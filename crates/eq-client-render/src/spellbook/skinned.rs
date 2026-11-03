@@ -256,6 +256,51 @@ pub(crate) fn present(
     }
 }
 
+/// Replaces the XML's sample button background as the book program does:
+/// an empty slot uses `A_SpellBookSlot`; occupied slots use the beneficial
+/// or detrimental background (`EQMac` 0x4352ff, 0x409520). Skin-defined hover
+/// and disabled states still take precedence over that normal background.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters.
+pub(crate) fn frames(
+    online: Res<crate::online::OnlineState>,
+    (view, names): (Res<BookView>, Res<SpellNames>),
+    mut art: crate::sheets::Art,
+    mut places: Query<(
+        &BookPlace,
+        &crate::skinned::SkinButton,
+        &Interaction,
+        Has<crate::skinned::Greyed>,
+        &mut ImageNode,
+    )>,
+) {
+    for (place, crate::skinned::SkinButton(look), interaction, greyed, mut image) in &mut places {
+        let state = if greyed {
+            look.disabled.as_ref()
+        } else if *interaction != Interaction::None {
+            look.flyby.as_ref()
+        } else {
+            None
+        };
+        let normal = match view.spell(online.world().spell_book(), place.0) {
+            None => Some("A_SpellBookSlot"),
+            Some(spell) => names.beneficial(spell).map(|beneficial| {
+                if beneficial {
+                    "BlueIconBackground"
+                } else {
+                    "RedIconBackground"
+                }
+            }),
+        };
+        let wanted = state
+            .and_then(|piece| art.cut(piece))
+            .or_else(|| normal.and_then(|name| art.named(name)))
+            .or_else(|| look.normal.as_ref().and_then(|piece| art.cut(piece)));
+        if let Some(wanted) = wanted {
+            *image = wanted;
+        }
+    }
+}
+
 /// What the chat says while a memorization, a scribe or another change to
 /// the book is under way, which a move or a deletion waits for, as the
 /// session refuses one meanwhile.
@@ -592,6 +637,83 @@ mod tests {
         });
         crate::online::testing::news(&mut online, [eq_client_core::WorldEvent::SpellBook(book)]);
         online
+    }
+
+    #[test]
+    fn book_slots_resolve_empty_occupied_and_hover_art_from_sidl() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Image>>();
+        crate::sheets::testing::blank(&mut app);
+        let frame = |name, x| {
+            format!(
+                "<Ui2DAnimation item=\"{name}\"><Frames>\
+            <Texture>spells01.tga</Texture><Location><X>{x}</X><Y>0</Y></Location>\
+            <Size><CX>8</CX><CY>8</CY></Size></Frames></Ui2DAnimation>"
+            )
+        };
+        let definitions = format!(
+            "<XML>{}{}{}{}</XML>",
+            frame("A_SpellBookSlot", 0),
+            frame("BlueIconBackground", 10),
+            frame("RedIconBackground", 20),
+            frame("Hover", 30)
+        );
+        crate::sheets::testing::definitions(&mut app, &definitions);
+        let mut fields = vec!["0"; 147];
+        fields[0] = "42";
+        fields[71] = "1";
+        fields[131] = "5";
+        let names = SpellNames(eq_client_assets::spells::Definitions::parse(
+            &fields.join("^"),
+            &eq_client_assets::spells::Layout::EQMAC,
+        ));
+        app.insert_resource(online())
+            .insert_resource(names)
+            .init_resource::<BookView>()
+            .insert_resource(crate::ViewerSettings(crate::ViewerConfig {
+                eq_directory: Some("synthetic-install".into()),
+                ..default()
+            }))
+            .add_systems(Update, frames);
+        let spawn = |app: &mut App, place| {
+            app.world_mut()
+                .spawn((
+                    BookPlace(place),
+                    crate::skinned::SkinButton(eq_client_assets::sidl::ButtonLook {
+                        flyby: Some(eq_client_assets::sidl::Piece {
+                            texture: "spells01.tga".into(),
+                            x: 30,
+                            y: 0,
+                            width: 8,
+                            height: 8,
+                        }),
+                        ..default()
+                    }),
+                    Interaction::None,
+                    ImageNode::default(),
+                ))
+                .id()
+        };
+        let empty = spawn(&mut app, 0);
+        let occupied = spawn(&mut app, 1);
+        let rect = |app: &App, entity| app.world().get::<ImageNode>(entity).unwrap().rect;
+        app.update();
+        assert_eq!(rect(&app, empty), Some(Rect::new(0.0, 0.0, 8.0, 8.0)));
+        assert_eq!(rect(&app, occupied), Some(Rect::new(10.0, 0.0, 18.0, 8.0)));
+        *app.world_mut().get_mut::<Interaction>(occupied).unwrap() = Interaction::Hovered;
+        app.update();
+        assert_eq!(rect(&app, occupied), Some(Rect::new(30.0, 0.0, 38.0, 8.0)));
+        *app.world_mut().get_mut::<Interaction>(occupied).unwrap() = Interaction::None;
+        fields[71] = "0";
+        app.insert_resource(SpellNames(eq_client_assets::spells::Definitions::parse(
+            &fields.join("^"),
+            &eq_client_assets::spells::Layout::EQMAC,
+        )));
+        app.update();
+        assert_eq!(rect(&app, occupied), Some(Rect::new(20.0, 0.0, 28.0, 8.0)));
+        app.world_mut().resource_mut::<BookView>().spread = 1;
+        app.update();
+        assert_eq!(rect(&app, occupied), Some(Rect::new(0.0, 0.0, 8.0, 8.0)));
     }
 
     #[test]

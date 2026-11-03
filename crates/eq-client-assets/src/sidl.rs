@@ -861,6 +861,13 @@ impl Library {
         self.piece(Some(name))
     }
 
+    /// A grid animation by its SIDL name, including its declared sheet
+    /// order, cell dimensions and numbering direction.
+    #[must_use]
+    pub fn named_grid(&self, name: &str) -> Option<IconGrid> {
+        self.grids.get(name).cloned()
+    }
+
     fn template(&self, node: roxmltree::Node<'_, '_>) -> WindowTemplate {
         let border = child(node, "Border");
         let side = |name: &str| self.piece(border.and_then(|border| text_of(border, name)));

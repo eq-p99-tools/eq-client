@@ -14,7 +14,8 @@ pub(super) use seat::seat;
 pub(crate) use skinned::Entry;
 pub(crate) use skinned::{BookHand, BookPlace, ChosenMark, PLACES, TurnsPages};
 pub(super) use skinned::{
-    clicks as book_clicks, memorize as memorize_held, present as book_present,
+    clicks as book_clicks, frames as book_frames, memorize as memorize_held,
+    present as book_present,
 };
 
 /// Keeps an open book above the bottom HUD at the default viewport size.
@@ -130,9 +131,15 @@ impl SpellNames {
     /// Spells from the text of a spell file.
     #[cfg(test)]
     pub(super) fn parse(text: &str) -> Self {
+        Self::parse_for(text, eq_client_assets::ui::InstalledClient::Titanium)
+    }
+
+    /// Synthetic spell data through the same generation layout as loading.
+    #[cfg(test)]
+    pub(super) fn parse_for(text: &str, client: eq_client_assets::ui::InstalledClient) -> Self {
         Self(eq_client_assets::spells::Definitions::parse(
             text,
-            &eq_client_assets::spells::Layout::TITANIUM,
+            &client.spell_file(),
         ))
     }
 
@@ -175,6 +182,11 @@ impl SpellNames {
 
     pub(super) fn icon(&self, id: u32) -> Option<u32> {
         self.spell(id)?.icon
+    }
+
+    /// Which of the book's two occupied-slot backgrounds the spell uses.
+    pub(super) fn beneficial(&self, id: u32) -> Option<bool> {
+        self.spell(id)?.beneficial
     }
 
     /// The spell's cell in the skin's gem icons.

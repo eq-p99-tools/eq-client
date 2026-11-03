@@ -21,6 +21,29 @@ pub(super) struct HudState {
 pub(super) struct HudRoot;
 #[derive(Component)]
 pub(crate) struct SpellGem(pub(crate) u8);
+
+/// Follows the active profile's class before either skin or fallback HUD
+/// frames are presented. An unknown profile retains the previous neutral
+/// presentation; eligibility never comes from mana or learned spells.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters.
+pub(crate) fn spell_visibility(
+    online: Res<super::online::OnlineState>,
+    settings: Option<Res<super::ViewerSettings>>,
+    mut shown: ResMut<super::windows::Shown>,
+) {
+    let client = settings.map_or_else(Default::default, |settings| settings.0.installed_client);
+    let available = online
+        .world()
+        .player()
+        .and_then(|player| player.class)
+        .is_none_or(|class| client.spellbook_class(class));
+    if shown
+        .bypass_change_detection()
+        .available(super::windows::WindowId::Spells, available)
+    {
+        shown.set_changed();
+    }
+}
 #[derive(Component)]
 pub(super) struct SpellDetails;
 #[derive(Component, Clone, Copy)]

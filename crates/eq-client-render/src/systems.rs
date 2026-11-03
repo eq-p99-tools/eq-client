@@ -138,6 +138,7 @@ pub(super) fn schedule(app: &mut App) {
                 character::lie,
                 doors::reconcile,
                 ground::reconcile,
+                hud::spell_visibility,
                 select_preview::show,
                 select_preview::turn,
             )
@@ -317,6 +318,7 @@ pub(super) fn schedule(app: &mut App) {
                         trade::fill_wares,
                         trade::picture,
                         items::icon,
+                        spellbook::book_frames,
                         spellbook::book_present,
                     ),
                     skinned::tabs,

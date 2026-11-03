@@ -1051,7 +1051,13 @@ fn button(
     // spellbook's close mark, starts unseen (`buttons`).
     let unseen = look.is_none() && !matches!(does, Does::Nothing | Does::ItemIcon);
     let look = look.or_else(|| button.look.flyby.as_ref().filter(|_| unseen));
-    let mut drawn = match look.and_then(|piece| art.cut(piece)) {
+    let image = if matches!(does, Does::BookPlace(_)) {
+        art.named("A_SpellBookSlot")
+            .or_else(|| look.and_then(|piece| art.cut(piece)))
+    } else {
+        look.and_then(|piece| art.cut(piece))
+    };
+    let mut drawn = match image {
         Some(mut image) => {
             if unseen {
                 image.color.set_alpha(0.0);
@@ -1540,6 +1546,7 @@ type Stateful<'w, 's> = Query<
         &'static Interaction,
         &'static mut ImageNode,
     ),
+    Without<crate::spellbook::BookPlace>,
 >;
 
 /// Draws each skin button in its state: on while its window is open, the

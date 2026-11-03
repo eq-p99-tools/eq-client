@@ -3,7 +3,10 @@
 //! own), never bundled: icons, and the pieces skinned windows are drawn
 //! with. Each texture is read once per skin.
 use bevy::prelude::*;
-use eq_client_assets::{sidl::Piece, ui::texture};
+use eq_client_assets::{
+    sidl::{Library, Piece},
+    ui::texture,
+};
 use std::collections::BTreeMap;
 
 type CutKey = (String, String, [u32; 4]);
@@ -18,6 +21,8 @@ pub(crate) struct Sheets {
     drawing: Option<String>,
     /// Whether an optional icon's region contains any visible pixels.
     visible: BTreeMap<CutKey, bool>,
+    /// Animation definitions, including missing libraries, read once per skin.
+    libraries: BTreeMap<String, Option<Library>>,
 }
 
 /// Cuts icons out of the skin's sheets.
@@ -55,8 +60,34 @@ impl Art<'_> {
 
     /// A spell's icon.
     pub(crate) fn spell(&mut self, icon: u32) -> Option<ImageNode> {
-        let (sheet, rect) = spell_cell(icon);
-        self.piece(&format!("spells{sheet:02}.tga"), rect)
+        let cell = self.library()?.named_grid("A_SpellIcons")?.cell(icon)?;
+        self.cut(&cell)
+    }
+
+    /// A picture the official program resolves by animation name, such as
+    /// the spellbook's empty-slot frame.
+    pub(crate) fn named(&mut self, name: &str) -> Option<ImageNode> {
+        let piece = self.library()?.named_piece(name)?;
+        self.cut(&piece)
+    }
+
+    /// Whether artwork needs to be resolved again for a newly selected skin.
+    pub(crate) fn skin_changed(&self) -> bool {
+        self.skin.is_changed() || self.settings.is_changed()
+    }
+
+    fn library(&mut self) -> Option<&Library> {
+        let directory = self.settings.0.eq_directory.as_deref()?;
+        let skin = self.sheets.drawing.as_ref().unwrap_or(&self.skin.0).clone();
+        self.sheets
+            .libraries
+            .entry(skin.clone())
+            .or_insert_with(|| {
+                Library::read(directory, &skin)
+                    .inspect_err(|error| warn!("UI icon definitions unavailable: {error}"))
+                    .ok()
+            })
+            .as_ref()
     }
 
     /// A piece of one of the skin's textures, as a skin window draws it.
@@ -153,26 +184,22 @@ fn item_cell(icon: u32) -> Option<(u32, Rect)> {
     Some((sheet, Rect::new(x, y, x + 40.0, y + 40.0)))
 }
 
-/// `EQUI_Animations` `A_SpellIcons` uses a horizontal 6-by-6 grid of 40px cells.
-fn spell_cell(icon: u32) -> (u32, Rect) {
-    let cell = icon % 36;
-    let x = f32::from(u16::try_from(cell % 6 * 40).expect("cell is bounded"));
-    let y = f32::from(u16::try_from(cell / 6 * 40).expect("cell is bounded"));
-    (icon / 36 + 1, Rect::new(x, y, x + 40.0, y + 40.0))
-}
-
 #[cfg(test)]
 pub(crate) mod testing {
     use super::*;
 
     /// Stands in for the skin's sheets: every sheet reads as one blank image.
     pub(crate) fn blank(app: &mut App) {
+        use std::fmt::Write as _;
         let handle = app
             .world_mut()
             .resource_mut::<Assets<Image>>()
             .add(Image::default());
         let mut sheets = Sheets::default();
-        let skin = super::super::skin::UiSkin::default().0;
+        let skin = app
+            .world()
+            .get_resource::<crate::skin::UiSkin>()
+            .map_or_else(|| crate::skin::UiSkin::default().0, |skin| skin.0.clone());
         for file in (1..=4)
             .map(|sheet| format!("dragitem{sheet}.tga"))
             .chain((1..=4).map(|sheet| format!("spells{sheet:02}.tga")))
@@ -181,14 +208,37 @@ pub(crate) mod testing {
                 .read
                 .insert((skin.clone(), file), Some(handle.clone()));
         }
+        let mut frames = String::new();
+        for sheet in 1..=4 {
+            write!(frames, "<Frames><Texture>spells{sheet:02}.tga</Texture><Location><X>0</X><Y>0</Y></Location>\
+                <Size><CX>240</CX><CY>240</CY></Size></Frames>").unwrap();
+        }
+        let animations = format!(
+            "<XML><Ui2DAnimation item=\"A_SpellIcons\">\
+            <Grid>true</Grid><CellWidth>40</CellWidth><CellHeight>40</CellHeight>\
+            {frames}</Ui2DAnimation></XML>"
+        );
+        sheets
+            .libraries
+            .insert(skin, Some(Library::parse(&animations, "<XML/>").unwrap()));
         app.insert_resource(sheets)
             .init_resource::<super::super::skin::UiSkin>();
+    }
+
+    /// Supplies synthetic SIDL while retaining the ordinary sheet/image path.
+    pub(crate) fn definitions(app: &mut App, animations: &str) {
+        let skin = app.world().resource::<crate::skin::UiSkin>().0.clone();
+        app.world_mut()
+            .resource_mut::<Sheets>()
+            .libraries
+            .insert(skin, Some(Library::parse(animations, "<XML/>").unwrap()));
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::system::RunSystemOnce;
 
     #[test]
     fn empty_icon_regions_preserve_the_fallback_even_on_nonempty_sheets() {
@@ -220,10 +270,36 @@ mod tests {
     }
 
     #[test]
-    fn spell_cells_follow_rows_then_sheets() {
-        assert_eq!(spell_cell(0), (1, Rect::new(0.0, 0.0, 40.0, 40.0)));
-        assert_eq!(spell_cell(1), (1, Rect::new(40.0, 0.0, 80.0, 40.0)));
-        assert_eq!(spell_cell(6), (1, Rect::new(0.0, 40.0, 40.0, 80.0)));
-        assert_eq!(spell_cell(36), (2, Rect::new(0.0, 0.0, 40.0, 40.0)));
+    fn spell_icons_follow_the_skins_declared_grid() {
+        let mut app = App::new();
+        app.init_resource::<Assets<Image>>();
+        testing::blank(&mut app);
+        app.insert_resource(crate::ViewerSettings(crate::ViewerConfig {
+            eq_directory: Some("synthetic-install".into()),
+            ..default()
+        }));
+        let skin = crate::skin::UiSkin::default().0;
+        let mut sheets = app.world_mut().resource_mut::<Sheets>();
+        let library = Library::parse("<XML><Ui2DAnimation item=\"A_SpellIcons\">\
+            <Grid>true</Grid><Vertical>true</Vertical><CellWidth>12</CellWidth><CellHeight>10</CellHeight>\
+            <Frames><Texture>spells02.tga</Texture><Location><X>3</X><Y>5</Y></Location>\
+            <Size><CX>24</CX><CY>20</CY></Size></Frames>\
+            <Frames><Texture>spells01.tga</Texture><Location><X>8</X><Y>9</Y></Location>\
+            <Size><CX>12</CX><CY>10</CY></Size></Frames>\
+            </Ui2DAnimation></XML>", "<XML/>").unwrap();
+        sheets.libraries.insert(skin, Some(library));
+        app.world_mut()
+            .run_system_once(|mut art: Art| {
+                assert_eq!(
+                    art.spell(1).unwrap().rect,
+                    Some(Rect::new(3.0, 15.0, 15.0, 25.0))
+                );
+                assert_eq!(
+                    art.spell(4).unwrap().rect,
+                    Some(Rect::new(8.0, 9.0, 20.0, 19.0))
+                );
+                assert!(art.spell(5).is_none());
+            })
+            .unwrap();
     }
 }
