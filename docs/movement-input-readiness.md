@@ -12,7 +12,7 @@ Carried weight uses the networking library's generation-specific bag, stack and
 coin rules. Effective STR includes eligible, level-scaled equipment and stat
 food, supported worn spell effects, active spell effects and EQMac fatigue.
 Spell values use caster level and supported formula caps, not the raw base.
-Movement modifiers choose the strongest snare, otherwise the strongest positive
+Movement modifiers choose the strongest snare, otherwise the strongest positive (the Titanium and EQMac programs' own rule, read 2026-11-03: each buff's effect evaluated at the buff's caster level, the most negative value or else the largest positive one; it is not a sum)
 modifier; an actual root dominates. STR is clamped to 1..255. Known EQMac fatigue
 subtracts `clamp(fatigue - effective_STA, 0, 10)`; absent fatigue conservatively
 subtracts its source-defined maximum 10.

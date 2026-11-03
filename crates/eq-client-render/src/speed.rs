@@ -15,8 +15,11 @@ struct Modifiers {
 }
 
 impl Modifiers {
-    /// Quarm's spell bonus rule: the strongest snare wins; otherwise the
-    /// fastest positive modifier wins. STR sums and an actual root dominates.
+    /// The programs' rule for the movement effect (3): the strongest snare
+    /// wins; otherwise the fastest positive modifier wins, each evaluated at
+    /// its buff's caster level (Titanium totaller 0x4106a3 / 0x4107e4 over
+    /// the cache 0x41002f builds, writer 0x410fdb; `EQMac` 0x4c6b6d, writer
+    /// 0x4caaba; program reads 11-03). STR sums and an actual root dominates.
     fn add(&mut self, other: Self) {
         self.rate = if self.rate < 0 || other.rate < 0 {
             self.rate.min(other.rate)
