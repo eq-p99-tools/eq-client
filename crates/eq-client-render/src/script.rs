@@ -567,6 +567,7 @@ type DriverContext<'w, 's> = (
     Query<'w, 's, &'static Window, With<PrimaryWindow>>,
     Option<Res<'w, super::ViewerSettings>>,
     Option<ResMut<'w, RunControl>>,
+    Option<Res<'w, super::inventory::InventoryState>>,
 );
 
 /// The keyboard as a script presses it: each press and release sets the
@@ -643,7 +644,7 @@ pub(super) fn drive(
         Query<&crate::outbox::Needs>,
         pointer::Aim,
     ),
-    (windows, settings, mut control): DriverContext,
+    (windows, settings, mut control, inventory): DriverContext,
     mut focus: MessageReader<bevy::window::WindowFocused>,
     mut reported_focus: Local<Option<(Entity, bool)>>,
     mut exit: MessageWriter<AppExit>,
@@ -806,6 +807,28 @@ pub(super) fn drive(
     }
     if let Some((step, since)) = script.current.clone() {
         let elapsed = now.saturating_sub(since);
+        // A second inventory click must select from the worker's latest
+        // projection. Wait only for that local submission result, never for
+        // remote move acceptance or an arbitrary pacing timer.
+        if matches!(
+            step,
+            Step::Click(
+                ClickTarget::Slot(_)
+                    | ClickTarget::Store
+                    | ClickTarget::Scribe
+                    | ClickTarget::Pick(_)
+            ) | Step::RightClick(ClickTarget::Slot(_))
+                | Step::HoldClick(ClickTarget::Slot(_), _)
+        ) && inventory
+            .as_ref()
+            .is_some_and(|inventory| !inventory.settled())
+            && script.clicked.is_none()
+        {
+            if elapsed > MAX_WAIT {
+                script.stop(&mut keys, &mut mouse, "queued item move did not finish");
+            }
+            return;
+        }
         let done = match &step {
             Step::Wait(duration) => elapsed >= *duration,
             Step::Create(character) | Step::CreateRefused(character) => {
@@ -3865,6 +3888,97 @@ mod tests {
 
     fn script_pointer(app: &App) -> Option<Vec2> {
         app.world().get_resource::<ScriptPointer>().map(|at| at.0)
+    }
+
+    #[test]
+    fn inventory_click_waits_for_local_send_result_then_uses_unconfirmed_projection() {
+        use crate::{inventory::InventoryState, online::testing};
+        use bevy::ecs::system::RunSystemOnce;
+        use eq_client_core::inventory::{InventoryActor, InventorySlot, InventoryUpdate};
+        let mut online = crate::online::OnlineState::new(true);
+        testing::admit(&mut online, 7, testing::player(7));
+        testing::inventory(
+            &mut online,
+            InventoryUpdate::Snapshot(
+                crate::preview::items()
+                    .into_iter()
+                    .filter(|item| item.slot != InventorySlot::CURSOR)
+                    .collect(),
+            ),
+        );
+        let (tx, rx) = std::sync::mpsc::sync_channel(2);
+        let mut app = pointing(vec![Step::Click(ClickTarget::Slot(24))]);
+        app.insert_resource(online)
+            .insert_resource(crate::outbox::Outbox::new(Some(tx)));
+        let first = app
+            .world_mut()
+            .spawn((
+                Button,
+                Interaction::Pressed,
+                crate::inventory::SlotButton(InventorySlot(251)),
+                crate::clicks::OnPress,
+            ))
+            .id();
+        app.world_mut()
+            .run_system_once(crate::inventory::input)
+            .unwrap();
+        app.world_mut().despawn(first);
+        let eq_client_core::ClientCommand::MoveInventory(request) = rx.try_recv().unwrap() else {
+            panic!("expected item move")
+        };
+        assert!(!app.world().resource::<InventoryState>().settled());
+        let target = app
+            .world_mut()
+            .spawn((
+                Button,
+                crate::inventory::SlotButton(InventorySlot(24)),
+                laid_out(Vec2::new(640.0, 360.0), 40.0, 1),
+            ))
+            .id();
+        for ms in [0, 10, 1300] {
+            frame_at(&mut app, ms);
+            assert_ne!(interaction(&app, target), Interaction::Pressed);
+        }
+        let mut online = app
+            .world_mut()
+            .remove_resource::<crate::online::OnlineState>()
+            .unwrap();
+        let update = online
+            .world()
+            .inventory()
+            .plan_move(
+                &request,
+                InventoryActor {
+                    bank_access: false,
+                    class: Some(1),
+                    deity: None,
+                    dual_wield: None,
+                    race: 1,
+                    level: 10,
+                    trade_slots: 0,
+                    trade_no_drop: false,
+                    world_container: false,
+                },
+            )
+            .unwrap();
+        testing::inventory(&mut online, update);
+        app.world_mut()
+            .resource_mut::<InventoryState>()
+            .action_result(
+                request.session_id,
+                request.revision,
+                None,
+                online.world().inventory(),
+            );
+        assert!(online.world().inventory().predicted());
+        app.insert_resource(online);
+        for ms in (1310..=2000).step_by(10) {
+            frame_at(&mut app, ms);
+            if interaction(&app, target) == Interaction::Pressed {
+                return;
+            }
+        }
+        panic!("the next click never used the local projection");
     }
 
     #[test]
