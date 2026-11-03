@@ -690,6 +690,18 @@ impl ClientWorld {
             WorldEvent::Consideration(consideration) => {
                 news.notices.push(self.zone.consider(consideration));
             }
+            WorldEvent::CombatRequest {
+                session_id, status, ..
+            } => {
+                if self.session_id != Some(*session_id) {
+                    news.ignored = true;
+                } else if let crate::combat::CombatRequestStatus::Refused(reason) = status {
+                    news.notices.push(Notice::CombatRefused(reason.clone()));
+                }
+                // Submission does not change authoritative world state. The
+                // renderer's toggle remains a local intention; server results
+                // arrive independently as consideration, damage and animation.
+            }
             WorldEvent::Damage(damage) => self.damage(damage, news),
             WorldEvent::Animation(animation) => self.motion_news(*animation, news),
             WorldEvent::TargetSent(id) => self.target_sent(*id, news),

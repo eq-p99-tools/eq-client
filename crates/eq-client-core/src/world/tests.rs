@@ -80,6 +80,57 @@ fn game(world: &mut ClientWorld, event: WorldEvent) -> Changes {
     world.apply(&WorldUpdate::Game(event), Instant::now(), &NoSpells)
 }
 
+#[test]
+fn combat_submission_and_refusal_do_not_fabricate_server_results() {
+    use crate::combat::{CombatRequest, CombatRequestStatus};
+    let mut world = admitted();
+    let original_player = world.player().cloned();
+    let original_target = *world.target();
+    for request in [
+        CombatRequest::AutoAttack { enabled: true },
+        CombatRequest::AutoAttack { enabled: false },
+        CombatRequest::Consider { target_id: 5 },
+    ] {
+        let sent = game(
+            &mut world,
+            WorldEvent::CombatRequest {
+                session_id: 1,
+                request,
+                status: CombatRequestStatus::Sent,
+            },
+        );
+        assert_eq!(sent.notices, []);
+        assert_eq!(sent.replies, []);
+        assert!(sent.reset.is_none());
+        let refused = game(
+            &mut world,
+            WorldEvent::CombatRequest {
+                session_id: 1,
+                request,
+                status: CombatRequestStatus::Refused("Synthetic refusal".into()),
+            },
+        );
+        assert_eq!(
+            refused.notices,
+            [Notice::CombatRefused("Synthetic refusal".into())]
+        );
+        assert_eq!(refused.replies, []);
+        assert!(refused.reset.is_none());
+        let stale = game(
+            &mut world,
+            WorldEvent::CombatRequest {
+                session_id: 2,
+                request,
+                status: CombatRequestStatus::Refused("Old request".into()),
+            },
+        );
+        assert!(stale.ignored);
+        assert_eq!(stale.notices, []);
+    }
+    assert_eq!(world.player(), original_player.as_ref());
+    assert_eq!(*world.target(), original_target);
+}
+
 fn connection(world: &mut ClientWorld, connected: bool, terminal: bool) -> Changes {
     world.apply(
         &WorldUpdate::Connection(match (connected, terminal) {

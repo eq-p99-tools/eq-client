@@ -316,6 +316,7 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         }
         Notice::BindWound(update) => bind_wound(update, messages).map_or_else(Vec::new, chat),
         Notice::TradeRefused(reason)
+        | Notice::CombatRefused(reason)
         | Notice::TrainingRefused(reason)
         | Notice::ResurrectionRefused(reason)
         | Notice::ReadRefused(reason) => chat(reason.as_str().into()),
