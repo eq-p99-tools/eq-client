@@ -21,7 +21,7 @@ fn triangle(mode: MaterialMode) -> ZonePrimitive {
 #[allow(clippy::too_many_lines)]
 fn placed_object_sidedness_survives_filtering_batching_and_reflection() {
     let mut zone = ZoneAsset {
-        regions: Default::default(),
+        regions: eq_client_assets::regions::ZoneRegions::default(),
         short_name: "synthetic".to_owned(),
         primitives: Vec::new(),
         terrain_materials: Vec::new(),
