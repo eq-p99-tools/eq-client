@@ -655,7 +655,7 @@ impl ClientWorld {
             | WorldEvent::TranslocateRefused { .. }
             | WorldEvent::BecameCorpse { .. }
             | WorldEvent::StatsChanged(_)
-            | WorldEvent::SkillReady(_)
+            | WorldEvent::SkillReset(_)
             | WorldEvent::DisciplineReuse(_)
             | WorldEvent::LinkedReuse(_)
             | WorldEvent::Discipline(_)
@@ -876,6 +876,7 @@ impl ClientWorld {
             WorldEvent::AbilitiesOffered(offered) => {
                 self.offered_abilities = Some(offered.clone());
             }
+            WorldEvent::SkillReady(skill) => self.skill_ready(*skill),
             WorldEvent::AbilityUsed {
                 session_id,
                 ability,

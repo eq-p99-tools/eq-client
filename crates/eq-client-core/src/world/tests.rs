@@ -1717,6 +1717,85 @@ fn abilities_are_the_skills_the_player_has_and_wait_on_the_sessions_timers() {
 }
 
 #[test]
+fn eqmac_ability_reset_releases_mend_and_shared_strikes_without_claiming_success() {
+    use crate::abilities::{Ability, eqmac::SkillReset};
+    use std::time::Duration;
+    let mut world = admitted();
+    world.carry_as(crate::GameDialect::EqMac);
+    let now = Instant::now();
+    for ability in [Ability::Mend, Ability::Kick, Ability::Hide] {
+        world.apply(
+            &WorldUpdate::Game(WorldEvent::AbilityUsed {
+                session_id: 1,
+                ability,
+                ready_in: Duration::from_secs(360),
+            }),
+            now,
+            &NoSpells,
+        );
+    }
+    // The raw record alone supplies no established units or readiness.
+    game(
+        &mut world,
+        WorldEvent::SkillReset(SkillReset {
+            skill: 32,
+            padding: 0,
+            timer: 1,
+        }),
+    );
+    game(&mut world, WorldEvent::SkillReady(65535));
+    assert!(world.ability_wait(Ability::Mend, now).is_some());
+    let before = world.player().unwrap().clone();
+    let changes = game(&mut world, WorldEvent::SkillReady(32));
+    assert_eq!(changes.notices, Vec::<Notice>::new());
+    assert_eq!(world.ability_wait(Ability::Mend, now), None);
+    assert!(world.ability_wait(Ability::Kick, now).is_some());
+    game(&mut world, WorldEvent::SkillReady(10));
+    for ability in [Ability::Kick, Ability::Bash, Ability::FlyingKick] {
+        assert_eq!(world.ability_wait(ability, now), None);
+    }
+    assert!(world.ability_wait(Ability::Hide, now).is_some());
+    assert_eq!(world.player().unwrap(), &before);
+    // A late reset in a cleared admission cannot manufacture an ability use.
+    world.reset(Reset::Entered);
+    game(&mut world, WorldEvent::SkillReady(32));
+    assert_eq!(world.ability_wait(Ability::Mend, now), None);
+}
+
+#[test]
+fn eqmac_ability_list_uses_profile_sentinels_and_class_without_changing_titanium() {
+    use crate::abilities::Ability;
+    let mut world = admitted();
+    world.carry_as(crate::GameDialect::EqMac);
+    let player = world.player.as_mut().unwrap();
+    player.class = Some(7);
+    let mut skills = vec![255; 100];
+    skills[32] = 0; // Mend is practiced from zero.
+    skills[25] = 100;
+    skills[30] = 100;
+    skills[42] = 254; // Sneak still requires training.
+    player.skills = Some(skills);
+    assert_eq!(
+        world.abilities(),
+        [Ability::Kick, Ability::Mend, Ability::FeignDeath]
+    );
+    game(
+        &mut world,
+        WorldEvent::Skill {
+            skill_id: 42,
+            value: 1,
+        },
+    );
+    assert!(world.abilities().contains(&Ability::Sneak));
+    world.player.as_mut().unwrap().class = Some(1);
+    assert!(!world.abilities().contains(&Ability::Mend));
+    assert!(!world.abilities().contains(&Ability::FeignDeath));
+    world.carry_as(crate::GameDialect::Titanium);
+    assert!(world.abilities().contains(&Ability::Fishing));
+    assert!(world.abilities().contains(&Ability::BindWound));
+}
+
+#[test]
 fn a_bandaging_that_ends_frees_bind_wound_and_the_player_hears_how_it_went() {
     use crate::{
         abilities::Ability,
