@@ -481,10 +481,13 @@ impl ClientWorld {
     }
 
     /// The player's inventory, bank and cursor as the server reported them,
-    /// with any local predictions the session marked.
+    /// with the ordered local projection of successfully queued moves.
     #[must_use]
-    pub const fn inventory(&self) -> &Inventory {
-        &self.inventory
+    pub fn inventory(&self) -> &Inventory {
+        self.inventory_moves
+            .projected
+            .as_ref()
+            .unwrap_or(&self.inventory)
     }
 
     /// The corpse the player is looting.

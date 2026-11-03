@@ -95,7 +95,7 @@ impl InventoryState {
                 "Wait for the current cast to finish or interrupt it"
             );
             ensure!(
-                self.actions.pending.is_none(),
+                !online.world().inventory_moves_pending(),
                 "Finish the pending inventory move first"
             );
             ensure!(
@@ -190,7 +190,14 @@ impl InventoryState {
         let Some((pending_session, pending_revision, to_cursor)) = self.actions.pending else {
             return;
         };
-        if (pending_session, pending_revision) != (session_id, revision) {
+        if pending_session != session_id {
+            return;
+        }
+        if pending_revision != revision {
+            if let Some(error) = error {
+                self.actions.auto_store = false;
+                self.refuse(error);
+            }
             return;
         }
         self.actions.pending = None;
@@ -213,16 +220,18 @@ impl InventoryState {
         &mut self,
         slot: InventorySlot,
         split: bool,
-        online: &OnlineState,
+        online: &mut OnlineState,
         sender: &Outbox,
-    ) {
+    ) -> bool {
         self.actions.auto_store = false;
         self.actions.split = None;
         let result = self.try_click(slot, split.then_some(NonZeroU32::MIN), online, sender);
+        let queued = result.is_ok();
         if let Err(error) = result {
             self.refuse(crate::outbox::window_line(&error));
         }
         self.revision = self.revision.wrapping_add(1);
+        queued
     }
 
     /// Opens a quantity picker bound to the current inventory revision.
@@ -233,10 +242,7 @@ impl InventoryState {
             .items()
             .get(&slot)
             .and_then(|item| item.stack_count);
-        if self.actions.pending.is_some()
-            || inventory.stale()
-            || inventory.items().contains_key(&InventorySlot::CURSOR)
-        {
+        if inventory.stale() || inventory.items().contains_key(&InventorySlot::CURSOR) {
             self.refuse("Finish the current cursor move first".into());
         } else if let Some(available) = count.filter(|count| *count > 1) {
             self.actions.split = Some(SplitSelection {
@@ -336,7 +342,7 @@ impl InventoryState {
     pub(crate) fn split_action(
         &mut self,
         action: SplitAction,
-        online: &OnlineState,
+        online: &mut OnlineState,
         sender: &Outbox,
     ) {
         let Some(mut selection) = self.actions.split.take() else {
@@ -393,9 +399,9 @@ impl InventoryState {
         self.actions.split = Some(selection);
     }
 
-    /// Advances automatic storage by one validated move after the previous result arrives.
-    pub(super) fn store_cursor(&mut self, online: &OnlineState, sender: &Outbox) {
-        if !self.actions.auto_store || self.actions.pending.is_some() {
+    /// Advances automatic storage by one validated move against the latest local projection.
+    pub(super) fn store_cursor(&mut self, online: &mut OnlineState, sender: &Outbox) {
+        if !self.actions.auto_store {
             return;
         }
         let inventory = online.world().inventory();
@@ -414,19 +420,13 @@ impl InventoryState {
         self.revision = self.revision.wrapping_add(1);
     }
 
-    /// Whether the worker has answered the local move submission. This says
-    /// nothing about server acceptance or unresolved inventory predictions.
-    pub(crate) const fn settled(&self) -> bool {
-        self.actions.pending.is_none()
-    }
-
     /// Hands the item on the cursor to the open give window, by the
     /// installed generation's `rule`: under
     /// [`eq_client_assets::ui::GiveAtOpen::StackFirst`] onto a stack of the
     /// same item with room left, else into the first empty slot.
     pub(crate) fn hand_over_cursor(
         &mut self,
-        online: &OnlineState,
+        online: &mut OnlineState,
         sender: &Outbox,
         rule: eq_client_assets::ui::GiveAtOpen,
     ) -> Handed {
@@ -452,13 +452,20 @@ impl InventoryState {
         })
         .flatten();
         if let Some(slot) = stack {
-            self.click_slot(slot, false, online, sender);
-            // A merge that left waits for its answer; what it leaves on the
-            // cursor goes on from there. One refused says why and stops.
-            return if self.settled() {
-                Handed::Placed
-            } else {
+            if !self.click_slot(slot, false, online, sender) {
+                return Handed::Placed;
+            }
+            // The projection shows any remainder immediately; a refusal
+            // stops automatic handover without replaying queued operations.
+            return if online
+                .world()
+                .inventory()
+                .items()
+                .contains_key(&InventorySlot::CURSOR)
+            {
                 Handed::Stacked
+            } else {
+                Handed::Placed
             };
         }
         match trade().find(|slot| !items.contains_key(slot)) {
@@ -517,15 +524,11 @@ impl InventoryState {
         &mut self,
         slot: InventorySlot,
         split: Option<NonZeroU32>,
-        online: &OnlineState,
+        online: &mut OnlineState,
         sender: &Outbox,
     ) -> anyhow::Result<()> {
         use anyhow::{Context, ensure};
         let inventory = online.world().inventory();
-        ensure!(
-            self.actions.pending.is_none(),
-            "Waiting for the queued move; it will not be retried"
-        );
         ensure!(
             online
                 .world()
@@ -603,6 +606,7 @@ impl InventoryState {
         let revision = inventory.revision();
         let actor = self.actor(online)?;
         let request = InventoryMove {
+            sequence: None,
             session_id: stamp.session_id,
             revision,
             from,
@@ -622,7 +626,7 @@ impl InventoryState {
                 "Item placed locally (offline demo)".into()
             };
         } else {
-            sender.send(online.world(), ClientCommand::MoveInventory(request))?;
+            online.queue_inventory_move(request, actor, sender)?;
             self.actions.pending = Some((stamp.session_id, revision, to_cursor));
             self.actions.message = if to_cursor {
                 "Picking item up onto cursor".into()
@@ -688,7 +692,7 @@ mod tests {
             self.state.click_slot(
                 InventorySlot(slot),
                 split,
-                &self.online,
+                &mut self.online,
                 &crate::outbox::Outbox::new(None),
             );
             self.settle();
@@ -696,13 +700,13 @@ mod tests {
 
         fn split(&mut self, action: SplitAction) {
             self.state
-                .split_action(action, &self.online, &crate::outbox::Outbox::new(None));
+                .split_action(action, &mut self.online, &crate::outbox::Outbox::new(None));
             self.settle();
         }
 
         fn store(&mut self) {
             self.state
-                .store_cursor(&self.online, &crate::outbox::Outbox::new(None));
+                .store_cursor(&mut self.online, &crate::outbox::Outbox::new(None));
             self.settle();
         }
 
@@ -956,36 +960,56 @@ mod tests {
     }
 
     #[test]
-    fn automatic_storage_waits_for_worker_and_stops_on_rejection() {
+    fn automatic_storage_projects_remainder_without_feedback_and_stops_on_rejection() {
         let mut bench = Bench::demo(7);
-        bench.click(251, false);
+        bench.hold_rations();
+        let original = bench.data().clone();
         let Bench { state, online } = &mut bench;
         state.demo = false;
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
         let sender = crate::outbox::Outbox::new(Some(tx));
         state.actions.auto_store = true;
         state.store_cursor(online, &sender);
-        let ClientCommand::MoveInventory(request) = rx.try_recv().unwrap() else {
-            panic!("wrong command")
+        state.store_cursor(online, &sender);
+        let ClientCommand::MoveInventory(first) = rx.try_recv().unwrap() else {
+            panic!("first move")
         };
-        state.store_cursor(online, &sender);
-        assert!(rx.try_recv().is_err());
-        state.action_result(
-            7,
-            request.revision,
-            Some("Rejected".into()),
-            online.world().inventory(),
+        let ClientCommand::MoveInventory(second) = rx.try_recv().unwrap() else {
+            panic!("remainder move")
+        };
+        assert_eq!(
+            second.sequence.unwrap().after,
+            Some(first.sequence.unwrap().id)
         );
-        state.store_cursor(online, &sender);
-        assert!(!state.actions.auto_store);
-        assert!(rx.try_recv().is_err());
         assert!(
-            online
+            !online
                 .world()
                 .inventory()
                 .items()
                 .contains_key(&InventorySlot::CURSOR)
         );
+        for request in [first, second] {
+            testing::news(
+                online,
+                [eq_client_core::WorldEvent::InventoryAction {
+                    session_id: 7,
+                    revision: request.revision,
+                    sequence: request.sequence,
+                    update: None,
+                    error: Some("Rejected".into()),
+                }],
+            );
+            state.action_result(
+                7,
+                request.revision,
+                Some("Rejected".into()),
+                online.world().inventory(),
+            );
+        }
+        state.store_cursor(online, &sender);
+        assert!(!state.actions.auto_store);
+        assert!(rx.try_recv().is_err());
+        assert_eq!(online.world().inventory(), &original);
     }
 
     #[test]
@@ -1069,42 +1093,57 @@ mod tests {
     }
 
     #[test]
-    fn queue_submission_does_not_predict_or_confirm_and_pending_moves_cannot_duplicate() {
+    fn queue_failure_preserves_projection_and_refused_chain_never_replays() {
         let mut bench = Bench::demo(7);
         let before = bench.data().clone();
         let Bench { state, online } = &mut bench;
         state.demo = false;
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let sender = crate::outbox::Outbox::new(Some(tx));
-        state.click_slot(InventorySlot(251), false, online, &sender);
-        state.click_slot(InventorySlot(24), false, online, &sender);
-        assert_eq!(online.world().inventory(), &before);
-        let ClientCommand::MoveInventory(request) = rx.try_recv().unwrap() else {
-            panic!("wrong command")
+        assert!(state.click_slot(InventorySlot(251), false, online, &sender));
+        let picked = online.world().inventory().clone();
+        assert!(picked.predicted());
+        assert!(!state.click_slot(InventorySlot(24), false, online, &sender));
+        assert_eq!(online.world().inventory(), &picked);
+        let ClientCommand::MoveInventory(first) = rx.try_recv().unwrap() else {
+            panic!("pick up")
         };
-        assert_eq!(request.from, InventorySlot(251));
-        assert_eq!(request.to, InventorySlot::CURSOR);
-        state.click_slot(InventorySlot(25), false, online, &sender);
-        assert!(rx.try_recv().is_err());
-        state.action_result(8, request.revision, None, online.world().inventory());
-        assert!(state.actions.pending.is_some());
-        state.action_result(
-            7,
-            request.revision,
-            Some("Rejected".into()),
-            online.world().inventory(),
+        assert!(state.click_slot(InventorySlot(25), false, online, &sender));
+        let ClientCommand::MoveInventory(second) = rx.try_recv().unwrap() else {
+            panic!("place")
+        };
+        assert_eq!(
+            (second.from, second.to),
+            (InventorySlot::CURSOR, InventorySlot(25))
         );
-        assert!(state.actions.pending.is_none());
+        for request in [first, second] {
+            testing::news(
+                online,
+                [eq_client_core::WorldEvent::InventoryAction {
+                    session_id: 7,
+                    revision: request.revision,
+                    sequence: request.sequence,
+                    update: None,
+                    error: Some("Rejected".into()),
+                }],
+            );
+            state.action_result(
+                7,
+                request.revision,
+                Some("Rejected".into()),
+                online.world().inventory(),
+            );
+        }
         assert_eq!(online.world().inventory(), &before);
+        assert!(!online.world().inventory_moves_pending());
         assert_eq!(state.actions.message, "Rejected");
         testing::connect(online, false);
-        state.click_slot(InventorySlot(251), false, online, &sender);
-        assert!(state.actions.pending.is_none());
+        assert!(!state.click_slot(InventorySlot(251), false, online, &sender));
         assert!(rx.try_recv().is_err());
     }
 
     #[test]
-    fn banking_tracks_nearby_service_and_queues_cursor_moves_without_prediction() {
+    fn banking_tracks_nearby_service_and_projects_only_valid_queued_moves() {
         let mut bench = Bench::demo(7);
         bench.state.demo = false;
         let before = bench.data().clone();
@@ -1145,7 +1184,21 @@ mod tests {
             matches!(rx.try_recv().unwrap(), ClientCommand::MoveInventory(request)
             if request.from == InventorySlot(2000) && request.to == InventorySlot::CURSOR)
         );
-        assert_eq!(online.world().inventory(), &before);
+        assert_eq!(online.world().inventory().revision(), before.revision() + 1);
+        assert!(
+            online
+                .world()
+                .inventory()
+                .items()
+                .contains_key(&InventorySlot::CURSOR)
+        );
+        assert!(
+            !online
+                .world()
+                .inventory()
+                .items()
+                .contains_key(&InventorySlot(2000))
+        );
         state.tab = super::super::Tab::Bank;
         testing::place_axis(online, |position| position.x = 21.0);
         state.refresh_bank_access(online);

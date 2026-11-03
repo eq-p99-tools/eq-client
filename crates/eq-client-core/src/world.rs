@@ -14,6 +14,7 @@ mod casting;
 mod changes;
 mod character;
 mod group;
+mod inventory_moves;
 mod items;
 mod landings;
 mod link;
@@ -277,6 +278,7 @@ pub struct ClientWorld {
     player: Option<PlayerState>,
     vitals: Vitals,
     inventory: Inventory,
+    inventory_moves: inventory_moves::Moves,
     /// Where the player's coins are, as the session keeps and tells them.
     wallet: crate::money::Wallet,
     /// Cursor receipt is independent of the bank balance, which is not carried.
@@ -864,12 +866,12 @@ impl ClientWorld {
             WorldEvent::InventoryAction {
                 session_id,
                 revision,
+                sequence,
+                update,
                 error,
-            } => news.replies.push(Reply::InventoryMove {
-                session_id: *session_id,
-                revision: *revision,
-                error: error.clone(),
-            }),
+            } => self.inventory_move_result(
+                (*session_id, *revision, *sequence), update.as_ref(), error.as_ref(), news,
+            ),
             WorldEvent::ItemUseAction {
                 session_id,
                 request_id,
@@ -1186,6 +1188,7 @@ impl ClientWorld {
 
     /// Forgets what the reason makes stale, and says so.
     fn reset(&mut self, reason: Reset) -> Changes {
+        self.inventory_moves.clear();
         self.accepted_speed_inputs = None;
         // A refused transfer resumes this same admission. Retain its revision
         // while suspended so later input changes can still be reported.

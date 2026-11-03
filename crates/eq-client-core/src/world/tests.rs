@@ -1,4 +1,5 @@
 use super::*;
+mod inventory_moves;
 use crate::{
     CampStatus, Coins, SpawnKind, SpellUpdate, WorldPosition, ZoneRejection,
     camp::CampTo,

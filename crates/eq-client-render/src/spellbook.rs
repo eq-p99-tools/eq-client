@@ -889,6 +889,10 @@ fn prepare_scribe(
     use anyhow::{Context, ensure};
     let online = online.context("Connect to scribe a scroll")?;
     let stamp = stamp.context("Connect to scribe a scroll")?;
+    ensure!(
+        !online.world().inventory_moves_pending(),
+        "Wait for queued item moves before scribing"
+    );
     let inventory = online.world().inventory();
     ensure!(
         inventory.received() && !inventory.stale(),

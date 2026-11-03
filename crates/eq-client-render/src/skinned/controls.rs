@@ -309,7 +309,10 @@ const fn digit(key: KeyCode) -> Option<u32> {
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn type_amount(
     input: Res<ButtonInput<KeyCode>>,
-    (online, outbox): (Res<crate::online::OnlineState>, Res<crate::outbox::Outbox>),
+    (mut online, outbox): (
+        ResMut<crate::online::OnlineState>,
+        Res<crate::outbox::Outbox>,
+    ),
     mut typing: ResMut<Typing>,
     mut state: ResMut<InventoryState>,
     boxes: Query<&Interaction, (With<AmountBox>, Changed<Interaction>)>,
@@ -342,7 +345,7 @@ pub(crate) fn type_amount(
             KeyCode::Backspace => state.erase_digit(),
             KeyCode::Enter | KeyCode::NumpadEnter => {
                 typing.counting = false;
-                state.split_action(SplitAction::Confirm, &online, &outbox);
+                state.split_action(SplitAction::Confirm, &mut online, &outbox);
             }
             KeyCode::Escape => {
                 typing.counting = false;

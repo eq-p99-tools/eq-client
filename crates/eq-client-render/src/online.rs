@@ -47,6 +47,22 @@ impl OnlineState {
         &self.world
     }
 
+    /// Queues and projects a move through the world's single inventory owner.
+    pub(crate) fn queue_inventory_move(
+        &mut self,
+        request: eq_client_core::inventory::InventoryMove,
+        actor: eq_client_core::inventory::InventoryActor,
+        sender: &crate::outbox::Outbox,
+    ) -> anyhow::Result<()> {
+        self.world
+            .queue_inventory_move(request, actor, |world, request| {
+                Ok(sender.send(
+                    world,
+                    eq_client_core::ClientCommand::MoveInventory(request.clone()),
+                )?)
+            })
+    }
+
     /// The player asked to camp, ending there.
     pub(super) fn camp_to(&mut self, to: eq_client_core::camp::CampTo) {
         self.world.camp_to(to);

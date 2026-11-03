@@ -17,6 +17,7 @@ pub(super) struct Offering {
 impl ClientWorld {
     /// The inventory changed; what equipped items give may change with it.
     pub(super) fn inventory_news(&mut self, update: &InventoryUpdate, changes: &mut Changes) {
+        self.inventory_moves.interrupt();
         self.inventory.apply(update.clone());
         changes.inventory = true;
         self.refresh_item_hp();
@@ -100,7 +101,7 @@ impl ClientWorld {
         }
         Offering {
             items: self
-                .inventory
+                .inventory()
                 .items()
                 .iter()
                 .filter(|(slot, _)| slot.is_in_trade())

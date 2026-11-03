@@ -153,7 +153,7 @@ pub(crate) fn window(
                 crate::coins::send(transfer, &online, &outbox);
             } else {
                 let rule = settings.0.installed_client.give_at_open();
-                let handed = inventory.hand_over_cursor(&online, &outbox, rule);
+                let handed = inventory.hand_over_cursor(&mut online, &outbox, rule);
                 *merging = handed == Handed::Stacked;
                 if handed == Handed::NoRoom && rule == GiveAtOpen::StackFirst {
                     no_room(&messages, &mut chat);
@@ -170,10 +170,10 @@ pub(crate) fn window(
             *opened = None;
             *merging = false;
         }
-        // Once a merge settles, what it left on the cursor goes on: onto
+        // After a merge, its projected cursor remainder goes on: onto
         // the next stack with room, then into the first empty slot (N4 2).
-        (Some(_), Some(_)) if *merging && inventory.settled() => {
-            let handed = inventory.hand_over_cursor(&online, &outbox, GiveAtOpen::StackFirst);
+        (Some(_), Some(_)) if *merging => {
+            let handed = inventory.hand_over_cursor(&mut online, &outbox, GiveAtOpen::StackFirst);
             *merging = handed == Handed::Stacked;
             if handed == Handed::NoRoom {
                 no_room(&messages, &mut chat);
@@ -553,19 +553,7 @@ mod tests {
                 MoveQuantity::Count(std::num::NonZeroU32::new(10).unwrap())
             )
         );
-        // Nothing more goes until the merge settles.
-        app.update();
-        assert!(rx.try_recv().is_err());
-        testing::inventory(
-            &mut online(&mut app),
-            InventoryUpdate::Snapshot(vec![stack(InventorySlot::CURSOR.0, 5), stack(3000, 20)]),
-        );
-        app.world_mut().resource_scope(
-            |world, mut state: Mut<crate::inventory::InventoryState>| {
-                let online = world.resource::<OnlineState>();
-                state.action_result(1, merge.revision, None, online.world().inventory());
-            },
-        );
+        // The projected remainder goes on before any worker reply.
         app.update();
         let Ok(ClientCommand::MoveInventory(rest)) = rx.try_recv() else {
             panic!("the rest goes on");
@@ -578,13 +566,12 @@ mod tests {
                 MoveQuantity::Whole
             )
         );
-        // And once that settles, nothing else is sent.
-        app.world_mut().resource_scope(
-            |world, mut state: Mut<crate::inventory::InventoryState>| {
-                let online = world.resource::<OnlineState>();
-                state.action_result(1, rest.revision, None, online.world().inventory());
-            },
+        assert_eq!(rest.revision, merge.revision + 1);
+        assert_eq!(
+            rest.sequence.unwrap().after,
+            Some(merge.sequence.unwrap().id)
         );
+        // The projected cursor is empty, so automatic handover stops.
         app.update();
         assert!(rx.try_recv().is_err());
     }
