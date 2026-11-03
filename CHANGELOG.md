@@ -6,7 +6,9 @@
   histories without confirming their placement. Affecting or unknown equipment
   histories remain pending even after a local round trip. Report pending equipment
   as prediction uncertainty, and log typed movement/equipment inputs separately
-  from the combined load display for script diagnostics.
+  from the combined load display for script diagnostics. Unversioned partial
+  updates cannot retire affecting history; non-neutral readiness remains
+  conservative until a full baseline or the existing settlement policy.
 - Add `--spots` to the selection proposal example for explicit full-document
   output preserving audit headers, comments and existing reviewed rows. Default
   output remains row snippets; every generated row stays unreviewed.

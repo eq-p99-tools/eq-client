@@ -74,7 +74,7 @@ pub struct ScaledEquipment {
 pub enum EquipmentUnavailable {
     /// No complete server inventory has arrived.
     MissingSnapshot,
-    /// Inventory needs correction or equipped slots include unconfirmed local moves.
+    /// Inventory needs correction or affecting equipment history needs a full baseline.
     UnconfirmedInventory,
     /// Class, base race or level cannot be interpreted by this rule set.
     UnknownCharacter,
@@ -86,7 +86,8 @@ pub enum EquipmentUnavailable {
 /// Ammo, cursor, carried and bank items are excluded. Food/drink contributions are separate.
 /// Predictions in storage slots and provably stat-neutral equipment histories
 /// do not invalidate contributions. Affecting or unknown intermediate equipment
-/// remains gated until authoritative coverage, even after a local round trip.
+/// remains gated until a full baseline or existing policy-driven settlement,
+/// even after a local round trip or a matching partial slot update.
 /// Returned worn effects still require evaluation; this is not a complete capacity result.
 ///
 /// # Errors
