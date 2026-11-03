@@ -132,7 +132,12 @@ fn calculate(
         player.race,
         u16::from(player.level),
     )
-    .map_err(|_| Missing::Inventory)?;
+    .map_err(|reason| match reason {
+        eq_client_core::resources::EquipmentUnavailable::UnconfirmedInventory => {
+            Missing::Prediction
+        }
+        _ => Missing::Inventory,
+    })?;
     let mut modifiers = food(inventory, u16::from(player.level))?;
     for (_, item) in equipped {
         modifiers.strength += i64::from(item.bonuses.strength);
@@ -205,7 +210,11 @@ fn calculate(
     })
 }
 
-fn inputs(world: &ClientWorld, spells: &crate::spellbook::SpellNames) -> SpeedInputState {
+/// The same typed readiness result for movement reporting and script diagnostics.
+pub(crate) fn inputs(
+    world: &ClientWorld,
+    spells: &crate::spellbook::SpellNames,
+) -> SpeedInputState {
     match calculate(world, |id| spells.mechanics(id).map(|m| m.effects.to_vec())) {
         Ok(inputs) => SpeedInputState::Ready(inputs),
         Err(reason) => SpeedInputState::Unavailable(reason),

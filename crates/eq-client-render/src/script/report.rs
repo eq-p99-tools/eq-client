@@ -22,6 +22,25 @@ pub(super) fn state(
     transform: Option<&Transform>,
 ) {
     let position = transform.map(placement);
+    let inventory = online.world().inventory();
+    let item_inputs = |item: &eq_client_core::inventory::InventoryItem| {
+        (
+            item.details.id,
+            item.details.weight_tenths,
+            item.details.equipment,
+            item.details.bonuses,
+        )
+    };
+    let prediction_inputs: Vec<_> = inventory
+        .prediction_origins()
+        .map(|(slot, origin)| {
+            (
+                slot.0,
+                origin.map(item_inputs),
+                inventory.items().get(&slot).map(item_inputs),
+            )
+        })
+        .collect();
     let slots: Vec<u32> = online
         .world()
         .buffs()
@@ -87,6 +106,18 @@ pub(super) fn state(
         ?items,
         inventory_predicted = online.world().inventory().predicted(),
         inventory_stale = online.world().inventory().stale(),
+        inventory_equipment_uncertain = online.world().inventory().equipment_stats_uncertain(),
+        inventory_prediction_inputs = ?prediction_inputs,
+        inventory_origins = ?online.world().inventory().prediction_origins()
+            .map(|(slot, item)| (slot.0, item.map(|item| item.details.id)))
+            .collect::<Vec<_>>(),
+        movement_weight = ?online.world().movement_weight(),
+        equipment_inputs = ?online.world().player().and_then(|player| {
+            player.class.map(|class| eq_client_core::resources::eqemu_equipped_modifiers(
+                inventory, class, player.race, u16::from(player.level),
+            ))
+        }),
+        movement_inputs = ?spells.as_deref().map(|spells| crate::speed::inputs(online.world(), spells)),
         cursor_queued = online.world().inventory().queued().count(),
         exchange = ?online.world().exchange(),
         abilities = ?online.world().abilities(),

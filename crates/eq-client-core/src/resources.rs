@@ -84,7 +84,9 @@ pub enum EquipmentUnavailable {
 
 /// Selects direct stat-bearing equipment using Titanium slot and eligibility masks.
 /// Ammo, cursor, carried and bank items are excluded. Food/drink contributions are separate.
-/// Predictions in storage slots do not invalidate unchanged equipment.
+/// Predictions in storage slots and provably stat-neutral equipment histories
+/// do not invalidate contributions. Affecting or unknown intermediate equipment
+/// remains gated until authoritative coverage, even after a local round trip.
 /// Returned worn effects still require evaluation; this is not a complete capacity result.
 ///
 /// # Errors
@@ -98,11 +100,7 @@ pub fn eqemu_equipped_modifiers(
     if !inventory.received() {
         return Err(EquipmentUnavailable::MissingSnapshot);
     }
-    if inventory.stale()
-        || inventory
-            .prediction_origins()
-            .any(|(slot, _)| (0..=20).contains(&slot.0))
-    {
+    if inventory.stale() || inventory.equipment_stats_uncertain() {
         return Err(EquipmentUnavailable::UnconfirmedInventory);
     }
     if !(1..=16).contains(&class) || level == 0 {
