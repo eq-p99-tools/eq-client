@@ -2845,7 +2845,7 @@ fn openable_doors(online: &super::online::OnlineState) -> Vec<u8> {
         .doors()
         .entries()
         .values()
-        .filter(|door| super::doors::swings(door))
+        .filter(|door| online.world().doors().supports_use(door.id) && super::doors::swings(door))
         .map(|door| door.id)
         .collect()
 }

@@ -792,6 +792,11 @@ pub(crate) mod testing {
         state.world = world;
     }
 
+    /// Selects the native generation before synthetic admission/door news.
+    pub(crate) fn generation(state: &mut OnlineState, generation: eq_client_core::GameDialect) {
+        state.world.carry_as(generation);
+    }
+
     /// Applies one update as the session's receiver hands it over.
     pub(crate) fn apply(state: &mut OnlineState, update: &WorldUpdate) {
         state.world.apply(update, Instant::now(), &NoSpells);

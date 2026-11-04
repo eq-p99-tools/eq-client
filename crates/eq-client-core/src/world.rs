@@ -349,9 +349,7 @@ impl ClientWorld {
     /// refreshed gems start their timers once the spells' timing is known,
     /// and casts that nothing ended run out.
     pub fn tick(&mut self, now: Instant, spells: &dyn SpellCatalog) {
-        if self.zone.doors.closes_due(now) {
-            self.zone.doors.close_due(now);
-        }
+        self.zone.doors.close_due(now);
         self.casting.cooldowns.resolve(spells, now);
         self.expire_casts(now);
     }
@@ -851,7 +849,7 @@ impl ClientWorld {
                 forward,
             } => self.position(*spawn_id, (*position, *velocity, *forward), now, news),
             WorldEvent::WearChange(change) => self.wear(change),
-            WorldEvent::Doors(update) => self.zone.doors.apply(update, now),
+            WorldEvent::Doors(update) => self.zone.doors.apply_for(update, now, self.generation),
             WorldEvent::DoorAction {
                 session_id,
                 door_id,

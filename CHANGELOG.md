@@ -51,6 +51,12 @@
   fallback so fatigue-only ticks leave the exact posted report unchanged, and
   display current capacity through the network formula. Missing prerequisites
   stay unavailable; Titanium capacity and zero-sentinel behavior are unchanged.
+- Offer the door hint and F key for supported ordinary EQMac doors with a
+  current empty cursor, generation-specific reach and settled hinge. Animate
+  received actions and native local return timing; sending a click does not
+  open the door. Specialized, static and unknown mechanisms stay visible
+  without use. Additive `doors::DoorTable` APIs: `apply_for`, `supports_use`,
+  `use_distance` and `hinge_fraction`; re-export `doors::eqmac`.
 - Keep autorun during a continuously positive speed recalibration. Actual
   withdrawal, admission and unsafe readiness resets still clear it.
 
