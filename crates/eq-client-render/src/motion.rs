@@ -2857,6 +2857,7 @@ mod tests {
         let (sender, receiver) = mpsc::sync_channel(1);
         sender
             .send(ClientCommand::SelectTarget {
+                request_id: 1,
                 session_id: 11,
                 spawn_id: None,
             })

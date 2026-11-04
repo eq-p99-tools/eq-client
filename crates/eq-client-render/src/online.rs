@@ -805,7 +805,9 @@ fn trace(update: &WorldUpdate, changes: &eq_client_core::world::Changes, world: 
     };
     match event {
         WorldEvent::ItemDetails(item) => debug!("Item definition received: ID {}", item.id),
-        WorldEvent::TargetSent(id) if !changes.ignored => debug!("Target packet sent: {id:?}"),
+        WorldEvent::TargetSent { state, .. } if !changes.ignored => {
+            debug!("Target packet sent: {:?}", state.spawn_id);
+        }
         WorldEvent::HealthPercent { spawn_id, percent }
             if world.target().selected == Some(*spawn_id) =>
         {

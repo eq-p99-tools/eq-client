@@ -407,10 +407,39 @@ impl ClientWorld {
         &self.target
     }
 
+    /// Correlation ID for the next explicit local target choice.
+    ///
+    /// # Panics
+    /// Panics if all 64-bit selection IDs have been used in this process.
+    #[must_use]
+    pub fn next_target_request(&self) -> u64 {
+        self.target_sequence
+            .checked_add(1)
+            .expect("target sequence exhausted")
+    }
+
+    /// Current target identity for a queued ability. A pending local choice,
+    /// unresolved server ID or lost incarnation has no usable identity.
+    #[must_use]
+    pub fn target_intent(&self) -> Option<eq_network_game::targets::TargetState> {
+        self.target.authority.filter(|state| {
+            self.in_world()
+                && self.target.sent
+                && state.available
+                && state.spawn_id == self.target.selected
+                && !self.target_stale()
+        })
+    }
+
     /// Whether the target is gone: its spawn despawned, was replaced or
     /// turned invisible. The player choosing themselves never goes stale.
     #[must_use]
     pub fn target_stale(&self) -> bool {
+        if self.target.server_selected
+            && self.target.authority.is_some_and(|state| !state.available)
+        {
+            return self.target.selected.is_some();
+        }
         self.target.selected.is_some_and(|id| {
             !self.is_player(id)
                 && self.zone.spawns.get(&id).is_none_or(|spawn| {

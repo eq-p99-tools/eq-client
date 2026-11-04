@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Follow admission-scoped server target changes and clears without echoing
+  selection packets. Preserve pending local choices and refuse ambiguous ability
+  recipients; unknown IDs and replaced spawns remain unavailable until resolved.
+
 - Follow the network-owned spell-table requirement for provider lifecycle and
   initial readiness instead of matching provider policy names in the host.
 - Post automatic-food preferences only to admissions offering `Capability::Meals`,

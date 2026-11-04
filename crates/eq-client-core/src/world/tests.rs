@@ -1434,22 +1434,263 @@ fn the_inventory_lasts_until_the_admission_or_session_ends() {
 #[test]
 fn the_target_follows_the_choice_and_the_sessions_word_on_it() {
     let mut world = admitted();
+    let state = |revision, spawn_id| eq_network_game::targets::TargetState {
+        revision,
+        spawn_id,
+        available: true,
+    };
     world.select_target(Some(5));
     assert_eq!(world.target().selected, Some(5));
     assert!(!world.target().sent);
     // News of another choice is not this one's.
-    assert!(game(&mut world, WorldEvent::TargetSent(Some(4))).ignored);
-    assert!(!game(&mut world, WorldEvent::TargetSent(Some(5))).ignored);
+    assert!(
+        game(
+            &mut world,
+            WorldEvent::TargetSent {
+                session_id: 2,
+                request_id: 1,
+                state: state(1, Some(5)),
+            }
+        )
+        .ignored
+    );
+    assert!(
+        !game(
+            &mut world,
+            WorldEvent::TargetSent {
+                session_id: 1,
+                request_id: 1,
+                state: state(1, Some(5)),
+            }
+        )
+        .ignored
+    );
     assert!(world.target().sent);
-    let refusal = |session_id, spawn_id| WorldEvent::TargetRejected {
+    world.select_target(Some(4));
+    let refusal = |session_id, request_id, spawn_id| WorldEvent::TargetRejected {
         session_id,
+        request_id,
         spawn_id,
+        state: Some(state(1, Some(5))),
         reason: "Too far away".into(),
     };
-    assert!(game(&mut world, refusal(2, Some(5))).ignored);
-    assert!(game(&mut world, refusal(1, Some(4))).ignored);
-    assert!(!game(&mut world, refusal(1, Some(5))).ignored);
+    assert!(game(&mut world, refusal(2, 2, Some(4))).ignored);
+    assert!(game(&mut world, refusal(1, 1, Some(4))).ignored);
+    assert!(!game(&mut world, refusal(1, 2, Some(4))).ignored);
+    assert_eq!(
+        world.target().selected,
+        Some(5),
+        "restore session authority"
+    );
+    assert!(world.target_intent().is_some());
+}
+
+fn target_changed(
+    session_id: u64,
+    request_id: u64,
+    revision: u64,
+    spawn_id: Option<u16>,
+    available: bool,
+) -> WorldEvent {
+    WorldEvent::TargetChanged {
+        session_id,
+        request_id,
+        state: eq_network_game::targets::TargetState {
+            revision,
+            spawn_id,
+            available,
+        },
+    }
+}
+
+#[test]
+fn server_targets_and_clears_project_without_becoming_local_requests() {
+    let mut world = admitted();
+    game(&mut world, WorldEvent::Spawns(vec![spawn(6)]));
+    // Raw wire facts alone are not admission-scoped authority.
+    game(&mut world, WorldEvent::Target(Some(5)));
     assert_eq!(world.target().selected, None);
+    for (revision, selected) in [(1, Some(5)), (2, Some(6)), (3, None)] {
+        game(&mut world, target_changed(1, 0, revision, selected, true));
+        assert_eq!(world.target().selected, selected);
+        assert!(world.target().server_selected);
+        let intent = world.target_intent().unwrap();
+        assert_eq!((intent.revision, intent.spawn_id), (revision, selected));
+    }
+    assert!(game(&mut world, target_changed(1, 0, 2, Some(6), true)).ignored);
+    assert_eq!(world.target().selected, None);
+}
+
+#[test]
+fn older_same_id_submission_cannot_acknowledge_a_newer_pending_choice() {
+    let mut world = admitted();
+    game(&mut world, WorldEvent::Spawns(vec![spawn(6)]));
+    for selected in [5, 6, 5] {
+        world.select_target(Some(selected));
+    }
+    game(
+        &mut world,
+        WorldEvent::TargetSent {
+            session_id: 1,
+            request_id: 1,
+            state: eq_network_game::targets::TargetState {
+                revision: 1,
+                spawn_id: Some(5),
+                available: true,
+            },
+        },
+    );
+    assert_eq!(world.target().selected, Some(5));
+    assert!(!world.target().sent);
+    assert_eq!(world.target_intent(), None);
+    game(&mut world, target_changed(1, 1, 2, Some(6), true));
+    assert_eq!(
+        world.target().selected,
+        Some(5),
+        "newer local choice stays pending"
+    );
+    assert_eq!(world.target_intent(), None);
+    game(
+        &mut world,
+        WorldEvent::TargetSent {
+            session_id: 1,
+            request_id: 3,
+            state: eq_network_game::targets::TargetState {
+                revision: 3,
+                spawn_id: Some(5),
+                available: true,
+            },
+        },
+    );
+    assert!(world.target().sent);
+    assert_eq!(world.target_intent().unwrap().revision, 3);
+    game(&mut world, target_changed(1, 3, 4, None, true));
+    assert_eq!(world.target().selected, None);
+}
+
+#[test]
+fn unknown_server_target_resolves_once_and_never_rebinds_a_replacement() {
+    let mut world = admitted();
+    game(&mut world, target_changed(1, 0, 1, Some(44), false));
+    assert_eq!(world.target().selected, Some(44));
+    assert!(world.target_stale());
+    assert_eq!(world.target_intent(), None);
+    game(&mut world, WorldEvent::Spawns(vec![spawn(44)]));
+    game(&mut world, target_changed(1, 0, 2, Some(44), true));
+    assert!(world.target_intent().is_some());
+    game(&mut world, WorldEvent::Spawns(vec![spawn(44)]));
+    assert_eq!(
+        world.target_intent(),
+        None,
+        "local incarnation changed already"
+    );
+    game(&mut world, target_changed(1, 0, 3, Some(44), false));
+    game(&mut world, WorldEvent::Spawns(vec![spawn(44)]));
+    assert!(world.target_stale());
+    assert_eq!(world.target_intent(), None);
+    game(&mut world, target_changed(1, 0, 4, Some(44), true));
+    assert!(
+        world.target_intent().is_some(),
+        "fresh explicit authority can select it"
+    );
+}
+
+#[test]
+fn late_target_projections_do_not_repopulate_a_lost_or_new_admission() {
+    let mut world = admitted();
+    game(&mut world, target_changed(1, 0, 1, Some(5), true));
+    connection(&mut world, false, false);
+    assert!(game(&mut world, target_changed(1, 0, 2, Some(5), true)).ignored);
+    assert_eq!(world.target().selected, None);
+    game(&mut world, entered(2));
+    assert!(game(&mut world, target_changed(1, 0, 3, Some(5), true)).ignored);
+    assert_eq!(world.target_intent(), None);
+    game(&mut world, target_changed(2, 0, 0, None, true));
+    connection(&mut world, true, false);
+    assert_eq!(world.target_intent().unwrap().spawn_id, None);
+}
+
+#[test]
+fn target_projection_stages_between_entered_and_connected_but_not_after_reset() {
+    let mut world = ClientWorld::default();
+    game(&mut world, entered(1));
+    game(&mut world, WorldEvent::Spawns(vec![spawn(5)]));
+    assert!(!game(&mut world, target_changed(1, 0, 1, Some(5), true)).ignored);
+    assert_eq!(world.target().selected, Some(5));
+    assert_eq!(world.target_intent(), None, "not connected yet");
+    connection(&mut world, true, false);
+    assert_eq!(world.target_intent().unwrap().spawn_id, Some(5));
+    connection(&mut world, false, false);
+    connection(&mut world, true, false);
+    assert!(game(&mut world, target_changed(1, 0, 2, Some(5), true)).ignored);
+    assert_eq!(
+        world.target_intent(),
+        None,
+        "Connected alone cannot reopen old projections"
+    );
+}
+
+#[test]
+fn a_shared_gate_refusal_does_not_invent_a_processed_selection_sequence() {
+    let mut world = admitted();
+    game(&mut world, target_changed(1, 0, 1, Some(5), true));
+    world.select_target(None);
+    game(
+        &mut world,
+        WorldEvent::TargetRejected {
+            session_id: 1,
+            request_id: 1,
+            spawn_id: None,
+            state: None,
+            reason: "Action held".into(),
+        },
+    );
+    assert_eq!(world.target().selected, Some(5));
+    assert_eq!(world.target_intent().unwrap().revision, 1);
+    assert!(!game(&mut world, target_changed(1, 0, 2, None, true)).ignored);
+    assert_eq!(world.target_intent().unwrap().spawn_id, None);
+}
+
+#[test]
+fn a_local_target_receipt_cannot_bind_a_spawn_replaced_while_the_choice_waited() {
+    let mut world = admitted();
+    world.select_target(Some(5));
+    game(&mut world, WorldEvent::Spawns(vec![spawn(5)]));
+    assert!(world.target_stale());
+    game(
+        &mut world,
+        WorldEvent::TargetSent {
+            session_id: 1,
+            request_id: 1,
+            state: eq_network_game::targets::TargetState {
+                revision: 1,
+                spawn_id: Some(5),
+                available: true,
+            },
+        },
+    );
+    assert_eq!(world.target().selected, Some(5));
+    assert!(
+        world.target_stale(),
+        "submission is not a fresh choice of the replacement"
+    );
+    assert_eq!(world.target_intent(), None);
+    // An explicit choice after observing the replacement is fresh.
+    world.select_target(Some(5));
+    game(
+        &mut world,
+        WorldEvent::TargetSent {
+            session_id: 1,
+            request_id: 2,
+            state: eq_network_game::targets::TargetState {
+                revision: 2,
+                spawn_id: Some(5),
+                available: true,
+            },
+        },
+    );
+    assert!(!world.target_stale());
+    assert_eq!(world.target_intent().unwrap().revision, 2);
 }
 
 #[test]

@@ -119,7 +119,7 @@ pub(super) fn input(
     let own_id = online.world().player().map(|player| player.spawn_id);
     // A target lasts until its spawn despawns, is replaced or turns invisible, however
     // far away it goes; drawing range only limits what can be clicked or cycled.
-    let invalid = online.world().target_stale();
+    let invalid = online.world().target_stale() && !online.world().target().server_selected;
     let current = online.world().target().selected;
     let mut proposal = invalid.then_some(None);
     if !*attempted
@@ -250,12 +250,14 @@ pub(crate) fn select(online: &mut OnlineState, outbox: &Outbox, selected: Option
     if selected == online.world().target().selected && !online.world().target_stale() {
         return;
     }
+    let request_id = online.world().next_target_request();
     // Offline, the choice is the viewer's alone; online, the outbox says
     // why a choice did not leave.
     if online.enabled
         && outbox
             .post(online.world(), |stamp| ClientCommand::SelectTarget {
                 session_id: stamp.session_id,
+                request_id,
                 spawn_id: selected,
             })
             .is_err()
@@ -518,6 +520,7 @@ pub(super) fn update(
     let chosen = online.world().target();
     let spawn = chosen
         .selected
+        .filter(|_| !online.world().target_stale())
         .and_then(|id| online.world().spawn(id).map(|spawn| &spawn.state));
     let own = online
         .world()
@@ -525,6 +528,7 @@ pub(super) fn update(
         .filter(|player| chosen.selected == Some(player.spawn_id));
     let hp = chosen
         .selected
+        .filter(|_| !online.world().target_stale())
         .and_then(|id| online.world().health(id))
         .or_else(|| own.and_then(|player| player.hp_percent));
     let health = format!("HP {}", hp.map_or_else(|| "--".into(), |v| format!("{v}%")));
@@ -534,6 +538,8 @@ pub(super) fn update(
                 || {
                     if own.is_some() {
                         "You".into()
+                    } else if chosen.selected.is_some() {
+                        "Target unavailable".into()
                     } else {
                         "No target".into()
                     }
@@ -552,7 +558,12 @@ pub(super) fn update(
                     };
                     let attacking = combat.as_ref().is_some_and(|combat| combat.auto_attack);
                     let doing = if attacking { "Attacking" } else { "" };
-                    joined(&[kind, &health, doing])
+                    let pending = if online.enabled && !chosen.sent {
+                        "Target pending"
+                    } else {
+                        ""
+                    };
+                    joined(&[kind, &health, doing, pending])
                 },
             );
         }
@@ -947,8 +958,12 @@ mod tests {
         );
     }
 
-    #[test]
-    fn self_target_uses_profile_without_a_nearby_entity_and_survives_culling() {
+    fn target_app() -> (
+        App,
+        std::sync::mpsc::Receiver<ClientCommand>,
+        Entity,
+        Entity,
+    ) {
         let mut app = App::new();
         crate::keys::testing::install(&mut app);
         let mut online = OnlineState::new(true);
@@ -1002,6 +1017,12 @@ mod tests {
         ));
         let label = app.world_mut().spawn((TargetName, Text::default())).id();
         let bar = app.world_mut().spawn((TargetHp, Node::default())).id();
+        (app, rx, label, bar)
+    }
+
+    #[test]
+    fn self_target_uses_profile_without_a_nearby_entity_and_survives_culling() {
+        let (mut app, rx, label, bar) = target_app();
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .press(KeyCode::F1);
@@ -1009,6 +1030,7 @@ mod tests {
         assert!(matches!(
             rx.try_recv().unwrap(),
             ClientCommand::SelectTarget {
+                request_id: 1,
                 session_id: 1,
                 spawn_id: Some(7)
             }
@@ -1037,6 +1059,55 @@ mod tests {
         );
         app.update();
         assert_eq!(app.world().get::<Node>(bar).unwrap().width, percent(31));
+    }
+
+    #[test]
+    fn unresolved_server_targets_and_clears_never_echo_or_borrow_health() {
+        let (mut app, rx, label, bar) = target_app();
+        // An unresolved server selection must stay explicit, with no
+        // automatic clear packet from input and no borrowed entity HP.
+        crate::online::testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [eq_client_core::WorldEvent::TargetChanged {
+                session_id: 1,
+                request_id: 0,
+                state: eq_client_core::targets::TargetState {
+                    revision: 2,
+                    spawn_id: Some(99),
+                    available: false,
+                },
+            }],
+        );
+        app.update();
+        assert_eq!(
+            app.world().get::<Text>(label).unwrap().0,
+            "Target unavailable"
+        );
+        assert_eq!(app.world().get::<Node>(bar).unwrap().width, percent(0));
+        assert_eq!(
+            app.world()
+                .resource::<OnlineState>()
+                .world()
+                .target()
+                .selected,
+            Some(99)
+        );
+        assert!(rx.try_recv().is_err());
+        crate::online::testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [eq_client_core::WorldEvent::TargetChanged {
+                session_id: 1,
+                request_id: 0,
+                state: eq_client_core::targets::TargetState {
+                    revision: 3,
+                    spawn_id: None,
+                    available: true,
+                },
+            }],
+        );
+        app.update();
+        assert_eq!(app.world().get::<Text>(label).unwrap().0, "No target");
+        assert!(rx.try_recv().is_err());
     }
 
     fn candidate(id: u16, hit: Option<f32>, posed: Option<(f32, f32)>) -> Candidate {

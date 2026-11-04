@@ -288,6 +288,8 @@ pub struct ClientWorld {
     items: ItemCache,
     // Until any reset: the target, the motion granted and camping.
     target: Target,
+    /// Host choices never reuse a correlation ID after a local reset.
+    target_sequence: u64,
     motion: Option<MotionGrant>,
     speed_input_revision: Option<u64>,
     accepted_speed_inputs: Option<crate::SpeedInputAcceptance>,
@@ -436,12 +438,18 @@ impl ClientWorld {
     /// The player's own choice of target, which the client tells the session
     /// separately; what the session makes of it arrives as news.
     pub fn select_target(&mut self, spawn: Option<u16>) {
+        self.target_sequence = self.next_target_request();
         self.target = Target {
             selected: spawn,
             sent: false,
             revision: spawn
                 .and_then(|id| self.zone.spawns.get(&id))
                 .map(|spawn| spawn.revision),
+            server_selected: false,
+            request_id: self.target_sequence,
+            reported_request: self.target.reported_request,
+            authority: self.target.authority,
+            accepts_updates: self.target.accepts_updates,
         };
     }
 
@@ -771,12 +779,19 @@ impl ClientWorld {
             }
             WorldEvent::Damage(damage) => self.damage(damage, news),
             WorldEvent::Animation(animation) => self.motion_news(*animation, news),
-            WorldEvent::TargetSent(id) => self.target_sent(*id, news),
+            WorldEvent::TargetChanged { session_id, request_id, state } => {
+                self.target_updated(*session_id, *request_id, *state, true, news);
+            }
+            WorldEvent::TargetSent { session_id, request_id, state } => {
+                self.target_updated(*session_id, *request_id, *state, false, news);
+            }
             WorldEvent::TargetRejected {
                 session_id,
+                request_id,
                 spawn_id,
+                state,
                 reason,
-            } => self.target_refused((*session_id, *spawn_id), reason, news),
+            } => self.target_refused((*session_id, *request_id, *spawn_id), *state, reason, news),
             WorldEvent::Visibility {
                 spawn_id,
                 invisible,

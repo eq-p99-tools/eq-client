@@ -25,6 +25,7 @@ pub(crate) fn update(
         .world()
         .target()
         .selected
+        .filter(|_| !online.world().target_stale())
         .filter(|_| options.options.target_ring)
         .filter(|_| online.world().connected() && !online.world().is_dead());
     let pose = selected.and_then(|id| {
