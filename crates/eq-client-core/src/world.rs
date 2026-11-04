@@ -306,6 +306,8 @@ pub struct ClientWorld {
     /// Where the last camp ended, until a front end takes it: one to the
     /// desktop ends the program.
     camped: Option<crate::camp::CampTo>,
+    /// Evidence retained separately from taking the local desktop destination.
+    camp_completion: Option<crate::camp::Completion>,
 
     // The character: from admission until camping.
     player: Option<PlayerState>,
@@ -439,6 +441,13 @@ impl ClientWorld {
     #[must_use]
     pub fn leaving(&self) -> bool {
         self.camped == Some(crate::camp::CampTo::Desktop)
+    }
+
+    /// The last completed camp's scope and evidence, until the next camp or
+    /// admission. A local deadline does not confirm server logout or cleanup.
+    #[must_use]
+    pub fn camp_completion(&self) -> Option<crate::camp::Completion> {
+        self.camp_completion
     }
 
     /// The player's own choice of target, which the client tells the session
@@ -1357,6 +1366,7 @@ impl ClientWorld {
         }
         match reason {
             Reset::Entered => {
+                self.camp_completion = None;
                 self.forget_admission();
                 self.wallet = crate::money::Wallet::default();
                 self.known_cursor_coins = None;
@@ -1368,7 +1378,8 @@ impl ClientWorld {
                 self.casting.interrupted = None;
             }
             Reset::Camped => {
-                // The character is gone, and with them everything about them.
+                // Local camp completion invalidates the character projection;
+                // its reply/deadline evidence is retained separately.
                 self.forget_admission();
                 self.book_action = None;
                 self.casting = Casting::default();

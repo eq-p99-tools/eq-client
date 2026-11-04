@@ -241,10 +241,27 @@ impl ClientWorld {
         // The camp under way keeps where it ends; one the session only now
         // says began ends where the player last asked.
         let to = self.camp.map_or(self.camp_to, |camp| camp.to);
-        if matches!(status, CampStatus::Camped) {
-            let changes = self.reset(Reset::Camped);
+        let outcome = match status {
+            CampStatus::Camped => Some(crate::camp::CampOutcome::LogoutReply),
+            CampStatus::ClosedWithoutReply => Some(crate::camp::CampOutcome::LocalDeadline),
+            _ => None,
+        };
+        if let Some(outcome) = outcome {
+            let completion = crate::camp::Completion {
+                admission_id: self.session_id,
+                destination: to,
+                outcome,
+            };
+            let mut changes = self.reset(Reset::Camped);
             self.camped = Some(to);
+            self.camp_completion = Some(completion);
+            if outcome == crate::camp::CampOutcome::LocalDeadline {
+                changes.notices.push(Notice::Camp(status.clone()));
+            }
             return changes;
+        }
+        if matches!(status, CampStatus::Preparing | CampStatus::LoggingOut) {
+            self.camp_completion = None;
         }
         self.camp = match status {
             CampStatus::Preparing => Some(Camp {
@@ -259,7 +276,10 @@ impl ClientWorld {
                 logging_out: true,
                 to,
             }),
-            CampStatus::Abandoned { .. } | CampStatus::Rejected(_) | CampStatus::Camped => None,
+            CampStatus::Abandoned { .. }
+            | CampStatus::Rejected(_)
+            | CampStatus::Camped
+            | CampStatus::ClosedWithoutReply => None,
         };
         if self.camp.is_none() {
             // Abandoned or refused: the next camp ends where it asks.

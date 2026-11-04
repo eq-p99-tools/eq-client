@@ -544,6 +544,9 @@ fn camp_lines(camp: &CampStatus, messages: Option<&Messages>) -> Vec<Said> {
         }
         CampStatus::LoggingOut => vec!["Logging out...".into()],
         CampStatus::Camped => Vec::new(),
+        CampStatus::ClosedWithoutReply => {
+            vec!["The zone connection closed after logout; no logout reply was received.".into()]
+        }
         CampStatus::Rejected(reason) => vec![reason.as_str().into()],
     }
 }
@@ -1283,6 +1286,13 @@ mod tests {
             [(Place::Chat, "Server message 12293".into())]
         );
         assert_eq!(wording(&Notice::Camp(CampStatus::Camped), None), []);
+        assert_eq!(
+            wording(&Notice::Camp(CampStatus::ClosedWithoutReply), None),
+            [(
+                Place::Chat,
+                "The zone connection closed after logout; no logout reply was received.".into()
+            )]
+        );
     }
 
     #[test]

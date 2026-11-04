@@ -2728,6 +2728,46 @@ fn a_desktop_camp_leaves_the_program_once_camped_and_a_plain_one_does_not() {
 }
 
 #[test]
+fn a_local_camp_deadline_keeps_its_destination_and_unconfirmed_evidence() {
+    use crate::camp::{CampOutcome, Completion};
+
+    for to in [CampTo::CharacterSelect, CampTo::Desktop] {
+        for (status, outcome) in [
+            (CampStatus::Camped, CampOutcome::LogoutReply),
+            (CampStatus::ClosedWithoutReply, CampOutcome::LocalDeadline),
+        ] {
+            let mut world = admitted();
+            let admission_id = world.session_id();
+            world.camp_to(to);
+            game(&mut world, WorldEvent::Camp(CampStatus::Preparing));
+            game(&mut world, WorldEvent::Camp(CampStatus::LoggingOut));
+            let changes = game(&mut world, WorldEvent::Camp(status));
+            assert_eq!(changes.reset, Some(Reset::Camped));
+            assert!(world.player().is_none() && world.session_id().is_none());
+            assert_eq!(world.leaving(), to == CampTo::Desktop);
+            let expected = Some(Completion {
+                admission_id,
+                destination: to,
+                outcome,
+            });
+            assert_eq!(world.camp_completion(), expected);
+            assert_eq!(world.take_leaving(), to == CampTo::Desktop);
+            assert!(!world.take_leaving());
+            assert_eq!(
+                world.camp_completion(),
+                expected,
+                "taking the exit does not erase evidence"
+            );
+            game(&mut world, entered(8));
+            assert!(
+                world.camp_completion().is_none(),
+                "a new admission does not inherit it"
+            );
+        }
+    }
+}
+
+#[test]
 fn item_definitions_last_for_the_admission() {
     let mut world = admitted();
     game(&mut world, WorldEvent::ItemDetails(chest().details));

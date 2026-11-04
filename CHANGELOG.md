@@ -9,6 +9,10 @@
   Window-layout v2 retains sizes and reads legacy position-only records.
 - API: `sidl::Screen::sizable` preserves `Sizable::{Omitted, Invalid, Fixed,
   Enabled}`. Screen struct literals must supply the authored declaration.
+- Distinguish a received camp logout reply from the normal local close deadline.
+  Both preserve the requested selection or desktop destination. Retain the
+  departing admission and evidence in lifecycle reports; a deadline alone does
+  not confirm server logout or cleanup.
 
 - Keep explicit background scripts running while their window is focused or
   passively observed with the pointer. Genuine keyboard, button and wheel input
