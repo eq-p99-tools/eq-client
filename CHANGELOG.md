@@ -6,6 +6,12 @@
   selection packets. Preserve pending local choices and refuse ambiguous ability
   recipients; unknown IDs and replaced spawns remain unavailable until resolved.
 
+- Read P99 notes and books through the selected worker inventory revision and
+  enqueue time. Refuse outstanding item projections or stale holdings before
+  submission. Only supported server text opens a note/book window; death,
+  transfer and disconnect clear it, and suspended arrivals cannot reopen it.
+  Preserve EQMac's nonzero book-kind behavior separately from Titanium.
+
 - Follow the network-owned spell-table requirement for provider lifecycle and
   initial readiness instead of matching provider policy names in the host.
 - Post automatic-food preferences only to admissions offering `Capability::Meals`,

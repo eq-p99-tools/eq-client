@@ -3379,6 +3379,65 @@ fn a_text_is_read_until_put_away_or_the_player_enters_a_zone() {
 }
 
 #[test]
+fn reading_text_cannot_reopen_after_disconnect_or_become_a_note_for_unknown_titanium_kind() {
+    let mut world = admitted();
+    let text = |kind| {
+        WorldEvent::BookText(crate::books::BookText {
+            kind,
+            text: "Synthetic server text".into(),
+        })
+    };
+    game(&mut world, text(1));
+    let before = world.reading().cloned();
+    for kind in [2, 255] {
+        assert!(game(&mut world, text(kind)).ignored);
+        assert_eq!(world.reading(), before.as_ref());
+    }
+    connection(&mut world, false, false);
+    assert!(world.reading().is_none());
+    assert!(game(&mut world, text(0)).ignored);
+    assert!(world.reading().is_none());
+    game(&mut world, entered(2));
+    assert!(game(&mut world, text(1)).ignored);
+    connection(&mut world, true, false);
+    game(&mut world, text(0));
+    assert_eq!(world.reading().map(|text| text.kind), Some(0));
+}
+
+#[test]
+fn death_and_zone_transfer_clear_reading_and_ignore_late_text_while_suspended() {
+    for reset in [
+        WorldEvent::Death(crate::Death {
+            spawn_id: 9,
+            killer_id: 5,
+            corpse_id: 0,
+            bind_zone_id: 0,
+            corpse_name: None,
+        }),
+        WorldEvent::ZoneTransfer(crate::ZoneOffer {
+            zone_id: 2,
+            instance_id: 0,
+            position: WorldPosition::default(),
+            reason: 0,
+            to_bind: false,
+            solicited: true,
+        }),
+    ] {
+        let mut world = admitted();
+        let text = WorldEvent::BookText(crate::books::BookText {
+            kind: 0,
+            text: "Synthetic text".into(),
+        });
+        game(&mut world, text.clone());
+        assert!(world.reading().is_some());
+        game(&mut world, reset);
+        assert!(world.reading().is_none());
+        assert!(game(&mut world, text).ignored);
+        assert!(world.reading().is_none());
+    }
+}
+
+#[test]
 fn a_combine_is_under_way_until_the_server_answers() {
     use crate::{inventory::InventorySlot, tradeskills::CombineUpdate};
     let mut world = admitted();

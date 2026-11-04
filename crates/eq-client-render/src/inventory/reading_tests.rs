@@ -13,7 +13,7 @@ fn online(reading: bool) -> OnlineState {
         &mut online,
         [WorldEvent::Entered {
             capabilities: if reading {
-                vec![Capability::Reading]
+                vec![Capability::Reading, Capability::Inventory]
             } else {
                 Vec::new()
             },
@@ -45,6 +45,7 @@ fn click(online: &OnlineState, sender: &Outbox, shown: &mut Shown) {
         shown,
         &crate::skinned::Skinned::default(),
         &mut crate::items::ItemState::default(),
+        &mut InventoryState::default(),
     );
 }
 
@@ -60,8 +61,10 @@ fn reading_click_posts_the_current_slot_without_inventing_text_or_opening_a_wind
         rx.try_recv().unwrap(),
         ClientCommand::ReadItem {
             session_id: 7,
-            slot: InventorySlot(23)
-        }
+            slot: InventorySlot(23),
+            revision,
+            ..
+        } if revision == before.revision()
     ));
     assert!(rx.try_recv().is_err());
     assert_eq!(sender.take_refused(), []);
@@ -117,4 +120,82 @@ fn reading_post_refusals_reach_chat_once_without_a_second_window_notice() {
             "case {case}"
         );
     }
+}
+
+#[test]
+fn queued_readable_projection_and_stale_inventory_do_not_submit_reads() {
+    use eq_client_core::inventory::{InventoryActor, InventoryMove, MoveQuantity, MoveRules};
+    let mut online = online(true);
+    let (tx, rx) = std::sync::mpsc::sync_channel(2);
+    let sender = Outbox::new(Some(tx));
+    let request = InventoryMove {
+        session_id: 7,
+        revision: online.world().inventory().revision(),
+        sequence: None,
+        from: InventorySlot(23),
+        to: InventorySlot::CURSOR,
+        quantity: MoveQuantity::Whole,
+        created: std::time::Instant::now(),
+    };
+    let actor = InventoryActor {
+        bank_access: false,
+        class: Some(1),
+        deity: None,
+        dual_wield: None,
+        race: 1,
+        level: 1,
+        trade_slots: 0,
+        trade_no_drop: false,
+        world_container: false,
+    };
+    online.plan_inventory_as(Some(MoveRules::EqEmu));
+    online
+        .queue_inventory_move(request, actor, &sender)
+        .unwrap();
+    let ClientCommand::MoveInventory(request) = rx.try_recv().unwrap() else {
+        panic!("move");
+    };
+    let mut state = InventoryState::default();
+    right_click(
+        InventorySlot::CURSOR,
+        &online,
+        &sender,
+        &mut Shown::default(),
+        &crate::skinned::Skinned::default(),
+        &mut crate::items::ItemState::default(),
+        &mut state,
+    );
+    assert!(rx.try_recv().is_err());
+    assert_eq!(
+        state.refused,
+        ["Finish the queued item moves before reading"]
+    );
+    assert!(online.world().reading().is_none());
+    let update = online
+        .world()
+        .worker_inventory()
+        .plan_move_for(MoveRules::EqEmu, &request, actor)
+        .unwrap();
+    testing::news(
+        &mut online,
+        [WorldEvent::InventoryAction {
+            session_id: request.session_id,
+            revision: request.revision,
+            sequence: request.sequence,
+            update: Some(update),
+            error: None,
+        }],
+    );
+    assert!(!online.world().inventory_moves_pending());
+    testing::inventory(&mut online, InventoryUpdate::Invalidated);
+    state.read_slot(InventorySlot::CURSOR, &online, &sender);
+    assert!(rx.try_recv().is_err());
+    assert_eq!(
+        state.refused,
+        [
+            "Finish the queued item moves before reading",
+            "Wait for current inventory before reading"
+        ]
+    );
+    assert!(online.world().reading().is_none());
 }

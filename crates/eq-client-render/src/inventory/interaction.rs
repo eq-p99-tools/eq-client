@@ -74,6 +74,32 @@ impl InventoryState {
         }
     }
 
+    /// Selects from the submitted replica, never a queued display projection.
+    /// Only received server text opens a read window.
+    pub(super) fn read_slot(&mut self, slot: InventorySlot, online: &OnlineState, sender: &Outbox) {
+        let result = (|| -> anyhow::Result<()> {
+            anyhow::ensure!(
+                !online.world().inventory_moves_pending(),
+                "Finish the queued item moves before reading"
+            );
+            let inventory = online.world().worker_inventory();
+            anyhow::ensure!(
+                inventory.received() && !inventory.stale(),
+                "Wait for current inventory before reading"
+            );
+            sender.post(online.world(), |stamp| ClientCommand::ReadItem {
+                session_id: stamp.session_id,
+                revision: inventory.revision(),
+                slot,
+                created: stamp.created,
+            })?;
+            Ok(())
+        })();
+        if let Err(error) = result {
+            self.refuse(crate::outbox::window_line(&error));
+        }
+    }
+
     /// Queues an explicit click effect without predicting charges or inventory changes.
     pub(super) fn use_slot(
         &mut self,

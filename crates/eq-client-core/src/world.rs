@@ -1108,7 +1108,15 @@ impl ClientWorld {
                 }
             }
             // A book or note to read, and a request the session would not send.
-            WorldEvent::BookText(text) => self.reading = Some(text.clone()),
+            WorldEvent::BookText(text) => {
+                if self.in_world()
+                    && (self.generation == crate::GameDialect::EqMac || text.kind <= 1)
+                {
+                    self.reading = Some(text.clone());
+                } else {
+                    news.ignored = true;
+                }
+            }
             WorldEvent::ReadRefused { session_id, reason } => {
                 if self.session_id == Some(*session_id) {
                     news.notices.push(Notice::ReadRefused(reason.clone()));
@@ -1307,6 +1315,7 @@ impl ClientWorld {
         // camping under way.
         self.target = Target::default();
         self.motion = None;
+        self.reading = None;
         if reason != Reset::Died {
             self.camp = None;
             self.camp_to = crate::camp::CampTo::default();

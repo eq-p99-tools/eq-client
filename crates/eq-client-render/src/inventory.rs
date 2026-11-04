@@ -406,7 +406,9 @@ pub(super) fn input(
                     use_clicked(&mut state, slot.0, (&online, &sender), &spells, &settings);
                 }
             } else {
-                right_click(slot.0, &online, &sender, &mut shown, &skinned, &mut items);
+                right_click(
+                    slot.0, &online, &sender, &mut shown, &skinned, &mut items, &mut state,
+                );
             }
         }
     }
@@ -476,6 +478,7 @@ fn right_click(
     shown: &mut super::windows::Shown,
     skinned: &crate::skinned::Skinned,
     items: &mut super::items::ItemState,
+    state: &mut InventoryState,
 ) {
     let Some(item) = online.world().inventory().items().get(&slot) else {
         return;
@@ -485,12 +488,7 @@ fn right_click(
     } else if item.book.is_some() {
         // Outbox owns posting refusals and shows them in chat. A successful
         // post opens nothing; the book or note waits for the server's text.
-        let _ = sender.post(online.world(), |stamp| {
-            eq_client_core::ClientCommand::ReadItem {
-                session_id: stamp.session_id,
-                slot,
-            }
-        });
+        state.read_slot(slot, online, sender);
     } else if eq_client_core::food::Meal::of_item_type(item.rules.item_type).is_some() {
         let _ = sender.post(online.world(), |stamp| {
             eq_client_core::ClientCommand::Consume {
