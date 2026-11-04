@@ -1369,6 +1369,10 @@ fn decal_place(button: &eq_client_assets::sidl::Button, area: Area) -> (f32, f32
 
 /// What a skin button shows on itself: its words, a count of coins, an
 /// ability's name or a bag's picture.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one exhaustive skin-button caption mapping"
+)]
 fn caption(
     inner: &mut ChildSpawnerCommands,
     does: Does,

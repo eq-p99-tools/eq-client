@@ -21,6 +21,17 @@
   manufacturing a corpse; keep duplicate notifications quiet and clear state
   on the next admission.
 
+- Start fresh Mac-era bindings with the requested Q attack, C consider and
+  Z duck keys, with arrow-key turning and no duplicate default chords. Saved
+  character bindings keep precedence. Q/Z are requested defaults; complete
+  original key-table/settings parity remains partially read.
+- Right-click world characters through the existing interaction paths,
+  considering non-interactable or known out-of-range NPCs without changing
+  the current target. Keep the existing capability and reach checks.
+- Offer a quantity picker on a plain stack click with an empty cursor.
+  Shift-click takes the whole stack and Ctrl-click takes one; these controls
+  are requested UX, with official modifier parity still unverified. Cursor
+  placement, single items and plain merchant selection keep their behavior.
 - **Breaking:** renderer `Session` now supplies `inventory_move_rules` from the
   network producer. Configure `ClientWorld::plan_inventory_as` before queuing
   moves; missing policy refuses planning. `Reply::InventoryMove` adds

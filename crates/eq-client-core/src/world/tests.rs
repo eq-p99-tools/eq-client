@@ -1,4 +1,5 @@
 mod loot_requests;
+mod wear;
 
 use super::*;
 mod inventory_moves;

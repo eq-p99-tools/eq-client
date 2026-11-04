@@ -80,9 +80,9 @@ fn capitalized(text: &str) -> String {
     })
 }
 
-/// Handles K (consider), H (hail) and G (toggle auto-attack, as the skin's
-/// melee attack button and a hotbutton bound to it do) for the current
-/// target.
+/// Handles the configured consider, hail and auto-attack keys, as well as
+/// the skin's melee attack button and a hotbutton bound to it, for the
+/// current target.
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(super) fn input(
     keys: super::keys::Keys,
@@ -517,6 +517,42 @@ mod tests {
         keys.reset_all();
         keys.press(KeyCode::Digit3);
         app.update();
+    }
+
+    #[test]
+    fn requested_mac_keys_submit_attack_and_consider_through_the_normal_input_system() {
+        let (mut app, rx) = attacking(eq_client_assets::ui::InstalledClient::EqMac);
+        app.insert_resource(crate::keys::KeyMap::for_client(
+            eq_client_assets::ui::InstalledClient::EqMac,
+        ));
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyQ);
+        app.update();
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ClientCommand::AutoAttack {
+                enabled: true,
+                session_id: 7,
+                ..
+            })
+        ));
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.reset_all();
+            keys.press(KeyCode::KeyC);
+        }
+        app.update();
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ClientCommand::Consider {
+                session_id: 7,
+                own_id: 12,
+                target_id: 30,
+                ..
+            })
+        ));
+        assert!(rx.try_recv().is_err());
     }
 
     /// The auto attack the frame sent, if it sent one, and nothing else.

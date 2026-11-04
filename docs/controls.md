@@ -10,20 +10,23 @@ Assigning an already-used chord moves it to the chosen action. Bindings are
 saved per character; `keys.txt` seeds characters without their own file.
 
 Titanium installations use the program's built-in key table for supported
-commands. Mac-era installations use this client's default table. These are
-starting defaults, before saved assignments:
+commands. Mac-era installations use this client's requested Q/C/Z defaults;
+the complete original command-table and saved-settings behavior remains
+partially read (recording checklist 6.351/6.352). Q for attack and Z for duck
+are requested starting choices, with saved bindings taking precedence.
+These are starting defaults, before saved assignments:
 
 | Action | Titanium | Client defaults (Mac-era) |
 | --- | --- | --- |
 | Forward/back | Up/Down or keypad | Up/Down |
-| Turn | Left/Right or keypad | Q/E |
-| Strafe | Unbound | Left/Right |
+| Turn | Left/Right or keypad | Left/Right |
+| Strafe | Unbound | Unbound |
 | Camera-relative movement | Unbound | W/A/S/D |
 | Walk/run toggle | F12 | Insert |
 | Autorun | Num Lock | Num Lock |
-| Attack | Q | G |
-| Consider | C | K |
-| Duck | D | C |
+| Attack | Q | Q |
+| Consider | C | C |
+| Duck | D | Z |
 | Use nearby door/object | U | F |
 | Inventory / spellbook | I / B | I / B |
 | Target self / next / previous | F1 / Tab / Shift+Tab | F1 / Tab / Shift+Tab |
@@ -35,6 +38,13 @@ A binding does not grant an unavailable server action. Text entry and focus
 guards prevent gameplay keys from firing while composing chat, searching the
 map, editing a script or changing a binding. Scripts using `press` use these
 same assignments; their semantic `move` command is independent of the key map.
+
+Right-clicking a visible character uses its supported interaction, such as
+looting a corpse or opening an in-reach merchant, bank or trainer. Other
+characters, and NPCs beyond the generation's known interaction reach, are
+considered through the normal session command. This keeps the current target.
+The server still checks each requested action; an unread interaction radius
+is left to its existing checks.
 
 ## Camera and windows
 

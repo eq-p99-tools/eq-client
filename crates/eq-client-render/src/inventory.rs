@@ -292,8 +292,7 @@ pub(super) fn spawn(commands: &mut Commands) {
 }
 
 /// What the inventory's mouse does, shown until a slot is hovered.
-const SLOT_HELP: &str =
-    "Click: move | Shift-click a stack: split | Right-click: inspect | Alt+right-click: use";
+const SLOT_HELP: &str = "Click a stack: quantity | Shift-click: whole stack | Ctrl-click: one | Right-click: inspect | Alt+right-click: use";
 
 /// Says the inventory's refusals in the chat, where the official client
 /// says them; a skinned window has no line of its own for them.
@@ -313,7 +312,7 @@ pub(super) fn say_refusals(
     }
 }
 
-/// Left-click moves through the cursor, Shift opens a quantity picker, and right-click inspects.
+/// Left-click chooses a stack quantity or moves through the cursor; right-click inspects.
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(super) fn input(
     keys: crate::keys::Keys,
@@ -412,12 +411,15 @@ pub(super) fn input(
     // A slot a hold picks up from is clicked when its quick press is let go
     // (`crate::clicks::Clicks`).
     if let Some(SlotButton(slot)) = clicks.iter().next() {
-        if keys
+        let whole = keys
             .input
-            .any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight])
-        {
-            state.select_split(*slot, online.world().inventory());
-        } else if skinned.has(super::windows::WindowId::Merchant)
+            .any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+        let one = keys
+            .input
+            .any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
+        if !whole
+            && !one
+            && skinned.has(super::windows::WindowId::Merchant)
             && !online
                 .world()
                 .inventory()
@@ -430,7 +432,7 @@ pub(super) fn input(
             // and its Sell button suggest; the official client's click there
             // is not checked yet.
         } else {
-            state.click_slot(*slot, false, &mut online, &sender);
+            state.left_click_slot(*slot, whole, one, &mut online, &sender);
         }
     }
 }
@@ -876,7 +878,7 @@ mod tests {
         );
     }
     #[test]
-    fn shift_click_opens_picker_and_buttons_pick_up_the_selected_quantity() {
+    fn plain_click_opens_picker_and_buttons_pick_up_the_selected_quantity() {
         let mut app = app();
         crate::online::testing::inventory(
             &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
@@ -895,13 +897,7 @@ mod tests {
             state.demo = true;
         }
         app.update();
-        app.world_mut()
-            .resource_mut::<ButtonInput<KeyCode>>()
-            .press(KeyCode::ShiftLeft);
         press_slot(&mut app, 251);
-        app.world_mut()
-            .resource_mut::<ButtonInput<KeyCode>>()
-            .reset_all();
         assert!(
             app.world()
                 .resource::<InventoryState>()
@@ -958,7 +954,13 @@ mod tests {
             state.tab = Tab::Inventory;
         }
         app.update();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::ShiftLeft);
         press_slot(&mut app, 251);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .release(KeyCode::ShiftLeft);
         assert_eq!(
             items(&app).items()[&InventorySlot::CURSOR].stack_count,
             Some(20)
@@ -969,7 +971,13 @@ mod tests {
             Some(20)
         );
         assert!(!items(&app).items().contains_key(&InventorySlot(251)));
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::ShiftLeft);
         press_slot(&mut app, 24);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .release(KeyCode::ShiftLeft);
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .press(KeyCode::Escape);

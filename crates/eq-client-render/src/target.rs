@@ -98,10 +98,11 @@ pub(super) fn input(
     mut online: ResMut<OnlineState>,
     mut chat: ResMut<super::chat::ChatState>,
     outbox: Res<Outbox>,
-    (ui, escape, presses): (
+    (ui, escape, presses, mut trade): (
         super::windows::pointer::PointerUi,
         Res<super::escape::Escape>,
         Res<super::hud::hotbar::carry::Presses>,
+        ResMut<super::trade::TradeState>,
     ),
 ) {
     let requested = chat.requested_target.take();
@@ -164,7 +165,7 @@ pub(super) fn input(
     } else if let Some(act) = keys.first([Act::TargetNext, Act::TargetPrevious]) {
         proposal = Some(cycle(&ids, current, act == Act::TargetPrevious));
     } else if accepts_input
-        && mouse.just_pressed(MouseButton::Left)
+        && mouse.any_just_pressed([MouseButton::Left, MouseButton::Right])
         // A click that put down or threw away a hotkey does nothing else.
         && !presses.taken()
         && !chat.hovered
@@ -210,10 +211,15 @@ pub(super) fn input(
             report_click(cursor, &spawns, choice);
             match choice {
                 // Clicking an item on the ground picks it up and keeps the target.
-                Choice::Item(drop_id) => {
+                Choice::Item(drop_id) if mouse.just_pressed(MouseButton::Left) => {
                     if let Some(line) = super::ground::use_object(drop_id, &mut online, &outbox) {
                         chat.history.push(super::chat::system_line(line));
                     }
+                }
+                Choice::Spawn(id, _) if mouse.just_pressed(MouseButton::Right) => {
+                    // Use the clicked entity without changing the current
+                    // target. The trade path falls back to consideration.
+                    trade.right_click(online.world(), id);
                 }
                 Choice::Spawn(id, _) => {
                     // An NPC clicked with an item on the cursor is asked to
@@ -221,11 +227,14 @@ pub(super) fn input(
                     super::give::offer(id, &mut online, &outbox);
                     proposal = Some(Some(id));
                 }
-                Choice::Nothing => match client.click_miss() {
-                    // Nothing is sent; a stale target is still dropped.
-                    ClickMiss::KeepTarget => {}
-                    ClickMiss::ClearTarget => proposal = Some(None),
-                },
+                Choice::Nothing if mouse.just_pressed(MouseButton::Left) => {
+                    match client.click_miss() {
+                        // Nothing is sent; a stale target is still dropped.
+                        ClickMiss::KeepTarget => {}
+                        ClickMiss::ClearTarget => proposal = Some(None),
+                    }
+                }
+                Choice::Item(_) | Choice::Nothing => (),
             }
         }
     }
@@ -979,6 +988,7 @@ mod tests {
             .init_resource::<ButtonInput<MouseButton>>()
             .init_resource::<NearbyEntities>()
             .init_resource::<super::super::chat::ChatState>()
+            .init_resource::<super::super::trade::TradeState>()
             .init_resource::<super::super::escape::Escape>()
             .init_resource::<super::super::hud::hotbar::carry::Presses>()
             .insert_resource(crate::outbox::Outbox::new(Some(tx)))

@@ -59,6 +59,10 @@ type Scripted<'w> = (
 /// Follows the pointer using confirmed/predicted inventory state, never a
 /// selected slot; while a script runs, it follows the script pointer.
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one cursor frame keeps input ownership, item and drag overlays in order"
+)]
 pub(crate) fn update(
     mut commands: Commands,
     state: Res<InventoryState>,

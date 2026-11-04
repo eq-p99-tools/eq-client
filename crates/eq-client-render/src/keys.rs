@@ -461,6 +461,22 @@ impl KeyMap {
     pub(crate) fn for_client(client: eq_client_assets::ui::InstalledClient) -> Self {
         let mut map = Self::default();
         let Some(table) = client.default_keys() else {
+            // Requested Mac-era starting keys, not a claim that Q/Z came
+            // from its program table (0x55a83b). Saved assignments are read
+            // after these defaults, including explicit empty bindings.
+            for (act, key) in [
+                (Act::Attack, KeyCode::KeyQ),
+                (Act::Consider, KeyCode::KeyC),
+                (Act::Duck, KeyCode::KeyZ),
+                (Act::TurnLeft, KeyCode::ArrowLeft),
+                (Act::TurnRight, KeyCode::ArrowRight),
+            ] {
+                let chord = Chord::key(key);
+                for chords in map.0.values_mut() {
+                    chords.retain(|bound| *bound != chord);
+                }
+                map.0.insert(act, vec![chord]);
+            }
             return map;
         };
         let mut read: BTreeMap<Act, Vec<Chord>> = BTreeMap::new();
@@ -777,7 +793,7 @@ mod tests {
         for (index, chord) in all.iter().enumerate() {
             assert!(!all[index + 1..].contains(chord), "{chord:?}");
         }
-        // The Mac-era client's table is unread: this client's own keys.
+        // Mac-era starting keys include the requested Q/C/Z assignments.
         let mac = KeyMap::for_client(InstalledClient::EqMac);
         for client in [&map, &mac] {
             assert_eq!(
@@ -785,8 +801,30 @@ mod tests {
                 [Chord::ctrl(KeyCode::KeyM)]
             );
         }
-        assert_eq!(mac.chords(Act::Attack), [Chord::key(KeyCode::KeyG)]);
+        assert_eq!(mac.chords(Act::Attack), [Chord::key(KeyCode::KeyQ)]);
         assert_eq!(mac.chords(Act::Autorun), [Chord::key(KeyCode::NumLock)]);
+    }
+
+    #[test]
+    fn mac_requested_command_keys_have_no_movement_or_command_conflicts() {
+        let map = KeyMap::for_client(eq_client_assets::ui::InstalledClient::EqMac);
+        for (act, key) in [
+            (Act::Attack, KeyCode::KeyQ),
+            (Act::Consider, KeyCode::KeyC),
+            (Act::Duck, KeyCode::KeyZ),
+            (Act::TurnLeft, KeyCode::ArrowLeft),
+            (Act::TurnRight, KeyCode::ArrowRight),
+        ] {
+            let chord = Chord::key(key);
+            assert_eq!(map.chords(act), [chord]);
+            let owners: Vec<_> = map
+                .assignments()
+                .filter_map(|(owner, chords)| chords.contains(&chord).then_some(owner))
+                .collect();
+            assert_eq!(owners, [act]);
+        }
+        assert_eq!(map.chords(Act::CameraLeft), [Chord::key(KeyCode::KeyA)]);
+        assert_eq!(map.chords(Act::CameraRight), [Chord::key(KeyCode::KeyD)]);
     }
 
     #[test]

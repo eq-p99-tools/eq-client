@@ -11,6 +11,7 @@ use super::windows;
 
 mod loot_requests;
 mod merchant;
+mod spawn_use;
 use loot_requests::PendingLoot;
 pub(crate) use merchant::{ChosenPicture, MerchantRows, chosen, fill as fill_wares, picture};
 
@@ -24,6 +25,8 @@ const BANKER_CLASS: u8 = 40;
 /// lists, which say what is on the corpse and for sale.
 #[derive(Resource, Default)]
 pub(super) struct TradeState {
+    /// One scene click, consumed once in its own admission.
+    right_clicked: Option<(u64, u16)>,
     loot: Option<LootWindow>,
     merchant: Option<MerchantWindow>,
     revision: u64,
@@ -319,6 +322,8 @@ pub(super) fn input(
         trade.prices = prices;
     }
     trade.follow(online.world());
+    let right_clicked =
+        trade.take_right_click(online.world(), settings.0.installed_client, &outbox);
     // Only a player in the world trades; the outbox stamps what they ask.
     let (Some(stamp), Some(own_id)) = (
         outbox.peek(online.world()),
@@ -332,16 +337,19 @@ pub(super) fn input(
         outbox.send(world, command).is_ok()
     };
     // The target's ID, kind, class, visibility and shown name.
-    let targeted = online.world().target().selected.and_then(|id| {
-        let spawn = &online.world().spawn(id)?.state;
-        Some((
-            id,
-            spawn.kind,
-            spawn.class,
-            spawn.invisible,
-            eq_client_core::entities::display_name(&spawn.name),
-        ))
-    });
+    let targeted = right_clicked
+        .map(spawn_use::Use::id)
+        .or(online.world().target().selected)
+        .and_then(|id| {
+            let spawn = &online.world().spawn(id)?.state;
+            Some((
+                id,
+                spawn.kind,
+                spawn.class,
+                spawn.invisible,
+                eq_client_core::entities::display_name(&spawn.name),
+            ))
+        });
     let mut clicked: Vec<Action> = buttons.iter().copied().collect();
     match *escape {
         super::escape::Escape::Close(windows::WindowId::Loot) => clicked.push(Action::EndLoot),
@@ -350,7 +358,9 @@ pub(super) fn input(
         }
         _ => (),
     }
-    if keys.pressed(super::keys::Act::Loot) {
+    if keys.pressed(super::keys::Act::Loot)
+        || matches!(right_clicked, Some(spawn_use::Use::Loot(_)))
+    {
         if trade.loot.is_some() {
             clicked.push(Action::EndLoot);
         } else if let Some((corpse_id, _, _, _, name)) = targeted
@@ -382,7 +392,9 @@ pub(super) fn input(
                 .push(super::chat::system_line("Target a corpse to loot it."));
         }
     }
-    if keys.pressed(super::keys::Act::Trade) {
+    if keys.pressed(super::keys::Act::Trade)
+        || matches!(right_clicked, Some(spawn_use::Use::Trade(_)))
+    {
         let banker = targeted.as_ref().is_some_and(|(_, kind, class, ..)| {
             *kind == SpawnKind::Npc && *class == Some(BANKER_CLASS)
         });

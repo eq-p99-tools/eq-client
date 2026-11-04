@@ -249,6 +249,23 @@ mod tests {
     }
 
     #[test]
+    fn saved_mac_bindings_override_new_starting_keys_including_cleared_actions() {
+        let saved = "Attack = G, Alt+Q\nConsider = K\nDuck = C\nTurnLeft = Q\nStand = \n";
+        let defaults = || KeyMap::for_client(eq_client_assets::ui::InstalledClient::EqMac);
+        let loaded = KeyMap::read(saved, defaults());
+        assert_eq!(
+            loaded.chords(Act::Attack),
+            [Chord::key(KeyCode::KeyG), Chord::alt(KeyCode::KeyQ)]
+        );
+        assert_eq!(loaded.chords(Act::Consider), [Chord::key(KeyCode::KeyK)]);
+        assert_eq!(loaded.chords(Act::Duck), [Chord::key(KeyCode::KeyC)]);
+        assert_eq!(loaded.chords(Act::TurnLeft), [Chord::key(KeyCode::KeyQ)]);
+        assert_eq!(loaded.chords(Act::Stand), []);
+        let text = loaded.text();
+        assert_eq!(KeyMap::read(&text, defaults()).text(), text);
+    }
+
+    #[test]
     fn a_clicked_assignment_captures_a_chord_without_gameplay_then_can_cancel_or_clear() {
         let mut app = crate::testing::app();
         app.add_systems(Update, capture);

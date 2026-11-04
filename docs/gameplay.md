@@ -59,8 +59,10 @@ presentation only, not item data sent to the server.
 
 - Left-click an item to pick it up onto the real EQ cursor, then click a slot to
   place, swap or merge it. Escape does not discard the cursor item.
-- Shift-click a stack or click its count to choose a quantity. The quantity
-  picker supports its slider, number input and confirmation/cancellation.
+- With an empty cursor, click a stack or its count to choose a quantity.
+  Shift-click takes the whole stack; Ctrl-click takes one (also with Shift).
+  These are this client's controls; official modifier parity is unverified.
+  The quantity picker supports its slider, number input and confirmation/cancellation.
 - **Auto inventory** fills compatible stacks and then empty carried slots. It
   waits between requests and stops on manual intervention or an error.
 - Right-click inspects received item details. **Alt+right-click** requests a

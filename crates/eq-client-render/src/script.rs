@@ -4598,13 +4598,25 @@ mod tests {
                 crate::clicks::OnPress,
             ))
             .id();
+        // This setup deliberately picks the whole stack; plain clicks now
+        // open the quantity picker before any move can be posted.
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::ShiftLeft);
         app.world_mut()
             .run_system_once(crate::inventory::input)
             .unwrap();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .release(KeyCode::ShiftLeft);
         app.world_mut().despawn(first);
         let eq_client_core::ClientCommand::MoveInventory(first) = rx.try_recv().unwrap() else {
             panic!("expected first move");
         };
+        assert_eq!(
+            first.quantity,
+            eq_client_core::inventory::MoveQuantity::Whole
+        );
         assert!(
             app.world()
                 .resource::<crate::online::OnlineState>()
