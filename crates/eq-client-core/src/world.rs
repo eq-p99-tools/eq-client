@@ -956,6 +956,14 @@ impl ClientWorld {
                 self.wallet.purse = Some(*coins);
                 news.trade = true;
             }
+            WorldEvent::PurseUncertain { session_id } => {
+                if self.accepts_reply(*session_id) {
+                    self.wallet.purse = None;
+                    news.trade = true;
+                } else {
+                    news.ignored = true;
+                }
+            }
             WorldEvent::CoinsElsewhere {
                 cursor,
                 bank,
@@ -978,6 +986,9 @@ impl ClientWorld {
             WorldEvent::Merchant(update) => self.merchant_news(update, news),
             WorldEvent::MerchantRefused { session_id, reason } => {
                 self.merchant_refused(*session_id, reason, news);
+            }
+            WorldEvent::MerchantUnanswered { session_id, reason } => {
+                self.merchant_unanswered(*session_id, reason, news);
             }
             WorldEvent::Exchange(update) => self.exchange_news(update, news),
             WorldEvent::ExchangeRefused { session_id, reason } => {

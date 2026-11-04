@@ -2736,6 +2736,78 @@ fn item_definitions_last_for_the_admission() {
 }
 
 #[test]
+fn an_unanswered_merchant_trade_is_information_without_a_belongings_change() {
+    let mut world = admitted();
+    let coins = Coins::from_copper(100);
+    game(&mut world, WorldEvent::Coins(coins));
+    game(
+        &mut world,
+        WorldEvent::Merchant(crate::merchant::MerchantUpdate::Opened {
+            merchant_id: 9,
+            accepted: true,
+            rate: 1.0,
+        }),
+    );
+    let items = world.inventory().items().clone();
+    let unanswered = |session_id| WorldEvent::MerchantUnanswered {
+        session_id,
+        reason: "The outcome is unknown".into(),
+    };
+    let changes = game(&mut world, unanswered(1));
+    assert_eq!(
+        changes.notices,
+        [Notice::MerchantUnanswered("The outcome is unknown".into())]
+    );
+    assert_eq!(world.coins(), Some(&coins));
+    assert_eq!(world.inventory().items(), &items);
+    assert_eq!(
+        world.merchant().map(|merchant| merchant.merchant_id),
+        Some(9)
+    );
+    assert!(game(&mut world, unanswered(2)).ignored);
+    game(&mut world, entered(2));
+    assert!(game(&mut world, unanswered(1)).ignored);
+}
+
+#[test]
+fn purse_uncertainty_is_admission_scoped_and_only_authority_restores_it() {
+    let mut world = admitted();
+    let coins = Coins::from_copper(100);
+    let bank = Coins::from_copper(250);
+    let cursor = Coins::from_copper(10);
+    game(&mut world, WorldEvent::Coins(coins));
+    game(
+        &mut world,
+        WorldEvent::CoinsElsewhere {
+            cursor,
+            bank,
+            given: Coins::default(),
+            offered: Coins::default(),
+        },
+    );
+    assert!(game(&mut world, WorldEvent::PurseUncertain { session_id: 2 }).ignored);
+    assert_eq!(world.coins(), Some(&coins));
+    let changes = game(&mut world, WorldEvent::PurseUncertain { session_id: 1 });
+    assert!(changes.trade);
+    assert_eq!(world.coins(), None);
+    assert_eq!(world.wallet.bank, Some(bank));
+    assert_eq!(world.wallet.cursor, cursor);
+    game(&mut world, shop_opened(9));
+    game(
+        &mut world,
+        WorldEvent::Merchant(crate::merchant::MerchantUpdate::Closed),
+    );
+    game(&mut world, shop_opened(9));
+    assert_eq!(world.coins(), None);
+    game(&mut world, WorldEvent::Coins(coins));
+    assert_eq!(world.coins(), Some(&coins));
+    game(&mut world, entered(2));
+    game(&mut world, WorldEvent::Coins(coins));
+    assert!(game(&mut world, WorldEvent::PurseUncertain { session_id: 1 }).ignored);
+    assert_eq!(world.coins(), Some(&coins));
+}
+
+#[test]
 fn news_for_the_player_comes_with_notices_and_others_news_without() {
     use crate::combat::{ConColor, Consideration, DamageOutcome};
     let mut world = admitted();
