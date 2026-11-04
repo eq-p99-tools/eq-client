@@ -26,9 +26,9 @@ pub struct Definition {
     pub gem_icon: Option<u32>,
     /// The colour, as ARGB, that tints a gem's background while it holds
     /// the spell (Titanium field 98, Mac-era field 86, and field 18 for one
-    /// colour). See [`gem_tint`].
+    /// colour). See the `gem_tint` helper.
     pub gem_tint: Option<u32>,
-    /// The tint field's value as read, before [`gem_tint`] resolves it,
+    /// The tint field's value as read, before the `gem_tint` helper resolves it,
     /// for the gem debug line.
     pub gem_tint_field: Option<u32>,
     /// Field 19: the unmodified mana cost.

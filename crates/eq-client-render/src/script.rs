@@ -6,8 +6,8 @@
 //! Attended clicks wait for the real pointer to leave the window. Explicit
 //! background ownership isolates native UI focus without moving that pointer;
 //! each click
-//! and hover first glides the script's own pointer to its control (see
-//! [`pointer`]), scrolling a list the control has scrolled out of view as
+//! and hover first glides the script's own pointer to its control (the
+//! `pointer` module), scrolling a list the control has scrolled out of view as
 //! the wheel does, and lands only on the control under it. A followed
 //! script keeps reading complete lines appended to its file, under the same limits.
 //! `gm` and `chat` steps require a network-constrained local EQEmu/TAKP session.
@@ -289,7 +289,7 @@ impl Script {
         self
     }
 
-    /// Marks the session local-only (see [`Script::local`]); set only when the
+    /// Marks the session local-only (the `Script::local` field); set only when the
     /// network session refuses servers outside this machine's network.
     #[must_use]
     pub fn local_session(mut self, local: bool) -> Self {
@@ -345,7 +345,7 @@ impl Script {
             || self.clicked.is_some()
     }
 
-    /// Marks the run offline (see [`Script::offline`]).
+    /// Marks the run offline (the `Script::offline` field).
     #[must_use]
     pub fn offline_preview(mut self, offline: bool) -> Self {
         self.offline = offline;

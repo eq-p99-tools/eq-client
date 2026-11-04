@@ -86,7 +86,7 @@ impl ModelScale {
     /// Titanium: classic models (races below 405 other than 403) draw at
     /// size × 0.2, × 1/1.3 while the zone's flag is set; the newer ones at
     /// size / 6. The program draws those × 1.3 when the flag and a second
-    /// setting ([0x923798], not yet read) are both clear: that is not
+    /// setting (not yet read) are both clear: that is not
     /// applied (recording checklist 6.346). The per-race overrides' heights
     /// are not applied either (6.346).
     #[must_use]

@@ -33,8 +33,8 @@ pub fn record_speed(speed: f32) -> f32 {
 }
 
 /// Whether a character moving `speed` units a second runs: faster than its
-/// record's `walk_speed`, by more than [`PAST_WALK`] of a speed value, or
-/// than [`FALLBACK_RUN`] where the record carries no walk speed.
+/// record's `walk_speed`, by more than `PAST_WALK` of a speed value, or
+/// than `FALLBACK_RUN` where the record carries no walk speed.
 #[must_use]
 pub fn runs(speed: f32, walk_speed: f32) -> bool {
     if walk_speed.is_finite() && walk_speed > 0.0 {
