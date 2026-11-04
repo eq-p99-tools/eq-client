@@ -59,6 +59,11 @@
   `use_distance` and `hinge_fraction`; re-export `doors::eqmac`.
 - Keep autorun during a continuously positive speed recalibration. Actual
   withdrawal, admission and unsafe readiness resets still clear it.
+- Add a bounded, versioned character-lifecycle JSON field to opt-in script
+  reports: complete offered lists and policies, uncorrelated creation history,
+  and current versus retained admitted identity. Preserve unknown scope and
+  source values; malformed/oversized output explicitly forbids consumer reliance.
+
 - Add ordinary named character deletion with an explicit Yes/No confirmation,
   safe Back/Disconnect while uncertain, and shared `delete NAME confirm NAME`
   scripting. Reports distinguish pending, unconfirmed, local refusal and absence

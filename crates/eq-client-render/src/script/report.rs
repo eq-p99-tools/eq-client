@@ -1,4 +1,6 @@
 //! State a script logs for later review.
+mod lifecycle;
+
 use bevy::prelude::*;
 
 use super::Observed;
@@ -53,6 +55,7 @@ pub(super) fn state(
         world = ?online.world().world_name(),
         far_clip = ?online.world().far_clip(),
         connected = online.world().connected(),
+        character_lifecycle = %lifecycle::state(online),
         character_deletion = %online.deletion.report(),
         ?position,
         ?posture,
