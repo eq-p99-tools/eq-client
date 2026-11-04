@@ -214,6 +214,7 @@ fn still_if_corpse(state: &mut SpawnState) {
 impl super::ClientWorld {
     /// Damage the player dealt or took; only that is theirs to read.
     pub(super) fn damage(&self, damage: &crate::combat::Damage, changes: &mut super::Changes) {
+        changes.damage.push(*damage);
         match self.player.as_ref() {
             Some(player)
                 if player.spawn_id == damage.source_id || player.spawn_id == damage.target_id =>

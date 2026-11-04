@@ -223,6 +223,8 @@ pub struct ClientWorld {
     /// The session's interpreted stun state and latest revision; None is
     /// unknown/unconfigured, not proof of clear control.
     own_stun: Option<(u64, crate::control::StunState)>,
+    /// Latest local worker policy feedback, never a server movement ACK.
+    movement_options_result: Option<(u64, Result<crate::movement::MovementOptions, String>)>,
     /// What the admission lets the player do.
     capabilities: Vec<crate::Capability>,
     /// What the admission leaves to the player, which they may do once they
@@ -611,6 +613,16 @@ impl ClientWorld {
                 } else {
                     news.ignored = true;
                 }
+            }
+            WorldEvent::MovementOptionsApplied { session_id, request_id, options } => {
+                if self.accepts_reply(*session_id) {
+                    self.movement_options_result = Some((*request_id, Ok(*options)));
+                } else { news.ignored = true; }
+            }
+            WorldEvent::MovementOptionsRefused { session_id, request_id, reason } => {
+                if self.accepts_reply(*session_id) {
+                    self.movement_options_result = Some((*request_id, Err(reason.clone())));
+                } else { news.ignored = true; }
             }
             WorldEvent::SpeedInputsAccepted(accepted) => {
                 if self.in_world()
@@ -1223,6 +1235,16 @@ impl ClientWorld {
     /// A death: a spawn becomes a corpse, and the player's own death holds
     /// them until the server offers to return them home.
     fn died(&mut self, death: &Death, now: Instant) -> Changes {
+        let killed = u16::try_from(death.spawn_id).ok().filter(|id| {
+            self.player
+                .as_ref()
+                .is_some_and(|player| u32::from(player.spawn_id) == death.killer_id)
+                && self
+                    .zone
+                    .spawns
+                    .get(id)
+                    .is_some_and(|spawn| spawn.state.kind == crate::SpawnKind::Npc)
+        });
         let own = self
             .player
             .as_ref()
@@ -1272,6 +1294,7 @@ impl ClientWorld {
             }
         };
         changes.notices.splice(0..0, slain);
+        changes.kills.extend(killed);
         changes
     }
 
@@ -1296,6 +1319,7 @@ impl ClientWorld {
 
     /// Forgets what the reason makes stale, and says so.
     fn reset(&mut self, reason: Reset) -> Changes {
+        self.movement_options_result = None;
         if matches!(
             reason,
             Reset::Entered | Reset::Camped | Reset::Lost { ended: true, .. }

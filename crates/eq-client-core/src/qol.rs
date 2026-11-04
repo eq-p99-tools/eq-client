@@ -65,12 +65,6 @@ pub enum Fix {
     /// is not the focused window: on Windows its taskbar button flashes
     /// until the client is focused again.
     FlashOnTells,
-    /// Reports the damage the world does to the player, such as a fall's,
-    /// to the server, as the official client does, until the player turns
-    /// it off: then the reports are held back and the character takes none.
-    /// A server may notice a character that never takes the damage, so the
-    /// label calls the setting unsafe.
-    TakeEnvironmentalDamage,
     /// Lays a corpse's body along the floor under it, pitched and rolled to
     /// the slope, rather than level with its soles, where it sinks into a
     /// hillside ([`crate::corpse_tilt`]). Adam's choice (10-20); what the
@@ -86,6 +80,40 @@ pub enum Fix {
     /// key returns it; the character never moves and nothing is sent. The
     /// official client has no such camera. Adam's choice (11-01).
     FreeCamera,
+    /// Lets the player see the scene clearly regardless of the outdoor
+    /// hour: nights are lit as noon lights them, the zone's distance fog
+    /// stays off the view, and any rain or snow will too once the client
+    /// draws weather at all (inferred choice of what belongs together).
+    /// Nothing the world sees changes.
+    ClearView,
+    /// Allows horizontal movement while stunned; other stun restrictions remain.
+    WalkWhileWinded,
+    /// Opens newly slain nearby NPC corpses naming the player as killer and
+    /// uses reply-driven Loot All. NO DROP items remain for manual looting.
+    AutoLoot,
+    /// Draws received positive damage above known targets without changing chat.
+    FloatingCombatText,
+    /// Reads the spellbook without automatically sitting.
+    ReadWhileStanding,
+    /// Memorizes without automatic sitting or the client preparation pause.
+    /// Existing source, admission and action validation still applies.
+    MemorizeWhileStanding,
+    /// Draws known invisible entities and marks names with parentheses.
+    /// Reported visibility and interaction rules remain unchanged.
+    ShowInvisible,
+    /// Answers supported P99 presence polls after an application-selected delay.
+    /// Joining a list and numeric challenges are separate actions.
+    AnswerListPolls,
+    /// Reports supported client-computed hazards. Disabling withholds reports;
+    /// server-generated damage still applies.
+    TakeEnvironmentalDamage,
+    /// Increases verified forward running speed by ten percent, as explicit
+    /// client policy, without a guarantee of server acceptance.
+    RunBoost,
+    /// Bounded flight using Jump to ascend and Duck to descend, retaining collision.
+    Fly,
+    /// Requests logout without sitting or camp preparation, then waits for its outcome.
+    ExitAtOnce,
     /// Makes the local map and known entity positions available on every
     /// server, independently of the original client's map support.
     MapEverywhere,
@@ -124,16 +152,27 @@ pub enum Fix {
 impl Fix {
     /// Every fix: the settings in the order the quality-of-life page lists
     /// them, then the fixes that are always on.
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 29] = [
         Self::SkipModifiedFood,
         Self::HiddenWindows,
         Self::AskBeforeDeletingSpells,
         Self::ShowTimesInChat,
         Self::FlashOnTells,
-        Self::TakeEnvironmentalDamage,
         Self::CorpsesAlongGround,
         Self::LongChaseCamera,
         Self::FreeCamera,
+        Self::ClearView,
+        Self::WalkWhileWinded,
+        Self::AutoLoot,
+        Self::FloatingCombatText,
+        Self::ReadWhileStanding,
+        Self::MemorizeWhileStanding,
+        Self::ShowInvisible,
+        Self::AnswerListPolls,
+        Self::TakeEnvironmentalDamage,
+        Self::RunBoost,
+        Self::Fly,
+        Self::ExitAtOnce,
         Self::MapEverywhere,
         Self::FrameCap,
         Self::GreyedControls,
@@ -161,6 +200,17 @@ impl Fix {
             Self::CorpsesAlongGround => "corpses_along_ground",
             Self::LongChaseCamera => "long_chase_camera",
             Self::FreeCamera => "free_camera",
+            Self::ClearView => "clear_view",
+            Self::WalkWhileWinded => "walk_while_winded",
+            Self::RunBoost => "run_boost",
+            Self::AutoLoot => "auto_loot",
+            Self::FloatingCombatText => "floating_combat_text",
+            Self::ReadWhileStanding => "read_while_standing",
+            Self::MemorizeWhileStanding => "memorize_while_standing",
+            Self::ShowInvisible => "show_invisible",
+            Self::AnswerListPolls => "answer_list_polls",
+            Self::Fly => "fly",
+            Self::ExitAtOnce => "exit_at_once",
             Self::FrameCap => "frame_cap",
             Self::GreyedControls => "greyed_controls",
             Self::CampCountdown => "camp_countdown",
@@ -188,10 +238,21 @@ impl Fix {
             Self::AskBeforeDeletingSpells => "Ask Before Deleting Spells",
             Self::ShowTimesInChat => "Show Times in Chat",
             Self::FlashOnTells => "Flash on Tells",
-            Self::TakeEnvironmentalDamage => "Take Environmental Damage (unsafe)",
+            Self::TakeEnvironmentalDamage => "Take Environmental Damage",
             Self::CorpsesAlongGround => "Corpses Lie Along the Ground",
             Self::LongChaseCamera => "Long Chase Camera",
             Self::FreeCamera => "Free Camera",
+            Self::ClearView => "See the World Clearly",
+            Self::WalkWhileWinded => "Walk While Winded",
+            Self::RunBoost => "Run a Little Faster",
+            Self::AutoLoot => "Loot Corpses Automatically",
+            Self::FloatingCombatText => "Floating Combat Text",
+            Self::ReadWhileStanding => "Read the Spellbook Standing",
+            Self::MemorizeWhileStanding => "Memorize Without Sitting",
+            Self::ShowInvisible => "Show Invisible Entities",
+            Self::AnswerListPolls => "Answer List Presence Polls",
+            Self::Fly => "Fly",
+            Self::ExitAtOnce => "Exit at Once",
             Self::FrameCap => "Cap Frames at 60",
             Self::GreyedControls => "Grey Out What Is Unavailable",
             Self::CampCountdown => "Count Down Camping",
@@ -237,6 +298,39 @@ impl Fix {
             Self::FreeCamera => {
                 "Let the Toggle Free Camera key detach the camera from your character and fly it anywhere until the key returns it. Your character never moves. Turn it off to keep the camera on your character."
             }
+            Self::ClearView => {
+                "Light the night as if it were noon and remove distance fog. This changes the local scene; weather particles are not currently rendered."
+            }
+            Self::WalkWhileWinded => {
+                "Allow horizontal movement while stunned. Attacks, spells, items and jumping still obey stun restrictions."
+            }
+            Self::RunBoost => {
+                "Increase forward running speed by 10 percent. Walking, strafing and backward movement are unchanged. Server acceptance is not guaranteed."
+            }
+            Self::AutoLoot => {
+                "Open newly slain NPC corpses naming you as killer within 20 units and use Loot All. Leave NO DROP items for manual looting. Stop on refusal; supported item results are required."
+            }
+            Self::FloatingCombatText => {
+                "Draw positive damage reported by the server above known targets. Chat remains available and no combat outcome is predicted."
+            }
+            Self::ReadWhileStanding => {
+                "Read the spellbook without automatically sitting, and keep it open while standing. Scribing and memorization use their separate rules."
+            }
+            Self::MemorizeWhileStanding => {
+                "Memorize without automatic sitting or the client preparation pause. Scribing keeps its usual posture and delay. Server validation still applies."
+            }
+            Self::ShowInvisible => {
+                "Draw known invisible entities with parentheses around their names. This changes presentation only and does not permit targeting through invisibility."
+            }
+            Self::Fly => {
+                "Fly using your Jump binding to ascend and Duck binding to descend. Movement remains bounded and collides with solid geometry. Turning this off restores gravity."
+            }
+            Self::ExitAtOnce => {
+                "Request logout without automatic sitting or the camp countdown. Wait for the server response before leaving the session."
+            }
+            Self::AnswerListPolls => {
+                "Answer supported P99 list presence polls after a local delay. This does not join a list or answer numeric challenges."
+            }
             Self::FrameCap => {
                 "Start the Max FPS slider at 60 frames a second instead of drawing as fast as your monitor allows."
             }
@@ -266,6 +360,17 @@ impl Fix {
             | Self::AskBeforeDeletingSpells
             | Self::TakeEnvironmentalDamage
             | Self::HotbarItemGuard => Kind::Guards,
+            // Speed lifted past the world's gift, and looting nobody asked
+            // for, are sends the official client would not make on their
+            // own; the world holds the player still by other means, and
+            // these ride its own packets under its own leave.
+            Self::AnswerListPolls
+            | Self::MemorizeWhileStanding
+            | Self::WalkWhileWinded
+            | Self::RunBoost
+            | Self::AutoLoot
+            | Self::Fly
+            | Self::ExitAtOnce => Kind::Acts,
             Self::HiddenWindows
             | Self::MapEverywhere
             | Self::ShowTimesInChat
@@ -273,6 +378,10 @@ impl Fix {
             | Self::CorpsesAlongGround
             | Self::LongChaseCamera
             | Self::FreeCamera
+            | Self::ClearView
+            | Self::ReadWhileStanding
+            | Self::ShowInvisible
+            | Self::FloatingCombatText
             | Self::FrameCap
             | Self::GreyedControls
             | Self::CampCountdown
@@ -297,12 +406,24 @@ impl Fix {
             Self::AskBeforeDeletingSpells => Some(Capability::DeletingSpells),
             Self::FlashOnTells => Some(Capability::Talking),
             Self::TakeEnvironmentalDamage => Some(Capability::EnvironmentalDamage),
+            // The three that send ride features the session only offers
+            // where a server type lists them: a server that never lets the
+            // session move the player has nothing to walk or run with, and
+            // a server with no looting has no corpse to open by itself.
+            Self::WalkWhileWinded | Self::RunBoost | Self::Fly => Some(Capability::Moving),
+            Self::AutoLoot => Some(Capability::Looting),
+            Self::AnswerListPolls => Some(Capability::AnsweringListPolls),
+            Self::ExitAtOnce => Some(Capability::Camping),
+            Self::ReadWhileStanding | Self::MemorizeWhileStanding => Some(Capability::Spellbook),
             Self::HiddenWindows
             | Self::MapEverywhere
             | Self::ShowTimesInChat
             | Self::CorpsesAlongGround
             | Self::LongChaseCamera
             | Self::FreeCamera
+            | Self::ClearView
+            | Self::ShowInvisible
+            | Self::FloatingCombatText
             | Self::FrameCap
             | Self::GreyedControls
             | Self::CampCountdown
@@ -351,7 +472,21 @@ impl Fix {
             | Self::CorpsesAlongGround
             | Self::LongChaseCamera
             | Self::FreeCamera => Availability::Setting { default: true },
-            Self::HiddenWindows | Self::ShowTimesInChat => Availability::Setting { default: false },
+            // A comfort the player has to ask for starts as the official
+            // client behaves: off.
+            Self::HiddenWindows
+            | Self::ShowTimesInChat
+            | Self::ClearView
+            | Self::WalkWhileWinded
+            | Self::RunBoost
+            | Self::AutoLoot
+            | Self::ReadWhileStanding
+            | Self::MemorizeWhileStanding
+            | Self::ShowInvisible
+            | Self::AnswerListPolls
+            | Self::Fly
+            | Self::ExitAtOnce
+            | Self::FloatingCombatText => Availability::Setting { default: false },
             Self::MapEverywhere
             | Self::FrameCap
             | Self::GreyedControls
@@ -368,6 +503,18 @@ impl Fix {
     #[must_use]
     pub const fn is_setting(self) -> bool {
         matches!(self.availability(), Availability::Setting { .. })
+    }
+
+    /// Whether this choice can raise an eyebrow, at the server or among the
+    /// neighbours: what it withholds, reports, or does faster than the
+    /// official client would. The page keeps these together under their own
+    /// caption at its end, and the names stay clean.
+    #[must_use]
+    pub const fn is_unsafe(self) -> bool {
+        matches!(
+            self,
+            Self::TakeEnvironmentalDamage | Self::RunBoost | Self::Fly | Self::ExitAtOnce
+        )
     }
 
     /// The fixes the player can turn off, in the quality-of-life page's
@@ -483,10 +630,21 @@ mod tests {
                 Fix::AskBeforeDeletingSpells,
                 Fix::ShowTimesInChat,
                 Fix::FlashOnTells,
-                Fix::TakeEnvironmentalDamage,
                 Fix::CorpsesAlongGround,
                 Fix::LongChaseCamera,
-                Fix::FreeCamera
+                Fix::FreeCamera,
+                Fix::ClearView,
+                Fix::WalkWhileWinded,
+                Fix::AutoLoot,
+                Fix::FloatingCombatText,
+                Fix::ReadWhileStanding,
+                Fix::MemorizeWhileStanding,
+                Fix::ShowInvisible,
+                Fix::AnswerListPolls,
+                Fix::TakeEnvironmentalDamage,
+                Fix::RunBoost,
+                Fix::Fly,
+                Fix::ExitAtOnce,
             ]
         );
         // A fix that is always on stays on whatever is asked.
@@ -494,6 +652,27 @@ mod tests {
             settings.set(fix, false);
             assert!(settings.on(fix), "{fix:?} turned off");
         }
+    }
+
+    #[test]
+    fn gameplay_departures_and_local_comforts_require_opt_in() {
+        let settings = Settings::default();
+        for fix in [
+            Fix::ClearView,
+            Fix::WalkWhileWinded,
+            Fix::RunBoost,
+            Fix::AutoLoot,
+            Fix::FloatingCombatText,
+            Fix::ReadWhileStanding,
+            Fix::MemorizeWhileStanding,
+            Fix::ShowInvisible,
+            Fix::AnswerListPolls,
+            Fix::Fly,
+            Fix::ExitAtOnce,
+        ] {
+            assert!(!settings.on(fix), "{fix:?}");
+        }
+        assert!(settings.on(Fix::TakeEnvironmentalDamage));
     }
 
     #[test]
@@ -506,7 +685,20 @@ mod tests {
             Some(Capability::EnvironmentalDamage)
         );
         assert_eq!(Fix::TakeEnvironmentalDamage.kind(), Kind::Guards);
-        assert!(Fix::TakeEnvironmentalDamage.label().ends_with("(unsafe)"));
+        // The choices that can raise an eyebrow sit together at the page's end
+        // under their caption; the flag lives in the predicate, never in a name.
+        assert_eq!(
+            Fix::settings()
+                .filter(|fix| fix.is_unsafe())
+                .collect::<Vec<_>>(),
+            [
+                Fix::TakeEnvironmentalDamage,
+                Fix::RunBoost,
+                Fix::Fly,
+                Fix::ExitAtOnce
+            ]
+        );
+        assert!(!Fix::ALL.iter().any(|fix| fix.label().contains("unsafe")));
         settings.set(Fix::TakeEnvironmentalDamage, false);
         assert!(!settings.on(Fix::TakeEnvironmentalDamage));
         assert_eq!(settings.unlocked(), []);

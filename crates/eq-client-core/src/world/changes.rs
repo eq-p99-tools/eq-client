@@ -120,6 +120,11 @@ pub struct Changes {
     /// The corpse being looted, the merchant's stock, the coins, or the
     /// training at a guildmaster changed.
     pub trade: bool,
+    /// Newly slain known NPCs whose death names the player as killer. These
+    /// IDs identify the locally projected corpses, not permission to loot.
+    pub kills: Vec<u16>,
+    /// Received combat outcomes, independent of whether they produce chat.
+    pub damage: Vec<crate::combat::Damage>,
     /// What the news tells the player.
     pub notices: Vec<Notice>,
     /// The sounds the server asks the player's client to play, in the order
