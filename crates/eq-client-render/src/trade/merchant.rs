@@ -39,7 +39,7 @@ pub(crate) struct MerchantSlot {
 }
 
 impl MerchantSlot {
-    /// The classic merchant grid's EQTypes 6000..6079 name stock slots 0..79.
+    /// The classic merchant grid's `EQTypes` 6000..6079 name stock slots 0..79.
     pub(crate) fn from_eq_type(number: u32) -> Option<Self> {
         let slot = number.checked_sub(6000).filter(|slot| *slot < 80)?;
         Some(Self {
