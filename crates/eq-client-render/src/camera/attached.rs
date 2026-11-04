@@ -17,6 +17,23 @@ pub(crate) enum View {
 }
 
 impl OrbitCamera {
+    /// The attached view retained by this camera, independent of a detached view.
+    pub(crate) const fn view_name(&self) -> &'static str {
+        match self.view {
+            View::Chase => "chase",
+            View::FirstPerson { .. } => "first_person",
+            View::Returning { .. } => "returning",
+        }
+    }
+
+    /// Attached pitch; first-person look has its own installed-client limits.
+    pub(crate) const fn view_pitch(&self) -> f32 {
+        match self.view {
+            View::FirstPerson { pitch } => pitch,
+            _ => self.pitch,
+        }
+    }
+
     pub(super) fn inside_body(&self) -> bool {
         !matches!(self.view, View::Chase)
     }

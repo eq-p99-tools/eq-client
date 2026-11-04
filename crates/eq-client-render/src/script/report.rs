@@ -26,6 +26,7 @@ pub(super) fn state(
     online: &crate::online::OnlineState,
     observed: &Observed,
     transform: Option<&Transform>,
+    camera: Option<&crate::OrbitCamera>,
 ) {
     // Keep named views here: appending a resource to Observed must not change
     // which resource a report mistakes for its spell catalog.
@@ -101,6 +102,10 @@ pub(super) fn state(
         character_deletion = %online.deletion.report(),
         ?position,
         ?posture,
+        attached_camera_mode = ?camera.map(crate::OrbitCamera::view_name),
+        camera_radius = ?camera.map(|camera| camera.radius),
+        camera_yaw = ?camera.map(|camera| camera.yaw),
+        camera_pitch = ?camera.map(crate::OrbitCamera::view_pitch),
         ?own_stun,
         local_movement_policy_feedback = ?online.world().movement_options_result(),
         ?option_values,

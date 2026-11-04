@@ -1779,7 +1779,13 @@ pub(super) fn drive(
             script.pointed = script.hovering.take().or(script.pointed);
         }
         Step::Report(label) => {
-            report::state(label, &online, &observed, players.single().ok());
+            report::state(
+                label,
+                &online,
+                &observed,
+                players.single().ok(),
+                cameras.single().ok(),
+            );
             report::surroundings(&online, &observed);
             report::game_messages(&mut script.chat_seen, &chat);
             return;
