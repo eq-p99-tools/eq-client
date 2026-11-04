@@ -402,10 +402,7 @@ mod tests {
                 .contains("FreeCamera = Alt+F8")
         );
         enter(&mut app, "Another");
-        assert_eq!(
-            app.world().resource::<KeyMap>().label(Act::FreeCamera),
-            "F9"
-        );
+        assert_eq!(app.world().resource::<KeyMap>().label(Act::FreeCamera), "");
         app.insert_resource(Bindings::default());
         enter(&mut app, "Example");
         assert_eq!(

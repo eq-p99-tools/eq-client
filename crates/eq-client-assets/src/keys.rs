@@ -8,8 +8,8 @@
 //! fresh installation does not have (program read N3 of 11-01; reading the
 //! overrides is recording checklist 6.352). Each command is the index the
 //! program's key-command dispatcher (0x4619cd) switches on; only the
-//! commands whose action is identified are listed here (the command map of
-//! 11-01), and of those only the ones this client also has.
+//! supported commands have typed actions; other read native assignments
+//! reserve their chords by command index without implementing those actions.
 //!
 //! The Mac-era table is read at 0x55a83b, with command identities at
 //! 0x611224 and dispatcher 0x54050c (whose command numbers are one-based).
@@ -51,6 +51,8 @@ pub enum Command {
     Options,
     /// Opens or closes the raid window.
     Raid,
+    /// Opens or closes the map window.
+    Map,
     /// Switches between sitting and standing.
     SitStand,
     /// Uses whatever is under the mouse: a spawn's right-click action, or a
@@ -66,6 +68,9 @@ pub enum Command {
     HotButton(u8),
     /// Selects this page of the first hotbar, from 0 (0x4619cd, commands 75..84).
     HotbarPage(u8),
+    /// An unimplemented native command whose chords remain reserved.
+    /// The index belongs to this generation's native table.
+    Reserved(u16),
 }
 
 /// A key as the program's table holds it: a `DirectInput` scan code with
@@ -157,8 +162,22 @@ const fn modified(command: Command, key: ScanKey) -> DefaultKey {
     }
 }
 
-/// The Titanium program's defaults for the commands listed, by the
-/// command's index in its table.
+// Generation-independent modifier mask: Ctrl=1, Shift=2, Alt=4.
+const fn reserved(command: u16, alternate: bool, scan: u8, modifiers: u8) -> DefaultKey {
+    DefaultKey {
+        command: Command::Reserved(command),
+        alternate,
+        key: ScanKey {
+            scan,
+            ctrl: modifiers & 1 != 0,
+            shift: modifiers & 2 != 0,
+            alt: modifiers & 4 != 0,
+        },
+    }
+}
+
+/// The Titanium program's defaults and native chord reservations, by command
+/// index. Reservations do not claim implementation of the corresponding action.
 pub const TITANIUM: &[DefaultKey] = &[
     primary(Command::Autorun, 0x45),   // 0: Num Lock
     primary(Command::Jump, 0x39),      // 1: Space
@@ -252,10 +271,137 @@ pub const TITANIUM: &[DefaultKey] = &[
     modified(Command::WalkRun, ScanKey::ctrl(0x13)),   // 139: Ctrl+R
     modified(Command::Options, ScanKey::alt(0x18)),    // 169: Alt+O
     modified(Command::Raid, ScanKey::alt(0x13)),       // 175: Alt+R
+    primary(Command::Map, 0x0e),                       // 187: Backspace
+    alternate(Command::Map, 0x32),                     // 187: M
+    // Native chords remain reserved even when their action is unsupported.
+    reserved(8, false, 0x58, 0),
+    reserved(15, false, 0x14, 0),
+    reserved(17, false, 0x49, 0),
+    reserved(17, true, 0xc9, 0),
+    reserved(18, false, 0x51, 0),
+    reserved(18, true, 0xd1, 0),
+    reserved(19, false, 0x4c, 0),
+    reserved(19, true, 0xc7, 0),
+    reserved(20, false, 0x47, 0),
+    reserved(20, true, 0xd2, 0),
+    reserved(21, false, 0x4f, 0),
+    reserved(21, true, 0xd3, 0),
+    reserved(22, false, 0x43, 0),
+    reserved(23, false, 0x44, 0),
+    reserved(25, false, 0x3c, 0),
+    reserved(26, false, 0x3d, 0),
+    reserved(27, false, 0x3e, 0),
+    reserved(28, false, 0x3f, 0),
+    reserved(29, false, 0x40, 0),
+    reserved(30, false, 0x41, 0),
+    reserved(32, false, 0x42, 0),
+    reserved(32, true, 0x29, 0),
+    reserved(34, false, 0x57, 0),
+    reserved(124, false, 0x13, 0),
+    reserved(125, false, 0x0f, 0),
+    reserved(126, false, 0x0f, 2),
+    reserved(130, false, 0x1e, 1),
+    reserved(131, false, 0x2e, 1),
+    reserved(132, false, 0x18, 1),
+    reserved(133, false, 0x32, 1),
+    reserved(134, false, 0x11, 1),
+    reserved(135, false, 0x17, 1),
+    reserved(136, false, 0x20, 1),
+    reserved(137, false, 0x2d, 1),
+    reserved(140, false, 0x0c, 2),
+    reserved(141, false, 0x0d, 2),
+    reserved(142, false, 0x4e, 0),
+    reserved(143, false, 0x4a, 0),
+    reserved(144, false, 0x48, 2),
+    reserved(144, true, 0xc8, 2),
+    reserved(145, false, 0x50, 2),
+    reserved(145, true, 0xd0, 2),
+    reserved(146, false, 0x49, 2),
+    reserved(146, true, 0xc9, 2),
+    reserved(147, false, 0x51, 2),
+    reserved(147, true, 0xd1, 2),
+    reserved(148, false, 0x28, 0),
+    reserved(149, false, 0x27, 2),
+    reserved(150, false, 0x26, 4),
+    reserved(151, false, 0x15, 4),
+    reserved(152, false, 0x19, 4),
+    reserved(153, false, 0x14, 4),
+    reserved(154, false, 0x1f, 4),
+    reserved(155, false, 0x30, 4),
+    reserved(156, false, 0x23, 4),
+    reserved(161, false, 0x12, 1),
+    reserved(162, false, 0x31, 1),
+    reserved(163, false, 0x32, 4),
+    reserved(164, false, 0x2f, 0),
+    reserved(165, false, 0x17, 4),
+    reserved(166, false, 0x14, 1),
+    reserved(167, false, 0x21, 4),
+    reserved(168, false, 0x3b, 4),
+    reserved(171, false, 0x11, 4),
+    reserved(173, false, 0x1e, 4),
+    reserved(174, false, 0x20, 4),
+    reserved(176, false, 0x25, 4),
+    reserved(177, false, 0x48, 4),
+    reserved(177, true, 0xc8, 4),
+    reserved(178, false, 0x50, 4),
+    reserved(178, true, 0xd0, 4),
+    reserved(179, false, 0x4d, 4),
+    reserved(179, true, 0xcd, 4),
+    reserved(180, false, 0x4b, 4),
+    reserved(180, true, 0xcb, 4),
+    reserved(181, false, 0x49, 4),
+    reserved(181, true, 0xc9, 4),
+    reserved(182, false, 0x51, 4),
+    reserved(182, true, 0xd1, 4),
+    reserved(183, false, 0x24, 4),
+    reserved(184, false, 0x12, 4),
+    reserved(185, false, 0x13, 6),
+    reserved(186, false, 0x31, 4),
+    reserved(188, false, 0x22, 4),
+    reserved(198, false, 0x2f, 4),
+    reserved(199, false, 0x01, 0),
+    reserved(200, false, 0x01, 0),
+    reserved(201, false, 0x21, 1),
+    reserved(202, false, 0x26, 0),
+    reserved(203, false, 0x16, 4),
+    reserved(204, false, 0x02, 1),
+    reserved(205, false, 0x03, 1),
+    reserved(206, false, 0x04, 1),
+    reserved(207, false, 0x05, 1),
+    reserved(208, false, 0x06, 1),
+    reserved(209, false, 0x07, 1),
+    reserved(210, false, 0x08, 1),
+    reserved(211, false, 0x09, 1),
+    reserved(212, false, 0x2e, 4),
+    reserved(213, false, 0x2c, 4),
+    reserved(214, false, 0x19, 1),
+    reserved(215, false, 0x10, 4),
+    reserved(216, false, 0x19, 0),
+    reserved(217, false, 0x1f, 2),
+    reserved(218, false, 0x2f, 1),
+    reserved(219, false, 0x14, 2),
+    reserved(224, false, 0x19, 2),
+    reserved(225, false, 0x30, 0),
+    reserved(232, false, 0x21, 0),
+    reserved(233, false, 0x2c, 0),
+    reserved(234, false, 0x22, 0),
+    reserved(238, false, 0x2d, 4),
+    reserved(246, false, 0x21, 5),
+    reserved(249, false, 0x27, 0),
+    reserved(250, false, 0x35, 0),
+    reserved(256, false, 0x1c, 0),
+    reserved(257, false, 0x1c, 4),
+    reserved(261, false, 0xd0, 0),
+    reserved(262, false, 0xc8, 0),
+    reserved(263, false, 0x01, 0),
+    reserved(264, false, 0x1c, 0),
+    reserved(264, true, 0x9c, 0),
+    reserved(266, false, 0x01, 0),
 ];
 
-/// The Mac-era program's defaults for the supported commands, before saved
-/// overrides. Indices below are zero-based table indices, not dispatcher IDs.
+/// The Mac-era defaults before saved overrides, plus read native reservations
+/// (including conditional initializer assignments). Indices below are zero-based
+/// table indices, not dispatcher IDs.
 pub const EQMAC: &[DefaultKey] = &[
     primary(Command::Autorun, 0x45), // 0: Num Lock
     primary(Command::Jump, 0x39),    // 1: Space
@@ -311,6 +457,104 @@ pub const EQMAC: &[DefaultKey] = &[
     modified(Command::WalkRun, ScanKey::ctrl(0x13)),   // 73: Ctrl+R
     modified(Command::Options, ScanKey::alt(0x18)),    // 102: Alt+O
     modified(Command::Raid, ScanKey::alt(0x13)),       // 108: Alt+R
+    // Native chords remain reserved even when their action is unsupported.
+    reserved(6, false, 0x58, 0),
+    reserved(12, false, 0x14, 0),
+    reserved(14, false, 0x49, 0),
+    reserved(14, true, 0xc9, 0),
+    reserved(15, false, 0x51, 0),
+    reserved(15, true, 0xd1, 0),
+    reserved(16, false, 0x4c, 0),
+    reserved(16, true, 0xc7, 0),
+    reserved(17, false, 0x47, 0),
+    reserved(17, true, 0xd2, 0),
+    reserved(18, false, 0x4f, 0),
+    reserved(18, true, 0xd3, 0),
+    reserved(19, false, 0x43, 0),
+    reserved(20, false, 0x44, 0),
+    reserved(22, false, 0x3c, 0),
+    reserved(23, false, 0x3d, 0),
+    reserved(24, false, 0x3e, 0),
+    reserved(25, false, 0x3f, 0),
+    reserved(26, false, 0x40, 0),
+    reserved(27, false, 0x41, 0),
+    reserved(28, false, 0x42, 0),
+    reserved(29, false, 0x57, 0),
+    reserved(58, false, 0x13, 0),
+    reserved(59, false, 0x0f, 0),
+    reserved(60, false, 0x0f, 2),
+    reserved(61, false, 0x29, 0),
+    reserved(64, false, 0x1e, 1),
+    reserved(65, false, 0x2e, 1),
+    reserved(66, false, 0x18, 1),
+    reserved(67, false, 0x32, 1),
+    reserved(68, false, 0x11, 1),
+    reserved(69, false, 0x17, 1),
+    reserved(70, false, 0x20, 1),
+    reserved(71, false, 0x2d, 1),
+    reserved(74, false, 0x0c, 2),
+    reserved(75, false, 0x0d, 2),
+    reserved(76, false, 0x4e, 0),
+    reserved(77, false, 0x4a, 0),
+    reserved(78, false, 0x48, 2),
+    reserved(78, true, 0xc8, 2),
+    reserved(79, false, 0x50, 2),
+    reserved(79, true, 0xd0, 2),
+    reserved(80, false, 0x4b, 2),
+    reserved(80, true, 0xcb, 2),
+    reserved(81, false, 0x4d, 2),
+    reserved(81, true, 0xcd, 2),
+    reserved(82, false, 0x47, 2),
+    reserved(82, true, 0xc7, 2),
+    reserved(83, false, 0x4f, 2),
+    reserved(83, true, 0xcf, 2),
+    reserved(84, false, 0x49, 2),
+    reserved(84, true, 0xc9, 2),
+    reserved(85, false, 0x51, 2),
+    reserved(85, true, 0xd1, 2),
+    reserved(86, false, 0x28, 0),
+    reserved(87, false, 0x27, 2),
+    reserved(88, false, 0x26, 4),
+    reserved(89, false, 0x15, 4),
+    reserved(90, false, 0x19, 4),
+    reserved(91, false, 0x14, 4),
+    reserved(92, false, 0x1f, 4),
+    reserved(93, false, 0x30, 4),
+    reserved(94, false, 0x23, 4),
+    reserved(95, false, 0x2e, 4),
+    reserved(96, false, 0x32, 4),
+    reserved(97, false, 0x2f, 0),
+    reserved(98, false, 0x17, 4),
+    reserved(99, false, 0x14, 1),
+    reserved(100, false, 0x21, 4),
+    reserved(101, false, 0x3b, 4),
+    reserved(104, false, 0x11, 4),
+    reserved(106, false, 0x1e, 4),
+    reserved(107, false, 0x20, 4),
+    reserved(109, false, 0x25, 4),
+    reserved(110, false, 0x48, 4),
+    reserved(110, true, 0xc8, 4),
+    reserved(111, false, 0x50, 4),
+    reserved(111, true, 0xd0, 4),
+    reserved(112, false, 0x4d, 4),
+    reserved(112, true, 0xcd, 4),
+    reserved(113, false, 0x4b, 4),
+    reserved(113, true, 0xcb, 4),
+    reserved(114, false, 0x49, 4),
+    reserved(114, true, 0xc9, 4),
+    reserved(115, false, 0x51, 4),
+    reserved(115, true, 0xd1, 4),
+    reserved(116, false, 0x21, 0),
+    reserved(117, false, 0x2c, 0),
+    reserved(118, false, 0x22, 0),
+    reserved(122, false, 0x2d, 4),
+    reserved(123, false, 0xb5, 0),
+    reserved(124, false, 0x4e, 0),
+    reserved(125, false, 0x52, 0),
+    reserved(126, false, 0xd2, 2),
+    reserved(127, false, 0xd3, 2),
+    reserved(128, false, 0x27, 0),
+    reserved(129, false, 0x35, 0),
 ];
 
 #[cfg(test)]
@@ -322,7 +566,11 @@ mod tests {
         for table in [TITANIUM, EQMAC] {
             for (index, entry) in table.iter().enumerate() {
                 for other in &table[index + 1..] {
-                    assert_ne!(entry.key, other.key, "{entry:?} {other:?}");
+                    if !matches!(entry.command, Command::Reserved(_))
+                        && !matches!(other.command, Command::Reserved(_))
+                    {
+                        assert_ne!(entry.key, other.key, "{entry:?} {other:?}");
+                    }
                     assert!(
                         entry.command != other.command || entry.alternate != other.alternate,
                         "{entry:?} {other:?}"

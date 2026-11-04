@@ -435,6 +435,32 @@ mod tests {
     }
 
     #[test]
+    fn native_map_keys_toggle_and_control_m_keeps_its_native_reservation() {
+        use eq_client_assets::ui::InstalledClient;
+        for client in [InstalledClient::Titanium, InstalledClient::EqMac] {
+            let mut app = crate::testing::app();
+            app.insert_resource(crate::keys::KeyMap::for_client(client));
+            app.add_systems(Update, toggle);
+            for (key, opened) in [(KeyCode::Backspace, true), (KeyCode::KeyM, false)] {
+                let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+                keys.reset_all();
+                keys.press(key);
+                app.update();
+                assert_eq!(
+                    app.world().resource::<Shown>().is_open(WindowId::Map),
+                    opened
+                );
+            }
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.reset_all();
+            keys.press(KeyCode::ControlLeft);
+            keys.press(KeyCode::KeyM);
+            app.update();
+            assert!(!app.world().resource::<Shown>().is_open(WindowId::Map));
+        }
+    }
+
+    #[test]
     fn the_map_opens_without_a_server_capability() {
         use eq_client_core::{Capability, WorldEvent};
         let mut app = crate::testing::app();

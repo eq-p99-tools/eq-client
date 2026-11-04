@@ -81,7 +81,7 @@ pub enum Fix {
     /// off, the camera keeps to the program's limit. Its height above the
     /// player stays the program's either way. Adam's choice (11-01).
     LongChaseCamera,
-    /// Offers the free camera: a key (F9 by default) detaches the camera from
+    /// Offers the free camera: a user-assigned key detaches the camera from
     /// the character to fly it anywhere, through walls and terrain, until the
     /// key returns it; the character never moves and nothing is sent. The
     /// official client has no such camera. Adam's choice (11-01).

@@ -57,7 +57,7 @@ session; a setting does not manufacture an unoffered server capability.
 | Take Environmental Damage (unsafe) | `take_environmental_damage` | On | Reports supported environmental damage; disabling it withholds reports |
 | Corpses Lie Along the Ground | `corpses_along_ground` | On | Tilts bodies to the floor slope |
 | Long Chase Camera | `long_chase_camera` | On | Extends chase zoom beyond the classic 200-unit limit, up to 20,000 |
-| Free Camera | `free_camera` | On | Lets the Toggle Free Camera key (F9) detach the camera and fly it; off, the key does nothing |
+| Free Camera | `free_camera` | On | Lets a user-assigned Toggle Free Camera key detach the camera and fly it; off, the key does nothing |
 
 Environmental damage is offered on P99, EQEmu and TAKP in the locked policy, with
 different supported hazards. The setting's unsafe label concerns withholding

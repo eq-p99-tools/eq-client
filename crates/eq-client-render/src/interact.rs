@@ -1,8 +1,8 @@
-//! F uses what is nearest within reach: a door, an item on the ground, or a
+//! Use selects what is nearest within reach: a door, an item on the ground, or a
 //! world container such as a forge.
 use bevy::prelude::*;
 
-/// What F would use now.
+/// What the Use action would use now.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) enum Use {
     /// Open or close a door, with its model.
@@ -118,7 +118,7 @@ mod tests {
     }
 
     #[test]
-    fn f_uses_whichever_of_a_door_and_an_item_is_nearer() {
+    fn use_selects_whichever_of_a_door_and_an_item_is_nearer() {
         let mut state = state();
         assert_eq!(nearest(&state), None);
         crate::online::testing::doors(&mut state, &door_at(6.0), std::time::Instant::now());

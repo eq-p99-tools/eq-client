@@ -614,10 +614,21 @@ pub(super) fn eased_distance(shown: f32, allowed: f32, seconds: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::keys::Act;
 
     fn free_app() -> (App, Entity, Entity) {
         let mut app = App::new();
         crate::keys::testing::install(&mut app);
+        // Detached-camera controls are explicit test assignments. Native
+        // F9 and Page Up/Down belong to different camera commands.
+        for (act, key) in [
+            (Act::FreeCamera, KeyCode::F9),
+            (Act::CameraUp, KeyCode::PageUp),
+            (Act::CameraDown, KeyCode::PageDown),
+            (Act::CameraForward, KeyCode::KeyW),
+        ] {
+            crate::keys::testing::bind(&mut app, act, crate::keys::Chord::key(key));
+        }
         let mut time = Time::<()>::default();
         time.advance_by(std::time::Duration::from_secs(1));
         app.insert_resource(time)

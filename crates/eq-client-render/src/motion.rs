@@ -2330,6 +2330,7 @@ mod tests {
         // These camera-relative motion cases choose their own controls;
         // W/A/S/D and Q/E are not the installed client's default bindings.
         for (act, key) in [
+            (Act::FreeCamera, KeyCode::F9),
             (Act::CameraForward, KeyCode::KeyW),
             (Act::CameraBack, KeyCode::KeyS),
             (Act::CameraLeft, KeyCode::KeyA),
