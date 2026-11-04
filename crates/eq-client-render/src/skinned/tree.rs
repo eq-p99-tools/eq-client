@@ -3,7 +3,7 @@
 use super::{
     Context, ScrolledText, ScrolledView, Shows, SkinPage, SkinTab, TABBED, TabFace, TabWords,
     WORD_TAB_HEIGHT, aligned, at, border, border_insets, button, controls, frame, frame_tab, gauge,
-    items, label, looks, reflow::Geometry, rgb, scrollbar, spell_gem, title, to_f32, with_qol_page,
+    items, label, looks, reflow::Geometry, rgb, scrollbar, spell_gem, title, to_f32,
 };
 use crate::{
     theme::{self, Size},
@@ -625,7 +625,12 @@ pub(super) fn tabbed(
     context: &Context,
 ) {
     let particle_pages = super::particles::pages(&tabs.pages, context.id);
-    let pages = with_qol_page(&particle_pages, context.id, inside.height);
+    let pages = super::qol::pages(
+        &particle_pages,
+        context.id,
+        Vec2::new(inside.width, inside.height),
+        tabs.page_frame.as_ref(),
+    );
     let pages = pages.as_ref();
     if context.id == WindowId::Options {
         // Added client pages can exceed the skin's single row. As with chat's
@@ -753,6 +758,18 @@ fn tabbed_page_contents(
     area: Area,
     context: &Context,
 ) {
+    let area = if let Some(content) = super::qol::content_height(page) {
+        let insets = tabs
+            .page_frame
+            .as_ref()
+            .map_or_else(frame::Insets::default, frame::insets);
+        Area {
+            height: area.height.max(insets.top + content + insets.bottom),
+            ..area
+        }
+    } else {
+        area
+    };
     let draw_page = |page_area: &mut ChildSpawnerCommands| {
         // The skin's page frame, where it names one, with the page's
         // pieces inside it.
@@ -768,9 +785,10 @@ fn tabbed_page_contents(
         pieces(page_area, art, &page.pieces, &inside, context);
     };
     if context.id == WindowId::Options {
-        // Preserve authored page coordinates and height. If extra tab
-        // rows reduce the viewport, the ordinary wheel owner can reach
-        // its bottom controls instead of clipping them permanently.
+        // Preserve authored page coordinates and the complete generated
+        // content extent. If extra tab rows reduce the viewport, the
+        // ordinary wheel owner can reach its bottom controls instead of
+        // clipping them permanently.
         viewport
             .spawn(Node {
                 width: px(area.width),

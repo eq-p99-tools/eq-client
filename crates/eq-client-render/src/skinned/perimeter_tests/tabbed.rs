@@ -24,13 +24,22 @@ fn spawn_tabs(app: &mut App, owner: WindowId, count: usize) -> (Entity, Vec<(usi
         tab_frame: None,
         page_frame: None,
     };
+    spawn_tab_box(app, owner, tab_box, Vec2::new(386.0, 180.0))
+}
+
+fn spawn_tab_box(
+    app: &mut App,
+    owner: WindowId,
+    tab_box: eq_client_assets::sidl::TabBox,
+    size: Vec2,
+) -> (Entity, Vec<(usize, Entity)>) {
     let root = app
         .world_mut()
         .run_system_once(move |mut commands: Commands, mut art: crate::sheets::Art| {
             commands
                 .spawn(Node {
                     overflow: Overflow::clip(),
-                    ..at(0.0, 0.0, 386.0, 180.0)
+                    ..at(0.0, 0.0, size.x, size.y)
                 })
                 .with_children(|root| {
                     tree::tabbed(
@@ -40,8 +49,8 @@ fn spawn_tabs(app: &mut App, owner: WindowId, count: usize) -> (Entity, Vec<(usi
                         &Area {
                             x: 0.0,
                             y: 0.0,
-                            width: 386.0,
-                            height: 180.0,
+                            width: size.x,
+                            height: size.y,
                         },
                         &Context {
                             id: owner,
@@ -142,4 +151,140 @@ fn actions_tabs_keep_their_single_row_and_authored_page_geometry() {
     assert_eq!(shown.min.y - window.min.y, 20.0);
     assert_eq!(shown.max, window.max);
     assert!(app.world().get::<ScrolledView>(page).is_none());
+}
+
+/// Generated controls use real page-frame insets and the measured viewport
+/// below two tab rows. Their source anchors must not escape either boundary.
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one production layout and scroll regression across sizes and scales"
+)]
+fn qol_controls_fit_the_width_and_scroll_fully_below_wrapped_tabs() {
+    use crate::options::OptionCheckbox;
+    use crate::windows::pointer::{TakesWheel, Wheel};
+    use eq_client_core::options::Toggle;
+    use eq_client_core::qol::Fix;
+
+    for scale in [1.0, 1.5] {
+        for size in [Vec2::new(386.0, 408.0), Vec2::new(180.0, 180.0)] {
+            let (_, pixels) = fixture();
+            let mut app = app(scale, pixels);
+            crate::clicks::testing::install(&mut app);
+            app.init_resource::<Tabs>()
+                .init_resource::<Wheel>()
+                .add_systems(Update, (tabs, controls::scroll_lists));
+            let pages = (0..8)
+                .map(|index| eq_client_assets::sidl::Page {
+                    name: format!("page{index}"),
+                    title: Some(if index == 7 {
+                        "Particles".into()
+                    } else {
+                        format!("Tab{index}")
+                    }),
+                    ..qol::tests::source()
+                })
+                .collect();
+            let tab_box = eq_client_assets::sidl::TabBox {
+                name: "OptionsTabs".into(),
+                area: None,
+                pages,
+                tab_frame: None,
+                page_frame: Some(qol::tests::page_frame()),
+            };
+            let (root, tabs) = spawn_tab_box(&mut app, WindowId::Options, tab_box, size);
+            app.update();
+            app.update();
+            let first_tab = bounds(app.world(), tabs[0].1);
+            let last_tab = bounds(app.world(), tabs[8].1);
+            assert!(last_tab.min.y >= first_tab.max.y);
+            crate::clicks::testing::click(&mut app, tabs[8].1);
+            let mut query = app.world_mut().query::<(Entity, &SkinPage)>();
+            let page = query
+                .iter(app.world())
+                .find(|(_, page)| page.0.index == 8)
+                .unwrap()
+                .0;
+            let viewport = bounds(app.world(), page);
+            assert!(viewport.min.y >= last_tab.max.y);
+            assert!(app.world().get::<TakesWheel>(page).is_some());
+
+            let mut query = app.world_mut().query::<(Entity, &OptionCheckbox)>();
+            let checkboxes: Vec<_> = query
+                .iter(app.world())
+                .filter(|(_, checkbox)| matches!(checkbox.0, Toggle::Qol(_)))
+                .map(|(entity, checkbox)| (entity, checkbox.0))
+                .collect();
+            assert_eq!(checkboxes.len(), Fix::settings().count());
+            for (entity, _) in &checkboxes {
+                let control = bounds(app.world(), *entity);
+                assert!(control.min.x >= viewport.min.x && control.max.x <= viewport.max.x);
+            }
+            let (bottom, _) = checkboxes
+                .iter()
+                .max_by(|(a, _), (b, _)| {
+                    bounds(app.world(), *a)
+                        .max
+                        .y
+                        .total_cmp(&bounds(app.world(), *b).max.y)
+                })
+                .unwrap();
+            assert!(bounds(app.world(), *bottom).max.y > viewport.max.y);
+            let mut sliders = app.world_mut().query::<(Entity, &SkinSlider)>();
+            let slider = sliders
+                .iter(app.world())
+                .find(|(_, slider)| {
+                    matches!(
+                        slider.sets,
+                        Sets::Level(eq_client_core::options::Level::UiScale)
+                    )
+                })
+                .unwrap()
+                .0;
+            let mut labels = app.world_mut().query::<(&ChildOf, &controls::LevelValue)>();
+            let value = labels
+                .iter(app.world())
+                .find(|(_, label)| label.0 == eq_client_core::options::Level::UiScale)
+                .unwrap()
+                .0
+                .parent();
+            let mut words = app.world_mut().query::<(&ChildOf, &Text)>();
+            let caption = words
+                .iter(app.world())
+                .find(|(_, text)| text.0 == "Interface scale")
+                .unwrap()
+                .0
+                .parent();
+            for control in [slider, value, caption] {
+                let rect = bounds(app.world(), control);
+                assert!(rect.min.x >= viewport.min.x && rect.max.x <= viewport.max.x);
+            }
+
+            // Exercise the production wheel consumer against this viewport's
+            // computed content height, including the last checkbox's margin.
+            *app.world_mut().resource_mut::<Wheel>() = Wheel {
+                surface: Some(page),
+                pixels: -100_000.0,
+                lines: 0.0,
+            };
+            app.update();
+            app.update();
+            for control in [*bottom, slider, value, caption] {
+                let rect = bounds(app.world(), control);
+                let clip = app.world().get::<CalculatedClip>(control).unwrap().clip;
+                assert!(
+                    rect.min.cmpge(clip.min).all() && rect.max.cmple(clip.max).all(),
+                    "complete control {rect:?} inside {clip:?}"
+                );
+            }
+            let mut wheel_owners = app.world_mut().query_filtered::<Entity, With<TakesWheel>>();
+            assert!(
+                wheel_owners
+                    .iter(app.world())
+                    .all(|entity| app.world().get::<SkinPage>(entity).is_some()),
+                "one wheel owner per page, with no nested QoL scroller"
+            );
+            assert_eq!(bounds(app.world(), root).size(), size * scale);
+        }
+    }
 }
