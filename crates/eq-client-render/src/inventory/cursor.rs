@@ -59,6 +59,10 @@ type Scripted<'w> = (
 /// Follows the pointer using confirmed/predicted inventory state, never a
 /// selected slot; while a script runs, it follows the script pointer.
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one cursor frame keeps input ownership, item and drag overlays in order"
+)]
 pub(crate) fn update(
     mut commands: Commands,
     state: Res<InventoryState>,
@@ -107,7 +111,12 @@ pub(crate) fn update(
     // While a script runs, what rides the cursor rides the script pointer.
     let script_pointer = scripted
         .1
-        .filter(|_| scripted.0.is_some())
+        .filter(|_| {
+            scripted
+                .0
+                .as_ref()
+                .is_some_and(|script| script.pointer_owned())
+        })
         .map(|pointer| pointer.0 / factor);
     let pointer = windows.single().ok().and_then(|window| {
         let pointer = match (script_pointer, window.cursor_position()) {

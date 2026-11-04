@@ -111,9 +111,13 @@ pub(super) fn reconcile(
 pub(super) fn hit<'a>(
     ray: Ray3d,
     drawn: impl Iterator<Item = (&'a GroundEntity, &'a Transform)>,
+    world_containers: bool,
 ) -> Option<(u32, f32)> {
     drawn
         .filter_map(|(entity, transform)| {
+            if !world_containers && entity.object.is_tradeskill_container() {
+                return None;
+            }
             let (min, max) = entity.pick?;
             let inverse = transform.to_matrix().inverse();
             let origin = inverse.transform_point3(ray.origin);
@@ -316,14 +320,51 @@ mod tests {
         );
         let entities = [&near, &far, &fixture];
         let along_x = Ray3d::new(Vec3::new(0.0, 0.4, 0.0), Dir3::X);
-        let (id, distance) =
-            hit(along_x, entities.iter().map(|(entity, at)| (entity, at))).unwrap();
+        let (id, distance) = hit(
+            along_x,
+            entities.iter().map(|(entity, at)| (entity, at)),
+            true,
+        )
+        .unwrap();
         assert_eq!(id, 1);
         // The small bag's box is widened to the minimum pick size.
         let half = eq_client_core::ground::MIN_PICK_SIZE / 2.0;
         assert!((distance - (5.0 - half)).abs() < 1e-4);
         let above = Ray3d::new(Vec3::new(0.0, 5.0, 0.0), Dir3::X);
-        assert!(hit(above, entities.iter().map(|(entity, at)| (entity, at))).is_none());
+        assert!(
+            hit(
+                above,
+                entities.iter().map(|(entity, at)| (entity, at)),
+                true
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn a_carried_offer_does_not_pick_a_station_in_front_of_an_item() {
+        let mut station = object(1, "FORGE", 0.0);
+        station.object_type = 17;
+        let station = GroundEntity {
+            object: station,
+            pick: Some((Vec3::ZERO, Vec3::ONE)),
+        };
+        let item = GroundEntity {
+            object: object(2, "IT63_ACTORDEF", 0.0),
+            pick: Some((Vec3::ZERO, Vec3::ONE)),
+        };
+        let at_station = Transform::from_xyz(2.0, 0.0, 0.0);
+        let at_item = Transform::from_xyz(5.0, 0.0, 0.0);
+        let ray = Ray3d::new(Vec3::new(0.0, 0.5, 0.5), Dir3::X);
+        let entries = [(&station, &at_station), (&item, &at_item)];
+        assert_eq!(
+            hit(ray, entries.into_iter(), false).map(|hit| hit.0),
+            Some(2)
+        );
+        assert_eq!(
+            hit(ray, entries.into_iter(), true).map(|hit| hit.0),
+            Some(1)
+        );
     }
 
     #[test]

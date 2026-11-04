@@ -613,7 +613,7 @@ mod tests {
         );
         assert_eq!(
             Toggle::Qol(Fix::SkipModifiedFood).needs(),
-            Some(Capability::Inventory)
+            Some(Capability::Meals)
         );
         assert_eq!(
             Toggle::all().count(),

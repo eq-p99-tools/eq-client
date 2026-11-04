@@ -4,6 +4,7 @@ use crate::{
     online::{OnlineState, testing},
     outbox::Outbox,
 };
+use bevy::ui::RelativeCursorPosition;
 use eq_client_core::{
     ClientCommand, PlayerState, SpellUpdate, WorldEvent, WorldPosition, WorldUpdate,
     world::{ClientWorld, NoSpells},
@@ -111,6 +112,37 @@ fn a_gem_clicked_with_a_spell_from_the_book_memorizes_it_instead_of_casting() {
     );
 }
 
+/// Synthetic pointer for the legacy action-dispatch fixture.
+fn hotbar_pointer(app: &mut App, on: Option<Entity>, down: bool) {
+    let world = app.world_mut();
+    let mut interactions = world.query::<&mut Interaction>();
+    for mut interaction in interactions.iter_mut(world) {
+        interaction.set_if_neq(Interaction::None);
+    }
+    if let Some(on) = on {
+        if let Some(mut relative) = app.world_mut().get_mut::<RelativeCursorPosition>(on) {
+            *relative = RelativeCursorPosition {
+                cursor_over: true,
+                normalized: Some(Vec2::ZERO),
+            };
+        }
+        *app.world_mut().get_mut::<Interaction>(on).unwrap() = if down {
+            Interaction::Pressed
+        } else {
+            Interaction::Hovered
+        };
+    }
+    let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
+    if down {
+        mouse.press(MouseButton::Left);
+    } else {
+        mouse.release(MouseButton::Left);
+    }
+    app.update();
+    let world = app.world_mut();
+    world.resource_mut::<ButtonInput<MouseButton>>().clear();
+}
+
 #[test]
 fn a_gem_casts_as_its_click_is_let_go_and_a_hold_puts_it_on_a_hotbutton_instead() {
     let mut app = crate::testing::app();
@@ -136,28 +168,7 @@ fn a_gem_casts_as_its_click_is_let_go_and_a_hold_puts_it_on_a_hotbutton_instead(
         .id();
     // Bevy marks the control pressed, or the one the button is let go over
     // hovered.
-    let button = |app: &mut App, on: Option<Entity>, down: bool| {
-        if let Some(on) = on {
-            *app.world_mut().get_mut::<Interaction>(on).unwrap() = if down {
-                Interaction::Pressed
-            } else {
-                Interaction::Hovered
-            };
-        }
-        let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
-        if down {
-            mouse.press(MouseButton::Left);
-        } else {
-            mouse.release(MouseButton::Left);
-        }
-        app.update();
-        let world = app.world_mut();
-        world.resource_mut::<ButtonInput<MouseButton>>().clear();
-        let mut interactions = world.query::<&mut Interaction>();
-        for mut interaction in interactions.iter_mut(world) {
-            interaction.set_if_neq(Interaction::None);
-        }
-    };
+    let button = hotbar_pointer;
     button(&mut app, Some(gem), true);
     assert!(rx.try_recv().is_err());
     button(&mut app, Some(gem), false);
@@ -175,8 +186,8 @@ fn a_gem_casts_as_its_click_is_let_go_and_a_hold_puts_it_on_a_hotbutton_instead(
     button(&mut app, None, false);
     assert!(rx.try_recv().is_err());
     // Held, the gem casts nothing and its hotkey goes onto the fifth
-    // hotbutton; neither press sends. The fifth held the fifth gem, which
-    // has no spell, so nothing comes onto the cursor in its place.
+    // hotbutton; neither press sends. Its stored fifth-gem shortcut comes
+    // onto the cursor even though that gem has no memorized spell.
     button(&mut app, Some(gem), true);
     app.world_mut()
         .resource_mut::<hotbar::carry::Presses>()
@@ -192,8 +203,10 @@ fn a_gem_casts_as_its_click_is_let_go_and_a_hold_puts_it_on_a_hotbutton_instead(
     );
     assert_eq!(
         app.world().resource::<hotbar::carry::Carry>().hotkey(),
-        None
+        Some(hotbar::Action::Gem(4))
     );
+    button(&mut app, None, true);
+    button(&mut app, None, false);
     // The next quick click on the gem casts, and the fifth hotbutton now
     // casts the first gem's spell.
     button(&mut app, Some(gem), true);
@@ -253,11 +266,68 @@ fn tap(app: &mut App, key: KeyCode) {
 }
 
 #[test]
+fn native_sit_stand_chord_uses_reported_posture_and_respects_typing() {
+    use eq_client_core::{Posture, PostureState};
+    for client in [
+        eq_client_assets::ui::InstalledClient::Titanium,
+        eq_client_assets::ui::InstalledClient::EqMac,
+    ] {
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let mut app = bar_app(tx);
+        app.insert_resource(crate::keys::KeyMap::for_client(client));
+        let chord = |app: &mut App| {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.reset_all();
+            keys.press(KeyCode::ControlLeft);
+            keys.press(KeyCode::KeyS);
+            app.update();
+        };
+        for (reported, wanted) in [
+            (PostureState::Standing, Posture::Sitting),
+            (PostureState::Sitting, Posture::Standing),
+            (PostureState::Ducking, Posture::Sitting),
+        ] {
+            testing::news(
+                &mut online(&mut app),
+                [WorldEvent::Posture {
+                    spawn_id: 12,
+                    posture: reported,
+                }],
+            );
+            chord(&mut app);
+            assert!(
+                matches!(rx.try_recv(), Ok(ClientCommand::SetPosture { posture, .. }) if posture == wanted)
+            );
+            // A key does not manufacture the server's changed posture.
+            assert_eq!(
+                app.world().resource::<OnlineState>().world().posture(12),
+                Some(reported)
+            );
+        }
+        app.world_mut()
+            .resource_mut::<crate::keys::Typing>()
+            .composing = true;
+        chord(&mut app);
+        assert!(rx.try_recv().is_err());
+    }
+}
+
+#[test]
 fn a_hotbuttons_sit_and_stand_send_the_postures_their_keys_send_and_say_a_refusal_once() {
     let (tx, rx) = std::sync::mpsc::sync_channel(4);
     let mut app = bar_app(tx);
     // The bar's ninth and tenth slots hold Sit and Stand by default, which
-    // run `/sit` and `/stand`; X and V are the posture keys.
+    // run `/sit` and `/stand`. Direct posture keys are explicit user choices.
+    crate::keys::testing::bind(
+        &mut app,
+        crate::keys::Act::Sit,
+        crate::keys::Chord::key(KeyCode::KeyX),
+    );
+    crate::keys::testing::bind(
+        &mut app,
+        crate::keys::Act::Stand,
+        crate::keys::Chord::key(KeyCode::KeyV),
+    );
     for (slot, key, wanted) in [
         (
             KeyCode::Digit9,
@@ -334,7 +404,11 @@ fn a_hotbuttons_camp_and_group_kinds_send_what_their_buttons_send() {
     tap(&mut app, KeyCode::Digit2);
     assert!(matches!(
         rx.try_recv().unwrap(),
-        ClientCommand::FollowGroup { session_id: 7 }
+        ClientCommand::FollowGroup {
+            session_id: 7,
+            invitation_id: None,
+            ..
+        }
     ));
     tap(&mut app, KeyCode::Digit3);
     assert!(matches!(
@@ -561,20 +635,10 @@ fn gems_and_action_slots_name_their_keys_from_the_key_map() {
         "Synthetic spell
 Alt+2: cast | Shift-click: forget | Hold: pick up"
     );
-    // A hold picks up what a hotbutton holds while that does something: the
-    // second gem's spell, not the third gem, which has none.
-    assert_eq!(
-        tooltip(slot),
-        "2: use | Ctrl+2: bind the hovered gem, item or button | Ctrl+Shift+2: empty | Hold: pick up"
-    );
-    assert_eq!(
-        tooltip(spellless),
-        "3: use | Ctrl+3: bind the hovered gem, item or button | Ctrl+Shift+3: empty"
-    );
-    assert_eq!(
-        tooltip(empty),
-        "4: use | Ctrl+4: bind the hovered gem, item or button | Ctrl+Shift+4: empty"
-    );
+    // A stored shortcut can be picked up even if its gem is currently empty.
+    assert_eq!(tooltip(slot), "2: use | Hold: pick up");
+    assert_eq!(tooltip(spellless), "3: use | Hold: pick up");
+    assert_eq!(tooltip(empty), "4: use");
 }
 
 #[test]

@@ -94,6 +94,14 @@ pub enum Step {
     WaitSelect,
     /// Highlights a listed character by name and presses Enter.
     Select(String),
+    /// Delete one exact listed name after repeating it explicitly. Completion is
+    /// only an absence observation on a refreshed list, never a deletion ACK.
+    DeleteCharacter {
+        /// Exact name from the received character list.
+        name: String,
+        /// Explicit repeated name required before submitting the request.
+        confirmation: String,
+    },
     /// Creates a character from the selection screen (local test servers).
     Create(eq_client_core::creation::NewCharacter),
     /// Asks for a character the server is expected to refuse, a taken name
@@ -479,6 +487,10 @@ fn parse_camera(arguments: &[&str]) -> Result<Step, String> {
     })
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "one exhaustive command grammar keeps unknown-command rejection explicit"
+)]
 pub(super) fn parse_step(line: &str) -> Result<Step, String> {
     let mut words = line.split_whitespace();
     let command = words.next().unwrap_or_default();
@@ -512,6 +524,18 @@ pub(super) fn parse_step(line: &str) -> Result<Step, String> {
         ("server", name) if !name.is_empty() => Step::Server(name.join(" ")),
         ("wait_select", []) => Step::WaitSelect,
         ("select", [name]) => Step::Select((*name).to_owned()),
+        ("delete", [name, "confirm", confirmation])
+            if name == confirmation
+                && !name.is_empty()
+                && name.len() < 64
+                && name.is_ascii()
+                && !name.as_bytes().contains(&0) =>
+        {
+            Step::DeleteCharacter {
+                name: (*name).into(),
+                confirmation: (*confirmation).into(),
+            }
+        }
         ("create", arguments) => Step::Create(parse_create(arguments)?),
         ("create_refused", arguments) => Step::CreateRefused(parse_create(arguments)?),
         ("wait_online", []) => Step::WaitOnline,
@@ -1254,6 +1278,33 @@ pub(super) fn typed(key: KeyCode, shift: bool, chorded: bool) -> (Key, Option<St
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn deletion_requires_exact_repeated_name_without_position_fallback() {
+        assert_eq!(
+            parse(
+                "delete Disposable confirm Disposable",
+                std::path::Path::new(".")
+            )
+            .unwrap(),
+            vec![Step::DeleteCharacter {
+                name: "Disposable".into(),
+                confirmation: "Disposable".into()
+            }]
+        );
+        for source in [
+            "delete Disposable",
+            "delete Disposable confirm Other",
+            "delete Disposable confirm disposable",
+            "delete 0",
+            "delete Disposable yes",
+        ] {
+            assert!(
+                parse(source, std::path::Path::new(".")).is_err(),
+                "{source}"
+            );
+        }
+    }
+
     use super::*;
 
     #[test]

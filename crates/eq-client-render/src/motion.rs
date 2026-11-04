@@ -75,6 +75,10 @@ pub(super) struct Controls {
     /// (`ClimbReach`), so it goes again at each admission and whenever the
     /// body's climb changes.
     climb_sent: Option<(u64, f32)>,
+    /// Admission and revision last used to withdraw voluntary input.
+    stun_revision: Option<(u64, u64)>,
+    /// Emission permission, separate from actual held-key/autorun intent.
+    stunned: bool,
 }
 
 /// How far a jump from standing still has come on a client that crouches
@@ -133,6 +137,8 @@ impl Default for Controls {
             last_answer: None,
             held: None,
             climb_sent: None,
+            stun_revision: None,
+            stunned: false,
         }
     }
 }
@@ -272,13 +278,15 @@ impl Controls {
         (yaw, heading): (f32, f32),
         looking_ahead: bool,
     ) -> MotionInput {
+        let focused = focused && !self.stunned;
+        let looking_ahead = looking_ahead && !self.stunned;
         // A complete tap can arrive between render frames. Preserve its press edge
         // for this one sample without mutating Bevy's shared held-key state.
         let keys = sample_keys(keys, map);
         let held = map.holding(&keys, scripted);
         let mut intent = movement_input(
             held,
-            (focused, looking_ahead, self.autorun),
+            (focused, looking_ahead, self.autorun && !self.stunned),
             yaw,
             heading,
             self.speed.unwrap_or(0.0),
@@ -317,8 +325,32 @@ impl Controls {
             last_answer: self.last_answer,
             last_jump: self.last_jump,
             walking: self.walking,
+            stun_revision: self.stun_revision,
             ..Self::default()
         };
+    }
+
+    /// A control transition never revokes calibrated speed or existing
+    /// vertical momentum. Remember revisions so start/expiry in one frame
+    /// still discard pending taps, facing and a crouched jump. Native input
+    /// collection (0x4a1d74) leaves actual autorun/held intent in place while
+    /// permission is blocked; fresh samples may resume after expiry.
+    fn observe_stun(&mut self, world: &ClientWorld) -> bool {
+        let revision = world.session_id().zip(world.stun_revision());
+        let changed = revision != self.stun_revision;
+        self.stun_revision = revision;
+        let stunned = world.is_stunned();
+        self.stunned = stunned;
+        if stunned || (changed && revision.is_some()) {
+            self.taps = TapBuffer::default();
+            self.jump = None;
+            self.crouch = None;
+            self.facing = None;
+        }
+        if changed && revision.is_some() {
+            self.moving = false;
+        }
+        stunned
     }
 
     /// Stops prediction without revoking the session's calibration. A pending
@@ -354,7 +386,17 @@ impl Controls {
     }
     /// Takes the session's word on how the player may move.
     pub fn grant(&mut self, grant: eq_client_core::world::MotionGrant) {
+        // A changed positive speed keeps the current intent. Any actual
+        // withdrawal/reset still clears it, including death and zoning.
+        let autorun = self.autorun
+            && self
+                .speed
+                .is_some_and(|value| value.is_finite() && value > 0.0)
+            && grant
+                .units_per_second
+                .is_some_and(|value| value.is_finite() && value > 0.0);
         self.reset(grant.units_per_second);
+        self.autorun = autorun;
         self.backward_speed = grant.backward_units_per_second;
         self.walk_speed = grant.walk_units_per_second;
         self.strafe_speed = grant.strafe_units_per_second;
@@ -453,12 +495,13 @@ pub(super) fn input(
     look: Option<Res<crate::camera::MouseLook>>,
 ) {
     let client = settings.0.installed_client;
-    if !online.enabled || !online.world().connected() || online.world().death().is_some() {
+    if !online.enabled || !online.world().connected() || online.world().is_dead() {
         controls.reset(None);
         controls.held = Some(Held::Withdrawn);
         return;
     }
     let detached = cameras.single().is_ok_and(|(_, free)| free);
+    let stunned = controls.observe_stun(online.world());
     if detached {
         controls.autorun = false;
         controls.taps = TapBuffer::default();
@@ -469,7 +512,7 @@ pub(super) fn input(
         controls.held = Some(Held::Withdrawn);
         return;
     }
-    let focused = keys.focused() && !detached && controls.speed.is_some();
+    let focused = keys.focused() && !detached && !stunned && controls.speed.is_some();
     if focused && keys.pressed(Act::Walk) && controls.walk_speed.is_some() {
         controls.walking = !controls.walking;
     }
@@ -1271,6 +1314,142 @@ fn arc(from: f32, to: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn stun_pauses_autorun_and_discards_queued_input_without_banking_distance() {
+        let (mut app, receiver) = app();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        {
+            let mut controls = app.world_mut().resource_mut::<Controls>();
+            controls.autorun = true;
+            controls.jump = Some(Instant::now());
+            controls.crouch = Some(Crouch::Until(Instant::now()));
+            controls.facing = Some(256.0);
+            controls.taps.0.push((KeyCode::KeyW, Instant::now()));
+        }
+        let update = |app: &mut App, revision, state| {
+            let mut online = app.world_mut().resource_mut::<online::OnlineState>();
+            crate::online::testing::news(
+                &mut online,
+                [eq_client_core::WorldEvent::OwnStun {
+                    session_id: 11,
+                    revision,
+                    state,
+                }],
+            );
+        };
+        update(&mut app, 1, eq_client_core::control::StunState::Stunned);
+        app.update();
+        assert!(receiver.try_recv().is_err());
+        let controls = app.world().resource::<Controls>();
+        assert!(controls.speed.is_some());
+        assert!(controls.autorun && controls.jump.is_none() && controls.crouch.is_none());
+        assert!(controls.taps.0.is_empty() && controls.facing.is_none());
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        update(&mut app, 2, eq_client_core::control::StunState::Clear);
+        app.update();
+        let ClientCommand::Move(resumed) = receiver.try_recv().expect("autorun should resume")
+        else {
+            panic!("unexpected command");
+        };
+        assert!(resumed.position.x.hypot(resumed.position.y) <= 0.601);
+        assert!(app.world().resource::<Controls>().autorun);
+        accept(&mut app, &resumed);
+        // A whole stun can pass between render frames. Its revision still
+        // withdraws intent accumulated before the session's interruption.
+        {
+            let mut controls = app.world_mut().resource_mut::<Controls>();
+            controls.jump = Some(Instant::now());
+            controls.last_accepted = Instant::now()
+                .checked_sub(Duration::from_millis(150))
+                .unwrap();
+        }
+        update(&mut app, 3, eq_client_core::control::StunState::Stunned);
+        update(&mut app, 4, eq_client_core::control::StunState::Clear);
+        app.update();
+        let controls = app.world().resource::<Controls>();
+        assert!(controls.autorun && controls.jump.is_none());
+        assert!(
+            !receiver
+                .try_iter()
+                .any(|command| matches!(command, ClientCommand::Jump { .. }))
+        );
+    }
+
+    #[test]
+    fn a_physically_held_key_resumes_after_stun_without_release_and_repress() {
+        let (mut app, receiver) = app();
+        let update = |app: &mut App, revision, state| {
+            let mut online = app.world_mut().resource_mut::<online::OnlineState>();
+            crate::online::testing::news(
+                &mut online,
+                [eq_client_core::WorldEvent::OwnStun {
+                    session_id: 11,
+                    revision,
+                    state,
+                }],
+            );
+        };
+        update(&mut app, 1, eq_client_core::control::StunState::Stunned);
+        app.update();
+        assert!(receiver.try_recv().is_err());
+        update(&mut app, 2, eq_client_core::control::StunState::Clear);
+        app.update();
+        let ClientCommand::Move(resumed) = receiver.try_recv().expect("held key should resume")
+        else {
+            panic!("unexpected command");
+        };
+        assert!(resumed.position.x < 0.0);
+        assert!(resumed.position.x.hypot(resumed.position.y) <= 0.601);
+    }
+
+    #[test]
+    fn stun_keeps_passive_falling_and_blocks_held_horizontal_input() {
+        let (mut app, receiver) = app();
+        {
+            let mut online = app.world_mut().resource_mut::<online::OnlineState>();
+            let mut player = online.world().player().unwrap().clone();
+            player.position = world_position([0.0, 53.0, 0.0], 0.0);
+            crate::online::testing::admit(&mut online, 11, player);
+            crate::online::testing::news(
+                &mut online,
+                [eq_client_core::WorldEvent::OwnStun {
+                    session_id: 11,
+                    revision: 1,
+                    state: eq_client_core::control::StunState::Stunned,
+                }],
+            );
+        }
+        {
+            let mut controls = app.world_mut().resource_mut::<Controls>();
+            controls.airborne = Some(AirborneController::default());
+            controls.autorun = true;
+            controls.last_accepted = Instant::now()
+                .checked_sub(Duration::from_millis(150))
+                .unwrap();
+        }
+        app.update();
+        let commands: Vec<_> = receiver.try_iter().collect();
+        let request = commands
+            .iter()
+            .find_map(|command| match command {
+                ClientCommand::Move(request) => Some(request),
+                _ => None,
+            })
+            .expect("passive fall missing");
+        assert_eq!(request.mode, MovementMode::Fall);
+        assert!(request.position.x.abs() < f32::EPSILON && request.position.y.abs() < f32::EPSILON);
+        assert!(request.position.z < 53.0);
+        assert!(
+            !commands
+                .iter()
+                .any(|command| matches!(command, ClientCommand::Jump { .. }))
+        );
+    }
 
     /// A size 6 human, standing 3.75 above its feet.
     const HUMAN: super::PlayerBody = super::PlayerBody {
@@ -2148,6 +2327,19 @@ mod tests {
         let (sender, receiver) = mpsc::sync_channel(2);
         let mut app = App::new();
         crate::keys::testing::install(&mut app);
+        // These camera-relative motion cases choose their own controls;
+        // W/A/S/D and Q/E are not the installed client's default bindings.
+        for (act, key) in [
+            (Act::FreeCamera, KeyCode::F9),
+            (Act::CameraForward, KeyCode::KeyW),
+            (Act::CameraBack, KeyCode::KeyS),
+            (Act::CameraLeft, KeyCode::KeyA),
+            (Act::CameraRight, KeyCode::KeyD),
+            (Act::TurnLeft, KeyCode::KeyQ),
+            (Act::TurnRight, KeyCode::KeyE),
+        ] {
+            crate::keys::testing::bind(&mut app, act, crate::keys::Chord::key(key));
+        }
         let mut state = online::OnlineState::new(true);
         crate::online::testing::admit(
             &mut state,
@@ -2241,6 +2433,13 @@ mod tests {
         reason = "Exact equality verifies unchanged or explicitly assigned state"
     )]
     fn strafing_is_perpendicular_to_facing_and_never_borrows_forward_speed() {
+        let map = crate::keys::testing::map(&[
+            (Act::StrafeLeft, crate::keys::Chord::key(KeyCode::ArrowLeft)),
+            (
+                Act::StrafeRight,
+                crate::keys::Chord::key(KeyCode::ArrowRight),
+            ),
+        ]);
         for heading in [0.0, 128.0, 256.0, 384.0] {
             let radians = eq_client_core::render_heading(heading);
             let facing = Vec3::new(radians.sin(), 0.0, radians.cos());
@@ -2252,13 +2451,12 @@ mod tests {
             keys.press(KeyCode::ArrowRight);
             assert_eq!(
                 controls
-                    .intent(&keys, &KeyMap::default(), &[], true, (0.0, heading), false)
+                    .intent(&keys, &map, &[], true, (0.0, heading), false)
                     .direction,
                 Vec3::ZERO
             );
             controls.strafe_speed = Some(3.0);
-            let right =
-                controls.intent(&keys, &KeyMap::default(), &[], true, (0.0, heading), false);
+            let right = controls.intent(&keys, &map, &[], true, (0.0, heading), false);
             assert_eq!(right.mode, MovementMode::Strafe);
             assert!(right.preserve_facing);
             assert_eq!(right.speed, 3.0);
@@ -2266,18 +2464,18 @@ mod tests {
             assert!(right.direction.dot(facing.cross(Vec3::Y)) > 0.999);
             keys.reset_all();
             keys.press(KeyCode::ArrowLeft);
-            let left = controls.intent(&keys, &KeyMap::default(), &[], true, (0.0, heading), false);
+            let left = controls.intent(&keys, &map, &[], true, (0.0, heading), false);
             assert!((left.direction + right.direction).length() < 0.0001);
             assert_eq!(
                 controls
-                    .intent(&keys, &KeyMap::default(), &[], false, (0.0, heading), false)
+                    .intent(&keys, &map, &[], false, (0.0, heading), false)
                     .direction,
                 Vec3::ZERO
             );
             keys.press(KeyCode::ArrowRight);
             assert_eq!(
                 controls
-                    .intent(&keys, &KeyMap::default(), &[], true, (0.0, heading), false)
+                    .intent(&keys, &map, &[], true, (0.0, heading), false)
                     .direction,
                 Vec3::ZERO
             );
@@ -2316,7 +2514,10 @@ mod tests {
         app.world_mut().resource_mut::<Controls>().walk_speed = Some(2.0);
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
-            .press(KeyCode::Insert);
+            .press(KeyCode::ControlLeft);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyR);
         app.update();
         let ClientCommand::Move(request) = receiver.try_recv().unwrap() else {
             panic!("expected walking movement")
@@ -2353,7 +2554,10 @@ mod tests {
             .composing = true;
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
-            .press(KeyCode::Insert);
+            .press(KeyCode::ControlLeft);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyR);
         app.update();
         assert!(!app.world().resource::<Controls>().walking);
     }
@@ -2776,6 +2980,35 @@ mod tests {
     }
 
     #[test]
+    fn positive_recalibration_keeps_autorun_but_a_real_withdrawal_clears_it() {
+        let mut controls = Controls {
+            speed: Some(10.0),
+            autorun: true,
+            ..Default::default()
+        };
+        let grant = |speed| eq_client_core::world::MotionGrant {
+            units_per_second: speed,
+            backward_units_per_second: None,
+            walk_units_per_second: None,
+            strafe_units_per_second: None,
+            falls: true,
+        };
+        controls.grant(grant(Some(9.0)));
+        assert!(controls.autorun);
+        assert_eq!(controls.speed, Some(9.0));
+        controls.grant(grant(None));
+        assert!(!controls.autorun);
+        controls.grant(grant(Some(10.0)));
+        assert!(
+            !controls.autorun,
+            "a regrant cannot revive withdrawn intent"
+        );
+        controls.autorun = true;
+        controls.grant(grant(Some(f32::NAN)));
+        assert!(!controls.autorun);
+    }
+
+    #[test]
     fn the_session_hears_the_bodys_climb_at_each_admission_and_change() {
         let (mut app, receiver) = app();
         app.world_mut()
@@ -2818,6 +3051,7 @@ mod tests {
         let (sender, receiver) = mpsc::sync_channel(1);
         sender
             .send(ClientCommand::SelectTarget {
+                request_id: 1,
                 session_id: 11,
                 spawn_id: None,
             })

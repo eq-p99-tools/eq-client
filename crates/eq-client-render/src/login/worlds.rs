@@ -674,6 +674,8 @@ mod tests {
         crate::online::testing::news(
             &mut app.world_mut().resource_mut::<OnlineState>(),
             [WorldEvent::CharacterSelection {
+                connection_id: 1,
+                deletion: None,
                 creation: Some(eq_client_core::creation::Rules::Titanium),
                 selection_id: 1,
                 characters: Vec::new(),

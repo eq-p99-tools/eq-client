@@ -5,8 +5,9 @@
 //! A control a list the wheel scrolls has scrolled out of view is first
 //! scrolled into it: the pointer glides to the list and turns the wheel a
 //! notch a frame, as a player scrolls the list before clicking the row.
-//! The real pointer is never moved: the script pointer is set only while the
-//! real one is outside the window, and is drawn as an arrow of its own: the
+//! The real pointer is never moved. The script pointer runs while the real one
+//! is outside, or while explicit background ownership isolates native hit
+//! testing, and is drawn as an arrow of its own: the
 //! skin's `arrow.cur`, or this client's own arrow when the skin has none.
 use std::time::Duration;
 
@@ -23,7 +24,7 @@ use crate::windows::pointer::{LINE_PIXELS, TakesWheel, Wheel};
 pub(super) const GLIDE: Duration = Duration::from_millis(250);
 
 /// Where a running script points, in the window's logical pixels. It is set
-/// only while the real pointer is outside the window, starts at the
+/// while the real pointer is outside or explicit background input owns the UI, starts at the
 /// window's middle and stays where the last glide left it; it is forgotten
 /// once the script ends.
 #[derive(Resource, Clone, Copy, Debug, PartialEq)]
@@ -355,7 +356,7 @@ pub(crate) fn draw(
     }
     let factor = scale.as_ref().map_or(1.0, |scale| scale.0);
     let at = pointer
-        .filter(|_| script.is_some())
+        .filter(|_| script.as_ref().is_some_and(|script| script.pointer_owned()))
         .map(|pointer| pointer.0 / factor);
     // The skin's cursor in the UI's pixels: its own pixels are the
     // display's, not the window's logical ones.

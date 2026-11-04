@@ -95,6 +95,8 @@ pub enum Notice {
     ShopRefused,
     /// Nothing was bought or sold, and why.
     TradeRefused(String),
+    /// A merchant has not answered; no purchase or sale outcome is established.
+    MerchantUnanswered(String),
     /// No give window opened, or it closed, and why.
     GiveRefused(String),
     /// An item on the ground could not be picked up, and why.

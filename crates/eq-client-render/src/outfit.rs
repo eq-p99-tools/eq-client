@@ -10,6 +10,10 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+#[cfg(test)]
+#[path = "outfit/wear_tests.rs"]
+mod wear_tests;
+
 /// A dressed material: the model's archive, the material's name and its tint.
 type Look = (PathBuf, String, Option<[u8; 3]>);
 

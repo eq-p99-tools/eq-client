@@ -331,6 +331,7 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         }
         Notice::BindWound(update) => bind_wound(update, messages).map_or_else(Vec::new, chat),
         Notice::TradeRefused(reason)
+        | Notice::MerchantUnanswered(reason)
         | Notice::CombatRefused(reason)
         | Notice::TrainingRefused(reason)
         | Notice::ResurrectionRefused(reason)
@@ -536,7 +537,7 @@ fn camp_lines(camp: &CampStatus, messages: Option<&Messages>) -> Vec<Said> {
             .collect(),
         CampStatus::Abandoned { by } => {
             let id = match by {
-                eq_client_core::CampEnd::Standing => 12683,
+                eq_client_core::CampEnd::Standing | eq_client_core::CampEnd::Stunned => 12683,
                 eq_client_core::CampEnd::Moving | eq_client_core::CampEnd::Other => 12290,
             };
             said(id, &[]).into_iter().collect()
@@ -1304,6 +1305,12 @@ mod tests {
         assert_eq!(
             said(CampStatus::Abandoned {
                 by: CampEnd::Standing
+            }),
+            [(Place::Chat, Said::official("Stood."))]
+        );
+        assert_eq!(
+            said(CampStatus::Abandoned {
+                by: CampEnd::Stunned
             }),
             [(Place::Chat, Said::official("Stood."))]
         );

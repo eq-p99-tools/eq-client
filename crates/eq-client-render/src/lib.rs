@@ -38,6 +38,7 @@ mod book_delete;
 mod buffs;
 mod character;
 mod character_create;
+mod character_delete;
 mod character_select;
 mod chat;
 mod clicks;
@@ -195,6 +196,11 @@ pub struct ViewerConfig {
     pub script_path: Option<PathBuf>,
     /// Script file and byte offset to keep reading appended steps from.
     pub script_follow: Option<(PathBuf, usize)>,
+    /// Explicit input ownership for CLI scripts and later opt-in recovery runs.
+    /// Background mode requests an initially non-activating window.
+    pub script_input_mode: script::InputMode,
+    /// Opt-in local script request/status bridge; must be a new directory.
+    pub script_control: Option<PathBuf>,
     /// Leave the script pointer's arrow undrawn while a script runs; it is
     /// drawn by default, so a recording shows where each click lands.
     pub hide_script_pointer: bool,
@@ -319,6 +325,10 @@ fn seed_official_options(
 }
 
 /// Opens a window and renders a loaded zone until the user closes it.
+#[allow(
+    clippy::too_many_lines,
+    reason = "keep startup resource, plugin and system installation order visible"
+)]
 pub fn run(
     zone: ZoneAsset,
     character: Option<CharacterAsset>,
@@ -329,7 +339,7 @@ pub fn run(
     let steps = config.script.clone();
     let arrow = !config.hide_script_pointer;
     let follow = config.script_follow.clone();
-    let local_session = config.local_session;
+    let script_input_mode = config.script_input_mode;
     let installed_client = config.installed_client;
     let mut option_defaults = config.option_defaults;
     seed_official_options(&config, &mut option_defaults);
@@ -344,14 +354,15 @@ pub fn run(
         screenshot.is_none(),
         config.window_position,
         window_size,
+        script_input_mode,
     );
     let mut app = App::new();
-    let spell_binding = match &source {
+    let (spell_binding, inventory_move_rules) = match &source {
         Source::Online {
             session: Some(session),
             ..
-        } => Some(session.spell_provider),
-        _ => None,
+        } => (Some(session.spell_provider), session.inventory_move_rules),
+        _ => (None, None),
     };
     let (front, updates, commands) = match source {
         Source::Online { logins, session } => login::FrontEnd::launched(logins, session),
@@ -368,6 +379,8 @@ pub fn run(
         spells.bind(binding);
     }
     let outbox = outbox::Outbox::new(commands);
+    let mut online_state = online::OnlineState::new(online);
+    online_state.plan_inventory_as(inventory_move_rules);
     outbox.set_spell_ready(spells.ready());
     app.insert_resource(spells);
     app.insert_resource(hud::messages::Messages::load(
@@ -379,7 +392,7 @@ pub fn run(
         character,
     })
     .insert_resource(ViewerSettings(config))
-    .insert_resource(online::OnlineState::new(online))
+    .insert_resource(online_state)
     .insert_resource(online::Updates(std::sync::Mutex::new(updates)))
     .insert_resource(outbox);
     init_presentation(&mut app);
@@ -412,7 +425,11 @@ pub fn run(
     loading::install(&mut app);
     device_pixels::install(&mut app);
     install_overlays(&mut app);
-    install_script(&mut app, (steps, follow), (local_session, online), arrow);
+    install_script(&mut app, (steps, follow), online, arrow, script_input_mode);
+    if let Err(error) = script::control::install(&mut app) {
+        error!(%error, "Cannot create script control directory; use a new directory");
+        return 2;
+    }
     script_workbench::install(&mut app);
     if let Some(path) = screenshot {
         app.insert_resource(CaptureRequest {
@@ -458,6 +475,31 @@ pub(crate) mod testing {
     }
 }
 
+#[cfg(test)]
+mod script_window_tests {
+    use super::*;
+
+    #[test]
+    fn only_explicit_background_creation_requests_an_inactive_window() {
+        for online in [false, true] {
+            for visible in [false, true] {
+                for mode in [script::InputMode::Attended, script::InputMode::Background] {
+                    let window =
+                        primary_window(online, visible, Some((20, 30)), Some((800, 600)), mode);
+                    assert_eq!(window.focused, mode == script::InputMode::Attended);
+                    assert_eq!(window.visible, visible);
+                    assert_eq!(window.position, WindowPosition::At(IVec2::new(20, 30)));
+                    assert_eq!(window.resolution.physical_width(), 800);
+                }
+            }
+        }
+        assert_eq!(
+            ViewerConfig::default().script_input_mode,
+            script::InputMode::Attended
+        );
+    }
+}
+
 /// The sliders' settings from `eqclient.ini`, on the scales assumed until a
 /// recording of the official client says otherwise: `ClipPlane` 0 to 20 and
 /// `MouseSensitivity` 0 to 10 as fractions of the slider, `MaxFPS` in frames.
@@ -487,20 +529,27 @@ fn exit_status(exit: &AppExit) -> i32 {
 }
 
 /// Drives a script after UI focus, optionally following its file; it is
-/// attended unless the session is local-only or the preview is offline.
+/// attended unless background mode, a local session or an offline preview
+/// explicitly permits unfocused input.
 /// The script pointer's arrow is drawn while it runs, unless `arrow` is false.
 fn install_script(
     app: &mut App,
     (program, follow): (Option<script::Program>, Option<(PathBuf, usize)>),
-    (local_session, online): (bool, bool),
+    online: bool,
     arrow: bool,
+    input_mode: script::InputMode,
 ) {
+    script::install_input(app, input_mode);
     if let Some(program) = program {
-        let mut script = script::Script::from_program(program);
+        let mut script = script::Script::for_viewer(
+            program,
+            &app.world().resource::<ViewerSettings>().0,
+            online,
+        );
         if let Some((path, offset)) = follow {
             script = script.with_follow(path, offset);
         }
-        app.insert_resource(script.local_session(local_session).offline_preview(!online));
+        app.insert_resource(script);
     }
     app.init_resource::<script::RunStatus>()
         .init_resource::<script::RunControl>();
@@ -508,6 +557,7 @@ fn install_script(
         PreUpdate,
         script::drive
             .after(bevy::ui::UiSystems::Focus)
+            .after(items::link_input)
             .before(clicks::track),
     )
     .add_systems(
@@ -539,6 +589,7 @@ fn primary_window(
     visible: bool,
     position: Option<(i32, i32)>,
     size: Option<(u32, u32)>,
+    input_mode: script::InputMode,
 ) -> Window {
     Window {
         title: if online {
@@ -548,6 +599,9 @@ fn primary_window(
         }
         .to_owned(),
         visible,
+        // Winit uses this initial value for WindowAttributes::with_active.
+        // It is a creation request, never a mutation of a running window.
+        focused: input_mode != script::InputMode::Background,
         position: position.map_or(WindowPosition::Automatic, |(x, y)| {
             WindowPosition::At(IVec2::new(x, y))
         }),
@@ -1083,6 +1137,7 @@ mod tests {
                 heard: std::sync::Arc::default(),
             }),
             Some(login::Session {
+                inventory_move_rules: Some(eq_client_core::inventory::MoveRules::EqEmu),
                 spell_provider: eq_client_core::spell_tables::Binding::new(
                     eq_client_core::spell_tables::Policy::Installed,
                 ),

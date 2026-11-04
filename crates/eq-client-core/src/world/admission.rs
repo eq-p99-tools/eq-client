@@ -51,16 +51,30 @@ impl ClientWorld {
     /// server's list is done with.
     pub(super) fn offered(
         &mut self,
-        selection_id: u64,
+        (connection_id, selection_id): (u64, u64),
         characters: &[CharacterChoice],
-        creation: Option<crate::creation::Rules>,
+        (creation, deletion): (
+            Option<crate::creation::Rules>,
+            Option<crate::deletion::Rules>,
+        ),
         changes: &mut Changes,
     ) {
+        if connection_id == 0
+            || self.characters.as_ref().is_some_and(|list| {
+                connection_id < list.connection_id
+                    || (connection_id == list.connection_id && selection_id <= list.selection_id)
+            })
+        {
+            changes.ignored = true;
+            return;
+        }
         self.servers = None;
         self.characters = Some(CharacterList {
+            connection_id,
             selection_id,
             characters: characters.to_vec(),
             creation,
+            deletion,
         });
         changes.characters = true;
     }
@@ -116,6 +130,7 @@ impl ClientWorld {
         self.capabilities = capabilities.to_vec();
         self.choices = choices.to_vec();
         self.session_id = Some(session_id);
+        self.target.accepts_updates = true;
         zone.clone_into(&mut self.zone_name);
         changes
             .notices

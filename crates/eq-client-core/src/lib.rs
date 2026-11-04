@@ -39,8 +39,10 @@ pub use eq_network_game::combat;
 pub use eq_network_game::command::GameCommand as ClientCommand;
 pub use eq_network_game::command::Posture;
 pub use eq_network_game::confirmations;
+pub use eq_network_game::control;
 pub use eq_network_game::corpses;
 pub use eq_network_game::creation;
+pub use eq_network_game::deletion;
 pub use eq_network_game::rules;
 pub mod character_creation;
 pub use eq_network_game::effects;
@@ -54,8 +56,9 @@ pub use eq_network_game::loot;
 pub use eq_network_game::merchant;
 pub use eq_network_game::money;
 pub use eq_network_game::movement::{
-    BackwardCalibration, MotionCalibration, MovementMode, MovementRequest, SpeedInputAcceptance,
-    SpeedInputState, SpeedInputUnavailable, SpeedInputs, StrafeCalibration, WalkCalibration,
+    BackwardCalibration, EqMacFatigueInputs, MotionCalibration, MovementMode, MovementRequest,
+    SpeedInputAcceptance, SpeedInputState, SpeedInputUnavailable, SpeedInputs, StrafeCalibration,
+    WalkCalibration,
 };
 pub use eq_network_game::pets;
 pub use eq_network_game::raid;
@@ -67,6 +70,7 @@ pub use eq_network_game::spells::BookActionStatus;
 pub use eq_network_game::spells::SpellBook;
 pub use eq_network_game::spells::SpellUpdate;
 pub use eq_network_game::sysinfo::{Machine, SysInfo};
+pub use eq_network_game::targets;
 pub use eq_network_game::tradeskills;
 pub use eq_network_game::training;
 pub use eq_network_game::zones;

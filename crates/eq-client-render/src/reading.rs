@@ -34,15 +34,15 @@ pub(crate) enum Text {
     Number(usize),
 }
 
-/// The window a text opens in: the book window for a book, the note window
-/// for anything else.
+/// The supported note/book window. `EQMac` uses nonzero kinds for books;
+/// Titanium's item-information/unknown kinds are not reading windows.
 fn window_for(world: &ClientWorld) -> Option<WindowId> {
     let text = world.reading()?;
-    Some(if text.kind == 1 {
-        WindowId::Book
-    } else {
-        WindowId::Note
-    })
+    match (world.generation(), text.kind) {
+        (_, 0) => Some(WindowId::Note),
+        (eq_client_core::GameDialect::EqMac, _) | (_, 1) => Some(WindowId::Book),
+        _ => None,
+    }
 }
 
 /// The pages of the book being read.
@@ -212,5 +212,29 @@ mod tests {
         app.update();
         assert!(app.world().resource::<Shown>().is_open(WindowId::Book));
         assert_eq!(app.world().resource::<Page>().0, 0);
+    }
+
+    #[test]
+    fn unknown_titanium_text_opens_no_window_and_eqmac_nonzero_kind_remains_a_book() {
+        let mut app = read(2, "Not a Titanium note");
+        app.update();
+        assert!(!app.world().resource::<Shown>().is_open(WindowId::Note));
+        assert!(!app.world().resource::<Shown>().is_open(WindowId::Book));
+        let mut online = OnlineState::new(true);
+        let mut world = ClientWorld::default();
+        world.carry_as(eq_client_core::GameDialect::EqMac);
+        testing::set_world(&mut online, world);
+        testing::admit(&mut online, 2, testing::player(7));
+        testing::news(
+            &mut online,
+            [WorldEvent::BookText(BookText {
+                kind: 2,
+                text: "Synthetic EQMac text".into(),
+            })],
+        );
+        app.insert_resource(online);
+        app.update();
+        assert!(!app.world().resource::<Shown>().is_open(WindowId::Note));
+        assert!(app.world().resource::<Shown>().is_open(WindowId::Book));
     }
 }

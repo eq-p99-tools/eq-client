@@ -131,6 +131,7 @@ impl SessionWorker {
     pub fn start(login: Login, options: &SessionOptions) -> Result<eq_client_render::Session> {
         let protocol = login.protocol;
         let client = client(login, options)?;
+        let inventory_move_rules = client.inventory_move_rules();
         let spell_provider =
             eq_client_core::spell_tables::Binding::new(client.spell_table_policy());
         let install = options.install.clone();
@@ -219,6 +220,7 @@ impl SessionWorker {
             }
         });
         Ok(eq_client_render::Session {
+            inventory_move_rules,
             spell_provider,
             updates: receiver,
             commands,
@@ -253,9 +255,9 @@ impl SpellBridge {
         &mut self,
         event: &ClientEvent,
     ) -> Result<Option<eq_client_core::spell_tables::Envelope>> {
-        use eq_client_core::spell_tables::{Fact, Policy};
+        use eq_client_core::spell_tables::Fact;
         use eq_network::client::ConnectionStage;
-        if self.binding.policy() != Policy::Project1999 {
+        if !self.binding.policy().requires_server_tables() {
             return Ok(None);
         }
         let fact = match event {
@@ -460,6 +462,35 @@ fn end_updates(sender: mpsc::SyncSender<WorldUpdate>, closed: &AtomicBool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spell_bridge_filters_lifecycle_and_tables_by_network_requirement() {
+        use eq_client_core::spell_tables::{Binding, Context, Event, Policy, Stage, Table, Update};
+        use eq_network::client::{ConnectionStage, SessionStatus};
+        for policy in [Policy::Installed, Policy::Project1999] {
+            let mut bridge = SpellBridge::new(Binding::new(policy));
+            for event in [
+                ClientEvent::Status(
+                    SessionStatus::new(ConnectionState::Connecting, "display").with_run_id(7),
+                ),
+                ClientEvent::Progress(ConnectionStage::ConnectingZone),
+                ClientEvent::World(WorldEvent::SpellTable(Event::new(
+                    Context::new(7, 1, Stage::World),
+                    Update::Table(Table::Registration(Vec::new())),
+                ))),
+                ClientEvent::Status(SessionStatus::new(ConnectionState::Connecting, "legacy")),
+            ] {
+                assert_eq!(
+                    bridge.capture(&event).unwrap().is_some(),
+                    policy.requires_server_tables()
+                );
+            }
+            if !policy.requires_server_tables() {
+                assert_eq!(bridge.run_id, None);
+                assert_eq!(bridge.attempt, 0);
+            }
+        }
+    }
 
     #[test]
     fn spell_bridge_captures_creation_binding_and_actual_attempt_order_before_enqueue() {

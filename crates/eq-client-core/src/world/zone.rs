@@ -229,29 +229,107 @@ impl super::ClientWorld {
         }
     }
 
-    /// The session told the server the player's target.
-    pub(super) fn target_sent(&mut self, id: Option<u16>, changes: &mut super::Changes) {
-        if self.target.selected == id {
-            self.target.sent = true;
-        } else {
+    /// Session authority, scoped to this admission and ordered independently
+    /// of a newer local choice still waiting in the command queue.
+    pub(super) fn target_updated(
+        &mut self,
+        session_id: u64,
+        request_id: u64,
+        state: eq_network_game::targets::TargetState,
+        server_selected: bool,
+        changes: &mut super::Changes,
+    ) {
+        if !self.target.accepts_updates
+            || self.session_id != Some(session_id)
+            || self.is_dead()
+            || self.pending_transfer.is_some()
+            || request_id > self.target_sequence
+            || request_id < self.target.reported_request
+            || self.target.authority.is_some_and(|old| {
+                state.revision < old.revision
+                    || (state.revision == old.revision
+                        && request_id == self.target.reported_request)
+            })
+        {
             changes.ignored = true;
+            return;
         }
+        let stale_local_choice = !server_selected
+            && !self.target.sent
+            && request_id == self.target.request_id
+            && state.spawn_id == self.target.selected
+            && self.target_stale();
+        self.target.authority = Some(state);
+        self.target.reported_request = request_id;
+        if request_id < self.target.request_id {
+            // Record the authority, but do not acknowledge a newer pending
+            // local choice or give it this different target's action token.
+            return;
+        }
+        self.target.request_id = request_id;
+        if stale_local_choice {
+            // A same-ID replacement while this choice waited cannot turn
+            // its receipt into a selection of the replacement incarnation.
+            // Keep the original local revision stale; input can clear it,
+            // and no ability may acquire an action token from this receipt.
+            self.target.sent = true;
+            return;
+        }
+        self.project_target(state, server_selected);
     }
 
-    /// The server refused the player's target.
+    fn project_target(
+        &mut self,
+        state: eq_network_game::targets::TargetState,
+        server_selected: bool,
+    ) {
+        self.target.selected = state.spawn_id;
+        self.target.sent = true;
+        self.target.server_selected = server_selected;
+        self.target.revision = state
+            .available
+            .then_some(state.spawn_id)
+            .flatten()
+            .and_then(|id| self.zone.spawns.get(&id))
+            .map(|spawn| spawn.revision);
+    }
+
+    /// Local refusal restores the session's target instead of leaving a
+    /// cleared display against a still-selected session recipient.
     pub(super) fn target_refused(
         &mut self,
-        (session_id, spawn_id): (u64, Option<u16>),
+        (session_id, request_id, spawn_id): (u64, u64, Option<u16>),
+        state: Option<eq_network_game::targets::TargetState>,
         reason: &str,
         changes: &mut super::Changes,
     ) {
-        if self.accepts_reply(session_id) && self.target.selected == spawn_id {
-            self.target = super::Target::default();
+        if !self.accepts_reply(session_id)
+            || self.is_dead()
+            || self.pending_transfer.is_some()
+            || self.target.request_id != request_id
+            || self.target.selected != spawn_id
+            || self.target.sent
+        {
+            changes.ignored = true;
+            return;
+        }
+        if let Some(state) = state {
+            self.target_updated(session_id, request_id, state, true, changes);
+        } else if let Some(state) = self.target.authority {
+            // A shared gate refused before the target owner processed this
+            // choice. Do not invent an advanced session request watermark.
+            self.target.request_id = self.target.reported_request;
+            self.project_target(state, true);
+        } else {
+            self.target = super::Target {
+                accepts_updates: self.target.accepts_updates,
+                ..super::Target::default()
+            };
+        }
+        if !changes.ignored {
             changes
                 .notices
                 .push(Notice::TargetRefused(reason.to_owned()));
-        } else {
-            changes.ignored = true;
         }
     }
 

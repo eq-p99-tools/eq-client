@@ -9,32 +9,57 @@ or alternate cell, then press the new key/chord. Escape cancels; Delete clears.
 Assigning an already-used chord moves it to the chosen action. Bindings are
 saved per character; `keys.txt` seeds characters without their own file.
 
-Titanium installations use the program's built-in key table for supported
-commands. Mac-era installations use this client's default table. These are
-starting defaults, before saved assignments:
+Supported commands start from the installed generation's built-in key table.
+Offline startup without a generation uses the same Titanium table as a fallback.
+Saved assignments in this client's shared or character key file take precedence,
+including an explicitly cleared action. Updating defaults does not reset those
+files. The original client's `[KeyMaps]` settings are not imported.
+These are starting defaults, before saved assignments:
 
-| Action | Titanium | Client defaults (Mac-era) |
+| Action | Titanium / offline fallback | Mac-era |
 | --- | --- | --- |
-| Forward/back | Up/Down or keypad | Up/Down |
-| Turn | Left/Right or keypad | Q/E |
-| Strafe | Unbound | Left/Right |
-| Camera-relative movement | Unbound | W/A/S/D |
-| Walk/run toggle | F12 | Insert |
+| Forward/back | Up/Down or keypad 8/2 | Up/Down or keypad 8/2 |
+| Turn | Left/Right or keypad 4/6 | Left/Right or keypad 4/6 |
+| Strafe | Unbound | Unbound |
+| Camera-relative movement | Unbound | Unbound |
+| Walk/run toggle | Ctrl+R | Ctrl+R |
 | Autorun | Num Lock | Num Lock |
-| Attack | Q | G |
-| Consider | C | K |
-| Duck | D | C |
-| Use nearby door/object | U | F |
-| Inventory / spellbook | I / B | I / B |
-| Target self / next / previous | F1 / Tab / Shift+Tab | F1 / Tab / Shift+Tab |
+| Attack | Q | A |
+| Consider | C | C |
+| Duck | D | D |
+| Sit/stand toggle | Ctrl+S | Ctrl+S |
+| Use nearby door/object | U | U |
+| Inventory / spellbook | I / Ctrl+B | I / Ctrl+B |
+| Target self / next | F1 / Tab | F1 / Tab |
 | Spell gems / hotbuttons | Alt+1…8 / 1…0 | Alt+1…8 / 1…0 |
-| Map / Options | Ctrl+M / Alt+O | Ctrl+M / Alt+O |
-| Free camera / up / down | F9 / Page Up / Page Down | F9 / Page Up / Page Down |
+| Map / Options | Backspace or M / Alt+O | Backspace or M (map fallback) / Alt+O |
+| Detached free camera / up / down | Unbound | Unbound |
+| Keyboard hotbar bind / clear | Unbound | Unbound |
+
+Direct loot, trade, separate sit/stand and previous-target shortcuts start
+unbound. Use the normal pointer interaction or assign a shortcut in Options.
+Unverified camera-relative movement defaults also stay unbound; W/A/S/D and
+Q/E are not supplied as substitute gameplay keys. F12 is the original client's
+mouse-look key, not its walk/run key.
+
+EqMac's added map uses Titanium's Backspace/M defaults as a fallback, after
+checking all read native assignments for conflicts. Unsupported native commands
+still reserve their chords: Ctrl+M, F9, Page Up/Down and Ctrl+1…8 cannot become
+defaults for unrelated extensions. Detached-camera controls and keyboard hotbar
+editing remain assignable in Options, with no starting keys. An explicit saved
+assignment can reuse a native chord.
 
 A binding does not grant an unavailable server action. Text entry and focus
 guards prevent gameplay keys from firing while composing chat, searching the
 map, editing a script or changing a binding. Scripts using `press` use these
 same assignments; their semantic `move` command is independent of the key map.
+
+Right-clicking a visible character uses its supported interaction, such as
+looting a corpse or opening an in-reach merchant, bank or trainer. Other
+characters, and NPCs beyond the generation's known interaction reach, are
+considered through the normal session command. This keeps the current target.
+The server still checks each requested action; an unread interaction radius
+is left to its existing checks.
 
 ## Camera and windows
 
@@ -53,9 +78,10 @@ camera pulls in before collidable roofs or walls obscure the character and
 returns to the chosen zoom after the obstruction clears. This is camera
 placement, not transparent roofs.
 
-**F9** detaches the camera; press it again to return to the character's current
-position. Movement keys fly through the loaded scene, turn keys/right-drag change
-direction, Page Up or Jump raises the camera, and Page Down lowers it. The view
+Assign **Toggle Free Camera** in Options to detach the camera; press the assigned
+key again to return to the character's current position. Movement keys fly
+through the loaded scene, turn keys/right-drag change direction, and Jump raises
+the camera. Free Camera Up/Down accept separate user assignments. The view
 shows a return-key hint. Detaching stops character input, autorun and queued
 movement/jump requests; character gravity and server updates still run. Zone or
 session changes restore the attached view. Detaching does not turn camera
@@ -70,7 +96,9 @@ preserves the document and any running script; use Stop to end execution.
 
 ## Map
 
-**Ctrl+M** opens the map on every server, including P99 and Quarm. It uses the
+**Backspace** or **M** opens the map on every server, including P99 and Quarm,
+unless changed in saved bindings. EqMac uses these as a Titanium-aligned fallback.
+It uses the
 installed map window when usable and a movable, minimizable fallback otherwise.
 Local map files add lines and labels; entity positions work without them.
 The initial view covers a 1,200-unit neighborhood around your character, so a

@@ -13,6 +13,13 @@ For example, `keys.txt` seeds `keys-<world>-<character>.txt`; file-name componen
 are sanitized. `login-servers.txt` holds [login presets](login.md). These files can
 contain account/character identifiers and should not be committed.
 
+Keyboard defaults come from the installed client's supported native commands;
+startup without a generation falls back to Titanium. Existing key files remain
+overrides, including lines with an empty value. Use Options → Keyboard to change
+or clear a saved assignment; a default change does not migrate it automatically.
+The installation's original `[KeyMaps]` overrides are not imported. See
+[Keyboard](controls.md#keyboard) for native defaults and local UI extensions.
+
 Map background opacity, plain/skin style and position lock use
 `map-view-<world>-<character>.txt`, seeded from `map-view.txt`. Change them with
 the [map's controls](controls.md#map); window coordinates remain in the normal
@@ -50,7 +57,7 @@ session; a setting does not manufacture an unoffered server capability.
 | Take Environmental Damage (unsafe) | `take_environmental_damage` | On | Reports supported environmental damage; disabling it withholds reports |
 | Corpses Lie Along the Ground | `corpses_along_ground` | On | Tilts bodies to the floor slope |
 | Long Chase Camera | `long_chase_camera` | On | Extends chase zoom beyond the classic 200-unit limit, up to 20,000 |
-| Free Camera | `free_camera` | On | Lets the Toggle Free Camera key (F9) detach the camera and fly it; off, the key does nothing |
+| Free Camera | `free_camera` | On | Lets a user-assigned Toggle Free Camera key detach the camera and fly it; off, the key does nothing |
 
 Environmental damage is offered on P99, EQEmu and TAKP in the locked policy, with
 different supported hazards. The setting's unsafe label concerns withholding

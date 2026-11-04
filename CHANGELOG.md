@@ -2,6 +2,113 @@
 
 ## Unreleased
 
+- Keep explicit background scripts running while their window is focused or
+  passively observed with the pointer. Genuine keyboard, button and wheel input
+  still takes ownership; Stop and scripted-click target checks remain available.
+
+- Follow admission-scoped server target changes and clears without echoing
+  selection packets. Preserve pending local choices and refuse ambiguous ability
+  recipients; unknown IDs and replaced spawns remain unavailable until resolved.
+
+- Read P99 notes and books through the selected worker inventory revision and
+  enqueue time. Refuse outstanding item projections or stale holdings before
+  submission. Only supported server text opens a note/book window; death,
+  transfer and disconnect clear it, and suspended arrivals cannot reopen it.
+  Preserve EQMac's nonzero book-kind behavior separately from Titanium.
+
+- Separate carried Combine controls from world-station availability using
+  `Capability::WorldContainers`. P99's carried offer enables no station hint,
+  open/close/world-combine or station script approach. Combine waits for queued
+  item-move results and keeps products/consumption separate from its reset.
+  Additive `ground::nearest_usable_for` selects only offered object kinds.
+
+- Follow the network-owned spell-table requirement for provider lifecycle and
+  initial readiness instead of matching provider policy names in the host.
+- Post automatic-food preferences only to admissions offering `Capability::Meals`,
+  keeping the saved choice on servers without meal support. Inventory support
+  alone no longer enables the meal option or sends an unsupported zone-in update.
+- Add explicit `--script-background` input ownership and a non-activating
+  initial window request. Returning to the client cancels held script input;
+  default launches, local-only commands and gameplay guards retain their rules.
+  API: `script::InputMode`, `Script::input_mode`, `Script::for_viewer`,
+  `ViewerConfig::script_input_mode` and `Phase::WaitingForInput`.
+- Add opt-in `--script-control` local file requests for explicit scenario starts,
+  targeted Stop and retained status, including recovery after terminal errors.
+  Runs share the workbench executor and limits; active runs reject replacement.
+  API: `ViewerConfig::script_control` and `Script::for_viewer`.
+- Track admission-scoped death-bind knowledge separately from death-packet
+  details. Show the existing death notice and action/pose lifecycle without
+  manufacturing a corpse; keep duplicate notifications quiet and clear state
+  on the next admission.
+
+- Start every generation's bindings from its program's own key table
+  (`eq_client_assets::keys::EQMAC` added beside `TITANIUM`; Titanium gains
+  Spellbook Ctrl+B, Sit/Stand Ctrl+S, Walk/Run Ctrl+R and Map Backspace/M).
+  Native commands this client does not support are `Command::Reserved` and
+  stay unbound; target previous, strafe, loot, trade, free camera and hotbar
+  key editing start unbound. Saved character bindings keep precedence.
+- Bind group invitations to their consent identity: the invitation shown is the
+  one `/follow` accepts and `/decline` (or `/disband` while one is pending)
+  declines, and a formed group names its leader. API:
+  `ClientWorld::group_invitation()`, `group_invitation_id()`.
+- Keep the session's own-player stun state out of movement and camping:
+  API `ClientWorld::stun_state()`, `is_stunned()`, `stun_revision()` and the
+  `eq_client_core::control` re-export.
+- Add ten retained hotbar pages (`eq_client_core::hotbar::{Pages, PAGES}`);
+  the shortcut hold that carries a button lasts 750 ms (was 500 ms).
+- Preserve complete skin border geometry: `sidl::Border` carries the four
+  side-cap pieces (`right_top`, `right_bottom`, `left_top`, `left_bottom`).
+- Show unanswered merchant outcomes: `Notice::MerchantUnanswered` reports a
+  purchase or sale with no result, and a `PurseUncertain` event leaves the
+  purse unknown until the server supplies it. Classic merchant catalog cells
+  bind by their `EQTypes` 6000..6079.
+- Right-click world characters through the existing interaction paths,
+  considering non-interactable or known out-of-range NPCs without changing
+  the current target. Keep the existing capability and reach checks.
+- Offer a quantity picker on a plain stack click with an empty cursor.
+  Shift-click takes the whole stack and Ctrl-click takes one; these controls
+  are requested UX, with official modifier parity still unverified. Cursor
+  placement, single items and plain merchant selection keep their behavior.
+- Cover right-click note/book requests and visible outbox refusals without
+  opening a reading window before server text arrives. The shared outbox
+  remains the sole owner of posting-refusal notices. Render classic book
+  backticks as line breaks in notes and paginated books.
+- **Breaking:** renderer `Session` now supplies `inventory_move_rules` from the
+  network producer. Configure `ClientWorld::plan_inventory_as` before queuing
+  moves; missing policy refuses planning. `Reply::InventoryMove` adds
+  `present_error` while preserving typed dependent refusal errors.
+- Compute movement weight, equipment and food from one ordered worker replica
+  (`worker_inventory`), keeping queued display/planning projections separate.
+  Same-admission resets retain pending result identities for late submissions;
+  new admissions and terminal resets discard them. Dependent refusals drain
+  without repeating the root chat notice.
+- Supply the network-owned optional `EqMacFatigueInputs` from the same proven
+  worker inventory. Signed strength stays uncapped until the session applies
+  fatigue; known stamina is capped to 1..255. Keep a stable conservative scalar
+  fallback so fatigue-only ticks leave the exact posted report unchanged, and
+  display current capacity through the network formula. Missing prerequisites
+  stay unavailable; Titanium capacity and zero-sentinel behavior are unchanged.
+- Offer the door hint and the Use key (U by default) for supported ordinary
+  EQMac doors with a current empty cursor, generation-specific reach and
+  settled hinge. Animate received actions and native local return timing;
+  sending a click does not open the door. Specialized, static and unknown
+  mechanisms stay visible without use. Additive `doors::DoorTable` APIs: `apply_for`, `supports_use`,
+  `use_distance` and `hinge_fraction`; re-export `doors::eqmac`.
+- Keep autorun during a continuously positive speed recalibration. Actual
+  withdrawal, admission and unsafe readiness resets still clear it.
+- Add a bounded, versioned character-lifecycle JSON field to opt-in script
+  reports: complete offered lists and policies, uncorrelated creation history,
+  and current versus retained admitted identity. Preserve unknown scope and
+  source values; malformed/oversized output explicitly forbids consumer reliance.
+
+- Add ordinary named character deletion with an explicit Yes/No confirmation,
+  safe Back/Disconnect while uncertain, and shared `delete NAME confirm NAME`
+  scripting. Reports distinguish pending, unconfirmed, local refusal and absence
+  observed in a specific refreshed list; absence never claims permanent deletion.
+  Breaking API migration: character lists/events require connection generation
+  and deletion capability; commands/events/replies add typed deletion variants.
+  Keep actual session/list scope, including across reconnects and late replies.
+
 - Apply item moves to a local projection and send them in order without
   waiting for the worker between clicks; scribing waits for queued moves. A
   refusal rolls the projection back to the server's state and refuses the
@@ -12,7 +119,8 @@
 - Show the Skills window by the generation's own list, rank and value rules
   from per-generation tables shipped as data (numbers only), list languages,
   and name language zero from the received selector; the Mac-era selector is
-  unread, so its row keeps a placeholder name. API: new `eq_client_assets::skills`,
+  unread, so its row is withheld while its received proficiency is retained.
+  API: new `eq_client_assets::skills`,
   `InstalledClient::skill_rules()`, `ClientWorld::language_zero_selector()`;
   `skills_revision` also advances on level and language changes.
 - Honour authored material sidedness for placed objects, mirroring one-sided

@@ -59,6 +59,12 @@ impl Host {
             .0
             .installed_client = eq_client_assets::ui::InstalledClient::EqMac;
         crate::keys::testing::install(&mut app);
+        // The direct loot command has no native default; choose one here.
+        crate::keys::testing::bind(
+            &mut app,
+            crate::keys::Act::Loot,
+            crate::keys::Chord::key(KeyCode::KeyL),
+        );
         crate::clicks::testing::install(&mut app);
         app.world_mut().spawn((
             Window {

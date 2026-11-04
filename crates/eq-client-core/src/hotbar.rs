@@ -1,10 +1,13 @@
-//! The hotbar's ten slots and what each is bound to. A file keeps them per
+//! A hotbar page's ten slots and what each is bound to. [`Pages`] keeps all
+//! ten pages of the first bar. A file keeps them per
 //! character, one `slot_<n> = <binding>` line each, so a file from an older
 //! client still reads. A character with no file of their own starts from
 //! the official client's hotbuttons where this client knows their kinds, or
 //! else from the client's defaults.
 use crate::{abilities::Ability, inventory::InventorySlot};
 use std::fmt::Write as _;
+mod pages;
+pub use pages::{PAGES, Pages};
 
 /// The first line of a hotbar file.
 pub const HEADER: &str = "# eq-client hotbar v1";
@@ -45,6 +48,21 @@ pub enum Binding {
 }
 
 impl Binding {
+    /// A supported native shortcut code; unknown kinds stay unsupported.
+    fn official(code: &str) -> Option<Self> {
+        if let Some(gem) = code.strip_prefix('H') {
+            gem.parse::<u8>().ok().filter(|gem| *gem < 8).map(Self::Gem)
+        } else if let Some(skill) = code.strip_prefix('J') {
+            skill
+                .parse()
+                .ok()
+                .and_then(Ability::from_skill)
+                .map(Self::Ability)
+        } else {
+            None
+        }
+    }
+
     /// The words a file keeps it as.
     fn words(self) -> String {
         match self {
@@ -166,20 +184,7 @@ impl Hotbar {
                 continue;
             };
             // The ini is read lossily, so a code may start with any character.
-            hotbar.0[index] = if let Some(gem) = code.strip_prefix('H') {
-                gem.parse::<u8>()
-                    .ok()
-                    .filter(|gem| *gem < 8)
-                    .map(Binding::Gem)
-            } else if let Some(skill) = code.strip_prefix('J') {
-                skill
-                    .parse()
-                    .ok()
-                    .and_then(Ability::from_skill)
-                    .map(Binding::Ability)
-            } else {
-                None
-            };
+            hotbar.0[index] = Binding::official(code);
         }
         Some(hotbar)
     }

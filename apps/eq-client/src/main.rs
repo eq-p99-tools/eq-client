@@ -22,6 +22,7 @@ enum CameraStyle {
 
 #[derive(Debug, Parser)]
 #[command(version, about)]
+#[command(group(clap::ArgGroup::new("script_execution").args(["script", "script_control"]).multiple(true)))]
 #[allow(clippy::struct_excessive_bools)] // Independent CLI switches, with clap enforcing incompatible modes.
 struct Arguments {
     /// Path to a locally installed `EverQuest` client.
@@ -174,7 +175,8 @@ struct Arguments {
 
     /// Start a scenario file through the same executor as the in-game Scripts
     /// workbench. Runs only
-    /// while the client window is focused, except offline or on a local
+    /// while the client window is focused, except with --script-background,
+    /// offline or on a local
     /// `EQEmu` or TAKP server.
     /// Screenshots are saved beside it.
     #[arg(long, conflicts_with = "screenshot")]
@@ -193,6 +195,15 @@ struct Arguments {
     /// the runtime limit.
     #[arg(long, requires = "script")]
     script_follow: bool,
+
+    /// Run scripts while unfocused without taking focus at launch. Returning
+    /// to the window cancels held script input. Requires --script or --script-control.
+    #[arg(long, requires = "script_execution")]
+    script_background: bool,
+    /// Enable a local script request/status inbox in a new directory.
+    /// Explicit new runs can be submitted after the previous run ends.
+    #[arg(long, conflicts_with = "screenshot")]
+    script_control: Option<PathBuf>,
 
     /// Leave the script pointer undrawn: the arrow that shows, while a
     /// script runs, where its clicks and hovers point.
@@ -720,6 +731,12 @@ fn viewer_config(
         },
         script,
         script_follow,
+        script_input_mode: if arguments.script_background {
+            eq_client_render::script::InputMode::Background
+        } else {
+            eq_client_render::script::InputMode::Attended
+        },
+        script_control: arguments.script_control,
         script_editor: arguments.script_editor,
         script_path: arguments.script.clone(),
         hide_script_pointer: arguments.hide_script_pointer,
@@ -852,6 +869,94 @@ mod tests {
         parse_window_size, presets, run_client, seconds,
     };
     use clap::Parser;
+
+    #[test]
+    fn background_scripts_are_explicit_and_require_an_execution_source() {
+        assert!(Arguments::try_parse_from(["eq-client", "--script-background"]).is_err());
+        let default =
+            Arguments::try_parse_from(["eq-client", "--script", "scenario.eqscript"]).unwrap();
+        assert!(!default.script_background);
+        let background = Arguments::try_parse_from([
+            "eq-client",
+            "--script",
+            "scenario.eqscript",
+            "--script-background",
+        ])
+        .unwrap();
+        assert!(background.script_background);
+        // Input ownership grants no local-server or command permission.
+        for provider in [ServerProtocol::Project1999, ServerProtocol::Quarm] {
+            assert!(!super::script_session(Some(&[Step::Face]), false, Some(provider)).unwrap());
+            assert!(
+                super::script_session(Some(&[Step::Gm("summon".into())]), false, Some(provider))
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn background_control_only_and_initial_followed_scripts_share_the_launch_policy() {
+        let control = Arguments::try_parse_from([
+            "eq-client",
+            "--script-control",
+            "new-control",
+            "--script-background",
+        ])
+        .unwrap();
+        assert!(control.script_background && control.script.is_none());
+        assert!(control.script_control.is_some());
+        assert!(!control.script_follow && !control.online && !control.local_test);
+        let followed = Arguments::try_parse_from([
+            "eq-client",
+            "--script-control",
+            "new-control",
+            "--script",
+            "scenario.eqscript",
+            "--script-follow",
+            "--script-background",
+        ])
+        .unwrap();
+        assert!(followed.script_background && followed.script_follow);
+        assert!(followed.script.is_some() && followed.script_control.is_some());
+        assert!(
+            Arguments::try_parse_from(["eq-client", "--script-editor", "--script-background"])
+                .is_err()
+        );
+        assert!(
+            Arguments::try_parse_from([
+                "eq-client",
+                "--script-control",
+                "new-control",
+                "--script-follow"
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn script_control_is_opt_in_and_does_not_require_an_initial_script() {
+        let ordinary = Arguments::try_parse_from(["eq-client"]).unwrap();
+        assert!(ordinary.script_control.is_none());
+        let controlled =
+            Arguments::try_parse_from(["eq-client", "--script-control", "new-control"]).unwrap();
+        assert_eq!(
+            controlled.script_control.as_deref(),
+            Some(Path::new("new-control"))
+        );
+        assert!(controlled.script.is_none() && !controlled.script_follow);
+        assert!(Arguments::try_parse_from(["eq-client", "--script-control"]).is_err());
+        assert!(Arguments::try_parse_from(["eq-client", "--script-follow"]).is_err());
+        let followed = Arguments::try_parse_from([
+            "eq-client",
+            "--script",
+            "healthy.eqscript",
+            "--script-follow",
+            "--script-control",
+            "another-control",
+        ])
+        .unwrap();
+        assert!(followed.script_follow && followed.script_control.is_some());
+    }
 
     #[test]
     fn workbench_local_mode_requires_a_stock_server_and_an_online_launch() {

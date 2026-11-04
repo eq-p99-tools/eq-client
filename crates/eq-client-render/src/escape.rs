@@ -14,6 +14,8 @@ pub(crate) enum Escape {
     /// No Escape this frame, or nothing it applies to.
     #[default]
     Unused,
+    /// Cancels a pending hotbar hold or carried shortcut, without an item action.
+    Hotbar,
     /// Cancels the inventory action under way, such as a split.
     Inventory,
     /// Closes this window.
@@ -42,6 +44,10 @@ pub(super) fn route(
     inventory: Res<super::inventory::InventoryState>,
     (stack, frames): (Res<Stack>, Frames),
     (online, front): (Res<super::online::OnlineState>, Res<super::login::FrontEnd>),
+    (carry, presses): (
+        Option<Res<super::hud::hotbar::carry::Carry>>,
+        Option<Res<super::hud::hotbar::carry::Presses>>,
+    ),
     mut escape: ResMut<Escape>,
     menu: Res<super::windows::menu::Menu>,
 ) {
@@ -50,6 +56,13 @@ pub(super) fn route(
     let key = keys.input.just_pressed(KeyCode::Escape);
     *escape = match screen {
         _ if !key || keys.escape_claimed() || !keys.window_focused() => Escape::Unused,
+        Screen::World
+            if keys.escape_free()
+                && (carry.as_ref().is_some_and(|carry| carry.hotkey().is_some())
+                    || presses.as_ref().is_some_and(|presses| presses.pending())) =>
+        {
+            Escape::Hotbar
+        }
         _ if menu.open => Escape::Close(WindowId::Selector),
         _ if screen != Screen::World
             && frames

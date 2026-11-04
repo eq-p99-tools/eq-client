@@ -120,8 +120,13 @@ fn rows(
             continue;
         }
         let name = SkillRules::language_name_string(language, common_variant)
-            .and_then(|name| messages.argument_free(name))
-            .map_or_else(|| format!("Language {language}"), str::to_owned);
+            .and_then(|name| messages.argument_free(name));
+        // The unmapped EQMac selector establishes no name for this row.
+        // Withhold its presentation while retaining the received proficiency.
+        if client == InstalledClient::EqMac && language == 0 && name.is_none() {
+            continue;
+        }
+        let name = name.map_or_else(|| format!("Language {language}"), str::to_owned);
         let id = 100 + u32::from(language);
         if let Some(row) = row(id, name, u32::from(*raw), inputs, rules, messages) {
             rows.push(row);
@@ -466,8 +471,8 @@ mod tests {
         (app, list)
     }
 
-    fn language_name(app: &App, list: Entity) -> &str {
-        &app.world()
+    fn language_name(app: &App, list: Entity) -> Option<&str> {
+        app.world()
             .get::<SkillsList>(list)
             .unwrap()
             .drawn
@@ -475,8 +480,7 @@ mod tests {
             .unwrap()
             .iter()
             .find(|row| row.id == 100)
-            .unwrap()
-            .name
+            .map(|row| row.name.as_str())
     }
 
     fn language_rules(client: InstalledClient, raw: u32) -> eq_client_core::WorldEvent {
@@ -501,10 +505,17 @@ mod tests {
         for client in [InstalledClient::Titanium, InstalledClient::EqMac] {
             let (mut app, list) = language_list(client);
             let expected = match client {
-                InstalledClient::Titanium => ["Default speech", "Alternate speech", "Changed"],
-                InstalledClient::EqMac => ["Language 0"; 3],
+                InstalledClient::Titanium => [
+                    Some("Default speech"),
+                    Some("Alternate speech"),
+                    Some("Changed"),
+                ],
+                InstalledClient::EqMac => [None; 3],
             };
-            assert_eq!(language_name(&app, list), "Language 0");
+            assert_eq!(
+                language_name(&app, list),
+                (client == InstalledClient::Titanium).then_some("Language 0")
+            );
             testing::news(
                 &mut app.world_mut().resource_mut::<OnlineState>(),
                 [language_rules(client, 0)],
@@ -571,7 +582,7 @@ mod tests {
             [language_rules(client, u32::MAX)],
         );
         app.update();
-        assert_eq!(language_name(&app, list), "Alternate speech");
+        assert_eq!(language_name(&app, list), Some("Alternate speech"));
         let player = app
             .world()
             .resource::<OnlineState>()
@@ -585,13 +596,13 @@ mod tests {
             player.clone(),
         );
         app.update();
-        assert_eq!(language_name(&app, list), "Alternate speech");
+        assert_eq!(language_name(&app, list), Some("Alternate speech"));
         testing::news(
             &mut app.world_mut().resource_mut::<OnlineState>(),
             [language_rules(client, 0)],
         );
         app.update();
-        assert_eq!(language_name(&app, list), "Default speech");
+        assert_eq!(language_name(&app, list), Some("Default speech"));
 
         app.world_mut().resource_mut::<OnlineState>().restart();
         testing::admit(
@@ -600,13 +611,13 @@ mod tests {
             player,
         );
         app.update();
-        assert_eq!(language_name(&app, list), "Language 0");
+        assert_eq!(language_name(&app, list), Some("Language 0"));
         testing::news(
             &mut app.world_mut().resource_mut::<OnlineState>(),
             [language_rules(client, 0x8000_0000)],
         );
         app.update();
-        assert_eq!(language_name(&app, list), "Alternate speech");
+        assert_eq!(language_name(&app, list), Some("Alternate speech"));
         // The installed generation remains part of the projection. A
         // contrived retained Titanium fact cannot enable an EQMac mapping.
         app.world_mut()
@@ -614,6 +625,101 @@ mod tests {
             .0
             .installed_client = InstalledClient::EqMac;
         app.update();
-        assert_eq!(language_name(&app, list), "Language 0");
+        assert_eq!(language_name(&app, list), None);
+    }
+
+    #[test]
+    fn eqmac_withholds_unresolved_language_zero_without_losing_received_ranks_or_named_rows() {
+        use eq_client_core::WorldEvent;
+        let (mut app, list) = language_list(InstalledClient::EqMac);
+        assert_eq!(language_name(&app, list), None);
+        app.insert_resource(crate::hud::messages::Messages::parse(
+            "EQST0002\n7\n3113 Alternate speech\n3114 Default speech\n3115 Other speech\n3200 Named speech\n3224 Low\n3228 Middle\n3234 Last\n",
+        ));
+        testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [
+                WorldEvent::Skill {
+                    skill_id: 100,
+                    value: 75,
+                },
+                WorldEvent::Skill {
+                    skill_id: 101,
+                    value: 10,
+                },
+                WorldEvent::Skill {
+                    skill_id: 131,
+                    value: 50,
+                },
+            ],
+        );
+        app.update();
+        let visible = app
+            .world()
+            .get::<SkillsList>(list)
+            .unwrap()
+            .drawn
+            .clone()
+            .unwrap();
+        assert!(!visible.iter().any(|row| row.id == 100));
+        assert!(
+            visible
+                .iter()
+                .any(|row| row.id == 101 && row.name == "Named speech" && row.value == Some(10))
+        );
+        assert!(
+            visible
+                .iter()
+                .any(|row| row.id == 131 && row.name == "Other speech" && row.value == Some(50))
+        );
+        let profile = app
+            .world()
+            .resource::<OnlineState>()
+            .world()
+            .player()
+            .unwrap();
+        assert_eq!(profile.languages.as_ref().unwrap()[0], 75);
+        assert_eq!(profile.languages.as_ref().unwrap()[1], 10);
+        assert_eq!(profile.languages.as_ref().unwrap()[31], 50);
+
+        let children = app.world().get::<Children>(list).unwrap().to_vec();
+        testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [WorldEvent::Skill {
+                skill_id: 100,
+                value: 50,
+            }],
+        );
+        app.update();
+        assert_eq!(
+            app.world().get::<Children>(list).unwrap().to_vec(),
+            children
+        );
+        assert_eq!(
+            app.world().get::<SkillsList>(list).unwrap().drawn.as_ref(),
+            Some(&visible)
+        );
+        assert_eq!(
+            app.world()
+                .resource::<OnlineState>()
+                .world()
+                .player()
+                .unwrap()
+                .languages
+                .as_ref()
+                .unwrap()[0],
+            50
+        );
+        let recreated = app.world_mut().spawn(SkillsList::default()).id();
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<SkillsList>(recreated)
+                .unwrap()
+                .drawn
+                .as_ref(),
+            Some(&visible)
+        );
+        assert_eq!(language_name(&app, recreated), None);
     }
 }

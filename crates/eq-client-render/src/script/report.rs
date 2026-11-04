@@ -1,4 +1,6 @@
 //! State a script logs for later review.
+mod lifecycle;
+
 use bevy::prelude::*;
 
 use super::Observed;
@@ -22,14 +24,8 @@ pub(super) fn state(
     transform: Option<&Transform>,
 ) {
     let position = transform.map(placement);
-    let inventory = online.world().inventory();
-    let prediction_inputs = prediction_inputs(inventory);
-    let slots: Vec<u32> = online
-        .world()
-        .buffs()
-        .slots()
-        .map(|slots| slots.values().map(|buff| buff.spell_id).collect())
-        .unwrap_or_default();
+    let prediction_inputs = prediction_inputs(online.world().inventory());
+    let slots = buff_slots(online);
     let effects: Vec<u16> = online.world().buffs().effects().keys().copied().collect();
     let posture = online
         .world()
@@ -59,6 +55,8 @@ pub(super) fn state(
         world = ?online.world().world_name(),
         far_clip = ?online.world().far_clip(),
         connected = online.world().connected(),
+        character_lifecycle = %lifecycle::state(online),
+        character_deletion = %online.deletion.report(),
         ?position,
         ?posture,
         hp = ?online.world().hit_points(),
@@ -85,7 +83,9 @@ pub(super) fn state(
             .map(|(slot, item)| (slot.0, item.map(|item| item.details.id)))
             .collect::<Vec<_>>(),
         movement_weight = ?online.world().movement_weight(),
-        equipment_inputs = ?equipment_inputs(online, inventory),
+        movement_weight_conservative = online.world().worker_inventory().carried_weight_is_conservative(),
+        worker_inventory_revision = online.world().worker_inventory().revision(),
+        equipment_inputs = ?equipment_inputs(online, online.world().worker_inventory()),
         movement_inputs = ?spells.as_deref().map(|spells| crate::speed::inputs(online.world(), spells)),
         cursor_queued = online.world().inventory().queued().count(),
         exchange = ?online.world().exchange(),
@@ -160,6 +160,16 @@ fn equipment_inputs(
             )
         })
     })
+}
+
+/// The spell identifiers in occupied buff slots.
+fn buff_slots(online: &crate::online::OnlineState) -> Vec<u32> {
+    online
+        .world()
+        .buffs()
+        .slots()
+        .map(|slots| slots.values().map(|buff| buff.spell_id).collect())
+        .unwrap_or_default()
 }
 
 /// The occupied spell-book slots and their spell identifiers.

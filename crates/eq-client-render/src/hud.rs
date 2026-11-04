@@ -459,7 +459,7 @@ pub(super) fn actions(
     ),
 ) {
     use super::keys::Act;
-    if !online.world().connected() || online.world().death().is_some() || !keys.focused() {
+    if !online.world().connected() || online.world().is_dead() || !keys.focused() {
         return;
     }
     let Some(player) = online.world().player() else {
@@ -541,6 +541,8 @@ pub(super) fn actions(
             }
             Some(_) => None,
         }
+    } else if keys.pressed(Act::SitStand) {
+        toggled_seat(online.world().posture(player.spawn_id))
     } else if keys.pressed(Act::Sit) {
         Some(eq_client_core::Posture::Sitting)
     } else if keys.pressed(Act::Stand) {
@@ -558,6 +560,18 @@ pub(super) fn actions(
                 created: stamp.created,
             }
         });
+    }
+}
+
+/// The native sit/stand command chooses a request from reported posture.
+const fn toggled_seat(
+    posture: Option<eq_client_core::PostureState>,
+) -> Option<eq_client_core::Posture> {
+    use eq_client_core::{Posture, PostureState};
+    match posture {
+        None | Some(PostureState::Standing | PostureState::Ducking) => Some(Posture::Sitting),
+        Some(PostureState::Sitting) => Some(Posture::Standing),
+        Some(_) => None,
     }
 }
 

@@ -113,29 +113,41 @@ fn posed(door: &eq_client_core::doors::Door, swing: f32) -> Transform {
 }
 
 /// Nearest usable server definition in this admission with its distance, which
-/// is measured in all three axes. Where the server policy only receives door
-/// state and offers no door use, no door is usable, so none is offered.
+/// uses the generation's dimensions. Unoffered, unsupported or moving doors
+/// produce no hint or nearest-use action.
 pub(super) fn nearest(
     state: &super::online::OnlineState,
 ) -> Option<(f32, &eq_client_core::doors::Door)> {
     if !state.world().connected()
-        || state.world().death().is_some()
+        || state.world().is_dead()
         || !crate::outbox::offered(state.world(), eq_client_core::Capability::Doors)
     {
         return None;
     }
+    if state.world().generation() == eq_client_core::GameDialect::EqMac {
+        let inventory = state.world().inventory();
+        if !inventory.received()
+            || inventory.stale()
+            || inventory
+                .items()
+                .contains_key(&eq_client_core::inventory::InventorySlot::CURSOR)
+        {
+            return None;
+        }
+    }
     let player = state.world().player()?;
+    let now = std::time::Instant::now();
     state
         .world()
         .doors()
         .entries()
         .values()
         .filter_map(|door| {
-            let distance = (door.position.x - player.position.x)
-                .hypot(door.position.y - player.position.y)
-                .hypot(door.position.z - player.position.z);
-            (distance.is_finite() && distance <= eq_client_core::doors::Doors::USE_DISTANCE)
-                .then_some((distance, door))
+            state
+                .world()
+                .doors()
+                .use_distance(door.id, player.position, now)
+                .map(|distance| (distance, door))
         })
         .min_by(|a, b| a.0.total_cmp(&b.0))
 }
@@ -206,7 +218,9 @@ pub(super) fn reconcile(
             // A changed definition may reuse an ID for a different mechanism.
             let mut previous = door.definition.clone();
             previous.action = definition.action;
-            if previous != *definition {
+            if let Some(fraction) = state.world().doors().hinge_fraction(door.id) {
+                door.swing = open_swing(definition).unwrap_or(0.0) * fraction;
+            } else if previous != *definition {
                 door.swing = hinge_target(definition).unwrap_or(0.0);
             } else if let Some(target) = hinge_target(definition) {
                 door.swing = advance_hinge(door.swing, target, time.delta_secs());
@@ -240,7 +254,12 @@ pub(super) fn reconcile(
         let Some(model) = models.0.get(&model_key(&door.model)) else {
             continue;
         };
-        let swing = hinge_target(door).unwrap_or(0.0);
+        let swing = state
+            .world()
+            .doors()
+            .hinge_fraction(id)
+            .and_then(|fraction| open_swing(door).map(|open| open * fraction))
+            .unwrap_or_else(|| hinge_target(door).unwrap_or(0.0));
         if let Some(open) = open_swing(door) {
             hinges.0.insert(id, hinge_fraction(swing, open));
         }
@@ -499,7 +518,7 @@ mod tests {
         assert!((ground(&app) - 0.5).abs() < 0.001);
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
-            .press(KeyCode::KeyF);
+            .press(KeyCode::KeyU);
         app.update();
         assert!(receiver.try_recv().is_err());
         app.world_mut().get_mut::<Window>(window).unwrap().focused = true;

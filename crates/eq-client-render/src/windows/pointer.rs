@@ -99,6 +99,7 @@ type Surfaces<'w, 's> = Query<
 
 #[derive(SystemParam)]
 pub(crate) struct PointerUi<'w, 's> {
+    script: Option<Res<'w, crate::script::Script>>,
     surfaces: Surfaces<'w, 's>,
     clipping: Query<
         'w,
@@ -113,9 +114,15 @@ pub(crate) struct PointerUi<'w, 's> {
 }
 
 impl PointerUi<'_, '_> {
-    /// Matches UI hit testing, including rounded corners and ancestor scroll clipping.
+    /// Blocks native world input while the script owns it, otherwise matching
+    /// UI hit testing, including rounded corners and ancestor scroll clipping.
     pub fn contains(&self, cursor: Vec2) -> bool {
-        self.top_at(cursor).is_some()
+        // A semantic UI click must not also target the world under the idle
+        // physical pointer. Native activity hands ownership back before focus.
+        self.script
+            .as_ref()
+            .is_some_and(|script| script.background_owns_input())
+            || self.top_at(cursor).is_some()
     }
 
     /// The frontmost control or blocking panel at an event's original position.

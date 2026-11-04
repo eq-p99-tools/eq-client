@@ -22,6 +22,11 @@ pub(crate) struct QuestionText;
 /// A question the client asks of its own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Question {
+    /// Exact list and request token; the deletion owner retains the frozen name.
+    DeleteCharacter {
+        scope: eq_client_core::deletion::Scope,
+        request_id: u64,
+    },
     /// Whether to delete this spell from this place in the book for good
     /// ([`eq_client_core::qol::Fix::AskBeforeDeletingSpells`]).
     DeleteSpell {
@@ -34,8 +39,9 @@ pub(crate) enum Question {
 
 impl Question {
     /// What the dialog says, in the client's own words.
-    fn text(self, names: &crate::spellbook::SpellNames) -> String {
+    fn text(self, names: &crate::spellbook::SpellNames, online: &OnlineState) -> String {
         match self {
+            Self::DeleteCharacter { .. } => online.deletion.prompt().filter(|request| crate::character_delete::question(request) == self).map_or_else(String::new, |request| format!("Delete character {}? This may permanently remove the character. Choose Yes to confirm this exact name, or No to cancel.", request.name())),
             Self::DeleteSpell { spell, .. } => {
                 format!(
                     "Delete {} from your spell book for good?",
@@ -161,7 +167,7 @@ pub(crate) fn show(
     } else {
         asked
             .question
-            .map(|question| question.text(&names))
+            .map(|question| question.text(&names, &online))
             .unwrap_or_default()
     };
     for mut text in &mut texts {

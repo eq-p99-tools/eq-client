@@ -180,4 +180,15 @@ impl ClientWorld {
             changes.ignored = true;
         }
     }
+
+    /// A merchant trade has no established outcome; belongings stay unchanged.
+    pub(super) fn merchant_unanswered(&self, session_id: u64, reason: &str, changes: &mut Changes) {
+        if self.session_id == Some(session_id) {
+            changes
+                .notices
+                .push(Notice::MerchantUnanswered(reason.to_owned()));
+        } else {
+            changes.ignored = true;
+        }
+    }
 }

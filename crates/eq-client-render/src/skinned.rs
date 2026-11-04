@@ -4,6 +4,8 @@
 //! frame and pieces, and what each gauge and label shows follows the
 //! official client's numbering. A skin without the window, or a viewer
 //! without an installation, keeps the client's own chrome.
+#[cfg(test)]
+mod hotbar_drag_tests;
 mod tree;
 #[cfg(test)]
 use tree::{augment_section, text_box};
@@ -25,6 +27,13 @@ mod frame;
 pub(crate) mod gem;
 mod items;
 pub(crate) mod looks;
+#[cfg(test)]
+mod merchant_grid_tests;
+mod perimeter;
+mod pixel_edges;
+pub(crate) use pixel_edges::register as register_border_pixels;
+#[cfg(test)]
+mod perimeter_tests;
 pub(crate) mod scrollbar;
 
 pub(crate) use controls::{
@@ -34,7 +43,8 @@ pub(crate) use controls::{
 };
 
 pub(crate) use items::{
-    Closes, TheirSlot, close, contents, frames, loot, quantity, theirs, toggle_bag,
+    Closes, Content as SlotContent, TheirSlot, close, contents, draw as draw_item, frames, loot,
+    quantity, theirs, toggle_bag,
 };
 
 use super::{hud::hotbar, windows::WindowId};
@@ -1247,13 +1257,21 @@ fn behave(
             Button,
             super::tradeskills::CombineButton(container),
             skin(),
-            crate::outbox::Needs::Capability(Capability::Tradeskills),
+            crate::outbox::Needs::Capability(eq_client_core::tradeskills::combine_capability(
+                container,
+            )),
         )),
         Does::Maps(action) => drawn.insert((Button, action, skin())),
         Does::HotButton(index) => drawn.insert((
             Button,
             hotbar::Slot(index),
             hotbar::Pickable(hotbar::Source::Slot(index)),
+            skin(),
+            crate::outbox::Needs::Nothing,
+        )),
+        Does::HotbarPage(forward) => drawn.insert((
+            Button,
+            hotbar::page::Button(forward),
             skin(),
             crate::outbox::Needs::Nothing,
         )),
@@ -1275,6 +1293,7 @@ fn behave(
         Does::BookPlace(_)
         | Does::TurnsSpellbook(_)
         | Does::CharacterSlot(_)
+        | Does::DeletesCharacter
         | Does::EntersWorld
         | Does::Quits => {
             listed(drawn, does, skin());
@@ -1309,6 +1328,7 @@ fn listed(drawn: &mut EntityCommands, does: Does, skin: SkinButton) {
             drawn.insert((Button, crate::spellbook::TurnsPages(forward), skin))
         }
         Does::CharacterSlot(slot) => drawn.insert((Button, Action::Choose(slot), skin, tooltip())),
+        Does::DeletesCharacter => drawn.insert((Button, Action::Delete, skin)),
         Does::EntersWorld => drawn.insert((Button, Action::Enter, skin)),
         Does::Quits => drawn.insert((Button, Action::Quit, skin)),
         _ => drawn,
@@ -1369,6 +1389,10 @@ fn decal_place(button: &eq_client_assets::sidl::Button, area: Area) -> (f32, f32
 
 /// What a skin button shows on itself: its words, a count of coins, an
 /// ability's name or a bag's picture.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one exhaustive skin-button caption mapping"
+)]
 fn caption(
     inner: &mut ChildSpawnerCommands,
     does: Does,
@@ -1465,9 +1489,11 @@ fn caption(
         | Does::TurnsPage(_)
         | Does::Combines(_)
         | Does::Maps(_)
+        | Does::HotbarPage(_)
         | Does::Picks(_)
         | Does::Trades(_)
         | Does::TurnsSpellbook(_)
+        | Does::DeletesCharacter
         | Does::EntersWorld
         | Does::Quits
         | Does::Nothing => {
@@ -1612,8 +1638,8 @@ pub(crate) fn buttons(
     }
 }
 
-/// How far a window border reaches in from each edge: its sides' widths
-/// and its top's and bottom's heights.
+/// The client area starts beyond the largest authored piece on each side.
+/// Transparent pixels remain part of a piece's dimensions.
 fn border_insets(border: &eq_client_assets::sidl::Border) -> frame::Insets {
     let size = |piece: &Option<Piece>| {
         piece.as_ref().map_or((0.0, 0.0), |piece| {
@@ -1621,10 +1647,22 @@ fn border_insets(border: &eq_client_assets::sidl::Border) -> frame::Insets {
         })
     };
     frame::Insets {
-        left: size(&border.left).0,
-        top: size(&border.top).1,
-        right: size(&border.right).0,
-        bottom: size(&border.bottom).1,
+        left: size(&border.left_top)
+            .0
+            .max(size(&border.left).0)
+            .max(size(&border.left_bottom).0),
+        top: size(&border.top_left)
+            .1
+            .max(size(&border.top).1)
+            .max(size(&border.top_right).1),
+        right: size(&border.right_top)
+            .0
+            .max(size(&border.right).0)
+            .max(size(&border.right_bottom).0),
+        bottom: size(&border.bottom_left)
+            .1
+            .max(size(&border.bottom).1)
+            .max(size(&border.bottom_right).1),
     }
 }
 
@@ -1642,33 +1680,12 @@ pub(crate) fn border(
         right,
         bottom,
     } = border_insets(border);
-    let (across, down) = (width - left - right, height - top - bottom);
-    for (piece, (x, y, stretch_x, stretch_y)) in [
-        (&border.top_left, (0.0, 0.0, None, None)),
-        (&border.top, (left, 0.0, Some(across), None)),
-        (&border.top_right, (width - right, 0.0, None, None)),
-        (&border.left, (0.0, top, None, Some(down))),
-        (&border.right, (width - right, top, None, Some(down))),
-        (&border.bottom_left, (0.0, height - bottom, None, None)),
-        (&border.bottom, (left, height - bottom, Some(across), None)),
-        (
-            &border.bottom_right,
-            (width - right, height - bottom, None, None),
-        ),
-    ] {
-        if let Some(piece) = piece {
-            let size = (
-                stretch_x.unwrap_or(to_f32(piece.width)),
-                stretch_y.unwrap_or(to_f32(piece.height)),
-            );
-            picture(window, art, piece, at(x, y, size.0, size.1));
-        }
-    }
+    perimeter::draw(window, art, border, (width, height));
     Area {
         x: left,
         y: top,
-        width: across,
-        height: down,
+        width: (width - left - right).max(0.0),
+        height: (height - top - bottom).max(0.0),
     }
 }
 
@@ -2058,6 +2075,19 @@ fn window_label(owner: WindowId, name: &str) -> Option<Shows> {
     })
 }
 
+/// The training window's practice points or carried coin value.
+fn training_label(owner: WindowId, name: &str) -> Option<Shows> {
+    match name {
+        "TRNW_PracticeCount" if owner == WindowId::Training => Some(Shows::PracticePoints),
+        _ if owner == WindowId::Training => name
+            .strip_prefix("TRNW_CoinCount")
+            .and_then(|index| index.parse::<usize>().ok())
+            .and_then(|index| Coin::ALL.get(index))
+            .map(|coin| Shows::Coins(CoinPlace::Purse, *coin)),
+        _ => None,
+    }
+}
+
 /// A label: fixed text, or what its number says it shows; a bag's window
 /// names its bag.
 fn label(
@@ -2086,21 +2116,14 @@ fn label(
     let trader = owner == WindowId::Trade && name == "TRDW_MyName";
     let named = window_label(owner, name);
     // The Training window's practice points and the coins the player carries.
-    let counted = match name {
-        "TRNW_PracticeCount" if owner == WindowId::Training => Some(Shows::PracticePoints),
-        _ if owner == WindowId::Training => name
-            .strip_prefix("TRNW_CoinCount")
-            .and_then(|index| index.parse::<usize>().ok())
-            .and_then(|index| Coin::ALL.get(index))
-            .map(|coin| Shows::Coins(CoinPlace::Purse, *coin)),
-        _ => None,
-    };
+    let counted = training_label(owner, name);
     // The book window's page numbers.
     let page_number = match (owner, name) {
         (WindowId::Book, "BOOK_Page0Number") => Some(0),
         (WindowId::Book, "BOOK_Page1Number") => Some(1),
         _ => None,
     };
+    let hotbar_page = owner == WindowId::Actions && name == "HB_CurrentPageLabel";
     let filled = label.eq_type.is_some()
         || bag.is_some()
         || banker
@@ -2108,7 +2131,8 @@ fn label(
         || trader
         || named.is_some()
         || counted.is_some()
-        || page_number.is_some();
+        || page_number.is_some()
+        || hotbar_page;
     let words = if filled { "" } else { label.text.as_str() };
     let text = theme::text(
         words,
@@ -2127,6 +2151,7 @@ fn label(
     }
     let buff_name = buff_label(owner, label.eq_type);
     match (label.eq_type, bag) {
+        _ if hotbar_page => aligned(window, node, label.align, (text, hotbar::page::Number)),
         (Some(_), _) if let Some((effects, index)) = buff_name => aligned(
             window,
             node,
@@ -2423,13 +2448,15 @@ mod tests {
             does("HB_Button10", WindowId::Actions),
             Some(Does::HotButton(9))
         ));
-        // One page so far: the page buttons are greyed out.
-        for id in [
-            "HB_PageLeftButton",
-            "HB_PageRightButton",
-            "HB_Button11",
-            "HB_Button0",
-        ] {
+        assert!(matches!(
+            does("HB_PageLeftButton", WindowId::Actions),
+            Some(Does::HotbarPage(false))
+        ));
+        assert!(matches!(
+            does("HB_PageRightButton", WindowId::Actions),
+            Some(Does::HotbarPage(true))
+        ));
+        for id in ["HB_Button11", "HB_Button0"] {
             assert!(
                 matches!(does(id, WindowId::Actions), Some(Does::Nothing)),
                 "{id}"
@@ -2650,7 +2677,7 @@ mod tests {
             border: false,
             tooltip: None,
             pieces: vec![
-                ("page".into(), button("HB_PageLeftButton", 0.0)),
+                ("page".into(), button("HB_FileButton", 0.0)),
                 ("slot".into(), button("HB_Button1", 20.0)),
             ],
             tab_frame: None,
@@ -2686,7 +2713,7 @@ mod tests {
             .iter(app.world())
             .map(|(needs, hovers, tooltip, button)| (*needs, hovers, tooltip, button))
             .collect();
-        // The page button the client lacks gives its reason on hover in
+        // The file button the client lacks gives its reason on hover in
         // place of the skin's tooltip, and is a button, which keeps a press
         // from dragging its window; the slot beside it works and keeps its
         // own tooltip.
@@ -2704,7 +2731,7 @@ mod tests {
             names,
             [
                 (WindowId::Actions, "HB_Button1".to_owned()),
-                (WindowId::Actions, "HB_PageLeftButton".to_owned()),
+                (WindowId::Actions, "HB_FileButton".to_owned()),
             ]
         );
     }
@@ -3102,13 +3129,12 @@ mod tests {
             Some(Does::EntersWorld)
         ));
         assert!(matches!(does("Quit_Button", list), Some(Does::Quits)));
+        assert!(matches!(
+            does("Delete_Button", list),
+            Some(Does::DeletesCharacter)
+        ));
         // What this client lacks yet is greyed.
-        for lacking in [
-            "Delete_Button",
-            "Rotate_Button",
-            "Explore_Button",
-            "Go_Home_Button",
-        ] {
+        for lacking in ["Rotate_Button", "Explore_Button", "Go_Home_Button"] {
             assert!(
                 matches!(does(lacking, list), Some(Does::Nothing)),
                 "{lacking}"

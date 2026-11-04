@@ -215,3 +215,208 @@ fn refused_tail_preserves_the_submitted_prefix_as_uncertain() {
     let fresh = queue(&mut world, 30, 24);
     assert_eq!(fresh.sequence.unwrap().after, None);
 }
+
+#[test]
+fn host_planning_uses_selected_rules_and_never_falls_back_when_policy_is_missing() {
+    use crate::inventory::MoveRules;
+    for rules in [
+        None,
+        Some(MoveRules::EqEmu),
+        Some(MoveRules::Takp),
+        Some(MoveRules::Quarm),
+    ] {
+        let mut world = setup();
+        let mut item = world.inventory().items()[&InventorySlot(22)].clone();
+        item.slot = InventorySlot::CURSOR;
+        item.details.slots = u32::MAX;
+        item.details.classes = u32::MAX;
+        item.details.races = u32::MAX;
+        game(
+            &mut world,
+            WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![item])),
+        );
+        world.plan_inventory_as(rules);
+        let before = world.inventory().clone();
+        let request = request(&world, 30, 0);
+        let mut called = false;
+        let result = world.queue_inventory_move(request, actor(), |_, _| {
+            called = true;
+            Ok(())
+        });
+        let valid = rules == Some(MoveRules::EqEmu);
+        assert_eq!(result.is_ok(), valid, "{rules:?}: {result:?}");
+        assert_eq!(called, valid);
+        if !valid {
+            assert_eq!(world.inventory(), &before);
+            assert!(!world.inventory_moves_pending());
+        }
+    }
+}
+
+#[test]
+fn same_admission_transfer_reset_reconciles_a_late_success_once_before_recovery() {
+    let mut world = setup();
+    let mut worker = world.worker_inventory().clone();
+    let first = queue(&mut world, 22, 30);
+    let update = worker.plan_move(&first, actor()).unwrap();
+    worker.apply(update.clone());
+    game(
+        &mut world,
+        WorldEvent::ZoneTransfer(ZoneOffer {
+            zone_id: 2,
+            instance_id: 0,
+            position: WorldPosition::default(),
+            reason: 0,
+            to_bind: false,
+            solicited: true,
+        }),
+    );
+    assert!(!world.in_world());
+    assert!(world.inventory_moves_pending());
+    assert!(world.inventory().items().contains_key(&InventorySlot(22)));
+    assert!(!result(&mut world, &first, Some(update.clone()), None).ignored);
+    assert_eq!(world.worker_inventory(), &worker);
+    assert!(!world.inventory_moves_pending());
+    assert!(result(&mut world, &first, Some(update), None).ignored);
+    assert_eq!(world.accepted_speed_inputs(), None);
+    game(
+        &mut world,
+        WorldEvent::ZoneTransferRejected {
+            session_id: 1,
+            reason: ZoneRejection::Cancelled,
+        },
+    );
+    assert!(world.in_world());
+    let fresh = queue(&mut world, 30, 23);
+    assert_eq!(fresh.sequence.unwrap().after, None);
+    assert!(fresh.sequence.unwrap().id > first.sequence.unwrap().id);
+}
+
+#[test]
+fn retained_resets_drain_same_admission_results_but_new_admissions_discard_them() {
+    for reset in [
+        Reset::Died,
+        Reset::Lost {
+            ended: false,
+            transferring: false,
+        },
+    ] {
+        let mut world = setup();
+        let mut worker = world.worker_inventory().clone();
+        let first = queue(&mut world, 22, 30);
+        let update = worker.plan_move(&first, actor()).unwrap();
+        worker.apply(update.clone());
+        if matches!(reset, Reset::Lost { .. }) {
+            connection(&mut world, false, false);
+            assert!(!world.accepts_reply(first.session_id));
+        } else {
+            game(
+                &mut world,
+                WorldEvent::Death(crate::Death {
+                    spawn_id: 9,
+                    killer_id: 5,
+                    corpse_id: 0,
+                    bind_zone_id: 0,
+                    corpse_name: None,
+                }),
+            );
+        }
+        assert!(world.inventory_moves_pending());
+        assert!(!result(&mut world, &first, Some(update), None).ignored);
+        assert_eq!(world.worker_inventory(), &worker);
+        assert_eq!(world.accepted_speed_inputs(), None);
+    }
+    let mut world = setup();
+    let worker = world.worker_inventory().clone();
+    let first = queue(&mut world, 22, 30);
+    let update = worker.plan_move(&first, actor()).unwrap();
+    game(&mut world, entered(2));
+    assert!(result(&mut world, &first, Some(update), None).ignored);
+    assert!(!world.worker_inventory().received());
+}
+
+#[test]
+fn newer_authoritative_state_cannot_be_overwritten_by_a_tracked_old_success() {
+    let mut world = setup();
+    let worker = world.worker_inventory().clone();
+    let first = queue(&mut world, 22, 30);
+    let update = worker.plan_move(&first, actor()).unwrap();
+    world.reset(Reset::Zoning { to_bind: false });
+    let snapshot = worker.items().values().cloned().collect();
+    game(
+        &mut world,
+        WorldEvent::Inventory(InventoryUpdate::Snapshot(snapshot)),
+    );
+    let authoritative = world.worker_inventory().clone();
+    result(&mut world, &first, Some(update.clone()), None);
+    assert_eq!(world.worker_inventory(), &authoritative);
+    assert!(!world.inventory_moves_pending());
+    assert!(result(&mut world, &first, Some(update), None).ignored);
+    assert_eq!(world.accepted_speed_inputs(), None);
+}
+
+#[test]
+fn dependent_refusals_keep_typed_errors_but_present_only_the_root() {
+    let mut world = setup();
+    let requests = [
+        queue(&mut world, 22, 30),
+        queue(&mut world, 30, 23),
+        queue(&mut world, 23, 30),
+    ];
+    for (index, request) in requests.iter().enumerate() {
+        let reason = if index == 0 {
+            "Access changed"
+        } else {
+            "Predecessor refused"
+        };
+        let changes = result(&mut world, request, None, Some(reason));
+        assert!(matches!(changes.replies.as_slice(), [Reply::InventoryMove {
+            error: Some(error), present_error, ..
+        }] if error == reason && *present_error == (index == 0)));
+    }
+    assert!(!world.inventory_moves_pending());
+    let fresh = queue(&mut world, 22, 30);
+    let changes = result(&mut world, &fresh, None, Some("Different root"));
+    assert!(matches!(
+        changes.replies.as_slice(),
+        [Reply::InventoryMove {
+            present_error: true,
+            ..
+        }]
+    ));
+}
+
+#[test]
+fn ambiguous_or_empty_result_payloads_do_not_fabricate_a_submission() {
+    let mut world = setup();
+    let worker = world.worker_inventory().clone();
+    let first = queue(&mut world, 22, 30);
+    let update = worker.plan_move(&first, actor()).unwrap();
+    assert!(result(&mut world, &first, None, None).ignored);
+    assert!(
+        result(
+            &mut world,
+            &first,
+            Some(update.clone()),
+            Some("Both present")
+        )
+        .ignored
+    );
+    assert!(world.inventory_moves_pending());
+    assert_eq!(world.worker_inventory(), &worker);
+    assert!(!result(&mut world, &first, Some(update), None).ignored);
+    assert!(!world.inventory_moves_pending());
+}
+
+#[test]
+fn a_terminal_connection_end_discards_even_a_matching_late_success() {
+    let mut world = setup();
+    let worker = world.worker_inventory().clone();
+    let first = queue(&mut world, 22, 30);
+    let update = worker.plan_move(&first, actor()).unwrap();
+    connection(&mut world, false, true);
+    assert!(!world.inventory_moves_pending());
+    assert!(result(&mut world, &first, Some(update), None).ignored);
+    assert!(!world.worker_inventory().received());
+    assert_eq!(world.accepted_speed_inputs(), None);
+}

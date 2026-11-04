@@ -74,4 +74,69 @@ These commands support scripts that deliberately start before world entry. They 
 - `select name`: choose a character and enter the world.
 - `create name race class gender deity start_zone primary_stat`: request character creation from selection where the server policy supports it, using numeric identifiers; the final stat receives the free stat points. `start_zone` is the city's Titanium choice number (1 Qeynos, 2 Halas, and so on); a generation that sends its own value for the same city, such as the Mac-era start-zone IDs, has it translated before sending. This command is not restricted to local servers by the script parser.
 - `create_refused name race class gender deity start_zone primary_stat`: the same request where the server is expected to refuse it (a name already taken, for one); the step passes on the refusal and ends the script if the character is created.
+- `delete NAME confirm NAME`: request deletion of the exact listed character,
+  repeating its spelling and case. It uses the ordinary named confirmation/sender
+  and never chooses a character by row position. The step waits for an explicit
+  absence observation in the current connection's refreshed list. A refusal,
+  unconfirmed outcome, session change or bounded timeout stops the script before
+  following actions, including `quit`; it never retries or disconnects by itself.
+  Ordinary Back / Disconnect remains available. Absence is not a server deletion
+  acknowledgment or proof of database purge.
 - `wait_online`: wait for a zone admission and player before continuing.
+
+## Character-deletion report
+
+The `character_deletion` field in `Script report` and `Character deletion
+observation` log events is JSON, version 1:
+
+```json
+{"version":1,"current_scope":{"connection_id":7,"selection_id":12},"update":{"request":{"scope":{"connection_id":7,"selection_id":11},"request_id":3,"name":"Disposable"},"progress":{"ObservedAbsent":{"scope":{"connection_id":7,"selection_id":12}}}}}
+```
+
+`current_scope` and `update` can be null. The request scope is the confirmed
+original list. `progress` is the ordinary typed enum: `{"NotSent":"Reason"}`,
+`{"Pending":null}` or `{"Pending":{"scope":{...},"presence":"Present"}}`,
+`{"Unconfirmed":{"reason":"TimedOut","observation":null}}`
+(with a scoped observation when available), or `{"ObservedAbsent":{"scope":{...}}}`.
+Other unconfirmed reason labels are `ConnectionEnded` and `SendFailed`.
+Local refusal labels are `Unsupported`, `StaleList`, `StaleConnection`, `NotListed`,
+`Busy`, `Duplicate`, `NotAtSelection`, and `QueueUnavailable`.
+
+Consumers must match the complete original request and require the observed scope
+to equal `current_scope` on the same connection. An older absence remains a
+historical snapshot. There is no deleted/success boolean, and prose is not a
+machine contract. These reports may contain character identities; retain them as
+private evidence.
+
+## Character-lifecycle report
+
+Opt-in `Script report` events add `character_lifecycle`, JSON version 1. It is a
+bounded snapshot of existing model facts; it does not establish disposable
+ownership or causal creation/deletion success. Reports and fixture identities
+belong in private evidence.
+
+| Field | Meaning |
+| --- | --- |
+| `complete`, `incomplete_reason`, `consumer_reliance`, `limits` | Completeness of this field; incomplete output forbids reliance. |
+| `lifecycle` | Online-enabled, connected, ended, admission ID, has-player, in-world, dead and transfer-pending facts. The model does not retain active world scope or last Link; both are null. |
+| `selection` | Separate selection-view scope/entering flag and full received `snapshot`: scope, all entries (slot, exact name, source level/zone ID), actual creation/deletion rules, policy capacity and free slots. |
+| `creation_answer` | Last count/name/outcome, labeled `history_unscoped`; request ID and scope are null because the model provides no correlation. |
+| `player` | Exact admitted name, spawn/admission IDs, level/race/gender/class and zone, labeled `current_admission` or `retained_admission`. |
+
+Selection states are `selection_view`, `entering_view`, `cached_snapshot`,
+`view_without_snapshot` and `absent`. View matching does not prove a currently
+connected world socket. Nonterminal progress can retain an older list; terminal
+loss/entry/camp clears it. Creation history can survive those resets and a new
+world connection; restart clears it. Unknown source levels/zones stay null;
+reported zero values stay zero. An absent creation offer has null capacity/free slots,
+not zero capacity. Capacity comes only from the offered creation rules and is
+not a promise of server acceptance. Empty admitted-zone text is unknown/null.
+
+The field permits at most 16 entries, 63 ASCII bytes per nonempty name, 128 ASCII
+zone bytes and 8,192 serialized JSON bytes. Control characters, ambiguous names
+or slots, policy-capacity mismatch and exceeded bounds yield `complete:false`,
+`consumer_reliance:"forbidden"`, a static reason and null data sections. No partial
+list is labeled complete. Otherwise reliance still requires exclusive runner/log
+binding and fresh-observation provenance; no account identity, transport generation
+or creation-request correlation is invented from cached facts. The existing
+`character_deletion` field and its observation-only contract remain separate.

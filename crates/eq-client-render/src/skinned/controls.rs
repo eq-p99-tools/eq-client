@@ -1050,7 +1050,7 @@ mod tests {
             .iter(world)
             .find(|(_, cell, _)| cell.act == Act::FreeCamera && cell.slot == 0)
             .unwrap();
-        assert_eq!(text.0, "F9");
+        assert_eq!(text.0, "");
         crate::clicks::testing::click(&mut app, button);
         let world = app.world_mut();
         assert!(

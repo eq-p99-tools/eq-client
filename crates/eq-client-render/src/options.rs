@@ -134,6 +134,9 @@ pub(crate) fn tell_session(
         return;
     };
     tell_helm(&online, &outbox, &mut state, session_id);
+    if !crate::outbox::offered(online.world(), eq_client_core::Capability::Meals) {
+        return;
+    }
     let auto_eat = state.options.auto_eat();
     if state.told == Some((session_id, auto_eat)) {
         return;
@@ -245,6 +248,116 @@ mod tests {
         let _ = std::fs::remove_dir_all(&directory);
     }
 
+    fn meal_admission(app: &mut App, session_id: u64, meals: bool) {
+        use eq_client_core::{Capability, WorldEvent};
+        let mut online = OnlineState::new(true);
+        let mut capabilities = vec![Capability::Inventory];
+        if meals {
+            capabilities.push(Capability::Meals);
+        }
+        testing::news(
+            &mut online,
+            [WorldEvent::Entered {
+                capabilities,
+                choices: Vec::new(),
+                session_id,
+                zone: "qeytoqrg".into(),
+                player: Box::new(testing::player(7)),
+                far_clip: None,
+                spell_landing_flag: None,
+            }],
+        );
+        testing::connect(&mut online, true);
+        app.insert_resource(online);
+    }
+
+    #[test]
+    fn meal_preferences_wait_for_support_and_survive_admission_changes() {
+        use eq_client_core::{ClientCommand, qol::Fix};
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let mut app = crate::testing::app();
+        let mut options = Options::default();
+        options.set(Toggle::Qol(Fix::SkipModifiedFood), false);
+        let saved = options.text();
+        app.insert_resource(OptionsState::new(options))
+            .insert_resource(crate::outbox::Outbox::new(Some(tx)))
+            .add_systems(Update, tell_session);
+        meal_admission(&mut app, 1, false);
+        for _ in 0..2 {
+            app.update();
+        }
+        assert!(rx.try_recv().is_err());
+        let state = app.world().resource::<OptionsState>();
+        assert_eq!(state.told, None);
+        assert_eq!(state.options.text(), saved);
+        assert_eq!(
+            Options::read(&saved, Options::default()).auto_eat(),
+            AutoEat::Anything
+        );
+        meal_admission(&mut app, 2, true);
+        app.update();
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            ClientCommand::AutoEat {
+                session_id: 2,
+                auto_eat: AutoEat::Anything
+            }
+        );
+        app.update();
+        assert!(
+            rx.try_recv().is_err(),
+            "one update per admission and setting"
+        );
+        app.world_mut()
+            .resource_mut::<OptionsState>()
+            .options
+            .set(Toggle::Qol(Fix::SkipModifiedFood), true);
+        app.update();
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            ClientCommand::AutoEat {
+                session_id: 2,
+                auto_eat: AutoEat::Plain
+            }
+        );
+        meal_admission(&mut app, 3, false);
+        app.update();
+        assert!(rx.try_recv().is_err());
+        assert_eq!(
+            app.world().resource::<OptionsState>().options.auto_eat(),
+            AutoEat::Plain
+        );
+    }
+
+    #[test]
+    fn a_full_queue_retries_the_current_meal_preference() {
+        use eq_client_core::ClientCommand;
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let mut app = crate::testing::app();
+        app.insert_resource(OptionsState::default())
+            .insert_resource(crate::outbox::Outbox::new(Some(tx)))
+            .add_systems(Update, tell_session);
+        meal_admission(&mut app, 4, true);
+        assert!(app.world().resource::<crate::outbox::Outbox>().tell(
+            app.world().resource::<OnlineState>().world(),
+            ClientCommand::AutoEat {
+                session_id: 4,
+                auto_eat: AutoEat::Anything
+            },
+        ));
+        app.update();
+        assert_eq!(app.world().resource::<OptionsState>().told, None);
+        rx.try_recv().unwrap();
+        app.update();
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            ClientCommand::AutoEat {
+                session_id: 4,
+                auto_eat: AutoEat::Plain
+            }
+        );
+    }
+
     #[test]
     fn show_my_helm_is_told_on_each_change_where_the_session_sends_it() {
         use eq_client_core::{Capability, ClientCommand};
@@ -294,13 +407,13 @@ mod tests {
         let mut app = crate::testing::app();
         app.insert_resource(OptionsState::new(Options::default()))
             .add_systems(Update, toggle);
-        // A session without the inventory eats nothing on its own, so the
+        // A session without meals eats nothing on its own, so the
         // food setting is greyed out there.
         let mut online = OnlineState::new(true);
         testing::news(
             &mut online,
             [WorldEvent::Entered {
-                capabilities: vec![Capability::Talking],
+                capabilities: vec![Capability::Talking, Capability::Inventory],
                 choices: Vec::new(),
                 session_id: 1,
                 zone: "qeytoqrg".into(),

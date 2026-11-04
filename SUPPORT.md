@@ -16,8 +16,8 @@ Quarm/TAKP behavior. Frontends use runtime capabilities, not server-name flags.
 ## Server policy snapshot
 
 The following summarizes the networking revision pinned by this application's
-Cargo.lock: `a883845b11f7a5b52ab6e98d1f4ad8744920d1c9`. Its
-[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/a883845b11f7a5b52ab6e98d1f4ad8744920d1c9/crates/eq-network/src/client/session/servers.rs)
+Cargo.lock: `c6c4bb09b6171e1709f27fdd4311b52c8307342b`. Its
+[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/c6c4bb09b6171e1709f27fdd4311b52c8307342b/crates/eq-network/src/client/session/servers.rs)
 are the source for this table. **Yes means provided by that policy**, not a live
 certification, and individual operations still validate their prerequisites.
 
@@ -38,10 +38,10 @@ certification, and individual operations still validate their prerequisites.
 | Targeting | Yes | Yes | Yes | Yes |
 | Combat and considering | Yes | Yes | Yes | Yes |
 | Corpse looting | Yes | Yes | Yes (manual) | No |
-| Door interaction | Yes | Yes | No | No |
+| Door interaction | Yes | Yes | Yes (ordinary) | Yes (ordinary) |
 | Ground-item state and pickup | Yes | Yes | Yes | Yes |
 | Camping and zone transfers | Yes | Yes | Yes | Yes |
-| Groups | No | Yes | No | Yes |
+| Groups | Yes | Yes | No | Yes |
 | Raids, training, reading and tradeskills | No | Yes | No | No |
 | Pets and corpse commands | Yes | Yes | No | No |
 | Resurrection / translocate answers | No / No | Yes / Yes | No / No | No / Yes |
@@ -71,9 +71,10 @@ Titanium retains its existing automatic path. See
 [EQMac loot receipts](docs/eqmac-loot-receipts.md).
 
 Both EQMac policies offer ground-item state and guarded pickup. An object removal
-or an unrelated inventory change does not establish delivery. Door definitions
-and state updates are receive-only on Quarm and TAKP: neither policy offers door
-interaction, and no EQMac door sender is activated.
+or an unrelated inventory change does not establish delivery. Quarm and TAKP
+offer ordinary door use with an empty cursor, within the generation's reach and
+with a settled hinge; specialized, static and unknown mechanisms stay visible
+without use, and sending a click does not open the door.
 
 Current movement requires complete load/STR/buff inputs. Unknown state withdraws
 player input without inventing a zero load or a root, and bounded passive falls
@@ -92,11 +93,11 @@ affected mechanics unavailable while chat remains usable. See [installed spell
 providers](docs/spell-providers.md). These source and synthetic checks add no live
 compatibility certification.
 
-The pinned networking [combat](https://github.com/eq-p99-tools/eq-network/blob/a883845b11f7a5b52ab6e98d1f4ad8744920d1c9/docs/quarm-combat.md),
-[loot](https://github.com/eq-p99-tools/eq-network/blob/a883845b11f7a5b52ab6e98d1f4ad8744920d1c9/docs/eqmac-looting.md) and
-[world-object](https://github.com/eq-p99-tools/eq-network/blob/a883845b11f7a5b52ab6e98d1f4ad8744920d1c9/docs/eqmac-world-objects.md)
+The pinned networking [combat](https://github.com/eq-p99-tools/eq-network/blob/c6c4bb09b6171e1709f27fdd4311b52c8307342b/docs/quarm-combat.md),
+[loot](https://github.com/eq-p99-tools/eq-network/blob/c6c4bb09b6171e1709f27fdd4311b52c8307342b/docs/eqmac-looting.md) and
+[world-object](https://github.com/eq-p99-tools/eq-network/blob/c6c4bb09b6171e1709f27fdd4311b52c8307342b/docs/eqmac-world-objects.md)
 contracts record their limits and controlled live checklists. The dated
-[P99/Quarm gap report](https://github.com/eq-p99-tools/eq-network/blob/a883845b11f7a5b52ab6e98d1f4ad8744920d1c9/docs/public-server-gaps.md)
+[P99/Quarm gap report](https://github.com/eq-p99-tools/eq-network/blob/c6c4bb09b6171e1709f27fdd4311b52c8307342b/docs/public-server-gaps.md)
 retains the earlier inspection and its scenario-specific evidence.
 
 ### Public-parity checks, 2026-11-02
@@ -160,7 +161,9 @@ server either fully tested or wholly untested based on one of them.
 
 The native client still has incomplete model/UI coverage, swimming, client-side
 same-zone teleporter detection and some cooldown/resource information. Character
-creation has UI and scenario paths on all four policies; deletion is unavailable.
+creation has UI and scenario paths on all four policies; named deletion with an
+explicit confirmation is offered on all four, and an absence from a refreshed
+list never claims permanent deletion.
 The creation form includes the appearance choices supported by each policy,
 with a model preview from the user's installation. Classic/Titanium names come
 from the world; EQMac uses a local generator. Titanium also offers tutorial

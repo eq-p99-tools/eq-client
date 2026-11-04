@@ -3,13 +3,17 @@
 //! Actions window button or a worn or carried item with a click effect picks
 //! its hotkey up, and a click on a hotbutton puts it down there.
 //!
-//! What the official client does here is inferred, not checked yet: how long
-//! a press is held before it picks up ([`HOLD`]), that a hotkey put down on
-//! a hotbutton swaps onto the cursor what a hold there would pick up (one
-//! that does nothing now, such as an empty gem, is simply replaced), that
-//! letting go of the hold over another hotbutton puts the hotkey there, that
-//! a click anywhere else throws the hotkey away and does nothing else, and
-//! what the cursor shows of a hotkey ([`Face`]).
+//! Titanium dispatches its held-button notification after more than 750ms
+//! (0x4a9741, 0x5b0050, 0x5bb040). Its hotbar handler 0x51550d picks up a
+//! nonempty stored shortcut and clears/persists its source slot; placing one
+//! replaces the destination and carries its old shortcut, independent of whether
+//! either action can activate. Native snippets and installed art stay external.
+//!
+//! Releasing on the original hotbutton keeps the shortcut on the cursor;
+//! releasing on another places it there. Dragging a hotbar shortcut off the bar,
+//! clicking elsewhere with one carried, or Escape discards only the shortcut.
+//! Changing profile/layout or losing input ownership cancels the gesture. The
+//! cursor artwork is this client's presentation and still needs visual acceptance.
 //!
 //! Each control says what a hold picks up from it where it is built, with
 //! [`Pickable`], and the systems that act on its clicks read them through
@@ -21,13 +25,13 @@
 //! that acts on the press ([`crate::clicks::OnPress`]).
 use super::{Action, Bindings};
 use crate::abilities::AbilityButton;
-use bevy::prelude::*;
+use bevy::{prelude::*, ui::RelativeCursorPosition};
 use eq_client_core::{inventory::InventorySlot, world::ClientWorld};
 use std::time::{Duration, Instant};
 
 /// How long the left button is held on a control before its hotkey comes
-/// onto the cursor. Inferred: the official client's time is not checked.
-pub(crate) const HOLD: Duration = Duration::from_millis(500);
+/// onto the cursor. Titanium dispatches strictly after 750ms (0x4a9741).
+pub(crate) const HOLD: Duration = Duration::from_millis(750);
 
 /// The keys that make a press act at once, as Shift-click forgets a gem or
 /// splits a stack.
@@ -46,9 +50,8 @@ const MODIFIERS: [KeyCode; 6] = [
 pub(crate) enum Source {
     /// A spell gem, from 0: its spell, while it holds one.
     Gem(u8),
-    /// A hotbutton, from 0: what it holds, while that does something (a gem
-    /// with a spell, or the item it was made with still in its place, as
-    /// that gem or place gives it), which leaves it when picked up.
+    /// A hotbutton, from 0: its stored shortcut, even when its action is
+    /// temporarily unusable. Picking it up removes only this binding.
     Slot(usize),
     /// An Actions window ability button: the ability it holds now.
     Ability(AbilityButton),
@@ -66,24 +69,7 @@ impl Source {
     pub(crate) fn binding(self, world: &ClientWorld, bindings: &Bindings) -> Option<Action> {
         match self {
             Self::Gem(gem) => world.gem(usize::from(gem)).map(|_| Action::Gem(gem)),
-            Self::Slot(index) => {
-                let binding = bindings.0.get(index).copied().flatten()?;
-                let source = match binding {
-                    Action::Gem(gem) => Self::Gem(gem),
-                    Action::Item { slot, .. } => Self::Item(slot),
-                    Action::Sit
-                    | Action::Stand
-                    | Action::Ability(_)
-                    | Action::Attack
-                    | Action::Camp
-                    | Action::Invite
-                    | Action::Follow
-                    | Action::Disband => Self::Fixed(binding),
-                };
-                source
-                    .binding(world, bindings)
-                    .filter(|given| *given == binding)
-            }
+            Self::Slot(index) => bindings.0.get(index).copied().flatten(),
             Self::Ability(button) => crate::abilities::assigned(world, button).map(Action::Ability),
             Self::Item(slot) => world
                 .inventory()
@@ -103,6 +89,7 @@ impl Source {
 
 /// A control a hold picks a hotkey up from, and what it gives.
 #[derive(Component, Clone, Copy, Debug)]
+#[require(RelativeCursorPosition)]
 pub(crate) struct Pickable(pub(crate) Source);
 
 /// A press under way on a control a hold picks up from.
@@ -110,6 +97,7 @@ pub(crate) struct Pickable(pub(crate) Source);
 struct Held {
     entity: Entity,
     source: Source,
+    hotkey: Action,
     since: Instant,
     /// Whether the hold has picked the hotkey up.
     picked: bool,
@@ -123,6 +111,48 @@ pub(crate) struct Presses {
     /// The control clicked this frame.
     clicked: Option<Entity>,
     taken: bool,
+    editing: Option<Editing>,
+}
+
+/// The admission/profile and exact layout that own a pending/cursor operation.
+/// A replacement cannot retarget the captured shortcut to a different layout.
+#[derive(Debug)]
+struct Editing {
+    admission: Option<u64>,
+    profile: Option<crate::profile_files::CharacterProfile>,
+    slots: [Option<Action>; 10],
+    layout_revision: u64,
+}
+
+impl Editing {
+    fn capture(
+        world: &ClientWorld,
+        profile: &crate::profile_files::Profile,
+        bindings: &Bindings,
+    ) -> Self {
+        Self {
+            admission: world.session_id(),
+            profile: profile.key(),
+            slots: bindings.0,
+            layout_revision: bindings.revision(),
+        }
+    }
+
+    fn matches(
+        &self,
+        world: &ClientWorld,
+        profile: &crate::profile_files::Profile,
+        bindings: &Bindings,
+    ) -> bool {
+        self.admission == world.session_id()
+            && self.layout_revision == bindings.revision()
+            && self.slots == bindings.0
+            && self
+                .profile
+                .as_ref()
+                .map(|key| (key.character.as_str(), key.world.as_str()))
+                == profile.names()
+    }
 }
 
 impl Presses {
@@ -130,6 +160,20 @@ impl Presses {
     /// put down or threw away, so it does nothing else.
     pub(crate) const fn taken(&self) -> bool {
         self.taken
+    }
+
+    /// A mouse hold which Escape can cancel before any binding changes.
+    pub(crate) const fn pending(&self) -> bool {
+        self.held.is_some()
+    }
+
+    fn cancel(&mut self, carry: &mut Carry, button: &mut crate::clicks::LeftButton) {
+        self.taken = true;
+        self.held = None;
+        self.clicked = None;
+        self.editing = None;
+        carry.0 = None;
+        button.cancel();
     }
 
     /// Whether the hold rule clicked this control this frame.
@@ -152,7 +196,10 @@ impl Presses {
     /// long.
     pub(crate) fn hold_past(&mut self) {
         if let Some(held) = self.held.as_mut() {
-            held.since = held.since.checked_sub(HOLD).unwrap();
+            held.since = held
+                .since
+                .checked_sub(HOLD + Duration::from_millis(1))
+                .unwrap();
         }
     }
 }
@@ -228,7 +275,11 @@ impl Face {
         } else {
             Self {
                 picture: None,
-                words: super::caption_text(Some(hotkey), world),
+                words: match hotkey {
+                    Action::Gem(gem) => format!("Spell gem {}", gem + 1),
+                    Action::Item { .. } => "Item shortcut".into(),
+                    _ => super::caption_text(Some(hotkey), world),
+                },
             }
         }
     }
@@ -243,6 +294,8 @@ type Controls<'w, 's> = Query<
         &'static mut Interaction,
         Option<&'static Pickable>,
         Has<crate::clicks::OnPress>,
+        Option<&'static RelativeCursorPosition>,
+        Has<crate::tooltip::ScriptPressed>,
     ),
 >;
 
@@ -258,12 +311,20 @@ type Controls<'w, 's> = Query<
 /// the control under the pointer hovered when the button is let go, which is
 /// how a hotbutton under a released hold is found.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+#[allow(
+    clippy::too_many_lines,
+    reason = "keep ownership, pickup and release decisions in gesture order"
+)]
 pub(crate) fn route(
     keys: crate::keys::Keys,
     mouse: Res<ButtonInput<MouseButton>>,
     (online, hand): (
         Res<crate::online::OnlineState>,
         Res<crate::spellbook::BookHand>,
+    ),
+    (profile, escape): (
+        Res<crate::profile_files::Profile>,
+        Res<crate::escape::Escape>,
     ),
     mut bindings: ResMut<Bindings>,
     (mut carry, mut presses, mut button): (
@@ -277,33 +338,45 @@ pub(crate) fn route(
     presses.clicked = None;
     presses.taken = false;
     let world = online.world();
+    let active = carry.0.is_some() || presses.pending();
     let busy = world
         .inventory()
         .items()
         .contains_key(&InventorySlot::CURSOR)
         || crate::coins::on_cursor(world).is_some()
         || hand.held.is_some();
-    if carry.0.is_some() && (busy || world.player().is_none()) {
-        carry.0 = None;
+    let replaced = presses
+        .editing
+        .as_ref()
+        .is_some_and(|editing| !editing.matches(world, &profile, &bindings));
+    let focused = keys.window_focused();
+    let can_edit = world.connected() && world.player().is_some();
+    let unavailable = !focused || !can_edit;
+    if active && (busy || replaced || unavailable || *escape == crate::escape::Escape::Hotbar) {
+        presses.cancel(&mut carry, &mut button);
+        return;
+    }
+    if !focused {
+        return;
     }
     if mouse.just_pressed(MouseButton::Left) {
         let under = controls
             .iter()
             .filter(|(_, interaction, ..)| **interaction == Interaction::Pressed)
-            .find_map(|(entity, _, pickable, on_press)| {
+            .find_map(|(entity, _, pickable, on_press, ..)| {
                 pickable.map(|pickable| (entity, pickable.0, on_press))
             });
         presses.held = None;
+        presses.editing = None;
         if let Some(hotkey) = carry.0 {
             presses.taken = true;
-            // Put down on a hotbutton, what a hold there would pick up comes
-            // onto the cursor.
             carry.0 = match under {
                 Some((_, Source::Slot(index), _)) => put_down(&mut bindings, world, index, hotkey),
                 _ => None,
             };
-            // What the press went to shows hovered, so no system takes the
-            // press as a click, as it begins or as it is let go.
+            if carry.0.is_some() {
+                presses.editing = Some(Editing::capture(world, &profile, &bindings));
+            }
             button.cancel();
             for (_, mut interaction, ..) in &mut controls {
                 if *interaction == Interaction::Pressed {
@@ -312,71 +385,109 @@ pub(crate) fn route(
             }
         } else if let Some((entity, source, on_press)) = under {
             let plain = !keys.input.any_pressed(MODIFIERS);
-            if plain && !busy && source.binding(world, &bindings).is_some() {
+            if plain
+                && can_edit
+                && !busy
+                && let Some(hotkey) = source.binding(world, &bindings)
+            {
                 button.claim(entity);
                 presses.held = Some(Held {
                     entity,
                     source,
+                    hotkey,
                     since: now,
                     picked: false,
                 });
+                presses.editing = Some(Editing::capture(world, &profile, &bindings));
             } else if on_press || busy {
-                // What is on the cursor goes down as the press begins, as on
-                // an item's place.
                 button.claim(entity);
                 presses.clicked = Some(entity);
             }
-            // Any other press clicks as it is let go over its control, as
-            // every button does ([`crate::clicks`]).
         }
     }
     let Some(mut held) = presses.held else {
         return;
     };
-    if mouse.pressed(MouseButton::Left) {
-        if !held.picked && !busy && now.duration_since(held.since) >= HOLD {
-            held.picked = true;
-            if let Some(hotkey) = held.source.binding(world, &bindings) {
-                if let Source::Slot(index) = held.source {
-                    bindings.0[index] = None;
-                }
-                carry.0 = Some(hotkey);
-            }
+    let over_source =
+        controls
+            .get(held.entity)
+            .ok()
+            .map(|(_, interaction, _, _, relative, scripted)| {
+                *interaction != Interaction::None
+                    && (scripted || relative.is_some_and(RelativeCursorPosition::cursor_over))
+            });
+    if over_source.is_none() {
+        presses.cancel(&mut carry, &mut button);
+        return;
+    }
+    let released = mouse.just_released(MouseButton::Left);
+    // A reset/capture of the physical button is not a release and cannot click.
+    if !mouse.pressed(MouseButton::Left) && !released {
+        presses.cancel(&mut carry, &mut button);
+        return;
+    }
+    // Also check the deadline on a release frame: a slow frame must not turn a
+    // long hold into activation merely because no held frame was rendered.
+    if !held.picked && expired(held.since, now) {
+        if over_source != Some(true) || held.source.binding(world, &bindings) != Some(held.hotkey) {
+            presses.cancel(&mut carry, &mut button);
+            return;
         }
+        held.picked = true;
+        if let Source::Slot(index) = held.source {
+            bindings.0[index] = None;
+        }
+        carry.0 = Some(held.hotkey);
+        presses.editing = Some(Editing::capture(world, &profile, &bindings));
+    }
+    if !released {
         presses.held = Some(held);
         return;
     }
     presses.held = None;
     if !held.picked {
-        // Let go over its control, which Bevy then marks hovered, a quick
-        // press clicks it; let go anywhere else, it clicks nothing.
-        if controls
-            .get(held.entity)
-            .is_ok_and(|(_, interaction, ..)| *interaction != Interaction::None)
-        {
+        if over_source == Some(true) {
             presses.clicked = Some(held.entity);
         }
-    } else if let Some(hotkey) = carry.0 {
-        // Let go over another hotbutton, the hotkey goes there; over the one
-        // it came from, it stays on the cursor.
+        presses.editing = None;
+        return;
+    }
+    presses.taken = true;
+    button.cancel();
+    if let Some(hotkey) = carry.0 {
         let over = controls
             .iter()
-            .find_map(|(_, interaction, pickable, _)| match pickable {
-                Some(Pickable(Source::Slot(index))) if *interaction != Interaction::None => {
-                    Some(*index)
-                }
-                _ => None,
-            })
-            .filter(|index| held.source != Source::Slot(*index));
-        if let Some(index) = over {
-            carry.0 = put_down(&mut bindings, world, index, hotkey);
+            .find_map(
+                |(_, interaction, pickable, _, relative, scripted)| match pickable {
+                    Some(Pickable(Source::Slot(index)))
+                        if *interaction != Interaction::None
+                            && (scripted
+                                || relative.is_some_and(RelativeCursorPosition::cursor_over)) =>
+                    {
+                        Some(*index)
+                    }
+                    _ => None,
+                },
+            );
+        match over {
+            Some(index) if held.source != Source::Slot(index) => {
+                carry.0 = put_down(&mut bindings, world, index, hotkey);
+            }
+            None if matches!(held.source, Source::Slot(_)) => carry.0 = None,
+            _ => (),
         }
     }
+    presses.editing = carry
+        .0
+        .map(|_| Editing::capture(world, &profile, &bindings));
 }
 
-/// Puts a hotkey down on a hotbutton, and gives what a hold there would have
-/// picked up, which comes onto the cursor: what does nothing now (a gem with
-/// no spell, an item gone from its place) is simply replaced.
+fn expired(since: Instant, now: Instant) -> bool {
+    now.saturating_duration_since(since) > HOLD
+}
+
+/// Places a shortcut and carries the exact previous binding, including one
+/// whose current action cannot activate. This never moves an inventory item.
 fn put_down(
     bindings: &mut Bindings,
     world: &ClientWorld,
@@ -387,6 +498,9 @@ fn put_down(
     *bindings.0.get_mut(index)? = Some(hotkey);
     lifted
 }
+
+#[cfg(test)]
+pub(crate) mod pointer_tests;
 
 #[cfg(test)]
 mod tests {
@@ -438,7 +552,13 @@ mod tests {
     fn control(app: &mut App, number: u8, source: Option<Source>) -> Entity {
         let mut control = app.world_mut().spawn((Control(number), Interaction::None));
         if let Some(source) = source {
-            control.insert(Pickable(source));
+            control.insert((
+                Pickable(source),
+                RelativeCursorPosition {
+                    cursor_over: true,
+                    normalized: Some(Vec2::ZERO),
+                },
+            ));
         }
         control.id()
     }
@@ -568,7 +688,7 @@ mod tests {
     }
 
     #[test]
-    fn a_hotkey_put_down_where_a_hold_would_pick_up_nothing_lifts_nothing() {
+    fn replacing_an_unusable_shortcut_carries_its_stored_binding() {
         let mut app = app();
         let gem = control(&mut app, 1, Some(Source::Gem(0)));
         let fifth = control(&mut app, 5, Some(Source::Slot(4)));
@@ -576,38 +696,35 @@ mod tests {
         // Hotbuttons 5 and 6 start as gems 5 and 6, which hold no spell.
         assert_eq!(slots(&app)[4], Some(Action::Gem(4)));
         assert_eq!(slots(&app)[5], Some(Action::Gem(5)));
-        // Put down with a click, nothing comes onto the cursor, so the next
-        // quick click on the gem clicks it.
+        // A click swaps the stored shortcut, even without a memorized spell.
         pick_up(&mut app, gem);
         press(&mut app, Some(fifth));
         release(&mut app, Some(fifth));
         assert_eq!(slots(&app)[4], Some(Action::Gem(0)));
-        assert_eq!(hotkey(&app), None);
-        press(&mut app, Some(gem));
-        release(&mut app, Some(gem));
-        assert_eq!(clicked(&app), [1]);
-        // Let go of a hold over one, the same.
+        assert_eq!(hotkey(&app), Some(Action::Gem(4)));
+        press(&mut app, None);
+        release(&mut app, None);
+        // Letting go of a hold over another shortcut also swaps it.
         press(&mut app, Some(gem));
         hold(&mut app);
         release(&mut app, Some(sixth));
         assert_eq!(slots(&app)[5], Some(Action::Gem(0)));
-        assert_eq!(hotkey(&app), None);
-        press(&mut app, Some(gem));
-        release(&mut app, Some(gem));
-        assert_eq!(clicked(&app), [1, 1]);
+        assert_eq!(hotkey(&app), Some(Action::Gem(5)));
+        assert_eq!(clicked(&app), [] as [u8; 0]);
     }
 
     #[test]
-    fn a_hold_on_a_hotbutton_whose_gem_is_empty_picks_up_nothing_and_clicks_when_let_go() {
+    fn a_hold_can_pick_up_a_stored_shortcut_whose_gem_is_empty() {
         let mut app = app();
         let fifth = control(&mut app, 5, Some(Source::Slot(4)));
         press(&mut app, Some(fifth));
         assert_eq!(clicked(&app), [] as [u8; 0]);
         hold(&mut app);
-        assert_eq!(hotkey(&app), None);
+        assert_eq!(hotkey(&app), Some(Action::Gem(4)));
         release(&mut app, Some(fifth));
-        assert_eq!(clicked(&app), [5]);
-        assert_eq!(slots(&app), Bindings::default().0);
+        assert_eq!(clicked(&app), [] as [u8; 0]);
+        assert_eq!(slots(&app)[4], None);
+        assert_eq!(hotkey(&app), Some(Action::Gem(4)));
     }
 
     #[test]
@@ -703,13 +820,15 @@ mod tests {
             Some(Action::Gem(0))
         );
         assert_eq!(Source::Gem(1).binding(world, &bindings), None);
-        // A hotbutton gives what it holds only while that does something: a
-        // gem with a spell, not one without, and any other kind as it is.
+        // A hotbutton gives its stored shortcut independently of usability.
         assert_eq!(
             Source::Slot(0).binding(world, &bindings),
             Some(Action::Gem(0))
         );
-        assert_eq!(Source::Slot(1).binding(world, &bindings), None);
+        assert_eq!(
+            Source::Slot(1).binding(world, &bindings),
+            Some(Action::Gem(1))
+        );
         assert_eq!(Source::Slot(8).binding(world, &bindings), Some(Action::Sit));
         assert_eq!(
             Source::Fixed(Action::Camp).binding(world, &bindings),
@@ -749,10 +868,12 @@ mod tests {
                 words: name,
             }
         );
-        // Another item where the bound one was, an empty gem and a kind
-        // without a picture show what a hotbutton shows for them.
-        assert_eq!(face(Action::Item { slot, id: id + 1 }).words, "Item");
-        assert_eq!(face(Action::Gem(1)).words, "-");
+        // Missing action data still leaves visible shortcut feedback.
+        assert_eq!(
+            face(Action::Item { slot, id: id + 1 }).words,
+            "Item shortcut"
+        );
+        assert_eq!(face(Action::Gem(1)).words, "Spell gem 2");
         assert_eq!(
             face(Action::Camp),
             Face {
@@ -801,9 +922,8 @@ mod tests {
         for slot in [30, 331, 2000, 2031, 3000, 4000, 23] {
             assert_eq!(given(slot), None, "{slot}");
         }
-        // A hotbutton gives a bound item only while the item it was made with
-        // is still such an item in its place: not another item there, one
-        // without a click effect, none, or one in the bank.
+        // Editing a stored item shortcut does not depend on the item still
+        // being usable. Activation checks remain separate.
         let id = world.inventory().items()[&InventorySlot(22)].details.id;
         let bound = |slot, id| {
             let mut bindings = Bindings::default();
@@ -821,7 +941,14 @@ mod tests {
             })
         );
         for (slot, id) in [(22, id + 1), (23, id), (24, id), (2000, id)] {
-            assert_eq!(bound(slot, id), None, "{slot}");
+            assert_eq!(
+                bound(slot, id),
+                Some(Action::Item {
+                    slot: InventorySlot(slot),
+                    id
+                }),
+                "{slot}"
+            );
         }
     }
 }

@@ -14,7 +14,7 @@ use bevy::prelude::*;
 /// trade, combat and motion) empty: every resource the windows keep, in one
 /// list that the tests' app starts from too.
 pub(super) fn init_presentation(app: &mut App) {
-    // A fresh installation's keys, by the installed client's own table.
+    // Use the installed table, or the explicit Titanium fallback offline.
     let keys = app
         .world()
         .get_resource::<crate::ViewerSettings>()
@@ -35,6 +35,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<windows::pointer::Wheel>()
         .init_resource::<skin::UiSkin>()
         .init_resource::<hud::hotbar::Bindings>()
+        .init_resource::<hud::hotbar::Files>()
         .init_resource::<hud::hotbar::carry::Presses>()
         .init_resource::<clicks::LeftButton>()
         .init_resource::<hud::hotbar::carry::Carry>()
@@ -161,7 +162,13 @@ pub(super) fn schedule(app: &mut App) {
             )
                 .chain()
                 .in_set(Stage::Typing),
-            (escape::route, hud::hotbar::carry::route, map::navigate)
+            (
+                hud::hotbar::prepare,
+                hud::hotbar::page::input,
+                escape::route,
+                hud::hotbar::carry::route,
+                map::navigate,
+            )
                 .chain()
                 .in_set(Stage::Route),
         ),
@@ -427,5 +434,6 @@ pub(super) fn install_overlays(app: &mut App) {
             .before(Stage::Scene),
     );
     skin::register(app);
+    skinned::register_border_pixels(app);
     app.add_systems(PostUpdate, chat::scroll.after(bevy::ui::UiSystems::Layout));
 }

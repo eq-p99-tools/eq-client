@@ -62,7 +62,7 @@ pub(crate) fn capture(
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
-    use crate::keys::{Act, KeyMap};
+    use crate::keys::Act;
     use bevy::input::ButtonState;
 
     /// A complete native chord can arrive before the next frame.
@@ -105,7 +105,10 @@ pub(super) mod tests {
         physical.release(KeyCode::Digit1);
         app.update();
         let presses = app.world().resource::<Presses>();
-        let map = KeyMap::default();
+        let map = crate::keys::testing::map(&[(
+            Act::BindSlot(0),
+            crate::keys::Chord::ctrl(KeyCode::Digit1),
+        )]);
         assert!(map.just_pressed(&physical, Act::BindSlot(0), presses));
         assert!(!map.just_pressed(&physical, Act::Slot(0), presses));
         physical.reset_all();

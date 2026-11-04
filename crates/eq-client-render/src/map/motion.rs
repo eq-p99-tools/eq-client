@@ -74,7 +74,7 @@ pub(crate) fn sample(
 ) {
     let world = online.world();
     let current = world.connected()
-        && world.death().is_none()
+        && !world.is_dead()
         && !online.scene_loading()
         && scene.is_some_and(|scene| scene.zone_name == world.zone());
     let pose = current

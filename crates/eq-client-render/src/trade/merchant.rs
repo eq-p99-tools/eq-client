@@ -1,5 +1,5 @@
 //! The skin's merchant window (`EQUI_MerchantWnd.xml`): the merchant's
-//! wares in its list, and the item chosen to buy or to sell, with its
+//! wares in its grid or list, and the item chosen to buy or to sell, with its
 //! picture, name and price, which its Buy and Sell buttons act on.
 use super::{Action, Chosen, TradeState};
 use crate::theme;
@@ -27,6 +27,26 @@ pub(crate) struct MerchantRows {
 struct Inputs {
     stock: u64,
     chosen: Option<Chosen>,
+}
+
+/// A catalog cell in a merchant window, using its wire stock slot rather
+/// than a player inventory slot or a row's position in a sorted list.
+#[derive(Component, Debug)]
+#[require(crate::clicks::OnPress)]
+pub(crate) struct MerchantSlot {
+    pub(crate) slot: u32,
+    checked: Option<u64>,
+}
+
+impl MerchantSlot {
+    /// The classic merchant grid's `EQTypes` 6000..6079 name stock slots 0..79.
+    pub(crate) fn from_eq_type(number: u32) -> Option<Self> {
+        let slot = number.checked_sub(6000).filter(|slot| *slot < 80)?;
+        Some(Self {
+            slot,
+            checked: None,
+        })
+    }
 }
 
 impl MerchantRows {
@@ -84,28 +104,65 @@ const fn coins(copper: u32) -> [u32; 4] {
     ]
 }
 
-/// Fills the skin's list with the merchant's wares, again whenever they or
+/// Fills the skin's list or grid with the merchant's wares, again whenever they or
 /// the choice change: each row the ware's icon, its name, how many the
 /// merchant has, and its price in the columns for each coin. A click on a
 /// row chooses it.
-#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+#[allow(clippy::needless_pass_by_value, clippy::type_complexity)] // Bevy system parameters.
 pub(crate) fn fill(
     mut commands: Commands,
     online: Res<crate::online::OnlineState>,
     trade: Res<TradeState>,
     mut art: crate::sheets::Art,
     mut lists: Query<(Entity, &mut MerchantRows, Option<&Children>)>,
+    mut slots: Query<(Entity, &mut MerchantSlot, &Node, Option<&Children>)>,
+    content: Query<(), With<crate::skinned::SlotContent>>,
 ) {
     let input = Inputs {
         stock: online.world().merchant_revision(),
         chosen: trade.chosen(),
     };
-    // No list, or every existing list is current: no row allocation or sorting.
+    // Newly drawn cells have no checked input, even if stock arrived first.
+    if lists.iter().all(|(_, list, _)| list.checked == Some(input))
+        && slots
+            .iter()
+            .all(|(_, slot, _, _)| slot.checked == Some(input.stock))
+    {
+        return;
+    }
+    fill_lists(
+        &mut commands,
+        &mut art,
+        online.world(),
+        &trade,
+        input,
+        &mut lists,
+    );
+    fill_slots(
+        &mut commands,
+        &mut art,
+        online.world(),
+        input.stock,
+        &mut slots,
+        &content,
+    );
+}
+
+/// Retains the existing listbox projection alongside the optional catalog grid.
+#[allow(clippy::type_complexity)] // Bevy component query.
+fn fill_lists(
+    commands: &mut Commands,
+    art: &mut crate::sheets::Art,
+    world: &ClientWorld,
+    trade: &TradeState,
+    input: Inputs,
+    lists: &mut Query<(Entity, &mut MerchantRows, Option<&Children>)>,
+) {
     if lists.iter().all(|(_, list, _)| list.checked == Some(input)) {
         return;
     }
-    let wanted = rows(online.world(), &trade);
-    for (entity, mut list, children) in &mut lists {
+    let wanted = rows(world, trade);
+    for (entity, mut list, children) in lists.iter_mut() {
         if list.checked == Some(input) {
             continue;
         }
@@ -178,9 +235,48 @@ pub(crate) fn fill(
                 silver.to_string(),
                 copper.to_string(),
             ];
-            crate::list_cells::text(&mut commands, line, cells, widths.copied());
+            crate::list_cells::text(commands, line, cells, widths.copied());
         }
         list.drawn = Some(wanted.clone());
+    }
+}
+
+/// Projects only catalog contents into the authored cells, retaining their backgrounds.
+#[allow(clippy::type_complexity)] // Bevy component queries.
+fn fill_slots(
+    commands: &mut Commands,
+    art: &mut crate::sheets::Art,
+    world: &ClientWorld,
+    stock: u64,
+    slots: &mut Query<(Entity, &mut MerchantSlot, &Node, Option<&Children>)>,
+    content: &Query<(), With<crate::skinned::SlotContent>>,
+) {
+    for (entity, mut slot, node, children) in slots.iter_mut() {
+        if slot.checked == Some(stock) {
+            continue;
+        }
+        slot.checked = Some(stock);
+        for child in children.into_iter().flatten() {
+            if content.contains(*child) {
+                commands.entity(*child).despawn();
+            }
+        }
+        let ware = world
+            .merchant()
+            .and_then(|merchant| merchant.stock.get(&slot.slot));
+        if let Some(ware) = ware {
+            commands.entity(entity).insert((
+                Action::Choose(ware.slot),
+                crate::outbox::Needs::Capability(super::needs(Action::Choose(ware.slot))),
+            ));
+        } else {
+            // A removed or empty cell is neither a purchase nor an inventory
+            // operation, and cannot retain its previous selection action.
+            commands
+                .entity(entity)
+                .remove::<(Action, crate::outbox::Needs)>();
+        }
+        crate::skinned::draw_item(commands, art, entity, node, ware.map(|ware| &ware.item));
     }
 }
 

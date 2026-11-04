@@ -54,6 +54,7 @@ pub(crate) fn use_ability(ability: Ability, online: &OnlineState, outbox: &Outbo
     let _ = outbox.post(online.world(), |stamp| ClientCommand::UseAbility {
         session_id: stamp.session_id,
         ability,
+        target: online.world().target_intent(),
         created: stamp.created,
     });
 }
@@ -213,5 +214,66 @@ mod tests {
                 None
             ]
         );
+    }
+
+    #[test]
+    fn queued_abilities_name_the_displayed_authority_and_pending_choices_have_no_token() {
+        use eq_client_core::{WorldEvent, targets::TargetState};
+        let mut online = monk();
+        testing::spawns(&mut online, vec![testing::pet(42, 7), testing::pet(43, 7)]);
+        let (sender, receive) = std::sync::mpsc::sync_channel(8);
+        let outbox = Outbox::new(Some(sender));
+        let state = |revision, spawn_id| TargetState {
+            revision,
+            spawn_id,
+            available: true,
+        };
+        for (revision, spawn_id) in [(1, Some(42)), (2, Some(43)), (3, None)] {
+            let target = state(revision, spawn_id);
+            testing::news(
+                &mut online,
+                [WorldEvent::TargetChanged {
+                    session_id: 1,
+                    request_id: 0,
+                    state: target,
+                }],
+            );
+            assert_eq!(online.world().target().selected, spawn_id);
+            use_ability(Ability::Taunt, &online, &outbox);
+            assert!(matches!(receive.try_recv().unwrap(),
+                ClientCommand::UseAbility { target: Some(actual), .. } if actual == target));
+            assert!(
+                receive.try_recv().is_err(),
+                "incoming projection never sends a target request"
+            );
+        }
+        crate::target::select(&mut online, &outbox, Some(42));
+        assert!(matches!(
+            receive.try_recv().unwrap(),
+            ClientCommand::SelectTarget {
+                request_id: 1,
+                spawn_id: Some(42),
+                ..
+            }
+        ));
+        use_ability(Ability::Taunt, &online, &outbox);
+        assert!(matches!(
+            receive.try_recv().unwrap(),
+            ClientCommand::UseAbility { target: None, .. }
+        ));
+        assert_eq!(online.world().target().selected, Some(42));
+        assert!(!online.world().target().sent);
+        let target = state(4, Some(42));
+        testing::news(
+            &mut online,
+            [WorldEvent::TargetSent {
+                session_id: 1,
+                request_id: 1,
+                state: target,
+            }],
+        );
+        use_ability(Ability::Taunt, &online, &outbox);
+        assert!(matches!(receive.try_recv().unwrap(),
+            ClientCommand::UseAbility { target: Some(actual), .. } if actual == target));
     }
 }

@@ -1,5 +1,5 @@
 use super::*;
-use eq_client_core::spell_tables::{Assignment, Context};
+use eq_client_core::spell_tables::{Assignment, Context, Policy};
 
 fn id(value: u16) -> SpellId {
     SpellId::new(value).unwrap()
@@ -70,6 +70,32 @@ fn replay(provider: &mut Provider, zone: u64, pairs: &[(u16, u16)]) {
                 .collect(),
         ),
     );
+}
+
+#[test]
+fn network_requirement_controls_initial_readiness_and_unknown_run_failure() {
+    for policy in [Policy::Installed, Policy::Project1999] {
+        let binding = Binding::new(policy);
+        let mut provider = Provider::new(binding, definitions());
+        assert_eq!(provider.ready(), !policy.requires_server_tables());
+        assert_eq!(provider.get(1).is_some(), !policy.requires_server_tables());
+        let missing = binding.envelope(Fact::RunUnavailable { attempt: 1 });
+        assert_eq!(provider.receive(&missing), policy.requires_server_tables());
+        assert!(
+            !provider.receive(&missing),
+            "failure notification remains sticky"
+        );
+        if policy.requires_server_tables() {
+            assert_eq!(
+                provider.readiness(),
+                &Readiness::Unavailable(Failure::RunIdentity)
+            );
+        } else {
+            assert_eq!(provider.readiness(), &Readiness::Installed);
+            assert_eq!(provider.attempt, 0);
+            assert_eq!(provider.run_id, None);
+        }
+    }
 }
 
 #[test]

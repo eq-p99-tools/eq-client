@@ -13,6 +13,7 @@ mod belongings;
 mod casting;
 mod changes;
 mod character;
+mod control;
 mod group;
 mod inventory_moves;
 mod items;
@@ -49,15 +50,36 @@ use crate::{
 };
 use std::{collections::BTreeMap, time::Instant};
 
+/// Own lifecycle knowledge; bind-only knowledge never manufactures packet details.
+enum OwnDeath {
+    Reported { details: Death, since: Instant },
+    BindTransfer { since: Instant },
+}
+
 /// The characters the world server offered to play.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CharacterList {
+    /// Process-monotonic world-connection generation supplied by the session.
+    pub connection_id: u64,
     /// Names this offer, which a choice must repeat.
     pub selection_id: u64,
     /// The characters, in their server slots.
     pub characters: Vec<CharacterChoice>,
     /// Creation policy supplied by the session with this list.
     pub creation: Option<crate::creation::Rules>,
+    /// Native deletion capability, scoped to this list and connection.
+    pub deletion: Option<crate::deletion::Rules>,
+}
+
+impl CharacterList {
+    /// Exact scope required by a named deletion confirmation.
+    #[must_use]
+    pub const fn scope(&self) -> crate::deletion::Scope {
+        crate::deletion::Scope {
+            connection_id: self.connection_id,
+            selection_id: self.selection_id,
+        }
+    }
 }
 
 /// The world's last answer to a character the player asked for.
@@ -198,6 +220,9 @@ pub struct ClientWorld {
 
     // The admission: from entering a zone until the next admission.
     session_id: Option<u64>,
+    /// The session's interpreted stun state and latest revision; None is
+    /// unknown/unconfigured, not proof of clear control.
+    own_stun: Option<(u64, crate::control::StunState)>,
     /// What the admission lets the player do.
     capabilities: Vec<crate::Capability>,
     /// What the admission leaves to the player, which they may do once they
@@ -226,7 +251,7 @@ pub struct ClientWorld {
     /// The spell action flag that says a spell landed on its target, as the
     /// admission says for its server type; None records no landings.
     spell_landing_flag: Option<u8>,
-    death: Option<Death>,
+    death: Option<OwnDeath>,
     /// The HP at or below which the server takes the player as dead, where
     /// it leaves that death to the client's own report; the session names
     /// it only where it can count what the player's items add.
@@ -248,7 +273,7 @@ pub struct ClientWorld {
     group: Option<Group>,
     /// Who invited the player to their group, until the player answers or
     /// is in one; the session forgets it with the admission.
-    group_invitation: Option<String>,
+    group_invitation: Option<(String, crate::group::InvitationId)>,
     /// Whether the player agreed to join a group whose list has not come.
     joining_group: bool,
     /// The target the server's answer to an assist names, until the player
@@ -267,6 +292,8 @@ pub struct ClientWorld {
     items: ItemCache,
     // Until any reset: the target, the motion granted and camping.
     target: Target,
+    /// Host choices never reuse a correlation ID after a local reset.
+    target_sequence: u64,
     motion: Option<MotionGrant>,
     speed_input_revision: Option<u64>,
     accepted_speed_inputs: Option<crate::SpeedInputAcceptance>,
@@ -343,9 +370,7 @@ impl ClientWorld {
     /// refreshed gems start their timers once the spells' timing is known,
     /// and casts that nothing ended run out.
     pub fn tick(&mut self, now: Instant, spells: &dyn SpellCatalog) {
-        if self.zone.doors.closes_due(now) {
-            self.zone.doors.close_due(now);
-        }
+        self.zone.doors.close_due(now);
         self.casting.cooldowns.resolve(spells, now);
         self.expire_casts(now);
     }
@@ -417,12 +442,18 @@ impl ClientWorld {
     /// The player's own choice of target, which the client tells the session
     /// separately; what the session makes of it arrives as news.
     pub fn select_target(&mut self, spawn: Option<u16>) {
+        self.target_sequence = self.next_target_request();
         self.target = Target {
             selected: spawn,
             sent: false,
             revision: spawn
                 .and_then(|id| self.zone.spawns.get(&id))
                 .map(|spawn| spawn.revision),
+            server_selected: false,
+            request_id: self.target_sequence,
+            reported_request: self.target.reported_request,
+            authority: self.target.authority,
+            accepts_updates: self.target.accepts_updates,
         };
     }
 
@@ -550,10 +581,13 @@ impl ClientWorld {
                 refusal,
             } => self.server_refused(*selection_id, refusal, news),
             WorldEvent::CharacterSelection {
+                connection_id,
                 selection_id,
                 characters,
                 creation,
-            } => self.offered(*selection_id, characters, *creation, news),
+                deletion,
+            } => self.offered((*connection_id, *selection_id), characters, (*creation, *deletion), news),
+            WorldEvent::CharacterDeletion(update) => news.replies.push(Reply::CharacterDeletion(update.clone())),
             WorldEvent::Entered {
                 capabilities,
                 choices,
@@ -606,12 +640,27 @@ impl ClientWorld {
                 },
                 news,
             ),
+            WorldEvent::OwnStun { session_id, revision, state } =>
+                self.project_stun(*session_id, *revision, *state, news),
             WorldEvent::MotionSent {
                 session_id,
                 position,
                 refused,
             } => self.motion_sent(*session_id, *position, refused.as_ref(), news),
             WorldEvent::Death(death) => return self.died(death, now),
+            WorldEvent::DeathBind { session_id } => {
+                if self.session_id != Some(*session_id) {
+                    return Changes { ignored: true, ..Changes::default() };
+                }
+                if self.death.is_some() { return Changes::default(); }
+                self.death = Some(OwnDeath::BindTransfer { since: now });
+                self.own_health(0);
+                self.bled_out = None;
+                self.zone.trade.exchange = None;
+                let mut changes = self.reset(Reset::Died);
+                changes.notices.push(Notice::Slain { victim: Party::Player, killer: Party::Unseen });
+                return changes;
+            }
             WorldEvent::DeathThreshold(threshold) => self.death_threshold = Some(*threshold),
             WorldEvent::ZoneTransfer(offer) => return self.transfer(offer),
             WorldEvent::ZoneTransferRejected { session_id, reason } => {
@@ -647,9 +696,10 @@ impl ClientWorld {
 
             // Nothing here shows the world's other rules,
             // its chat server, a zone it says is down, the zone's weather or
-            // its header beyond the sky and the clip yet, nor stops the
-            // player while stunned, charmed, held by the server or berserk,
-            // spins them, or shows their hiding's end. The target
+            // its header beyond the sky and the clip yet, nor applies
+            // charm or other server control, spins players or shows their
+            // hiding's end. Berserk remains informational; raw stun durations
+            // are interpreted by the session's OwnStun. The target
             // the server sets and whom it targets, a quest's reward and ding
             // (the session puts a reward's coins in the purse), a sacrifice
             // offer and a player becoming a corpse wait for their front ends
@@ -736,12 +786,19 @@ impl ClientWorld {
             }
             WorldEvent::Damage(damage) => self.damage(damage, news),
             WorldEvent::Animation(animation) => self.motion_news(*animation, news),
-            WorldEvent::TargetSent(id) => self.target_sent(*id, news),
+            WorldEvent::TargetChanged { session_id, request_id, state } => {
+                self.target_updated(*session_id, *request_id, *state, true, news);
+            }
+            WorldEvent::TargetSent { session_id, request_id, state } => {
+                self.target_updated(*session_id, *request_id, *state, false, news);
+            }
             WorldEvent::TargetRejected {
                 session_id,
+                request_id,
                 spawn_id,
+                state,
                 reason,
-            } => self.target_refused((*session_id, *spawn_id), reason, news),
+            } => self.target_refused((*session_id, *request_id, *spawn_id), *state, reason, news),
             WorldEvent::Visibility {
                 spawn_id,
                 invisible,
@@ -832,7 +889,7 @@ impl ClientWorld {
                 forward,
             } => self.position(*spawn_id, (*position, *velocity, *forward), now, news),
             WorldEvent::WearChange(change) => self.wear(change),
-            WorldEvent::Doors(update) => self.zone.doors.apply(update, now),
+            WorldEvent::Doors(update) => self.zone.doors.apply_for(update, now, self.generation),
             WorldEvent::DoorAction {
                 session_id,
                 door_id,
@@ -899,6 +956,14 @@ impl ClientWorld {
                 self.wallet.purse = Some(*coins);
                 news.trade = true;
             }
+            WorldEvent::PurseUncertain { session_id } => {
+                if self.accepts_reply(*session_id) {
+                    self.wallet.purse = None;
+                    news.trade = true;
+                } else {
+                    news.ignored = true;
+                }
+            }
             WorldEvent::CoinsElsewhere {
                 cursor,
                 bank,
@@ -921,6 +986,9 @@ impl ClientWorld {
             WorldEvent::Merchant(update) => self.merchant_news(update, news),
             WorldEvent::MerchantRefused { session_id, reason } => {
                 self.merchant_refused(*session_id, reason, news);
+            }
+            WorldEvent::MerchantUnanswered { session_id, reason } => {
+                self.merchant_unanswered(*session_id, reason, news);
             }
             WorldEvent::Exchange(update) => self.exchange_news(update, news),
             WorldEvent::ExchangeRefused { session_id, reason } => {
@@ -1051,7 +1119,15 @@ impl ClientWorld {
                 }
             }
             // A book or note to read, and a request the session would not send.
-            WorldEvent::BookText(text) => self.reading = Some(text.clone()),
+            WorldEvent::BookText(text) => {
+                if self.in_world()
+                    && (self.generation == crate::GameDialect::EqMac || text.kind <= 1)
+                {
+                    self.reading = Some(text.clone());
+                } else {
+                    news.ignored = true;
+                }
+            }
             WorldEvent::ReadRefused { session_id, reason } => {
                 if self.session_id == Some(*session_id) {
                     news.notices.push(Notice::ReadRefused(reason.clone()));
@@ -1147,14 +1223,23 @@ impl ClientWorld {
     /// A death: a spawn becomes a corpse, and the player's own death holds
     /// them until the server offers to return them home.
     fn died(&mut self, death: &Death, now: Instant) -> Changes {
+        let own = self
+            .player
+            .as_ref()
+            .is_some_and(|player| u32::from(player.spawn_id) == death.spawn_id);
+        let already_dead = own && self.death.is_some();
         // Who died and who killed them, named before the corpse takes its
         // name; a death of no one the player knows says nothing.
-        let slain = match self.party(death.spawn_id) {
-            Party::Unseen => None,
-            victim => Some(Notice::Slain {
-                victim,
-                killer: self.party(death.killer_id),
-            }),
+        let slain = if already_dead {
+            None
+        } else {
+            match self.party(death.spawn_id) {
+                Party::Unseen => None,
+                victim => Some(Notice::Slain {
+                    victim,
+                    killer: self.party(death.killer_id),
+                }),
+            }
         };
         if let Ok(id) = u16::try_from(death.spawn_id) {
             self.zone.corpse(
@@ -1173,11 +1258,18 @@ impl ClientWorld {
             Changes::default()
         } else {
             self.own_health(0);
-            self.death = Some(death.clone());
+            self.death = Some(OwnDeath::Reported {
+                details: death.clone(),
+                since: self.death_since().unwrap_or(now),
+            });
             self.bled_out = None;
             // The server closes a window the player dies with.
             self.zone.trade.exchange = None;
-            self.reset(Reset::Died)
+            if already_dead {
+                Changes::default()
+            } else {
+                self.reset(Reset::Died)
+            }
         };
         changes.notices.splice(0..0, slain);
         changes
@@ -1204,7 +1296,14 @@ impl ClientWorld {
 
     /// Forgets what the reason makes stale, and says so.
     fn reset(&mut self, reason: Reset) -> Changes {
-        self.inventory_moves.clear();
+        if matches!(
+            reason,
+            Reset::Entered | Reset::Camped | Reset::Lost { ended: true, .. }
+        ) {
+            self.inventory_moves.clear();
+        } else {
+            self.inventory_moves.interrupt();
+        }
         self.accepted_speed_inputs = None;
         // A refused transfer resumes this same admission. Retain its revision
         // while suspended so later input changes can still be reported.
@@ -1227,6 +1326,7 @@ impl ClientWorld {
         // camping under way.
         self.target = Target::default();
         self.motion = None;
+        self.reading = None;
         if reason != Reset::Died {
             self.camp = None;
             self.camp_to = crate::camp::CampTo::default();
@@ -1319,6 +1419,7 @@ impl ClientWorld {
         self.raid_invitation = None;
         self.raid_flow = raid::RaidFlow::default();
         self.death = None;
+        self.own_stun = None;
         self.death_threshold = None;
         self.bled_out = None;
         self.forget_zone();

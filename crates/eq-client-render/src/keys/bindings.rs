@@ -226,7 +226,7 @@ mod tests {
     #[test]
     fn edited_keys_round_trip_and_move_conflicting_chords() {
         let mut map = KeyMap::default();
-        map.assign(cell(), Some(Chord::key(KeyCode::KeyK)));
+        map.assign(cell(), Some(Chord::key(KeyCode::KeyC)));
         assert_eq!(map.chords(Act::Consider), []);
         map.assign(
             Assignment { slot: 1, ..cell() },
@@ -237,15 +237,52 @@ mod tests {
         assert_eq!(loaded.text(), text);
         assert_eq!(
             loaded.chords(Act::FreeCamera),
-            [Chord::key(KeyCode::KeyK), Chord::ctrl_shift(KeyCode::F11)]
+            [Chord::key(KeyCode::KeyC), Chord::ctrl_shift(KeyCode::F11)]
         );
         assert_eq!(loaded.chords(Act::Consider), []);
         let loaded = KeyMap::read(
             "FreeCamera = UnknownKey\nCameraUp = Ctrl+PageUp\nFutureAction = F2",
             loaded,
         );
-        assert_eq!(loaded.label(Act::FreeCamera), "K");
+        assert_eq!(loaded.label(Act::FreeCamera), "C");
         assert_eq!(loaded.label(Act::CameraUp), "Ctrl+PageUp");
+    }
+
+    #[test]
+    fn saved_mac_bindings_override_new_starting_keys_including_cleared_actions() {
+        let saved = "Attack = G, Alt+Q\nConsider = K\nDuck = C\nTurnLeft = Q\nStand = \n";
+        let defaults = || KeyMap::for_client(eq_client_assets::ui::InstalledClient::EqMac);
+        let loaded = KeyMap::read(saved, defaults());
+        assert_eq!(
+            loaded.chords(Act::Attack),
+            [Chord::key(KeyCode::KeyG), Chord::alt(KeyCode::KeyQ)]
+        );
+        assert_eq!(loaded.chords(Act::Consider), [Chord::key(KeyCode::KeyK)]);
+        assert_eq!(loaded.chords(Act::Duck), [Chord::key(KeyCode::KeyC)]);
+        assert_eq!(loaded.chords(Act::TurnLeft), [Chord::key(KeyCode::KeyQ)]);
+        assert_eq!(loaded.chords(Act::Stand), []);
+        let text = loaded.text();
+        assert_eq!(KeyMap::read(&text, defaults()).text(), text);
+    }
+
+    #[test]
+    fn saved_custom_keys_and_explicit_native_clears_win_for_each_generation() {
+        use eq_client_assets::ui::InstalledClient;
+        for client in [InstalledClient::Titanium, InstalledClient::EqMac] {
+            let loaded = KeyMap::read(
+                "Attack = \nDuck = Z\nTrade = U\nUse = \nSitStand = \n",
+                KeyMap::for_client(client),
+            );
+            assert_eq!(loaded.chords(Act::Attack), []);
+            assert_eq!(loaded.chords(Act::Use), []);
+            assert_eq!(loaded.chords(Act::SitStand), []);
+            assert_eq!(loaded.chords(Act::Duck), [Chord::key(KeyCode::KeyZ)]);
+            assert_eq!(loaded.chords(Act::Trade), [Chord::key(KeyCode::KeyU)]);
+            assert_eq!(
+                KeyMap::read(&loaded.text(), KeyMap::for_client(client)).text(),
+                loaded.text()
+            );
+        }
     }
 
     #[test]
@@ -365,10 +402,7 @@ mod tests {
                 .contains("FreeCamera = Alt+F8")
         );
         enter(&mut app, "Another");
-        assert_eq!(
-            app.world().resource::<KeyMap>().label(Act::FreeCamera),
-            "F9"
-        );
+        assert_eq!(app.world().resource::<KeyMap>().label(Act::FreeCamera), "");
         app.insert_resource(Bindings::default());
         enter(&mut app, "Example");
         assert_eq!(

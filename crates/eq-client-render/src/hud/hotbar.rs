@@ -3,27 +3,47 @@
 use crate::profile_files::CharacterProfile;
 use crate::theme::{self, Size};
 use bevy::prelude::*;
-use eq_client_core::{hotbar::Hotbar, qol::Fix, world::ClientWorld};
+use eq_client_core::{
+    hotbar::{Hotbar, Pages},
+    qol::Fix,
+    world::ClientWorld,
+};
 use std::time::Instant;
 pub(crate) mod carry;
 mod item_art;
 #[cfg(test)]
 mod item_tests;
+pub(crate) mod page;
 pub(crate) use carry::{Pickable, Source};
 
 pub(crate) use eq_client_core::hotbar::Binding as Action;
 pub(crate) use item_art::update as item_artwork;
 
 #[derive(Resource)]
-pub(crate) struct Bindings(pub(crate) [Option<Action>; 10]);
+pub(crate) struct Bindings(pub(crate) [Option<Action>; 10], page::State);
 
 impl Default for Bindings {
     fn default() -> Self {
-        Self(Hotbar::default().0)
+        Self(Hotbar::default().0, page::State::default())
     }
 }
 
 pub(crate) use crate::profile_files::Store;
+
+/// One file owner shared by the load before input and save after input.
+#[derive(Resource, Default)]
+pub(crate) struct Files(Store);
+
+/// Apply profile changes before page and action routing. The later persistence
+/// system shares the same file owner and saves this frame's binding edits.
+pub(crate) fn prepare(
+    settings: Res<crate::ViewerSettings>,
+    profile: Res<crate::profile_files::Profile>,
+    bindings: ResMut<Bindings>,
+    files: ResMut<Files>,
+) {
+    persist(settings, profile, bindings, files);
+}
 
 /// Loads the hotbar of whoever is playing, and saves a change to their own
 /// file. A character with no file of their own starts from the official
@@ -34,23 +54,24 @@ pub(crate) fn persist(
     settings: Res<crate::ViewerSettings>,
     profile: Res<crate::profile_files::Profile>,
     mut bindings: ResMut<Bindings>,
-    mut store: Local<Store>,
+    mut files: ResMut<Files>,
 ) {
+    let store = &mut files.0;
     store.retry(Instant::now());
-    if store.loaded && !profile.is_changed() {
+    if store.loaded && store.profile == profile.key() {
         if bindings.is_changed() {
-            save(&mut store, &bindings);
+            save(store, &bindings);
         }
         return;
     }
     if store.loaded {
-        save(&mut store, &bindings);
+        save(store, &bindings);
     } else {
         store.open(settings.0.settings_directory.as_ref());
     }
     store.profile = profile.key();
     let Some(CharacterProfile { world, character }) = store.profile.clone() else {
-        bindings.0 = Hotbar::default().0;
+        bindings.load(&Pages::default());
         store.loaded_text(String::new());
         return;
     };
@@ -60,12 +81,12 @@ pub(crate) fn persist(
             settings
                 .0
                 .official_settings()
-                .and_then(|official| Hotbar::official(&official.hotbuttons(&character, &world)))
+                .and_then(|official| Pages::official(&official.hotbutton_pages(&character, &world)))
                 .unwrap_or_default()
         },
-        |text| Hotbar::read(&text, Hotbar::default()),
+        |text| Pages::read(&text, Pages::default()),
     );
-    bindings.0 = hotbar.0;
+    bindings.load(&hotbar);
     store.loaded_text(hotbar.text());
 }
 
@@ -75,7 +96,7 @@ fn save(store: &mut Store, bindings: &Bindings) {
         return;
     };
     let name = file_name(&profile.world, &profile.character);
-    store.save(name, Hotbar(bindings.0).text(), Instant::now());
+    store.save(name, bindings.snapshot().text(), Instant::now());
 }
 
 /// The character's own hotbar file.
@@ -160,6 +181,7 @@ pub(super) fn spawn(commands: &mut Commands, root: Entity) {
                 .with_children(|button| contents(button, index, None));
         }
     }
+    page::spawn(commands, frame);
     let hint = super::label(commands, frame, "", Size::Caption, theme::INK);
     commands.entity(hint).insert((
         Hint,
@@ -308,6 +330,7 @@ type Labels<'w, 's> = Query<
         Option<&'static Caption>,
         Option<&'static Words>,
         Option<&'static Hint>,
+        Option<&'static page::Number>,
     ),
 >;
 
@@ -367,7 +390,7 @@ pub(crate) fn presentation(
             color.0 = theme::readiness(*interaction != Interaction::None, empty, waiting);
         }
     }
-    for (mut text, caption, words, hint) in &mut labels {
+    for (mut text, caption, words, hint, page) in &mut labels {
         // Written only when they change, so `fit_words` sees a change.
         let wanted = match (caption, words) {
             (Some(caption), _) => Some(faces(bindings.0[caption.0], online.world()).0),
@@ -387,6 +410,9 @@ pub(crate) fn presentation(
                 (&names, &map),
                 now,
             );
+        }
+        if page.is_some() {
+            text.0 = (bindings.page() + 1).to_string();
         }
     }
 }
@@ -701,7 +727,14 @@ mod tests {
                     name: "Example".into(),
                 },
             ),
-            (Action::Follow, ClientCommand::FollowGroup { session_id: 1 }),
+            (
+                Action::Follow,
+                ClientCommand::FollowGroup {
+                    session_id: 1,
+                    inviter: "Leader".into(),
+                    invitation_id: eq_client_core::group::InvitationId::new(1),
+                },
+            ),
             (Action::Disband, ClientCommand::Disband { session_id: 1 }),
         ];
         for (action, command) in sent {
@@ -919,10 +952,30 @@ mod tests {
                 .starts_with("Unassigned")
         );
     }
+    fn choose_editing_keys(app: &mut App) {
+        for (index, key) in [
+            (0, KeyCode::Digit1),
+            (1, KeyCode::Digit2),
+            (2, KeyCode::Digit3),
+        ] {
+            crate::keys::testing::bind(
+                app,
+                crate::keys::Act::BindSlot(index),
+                crate::keys::Chord::ctrl(key),
+            );
+            crate::keys::testing::bind(
+                app,
+                crate::keys::Act::ClearSlot(index),
+                crate::keys::Chord::ctrl_shift(key),
+            );
+        }
+    }
+
     #[test]
     fn binding_and_clearing_requires_focused_non_chat_input() {
         let mut app = App::new();
         crate::keys::testing::install(&mut app);
+        choose_editing_keys(&mut app);
         let mut online = crate::online::OnlineState::new(true);
         crate::online::testing::admit(&mut online, 1, crate::online::testing::player(1));
         crate::online::testing::spell(
@@ -1040,6 +1093,82 @@ mod persist_tests {
         player.name = name.into();
         testing::admit(&mut online, 1, player);
         app.insert_resource(online);
+    }
+
+    #[test]
+    fn legacy_files_and_all_page_edits_stay_with_their_profile_before_page_input() {
+        let directory = std::env::temp_dir().join(format!(
+            "eq-hotbar-pages-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let first = directory.join(file_name("ExampleWorld", "First"));
+        let mut old = Hotbar::default();
+        old.0[0] = Some(Action::Camp);
+        std::fs::write(&first, old.text()).unwrap();
+        let mut app = crate::testing::app();
+        app.world_mut()
+            .resource_mut::<crate::ViewerSettings>()
+            .0
+            .settings_directory = Some(directory.clone());
+        app.add_systems(
+            Update,
+            (
+                crate::profile_files::follow,
+                prepare,
+                page::input,
+                carry::route,
+                persist,
+            )
+                .chain(),
+        );
+        enter(&mut app, "First");
+        app.update();
+        assert_eq!(app.world().resource::<Bindings>().0[0], Some(Action::Camp));
+        {
+            let mut bindings = app.world_mut().resource_mut::<Bindings>();
+            bindings.select(9);
+            bindings.0[0] = Some(Action::Sit);
+        }
+        app.update();
+        assert!(
+            std::fs::read_to_string(&first)
+                .unwrap()
+                .contains("page_10_slot_1 = sit")
+        );
+        enter(&mut app, "Second");
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.press(KeyCode::ShiftLeft);
+            keys.press(KeyCode::Digit2);
+        }
+        app.update();
+        assert_eq!(app.world().resource::<Bindings>().page(), 1);
+        assert_eq!(app.world().resource::<Bindings>().0, [None; 10]);
+        assert!(!directory.join(file_name("ExampleWorld", "Second")).exists());
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        enter(&mut app, "First");
+        app.update();
+        assert_eq!(app.world().resource::<Bindings>().page(), 1);
+        app.world_mut().resource_mut::<Bindings>().select(0);
+        assert_eq!(app.world().resource::<Bindings>().0[0], Some(Action::Camp));
+        {
+            let mut bindings = app.world_mut().resource_mut::<Bindings>();
+            bindings.select(9);
+            assert_eq!(bindings.0[0], Some(Action::Sit));
+            bindings.0[0] = None;
+        }
+        app.update();
+        let saved = Pages::read(&std::fs::read_to_string(&first).unwrap(), Pages::default());
+        assert_eq!(saved.0[0].0[0], Some(Action::Camp));
+        assert_eq!(saved.0[9].0[0], None);
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

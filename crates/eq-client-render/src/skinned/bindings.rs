@@ -119,6 +119,8 @@ pub(super) enum Does {
     Maps(crate::map::MapButton),
     /// Uses the action bound to this slot of the action bar, and shows it.
     HotButton(usize),
+    /// Selects the next (true) or previous page of the first hotbar.
+    HotbarPage(bool),
     /// Does this to the quantity window's amount, as Accept takes it.
     Picks(crate::inventory::SplitAction),
     /// Does this to the loot open on a corpse or the merchant open, as the
@@ -138,6 +140,8 @@ pub(super) enum Does {
     CharacterSlot(u8),
     /// Enters the world with the chosen character.
     EntersWorld,
+    /// Opens the ordinary named character-deletion confirmation.
+    DeletesCharacter,
     /// Leaves the game, from the character list.
     Quits,
     /// Nothing yet: drawn greyed out, as the client's own windows show what
@@ -208,9 +212,13 @@ pub(super) fn does(id: &str, owner: WindowId) -> Option<Does> {
     if owner == WindowId::Map {
         return Some(crate::map::MapButton::for_screen(id).map_or(Does::Nothing, Does::Maps));
     }
-    // The action bar's ten buttons; its pages wait for a second page.
+    // The first hotbar's ten buttons and page arrows share ordinary behavior.
     if owner == WindowId::Actions {
-        return Some(hot_button(id).map_or(Does::Nothing, Does::HotButton));
+        return Some(match id {
+            "HB_PageLeftButton" => Does::HotbarPage(false),
+            "HB_PageRightButton" => Does::HotbarPage(true),
+            _ => hot_button(id).map_or(Does::Nothing, Does::HotButton),
+        });
     }
     if owner == WindowId::Book {
         match id {
@@ -316,11 +324,12 @@ pub(super) fn own_button(id: &str, owner: WindowId) -> Option<Does> {
 /// What a button of the skin's character list does: its eight character
 /// buttons show the slots of the server's list in order, Enter World enters
 /// with the chosen one and Quit leaves the game. Empty slots open creation.
-/// Deleting and rotating characters, the tutorial, exploring and returning
+/// Rotating characters, the tutorial, exploring and returning
 /// home are not in this client yet.
 pub(super) fn character_button(id: &str) -> Does {
     match id {
         "Enter_World_Button" => Does::EntersWorld,
+        "Delete_Button" => Does::DeletesCharacter,
         "Quit_Button" => Does::Quits,
         _ => id
             .strip_prefix("Char")

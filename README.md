@@ -46,10 +46,10 @@ in the EverQuest installation, so the week's wait survives restarts.
 - **Scripts:** choose Scripts from the bottom-right EQ menu to edit, load, run and watch scripts using
   your current character. The Help tab renders the same
   [script guide](docs/scripts/README.md) available on GitHub.
-- **Map:** Ctrl+M opens known entity positions on every server. Search, inspect
+- **Map:** Backspace or M opens known entity positions on every server. Search, inspect
   and track names locally; the separate Target action uses normal targeting checks.
-- **Camera:** right-drag to look and use the wheel to zoom. F9 detaches the camera;
-  F9 again returns to your character. Free-camera controls do not walk the character.
+- **Camera:** right-drag to look and use the wheel to zoom. Assign Toggle Free Camera
+  in Options to detach and return. Free-camera controls do not walk the character.
 - **Keyboard:** Options → Keyboard lists and edits primary/alternate bindings.
   Defaults depend on the installed client; Titanium does not bind WASD movement
   by default. Saved character bindings take precedence.

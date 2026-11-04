@@ -25,8 +25,9 @@ impl ClientWorld {
         self.accepted_speed_inputs
     }
 
-    /// Complete carried load, in tenths. Unknown inventory/coins never become zero.
-    /// Predictions are usable only when they preserve the authoritative item weight.
+    /// Movement load in tenths from one worker replica. Unknown inventory/coins
+    /// never become zero. A proven cursor-arrival history can conservatively
+    /// overstate carried mass without confirming predicted placement.
     ///
     /// # Errors
     /// Returns the input category requiring authoritative state.
@@ -194,6 +195,33 @@ impl ClientWorld {
         self.session_id
     }
 
+    /// The admission's interpreted own-player stun state. None preserves
+    /// unknown/unconfigured semantics; charm, roots and death are separate.
+    #[must_use]
+    pub const fn stun_state(&self) -> Option<crate::control::StunState> {
+        match self.own_stun {
+            Some((_, state)) => Some(state),
+            None => None,
+        }
+    }
+
+    /// The latest stun transition revision, including expiry. Consumers can
+    /// withdraw queued intent even when a complete stun crossed one frame.
+    #[must_use]
+    pub const fn stun_revision(&self) -> Option<u64> {
+        match self.own_stun {
+            Some((revision, _)) => Some(revision),
+            None => None,
+        }
+    }
+
+    /// Whether a verified own stun is active. False is not proof of known
+    /// clear state: inspect [`Self::stun_state`] when that distinction matters.
+    #[must_use]
+    pub fn is_stunned(&self) -> bool {
+        self.stun_state() == Some(crate::control::StunState::Stunned)
+    }
+
     /// The zone's short name, as the server gave it.
     #[must_use]
     pub fn zone(&self) -> &str {
@@ -262,10 +290,33 @@ impl ClientWorld {
         self.min_clip
     }
 
-    /// The player's death, until the next admission.
+    /// Details supplied by an existing death event, until the next admission.
+    /// A death-only bind transfer supplies lifecycle knowledge without details.
     #[must_use]
     pub const fn death(&self) -> Option<&Death> {
-        self.death.as_ref()
+        match self.death.as_ref() {
+            Some(super::OwnDeath::Reported { details, .. }) => Some(details),
+            _ => None,
+        }
+    }
+
+    /// Whether the session established death from a death event or a death-only
+    /// bind transfer. This never implies any killer or corpse details.
+    #[must_use]
+    pub const fn is_dead(&self) -> bool {
+        self.death.is_some()
+    }
+
+    /// When this admission first established own death, for the avatar's
+    /// death animation. This does not establish a corpse in the entity map.
+    #[must_use]
+    pub const fn death_since(&self) -> Option<std::time::Instant> {
+        match self.death {
+            Some(
+                super::OwnDeath::Reported { since, .. } | super::OwnDeath::BindTransfer { since },
+            ) => Some(since),
+            None => None,
+        }
     }
 
     /// The player's HP, with what their items add, when the server's last
@@ -383,10 +434,39 @@ impl ClientWorld {
         &self.target
     }
 
+    /// Correlation ID for the next explicit local target choice.
+    ///
+    /// # Panics
+    /// Panics if all 64-bit selection IDs have been used in this process.
+    #[must_use]
+    pub fn next_target_request(&self) -> u64 {
+        self.target_sequence
+            .checked_add(1)
+            .expect("target sequence exhausted")
+    }
+
+    /// Current target identity for a queued ability. A pending local choice,
+    /// unresolved server ID or lost incarnation has no usable identity.
+    #[must_use]
+    pub fn target_intent(&self) -> Option<eq_network_game::targets::TargetState> {
+        self.target.authority.filter(|state| {
+            self.in_world()
+                && self.target.sent
+                && state.available
+                && state.spawn_id == self.target.selected
+                && !self.target_stale()
+        })
+    }
+
     /// Whether the target is gone: its spawn despawned, was replaced or
     /// turned invisible. The player choosing themselves never goes stale.
     #[must_use]
     pub fn target_stale(&self) -> bool {
+        if self.target.server_selected
+            && self.target.authority.is_some_and(|state| !state.available)
+        {
+            return self.target.selected.is_some();
+        }
         self.target.selected.is_some_and(|id| {
             !self.is_player(id)
                 && self.zone.spawns.get(&id).is_none_or(|spawn| {
@@ -496,6 +576,14 @@ impl ClientWorld {
             .projected
             .as_ref()
             .unwrap_or(&self.inventory)
+    }
+
+    /// The ordered worker replica, including only locally submitted predictions
+    /// and received server updates. Movement weight, equipment and food must use
+    /// this same view. It does not imply server acceptance of submitted moves.
+    #[must_use]
+    pub const fn worker_inventory(&self) -> &Inventory {
+        &self.inventory
     }
 
     /// The corpse the player is looting.

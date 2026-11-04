@@ -30,6 +30,7 @@ pub(crate) enum Act {
     /// Uses the door or picks up the item in reach.
     Use,
     Sit,
+    SitStand,
     Duck,
     Stand,
     /// Casts the spell in this gem, from 0.
@@ -40,6 +41,8 @@ pub(crate) enum Act {
     BindSlot(u8),
     /// Empties this action slot.
     ClearSlot(u8),
+    /// Selects this hotbar page, from 0.
+    HotbarPage(u8),
     /// Character-relative moves.
     Forward,
     Back,
@@ -97,12 +100,14 @@ impl Act {
             Self::Trade => "Trade",
             Self::Use => "Use Door or Item",
             Self::Sit => "Sit",
+            Self::SitStand => "Sit or Stand",
             Self::Duck => "Duck",
             Self::Stand => "Stand",
             Self::Gem(gem) => return format!("Cast Spell {}", gem + 1),
             Self::Slot(slot) => return format!("Hotbar Button {}", slot + 1),
             Self::BindSlot(slot) => return format!("Bind Hotbar Button {}", slot + 1),
             Self::ClearSlot(slot) => return format!("Clear Hotbar Button {}", slot + 1),
+            Self::HotbarPage(page) => return format!("Hotbar Page {}", page + 1),
             Self::Forward => "Forward",
             Self::Back => "Back",
             Self::StrafeLeft => "Strafe Left",
@@ -132,9 +137,12 @@ impl Act {
                 KeyGroup::Commands
             }
             Self::Gem(_) => KeyGroup::SpellCasting,
-            Self::Slot(_) | Self::BindSlot(_) | Self::ClearSlot(_) => KeyGroup::Hotbar(1),
+            Self::Slot(_) | Self::BindSlot(_) | Self::ClearSlot(_) | Self::HotbarPage(_) => {
+                KeyGroup::Hotbar(1)
+            }
             Self::FreeCamera | Self::CameraUp | Self::CameraDown => KeyGroup::Camera,
             Self::Sit
+            | Self::SitStand
             | Self::Duck
             | Self::Stand
             | Self::Forward
@@ -173,6 +181,7 @@ impl Chord {
         }
     }
 
+    #[cfg(test)]
     pub(crate) const fn alt(key: KeyCode) -> Self {
         Self {
             alt: true,
@@ -180,6 +189,7 @@ impl Chord {
         }
     }
 
+    #[cfg(test)]
     pub(crate) const fn ctrl(key: KeyCode) -> Self {
         Self {
             ctrl: true,
@@ -187,6 +197,7 @@ impl Chord {
         }
     }
 
+    #[cfg(test)]
     pub(crate) const fn shift(key: KeyCode) -> Self {
         Self {
             shift: true,
@@ -194,6 +205,7 @@ impl Chord {
         }
     }
 
+    #[cfg(test)]
     pub(crate) const fn ctrl_shift(key: KeyCode) -> Self {
         Self {
             ctrl: true,
@@ -237,89 +249,32 @@ pub(crate) fn key_name(key: KeyCode) -> String {
         .to_owned()
 }
 
-/// The number keys from 1 to 0, as the action slots and gems number them.
-const DIGITS: [KeyCode; 10] = [
-    KeyCode::Digit1,
-    KeyCode::Digit2,
-    KeyCode::Digit3,
-    KeyCode::Digit4,
-    KeyCode::Digit5,
-    KeyCode::Digit6,
-    KeyCode::Digit7,
-    KeyCode::Digit8,
-    KeyCode::Digit9,
-    KeyCode::Digit0,
-];
-
 /// Every action's keys: a primary and, for some, an alternate.
 #[derive(Resource, Clone, Debug)]
 pub(crate) struct KeyMap(BTreeMap<Act, Vec<Chord>>);
 
 impl Default for KeyMap {
     fn default() -> Self {
-        let mut map = BTreeMap::new();
-        let mut bind = |act, chords: &[Chord]| {
-            map.insert(act, chords.to_vec());
-        };
-        bind(
-            Act::Toggle(WindowId::Inventory),
-            &[Chord::key(KeyCode::KeyI)],
-        );
-        bind(
-            Act::Toggle(WindowId::Spellbook),
-            &[Chord::key(KeyCode::KeyB)],
-        );
-        bind(Act::Toggle(WindowId::Options), &[Chord::alt(KeyCode::KeyO)]);
-        bind(Act::Toggle(WindowId::Map), &[Chord::ctrl(KeyCode::KeyM)]);
-        // As the official client's notes on raids say (`raidsdoc.txt`).
-        bind(Act::Toggle(WindowId::Raid), &[Chord::alt(KeyCode::KeyR)]);
-        bind(Act::TargetSelf, &[Chord::key(KeyCode::F1)]);
-        bind(Act::TargetNext, &[Chord::key(KeyCode::Tab)]);
-        bind(Act::TargetPrevious, &[Chord::shift(KeyCode::Tab)]);
-        bind(Act::Consider, &[Chord::key(KeyCode::KeyK)]);
-        bind(Act::Hail, &[Chord::key(KeyCode::KeyH)]);
-        bind(Act::Attack, &[Chord::key(KeyCode::KeyG)]);
-        bind(Act::Loot, &[Chord::key(KeyCode::KeyL)]);
-        bind(Act::Trade, &[Chord::key(KeyCode::KeyU)]);
-        bind(Act::Use, &[Chord::key(KeyCode::KeyF)]);
-        bind(Act::Sit, &[Chord::key(KeyCode::KeyX)]);
-        bind(Act::Duck, &[Chord::key(KeyCode::KeyC)]);
-        bind(Act::Stand, &[Chord::key(KeyCode::KeyV)]);
-        for (index, key) in (0..).zip(DIGITS) {
-            if index < 8 {
-                bind(Act::Gem(index), &[Chord::alt(key)]);
-            }
-            bind(Act::Slot(index), &[Chord::key(key)]);
-            bind(Act::BindSlot(index), &[Chord::ctrl(key)]);
-            bind(Act::ClearSlot(index), &[Chord::ctrl_shift(key)]);
-        }
-        bind(Act::Forward, &[Chord::key(KeyCode::ArrowUp)]);
-        bind(Act::Back, &[Chord::key(KeyCode::ArrowDown)]);
-        bind(Act::StrafeLeft, &[Chord::key(KeyCode::ArrowLeft)]);
-        bind(Act::StrafeRight, &[Chord::key(KeyCode::ArrowRight)]);
-        bind(Act::CameraForward, &[Chord::key(KeyCode::KeyW)]);
-        bind(Act::CameraBack, &[Chord::key(KeyCode::KeyS)]);
-        bind(Act::CameraLeft, &[Chord::key(KeyCode::KeyA)]);
-        bind(Act::CameraRight, &[Chord::key(KeyCode::KeyD)]);
-        bind(Act::FreeCamera, &[Chord::key(KeyCode::F9)]);
-        bind(Act::CameraUp, &[Chord::key(KeyCode::PageUp)]);
-        bind(Act::CameraDown, &[Chord::key(KeyCode::PageDown)]);
-        bind(Act::TurnLeft, &[Chord::key(KeyCode::KeyQ)]);
-        bind(Act::TurnRight, &[Chord::key(KeyCode::KeyE)]);
-        bind(Act::Jump, &[Chord::key(KeyCode::Space)]);
-        bind(Act::Walk, &[Chord::key(KeyCode::Insert)]);
-        // Num Lock, as the Titanium program binds it; the Mac-era client's
-        // key is unread (recording checklist 6.351).
-        bind(Act::Autorun, &[Chord::key(KeyCode::NumLock)]);
-        Self(map)
+        // Offline/hand-built apps without an installed generation use the
+        // Titanium table as an explicit fallback, through the same builder.
+        Self::for_client(eq_client_assets::ui::InstalledClient::Titanium)
     }
 }
 
-/// The acts a client's built-in table leaves unbound where it binds its
-/// own: the Titanium program's two strafe commands have no default key
-/// (which is left and which right is unread, recording checklist 6.361),
-/// and it has no camera-relative moves, which stay this client's to bind.
-const UNBOUND_BY_TABLE: [Act; 6] = [
+/// Actions listed in Options but without a verified equivalent default.
+/// Native strafe commands are unbound in Titanium; direct loot/trade and
+/// separate sit/stand are extensions. Camera-relative native commands use
+/// modifiers that this client's held movement currently ignores, so their
+/// equivalence is not established and no substitute W/A/S/D keys are added.
+const UNBOUND: [Act; 14] = [
+    Act::TargetPrevious,
+    Act::Loot,
+    Act::Trade,
+    Act::Sit,
+    Act::Stand,
+    Act::FreeCamera,
+    Act::CameraUp,
+    Act::CameraDown,
     Act::StrafeLeft,
     Act::StrafeRight,
     Act::CameraForward,
@@ -344,13 +299,19 @@ const fn act_for(command: eq_client_assets::keys::Command) -> Option<Act> {
         Command::Duck => Act::Duck,
         Command::Hail => Act::Hail,
         Command::Inventory => Act::Toggle(WindowId::Inventory),
+        Command::Spellbook => Act::Toggle(WindowId::Spellbook),
+        Command::Options => Act::Toggle(WindowId::Options),
+        Command::Raid => Act::Toggle(WindowId::Raid),
+        Command::Map => Act::Toggle(WindowId::Map),
+        Command::SitStand => Act::SitStand,
         Command::Use => Act::Use,
         Command::TargetSelf => Act::TargetSelf,
         Command::TargetNext => Act::TargetNext,
         // This client keeps eight gems.
         Command::Gem(gem) if gem < 8 => Act::Gem(gem),
-        Command::Gem(_) => return None,
         Command::HotButton(slot) => Act::Slot(slot),
+        Command::HotbarPage(page) if page < 10 => Act::HotbarPage(page),
+        Command::Gem(_) | Command::HotbarPage(_) | Command::Reserved(_) => return None,
     })
 }
 
@@ -452,45 +413,60 @@ const fn scan_key(scan: u8) -> Option<KeyCode> {
     })
 }
 
+fn table_chord(key: eq_client_assets::keys::ScanKey) -> Option<Chord> {
+    Some(Chord {
+        key: scan_key(key.scan)?,
+        ctrl: key.ctrl,
+        shift: key.shift,
+        alt: key.alt,
+    })
+}
+
 impl KeyMap {
-    /// The keys a fresh installation of `client` starts with: its program's
-    /// built-in table where read, in which each command this client has
-    /// takes the table's keys and nothing else; this client's own keys for
-    /// the rest, less any key the table gives a command and less
-    /// [`UNBOUND_BY_TABLE`]. Without a table, this client's own.
+    /// The installed generation's verified table, with only deliberate UI
+    /// extensions. An unread table uses Titanium as a fallback, never a
+    /// claimed native default for that generation. Saved keys load later.
     pub(crate) fn for_client(client: eq_client_assets::ui::InstalledClient) -> Self {
-        let mut map = Self::default();
-        let Some(table) = client.default_keys() else {
-            return map;
-        };
+        let table = client
+            .default_keys()
+            .unwrap_or(eq_client_assets::keys::TITANIUM);
         let mut read: BTreeMap<Act, Vec<Chord>> = BTreeMap::new();
+        for act in UNBOUND {
+            read.insert(act, Vec::new());
+        }
+        for index in 0..10 {
+            read.insert(Act::BindSlot(index), Vec::new());
+            read.insert(Act::ClearSlot(index), Vec::new());
+        }
         // Primaries first, then alternates, as the key list shows them.
         for alternate in [false, true] {
             for entry in table.iter().filter(|entry| entry.alternate == alternate) {
-                let (Some(act), Some(key)) = (act_for(entry.command), scan_key(entry.key.scan))
+                let (Some(act), Some(chord)) = (act_for(entry.command), table_chord(entry.key))
                 else {
                     continue;
                 };
-                read.entry(act).or_default().push(Chord {
-                    key,
-                    ctrl: entry.key.ctrl,
-                    shift: entry.key.shift,
-                    alt: entry.key.alt,
-                });
+                read.entry(act).or_default().push(chord);
             }
         }
-        let taken: Vec<Chord> = read.values().flatten().copied().collect();
-        for (act, chords) in &mut map.0 {
-            if let Some(keys) = read.remove(act) {
-                *chords = keys;
-            } else if UNBOUND_BY_TABLE.contains(act) {
-                chords.clear();
-            } else {
-                chords.retain(|chord| !taken.contains(chord));
-            }
+        // EqMac has no native map action. Use Titanium's verified map keys
+        // only if the entire native table, including unsupported commands,
+        // leaves them free. Never borrow an unrelated native command's keys.
+        if let std::collections::btree_map::Entry::Vacant(entry) =
+            read.entry(Act::Toggle(WindowId::Map))
+        {
+            let reserved: Vec<_> = table
+                .iter()
+                .filter_map(|entry| table_chord(entry.key))
+                .collect();
+            let fallback = eq_client_assets::keys::TITANIUM
+                .iter()
+                .filter(|entry| entry.command == eq_client_assets::keys::Command::Map)
+                .filter_map(|entry| table_chord(entry.key))
+                .filter(|chord| !reserved.contains(chord))
+                .collect();
+            entry.insert(fallback);
         }
-        map.0.extend(read);
-        map
+        Self(read)
     }
     /// Every action with its keys, in the key map's order.
     pub(crate) fn assignments(&self) -> impl Iterator<Item = (Act, &[Chord])> {
@@ -525,8 +501,8 @@ impl KeyMap {
         }
     }
 
-    /// Key help for these actions, one way for every window: "K: consider |
-    /// G: attack". Unbound actions are left out.
+    /// Key help for these actions, one way for every window: "C: consider |
+    /// Q: attack". Unbound actions are left out.
     pub(crate) fn help(&self, acts: &[(Act, &str)]) -> String {
         acts.iter()
             .filter_map(|(act, what)| {
@@ -660,10 +636,9 @@ pub(crate) struct Keys<'w, 's> {
 }
 
 impl Keys<'_, '_> {
-    /// Whether the window has focus, or a script that runs unattended drives
-    /// it: two clients on one PC take turns holding the focus, and the one
-    /// without it still takes its script's keys and clicks. Clicks count from
-    /// then on, though the chat may still have the keyboard.
+    /// Whether native focus or the current script's input policy owns the
+    /// window. Background scripts qualify only after their per-frame native
+    /// input guard succeeds; local/offline default behavior is retained.
     pub(crate) fn window_focused(&self) -> bool {
         self.windows.single().is_ok_and(|window| window.focused)
             || self
@@ -729,9 +704,39 @@ pub(crate) mod testing {
     /// Gives a hand-built test app the bindings and the chat's hold on the
     /// keyboard, which every system that takes keys reads.
     pub(crate) fn install(app: &mut App) {
-        app.init_resource::<super::KeyMap>()
-            .init_resource::<super::presses::Presses>()
+        let map = app
+            .world()
+            .get_resource::<crate::ViewerSettings>()
+            .map_or_else(super::KeyMap::default, |settings| {
+                super::KeyMap::for_client(settings.0.installed_client)
+            });
+        if !app.world().contains_resource::<super::KeyMap>() {
+            app.insert_resource(map);
+        }
+        app.init_resource::<super::presses::Presses>()
             .init_resource::<super::Typing>();
+    }
+
+    /// A test's explicit user assignment, with the same single-owner rule.
+    pub(crate) fn bind(app: &mut App, act: super::Act, chord: super::Chord) {
+        let mut map = app.world_mut().resource_mut::<super::KeyMap>();
+        assign(&mut map, act, chord);
+    }
+
+    fn assign(map: &mut super::KeyMap, act: super::Act, chord: super::Chord) {
+        for chords in map.0.values_mut() {
+            chords.retain(|bound| *bound != chord);
+        }
+        map.0.insert(act, vec![chord]);
+    }
+
+    /// A movement test's explicit user map, rather than guessed defaults.
+    pub(crate) fn map(bindings: &[(super::Act, super::Chord)]) -> super::KeyMap {
+        let mut map = super::KeyMap::default();
+        for (act, chord) in bindings {
+            assign(&mut map, *act, *chord);
+        }
+        map
     }
 }
 
@@ -757,19 +762,24 @@ mod tests {
         assert_eq!(keys(Act::Consider), [Chord::key(KeyCode::KeyC)]);
         assert_eq!(keys(Act::Duck), [Chord::key(KeyCode::KeyD)]);
         assert_eq!(keys(Act::Use), [Chord::key(KeyCode::KeyU)]);
-        assert_eq!(keys(Act::Walk), [Chord::key(KeyCode::F12)]);
+        assert_eq!(keys(Act::Walk), [Chord::ctrl(KeyCode::KeyR)]);
+        assert_eq!(keys(Act::SitStand), [Chord::ctrl(KeyCode::KeyS)]);
+        assert_eq!(
+            keys(Act::Toggle(WindowId::Spellbook)),
+            [Chord::ctrl(KeyCode::KeyB)]
+        );
         assert_eq!(keys(Act::Gem(7)), [Chord::alt(KeyCode::Digit8)]);
         assert_eq!(keys(Act::Slot(9)), [Chord::key(KeyCode::Digit0)]);
-        // The program has no default for strafing nor any camera-relative
-        // move; a key its table gives a command leaves this client's act.
-        for act in UNBOUND_BY_TABLE {
+        assert_eq!(keys(Act::HotbarPage(0)), [Chord::shift(KeyCode::Digit1)]);
+        assert_eq!(keys(Act::HotbarPage(9)), [Chord::shift(KeyCode::Digit0)]);
+        for act in UNBOUND {
             assert_eq!(keys(act), [], "{act:?}");
             assert!(map.assignments().any(|(listed, _)| listed == act));
         }
         assert_eq!(keys(Act::Trade), []);
         // This client's own keys stay where the table leaves them free.
-        assert_eq!(keys(Act::BindSlot(0)), [Chord::ctrl(KeyCode::Digit1)]);
-        assert_eq!(keys(Act::Loot), [Chord::key(KeyCode::KeyL)]);
+        assert_eq!(keys(Act::BindSlot(0)), []);
+        assert_eq!(keys(Act::Loot), []);
         // No key does two things.
         let all: Vec<Chord> = map
             .assignments()
@@ -778,16 +788,124 @@ mod tests {
         for (index, chord) in all.iter().enumerate() {
             assert!(!all[index + 1..].contains(chord), "{chord:?}");
         }
-        // The Mac-era client's table is unread: this client's own keys.
+        // EqMac has its own read table, not requested Q/Z starting guesses.
         let mac = KeyMap::for_client(InstalledClient::EqMac);
         for client in [&map, &mac] {
             assert_eq!(
                 client.chords(Act::Toggle(WindowId::Map)),
-                [Chord::ctrl(KeyCode::KeyM)]
+                [Chord::key(KeyCode::Backspace), Chord::key(KeyCode::KeyM)]
             );
         }
-        assert_eq!(mac.chords(Act::Attack), [Chord::key(KeyCode::KeyG)]);
+        assert_eq!(mac.chords(Act::Attack), [Chord::key(KeyCode::KeyA)]);
         assert_eq!(mac.chords(Act::Autorun), [Chord::key(KeyCode::NumLock)]);
+    }
+
+    #[test]
+    fn mac_native_command_keys_have_no_movement_or_command_conflicts() {
+        let map = KeyMap::for_client(eq_client_assets::ui::InstalledClient::EqMac);
+        for (act, key) in [
+            (Act::Attack, KeyCode::KeyA),
+            (Act::Consider, KeyCode::KeyC),
+            (Act::Duck, KeyCode::KeyD),
+            (Act::Use, KeyCode::KeyU),
+        ] {
+            let chord = Chord::key(key);
+            assert_eq!(map.chords(act), [chord]);
+            let owners: Vec<_> = map
+                .assignments()
+                .filter_map(|(owner, chords)| chords.contains(&chord).then_some(owner))
+                .collect();
+            assert_eq!(owners, [act]);
+        }
+        assert_eq!(
+            map.chords(Act::TurnLeft),
+            [Chord::key(KeyCode::Numpad4), Chord::key(KeyCode::ArrowLeft)]
+        );
+        for act in UNBOUND {
+            assert_eq!(map.chords(act), [], "{act:?}");
+        }
+        assert_eq!(map.chords(Act::Walk), [Chord::ctrl(KeyCode::KeyR)]);
+        assert_eq!(
+            map.chords(Act::Toggle(WindowId::Spellbook)),
+            [Chord::ctrl(KeyCode::KeyB)]
+        );
+        let chords: Vec<_> = map.assignments().flat_map(|(_, chords)| chords).collect();
+        for (index, chord) in chords.iter().enumerate() {
+            assert!(!chords[index + 1..].contains(chord), "{chord:?}");
+        }
+    }
+
+    #[test]
+    fn unsupported_native_commands_reserve_keys_against_unrelated_defaults() {
+        use eq_client_assets::ui::InstalledClient;
+        for client in [InstalledClient::Titanium, InstalledClient::EqMac] {
+            let map = KeyMap::for_client(client);
+            for chord in [
+                Chord::ctrl(KeyCode::KeyM),
+                Chord::key(KeyCode::F9),
+                Chord::key(KeyCode::PageUp),
+                Chord::key(KeyCode::PageDown),
+            ] {
+                assert!(client.default_keys().unwrap().iter().any(|entry| {
+                    matches!(entry.command, eq_client_assets::keys::Command::Reserved(_))
+                        && table_chord(entry.key) == Some(chord)
+                }));
+                assert!(
+                    !map.assignments().any(|(_, chords)| chords.contains(&chord)),
+                    "{client:?}: {chord:?}"
+                );
+            }
+            for index in 0..10 {
+                assert_eq!(map.chords(Act::BindSlot(index)), []);
+                assert_eq!(map.chords(Act::ClearSlot(index)), []);
+            }
+            assert_eq!(map.chords(Act::FreeCamera), []);
+            assert_eq!(map.chords(Act::CameraUp), []);
+            assert_eq!(map.chords(Act::CameraDown), []);
+        }
+        let titanium = InstalledClient::Titanium.default_keys().unwrap();
+        assert!(titanium.iter().any(|entry| matches!(
+            entry.command,
+            eq_client_assets::keys::Command::Reserved(_)
+        ) && table_chord(entry.key)
+            == Some(Chord::ctrl(KeyCode::Digit1))));
+    }
+
+    #[test]
+    fn offline_fallback_and_test_apps_use_the_same_generation_builder() {
+        use eq_client_assets::ui::InstalledClient;
+        assert_eq!(
+            KeyMap::default().0,
+            KeyMap::for_client(InstalledClient::Titanium).0
+        );
+        for client in [InstalledClient::Titanium, InstalledClient::EqMac] {
+            let mut settings = crate::ViewerSettings::default();
+            settings.0.installed_client = client;
+            let mut app = App::new();
+            app.insert_resource(settings);
+            crate::init_presentation(&mut app);
+            assert_eq!(
+                app.world().resource::<KeyMap>().0,
+                KeyMap::for_client(client).0
+            );
+            testing::install(&mut app);
+            assert_eq!(
+                app.world().resource::<KeyMap>().0,
+                KeyMap::for_client(client).0
+            );
+            let mut app = App::new();
+            let mut settings = crate::ViewerSettings::default();
+            settings.0.installed_client = client;
+            app.insert_resource(settings);
+            testing::install(&mut app);
+            assert_eq!(
+                app.world().resource::<KeyMap>().0,
+                KeyMap::for_client(client).0
+            );
+        }
+        let mut app = App::new();
+        testing::install(&mut app);
+        assert_eq!(app.world().resource::<KeyMap>().0, KeyMap::default().0);
     }
 
     #[test]
@@ -831,7 +949,11 @@ mod tests {
 
     #[test]
     fn a_chord_matches_only_with_exactly_its_modifiers() {
-        let map = KeyMap::default();
+        // Explicit editor assignments can override native reservations.
+        let map = testing::map(&[
+            (Act::BindSlot(0), Chord::ctrl(KeyCode::Digit1)),
+            (Act::ClearSlot(0), Chord::ctrl_shift(KeyCode::Digit1)),
+        ]);
         let presses = presses::Presses::default();
         let one = keys(&[], KeyCode::Digit1);
         let alt_one = keys(&[KeyCode::AltLeft], KeyCode::Digit1);
@@ -845,7 +967,7 @@ mod tests {
         assert!(!map.just_pressed(&ctrl_shift_one, Act::BindSlot(0), &presses));
         assert!(map.just_pressed(&ctrl_shift_one, Act::ClearSlot(0), &presses));
         let tab = keys(&[KeyCode::ShiftRight], KeyCode::Tab);
-        assert!(map.just_pressed(&tab, Act::TargetPrevious, &presses));
+        assert!(!map.just_pressed(&tab, Act::TargetPrevious, &presses));
         assert!(!map.just_pressed(&tab, Act::TargetNext, &presses));
     }
 
@@ -860,7 +982,7 @@ mod tests {
             });
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
-            .press(KeyCode::KeyG);
+            .press(KeyCode::KeyQ);
         app.world_mut().resource_mut::<Typing>().map_search = true;
         app.update();
         assert!(!app.world().resource::<Seen>().0);
@@ -872,24 +994,24 @@ mod tests {
     #[test]
     fn movement_keys_move_whatever_is_held_with_them() {
         let map = KeyMap::default();
-        let walking = keys(&[KeyCode::ShiftLeft], KeyCode::KeyW);
-        assert!(map.held(&walking, Act::CameraForward));
+        let walking = keys(&[KeyCode::ShiftLeft], KeyCode::ArrowUp);
+        assert!(map.held(&walking, Act::Forward));
     }
 
     #[test]
     fn hints_name_each_actions_key() {
         let map = KeyMap::default();
         assert_eq!(map.label(Act::Gem(0)), "Alt+1");
-        assert_eq!(map.label(Act::ClearSlot(9)), "Ctrl+Shift+0");
+        assert_eq!(map.label(Act::ClearSlot(9)), "");
         assert_eq!(
             map.help(&[(Act::Consider, "consider"), (Act::Attack, "attack")]),
-            "K: consider | G: attack"
+            "C: consider | Q: attack"
         );
         assert_eq!(
             map.named(Act::Toggle(WindowId::Spellbook), "Spellbook"),
-            "Spellbook [B]"
+            "Spellbook [Ctrl+B]"
         );
-        assert_eq!(map.label(Act::Forward), "Up");
+        assert_eq!(map.label(Act::Forward), "Numpad8");
         assert_eq!(key_name(KeyCode::F1), "F1");
     }
 

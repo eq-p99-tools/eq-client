@@ -1,4 +1,6 @@
 mod loot_requests;
+mod own_stun;
+mod wear;
 
 use super::*;
 mod inventory_moves;
@@ -162,6 +164,7 @@ fn entered(session_id: u64) -> WorldEvent {
 /// item in the zone.
 fn admitted() -> ClientWorld {
     let mut world = ClientWorld::default();
+    world.plan_inventory_as(Some(crate::inventory::MoveRules::EqEmu));
     game(&mut world, entered(1));
     connection(&mut world, true, false);
     game(&mut world, WorldEvent::Spawns(vec![spawn(5)]));
@@ -341,6 +344,66 @@ fn only_the_player_dying_holds_them_and_every_death_leaves_a_corpse() {
 }
 
 #[test]
+fn death_bind_has_no_packet_or_corpse_details_and_clears_on_admission() {
+    for packet_first in [false, true] {
+        let mut world = admitted();
+        let session_id = world.session_id().unwrap();
+        let own = Death {
+            spawn_id: 9,
+            killer_id: 5,
+            corpse_id: 10,
+            bind_zone_id: 2,
+            corpse_name: None,
+        };
+        let revision = world.spawn(5).unwrap().revision;
+        let stale = game(
+            &mut world,
+            WorldEvent::DeathBind {
+                session_id: session_id + 1,
+            },
+        );
+        assert!(stale.ignored);
+        assert!(!world.is_dead());
+        if packet_first {
+            game(&mut world, WorldEvent::Death(own.clone()));
+        }
+        let changes = game(&mut world, WorldEvent::DeathBind { session_id });
+        assert_eq!(changes.reset, (!packet_first).then_some(Reset::Died));
+        assert_eq!(changes.notices.len(), usize::from(!packet_first));
+        assert!(world.is_dead());
+        let since = world.death_since().unwrap();
+        assert_eq!(world.death().is_some(), packet_first);
+        assert_eq!(world.spawn(5).unwrap().revision, revision);
+        if !packet_first {
+            assert!(
+                world.died_at(9).is_none(),
+                "bind knowledge alone creates no corpse"
+            );
+        }
+        let repeat = game(&mut world, WorldEvent::DeathBind { session_id });
+        assert_eq!(repeat.notices, []);
+        assert_eq!(repeat.reset, None);
+        let packet = game(&mut world, WorldEvent::Death(own));
+        assert!(
+            packet.notices.is_empty(),
+            "later details do not announce a second death"
+        );
+        assert!(world.death().is_some());
+        assert_eq!(world.death_since(), Some(since));
+        let player = world.player().unwrap().clone();
+        world.entered(
+            (&[], &[], session_id + 1),
+            ("synthetic", None, None),
+            &player,
+            Instant::now(),
+        );
+        assert!(!world.is_dead());
+        assert!(world.death().is_none());
+        assert!(world.death_since().is_none());
+    }
+}
+
+#[test]
 fn a_death_in_view_names_who_died_and_who_killed_them() {
     use crate::world::Party;
     let mut world = admitted();
@@ -503,6 +566,7 @@ fn input_acceptance_is_current_and_never_supplies_movement_permission() {
         revision: 7,
         report_id: 19,
         inputs: crate::SpeedInputs {
+            eqmac_fatigue: None,
             rate: 0,
             weight: 0,
             capacity: 90,
@@ -1371,22 +1435,263 @@ fn the_inventory_lasts_until_the_admission_or_session_ends() {
 #[test]
 fn the_target_follows_the_choice_and_the_sessions_word_on_it() {
     let mut world = admitted();
+    let state = |revision, spawn_id| eq_network_game::targets::TargetState {
+        revision,
+        spawn_id,
+        available: true,
+    };
     world.select_target(Some(5));
     assert_eq!(world.target().selected, Some(5));
     assert!(!world.target().sent);
     // News of another choice is not this one's.
-    assert!(game(&mut world, WorldEvent::TargetSent(Some(4))).ignored);
-    assert!(!game(&mut world, WorldEvent::TargetSent(Some(5))).ignored);
+    assert!(
+        game(
+            &mut world,
+            WorldEvent::TargetSent {
+                session_id: 2,
+                request_id: 1,
+                state: state(1, Some(5)),
+            }
+        )
+        .ignored
+    );
+    assert!(
+        !game(
+            &mut world,
+            WorldEvent::TargetSent {
+                session_id: 1,
+                request_id: 1,
+                state: state(1, Some(5)),
+            }
+        )
+        .ignored
+    );
     assert!(world.target().sent);
-    let refusal = |session_id, spawn_id| WorldEvent::TargetRejected {
+    world.select_target(Some(4));
+    let refusal = |session_id, request_id, spawn_id| WorldEvent::TargetRejected {
         session_id,
+        request_id,
         spawn_id,
+        state: Some(state(1, Some(5))),
         reason: "Too far away".into(),
     };
-    assert!(game(&mut world, refusal(2, Some(5))).ignored);
-    assert!(game(&mut world, refusal(1, Some(4))).ignored);
-    assert!(!game(&mut world, refusal(1, Some(5))).ignored);
+    assert!(game(&mut world, refusal(2, 2, Some(4))).ignored);
+    assert!(game(&mut world, refusal(1, 1, Some(4))).ignored);
+    assert!(!game(&mut world, refusal(1, 2, Some(4))).ignored);
+    assert_eq!(
+        world.target().selected,
+        Some(5),
+        "restore session authority"
+    );
+    assert!(world.target_intent().is_some());
+}
+
+fn target_changed(
+    session_id: u64,
+    request_id: u64,
+    revision: u64,
+    spawn_id: Option<u16>,
+    available: bool,
+) -> WorldEvent {
+    WorldEvent::TargetChanged {
+        session_id,
+        request_id,
+        state: eq_network_game::targets::TargetState {
+            revision,
+            spawn_id,
+            available,
+        },
+    }
+}
+
+#[test]
+fn server_targets_and_clears_project_without_becoming_local_requests() {
+    let mut world = admitted();
+    game(&mut world, WorldEvent::Spawns(vec![spawn(6)]));
+    // Raw wire facts alone are not admission-scoped authority.
+    game(&mut world, WorldEvent::Target(Some(5)));
     assert_eq!(world.target().selected, None);
+    for (revision, selected) in [(1, Some(5)), (2, Some(6)), (3, None)] {
+        game(&mut world, target_changed(1, 0, revision, selected, true));
+        assert_eq!(world.target().selected, selected);
+        assert!(world.target().server_selected);
+        let intent = world.target_intent().unwrap();
+        assert_eq!((intent.revision, intent.spawn_id), (revision, selected));
+    }
+    assert!(game(&mut world, target_changed(1, 0, 2, Some(6), true)).ignored);
+    assert_eq!(world.target().selected, None);
+}
+
+#[test]
+fn older_same_id_submission_cannot_acknowledge_a_newer_pending_choice() {
+    let mut world = admitted();
+    game(&mut world, WorldEvent::Spawns(vec![spawn(6)]));
+    for selected in [5, 6, 5] {
+        world.select_target(Some(selected));
+    }
+    game(
+        &mut world,
+        WorldEvent::TargetSent {
+            session_id: 1,
+            request_id: 1,
+            state: eq_network_game::targets::TargetState {
+                revision: 1,
+                spawn_id: Some(5),
+                available: true,
+            },
+        },
+    );
+    assert_eq!(world.target().selected, Some(5));
+    assert!(!world.target().sent);
+    assert_eq!(world.target_intent(), None);
+    game(&mut world, target_changed(1, 1, 2, Some(6), true));
+    assert_eq!(
+        world.target().selected,
+        Some(5),
+        "newer local choice stays pending"
+    );
+    assert_eq!(world.target_intent(), None);
+    game(
+        &mut world,
+        WorldEvent::TargetSent {
+            session_id: 1,
+            request_id: 3,
+            state: eq_network_game::targets::TargetState {
+                revision: 3,
+                spawn_id: Some(5),
+                available: true,
+            },
+        },
+    );
+    assert!(world.target().sent);
+    assert_eq!(world.target_intent().unwrap().revision, 3);
+    game(&mut world, target_changed(1, 3, 4, None, true));
+    assert_eq!(world.target().selected, None);
+}
+
+#[test]
+fn unknown_server_target_resolves_once_and_never_rebinds_a_replacement() {
+    let mut world = admitted();
+    game(&mut world, target_changed(1, 0, 1, Some(44), false));
+    assert_eq!(world.target().selected, Some(44));
+    assert!(world.target_stale());
+    assert_eq!(world.target_intent(), None);
+    game(&mut world, WorldEvent::Spawns(vec![spawn(44)]));
+    game(&mut world, target_changed(1, 0, 2, Some(44), true));
+    assert!(world.target_intent().is_some());
+    game(&mut world, WorldEvent::Spawns(vec![spawn(44)]));
+    assert_eq!(
+        world.target_intent(),
+        None,
+        "local incarnation changed already"
+    );
+    game(&mut world, target_changed(1, 0, 3, Some(44), false));
+    game(&mut world, WorldEvent::Spawns(vec![spawn(44)]));
+    assert!(world.target_stale());
+    assert_eq!(world.target_intent(), None);
+    game(&mut world, target_changed(1, 0, 4, Some(44), true));
+    assert!(
+        world.target_intent().is_some(),
+        "fresh explicit authority can select it"
+    );
+}
+
+#[test]
+fn late_target_projections_do_not_repopulate_a_lost_or_new_admission() {
+    let mut world = admitted();
+    game(&mut world, target_changed(1, 0, 1, Some(5), true));
+    connection(&mut world, false, false);
+    assert!(game(&mut world, target_changed(1, 0, 2, Some(5), true)).ignored);
+    assert_eq!(world.target().selected, None);
+    game(&mut world, entered(2));
+    assert!(game(&mut world, target_changed(1, 0, 3, Some(5), true)).ignored);
+    assert_eq!(world.target_intent(), None);
+    game(&mut world, target_changed(2, 0, 0, None, true));
+    connection(&mut world, true, false);
+    assert_eq!(world.target_intent().unwrap().spawn_id, None);
+}
+
+#[test]
+fn target_projection_stages_between_entered_and_connected_but_not_after_reset() {
+    let mut world = ClientWorld::default();
+    game(&mut world, entered(1));
+    game(&mut world, WorldEvent::Spawns(vec![spawn(5)]));
+    assert!(!game(&mut world, target_changed(1, 0, 1, Some(5), true)).ignored);
+    assert_eq!(world.target().selected, Some(5));
+    assert_eq!(world.target_intent(), None, "not connected yet");
+    connection(&mut world, true, false);
+    assert_eq!(world.target_intent().unwrap().spawn_id, Some(5));
+    connection(&mut world, false, false);
+    connection(&mut world, true, false);
+    assert!(game(&mut world, target_changed(1, 0, 2, Some(5), true)).ignored);
+    assert_eq!(
+        world.target_intent(),
+        None,
+        "Connected alone cannot reopen old projections"
+    );
+}
+
+#[test]
+fn a_shared_gate_refusal_does_not_invent_a_processed_selection_sequence() {
+    let mut world = admitted();
+    game(&mut world, target_changed(1, 0, 1, Some(5), true));
+    world.select_target(None);
+    game(
+        &mut world,
+        WorldEvent::TargetRejected {
+            session_id: 1,
+            request_id: 1,
+            spawn_id: None,
+            state: None,
+            reason: "Action held".into(),
+        },
+    );
+    assert_eq!(world.target().selected, Some(5));
+    assert_eq!(world.target_intent().unwrap().revision, 1);
+    assert!(!game(&mut world, target_changed(1, 0, 2, None, true)).ignored);
+    assert_eq!(world.target_intent().unwrap().spawn_id, None);
+}
+
+#[test]
+fn a_local_target_receipt_cannot_bind_a_spawn_replaced_while_the_choice_waited() {
+    let mut world = admitted();
+    world.select_target(Some(5));
+    game(&mut world, WorldEvent::Spawns(vec![spawn(5)]));
+    assert!(world.target_stale());
+    game(
+        &mut world,
+        WorldEvent::TargetSent {
+            session_id: 1,
+            request_id: 1,
+            state: eq_network_game::targets::TargetState {
+                revision: 1,
+                spawn_id: Some(5),
+                available: true,
+            },
+        },
+    );
+    assert_eq!(world.target().selected, Some(5));
+    assert!(
+        world.target_stale(),
+        "submission is not a fresh choice of the replacement"
+    );
+    assert_eq!(world.target_intent(), None);
+    // An explicit choice after observing the replacement is fresh.
+    world.select_target(Some(5));
+    game(
+        &mut world,
+        WorldEvent::TargetSent {
+            session_id: 1,
+            request_id: 2,
+            state: eq_network_game::targets::TargetState {
+                revision: 2,
+                spawn_id: Some(5),
+                available: true,
+            },
+        },
+    );
+    assert!(!world.target_stale());
+    assert_eq!(world.target_intent().unwrap().revision, 2);
 }
 
 #[test]
@@ -2431,6 +2736,78 @@ fn item_definitions_last_for_the_admission() {
 }
 
 #[test]
+fn an_unanswered_merchant_trade_is_information_without_a_belongings_change() {
+    let mut world = admitted();
+    let coins = Coins::from_copper(100);
+    game(&mut world, WorldEvent::Coins(coins));
+    game(
+        &mut world,
+        WorldEvent::Merchant(crate::merchant::MerchantUpdate::Opened {
+            merchant_id: 9,
+            accepted: true,
+            rate: 1.0,
+        }),
+    );
+    let items = world.inventory().items().clone();
+    let unanswered = |session_id| WorldEvent::MerchantUnanswered {
+        session_id,
+        reason: "The outcome is unknown".into(),
+    };
+    let changes = game(&mut world, unanswered(1));
+    assert_eq!(
+        changes.notices,
+        [Notice::MerchantUnanswered("The outcome is unknown".into())]
+    );
+    assert_eq!(world.coins(), Some(&coins));
+    assert_eq!(world.inventory().items(), &items);
+    assert_eq!(
+        world.merchant().map(|merchant| merchant.merchant_id),
+        Some(9)
+    );
+    assert!(game(&mut world, unanswered(2)).ignored);
+    game(&mut world, entered(2));
+    assert!(game(&mut world, unanswered(1)).ignored);
+}
+
+#[test]
+fn purse_uncertainty_is_admission_scoped_and_only_authority_restores_it() {
+    let mut world = admitted();
+    let coins = Coins::from_copper(100);
+    let bank = Coins::from_copper(250);
+    let cursor = Coins::from_copper(10);
+    game(&mut world, WorldEvent::Coins(coins));
+    game(
+        &mut world,
+        WorldEvent::CoinsElsewhere {
+            cursor,
+            bank,
+            given: Coins::default(),
+            offered: Coins::default(),
+        },
+    );
+    assert!(game(&mut world, WorldEvent::PurseUncertain { session_id: 2 }).ignored);
+    assert_eq!(world.coins(), Some(&coins));
+    let changes = game(&mut world, WorldEvent::PurseUncertain { session_id: 1 });
+    assert!(changes.trade);
+    assert_eq!(world.coins(), None);
+    assert_eq!(world.wallet.bank, Some(bank));
+    assert_eq!(world.wallet.cursor, cursor);
+    game(&mut world, shop_opened(9));
+    game(
+        &mut world,
+        WorldEvent::Merchant(crate::merchant::MerchantUpdate::Closed),
+    );
+    game(&mut world, shop_opened(9));
+    assert_eq!(world.coins(), None);
+    game(&mut world, WorldEvent::Coins(coins));
+    assert_eq!(world.coins(), Some(&coins));
+    game(&mut world, entered(2));
+    game(&mut world, WorldEvent::Coins(coins));
+    assert!(game(&mut world, WorldEvent::PurseUncertain { session_id: 1 }).ignored);
+    assert_eq!(world.coins(), Some(&coins));
+}
+
+#[test]
 fn news_for_the_player_comes_with_notices_and_others_news_without() {
     use crate::combat::{ConColor, Consideration, DamageOutcome};
     let mut world = admitted();
@@ -3074,6 +3451,65 @@ fn a_text_is_read_until_put_away_or_the_player_enters_a_zone() {
 }
 
 #[test]
+fn reading_text_cannot_reopen_after_disconnect_or_become_a_note_for_unknown_titanium_kind() {
+    let mut world = admitted();
+    let text = |kind| {
+        WorldEvent::BookText(crate::books::BookText {
+            kind,
+            text: "Synthetic server text".into(),
+        })
+    };
+    game(&mut world, text(1));
+    let before = world.reading().cloned();
+    for kind in [2, 255] {
+        assert!(game(&mut world, text(kind)).ignored);
+        assert_eq!(world.reading(), before.as_ref());
+    }
+    connection(&mut world, false, false);
+    assert!(world.reading().is_none());
+    assert!(game(&mut world, text(0)).ignored);
+    assert!(world.reading().is_none());
+    game(&mut world, entered(2));
+    assert!(game(&mut world, text(1)).ignored);
+    connection(&mut world, true, false);
+    game(&mut world, text(0));
+    assert_eq!(world.reading().map(|text| text.kind), Some(0));
+}
+
+#[test]
+fn death_and_zone_transfer_clear_reading_and_ignore_late_text_while_suspended() {
+    for reset in [
+        WorldEvent::Death(crate::Death {
+            spawn_id: 9,
+            killer_id: 5,
+            corpse_id: 0,
+            bind_zone_id: 0,
+            corpse_name: None,
+        }),
+        WorldEvent::ZoneTransfer(crate::ZoneOffer {
+            zone_id: 2,
+            instance_id: 0,
+            position: WorldPosition::default(),
+            reason: 0,
+            to_bind: false,
+            solicited: true,
+        }),
+    ] {
+        let mut world = admitted();
+        let text = WorldEvent::BookText(crate::books::BookText {
+            kind: 0,
+            text: "Synthetic text".into(),
+        });
+        game(&mut world, text.clone());
+        assert!(world.reading().is_some());
+        game(&mut world, reset);
+        assert!(world.reading().is_none());
+        assert!(game(&mut world, text).ignored);
+        assert!(world.reading().is_none());
+    }
+}
+
+#[test]
 fn a_combine_is_under_way_until_the_server_answers() {
     use crate::{inventory::InventorySlot, tradeskills::CombineUpdate};
     let mut world = admitted();
@@ -3106,6 +3542,59 @@ fn a_combine_is_under_way_until_the_server_answers() {
             reason: reason.into(),
             string_id: Some(crate::tradeskills::HANDS_FULL),
         }]
+    );
+}
+
+#[test]
+fn a_combine_reset_never_supplies_consumption_or_a_product() {
+    use crate::{
+        inventory::{InventorySlot, InventoryUpdate},
+        tradeskills::CombineUpdate,
+    };
+    let mut world = admitted();
+    let mut kit = chest();
+    kit.slot = InventorySlot(23);
+    kit.bag_slots = 10;
+    kit.rules.bag_type = 16;
+    let mut component = chest();
+    component.slot = InventorySlot(261);
+    game(
+        &mut world,
+        WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![kit, component])),
+    );
+    let before = world.inventory().items().clone();
+    game(
+        &mut world,
+        WorldEvent::Combine(CombineUpdate::Started(InventorySlot(23))),
+    );
+    game(&mut world, WorldEvent::Combine(CombineUpdate::Answered));
+    assert!(world.combining().is_none());
+    assert_eq!(world.inventory().items(), &before);
+    assert!(
+        !world
+            .inventory()
+            .items()
+            .contains_key(&InventorySlot::CURSOR)
+    );
+    game(
+        &mut world,
+        WorldEvent::Inventory(InventoryUpdate::Consume {
+            slot: InventorySlot(261),
+            charge: false,
+        }),
+    );
+    assert!(!world.inventory().items().contains_key(&InventorySlot(261)));
+    let mut product = chest();
+    product.slot = InventorySlot::CURSOR;
+    game(
+        &mut world,
+        WorldEvent::Inventory(InventoryUpdate::Cursor(vec![product])),
+    );
+    assert!(
+        world
+            .inventory()
+            .items()
+            .contains_key(&InventorySlot::CURSOR)
     );
 }
 
@@ -3197,7 +3686,10 @@ fn a_group_follows_the_servers_word_and_says_what_happened() {
         news(
             &mut world,
             GroupUpdate::Invited {
-                inviter: "Leader".into()
+                inviter: "Leader".into(),
+                player: "Example".into(),
+                kind: crate::group::InvitationKind::Initial,
+                id: crate::group::InvitationId::new(1),
             }
         ),
         said(GroupNotice::Invited("Leader".into()))
@@ -3313,7 +3805,12 @@ fn a_group_the_player_formed_is_theirs_to_lead_until_it_ends() {
     let friend = || Party::Named("Friend".into());
     // Forming one makes the player its leader; others join it.
     assert_eq!(
-        news(&mut world, GroupUpdate::Formed),
+        news(
+            &mut world,
+            GroupUpdate::Formed {
+                leader: "Example".into()
+            }
+        ),
         said(GroupNotice::Formed)
     );
     assert_eq!(
@@ -3342,7 +3839,12 @@ fn a_group_the_player_formed_is_theirs_to_lead_until_it_ends() {
     );
     assert!(world.group().is_none());
     // A new admission forgets the group, which the server lists again.
-    news(&mut world, GroupUpdate::Formed);
+    news(
+        &mut world,
+        GroupUpdate::Formed {
+            leader: "Example".into(),
+        },
+    );
     game(&mut world, entered(2));
     assert!(world.group().is_none());
 }
@@ -3821,6 +4323,8 @@ fn the_login_servers_list_lasts_until_the_chosen_world_lists_characters() {
     let changes = game(
         &mut world,
         WorldEvent::CharacterSelection {
+            connection_id: 1,
+            deletion: None,
             creation: Some(crate::creation::Rules::Titanium),
             selection_id: 9,
             characters: Vec::new(),
@@ -4631,4 +5135,180 @@ fn skills_language_selector_follows_the_world_rules_lifetime() {
         world.language_zero_selector(),
         Some(LanguageZeroSelector(0))
     );
+}
+
+#[test]
+fn character_lists_reject_older_scopes_and_accept_a_new_connection_with_reused_list_id() {
+    fn offered(connection_id: u64, selection_id: u64) -> WorldEvent {
+        WorldEvent::CharacterSelection {
+            connection_id,
+            selection_id,
+            characters: Vec::new(),
+            creation: None,
+            deletion: Some(crate::deletion::Rules::Titanium),
+        }
+    }
+    let mut world = ClientWorld::default();
+    game(&mut world, offered(7, 1));
+    game(&mut world, offered(7, 2));
+    assert!(game(&mut world, offered(7, 1)).ignored);
+    assert!(game(&mut world, offered(7, 2)).ignored);
+    assert!(game(&mut world, offered(6, 9)).ignored);
+    assert!(!game(&mut world, offered(8, 1)).ignored);
+    assert_eq!(
+        world.characters().unwrap().scope(),
+        crate::deletion::Scope {
+            connection_id: 8,
+            selection_id: 1
+        }
+    );
+}
+
+#[test]
+fn a_deletion_update_is_a_typed_reply_without_optimistically_removing_a_character() {
+    let mut world = ClientWorld::default();
+    let character = crate::CharacterChoice {
+        slot: 0,
+        name: "Disposable".into(),
+        level: None,
+        zone_id: None,
+        look: None,
+    };
+    game(
+        &mut world,
+        WorldEvent::CharacterSelection {
+            connection_id: 7,
+            selection_id: 1,
+            characters: vec![character.clone()],
+            creation: None,
+            deletion: Some(crate::deletion::Rules::Titanium),
+        },
+    );
+    let request = crate::deletion::Request::new(
+        world.characters().unwrap().scope(),
+        1,
+        "Disposable",
+        "Disposable",
+    )
+    .unwrap();
+    let update = crate::deletion::Update {
+        request,
+        progress: crate::deletion::Progress::ObservedAbsent {
+            scope: crate::deletion::Scope {
+                connection_id: 7,
+                selection_id: 2,
+            },
+        },
+    };
+    let changes = game(&mut world, WorldEvent::CharacterDeletion(update.clone()));
+    assert_eq!(changes.replies, [Reply::CharacterDeletion(update)]);
+    assert!(!changes.characters);
+    assert_eq!(world.characters().unwrap().characters, vec![character]);
+}
+
+#[test]
+fn group_consent_retains_owned_identity_and_waits_for_authoritative_membership() {
+    use crate::group::{GroupUpdate, InvitationId, InvitationKind};
+    let mut world = admitted();
+    let offer = |inviter: &str, id| GroupUpdate::Invited {
+        inviter: inviter.into(),
+        player: "Example".into(),
+        kind: InvitationKind::Existing,
+        id,
+    };
+    // Raw codec offers cannot become consent before session ownership.
+    game(&mut world, WorldEvent::Group(offer("Leader", None)));
+    assert_eq!(world.group_invitation(), None);
+    game(
+        &mut world,
+        WorldEvent::Group(offer("Leader", InvitationId::new(1))),
+    );
+    for inviter in ["Leader", "Other"] {
+        game(
+            &mut world,
+            WorldEvent::Group(offer(inviter, InvitationId::new(2))),
+        );
+        assert_eq!(world.group_invitation(), Some("Leader"));
+        assert_eq!(world.group_invitation_id(), InvitationId::new(1));
+    }
+    game(
+        &mut world,
+        WorldEvent::Group(GroupUpdate::Declining {
+            inviter: "Leader".into(),
+        }),
+    );
+    game(
+        &mut world,
+        WorldEvent::Group(offer("Leader", InvitationId::new(3))),
+    );
+    assert_eq!(world.group_invitation_id(), InvitationId::new(3));
+    game(
+        &mut world,
+        WorldEvent::Group(GroupUpdate::Following {
+            inviter: "Leader".into(),
+        }),
+    );
+    assert!(world.group().is_none(), "submission is not membership");
+    assert_eq!(world.group_invitation(), None);
+    game(
+        &mut world,
+        WorldEvent::Group(offer("Other", InvitationId::new(4))),
+    );
+    assert_eq!(
+        world.group_invitation(),
+        None,
+        "an unanswered join cannot replace consent"
+    );
+    let changed = game(
+        &mut world,
+        WorldEvent::Group(GroupUpdate::Members {
+            leader: "Leader".into(),
+            members: vec!["Leader".into(), "Example".into(), "leader".into()],
+        }),
+    );
+    assert_eq!(
+        changed.notices,
+        [Notice::Group(GroupNotice::Joined(Party::Player))]
+    );
+    assert_eq!(world.group().unwrap().members, ["Leader"]);
+    game(
+        &mut world,
+        WorldEvent::Group(GroupUpdate::Left {
+            member: "Leader".into(),
+        }),
+    );
+    assert_eq!(
+        world.group().unwrap().leader,
+        None,
+        "departed leadership is unknown until reported"
+    );
+    game(&mut world, WorldEvent::Group(GroupUpdate::Disbanded));
+    game(
+        &mut world,
+        WorldEvent::Group(offer("Leader", InvitationId::new(5))),
+    );
+    game(&mut world, entered(2));
+    assert_eq!(world.group_invitation_id(), None);
+    assert!(world.group().is_none());
+}
+
+#[test]
+fn initial_group_leadership_keeps_members_received_before_formation() {
+    use crate::group::GroupUpdate;
+    let mut world = admitted();
+    game(
+        &mut world,
+        WorldEvent::Group(GroupUpdate::Joined {
+            member: "Friend".into(),
+        }),
+    );
+    game(
+        &mut world,
+        WorldEvent::Group(GroupUpdate::Formed {
+            leader: "Other".into(),
+        }),
+    );
+    assert_eq!(world.group().unwrap().members, ["Friend"]);
+    assert_eq!(world.group().unwrap().leader.as_deref(), Some("Other"));
+    assert!(!world.leads_group());
 }

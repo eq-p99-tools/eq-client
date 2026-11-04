@@ -489,6 +489,10 @@ type Animated<'w, 's> = Query<
 
 /// Updates local animation only; it cannot send movement or gameplay commands.
 #[allow(clippy::needless_pass_by_value)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "keep one animation frame's death, equipment and pose ordering together"
+)]
 pub(super) fn animate(
     time: Res<Time>,
     (online, spells, controls): (
@@ -529,7 +533,7 @@ pub(super) fn animate(
             swing.max(cast)
         });
         character.swings.follow(latest, dt);
-        if posture == Some(eq_client_core::PostureState::Frozen) {
+        if posture == Some(eq_client_core::PostureState::Frozen) && !(own && world.is_dead()) {
             continue;
         }
         character.elapsed += dt;
@@ -546,7 +550,15 @@ pub(super) fn animate(
         character.since_pose = 0.0;
         // A corpse seen dying falls from its death; one that arrived dead
         // lies in the death clip's last frame.
-        let lying = corpse.map(|corpse| corpse.lying(now));
+        let lying = corpse.map(|corpse| corpse.lying(now)).or_else(|| {
+            if own {
+                world
+                    .death_since()
+                    .map(|since| now.saturating_duration_since(since).as_secs_f32())
+            } else {
+                None
+            }
+        });
         let (selected, pinned) = character.next_clip(lying, posture, step);
         let selected = paced(
             selected,

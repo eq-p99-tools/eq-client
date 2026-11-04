@@ -1,8 +1,6 @@
 //! Installed-provider lifetime and transactional P99 replay, independent of zones.
 use eq_client_assets::spells::{Definition, Definitions, ReplayProjection};
-use eq_client_core::spell_tables::{
-    Binding, Envelope, Event, Fact, Policy, SpellId, Stage, Table, Update,
-};
+use eq_client_core::spell_tables::{Binding, Envelope, Event, Fact, SpellId, Stage, Table, Update};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Mechanics availability for the current provider and zone.
@@ -45,9 +43,10 @@ pub(super) struct Provider {
 
 impl Provider {
     pub(super) fn new(binding: Binding, base: Definitions) -> Self {
-        let readiness = match binding.policy() {
-            Policy::Installed => Readiness::Installed,
-            Policy::Project1999 => Readiness::AwaitingRegistration,
+        let readiness = if binding.policy().requires_server_tables() {
+            Readiness::AwaitingRegistration
+        } else {
+            Readiness::Installed
         };
         Self {
             binding,
@@ -123,7 +122,7 @@ impl Provider {
     }
 
     fn apply_event(&mut self, envelope: &Envelope) {
-        if envelope.binding() != self.binding || self.binding.policy() != Policy::Project1999 {
+        if envelope.binding() != self.binding || !self.binding.policy().requires_server_tables() {
             return;
         }
         match envelope.fact() {

@@ -59,11 +59,16 @@ presentation only, not item data sent to the server.
 
 - Left-click an item to pick it up onto the real EQ cursor, then click a slot to
   place, swap or merge it. Escape does not discard the cursor item.
-- Shift-click a stack or click its count to choose a quantity. The quantity
-  picker supports its slider, number input and confirmation/cancellation.
+- With an empty cursor, click a stack or its count to choose a quantity.
+  Shift-click takes the whole stack; Ctrl-click takes one (also with Shift).
+  These are this client's controls; official modifier parity is unverified
+  (inferred, recording checklist 6.382).
+  The quantity picker supports its slider, number input and confirmation/cancellation.
 - **Auto inventory** fills compatible stacks and then empty carried slots. It
   waits between requests and stops on manual intervention or an error.
-- Right-click inspects received item details. **Alt+right-click** requests a
+- Right-click a note or book to request its text where reading is offered;
+  the reading window opens when the server replies. Other items show their
+  received details. **Alt+right-click** requests a
   click effect where available; a selected target is used, otherwise self.
 - Filled bags carry their contents. Equipment eligibility, bag capacity/size,
   quivers, dual-wield requirements and two-handed conflicts are checked.

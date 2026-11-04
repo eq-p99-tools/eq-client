@@ -17,10 +17,24 @@ pub const MIN_PICK_SIZE: f32 = 1.5;
 /// container such as a forge to open. Other fixtures are left out.
 #[must_use]
 pub fn nearest_usable(objects: &Objects, player: WorldPosition) -> Option<(u32, f32)> {
+    nearest_usable_for(objects, player, true)
+}
+
+/// Chooses an item or an offered world container. A carried-combine offer
+/// alone does not make a stationary fixture usable.
+#[must_use]
+pub fn nearest_usable_for(
+    objects: &Objects,
+    player: WorldPosition,
+    world_containers: bool,
+) -> Option<(u32, f32)> {
     objects
         .entries()
         .values()
-        .filter(|object| object.kind() == ObjectKind::Item || object.is_tradeskill_container())
+        .filter(|object| {
+            object.kind() == ObjectKind::Item
+                || (world_containers && object.is_tradeskill_container())
+        })
         .filter_map(|object| {
             let distance = (object.position.x - player.x)
                 .hypot(object.position.y - player.y)
@@ -135,6 +149,11 @@ mod tests {
         forge.object_type = 17;
         objects.apply(&ObjectUpdate::Spawn(forge));
         assert_eq!(nearest_usable(&objects, player).map(|hit| hit.0), Some(5));
+        // A carried-combine offer does not let the nearer station hide the item.
+        assert_eq!(
+            nearest_usable_for(&objects, player, false).map(|hit| hit.0),
+            Some(1)
+        );
         objects.apply(&ObjectUpdate::Snapshot(Vec::new()));
         assert_eq!(nearest_usable(&objects, player), None);
     }

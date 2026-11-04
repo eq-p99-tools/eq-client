@@ -91,6 +91,7 @@ fn pin_and_track_are_local_and_target_posts_exactly_one_selection_command() {
     assert!(matches!(
         receive.try_recv().unwrap(),
         ClientCommand::SelectTarget {
+            request_id: 1,
             session_id: 1,
             spawn_id: Some(2)
         }
@@ -183,6 +184,7 @@ fn full_outbox_keeps_the_old_target_and_self_target_needs_no_spawn_entry() {
     app.world()
         .resource::<Outbox>()
         .post(online.world(), |stamp| ClientCommand::SelectTarget {
+            request_id: 1,
             session_id: stamp.session_id,
             spawn_id: None,
         })

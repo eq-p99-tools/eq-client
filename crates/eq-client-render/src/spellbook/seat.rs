@@ -55,7 +55,7 @@ fn sit(world: &ClientWorld, posture: Option<PostureState>, outbox: Option<&crate
         posture,
         None | Some(PostureState::Standing | PostureState::Ducking)
     );
-    if !standing || !world.connected() || world.death().is_some() || super::action_pending(world) {
+    if !standing || !world.connected() || world.is_dead() || super::action_pending(world) {
         return;
     }
     // The outbox shows why a sit did not go.
@@ -291,6 +291,9 @@ mod tests {
             bevy::window::PrimaryWindow,
         ));
         report(&mut app, PostureState::Standing);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::ControlLeft);
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .press(KeyCode::KeyB);

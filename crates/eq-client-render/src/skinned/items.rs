@@ -1,8 +1,9 @@
 //! The windows that hold items, drawn from the skin: the inventory's page of
-//! slots, purse and figure; each open bag; and the bank. Every slot is the
+//! slots, purse and figure; each open bag; and the bank. A player slot is the
 //! inventory's own slot button, so a click moves an item, a shifted click
 //! splits a stack, a right click inspects it (or opens a bag) and an Alt
-//! right click uses it, as in the client's own inventory window.
+//! right click uses it, as in the client's own inventory window. Corpse and
+//! merchant cells retain their separate loot and catalog actions.
 use super::{Skinned, at, picture};
 use crate::{
     hud::hotbar,
@@ -87,6 +88,28 @@ pub(super) fn slot(
 ) {
     if owner == WindowId::Loot {
         loot_slot(window, art, slot, inside);
+        return;
+    }
+    if owner == WindowId::Merchant
+        && let Some(place) = slot.slot.and_then(crate::trade::MerchantSlot::from_eq_type)
+    {
+        let area = slot.area_in(inside.width, inside.height);
+        window
+            .spawn((
+                Button,
+                place,
+                at(
+                    inside.x + area.x,
+                    inside.y + area.y,
+                    area.width,
+                    area.height,
+                ),
+            ))
+            .with_children(|cell| {
+                if let Some(piece) = &slot.background {
+                    picture(cell, art, piece, at(0.0, 0.0, area.width, area.height));
+                }
+            });
         return;
     }
     let Some((number, in_bag)) = slot.slot.and_then(|number| slot_of(owner, number)) else {
@@ -406,7 +429,7 @@ pub(crate) fn contents(
 /// Draws an item in a slot: its icon (or its initials without one) and its
 /// stack's count, named under the pointer as in the official client; an
 /// empty slot loses its name.
-fn draw(
+pub(crate) fn draw(
     commands: &mut Commands,
     art: &mut Art,
     cell: Entity,

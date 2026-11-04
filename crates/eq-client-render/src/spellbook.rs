@@ -1367,6 +1367,9 @@ mod tests {
             .id();
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::ControlLeft);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
             .press(KeyCode::KeyB);
         app.update();
         assert_eq!(

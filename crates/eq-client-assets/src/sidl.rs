@@ -74,7 +74,7 @@ impl IconGrid {
     }
 }
 
-/// A window's frame: the eight border pieces around it, from the top left.
+/// A window's frame: corners, edges and the end caps of its vertical sides.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Border {
     /// The top left corner.
@@ -83,16 +83,24 @@ pub struct Border {
     pub top: Option<Piece>,
     /// The top right corner.
     pub top_right: Option<Piece>,
+    /// The right side's top end, below the top right corner.
+    pub right_top: Option<Piece>,
     /// The right edge.
     pub right: Option<Piece>,
+    /// The right side's bottom end, above the bottom right corner.
+    pub right_bottom: Option<Piece>,
     /// The bottom right corner.
     pub bottom_right: Option<Piece>,
     /// The bottom edge.
     pub bottom: Option<Piece>,
     /// The bottom left corner.
     pub bottom_left: Option<Piece>,
+    /// The left side's top end, below the top left corner.
+    pub left_top: Option<Piece>,
     /// The left edge.
     pub left: Option<Piece>,
+    /// The left side's bottom end, above the bottom left corner.
+    pub left_bottom: Option<Piece>,
 }
 
 /// A frame drawn around a box from pieces (`FrameTemplate`), as a tab's,
@@ -879,11 +887,15 @@ impl Library {
                 top_left: side("TopLeft"),
                 top: side("Top"),
                 top_right: side("TopRight"),
+                right_top: side("RightTop"),
                 right: side("Right"),
+                right_bottom: side("RightBottom"),
                 bottom_right: side("BottomRight"),
                 bottom: side("Bottom"),
                 bottom_left: side("BottomLeft"),
+                left_top: side("LeftTop"),
                 left: side("Left"),
+                left_bottom: side("LeftBottom"),
             },
             title: [
                 title_piece("Left"),
@@ -1522,6 +1534,38 @@ mod tests {
             <Pieces>Clip</Pieces><Pieces>Sky</Pieces><Pieces>Keys</Pieces>
         </Screen>
     </XML>"#;
+
+    #[test]
+    fn a_window_border_retains_its_four_side_caps_and_zero_size_anchors() {
+        let animations = ANIMATIONS.replace(
+            "</XML>",
+            "<Ui2DAnimation item=\"A_Empty\"><Frames><Texture>frame.tga</Texture>\
+                <Location><X>6</X><Y>11</Y></Location>\
+                <Size><CX>0</CX><CY>0</CY></Size></Frames></Ui2DAnimation></XML>",
+        );
+        let templates = r#"<XML><WindowDrawTemplate item="Bordered">
+            <Border><TopLeft>A_Corner</TopLeft>
+                <LeftTop>A_Back</LeftTop><LeftBottom>A_Empty</LeftBottom>
+                <RightTop>A_Fill</RightTop><RightBottom>A_Corner</RightBottom>
+                <Right>A_Missing</Right></Border>
+        </WindowDrawTemplate></XML>"#;
+        let library = Library::parse(&animations, templates).unwrap();
+        let screen = library
+            .screen(
+                r#"<XML><Screen item="Example"><Size><CX>80</CX><CY>60</CY></Size>
+                    <DrawTemplate>Bordered</DrawTemplate><Style_Border>true</Style_Border>
+                </Screen></XML>"#,
+                "Example",
+            )
+            .unwrap();
+        let border = screen.template.unwrap().border;
+        assert_eq!(border.left_top, library.named_piece("A_Back"));
+        assert_eq!(border.right_top, library.named_piece("A_Fill"));
+        assert_eq!(border.right_bottom, library.named_piece("A_Corner"));
+        let empty = border.left_bottom.unwrap();
+        assert_eq!((empty.x, empty.y, empty.width, empty.height), (6, 11, 0, 0));
+        assert!(border.left.is_none() && border.right.is_none());
+    }
 
     #[test]
     fn a_column_may_be_headed_by_a_picture() {
