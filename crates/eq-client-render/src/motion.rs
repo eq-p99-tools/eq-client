@@ -1665,6 +1665,30 @@ mod tests {
     }
 
     #[test]
+    fn toggling_flight_at_floor_contact_keeps_height_and_restores_ground_motion() {
+        let (mut app, receiver) = app();
+        movement_choice(&mut app, Fix::Fly, true);
+        app.update();
+        let ClientCommand::Move(flying) = receiver.try_recv().unwrap() else {
+            panic!("flight sample")
+        };
+        assert!(flying.position.x < 0.0);
+        assert!((flying.position.z - 3.0).abs() < 0.001);
+        accept(&mut app, &flying);
+        movement_choice(&mut app, Fix::Fly, false);
+        app.update();
+        let ClientCommand::Move(grounded) = receiver.try_recv().unwrap() else {
+            panic!("ground sample")
+        };
+        assert!(grounded.position.x < flying.position.x);
+        assert!((grounded.position.z - 3.0).abs() < 0.001);
+        assert!(
+            receiver.try_recv().is_err(),
+            "a contact transition invents no jump or damage"
+        );
+    }
+
+    #[test]
     fn every_movement_opt_in_keeps_unknown_disconnected_and_dead_gates() {
         for state in 0..3 {
             let (mut app, receiver) = app();
