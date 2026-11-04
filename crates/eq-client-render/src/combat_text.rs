@@ -182,35 +182,39 @@ pub(crate) fn update(
         .filter(|hit| !hit.invisible || show_invisible)
         .take(room)
     {
-        commands.spawn((
-            Number {
-                session,
-                position: hit.position,
-                age: 0.0,
-                invisible: hit.invisible,
-            },
-            Text::new(hit.points.to_string()),
-            crate::theme::font(crate::theme::Size::Body),
-            TextColor(if hit.incoming {
-                Color::srgb(1.0, 0.3, 0.25)
-            } else {
-                Color::srgb(1.0, 0.9, 0.3)
-            }),
-            TextShadow {
-                offset: Vec2::ONE,
-                color: Color::BLACK,
-            },
-            TextLayout::new(Justify::Center, LineBreak::NoWrap),
-            Node {
-                position_type: PositionType::Absolute,
-                ..default()
-            },
-            UiTransform::from_translation(Val2::percent(-50.0, 0.0)),
-            GlobalZIndex(2),
-            bevy::ui::FocusPolicy::Pass,
-            Visibility::Hidden,
-        ));
+        draw(&mut commands, session, &hit);
     }
+}
+
+fn draw(commands: &mut Commands, session: u64, hit: &Hit) {
+    commands.spawn((
+        Number {
+            session,
+            position: hit.position,
+            age: 0.0,
+            invisible: hit.invisible,
+        },
+        Text::new(hit.points.to_string()),
+        crate::theme::font(crate::theme::Size::Body),
+        TextColor(if hit.incoming {
+            Color::srgb(1.0, 0.3, 0.25)
+        } else {
+            Color::srgb(1.0, 0.9, 0.3)
+        }),
+        TextShadow {
+            offset: Vec2::ONE,
+            color: Color::BLACK,
+        },
+        TextLayout::new(Justify::Center, LineBreak::NoWrap),
+        Node {
+            position_type: PositionType::Absolute,
+            ..default()
+        },
+        UiTransform::from_translation(Val2::percent(-50.0, 0.0)),
+        GlobalZIndex(2),
+        bevy::ui::FocusPolicy::Pass,
+        Visibility::Hidden,
+    ));
 }
 
 #[cfg(test)]

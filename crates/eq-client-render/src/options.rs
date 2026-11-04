@@ -279,7 +279,7 @@ mod tests {
         enter(&mut app, "Another");
         app.update();
         let commands: Vec<_> = receiver.try_iter().collect();
-        assert!(commands.iter().any(|command| matches!(command, ClientCommand::SetMovementOptions { options, .. } if *options == Default::default())));
+        assert!(commands.iter().any(|command| matches!(command, ClientCommand::SetMovementOptions { options, .. } if *options == eq_client_core::movement::MovementOptions::default())));
         let options = &app.world().resource::<OptionsState>().options;
         assert!(!options.qol.on(Fix::Fly));
         assert!(!options.qol.on(Fix::AutoLoot));

@@ -229,7 +229,8 @@ mod tests {
                     testing::spawns(&mut online, vec![replacement]);
                 }
                 1 => {
-                    state.automatic.candidates[0].seen = Instant::now() - LIFETIME;
+                    state.automatic.candidates[0].seen =
+                        Instant::now().checked_sub(LIFETIME).unwrap();
                 }
                 2 => {
                     let mut far = testing::player(7);

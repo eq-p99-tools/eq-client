@@ -60,22 +60,14 @@ fn only_new_known_npc_deaths_naming_the_player_are_kill_candidates() {
         [5]
     );
     assert_eq!(world.spawn(5).unwrap().state.kind, SpawnKind::NpcCorpse);
-    assert!(
-        game(&mut world, WorldEvent::Death(death.clone()))
-            .kills
-            .is_empty()
-    );
+    assert_eq!(game(&mut world, WorldEvent::Death(death.clone())).kills, []);
     game(&mut world, WorldEvent::Spawns(vec![spawn(5)]));
     let mut another = death.clone();
     another.killer_id = 8;
-    assert!(
-        game(&mut world, WorldEvent::Death(another))
-            .kills
-            .is_empty()
-    );
+    assert_eq!(game(&mut world, WorldEvent::Death(another)).kills, []);
     let mut unseen = death;
     unseen.spawn_id = 77;
-    assert!(game(&mut world, WorldEvent::Death(unseen)).kills.is_empty());
+    assert_eq!(game(&mut world, WorldEvent::Death(unseen)).kills, []);
 }
 
 #[test]
@@ -91,7 +83,7 @@ fn received_damage_is_available_without_inventing_health_or_chat() {
     };
     let changes = game(&mut world, WorldEvent::Damage(damage));
     assert_eq!(changes.damage, [damage]);
-    assert!(changes.notices.is_empty());
+    assert_eq!(changes.notices, []);
     assert_eq!(world.health(5), None);
     assert_eq!(world.health(77), None);
 }

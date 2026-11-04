@@ -538,10 +538,7 @@ pub(super) fn actions(
     // The duck key toggles, as both programs' key dispatchers do (Titanium
     // 0x4619cd case 0x4623b1, EQMac 0x54050c): standing ducks, ducking
     // stands, and any other stance leaves the key alone.
-    let flying = options
-        .as_ref()
-        .is_some_and(|options| options.options.qol.on(eq_client_core::qol::Fix::Fly))
-        && online.world().can(eq_client_core::Capability::Moving);
+    let flying = flight_uses_duck(options.as_deref(), online.world());
     let posture = if keys.pressed(Act::Duck) && !flying {
         match online.world().posture(player_id) {
             Some(eq_client_core::PostureState::Ducking) => Some(eq_client_core::Posture::Standing),
@@ -570,6 +567,15 @@ pub(super) fn actions(
             }
         });
     }
+}
+
+/// Flight uses Duck for descent only when its movement feature is available.
+fn flight_uses_duck(
+    options: Option<&crate::options::OptionsState>,
+    world: &eq_client_core::world::ClientWorld,
+) -> bool {
+    options.is_some_and(|options| options.options.qol.on(eq_client_core::qol::Fix::Fly))
+        && world.can(eq_client_core::Capability::Moving)
 }
 
 /// The native sit/stand command chooses a request from reported posture.

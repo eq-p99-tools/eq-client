@@ -17,6 +17,10 @@ pub(super) fn placement(transform: &Transform) -> (f32, f32, f32, f32) {
 }
 
 /// Logs player, resource, cast, buff, book and inventory state under a label.
+#[allow(
+    clippy::too_many_lines,
+    reason = "one stable diagnostic event keeps its state fields together"
+)]
 pub(super) fn state(
     label: &str,
     online: &crate::online::OnlineState,

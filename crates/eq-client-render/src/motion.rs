@@ -3058,8 +3058,9 @@ mod tests {
                 .try_iter()
                 .any(|command| matches!(command, ClientCommand::Move(_)))
         );
-        app.world_mut().resource_mut::<Controls>().last_accepted =
-            Instant::now() - Duration::from_millis(100);
+        app.world_mut().resource_mut::<Controls>().last_accepted = Instant::now()
+            .checked_sub(Duration::from_millis(100))
+            .unwrap();
         app.update();
         assert!(
             receiver

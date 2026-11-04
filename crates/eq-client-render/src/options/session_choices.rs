@@ -215,16 +215,18 @@ mod tests {
         );
     }
 
+    fn ready(app: &App, options: MovementOptions) -> bool {
+        app.world()
+            .resource::<MovementSync>()
+            .ready(Some(1), options)
+    }
+
     #[test]
     fn only_matching_worker_feedback_releases_departures_and_refusals_retry_with_a_new_id() {
         let (mut app, receiver) = fixture(8);
         app.update();
         let normal = MovementOptions::default();
-        assert!(
-            app.world()
-                .resource::<MovementSync>()
-                .ready(Some(1), normal)
-        );
+        assert!(ready(&app, normal));
         assert!(
             !receiver
                 .try_iter()
@@ -244,11 +246,7 @@ mod tests {
         else {
             panic!("policy request")
         };
-        assert!(
-            !app.world()
-                .resource::<MovementSync>()
-                .ready(Some(1), options)
-        );
+        assert!(!ready(&app, options));
         testing::news(
             &mut app.world_mut().resource_mut::<OnlineState>(),
             [eq_client_core::WorldEvent::MovementOptionsApplied {
@@ -258,11 +256,7 @@ mod tests {
             }],
         );
         app.update();
-        assert!(
-            !app.world()
-                .resource::<MovementSync>()
-                .ready(Some(1), options)
-        );
+        assert!(!ready(&app, options));
         testing::news(
             &mut app.world_mut().resource_mut::<OnlineState>(),
             [eq_client_core::WorldEvent::MovementOptionsApplied {
@@ -272,11 +266,7 @@ mod tests {
             }],
         );
         app.update();
-        assert!(
-            !app.world()
-                .resource::<MovementSync>()
-                .ready(Some(1), options)
-        );
+        assert!(!ready(&app, options));
         testing::news(
             &mut app.world_mut().resource_mut::<OnlineState>(),
             [eq_client_core::WorldEvent::MovementOptionsRefused {
@@ -307,11 +297,7 @@ mod tests {
             }],
         );
         app.update();
-        assert!(
-            app.world()
-                .resource::<MovementSync>()
-                .ready(Some(1), options)
-        );
+        assert!(ready(&app, options));
         assert!(
             !app.world()
                 .resource::<MovementSync>()
@@ -323,11 +309,7 @@ mod tests {
             .qol
             .set(Fix::RunBoost, false);
         app.update();
-        assert!(
-            !app.world()
-                .resource::<MovementSync>()
-                .ready(Some(1), normal)
-        );
+        assert!(!ready(&app, normal));
         assert!(
             matches!(receiver.try_recv().unwrap(), ClientCommand::SetMovementOptions { options, .. } if options == normal)
         );

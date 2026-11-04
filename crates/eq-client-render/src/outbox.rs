@@ -207,7 +207,7 @@ impl Outbox {
             if world.is_dead() && !preference {
                 return Err(Refusal::Dead);
             }
-            if !world.in_world() && !(preference && world.connected()) {
+            if !(world.in_world() || preference && world.connected()) {
                 return Err(Refusal::Away);
             }
             if !world.can(capability) {

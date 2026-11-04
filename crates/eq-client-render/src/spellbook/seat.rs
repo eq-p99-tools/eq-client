@@ -46,15 +46,12 @@ pub(crate) fn seat(
     let mut open = shown.is_open(WindowId::Spellbook);
     let reset = seen.open
         && (seen.session != world.session_id() || (world.player().is_some() && !world.in_world()));
-    if open && reset {
-        shown.close(WindowId::Spellbook);
-        open = false;
-    } else if open
-        && seen.open
-        && !unseated
-        && posture != seen.posture
-        && posture != Some(PostureState::Sitting)
-    {
+    let close = reset
+        || (seen.open
+            && !unseated
+            && posture != seen.posture
+            && posture != Some(PostureState::Sitting));
+    if open && close {
         shown.close(WindowId::Spellbook);
         open = false;
     } else if open && (!seen.open || seen.unseated) && !unseated {

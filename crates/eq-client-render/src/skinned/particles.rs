@@ -130,8 +130,11 @@ mod tests {
             .options;
         assert!(!options.spell_effects);
         assert!(
-            !eq_client_core::options::Options::read(&options.text(), Default::default())
-                .spell_effects
+            !eq_client_core::options::Options::read(
+                &options.text(),
+                eq_client_core::options::Options::default()
+            )
+            .spell_effects
         );
     }
 }
