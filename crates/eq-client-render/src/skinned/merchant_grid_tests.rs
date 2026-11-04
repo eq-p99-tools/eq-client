@@ -81,7 +81,20 @@ fn news(app: &mut App, events: impl IntoIterator<Item = WorldEvent>) {
 fn fixture(owner: WindowId) -> (App, Receiver<ClientCommand>) {
     let mut app = crate::testing::app();
     let mut online = OnlineState::new(true);
-    testing::admit(&mut online, 1, testing::player(7));
+    online.plan_inventory_as(Some(eq_client_core::inventory::MoveRules::EqEmu));
+    testing::news(
+        &mut online,
+        [WorldEvent::Entered {
+            capabilities: vec![Capability::Inventory, Capability::Trading],
+            choices: Vec::new(),
+            session_id: 1,
+            zone: "qeytoqrg".into(),
+            player: Box::new(testing::player(7)),
+            far_clip: None,
+            spell_landing_flag: None,
+        }],
+    );
+    testing::connect(&mut online, true);
     testing::inventory(
         &mut online,
         InventoryUpdate::Snapshot(crate::preview::items()),
@@ -89,7 +102,6 @@ fn fixture(owner: WindowId) -> (App, Receiver<ClientCommand>) {
     testing::news(
         &mut online,
         [
-            WorldEvent::Capabilities(vec![Capability::Inventory, Capability::Trading]),
             WorldEvent::Coins(Coins::default()),
             WorldEvent::Merchant(MerchantUpdate::Opened {
                 merchant_id: 9,
@@ -267,11 +279,11 @@ fn merchant_grid_selection_sends_no_purchase_and_never_enters_inventory_input() 
         .items()
         .clone();
     let seventh = cells(&mut app, 7)[0];
-    let chat_lines = app
+    let chat_revision = app
         .world()
         .resource::<crate::chat::ChatState>()
         .history
-        .len();
+        .revision();
     crate::clicks::testing::click(&mut app, seventh);
     assert_eq!(
         app.world().resource::<TradeState>().chosen(),
@@ -296,8 +308,8 @@ fn merchant_grid_selection_sends_no_purchase_and_never_enters_inventory_input() 
         app.world()
             .resource::<crate::chat::ChatState>()
             .history
-            .len(),
-        chat_lines
+            .revision(),
+        chat_revision
     );
     let empty = cells(&mut app, 79)[0];
     crate::clicks::testing::click(&mut app, empty);
@@ -313,8 +325,8 @@ fn merchant_grid_selection_sends_no_purchase_and_never_enters_inventory_input() 
         app.world()
             .resource::<crate::chat::ChatState>()
             .history
-            .len(),
-        chat_lines
+            .revision(),
+        chat_revision
     );
     // A stock update can precede the pass that removes the old cell action.
     // Run input before projection, as the viewer does, and ignore that action.
