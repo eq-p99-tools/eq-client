@@ -313,6 +313,7 @@ mod tests {
                 yaw: 0.0,
                 pitch: -0.5,
                 pulled: None,
+                view: default(),
             })
             .id();
         crate::online::testing::news(

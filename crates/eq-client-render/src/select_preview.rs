@@ -248,6 +248,7 @@ pub(super) fn turn(
         return;
     };
     if let Some((yaw, pitch, distance)) = preview.frame.take() {
+        camera.reset_view();
         // Within the orbit's own limits, so its clamps change nothing the
         // player didn't.
         camera.yaw = yaw;
@@ -386,6 +387,7 @@ mod tests {
                 yaw: 0.0,
                 pitch: -0.5,
                 pulled: None,
+                view: default(),
             })
             .id();
         let player = app

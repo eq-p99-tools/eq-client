@@ -270,6 +270,7 @@ pub(super) fn schedule(app: &mut App) {
                 motion::interpolate,
                 crate::camera::fly_camera,
                 orbit_camera,
+                crate::camera::show_player,
                 update_hud,
                 // Opens the give, quantity and training windows before their
                 // frames are drawn.

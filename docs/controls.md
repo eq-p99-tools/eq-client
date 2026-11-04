@@ -74,6 +74,10 @@ dragged over it receives the pointer instead. Its popup opens above the windows.
 
 Right-drag changes the view and the wheel zooms unless a UI surface owns the
 wheel. `--camera orthographic` selects the isometric-style projection. The chase
+view enters first person at minimum inward zoom, hiding the local body and gear.
+Right-drag looks around without changing the character's heading; zooming out
+returns to the chase view. Death, zone/session changes and character previews
+restore third person. The orthographic view keeps its own zoom range. The chase
 camera pulls in before collidable roofs or walls obscure the character and
 returns to the chosen zoom after the obstruction clears. This is camera
 placement, not transparent roofs.

@@ -341,6 +341,13 @@ mod tests {
         world.entity_mut(child).insert(Visibility::Hidden);
         assert!(system.get(&world).unwrap().pick(root, ray).hit.is_none());
         world.entity_mut(child).insert(Visibility::Inherited);
+        // First person hides the local movement root. Its body and held
+        // items must all leave picking along with that root.
+        world.entity_mut(root).insert(Visibility::Hidden);
+        let hidden = system.get(&world).unwrap().pick(root, ray);
+        assert!(hidden.hit.is_none());
+        assert!(hidden.posed.is_none());
+        world.entity_mut(root).insert(Visibility::Inherited);
         world
             .entity_mut(root)
             .insert(Transform::from_xyz(30.0, 0.0, 0.0));

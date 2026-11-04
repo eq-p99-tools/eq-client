@@ -1290,6 +1290,7 @@ mod tests {
             yaw: 0.75,
             pitch: -60.0_f32.to_radians(),
             pulled: None,
+            view: default(),
         };
         let requested = orbit_transform(&camera);
         let mut under = OrbitCamera { ..camera };
@@ -1342,6 +1343,7 @@ mod tests {
             yaw: 0.75,
             pitch: -60.0_f32.to_radians(),
             pulled: None,
+            view: default(),
         };
         // Walking under the roof's edge and back out, a frame at a time, with
         // the head's line as well as the middle's.
@@ -1408,6 +1410,7 @@ mod tests {
             yaw: 0.0,
             pitch: -0.15,
             pulled: None,
+            view: default(),
         };
         let requested = orbit_transform(&camera);
         let rise = 6.0 * HEAD_LINE;
@@ -1600,6 +1603,7 @@ mod tests {
                     pitch: -1.0,
                     radius: 300.0,
                     pulled: None,
+                    view: default(),
                 },
                 Transform::default(),
                 Projection::Orthographic(OrthographicProjection::default_3d()),
@@ -1690,6 +1694,7 @@ mod tests {
                     pitch: -0.5,
                     radius: 40.0,
                     pulled: None,
+                    view: default(),
                 },
                 Transform::default(),
             ))
@@ -1802,6 +1807,7 @@ mod tests {
             yaw: 0.0,
             pitch: 0.0,
             pulled: None,
+            view: default(),
         });
         let player = app
             .world_mut()

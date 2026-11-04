@@ -1728,6 +1728,7 @@ pub(super) fn drive(
             for mut camera in &mut cameras {
                 // The view holds the pitch and distance within its own
                 // ranges from the next frame, as it holds the mouse's.
+                camera.reset_view();
                 camera.yaw = super::behind(eq_client_core::render_heading(base + *heading));
                 camera.pitch = pitch.to_radians();
                 if let Some(radius) = radius {

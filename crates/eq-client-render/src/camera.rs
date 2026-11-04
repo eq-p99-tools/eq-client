@@ -1,4 +1,5 @@
 //! Chase camera placement, input arbitration and collision-aware zoom.
+mod attached;
 use crate::{
     Collision, Player, PlayerBody, ProjectionStyle, chat, inventory, items, online, options,
     sounds, windows,
@@ -14,6 +15,7 @@ pub(super) struct OrbitCamera {
     /// The distance shown while a roof or wall holds the camera short of
     /// `radius`; None once it is back out at the chosen zoom.
     pub(super) pulled: Option<f32>,
+    pub(super) view: attached::View,
 }
 
 /// A detached view. Its transform is the camera's alone; the orbit keeps
@@ -230,6 +232,7 @@ pub(super) fn spawn_camera(
         yaw: 0.0,
         pitch: CHASE_PITCH,
         pulled: None,
+        view: default(),
     };
     // The first zone is entered before this camera exists, so it starts
     // behind the player here; later entries turn it in `Scene::enter`.
@@ -284,7 +287,11 @@ pub(super) fn orbit_camera(
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     ui: windows::pointer::PointerUi,
 ) {
-    let head = bodies.single().map_or(0.0, |body| body.height * HEAD_LINE);
+    let body = bodies.single().ok();
+    let head = body.map_or(0.0, |body| body.height * HEAD_LINE);
+    let playing = online.selection.is_none()
+        && !online.world().is_dead()
+        && (!online.enabled || online.world().connected());
     let accepts_input = windows.single().is_ok_and(|window| {
         window.focused
             && !window
@@ -301,7 +308,8 @@ pub(super) fn orbit_camera(
     };
     // A turn over a window scrolls the window, never the camera too; with
     // the wheel's zoom turned off, it does nothing here.
-    let scroll = if !accepts_input
+    let scroll = if !playing
+        || !accepts_input
         || !options.options.wheel_zoom
         || wheel.surface.is_some()
         || chat.hovered
@@ -322,41 +330,60 @@ pub(super) fn orbit_camera(
         let turn = options.options.turn_per_pixel();
         if free {
             let clip = clip.map(|clip| clip + past_program(camera.radius, program));
-            if let Some(mut projection) = projection
-                && !fitted(&projection, camera.radius, clip)
-            {
-                fit_projection(&mut projection, camera.radius, clip);
+            if let Some(mut projection) = projection {
+                fit_view_projection(&mut projection, camera.radius, clip, false);
             }
             continue;
         }
         camera.yaw -= drag.x * turn;
+        let world = collision.as_ref().and_then(|world| world.0.as_ref());
+        if !playing {
+            camera.reset_view();
+        }
         // The limits are the program's chase camera's, with the distance on
         // the player's leash. The top-down
         // orthographic view is not in the program, so it keeps this
         // client's own pitch and zoom ranges.
         if matches!(projection.as_deref(), Some(Projection::Orthographic(_))) {
+            if camera.inside_body() {
+                camera.reset_view();
+            }
             top_down(&mut camera, drag.y * turn * rise, (-scroll * 0.12).exp());
+            *transform = unobstructed_orbit(&mut camera, world, head, time.delta_secs());
         } else {
-            chase(
-                &mut camera,
+            *transform = camera.attached_view(
                 limits,
-                drag.y * turn * rise * HEIGHT_PER_RADIAN,
-                (-scroll * 0.12).exp(),
+                drag.y * turn * rise,
+                scroll,
+                world,
+                head,
+                time.delta_secs(),
             );
         }
         let radius = camera.radius;
         let clip = clip.map(|clip| clip + past_program(radius, program));
-        if let Some(mut projection) = projection
-            && !fitted(&projection, radius, clip)
-        {
-            fit_projection(&mut projection, radius, clip);
+        if let Some(mut projection) = projection {
+            fit_view_projection(&mut projection, radius, clip, camera.inside_body());
         }
-        *transform = unobstructed_orbit(
-            &mut camera,
-            collision.as_ref().and_then(|world| world.0.as_ref()),
-            head,
-            time.delta_secs(),
-        );
+    }
+}
+
+/// Hides the local movement root and its model/gear only while the attached
+/// view is inside it. Detached views and lifecycle resets show it again.
+#[allow(clippy::needless_pass_by_value)]
+pub(crate) fn show_player(
+    cameras: Query<(&OrbitCamera, Has<FreeCamera>)>,
+    mut players: Query<&mut Visibility, With<Player>>,
+) {
+    let hidden = cameras
+        .single()
+        .is_ok_and(|(camera, free)| !free && camera.inside_body());
+    for mut visibility in &mut players {
+        visibility.set_if_neq(if hidden {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        });
     }
 }
 
@@ -513,6 +540,17 @@ fn fit_projection(projection: &mut Projection, radius: f32, clip: Option<f32>) {
             orthographic.far = far;
         }
         Projection::Custom(_) => (),
+    }
+}
+
+/// Fits scene reach and leaves nearby surfaces visible while the view is
+/// inside the body. Near distances are rendering choices, not model eye data.
+fn fit_view_projection(projection: &mut Projection, radius: f32, clip: Option<f32>, inside: bool) {
+    if !fitted(projection, radius, clip) {
+        fit_projection(projection, radius, clip);
+    }
+    if let Projection::Perspective(perspective) = projection {
+        perspective.near = if inside { 0.1 } else { 1.0 };
     }
 }
 
@@ -696,6 +734,7 @@ mod tests {
             yaw: 0.0,
             pitch: -0.35,
             pulled: None,
+            view: default(),
         };
         let camera = app.world_mut().spawn((orbit_transform(&orbit), orbit)).id();
         (app, camera, player)
@@ -985,6 +1024,7 @@ mod tests {
             yaw: 0.0,
             pitch: -0.2,
             pulled: None,
+            view: default(),
         };
         // Raised as far as it goes: 30 units over the player.
         chase(&mut camera, limits, 1000.0, 1.0);
@@ -1019,6 +1059,7 @@ mod tests {
             yaw: 0.0,
             pitch: -0.2,
             pulled: None,
+            view: default(),
         };
         let height = |camera: &OrbitCamera| camera.radius * (-camera.pitch).sin();
         let distance = |camera: &OrbitCamera| camera.radius * camera.pitch.cos();

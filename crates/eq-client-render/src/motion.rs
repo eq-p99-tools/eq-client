@@ -2819,6 +2819,7 @@ mod tests {
             yaw: eq_client_core::render_heading(384.0) + std::f32::consts::PI,
             pitch: 1.0,
             pulled: None,
+            view: default(),
         });
         app.world_mut().spawn((
             Window {
