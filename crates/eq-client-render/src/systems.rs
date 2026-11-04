@@ -434,5 +434,6 @@ pub(super) fn install_overlays(app: &mut App) {
             .before(Stage::Scene),
     );
     skin::register(app);
+    skinned::register_border_pixels(app);
     app.add_systems(PostUpdate, chat::scroll.after(bevy::ui::UiSystems::Layout));
 }

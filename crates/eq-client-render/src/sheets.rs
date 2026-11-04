@@ -188,6 +188,23 @@ fn item_cell(icon: u32) -> Option<(u32, Rect)> {
 pub(crate) mod testing {
     use super::*;
 
+    /// Supplies generated artwork to the ordinary skin rectangle/upload path.
+    pub(crate) fn sheet(app: &mut App, file: &str, pixels: image::RgbaImage) {
+        let skin = app
+            .world()
+            .resource::<super::super::skin::UiSkin>()
+            .0
+            .clone();
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<Image>>()
+            .add(image(pixels));
+        app.world_mut()
+            .resource_mut::<Sheets>()
+            .read
+            .insert((skin, file.to_owned()), Some(handle));
+    }
+
     /// Stands in for the skin's sheets: every sheet reads as one blank image.
     pub(crate) fn blank(app: &mut App) {
         use std::fmt::Write as _;

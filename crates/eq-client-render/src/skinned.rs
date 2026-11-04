@@ -27,6 +27,11 @@ mod frame;
 pub(crate) mod gem;
 mod items;
 pub(crate) mod looks;
+mod perimeter;
+mod pixel_edges;
+pub(crate) use pixel_edges::register as register_border_pixels;
+#[cfg(test)]
+mod perimeter_tests;
 pub(crate) mod scrollbar;
 
 pub(crate) use controls::{
@@ -1630,8 +1635,8 @@ pub(crate) fn buttons(
     }
 }
 
-/// How far a window border reaches in from each edge: its sides' widths
-/// and its top's and bottom's heights.
+/// The client area starts beyond the largest authored piece on each side.
+/// Transparent pixels remain part of a piece's dimensions.
 fn border_insets(border: &eq_client_assets::sidl::Border) -> frame::Insets {
     let size = |piece: &Option<Piece>| {
         piece.as_ref().map_or((0.0, 0.0), |piece| {
@@ -1639,10 +1644,22 @@ fn border_insets(border: &eq_client_assets::sidl::Border) -> frame::Insets {
         })
     };
     frame::Insets {
-        left: size(&border.left).0,
-        top: size(&border.top).1,
-        right: size(&border.right).0,
-        bottom: size(&border.bottom).1,
+        left: size(&border.left_top)
+            .0
+            .max(size(&border.left).0)
+            .max(size(&border.left_bottom).0),
+        top: size(&border.top_left)
+            .1
+            .max(size(&border.top).1)
+            .max(size(&border.top_right).1),
+        right: size(&border.right_top)
+            .0
+            .max(size(&border.right).0)
+            .max(size(&border.right_bottom).0),
+        bottom: size(&border.bottom_left)
+            .1
+            .max(size(&border.bottom).1)
+            .max(size(&border.bottom_right).1),
     }
 }
 
@@ -1660,33 +1677,12 @@ pub(crate) fn border(
         right,
         bottom,
     } = border_insets(border);
-    let (across, down) = (width - left - right, height - top - bottom);
-    for (piece, (x, y, stretch_x, stretch_y)) in [
-        (&border.top_left, (0.0, 0.0, None, None)),
-        (&border.top, (left, 0.0, Some(across), None)),
-        (&border.top_right, (width - right, 0.0, None, None)),
-        (&border.left, (0.0, top, None, Some(down))),
-        (&border.right, (width - right, top, None, Some(down))),
-        (&border.bottom_left, (0.0, height - bottom, None, None)),
-        (&border.bottom, (left, height - bottom, Some(across), None)),
-        (
-            &border.bottom_right,
-            (width - right, height - bottom, None, None),
-        ),
-    ] {
-        if let Some(piece) = piece {
-            let size = (
-                stretch_x.unwrap_or(to_f32(piece.width)),
-                stretch_y.unwrap_or(to_f32(piece.height)),
-            );
-            picture(window, art, piece, at(x, y, size.0, size.1));
-        }
-    }
+    perimeter::draw(window, art, border, (width, height));
     Area {
         x: left,
         y: top,
-        width: across,
-        height: down,
+        width: (width - left - right).max(0.0),
+        height: (height - top - bottom).max(0.0),
     }
 }
 
