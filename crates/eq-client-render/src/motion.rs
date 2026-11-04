@@ -79,6 +79,10 @@ pub(super) struct Controls {
     stun_revision: Option<(u64, u64)>,
     /// Emission permission, separate from actual held-key/autorun intent.
     stunned: bool,
+    /// The actual stun also blocks jump and flight's voluntary height changes.
+    stun_active: bool,
+    /// Explicit departures; the session checks the same choices independently.
+    movement_options: eq_client_core::movement::MovementOptions,
 }
 
 /// How far a jump from standing still has come on a client that crouches
@@ -139,6 +143,8 @@ impl Default for Controls {
             climb_sent: None,
             stun_revision: None,
             stunned: false,
+            stun_active: false,
+            movement_options: eq_client_core::movement::MovementOptions::default(),
         }
     }
 }
@@ -312,6 +318,22 @@ impl Controls {
                 intent.direction = Vec3::ZERO;
             }
         }
+        let boosted = self.movement_options.run_boost && intent.mode == MovementMode::Forward;
+        if boosted {
+            intent.speed *= eq_client_core::movement::MovementOptions::RUN_BOOST;
+        }
+        if self.movement_options.fly && focused {
+            intent.direction.y = if self.stun_active {
+                0.0
+            } else {
+                held.axis(Act::Duck, Act::Jump)
+            };
+            intent.direction = intent.direction.normalize_or_zero();
+            // Run boost changes only horizontal speed, including during flight.
+            if boosted {
+                intent.direction.y /= eq_client_core::movement::MovementOptions::RUN_BOOST;
+            }
+        }
         intent
     }
     /// Starts motion afresh, as an admission, a zone or a server's
@@ -326,6 +348,7 @@ impl Controls {
             last_jump: self.last_jump,
             walking: self.walking,
             stun_revision: self.stun_revision,
+            movement_options: self.movement_options,
             ..Self::default()
         };
     }
@@ -340,7 +363,8 @@ impl Controls {
         let changed = revision != self.stun_revision;
         self.stun_revision = revision;
         let stunned = world.is_stunned();
-        self.stunned = stunned;
+        self.stun_active = stunned;
+        self.stunned = stunned && !self.movement_options.walk_while_stunned;
         if stunned || (changed && revision.is_some()) {
             self.taps = TapBuffer::default();
             self.jump = None;
@@ -350,7 +374,30 @@ impl Controls {
         if changed && revision.is_some() {
             self.moving = false;
         }
-        stunned
+        self.stunned
+    }
+
+    /// A change cannot bank displacement or carry a jump/fall into flight.
+    fn choose_movement(&mut self, options: eq_client_core::movement::MovementOptions) {
+        if self.movement_options == options {
+            return;
+        }
+        if self.movement_options.fly != options.fly {
+            self.airborne = self
+                .airborne
+                .as_ref()
+                .map(|_| AirborneController::default());
+        }
+        self.movement_options = options;
+        self.taps = TapBuffer::default();
+        self.jump = None;
+        self.crouch = None;
+        self.facing = None;
+        self.moving = false;
+        // The session starts a fresh budget and schedules its paced stop when
+        // its option command arrives. Do not immediately spend a full sample
+        // of displacement against the new budget.
+        self.last_accepted = Instant::now();
     }
 
     /// Stops prediction without revoking the session's calibration. A pending
@@ -484,6 +531,7 @@ pub(super) fn input(
     collision: Res<Collision>,
     outbox: Res<crate::outbox::Outbox>,
     options: Res<crate::options::OptionsState>,
+    movement_sync: Option<Res<crate::options::MovementSync>>,
     mut controls: ResMut<Controls>,
     players: Query<&PlayerBody, With<Player>>,
     cameras: Query<(&OrbitCamera, Has<crate::camera::FreeCamera>)>,
@@ -501,6 +549,17 @@ pub(super) fn input(
         return;
     }
     let detached = cameras.single().is_ok_and(|(_, free)| free);
+    let movement = eq_client_core::movement::options(&options.options.qol);
+    if movement_sync
+        .as_ref()
+        .is_some_and(|sync| !sync.ready(online.world().session_id(), movement))
+    {
+        controls.pause_prediction();
+        controls.held = Some(Held::Gate);
+        return;
+    }
+    controls.choose_movement(movement);
+    let flying = controls.movement_options.fly;
     let stunned = controls.observe_stun(online.world());
     if detached {
         controls.autorun = false;
@@ -531,6 +590,8 @@ pub(super) fn input(
     // where the session takes both, and no sooner after the last than the
     // installed client allows.
     if focused
+        && !flying
+        && !online.world().is_stunned()
         && keys.pressed(Act::Jump)
         && controls.airborne.is_some()
         && controls.crouch.is_none()
@@ -563,9 +624,17 @@ pub(super) fn input(
     }
     let map = &*keys.map;
     let keyboard = navigation.sample(&keys.input);
+    let mut movement_keys = map.movement_keys();
+    if flying {
+        movement_keys.extend(
+            [Act::Jump, Act::Duck]
+                .into_iter()
+                .flat_map(|act| map.keys(act)),
+        );
+    }
     controls
         .taps
-        .observe(&keyboard, &map.movement_keys(), focused, now);
+        .observe(&keyboard, &movement_keys, focused, now);
     if controls.waiting {
         if now.duration_since(controls.queued_at) > Duration::from_millis(250) {
             controls.pause_prediction();
@@ -669,10 +738,11 @@ pub(super) fn input(
     // A jump or fall keeps going after the keys are released, and a player
     // who may fall starts to where no ground is under them, as the server
     // can leave them after a move it makes (a `#goto` into the air).
-    let airborne = controls
-        .airborne
-        .as_ref()
-        .is_some_and(|airborne| airborne.velocity() != 0.0 || unsupported(world, feet));
+    let airborne = !flying
+        && controls
+            .airborne
+            .as_ref()
+            .is_some_and(|airborne| airborne.velocity() != 0.0 || unsupported(world, feet));
     // So does a heading sent that still turns toward the facing.
     if direction == Vec3::ZERO
         && turn == 0.0
@@ -721,6 +791,7 @@ pub(super) fn input(
     };
     let previous_airborne = controls.airborne.clone();
     let (landing, mode, jumped) = match controls.airborne.as_mut() {
+        _ if flying => (world.fly_step(feet, delta, body.height), mode, false),
         Some(airborne) => {
             let rising = airborne.velocity() > 0.0;
             let landing = fall_step(
@@ -768,7 +839,7 @@ pub(super) fn input(
     // movement session refuses a sample that turns faster than the wire's
     // turn field holds (`heading_velocity`: at most 127 heading units in its
     // longest sample), and the position goes with it.
-    let facing = if direction == Vec3::ZERO || preserve_facing {
+    let facing = if Vec2::new(direction.x, direction.z) == Vec2::ZERO || preserve_facing {
         (shown + turn * TURN_RATE * span).rem_euclid(512.0)
     } else {
         eq_client_core::world_heading(direction.x.atan2(direction.z))
@@ -819,7 +890,11 @@ pub(super) fn input(
             safe_fall = cost.safe_fall,
             "Landing"
         );
-        say_fall(client, cost, online.world(), &messages, &mut chat);
+        if options.options.qol.on(Fix::TakeEnvironmentalDamage)
+            && online.world().can(Capability::EnvironmentalDamage)
+        {
+            say_fall(client, cost, online.world(), &messages, &mut chat);
+        }
         controls.unreported = report_fall(&outbox, online.world(), &options.options.qol, cost);
     }
     controls.moving = position.distance_squared(origin) > 0.000_001
@@ -1314,6 +1389,310 @@ fn arc(from: f32, to: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+
+    fn movement_choice(app: &mut App, fix: Fix, on: bool) {
+        app.world_mut()
+            .resource_mut::<crate::options::OptionsState>()
+            .options
+            .qol
+            .set(fix, on);
+        let options = eq_client_core::movement::options(
+            &app.world()
+                .resource::<crate::options::OptionsState>()
+                .options
+                .qol,
+        );
+        let mut controls = app.world_mut().resource_mut::<Controls>();
+        controls.choose_movement(options);
+        // These motion fixtures start after the policy's new local gate. Its
+        // first-frame hold is exercised separately below.
+        controls.last_accepted = Instant::now()
+            .checked_sub(Duration::from_millis(100))
+            .unwrap();
+    }
+
+    #[test]
+    fn changing_movement_options_restarts_the_local_time_gate() {
+        let (mut app, receiver) = app();
+        app.world_mut().resource_mut::<Controls>().moving = true;
+        app.world_mut()
+            .resource_mut::<crate::options::OptionsState>()
+            .options
+            .qol
+            .set(Fix::RunBoost, true);
+        app.update();
+        assert!(receiver.try_recv().is_err());
+        assert_eq!(app.world().resource::<Controls>().held, Some(Held::Gate));
+        assert!(!app.world().resource::<Controls>().moving);
+        app.world_mut().resource_mut::<Controls>().last_accepted = Instant::now()
+            .checked_sub(Duration::from_millis(100))
+            .unwrap();
+        app.update();
+        let ClientCommand::Move(boosted) = receiver.try_recv().expect("fresh policy budget") else {
+            panic!("unexpected command");
+        };
+        assert!((boosted.position.x + 0.66).abs() < 0.001);
+        accept(&mut app, &boosted);
+        app.world_mut()
+            .resource_mut::<crate::options::OptionsState>()
+            .options
+            .qol
+            .set(Fix::RunBoost, false);
+        app.update();
+        assert!(receiver.try_recv().is_err());
+        assert_eq!(app.world().resource::<Controls>().held, Some(Held::Gate));
+        app.world_mut().resource_mut::<Controls>().last_accepted = Instant::now()
+            .checked_sub(Duration::from_millis(100))
+            .unwrap();
+        app.update();
+        let ClientCommand::Move(normal) = receiver.try_recv().expect("ordinary policy budget")
+        else {
+            panic!("unexpected command");
+        };
+        assert!((normal.position.x - boosted.position.x + 0.6).abs() < 0.001);
+    }
+
+    #[test]
+    fn run_boost_only_changes_the_granted_forward_speed() {
+        let mut controls = Controls {
+            speed: Some(6.0),
+            backward_speed: Some(2.0),
+            walk_speed: Some(1.5),
+            strafe_speed: Some(3.0),
+            ..Controls::default()
+        };
+        let map = KeyMap::for_client(InstalledClient::Titanium);
+        let keys = ButtonInput::<KeyCode>::default();
+        let intent = |controls: &Controls, act| {
+            controls.intent(&keys, &map, &[act], true, (0.0, 0.0), false)
+        };
+        let normal = intent(&controls, Act::Forward);
+        controls.movement_options.run_boost = true;
+        let boosted = intent(&controls, Act::Forward);
+        assert!(
+            (boosted.speed - normal.speed * eq_client_core::movement::MovementOptions::RUN_BOOST)
+                .abs()
+                < 0.001
+        );
+        assert!((intent(&controls, Act::Back).speed - 2.0).abs() < 0.001);
+        assert!((intent(&controls, Act::StrafeLeft).speed - 3.0).abs() < 0.001);
+        controls.walking = true;
+        assert!((intent(&controls, Act::Forward).speed - 1.5).abs() < 0.001);
+        controls.movement_options.run_boost = false;
+        controls.walking = false;
+        assert!((intent(&controls, Act::Forward).speed - normal.speed).abs() < 0.001);
+    }
+
+    #[test]
+    fn winded_opt_in_moves_during_stun_without_releasing_the_stun_or_jumping() {
+        let (mut app, receiver) = app();
+        movement_choice(&mut app, Fix::WalkWhileWinded, true);
+        app.world_mut().resource_mut::<Controls>().airborne = Some(AirborneController::default());
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Space);
+        crate::online::testing::news(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            [eq_client_core::WorldEvent::OwnStun {
+                session_id: 11,
+                revision: 1,
+                state: eq_client_core::control::StunState::Stunned,
+            }],
+        );
+        app.update();
+        let ClientCommand::Move(request) = receiver.try_recv().expect("opted-in walking") else {
+            panic!("unexpected command");
+        };
+        assert!(request.position.x < 0.0);
+        assert!(request.position.x.hypot(request.position.y) <= 0.601);
+        assert!(
+            app.world()
+                .resource::<online::OnlineState>()
+                .world()
+                .is_stunned()
+        );
+        assert!(
+            receiver.try_recv().is_err(),
+            "no jump or posture send while stunned"
+        );
+        accept(&mut app, &request);
+        movement_choice(&mut app, Fix::WalkWhileWinded, false);
+        app.update();
+        assert!(
+            receiver.try_recv().is_err(),
+            "turning the option off restores the hold"
+        );
+    }
+
+    #[test]
+    fn flight_normalizes_diagonals_and_never_boosts_vertical_speed() {
+        let mut controls = Controls {
+            speed: Some(6.0),
+            movement_options: eq_client_core::movement::MovementOptions {
+                fly: true,
+                ..Default::default()
+            },
+            ..Controls::default()
+        };
+        let map = KeyMap::for_client(InstalledClient::Titanium);
+        let keys = ButtonInput::<KeyCode>::default();
+        let intent = controls.intent(
+            &keys,
+            &map,
+            &[Act::Forward, Act::Jump],
+            true,
+            (0.0, 128.0),
+            false,
+        );
+        assert!((intent.direction.length() - 1.0).abs() < 0.001);
+        assert!(intent.direction.y > 0.7);
+        let opposite = controls.intent(
+            &keys,
+            &map,
+            &[Act::Jump, Act::Duck],
+            true,
+            (0.0, 128.0),
+            false,
+        );
+        assert!(opposite.direction.length() < f32::EPSILON);
+        controls.movement_options.run_boost = true;
+        let up = controls.intent(&keys, &map, &[Act::Jump], true, (0.0, 128.0), false);
+        assert!((up.direction.y * up.speed - 6.0).abs() < 0.001);
+        let boosted = controls.intent(
+            &keys,
+            &map,
+            &[Act::Forward, Act::Jump],
+            true,
+            (0.0, 128.0),
+            false,
+        );
+        assert!(
+            (boosted.direction.y * boosted.speed - intent.direction.y * intent.speed).abs() < 0.001
+        );
+    }
+
+    #[test]
+    fn flight_ascends_hovers_and_descends_without_jump_notices_then_resumes_gravity() {
+        let (mut app, receiver) = app();
+        movement_choice(&mut app, Fix::Fly, true);
+        crate::keys::testing::bind(&mut app, Act::Duck, crate::keys::Chord::key(KeyCode::KeyC));
+        {
+            let mut online = app.world_mut().resource_mut::<online::OnlineState>();
+            let mut player = online.world().player().unwrap().clone();
+            player.position = world_position([0.0, 13.0, 0.0], 128.0);
+            crate::online::testing::admit(&mut online, 11, player);
+        }
+        app.world_mut().resource_mut::<Controls>().airborne = Some(AirborneController::default());
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        app.update();
+        assert!(receiver.try_recv().is_err(), "an idle flyer hovers");
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Space);
+        app.update();
+        let ClientCommand::Move(up) = receiver.try_recv().expect("ascending sample") else {
+            panic!("unexpected command");
+        };
+        assert!((up.position.z - 13.6).abs() < 0.001);
+        assert!((up.position.heading - 128.0).abs() < 0.001);
+        assert!(receiver.try_recv().is_err(), "flight sends no jump notice");
+        accept(&mut app, &up);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        app.update();
+        let ClientCommand::Move(stop) = receiver.try_recv().expect("hover stop") else {
+            panic!("unexpected command");
+        };
+        assert!((stop.position.z - up.position.z).abs() < 0.001);
+        accept(&mut app, &stop);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyC);
+        app.update();
+        let ClientCommand::Move(down) = receiver.try_recv().expect("descending sample") else {
+            panic!("unexpected command");
+        };
+        assert!(down.position.z < stop.position.z && down.position.z >= stop.position.z - 0.601);
+        assert!(receiver.try_recv().is_err());
+        accept(&mut app, &down);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        movement_choice(&mut app, Fix::Fly, false);
+        app.update();
+        let ClientCommand::Move(fall) = receiver.try_recv().expect("gravity resumes") else {
+            panic!("unexpected command");
+        };
+        assert_eq!(fall.mode, MovementMode::Fall);
+        assert!(fall.position.z < down.position.z);
+    }
+
+    #[test]
+    fn flight_requires_a_separate_stun_opt_in_and_never_supplies_unknown_speed() {
+        let (mut app, receiver) = app();
+        movement_choice(&mut app, Fix::Fly, true);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Space);
+        crate::online::testing::news(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            [eq_client_core::WorldEvent::OwnStun {
+                session_id: 11,
+                revision: 1,
+                state: eq_client_core::control::StunState::Stunned,
+            }],
+        );
+        app.update();
+        assert!(receiver.try_recv().is_err());
+        movement_choice(&mut app, Fix::WalkWhileWinded, true);
+        app.update();
+        let ClientCommand::Move(request) = receiver.try_recv().expect("separate stun opt-in")
+        else {
+            panic!("unexpected command");
+        };
+        assert!(
+            (request.position.z - 3.0).abs() < 0.001,
+            "winded never lifts the flight height hold"
+        );
+        assert!(request.position.x < 0.0);
+        accept(&mut app, &request);
+        app.world_mut().resource_mut::<Controls>().reset(None);
+        app.update();
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn every_movement_opt_in_keeps_unknown_disconnected_and_dead_gates() {
+        for state in 0..3 {
+            let (mut app, receiver) = app();
+            for fix in [Fix::WalkWhileWinded, Fix::RunBoost, Fix::Fly] {
+                movement_choice(&mut app, fix, true);
+            }
+            match state {
+                0 => app.world_mut().resource_mut::<Controls>().reset(None),
+                1 => crate::online::testing::connect(
+                    &mut app.world_mut().resource_mut::<online::OnlineState>(),
+                    false,
+                ),
+                _ => crate::online::testing::news(
+                    &mut app.world_mut().resource_mut::<online::OnlineState>(),
+                    [eq_client_core::WorldEvent::Death(eq_client_core::Death {
+                        spawn_id: 7,
+                        killer_id: 0,
+                        corpse_id: 0,
+                        bind_zone_id: 0,
+                        corpse_name: None,
+                    })],
+                ),
+            }
+            app.update();
+            assert!(receiver.try_recv().is_err(), "state {state}");
+            assert!(app.world().resource::<Controls>().speed.is_none());
+        }
+    }
 
     #[test]
     fn stun_pauses_autorun_and_discards_queued_input_without_banking_distance() {
@@ -2597,6 +2976,72 @@ mod tests {
         assert!(request.position.x.abs() < 0.001 && request.position.y.abs() < 0.001);
         assert!((turn_toward(508.0, 4.0, 3.0) - 511.0).abs() < 0.001);
         assert!((turn_toward(4.0, 508.0, 3.0) - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn departure_motion_waits_for_matching_local_policy_application() {
+        let (mut app, receiver) = app();
+        app.init_resource::<crate::options::MovementSync>()
+            .add_systems(Update, crate::options::tell_choices.before(input));
+        app.world_mut()
+            .resource_mut::<crate::options::OptionsState>()
+            .options
+            .qol
+            .set(Fix::RunBoost, true);
+        app.update();
+        let commands: Vec<_> = receiver.try_iter().collect();
+        let (request_id, options) = commands
+            .iter()
+            .find_map(|command| match command {
+                ClientCommand::SetMovementOptions {
+                    request_id,
+                    options,
+                    ..
+                } => Some((*request_id, *options)),
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            !commands
+                .iter()
+                .any(|command| matches!(command, ClientCommand::Move(_)))
+        );
+        crate::online::testing::news(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            [eq_client_core::WorldEvent::MovementOptionsApplied {
+                session_id: 11,
+                request_id: request_id + 1,
+                options,
+            }],
+        );
+        app.update();
+        assert!(
+            !receiver
+                .try_iter()
+                .any(|command| matches!(command, ClientCommand::Move(_)))
+        );
+        crate::online::testing::news(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            [eq_client_core::WorldEvent::MovementOptionsApplied {
+                session_id: 11,
+                request_id,
+                options,
+            }],
+        );
+        app.update();
+        assert!(
+            !receiver
+                .try_iter()
+                .any(|command| matches!(command, ClientCommand::Move(_)))
+        );
+        app.world_mut().resource_mut::<Controls>().last_accepted =
+            Instant::now() - Duration::from_millis(100);
+        app.update();
+        assert!(
+            receiver
+                .try_iter()
+                .any(|command| matches!(command, ClientCommand::Move(_)))
+        );
     }
 
     /// The model's rotation when it faces this heading.

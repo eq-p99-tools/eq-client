@@ -2,12 +2,13 @@
 //! Keep shared-input and deferred-entity ordering visible at this composition boundary.
 use crate::{
     abilities, buffs, character, character_create, character_select, chat, clicks, coins, combat,
-    confirm, daylight, doors, entities, escape, exit_after_screenshot, give, ground, group, hud,
-    interact, inventory, item_models, items, keys, login, logs, map, motion, move_player, names,
-    navigation, navmesh_prebuild, notices, online, options, orbit_camera, outbox, outfit,
-    paperdoll, pet, profile_files, raid, reading, resources, schedule_screenshot, select_preview,
-    sheets, skills, skin, skinned, sounds, speed, spell_effects, spell_icons, spellbook, target,
-    tooltip, trade, tradeskills, training, translocate, update_hud, whereabouts, who, windows,
+    combat_text, confirm, daylight, doors, entities, escape, exit_after_screenshot, give, ground,
+    group, hud, interact, inventory, item_models, items, keys, login, logs, map, motion,
+    move_player, names, navigation, navmesh_prebuild, notices, online, options, orbit_camera,
+    outbox, outfit, paperdoll, pet, profile_files, raid, reading, resources, schedule_screenshot,
+    select_preview, sheets, skills, skin, skinned, sounds, speed, spell_effects, spell_icons,
+    spellbook, target, tooltip, trade, tradeskills, training, translocate, update_hud, whereabouts,
+    who, windows,
 };
 use bevy::prelude::*;
 /// Starts the presentation state (HUD, windows, chat, targeting, inventory,
@@ -26,10 +27,12 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<sounds::Sounds>()
         .init_resource::<doors::Hinges>()
         .init_resource::<options::OptionsState>()
+        .init_resource::<options::MovementSync>()
         .init_resource::<logs::ChatLog>()
         .init_resource::<hud::HudState>()
         .init_resource::<hud::action_bar::ActionRequests>()
         .init_resource::<combat::CombatState>()
+        .init_resource::<combat_text::CombatText>()
         .init_resource::<trade::TradeState>()
         .init_resource::<escape::Escape>()
         .init_resource::<windows::pointer::Wheel>()
@@ -176,6 +179,7 @@ pub(super) fn schedule(app: &mut App) {
     .add_systems(
         Update,
         (
+            options::tell_choices,
             (items::input, chat::links::input).chain(),
             inventory::input,
             coins::input,
@@ -375,6 +379,7 @@ pub(super) fn schedule(app: &mut App) {
                 sounds::update,
                 target::marker::update,
                 (names::request, names::update).chain(),
+                combat_text::update,
                 (schedule_screenshot, select_preview::next_capture).chain(),
                 exit_after_screenshot,
             )

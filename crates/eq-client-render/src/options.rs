@@ -6,6 +6,10 @@ use eq_client_core::food::AutoEat;
 use eq_client_core::options::{Options, Toggle};
 use std::time::Instant;
 
+mod session_choices;
+pub(crate) use session_choices::MovementSync;
+pub(crate) use session_choices::tell as tell_choices;
+
 /// The file a character with none of their own starts from.
 const SHARED: &str = "options.txt";
 

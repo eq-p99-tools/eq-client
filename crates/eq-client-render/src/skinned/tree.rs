@@ -485,7 +485,8 @@ pub(super) fn tabbed(
     inside: &Area,
     context: &Context,
 ) {
-    let pages = with_qol_page(&tabs.pages, context.id, inside.height);
+    let particle_pages = super::particles::pages(&tabs.pages, context.id);
+    let pages = with_qol_page(&particle_pages, context.id, inside.height);
     let pages = pages.as_ref();
     let tab_box: std::sync::Arc<str> = tabs.name.as_str().into();
     let tab = |index| SkinTab {

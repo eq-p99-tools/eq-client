@@ -9,6 +9,7 @@ use eq_client_core::{ClientCommand, SpawnKind, inventory::InventoryItem, world::
 
 use super::windows;
 
+mod auto_loot;
 mod loot_requests;
 mod merchant;
 mod spawn_use;
@@ -27,6 +28,7 @@ const BANKER_CLASS: u8 = 40;
 /// lists, which say what is on the corpse and for sale.
 #[derive(Resource, Default)]
 pub(super) struct TradeState {
+    automatic: auto_loot::AutoLoot,
     /// One scene click, consumed once in its own admission.
     right_clicked: Option<(u64, u16)>,
     loot: Option<LootWindow>,
@@ -318,7 +320,14 @@ pub(super) fn input(
         Res<crate::ViewerSettings>,
         Res<super::hud::messages::Messages>,
     ),
+    options: Option<Res<crate::options::OptionsState>>,
 ) {
+    trade.follow_automatic(
+        online.world(),
+        options
+            .as_ref()
+            .is_some_and(|options| options.options.qol.on(eq_client_core::qol::Fix::AutoLoot)),
+    );
     let prices = settings.0.installed_client.merchant_prices();
     if trade.prices != prices {
         trade.prices = prices;
@@ -651,7 +660,15 @@ pub(super) fn input(
         .filter(|_| online.world().loot_continuation().automatic())
         .and(online.world().loot())
         .filter(|loot| loot.listed)
-        .map(|loot| (loot.corpse_id, loot.items.keys().next().copied()));
+        .map(|loot| {
+            let automatic = trade.automatic.active == Some((session_id, loot.corpse_id));
+            let place = loot
+                .items
+                .iter()
+                .find(|(_, item)| !automatic || !no_drop(item))
+                .map(|(place, _)| *place);
+            (loot.corpse_id, place)
+        });
     match next {
         Some((corpse_id, Some(place))) => {
             if send(
@@ -691,6 +708,14 @@ pub(super) fn input(
             trade.changed();
         }
         Some(_) | None => (),
+    }
+    // Explicit input has priority over starting another automatic corpse.
+    if !keys.pressed(super::keys::Act::Loot)
+        && !keys.pressed(super::keys::Act::Trade)
+        && buttons.iter().next().is_none()
+        && matches!(*escape, super::escape::Escape::Unused)
+    {
+        trade.open_automatic(&mut online, &outbox, stamp);
     }
 }
 

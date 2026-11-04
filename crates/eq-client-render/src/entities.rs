@@ -3,7 +3,7 @@
 use super::{ViewerSettings, character, online::OnlineState};
 use bevy::prelude::*;
 use eq_client_assets::characters::{DonorArchives, load_installed_character};
-use eq_client_core::{SpawnKind, entities::nearby, races, render_position};
+use eq_client_core::{SpawnKind, entities::nearby_with_invisible, races, render_position};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Resource, Default)]
@@ -285,13 +285,17 @@ pub(super) fn reconcile(
             .entity_distance
             .map_or(reach, |distance| distance.min(reach))
     };
-    let selected = nearby(
+    let selected = nearby_with_invisible(
         state.world().spawns().values().map(|spawn| &spawn.state),
         player.spawn_id,
         player.position,
         &present,
         reach,
         usize::MAX,
+        options
+            .options
+            .qol
+            .on(eq_client_core::qol::Fix::ShowInvisible),
     );
     if nearby_state.chosen != selected.len() {
         nearby_state.chosen = selected.len();

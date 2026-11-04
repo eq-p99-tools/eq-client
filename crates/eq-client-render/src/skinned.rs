@@ -6,6 +6,7 @@
 //! without an installation, keeps the client's own chrome.
 #[cfg(test)]
 mod hotbar_drag_tests;
+mod particles;
 mod tree;
 #[cfg(test)]
 use tree::{augment_section, text_box};
@@ -879,7 +880,7 @@ fn with_qol_page(
     };
     // The page's room under the row of tabs, its own tab among them.
     let room = inside_height - tab_strip(pages.iter().chain([&qol]));
-    let mut pieces = qol_checkboxes(&checkbox, room);
+    let mut pieces = qol_checkboxes(pages, &checkbox, room);
     pieces.extend(qol_scale(pages, &checkbox, room));
     let mut all = pages.to_vec();
     all.push(eq_client_assets::sidl::Page { pieces, ..qol });
@@ -911,7 +912,10 @@ fn qol_scale(
     // The caption over the slider, in the next place with room for both
     // down the page, else at the top of the next column.
     let tall = value.area.height + 2.0 + slider.area.height;
-    let first = eq_client_core::qol::Fix::settings().count();
+    // One row more when the page opens its unsafe run with a caption, as
+    // qol_checkboxes does whenever the skin lends a line of text for it.
+    let first = eq_client_core::qol::Fix::settings().count()
+        + usize::from(pieces().any(|(_, element)| matches!(element, Element::Label(_))));
     let (x, y, width) = (first..first + 64)
         .map(|index| qol_place(checkbox, room, index))
         .find(|&(_, y, _)| y + tall <= room - 10.0 || y <= 10.0)
@@ -954,24 +958,72 @@ fn qol_scale(
     reason = "a page holds few rows"
 )]
 fn qol_checkboxes(
+    pages: &[eq_client_assets::sidl::Page],
     checkbox: &eq_client_assets::sidl::Button,
     room: f32,
 ) -> Vec<(String, eq_client_assets::sidl::Element)> {
-    eq_client_core::qol::Fix::settings()
+    use eq_client_assets::sidl::Element;
+    let settings: Vec<_> = eq_client_core::qol::Fix::settings().collect();
+    // The caption's line of text, cut from the skin's own, like the scale's.
+    let caption =
+        pages
+            .iter()
+            .flat_map(|page| &page.pieces)
+            .find_map(|(_, element)| match element {
+                Element::Label(label) => Some(label.clone()),
+                _ => None,
+            });
+    // The rows of the page: every setting in order, with the caption ahead
+    // of the unsafe run that closes it.
+    let first_unsafe = settings.iter().position(|fix| fix.is_unsafe());
+    let mut rows: Vec<(String, Row)> = Vec::new();
+    for (position, fix) in settings.iter().copied().enumerate() {
+        if Some(position) == first_unsafe
+            && let Some(label) = &caption
+        {
+            rows.push((
+                "EQC_QoL_UnsafeCaption".to_owned(),
+                Row::Caption(label.clone()),
+            ));
+        }
+        rows.push((qol_checkbox_id(fix), Row::Setting(fix)));
+    }
+    rows.into_iter()
         .enumerate()
-        .map(|(index, fix)| {
-            let mut checkbox = checkbox.clone();
-            let id = qol_checkbox_id(fix);
-            let (x, y, width) = qol_place(&checkbox, room, index);
-            checkbox.id = Some(id.clone());
-            checkbox.text = Some(fix.label().to_owned());
-            checkbox.tooltip = Some(fix.tooltip().to_owned());
-            checkbox.area.x = x;
-            checkbox.area.y = y;
-            checkbox.area.width = width;
-            (id, eq_client_assets::sidl::Element::Button(checkbox))
+        .map(|(index, (id, row))| match row {
+            Row::Setting(fix) => {
+                let mut checkbox = checkbox.clone();
+                let (x, y, width) = qol_place(&checkbox, room, index);
+                checkbox.id = Some(id.clone());
+                checkbox.text = Some(fix.label().to_owned());
+                checkbox.tooltip = Some(fix.tooltip().to_owned());
+                checkbox.area.x = x;
+                checkbox.area.y = y;
+                checkbox.area.width = width;
+                (id, Element::Button(checkbox))
+            }
+            Row::Caption(label) => {
+                let mut line = label;
+                let (x, y, width) = qol_place(checkbox, room, index);
+                line.eq_type = None;
+                "Unsafe".clone_into(&mut line.text);
+                line.area = Area {
+                    x,
+                    y,
+                    width,
+                    height: line.area.height,
+                };
+                (id, Element::Label(line))
+            }
         })
         .collect()
+}
+
+/// One row of the quality-of-life page: a setting's checkbox, or the caption
+/// that opens the unsafe run.
+enum Row {
+    Setting(eq_client_core::qol::Fix),
+    Caption(eq_client_assets::sidl::Label),
 }
 
 /// Where the quality-of-life page's place this far along sits, and how wide it is: one
@@ -1545,13 +1597,17 @@ pub(crate) struct SlashButton(pub(crate) &'static str);
 /// shows in chat.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn slash(
-    online: Res<super::online::OnlineState>,
+    mut online: ResMut<super::online::OnlineState>,
     outbox: Res<crate::outbox::Outbox>,
     mut chat: ResMut<super::chat::ChatState>,
     buttons: crate::clicks::Clicks<SlashButton>,
+    options: Option<Res<crate::options::OptionsState>>,
 ) {
+    let qol = options
+        .as_ref()
+        .map_or_else(Default::default, |options| options.options.qol);
     for SlashButton(command) in buttons.iter() {
-        super::chat::run_game_command(command, &online, &outbox, &mut chat);
+        super::chat::run_game_command(command, &mut online, &outbox, &mut chat, &qol);
     }
 }
 
@@ -3426,10 +3482,16 @@ mod tests {
             title_colors: [None, None],
             tooltip: None,
         };
-        let pages = with_qol_page(std::slice::from_ref(&general), WindowId::Options, 400.0);
+        let settings: Vec<_> = Fix::settings().collect();
+        // Tall enough, with room to spare, that a page this high holds every
+        // setting in one column whatever today's count is — the row pitch is
+        // the skin's checkbox height plus the gap, and the column wrap itself
+        // is what the short page below checks.
+        let inside =
+            26.0 * (to_f32(u32::try_from(settings.len()).unwrap_or_default()) + 2.0) + 60.0;
+        let pages = with_qol_page(std::slice::from_ref(&general), WindowId::Options, inside);
         assert_eq!(pages.len(), 2);
         assert_eq!(pages[1].title.as_deref(), Some("QoL"));
-        let settings: Vec<_> = Fix::settings().collect();
         assert_eq!(pages[1].pieces.len(), settings.len());
         let mut above: Option<Area> = None;
         for ((_, piece), fix) in pages[1].pieces.iter().zip(settings.iter().copied()) {
@@ -3471,6 +3533,76 @@ mod tests {
             .len(),
             1
         );
+    }
+
+    #[test]
+    fn the_qol_page_caps_its_unsafe_choices_with_a_caption() {
+        use eq_client_assets::sidl::{Align, Button, ButtonLook, Element, Label, Page};
+        let checkbox = Button {
+            id: Some("OGP_PetWindowPopupCheckbox".into()),
+            area: Area {
+                x: 10.0,
+                y: 175.0,
+                width: 150.0,
+                height: 20.0,
+            },
+            placed: true,
+            anchors: None,
+            look: ButtonLook::default(),
+            checkbox: true,
+            text: Some("Pet Window Popup".into()),
+            text_color: None,
+            font: None,
+            decal: None,
+            decal_area: None,
+            tooltip: None,
+        };
+        let line = Label {
+            area: Area {
+                x: 10.0,
+                y: 20.0,
+                width: 80.0,
+                height: 14.0,
+            },
+            anchors: None,
+            eq_type: Some(13322),
+            text: "General".into(),
+            color: None,
+            align: Align::Left,
+            font: None,
+            wraps: false,
+        };
+        let general = Page {
+            name: "OptionsGeneralPage".into(),
+            title: Some("General".into()),
+            area: None,
+            template: None,
+            pieces: vec![
+                ("checkbox".into(), Element::Button(checkbox)),
+                ("caption".into(), Element::Label(line)),
+            ],
+            icon: [None, None],
+            title_colors: [None, None],
+            tooltip: None,
+        };
+        let pages = with_qol_page(std::slice::from_ref(&general), WindowId::Options, 1200.0);
+        let settings: Vec<_> = eq_client_core::qol::Fix::settings().collect();
+        let first_unsafe = settings.iter().position(|fix| fix.is_unsafe()).unwrap();
+        // The page holds every setting, and one caption line ahead of the
+        // unsafe run that closes it.
+        assert_eq!(pages[1].pieces.len(), settings.len() + 1);
+        let (id, piece) = &pages[1].pieces[first_unsafe];
+        let Element::Label(caption) = piece else {
+            panic!("a caption ahead of the unsafe settings")
+        };
+        assert_eq!(id, "EQC_QoL_UnsafeCaption");
+        assert_eq!(caption.text, "Unsafe");
+        assert!(caption.eq_type.is_none());
+        // It sits directly over the first of them.
+        let (_, Element::Button(boxed)) = &pages[1].pieces[first_unsafe + 1] else {
+            panic!("a checkbox")
+        };
+        assert_eq!(boxed.text.as_deref(), Some(settings[first_unsafe].label()));
     }
 
     #[test]
@@ -3541,8 +3673,10 @@ mod tests {
         let skin = [general.clone(), display];
         let pages = with_qol_page(&skin, WindowId::Options, 400.0);
         let qol = &pages[2].pieces;
-        assert_eq!(qol.len(), settings.len() + 3);
-        let last_checkbox = match &qol[settings.len() - 1].1 {
+        // One row for the unsafe caption ahead of the last settings, and the
+        // scale's own three below them all.
+        assert_eq!(qol.len(), settings.len() + 4);
+        let last_checkbox = match &qol[settings.len()].1 {
             Element::Button(checkbox) => checkbox.area,
             _ => panic!("a checkbox"),
         };
@@ -3550,7 +3684,7 @@ mod tests {
             (_, Element::Label(caption)),
             (slider_id, Element::Slider(slider)),
             (value_id, Element::Label(value)),
-        ] = &qol[settings.len()..]
+        ] = &qol[settings.len() + 1..]
         else {
             panic!("a caption, a slider and its value")
         };

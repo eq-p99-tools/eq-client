@@ -195,10 +195,19 @@ impl Outbox {
             if world.session_id().is_none() {
                 return Err(Refusal::NotAdmitted);
             }
-            if world.is_dead() {
+            let preference = matches!(
+                command,
+                ClientCommand::SetMovementOptions { .. }
+                    | ClientCommand::SetBookOptions { .. }
+                    | ClientCommand::AnswerListPolls { .. }
+            );
+            if preference && command.session_id() != world.session_id() {
+                return Err(Refusal::Away);
+            }
+            if world.is_dead() && !preference {
                 return Err(Refusal::Dead);
             }
-            if !world.in_world() {
+            if !world.in_world() && !(preference && world.connected()) {
                 return Err(Refusal::Away);
             }
             if !world.can(capability) {
@@ -249,6 +258,8 @@ pub(crate) enum Needs {
     /// A setting that turns on what the session leaves to the player, which
     /// matters only where the session does.
     Choice(Capability),
+    /// Automatic looting requires item results, not receipt-only echoes.
+    AutomaticLoot,
     /// An ability, which the server type must also list.
     Ability(eq_client_core::abilities::Ability),
     /// Nothing of the session, as an empty action bar slot needs: never
@@ -263,6 +274,9 @@ pub(crate) enum Needs {
 impl Needs {
     /// What an Options window checkbox needs of the session, if anything.
     pub(crate) fn of(toggle: eq_client_core::options::Toggle) -> Option<Self> {
+        if toggle == eq_client_core::options::Toggle::Qol(eq_client_core::qol::Fix::AutoLoot) {
+            return Some(Self::AutomaticLoot);
+        }
         let unlocks = match toggle {
             eq_client_core::options::Toggle::Qol(fix) => fix.unlocks(),
             _ => None,
@@ -278,6 +292,9 @@ impl Needs {
         match self {
             Self::Capability(capability) => offered(world, capability),
             Self::Choice(capability) => world.session_id().is_none() || world.leaves(capability),
+            Self::AutomaticLoot => {
+                offered(world, Capability::Looting) && world.loot_continuation().automatic()
+            }
             Self::Ability(ability) => {
                 offered(world, Capability::Abilities) && world.ability_offered(ability)
             }
@@ -302,6 +319,9 @@ impl Needs {
                 fix.label()
             ),
             (Self::Missing, None) => MISSING.to_owned(),
+            (Self::AutomaticLoot, None) => {
+                "Automatic looting needs supported item results on this session.".to_owned()
+            }
             (Self::Choice(_), None) => NOT_LEFT.to_owned(),
             (Self::Capability(_) | Self::Ability(_) | Self::Nothing, None) => {
                 UNAVAILABLE.to_owned()

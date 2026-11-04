@@ -443,11 +443,12 @@ pub(super) fn spell_details(
 pub(super) fn actions(
     keys: super::keys::Keys,
     mut chat: ResMut<super::chat::ChatState>,
-    online: Res<super::online::OnlineState>,
+    mut online: ResMut<super::online::OnlineState>,
     outbox: Res<crate::outbox::Outbox>,
     clicks: crate::clicks::Clicks<SpellGem>,
     bar_clicks: crate::clicks::Clicks<hotbar::Slot>,
     bindings: Res<hotbar::Bindings>,
+    options: Option<Res<crate::options::OptionsState>>,
     definitions: (
         Res<super::spellbook::SpellNames>,
         Res<messages::Messages>,
@@ -527,14 +528,22 @@ pub(super) fn actions(
     }
     // Sit, Stand, Camp and the group's kinds run what their Actions window
     // buttons run; melee attack toggles in `combat::input`.
+    let player_id = player.spawn_id;
     if let Some(command) = bar_action.and_then(hotbar::command) {
-        super::chat::run_game_command(command, &online, &outbox, &mut chat);
+        let qol = options
+            .as_ref()
+            .map_or_else(Default::default, |options| options.options.qol);
+        super::chat::run_game_command(command, &mut online, &outbox, &mut chat, &qol);
     }
     // The duck key toggles, as both programs' key dispatchers do (Titanium
     // 0x4619cd case 0x4623b1, EQMac 0x54050c): standing ducks, ducking
     // stands, and any other stance leaves the key alone.
-    let posture = if keys.pressed(Act::Duck) {
-        match online.world().posture(player.spawn_id) {
+    let flying = options
+        .as_ref()
+        .is_some_and(|options| options.options.qol.on(eq_client_core::qol::Fix::Fly))
+        && online.world().can(eq_client_core::Capability::Moving);
+    let posture = if keys.pressed(Act::Duck) && !flying {
+        match online.world().posture(player_id) {
             Some(eq_client_core::PostureState::Ducking) => Some(eq_client_core::Posture::Standing),
             None | Some(eq_client_core::PostureState::Standing) => {
                 Some(eq_client_core::Posture::Ducking)
@@ -542,7 +551,7 @@ pub(super) fn actions(
             Some(_) => None,
         }
     } else if keys.pressed(Act::SitStand) {
-        toggled_seat(online.world().posture(player.spawn_id))
+        toggled_seat(online.world().posture(player_id))
     } else if keys.pressed(Act::Sit) {
         Some(eq_client_core::Posture::Sitting)
     } else if keys.pressed(Act::Stand) {
@@ -555,7 +564,7 @@ pub(super) fn actions(
         let _ = outbox.post(online.world(), |stamp| {
             eq_client_core::ClientCommand::SetPosture {
                 session_id: stamp.session_id,
-                spawn_id: player.spawn_id,
+                spawn_id: player_id,
                 posture,
                 created: stamp.created,
             }

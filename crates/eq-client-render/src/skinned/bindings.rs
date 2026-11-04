@@ -352,7 +352,7 @@ pub(super) fn hot_button(id: &str) -> Option<usize> {
 
 /// The skin's Options window checkboxes for the official client's options
 /// this client keeps, by screen ID.
-const OPTION_CHECKBOXES: [(&str, eq_client_core::options::Toggle); 7] = {
+const OPTION_CHECKBOXES: [(&str, eq_client_core::options::Toggle); 8] = {
     use eq_client_core::options::Toggle;
     [
         ("OGP_PetWindowPopupCheckbox", Toggle::PetWindowPopup),
@@ -362,6 +362,7 @@ const OPTION_CHECKBOXES: [(&str, eq_client_core::options::Toggle); 7] = {
         ("ODP_NPCNamesCheckbox", Toggle::NpcNames),
         ("OMP_InvertYAxisCheckbox", Toggle::InvertY),
         ("OMP_MouseWheelZoomCheckbox", Toggle::WheelZoom),
+        ("EQC_SpellEffectsCheckbox", Toggle::SpellEffects),
     ]
 };
 

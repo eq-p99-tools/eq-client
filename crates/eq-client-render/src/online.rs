@@ -345,6 +345,8 @@ pub(super) struct Panels<'w> {
     book: Option<ResMut<'w, super::spellbook::BookSelection>>,
     book_view: Option<ResMut<'w, super::spellbook::BookView>>,
     sounds: ResMut<'w, super::sounds::Sounds>,
+    options: Option<Res<'w, super::options::OptionsState>>,
+    combat_text: Option<ResMut<'w, super::combat_text::CombatText>>,
 }
 
 impl Panels<'_> {
@@ -358,6 +360,26 @@ impl Panels<'_> {
         messages: Option<&hud::messages::Messages>,
         chat: &mut super::chat::ChatState,
     ) {
+        if let Some(options) = self.options.as_ref() {
+            if options.options.qol.on(eq_client_core::qol::Fix::AutoLoot) {
+                self.trade.killed(state.world(), &changes.kills);
+            }
+            if options
+                .options
+                .qol
+                .on(eq_client_core::qol::Fix::FloatingCombatText)
+                && let Some(text) = self.combat_text.as_mut()
+            {
+                text.hear(
+                    state.world(),
+                    &changes.damage,
+                    options
+                        .options
+                        .qol
+                        .on(eq_client_core::qol::Fix::ShowInvisible),
+                );
+            }
+        }
         if changes.inventory {
             self.inventory.refresh(state.world.inventory().stale());
         }

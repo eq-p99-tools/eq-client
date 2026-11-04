@@ -223,13 +223,22 @@ pub(super) fn update(
         eq_client_core::zones::number(world.zone()),
         world.game_time(std::time::Instant::now()),
     );
-    let mut lit = lighting(&sky, minute, &day_night(clock));
+    // The player may ask to see the scene clearly whatever the hour and the
+    // weather: the same zone, lit as if the clock said midday, with the
+    // zone's distance fog kept out of the view. What the world sees is the
+    // same either way; this is the drawn scene alone.
+    let clearly = options.options.qol.on(eq_client_core::qol::Fix::ClearView);
+    let lit_minute = if clearly { None } else { minute };
+    let mut lit = lighting(&sky, lit_minute, &day_night(clock));
     lit.fog = closed_in(
         lit.fog,
         crate::camera::clip_distance(settings.0.installed_client, &options.options, world),
         world.far_clip(),
         lit.sky,
     );
+    if clearly {
+        lit.fog = None;
+    }
     for mut sun in &mut suns {
         sun.illuminance = lit.sun.0;
         sun.color = color(lit.sun.1);
@@ -323,6 +332,25 @@ mod tests {
         assert!(
             (app.world().resource::<GlobalAmbientLight>().brightness - DAY_AMBIENT).abs() > 1.0
         );
+        let midnight = app.world().resource::<GlobalAmbientLight>().brightness;
+        app.world_mut()
+            .resource_mut::<crate::options::OptionsState>()
+            .options
+            .qol
+            .set(eq_client_core::qol::Fix::ClearView, true);
+        app.update();
+        assert!(app.world().get::<DistanceFog>(camera).is_none());
+        assert!(
+            (app.world().resource::<GlobalAmbientLight>().brightness - DAY_AMBIENT).abs() < 0.001
+        );
+        app.world_mut()
+            .resource_mut::<crate::options::OptionsState>()
+            .options
+            .qol
+            .set(eq_client_core::qol::Fix::ClearView, false);
+        app.update();
+        assert!(app.world().get::<DistanceFog>(camera).is_some());
+        assert!((app.world().resource::<GlobalAmbientLight>().brightness - midnight).abs() < 0.001);
         // A camp forgets the zone's sky.
         crate::online::testing::set_world(
             &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),

@@ -616,6 +616,7 @@ type Observed<'w> = (
     Option<Res<'w, super::doors::Hinges>>,
     Option<Res<'w, super::zone_navmesh::ZoneNavMesh>>,
     Option<Res<'w, crate::spellbook::SpellNames>>,
+    Option<Res<'w, crate::options::OptionsState>>,
 );
 
 type Input<'w, 's> = (Keyboard<'w, 's>, ResMut<'w, ButtonInput<MouseButton>>);
@@ -1616,8 +1617,13 @@ pub(super) fn drive(
             return;
         }
         Step::Slash(command) => {
-            let queued = super::chat::client_request(command, &mut chat)
-                .unwrap_or_else(|| super::chat::submit_game_command(command, &online, &observed.1));
+            let qol = observed
+                .9
+                .as_ref()
+                .map_or_else(Default::default, |options| options.options.qol);
+            let queued = super::chat::client_request(command, &mut chat).unwrap_or_else(|| {
+                super::chat::submit_game_command(command, &mut online, &observed.1, &qol)
+            });
             if let Err(error) = queued {
                 script.stop(&mut keys, &mut mouse, &error);
             }

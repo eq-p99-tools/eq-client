@@ -44,6 +44,7 @@ mod chat;
 mod clicks;
 mod coins;
 mod combat;
+mod combat_text;
 mod confirm;
 mod creation_preview;
 mod daylight;
@@ -307,6 +308,7 @@ fn seed_official_options(
         for (toggle, setting) in [
             (Toggle::Log, official.log),
             (Toggle::Sound, official.sound),
+            (Toggle::SpellEffects, official.spell_effects),
             (Toggle::PcNames, official.pc_names),
             (Toggle::NpcNames, official.npc_names),
         ] {

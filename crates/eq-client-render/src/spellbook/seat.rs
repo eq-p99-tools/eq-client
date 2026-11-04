@@ -1,5 +1,7 @@
 //! The book and the player's seat go together, as in the official client:
-//! the player must be sitting to keep the book open.
+//! the player must be sitting to keep the book open by default. The Read the
+//! Spellbook Standing option changes the local book-open posture behavior.
+//! Actual spellbook actions retain their separate session validation.
 use crate::windows::{Shown, WindowId};
 use bevy::prelude::*;
 use eq_client_core::{PostureState, world::ClientWorld};
@@ -10,6 +12,8 @@ use eq_client_core::{PostureState, world::ClientWorld};
 pub(crate) struct Seen {
     open: bool,
     posture: Option<PostureState>,
+    session: Option<u64>,
+    unseated: bool,
 }
 
 /// Sits a standing player down as the book opens, with the command their
@@ -19,26 +23,49 @@ pub(crate) struct Seen {
 /// The sit it sends cannot close the book, since a change to sitting never
 /// does. Closing the book leaves the player sitting (inferred). Every
 /// official client does this (the Mac client's is inferred), so no server
-/// type changes it.
+/// type changes it. The comfort setting lets the player read without the
+/// seat: the book then neither sends the sit nor closes on standing, and
+/// nothing else goes out either way.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn seat(
     mut shown: ResMut<Shown>,
     online: Option<Res<crate::online::OnlineState>>,
     outbox: Option<Res<crate::outbox::Outbox>>,
+    options: Option<Res<crate::options::OptionsState>>,
     mut seen: Local<Seen>,
 ) {
     let world = crate::online::world(online.as_deref());
     let posture = world
         .player()
         .and_then(|player| world.posture(player.spawn_id));
+    let unseated = options.as_ref().is_some_and(|o| {
+        o.options
+            .qol
+            .on(eq_client_core::qol::Fix::ReadWhileStanding)
+    });
     let mut open = shown.is_open(WindowId::Spellbook);
-    if open && seen.open && posture != seen.posture && posture != Some(PostureState::Sitting) {
+    let reset = seen.open
+        && (seen.session != world.session_id() || (world.player().is_some() && !world.in_world()));
+    if open && reset {
         shown.close(WindowId::Spellbook);
         open = false;
-    } else if open && !seen.open {
+    } else if open
+        && seen.open
+        && !unseated
+        && posture != seen.posture
+        && posture != Some(PostureState::Sitting)
+    {
+        shown.close(WindowId::Spellbook);
+        open = false;
+    } else if open && (!seen.open || seen.unseated) && !unseated {
         sit(world, posture, outbox.as_deref());
     }
-    *seen = Seen { open, posture };
+    *seen = Seen {
+        open,
+        posture,
+        session: world.session_id(),
+        unseated,
+    };
 }
 
 /// Sits the player in a session, alive, and standing, ducking or not yet
@@ -270,6 +297,42 @@ mod tests {
         app.update();
         assert!(!is_open(&app));
         assert_eq!(sent(&receiver).len(), 0);
+    }
+
+    #[test]
+    fn reading_standing_sends_no_seat_and_closes_nothing() {
+        use crate::options::OptionsState;
+        use eq_client_core::{Posture, options::Options, qol::Fix};
+        let (mut app, receiver) = seated_app();
+        let mut settings = Options::default();
+        settings.qol.set(Fix::ReadWhileStanding, true);
+        app.insert_resource(OptionsState::new(settings));
+        report(&mut app, PostureState::Standing);
+        app.update();
+        open(&mut app, true);
+        app.update();
+        // The comfort keeps the seat unsent, and the book open all the same.
+        assert_eq!(sent(&receiver), [] as [(u16, Posture); 0]);
+        assert!(is_open(&app));
+        // Sitting, standing or looting about keeps the pages open alike.
+        report(&mut app, PostureState::Sitting);
+        app.update();
+        report(&mut app, PostureState::Looting);
+        app.update();
+        assert!(is_open(&app));
+        // With the choice off again, the old ritual returns.
+        report(&mut app, PostureState::Standing);
+        app.update();
+        let mut settings = Options::default();
+        settings.qol.set(Fix::ReadWhileStanding, false);
+        app.insert_resource(OptionsState::new(settings));
+        app.update();
+        assert_eq!(sent(&receiver), [(7, Posture::Sitting)]);
+        open(&mut app, false);
+        app.update();
+        open(&mut app, true);
+        app.update();
+        assert_eq!(sent(&receiver), [(7, Posture::Sitting)]);
     }
 
     #[test]
