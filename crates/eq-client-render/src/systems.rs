@@ -14,7 +14,7 @@ use bevy::prelude::*;
 /// trade, combat and motion) empty: every resource the windows keep, in one
 /// list that the tests' app starts from too.
 pub(super) fn init_presentation(app: &mut App) {
-    // A fresh installation's keys, by the installed client's own table.
+    // Use the installed table, or the explicit Titanium fallback offline.
     let keys = app
         .world()
         .get_resource::<crate::ViewerSettings>()

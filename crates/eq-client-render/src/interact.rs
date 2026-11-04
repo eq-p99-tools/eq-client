@@ -279,7 +279,7 @@ mod tests {
         ));
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
-            .press(KeyCode::KeyF);
+            .press(KeyCode::KeyU);
         app.update();
         assert!(matches!(
             receiver.try_recv().unwrap(),
@@ -377,7 +377,7 @@ mod tests {
         ));
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
-            .press(KeyCode::KeyF);
+            .press(KeyCode::KeyU);
         app.update();
         assert!(matches!(
             receiver.try_recv().unwrap(),

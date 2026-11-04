@@ -293,6 +293,9 @@ mod tests {
         report(&mut app, PostureState::Standing);
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::ControlLeft);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
             .press(KeyCode::KeyB);
         app.update();
         assert!(is_open(&app));

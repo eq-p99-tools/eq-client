@@ -518,7 +518,7 @@ mod tests {
         assert!((ground(&app) - 0.5).abs() < 0.001);
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
-            .press(KeyCode::KeyF);
+            .press(KeyCode::KeyU);
         app.update();
         assert!(receiver.try_recv().is_err());
         app.world_mut().get_mut::<Window>(window).unwrap().focused = true;

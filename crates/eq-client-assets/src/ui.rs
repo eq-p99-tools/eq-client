@@ -612,14 +612,14 @@ impl InstalledClient {
     }
 
     /// The keys a fresh installation of this client binds its commands
-    /// to, from the program where read (Titanium, program read N3 of
-    /// 11-01); None where unread, and this client's own defaults stand
-    /// (the Mac-era client, recording checklist 6.351).
+    /// to, from the program where read (Titanium 0x4b26f0, Mac-era
+    /// 0x55a83b). None denotes an unread generation; callers must label
+    /// any fallback rather than treating it as that generation's table.
     #[must_use]
     pub const fn default_keys(self) -> Option<&'static [crate::keys::DefaultKey]> {
         match self {
             Self::Titanium => Some(crate::keys::TITANIUM),
-            Self::EqMac => None,
+            Self::EqMac => Some(crate::keys::EQMAC),
         }
     }
 

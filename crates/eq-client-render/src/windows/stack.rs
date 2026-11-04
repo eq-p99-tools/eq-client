@@ -503,6 +503,9 @@ mod tests {
             .composing = true;
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::ControlLeft);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
             .press(KeyCode::KeyB);
         app.update();
         assert!(!app.world().resource::<Shown>().is_open(WindowId::Spellbook));

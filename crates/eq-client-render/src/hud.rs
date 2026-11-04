@@ -541,6 +541,15 @@ pub(super) fn actions(
             }
             Some(_) => None,
         }
+    } else if keys.pressed(Act::SitStand) {
+        match online.world().posture(player.spawn_id) {
+            None
+            | Some(
+                eq_client_core::PostureState::Standing | eq_client_core::PostureState::Ducking,
+            ) => Some(eq_client_core::Posture::Sitting),
+            Some(eq_client_core::PostureState::Sitting) => Some(eq_client_core::Posture::Standing),
+            Some(_) => None,
+        }
     } else if keys.pressed(Act::Sit) {
         Some(eq_client_core::Posture::Sitting)
     } else if keys.pressed(Act::Stand) {

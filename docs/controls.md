@@ -9,30 +9,43 @@ or alternate cell, then press the new key/chord. Escape cancels; Delete clears.
 Assigning an already-used chord moves it to the chosen action. Bindings are
 saved per character; `keys.txt` seeds characters without their own file.
 
-Titanium installations use the program's built-in key table for supported
-commands. Mac-era installations use this client's requested Q/C/Z defaults;
-the complete original command-table and saved-settings behavior remains
-partially read (recording checklist 6.351/6.352). Q for attack and Z for duck
-are requested starting choices, with saved bindings taking precedence.
+Supported commands start from the installed generation's built-in key table.
+Offline startup without a generation uses the same Titanium table as a fallback.
+Saved assignments in this client's shared or character key file take precedence,
+including an explicitly cleared action. Updating defaults does not reset those
+files. The original client's `[KeyMaps]` settings are not imported.
 These are starting defaults, before saved assignments:
 
-| Action | Titanium | Client defaults (Mac-era) |
+| Action | Titanium / offline fallback | Mac-era |
 | --- | --- | --- |
-| Forward/back | Up/Down or keypad | Up/Down |
-| Turn | Left/Right or keypad | Left/Right |
+| Forward/back | Up/Down or keypad 8/2 | Up/Down or keypad 8/2 |
+| Turn | Left/Right or keypad 4/6 | Left/Right or keypad 4/6 |
 | Strafe | Unbound | Unbound |
-| Camera-relative movement | Unbound | W/A/S/D |
-| Walk/run toggle | F12 | Insert |
+| Camera-relative movement | Unbound | Unbound |
+| Walk/run toggle | Ctrl+R | Ctrl+R |
 | Autorun | Num Lock | Num Lock |
-| Attack | Q | Q |
+| Attack | Q | A |
 | Consider | C | C |
-| Duck | D | Z |
-| Use nearby door/object | U | F |
-| Inventory / spellbook | I / B | I / B |
-| Target self / next / previous | F1 / Tab / Shift+Tab | F1 / Tab / Shift+Tab |
+| Duck | D | D |
+| Sit/stand toggle | Ctrl+S | Ctrl+S |
+| Use nearby door/object | U | U |
+| Inventory / spellbook | I / Ctrl+B | I / Ctrl+B |
+| Target self / next | F1 / Tab | F1 / Tab |
 | Spell gems / hotbuttons | Alt+1…8 / 1…0 | Alt+1…8 / 1…0 |
 | Map / Options | Ctrl+M / Alt+O | Ctrl+M / Alt+O |
 | Free camera / up / down | F9 / Page Up / Page Down | F9 / Page Up / Page Down |
+
+Direct loot, trade, separate sit/stand and previous-target shortcuts start
+unbound. Use the normal pointer interaction or assign a shortcut in Options.
+Unverified camera-relative movement defaults also stay unbound; W/A/S/D and
+Q/E are not supplied as substitute gameplay keys. F12 is the original client's
+mouse-look key, not its walk/run key.
+
+The local map (Ctrl+M), detached camera (F9, Page Up/Down), and keyboard hotbar
+editing (Ctrl+1…0 to bind, Ctrl+Shift+1…0 to clear) are this client's deliberate
+extensions. Their defaults do not conflict with supported native commands.
+Camera height keys apply only while detached. The map and detached camera
+do not claim the original client's window or camera-switch behavior.
 
 A binding does not grant an unavailable server action. Text entry and focus
 guards prevent gameplay keys from firing while composing chat, searching the

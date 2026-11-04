@@ -1571,6 +1571,12 @@ mod tests {
         let mut app = App::new();
         app.init_resource::<windows::Shown>();
         crate::keys::testing::install(&mut app);
+        // Direct target trading is an explicit user shortcut, not native U.
+        crate::keys::testing::bind(
+            &mut app,
+            crate::keys::Act::Trade,
+            crate::keys::Chord::key(KeyCode::KeyT),
+        );
         app.insert_resource(online)
             .init_resource::<TradeState>()
             .insert_resource(crate::outbox::Outbox::new(Some(sender)))
@@ -1588,18 +1594,18 @@ mod tests {
             },
             bevy::window::PrimaryWindow,
         ));
-        let press_u = |app: &mut App| {
+        let press_trade = |app: &mut App| {
             app.world_mut()
                 .resource_mut::<ButtonInput<KeyCode>>()
-                .press(KeyCode::KeyU);
+                .press(KeyCode::KeyT);
             app.update();
             let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
-            keys.release(KeyCode::KeyU);
+            keys.release(KeyCode::KeyT);
             keys.clear();
         };
         // The key asks; with no answer, as from a merchant out of the
         // server's range, no window opens.
-        press_u(&mut app);
+        press_trade(&mut app);
         assert!(matches!(
             receiver.try_recv(),
             Ok(ClientCommand::Shop {
@@ -1611,7 +1617,7 @@ mod tests {
         app.update();
         assert_eq!(app.world().resource::<TradeState>().merchant(), None);
         // Asking again asks again.
-        press_u(&mut app);
+        press_trade(&mut app);
         assert!(matches!(
             receiver.try_recv(),
             Ok(ClientCommand::Shop { merchant_id: 8, .. })
@@ -1629,7 +1635,7 @@ mod tests {
             Some("Example Trader")
         );
         // Open, the key ends the trade.
-        press_u(&mut app);
+        press_trade(&mut app);
         assert!(matches!(
             receiver.try_recv(),
             Ok(ClientCommand::Shop { open: false, .. })
@@ -1658,14 +1664,19 @@ mod tests {
             let mut settings = crate::ViewerSettings::default();
             settings.0.installed_client = client;
             let mut app = App::new();
+            app.insert_resource(settings);
             app.init_resource::<windows::Shown>();
             crate::keys::testing::install(&mut app);
+            crate::keys::testing::bind(
+                &mut app,
+                crate::keys::Act::Trade,
+                crate::keys::Chord::key(KeyCode::KeyT),
+            );
             app.insert_resource(online)
                 .init_resource::<TradeState>()
                 .insert_resource(crate::outbox::Outbox::new(Some(sender)))
                 .init_resource::<crate::notices::Lines>()
                 .init_resource::<super::super::chat::ChatState>()
-                .insert_resource(settings)
                 .init_resource::<crate::hud::messages::Messages>()
                 .init_resource::<super::super::escape::Escape>()
                 .init_resource::<ButtonInput<KeyCode>>()
@@ -1677,9 +1688,20 @@ mod tests {
                 },
                 bevy::window::PrimaryWindow,
             ));
+            // Native U is Use, not direct target trading. Merely selecting
+            // a merchant and pressing it cannot invoke Trade's shortcut.
             app.world_mut()
                 .resource_mut::<ButtonInput<KeyCode>>()
                 .press(KeyCode::KeyU);
+            app.update();
+            assert!(receiver.try_recv().is_err());
+            assert_eq!(app.world().resource::<TradeState>().merchant(), None);
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .reset_all();
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(KeyCode::KeyT);
             app.update();
             receiver.try_recv().ok()
         };

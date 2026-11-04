@@ -266,11 +266,68 @@ fn tap(app: &mut App, key: KeyCode) {
 }
 
 #[test]
+fn native_sit_stand_chord_uses_reported_posture_and_respects_typing() {
+    use eq_client_core::{Posture, PostureState};
+    for client in [
+        eq_client_assets::ui::InstalledClient::Titanium,
+        eq_client_assets::ui::InstalledClient::EqMac,
+    ] {
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let mut app = bar_app(tx);
+        app.insert_resource(crate::keys::KeyMap::for_client(client));
+        let chord = |app: &mut App| {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.reset_all();
+            keys.press(KeyCode::ControlLeft);
+            keys.press(KeyCode::KeyS);
+            app.update();
+        };
+        for (reported, wanted) in [
+            (PostureState::Standing, Posture::Sitting),
+            (PostureState::Sitting, Posture::Standing),
+            (PostureState::Ducking, Posture::Sitting),
+        ] {
+            testing::news(
+                &mut online(&mut app),
+                [WorldEvent::Posture {
+                    spawn_id: 12,
+                    posture: reported,
+                }],
+            );
+            chord(&mut app);
+            assert!(
+                matches!(rx.try_recv(), Ok(ClientCommand::SetPosture { posture, .. }) if posture == wanted)
+            );
+            // A key does not manufacture the server's changed posture.
+            assert_eq!(
+                app.world().resource::<OnlineState>().world().posture(12),
+                Some(reported)
+            );
+        }
+        app.world_mut()
+            .resource_mut::<crate::keys::Typing>()
+            .composing = true;
+        chord(&mut app);
+        assert!(rx.try_recv().is_err());
+    }
+}
+
+#[test]
 fn a_hotbuttons_sit_and_stand_send_the_postures_their_keys_send_and_say_a_refusal_once() {
     let (tx, rx) = std::sync::mpsc::sync_channel(4);
     let mut app = bar_app(tx);
     // The bar's ninth and tenth slots hold Sit and Stand by default, which
-    // run `/sit` and `/stand`; X and V are the posture keys.
+    // run `/sit` and `/stand`. Direct posture keys are explicit user choices.
+    crate::keys::testing::bind(
+        &mut app,
+        crate::keys::Act::Sit,
+        crate::keys::Chord::key(KeyCode::KeyX),
+    );
+    crate::keys::testing::bind(
+        &mut app,
+        crate::keys::Act::Stand,
+        crate::keys::Chord::key(KeyCode::KeyV),
+    );
     for (slot, key, wanted) in [
         (
             KeyCode::Digit9,

@@ -2327,6 +2327,18 @@ mod tests {
         let (sender, receiver) = mpsc::sync_channel(2);
         let mut app = App::new();
         crate::keys::testing::install(&mut app);
+        // These camera-relative motion cases choose their own controls;
+        // W/A/S/D and Q/E are not the installed client's default bindings.
+        for (act, key) in [
+            (Act::CameraForward, KeyCode::KeyW),
+            (Act::CameraBack, KeyCode::KeyS),
+            (Act::CameraLeft, KeyCode::KeyA),
+            (Act::CameraRight, KeyCode::KeyD),
+            (Act::TurnLeft, KeyCode::KeyQ),
+            (Act::TurnRight, KeyCode::KeyE),
+        ] {
+            crate::keys::testing::bind(&mut app, act, crate::keys::Chord::key(key));
+        }
         let mut state = online::OnlineState::new(true);
         crate::online::testing::admit(
             &mut state,
@@ -2420,6 +2432,13 @@ mod tests {
         reason = "Exact equality verifies unchanged or explicitly assigned state"
     )]
     fn strafing_is_perpendicular_to_facing_and_never_borrows_forward_speed() {
+        let map = crate::keys::testing::map(&[
+            (Act::StrafeLeft, crate::keys::Chord::key(KeyCode::ArrowLeft)),
+            (
+                Act::StrafeRight,
+                crate::keys::Chord::key(KeyCode::ArrowRight),
+            ),
+        ]);
         for heading in [0.0, 128.0, 256.0, 384.0] {
             let radians = eq_client_core::render_heading(heading);
             let facing = Vec3::new(radians.sin(), 0.0, radians.cos());
@@ -2431,13 +2450,12 @@ mod tests {
             keys.press(KeyCode::ArrowRight);
             assert_eq!(
                 controls
-                    .intent(&keys, &KeyMap::default(), &[], true, (0.0, heading), false)
+                    .intent(&keys, &map, &[], true, (0.0, heading), false)
                     .direction,
                 Vec3::ZERO
             );
             controls.strafe_speed = Some(3.0);
-            let right =
-                controls.intent(&keys, &KeyMap::default(), &[], true, (0.0, heading), false);
+            let right = controls.intent(&keys, &map, &[], true, (0.0, heading), false);
             assert_eq!(right.mode, MovementMode::Strafe);
             assert!(right.preserve_facing);
             assert_eq!(right.speed, 3.0);
@@ -2445,18 +2463,18 @@ mod tests {
             assert!(right.direction.dot(facing.cross(Vec3::Y)) > 0.999);
             keys.reset_all();
             keys.press(KeyCode::ArrowLeft);
-            let left = controls.intent(&keys, &KeyMap::default(), &[], true, (0.0, heading), false);
+            let left = controls.intent(&keys, &map, &[], true, (0.0, heading), false);
             assert!((left.direction + right.direction).length() < 0.0001);
             assert_eq!(
                 controls
-                    .intent(&keys, &KeyMap::default(), &[], false, (0.0, heading), false)
+                    .intent(&keys, &map, &[], false, (0.0, heading), false)
                     .direction,
                 Vec3::ZERO
             );
             keys.press(KeyCode::ArrowRight);
             assert_eq!(
                 controls
-                    .intent(&keys, &KeyMap::default(), &[], true, (0.0, heading), false)
+                    .intent(&keys, &map, &[], true, (0.0, heading), false)
                     .direction,
                 Vec3::ZERO
             );
@@ -2495,7 +2513,10 @@ mod tests {
         app.world_mut().resource_mut::<Controls>().walk_speed = Some(2.0);
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
-            .press(KeyCode::Insert);
+            .press(KeyCode::ControlLeft);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyR);
         app.update();
         let ClientCommand::Move(request) = receiver.try_recv().unwrap() else {
             panic!("expected walking movement")
@@ -2532,7 +2553,10 @@ mod tests {
             .composing = true;
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
-            .press(KeyCode::Insert);
+            .press(KeyCode::ControlLeft);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyR);
         app.update();
         assert!(!app.world().resource::<Controls>().walking);
     }

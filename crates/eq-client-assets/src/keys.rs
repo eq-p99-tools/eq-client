@@ -10,6 +10,12 @@
 //! program's key-command dispatcher (0x4619cd) switches on; only the
 //! commands whose action is identified are listed here (the command map of
 //! 11-01), and of those only the ones this client also has.
+//!
+//! The Mac-era table is read at 0x55a83b, with command identities at
+//! 0x611224 and dispatcher 0x54050c (whose command numbers are one-based).
+//! Titanium identities at 0x78d868 distinguish mouse look (8, F12) from
+//! walk/run (139, Ctrl+R). Modifier decoding differs between generations:
+//! Titanium 0x5ba2d0/0x5ba560; Mac-era 0x52505a/0x525520.
 
 /// A program key command whose action is identified.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -27,8 +33,7 @@ pub enum Command {
     TurnRight,
     /// Turns left while held.
     TurnLeft,
-    /// Switches between walking and running (identified from its routine
-    /// and its key; recording checklist 6.361).
+    /// Switches between walking and running.
     WalkRun,
     /// Turns auto attack on and off.
     AutoAttack,
@@ -40,6 +45,14 @@ pub enum Command {
     Hail,
     /// Opens or closes the inventory window.
     Inventory,
+    /// Opens or closes the spellbook.
+    Spellbook,
+    /// Opens or closes Options.
+    Options,
+    /// Opens or closes the raid window.
+    Raid,
+    /// Switches between sitting and standing.
+    SitStand,
     /// Uses whatever is under the mouse: a spawn's right-click action, or a
     /// door.
     Use,
@@ -82,6 +95,13 @@ impl ScanKey {
     const fn alt(scan: u8) -> Self {
         Self {
             alt: true,
+            ..Self::plain(scan)
+        }
+    }
+
+    const fn ctrl(scan: u8) -> Self {
+        Self {
+            ctrl: true,
             ..Self::plain(scan)
         }
     }
@@ -129,6 +149,14 @@ const fn hotbar_page(page: u8, scan: u8) -> DefaultKey {
     }
 }
 
+const fn modified(command: Command, key: ScanKey) -> DefaultKey {
+    DefaultKey {
+        command,
+        alternate: false,
+        key,
+    }
+}
+
 /// The Titanium program's defaults for the commands listed, by the
 /// command's index in its table.
 pub const TITANIUM: &[DefaultKey] = &[
@@ -142,7 +170,6 @@ pub const TITANIUM: &[DefaultKey] = &[
     alternate(Command::TurnRight, 0xcd),
     primary(Command::TurnLeft, 0x4b), // 5: keypad 4
     alternate(Command::TurnLeft, 0xcb),
-    primary(Command::WalkRun, 0x58),    // 8: F12
     primary(Command::AutoAttack, 0x10), // 10: Q
     primary(Command::Consider, 0x2e),   // 11: C
     primary(Command::Duck, 0x20),       // 12: D
@@ -219,7 +246,71 @@ pub const TITANIUM: &[DefaultKey] = &[
         alternate: false,
         key: ScanKey::alt(0x0a),
     },
-    primary(Command::TargetNext, 0x0f), // 128: Tab
+    primary(Command::TargetNext, 0x0f),                // 128: Tab
+    modified(Command::Spellbook, ScanKey::ctrl(0x30)), // 129: Ctrl+B
+    modified(Command::SitStand, ScanKey::ctrl(0x1f)),  // 138: Ctrl+S
+    modified(Command::WalkRun, ScanKey::ctrl(0x13)),   // 139: Ctrl+R
+    modified(Command::Options, ScanKey::alt(0x18)),    // 169: Alt+O
+    modified(Command::Raid, ScanKey::alt(0x13)),       // 175: Alt+R
+];
+
+/// The Mac-era program's defaults for the supported commands, before saved
+/// overrides. Indices below are zero-based table indices, not dispatcher IDs.
+pub const EQMAC: &[DefaultKey] = &[
+    primary(Command::Autorun, 0x45), // 0: Num Lock
+    primary(Command::Jump, 0x39),    // 1: Space
+    primary(Command::Forward, 0x48), // 2: keypad 8
+    alternate(Command::Forward, 0xc8),
+    primary(Command::Back, 0x50), // 3: keypad 2
+    alternate(Command::Back, 0xd0),
+    primary(Command::TurnRight, 0x4d), // 4: keypad 6
+    alternate(Command::TurnRight, 0xcd),
+    primary(Command::TurnLeft, 0x4b), // 5: keypad 4
+    alternate(Command::TurnLeft, 0xcb),
+    primary(Command::AutoAttack, 0x1e), // 7: A
+    primary(Command::Consider, 0x2e),   // 8: C
+    primary(Command::Duck, 0x20),       // 9: D
+    primary(Command::Hail, 0x23),       // 10: H
+    primary(Command::Inventory, 0x17),  // 11: I
+    primary(Command::Use, 0x16),        // 13: U
+    primary(Command::TargetSelf, 0x3b), // 21: F1
+    // 30..39: the first bank's hotbuttons on 1..0.
+    primary(Command::HotButton(0), 0x02),
+    primary(Command::HotButton(1), 0x03),
+    primary(Command::HotButton(2), 0x04),
+    primary(Command::HotButton(3), 0x05),
+    primary(Command::HotButton(4), 0x06),
+    primary(Command::HotButton(5), 0x07),
+    primary(Command::HotButton(6), 0x08),
+    primary(Command::HotButton(7), 0x09),
+    primary(Command::HotButton(8), 0x0a),
+    primary(Command::HotButton(9), 0x0b),
+    // 40..49: first hotbar pages on Shift+1..0.
+    hotbar_page(0, 0x02),
+    hotbar_page(1, 0x03),
+    hotbar_page(2, 0x04),
+    hotbar_page(3, 0x05),
+    hotbar_page(4, 0x06),
+    hotbar_page(5, 0x07),
+    hotbar_page(6, 0x08),
+    hotbar_page(7, 0x09),
+    hotbar_page(8, 0x0a),
+    hotbar_page(9, 0x0b),
+    // 50..57: eight spell gems on Alt+1..8.
+    modified(Command::Gem(0), ScanKey::alt(0x02)),
+    modified(Command::Gem(1), ScanKey::alt(0x03)),
+    modified(Command::Gem(2), ScanKey::alt(0x04)),
+    modified(Command::Gem(3), ScanKey::alt(0x05)),
+    modified(Command::Gem(4), ScanKey::alt(0x06)),
+    modified(Command::Gem(5), ScanKey::alt(0x07)),
+    modified(Command::Gem(6), ScanKey::alt(0x08)),
+    modified(Command::Gem(7), ScanKey::alt(0x09)),
+    primary(Command::TargetNext, 0x0f),                // 62: Tab
+    modified(Command::Spellbook, ScanKey::ctrl(0x30)), // 63: Ctrl+B
+    modified(Command::SitStand, ScanKey::ctrl(0x1f)),  // 72: Ctrl+S
+    modified(Command::WalkRun, ScanKey::ctrl(0x13)),   // 73: Ctrl+R
+    modified(Command::Options, ScanKey::alt(0x18)),    // 102: Alt+O
+    modified(Command::Raid, ScanKey::alt(0x13)),       // 108: Alt+R
 ];
 
 #[cfg(test)]
@@ -228,13 +319,15 @@ mod tests {
 
     #[test]
     fn each_command_has_one_primary_at_most_and_no_key_twice() {
-        for (index, entry) in TITANIUM.iter().enumerate() {
-            for other in &TITANIUM[index + 1..] {
-                assert_ne!(entry.key, other.key, "{entry:?} {other:?}");
-                assert!(
-                    entry.command != other.command || entry.alternate != other.alternate,
-                    "{entry:?} {other:?}"
-                );
+        for table in [TITANIUM, EQMAC] {
+            for (index, entry) in table.iter().enumerate() {
+                for other in &table[index + 1..] {
+                    assert_ne!(entry.key, other.key, "{entry:?} {other:?}");
+                    assert!(
+                        entry.command != other.command || entry.alternate != other.alternate,
+                        "{entry:?} {other:?}"
+                    );
+                }
             }
         }
         let autorun = TITANIUM
@@ -242,6 +335,26 @@ mod tests {
             .find(|entry| entry.command == Command::Autorun)
             .unwrap();
         assert_eq!(autorun.key, ScanKey::plain(0x45));
+    }
+
+    #[test]
+    fn native_generations_distinguish_attack_and_share_command_modifiers() {
+        let key = |table: &[DefaultKey], command| {
+            table
+                .iter()
+                .find(|entry| entry.command == command)
+                .unwrap()
+                .key
+        };
+        assert_eq!(key(TITANIUM, Command::AutoAttack), ScanKey::plain(0x10));
+        assert_eq!(key(EQMAC, Command::AutoAttack), ScanKey::plain(0x1e));
+        for table in [TITANIUM, EQMAC] {
+            assert_eq!(key(table, Command::Duck), ScanKey::plain(0x20));
+            assert_eq!(key(table, Command::Use), ScanKey::plain(0x16));
+            assert_eq!(key(table, Command::WalkRun), ScanKey::ctrl(0x13));
+            assert_eq!(key(table, Command::SitStand), ScanKey::ctrl(0x1f));
+            assert_eq!(key(table, Command::Spellbook), ScanKey::ctrl(0x30));
+        }
     }
 
     #[test]
