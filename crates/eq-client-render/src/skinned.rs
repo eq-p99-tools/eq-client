@@ -27,6 +27,8 @@ mod frame;
 pub(crate) mod gem;
 mod items;
 pub(crate) mod looks;
+#[cfg(test)]
+mod merchant_grid_tests;
 mod perimeter;
 mod pixel_edges;
 pub(crate) use pixel_edges::register as register_border_pixels;
@@ -41,7 +43,8 @@ pub(crate) use controls::{
 };
 
 pub(crate) use items::{
-    Closes, TheirSlot, close, contents, frames, loot, quantity, theirs, toggle_bag,
+    Closes, Content as SlotContent, TheirSlot, close, contents, draw as draw_item, frames, loot,
+    quantity, theirs, toggle_bag,
 };
 
 use super::{hud::hotbar, windows::WindowId};

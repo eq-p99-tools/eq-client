@@ -13,7 +13,9 @@ mod loot_requests;
 mod merchant;
 mod spawn_use;
 use loot_requests::PendingLoot;
-pub(crate) use merchant::{ChosenPicture, MerchantRows, chosen, fill as fill_wares, picture};
+pub(crate) use merchant::{
+    ChosenPicture, MerchantRows, MerchantSlot, chosen, fill as fill_wares, picture,
+};
 
 /// The NPC class that answers ordinary shop requests; servers ignore other classes.
 const MERCHANT_CLASS: u8 = 41;
@@ -610,7 +612,12 @@ pub(super) fn input(
                 }
             }
             Action::Choose(slot) => {
-                if let Some(window) = trade.merchant.as_mut() {
+                if online
+                    .world()
+                    .merchant()
+                    .is_some_and(|merchant| merchant.stock.contains_key(&slot))
+                    && let Some(window) = trade.merchant.as_mut()
+                {
                     window.chosen = Some(Chosen::Ware(slot));
                     trade.changed();
                 }
