@@ -1247,7 +1247,9 @@ fn behave(
             Button,
             super::tradeskills::CombineButton(container),
             skin(),
-            crate::outbox::Needs::Capability(Capability::Tradeskills),
+            crate::outbox::Needs::Capability(eq_client_core::tradeskills::combine_capability(
+                container,
+            )),
         )),
         Does::Maps(action) => drawn.insert((Button, action, skin())),
         Does::HotButton(index) => drawn.insert((

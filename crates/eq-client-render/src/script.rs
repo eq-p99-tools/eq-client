@@ -925,11 +925,13 @@ pub(super) fn drive(
     }
     if let Some((step, since)) = script.current.clone() {
         let elapsed = now.saturating_sub(since);
-        // Scribing consumes a cursor item and starts a server operation. It
-        // still requires the worker's preceding local moves to be submitted;
+        // Scribing and combining start server operations that may consume items.
+        // The worker's preceding local moves must be submitted first;
         // successive slot/store/split clicks use the world's local projection.
-        if matches!(step, Step::Click(ClickTarget::Scribe))
-            && online.world().inventory_moves_pending()
+        if matches!(
+            step,
+            Step::Click(ClickTarget::Scribe | ClickTarget::Combine(_))
+        ) && online.world().inventory_moves_pending()
             && script.clicked.is_none()
         {
             if elapsed > MAX_WAIT {
@@ -2960,6 +2962,9 @@ fn spawn_goal(
 /// The zone's nearest world container of a tradeskill kind to the player.
 fn nearest_station(online: &super::online::OnlineState, kind: u8) -> Option<u32> {
     let world = online.world();
+    if !crate::outbox::offered(world, eq_client_core::Capability::WorldContainers) {
+        return None;
+    }
     let player = world.player()?;
     eq_client_core::ground::nearest_container(world.objects(), kind, player.position)
         .map(|object| object.drop_id)
@@ -3129,6 +3134,40 @@ fn runs(distance: Option<f32>, range: f32) -> bool {
 mod tests {
     use super::*;
     use eq_client_assets::ui::InstalledClient;
+
+    #[test]
+    fn station_steps_require_the_station_offer_even_when_carried_combines_are_offered() {
+        use eq_client_core::{
+            Capability, WorldEvent,
+            ground::{GroundObject, ObjectUpdate},
+        };
+        let mut online = crate::online::OnlineState::new(true);
+        let player = crate::online::testing::player(7);
+        crate::online::testing::admit(&mut online, 1, player.clone());
+        crate::online::testing::news(
+            &mut online,
+            [WorldEvent::Entered {
+                capabilities: vec![Capability::Tradeskills],
+                choices: Vec::new(),
+                session_id: 2,
+                zone: "qeytoqrg".into(),
+                player: Box::new(player),
+                far_clip: None,
+                spell_landing_flag: None,
+            }],
+        );
+        crate::online::testing::objects(
+            &mut online,
+            &ObjectUpdate::Spawn(GroundObject {
+                drop_id: 72,
+                model: "FORGE".into(),
+                object_type: 17,
+                position: default(),
+            }),
+        );
+        assert!(online.world().can(Capability::Tradeskills));
+        assert_eq!(nearest_station(&online, 17), None);
+    }
 
     /// Scripts name the starting city by its Titanium number: Titanium sends
     /// it as written, the Mac-era generation sends its own value for the same

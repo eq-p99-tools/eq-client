@@ -19,7 +19,11 @@ pub(super) fn nearest(state: &super::online::OnlineState) -> Option<Use> {
         .player()
         .filter(|_| state.in_world())
         .and_then(|player| {
-            eq_client_core::ground::nearest_usable(state.world().objects(), player.position)
+            eq_client_core::ground::nearest_usable_for(
+                state.world().objects(),
+                player.position,
+                crate::outbox::offered(state.world(), eq_client_core::Capability::WorldContainers),
+            )
         });
     match (door, item) {
         (Some((door_distance, door)), item)
@@ -130,6 +134,42 @@ mod tests {
         assert_eq!(nearest(&state), Some(Use::Object(71)));
         crate::online::testing::connect(&mut state, false);
         assert_eq!(nearest(&state), None);
+    }
+
+    #[test]
+    fn carried_combines_do_not_offer_a_station_ahead_of_a_ground_item() {
+        let mut state = state();
+        let capabilities = eq_client_core::Capability::ALL
+            .into_iter()
+            .filter(|capability| *capability != eq_client_core::Capability::WorldContainers)
+            .collect();
+        let player = state.world().player().unwrap().clone();
+        crate::online::testing::news(
+            &mut state,
+            [eq_client_core::WorldEvent::Entered {
+                capabilities,
+                choices: Vec::new(),
+                session_id: 12,
+                zone: "qeytoqrg".into(),
+                player: Box::new(player),
+                far_clip: None,
+                spell_landing_flag: None,
+            }],
+        );
+        crate::online::testing::objects(
+            &mut state,
+            &ObjectUpdate::Spawn(GroundObject {
+                drop_id: 72,
+                model: "FORGE".into(),
+                object_type: 17,
+                position: eq_client_core::WorldPosition {
+                    x: 2.0,
+                    ..default()
+                },
+            }),
+        );
+        crate::online::testing::objects(&mut state, &item_at(3.0));
+        assert_eq!(nearest(&state), Some(Use::Object(71)));
     }
 
     /// A policy that offers no door use exposes no door: neither

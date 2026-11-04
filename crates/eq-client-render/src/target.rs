@@ -206,7 +206,12 @@ pub(super) fn input(
                     }
                 })
                 .collect();
-            let item = super::ground::hit(ray, ground.iter()).filter(|hit| !blocked(hit.1));
+            let item = super::ground::hit(
+                ray,
+                ground.iter(),
+                crate::outbox::offered(online.world(), eq_client_core::Capability::WorldContainers),
+            )
+            .filter(|hit| !blocked(hit.1));
             let choice = choose(rule, &spawns, item);
             report_click(cursor, &spawns, choice);
             match choice {

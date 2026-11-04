@@ -3474,6 +3474,59 @@ fn a_combine_is_under_way_until_the_server_answers() {
 }
 
 #[test]
+fn a_combine_reset_never_supplies_consumption_or_a_product() {
+    use crate::{
+        inventory::{InventorySlot, InventoryUpdate},
+        tradeskills::CombineUpdate,
+    };
+    let mut world = admitted();
+    let mut kit = chest();
+    kit.slot = InventorySlot(23);
+    kit.bag_slots = 10;
+    kit.rules.bag_type = 16;
+    let mut component = chest();
+    component.slot = InventorySlot(261);
+    game(
+        &mut world,
+        WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![kit, component])),
+    );
+    let before = world.inventory().items().clone();
+    game(
+        &mut world,
+        WorldEvent::Combine(CombineUpdate::Started(InventorySlot(23))),
+    );
+    game(&mut world, WorldEvent::Combine(CombineUpdate::Answered));
+    assert!(world.combining().is_none());
+    assert_eq!(world.inventory().items(), &before);
+    assert!(
+        !world
+            .inventory()
+            .items()
+            .contains_key(&InventorySlot::CURSOR)
+    );
+    game(
+        &mut world,
+        WorldEvent::Inventory(InventoryUpdate::Consume {
+            slot: InventorySlot(261),
+            charge: false,
+        }),
+    );
+    assert!(!world.inventory().items().contains_key(&InventorySlot(261)));
+    let mut product = chest();
+    product.slot = InventorySlot::CURSOR;
+    game(
+        &mut world,
+        WorldEvent::Inventory(InventoryUpdate::Cursor(vec![product])),
+    );
+    assert!(
+        world
+            .inventory()
+            .items()
+            .contains_key(&InventorySlot::CURSOR)
+    );
+}
+
+#[test]
 fn a_world_container_opens_only_when_asked_and_closes_with_the_player() {
     use crate::ground::{ContainerView, ObjectUpdate};
     let mut world = admitted();

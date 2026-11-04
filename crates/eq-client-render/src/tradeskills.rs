@@ -73,7 +73,10 @@ pub(crate) fn buttons(
 ) {
     let world = online.world();
     for CombineButton(container) in buttons.iter() {
-        if world.combining().is_none() && combines(world, *container) {
+        if world.combining().is_none()
+            && !world.inventory_moves_pending()
+            && combines(world, *container)
+        {
             let _ = outbox.post(world, |stamp| eq_client_core::ClientCommand::Combine {
                 session_id: stamp.session_id,
                 container: *container,
@@ -98,7 +101,7 @@ pub(crate) fn show(
         } else {
             Visibility::Hidden
         });
-        let waiting = world.combining().is_some();
+        let waiting = world.combining().is_some() || world.inventory_moves_pending();
         if waiting && !greyed {
             commands.entity(entity).insert(Greyed);
         } else if !waiting && greyed {
@@ -187,6 +190,70 @@ mod tests {
         app.update();
         assert!(app.world().get::<Greyed>(button).is_none());
         assert!(visible(&app));
+    }
+
+    #[test]
+    fn a_combine_waits_for_queued_component_moves_without_guessing_delivery() {
+        use eq_client_core::inventory::{InventoryActor, InventoryMove, MoveQuantity, MoveRules};
+        let kit = bag(16);
+        let mut component = bag(0);
+        component.bag_slots = 0;
+        component.slot = InventorySlot(22);
+        let (mut app, button) = app(kit.clone());
+        let (sender, received) = std::sync::mpsc::sync_channel(4);
+        let outbox = Outbox::new(Some(sender));
+        {
+            let mut online = app.world_mut().resource_mut::<OnlineState>();
+            online.plan_inventory_as(Some(MoveRules::EqEmu));
+            testing::inventory(&mut online, InventoryUpdate::Snapshot(vec![kit, component]));
+            let request = InventoryMove {
+                session_id: 1,
+                revision: online.world().inventory().revision(),
+                sequence: None,
+                from: InventorySlot(22),
+                to: InventorySlot(261),
+                quantity: MoveQuantity::Whole,
+                created: std::time::Instant::now(),
+            };
+            let actor = InventoryActor {
+                bank_access: false,
+                class: Some(1),
+                deity: None,
+                dual_wield: None,
+                race: 1,
+                level: 1,
+                trade_slots: 0,
+                trade_no_drop: false,
+                world_container: false,
+            };
+            online
+                .queue_inventory_move(request, actor, &outbox)
+                .unwrap();
+            assert!(online.world().inventory_moves_pending());
+        }
+        app.update();
+        assert!(app.world().get::<Greyed>(button).is_some());
+        let eq_client_core::ClientCommand::MoveInventory(request) = received.try_recv().unwrap()
+        else {
+            panic!("only the component move was queued");
+        };
+        assert!(received.try_recv().is_err());
+        testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [WorldEvent::InventoryAction {
+                session_id: 1,
+                revision: request.revision,
+                sequence: request.sequence,
+                update: None,
+                error: Some("Synthetic local refusal".into()),
+            }],
+        );
+        app.update();
+        assert!(app.world().get::<Greyed>(button).is_none());
+        let world = app.world().resource::<OnlineState>().world();
+        assert!(!world.inventory_moves_pending());
+        assert!(world.inventory().items().contains_key(&InventorySlot(22)));
+        assert!(!world.inventory().items().contains_key(&InventorySlot(261)));
     }
 
     #[test]

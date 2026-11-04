@@ -12,6 +12,12 @@
   transfer and disconnect clear it, and suspended arrivals cannot reopen it.
   Preserve EQMac's nonzero book-kind behavior separately from Titanium.
 
+- Separate carried Combine controls from world-station availability using
+  `Capability::WorldContainers`. P99's carried offer enables no station hint,
+  open/close/world-combine or station script approach. Combine waits for queued
+  item-move results and keeps products/consumption separate from its reset.
+  Additive `ground::nearest_usable_for` selects only offered object kinds.
+
 - Follow the network-owned spell-table requirement for provider lifecycle and
   initial readiness instead of matching provider policy names in the host.
 - Post automatic-food preferences only to admissions offering `Capability::Meals`,

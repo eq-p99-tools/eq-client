@@ -422,6 +422,44 @@ mod tests {
     }
 
     #[test]
+    fn a_carried_combine_offer_never_authorizes_station_commands() {
+        use eq_client_core::{inventory::InventorySlot, tradeskills::WORLD_CONTAINER};
+        let (queue, received) = std::sync::mpsc::sync_channel(4);
+        let outbox = Outbox::new(Some(queue));
+        let world = admitted(vec![Capability::Tradeskills]);
+        let combine = |container| ClientCommand::Combine {
+            session_id: 4,
+            container,
+            created: Instant::now(),
+        };
+        outbox.send(&world, combine(InventorySlot(23))).unwrap();
+        for command in [
+            combine(WORLD_CONTAINER),
+            ClientCommand::OpenContainer {
+                session_id: 4,
+                drop_id: 71,
+                created: Instant::now(),
+            },
+            ClientCommand::CloseContainer { session_id: 4 },
+        ] {
+            assert_eq!(
+                outbox.send(&world, command),
+                Err(Refusal::Unavailable(Capability::WorldContainers))
+            );
+        }
+        assert!(matches!(
+            received.try_recv().unwrap(),
+            ClientCommand::Combine {
+                container: InventorySlot(23),
+                ..
+            }
+        ));
+        assert!(received.try_recv().is_err());
+        assert!(world.container().is_none());
+        assert!(world.combining().is_none());
+    }
+
+    #[test]
     fn unavailable_spell_data_refuses_casting_while_chat_keeps_working() {
         let (queue, received) = std::sync::mpsc::sync_channel(2);
         let outbox = Outbox::new(Some(queue));
