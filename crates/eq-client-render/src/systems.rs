@@ -300,13 +300,7 @@ pub(super) fn schedule(app: &mut App) {
                 (
                     (spell_icons::update, skinned::gem::pieces),
                     logs::write,
-                    (
-                        options::toggle,
-                        options::persist,
-                        options::choose,
-                        options::tell_session,
-                    )
-                        .chain(),
+                    (options::toggle, options::choose, options::tell_session).chain(),
                 ),
                 (outbox::show, inventory::say_refusals),
                 (hud::action_bar::cast_window, hud::action_bar::update),
@@ -436,6 +430,12 @@ pub(super) fn install_overlays(app: &mut App) {
         Update,
         profile_files::follow
             .after(Stage::Receive)
+            .before(Stage::Scene),
+    );
+    app.add_systems(
+        Update,
+        options::persist
+            .after(profile_files::follow)
             .before(Stage::Scene),
     );
     skin::register(app);

@@ -19,6 +19,7 @@ struct Hit {
     position: Vec3,
     points: u32,
     incoming: bool,
+    invisible: bool,
 }
 
 impl CombatText {
@@ -41,14 +42,20 @@ impl CombatText {
                 .player()
                 .filter(|player| player.spawn_id == damage.target_id);
             let anchor = player
-                .map(|player| (player.position, player.size))
+                .map(|player| (player.position, player.size, false))
                 .or_else(|| {
                     world
                         .spawn(damage.target_id)
                         .filter(|spawn| !spawn.state.invisible || show_invisible)
-                        .map(|spawn| (spawn.state.position, spawn.state.size))
+                        .map(|spawn| {
+                            (
+                                spawn.state.position,
+                                spawn.state.size,
+                                spawn.state.invisible,
+                            )
+                        })
                 });
-            let Some((position, size)) = anchor else {
+            let Some((position, size, invisible)) = anchor else {
                 continue;
             };
             let top = if size.is_finite() && size > 0.0 {
@@ -68,6 +75,7 @@ impl CombatText {
                 position,
                 points,
                 incoming: player.is_some(),
+                invisible,
             });
         }
     }
@@ -78,6 +86,7 @@ pub(crate) struct Number {
     session: u64,
     position: Vec3,
     age: f32,
+    invisible: bool,
 }
 
 /// Numbers expire, disappear on disable/reset, and never generate combat outcomes.
@@ -106,13 +115,21 @@ pub(crate) fn update(
         .qol
         .on(eq_client_core::qol::Fix::FloatingCombatText)
         && world.in_world();
+    let show_invisible = options
+        .options
+        .qol
+        .on(eq_client_core::qol::Fix::ShowInvisible);
     if !enabled || state.session != session {
         state.pending.clear();
         state.session = session;
     }
     for (entity, mut number, mut node, mut color, mut visibility) in &mut numbers {
         number.age += time.delta_secs().max(0.0);
-        if !enabled || Some(number.session) != session || number.age >= LIFETIME {
+        if !enabled
+            || Some(number.session) != session
+            || number.age >= LIFETIME
+            || (number.invisible && !show_invisible)
+        {
             commands.entity(entity).despawn();
             continue;
         }
@@ -159,12 +176,18 @@ pub(crate) fn update(
         return;
     };
     let room = LIMIT.saturating_sub(numbers.iter().count());
-    for hit in state.pending.drain(..).take(room) {
+    for hit in state
+        .pending
+        .drain(..)
+        .filter(|hit| !hit.invisible || show_invisible)
+        .take(room)
+    {
         commands.spawn((
             Number {
                 session,
                 position: hit.position,
                 age: 0.0,
+                invisible: hit.invisible,
             },
             Text::new(hit.points.to_string()),
             crate::theme::font(crate::theme::Size::Body),
@@ -257,6 +280,7 @@ mod tests {
                     session: 1,
                     position: Vec3::ZERO,
                     age: 0.0,
+                    invisible: false,
                 },
                 Node::default(),
                 TextColor::default(),
@@ -277,6 +301,7 @@ mod tests {
                     session: 99,
                     position: Vec3::ZERO,
                     age: 0.0,
+                    invisible: false,
                 },
                 Node::default(),
                 TextColor::default(),

@@ -252,6 +252,41 @@ mod tests {
         let _ = std::fs::remove_dir_all(&directory);
     }
 
+    #[test]
+    fn a_new_characters_choices_load_before_the_worker_is_told() {
+        use eq_client_core::{ClientCommand, qol::Fix};
+        let directory = std::env::temp_dir().join(format!(
+            "eq-client-qol-profile-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let mut saved = Options::default();
+        saved.qol.set(Fix::Fly, true);
+        saved.qol.set(Fix::AutoLoot, true);
+        std::fs::write(
+            directory.join("options-ExampleWorld-Example.txt"),
+            saved.text(),
+        )
+        .unwrap();
+        let (sender, receiver) = std::sync::mpsc::sync_channel(8);
+        let mut app = app(&directory);
+        app.insert_resource(crate::outbox::Outbox::new(Some(sender)))
+            .add_systems(Update, tell_choices.after(persist));
+        enter(&mut app, "Example");
+        app.update();
+        assert!(receiver.try_iter().any(|command| matches!(command, ClientCommand::SetMovementOptions { options, .. } if options.fly)));
+        enter(&mut app, "Another");
+        app.update();
+        let commands: Vec<_> = receiver.try_iter().collect();
+        assert!(commands.iter().any(|command| matches!(command, ClientCommand::SetMovementOptions { options, .. } if *options == Default::default())));
+        let options = &app.world().resource::<OptionsState>().options;
+        assert!(!options.qol.on(Fix::Fly));
+        assert!(!options.qol.on(Fix::AutoLoot));
+        assert!(!commands.iter().any(|command| matches!(command, ClientCommand::SetMovementOptions { options, .. } if options.fly)));
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
     fn meal_admission(app: &mut App, session_id: u64, meals: bool) {
         use eq_client_core::{Capability, WorldEvent};
         let mut online = OnlineState::new(true);
