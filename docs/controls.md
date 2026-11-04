@@ -95,6 +95,14 @@ Drag a framed window's titlebar to move it; use its minimize/restore button when
 present. Passive panels move by dragging their surface. Layouts are constrained
 to the viewport and saved per character. A newly opened window uses saved
 positions, compatible installed-client positions, or its default layout.
+An installed chat screen that explicitly enables `Style_Sizable` also resizes
+from its edges and corners. Its frame, nested chat content and scrollbar follow
+the size while keeping the existing controls. Buttons and text boxes keep their
+presses; a plain interior drag still moves the window. Minimized or locked
+frames do not resize. Inventory and spellbook retain their fixed authored sizes.
+The chat minimum of 160 by 100 logical pixels is this client's usability policy;
+native numeric sizing limits have not been established. No numeric maximum is
+imposed. Oversized frames retain the existing viewport reachability behavior.
 The Scripts window has a Close button instead of minimize/restore. Closing it
 preserves the document and any running script; use Stop to end execution.
 

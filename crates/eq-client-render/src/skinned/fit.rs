@@ -180,6 +180,7 @@ mod tests {
 
     fn screen(area: Area, pieces: Vec<(String, Element)>) -> Screen {
         Screen {
+            sizable: eq_client_assets::sidl::Sizable::Omitted,
             name: "Container".to_owned(),
             title: None,
             title_color: None,

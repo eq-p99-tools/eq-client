@@ -2,8 +2,8 @@
 //! Widget behavior and live values remain with the skin owner and presentation module.
 use super::{
     Context, ScrolledText, ScrolledView, Shows, SkinPage, SkinTab, TABBED, TabFace, TabWords,
-    WORD_TAB_HEIGHT, aligned, at, border, button, controls, frame, frame_tab, gauge, items, label,
-    looks, rgb, scrollbar, spell_gem, title, to_f32, with_qol_page,
+    WORD_TAB_HEIGHT, aligned, at, border, border_insets, button, controls, frame, frame_tab, gauge,
+    items, label, looks, reflow::Geometry, rgb, scrollbar, spell_gem, title, to_f32, with_qol_page,
 };
 use crate::{
     theme::{self, Size},
@@ -41,7 +41,11 @@ pub(super) fn draw(
     // between its pieces, and a look saved for it has nothing to tint or fade:
     // the skin's setting wins (inferred, as is what the setting means).
     if !screen.transparent {
-        let mut backdrop = window.spawn((looks::Backdrop(context.id), at(0.0, 0.0, width, height)));
+        let mut backdrop = window.spawn((
+            looks::Backdrop(context.id),
+            at(0.0, 0.0, width, height),
+            Geometry::inset(0.0, 0.0, 0.0, 0.0),
+        ));
         if context.id == WindowId::Map {
             backdrop.insert(crate::map::Backdrop::Artwork);
         }
@@ -77,6 +81,13 @@ pub(super) fn draw(
         }
     }
     let title_bottom = (inside.y > 0.0 && screen.title_bar.is_some()).then_some(inside.y);
+    let insets = screen
+        .template
+        .as_ref()
+        .filter(|_| screen.border)
+        .map_or_else(frame::Insets::default, |template| {
+            border_insets(&template.border)
+        });
     // As in the official client, nothing shows outside the client area: the
     // skin parks pieces there that only some windows use, such as a
     // container's augment labels.
@@ -87,10 +98,13 @@ pub(super) fn draw(
         height: inside.height,
     };
     window
-        .spawn(Node {
-            overflow: Overflow::clip(),
-            ..at(inside.x, inside.y, inside.width, inside.height)
-        })
+        .spawn((
+            Node {
+                overflow: Overflow::clip(),
+                ..at(inside.x, inside.y, inside.width, inside.height)
+            },
+            Geometry::inset(inside.x, inside.y, insets.right, insets.bottom),
+        ))
         .with_children(|area| pieces(area, art, &screen.pieces, &client, context));
     title_bottom
 }
@@ -152,23 +166,7 @@ pub(super) fn pieces(
                 tabbed(window, art, tabs, &at, context);
             }
             // The first page shows; the client has nothing for the others yet.
-            Element::Tabs(tabs) => {
-                if let Some(page) = tabs.pages.first() {
-                    let at = page.area.unwrap_or(Area {
-                        x: 0.0,
-                        y: 0.0,
-                        width: inside.width,
-                        height: inside.height,
-                    });
-                    let page_inside = Area {
-                        x: inside.x + at.x,
-                        y: inside.y + at.y,
-                        width: at.width,
-                        height: at.height,
-                    };
-                    self::pieces(window, art, &page.pieces, &page_inside, context);
-                }
-            }
+            Element::Tabs(tabs) => first_page(window, art, tabs, &inside, context),
             Element::View(view) if view.name == "IW_CharacterView" => {
                 items::figure(window, view, &inside, context.paperdoll);
             }
@@ -321,13 +319,27 @@ pub(super) fn chat_box(
         anchors.within(inside.width, inside.height)
     });
     window
-        .spawn(at(
-            inside.x + area.x,
-            inside.y + area.y,
-            area.width,
-            area.height,
+        .spawn((
+            at(
+                inside.x + area.x,
+                inside.y + area.y,
+                area.width,
+                area.height,
+            ),
+            Geometry(text.anchors.unwrap_or(eq_client_assets::sidl::Anchors {
+                left: eq_client_assets::sidl::Anchor::Start(area.x),
+                top: eq_client_assets::sidl::Anchor::Start(area.y),
+                right: eq_client_assets::sidl::Anchor::Start(area.x + area.width),
+                bottom: eq_client_assets::sidl::Anchor::Start(area.y + area.height),
+            })),
         ))
         .with_children(|frame| {
+            let insets = text
+                .template
+                .as_ref()
+                .map_or_else(frame::Insets::default, |template| {
+                    border_insets(&template.border)
+                });
             let client = text.template.as_ref().map_or(
                 Area {
                     x: 0.0,
@@ -337,27 +349,62 @@ pub(super) fn chat_box(
                 },
                 |template| border(frame, art, &template.border, (area.width, area.height)),
             );
-            match text.id.as_deref() {
-                // The output scrolls, with the skin's scrollbar beside its
-                // lines where the skin gives it one.
-                Some("CWChatOutput") => {
-                    let bar = text.scrollbar.as_ref();
-                    let width = bar.map_or(0.0, scrollbar::width);
-                    let lines = crate::chat::skinned_output(
-                        frame,
-                        at(client.x, client.y, client.width - width, client.height),
-                        (art, tab_frame),
-                    );
-                    if let Some(look) = bar {
-                        scrollbar::spawn(frame, art, look, &client, (lines, Some(WindowId::Chat)));
-                    }
-                }
-                Some("CWChatInput") => crate::chat::skinned_input(
-                    frame,
+            // A dedicated client container makes every nested anchor relative
+            // to the same clipped inset rectangle, including input and bar.
+            frame
+                .spawn((
                     at(client.x, client.y, client.width, client.height),
-                ),
-                _ => (),
-            }
+                    Geometry::inset(client.x, client.y, insets.right, insets.bottom),
+                ))
+                .with_children(|frame| {
+                    let client = Area {
+                        x: 0.0,
+                        y: 0.0,
+                        ..client
+                    };
+                    match text.id.as_deref() {
+                        // The output scrolls, with the skin's scrollbar beside its
+                        // lines where the skin gives it one.
+                        Some("CWChatOutput") => {
+                            let bar = text.scrollbar.as_ref();
+                            let width = bar.map_or(0.0, scrollbar::width);
+                            let lines = crate::chat::skinned_output(
+                                frame,
+                                Node {
+                                    left: px(0),
+                                    top: px(0),
+                                    right: px(width),
+                                    bottom: px(0),
+                                    position_type: PositionType::Absolute,
+                                    ..default()
+                                },
+                                (art, tab_frame),
+                            );
+                            if let Some(look) = bar {
+                                scrollbar::retained(
+                                    frame,
+                                    art,
+                                    look,
+                                    &client,
+                                    (lines, Some(WindowId::Chat)),
+                                    Vec2::new(client.width, client.height),
+                                );
+                            }
+                        }
+                        Some("CWChatInput") => crate::chat::skinned_input(
+                            frame,
+                            Node {
+                                left: px(0),
+                                top: px(0),
+                                right: px(0),
+                                bottom: px(0),
+                                position_type: PositionType::Absolute,
+                                ..default()
+                            },
+                        ),
+                        _ => (),
+                    }
+                });
         });
 }
 
@@ -374,72 +421,107 @@ pub(super) fn view(
     let area = view.anchors.map_or(view.area, |anchors| {
         anchors.within(inside.width, inside.height)
     });
-    window
-        .spawn(at(
-            inside.x + area.x,
-            inside.y + area.y,
-            area.width,
-            area.height,
-        ))
-        .with_children(|frame| {
-            let mut client = Area {
-                x: 0.0,
-                y: 0.0,
-                width: area.width,
-                height: area.height,
-            };
-            if let Some(template) = view.template.as_ref().filter(|_| view.border) {
-                client = border(frame, art, &template.border, (area.width, area.height));
-            }
-            // One the skin gives a scrollbar scrolls its pieces beside it, as
-            // the loot window's slots do.
-            let bar = view.scrollbar.as_ref();
-            let width = client.width - bar.map_or(0.0, scrollbar::width);
-            let mut clipped = frame.spawn(Node {
+    let mut outer = window.spawn(at(
+        inside.x + area.x,
+        inside.y + area.y,
+        area.width,
+        area.height,
+    ));
+    if context.id == WindowId::Chat {
+        outer.insert(Geometry(view.anchors.unwrap_or(
+            eq_client_assets::sidl::Anchors {
+                left: eq_client_assets::sidl::Anchor::Start(area.x),
+                top: eq_client_assets::sidl::Anchor::Start(area.y),
+                right: eq_client_assets::sidl::Anchor::Start(area.x + area.width),
+                bottom: eq_client_assets::sidl::Anchor::Start(area.y + area.height),
+            },
+        )));
+    }
+    outer.with_children(|frame| {
+        let insets = view
+            .template
+            .as_ref()
+            .filter(|_| view.border)
+            .map_or_else(frame::Insets::default, |template| {
+                border_insets(&template.border)
+            });
+        let mut client = Area {
+            x: 0.0,
+            y: 0.0,
+            width: area.width,
+            height: area.height,
+        };
+        if let Some(template) = view.template.as_ref().filter(|_| view.border) {
+            client = border(frame, art, &template.border, (area.width, area.height));
+        }
+        // One the skin gives a scrollbar scrolls its pieces beside it, as
+        // the loot window's slots do.
+        let bar = view.scrollbar.as_ref();
+        let width = client.width - bar.map_or(0.0, scrollbar::width);
+        let mut clipped = frame.spawn((
+            Node {
                 overflow: if bar.is_some() {
                     Overflow::scroll_y()
                 } else {
                     Overflow::clip()
                 },
                 ..at(client.x, client.y, width.max(0.0), client.height)
-            });
+            },
+            Geometry::inset(
+                client.x,
+                client.y,
+                insets.right + bar.map_or(0.0, scrollbar::width),
+                insets.bottom,
+            ),
+        ));
+        if bar.is_some() {
+            clipped.insert((
+                ScrollPosition::default(),
+                ScrolledView,
+                crate::windows::pointer::TakesWheel,
+            ));
+        }
+        let scrolled = clipped.id();
+        clipped.with_children(|clipped| {
+            let origin = Area {
+                x: 0.0,
+                y: 0.0,
+                width,
+                height: client.height,
+            };
+            pieces(clipped, art, &view.pieces, &origin, context);
             if bar.is_some() {
-                clipped.insert((
-                    ScrollPosition::default(),
-                    ScrolledView,
-                    crate::windows::pointer::TakesWheel,
-                ));
-            }
-            let scrolled = clipped.id();
-            clipped.with_children(|clipped| {
-                let origin = Area {
-                    x: 0.0,
-                    y: 0.0,
-                    width,
-                    height: client.height,
-                };
-                pieces(clipped, art, &view.pieces, &origin, context);
-                if bar.is_some() {
-                    // As tall as its lowest piece, so all of them scroll into
-                    // view.
-                    let bottom = view
-                        .pieces
-                        .iter()
-                        .filter_map(|(_, element)| placed_area(element))
-                        .map(|area| area.y + area.height)
-                        .fold(0.0, f32::max);
-                    clipped.spawn(Node {
-                        width: px(1),
-                        height: px(bottom),
-                        flex_shrink: 0.0,
-                        ..default()
-                    });
-                }
-            });
-            if let Some(look) = bar {
-                scrollbar::spawn(frame, art, look, &client, (scrolled, Some(context.id)));
+                // As tall as its lowest piece, so all of them scroll into
+                // view.
+                let bottom = view
+                    .pieces
+                    .iter()
+                    .filter_map(|(_, element)| placed_area(element))
+                    .map(|area| area.y + area.height)
+                    .fold(0.0, f32::max);
+                clipped.spawn(Node {
+                    width: px(1),
+                    height: px(bottom),
+                    flex_shrink: 0.0,
+                    ..default()
+                });
             }
         });
+        if let Some(look) = bar {
+            if context.id == WindowId::Chat {
+                scrollbar::retained(
+                    frame,
+                    art,
+                    look,
+                    &client,
+                    (scrolled, Some(context.id)),
+                    Vec2::new(area.width, area.height),
+                );
+            } else {
+                scrollbar::spawn(frame, art, look, &client, (scrolled, Some(context.id)));
+            }
+        }
+    });
 }
 
 /// Whether a piece is part of a container window's augment section: its
@@ -472,6 +554,63 @@ pub(super) const fn placed_area(element: &Element) -> Option<Area> {
         Element::Gauge(gauge) => Some(gauge.area),
         Element::Image { area, .. } => Some(*area),
         _ => None,
+    }
+}
+
+/// Draws the first authored page where the window has no tab-selection UI.
+fn first_page(
+    window: &mut ChildSpawnerCommands,
+    art: &mut crate::sheets::Art,
+    tabs: &eq_client_assets::sidl::TabBox,
+    inside: &Area,
+    context: &Context,
+) {
+    let Some(page) = tabs.pages.first() else {
+        return;
+    };
+    let at = page.area.unwrap_or(Area {
+        x: 0.0,
+        y: 0.0,
+        width: inside.width,
+        height: inside.height,
+    });
+    let page_inside = Area {
+        x: inside.x + at.x,
+        y: inside.y + at.y,
+        width: at.width,
+        height: at.height,
+    };
+    if context.id == WindowId::Chat {
+        let axis = if page.area.is_some() {
+            super::reflow::Axis::Start
+        } else {
+            super::reflow::Axis::Stretch
+        };
+        window
+            .spawn((
+                super::at(
+                    page_inside.x,
+                    page_inside.y,
+                    page_inside.width,
+                    page_inside.height,
+                ),
+                Geometry::from_area(at, Vec2::new(inside.width, inside.height), axis, axis),
+            ))
+            .with_children(|page_area| {
+                self::pieces(
+                    page_area,
+                    art,
+                    &page.pieces,
+                    &Area {
+                        x: 0.0,
+                        y: 0.0,
+                        ..page_inside
+                    },
+                    context,
+                );
+            });
+    } else {
+        self::pieces(window, art, &page.pieces, &page_inside, context);
     }
 }
 

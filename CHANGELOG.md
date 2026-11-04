@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Resize explicitly sizable installed chat screens by their edges and corners,
+  retaining widgets, anchored content, clipping and full size across rebuilds
+  and restarts. Fixed Inventory and Spellbook remain fixed. The 160×100 logical
+  chat minimum is client usability policy; native numeric limits remain unknown.
+  Window-layout v2 retains sizes and reads legacy position-only records.
+- API: `sidl::Screen::sizable` preserves `Sizable::{Omitted, Invalid, Fixed,
+  Enabled}`. Screen struct literals must supply the authored declaration.
+
 - Keep explicit background scripts running while their window is focused or
   passively observed with the pointer. Genuine keyboard, button and wheel input
   still takes ownership; Stop and scripted-click target checks remain available.

@@ -13,7 +13,7 @@ use std::{
 
 /// Changed placements are written at most this often, and never mid-drag.
 const SAVE_INTERVAL: Duration = Duration::from_secs(1);
-const HEADER: &str = "# eq-client window layouts v1";
+const HEADER: &str = "# eq-client window layouts v2";
 const SHARED: &str = "windows.txt";
 
 /// Placement-specific scheduling around the shared profile persistence state.
@@ -30,18 +30,28 @@ pub(super) fn persist(
         Res<Time<Real>>,
         Query<&Window, With<bevy::window::PrimaryWindow>>,
     ),
-    settings: Res<crate::ViewerSettings>,
-    profile: Res<crate::profile_files::Profile>,
-    drag: Res<super::DragState>,
+    (settings, profile): (
+        Res<crate::ViewerSettings>,
+        Res<crate::profile_files::Profile>,
+    ),
+    mut drag: ResMut<super::DragState>,
     mut exits: MessageReader<AppExit>,
     mut layouts: ResMut<Layouts>,
     mut store: Local<Store>,
+    mut frames: Query<(&mut super::Frame, &mut Node)>,
 ) {
     let exiting = exits.read().count() > 0;
+    if exiting {
+        drag.active = None;
+        drag.cursor = None;
+    }
     if drag.active.is_none() {
         store.files.retry(Instant::now());
     }
     if !store.files.loaded || profile.is_changed() {
+        for (mut frame, mut node) in &mut frames {
+            frame.clear_size(&mut node);
+        }
         if store.files.loaded {
             save(&mut store, &layouts);
         } else {
@@ -53,6 +63,10 @@ pub(super) fn persist(
         if store.files.directory.is_some() {
             let text = own.or_else(|| store.files.read(SHARED)).unwrap_or_default();
             layouts.0 = decode(&text);
+        } else {
+            for saved in layouts.0.values_mut() {
+                saved.size = None;
+            }
         }
         // A character this client has not placed windows for yet starts where
         // the official client last put them.
@@ -124,6 +138,7 @@ fn seed(
         layouts.insert(
             id,
             Saved {
+                size: None,
                 entity: Entity::PLACEHOLDER,
                 edges: [px(at.x), px(at.y), Val::Auto, Val::Auto],
                 margin: UiRect::ZERO,
@@ -174,7 +189,20 @@ fn encode(layouts: &BTreeMap<super::WindowId, Saved>) -> String {
             "relative"
         };
         let state = if saved.minimized { "minimized" } else { "open" };
-        let _ = writeln!(text, "{} {position} {state}\t{key}", values.join(" "));
+        let size = saved.size.filter(|size| size.valid()).map_or_else(
+            || "default".to_owned(),
+            |size| {
+                format!(
+                    "size:{:016x}:{}:{}",
+                    size.scope, size.dimensions.x, size.dimensions.y
+                )
+            },
+        );
+        let _ = writeln!(
+            text,
+            "{} {position} {state} {size}\t{key}",
+            values.join(" ")
+        );
     }
     text
 }
@@ -186,10 +214,14 @@ fn decode(text: &str) -> BTreeMap<super::WindowId, Saved> {
         .filter(|line| !line.starts_with('#'))
         .filter_map(|line| {
             let (fields, key) = line.split_once('\t')?;
-            let fields: Vec<&str> = fields.split(' ').collect();
-            let [l, t, r, b, ml, mr, mt, mb, position, state] = fields.as_slice() else {
+            let fields: Vec<&str> = fields.split_whitespace().collect();
+            let [l, t, r, b, ml, mr, mt, mb, position, state, rest @ ..] = fields.as_slice() else {
                 return None;
             };
+            if rest.len() > 1 {
+                return None;
+            }
+            let size = rest.first().and_then(|field| parse_size(field));
             let value = |field: &str| parse_length(field);
             let saved = Saved {
                 entity: Entity::PLACEHOLDER,
@@ -211,10 +243,20 @@ fn decode(text: &str) -> BTreeMap<super::WindowId, Saved> {
                     _ => return None,
                 },
                 placed: true,
+                size,
             };
             Some((super::WindowId::saved_under(key)?, saved))
         })
         .collect()
+}
+
+fn parse_size(field: &str) -> Option<super::resize::Size> {
+    let mut parts = field.strip_prefix("size:")?.split(':');
+    let size = super::resize::Size {
+        scope: u64::from_str_radix(parts.next()?, 16).ok()?,
+        dimensions: Vec2::new(parts.next()?.parse().ok()?, parts.next()?.parse().ok()?),
+    };
+    (parts.next().is_none() && size.valid()).then_some(size)
 }
 
 fn length(value: Val) -> String {
@@ -265,6 +307,7 @@ mod tests {
         };
         let mut layouts = BTreeMap::new();
         let mut chat = Saved {
+            size: None,
             entity: Entity::PLACEHOLDER,
             edges: [px(1), px(2), Val::Auto, Val::Auto],
             margin: UiRect::ZERO,
@@ -319,6 +362,7 @@ mod tests {
 
     fn saved(left: Val, minimized: bool) -> Saved {
         Saved {
+            size: None,
             entity: Entity::PLACEHOLDER,
             edges: [left, px(93.5), Val::Auto, percent(10)],
             margin: UiRect {
@@ -343,6 +387,37 @@ mod tests {
         assert!(text.starts_with(HEADER));
         assert!(text.contains("\tspellbook\n"));
         assert_eq!(decode(&text), layouts);
+    }
+
+    #[test]
+    fn resize_sizes_round_trip_while_legacy_and_invalid_sizes_keep_placements() {
+        let mut chat = saved(px(35), true);
+        chat.size = Some(super::super::resize::Size {
+            scope: 0x1234,
+            dimensions: Vec2::new(610.0, 320.0),
+        });
+        let layouts = BTreeMap::from([(super::super::WindowId::Chat, chat)]);
+        assert_eq!(decode(&encode(&layouts)), layouts);
+        for size in [
+            "",
+            " default",
+            " size:1234:NaN:200",
+            " size:1234:500:inf",
+            " size:1234:-10:200",
+            " size:1234:0:200",
+            " size:1234:160:99",
+            " size:xyz:400:200",
+            " size:1234:400:200:extra",
+        ] {
+            let line = format!(
+                "# eq-client window layouts v1\n35px 93.5px auto auto 0px 0px 0px 0px absolute minimized{size}\tchat\n"
+            );
+            let loaded = decode(&line);
+            let loaded = &loaded[&super::super::WindowId::Chat];
+            assert_eq!(loaded.edges[..2], [px(35), px(93.5)]);
+            assert!(loaded.minimized);
+            assert!(loaded.size.is_none(), "{size}");
+        }
     }
 
     #[test]

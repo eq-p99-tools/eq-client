@@ -13,6 +13,16 @@ For example, `keys.txt` seeds `keys-<world>-<character>.txt`; file-name componen
 are sanitized. `login-servers.txt` holds [login presets](login.md). These files can
 contain account/character identifiers and should not be committed.
 
+Window-layout v2 records retain an optional full chat size alongside position
+and minimized state. Existing v1 position-only records remain readable and use
+the authored size. A size belongs to its effective skin and authored layout;
+another layout or a fixed screen uses its own geometry. Returning to the same
+layout can reuse the retained preference until another size replaces it.
+Invalid sizes are ignored while valid placement fields remain available.
+Size changes use the normal per-character file and atomic save path after the
+gesture ends; minimized title height is never a preferred full height. Original
+client position imports do not invent a size preference.
+
 Keyboard defaults come from the installed client's supported native commands;
 startup without a generation falls back to Titanium. Existing key files remain
 overrides, including lines with an empty value. Use Options → Keyboard to change

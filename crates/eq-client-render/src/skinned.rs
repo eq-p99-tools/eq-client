@@ -31,6 +31,8 @@ pub(crate) mod looks;
 #[cfg(test)]
 mod merchant_grid_tests;
 mod perimeter;
+mod reflow;
+pub(crate) use reflow::update as reflow_layout;
 mod pixel_edges;
 pub(crate) use pixel_edges::register as register_border_pixels;
 #[cfg(test)]
@@ -494,6 +496,17 @@ pub(crate) fn apply(
         };
         let fitted = places.and_then(|places| fit::fitted(screen, places));
         let screen = fitted.as_ref().unwrap_or(screen);
+        // This first retained reflow contract belongs to chat. Other authored
+        // sizable screens are preserved by the parser without assuming that
+        // their widgets share chat's sizing policy.
+        let sizing = reflow::eligible_scope(&from, *id, screen);
+        state.sizing(sizing, Vec2::new(screen.area.width, screen.area.height));
+        let mut effective = screen.clone();
+        if let Some(size) = state.preferred_size() {
+            effective.area.width = size.x;
+            effective.area.height = size.y;
+        }
+        let screen = &effective;
         commands.entity(frame).insert(Drawn(from.clone(), places));
         art.draw_in((from != skin.0).then(|| from.clone()));
         skinned.0.insert(*id);
@@ -1128,6 +1141,11 @@ fn button(
         }
         None => window.spawn(node),
     };
+    if owner == WindowId::Chat
+        && let Some(anchors) = button.anchors
+    {
+        drawn.insert(reflow::Geometry(anchors));
+    }
     behave(&mut drawn, does, (button, area), owner);
     if let Some(id) = &button.id {
         drawn.insert(SkinId {
@@ -1765,8 +1783,39 @@ fn title(
     let tall = to_f32(middle.height);
     let wide = |piece: &Option<Piece>| piece.as_ref().map_or(0.0, |piece| to_f32(piece.width));
     let (left_width, right_width) = (wide(left), wide(right));
+    let parent = Vec2::new(screen.area.width, screen.area.height);
+    let picture = |window: &mut ChildSpawnerCommands,
+                   art: &mut crate::sheets::Art,
+                   piece: &Piece,
+                   node: Node,
+                   horizontal: reflow::Axis| {
+        let geometry = reflow::Geometry::from_area(
+            Area {
+                x: if let Val::Px(x) = node.left { x } else { 0.0 },
+                y: inside.y,
+                width: if let Val::Px(width) = node.width {
+                    width
+                } else {
+                    0.0
+                },
+                height: tall,
+            },
+            parent,
+            horizontal,
+            reflow::Axis::Start,
+        );
+        if let Some(image) = art.cut(piece) {
+            window.spawn((image, node, geometry));
+        }
+    };
     if let Some(piece) = left {
-        picture(window, art, piece, at(inside.x, inside.y, left_width, tall));
+        picture(
+            window,
+            art,
+            piece,
+            at(inside.x, inside.y, left_width, tall),
+            reflow::Axis::Start,
+        );
     }
     let middle_width = inside.width - left_width - right_width;
     picture(
@@ -1774,6 +1823,7 @@ fn title(
         art,
         middle,
         at(inside.x + left_width, inside.y, middle_width, tall),
+        reflow::Axis::Stretch,
     );
     // Where the official client writes it on the bar is not checked yet:
     // after the bar's left end, in the middle of its height.
@@ -1784,7 +1834,22 @@ fn title(
     let ink = screen.title_color.map_or(theme::INK_BRIGHT, rgb);
     if let Some(words) = &screen.title {
         let text = theme::text(words.as_str(), font(screen.font), ink);
-        aligned(window, node, Align::Left, text);
+        window
+            .spawn((
+                node,
+                reflow::Geometry::from_area(
+                    Area {
+                        x: inside.x + left_width,
+                        y: inside.y,
+                        width: middle_width,
+                        height: tall,
+                    },
+                    parent,
+                    reflow::Axis::Stretch,
+                    reflow::Axis::Start,
+                ),
+            ))
+            .with_child((text, TextLayout::new(Justify::Left, LineBreak::NoWrap)));
     } else if owner == WindowId::Item {
         // The item display gives no words of its own: the item's name goes
         // there (`items::update`).
@@ -1796,9 +1861,15 @@ fn title(
     }
     if let Some(piece) = right {
         let x = inside.x + inside.width - right_width;
-        picture(window, art, piece, at(x, inside.y, right_width, tall));
+        picture(
+            window,
+            art,
+            piece,
+            at(x, inside.y, right_width, tall),
+            reflow::Axis::End,
+        );
     }
-    title_boxes(window, art, (template, bar), (inside, tall), owner);
+    title_boxes(window, art, (template, bar), (inside, tall, parent), owner);
     inside.y += tall;
     inside.height -= tall;
 }
@@ -1815,7 +1886,7 @@ fn title_boxes(
         &eq_client_assets::sidl::WindowTemplate,
         eq_client_assets::sidl::TitleBar,
     ),
-    (inside, tall): (&Area, f32),
+    (inside, tall, parent): (&Area, f32, Vec2),
     owner: WindowId,
 ) {
     let frame = window.target_entity();
@@ -1847,6 +1918,17 @@ fn title_boxes(
         let mut drawn = window.spawn((
             image,
             node,
+            reflow::Geometry::from_area(
+                Area {
+                    x: right,
+                    y: inside.y + (tall - height).max(0.0) / 2.0,
+                    width,
+                    height,
+                },
+                parent,
+                reflow::Axis::End,
+                reflow::Axis::Start,
+            ),
             Button,
             SkinButton(look.clone()),
             TitleBox {
@@ -2153,9 +2235,6 @@ fn label(
     inside: &Area,
     owner: WindowId,
 ) {
-    let area = label.anchors.map_or(label.area, |anchors| {
-        anchors.within(inside.width, inside.height)
-    });
     let bag = match owner {
         WindowId::Bag(bag) if name == "Container_Label" => {
             Some(items::BagPart::Name(InventorySlot(bag)))
@@ -2195,6 +2274,76 @@ fn label(
         font(label.font),
         label.color.map_or(theme::INK_BRIGHT, rgb),
     );
+    let node = label_node(label, inside);
+    let geometry = (owner == WindowId::Chat)
+        .then(|| label.anchors.map(reflow::Geometry))
+        .flatten();
+    let buff_name = buff_label(owner, label.eq_type);
+    match (label.eq_type, bag) {
+        _ if hotbar_page => aligned_in(
+            window,
+            node,
+            label.align,
+            (text, hotbar::page::Number),
+            geometry,
+        ),
+        (Some(_), _) if let Some((effects, index)) = buff_name => aligned_in(
+            window,
+            node,
+            label.align,
+            (text, Shows::BuffName(effects, index)),
+            geometry,
+        ),
+        (Some(kind), _) if let Some(gem) = gem_label(kind) => {
+            aligned_in(
+                window,
+                node,
+                label.align,
+                (text, Shows::GemName(gem)),
+                geometry,
+            );
+        }
+        (Some(kind), _) => aligned_in(
+            window,
+            node,
+            label.align,
+            (text, Shows::Label(kind)),
+            geometry,
+        ),
+        (None, Some(bag)) => aligned_in(window, node, label.align, (text, bag), geometry),
+        (None, None) if banker => {
+            aligned_in(window, node, label.align, (text, Shows::Banker), geometry);
+        }
+        (None, None) if let Some(side) = page_number => {
+            aligned_in(
+                window,
+                node,
+                label.align,
+                (text, super::reading::Text::Number(side)),
+                geometry,
+            );
+        }
+        (None, None) if let Some(shows) = counted => {
+            aligned_in(window, node, label.align, (text, shows), geometry);
+        }
+        (None, None) if partner => {
+            aligned_in(window, node, label.align, (text, Shows::Partner), geometry);
+        }
+        (None, None) if trader => {
+            aligned_in(window, node, label.align, (text, Shows::Trader), geometry);
+        }
+        (None, None) if let Some(shows) = named => {
+            aligned_in(window, node, label.align, (text, shows), geometry);
+        }
+        (None, None) => plain_label(window, name, label, text, node, geometry, owner),
+    }
+}
+
+/// The authored label rectangle, including its wrapping anchor policy.
+fn label_node(label: &Label, inside: &Area) -> Node {
+    let area = label.anchors.map_or(label.area, |anchors| {
+        anchors.within(inside.width, inside.height)
+    });
     let mut node = at(
         inside.x + area.x,
         inside.y + area.y,
@@ -2205,52 +2354,35 @@ fn label(
     if line_at_top(label.anchors, label.wraps) {
         node.height = Val::Auto;
     }
-    let buff_name = buff_label(owner, label.eq_type);
-    match (label.eq_type, bag) {
-        _ if hotbar_page => aligned(window, node, label.align, (text, hotbar::page::Number)),
-        (Some(_), _) if let Some((effects, index)) = buff_name => aligned(
+    node
+}
+
+/// Draws a label with no live domain binding, including option slider values.
+fn plain_label(
+    window: &mut ChildSpawnerCommands,
+    name: &str,
+    label: &Label,
+    text: impl Bundle,
+    node: Node,
+    geometry: Option<reflow::Geometry>,
+    owner: WindowId,
+) {
+    match controls::value_label(name, owner) {
+        Some(controls::ValueLabel::Shows(level)) => aligned_in(
             window,
             node,
             label.align,
-            (text, Shows::BuffName(effects, index)),
+            (text, controls::LevelValue(level)),
+            geometry,
         ),
-        (Some(kind), _) if let Some(gem) = gem_label(kind) => {
-            aligned(window, node, label.align, (text, Shows::GemName(gem)));
-        }
-        (Some(kind), _) => aligned(window, node, label.align, (text, Shows::Label(kind))),
-        (None, Some(bag)) => aligned(window, node, label.align, (text, bag)),
-        (None, None) if banker => aligned(window, node, label.align, (text, Shows::Banker)),
-        (None, None) if let Some(side) = page_number => {
-            aligned(
-                window,
-                node,
-                label.align,
-                (text, super::reading::Text::Number(side)),
-            );
-        }
-        (None, None) if let Some(shows) = counted => {
-            aligned(window, node, label.align, (text, shows));
-        }
-        (None, None) if partner => aligned(window, node, label.align, (text, Shows::Partner)),
-        (None, None) if trader => aligned(window, node, label.align, (text, Shows::Trader)),
-        (None, None) if let Some(shows) = named => {
-            aligned(window, node, label.align, (text, shows));
-        }
-        (None, None) => match controls::value_label(name, owner) {
-            Some(controls::ValueLabel::Shows(level)) => aligned(
-                window,
-                node,
-                label.align,
-                (text, controls::LevelValue(level)),
-            ),
-            Some(controls::ValueLabel::Blank) => aligned(
-                window,
-                node,
-                label.align,
-                theme::text("", font(label.font), theme::INK_DIM),
-            ),
-            None => aligned(window, node, label.align, text),
-        },
+        Some(controls::ValueLabel::Blank) => aligned_in(
+            window,
+            node,
+            label.align,
+            theme::text("", font(label.font), theme::INK_DIM),
+            geometry,
+        ),
+        None => aligned_in(window, node, label.align, text, geometry),
     }
 }
 
@@ -2273,9 +2405,19 @@ fn line_at_top(anchors: Option<Anchors>, wraps: bool) -> bool {
 /// one line in the middle of the box's height.
 pub(crate) fn aligned(
     window: &mut ChildSpawnerCommands,
+    node: Node,
+    align: Align,
+    text: impl Bundle,
+) {
+    aligned_in(window, node, align, text, None);
+}
+
+fn aligned_in(
+    window: &mut ChildSpawnerCommands,
     mut node: Node,
     align: Align,
     text: impl Bundle,
+    geometry: Option<reflow::Geometry>,
 ) {
     node.justify_content = match align {
         Align::Left => JustifyContent::FlexStart,
@@ -2287,9 +2429,11 @@ pub(crate) fn aligned(
     // (inferred, recording item 6.220).
     node.align_items = AlignItems::Center;
     node.overflow = Overflow::clip();
-    window
-        .spawn(node)
-        .with_child((text, TextLayout::new(Justify::Left, LineBreak::NoWrap)));
+    let mut drawn = window.spawn(node);
+    if let Some(geometry) = geometry {
+        drawn.insert(geometry);
+    }
+    drawn.with_child((text, TextLayout::new(Justify::Left, LineBreak::NoWrap)));
 }
 
 /// A piece of the skin, stretched over this node.
@@ -2349,6 +2493,7 @@ mod tests {
             height: 14,
         };
         let screen = |titlebar: bool, title: Option<&str>| Screen {
+            sizable: eq_client_assets::sidl::Sizable::Omitted,
             name: "Window".into(),
             title: title.map(str::to_owned),
             title_color: None,
@@ -2418,6 +2563,7 @@ mod tests {
     #[test]
     fn an_unplaced_window_opens_where_the_skin_puts_it_unless_it_says_otherwise() {
         let screen = Screen {
+            sizable: eq_client_assets::sidl::Sizable::Omitted,
             name: "Window".into(),
             title: None,
             title_color: None,
@@ -2555,6 +2701,7 @@ mod tests {
             })
         };
         let screen = Screen {
+            sizable: eq_client_assets::sidl::Sizable::Omitted,
             name: "ActionsWindow".into(),
             title: None,
             title_color: None,
@@ -2630,6 +2777,7 @@ mod tests {
             height: 40.0,
         };
         let screen = Screen {
+            sizable: eq_client_assets::sidl::Sizable::Omitted,
             name: "HotButtonWnd".into(),
             title: None,
             title_color: None,
@@ -2718,6 +2866,7 @@ mod tests {
             })
         };
         let screen = Screen {
+            sizable: eq_client_assets::sidl::Sizable::Omitted,
             name: "HotButtonWnd".into(),
             title: None,
             title_color: None,
@@ -2817,6 +2966,7 @@ mod tests {
             })
         };
         let screen = Screen {
+            sizable: eq_client_assets::sidl::Sizable::Omitted,
             name: "Container".into(),
             title: None,
             title_color: None,
@@ -2969,6 +3119,7 @@ mod tests {
             header: None,
         });
         Screen {
+            sizable: eq_client_assets::sidl::Sizable::Omitted,
             name: "OptionsWindow".into(),
             title: None,
             title_color: None,
@@ -3244,6 +3395,7 @@ mod tests {
     ) -> Vec<(f32, f32, f32, bool)> {
         use eq_client_assets::sidl::{Button, ButtonLook, Element, Piece};
         let screen = Screen {
+            sizable: eq_client_assets::sidl::Sizable::Omitted,
             name: "ItemDisplayWindow".into(),
             title: None,
             title_color: None,
@@ -4858,6 +5010,7 @@ mod tests {
             )
         };
         let mut screen = Screen {
+            sizable: eq_client_assets::sidl::Sizable::Omitted,
             name: "CursorAttachment".into(),
             title: None,
             title_color: None,

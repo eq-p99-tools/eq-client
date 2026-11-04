@@ -8,6 +8,7 @@ mod layout;
 pub(super) mod menu;
 pub(super) mod pointer;
 mod registry;
+mod resize;
 mod stack;
 mod store;
 pub(super) use layout::Layouts;
@@ -52,7 +53,11 @@ pub(super) fn register_layout(app: &mut App) {
     // scripted move waiting for it lands after and wins.
     app.add_systems(
         PostUpdate,
-        (layout::remember, scripted_moves)
+        (
+            layout::remember,
+            scripted_moves,
+            crate::skinned::reflow_layout,
+        )
             .chain()
             .before(bevy::ui::UiSystems::Layout),
     );
@@ -127,12 +132,46 @@ pub(super) struct Frame {
     /// How tall a window drawn from the skin is when minimized: the bottom
     /// of its title bar, below which it is cut off.
     title_bottom: Option<f32>,
+    /// Only an eligible effective layout may use this preference.
+    size: Option<resize::Size>,
+    resize_scope: Option<u64>,
+    layout_revision: u64,
+    authored_size: Option<Vec2>,
 }
 
 #[derive(Component)]
 pub(super) struct DragHandle(Entity);
 
 impl Frame {
+    pub(crate) fn full_height(&self, current: f32) -> f32 {
+        match self.restored_height {
+            Some((Val::Px(height), _)) if self.minimized => height,
+            _ => current,
+        }
+    }
+    pub(crate) fn sizing(&mut self, scope: Option<u64>, authored: Vec2) {
+        self.resize_scope = scope;
+        self.authored_size = scope.map(|_| authored);
+        self.layout_revision = self.layout_revision.wrapping_add(1);
+    }
+
+    fn clear_size(&mut self, node: &mut Node) {
+        self.size = None;
+        if let Some(size) = self.authored_size {
+            node.width = px(size.x);
+            if self.minimized {
+                self.restored_height = Some((px(size.y), Val::Auto));
+            } else {
+                node.height = px(size.y);
+            }
+        }
+    }
+
+    pub(crate) fn preferred_size(&self) -> Option<Vec2> {
+        self.size
+            .filter(|size| Some(size.scope) == self.resize_scope && size.valid())
+            .map(|size| size.dimensions)
+    }
     /// Whether only this frame's title bar is currently shown.
     pub(crate) const fn minimized(&self) -> bool {
         self.minimized
@@ -223,6 +262,19 @@ pub(super) struct MinimizeLabel(Entity);
 #[derive(Resource, Default)]
 pub(super) struct DragState {
     active: Option<ActiveDrag>,
+    cursor: Option<resize::Edges>,
+}
+
+impl DragState {
+    pub(crate) fn resize_cursor(&self) -> Option<bevy::window::SystemCursorIcon> {
+        use bevy::window::SystemCursorIcon;
+        self.cursor.map(|edges| match (edges.x, edges.y) {
+            (0, _) => SystemCursorIcon::NsResize,
+            (_, 0) => SystemCursorIcon::EwResize,
+            (-1, -1) | (1, 1) => SystemCursorIcon::NwseResize,
+            _ => SystemCursorIcon::NeswResize,
+        })
+    }
 }
 
 struct ActiveDrag {
@@ -230,6 +282,14 @@ struct ActiveDrag {
     cursor: Vec2,
     origin: Vec2,
     inverse_scale: f32,
+    inverse: bevy::math::Affine2,
+    cursor_physical: Vec2,
+    basis: Mat2,
+    size: Vec2,
+    edges: Option<resize::Edges>,
+    layout_revision: u64,
+    resize_scope: Option<u64>,
+    minimized: bool,
 }
 
 /// Marks a passive panel so its entire surface can be used to move it.
@@ -306,11 +366,15 @@ pub(super) fn title_bar(parent: &mut ChildSpawnerCommands, frame: Entity, id: Wi
 }
 
 /// Moves windows from their drag surfaces and collapses interactive window bodies.
-#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::needless_pass_by_value,
+    clippy::too_many_lines
+)]
 pub(super) fn input(
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    handles: Query<(&Interaction, &DragHandle), Changed<Interaction>>,
+    handles: Query<(&Interaction, &DragHandle)>,
     minimizes: crate::clicks::Clicks<Minimize>,
     children: Query<&Children>,
     title_bars: Query<(), With<TitleBar>>,
@@ -319,7 +383,18 @@ pub(super) fn input(
     mut labels: Query<(&MinimizeLabel, &mut Text)>,
     mut drag: ResMut<DragState>,
     locked: Query<(), With<PositionLocked>>,
+    profile: Option<Res<crate::profile_files::Profile>>,
+    skin: Option<Res<crate::skin::UiSkin>>,
+    presses: Option<Res<crate::hud::hotbar::carry::Presses>>,
+    scale: Option<Res<UiScale>>,
 ) {
+    drag.cursor = None;
+    if profile.as_ref().is_some_and(DetectChanges::is_changed)
+        || skin.as_ref().is_some_and(DetectChanges::is_changed)
+        || scale.as_ref().is_some_and(DetectChanges::is_changed)
+    {
+        drag.active = None;
+    }
     let Ok(window) = windows.single() else {
         drag.active = None;
         return;
@@ -352,21 +427,60 @@ pub(super) fn input(
     if mouse.just_released(MouseButton::Left) || !mouse.pressed(MouseButton::Left) {
         drag.active = None;
     }
+    if drag.active.is_none()
+        && !mouse.pressed(MouseButton::Left)
+        && let Some(cursor) = cursor
+        && let Some((_, handle)) = handles
+            .iter()
+            .find(|(interaction, _)| **interaction == Interaction::Hovered)
+        && !locked.contains(handle.0)
+        && let Ok((_, computed, transform, state)) = frames.get(handle.0)
+        && !state.minimized
+        && state.resize_scope.is_some()
+        && let Some(inverse) = transform.try_inverse()
+    {
+        let local = (inverse.transform_point2(cursor) + computed.size() * 0.5)
+            * computed.inverse_scale_factor();
+        drag.cursor = resize::Edges::at(local, computed.size() * computed.inverse_scale_factor());
+    }
     if mouse.just_pressed(MouseButton::Left)
+        && !presses.as_ref().is_some_and(|presses| presses.taken())
         && let Some(cursor) = cursor
         && let Some(frame) = handles
             .iter()
             .find(|(interaction, _)| **interaction == Interaction::Pressed)
             .map(|(_, handle)| handle.0)
-        && let Ok((_, computed, transform, _)) = frames.get(frame)
+        && let Ok((node, computed, transform, state)) = frames.get(frame)
         && !locked.contains(frame)
+        && let Some(inverse) = transform.try_inverse()
     {
+        let local = (inverse.transform_point2(cursor) + computed.size() * 0.5)
+            * computed.inverse_scale_factor();
+        let size = computed.size() * computed.inverse_scale_factor();
+        let edges = (!state.minimized && state.resize_scope.is_some())
+            .then(|| resize::Edges::at(local, size))
+            .flatten();
         drag.active = Some(ActiveDrag {
             frame,
-            cursor: cursor * computed.inverse_scale_factor(),
-            origin: (transform.translation - computed.size() * 0.5)
-                * computed.inverse_scale_factor(),
+            cursor: inverse.transform_point2(cursor) * computed.inverse_scale_factor(),
+            origin: match (edges, node.left, node.top) {
+                (Some(_), Val::Px(left), Val::Px(top)) if node.margin == UiRect::ZERO => {
+                    Vec2::new(left, top)
+                }
+                _ => {
+                    (transform.translation - computed.size() * 0.5)
+                        * computed.inverse_scale_factor()
+                }
+            },
             inverse_scale: computed.inverse_scale_factor(),
+            inverse,
+            cursor_physical: cursor,
+            basis: transform.matrix2,
+            size,
+            edges,
+            layout_revision: state.layout_revision,
+            resize_scope: state.resize_scope,
+            minimized: state.minimized,
         });
     }
     let Some(active) = drag.active.as_ref() else {
@@ -377,16 +491,63 @@ pub(super) fn input(
         return;
     }
     let Some(cursor) = cursor else {
+        drag.active = None;
         return;
     };
     if let Ok((mut node, computed, _, mut frame)) = frames.get_mut(active.frame) {
-        if computed.inverse_scale_factor().to_bits() != active.inverse_scale.to_bits() {
+        if computed.inverse_scale_factor().to_bits() != active.inverse_scale.to_bits()
+            || frame.layout_revision != active.layout_revision
+            || frame.resize_scope != active.resize_scope
+            || frame.minimized != active.minimized
+        {
             drag.active = None;
             return;
         }
-        let position = active.origin + cursor * active.inverse_scale - active.cursor;
-        let room = (window.physical_size().as_vec2() - computed.size()) * active.inverse_scale;
-        put(&mut node, &mut frame, position, room);
+        let delta = active.inverse.transform_point2(cursor) * active.inverse_scale - active.cursor;
+        let edges = active.edges;
+        // The feedback comes from this same owner, even off the frame.
+        // Set it after using `active`, to keep the state borrow disjoint.
+        if let Some(edges) = edges {
+            let resized = edges.dragged(
+                Rect::from_corners(active.origin, active.origin + active.size),
+                delta,
+            );
+            // The UI transform acts about the frame's center. Compensate that
+            // center's size change so the opposite rendered edges stay put.
+            let half_change = (resized.size() - active.size) * 0.5;
+            let position = active.origin
+                + active.basis * (resized.min - active.origin + half_change)
+                - half_change;
+            if (node.left, node.top, node.width, node.height)
+                != (
+                    px(position.x),
+                    px(position.y),
+                    px(resized.width()),
+                    px(resized.height()),
+                )
+            {
+                node.position_type = PositionType::Absolute;
+                node.left = px(position.x);
+                node.top = px(position.y);
+                node.right = Val::Auto;
+                node.bottom = Val::Auto;
+                node.margin = UiRect::ZERO;
+                node.width = px(resized.width());
+                node.height = px(resized.height());
+                frame.size = active.resize_scope.map(|scope| resize::Size {
+                    scope,
+                    dimensions: resized.size(),
+                });
+                frame.placed = true;
+            }
+        } else {
+            let position = active.origin + (cursor - active.cursor_physical) * active.inverse_scale;
+            let room = (window.physical_size().as_vec2() - computed.size()) * active.inverse_scale;
+            put(&mut node, &mut frame, position, room);
+        }
+        drag.cursor = edges;
+    } else {
+        drag.active = None;
     }
 }
 
@@ -525,6 +686,14 @@ mod tests {
             cursor: Vec2::ZERO,
             origin: Vec2::ZERO,
             inverse_scale: 1.0,
+            inverse: bevy::math::Affine2::IDENTITY,
+            cursor_physical: Vec2::ZERO,
+            basis: Mat2::IDENTITY,
+            size: Vec2::splat(200.0),
+            edges: None,
+            layout_revision: 0,
+            resize_scope: None,
+            minimized: false,
         });
         app.update();
         assert!(app.world().resource::<DragState>().active.is_none());
@@ -619,6 +788,7 @@ mod tests {
         app.world_mut().resource_mut::<Layouts>().0.insert(
             WindowId::Chat,
             layout::Saved {
+                size: None,
                 entity: old,
                 edges: [px(10.0), px(20.0), Val::Auto, Val::Auto],
                 margin: UiRect::default(),

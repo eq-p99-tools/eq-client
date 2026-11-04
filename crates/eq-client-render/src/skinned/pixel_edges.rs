@@ -10,7 +10,7 @@ use std::collections::BTreeMap;
 pub(super) struct Frame;
 
 #[derive(Component)]
-pub(super) struct Piece(pub(super) Rect);
+pub(crate) struct Piece(pub(super) Rect);
 
 type Relations<'w, 's> = Query<
     'w,

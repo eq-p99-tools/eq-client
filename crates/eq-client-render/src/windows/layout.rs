@@ -14,6 +14,7 @@ pub(super) struct Saved {
     pub minimized: bool,
     /// Moved or minimized by the player; only these are kept between runs.
     pub placed: bool,
+    pub size: Option<super::resize::Size>,
 }
 
 /// Window placements by window, kept through scene despawns.
@@ -24,7 +25,8 @@ pub(crate) struct Layouts(pub(super) BTreeMap<super::WindowId, Saved>);
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn constrain(
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
-    mut frames: Query<(&mut Node, &ComputedNode), With<Frame>>,
+    mut frames: Query<(Entity, &mut Node, &ComputedNode), With<Frame>>,
+    drag: Option<Res<super::DragState>>,
 ) {
     let Ok(window) = windows.single() else {
         return;
@@ -33,7 +35,14 @@ pub(crate) fn constrain(
     if viewport.min_element() <= 0.0 {
         return;
     }
-    for (mut node, computed) in &mut frames {
+    for (entity, mut node, computed) in &mut frames {
+        if drag.as_ref().is_some_and(|drag| {
+            drag.active
+                .as_ref()
+                .is_some_and(|active| active.frame == entity)
+        }) {
+            continue;
+        }
         // Leave responsive default anchors and hidden/unlaid-out panels alone.
         let (Val::Px(left), Val::Px(top)) = (node.left, node.top) else {
             continue;
@@ -80,6 +89,11 @@ pub(crate) fn remember(
             node.margin = saved.margin;
             node.position_type = saved.position_type;
             frame.placed |= saved.placed;
+            frame.size = saved.size.filter(|size| size.valid());
+            if let Some(size) = frame.preferred_size() {
+                node.width = px(size.x);
+                node.height = px(size.y);
+            }
             if saved.minimized && key.0.can_minimize() {
                 frame.minimized = true;
                 collapse(
@@ -105,6 +119,7 @@ pub(crate) fn remember(
                 position_type: node.position_type,
                 minimized: frame.minimized,
                 placed: frame.placed,
+                size: frame.size,
             },
         );
     }
@@ -113,6 +128,66 @@ pub(crate) fn remember(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resize_size_restores_only_for_the_eligible_layout_and_keeps_full_minimized_height() {
+        for scope in [Some(7), Some(8), None] {
+            let mut app = App::new();
+            app.init_resource::<Layouts>().add_systems(Update, remember);
+            let (frame, _) = window(&mut app, 240.0);
+            app.world_mut().get_mut::<Node>(frame).unwrap().width = px(400);
+            app.world_mut()
+                .get_mut::<Frame>(frame)
+                .unwrap()
+                .sizing(scope, Vec2::new(400.0, 240.0));
+            app.world_mut().resource_mut::<Layouts>().0.insert(
+                super::super::WindowId::Chat,
+                Saved {
+                    entity: Entity::PLACEHOLDER,
+                    edges: [px(41), px(63), Val::Auto, Val::Auto],
+                    margin: UiRect::ZERO,
+                    position_type: PositionType::Absolute,
+                    minimized: true,
+                    placed: true,
+                    size: Some(super::super::resize::Size {
+                        scope: 7,
+                        dimensions: Vec2::new(610.0, 320.0),
+                    }),
+                },
+            );
+            app.update();
+            let node = app.world().get::<Node>(frame).unwrap();
+            assert_eq!(node.width, if scope == Some(7) { px(610) } else { px(400) });
+            let state = app.world().get::<Frame>(frame).unwrap();
+            assert_eq!(
+                state.restored_height,
+                Some((if scope == Some(7) { px(320) } else { px(240) }, Val::Auto))
+            );
+            assert_eq!(state.size.unwrap().dimensions, Vec2::new(610.0, 320.0));
+        }
+    }
+
+    #[test]
+    fn resize_profile_reset_removes_the_old_size_without_saving_collapsed_height() {
+        let mut frame = Frame::default();
+        frame.sizing(Some(7), Vec2::new(400.0, 240.0));
+        frame.size = Some(super::super::resize::Size {
+            scope: 7,
+            dimensions: Vec2::new(610.0, 320.0),
+        });
+        let mut node = Node {
+            width: px(610),
+            height: px(320),
+            ..default()
+        };
+        frame.drawn_from_skin(&mut node, Some(18.0));
+        frame.minimized = true;
+        super::super::collapse_skinned(&mut node, &mut frame);
+        frame.clear_size(&mut node);
+        assert_eq!((node.width, node.height), (px(400), px(18)));
+        assert_eq!(frame.full_height(18.0), 240.0);
+        assert!(frame.preferred_size().is_none());
+    }
 
     #[test]
     fn a_window_keeps_its_place_while_a_full_window_screen_lays_out_in_pixels() {
@@ -302,6 +377,7 @@ mod tests {
         world.resource_mut::<Layouts>().0.insert(
             super::super::WindowId::Scripts,
             Saved {
+                size: None,
                 entity: Entity::PLACEHOLDER,
                 edges: [px(41), px(63), Val::Auto, Val::Auto],
                 margin: UiRect::ZERO,

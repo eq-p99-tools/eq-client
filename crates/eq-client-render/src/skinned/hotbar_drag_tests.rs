@@ -70,6 +70,7 @@ fn fixture() -> pointer_tests::Fixture {
         }),
     ));
     let screen = Screen {
+        sizable: eq_client_assets::sidl::Sizable::Omitted,
         name: "HotButtonWnd".into(),
         title: None,
         title_color: None,
