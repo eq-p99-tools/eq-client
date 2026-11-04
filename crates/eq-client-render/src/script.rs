@@ -922,8 +922,17 @@ pub(super) fn drive(
             // ordinary click/menu handlers observe the release.
             script.menu_opening = Some(MenuOpening::Released { target, since: now });
         }
+        let menu_entry = script
+            .current
+            .as_ref()
+            .is_some_and(|(step, _)| entry_target(step).is_some());
         script.release(&mut keys, &mut mouse);
         script.current = None;
+        if menu_entry {
+            // The entry's release reaches its handler later this frame.
+            // Dispatching another entry now would see the old open menu.
+            return;
+        }
     }
     if let Some((step, since)) = script.current.clone() {
         let elapsed = now.saturating_sub(since);
@@ -1516,6 +1525,10 @@ pub(super) fn drive(
         script.awaited = None;
         script.approached = None;
         script.deleting = None;
+        if entry_target(&step).is_some() {
+            // A held menu entry also closes the menu after this release.
+            return;
+        }
     }
     script.progress.complete_step();
     if !script.advance(now) {

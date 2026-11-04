@@ -410,13 +410,19 @@ mod tests {
                 geometry(Vec2::new(400.0, 300.0), 200.0, 10),
             ))
             .id();
-        app.world_mut().spawn((
-            Button,
-            Entry(WindowId::Inventory),
-            super::super::SelectorButton(WindowId::Inventory),
-            ChildOf(panel),
-            geometry(Vec2::new(400.0, 300.0), 40.0, 11),
-        ));
+        for (id, at) in [
+            (WindowId::Inventory, Vec2::new(400.0, 300.0)),
+            (WindowId::Spellbook, Vec2::new(450.0, 300.0)),
+            (WindowId::Options, Vec2::new(400.0, 350.0)),
+        ] {
+            app.world_mut().spawn((
+                Button,
+                Entry(id),
+                super::super::SelectorButton(id),
+                ChildOf(panel),
+                geometry(at, 40.0, 11),
+            ));
+        }
         let window = app
             .world_mut()
             .query_filtered::<Entity, With<bevy::window::PrimaryWindow>>()
@@ -474,6 +480,41 @@ mod tests {
             .set_physical_cursor_position(None);
         for ms in [42_001, 42_251, 42_252] {
             menu_frame(app, ms);
+        }
+    }
+
+    #[test]
+    fn consecutive_scripted_window_clicks_reopen_the_menu_after_the_previous_release() {
+        for source in [
+            "click window spellbook\nclick window options\n",
+            "hold_click 1 window spellbook\nclick window options\n",
+        ] {
+            let (mut app, window, _) = scripted_menu();
+            let program = crate::script::Program::parse(source, std::path::Path::new(".")).unwrap();
+            app.insert_resource(crate::script::Script::from_program(program));
+            app.world_mut()
+                .resource_mut::<Shown>()
+                .open(WindowId::Spellbook);
+            hand_off_pointer(&mut app, window);
+            for ms in (42_253..=44_253).step_by(16) {
+                menu_frame(&mut app, ms);
+            }
+            let status = app.world().resource::<crate::script::RunStatus>();
+            assert_eq!(
+                status.phase(),
+                crate::script::Phase::Completed,
+                "{source}: {:?}",
+                status.events().back()
+            );
+            let shown = app.world().resource::<Shown>();
+            assert!(!shown.displayed(WindowId::Spellbook));
+            assert!(shown.displayed(WindowId::Options));
+            assert!(!app.world().resource::<Menu>().open);
+            assert!(
+                !app.world()
+                    .resource::<ButtonInput<MouseButton>>()
+                    .pressed(MouseButton::Left)
+            );
         }
     }
 
