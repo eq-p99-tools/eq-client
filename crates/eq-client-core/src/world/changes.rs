@@ -57,6 +57,9 @@ pub enum Reply {
         revision: u64,
         /// Why it was refused.
         error: Option<String>,
+        /// Whether to present this refusal. A dependent tail retains its typed
+        /// error while suppressing a second notice for an already reported root.
+        present_error: bool,
     },
     /// Local disposition of the original loot action; never server completion.
     LootRequest {

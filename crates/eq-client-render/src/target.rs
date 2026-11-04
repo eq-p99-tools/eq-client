@@ -111,7 +111,7 @@ pub(super) fn input(
         .take_assisted()
         .filter(|id| online.world().spawn(*id).is_some() || online.world().is_player(*id));
     // The world forgets the target when the connection drops or the player dies.
-    if !online.world().connected() || online.world().death().is_some() {
+    if !online.world().connected() || online.world().is_dead() {
         return;
     }
     let ids = targetable(nearby.rendered.keys().copied(), &online);
@@ -396,7 +396,7 @@ fn targetable(rendered: impl Iterator<Item = u16>, online: &OnlineState) -> Vec<
 /// visibility does not grant targeting through invisibility or past the clip.
 pub(crate) fn unavailable(online: &OnlineState, id: u16) -> Option<&'static str> {
     let world = online.world();
-    if world.death().is_some() {
+    if world.is_dead() {
         return Some(crate::outbox::Refusal::Dead.text());
     }
     if !world.in_world() {

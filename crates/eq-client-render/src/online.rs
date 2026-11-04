@@ -88,6 +88,14 @@ impl OnlineState {
         self.held.clear();
     }
 
+    /// Bind host planning to the selected worker's placement policy.
+    pub(super) fn plan_inventory_as(
+        &mut self,
+        rules: Option<eq_client_core::inventory::MoveRules>,
+    ) {
+        self.world.plan_inventory_as(rules);
+    }
+
     /// The player asked to play on a world of the login server's list.
     pub(super) fn ask_server(&mut self, index: usize) {
         self.world.ask_server(index);
@@ -307,10 +315,12 @@ impl Panels<'_> {
                     session_id,
                     revision,
                     error,
+                    present_error,
                 } => self.inventory.action_result(
                     *session_id,
                     *revision,
                     error.clone(),
+                    *present_error,
                     state.world.inventory(),
                 ),
                 Reply::LootRequest {
@@ -909,6 +919,7 @@ pub(crate) mod testing {
         player: PlayerState,
         far_clip: Option<f32>,
     ) {
+        state.plan_inventory_as(Some(eq_client_core::inventory::MoveRules::EqEmu));
         news(
             state,
             [WorldEvent::Entered {
@@ -1075,6 +1086,7 @@ mod tests {
                 heard: std::sync::Arc::default(),
             }),
             Some(Session {
+                inventory_move_rules: Some(eq_client_core::inventory::MoveRules::EqEmu),
                 spell_provider: eq_client_core::spell_tables::Binding::new(
                     eq_client_core::spell_tables::Policy::Installed,
                 ),
@@ -2131,7 +2143,7 @@ mod tests {
             .send(WorldUpdate::Game(WorldEvent::Death(death.clone())))
             .unwrap();
         app.update();
-        assert!(world(&app).death().is_none());
+        assert!(!world(&app).is_dead());
         app.world_mut()
             .resource_mut::<OnlineState>()
             .world
@@ -2141,7 +2153,7 @@ mod tests {
             .send(WorldUpdate::Game(WorldEvent::Death(death)))
             .unwrap();
         app.update();
-        assert!(world(&app).death().is_some());
+        assert!(world(&app).is_dead());
         assert_eq!(world(&app).target().selected, None);
         assert_eq!(world(&app).health(7), Some(0));
         assert_eq!(world(&app).casting().pending, None);
@@ -2179,7 +2191,7 @@ mod tests {
             .unwrap();
         app.update();
         // Asset loading is intentionally absent in this event-level test.
-        assert!(world(&app).death().is_none());
+        assert!(!world(&app).is_dead());
         assert!(world(&app).spawns().is_empty());
         assert!(world(&app).doors().entries().is_empty());
     }

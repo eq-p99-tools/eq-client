@@ -68,6 +68,7 @@ fn queue_equipment_move(
     to: i32,
 ) -> (eq_client_core::inventory::InventoryMove, InventoryUpdate) {
     use eq_client_core::inventory::{InventoryActor, InventoryMove, MoveQuantity, MoveRules};
+    state.plan_inventory_as(Some(MoveRules::Quarm));
     let before = state.world().inventory().clone();
     let player = state.world().player().unwrap();
     let actor = InventoryActor {
@@ -136,6 +137,7 @@ fn known_stat_neutral_equipment_keeps_readiness_without_confirming_placement() {
         rate: 0,
         weight: 3,
         capacity: 90,
+        eqmac_fatigue: None,
     };
     assert_eq!(calculate(state.world(), effects), Ok(expected));
     for (from, to) in [(24, 30), (30, 13), (13, 30), (30, 24)] {
@@ -302,7 +304,15 @@ fn projected_affecting_tail_keeps_its_history_through_partial_correction_and_dra
     let projected = state.world().inventory().clone();
     assert_eq!(projected.items()[&InventorySlot(24)], original);
     assert!(projected.equipment_stats_uncertain());
-    assert_eq!(calculate(state.world(), effects), Err(Missing::Prediction));
+    assert_eq!(
+        calculate(state.world(), effects),
+        Ok(SpeedInputs {
+            rate: 0,
+            weight: 3,
+            capacity: 90,
+            eqmac_fatigue: None,
+        })
+    );
     testing::news(
         &mut state,
         [
@@ -311,6 +321,7 @@ fn projected_affecting_tail_keeps_its_history_through_partial_correction_and_dra
         ],
     );
     assert!(state.world().inventory().equipment_stats_uncertain());
+    assert_eq!(calculate(state.world(), effects), Err(Missing::Prediction));
     // The worker prefix is equipped, so this older empty slot record is a
     // correction. The local overlay must drop; later queued requests drain.
     testing::news(
@@ -371,6 +382,39 @@ fn new_admission_and_partial_items_cannot_reuse_unrecorded_neutrality() {
     assert!(old.equipment_stats_uncertain());
 }
 
+#[test]
+fn queued_food_projection_does_not_mix_with_worker_movement_weight_or_capacity() {
+    let mut state = online();
+    ready(&mut state);
+    let mut first = item(22, 0, 7);
+    let mut second = item(23, 0, 1);
+    first.rules.item_type = 14;
+    second.rules.item_type = 14;
+    testing::news(
+        &mut state,
+        [WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![
+            first, second,
+        ]))],
+    );
+    let expected = SpeedInputs {
+        rate: 0,
+        weight: 0,
+        capacity: 97,
+        eqmac_fatigue: None,
+    };
+    assert_eq!(calculate(state.world(), effects), Ok(expected));
+    let (request, update) = queue_equipment_move(&mut state, 22, 30);
+    assert_ne!(state.world().inventory(), state.world().worker_inventory());
+    assert_eq!(calculate(state.world(), effects), Ok(expected));
+    assert_eq!(state.world().accepted_speed_inputs(), None);
+    testing::news(
+        &mut state,
+        [equipment_move_result(&request, Some(update), None)],
+    );
+    assert_eq!(calculate(state.world(), effects), Err(Missing::Prediction));
+    assert_eq!(state.world().accepted_speed_inputs(), None);
+}
+
 fn effects(spell: u32) -> Option<Vec<Effect>> {
     let (id, base, maximum, formula) = match spell {
         1 => (3, 10, 50, 102),
@@ -422,7 +466,8 @@ fn absent_empty_invalidated_and_recovered_state_are_distinct() {
         Ok(SpeedInputs {
             rate: 0,
             weight: 0,
-            capacity: 90
+            capacity: 90,
+            eqmac_fatigue: None,
         })
     );
     testing::news(
@@ -871,6 +916,7 @@ fn report_identity_wrap_and_admission_changes_do_not_match_the_previous_report()
         rate: 0,
         weight: 0,
         capacity: 90,
+        eqmac_fatigue: None,
     });
     let previous_id = reports.prepare(1, 1, state).id;
     assert_eq!(previous_id, u64::MAX);
@@ -1089,7 +1135,8 @@ fn worn_strength_coin_changes_and_weight_preserving_predictions_recalculate() {
         Ok(SpeedInputs {
             rate: 0,
             weight: 16,
-            capacity: 105
+            capacity: 105,
+            eqmac_fatigue: None,
         })
     );
     let mut moved = carried.clone();
@@ -1146,7 +1193,8 @@ fn scaled_snare_overrides_speed_and_root_fade_restores_without_inflation() {
         Ok(SpeedInputs {
             rate: 30,
             weight: 0,
-            capacity: 115
+            capacity: 115,
+            eqmac_fatigue: None,
         })
     );
     testing::news(&mut state, [buff(2, 2)]);
@@ -1248,7 +1296,7 @@ fn a_large_snare_cannot_masquerade_as_the_root_sentinel() {
 }
 
 #[test]
-fn eqmac_fatigue_recalculates_effective_strength_from_reported_state() {
+fn eqmac_fatigue_changes_effective_capacity_without_changing_the_posted_basis() {
     use eq_client_core::{GameDialect, WorldUpdate, food::Nourishment, world::NoSpells};
     let source = online();
     let mut world = ClientWorld::default();
@@ -1285,7 +1333,18 @@ fn eqmac_fatigue_recalculates_effective_strength_from_reported_state() {
         tell(&mut world, event);
     }
     // Missing fatigue has a source-defined bounded penalty, not an invented zero.
-    assert_eq!(calculate(&world, effects).unwrap().capacity, 80);
+    let basis = calculate(&world, effects).unwrap();
+    assert_eq!(basis.capacity, 80);
+    assert_eq!(
+        basis.eqmac_fatigue,
+        Some(EqMacFatigueInputs {
+            strength: 90,
+            stamina: Some(60)
+        })
+    );
+    assert_eq!(effective_capacity(&world, basis), 80);
+    let mut reports = Reports::default();
+    let report_id = reports.prepare(1, 1, SpeedInputState::Ready(basis)).id;
     for (fatigue, strength) in [(0, 90), (65, 85), (100, 80), (0, 90)] {
         tell(
             &mut world,
@@ -1295,7 +1354,68 @@ fn eqmac_fatigue_recalculates_effective_strength_from_reported_state() {
                 fatigue: Some(fatigue),
             }),
         );
-        assert_eq!(calculate(&world, effects).unwrap().capacity, strength);
+        assert_eq!(calculate(&world, effects), Ok(basis));
+        assert_eq!(effective_capacity(&world, basis), strength);
+        assert_eq!(
+            reports.prepare(1, 1, SpeedInputState::Ready(basis)).id,
+            report_id
+        );
+    }
+}
+
+#[test]
+fn eqmac_host_basis_preserves_signed_strength_and_known_stamina_bounds() {
+    for (base_str, bonus_str, base_sta, bonus_sta, strength, stamina, fallback) in [
+        (0, -7, 0, 0, -7, 1, 1),
+        (0, 0, 0, 0, 0, 1, 1),
+        (1, 0, 1, 0, 1, 1, 1),
+        (255, 0, 100, 0, 255, 100, 245),
+        (260, 0, 100, 0, 260, 100, 250),
+        (265, 0, 100, 0, 265, 100, 255),
+        (300, 0, 250, 100, 300, 255, 255),
+        (90, 0, 5, -100, 90, 1, 80),
+    ] {
+        let mut state = online();
+        let mut player = state.world().player().unwrap().clone();
+        let base = player.base_attributes.as_mut().unwrap();
+        base.strength = base_str;
+        base.stamina = base_sta;
+        let mut world = ClientWorld::default();
+        world.carry_as(eq_client_core::GameDialect::EqMac);
+        testing::set_world(&mut state, world);
+        testing::admit(&mut state, 1, player);
+        ready(&mut state);
+        let mut equipment = item(17, 0, bonus_str);
+        equipment.details.bonuses.as_mut().unwrap().stamina = bonus_sta;
+        testing::news(
+            &mut state,
+            [
+                WorldEvent::BuffSnapshot(Vec::new()),
+                WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![equipment])),
+            ],
+        );
+        let basis = calculate(state.world(), effects).unwrap();
+        assert_eq!(
+            basis.eqmac_fatigue,
+            Some(EqMacFatigueInputs {
+                strength,
+                stamina: Some(stamina)
+            })
+        );
+        assert_eq!(basis.capacity, fallback);
+        assert_ne!(basis.capacity, 0);
+        assert_eq!(basis.eqmac_capacity(None), fallback);
+        // Known fatigue is applied BEFORE255, independently of the fallback.
+        if strength == 260 {
+            assert_eq!(basis.eqmac_capacity(Some(110)), 250);
+            assert_eq!(basis.eqmac_capacity(Some(105)), 255);
+        }
+        testing::news(
+            &mut state,
+            [WorldEvent::Inventory(InventoryUpdate::Invalidated)],
+        );
+        assert_eq!(calculate(state.world(), effects), Err(Missing::Inventory));
+        assert_eq!(state.world().accepted_speed_inputs(), None);
     }
 }
 

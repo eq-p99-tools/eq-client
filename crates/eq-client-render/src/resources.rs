@@ -12,7 +12,7 @@ pub(super) fn update(
 ) {
     hud.resource_estimate = if settings.0.estimate_titanium_resources
         && online.world().connected()
-        && online.world().death().is_none()
+        && !online.world().is_dead()
         && online.world().session_id().is_some()
     {
         online

@@ -162,6 +162,7 @@ fn entered(session_id: u64) -> WorldEvent {
 /// item in the zone.
 fn admitted() -> ClientWorld {
     let mut world = ClientWorld::default();
+    world.plan_inventory_as(Some(crate::inventory::MoveRules::EqEmu));
     game(&mut world, entered(1));
     connection(&mut world, true, false);
     game(&mut world, WorldEvent::Spawns(vec![spawn(5)]));
@@ -341,6 +342,66 @@ fn only_the_player_dying_holds_them_and_every_death_leaves_a_corpse() {
 }
 
 #[test]
+fn death_bind_has_no_packet_or_corpse_details_and_clears_on_admission() {
+    for packet_first in [false, true] {
+        let mut world = admitted();
+        let session_id = world.session_id().unwrap();
+        let own = Death {
+            spawn_id: 9,
+            killer_id: 5,
+            corpse_id: 10,
+            bind_zone_id: 2,
+            corpse_name: None,
+        };
+        let revision = world.spawn(5).unwrap().revision;
+        let stale = game(
+            &mut world,
+            WorldEvent::DeathBind {
+                session_id: session_id + 1,
+            },
+        );
+        assert!(stale.ignored);
+        assert!(!world.is_dead());
+        if packet_first {
+            game(&mut world, WorldEvent::Death(own.clone()));
+        }
+        let changes = game(&mut world, WorldEvent::DeathBind { session_id });
+        assert_eq!(changes.reset, (!packet_first).then_some(Reset::Died));
+        assert_eq!(changes.notices.len(), usize::from(!packet_first));
+        assert!(world.is_dead());
+        let since = world.death_since().unwrap();
+        assert_eq!(world.death().is_some(), packet_first);
+        assert_eq!(world.spawn(5).unwrap().revision, revision);
+        if !packet_first {
+            assert!(
+                world.died_at(9).is_none(),
+                "bind knowledge alone creates no corpse"
+            );
+        }
+        let repeat = game(&mut world, WorldEvent::DeathBind { session_id });
+        assert_eq!(repeat.notices, []);
+        assert_eq!(repeat.reset, None);
+        let packet = game(&mut world, WorldEvent::Death(own));
+        assert!(
+            packet.notices.is_empty(),
+            "later details do not announce a second death"
+        );
+        assert!(world.death().is_some());
+        assert_eq!(world.death_since(), Some(since));
+        let player = world.player().unwrap().clone();
+        world.entered(
+            (&[], &[], session_id + 1),
+            ("synthetic", None, None),
+            &player,
+            Instant::now(),
+        );
+        assert!(!world.is_dead());
+        assert!(world.death().is_none());
+        assert!(world.death_since().is_none());
+    }
+}
+
+#[test]
 fn a_death_in_view_names_who_died_and_who_killed_them() {
     use crate::world::Party;
     let mut world = admitted();
@@ -503,6 +564,7 @@ fn input_acceptance_is_current_and_never_supplies_movement_permission() {
         revision: 7,
         report_id: 19,
         inputs: crate::SpeedInputs {
+            eqmac_fatigue: None,
             rate: 0,
             weight: 0,
             capacity: 90,

@@ -125,13 +125,11 @@ impl InventoryState {
             return;
         }
         let world = online.world();
-        let banker = (!self.demo
-            && world.connected()
-            && world.death().is_none()
-            && world.session_id().is_some())
-        .then(|| world.player())
-        .flatten()
-        .and_then(|player| nearest_banker(world, player.position));
+        let banker =
+            (!self.demo && world.connected() && !world.is_dead() && world.session_id().is_some())
+                .then(|| world.player())
+                .flatten()
+                .and_then(|player| nearest_banker(world, player.position));
         let available = banker.is_some();
         self.banker = banker.unwrap_or_default();
         if self.bank_open != available {

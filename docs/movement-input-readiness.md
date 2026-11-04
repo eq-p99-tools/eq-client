@@ -83,3 +83,32 @@ no active combat. Keep account/character identifiers, captures and assets privat
 Record each server, exact source heads, steps, expected versus observed behavior
 and any correction/refusal. A pass on one server does not establish another's
 compatibility. Stop on unexpected displacement or inventory divergence.
+
+
+## Coherent inventory and fatigue prerequisites
+
+Host move selection/display uses `ClientWorld::inventory()`, the bounded queued
+projection. Movement weight, equipment and food use `worker_inventory()`, the
+ordered submitted replica. Neither view acknowledges server delivery. Bind
+`Session::inventory_move_rules` from the network Client before queuing moves;
+`plan_inventory_as(None)` refuses planning instead of choosing EqEmu rules.
+
+A same-admission death/transfer/nonterminal-link reset discards the display
+projection while pending results drain. Matching late submissions update the
+worker replica once; duplicates, old admissions and inconsistent payloads cannot
+overwrite newer authoritative state. Typed dependent refusals remain available,
+while `Reply::InventoryMove { present_error, .. }` controls repeated UI notices.
+
+For EQMac, ready reports include the network-owned `EqMacFatigueInputs`: signed
+effective strength before fatigue/cap, and known effective stamina capped to
+1..255. All metadata, effects, inventory and coin prerequisites still apply.
+The scalar capacity is a stable final capped maximum-penalty fallback; the typed
+component is the sole basis for current fatigue-adjusted capacity. The session
+applies authoritative fatigue before the final cap. The display calls the same
+network formula without changing the report or weakening receipt equality.
+Fatigue alone therefore leaves the exact posted payload and report identity
+unchanged. Missing prerequisites remain unavailable; absent components retain
+legacy handling and Titanium capacity/zero-sentinel semantics are unchanged.
+
+These are source and synthetic regression contracts. Final combined dependency
+pins, client execution and separately coordinated live validation remain required.

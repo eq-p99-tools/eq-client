@@ -119,7 +119,7 @@ pub(super) fn nearest(
     state: &super::online::OnlineState,
 ) -> Option<(f32, &eq_client_core::doors::Door)> {
     if !state.world().connected()
-        || state.world().death().is_some()
+        || state.world().is_dead()
         || !crate::outbox::offered(state.world(), eq_client_core::Capability::Doors)
     {
         return None;

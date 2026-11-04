@@ -1,6 +1,8 @@
 //! One owner of queued inventory projections over the ordered worker replica.
 use super::{Changes, ClientWorld, Reply};
-use crate::inventory::{Inventory, InventoryActor, InventoryMove, InventoryUpdate, MoveSequence};
+use crate::inventory::{
+    Inventory, InventoryActor, InventoryMove, InventoryUpdate, MoveRules, MoveSequence,
+};
 use anyhow::{Context, Result, ensure};
 use std::collections::VecDeque;
 
@@ -14,10 +16,13 @@ struct Pending {
 
 #[derive(Default)]
 pub(super) struct Moves {
+    rules: Option<MoveRules>,
     next_id: u64,
     pending: VecDeque<Pending>,
     pub(super) projected: Option<Inventory>,
     interrupted: bool,
+    /// A root refusal was already offered for this still-draining queue.
+    refused: bool,
 }
 
 impl Moves {
@@ -25,6 +30,7 @@ impl Moves {
     pub(super) fn clear(&mut self) {
         *self = Self {
             next_id: self.next_id,
+            rules: self.rules,
             ..Self::default()
         };
     }
@@ -37,6 +43,16 @@ impl Moves {
 }
 
 impl ClientWorld {
+    /// Configures host placement from the network producer's inventory policy.
+    /// Missing policy refuses moves; the installed generation is not a fallback.
+    /// A changed policy discards the overlay while outstanding results drain.
+    pub fn plan_inventory_as(&mut self, rules: Option<MoveRules>) {
+        if self.inventory_moves.rules != rules {
+            self.inventory_moves.interrupt();
+            self.inventory_moves.rules = rules;
+        }
+    }
+
     /// Whether local move results remain outstanding. This is a prerequisite
     /// for operations such as scribing, never a gate between successive moves.
     #[must_use]
@@ -70,7 +86,11 @@ impl ClientWorld {
             "Too many queued item moves"
         );
         let before = self.offering();
-        let update = self.inventory().plan_move(&request, actor)?;
+        let rules = self
+            .inventory_moves
+            .rules
+            .context("Inventory placement policy is unavailable")?;
+        let update = self.inventory().plan_move_for(rules, &request, actor)?;
         let id = self
             .inventory_moves
             .next_id
@@ -106,11 +126,17 @@ impl ClientWorld {
         error: Option<&String>,
         changes: &mut Changes,
     ) {
-        if !self.accepts_reply(session_id) {
+        // A same-admission success can arrive after death/zoning/link reset.
+        // Retained request identity, rather than current ability to act, owns it.
+        if self.session_id != Some(session_id)
+            || (sequence.is_none() && !self.accepts_reply(session_id))
+            || error.is_some() == update.is_some()
+        {
             changes.ignored = true;
             return;
         }
         let before = self.offering();
+        let mut apply = error.is_none() && update.is_some();
         if let Some(sequence) = sequence {
             let Some(pending) = self.inventory_moves.pending.front() else {
                 changes.ignored = true;
@@ -123,6 +149,7 @@ impl ClientWorld {
             let matches = error.is_none()
                 && update == Some(&pending.update)
                 && self.inventory.revision() == revision;
+            apply &= matches;
             self.inventory_moves.pending.pop_front();
             if !matches {
                 self.inventory_moves.interrupt();
@@ -130,14 +157,17 @@ impl ClientWorld {
         } else {
             self.inventory_moves.interrupt();
         }
-        if error.is_none()
-            && let Some(update) = update
-        {
+        let present_error = error.is_none()
+            || !self.inventory_moves.refused
+            || sequence.is_none_or(|sequence| sequence.after.is_none());
+        self.inventory_moves.refused |= error.is_some();
+        if apply && let Some(update) = update {
             self.inventory.apply(update.clone());
         }
         if self.inventory_moves.pending.is_empty() {
             self.inventory_moves.projected = None;
             self.inventory_moves.interrupted = false;
+            self.inventory_moves.refused = false;
         }
         changes.inventory = true;
         self.refresh_item_hp();
@@ -146,6 +176,7 @@ impl ClientWorld {
             session_id,
             revision,
             error: error.cloned(),
+            present_error,
         });
     }
 }

@@ -90,6 +90,8 @@ pub enum Connection {
 /// A session running on its own thread: its news, the queue for the
 /// player's requests, and the thread.
 pub struct Session {
+    /// Placement policy supplied by this network producer for host projections.
+    pub inventory_move_rules: Option<eq_client_core::inventory::MoveRules>,
     /// The immutable spell-provider binding allocated with this producer.
     pub spell_provider: eq_client_core::spell_tables::Binding,
     /// What the session tells the client.
@@ -405,6 +407,7 @@ impl FrontEnd {
         link: &mut Link,
     ) {
         online.restart();
+        online.plan_inventory_as(session.inventory_move_rules);
         link.spells.bind(session.spell_provider);
         link.outbox.set_spell_ready(link.spells.ready());
         link.attach(Some(session.updates), Some(session.commands));
@@ -785,6 +788,7 @@ pub(crate) mod testing {
             let thread = Thread::default();
             heard.sessions.push((updates, queue, thread.clone()));
             Ok(Connection::Session(Session {
+                inventory_move_rules: Some(eq_client_core::inventory::MoveRules::EqEmu),
                 spell_provider: eq_client_core::spell_tables::Binding::new(
                     eq_client_core::spell_tables::Policy::Installed,
                 ),
@@ -889,6 +893,7 @@ mod tests {
         let (mut front, updates, commands) = FrontEnd::launched(
             Box::new(fake),
             Some(Session {
+                inventory_move_rules: Some(eq_client_core::inventory::MoveRules::EqEmu),
                 spell_provider: eq_client_core::spell_tables::Binding::new(
                     eq_client_core::spell_tables::Policy::Installed,
                 ),
@@ -937,6 +942,7 @@ mod tests {
         let (mut front, updates, commands) = FrontEnd::launched(
             Box::new(fake),
             Some(Session {
+                inventory_move_rules: Some(eq_client_core::inventory::MoveRules::EqEmu),
                 spell_provider: eq_client_core::spell_tables::Binding::new(
                     eq_client_core::spell_tables::Policy::Installed,
                 ),

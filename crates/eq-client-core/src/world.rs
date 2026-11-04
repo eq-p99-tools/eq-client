@@ -49,6 +49,12 @@ use crate::{
 };
 use std::{collections::BTreeMap, time::Instant};
 
+/// Own lifecycle knowledge; bind-only knowledge never manufactures packet details.
+enum OwnDeath {
+    Reported { details: Death, since: Instant },
+    BindTransfer { since: Instant },
+}
+
 /// The characters the world server offered to play.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CharacterList {
@@ -226,7 +232,7 @@ pub struct ClientWorld {
     /// The spell action flag that says a spell landed on its target, as the
     /// admission says for its server type; None records no landings.
     spell_landing_flag: Option<u8>,
-    death: Option<Death>,
+    death: Option<OwnDeath>,
     /// The HP at or below which the server takes the player as dead, where
     /// it leaves that death to the client's own report; the session names
     /// it only where it can count what the player's items add.
@@ -612,6 +618,19 @@ impl ClientWorld {
                 refused,
             } => self.motion_sent(*session_id, *position, refused.as_ref(), news),
             WorldEvent::Death(death) => return self.died(death, now),
+            WorldEvent::DeathBind { session_id } => {
+                if self.session_id != Some(*session_id) {
+                    return Changes { ignored: true, ..Changes::default() };
+                }
+                if self.death.is_some() { return Changes::default(); }
+                self.death = Some(OwnDeath::BindTransfer { since: now });
+                self.own_health(0);
+                self.bled_out = None;
+                self.zone.trade.exchange = None;
+                let mut changes = self.reset(Reset::Died);
+                changes.notices.push(Notice::Slain { victim: Party::Player, killer: Party::Unseen });
+                return changes;
+            }
             WorldEvent::DeathThreshold(threshold) => self.death_threshold = Some(*threshold),
             WorldEvent::ZoneTransfer(offer) => return self.transfer(offer),
             WorldEvent::ZoneTransferRejected { session_id, reason } => {
@@ -1147,14 +1166,23 @@ impl ClientWorld {
     /// A death: a spawn becomes a corpse, and the player's own death holds
     /// them until the server offers to return them home.
     fn died(&mut self, death: &Death, now: Instant) -> Changes {
+        let own = self
+            .player
+            .as_ref()
+            .is_some_and(|player| u32::from(player.spawn_id) == death.spawn_id);
+        let already_dead = own && self.death.is_some();
         // Who died and who killed them, named before the corpse takes its
         // name; a death of no one the player knows says nothing.
-        let slain = match self.party(death.spawn_id) {
-            Party::Unseen => None,
-            victim => Some(Notice::Slain {
-                victim,
-                killer: self.party(death.killer_id),
-            }),
+        let slain = if already_dead {
+            None
+        } else {
+            match self.party(death.spawn_id) {
+                Party::Unseen => None,
+                victim => Some(Notice::Slain {
+                    victim,
+                    killer: self.party(death.killer_id),
+                }),
+            }
         };
         if let Ok(id) = u16::try_from(death.spawn_id) {
             self.zone.corpse(
@@ -1173,11 +1201,18 @@ impl ClientWorld {
             Changes::default()
         } else {
             self.own_health(0);
-            self.death = Some(death.clone());
+            self.death = Some(OwnDeath::Reported {
+                details: death.clone(),
+                since: self.death_since().unwrap_or(now),
+            });
             self.bled_out = None;
             // The server closes a window the player dies with.
             self.zone.trade.exchange = None;
-            self.reset(Reset::Died)
+            if already_dead {
+                Changes::default()
+            } else {
+                self.reset(Reset::Died)
+            }
         };
         changes.notices.splice(0..0, slain);
         changes
@@ -1204,7 +1239,14 @@ impl ClientWorld {
 
     /// Forgets what the reason makes stale, and says so.
     fn reset(&mut self, reason: Reset) -> Changes {
-        self.inventory_moves.clear();
+        if matches!(
+            reason,
+            Reset::Entered | Reset::Camped | Reset::Lost { ended: true, .. }
+        ) {
+            self.inventory_moves.clear();
+        } else {
+            self.inventory_moves.interrupt();
+        }
         self.accepted_speed_inputs = None;
         // A refused transfer resumes this same admission. Retain its revision
         // while suspended so later input changes can still be reported.

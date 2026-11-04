@@ -131,6 +131,7 @@ impl SessionWorker {
     pub fn start(login: Login, options: &SessionOptions) -> Result<eq_client_render::Session> {
         let protocol = login.protocol;
         let client = client(login, options)?;
+        let inventory_move_rules = client.inventory_move_rules();
         let spell_provider =
             eq_client_core::spell_tables::Binding::new(client.spell_table_policy());
         let install = options.install.clone();
@@ -219,6 +220,7 @@ impl SessionWorker {
             }
         });
         Ok(eq_client_render::Session {
+            inventory_move_rules,
             spell_provider,
             updates: receiver,
             commands,

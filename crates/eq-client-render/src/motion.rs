@@ -354,7 +354,17 @@ impl Controls {
     }
     /// Takes the session's word on how the player may move.
     pub fn grant(&mut self, grant: eq_client_core::world::MotionGrant) {
+        // A changed positive speed keeps the current intent. Any actual
+        // withdrawal/reset still clears it, including death and zoning.
+        let autorun = self.autorun
+            && self
+                .speed
+                .is_some_and(|value| value.is_finite() && value > 0.0)
+            && grant
+                .units_per_second
+                .is_some_and(|value| value.is_finite() && value > 0.0);
         self.reset(grant.units_per_second);
+        self.autorun = autorun;
         self.backward_speed = grant.backward_units_per_second;
         self.walk_speed = grant.walk_units_per_second;
         self.strafe_speed = grant.strafe_units_per_second;
@@ -453,7 +463,7 @@ pub(super) fn input(
     look: Option<Res<crate::camera::MouseLook>>,
 ) {
     let client = settings.0.installed_client;
-    if !online.enabled || !online.world().connected() || online.world().death().is_some() {
+    if !online.enabled || !online.world().connected() || online.world().is_dead() {
         controls.reset(None);
         controls.held = Some(Held::Withdrawn);
         return;
@@ -2773,6 +2783,35 @@ mod tests {
         assert_eq!(request.mode, MovementMode::Fall);
         assert!(request.position.x.abs() < f32::EPSILON && request.position.y.abs() < f32::EPSILON);
         assert!(request.position.z < 53.0);
+    }
+
+    #[test]
+    fn positive_recalibration_keeps_autorun_but_a_real_withdrawal_clears_it() {
+        let mut controls = Controls {
+            speed: Some(10.0),
+            autorun: true,
+            ..Default::default()
+        };
+        let grant = |speed| eq_client_core::world::MotionGrant {
+            units_per_second: speed,
+            backward_units_per_second: None,
+            walk_units_per_second: None,
+            strafe_units_per_second: None,
+            falls: true,
+        };
+        controls.grant(grant(Some(9.0)));
+        assert!(controls.autorun);
+        assert_eq!(controls.speed, Some(9.0));
+        controls.grant(grant(None));
+        assert!(!controls.autorun);
+        controls.grant(grant(Some(10.0)));
+        assert!(
+            !controls.autorun,
+            "a regrant cannot revive withdrawn intent"
+        );
+        controls.autorun = true;
+        controls.grant(grant(Some(f32::NAN)));
+        assert!(!controls.autorun);
     }
 
     #[test]

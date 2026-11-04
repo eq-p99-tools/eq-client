@@ -185,6 +185,7 @@ impl InventoryState {
         session_id: u64,
         revision: u64,
         error: Option<String>,
+        present_error: bool,
         inventory: &Inventory,
     ) {
         let Some((pending_session, pending_revision, to_cursor)) = self.actions.pending else {
@@ -196,7 +197,9 @@ impl InventoryState {
         if pending_revision != revision {
             if let Some(error) = error {
                 self.actions.auto_store = false;
-                self.refuse(error);
+                if present_error {
+                    self.refuse(error);
+                }
             }
             return;
         }
@@ -205,7 +208,9 @@ impl InventoryState {
             self.actions.auto_store = false;
         }
         if let Some(error) = error {
-            self.refuse(error);
+            if present_error {
+                self.refuse(error);
+            }
         } else if to_cursor || inventory.items().contains_key(&InventorySlot::CURSOR) {
             self.actions.message = "Item is on the cursor; choose a destination".into();
         } else {
@@ -645,6 +650,24 @@ mod tests {
     use crate::online::testing;
     use eq_client_core::inventory::InventoryUpdate;
 
+    #[test]
+    fn dependent_refusals_drain_actions_without_repeating_the_root_chat_notice() {
+        let mut state = InventoryState::default();
+        state.actions.pending = Some((7, 3, false));
+        state.actions.auto_store = true;
+        let inventory = Inventory::default();
+        state.action_result(7, 1, Some("Access changed".into()), true, &inventory);
+        state.action_result(7, 2, Some("Predecessor refused".into()), false, &inventory);
+        state.action_result(7, 3, Some("Predecessor refused".into()), false, &inventory);
+        assert_eq!(state.refused, ["Access changed"]);
+        assert_eq!(state.actions.message, "Access changed");
+        assert_eq!(state.actions.pending, None);
+        assert!(!state.actions.auto_store);
+        state.actions.pending = Some((7, 4, false));
+        state.action_result(7, 4, Some("Different root".into()), true, &inventory);
+        assert_eq!(state.refused, ["Access changed", "Different root"]);
+    }
+
     /// The inventory window beside the world holding the items.
     struct Bench {
         state: InventoryState,
@@ -1004,6 +1027,7 @@ mod tests {
                 7,
                 request.revision,
                 Some("Rejected".into()),
+                true,
                 online.world().inventory(),
             );
         }
@@ -1132,6 +1156,7 @@ mod tests {
                 7,
                 request.revision,
                 Some("Rejected".into()),
+                true,
                 online.world().inventory(),
             );
         }

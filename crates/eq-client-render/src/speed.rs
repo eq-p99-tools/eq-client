@@ -3,7 +3,9 @@ use crate::{online::OnlineState, outbox::Outbox};
 use bevy::prelude::*;
 use eq_client_assets::spells::Effect;
 use eq_client_core::{ClientCommand, world::ClientWorld};
-use eq_client_core::{SpeedInputState, SpeedInputUnavailable as Missing, SpeedInputs};
+use eq_client_core::{
+    EqMacFatigueInputs, SpeedInputState, SpeedInputUnavailable as Missing, SpeedInputs,
+};
 
 /// Evaluated direct spell contributions, before combining active effects.
 #[derive(Clone, Copy, Default)]
@@ -125,7 +127,7 @@ fn calculate(
     let weight =
         u16::try_from((world.movement_weight()? / 10).min(32_766)).expect("bounded weight");
     let base = player.base_attributes.ok_or(Missing::Attributes)?;
-    let inventory = world.inventory();
+    let inventory = world.worker_inventory();
     let equipped = eq_client_core::resources::eqemu_equipped_modifiers(
         inventory,
         player.class.ok_or(Missing::Attributes)?,
@@ -179,17 +181,24 @@ fn calculate(
         }
         modifiers.add(projected);
     }
-    let fatigue_penalty = if world.generation() == eq_client_core::GameDialect::EqMac {
-        let stamina = (i64::from(base.stamina) + modifiers.stamina).clamp(1, 255);
-        // Until fatigue arrives, its source-defined maximum penalty is a sound
-        // lower bound on STR. Do not turn the entire calculation into unknown.
-        world
-            .nourishment()
-            .and_then(|n| n.fatigue)
-            .map_or(10, |fatigue| (i64::from(fatigue) - stamina).clamp(0, 10))
+    let strength = i64::from(base.strength) + modifiers.strength;
+    let eqmac_fatigue = if world.generation() == eq_client_core::GameDialect::EqMac {
+        Some(EqMacFatigueInputs {
+            strength,
+            stamina: Some(
+                u8::try_from((i64::from(base.stamina) + modifiers.stamina).clamp(1, 255))
+                    .expect("bounded stamina"),
+            ),
+        })
     } else {
-        0
+        None
     };
+    // A stable capped fallback keeps fatigue-only ticks out of the posted
+    // report identity. The component alone owns current EQMac capacity.
+    let capacity = eqmac_fatigue.map_or_else(
+        || u32::try_from(strength.clamp(1, 255)).expect("bounded strength"),
+        |inputs| inputs.capacity(None),
+    );
     Ok(SpeedInputs {
         rate: if modifiers.rooted {
             -1000
@@ -203,10 +212,8 @@ fn calculate(
             .expect("bounded rate")
         },
         weight,
-        capacity: u32::try_from(
-            (i64::from(base.strength) + modifiers.strength - fatigue_penalty).clamp(1, 255),
-        )
-        .expect("bounded strength"),
+        capacity,
+        eqmac_fatigue,
     })
 }
 
@@ -228,7 +235,9 @@ pub(crate) fn inputs(
 fn readiness_reason(world: &ClientWorld, reason: Missing) -> &'static str {
     match reason {
         Missing::Attributes => "Movement paused: waiting for character information.",
-        Missing::Inventory if !world.inventory().received() || world.inventory().stale() => {
+        Missing::Inventory
+            if !world.worker_inventory().received() || world.worker_inventory().stale() =>
+        {
             "Movement paused: waiting for inventory information."
         }
         Missing::Inventory => "Movement paused: item details are unavailable.",
@@ -239,9 +248,13 @@ fn readiness_reason(world: &ClientWorld, reason: Missing) -> &'static str {
         // An affecting equipment history with no live prediction left to
         // confirm ends only with a full inventory snapshot or a settlement.
         Missing::Prediction
-            if world.inventory().equipment_stats_uncertain() && !world.inventory().predicted() =>
+            if world.worker_inventory().equipment_stats_uncertain()
+                && !world.worker_inventory().predicted() =>
         {
             "Movement paused: equipment changes need a full inventory refresh."
+        }
+        Missing::Prediction if !world.worker_inventory().predicted() => {
+            "Movement paused: weight changes need a full inventory refresh."
         }
         Missing::Prediction => "Movement paused: waiting for item changes to be confirmed.",
         Missing::Effects if world.buffs().slots().is_none() => {
@@ -257,8 +270,20 @@ pub(crate) fn load(
     spells: &crate::spellbook::SpellNames,
 ) -> Option<(u16, Option<u32>)> {
     match inputs(world, spells) {
-        SpeedInputState::Ready(inputs) => Some((inputs.weight, Some(inputs.capacity))),
+        SpeedInputState::Ready(inputs) => {
+            Some((inputs.weight, Some(effective_capacity(world, inputs))))
+        }
         SpeedInputState::Unavailable(_) => None,
+    }
+}
+
+/// Display current capacity through the network-owned fatigue formula without
+/// changing the posted report or manufacturing a new acceptance receipt.
+fn effective_capacity(world: &ClientWorld, inputs: SpeedInputs) -> u32 {
+    if world.generation() == eq_client_core::GameDialect::EqMac {
+        inputs.eqmac_capacity(world.nourishment().and_then(|n| n.fatigue))
+    } else {
+        inputs.capacity
     }
 }
 

@@ -459,7 +459,7 @@ pub(super) fn actions(
     ),
 ) {
     use super::keys::Act;
-    if !online.world().connected() || online.world().death().is_some() || !keys.focused() {
+    if !online.world().connected() || online.world().is_dead() || !keys.focused() {
         return;
     }
     let Some(player) = online.world().player() else {

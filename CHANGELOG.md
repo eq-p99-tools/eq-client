@@ -16,6 +16,28 @@
   targeted Stop and retained status, including recovery after terminal errors.
   Runs share the workbench executor and limits; active runs reject replacement.
   API: `ViewerConfig::script_control` and `Script::for_viewer`.
+- Track admission-scoped death-bind knowledge separately from death-packet
+  details. Show the existing death notice and action/pose lifecycle without
+  manufacturing a corpse; keep duplicate notifications quiet and clear state
+  on the next admission.
+
+- **Breaking:** renderer `Session` now supplies `inventory_move_rules` from the
+  network producer. Configure `ClientWorld::plan_inventory_as` before queuing
+  moves; missing policy refuses planning. `Reply::InventoryMove` adds
+  `present_error` while preserving typed dependent refusal errors.
+- Compute movement weight, equipment and food from one ordered worker replica
+  (`worker_inventory`), keeping queued display/planning projections separate.
+  Same-admission resets retain pending result identities for late submissions;
+  new admissions and terminal resets discard them. Dependent refusals drain
+  without repeating the root chat notice.
+- Supply the network-owned optional `EqMacFatigueInputs` from the same proven
+  worker inventory. Signed strength stays uncapped until the session applies
+  fatigue; known stamina is capped to 1..255. Keep a stable conservative scalar
+  fallback so fatigue-only ticks leave the exact posted report unchanged, and
+  display current capacity through the network formula. Missing prerequisites
+  stay unavailable; Titanium capacity and zero-sentinel behavior are unchanged.
+- Keep autorun during a continuously positive speed recalibration. Actual
+  withdrawal, admission and unsafe readiness resets still clear it.
 
 - Apply item moves to a local projection and send them in order without
   waiting for the worker between clicks; scribing waits for queued moves. A

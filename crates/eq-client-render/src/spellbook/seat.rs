@@ -55,7 +55,7 @@ fn sit(world: &ClientWorld, posture: Option<PostureState>, outbox: Option<&crate
         posture,
         None | Some(PostureState::Standing | PostureState::Ducking)
     );
-    if !standing || !world.connected() || world.death().is_some() || super::action_pending(world) {
+    if !standing || !world.connected() || world.is_dead() || super::action_pending(world) {
         return;
     }
     // The outbox shows why a sit did not go.

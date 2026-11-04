@@ -122,7 +122,7 @@ pub(super) fn input(
         .filter(|posture| *posture != PostureState::Standing);
     // Both clients stop attacking when the player stops standing, and keep
     // on whatever becomes of the target.
-    let live = world.connected() && world.death().is_none();
+    let live = world.connected() && !world.is_dead();
     if combat.auto_attack && (!live || posture.is_some()) {
         combat.auto_attack = false;
         if world.connected() && outbox.post(world, attack(false)).is_ok() {

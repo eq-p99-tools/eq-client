@@ -195,7 +195,7 @@ impl Outbox {
             if world.session_id().is_none() {
                 return Err(Refusal::NotAdmitted);
             }
-            if world.death().is_some() {
+            if world.is_dead() {
                 return Err(Refusal::Dead);
             }
             if !world.in_world() {

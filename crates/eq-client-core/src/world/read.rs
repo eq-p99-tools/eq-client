@@ -25,8 +25,9 @@ impl ClientWorld {
         self.accepted_speed_inputs
     }
 
-    /// Complete carried load, in tenths. Unknown inventory/coins never become zero.
-    /// Predictions are usable only when they preserve the authoritative item weight.
+    /// Movement load in tenths from one worker replica. Unknown inventory/coins
+    /// never become zero. A proven cursor-arrival history can conservatively
+    /// overstate carried mass without confirming predicted placement.
     ///
     /// # Errors
     /// Returns the input category requiring authoritative state.
@@ -262,10 +263,33 @@ impl ClientWorld {
         self.min_clip
     }
 
-    /// The player's death, until the next admission.
+    /// Details supplied by an existing death event, until the next admission.
+    /// A death-only bind transfer supplies lifecycle knowledge without details.
     #[must_use]
     pub const fn death(&self) -> Option<&Death> {
-        self.death.as_ref()
+        match self.death.as_ref() {
+            Some(super::OwnDeath::Reported { details, .. }) => Some(details),
+            _ => None,
+        }
+    }
+
+    /// Whether the session established death from a death event or a death-only
+    /// bind transfer. This never implies any killer or corpse details.
+    #[must_use]
+    pub const fn is_dead(&self) -> bool {
+        self.death.is_some()
+    }
+
+    /// When this admission first established own death, for the avatar's
+    /// death animation. This does not establish a corpse in the entity map.
+    #[must_use]
+    pub const fn death_since(&self) -> Option<std::time::Instant> {
+        match self.death {
+            Some(
+                super::OwnDeath::Reported { since, .. } | super::OwnDeath::BindTransfer { since },
+            ) => Some(since),
+            None => None,
+        }
     }
 
     /// The player's HP, with what their items add, when the server's last
@@ -496,6 +520,14 @@ impl ClientWorld {
             .projected
             .as_ref()
             .unwrap_or(&self.inventory)
+    }
+
+    /// The ordered worker replica, including only locally submitted predictions
+    /// and received server updates. Movement weight, equipment and food must use
+    /// this same view. It does not imply server acceptance of submitted moves.
+    #[must_use]
+    pub const fn worker_inventory(&self) -> &Inventory {
+        &self.inventory
     }
 
     /// The corpse the player is looting.
