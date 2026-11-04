@@ -636,18 +636,9 @@ fn gems_and_action_slots_name_their_keys_from_the_key_map() {
 Alt+2: cast | Shift-click: forget | Hold: pick up"
     );
     // A stored shortcut can be picked up even if its gem is currently empty.
-    assert_eq!(
-        tooltip(slot),
-        "2: use | Ctrl+2: bind the hovered gem, item or button | Ctrl+Shift+2: empty | Hold: pick up"
-    );
-    assert_eq!(
-        tooltip(spellless),
-        "3: use | Ctrl+3: bind the hovered gem, item or button | Ctrl+Shift+3: empty | Hold: pick up"
-    );
-    assert_eq!(
-        tooltip(empty),
-        "4: use | Ctrl+4: bind the hovered gem, item or button | Ctrl+Shift+4: empty"
-    );
+    assert_eq!(tooltip(slot), "2: use | Hold: pick up");
+    assert_eq!(tooltip(spellless), "3: use | Hold: pick up");
+    assert_eq!(tooltip(empty), "4: use");
 }
 
 #[test]

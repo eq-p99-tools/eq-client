@@ -61,6 +61,11 @@ fn item_binding_uses_current_inventory_and_never_activates_replacement_items() {
     let (tx, rx) = std::sync::mpsc::sync_channel(4);
     let mut app = App::new();
     crate::keys::testing::install(&mut app);
+    crate::keys::testing::bind(
+        &mut app,
+        crate::keys::Act::BindSlot(0),
+        crate::keys::Chord::ctrl(KeyCode::Digit1),
+    );
     app.init_resource::<Bindings>()
         .init_resource::<ButtonInput<KeyCode>>()
         .init_resource::<crate::chat::ChatState>()

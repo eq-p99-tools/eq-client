@@ -126,6 +126,17 @@ pub(crate) mod tests {
     /// Both real factories must expose page controls through the release rule,
     /// and use the selected page for keyboard activation and bind/clear.
     pub(crate) fn controls(mut fixture: Fixture) {
+        // Keyboard editing is an explicit user choice, independent of page keys.
+        crate::keys::testing::bind(
+            &mut fixture.app,
+            crate::keys::Act::BindSlot(0),
+            crate::keys::Chord::ctrl(KeyCode::Digit1),
+        );
+        crate::keys::testing::bind(
+            &mut fixture.app,
+            crate::keys::Act::ClearSlot(0),
+            crate::keys::Chord::ctrl_shift(KeyCode::Digit1),
+        );
         fixture.app.add_systems(
             Update,
             (super::super::update, super::super::presentation)
