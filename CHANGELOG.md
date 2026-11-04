@@ -32,6 +32,10 @@
   Shift-click takes the whole stack and Ctrl-click takes one; these controls
   are requested UX, with official modifier parity still unverified. Cursor
   placement, single items and plain merchant selection keep their behavior.
+- Cover right-click note/book requests and visible outbox refusals without
+  opening a reading window before server text arrives. The shared outbox
+  remains the sole owner of posting-refusal notices. Render classic book
+  backticks as line breaks in notes and paginated books.
 - **Breaking:** renderer `Session` now supplies `inventory_move_rules` from the
   network producer. Configure `ClientWorld::plan_inventory_as` before queuing
   moves; missing policy refuses planning. `Reply::InventoryMove` adds

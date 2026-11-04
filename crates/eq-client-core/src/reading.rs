@@ -2,7 +2,7 @@
 //! line breaks made plain, and a book's text laid out page by page.
 
 /// The server's text with its line-break markup (`<BR>` in any case, and
-/// the `^` notes use) as newlines, without trailing ones.
+/// the `^` notes use and classic book backticks) as newlines, without trailing ones.
 #[must_use]
 pub fn plain(text: &str) -> String {
     let mut plain = String::with_capacity(text.len());
@@ -24,7 +24,7 @@ pub fn plain(text: &str) -> String {
     plain.push_str(rest);
     plain
         .replace("\r\n", "\n")
-        .replace('^', "\n")
+        .replace(['^', '`'], "\n")
         .trim_end()
         .to_owned()
 }
@@ -99,5 +99,15 @@ mod tests {
         assert_eq!(super::pages("", 10, 3), [""]);
         // A word longer than a line is cut across lines.
         assert_eq!(super::pages("abcdefghij", 4, 5), ["abcd\nefgh\nij"]);
+    }
+
+    #[test]
+    fn classic_text_line_breaks_work_in_notes_and_paginated_books() {
+        let text = "First line`Second line`Third line`";
+        assert_eq!(plain(text), "First line\nSecond line\nThird line");
+        assert_eq!(
+            pages(text, 40, 2),
+            ["First line\nSecond line", "Third line"]
+        );
     }
 }

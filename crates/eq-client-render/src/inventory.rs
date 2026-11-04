@@ -3,6 +3,8 @@ pub(super) mod colors;
 pub(super) mod cursor;
 mod interaction;
 mod layout;
+#[cfg(test)]
+mod reading_tests;
 
 pub(crate) use interaction::{Handed, SplitAction};
 
@@ -481,7 +483,8 @@ fn right_click(
     if item.bag_slots > 0 && skinned.has(super::windows::WindowId::Inventory) {
         crate::skinned::toggle_bag(shown, slot);
     } else if item.book.is_some() {
-        // The book or note opens to read when the server sends its text.
+        // Outbox owns posting refusals and shows them in chat. A successful
+        // post opens nothing; the book or note waits for the server's text.
         let _ = sender.post(online.world(), |stamp| {
             eq_client_core::ClientCommand::ReadItem {
                 session_id: stamp.session_id,
