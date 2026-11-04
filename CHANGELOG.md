@@ -12,7 +12,8 @@
 - Show the Skills window by the generation's own list, rank and value rules
   from per-generation tables shipped as data (numbers only), list languages,
   and name language zero from the received selector; the Mac-era selector is
-  unread, so its row keeps a placeholder name. API: new `eq_client_assets::skills`,
+  unread, so its row is withheld while its received proficiency is retained.
+  API: new `eq_client_assets::skills`,
   `InstalledClient::skill_rules()`, `ClientWorld::language_zero_selector()`;
   `skills_revision` also advances on level and language changes.
 - Honour authored material sidedness for placed objects, mirroring one-sided
