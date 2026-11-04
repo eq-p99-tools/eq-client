@@ -2,6 +2,7 @@
 //! Pixel sampling below is a CPU UV check, not a GPU/native render comparison.
 mod capture;
 mod capture_pixels;
+mod tabbed;
 
 use super::*;
 use bevy::{
@@ -18,6 +19,7 @@ use bevy::{
 use std::{collections::BTreeMap, fmt::Write as _};
 
 const SHEET: &str = "synthetic-border.tga";
+
 const TAGS: [(&str, u16, u16); 12] = [
     ("TopLeft", 7, 3),
     ("Top", 2, 2),

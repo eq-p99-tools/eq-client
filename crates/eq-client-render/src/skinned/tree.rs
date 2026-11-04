@@ -488,6 +488,38 @@ pub(super) fn tabbed(
     let particle_pages = super::particles::pages(&tabs.pages, context.id);
     let pages = with_qol_page(&particle_pages, context.id, inside.height);
     let pages = pages.as_ref();
+    if context.id == WindowId::Options {
+        // Added client pages can exceed the skin's single row. As with chat's
+        // tabs, let the row wrap at its measured intrinsic widths. Its height
+        // participates in layout so no tab overlaps the page below it.
+        window
+            .spawn(Node {
+                flex_direction: FlexDirection::Column,
+                ..at(inside.x, inside.y, inside.width, inside.height)
+            })
+            .with_children(|column| {
+                let origin = Area {
+                    x: 0.0,
+                    y: 0.0,
+                    ..*inside
+                };
+                tabbed_pages(column, art, tabs, pages, &origin, context);
+            });
+    } else {
+        tabbed_pages(window, art, tabs, pages, inside, context);
+    }
+}
+
+/// Builds the tabs and pages; Options alone uses a wrapping, flowing strip.
+fn tabbed_pages(
+    window: &mut ChildSpawnerCommands,
+    art: &mut crate::sheets::Art,
+    tabs: &eq_client_assets::sidl::TabBox,
+    pages: &[eq_client_assets::sidl::Page],
+    inside: &Area,
+    context: &Context,
+) {
+    let wrapping = context.id == WindowId::Options;
     let tab_box: std::sync::Arc<str> = tabs.name.as_str().into();
     let tab = |index| SkinTab {
         window: context.id,
@@ -496,17 +528,31 @@ pub(super) fn tabbed(
         index,
     };
     let strip = tab_strip(pages.iter());
+    let row = if wrapping {
+        Node {
+            width: px((inside.width - 4.0).max(0.0)),
+            min_height: px(strip - 2.0),
+            flex_wrap: FlexWrap::Wrap,
+            flex_shrink: 0.0,
+            row_gap: px(2),
+            align_self: AlignSelf::Center,
+            margin: UiRect::vertical(px(1)),
+            ..default()
+        }
+    } else {
+        at(
+            inside.x + 2.0,
+            inside.y + 1.0,
+            inside.width - 4.0,
+            strip - 1.0,
+        )
+    };
     window
         .spawn(Node {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::FlexStart,
             column_gap: px(2),
-            ..at(
-                inside.x + 2.0,
-                inside.y + 1.0,
-                inside.width - 4.0,
-                strip - 1.0,
-            )
+            ..row
         })
         .with_children(|row| {
             for (index, page) in pages.iter().enumerate() {
@@ -524,29 +570,79 @@ pub(super) fn tabbed(
         ..*context
     };
     for (index, page) in pages.iter().enumerate() {
-        window
-            .spawn((
-                SkinPage(tab(index)),
-                Node {
-                    display: Display::None,
-                    overflow: Overflow::clip(),
-                    ..at(inside.x, inside.y + strip, area.width, area.height)
-                },
-            ))
-            .with_children(|page_area| {
-                // The skin's page frame, where it names one, with the page's
-                // pieces inside it.
-                let inside = tabs.page_frame.as_ref().map_or(area, |look| {
-                    let insets = frame::around(page_area, art, look);
-                    Area {
-                        x: insets.left,
-                        y: insets.top,
-                        width: area.width - insets.left - insets.right,
-                        height: area.height - insets.top - insets.bottom,
-                    }
-                });
-                pieces(page_area, art, &page.pieces, &inside, &within);
-            });
+        let node = if wrapping {
+            Node {
+                width: percent(100),
+                min_height: px(0),
+                flex_basis: px(0),
+                flex_grow: 1.0,
+                overflow: Overflow::scroll_y(),
+                ..default()
+            }
+        } else {
+            Node {
+                overflow: Overflow::clip(),
+                ..at(inside.x, inside.y + strip, area.width, area.height)
+            }
+        };
+        let mut viewport = window.spawn((
+            SkinPage(tab(index)),
+            Node {
+                display: Display::None,
+                ..node
+            },
+        ));
+        if wrapping {
+            viewport.insert((
+                ScrollPosition::default(),
+                ScrolledView,
+                crate::windows::pointer::TakesWheel,
+            ));
+        }
+        viewport.with_children(|viewport| {
+            tabbed_page_contents(viewport, art, tabs, page, area, &within);
+        });
+    }
+}
+
+/// Keeps page coordinates intact beneath either kind of tab strip.
+fn tabbed_page_contents(
+    viewport: &mut ChildSpawnerCommands,
+    art: &mut crate::sheets::Art,
+    tabs: &eq_client_assets::sidl::TabBox,
+    page: &eq_client_assets::sidl::Page,
+    area: Area,
+    context: &Context,
+) {
+    let draw_page = |page_area: &mut ChildSpawnerCommands| {
+        // The skin's page frame, where it names one, with the page's
+        // pieces inside it.
+        let inside = tabs.page_frame.as_ref().map_or(area, |look| {
+            let insets = frame::around(page_area, art, look);
+            Area {
+                x: insets.left,
+                y: insets.top,
+                width: area.width - insets.left - insets.right,
+                height: area.height - insets.top - insets.bottom,
+            }
+        });
+        pieces(page_area, art, &page.pieces, &inside, context);
+    };
+    if context.id == WindowId::Options {
+        // Preserve authored page coordinates and height. If extra tab
+        // rows reduce the viewport, the ordinary wheel owner can reach
+        // its bottom controls instead of clipping them permanently.
+        viewport
+            .spawn(Node {
+                width: px(area.width),
+                height: px(area.height),
+                flex_shrink: 0.0,
+                ..default()
+            })
+            .with_children(draw_page);
+    } else {
+        let mut draw_page = draw_page;
+        draw_page(viewport);
     }
 }
 
