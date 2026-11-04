@@ -66,6 +66,9 @@ mod tests {
             &mut app,
             GroupUpdate::Invited {
                 inviter: "Leader".into(),
+                player: "Example".into(),
+                kind: eq_client_core::group::InvitationKind::Initial,
+                id: eq_client_core::group::InvitationId::new(1),
             },
         );
         assert_eq!(group_frames(&mut app), 1);
@@ -77,7 +80,12 @@ mod tests {
             },
         );
         assert_eq!(group_frames(&mut app), 0);
-        news(&mut app, GroupUpdate::Formed);
+        news(
+            &mut app,
+            GroupUpdate::Formed {
+                leader: "Example".into(),
+            },
+        );
         assert_eq!(group_frames(&mut app), 1);
         news(&mut app, GroupUpdate::Disbanded);
         assert_eq!(group_frames(&mut app), 0);

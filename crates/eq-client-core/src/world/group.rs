@@ -52,7 +52,16 @@ impl ClientWorld {
     /// for an answer.
     #[must_use]
     pub fn group_invitation(&self) -> Option<&str> {
-        self.group_invitation.as_deref()
+        self.group_invitation
+            .as_ref()
+            .map(|(name, _)| name.as_str())
+    }
+
+    /// Session-local generation of the displayed invitation. This is not
+    /// a server identifier; together with admission and inviter it binds consent.
+    #[must_use]
+    pub fn group_invitation_id(&self) -> Option<crate::group::InvitationId> {
+        self.group_invitation.as_ref().map(|(_, id)| *id)
     }
 
     /// Whether the player leads their group.
@@ -111,6 +120,22 @@ impl ClientWorld {
         }
     }
 
+    fn listed_group(&self, leader: &str, members: &[String]) -> Option<Group> {
+        let mut listed = Vec::<String>::new();
+        for member in members {
+            if !member.is_empty()
+                && !self.is_named(member)
+                && !listed.iter().any(|name| name.eq_ignore_ascii_case(member))
+            {
+                listed.push(member.clone());
+            }
+        }
+        (!leader.is_empty() || !listed.is_empty()).then(|| Group {
+            leader: (!leader.is_empty()).then(|| leader.to_owned()),
+            members: listed,
+        })
+    }
+
     /// Follows news of groups, and says what it tells the player.
     pub(super) fn group_news(&mut self, update: &GroupUpdate, news: &mut Changes) {
         let notice = match update {
@@ -124,18 +149,30 @@ impl ClientWorld {
                 self.group_invitation = None;
                 Some(GroupNotice::Declining(inviter.clone()))
             }
-            GroupUpdate::Invited { inviter } => {
-                self.group_invitation = Some(inviter.clone());
-                Some(GroupNotice::Invited(inviter.clone()))
+            GroupUpdate::Invited {
+                inviter,
+                player,
+                id: Some(id),
+                ..
+            } => {
+                if !self.is_named(player)
+                    || self.group.is_some()
+                    || self.joining_group
+                    || self.group_invitation.is_some()
+                {
+                    None
+                } else {
+                    self.group_invitation = Some((inviter.clone(), *id));
+                    Some(GroupNotice::Invited(inviter.clone()))
+                }
             }
-            // The member's join, which comes first, says it.
-            GroupUpdate::Accepted { .. } => None,
-            GroupUpdate::Declined { member } => Some(GroupNotice::Declined(member.clone())),
-            GroupUpdate::Formed => {
-                self.group = Some(Group {
-                    leader: self.player.as_ref().map(|player| player.name.clone()),
-                    members: Vec::new(),
-                });
+            // An invitation needs an identity; an accepted member's preceding
+            // join already supplies its update.
+            GroupUpdate::Invited { id: None, .. } | GroupUpdate::Accepted { .. } => None,
+            GroupUpdate::Declined { member, .. } => Some(GroupNotice::Declined(member.clone())),
+            GroupUpdate::Formed { leader } => {
+                self.group.get_or_insert_with(Group::default).leader =
+                    (!leader.is_empty()).then(|| leader.clone());
                 Some(GroupNotice::Formed)
             }
             GroupUpdate::Joined { member } => {
@@ -152,10 +189,18 @@ impl ClientWorld {
                 let party = self.group_party(member);
                 if party == Party::Player {
                     self.group = None;
+                    self.group_invitation = None;
                 } else if let Some(group) = self.group.as_mut() {
                     group
                         .members
                         .retain(|name| !name.eq_ignore_ascii_case(member));
+                    if group
+                        .leader
+                        .as_ref()
+                        .is_some_and(|name| name.eq_ignore_ascii_case(member))
+                    {
+                        group.leader = None;
+                    }
                 }
                 Some(GroupNotice::Left(party))
             }
@@ -163,11 +208,9 @@ impl ClientWorld {
             // each zone's admission; only joining says so. A list naming no
             // leader leaves the leader unknown.
             GroupUpdate::Members { leader, members } => {
-                self.group = Some(Group {
-                    leader: (!leader.is_empty()).then(|| leader.clone()),
-                    members: members.clone(),
-                });
-                std::mem::take(&mut self.joining_group)
+                self.group = self.listed_group(leader, members);
+                self.group_invitation = None;
+                (std::mem::take(&mut self.joining_group) && self.group.is_some())
                     .then_some(GroupNotice::Joined(Party::Player))
             }
             // Only a change of leader says so. A leader named for a group
@@ -187,12 +230,16 @@ impl ClientWorld {
             }
             // The server ends a group the player is not in as they leave a
             // raid: that says nothing.
-            GroupUpdate::Disbanded => self.group.take().map(|_| GroupNotice::Disbanded),
+            GroupUpdate::Disbanded => {
+                self.group_invitation = None;
+                self.group.take().map(|_| GroupNotice::Disbanded)
+            }
         };
         // Being in a group answers any invitation, and leaving one ends any
         // joining.
         if self.group.is_some() {
             self.group_invitation = None;
+            self.joining_group = false;
         } else if matches!(update, GroupUpdate::Left { .. } | GroupUpdate::Disbanded) {
             self.joining_group = false;
         }

@@ -1155,8 +1155,23 @@ fn group_command(
                 .next()
                 .map_or_else(|| targeted_player(online), str::to_owned),
         },
-        "follow" => ClientCommand::FollowGroup { session_id },
-        _ => ClientCommand::Disband { session_id },
+        "follow" => ClientCommand::FollowGroup {
+            session_id,
+            inviter: online
+                .world()
+                .group_invitation()
+                .unwrap_or_default()
+                .to_owned(),
+            invitation_id: online.world().group_invitation_id(),
+        },
+        _ => match online.world().group_invitation() {
+            Some(inviter) => ClientCommand::DeclineGroup {
+                session_id,
+                inviter: inviter.to_owned(),
+                invitation_id: online.world().group_invitation_id(),
+            },
+            None => ClientCommand::Disband { session_id },
+        },
     }
 }
 
@@ -2639,5 +2654,45 @@ mod tests {
         assert!((view.offset - 35.0).abs() < 0.001);
         assert_eq!(view.seen, 0);
         assert_eq!(state.history.unread(ChatTab::All, view.seen), 7);
+    }
+    #[test]
+    fn group_buttons_bind_answers_to_the_displayed_invitation() {
+        use crate::online::{OnlineState, testing};
+        use eq_client_core::{
+            WorldEvent,
+            group::{GroupUpdate, InvitationId, InvitationKind},
+        };
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 7, testing::player(9));
+        let offer = |id| {
+            WorldEvent::Group(GroupUpdate::Invited {
+                inviter: "Leader".into(),
+                player: "Example".into(),
+                kind: InvitationKind::Existing,
+                id: InvitationId::new(id),
+            })
+        };
+        testing::news(&mut online, [offer(1)]);
+        let accept = group_command("follow", "", &online, 7);
+        let decline = group_command("disband", "", &online, 7);
+        assert!(
+            matches!(&accept, ClientCommand::FollowGroup { session_id: 7, inviter, invitation_id }
+            if inviter == "Leader" && *invitation_id == InvitationId::new(1))
+        );
+        assert!(
+            matches!(&decline, ClientCommand::DeclineGroup { session_id: 7, inviter, invitation_id }
+            if inviter == "Leader" && *invitation_id == InvitationId::new(1))
+        );
+        testing::news(
+            &mut online,
+            [
+                WorldEvent::Group(GroupUpdate::Declining {
+                    inviter: "Leader".into(),
+                }),
+                offer(2),
+            ],
+        );
+        assert_ne!(group_command("follow", "", &online, 7), accept);
+        assert_ne!(group_command("disband", "", &online, 7), decline);
     }
 }

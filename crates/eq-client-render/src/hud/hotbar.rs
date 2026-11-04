@@ -701,7 +701,14 @@ mod tests {
                     name: "Example".into(),
                 },
             ),
-            (Action::Follow, ClientCommand::FollowGroup { session_id: 1 }),
+            (
+                Action::Follow,
+                ClientCommand::FollowGroup {
+                    session_id: 1,
+                    inviter: "Leader".into(),
+                    invitation_id: eq_client_core::group::InvitationId::new(1),
+                },
+            ),
             (Action::Disband, ClientCommand::Disband { session_id: 1 }),
         ];
         for (action, command) in sent {

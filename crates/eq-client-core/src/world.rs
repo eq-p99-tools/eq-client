@@ -273,7 +273,7 @@ pub struct ClientWorld {
     group: Option<Group>,
     /// Who invited the player to their group, until the player answers or
     /// is in one; the session forgets it with the admission.
-    group_invitation: Option<String>,
+    group_invitation: Option<(String, crate::group::InvitationId)>,
     /// Whether the player agreed to join a group whose list has not come.
     joining_group: bool,
     /// The target the server's answer to an assist names, until the player

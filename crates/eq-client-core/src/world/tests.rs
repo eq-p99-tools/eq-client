@@ -3502,7 +3502,10 @@ fn a_group_follows_the_servers_word_and_says_what_happened() {
         news(
             &mut world,
             GroupUpdate::Invited {
-                inviter: "Leader".into()
+                inviter: "Leader".into(),
+                player: "Example".into(),
+                kind: crate::group::InvitationKind::Initial,
+                id: crate::group::InvitationId::new(1),
             }
         ),
         said(GroupNotice::Invited("Leader".into()))
@@ -3618,7 +3621,12 @@ fn a_group_the_player_formed_is_theirs_to_lead_until_it_ends() {
     let friend = || Party::Named("Friend".into());
     // Forming one makes the player its leader; others join it.
     assert_eq!(
-        news(&mut world, GroupUpdate::Formed),
+        news(
+            &mut world,
+            GroupUpdate::Formed {
+                leader: "Example".into()
+            }
+        ),
         said(GroupNotice::Formed)
     );
     assert_eq!(
@@ -3647,7 +3655,12 @@ fn a_group_the_player_formed_is_theirs_to_lead_until_it_ends() {
     );
     assert!(world.group().is_none());
     // A new admission forgets the group, which the server lists again.
-    news(&mut world, GroupUpdate::Formed);
+    news(
+        &mut world,
+        GroupUpdate::Formed {
+            leader: "Example".into(),
+        },
+    );
     game(&mut world, entered(2));
     assert!(world.group().is_none());
 }
@@ -5007,4 +5020,111 @@ fn a_deletion_update_is_a_typed_reply_without_optimistically_removing_a_characte
     assert_eq!(changes.replies, [Reply::CharacterDeletion(update)]);
     assert!(!changes.characters);
     assert_eq!(world.characters().unwrap().characters, vec![character]);
+}
+
+#[test]
+fn group_consent_retains_owned_identity_and_waits_for_authoritative_membership() {
+    use crate::group::{GroupUpdate, InvitationId, InvitationKind};
+    let mut world = admitted();
+    let offer = |inviter: &str, id| GroupUpdate::Invited {
+        inviter: inviter.into(),
+        player: "Example".into(),
+        kind: InvitationKind::Existing,
+        id,
+    };
+    // Raw codec offers cannot become consent before session ownership.
+    game(&mut world, WorldEvent::Group(offer("Leader", None)));
+    assert_eq!(world.group_invitation(), None);
+    game(
+        &mut world,
+        WorldEvent::Group(offer("Leader", InvitationId::new(1))),
+    );
+    for inviter in ["Leader", "Other"] {
+        game(
+            &mut world,
+            WorldEvent::Group(offer(inviter, InvitationId::new(2))),
+        );
+        assert_eq!(world.group_invitation(), Some("Leader"));
+        assert_eq!(world.group_invitation_id(), InvitationId::new(1));
+    }
+    game(
+        &mut world,
+        WorldEvent::Group(GroupUpdate::Declining {
+            inviter: "Leader".into(),
+        }),
+    );
+    game(
+        &mut world,
+        WorldEvent::Group(offer("Leader", InvitationId::new(3))),
+    );
+    assert_eq!(world.group_invitation_id(), InvitationId::new(3));
+    game(
+        &mut world,
+        WorldEvent::Group(GroupUpdate::Following {
+            inviter: "Leader".into(),
+        }),
+    );
+    assert!(world.group().is_none(), "submission is not membership");
+    assert_eq!(world.group_invitation(), None);
+    game(
+        &mut world,
+        WorldEvent::Group(offer("Other", InvitationId::new(4))),
+    );
+    assert_eq!(
+        world.group_invitation(),
+        None,
+        "an unanswered join cannot replace consent"
+    );
+    let changed = game(
+        &mut world,
+        WorldEvent::Group(GroupUpdate::Members {
+            leader: "Leader".into(),
+            members: vec!["Leader".into(), "Example".into(), "leader".into()],
+        }),
+    );
+    assert_eq!(
+        changed.notices,
+        [Notice::Group(GroupNotice::Joined(Party::Player))]
+    );
+    assert_eq!(world.group().unwrap().members, ["Leader"]);
+    game(
+        &mut world,
+        WorldEvent::Group(GroupUpdate::Left {
+            member: "Leader".into(),
+        }),
+    );
+    assert_eq!(
+        world.group().unwrap().leader,
+        None,
+        "departed leadership is unknown until reported"
+    );
+    game(&mut world, WorldEvent::Group(GroupUpdate::Disbanded));
+    game(
+        &mut world,
+        WorldEvent::Group(offer("Leader", InvitationId::new(5))),
+    );
+    game(&mut world, entered(2));
+    assert_eq!(world.group_invitation_id(), None);
+    assert!(world.group().is_none());
+}
+
+#[test]
+fn initial_group_leadership_keeps_members_received_before_formation() {
+    use crate::group::GroupUpdate;
+    let mut world = admitted();
+    game(
+        &mut world,
+        WorldEvent::Group(GroupUpdate::Joined {
+            member: "Friend".into(),
+        }),
+    );
+    game(
+        &mut world,
+        WorldEvent::Group(GroupUpdate::Formed {
+            leader: "Other".into(),
+        }),
+    );
+    assert_eq!(world.group().unwrap().members, ["Friend"]);
+    assert_eq!(world.group().unwrap().leader.as_deref(), Some("Other"));
+    assert!(!world.leads_group());
 }
