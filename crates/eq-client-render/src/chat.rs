@@ -2415,6 +2415,141 @@ mod tests {
         assert!(!app.world().resource::<crate::keys::Typing>().composing);
     }
 
+    fn received_chat_app() -> (App, std::sync::mpsc::Sender<eq_client_core::WorldUpdate>) {
+        use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut app = crate::testing::app();
+        let mut online = crate::online::OnlineState::new(true);
+        crate::online::testing::admit(&mut online, 1, crate::online::testing::player(7));
+        online.open_loot(9);
+        app.add_message::<KeyboardInput>()
+            .insert_resource(online)
+            .insert_resource(crate::online::Updates(std::sync::Mutex::new(Some(rx))))
+            .insert_resource(crate::hud::messages::Messages::parse(
+                "EQST0002\n0 1\n12239 Synthetic assessment.\n12216 Synthetic standing.\n12227 Synthetic level.\n12072 Synthetic loot %1.\n60001 Synthetic typed system.\n",
+            ))
+            .insert_resource(ChatLook { colors: [(289, [4, 5, 6])].into(), font: None })
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .init_resource::<Assets<SkinnedMeshInverseBindposes>>()
+            .add_systems(Update, (crate::online::receive, input, refresh).chain());
+        app.world_mut().spawn(Content {
+            bare: true,
+            ..default()
+        });
+        (app, tx)
+    }
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Keep the ordered receive and tab-switch rendering scenario together"
+    )]
+    fn received_consider_loot_and_system_lines_render_in_all_after_tab_switches() {
+        use eq_client_core::{
+            Coins, WorldEvent, WorldUpdate,
+            combat::{ConColor, Consideration},
+            loot::{LootResponse, LootUpdate},
+        };
+        let (mut app, tx) = received_chat_app();
+        for update in [
+            WorldUpdate::Chat(ChatLine {
+                channel: ChannelName::Guild,
+                source: Source::Server,
+                sender: Some("Speaker".into()),
+                ..system_line("Synthetic guild.")
+            }),
+            WorldUpdate::Game(WorldEvent::Consideration(Consideration {
+                target_id: 9,
+                faction: 5,
+                color: ConColor::Blue,
+                hit_points: None,
+            })),
+            WorldUpdate::Game(WorldEvent::Loot(LootUpdate::Opened {
+                response: LootResponse::Normal,
+                coins: Coins {
+                    gold: 1,
+                    ..Coins::default()
+                },
+            })),
+            WorldUpdate::ServerMessage {
+                string_id: 60_001,
+                arguments: Vec::new(),
+                message_type: Some(289),
+            },
+        ] {
+            tx.send(update).unwrap();
+        }
+        app.update();
+        let expected = [
+            "Speaker (guild): Synthetic guild.",
+            "Synthetic assessment.",
+            "Synthetic loot 1g.",
+            "Synthetic typed system.",
+        ];
+        assert_eq!(shown(&mut app), expected);
+        let history = &app.world().resource::<ChatState>().history;
+        assert_eq!(history.lines(ChatTab::System).len(), 3);
+        assert!(
+            history.lines(ChatTab::Say).is_empty(),
+            "assessment and loot are not NPC/player speech"
+        );
+        assert!(
+            history
+                .lines(ChatTab::System)
+                .iter()
+                .all(|(_, line)| line.channel == ChannelName::System
+                    && line.source == Source::Official)
+        );
+        let button = app
+            .world_mut()
+            .spawn((TabButton(ChatTab::System), Interaction::None))
+            .id();
+        crate::clicks::testing::click(&mut app, button);
+        assert_eq!(shown(&mut app), expected[1..]);
+        app.world_mut()
+            .entity_mut(button)
+            .insert(TabButton(ChatTab::Guild));
+        crate::clicks::testing::click(&mut app, button);
+        assert_eq!(shown(&mut app), expected[..1]);
+        // Receive another system line while a different filter is selected.
+        tx.send(WorldUpdate::Chat(system_line("Synthetic local refusal.")))
+            .unwrap();
+        app.update();
+        assert_eq!(shown(&mut app), expected[..1]);
+        app.world_mut()
+            .entity_mut(button)
+            .insert(TabButton(ChatTab::All));
+        crate::clicks::testing::click(&mut app, button);
+        let mut all = expected.to_vec();
+        all.push("Synthetic local refusal.");
+        assert_eq!(shown(&mut app), all);
+        let typed = column(&mut app)
+            .into_iter()
+            .find(|entity| {
+                app.world()
+                    .get::<Text>(*entity)
+                    .is_some_and(|text| text.0 == "Synthetic typed system.")
+            })
+            .unwrap();
+        assert_eq!(
+            app.world().get::<TextColor>(typed).unwrap().0,
+            Color::srgb_u8(4, 5, 6)
+        );
+        let history = &app.world().resource::<ChatState>().history;
+        let ids: Vec<_> = history
+            .lines(ChatTab::All)
+            .iter()
+            .map(|(id, _)| *id)
+            .collect();
+        assert_eq!(ids, [1, 2, 3, 4, 5]);
+        assert_eq!(history.lines(ChatTab::System).len(), 4);
+        assert_eq!(
+            history.lines(ChatTab::System).last().unwrap().1.source,
+            Source::Client
+        );
+    }
+
     #[test]
     fn pressing_tabs_filters_text_without_losing_history() {
         let mut app = App::new();

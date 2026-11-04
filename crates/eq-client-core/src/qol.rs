@@ -284,7 +284,7 @@ impl Fix {
     }
 
     /// What the session must offer for the fix to matter, if anything:
-    /// eating on its own comes with the inventory, only a session that
+    /// eating on its own needs meal support, only a session that
     /// deletes spells has one to ask about, tells come with talking, and
     /// only a session that takes the world's damage from the client has any
     /// to hold back.
@@ -293,7 +293,7 @@ impl Fix {
     #[must_use]
     pub const fn needs(self) -> Option<Capability> {
         match self {
-            Self::SkipModifiedFood => Some(Capability::Inventory),
+            Self::SkipModifiedFood => Some(Capability::Meals),
             Self::AskBeforeDeletingSpells => Some(Capability::DeletingSpells),
             Self::FlashOnTells => Some(Capability::Talking),
             Self::TakeEnvironmentalDamage => Some(Capability::EnvironmentalDamage),

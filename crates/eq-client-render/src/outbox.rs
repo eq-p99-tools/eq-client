@@ -640,10 +640,10 @@ mod tests {
         assert!(!Needs::Choice(Capability::Map).offered(&offering));
         assert_eq!(Needs::Choice(Capability::Map).reason(&offering), NOT_LEFT);
         assert!(Needs::Capability(Capability::Map).offered(&offering));
-        // Other checkboxes need what they always did.
+        // The saved food preference needs the session's meal capability.
         assert_eq!(
             Needs::of(Toggle::Qol(Fix::SkipModifiedFood)),
-            Some(Needs::Capability(Capability::Inventory))
+            Some(Needs::Capability(Capability::Meals))
         );
         assert_eq!(Needs::of(Toggle::Qol(Fix::HiddenWindows)), None);
     }

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Follow the network-owned spell-table requirement for provider lifecycle and
+  initial readiness instead of matching provider policy names in the host.
+- Post automatic-food preferences only to admissions offering `Capability::Meals`,
+  keeping the saved choice on servers without meal support. Inventory support
+  alone no longer enables the meal option or sends an unsupported zone-in update.
+
 - Apply item moves to a local projection and send them in order without
   waiting for the worker between clicks; scribing waits for queued moves. A
   refusal rolls the projection back to the server's state and refuses the

@@ -30,7 +30,9 @@ missing-mechanics report. Chat and logging continue.
 The host allocates `spell_tables::Binding` when creating a producer. The
 binding uses `Client::spell_table_policy()`, whose network owner selects the
 provider before any events arrive. No app protocol-name branch or first-event
-latch is required. Connecting carries the numeric `SessionStatus::run_id`;
+latch is required. Its `requires_server_tables()` predicate owns the lifecycle
+routing and initial-readiness decision; the host does not match policy variants.
+Connecting carries the numeric `SessionStatus::run_id`;
 the formatted display label is never parsed and cannot abort a session.
 The released display-only status constructor can leave that ID unknown.
 Such a Connecting snapshot yields `Fact::RunUnavailable`: it cannot preserve
