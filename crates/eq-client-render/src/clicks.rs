@@ -145,7 +145,7 @@ impl<T: Component> Clicks<'_, '_, T> {
 /// Clicks for tests, pressed and let go as Bevy marks them.
 #[cfg(test)]
 pub(crate) mod testing {
-    use bevy::prelude::*;
+    use bevy::{prelude::*, ui::RelativeCursorPosition};
 
     /// Gives a hand-built test app the click rule.
     pub(crate) fn install(app: &mut App) {
@@ -159,6 +159,12 @@ pub(crate) mod testing {
     pub(crate) fn press(app: &mut App, on: Option<Entity>) {
         if let Some(on) = on {
             *app.world_mut().get_mut::<Interaction>(on).unwrap() = Interaction::Pressed;
+            if let Some(mut relative) = app.world_mut().get_mut::<RelativeCursorPosition>(on) {
+                *relative = RelativeCursorPosition {
+                    cursor_over: true,
+                    normalized: Some(Vec2::ZERO),
+                };
+            }
         }
         let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
         mouse.press(MouseButton::Left);
@@ -180,6 +186,11 @@ pub(crate) mod testing {
         // rests on its replacement, which the press never began on.
         if let Some(mut interaction) = over.and_then(|over| world.get_mut::<Interaction>(over)) {
             *interaction = Interaction::Hovered;
+        }
+        let mut positions = world.query::<(Entity, &mut RelativeCursorPosition)>();
+        for (entity, mut relative) in positions.iter_mut(world) {
+            relative.cursor_over = Some(entity) == over;
+            relative.normalized = relative.cursor_over.then_some(Vec2::ZERO);
         }
         world
             .resource_mut::<ButtonInput<MouseButton>>()

@@ -4,6 +4,8 @@
 //! frame and pieces, and what each gauge and label shows follows the
 //! official client's numbering. A skin without the window, or a viewer
 //! without an installation, keeps the client's own chrome.
+#[cfg(test)]
+mod hotbar_drag_tests;
 mod tree;
 #[cfg(test)]
 use tree::{augment_section, text_box};
