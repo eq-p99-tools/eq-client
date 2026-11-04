@@ -34,6 +34,15 @@ Use these targets after `click`, `right_click` or `hover`. For a held click, put
 - `give`: the give window's button.
 - `combine slot`: combine in the tradeskill container in a pack slot.
 
+Titanium purchases and sales of multiple available units use the existing
+quantity picker. After `buy_chosen` or `sell_chosen`, use the quantity slider
+or `pick amount` number box, then `pick confirm` (the skin's Accept button).
+Closing the quantity window leaves holdings unchanged. The unskinned picker
+also has `min`, `max`, `more`, `less` and `cancel` buttons; selectors require
+the corresponding control to exist. A single available unit submits directly.
+A changed selection must be chosen again; scripts do not retry an unanswered
+merchant action.
+
 ## Windows and lists
 
 - `window key`: click a window toggle, such as `inventory`, `spellbook`, `options` or `scripts`. The toggles live in the EQ menu; while it is closed the step first clicks the menu's own button (`button selector EQButton`), waits for the menu to open (up to a second), then clicks the entry; the script ends if the menu stays closed. Keyboard shortcuts such as the map's starting `press M` do not require the menu; saved bindings still apply.

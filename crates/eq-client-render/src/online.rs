@@ -349,6 +349,13 @@ pub(super) struct Panels<'w> {
 }
 
 impl Panels<'_> {
+    /// Reconcile merchant intent only with admitted worker updates.
+    fn merchant_news(&mut self, update: &WorldUpdate, changes: &Changes, world: &ClientWorld) {
+        if !changes.ignored {
+            self.trade.merchant_news(update, world);
+        }
+    }
+
     /// Shows what the world's changes mean for the panels: the inventory, the
     /// notices, motion, the trade windows and the answers to the panels' own
     /// requests; and plays the sounds the server names.
@@ -655,6 +662,7 @@ pub(super) fn receive(
     for update in news {
         let (changes, before) = apply(&mut state.world, &update, spells);
         trace(&update, &changes, &state.world);
+        panels.merchant_news(&update, &changes, &state.world);
         if let Some(reason) = changes.reset {
             state.loading.clear();
             panels.forget(reason, &mut state);

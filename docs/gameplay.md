@@ -156,6 +156,15 @@ because its window opened. Ground pickups and doors use reach checks. World
 tradeskill containers and combines exist where `Tradeskills` is offered, rather
 than being universally unsupported.
 
+With Titanium, Buy and Sell open the existing quantity picker when more than
+one unit is available; a single unit goes directly through the same checked
+submission. The picker starts at one and is bounded by the received stack,
+stock and known purse. The selected name and quote follow its count. Cancel,
+closing the merchant or changing its catalog, inventory or admission discards
+the selection. Only one merchant action can be pending. An unanswered action
+shows an unknown outcome and is never retried automatically; received items
+and coin updates remain the session's responsibility.
+
 Grouping, raids, pets, training, reading and resurrection/translocate dialogs have
 client paths with distinct capabilities. See the [policy matrix](../SUPPORT.md)
 before assuming a visible window can act on P99, Quarm or another server. Camp

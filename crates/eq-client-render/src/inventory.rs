@@ -351,7 +351,7 @@ pub(super) fn input(
     }
     if *escape == super::escape::Escape::Inventory {
         state.actions.auto_store = false;
-        state.actions.split = None;
+        state.cancel_split();
         if state.actions.pending.is_none() {
             state.actions.message.clear();
         }
@@ -359,7 +359,7 @@ pub(super) fn input(
     }
     // A closed inventory ends its own actions; slots in an open bag or bank
     // still take clicks.
-    if !shown.is_open(super::windows::WindowId::Inventory) {
+    if !shown.is_open(super::windows::WindowId::Inventory) && !state.picking_merchant() {
         state.actions.auto_store = false;
         state.actions.split = None;
     }

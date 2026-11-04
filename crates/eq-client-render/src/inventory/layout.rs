@@ -49,9 +49,15 @@ fn quantity_picker(parent: &mut ChildSpawnerCommands, view: View<'_>) {
                 ..default()
             })
             .with_children(|picker| {
+                let merchant = matches!(selection.picked, super::interaction::Picked::Merchant(_));
                 theme::label(
                     picker,
-                    &format!("PICK UP {} / {}", selection.amount, selection.available),
+                    &format!(
+                        "{} {} / {}",
+                        if merchant { "TRADE" } else { "PICK UP" },
+                        selection.amount,
+                        selection.available
+                    ),
                     Size::Label,
                 );
                 picker
@@ -65,7 +71,10 @@ fn quantity_picker(parent: &mut ChildSpawnerCommands, view: View<'_>) {
                             (SplitAction::Less, "-"),
                             (SplitAction::More, "+"),
                             (SplitAction::Maximum, "Max"),
-                            (SplitAction::Confirm, "Pick up"),
+                            (
+                                SplitAction::Confirm,
+                                if merchant { "Accept" } else { "Pick up" },
+                            ),
                             (SplitAction::Cancel, "Cancel"),
                         ] {
                             theme::button_with(row, action, title, Size::Body);
