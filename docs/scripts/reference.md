@@ -57,6 +57,7 @@ Approach, walk and chase hold the camera-relative forward command, independent o
 - `screenshot filename.png`: capture beside the script; the argument must be a filename.
 - `sound filename.wav`: play a sound from the installed game assets.
 - `slash command [arguments]`: run one of the supported game slash commands, without a leading slash.
+  `slash camp desktop` uses the ordinary camp destination and current QoL exit choice.
 - `gm command [arguments]`: an allowed GM command on a network-constrained local test session only.
 - `chat channel message`: chat on a network-constrained local test session only.
 - `quit`: close the client.

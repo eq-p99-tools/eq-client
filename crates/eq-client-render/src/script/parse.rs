@@ -611,6 +611,7 @@ fn parse_slash(words: &[&str]) -> Result<Step, String> {
         [command] if matches!(*command, "camp" | "sit" | "stand") => {
             Step::Slash(format!("/{command}"))
         }
+        ["camp", "desktop"] => Step::Slash("/camp desktop".into()),
         ["target", name @ ..] if !name.is_empty() => {
             Step::Slash(format!("/target {}", name.join(" ")))
         }
@@ -1443,6 +1444,18 @@ mod tests {
             parse("gm zone qeynos #givemoney 999", base).unwrap(),
             [Step::Gm("zone qeynos".into())]
         );
+    }
+
+    #[test]
+    fn desktop_camp_uses_the_game_command_owner_and_rejects_other_destinations() {
+        let base = Path::new("private");
+        assert_eq!(
+            parse("slash camp desktop\n", base).unwrap(),
+            [Step::Slash("/camp desktop".into())]
+        );
+        for bad in ["slash camp server", "slash camp desktop now"] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
     }
 
     #[test]

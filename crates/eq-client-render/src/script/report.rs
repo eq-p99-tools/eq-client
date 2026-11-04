@@ -20,9 +20,47 @@ pub(super) fn placement(transform: &Transform) -> (f32, f32, f32, f32) {
 pub(super) fn state(
     label: &str,
     online: &crate::online::OnlineState,
-    (hud, .., spells): &Observed,
+    observed: &Observed,
     transform: Option<&Transform>,
 ) {
+    // Keep named views here: appending a resource to Observed must not change
+    // which resource a report mistakes for its spell catalog.
+    let hud = &observed.0;
+    let spells = observed.8.as_deref();
+    let option_values = observed.9.as_ref().map(|state| {
+        eq_client_core::options::Toggle::all()
+            .map(|toggle| (toggle.key(), state.options.get(toggle)))
+            .collect::<Vec<_>>()
+    });
+    let own_stun = online
+        .world()
+        .stun_revision()
+        .map(|revision| (revision, online.world().is_stunned()));
+    let invisible = online
+        .world()
+        .spawns()
+        .iter()
+        .filter(|(_, spawn)| spawn.state.invisible)
+        .collect::<Vec<_>>();
+    let known_invisible_count = online.world().session_id().map(|_| invisible.len());
+    let known_invisible = online.world().session_id().map(|_| {
+        invisible
+            .into_iter()
+            .take(16)
+            .map(|(id, spawn)| {
+                (
+                    *id,
+                    spawn.revision,
+                    eq_client_core::entities::display_name(&spawn.state.name),
+                    [
+                        spawn.state.position.x,
+                        spawn.state.position.y,
+                        spawn.state.position.z,
+                    ],
+                )
+            })
+            .collect::<Vec<_>>()
+    });
     let position = transform.map(placement);
     let prediction_inputs = prediction_inputs(online.world().inventory());
     let slots = buff_slots(online);
@@ -59,6 +97,11 @@ pub(super) fn state(
         character_deletion = %online.deletion.report(),
         ?position,
         ?posture,
+        ?own_stun,
+        local_movement_policy_feedback = ?online.world().movement_options_result(),
+        ?option_values,
+        ?known_invisible_count,
+        ?known_invisible,
         hp = ?online.world().hit_points(),
         mana = ?online.world().vitals().mana,
         endurance = ?online.world().vitals().endurance,
@@ -86,7 +129,7 @@ pub(super) fn state(
         movement_weight_conservative = online.world().worker_inventory().carried_weight_is_conservative(),
         worker_inventory_revision = online.world().worker_inventory().revision(),
         equipment_inputs = ?equipment_inputs(online, online.world().worker_inventory()),
-        movement_inputs = ?spells.as_deref().map(|spells| crate::speed::inputs(online.world(), spells)),
+        movement_inputs = ?spells.map(|spells| crate::speed::inputs(online.world(), spells)),
         cursor_queued = online.world().inventory().queued().count(),
         exchange = ?online.world().exchange(),
         abilities = ?online.world().abilities(),
@@ -107,7 +150,7 @@ pub(super) fn state(
         containers = ?containers(online),
         combining = ?online.world().combining(),
         purse = ?online.world().coins(),
-        load = ?carried(online, spells.as_deref()),
+        load = ?carried(online, spells),
         cursor_coins = ?online.world().coins_in(eq_client_core::money::CoinPlace::Cursor),
         bank_coins = ?online.world().coins_in(eq_client_core::money::CoinPlace::Bank),
         gear = ?online.world().player().map(|player| player.appearance.materials),
