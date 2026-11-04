@@ -69,6 +69,15 @@ fn background_app() -> (App, Entity) {
 fn background_control_reports_native_ownership_wait_before_taking_input() {
     let (mut app, window) = background_app();
     app.world_mut().get_mut::<Window>(window).unwrap().focused = true;
+    app.world_mut()
+        .write_message(bevy::input::keyboard::KeyboardInput {
+            key_code: KeyCode::KeyW,
+            logical_key: bevy::input::keyboard::Key::Character("w".into()),
+            state: bevy::input::ButtonState::Pressed,
+            text: Some("w".into()),
+            repeat: false,
+            window,
+        });
     assert_eq!(start(&mut app, 1, "press A\n").outcome, "accepted");
     let status: Value =
         serde_json::from_slice(&app.world().resource::<Bridge>().snapshot()).unwrap();
@@ -87,6 +96,47 @@ fn background_control_reports_native_ownership_wait_before_taking_input() {
         *app.world().resource::<super::super::InputMode>(),
         super::super::InputMode::Background
     );
+}
+
+#[test]
+fn background_control_can_be_passively_watched_through_selection_and_report() {
+    for (focused, pointer) in [(true, false), (false, true), (true, true)] {
+        let (mut app, window) = background_app();
+        {
+            let mut window = app.world_mut().get_mut::<Window>(window).unwrap();
+            window.focused = focused;
+            if pointer {
+                window.set_cursor_position(Some(Vec2::new(10.0, 10.0)));
+            }
+        }
+        assert_eq!(
+            start(&mut app, 1, "wait_select\nreport observed\n").outcome,
+            "accepted"
+        );
+        let status: Value =
+            serde_json::from_slice(&app.world().resource::<Bridge>().snapshot()).unwrap();
+        assert_eq!(status["run"]["phase"], "running");
+        assert!(matches!(
+            app.world().resource::<Script>().current,
+            Some((super::super::Step::WaitSelect, _))
+        ));
+        app.world_mut()
+            .resource_mut::<crate::online::OnlineState>()
+            .selection = Some(crate::character_select::Selection::new(1, Vec::new()));
+        for ms in [10, 20, 30, 40, 50] {
+            frame(&mut app, ms);
+        }
+        assert!(!app.world().contains_resource::<Script>());
+        assert_eq!(
+            app.world()
+                .resource::<Bridge>()
+                .history
+                .back()
+                .unwrap()
+                .phase,
+            Phase::Completed
+        );
+    }
 }
 
 #[test]

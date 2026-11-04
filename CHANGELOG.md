@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Keep explicit background scripts running while their window is focused or
+  passively observed with the pointer. Genuine keyboard, button and wheel input
+  still takes ownership; Stop and scripted-click target checks remain available.
+
 - Follow admission-scoped server target changes and clears without echoing
   selection packets. Preserve pending local choices and refuse ambiguous ability
   recipients; unknown IDs and replaced spawns remain unavailable until resolved.

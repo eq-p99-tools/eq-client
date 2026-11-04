@@ -3,8 +3,9 @@
 //! Public-server runs require focus unless background input is explicitly enabled.
 //! Offline and network-constrained local test runs can proceed without focus;
 //! all runs have bounded time and use the ordinary input and action paths.
-//! Scripted clicks are only injected while the real pointer is outside the window,
-//! so they cannot also press whatever the pointer happens to be over; each click
+//! Attended clicks wait for the real pointer to leave the window. Explicit
+//! background ownership isolates native UI focus without moving that pointer;
+//! each click
 //! and hover first glides the script's own pointer to its control (see
 //! [`pointer`]), scrolling a list the control has scrolled out of view as
 //! the wheel does, and lands only on the control under it. A followed
@@ -319,6 +320,11 @@ impl Script {
             InputMode::Attended => true,
             InputMode::Background => self.owns_input,
         }
+    }
+
+    /// Whether native pointer hit testing yields to the explicit script owner.
+    pub(crate) const fn background_owns_input(&self) -> bool {
+        matches!(self.input_mode, InputMode::Background) && self.owns_input
     }
 
     /// The movement commands the script holds itself.
@@ -805,11 +811,10 @@ pub(super) fn drive(
     }
     let window = windows.single().ok();
     if script.input_mode == InputMode::Background {
-        let focused = window.is_none_or(|window| window.focused)
-            || reported_focus.is_some_and(|(entity, focused)| windows.contains(entity) && focused);
-        let pointer = window.is_some_and(|window| window.cursor_position().is_some());
+        // Watching the window does not take input ownership. Only genuine
+        // keyboard, button or wheel activity yields the background runner.
         let native = keys.background.as_ref().is_none_or(|state| state.busy());
-        script.owns_input = !focused && !pointer && !native;
+        script.owns_input = !native;
         if !script.owns_input {
             if script.holding() {
                 script.cancel_press(&mut buttons, &mut commands);
@@ -821,11 +826,7 @@ pub(super) fn drive(
                 script.retire(&mut commands);
             } else {
                 script.paused = true;
-                script.progress.phase = if pointer {
-                    Phase::WaitingForPointer
-                } else {
-                    Phase::WaitingForInput
-                };
+                script.progress.phase = Phase::WaitingForInput;
             }
             return;
         }
@@ -1369,7 +1370,9 @@ pub(super) fn drive(
                     script.stop(&mut keys, &mut mouse, "the pointer stayed over the window");
                     return;
                 }
-                if window.is_some_and(|window| window.cursor_position().is_some()) {
+                if !script.background_owns_input()
+                    && window.is_some_and(|window| window.cursor_position().is_some())
+                {
                     script.progress.phase = Phase::WaitingForPointer;
                     return;
                 }
@@ -1406,7 +1409,9 @@ pub(super) fn drive(
                         script.stop(&mut keys, &mut mouse, "the pointer stayed over the window");
                         return;
                     }
-                    if window.is_some_and(|window| window.cursor_position().is_some()) {
+                    if !script.background_owns_input()
+                        && window.is_some_and(|window| window.cursor_position().is_some())
+                    {
                         script.progress.phase = Phase::WaitingForPointer;
                         return;
                     }
@@ -1452,7 +1457,8 @@ pub(super) fn drive(
                     .filter(|_| script.scrolling.is_none())
                     .map(|glide| glide.target)
                     .or_else(|| find(*target, &buttons, &layout));
-                let inside = window.is_some_and(|window| window.cursor_position().is_some());
+                let inside = !script.background_owns_input()
+                    && window.is_some_and(|window| window.cursor_position().is_some());
                 if let Some(entity) = target_entity.filter(|_| !inside) {
                     match scroll_to(
                         script,
@@ -1738,7 +1744,9 @@ pub(super) fn drive(
         Step::Click(_) | Step::RightClick(_) | Step::HoldClick(..) => {
             // The script pointer leaves the control a hover rested on.
             script.pointed = script.hovering.take().or(script.pointed);
-            if window.is_some_and(|window| window.cursor_position().is_some()) {
+            if !script.background_owns_input()
+                && window.is_some_and(|window| window.cursor_position().is_some())
+            {
                 info!("Scripted click waits until the pointer leaves the client window");
             }
         }
@@ -1747,7 +1755,9 @@ pub(super) fn drive(
                 script.stop(&mut keys, &mut mouse, "hover target is not visible");
                 return;
             };
-            if window.is_some_and(|window| window.cursor_position().is_some()) {
+            if !script.background_owns_input()
+                && window.is_some_and(|window| window.cursor_position().is_some())
+            {
                 // With the real pointer over the window there is no script
                 // pointer to glide: the hover rests on the control at once,
                 // even one just clicked.
@@ -3132,6 +3142,7 @@ fn runs(distance: Option<f32>, range: f32) -> bool {
 
 #[cfg(test)]
 mod tests {
+    mod background_pointer;
     use super::*;
     use eq_client_assets::ui::InstalledClient;
 
@@ -4137,6 +4148,11 @@ mod tests {
         let keys = app.world().resource::<ButtonInput<KeyCode>>();
         assert!(keys.pressed(KeyCode::KeyW));
         assert!(!keys.just_pressed(KeyCode::KeyW));
+        set_focus(&mut app, window, true);
+        app.world_mut()
+            .get_mut::<Window>(window)
+            .unwrap()
+            .set_cursor_position(Some(Vec2::new(10.0, 10.0)));
         for ms in [40, 100, 110] {
             frame_at(&mut app, ms);
         }
@@ -4196,46 +4212,35 @@ mod tests {
     fn background_waits_for_native_ownership_and_rechecks_before_the_first_action() {
         let (mut app, window) = background(vec![Step::Press(vec![KeyCode::KeyA])]);
         set_focus(&mut app, window, true);
+        app.world_mut()
+            .get_mut::<Window>(window)
+            .unwrap()
+            .set_cursor_position(Some(Vec2::new(10.0, 10.0)));
+        native_key(&mut app, window, KeyCode::KeyW, true);
         frame_at(&mut app, 0);
         assert_eq!(
             app.world().resource::<RunStatus>().phase(),
             Phase::WaitingForInput
         );
         assert!(!app.world().resource::<Script>().pointer_owned());
-        set_focus(&mut app, window, false);
-        app.world_mut()
-            .get_mut::<Window>(window)
-            .unwrap()
-            .set_cursor_position(Some(Vec2::new(10.0, 10.0)));
         frame_at(&mut app, 10);
-        assert_eq!(
-            app.world().resource::<RunStatus>().phase(),
-            Phase::WaitingForPointer
-        );
-        app.world_mut()
-            .get_mut::<Window>(window)
-            .unwrap()
-            .set_cursor_position(None);
-        native_key(&mut app, window, KeyCode::KeyW, true);
-        frame_at(&mut app, 20);
-        frame_at(&mut app, 30);
         assert_eq!(
             app.world().resource::<RunStatus>().phase(),
             Phase::WaitingForInput
         );
         native_key(&mut app, window, KeyCode::KeyW, false);
-        frame_at(&mut app, 40);
+        frame_at(&mut app, 20);
         assert_eq!(
             app.world().resource::<RunStatus>().phase(),
             Phase::WaitingForInput
         );
-        frame_at(&mut app, 50);
+        frame_at(&mut app, 30);
         assert!(
             app.world()
                 .resource::<ButtonInput<KeyCode>>()
                 .pressed(KeyCode::KeyA)
         );
-        frame_at(&mut app, 60);
+        frame_at(&mut app, 40);
         assert!(
             !app.world()
                 .resource::<ButtonInput<KeyCode>>()
@@ -4250,6 +4255,52 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn passive_background_observation_keeps_wait_select_and_reports_running() {
+        for (focused, pointer) in [(true, false), (false, true), (true, true)] {
+            let (mut app, window) = background(vec![
+                Step::WaitSelect,
+                Step::Report("observed selection".into()),
+                Step::Wait(Duration::from_millis(10)),
+            ]);
+            set_focus(&mut app, window, focused);
+            if pointer {
+                app.world_mut()
+                    .get_mut::<Window>(window)
+                    .unwrap()
+                    .set_cursor_position(Some(Vec2::new(10.0, 10.0)));
+            }
+            for ms in [0, 10] {
+                frame_at(&mut app, ms);
+                let script = app.world().resource::<Script>();
+                assert!(script.pointer_owned());
+                assert!(matches!(script.current, Some((Step::WaitSelect, _))));
+                assert_eq!(app.world().resource::<RunStatus>().phase(), Phase::Running);
+            }
+            // Only actual selection state satisfies the wait, even while watched.
+            app.world_mut()
+                .resource_mut::<crate::online::OnlineState>()
+                .selection = Some(crate::character_select::Selection::new(1, Vec::new()));
+            for ms in [20, 30, 40, 50, 60] {
+                frame_at(&mut app, ms);
+            }
+            assert!(!app.world().contains_resource::<Script>());
+            assert_eq!(
+                app.world().resource::<RunStatus>().phase(),
+                Phase::Completed
+            );
+            assert_eq!(
+                app.world()
+                    .resource::<SeenKeys>()
+                    .0
+                    .iter()
+                    .filter(|event| event.state.is_pressed())
+                    .count(),
+                0
+            );
+        }
     }
 
     #[test]
@@ -4273,12 +4324,6 @@ mod tests {
             .resource_mut::<RunControl>()
             .request(Request::Resume);
         frame_at(&mut app, 40);
-        assert_eq!(
-            app.world().resource::<RunStatus>().phase(),
-            Phase::WaitingForInput
-        );
-        set_focus(&mut app, window, false);
-        frame_at(&mut app, 50);
         assert!(
             app.world()
                 .resource::<ButtonInput<KeyCode>>()
@@ -4358,7 +4403,7 @@ mod tests {
     }
 
     #[test]
-    fn a_background_mouse_press_cancels_without_clicking_on_focus_or_pointer_return() {
+    fn passive_focus_and_pointer_observation_preserve_a_background_mouse_hold() {
         for pointer_return in [false, true] {
             let (mut app, window, give) = pressed_give();
             if pointer_return {
@@ -4370,14 +4415,14 @@ mod tests {
                 set_focus(&mut app, window, true);
             }
             frame_at(&mut app, 270);
-            assert!(!app.world().contains_resource::<Script>());
-            assert_eq!(app.world().resource::<RunStatus>().phase(), Phase::Failed);
+            assert!(app.world().contains_resource::<Script>());
+            assert_eq!(app.world().resource::<RunStatus>().phase(), Phase::Running);
             assert!(
-                !app.world()
+                app.world()
                     .resource::<ButtonInput<MouseButton>>()
                     .pressed(MouseButton::Left)
             );
-            assert_eq!(interaction(&app, give), Interaction::None);
+            assert_eq!(interaction(&app, give), Interaction::Pressed);
             assert!(
                 !app.world()
                     .resource::<crate::clicks::LeftButton>()

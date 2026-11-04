@@ -21,8 +21,8 @@ pub enum InputMode {
     /// Require focus on public servers; retain offline/local test behavior.
     #[default]
     Attended,
-    /// Run only while the primary window and pointer are free of user input.
-    /// Returning to the window cancels any held synthetic input.
+    /// Yield to genuine keyboard, button or wheel input. Passive window focus
+    /// and pointer presence do not interrupt a background run.
     Background,
 }
 
@@ -50,12 +50,54 @@ impl BackgroundInput {
 pub(crate) fn install(app: &mut App, mode: InputMode) {
     app.insert_resource(mode);
     if mode == InputMode::Background {
-        app.init_resource::<BackgroundInput>().add_systems(
-            PreUpdate,
-            observe
-                .after(bevy::input::InputSystems)
-                .before(super::drive),
-        );
+        app.init_resource::<BackgroundInput>()
+            .configure_sets(PreUpdate, bevy::ui::UiSystems::Focus.run_if(native_focus))
+            .add_systems(
+                PreUpdate,
+                (
+                    observe
+                        .after(bevy::input::InputSystems)
+                        .before(crate::camera::look)
+                        .before(bevy::ui::UiSystems::Focus),
+                    isolate_ui
+                        .after(bevy::ui::UiSystems::Focus)
+                        .before(crate::items::link_input)
+                        .before(super::drive),
+                ),
+            );
+    }
+}
+
+/// Physical UI hit testing resumes before the frame that takes native input.
+#[allow(clippy::needless_pass_by_value)]
+fn native_focus(script: Option<Res<super::Script>>) -> bool {
+    !script.is_some_and(|script| script.background_owns_input())
+}
+
+/// The semantic script pointer owns UI interaction while native input is idle.
+/// Keep its held/hovered controls stable, so [`crate::clicks::OnPress`] does not repeat each
+/// frame. Clear cached physical hover without changing the Window or OS cursor.
+#[allow(clippy::needless_pass_by_value)]
+fn isolate_ui(
+    script: Option<Res<super::Script>>,
+    mut controls: Query<(
+        Entity,
+        &mut Interaction,
+        Option<&mut bevy::ui::RelativeCursorPosition>,
+    )>,
+) {
+    let Some(script) = script.filter(|script| script.background_owns_input()) else {
+        return;
+    };
+    for (entity, mut interaction, relative) in &mut controls {
+        let pressed = script.clicked.is_some() && script.pressed == Some(entity);
+        let hovered = script.hovering == Some(entity) || script.pointed == Some(entity);
+        if !pressed && !hovered {
+            interaction.set_if_neq(Interaction::None);
+        }
+        if !pressed && let Some(mut relative) = relative {
+            relative.set_if_neq(bevy::ui::RelativeCursorPosition::default());
+        }
     }
 }
 
@@ -70,6 +112,7 @@ pub(super) fn observe(
     mut wheel: MessageReader<MouseWheel>,
     mut focus: MessageReader<WindowFocused>,
     mut lost: MessageReader<KeyboardFocusLost>,
+    script: Option<ResMut<super::Script>>,
 ) {
     state.activity = false;
     for event in focus.read().filter(|event| windows.contains(event.window)) {
@@ -105,4 +148,10 @@ pub(super) fn observe(
         }
     }
     state.activity |= wheel.read().count() != 0;
+    if let Some(mut script) = script {
+        script.owns_input = script.input_mode == InputMode::Background
+            && script.progress.phase.active()
+            && !matches!(script.mode, super::RunMode::Paused(_))
+            && !state.busy();
+    }
 }

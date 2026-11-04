@@ -38,7 +38,7 @@ Actions use the state that exists when they execute. Select a target yourself be
 
 Pause finishes the current action, then pauses with held inputs released. Step executes one action from a pause. Resume continues; Stop immediately releases synthetic input and stops the scenario. Closing the window does not stop a run. Scripts has no minimized state.
 
-Scripts on P99 and Quarm require focus by default. Explicit `--script-background` runs while unfocused and cancels held input if you return to the window. The existing runtime bounds and local-only command restrictions still apply. See Run controls for input ownership and time limits.
+Scripts on P99 and Quarm require focus by default. Explicit `--script-background` also runs while unfocused and permits passive observation of the focused window. Genuine keyboard, button or wheel input yields ownership and cancels held script input. The existing runtime bounds and local-only command restrictions still apply. See Run controls for input ownership and time limits.
 
 ## Other entry points
 

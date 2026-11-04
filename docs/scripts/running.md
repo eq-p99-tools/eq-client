@@ -18,7 +18,7 @@ P99 and Quarm runs require focus by default. Bring the client to the foreground 
 
 Losing focus while a key is held stops the run and releases it. Offline previews and network-constrained local test sessions do not require foreground focus.
 
-Before a scripted click can be injected, move the real pointer outside the client window. This avoids one synthetic click also activating whatever is beneath the real pointer. The Execution tab reports this wait. You can move the pointer back to use Pause or Stop. Do not remove this ownership rule when writing a scenario.
+For a default attended run, move the real pointer outside the client window before a scripted click can be injected. This avoids one synthetic click also activating whatever is beneath the real pointer. The Execution tab reports this wait. You can move the pointer back to use Pause or Stop. Explicit background runs isolate native hit testing instead, as described below.
 
 Typing in the workbench belongs to the editor, not movement or chat. While a script runs, the editor gives up keyboard focus so script-generated keystrokes reach the intended controls.
 
@@ -26,7 +26,7 @@ Typing in the workbench belongs to the editor, not movement or chat. While a scr
 
 Use `--script scenario.eqscript --script-background` to run through the same in-client input paths while you use another application. Control-only startup also works: `--script-control new-control --script-background`. The background option requires a script or control inbox; both can be supplied together. It works with every server provider and with `--script-follow`. It requests an initially non-activating window; it never changes the focus of an existing window. The platform controls whether that request is honored.
 
-Leave the client unfocused and the physical pointer outside its window. Focusing the client, bringing the pointer inside, or delivering native keyboard, button or wheel input makes an idle runner wait. If the runner is holding a key, movement action or mouse press, that return cancels the press, releases the script's input and ends the run instead of resuming a partial action. A new run is required after cancellation. Genuine input remains available to the client.
+You may focus the client and hover the physical pointer to watch a background run, including waits, reports, clicks, right-clicks and holds. While the script owns input, its own pointer routes UI actions and the physical pointer cannot create a second target. Named-control visibility, clipping and coverage checks still apply. The physical pointer is never moved. Genuine native keyboard, button or wheel input hands native hit testing back before that input is processed and makes an idle runner wait. If the runner is holding a key, movement action or mouse press, that activity cancels the press, releases only the script's input and ends the run instead of resuming a partial action. A new run is required after cancellation. Genuine input remains available to the client.
 
 Background mode does not enable `gm` or `chat`, change the selected server, or imply an online launch. Network restrictions, gameplay validation, named-control visibility and geometry checks, source and runtime limits, and Stop remain in effect. The default workbench run remains attended on public servers. The background policy is explicit for each run, including any replacement created by an opt-in controller.
 

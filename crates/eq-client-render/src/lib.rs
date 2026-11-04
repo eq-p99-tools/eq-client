@@ -557,6 +557,7 @@ fn install_script(
         PreUpdate,
         script::drive
             .after(bevy::ui::UiSystems::Focus)
+            .after(items::link_input)
             .before(clicks::track),
     )
     .add_systems(

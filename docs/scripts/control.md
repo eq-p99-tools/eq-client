@@ -12,9 +12,12 @@ works without an initial script and can run scenarios after you log in normally.
 For an initially non-activating window and runs that proceed while you use another
 application, add `--script-background`: `--script-control new-control --script-background`.
 No dummy initial script is needed. Every explicit new run inherits that launch's
-background policy, including recovery after an error. Leave the client unfocused
-and the physical pointer outside it. Returning during held script input cancels
-the run; status reports `waiting_for_input` when it is waiting to take ownership.
+background policy, including recovery after an error. You may focus the client
+or hover the physical pointer to watch read-only progress. Genuine keyboard,
+button or wheel input during held script input cancels the run; status reports
+`waiting_for_input` when it is waiting to take ownership. Background clicks and
+holds use the script pointer while native hit testing is isolated; the physical
+pointer is never moved and cannot create a second synthetic click target.
 The default remains attended on public servers. See Run controls for the full
 input handoff rules and the platform limits on initial non-activation.
 
