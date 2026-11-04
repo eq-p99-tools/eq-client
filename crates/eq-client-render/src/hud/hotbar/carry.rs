@@ -121,6 +121,7 @@ struct Editing {
     admission: Option<u64>,
     profile: Option<crate::profile_files::CharacterProfile>,
     slots: [Option<Action>; 10],
+    layout_revision: u64,
 }
 
 impl Editing {
@@ -133,6 +134,7 @@ impl Editing {
             admission: world.session_id(),
             profile: profile.key(),
             slots: bindings.0,
+            layout_revision: bindings.revision(),
         }
     }
 
@@ -143,6 +145,7 @@ impl Editing {
         bindings: &Bindings,
     ) -> bool {
         self.admission == world.session_id()
+            && self.layout_revision == bindings.revision()
             && self.slots == bindings.0
             && self
                 .profile

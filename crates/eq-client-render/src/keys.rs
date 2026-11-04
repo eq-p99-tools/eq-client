@@ -40,6 +40,8 @@ pub(crate) enum Act {
     BindSlot(u8),
     /// Empties this action slot.
     ClearSlot(u8),
+    /// Selects this hotbar page, from 0.
+    HotbarPage(u8),
     /// Character-relative moves.
     Forward,
     Back,
@@ -103,6 +105,7 @@ impl Act {
             Self::Slot(slot) => return format!("Hotbar Button {}", slot + 1),
             Self::BindSlot(slot) => return format!("Bind Hotbar Button {}", slot + 1),
             Self::ClearSlot(slot) => return format!("Clear Hotbar Button {}", slot + 1),
+            Self::HotbarPage(page) => return format!("Hotbar Page {}", page + 1),
             Self::Forward => "Forward",
             Self::Back => "Back",
             Self::StrafeLeft => "Strafe Left",
@@ -132,7 +135,9 @@ impl Act {
                 KeyGroup::Commands
             }
             Self::Gem(_) => KeyGroup::SpellCasting,
-            Self::Slot(_) | Self::BindSlot(_) | Self::ClearSlot(_) => KeyGroup::Hotbar(1),
+            Self::Slot(_) | Self::BindSlot(_) | Self::ClearSlot(_) | Self::HotbarPage(_) => {
+                KeyGroup::Hotbar(1)
+            }
             Self::FreeCamera | Self::CameraUp | Self::CameraDown => KeyGroup::Camera,
             Self::Sit
             | Self::Duck
@@ -292,6 +297,7 @@ impl Default for KeyMap {
             bind(Act::Slot(index), &[Chord::key(key)]);
             bind(Act::BindSlot(index), &[Chord::ctrl(key)]);
             bind(Act::ClearSlot(index), &[Chord::ctrl_shift(key)]);
+            bind(Act::HotbarPage(index), &[Chord::shift(key)]);
         }
         bind(Act::Forward, &[Chord::key(KeyCode::ArrowUp)]);
         bind(Act::Back, &[Chord::key(KeyCode::ArrowDown)]);
@@ -349,8 +355,9 @@ const fn act_for(command: eq_client_assets::keys::Command) -> Option<Act> {
         Command::TargetNext => Act::TargetNext,
         // This client keeps eight gems.
         Command::Gem(gem) if gem < 8 => Act::Gem(gem),
-        Command::Gem(_) => return None,
         Command::HotButton(slot) => Act::Slot(slot),
+        Command::HotbarPage(page) if page < 10 => Act::HotbarPage(page),
+        Command::Gem(_) | Command::HotbarPage(_) => return None,
     })
 }
 
@@ -775,6 +782,8 @@ mod tests {
         assert_eq!(keys(Act::Walk), [Chord::key(KeyCode::F12)]);
         assert_eq!(keys(Act::Gem(7)), [Chord::alt(KeyCode::Digit8)]);
         assert_eq!(keys(Act::Slot(9)), [Chord::key(KeyCode::Digit0)]);
+        assert_eq!(keys(Act::HotbarPage(0)), [Chord::shift(KeyCode::Digit1)]);
+        assert_eq!(keys(Act::HotbarPage(9)), [Chord::shift(KeyCode::Digit0)]);
         // The program has no default for strafing nor any camera-relative
         // move; a key its table gives a command leaves this client's act.
         for act in UNBOUND_BY_TABLE {

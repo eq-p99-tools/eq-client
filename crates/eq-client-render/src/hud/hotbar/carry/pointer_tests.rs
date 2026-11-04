@@ -64,6 +64,7 @@ pub(crate) fn app() -> App {
             Update,
             (
                 crate::profile_files::follow,
+                super::super::page::input,
                 crate::escape::route,
                 route,
                 record,
@@ -100,7 +101,7 @@ pub(crate) fn app() -> App {
     app
 }
 
-fn ordinary() -> Fixture {
+pub(crate) fn ordinary() -> Fixture {
     let mut app = app();
     app.add_systems(Startup, |mut commands: Commands| {
         let root = commands.spawn(Node::default()).id();
@@ -133,6 +134,11 @@ pub(crate) fn finish(mut app: App) -> Fixture {
     for entity in nodes {
         let (center, size) = if let Some(slot) = world.get::<Slot>(entity) {
             (point(slot.0), Vec2::splat(40.0))
+        } else if let Some(button) = world.get::<super::super::page::Button>(entity) {
+            (
+                Vec2::new(if button.0 { 80.0 } else { 30.0 }, 120.0),
+                Vec2::splat(24.0),
+            )
         } else if world.get::<crate::windows::DragHandle>(entity).is_some() {
             (Vec2::new(270.0, 15.0), Vec2::new(540.0, 30.0))
         } else if world.get::<crate::windows::Frame>(entity).is_some()
@@ -228,7 +234,7 @@ impl Fixture {
     pub(crate) fn binding(&self, slot: usize) -> Option<Action> {
         self.app.world().resource::<Bindings>().0[slot]
     }
-    fn requests(&self) -> &[Action] {
+    pub(crate) fn requests(&self) -> &[Action] {
         &self.app.world().resource::<Requests>().0
     }
 }

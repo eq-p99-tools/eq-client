@@ -834,6 +834,16 @@ pub trait OfficialSettings {
         Vec::new()
     }
 
+    /// All ten pages of the first hotbar: (page, button, code), both numbers
+    /// from 1. An empty code is an explicitly empty saved slot. Providers
+    /// implementing the older first-page API retain that page unchanged.
+    fn hotbutton_pages(&self, character: &str, world: &str) -> Vec<(u8, u8, String)> {
+        self.hotbuttons(character, world)
+            .into_iter()
+            .map(|(button, code)| (1, button, code))
+            .collect()
+    }
+
     /// Where the client last put a character's windows on a world, at every
     /// screen size it was played at.
     fn window_positions(&self, _character: &str, _world: &str) -> Vec<WindowPosition> {
@@ -921,6 +931,15 @@ impl OfficialSettings for Titanium<'_> {
         }
         std::fs::read(self.0.join(format!("{character}_{world}.ini")))
             .map(|bytes| hotbuttons_from_ini(&String::from_utf8_lossy(&bytes)))
+            .unwrap_or_default()
+    }
+
+    fn hotbutton_pages(&self, character: &str, world: &str) -> Vec<(u8, u8, String)> {
+        if !plain_name(character) || !plain_name(world) {
+            return Vec::new();
+        }
+        std::fs::read(self.0.join(format!("{character}_{world}.ini")))
+            .map(|bytes| hotbutton_pages_from_ini(&String::from_utf8_lossy(&bytes)))
             .unwrap_or_default()
     }
 
@@ -1043,10 +1062,21 @@ fn options_from_ini(text: &str) -> OfficialOptions {
 }
 
 fn hotbuttons_from_ini(text: &str) -> Vec<(u8, String)> {
+    hotbutton_pages_from_ini(text)
+        .into_iter()
+        .filter_map(|(page, button, code)| {
+            (page == 1 && !code.is_empty()).then_some((button, code))
+        })
+        .collect()
+}
+
+fn hotbutton_pages_from_ini(text: &str) -> Vec<(u8, u8, String)> {
     (1..=10u8)
-        .filter_map(|button| {
-            let code = ini_value(text, "HotButtons", &format!("Page1Button{button}"))?;
-            (!code.is_empty()).then_some((button, code))
+        .flat_map(|page| {
+            (1..=10u8).filter_map(move |button| {
+                ini_value(text, "HotButtons", &format!("Page{page}Button{button}"))
+                    .map(|code| (page, button, code))
+            })
         })
         .collect()
 }
@@ -1781,6 +1811,26 @@ MouseSensitivity=4
                 .hotbuttons("../x", "World")
                 .len(),
             0
+        );
+    }
+
+    #[test]
+    fn all_hotbar_pages_preserve_explicit_empties_without_reading_other_bars() {
+        let text = "[HotButtons]\nPage1Button1=H0\nPage2Button10=J29\nPage10Button1=H7\nPage3Button1=\nPage11Button1=H2\nPage2Button11=H3\n[HotButtons2]\nPage1Button2=H4\n";
+        assert_eq!(
+            hotbutton_pages_from_ini(text),
+            [
+                (1, 1, "H0".into()),
+                (2, 10, "J29".into()),
+                (3, 1, String::new()),
+                (10, 1, "H7".into())
+            ]
+        );
+        assert_eq!(
+            InstalledClient::Titanium
+                .settings(Path::new("."))
+                .hotbutton_pages("../x", "World"),
+            [] as [(u8, u8, String); 0]
         );
     }
 

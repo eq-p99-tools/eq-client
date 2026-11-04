@@ -51,6 +51,8 @@ pub enum Command {
     Gem(u8),
     /// Uses this hotbutton of the first bank, from 0.
     HotButton(u8),
+    /// Selects this page of the first hotbar, from 0 (0x4619cd, commands 75..84).
+    HotbarPage(u8),
 }
 
 /// A key as the program's table holds it: a `DirectInput` scan code with
@@ -83,6 +85,13 @@ impl ScanKey {
             ..Self::plain(scan)
         }
     }
+
+    const fn shift(scan: u8) -> Self {
+        Self {
+            shift: true,
+            ..Self::plain(scan)
+        }
+    }
 }
 
 /// A command's default key: its primary, or with `alternate` its second.
@@ -109,6 +118,14 @@ const fn alternate(command: Command, scan: u8) -> DefaultKey {
         command,
         alternate: true,
         key: ScanKey::plain(scan),
+    }
+}
+
+const fn hotbar_page(page: u8, scan: u8) -> DefaultKey {
+    DefaultKey {
+        command: Command::HotbarPage(page),
+        alternate: false,
+        key: ScanKey::shift(scan),
     }
 }
 
@@ -144,6 +161,18 @@ pub const TITANIUM: &[DefaultKey] = &[
     primary(Command::HotButton(7), 0x09),
     primary(Command::HotButton(8), 0x0a),
     primary(Command::HotButton(9), 0x0b),
+    // 75..84: Shift+1..0. Read from 0x4b26f0; modifier decoding/getters
+    // 0x5ba2d0/0x5ba270 and formatting 0x5ba560 identify Shift.
+    hotbar_page(0, 0x02),
+    hotbar_page(1, 0x03),
+    hotbar_page(2, 0x04),
+    hotbar_page(3, 0x05),
+    hotbar_page(4, 0x06),
+    hotbar_page(5, 0x07),
+    hotbar_page(6, 0x08),
+    hotbar_page(7, 0x09),
+    hotbar_page(8, 0x0a),
+    hotbar_page(9, 0x0b),
     // 115-123: the spell gems on Alt+1 to Alt+9.
     DefaultKey {
         command: Command::Gem(0),
@@ -213,5 +242,19 @@ mod tests {
             .find(|entry| entry.command == Command::Autorun)
             .unwrap();
         assert_eq!(autorun.key, ScanKey::plain(0x45));
+    }
+
+    #[test]
+    fn native_first_bar_pages_use_shift_one_through_zero() {
+        let pages: Vec<_> = TITANIUM
+            .iter()
+            .filter(|entry| matches!(entry.command, Command::HotbarPage(_)))
+            .collect();
+        assert_eq!(pages.len(), 10);
+        for (page, entry) in (0_u8..10).zip(pages) {
+            assert_eq!(entry.command, Command::HotbarPage(page));
+            assert_eq!(entry.key, ScanKey::shift(page + 2));
+            assert!(!entry.alternate);
+        }
     }
 }

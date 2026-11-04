@@ -119,6 +119,8 @@ pub(super) enum Does {
     Maps(crate::map::MapButton),
     /// Uses the action bound to this slot of the action bar, and shows it.
     HotButton(usize),
+    /// Selects the next (true) or previous page of the first hotbar.
+    HotbarPage(bool),
     /// Does this to the quantity window's amount, as Accept takes it.
     Picks(crate::inventory::SplitAction),
     /// Does this to the loot open on a corpse or the merchant open, as the
@@ -210,9 +212,13 @@ pub(super) fn does(id: &str, owner: WindowId) -> Option<Does> {
     if owner == WindowId::Map {
         return Some(crate::map::MapButton::for_screen(id).map_or(Does::Nothing, Does::Maps));
     }
-    // The action bar's ten buttons; its pages wait for a second page.
+    // The first hotbar's ten buttons and page arrows share ordinary behavior.
     if owner == WindowId::Actions {
-        return Some(hot_button(id).map_or(Does::Nothing, Does::HotButton));
+        return Some(match id {
+            "HB_PageLeftButton" => Does::HotbarPage(false),
+            "HB_PageRightButton" => Does::HotbarPage(true),
+            _ => hot_button(id).map_or(Does::Nothing, Does::HotButton),
+        });
     }
     if owner == WindowId::Book {
         match id {

@@ -1261,6 +1261,12 @@ fn behave(
             skin(),
             crate::outbox::Needs::Nothing,
         )),
+        Does::HotbarPage(forward) => drawn.insert((
+            Button,
+            hotbar::page::Button(forward),
+            skin(),
+            crate::outbox::Needs::Nothing,
+        )),
         Does::Picks(action) => drawn.insert((Button, action, skin())),
         Does::Trades(action) => {
             trades(drawn, action, skin());
@@ -1475,6 +1481,7 @@ fn caption(
         | Does::TurnsPage(_)
         | Does::Combines(_)
         | Does::Maps(_)
+        | Does::HotbarPage(_)
         | Does::Picks(_)
         | Does::Trades(_)
         | Does::TurnsSpellbook(_)
@@ -2069,6 +2076,19 @@ fn window_label(owner: WindowId, name: &str) -> Option<Shows> {
     })
 }
 
+/// The training window's practice points or carried coin value.
+fn training_label(owner: WindowId, name: &str) -> Option<Shows> {
+    match name {
+        "TRNW_PracticeCount" if owner == WindowId::Training => Some(Shows::PracticePoints),
+        _ if owner == WindowId::Training => name
+            .strip_prefix("TRNW_CoinCount")
+            .and_then(|index| index.parse::<usize>().ok())
+            .and_then(|index| Coin::ALL.get(index))
+            .map(|coin| Shows::Coins(CoinPlace::Purse, *coin)),
+        _ => None,
+    }
+}
+
 /// A label: fixed text, or what its number says it shows; a bag's window
 /// names its bag.
 fn label(
@@ -2097,21 +2117,14 @@ fn label(
     let trader = owner == WindowId::Trade && name == "TRDW_MyName";
     let named = window_label(owner, name);
     // The Training window's practice points and the coins the player carries.
-    let counted = match name {
-        "TRNW_PracticeCount" if owner == WindowId::Training => Some(Shows::PracticePoints),
-        _ if owner == WindowId::Training => name
-            .strip_prefix("TRNW_CoinCount")
-            .and_then(|index| index.parse::<usize>().ok())
-            .and_then(|index| Coin::ALL.get(index))
-            .map(|coin| Shows::Coins(CoinPlace::Purse, *coin)),
-        _ => None,
-    };
+    let counted = training_label(owner, name);
     // The book window's page numbers.
     let page_number = match (owner, name) {
         (WindowId::Book, "BOOK_Page0Number") => Some(0),
         (WindowId::Book, "BOOK_Page1Number") => Some(1),
         _ => None,
     };
+    let hotbar_page = owner == WindowId::Actions && name == "HB_CurrentPageLabel";
     let filled = label.eq_type.is_some()
         || bag.is_some()
         || banker
@@ -2119,7 +2132,8 @@ fn label(
         || trader
         || named.is_some()
         || counted.is_some()
-        || page_number.is_some();
+        || page_number.is_some()
+        || hotbar_page;
     let words = if filled { "" } else { label.text.as_str() };
     let text = theme::text(
         words,
@@ -2138,6 +2152,7 @@ fn label(
     }
     let buff_name = buff_label(owner, label.eq_type);
     match (label.eq_type, bag) {
+        _ if hotbar_page => aligned(window, node, label.align, (text, hotbar::page::Number)),
         (Some(_), _) if let Some((effects, index)) = buff_name => aligned(
             window,
             node,
@@ -2434,13 +2449,15 @@ mod tests {
             does("HB_Button10", WindowId::Actions),
             Some(Does::HotButton(9))
         ));
-        // One page so far: the page buttons are greyed out.
-        for id in [
-            "HB_PageLeftButton",
-            "HB_PageRightButton",
-            "HB_Button11",
-            "HB_Button0",
-        ] {
+        assert!(matches!(
+            does("HB_PageLeftButton", WindowId::Actions),
+            Some(Does::HotbarPage(false))
+        ));
+        assert!(matches!(
+            does("HB_PageRightButton", WindowId::Actions),
+            Some(Does::HotbarPage(true))
+        ));
+        for id in ["HB_Button11", "HB_Button0"] {
             assert!(
                 matches!(does(id, WindowId::Actions), Some(Does::Nothing)),
                 "{id}"
@@ -2661,7 +2678,7 @@ mod tests {
             border: false,
             tooltip: None,
             pieces: vec![
-                ("page".into(), button("HB_PageLeftButton", 0.0)),
+                ("page".into(), button("HB_FileButton", 0.0)),
                 ("slot".into(), button("HB_Button1", 20.0)),
             ],
             tab_frame: None,
@@ -2697,7 +2714,7 @@ mod tests {
             .iter(app.world())
             .map(|(needs, hovers, tooltip, button)| (*needs, hovers, tooltip, button))
             .collect();
-        // The page button the client lacks gives its reason on hover in
+        // The file button the client lacks gives its reason on hover in
         // place of the skin's tooltip, and is a button, which keeps a press
         // from dragging its window; the slot beside it works and keeps its
         // own tooltip.
@@ -2715,7 +2732,7 @@ mod tests {
             names,
             [
                 (WindowId::Actions, "HB_Button1".to_owned()),
-                (WindowId::Actions, "HB_PageLeftButton".to_owned()),
+                (WindowId::Actions, "HB_FileButton".to_owned()),
             ]
         );
     }
