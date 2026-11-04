@@ -67,7 +67,21 @@ fn queue_equipment_move(
     from: i32,
     to: i32,
 ) -> (eq_client_core::inventory::InventoryMove, InventoryUpdate) {
-    use eq_client_core::inventory::{InventoryActor, InventoryMove, MoveQuantity, MoveRules};
+    queue_inventory_quantity(
+        state,
+        from,
+        to,
+        eq_client_core::inventory::MoveQuantity::Whole,
+    )
+}
+
+fn queue_inventory_quantity(
+    state: &mut OnlineState,
+    from: i32,
+    to: i32,
+    quantity: eq_client_core::inventory::MoveQuantity,
+) -> (eq_client_core::inventory::InventoryMove, InventoryUpdate) {
+    use eq_client_core::inventory::{InventoryActor, InventoryMove, MoveRules};
     state.plan_inventory_as(Some(MoveRules::Quarm));
     let before = state.world().inventory().clone();
     let player = state.world().player().unwrap();
@@ -88,7 +102,7 @@ fn queue_equipment_move(
         sequence: None,
         from: InventorySlot(from),
         to: InventorySlot(to),
-        quantity: MoveQuantity::Whole,
+        quantity,
         created: std::time::Instant::now(),
     };
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
@@ -120,6 +134,90 @@ fn equipment_move_result(
 fn submit_equipment_move(state: &mut OnlineState, from: i32, to: i32) {
     let (request, update) = queue_equipment_move(state, from, to);
     testing::news(state, [equipment_move_result(&request, Some(update), None)]);
+}
+
+#[test]
+fn root_stack_mass_bound_uses_worker_results_without_confirming_placement() {
+    use eq_client_core::inventory::MoveQuantity;
+    let mut state = online();
+    ready(&mut state);
+    let mut milk = item(22, 1, 0);
+    milk.stack_count = Some(19);
+    milk.rules.stack_size = 20;
+    milk.rules.item_type = 15;
+    let mut other = item(24, 43, 0);
+    other.details.id += 1;
+    testing::news(
+        &mut state,
+        [WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![
+            milk, other,
+        ]))],
+    );
+    assert_eq!(state.world().movement_weight(), Ok(44));
+    let count = MoveQuantity::Count(std::num::NonZeroU32::new(1).unwrap());
+    for cycle in 0..3 {
+        for (from, to, amount) in [
+            (22, 30, count),
+            (30, 29, MoveQuantity::Whole),
+            (29, 30, MoveQuantity::Whole),
+            (30, 22, count),
+        ] {
+            let before = calculate(state.world(), effects).unwrap();
+            let (request, update) = queue_inventory_quantity(&mut state, from, to, amount);
+            assert_eq!(calculate(state.world(), effects), Ok(before));
+            assert_ne!(state.world().inventory(), state.world().worker_inventory());
+            testing::news(
+                &mut state,
+                [equipment_move_result(&request, Some(update), None)],
+            );
+            let bound = if cycle == 0 && from == 22 { 45 } else { 46 };
+            assert_eq!(state.world().movement_weight(), Ok(bound));
+            assert_eq!(calculate(state.world(), effects).unwrap().weight, 4);
+            assert!(state.world().worker_inventory().predicted());
+            assert!(
+                state
+                    .world()
+                    .worker_inventory()
+                    .carried_weight_is_conservative()
+            );
+            assert!(!state.world().worker_inventory().equipment_stats_uncertain());
+            assert_eq!(state.world().accepted_speed_inputs(), None);
+        }
+    }
+    assert!(state.world().worker_inventory().unresolved_predictions() > 0);
+    testing::news(
+        &mut state,
+        [WorldEvent::Inventory(InventoryUpdate::Invalidated)],
+    );
+    assert_eq!(calculate(state.world(), effects), Err(Missing::Inventory));
+}
+
+#[test]
+fn a_stack_mass_bound_does_not_certify_stat_food() {
+    use eq_client_core::inventory::MoveQuantity;
+    let mut state = online();
+    ready(&mut state);
+    let mut milk = item(22, 7, 5);
+    milk.stack_count = Some(4);
+    milk.rules.stack_size = 20;
+    milk.rules.item_type = 15;
+    testing::news(
+        &mut state,
+        [WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![milk]))],
+    );
+    let (request, update) = queue_inventory_quantity(
+        &mut state,
+        22,
+        30,
+        MoveQuantity::Count(std::num::NonZeroU32::new(1).unwrap()),
+    );
+    testing::news(
+        &mut state,
+        [equipment_move_result(&request, Some(update), None)],
+    );
+    assert_eq!(state.world().movement_weight(), Ok(14));
+    assert_eq!(calculate(state.world(), effects), Err(Missing::Prediction));
+    assert!(state.world().worker_inventory().predicted());
 }
 
 #[test]
