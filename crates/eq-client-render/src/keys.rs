@@ -856,8 +856,8 @@ mod tests {
                 );
             }
             for index in 0..10 {
-                assert!(map.chords(Act::BindSlot(index)).is_empty());
-                assert!(map.chords(Act::ClearSlot(index)).is_empty());
+                assert_eq!(map.chords(Act::BindSlot(index)), []);
+                assert_eq!(map.chords(Act::ClearSlot(index)), []);
             }
             assert_eq!(map.chords(Act::FreeCamera), []);
             assert_eq!(map.chords(Act::CameraUp), []);

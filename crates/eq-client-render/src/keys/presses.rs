@@ -62,7 +62,7 @@ pub(crate) fn capture(
 #[cfg(test)]
 pub(super) mod tests {
     use super::*;
-    use crate::keys::{Act, KeyMap};
+    use crate::keys::Act;
     use bevy::input::ButtonState;
 
     /// A complete native chord can arrive before the next frame.

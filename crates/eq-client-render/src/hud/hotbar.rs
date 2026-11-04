@@ -952,26 +952,30 @@ mod tests {
                 .starts_with("Unassigned")
         );
     }
-    #[test]
-    fn binding_and_clearing_requires_focused_non_chat_input() {
-        let mut app = App::new();
-        crate::keys::testing::install(&mut app);
+    fn choose_editing_keys(app: &mut App) {
         for (index, key) in [
             (0, KeyCode::Digit1),
             (1, KeyCode::Digit2),
             (2, KeyCode::Digit3),
         ] {
             crate::keys::testing::bind(
-                &mut app,
+                app,
                 crate::keys::Act::BindSlot(index),
                 crate::keys::Chord::ctrl(key),
             );
             crate::keys::testing::bind(
-                &mut app,
+                app,
                 crate::keys::Act::ClearSlot(index),
                 crate::keys::Chord::ctrl_shift(key),
             );
         }
+    }
+
+    #[test]
+    fn binding_and_clearing_requires_focused_non_chat_input() {
+        let mut app = App::new();
+        crate::keys::testing::install(&mut app);
+        choose_editing_keys(&mut app);
         let mut online = crate::online::OnlineState::new(true);
         crate::online::testing::admit(&mut online, 1, crate::online::testing::player(1));
         crate::online::testing::spell(
