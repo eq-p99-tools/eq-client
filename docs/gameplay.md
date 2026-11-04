@@ -61,7 +61,8 @@ presentation only, not item data sent to the server.
   place, swap or merge it. Escape does not discard the cursor item.
 - With an empty cursor, click a stack or its count to choose a quantity.
   Shift-click takes the whole stack; Ctrl-click takes one (also with Shift).
-  These are this client's controls; official modifier parity is unverified.
+  These are this client's controls; official modifier parity is unverified
+  (inferred, recording checklist 6.382).
   The quantity picker supports its slider, number input and confirmation/cancellation.
 - **Auto inventory** fills compatible stacks and then empty carried slots. It
   waits between requests and stops on manual intervention or an error.

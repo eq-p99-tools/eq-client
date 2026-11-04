@@ -778,6 +778,13 @@ mod tests {
     fn keyboard_cycles_only_rendered_entities_and_keeps_targets_until_they_are_gone() {
         let mut app = crate::testing::app();
         app.add_systems(Update, (super::super::escape::route, input).chain());
+        // The program's key table binds only Target Next; cycling backwards
+        // is an explicit user assignment.
+        crate::keys::testing::bind(
+            &mut app,
+            crate::keys::Act::TargetPrevious,
+            crate::keys::Chord::shift(KeyCode::Tab),
+        );
         {
             let mut online = app.world_mut().resource_mut::<OnlineState>();
             crate::online::testing::admit(&mut online, 1, crate::online::testing::player(1));

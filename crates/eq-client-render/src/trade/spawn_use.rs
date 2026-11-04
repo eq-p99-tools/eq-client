@@ -34,7 +34,7 @@ impl TradeState {
         outbox: &Outbox,
     ) -> Option<Use> {
         let (session, id) = self.right_clicked.take()?;
-        if world.session_id() != Some(session) || !world.connected() || world.death().is_some() {
+        if world.session_id() != Some(session) || !world.connected() || world.is_dead() {
             return None;
         }
         let spawn = &world.spawn(id)?.state;

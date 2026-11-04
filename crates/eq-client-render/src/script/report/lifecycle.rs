@@ -93,7 +93,7 @@ fn snapshot(world: &ClientWorld, view: Option<View>, online_enabled: bool) -> St
         "online_enabled": online_enabled, "connected": world.connected(),
         "ended": world.ended(), "admission_id": world.session_id(),
         "has_player": world.player().is_some(), "in_world": world.in_world(),
-        "dead": world.death().is_some(), "transfer_pending": world.pending_transfer().is_some(),
+        "dead": world.is_dead(), "transfer_pending": world.pending_transfer().is_some(),
         "active_world_scope": null, "last_link": null,
     });
     report["selection"] = json!({

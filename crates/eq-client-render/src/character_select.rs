@@ -343,6 +343,8 @@ pub(super) fn update(
                 selection.selected = Some(selection.entries[next].slot);
             }
         }
+        // The Delete key as a shortcut to the confirmation is this client's
+        // own (inferred, recording checklist 6.383).
         if keys.just_pressed(KeyCode::Delete) && selection.deletion.is_some() {
             ask_delete = true;
         }
