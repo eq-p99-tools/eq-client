@@ -114,6 +114,22 @@ impl Program {
         &self.instructions
     }
 
+    /// Match the workbench's local-only command gate before queuing a new run.
+    pub(crate) fn check_local_commands(&self, local: bool) -> Result<(), ParseError> {
+        if !local
+            && let Some(instruction) = self
+                .instructions
+                .iter()
+                .find(|instruction| matches!(instruction.step(), Step::Gm(_) | Step::Chat(_)))
+        {
+            return Err(ParseError {
+                line: Some(instruction.line()),
+                message: "gm and chat require a network-enforced local test session.".into(),
+            });
+        }
+        Ok(())
+    }
+
     /// Converts a program to the legacy action list used by existing callers.
     #[must_use]
     pub fn into_steps(self) -> Vec<Step> {

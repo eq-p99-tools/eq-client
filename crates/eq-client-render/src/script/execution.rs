@@ -16,6 +16,8 @@ pub enum Phase {
     Running,
     /// Waiting for the attended client to regain focus.
     WaitingForFocus,
+    /// Waiting for an explicitly background run to have exclusive input.
+    WaitingForInput,
     /// Waiting for the physical pointer to leave before injecting a click.
     WaitingForPointer,
     /// Finishing the current action before pausing.
@@ -40,6 +42,7 @@ impl Phase {
             self,
             Self::Running
                 | Self::WaitingForFocus
+                | Self::WaitingForInput
                 | Self::WaitingForPointer
                 | Self::Pausing
                 | Self::Paused
@@ -60,6 +63,8 @@ pub struct RunEvent {
 /// The latest run's source, progress and result, retained after execution ends.
 #[derive(Clone, Debug, Default, Resource)]
 pub struct RunStatus {
+    /// Stable for this execution, even when follow mode extends its source.
+    pub(super) identity: Arc<()>,
     pub(super) source: Arc<str>,
     pub(super) phase: Phase,
     pub(super) line: Option<usize>,

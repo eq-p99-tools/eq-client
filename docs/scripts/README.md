@@ -14,6 +14,8 @@ Scripts are small UTF-8 text files in the client's own language, with one action
 
 [Run controls and troubleshooting](running.md)
 
+[Local file control and explicit recovery](control.md)
+
 [Vim and Neovim syntax plugin](vim.md)
 
 The in-game Help tab keeps a clickable breadcrumb above the article as you scroll. The links inside each document remain available in both the game and GitHub.
@@ -36,7 +38,7 @@ Actions use the state that exists when they execute. Select a target yourself be
 
 Pause finishes the current action, then pauses with held inputs released. Step executes one action from a pause. Resume continues; Stop immediately releases synthetic input and stops the scenario. Closing the window does not stop a run. Scripts has no minimized state.
 
-Scripts on P99 and Quarm remain attended: keep the client focused. The existing runtime bounds and local-only command restrictions still apply. See Run controls for pointer ownership and time limits.
+Scripts on P99 and Quarm require focus by default. Explicit `--script-background` runs while unfocused and cancels held input if you return to the window. The existing runtime bounds and local-only command restrictions still apply. See Run controls for input ownership and time limits.
 
 ## Other entry points
 

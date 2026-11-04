@@ -88,6 +88,14 @@ is removed. CLI and UI launches share these types. Pause and single-step operate
 at action boundaries; Stop releases synthetic input without committing a pending
 click. The source snapshot never changes during a workbench run.
 
+The opt-in `script::control` file bridge submits snapshots through the same
+`Program`, `Script::for_viewer` and `RunControl` paths. It owns bounded request
+IDs, receipts and status publication; the executor still owns action completion,
+input release and terminal outcomes. An active run rejects replacement. Fixed
+file exchanges run off the frame thread and keep their process lifetime across
+game admissions and runner retirement. Local receipts never certify server
+acceptance; shutdown status never certifies a clean camp.
+
 `script_workbench::document` owns editable text, disk snapshots and bounded file
 operations. File jobs run off the frame thread, use document generations rather
 than game admissions, and preserve the buffer on failure. `view` owns chrome,

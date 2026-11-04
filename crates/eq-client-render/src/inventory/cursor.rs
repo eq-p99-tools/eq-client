@@ -107,7 +107,12 @@ pub(crate) fn update(
     // While a script runs, what rides the cursor rides the script pointer.
     let script_pointer = scripted
         .1
-        .filter(|_| scripted.0.is_some())
+        .filter(|_| {
+            scripted
+                .0
+                .as_ref()
+                .is_some_and(|script| script.pointer_owned())
+        })
         .map(|pointer| pointer.0 / factor);
     let pointer = windows.single().ok().and_then(|window| {
         let pointer = match (script_pointer, window.cursor_position()) {

@@ -1,6 +1,6 @@
 //! Bounded scenarios shared by the in-game workbench and command-line runner.
 //!
-//! Public-server runs require focus and stop if it is lost while a key is held.
+//! Public-server runs require focus unless background input is explicitly enabled.
 //! Offline and network-constrained local test runs can proceed without focus;
 //! all runs have bounded time and use the ordinary input and action paths.
 //! Scripted clicks are only injected while the real pointer is outside the window,
@@ -10,7 +10,11 @@
 //! the wheel does, and lands only on the control under it. A followed
 //! script keeps reading complete lines appended to its file, under the same limits.
 //! `gm` and `chat` steps require a network-constrained local EQEmu/TAKP session.
+pub(crate) mod control;
 mod execution;
+mod input;
+pub use input::InputMode;
+pub(super) use input::install as install_input;
 mod parse;
 pub(crate) mod pointer;
 mod program;
@@ -63,6 +67,10 @@ const SLOW_ROUTE_CALL: Duration = Duration::from_millis(5);
 
 /// Remaining steps and the one in progress.
 #[derive(Resource)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "pause, local/offline policies and current input ownership are independent facts"
+)]
 pub struct Script {
     steps: VecDeque<QueuedStep>,
     current: Option<(Step, Duration)>,
@@ -95,6 +103,9 @@ pub struct Script {
     /// The preview runs offline: no step can reach a server, so steps run
     /// without anyone watching the window, but `gm` steps stay refused.
     offline: bool,
+    input_mode: InputMode,
+    /// True only after this frame's background ownership check succeeds.
+    owns_input: bool,
     /// The route a `walk` step is searching for or following.
     route: Option<eq_client_core::movement::Route>,
     /// The closed door the walk is opening, if any.
@@ -199,6 +210,8 @@ impl Script {
             follow: None,
             local: false,
             offline: false,
+            input_mode: InputMode::Attended,
+            owns_input: false,
             route: None,
             door_wait: None,
             following: None,
@@ -237,6 +250,16 @@ impl Script {
         }
     }
 
+    /// Builds a viewer run with the process's explicit input policy and the
+    /// existing local/offline permissions. Replacement runs use this same path.
+    #[must_use]
+    pub fn for_viewer(program: Program, config: &crate::ViewerConfig, online: bool) -> Self {
+        Self::from_program(program)
+            .local_session(config.local_session)
+            .offline_preview(!online)
+            .input_mode(config.script_input_mode)
+    }
+
     /// The current run's typed progress, including its immutable source snapshot.
     #[must_use]
     pub const fn status(&self) -> &RunStatus {
@@ -270,11 +293,29 @@ impl Script {
         self
     }
 
-    /// Whether the script runs without anyone watching the window: on a
-    /// local-only session, or offline.
+    /// Selects input ownership without changing session or command permissions.
+    #[must_use]
+    pub fn input_mode(mut self, mode: InputMode) -> Self {
+        self.input_mode = mode;
+        self
+    }
+
+    /// Whether this frame accepts scripted input without native window focus.
     #[must_use]
     pub(crate) const fn unattended(&self) -> bool {
-        self.local || self.offline
+        match self.input_mode {
+            InputMode::Attended => self.local || self.offline,
+            InputMode::Background => self.owns_input,
+        }
+    }
+
+    /// Background runs yield their drawn pointer and carried overlay together
+    /// with their input; existing attended/local pointer behavior is retained.
+    pub(crate) const fn pointer_owned(&self) -> bool {
+        match self.input_mode {
+            InputMode::Attended => true,
+            InputMode::Background => self.owns_input,
+        }
     }
 
     /// The movement commands the script holds itself.
@@ -287,9 +328,12 @@ impl Script {
         self.facing
     }
 
-    /// Whether the script holds a key or a movement command.
+    /// Whether cancellation must release input before yielding the window.
     fn holding(&self) -> bool {
-        !self.held.is_empty() || !self.acts.is_empty()
+        !self.held.is_empty()
+            || !self.acts.is_empty()
+            || self.facing.is_some()
+            || self.clicked.is_some()
     }
 
     /// Marks the run offline (see [`Script::offline`]).
@@ -365,7 +409,10 @@ impl Script {
         self.acts.clear();
         self.facing = None;
         if let Some(button) = self.clicked.take() {
-            mouse.release(button);
+            // A genuine press of the same button belongs to the user now.
+            if !keys.native_button(button) {
+                mouse.release(button);
+            }
         }
         self.pressed = None;
     }
@@ -391,6 +438,7 @@ impl Script {
 
     fn stop(&mut self, keys: &mut Keyboard, mouse: &mut ButtonInput<MouseButton>, reason: &str) {
         self.release(keys, mouse);
+        self.owns_input = false;
         self.steps.clear();
         self.current = None;
         self.follow = None;
@@ -445,8 +493,9 @@ impl Script {
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn observe(script: Option<Res<Script>>, mut status: ResMut<RunStatus>) {
     if let Some(script) = script {
-        // The source identifies the run; revisions identify history changes.
-        if !std::sync::Arc::ptr_eq(&status.source, &script.progress.source)
+        // Follow mode can extend the source without replacing this execution.
+        if !std::sync::Arc::ptr_eq(&status.identity, &script.progress.identity)
+            || !std::sync::Arc::ptr_eq(&status.source, &script.progress.source)
             || status.revision != script.progress.revision
         {
             *status = script.progress.clone();
@@ -577,6 +626,7 @@ pub(super) struct Keyboard<'w, 's> {
     state: ResMut<'w, ButtonInput<KeyCode>>,
     typed: MessageWriter<'w, bevy::input::keyboard::KeyboardInput>,
     window: Query<'w, 's, Entity, With<PrimaryWindow>>,
+    background: Option<ResMut<'w, input::BackgroundInput>>,
 }
 
 impl Keyboard<'_, '_> {
@@ -588,6 +638,13 @@ impl Keyboard<'_, '_> {
     }
 
     fn release(&mut self, key: KeyCode) {
+        if self
+            .background
+            .as_ref()
+            .is_some_and(|state| state.keys.contains(&key))
+        {
+            return;
+        }
         if self.state.pressed(key) {
             self.send(key, bevy::input::ButtonState::Released);
         }
@@ -605,7 +662,7 @@ impl Keyboard<'_, '_> {
             KeyCode::AltRight,
         ]);
         let (logical_key, text) = parse::typed(key_code, shift, chorded);
-        self.typed.write(bevy::input::keyboard::KeyboardInput {
+        let id = self.typed.write(bevy::input::keyboard::KeyboardInput {
             key_code,
             logical_key,
             state,
@@ -614,6 +671,26 @@ impl Keyboard<'_, '_> {
             repeat: false,
             window: self.window.single().unwrap_or(Entity::PLACEHOLDER),
         });
+        if let Some(background) = &mut self.background {
+            background.authored(id);
+        }
+    }
+
+    fn native_button(&self, button: MouseButton) -> bool {
+        self.background
+            .as_ref()
+            .is_some_and(|state| state.buttons.contains(&button))
+    }
+
+    /// A backend focus-loss reset must not retrigger held actions or type text.
+    fn restore(&mut self, held: &[KeyCode]) {
+        for &key in held {
+            if !self.state.pressed(key) {
+                self.state.press(key);
+                self.state.clear_just_pressed(key);
+                self.state.clear_just_released(key);
+            }
+        }
     }
 }
 
@@ -697,6 +774,7 @@ pub(super) fn drive(
         }
     }
     if matches!(script.mode, RunMode::Paused(_)) {
+        script.owns_input = false;
         script.last_frame = Some(now);
         return;
     }
@@ -717,9 +795,38 @@ pub(super) fn drive(
     let started = *script.started.get_or_insert(now);
     script.progress.elapsed = now.saturating_sub(started);
     if now.saturating_sub(started) > MAX_RUNTIME {
+        script.cancel_press(&mut buttons, &mut commands);
         script.stop(&mut keys, &mut mouse, "maximum runtime reached");
         script.retire(&mut commands);
         return;
+    }
+    let window = windows.single().ok();
+    if script.input_mode == InputMode::Background {
+        let focused = window.is_none_or(|window| window.focused)
+            || reported_focus.is_some_and(|(entity, focused)| windows.contains(entity) && focused);
+        let pointer = window.is_some_and(|window| window.cursor_position().is_some());
+        let native = keys.background.as_ref().is_none_or(|state| state.busy());
+        script.owns_input = !focused && !pointer && !native;
+        if !script.owns_input {
+            if script.holding() {
+                script.cancel_press(&mut buttons, &mut commands);
+                script.stop(
+                    &mut keys,
+                    &mut mouse,
+                    "native input reclaimed the background window",
+                );
+                script.retire(&mut commands);
+            } else {
+                script.paused = true;
+                script.progress.phase = if pointer {
+                    Phase::WaitingForPointer
+                } else {
+                    Phase::WaitingForInput
+                };
+            }
+            return;
+        }
+        keys.restore(&script.held);
     }
     if script.current.is_none() {
         script.progress.complete_step();
@@ -750,7 +857,6 @@ pub(super) fn drive(
             return;
         }
     }
-    let window = windows.single().ok();
     if !may_run(
         script.unattended(),
         reported_focus
@@ -759,10 +865,11 @@ pub(super) fn drive(
         window.is_some_and(|window| window.focused),
     ) {
         if script.holding() {
+            script.cancel_press(&mut buttons, &mut commands);
             script.stop(
                 &mut keys,
                 &mut mouse,
-                "window lost focus while holding keys",
+                "window lost focus while holding input",
             );
         } else {
             if !script.paused {
@@ -3824,6 +3931,472 @@ mod tests {
             .add_systems(Startup, pointer::spawn)
             .add_systems(Update, (drive, pointer::draw).chain());
         app
+    }
+
+    /// Production `PreUpdate` input/drive/click order, without any OS window or
+    /// network connection. The script has public-session input permissions.
+    fn background(steps: Vec<Step>) -> (App, Entity) {
+        let mut app = crate::testing::app();
+        app.insert_resource(Time::<Real>::new(std::time::Instant::now()))
+            .init_resource::<crate::windows::Moves>()
+            .add_message::<bevy::input::keyboard::KeyboardInput>()
+            .add_message::<bevy::input::keyboard::KeyboardFocusLost>()
+            .add_message::<bevy::input::mouse::MouseButtonInput>()
+            .add_message::<bevy::input::mouse::MouseWheel>()
+            .add_message::<bevy::window::WindowFocused>()
+            .add_message::<AppExit>()
+            .init_resource::<SeenKeys>()
+            .add_systems(
+                PreUpdate,
+                (
+                    bevy::input::keyboard::keyboard_input_system,
+                    bevy::input::mouse::mouse_button_input_system,
+                )
+                    .in_set(bevy::input::InputSystems),
+            )
+            .add_systems(Update, collect_keys);
+        crate::install_script(&mut app, (None, None), true, false, InputMode::Background);
+        app.insert_resource(Script::new(steps).input_mode(InputMode::Background));
+        let window = app
+            .world_mut()
+            .query_filtered::<Entity, With<PrimaryWindow>>()
+            .single(app.world())
+            .unwrap();
+        app.world_mut().get_mut::<Window>(window).unwrap().focused = false;
+        (app, window)
+    }
+
+    #[derive(Default, Resource)]
+    struct SeenKeys(Vec<bevy::input::keyboard::KeyboardInput>);
+
+    #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are wrappers.
+    fn collect_keys(
+        mut events: MessageReader<bevy::input::keyboard::KeyboardInput>,
+        mut seen: ResMut<SeenKeys>,
+    ) {
+        seen.0.extend(events.read().cloned());
+    }
+
+    fn native_key(app: &mut App, window: Entity, key_code: KeyCode, pressed: bool) {
+        use bevy::input::{ButtonState, keyboard::KeyboardInput};
+        let state = if pressed {
+            ButtonState::Pressed
+        } else {
+            ButtonState::Released
+        };
+        let (logical_key, text) = parse::typed(key_code, false, false);
+        app.world_mut().write_message(KeyboardInput {
+            key_code,
+            logical_key,
+            state,
+            text: text.filter(|_| pressed).map(Into::into),
+            repeat: false,
+            window,
+        });
+    }
+
+    fn set_focus(app: &mut App, window: Entity, focused: bool) {
+        app.world_mut().get_mut::<Window>(window).unwrap().focused = focused;
+        app.world_mut()
+            .write_message(bevy::window::WindowFocused { window, focused });
+    }
+
+    fn pressed_give() -> (App, Entity, Entity) {
+        let (mut app, window) = background(vec![Step::HoldClick(
+            ClickTarget::Give,
+            Duration::from_secs(2),
+        )]);
+        let (give, _) = give_and_attack(&mut app);
+        for ms in [0, 10, 260] {
+            frame_at(&mut app, ms);
+        }
+        assert_eq!(interaction(&app, give), Interaction::Pressed);
+        assert!(
+            app.world()
+                .resource::<ButtonInput<MouseButton>>()
+                .pressed(MouseButton::Left)
+        );
+        (app, window, give)
+    }
+
+    #[test]
+    fn background_runs_use_public_permissions_and_do_not_repeat_held_input() {
+        use bevy::ecs::system::RunSystemOnce;
+        let (mut app, window) = background(vec![Step::Hold(
+            vec![KeyCode::KeyW],
+            Duration::from_millis(100),
+        )]);
+        frame_at(&mut app, 0);
+        assert!(app.world().resource::<Script>().unattended());
+        assert!(!app.world().resource::<Script>().local);
+        assert!(!app.world().resource::<Script>().offline);
+        assert!(app.world().resource::<Script>().pointer_owned());
+        assert!(
+            app.world_mut()
+                .run_system_once(|keys: crate::keys::Keys| keys.focused())
+                .unwrap()
+        );
+        set_focus(&mut app, window, false);
+        app.world_mut()
+            .write_message(bevy::input::keyboard::KeyboardFocusLost);
+        frame_at(&mut app, 20);
+        let keys = app.world().resource::<ButtonInput<KeyCode>>();
+        assert!(keys.pressed(KeyCode::KeyW));
+        assert!(!keys.just_pressed(KeyCode::KeyW));
+        for ms in [40, 100, 110] {
+            frame_at(&mut app, ms);
+        }
+        assert!(!app.world().contains_resource::<Script>());
+        assert_eq!(
+            app.world().resource::<RunStatus>().phase(),
+            Phase::Completed
+        );
+        let events = &app.world().resource::<SeenKeys>().0;
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| event.state.is_pressed())
+                .count(),
+            1
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| !event.state.is_pressed())
+                .count(),
+            1
+        );
+        assert_eq!(*app.world().resource::<InputMode>(), InputMode::Background);
+    }
+
+    #[test]
+    fn default_public_runs_still_wait_for_focus_and_cancel_on_focus_loss() {
+        let (mut app, window) = background(Vec::new());
+        app.insert_resource(Script::new(vec![Step::Hold(
+            vec![KeyCode::KeyW],
+            Duration::from_secs(1),
+        )]));
+        frame_at(&mut app, 0);
+        assert_eq!(
+            app.world().resource::<RunStatus>().phase(),
+            Phase::WaitingForFocus
+        );
+        set_focus(&mut app, window, true);
+        frame_at(&mut app, 10);
+        assert!(
+            app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .pressed(KeyCode::KeyW)
+        );
+        set_focus(&mut app, window, false);
+        frame_at(&mut app, 20);
+        assert_eq!(app.world().resource::<RunStatus>().phase(), Phase::Failed);
+        assert!(
+            !app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .pressed(KeyCode::KeyW)
+        );
+    }
+
+    #[test]
+    fn background_waits_for_native_ownership_and_rechecks_before_the_first_action() {
+        let (mut app, window) = background(vec![Step::Press(vec![KeyCode::KeyA])]);
+        set_focus(&mut app, window, true);
+        frame_at(&mut app, 0);
+        assert_eq!(
+            app.world().resource::<RunStatus>().phase(),
+            Phase::WaitingForInput
+        );
+        assert!(!app.world().resource::<Script>().pointer_owned());
+        set_focus(&mut app, window, false);
+        app.world_mut()
+            .get_mut::<Window>(window)
+            .unwrap()
+            .set_cursor_position(Some(Vec2::new(10.0, 10.0)));
+        frame_at(&mut app, 10);
+        assert_eq!(
+            app.world().resource::<RunStatus>().phase(),
+            Phase::WaitingForPointer
+        );
+        app.world_mut()
+            .get_mut::<Window>(window)
+            .unwrap()
+            .set_cursor_position(None);
+        native_key(&mut app, window, KeyCode::KeyW, true);
+        frame_at(&mut app, 20);
+        frame_at(&mut app, 30);
+        assert_eq!(
+            app.world().resource::<RunStatus>().phase(),
+            Phase::WaitingForInput
+        );
+        native_key(&mut app, window, KeyCode::KeyW, false);
+        frame_at(&mut app, 40);
+        assert_eq!(
+            app.world().resource::<RunStatus>().phase(),
+            Phase::WaitingForInput
+        );
+        frame_at(&mut app, 50);
+        assert!(
+            app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .pressed(KeyCode::KeyA)
+        );
+        frame_at(&mut app, 60);
+        assert!(
+            !app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .pressed(KeyCode::KeyA)
+        );
+        assert_eq!(
+            app.world()
+                .resource::<SeenKeys>()
+                .0
+                .iter()
+                .filter(|e| e.key_code == KeyCode::KeyA && e.state.is_pressed())
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_paused_background_run_yields_its_pointer_until_explicitly_resumed() {
+        let (mut app, window) = background(vec![
+            Step::Wait(Duration::from_millis(10)),
+            Step::Press(vec![KeyCode::KeyA]),
+        ]);
+        frame_at(&mut app, 0);
+        app.world_mut()
+            .resource_mut::<RunControl>()
+            .request(Request::Pause);
+        frame_at(&mut app, 10);
+        frame_at(&mut app, 20);
+        assert_eq!(app.world().resource::<RunStatus>().phase(), Phase::Paused);
+        assert!(!app.world().resource::<Script>().pointer_owned());
+        set_focus(&mut app, window, true);
+        frame_at(&mut app, 30);
+        assert_eq!(app.world().resource::<RunStatus>().phase(), Phase::Paused);
+        app.world_mut()
+            .resource_mut::<RunControl>()
+            .request(Request::Resume);
+        frame_at(&mut app, 40);
+        assert_eq!(
+            app.world().resource::<RunStatus>().phase(),
+            Phase::WaitingForInput
+        );
+        set_focus(&mut app, window, false);
+        frame_at(&mut app, 50);
+        assert!(
+            app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .pressed(KeyCode::KeyA)
+        );
+    }
+
+    #[test]
+    fn native_same_key_survives_background_cancellation_without_a_synthetic_release() {
+        let (mut app, window) = background(vec![Step::Hold(
+            vec![KeyCode::KeyW],
+            Duration::from_secs(1),
+        )]);
+        frame_at(&mut app, 0);
+        set_focus(&mut app, window, true);
+        native_key(&mut app, window, KeyCode::KeyW, true);
+        frame_at(&mut app, 10);
+        assert!(!app.world().contains_resource::<Script>());
+        assert_eq!(app.world().resource::<RunStatus>().phase(), Phase::Failed);
+        assert!(
+            app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .pressed(KeyCode::KeyW)
+        );
+        assert!(
+            app.world()
+                .resource::<SeenKeys>()
+                .0
+                .iter()
+                .all(|event| event.state.is_pressed())
+        );
+        native_key(&mut app, window, KeyCode::KeyW, false);
+        frame_at(&mut app, 20);
+        assert!(
+            !app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .pressed(KeyCode::KeyW)
+        );
+    }
+
+    #[test]
+    fn background_yields_to_wheel_input_and_other_app_windows() {
+        use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
+        let (mut app, window) = background(vec![Step::Hold(
+            vec![KeyCode::KeyW],
+            Duration::from_secs(1),
+        )]);
+        frame_at(&mut app, 0);
+        app.world_mut().write_message(MouseWheel {
+            unit: MouseScrollUnit::Line,
+            x: 0.0,
+            y: 1.0,
+            window,
+            phase: bevy::input::touch::TouchPhase::Moved,
+        });
+        frame_at(&mut app, 10);
+        assert!(!app.world().contains_resource::<Script>());
+        assert!(
+            !app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .pressed(KeyCode::KeyW)
+        );
+
+        let (mut app, _) = background(vec![Step::Press(vec![KeyCode::KeyA])]);
+        let other = app.world_mut().spawn(Window::default()).id();
+        native_key(&mut app, other, KeyCode::KeyW, true);
+        frame_at(&mut app, 0);
+        assert_eq!(
+            app.world().resource::<RunStatus>().phase(),
+            Phase::WaitingForInput
+        );
+        assert!(
+            !app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .pressed(KeyCode::KeyA)
+        );
+    }
+
+    #[test]
+    fn a_background_mouse_press_cancels_without_clicking_on_focus_or_pointer_return() {
+        for pointer_return in [false, true] {
+            let (mut app, window, give) = pressed_give();
+            if pointer_return {
+                app.world_mut()
+                    .get_mut::<Window>(window)
+                    .unwrap()
+                    .set_cursor_position(Some(Vec2::new(10.0, 10.0)));
+            } else {
+                set_focus(&mut app, window, true);
+            }
+            frame_at(&mut app, 270);
+            assert!(!app.world().contains_resource::<Script>());
+            assert_eq!(app.world().resource::<RunStatus>().phase(), Phase::Failed);
+            assert!(
+                !app.world()
+                    .resource::<ButtonInput<MouseButton>>()
+                    .pressed(MouseButton::Left)
+            );
+            assert_eq!(interaction(&app, give), Interaction::None);
+            assert!(
+                !app.world()
+                    .resource::<crate::clicks::LeftButton>()
+                    .clicked(give)
+            );
+        }
+    }
+
+    #[test]
+    fn a_native_same_button_press_is_preserved_when_the_script_yields() {
+        let (mut app, window, give) = pressed_give();
+        app.world_mut()
+            .write_message(bevy::input::mouse::MouseButtonInput {
+                button: MouseButton::Left,
+                state: bevy::input::ButtonState::Pressed,
+                window,
+            });
+        frame_at(&mut app, 270);
+        assert!(!app.world().contains_resource::<Script>());
+        assert!(
+            app.world()
+                .resource::<ButtonInput<MouseButton>>()
+                .pressed(MouseButton::Left)
+        );
+        assert_eq!(interaction(&app, give), Interaction::None);
+        assert!(
+            !app.world()
+                .resource::<crate::clicks::LeftButton>()
+                .clicked(give)
+        );
+    }
+
+    #[test]
+    fn stop_runtime_limit_and_session_loss_cancel_background_mouse_presses() {
+        use crate::online::testing as session;
+        use eq_client_core::world::Link;
+        for cause in ["stop", "runtime", "session"] {
+            let (mut app, _, give) = pressed_give();
+            let ms = match cause {
+                "stop" => {
+                    app.world_mut()
+                        .resource_mut::<RunControl>()
+                        .request(Request::Stop);
+                    270
+                }
+                "runtime" => u64::try_from(MAX_RUNTIME.as_millis()).unwrap() + 1,
+                _ => {
+                    let mut online = app.world_mut().resource_mut::<crate::online::OnlineState>();
+                    online.enabled = true;
+                    session::admit(&mut online, 1, session::player(7));
+                    app.world_mut().resource_mut::<Script>().session = RunSession::Admitted;
+                    session::link(
+                        &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+                        Link::Ended,
+                    );
+                    270
+                }
+            };
+            frame_at(&mut app, ms);
+            assert!(!app.world().contains_resource::<Script>());
+            assert!(
+                !app.world()
+                    .resource::<ButtonInput<MouseButton>>()
+                    .pressed(MouseButton::Left),
+                "{cause}"
+            );
+            assert!(
+                !app.world()
+                    .resource::<crate::clicks::LeftButton>()
+                    .clicked(give),
+                "{cause}"
+            );
+            assert_eq!(interaction(&app, give), Interaction::None, "{cause}");
+        }
+    }
+
+    #[test]
+    fn background_clicks_keep_real_geometry_and_coverage_checks() {
+        let (mut app, _) = background(vec![Step::Click(ClickTarget::Give)]);
+        let (give, _) = give_and_attack(&mut app);
+        app.world_mut()
+            .spawn((Button, laid_out(Vec2::new(240.0, 360.0), 100.0, 10)));
+        for ms in [0, 10, 260, 270] {
+            frame_at(&mut app, ms);
+        }
+        assert_ne!(interaction(&app, give), Interaction::Pressed);
+        assert_eq!(app.world().resource::<RunStatus>().phase(), Phase::Failed);
+        assert!(
+            !app.world()
+                .resource::<ButtonInput<MouseButton>>()
+                .pressed(MouseButton::Left)
+        );
+    }
+
+    #[test]
+    fn viewer_factory_preserves_mode_and_separates_local_offline_permissions() {
+        for mode in [InputMode::Attended, InputMode::Background] {
+            for online in [false, true] {
+                let config = crate::ViewerConfig {
+                    script_input_mode: mode,
+                    ..default()
+                };
+                let run = Script::for_viewer(
+                    Program::parse("wait 10", Path::new(".")).unwrap(),
+                    &config,
+                    online,
+                );
+                assert_eq!(run.input_mode, mode);
+                assert!(!run.local);
+                assert_eq!(run.offline, !online);
+                assert!(!run.owns_input);
+            }
+        }
     }
 
     /// Runs a frame `ms` into the run.

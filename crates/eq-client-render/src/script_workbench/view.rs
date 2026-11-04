@@ -385,6 +385,7 @@ fn phase_text(phase: Phase) -> &'static str {
         Phase::Idle => "Ready",
         Phase::Running => "Running",
         Phase::WaitingForFocus => "Waiting for the client to regain focus",
+        Phase::WaitingForInput => "Background run: leave the client unfocused to continue",
         Phase::WaitingForPointer => "Move the real pointer outside the window to continue",
         Phase::Pausing => "Pausing after the current action",
         Phase::Paused => "Paused between actions",

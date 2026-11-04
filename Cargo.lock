@@ -2662,6 +2662,7 @@ dependencies = [
  "libeq",
  "linkify",
  "rodio",
+ "serde_json",
  "url",
  "webbrowser",
  "zeroize",

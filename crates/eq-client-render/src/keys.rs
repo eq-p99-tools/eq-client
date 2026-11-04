@@ -660,10 +660,9 @@ pub(crate) struct Keys<'w, 's> {
 }
 
 impl Keys<'_, '_> {
-    /// Whether the window has focus, or a script that runs unattended drives
-    /// it: two clients on one PC take turns holding the focus, and the one
-    /// without it still takes its script's keys and clicks. Clicks count from
-    /// then on, though the chat may still have the keyboard.
+    /// Whether native focus or the current script's input policy owns the
+    /// window. Background scripts qualify only after their per-frame native
+    /// input guard succeeds; local/offline default behavior is retained.
     pub(crate) fn window_focused(&self) -> bool {
         self.windows.single().is_ok_and(|window| window.focused)
             || self

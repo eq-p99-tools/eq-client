@@ -7,6 +7,15 @@
 - Post automatic-food preferences only to admissions offering `Capability::Meals`,
   keeping the saved choice on servers without meal support. Inventory support
   alone no longer enables the meal option or sends an unsupported zone-in update.
+- Add explicit `--script-background` input ownership and a non-activating
+  initial window request. Returning to the client cancels held script input;
+  default launches, local-only commands and gameplay guards retain their rules.
+  API: `script::InputMode`, `Script::input_mode`, `Script::for_viewer`,
+  `ViewerConfig::script_input_mode` and `Phase::WaitingForInput`.
+- Add opt-in `--script-control` local file requests for explicit scenario starts,
+  targeted Stop and retained status, including recovery after terminal errors.
+  Runs share the workbench executor and limits; active runs reject replacement.
+  API: `ViewerConfig::script_control` and `Script::for_viewer`.
 
 - Apply item moves to a local projection and send them in order without
   waiting for the worker between clicks; scribing waits for queued moves. A

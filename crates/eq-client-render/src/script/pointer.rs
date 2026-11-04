@@ -355,7 +355,7 @@ pub(crate) fn draw(
     }
     let factor = scale.as_ref().map_or(1.0, |scale| scale.0);
     let at = pointer
-        .filter(|_| script.is_some())
+        .filter(|_| script.as_ref().is_some_and(|script| script.pointer_owned()))
         .map(|pointer| pointer.0 / factor);
     // The skin's cursor in the UI's pixels: its own pixels are the
     // display's, not the window's logical ones.

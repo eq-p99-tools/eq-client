@@ -15,7 +15,7 @@ use bevy::{input_focus::InputFocus, prelude::*, text::EditableText};
 
 use crate::{
     background::Background,
-    script::{Phase, Request, RunControl, RunStatus, Script, Step},
+    script::{Phase, Request, RunControl, RunStatus, Script},
     windows::{Shown, WindowId},
 };
 use document::Document;
@@ -311,18 +311,11 @@ fn controls(
                     state.message = "Add an action before running.".into();
                 }
                 Ok(program) => {
-                    if !settings.0.local_session
-                        && program.instructions().iter().any(|instruction| {
-                            matches!(instruction.step(), Step::Gm(_) | Step::Chat(_))
-                        })
-                    {
-                        state.message =
-                            "gm and chat require a network-enforced local test session.".into();
+                    if let Err(error) = program.check_local_commands(settings.0.local_session) {
+                        state.message = error.to_string();
                         continue;
                     }
-                    let script = Script::from_program(program)
-                        .local_session(settings.0.local_session)
-                        .offline_preview(!online.enabled);
+                    let script = Script::for_viewer(program, &settings.0, online.enabled);
                     commands.insert_resource(script.status().clone());
                     commands.insert_resource(RunControl::default());
                     commands.insert_resource(script);
@@ -362,6 +355,7 @@ fn poll(mut state: ResMut<Workbench>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::script::Step;
     use bevy::input_focus::FocusCause;
 
     #[test]
