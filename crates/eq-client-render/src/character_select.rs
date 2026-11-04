@@ -1,4 +1,4 @@
-//! Pre-zone character selection uses server slots, never typed names.
+//! Pre-zone entry uses server slots; deletion captures an explicitly named identity.
 //! Occupied slots select a character; available empty slots start creation
 //! in the installed skin's list or the client's fallback list.
 use super::{online::OnlineState, outbox::Outbox, windows::WindowId};
@@ -8,6 +8,9 @@ use eq_client_core::{CharacterChoice, ClientCommand};
 
 pub(super) struct Selection {
     id: u64,
+    connection_id: u64,
+    deletion: Option<eq_client_core::deletion::Rules>,
+    held: bool,
     entries: Vec<CharacterChoice>,
     selected: Option<u8>,
     submitted: bool,
@@ -21,6 +24,9 @@ impl Selection {
     pub fn new(id: u64, entries: Vec<CharacterChoice>) -> Self {
         Self {
             id,
+            connection_id: 0,
+            deletion: None,
+            held: false,
             selected: entries.first().map(|entry| entry.slot),
             entries,
             submitted: false,
@@ -42,9 +48,41 @@ impl Selection {
         self
     }
 
+    pub(super) fn with_deletion(
+        mut self,
+        scope: eq_client_core::deletion::Scope,
+        rules: Option<eq_client_core::deletion::Rules>,
+    ) -> Self {
+        self.connection_id = scope.connection_id;
+        self.deletion = rules;
+        self
+    }
+
+    pub(super) const fn scope(&self) -> eq_client_core::deletion::Scope {
+        eq_client_core::deletion::Scope {
+            connection_id: self.connection_id,
+            selection_id: self.id,
+        }
+    }
+
+    pub(super) fn choose_exact(&mut self, name: &str) -> bool {
+        if self.submitted || self.held {
+            return false;
+        }
+        let mut entries = self.entries.iter().filter(|entry| entry.name == name);
+        let Some(entry) = entries.next() else {
+            return false;
+        };
+        if entries.next().is_some() {
+            return false;
+        }
+        self.selected = Some(entry.slot);
+        true
+    }
+
     pub(super) fn can_create(&self) -> Option<eq_client_core::creation::Rules> {
         self.creation
-            .filter(|rules| !self.submitted && self.entries.len() < rules.slots())
+            .filter(|rules| !self.submitted && !self.held && self.entries.len() < rules.slots())
     }
 
     /// Whether this empty slot can start a character draft under the list's policy.
@@ -95,6 +133,9 @@ impl Selection {
 
     /// Highlights a listed character by exact server spelling, ignoring case.
     pub(super) fn choose_named(&mut self, name: &str) -> bool {
+        if self.held {
+            return false;
+        }
         let slot = self
             .entries
             .iter()
@@ -119,7 +160,7 @@ impl Selection {
     /// Asks once; a refused request leaves the choice available for another
     /// click, and the outbox says why.
     fn enter(&mut self, outbox: &Outbox, world: &eq_client_core::world::ClientWorld) {
-        if self.submitted {
+        if self.submitted || self.held {
             return;
         }
         let Some(slot) = self.selected else {
@@ -157,6 +198,7 @@ pub(super) struct Root;
 pub(super) enum Action {
     Choose(u8),
     Enter,
+    Delete,
     /// The skin's Quit: back to the login screen, or out of the game in a
     /// run without one (`login::quit`).
     Quit,
@@ -175,10 +217,15 @@ pub(crate) struct SlotName {
 /// is up, and rebuilds the cover and the client's own panel only when their
 /// state changes.
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one selection frame orders confirmation, selection input and panel refresh"
+)]
 pub(super) fn update(
     mut commands: Commands,
     mut online: ResMut<OnlineState>,
     mut editor: ResMut<crate::character_create::Editor>,
+    mut asked: ResMut<crate::confirm::Asked>,
     lines: Res<crate::notices::Lines>,
     outbox: Res<Outbox>,
     keys: crate::keys::Keys,
@@ -208,11 +255,54 @@ pub(super) fn update(
             shown.close(WindowId::CharacterSelect);
         }
     }
+    // Invalidate only this owner's stale dialog; other confirmation questions
+    // keep their own answer lifecycle.
+    if let Some(question @ crate::confirm::Question::DeleteCharacter { .. }) = asked.question()
+        && (!visible
+            || online
+                .deletion
+                .prompt()
+                .map(crate::character_delete::question)
+                != Some(question))
+    {
+        asked.withdraw();
+    }
+    if let Some(request) = online.deletion.prompt().cloned() {
+        if !visible {
+            online.deletion.cancel(&request);
+        } else if let Some(yes) = asked.answer(crate::character_delete::question(&request)) {
+            if yes {
+                if let Err(error) =
+                    online.submit_character_deletion(&request, request.name(), &outbox)
+                {
+                    online.deletion.cancel(&request);
+                    if let Some(selection) = online.selection.as_mut() {
+                        selection.message = error;
+                    }
+                }
+            } else {
+                online.deletion.cancel(&request);
+                if let Some(selection) = online.selection.as_mut() {
+                    selection.message.clear();
+                }
+            }
+        }
+    }
+    let blocked = online.deletion.blocked();
+    let deletion_message = online.deletion.message();
+    if let Some(selection) = online.selection.as_mut() {
+        selection.held = blocked;
+        if let Some(message) = deletion_message {
+            selection.message = message;
+        }
+    }
+    let mut ask_delete = false;
     let (choosing, world) = online.choosing();
     if visible
         && focused
         && let Some(selection) = choosing
         && !selection.submitted
+        && !blocked
     {
         for action in buttons.iter() {
             if editor.active() {
@@ -229,6 +319,9 @@ pub(super) fn update(
                     }
                 }
                 Action::Enter => selection.enter(&outbox, world),
+                Action::Delete => {
+                    ask_delete = selection.deletion.is_some() && selection.selected.is_some();
+                }
                 Action::Quit => (),
             }
         }
@@ -250,6 +343,9 @@ pub(super) fn update(
                 selection.selected = Some(selection.entries[next].slot);
             }
         }
+        if keys.just_pressed(KeyCode::Delete) && selection.deletion.is_some() {
+            ask_delete = true;
+        }
         if keys.just_pressed(KeyCode::KeyC) {
             editor.open(selection, world);
         }
@@ -257,17 +353,34 @@ pub(super) fn update(
             selection.enter(&outbox, world);
         }
     }
+    if ask_delete && !editor.active() {
+        match online.prepare_character_deletion() {
+            Ok(request) => {
+                if !asked.ask(crate::character_delete::question(&request)) {
+                    online.deletion.cancel(&request);
+                }
+            }
+            Err(error) => {
+                if let Some(selection) = online.selection.as_mut() {
+                    selection.message = error;
+                }
+            }
+        }
+    }
     let status = lines.status.text();
+    let fallback_confirmation = !skinned.has(WindowId::Confirmation);
     let skinned = skinned.has(WindowId::CharacterSelect);
     let showing = preview.showing();
     let signature = format!(
-        "{visible}:{skinned}:{showing}:{status}:{:?}",
+        "{visible}:{skinned}:{fallback_confirmation}:{showing}:{status}:{:?}",
         online.selection.as_ref().map(|s| (
             s.id,
             s.selected,
             s.submitted,
             &s.message,
             s.creation,
+            s.deletion,
+            s.held,
             s.entries.len()
         ))
     );
@@ -280,6 +393,9 @@ pub(super) fn update(
     }
     if !visible {
         return;
+    }
+    if fallback_confirmation && let Some(request) = online.deletion.prompt() {
+        deletion_confirmation(&mut commands, request);
     }
     // Once Enter World is asked for, the loading screen covers the list
     // until the zone admits the character and the zone's own cover takes
@@ -425,6 +541,7 @@ fn character_line(
 /// or with the client's own panel on it. While the highlighted character
 /// stands in the scene (`showing`), the cover is clear and lets the pointer
 /// through to the camera, and the client's own panel moves to the left.
+#[allow(clippy::too_many_lines, reason = "one character-selection panel tree")]
 fn spawn(
     commands: &mut Commands,
     selection: Option<&Selection>,
@@ -497,6 +614,7 @@ fn spawn(
         ))
         .with_children(|panel| {
             theme::label(panel, "CHARACTER SELECT", Size::Display);
+            button(panel, Action::Quit, "Back / Disconnect", false);
             let Some(selection) = selection else {
                 theme::label(panel, guidance(selection, status), Size::Large);
                 return;
@@ -521,8 +639,11 @@ fn spawn(
             } else if selection.full() {
                 theme::label(panel, "All character slots are occupied.", Size::Label);
             }
-            if selection.selected.is_some() && !selection.submitted {
+            if selection.selected.is_some() && !selection.submitted && !selection.held {
                 button(panel, Action::Enter, "Enter World", true);
+                if selection.deletion.is_some() {
+                    button(panel, Action::Delete, "Delete Character", false);
+                }
             }
             if let Some(line) = line {
                 theme::label(panel, line, Size::Label);
@@ -530,6 +651,62 @@ fn spawn(
             theme::label(panel, guidance(Some(selection), status), Size::Label);
         });
     });
+}
+
+/// A skin without the confirmation window still offers the same explicit
+/// Yes/No question. Both buttons feed the ordinary confirmation owner.
+fn deletion_confirmation(commands: &mut Commands, request: &eq_client_core::deletion::Request) {
+    commands
+        .spawn((
+            Root,
+            GlobalZIndex(super::windows::Layer::Tool.base() + 100),
+            Button,
+            Node {
+                position_type: PositionType::Absolute,
+                width: percent(100),
+                height: percent(100),
+                align_items: AlignItems::Center,
+                justify_content: JustifyContent::Center,
+                ..default()
+            },
+            BackgroundColor(theme::COVER),
+        ))
+        .with_children(|root| {
+            root.spawn((
+                Node {
+                    width: px(440),
+                    max_width: percent(95),
+                    padding: UiRect::all(px(24)),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: px(12),
+                    ..default()
+                },
+                BackgroundColor(theme::TITLE_BAR),
+            ))
+            .with_children(|panel| {
+                theme::label(
+                    panel,
+                    &format!(
+                        "Delete character {}? This may permanently remove the character.",
+                        request.name()
+                    ),
+                    Size::Large,
+                );
+                theme::button_with(
+                    panel,
+                    crate::confirm::AnswerButton(true),
+                    "Yes, delete this character",
+                    Size::Large,
+                );
+                theme::button_with(
+                    panel,
+                    crate::confirm::AnswerButton(false),
+                    "No, keep this character",
+                    Size::Large,
+                );
+                button(panel, Action::Quit, "Back / Disconnect", false);
+            });
+        });
 }
 
 fn button(parent: &mut ChildSpawnerCommands, action: Action, text: &str, selected: bool) {
@@ -647,6 +824,7 @@ mod tests {
             .insert_resource(front)
             .init_resource::<crate::notices::Lines>()
             .init_resource::<crate::character_create::Editor>()
+            .init_resource::<crate::confirm::Asked>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<super::super::navigation::NavigationKeys>()
             .init_resource::<crate::windows::Shown>()
@@ -664,6 +842,138 @@ mod tests {
             PrimaryWindow,
         ));
         app
+    }
+
+    fn deletion_state(connection_id: u64, selection_id: u64) -> OnlineState {
+        let mut state = OnlineState::new(true);
+        crate::online::testing::news(
+            &mut state,
+            [eq_client_core::WorldEvent::CharacterSelection {
+                connection_id,
+                selection_id,
+                characters: vec![listed(0, "Disposable", Some(4))],
+                creation: Some(eq_client_core::creation::Rules::Titanium),
+                deletion: Some(eq_client_core::deletion::Rules::Titanium),
+            }],
+        );
+        let list = state.world().characters().unwrap().clone();
+        state.deletion.listed(&list);
+        state.selection = Some(
+            Selection::new(selection_id, list.characters.clone())
+                .with_creation(list.creation)
+                .with_deletion(list.scope(), list.deletion),
+        );
+        state
+    }
+
+    #[test]
+    fn ordinary_named_confirmation_sends_only_on_yes_and_keeps_back_available() {
+        for yes in [false, true] {
+            let (tx, rx) = std::sync::mpsc::sync_channel(4);
+            let state = deletion_state(7, 9);
+            let mut app = screen_app(
+                state,
+                crate::login::testing::past_login(),
+                Outbox::new(Some(tx)),
+            );
+            crate::clicks::testing::install(&mut app);
+            app.init_resource::<crate::ViewerSettings>()
+                .init_resource::<crate::chat::ChatState>()
+                .add_systems(Update, crate::confirm::buttons.before(update));
+            app.update();
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(KeyCode::Delete);
+            app.update();
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .clear();
+            app.update();
+            assert!(rx.try_recv().is_err());
+            let state = app.world().resource::<OnlineState>();
+            let request = state.deletion.prompt().unwrap().clone();
+            assert_eq!(request.name(), "Disposable");
+            assert_eq!(
+                request.scope(),
+                eq_client_core::deletion::Scope {
+                    connection_id: 7,
+                    selection_id: 9
+                }
+            );
+            assert!(
+                app.world_mut()
+                    .query::<&Action>()
+                    .iter(app.world())
+                    .any(|action| matches!(action, Action::Quit))
+            );
+            let answer = app
+                .world_mut()
+                .query::<(Entity, &crate::confirm::AnswerButton)>()
+                .iter(app.world())
+                .find_map(|(entity, answer)| (answer.0 == yes).then_some(entity))
+                .unwrap();
+            crate::clicks::testing::click(&mut app, answer);
+            if yes {
+                assert!(
+                    matches!(rx.try_recv().unwrap(), ClientCommand::DeleteCharacter(sent) if sent == request)
+                );
+                assert!(app.world().resource::<OnlineState>().deletion.blocked());
+                app.world_mut()
+                    .resource_mut::<ButtonInput<KeyCode>>()
+                    .press(KeyCode::Enter);
+                app.update();
+                assert!(rx.try_recv().is_err(), "pending deletion must hold entry");
+            } else {
+                assert!(rx.try_recv().is_err());
+                assert!(!app.world().resource::<OnlineState>().deletion.blocked());
+            }
+        }
+    }
+
+    #[test]
+    fn script_uses_the_ordinary_identity_sender_and_stale_confirmation_cannot_send() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let outbox = Outbox::new(Some(tx));
+        let mut state = deletion_state(7, 9);
+        assert!(
+            state
+                .script_character_deletion("disposable", "disposable", &outbox)
+                .is_err()
+        );
+        assert!(
+            state
+                .script_character_deletion("Disposable", "Other", &outbox)
+                .is_err()
+        );
+        assert!(rx.try_recv().is_err());
+        let old = state.prepare_character_deletion().unwrap();
+        let new_list = eq_client_core::world::CharacterList {
+            connection_id: 8,
+            selection_id: 9,
+            characters: vec![listed(0, "Disposable", Some(4))],
+            creation: None,
+            deletion: Some(eq_client_core::deletion::Rules::Titanium),
+        };
+        state.deletion.listed(&new_list);
+        assert!(
+            state
+                .submit_character_deletion(&old, "Disposable", &outbox)
+                .is_err()
+        );
+        assert!(rx.try_recv().is_err());
+        let mut state = deletion_state(8, 9);
+        let request = state
+            .script_character_deletion("Disposable", "Disposable", &outbox)
+            .unwrap();
+        assert!(
+            matches!(rx.try_recv().unwrap(), ClientCommand::DeleteCharacter(sent) if sent == request)
+        );
+        assert!(
+            state
+                .script_character_deletion("Disposable", "Disposable", &outbox)
+                .is_err()
+        );
+        assert!(rx.try_recv().is_err());
     }
 
     /// The layers character select's roots are drawn at.
@@ -999,6 +1309,7 @@ mod tests {
             .insert_resource(crate::outbox::Outbox::new(Some(tx)))
             .init_resource::<crate::notices::Lines>()
             .init_resource::<crate::character_create::Editor>()
+            .init_resource::<crate::confirm::Asked>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<super::super::navigation::NavigationKeys>()
             .init_resource::<crate::windows::Shown>()

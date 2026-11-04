@@ -138,6 +138,8 @@ pub(super) enum Does {
     CharacterSlot(u8),
     /// Enters the world with the chosen character.
     EntersWorld,
+    /// Opens the ordinary named character-deletion confirmation.
+    DeletesCharacter,
     /// Leaves the game, from the character list.
     Quits,
     /// Nothing yet: drawn greyed out, as the client's own windows show what
@@ -316,11 +318,12 @@ pub(super) fn own_button(id: &str, owner: WindowId) -> Option<Does> {
 /// What a button of the skin's character list does: its eight character
 /// buttons show the slots of the server's list in order, Enter World enters
 /// with the chosen one and Quit leaves the game. Empty slots open creation.
-/// Deleting and rotating characters, the tutorial, exploring and returning
+/// Rotating characters, the tutorial, exploring and returning
 /// home are not in this client yet.
 pub(super) fn character_button(id: &str) -> Does {
     match id {
         "Enter_World_Button" => Does::EntersWorld,
+        "Delete_Button" => Does::DeletesCharacter,
         "Quit_Button" => Does::Quits,
         _ => id
             .strip_prefix("Char")

@@ -58,12 +58,27 @@ enum OwnDeath {
 /// The characters the world server offered to play.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CharacterList {
+    /// Process-monotonic world-connection generation supplied by the session.
+    pub connection_id: u64,
     /// Names this offer, which a choice must repeat.
     pub selection_id: u64,
     /// The characters, in their server slots.
     pub characters: Vec<CharacterChoice>,
     /// Creation policy supplied by the session with this list.
     pub creation: Option<crate::creation::Rules>,
+    /// Native deletion capability, scoped to this list and connection.
+    pub deletion: Option<crate::deletion::Rules>,
+}
+
+impl CharacterList {
+    /// Exact scope required by a named deletion confirmation.
+    #[must_use]
+    pub const fn scope(&self) -> crate::deletion::Scope {
+        crate::deletion::Scope {
+            connection_id: self.connection_id,
+            selection_id: self.selection_id,
+        }
+    }
 }
 
 /// The world's last answer to a character the player asked for.
@@ -554,10 +569,13 @@ impl ClientWorld {
                 refusal,
             } => self.server_refused(*selection_id, refusal, news),
             WorldEvent::CharacterSelection {
+                connection_id,
                 selection_id,
                 characters,
                 creation,
-            } => self.offered(*selection_id, characters, *creation, news),
+                deletion,
+            } => self.offered((*connection_id, *selection_id), characters, (*creation, *deletion), news),
+            WorldEvent::CharacterDeletion(update) => news.replies.push(Reply::CharacterDeletion(update.clone())),
             WorldEvent::Entered {
                 capabilities,
                 choices,

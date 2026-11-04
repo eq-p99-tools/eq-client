@@ -264,6 +264,8 @@ fn characters(news: Res<News>, settings: Res<super::ViewerSettings>, switches: R
         }
     };
     news.game(WorldEvent::CharacterSelection {
+        connection_id: 1,
+        deletion: None,
         creation: Some(switches.0.creation.as_ref().map_or_else(
             || match settings.0.installed_client {
                 eq_client_assets::ui::InstalledClient::Titanium => {

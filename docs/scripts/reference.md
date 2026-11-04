@@ -74,4 +74,36 @@ These commands support scripts that deliberately start before world entry. They 
 - `select name`: choose a character and enter the world.
 - `create name race class gender deity start_zone primary_stat`: request character creation from selection where the server policy supports it, using numeric identifiers; the final stat receives the free stat points. `start_zone` is the city's Titanium choice number (1 Qeynos, 2 Halas, and so on); a generation that sends its own value for the same city, such as the Mac-era start-zone IDs, has it translated before sending. This command is not restricted to local servers by the script parser.
 - `create_refused name race class gender deity start_zone primary_stat`: the same request where the server is expected to refuse it (a name already taken, for one); the step passes on the refusal and ends the script if the character is created.
+- `delete NAME confirm NAME`: request deletion of the exact listed character,
+  repeating its spelling and case. It uses the ordinary named confirmation/sender
+  and never chooses a character by row position. The step waits for an explicit
+  absence observation in the current connection's refreshed list. A refusal,
+  unconfirmed outcome, session change or bounded timeout stops the script before
+  following actions, including `quit`; it never retries or disconnects by itself.
+  Ordinary Back / Disconnect remains available. Absence is not a server deletion
+  acknowledgment or proof of database purge.
 - `wait_online`: wait for a zone admission and player before continuing.
+
+## Character-deletion report
+
+The `character_deletion` field in `Script report` and `Character deletion
+observation` log events is JSON, version 1:
+
+```json
+{"version":1,"current_scope":{"connection_id":7,"selection_id":12},"update":{"request":{"scope":{"connection_id":7,"selection_id":11},"request_id":3,"name":"Disposable"},"progress":{"ObservedAbsent":{"scope":{"connection_id":7,"selection_id":12}}}}}
+```
+
+`current_scope` and `update` can be null. The request scope is the confirmed
+original list. `progress` is the ordinary typed enum: `{"NotSent":"Reason"}`,
+`{"Pending":null}` or `{"Pending":{"scope":{...},"presence":"Present"}}`,
+`{"Unconfirmed":{"reason":"TimedOut","observation":null}}`
+(with a scoped observation when available), or `{"ObservedAbsent":{"scope":{...}}}`.
+Other unconfirmed reason labels are `ConnectionEnded` and `SendFailed`.
+Local refusal labels are `Unsupported`, `StaleList`, `StaleConnection`, `NotListed`,
+`Busy`, `Duplicate`, `NotAtSelection`, and `QueueUnavailable`.
+
+Consumers must match the complete original request and require the observed scope
+to equal `current_scope` on the same connection. An older absence remains a
+historical snapshot. There is no deleted/success boolean, and prose is not a
+machine contract. These reports may contain character identities; retain them as
+private evidence.

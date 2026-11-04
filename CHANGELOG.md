@@ -59,6 +59,13 @@
   `use_distance` and `hinge_fraction`; re-export `doors::eqmac`.
 - Keep autorun during a continuously positive speed recalibration. Actual
   withdrawal, admission and unsafe readiness resets still clear it.
+- Add ordinary named character deletion with an explicit Yes/No confirmation,
+  safe Back/Disconnect while uncertain, and shared `delete NAME confirm NAME`
+  scripting. Reports distinguish pending, unconfirmed, local refusal and absence
+  observed in a specific refreshed list; absence never claims permanent deletion.
+  Breaking API migration: character lists/events require connection generation
+  and deletion capability; commands/events/replies add typed deletion variants.
+  Keep actual session/list scope, including across reconnects and late replies.
 
 - Apply item moves to a local projection and send them in order without
   waiting for the worker between clicks; scribing waits for queued moves. A

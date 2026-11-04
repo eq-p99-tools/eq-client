@@ -3,6 +3,26 @@
 [Documentation index](docs/README.md) · [Development](docs/development.md) ·
 [Server policy and evidence](SUPPORT.md)
 
+## Named character deletion
+
+`eq-network` owns the native codec, selected server capability, checked world
+connection generation, current-list validation, single submission and list
+observations. `CharacterSelection` and `world::CharacterList` require actual
+`connection_id` and `deletion` fields. `ClientCommand::DeleteCharacter` and
+`WorldEvent::CharacterDeletion` add exhaustive-match cases; core forwards the
+latter as `world::Reply::CharacterDeletion` without optimistically changing names.
+Do not fill missing scope with a fake connection ID. Offline preview fixtures
+explicitly offer no deletion capability.
+
+The renderer's one `character_delete::State` owns frozen named confirmations,
+request IDs, queue submission and lifecycle presentation. Ordinary Yes/No and
+`delete NAME confirm NAME` share it and the normal Outbox. New lists void unsent
+confirmation, connection changes void old intents, and uncertain submissions
+hold creation/entry with Back/Disconnect available. A result can establish only
+presence/absence in its explicit received list scope, never causal deletion or
+backend purge. Script reports serialize that typed evidence with its current
+scope; they do not parse display wording or invent a success flag.
+
 ## Ownership
 
 | Layer | Owns | Must not own |

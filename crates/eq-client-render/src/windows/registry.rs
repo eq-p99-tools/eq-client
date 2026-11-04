@@ -640,7 +640,8 @@ impl WindowId {
             // Where the skin places it, above the other windows until it is
             // answered; Escape leaves the question open.
             Self::Confirmation => Description {
-                layer: Layer::Popup,
+                // Also used at character selection: it must sit above screens.
+                layer: Layer::Tool,
                 closes_on_escape: false,
                 persists: false,
                 ..floating("", Placement::TopLeft(550.0, 350.0), false, &[])

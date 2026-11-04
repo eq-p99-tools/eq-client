@@ -25,6 +25,7 @@ pub(super) struct OnlineState {
     world: ClientWorld,
     /// The character choice in progress, from the world's character list.
     pub selection: Option<super::character_select::Selection>,
+    pub deletion: super::character_delete::State,
     /// The current zone's regions, from its assets.
     pub regions: eq_client_assets::regions::ZoneRegions,
     pub enabled: bool,
@@ -45,6 +46,88 @@ impl OnlineState {
     /// What the server has told the client.
     pub(super) fn world(&self) -> &ClientWorld {
         &self.world
+    }
+
+    /// Captures the exact currently selected identity for the ordinary dialog.
+    pub(crate) fn prepare_character_deletion(
+        &mut self,
+    ) -> Result<eq_client_core::deletion::Request, String> {
+        let selection = self
+            .selection
+            .as_ref()
+            .ok_or("Character selection is unavailable")?;
+        if selection.entering() {
+            return Err("Character entry is already in progress".into());
+        }
+        let name = selection
+            .entry(selection.chosen().ok_or("Select a character first")?)
+            .ok_or("Character is not listed")?
+            .name
+            .clone();
+        let list = self
+            .world
+            .characters()
+            .filter(|list| list.scope() == selection.scope())
+            .ok_or("Character list is no longer current")?;
+        self.deletion.prepare(list, &name)
+    }
+
+    /// Shared sender for the ordinary Yes answer and the explicit script step.
+    pub(crate) fn submit_character_deletion(
+        &mut self,
+        request: &eq_client_core::deletion::Request,
+        confirmation: &str,
+        outbox: &crate::outbox::Outbox,
+    ) -> Result<(), String> {
+        let selection = self
+            .selection
+            .as_ref()
+            .filter(|selection| !selection.entering())
+            .ok_or("Character selection is unavailable")?;
+        let list = self
+            .world
+            .characters()
+            .filter(|list| list.scope() == selection.scope())
+            .ok_or("Character list is no longer current")?;
+        let selected = selection
+            .chosen()
+            .and_then(|slot| selection.entry(slot))
+            .map(|entry| entry.name.as_str());
+        self.deletion
+            .submit(request, confirmation, list, selected, |request| {
+                outbox
+                    .send(
+                        &self.world,
+                        eq_client_core::ClientCommand::DeleteCharacter(request),
+                    )
+                    .map_err(|error| error.to_string())
+            })
+    }
+
+    /// An explicitly named script intent chooses by exact identity, then uses
+    /// the same confirmation and sender as the ordinary selection screen.
+    pub(crate) fn script_character_deletion(
+        &mut self,
+        name: &str,
+        confirmation: &str,
+        outbox: &crate::outbox::Outbox,
+    ) -> Result<eq_client_core::deletion::Request, String> {
+        if self.deletion.blocked() {
+            return Err("Character deletion is already awaiting attention".into());
+        }
+        if name != confirmation {
+            return Err("Deletion confirmation must repeat the exact name".into());
+        }
+        if !self
+            .selection
+            .as_mut()
+            .is_some_and(|selection| selection.choose_exact(name))
+        {
+            return Err("Deletion requires an exact listed character name".into());
+        }
+        let request = self.prepare_character_deletion()?;
+        self.submit_character_deletion(&request, confirmation, outbox)?;
+        Ok(request)
     }
 
     /// Queues and projects a move through the world's single inventory owner.
@@ -83,6 +166,7 @@ impl OnlineState {
     /// said, keeping the player's own choices, and no character choice is
     /// in progress.
     pub(super) fn restart(&mut self) {
+        self.deletion.ended();
         self.world.restart();
         self.selection = None;
         self.held.clear();
@@ -196,6 +280,7 @@ impl OnlineState {
         Self {
             world: ClientWorld::default(),
             selection: None,
+            deletion: default(),
             regions: eq_client_assets::regions::ZoneRegions::default(),
             enabled,
             loading: default(),
@@ -283,9 +368,13 @@ impl Panels<'_> {
             self.sounds.play_cue(cue);
         }
         if changes.characters {
+            if let Some(list) = state.world.characters() {
+                state.deletion.listed(list);
+            }
             state.selection = state.world.characters().map(|list| {
                 super::character_select::Selection::new(list.selection_id, list.characters.clone())
                     .with_creation(list.creation)
+                    .with_deletion(list.scope(), list.deletion)
             });
         }
         if let Some(selection) = state.selection.as_mut() {
@@ -304,6 +393,9 @@ impl Panels<'_> {
         }
         for reply in &changes.replies {
             match reply {
+                Reply::CharacterDeletion(update) => {
+                    state.deletion.hear(update, state.world.characters());
+                }
                 Reply::ItemUse {
                     session_id,
                     request_id,
@@ -377,6 +469,12 @@ impl Panels<'_> {
 
     /// Forgets what the world's reset made stale on screen and in the panels.
     fn forget(&mut self, reason: Reset, state: &mut OnlineState) {
+        if matches!(
+            reason,
+            Reset::Entered | Reset::Camped | Reset::Lost { ended: true, .. }
+        ) {
+            state.deletion.ended();
+        }
         if matches!(reason, Reset::Entered | Reset::Camped) {
             // Requests and choices made in the old admission are void.
             *self.combat = super::combat::CombatState::default();

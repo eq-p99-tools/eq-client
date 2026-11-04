@@ -1275,6 +1275,7 @@ fn behave(
         Does::BookPlace(_)
         | Does::TurnsSpellbook(_)
         | Does::CharacterSlot(_)
+        | Does::DeletesCharacter
         | Does::EntersWorld
         | Does::Quits => {
             listed(drawn, does, skin());
@@ -1309,6 +1310,7 @@ fn listed(drawn: &mut EntityCommands, does: Does, skin: SkinButton) {
             drawn.insert((Button, crate::spellbook::TurnsPages(forward), skin))
         }
         Does::CharacterSlot(slot) => drawn.insert((Button, Action::Choose(slot), skin, tooltip())),
+        Does::DeletesCharacter => drawn.insert((Button, Action::Delete, skin)),
         Does::EntersWorld => drawn.insert((Button, Action::Enter, skin)),
         Does::Quits => drawn.insert((Button, Action::Quit, skin)),
         _ => drawn,
@@ -1472,6 +1474,7 @@ fn caption(
         | Does::Picks(_)
         | Does::Trades(_)
         | Does::TurnsSpellbook(_)
+        | Does::DeletesCharacter
         | Does::EntersWorld
         | Does::Quits
         | Does::Nothing => {
@@ -3106,13 +3109,12 @@ mod tests {
             Some(Does::EntersWorld)
         ));
         assert!(matches!(does("Quit_Button", list), Some(Does::Quits)));
+        assert!(matches!(
+            does("Delete_Button", list),
+            Some(Does::DeletesCharacter)
+        ));
         // What this client lacks yet is greyed.
-        for lacking in [
-            "Delete_Button",
-            "Rotate_Button",
-            "Explore_Button",
-            "Go_Home_Button",
-        ] {
+        for lacking in ["Rotate_Button", "Explore_Button", "Go_Home_Button"] {
             assert!(
                 matches!(does(lacking, list), Some(Does::Nothing)),
                 "{lacking}"

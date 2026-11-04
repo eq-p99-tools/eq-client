@@ -3884,6 +3884,8 @@ fn the_login_servers_list_lasts_until_the_chosen_world_lists_characters() {
     let changes = game(
         &mut world,
         WorldEvent::CharacterSelection {
+            connection_id: 1,
+            deletion: None,
             creation: Some(crate::creation::Rules::Titanium),
             selection_id: 9,
             characters: Vec::new(),
@@ -4694,4 +4696,73 @@ fn skills_language_selector_follows_the_world_rules_lifetime() {
         world.language_zero_selector(),
         Some(LanguageZeroSelector(0))
     );
+}
+
+#[test]
+fn character_lists_reject_older_scopes_and_accept_a_new_connection_with_reused_list_id() {
+    fn offered(connection_id: u64, selection_id: u64) -> WorldEvent {
+        WorldEvent::CharacterSelection {
+            connection_id,
+            selection_id,
+            characters: Vec::new(),
+            creation: None,
+            deletion: Some(crate::deletion::Rules::Titanium),
+        }
+    }
+    let mut world = ClientWorld::default();
+    game(&mut world, offered(7, 1));
+    game(&mut world, offered(7, 2));
+    assert!(game(&mut world, offered(7, 1)).ignored);
+    assert!(game(&mut world, offered(7, 2)).ignored);
+    assert!(game(&mut world, offered(6, 9)).ignored);
+    assert!(!game(&mut world, offered(8, 1)).ignored);
+    assert_eq!(
+        world.characters().unwrap().scope(),
+        crate::deletion::Scope {
+            connection_id: 8,
+            selection_id: 1
+        }
+    );
+}
+
+#[test]
+fn a_deletion_update_is_a_typed_reply_without_optimistically_removing_a_character() {
+    let mut world = ClientWorld::default();
+    let character = crate::CharacterChoice {
+        slot: 0,
+        name: "Disposable".into(),
+        level: None,
+        zone_id: None,
+        look: None,
+    };
+    game(
+        &mut world,
+        WorldEvent::CharacterSelection {
+            connection_id: 7,
+            selection_id: 1,
+            characters: vec![character.clone()],
+            creation: None,
+            deletion: Some(crate::deletion::Rules::Titanium),
+        },
+    );
+    let request = crate::deletion::Request::new(
+        world.characters().unwrap().scope(),
+        1,
+        "Disposable",
+        "Disposable",
+    )
+    .unwrap();
+    let update = crate::deletion::Update {
+        request,
+        progress: crate::deletion::Progress::ObservedAbsent {
+            scope: crate::deletion::Scope {
+                connection_id: 7,
+                selection_id: 2,
+            },
+        },
+    };
+    let changes = game(&mut world, WorldEvent::CharacterDeletion(update.clone()));
+    assert_eq!(changes.replies, [Reply::CharacterDeletion(update)]);
+    assert!(!changes.characters);
+    assert_eq!(world.characters().unwrap().characters, vec![character]);
 }

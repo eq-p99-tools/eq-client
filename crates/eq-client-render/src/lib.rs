@@ -38,6 +38,7 @@ mod book_delete;
 mod buffs;
 mod character;
 mod character_create;
+mod character_delete;
 mod character_select;
 mod chat;
 mod clicks;

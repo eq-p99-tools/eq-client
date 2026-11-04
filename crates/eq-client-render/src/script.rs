@@ -148,6 +148,8 @@ pub struct Script {
     /// The count of the world's creation answers when a `create` step sent
     /// its request, so the step waits for the next.
     created_before: Option<u64>,
+    /// Full intent captured by the ordinary character-deletion owner.
+    deleting: Option<eq_client_core::deletion::Request>,
     /// The queued menu entry's opener, first waiting for its guarded click
     /// to finish, then for the menu's state after the local release. A
     /// release does not establish that the menu's handler opened it.
@@ -227,6 +229,7 @@ impl Script {
             approached: None,
             chase_seen: None,
             created_before: None,
+            deleting: None,
             menu_opening: None,
         }
     }
@@ -936,6 +939,29 @@ pub(super) fn drive(
         }
         let done = match &step {
             Step::Wait(duration) => elapsed >= *duration,
+            Step::DeleteCharacter { .. } => {
+                let result = script
+                    .deleting
+                    .as_ref()
+                    .ok_or_else(|| "Character deletion lost its request identity".to_owned())
+                    .and_then(|request| online.deletion.observed(request));
+                let result = result.and_then(|done| {
+                    if !done && elapsed > MAX_ONLINE_WAIT { Err("Character deletion observation timed out; outcome is unconfirmed. Reconnect to inspect the list.".into()) }
+                    else { Ok(done) }
+                });
+                match result {
+                    Ok(false) => false,
+                    Ok(true) => {
+                        info!(character_deletion = %online.deletion.report(), "Character deletion observation");
+                        true
+                    }
+                    Err(reason) => {
+                        info!(character_deletion = %online.deletion.report(), "Character deletion observation");
+                        script.stop(&mut keys, &mut mouse, &reason);
+                        return;
+                    }
+                }
+            }
             Step::Create(character) | Step::CreateRefused(character) => {
                 let refusal_expected = matches!(step, Step::CreateRefused(_));
                 match answered(
@@ -1480,6 +1506,7 @@ pub(super) fn drive(
         script.quiet = None;
         script.awaited = None;
         script.approached = None;
+        script.deleting = None;
     }
     script.progress.complete_step();
     if !script.advance(now) {
@@ -1513,7 +1540,27 @@ pub(super) fn drive(
     script.progress.begin(line);
     info!(?step, "Script step");
     match &step {
+        Step::DeleteCharacter { name, confirmation } => {
+            match online.script_character_deletion(name, confirmation, &observed.1) {
+                Ok(request) => {
+                    script.deleting = Some(request);
+                    info!(character_deletion = %online.deletion.report(), "Character deletion observation");
+                }
+                Err(reason) => {
+                    script.stop(&mut keys, &mut mouse, &reason);
+                    return;
+                }
+            }
+        }
         Step::Create(character) | Step::CreateRefused(character) => {
+            if online.deletion.blocked() {
+                script.stop(
+                    &mut keys,
+                    &mut mouse,
+                    "Character deletion is awaiting attention; Back / Disconnect is available",
+                );
+                return;
+            }
             let sent = online.selection.as_ref().is_some_and(|selection| {
                 let mut character = character.clone();
                 if let Some(rules) = selection.can_create() {
@@ -1632,6 +1679,14 @@ pub(super) fn drive(
             return;
         }
         Step::Select(name) => {
+            if online.deletion.blocked() {
+                script.stop(
+                    &mut keys,
+                    &mut mouse,
+                    "Character deletion is awaiting attention; Back / Disconnect is available",
+                );
+                return;
+            }
             if !online
                 .selection
                 .as_mut()

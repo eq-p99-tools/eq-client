@@ -70,8 +70,18 @@ blocked; Disconnect leaves the session. After a 60-second timeout, reconnect and
 check the character list before retrying. Success returns to the refreshed list
 with the new character selected; Enter World remains a separate action.
 
-Character deletion is not implemented. The optional scripting `create` command
-remains available through the same networking policies.
+To delete a character where the server offers deletion, select it and choose
+Delete Character (Delete on the keyboard). The confirmation names the exact
+character; Yes submits once, and No cancels. Any new character list invalidates
+an unanswered confirmation. Creation and Enter World wait while a submitted
+attempt is uncertain. Back / Disconnect stays available, including in the
+fallback list; reconnect to inspect the list if the outcome is unconfirmed.
+
+The client reports a character absent only when a refreshed list omits that name.
+This is a list observation, not a correlated deletion acknowledgment or proof of
+permanent removal. A name still listed, a timeout, or a disconnect proves no
+deletion outcome. The optional script commands use the same ordinary policies
+and sender; `delete NAME confirm NAME` requires the exact listed spelling.
 
 ## Login presets
 

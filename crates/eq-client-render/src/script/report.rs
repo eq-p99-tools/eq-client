@@ -53,6 +53,7 @@ pub(super) fn state(
         world = ?online.world().world_name(),
         far_clip = ?online.world().far_clip(),
         connected = online.world().connected(),
+        character_deletion = %online.deletion.report(),
         ?position,
         ?posture,
         hp = ?online.world().hit_points(),

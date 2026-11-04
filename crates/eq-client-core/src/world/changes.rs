@@ -40,6 +40,8 @@ pub struct Moved {
 /// The session's answer to a request the front end made itself.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Reply {
+    /// Local deletion lifecycle with explicitly scoped list evidence; never an ACK.
+    CharacterDeletion(crate::deletion::Update),
     /// An item use was submitted to the server, or refused.
     ItemUse {
         /// The admission it was made in.
