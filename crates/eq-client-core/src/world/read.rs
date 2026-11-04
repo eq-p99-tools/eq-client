@@ -195,6 +195,33 @@ impl ClientWorld {
         self.session_id
     }
 
+    /// The admission's interpreted own-player stun state. None preserves
+    /// unknown/unconfigured semantics; charm, roots and death are separate.
+    #[must_use]
+    pub const fn stun_state(&self) -> Option<crate::control::StunState> {
+        match self.own_stun {
+            Some((_, state)) => Some(state),
+            None => None,
+        }
+    }
+
+    /// The latest stun transition revision, including expiry. Consumers can
+    /// withdraw queued intent even when a complete stun crossed one frame.
+    #[must_use]
+    pub const fn stun_revision(&self) -> Option<u64> {
+        match self.own_stun {
+            Some((revision, _)) => Some(revision),
+            None => None,
+        }
+    }
+
+    /// Whether a verified own stun is active. False is not proof of known
+    /// clear state: inspect [`Self::stun_state`] when that distinction matters.
+    #[must_use]
+    pub fn is_stunned(&self) -> bool {
+        self.stun_state() == Some(crate::control::StunState::Stunned)
+    }
+
     /// The zone's short name, as the server gave it.
     #[must_use]
     pub fn zone(&self) -> &str {

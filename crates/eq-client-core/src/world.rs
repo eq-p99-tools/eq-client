@@ -13,6 +13,7 @@ mod belongings;
 mod casting;
 mod changes;
 mod character;
+mod control;
 mod group;
 mod inventory_moves;
 mod items;
@@ -219,6 +220,9 @@ pub struct ClientWorld {
 
     // The admission: from entering a zone until the next admission.
     session_id: Option<u64>,
+    /// The session's interpreted stun state and latest revision; None is
+    /// unknown/unconfigured, not proof of clear control.
+    own_stun: Option<(u64, crate::control::StunState)>,
     /// What the admission lets the player do.
     capabilities: Vec<crate::Capability>,
     /// What the admission leaves to the player, which they may do once they
@@ -636,6 +640,8 @@ impl ClientWorld {
                 },
                 news,
             ),
+            WorldEvent::OwnStun { session_id, revision, state } =>
+                self.project_stun(*session_id, *revision, *state, news),
             WorldEvent::MotionSent {
                 session_id,
                 position,
@@ -690,9 +696,10 @@ impl ClientWorld {
 
             // Nothing here shows the world's other rules,
             // its chat server, a zone it says is down, the zone's weather or
-            // its header beyond the sky and the clip yet, nor stops the
-            // player while stunned, charmed, held by the server or berserk,
-            // spins them, or shows their hiding's end. The target
+            // its header beyond the sky and the clip yet, nor applies
+            // charm or other server control, spins players or shows their
+            // hiding's end. Berserk remains informational; raw stun durations
+            // are interpreted by the session's OwnStun. The target
             // the server sets and whom it targets, a quest's reward and ding
             // (the session puts a reward's coins in the purse), a sacrifice
             // offer and a player becoming a corpse wait for their front ends
@@ -1392,6 +1399,7 @@ impl ClientWorld {
         self.raid_invitation = None;
         self.raid_flow = raid::RaidFlow::default();
         self.death = None;
+        self.own_stun = None;
         self.death_threshold = None;
         self.bled_out = None;
         self.forget_zone();

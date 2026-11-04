@@ -536,7 +536,7 @@ fn camp_lines(camp: &CampStatus, messages: Option<&Messages>) -> Vec<Said> {
             .collect(),
         CampStatus::Abandoned { by } => {
             let id = match by {
-                eq_client_core::CampEnd::Standing => 12683,
+                eq_client_core::CampEnd::Standing | eq_client_core::CampEnd::Stunned => 12683,
                 eq_client_core::CampEnd::Moving | eq_client_core::CampEnd::Other => 12290,
             };
             said(id, &[]).into_iter().collect()
@@ -1304,6 +1304,12 @@ mod tests {
         assert_eq!(
             said(CampStatus::Abandoned {
                 by: CampEnd::Standing
+            }),
+            [(Place::Chat, Said::official("Stood."))]
+        );
+        assert_eq!(
+            said(CampStatus::Abandoned {
+                by: CampEnd::Stunned
             }),
             [(Place::Chat, Said::official("Stood."))]
         );

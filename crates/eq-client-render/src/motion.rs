@@ -75,6 +75,10 @@ pub(super) struct Controls {
     /// (`ClimbReach`), so it goes again at each admission and whenever the
     /// body's climb changes.
     climb_sent: Option<(u64, f32)>,
+    /// Admission and revision last used to withdraw voluntary input.
+    stun_revision: Option<(u64, u64)>,
+    /// Emission permission, separate from actual held-key/autorun intent.
+    stunned: bool,
 }
 
 /// How far a jump from standing still has come on a client that crouches
@@ -133,6 +137,8 @@ impl Default for Controls {
             last_answer: None,
             held: None,
             climb_sent: None,
+            stun_revision: None,
+            stunned: false,
         }
     }
 }
@@ -272,13 +278,15 @@ impl Controls {
         (yaw, heading): (f32, f32),
         looking_ahead: bool,
     ) -> MotionInput {
+        let focused = focused && !self.stunned;
+        let looking_ahead = looking_ahead && !self.stunned;
         // A complete tap can arrive between render frames. Preserve its press edge
         // for this one sample without mutating Bevy's shared held-key state.
         let keys = sample_keys(keys, map);
         let held = map.holding(&keys, scripted);
         let mut intent = movement_input(
             held,
-            (focused, looking_ahead, self.autorun),
+            (focused, looking_ahead, self.autorun && !self.stunned),
             yaw,
             heading,
             self.speed.unwrap_or(0.0),
@@ -317,8 +325,32 @@ impl Controls {
             last_answer: self.last_answer,
             last_jump: self.last_jump,
             walking: self.walking,
+            stun_revision: self.stun_revision,
             ..Self::default()
         };
+    }
+
+    /// A control transition never revokes calibrated speed or existing
+    /// vertical momentum. Remember revisions so start/expiry in one frame
+    /// still discard pending taps, facing and a crouched jump. Native input
+    /// collection (0x4a1d74) leaves actual autorun/held intent in place while
+    /// permission is blocked; fresh samples may resume after expiry.
+    fn observe_stun(&mut self, world: &ClientWorld) -> bool {
+        let revision = world.session_id().zip(world.stun_revision());
+        let changed = revision != self.stun_revision;
+        self.stun_revision = revision;
+        let stunned = world.is_stunned();
+        self.stunned = stunned;
+        if stunned || (changed && revision.is_some()) {
+            self.taps = TapBuffer::default();
+            self.jump = None;
+            self.crouch = None;
+            self.facing = None;
+        }
+        if changed && revision.is_some() {
+            self.moving = false;
+        }
+        stunned
     }
 
     /// Stops prediction without revoking the session's calibration. A pending
@@ -469,6 +501,7 @@ pub(super) fn input(
         return;
     }
     let detached = cameras.single().is_ok_and(|(_, free)| free);
+    let stunned = controls.observe_stun(online.world());
     if detached {
         controls.autorun = false;
         controls.taps = TapBuffer::default();
@@ -479,7 +512,7 @@ pub(super) fn input(
         controls.held = Some(Held::Withdrawn);
         return;
     }
-    let focused = keys.focused() && !detached && controls.speed.is_some();
+    let focused = keys.focused() && !detached && !stunned && controls.speed.is_some();
     if focused && keys.pressed(Act::Walk) && controls.walk_speed.is_some() {
         controls.walking = !controls.walking;
     }
@@ -1281,6 +1314,142 @@ fn arc(from: f32, to: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn stun_pauses_autorun_and_discards_queued_input_without_banking_distance() {
+        let (mut app, receiver) = app();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        {
+            let mut controls = app.world_mut().resource_mut::<Controls>();
+            controls.autorun = true;
+            controls.jump = Some(Instant::now());
+            controls.crouch = Some(Crouch::Until(Instant::now()));
+            controls.facing = Some(256.0);
+            controls.taps.0.push((KeyCode::KeyW, Instant::now()));
+        }
+        let update = |app: &mut App, revision, state| {
+            let mut online = app.world_mut().resource_mut::<online::OnlineState>();
+            crate::online::testing::news(
+                &mut online,
+                [eq_client_core::WorldEvent::OwnStun {
+                    session_id: 11,
+                    revision,
+                    state,
+                }],
+            );
+        };
+        update(&mut app, 1, eq_client_core::control::StunState::Stunned);
+        app.update();
+        assert!(receiver.try_recv().is_err());
+        let controls = app.world().resource::<Controls>();
+        assert!(controls.speed.is_some());
+        assert!(controls.autorun && controls.jump.is_none() && controls.crouch.is_none());
+        assert!(controls.taps.0.is_empty() && controls.facing.is_none());
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        update(&mut app, 2, eq_client_core::control::StunState::Clear);
+        app.update();
+        let ClientCommand::Move(resumed) = receiver.try_recv().expect("autorun should resume")
+        else {
+            panic!("unexpected command");
+        };
+        assert!(resumed.position.x.hypot(resumed.position.y) <= 0.601);
+        assert!(app.world().resource::<Controls>().autorun);
+        accept(&mut app, &resumed);
+        // A whole stun can pass between render frames. Its revision still
+        // withdraws intent accumulated before the session's interruption.
+        {
+            let mut controls = app.world_mut().resource_mut::<Controls>();
+            controls.jump = Some(Instant::now());
+            controls.last_accepted = Instant::now()
+                .checked_sub(Duration::from_millis(150))
+                .unwrap();
+        }
+        update(&mut app, 3, eq_client_core::control::StunState::Stunned);
+        update(&mut app, 4, eq_client_core::control::StunState::Clear);
+        app.update();
+        let controls = app.world().resource::<Controls>();
+        assert!(controls.autorun && controls.jump.is_none());
+        assert!(
+            !receiver
+                .try_iter()
+                .any(|command| matches!(command, ClientCommand::Jump { .. }))
+        );
+    }
+
+    #[test]
+    fn a_physically_held_key_resumes_after_stun_without_release_and_repress() {
+        let (mut app, receiver) = app();
+        let update = |app: &mut App, revision, state| {
+            let mut online = app.world_mut().resource_mut::<online::OnlineState>();
+            crate::online::testing::news(
+                &mut online,
+                [eq_client_core::WorldEvent::OwnStun {
+                    session_id: 11,
+                    revision,
+                    state,
+                }],
+            );
+        };
+        update(&mut app, 1, eq_client_core::control::StunState::Stunned);
+        app.update();
+        assert!(receiver.try_recv().is_err());
+        update(&mut app, 2, eq_client_core::control::StunState::Clear);
+        app.update();
+        let ClientCommand::Move(resumed) = receiver.try_recv().expect("held key should resume")
+        else {
+            panic!("unexpected command");
+        };
+        assert!(resumed.position.x < 0.0);
+        assert!(resumed.position.x.hypot(resumed.position.y) <= 0.601);
+    }
+
+    #[test]
+    fn stun_keeps_passive_falling_and_blocks_held_horizontal_input() {
+        let (mut app, receiver) = app();
+        {
+            let mut online = app.world_mut().resource_mut::<online::OnlineState>();
+            let mut player = online.world().player().unwrap().clone();
+            player.position = world_position([0.0, 53.0, 0.0], 0.0);
+            crate::online::testing::admit(&mut online, 11, player);
+            crate::online::testing::news(
+                &mut online,
+                [eq_client_core::WorldEvent::OwnStun {
+                    session_id: 11,
+                    revision: 1,
+                    state: eq_client_core::control::StunState::Stunned,
+                }],
+            );
+        }
+        {
+            let mut controls = app.world_mut().resource_mut::<Controls>();
+            controls.airborne = Some(AirborneController::default());
+            controls.autorun = true;
+            controls.last_accepted = Instant::now()
+                .checked_sub(Duration::from_millis(150))
+                .unwrap();
+        }
+        app.update();
+        let commands: Vec<_> = receiver.try_iter().collect();
+        let request = commands
+            .iter()
+            .find_map(|command| match command {
+                ClientCommand::Move(request) => Some(request),
+                _ => None,
+            })
+            .expect("passive fall missing");
+        assert_eq!(request.mode, MovementMode::Fall);
+        assert!(request.position.x.abs() < f32::EPSILON && request.position.y.abs() < f32::EPSILON);
+        assert!(request.position.z < 53.0);
+        assert!(
+            !commands
+                .iter()
+                .any(|command| matches!(command, ClientCommand::Jump { .. }))
+        );
+    }
 
     /// A size 6 human, standing 3.75 above its feet.
     const HUMAN: super::PlayerBody = super::PlayerBody {

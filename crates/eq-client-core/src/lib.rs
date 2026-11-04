@@ -39,6 +39,7 @@ pub use eq_network_game::combat;
 pub use eq_network_game::command::GameCommand as ClientCommand;
 pub use eq_network_game::command::Posture;
 pub use eq_network_game::confirmations;
+pub use eq_network_game::control;
 pub use eq_network_game::corpses;
 pub use eq_network_game::creation;
 pub use eq_network_game::deletion;

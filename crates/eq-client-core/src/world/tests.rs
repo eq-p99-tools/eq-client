@@ -1,4 +1,5 @@
 mod loot_requests;
+mod own_stun;
 mod wear;
 
 use super::*;
