@@ -3992,6 +3992,22 @@ mod tests {
     }
 
     #[test]
+    fn a_stun_fixture_keeps_both_local_session_gates() {
+        let program = Program::parse("gm stun 8000", std::path::Path::new(".")).unwrap();
+        assert_eq!(
+            program.instructions()[0].step(),
+            &Step::Gm("stun 8000".into())
+        );
+        assert!(program.check_local_commands(false).is_err());
+        assert!(program.check_local_commands(true).is_ok());
+        assert!(gm_chat("stun 8000", false).is_err());
+        assert_eq!(
+            gm_chat("stun 8000", true).unwrap(),
+            eq_client_core::OutboundChat::Say("#stun 8000".into())
+        );
+    }
+
+    #[test]
     fn scripted_clicks_reach_only_buttons_in_open_windows() {
         use bevy::ecs::system::SystemState;
         let mut world = World::new();

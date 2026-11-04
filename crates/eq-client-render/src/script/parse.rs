@@ -13,7 +13,7 @@ pub(super) const MAX_WAIT: Duration = Duration::from_mins(2);
 const MAX_TRACE: Duration = Duration::from_secs(10);
 const MAX_WALK: Duration = Duration::from_mins(1);
 /// `EQEmu` GM commands a script may send, without the leading `#`.
-const GM_COMMANDS: [&str; 35] = [
+const GM_COMMANDS: [&str; 36] = [
     // The server's own view of the player's stats, weight and coins among
     // them, said back in chat; reads only.
     "showstats",
@@ -43,6 +43,8 @@ const GM_COMMANDS: [&str; 35] = [
     "npcloot",
     "castspell",
     "damage",
+    // A server-issued stun for a local test fixture; duration is milliseconds.
+    "stun",
     "givemoney",
     "zone",
     "goto",

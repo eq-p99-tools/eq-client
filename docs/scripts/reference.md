@@ -59,6 +59,8 @@ Approach, walk and chase hold the camera-relative forward command, independent o
 - `slash command [arguments]`: run one of the supported game slash commands, without a leading slash.
   `slash camp desktop` uses the ordinary camp destination and current QoL exit choice.
 - `gm command [arguments]`: an allowed GM command on a network-constrained local test session only.
+  `gm stun 8000` requests an 8,000-millisecond server stun for a local fixture.
+  Check received `own_stun` state; command submission alone does not establish the effect.
 - `chat channel message`: chat on a network-constrained local test session only.
 - `quit`: close the client.
 

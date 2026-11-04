@@ -451,7 +451,15 @@ impl Panels<'_> {
     }
 
     /// The session sent the player's move, or refused it.
-    fn moved(&mut self, moved: &Moved, drawn: Option<Transform>) {
+    fn moved(&mut self, admission_id: Option<u64>, moved: &Moved, drawn: Option<Transform>) {
+        debug!(
+            admission_id = ?admission_id,
+            position = ?moved.position,
+            outcome = if moved.refused.is_some() { "local_refused" } else { "transport_submitted" },
+            refused = ?moved.refused,
+            "Current-admission movement worker result; no server acknowledgment implied"
+        );
+
         self.motion.accepted();
         self.motion.refused.clone_from(&moved.refused);
         if let Some(transform) = drawn {
@@ -670,7 +678,7 @@ pub(super) fn receive(
         }
         panels.show(&changes, &mut state, messages.as_deref(), &mut chat);
         if let Some(moved) = &changes.moved {
-            panels.moved(moved, scene.player());
+            panels.moved(state.world.session_id(), moved, scene.player());
         }
         // Offline, the zone on screen is the viewer's own, and the preview
         // admits its player into it.
