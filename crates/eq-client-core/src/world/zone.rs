@@ -52,10 +52,10 @@ impl Zone {
     /// Spawns appear, or replace what had their IDs; each is drawn anew.
     pub(super) fn appear(&mut self, spawns: &[SpawnState], revision: &mut u64, now: Instant) {
         for spawn in spawns {
-            // A new spawn has not been considered, whatever had its ID, and
-            // one arriving as a corpse was not seen dying.
-            self.considered.remove(&spawn.spawn_id);
-            self.deaths.remove(&spawn.spawn_id);
+            // A new incarnation cannot inherit the previous actor's motions,
+            // casts, landings or assessment; an arriving corpse was not seen
+            // dying either. The same cleanup applies without a Despawn first.
+            self.vanish(spawn.spawn_id);
             *revision = revision.wrapping_add(1);
             self.spawns.insert(
                 spawn.spawn_id,

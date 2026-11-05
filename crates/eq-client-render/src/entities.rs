@@ -619,6 +619,86 @@ mod tests {
     use crate::online::testing;
 
     #[test]
+    fn a_frozen_remote_spawn_still_plays_its_authoritative_death_pose() {
+        use bevy::{ecs::system::RunSystemOnce, mesh::skinning::SkinnedMesh};
+        use eq_client_core::{Death, PostureState, WorldEvent};
+        use std::time::{Duration, Instant};
+
+        let mut world = World::new();
+        character::testing::stores(&mut world);
+        world.init_resource::<Time>();
+        world.init_resource::<crate::spellbook::SpellNames>();
+        world
+            .resource_mut::<Time>()
+            .advance_by(Duration::from_millis(50));
+        let mut online = crate::online::OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(9));
+        testing::spawns(&mut online, vec![testing::pet(5, 9)]);
+        testing::news(
+            &mut online,
+            [WorldEvent::Posture {
+                spawn_id: 5,
+                posture: PostureState::Frozen,
+            }],
+        );
+        world.insert_resource(online);
+        let prepared = character::testing::prepared(&mut world);
+        let root = character::testing::drawn(&mut world, &prepared);
+        world
+            .entity_mut(root)
+            .insert(RemoteEntity::new(5, None, 6.0));
+        let joints = world
+            .query::<&SkinnedMesh>()
+            .single(&world)
+            .unwrap()
+            .joints
+            .clone();
+        let pose = |world: &World| {
+            joints
+                .iter()
+                .map(|joint| world.get::<Transform>(*joint).unwrap().to_matrix())
+                .collect::<Vec<_>>()
+        };
+        let before = pose(&world);
+        world.run_system_once(character::animate).unwrap();
+        assert_eq!(pose(&world), before, "living frozen actors keep their pose");
+
+        let fell = Instant::now().checked_sub(Duration::from_secs(2)).unwrap();
+        let mut online = world.resource_mut::<crate::online::OnlineState>();
+        testing::news_at(
+            &mut online,
+            [WorldEvent::Death(Death {
+                spawn_id: 5,
+                killer_id: 9,
+                corpse_id: 5,
+                bind_zone_id: 0,
+                corpse_name: None,
+            })],
+            fell,
+        );
+        assert_eq!(online.world().posture(5), Some(PostureState::Frozen));
+        assert_eq!(
+            online.world().spawn(5).unwrap().state.kind,
+            SpawnKind::NpcCorpse
+        );
+        // Reconciliation gives the corpse the retained death time when it
+        // draws its model again. Its prior posture must not block that pose.
+        world.entity_mut(root).insert(character::Corpse {
+            fell: Some(fell),
+            ..default()
+        });
+        world.run_system_once(character::animate).unwrap();
+        let fallen = pose(&world);
+        let expected =
+            eq_client_assets::characters::CharacterAsset::testing().joints("D05", 2.0, false);
+        assert_ne!(fallen, before);
+        assert_eq!(fallen, expected);
+        // Repeated frames hold the corpse's final pose rather than restarting.
+        world.run_system_once(character::animate).unwrap();
+        assert_eq!(pose(&world), expected);
+    }
+
+    #[test]
     fn spawns_load_as_far_as_the_view_could_show_one() {
         let projection = Projection::Perspective(PerspectiveProjection {
             fov: std::f32::consts::FRAC_PI_2,

@@ -956,6 +956,47 @@ fn each_spawns_latest_swing_is_kept_with_a_count_that_never_repeats() {
 }
 
 #[test]
+fn a_replaced_spawn_cannot_complete_or_keep_the_previous_actors_cast() {
+    let mut world = admitted();
+    let began = |spell_id| {
+        WorldEvent::Spell(SpellUpdate::Began {
+            caster_id: 5,
+            spell_id,
+            duration_ms: 3000,
+        })
+    };
+    let mut landing = effect(5, 4);
+    landing.caster_id = 5;
+    game(&mut world, began(42));
+    game(&mut world, WorldEvent::SpellEffect(landing.clone()));
+    game(&mut world, swing(5, 5));
+    game(&mut world, began(43));
+    game(&mut world, swing(9, 8));
+    let own_motion = world.motion_of(9);
+    assert!(world.motion_of(5).is_some());
+    assert!(world.completed_cast_of(5).is_some());
+    assert!(world.landing_on(5).is_some());
+    assert_eq!(world.casting_of(5), Some(43));
+
+    // A Spawn record is a new incarnation even without a preceding Despawn.
+    game(&mut world, WorldEvent::Spawns(vec![spawn(5)]));
+    assert_eq!(world.motion_of(5), None);
+    assert_eq!(world.completed_cast_of(5), None);
+    assert_eq!(world.landing_on(5), None);
+    assert_eq!(world.casting_of(5), None);
+    assert_eq!(world.motion_of(9), own_motion);
+    // The former actor's delayed landing cannot complete the new one's cast.
+    game(&mut world, WorldEvent::SpellEffect(landing.clone()));
+    assert_eq!(world.completed_cast_of(5), None);
+    // New received activity still works and has a later motion identity.
+    game(&mut world, began(44));
+    landing.spell_id = 44;
+    game(&mut world, WorldEvent::SpellEffect(landing));
+    assert_eq!(world.completed_cast_of(5).unwrap().spell_id, 44);
+    assert!(world.completed_cast_of(5).unwrap().count > own_motion.unwrap().count);
+}
+
+#[test]
 fn a_cast_completes_when_its_spell_lands_while_it_is_under_way() {
     use std::time::Duration;
     let mut world = admitted();
