@@ -142,6 +142,13 @@ impl AirborneController {
         self.drift
     }
 
+    /// Bounds carry into the existing fall mode after a grounded diagonal.
+    pub fn limit_drift(&mut self, speed: f32) {
+        if speed.is_finite() && speed >= 0.0 {
+            self.drift = self.drift.clamp_length_max(speed);
+        }
+    }
+
     /// Resets momentum after a correction, teleport, or a new admission.
     pub fn reset(&mut self) {
         *self = Self::default();

@@ -173,6 +173,8 @@ pub struct MotionGrant {
     pub walk_units_per_second: Option<f32>,
     /// Moving sideways, when calibrated apart.
     pub strafe_units_per_second: Option<f32>,
+    /// Lateral rates when holding longitudinal input in the calibrated ground mode.
+    pub diagonal: crate::DiagonalRates,
     /// Whether the session sends falling samples.
     pub falls: bool,
 }
@@ -649,6 +651,7 @@ impl ClientWorld {
                 backward_units_per_second,
                 walk_units_per_second,
                 strafe_units_per_second,
+                diagonal,
                 falls,
             } => self.grant_motion(
                 *session_id,
@@ -657,6 +660,7 @@ impl ClientWorld {
                     backward_units_per_second: *backward_units_per_second,
                     walk_units_per_second: *walk_units_per_second,
                     strafe_units_per_second: *strafe_units_per_second,
+                    diagonal: *diagonal,
                     falls: *falls,
                 },
                 news,

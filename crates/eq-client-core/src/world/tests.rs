@@ -606,6 +606,7 @@ fn input_acceptance_is_current_and_never_supplies_movement_permission() {
     game(
         &mut world,
         WorldEvent::MotionState {
+            diagonal: crate::DiagonalRates::default(),
             session_id: 1,
             units_per_second: None,
             backward_units_per_second: None,
@@ -3017,7 +3018,12 @@ fn loot_and_shop_replies_say_what_the_player_got_or_was_refused() {
 
 #[test]
 fn the_session_grants_motion_until_any_reset() {
+    let diagonal = crate::DiagonalRates {
+        run: Some(5.0),
+        walk: None,
+    };
     let grant = |session_id| WorldEvent::MotionState {
+        diagonal,
         session_id,
         units_per_second: Some(20.0),
         backward_units_per_second: None,
@@ -3029,6 +3035,7 @@ fn the_session_grants_motion_until_any_reset() {
     assert!(game(&mut world, grant(2)).ignored);
     assert!(game(&mut world, grant(1)).motion);
     assert_eq!(world.motion().map(|grant| grant.falls), Some(true));
+    assert_eq!(world.motion().map(|grant| grant.diagonal), Some(diagonal));
     connection(&mut world, false, false);
     assert!(world.motion().is_none());
 }

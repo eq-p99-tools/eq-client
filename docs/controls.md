@@ -58,6 +58,12 @@ guards prevent gameplay keys from firing while composing chat, searching the
 map, editing a script or changing a binding. Scripts using `press` use these
 same assignments; their semantic `move` command is independent of the key map.
 
+Titanium sessions can combine forward or backward movement with a sidestep
+while grounded and holding a steady body heading. With mouse-look active,
+the turn keys supply the sidestep. Each component has its own speed budget.
+Collision that exceeds either component's budget and movement at jump or
+fall transitions use the ordinary single-mode path.
+
 Right-clicking a visible character uses its supported interaction, such as
 looting a corpse or opening an in-reach merchant, bank or trainer. Other
 characters, and NPCs beyond the generation's known interaction reach, are

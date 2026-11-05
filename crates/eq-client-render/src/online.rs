@@ -754,6 +754,7 @@ fn log_grant(grant: eq_client_core::world::MotionGrant) {
         backward_units_per_second,
         walk_units_per_second,
         strafe_units_per_second,
+        diagonal,
         falls,
     } = grant;
     if units_per_second.is_none() {
@@ -764,6 +765,7 @@ fn log_grant(grant: eq_client_core::world::MotionGrant) {
             ?backward_units_per_second,
             ?walk_units_per_second,
             ?strafe_units_per_second,
+            ?diagonal,
             falls,
             "Movement granted"
         );
