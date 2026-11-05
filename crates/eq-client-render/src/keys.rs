@@ -11,6 +11,7 @@ use bevy::{prelude::*, window::PrimaryWindow};
 use std::collections::BTreeMap;
 
 pub(crate) mod bindings;
+mod installed;
 pub(crate) mod modifiers;
 pub(crate) mod presses;
 
@@ -251,7 +252,7 @@ pub(crate) fn key_name(key: KeyCode) -> String {
 
 /// Every action's keys: a primary and, for some, an alternate.
 #[derive(Resource, Clone, Debug)]
-pub(crate) struct KeyMap(BTreeMap<Act, Vec<Chord>>);
+pub(crate) struct KeyMap(BTreeMap<Act, [Option<Chord>; 2]>);
 
 impl Default for KeyMap {
     fn default() -> Self {
@@ -423,6 +424,17 @@ fn table_chord(key: eq_client_assets::keys::ScanKey) -> Option<Chord> {
 }
 
 impl KeyMap {
+    /// The selected installation's keyboard seed, before this client's edits.
+    pub(super) fn for_settings(settings: &super::ViewerConfig) -> Self {
+        let mut map = Self::for_client(settings.installed_client);
+        if settings.installed_client == eq_client_assets::ui::InstalledClient::Titanium
+            && let Some(directory) = settings.eq_directory.as_deref()
+        {
+            map.import_titanium_movement(directory);
+        }
+        map
+    }
+
     /// The installed generation's verified table, with only deliberate UI
     /// extensions. An unread table uses Titanium as a fallback, never a
     /// claimed native default for that generation. Saved keys load later.
@@ -430,23 +442,19 @@ impl KeyMap {
         let table = client
             .default_keys()
             .unwrap_or(eq_client_assets::keys::TITANIUM);
-        let mut read: BTreeMap<Act, Vec<Chord>> = BTreeMap::new();
+        let mut read = BTreeMap::<Act, [Option<Chord>; 2]>::new();
         for act in UNBOUND {
-            read.insert(act, Vec::new());
+            read.insert(act, [None; 2]);
         }
         for index in 0..10 {
-            read.insert(Act::BindSlot(index), Vec::new());
-            read.insert(Act::ClearSlot(index), Vec::new());
+            read.insert(Act::BindSlot(index), [None; 2]);
+            read.insert(Act::ClearSlot(index), [None; 2]);
         }
-        // Primaries first, then alternates, as the key list shows them.
-        for alternate in [false, true] {
-            for entry in table.iter().filter(|entry| entry.alternate == alternate) {
-                let (Some(act), Some(chord)) = (act_for(entry.command), table_chord(entry.key))
-                else {
-                    continue;
-                };
-                read.entry(act).or_default().push(chord);
-            }
+        for entry in table {
+            let (Some(act), Some(chord)) = (act_for(entry.command), table_chord(entry.key)) else {
+                continue;
+            };
+            read.entry(act).or_default()[usize::from(entry.alternate)] = Some(chord);
         }
         // EqMac has no native map action. Use Titanium's verified map keys
         // only if the entire native table, including unsupported commands,
@@ -458,36 +466,40 @@ impl KeyMap {
                 .iter()
                 .filter_map(|entry| table_chord(entry.key))
                 .collect();
-            let fallback = eq_client_assets::keys::TITANIUM
+            let mut fallback = eq_client_assets::keys::TITANIUM
                 .iter()
                 .filter(|entry| entry.command == eq_client_assets::keys::Command::Map)
                 .filter_map(|entry| table_chord(entry.key))
-                .filter(|chord| !reserved.contains(chord))
-                .collect();
-            entry.insert(fallback);
+                .filter(|chord| !reserved.contains(chord));
+            entry.insert([fallback.next(), fallback.next()]);
         }
         Self(read)
     }
     /// Every action with its keys, in the key map's order.
-    pub(crate) fn assignments(&self) -> impl Iterator<Item = (Act, &[Chord])> {
-        self.0.iter().map(|(act, chords)| (*act, chords.as_slice()))
+    pub(crate) fn assignments(&self) -> impl Iterator<Item = (Act, &[Option<Chord>; 2])> {
+        self.0.iter().map(|(act, slots)| (*act, slots))
     }
 
     /// The chords bound to an action.
-    pub(crate) fn chords(&self, act: Act) -> &[Chord] {
-        self.0.get(&act).map_or(&[], Vec::as_slice)
+    fn bound(&self, act: Act) -> impl Iterator<Item = Chord> + '_ {
+        self.0.get(&act).into_iter().flatten().flatten().copied()
+    }
+
+    #[cfg(test)]
+    fn chords(&self, act: Act) -> Vec<Chord> {
+        self.bound(act).collect()
     }
 
     /// The keys bound to an action, whatever their modifiers.
     pub(crate) fn keys(&self, act: Act) -> impl Iterator<Item = KeyCode> + '_ {
-        self.chords(act).iter().map(|chord| chord.key)
+        self.bound(act).map(|chord| chord.key)
     }
 
-    /// The action's primary chord as a hint writes it, or nothing if unbound.
+    /// The action's first bound chord as a hint writes it, or nothing if unbound.
     pub(crate) fn label(&self, act: Act) -> String {
-        self.chords(act)
-            .first()
-            .map_or_else(String::new, |chord| chord.label())
+        self.bound(act)
+            .next()
+            .map_or_else(String::new, Chord::label)
     }
 
     /// The action named with its key, as "open the spellbook [B]", or just
@@ -521,9 +533,7 @@ impl KeyMap {
         act: Act,
         presses: &presses::Presses,
     ) -> bool {
-        self.chords(act)
-            .iter()
-            .any(|chord| presses.matches(*chord, keys))
+        self.bound(act).any(|chord| presses.matches(chord, keys))
     }
 
     /// Whether one of the action's keys is held, whatever is held with it.
@@ -708,7 +718,7 @@ pub(crate) mod testing {
             .world()
             .get_resource::<crate::ViewerSettings>()
             .map_or_else(super::KeyMap::default, |settings| {
-                super::KeyMap::for_client(settings.0.installed_client)
+                super::KeyMap::for_settings(&settings.0)
             });
         if !app.world().contains_resource::<super::KeyMap>() {
             app.insert_resource(map);
@@ -724,10 +734,8 @@ pub(crate) mod testing {
     }
 
     fn assign(map: &mut super::KeyMap, act: super::Act, chord: super::Chord) {
-        for chords in map.0.values_mut() {
-            chords.retain(|bound| *bound != chord);
-        }
-        map.0.insert(act, vec![chord]);
+        map.unbind(chord);
+        map.0.insert(act, [Some(chord), None]);
     }
 
     /// A movement test's explicit user map, rather than guessed defaults.
@@ -748,7 +756,7 @@ mod tests {
     fn titanium_starts_with_its_programs_keys() {
         use eq_client_assets::ui::InstalledClient;
         let map = KeyMap::for_client(InstalledClient::Titanium);
-        let keys = |act| map.chords(act).to_vec();
+        let keys = |act| map.chords(act);
         assert_eq!(keys(Act::Autorun), [Chord::key(KeyCode::NumLock)]);
         assert_eq!(
             keys(Act::Forward),
@@ -783,7 +791,7 @@ mod tests {
         // No key does two things.
         let all: Vec<Chord> = map
             .assignments()
-            .flat_map(|(_, chords)| chords.to_vec())
+            .flat_map(|(_, chords)| chords.iter().copied().flatten())
             .collect();
         for (index, chord) in all.iter().enumerate() {
             assert!(!all[index + 1..].contains(chord), "{chord:?}");
@@ -813,7 +821,7 @@ mod tests {
             assert_eq!(map.chords(act), [chord]);
             let owners: Vec<_> = map
                 .assignments()
-                .filter_map(|(owner, chords)| chords.contains(&chord).then_some(owner))
+                .filter_map(|(owner, chords)| chords.contains(&Some(chord)).then_some(owner))
                 .collect();
             assert_eq!(owners, [act]);
         }
@@ -829,7 +837,10 @@ mod tests {
             map.chords(Act::Toggle(WindowId::Spellbook)),
             [Chord::ctrl(KeyCode::KeyB)]
         );
-        let chords: Vec<_> = map.assignments().flat_map(|(_, chords)| chords).collect();
+        let chords: Vec<_> = map
+            .assignments()
+            .flat_map(|(_, chords)| chords.iter().flatten())
+            .collect();
         for (index, chord) in chords.iter().enumerate() {
             assert!(!chords[index + 1..].contains(chord), "{chord:?}");
         }
@@ -851,7 +862,8 @@ mod tests {
                         && table_chord(entry.key) == Some(chord)
                 }));
                 assert!(
-                    !map.assignments().any(|(_, chords)| chords.contains(&chord)),
+                    !map.assignments()
+                        .any(|(_, chords)| chords.contains(&Some(chord))),
                     "{client:?}: {chord:?}"
                 );
             }

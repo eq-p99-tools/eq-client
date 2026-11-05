@@ -13,8 +13,12 @@ Supported commands start from the installed generation's built-in key table.
 Offline startup without a generation uses the same Titanium table as a fallback.
 Saved assignments in this client's shared or character key file take precedence,
 including an explicitly cleared action. Updating defaults does not reset those
-files. The original client's `[KeyMaps]` settings are not imported.
-These are starting defaults, before saved assignments:
+files. Titanium's numeric `[KeyMaps]` movement and posture assignments apply
+over the built-in table. A legacy entry takes priority over a numeric entry
+for the same slot. Legacy clears apply, and other legacy entries and modified
+bindings for held movement leave the slot empty with a diagnostic. Other
+actions and generations use their built-in table. These are the built-in
+defaults:
 
 | Action | Titanium / offline fallback | Mac-era |
 | --- | --- | --- |

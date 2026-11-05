@@ -5,7 +5,7 @@
 //! keeps nothing for is drawn greyed out, as its buttons are.
 use super::{Area, WindowId, at, border, picture, to_f32};
 use crate::inventory::{InventoryState, SplitAction};
-use crate::keys::{KeyGroup, KeyMap, Typing};
+use crate::keys::{Chord, KeyGroup, KeyMap, Typing};
 use crate::options::OptionsState;
 use crate::theme::{self, Size};
 use bevy::{prelude::*, ui::RelativeCursorPosition};
@@ -944,11 +944,8 @@ pub(crate) fn fill_lists(
             }
             let cells = [
                 act.command(),
-                chords
-                    .first()
-                    .map(|chord| chord.label())
-                    .unwrap_or_default(),
-                chords.get(1).map(|chord| chord.label()).unwrap_or_default(),
+                chords[0].map(Chord::label).unwrap_or_default(),
+                chords[1].map(Chord::label).unwrap_or_default(),
             ];
             let row = commands
                 .spawn((

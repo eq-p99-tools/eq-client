@@ -27,8 +27,10 @@ Keyboard defaults come from the installed client's supported native commands;
 startup without a generation falls back to Titanium. Existing key files remain
 overrides, including lines with an empty value. Use Options → Keyboard to change
 or clear a saved assignment; a default change does not migrate it automatically.
-The installation's original `[KeyMaps]` overrides are not imported. See
-[Keyboard](controls.md#keyboard) for native defaults and local UI extensions.
+The client reads Titanium's numeric movement and posture overrides from
+`[KeyMaps]` in `defaults.ini` and `eqclient.ini`, with `eqclient.ini` taking
+precedence. A key file written by Options keeps independent primary and
+alternate slots. See [Keyboard](controls.md#keyboard) for the import scope.
 
 Map background opacity, plain/skin style and position lock use
 `map-view-<world>-<character>.txt`, seeded from `map-view.txt`. Change them with

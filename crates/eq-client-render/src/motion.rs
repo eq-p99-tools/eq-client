@@ -1,6 +1,8 @@
 //! Calibrated P99 input; no movement is generated without a session grant.
 use super::{
-    Collision, OrbitCamera, Player, PlayerBody, camera_relative_direction,
+    Collision, OrbitCamera, Player, PlayerBody,
+    camera::MouseLook,
+    camera_relative_direction,
     keys::{Act, KeyMap},
     online,
 };
@@ -282,14 +284,22 @@ impl Controls {
         scripted: &[Act],
         focused: bool,
         (yaw, heading): (f32, f32),
-        looking_ahead: bool,
+        look: Option<&MouseLook>,
     ) -> MotionInput {
         let focused = focused && !self.stunned;
-        let looking_ahead = looking_ahead && !self.stunned;
+        let looking = look.filter(|look| focused && look.held);
+        let looking_ahead = looking.is_some_and(|look| look.left);
         // A complete tap can arrive between render frames. Preserve its press edge
         // for this one sample without mutating Bevy's shared held-key state.
         let keys = sample_keys(keys, map);
         let held = map.holding(&keys, scripted);
+        let turn = if focused {
+            let turning =
+                |act| scripted.contains(&act) || (looking.is_none() && map.held(&keys, act));
+            f32::from(turning(Act::TurnLeft)) - f32::from(turning(Act::TurnRight))
+        } else {
+            0.0
+        };
         let mut intent = movement_input(
             held,
             (focused, looking_ahead, self.autorun && !self.stunned),
@@ -297,6 +307,7 @@ impl Controls {
             heading,
             self.speed.unwrap_or(0.0),
             self.backward_speed,
+            turn,
         );
         if self.walking && intent.mode == MovementMode::Forward {
             intent.mode = MovementMode::Walk;
@@ -304,7 +315,13 @@ impl Controls {
         }
         // Pure sidesteps have priority over camera-relative keys, but do not
         // combine with forward/back arrows until diagonal wire behavior is measured.
-        let sideways = held.axis(Act::StrafeLeft, Act::StrafeRight);
+        // Only physical turn bindings change meaning while looking. Both
+        // mouse buttons still ask to run forward instead of adding a sidestep.
+        let strafing = |strafe, turn| {
+            held.held(strafe) || (looking.is_some() && !looking_ahead && map.held(&keys, turn))
+        };
+        let sideways = f32::from(strafing(Act::StrafeRight, Act::TurnRight))
+            - f32::from(strafing(Act::StrafeLeft, Act::TurnLeft));
         if focused && sideways != 0.0 && !held.held(Act::Forward) && !held.held(Act::Back) {
             let radians = eq_client_core::render_heading(heading);
             intent.preserve_facing = true;
@@ -540,7 +557,7 @@ pub(super) fn input(
         Res<crate::hud::messages::Messages>,
         ResMut<crate::chat::ChatState>,
     ),
-    look: Option<Res<crate::camera::MouseLook>>,
+    look: Option<Res<MouseLook>>,
 ) {
     let client = settings.0.installed_client;
     if !online.enabled || !online.world().connected() || online.world().is_dead() {
@@ -697,14 +714,13 @@ pub(super) fn input(
     }
     let shown = controls.facing.unwrap_or(current_heading);
     let sampled = controls.taps.take(&keyboard);
-    let looking_ahead = focused && look.is_some_and(|look| look.held && look.left);
     let intent = controls.intent(
         &sampled,
         map,
         keys.scripted(),
         focused,
         (camera.yaw, shown),
-        looking_ahead,
+        look.as_deref(),
     );
     let MotionInput {
         mode,
@@ -1315,7 +1331,7 @@ struct MotionInput {
     preserve_facing: bool,
 }
 
-/// Resolves character-relative arrows and camera-relative WASD without mixing
+/// Resolves character-relative arrows and camera-relative actions without mixing
 /// modes. `looking_ahead` is the left button held
 /// while the right one looks around, which runs the way the camera faces as
 /// the camera-relative forward key does (Adam's observation of the official
@@ -1327,6 +1343,7 @@ fn movement_input(
     current_heading: f32,
     speed: f32,
     backward_speed: Option<f32>,
+    turn: f32,
 ) -> MotionInput {
     let (ahead, behind) = (held.held(Act::Forward), held.held(Act::Back));
     let backing = focused && behind && !ahead;
@@ -1362,11 +1379,6 @@ fn movement_input(
         (MovementMode::Forward, Vec3::ZERO)
     } else {
         (mode, direction)
-    };
-    let turn = if focused {
-        held.axis(Act::TurnRight, Act::TurnLeft)
-    } else {
-        0.0
     };
     MotionInput {
         mode,
@@ -1463,9 +1475,8 @@ mod tests {
         };
         let map = KeyMap::for_client(InstalledClient::Titanium);
         let keys = ButtonInput::<KeyCode>::default();
-        let intent = |controls: &Controls, act| {
-            controls.intent(&keys, &map, &[act], true, (0.0, 0.0), false)
-        };
+        let intent =
+            |controls: &Controls, act| controls.intent(&keys, &map, &[act], true, (0.0, 0.0), None);
         let normal = intent(&controls, Act::Forward);
         controls.movement_options.run_boost = true;
         let boosted = intent(&controls, Act::Forward);
@@ -1542,7 +1553,7 @@ mod tests {
             &[Act::Forward, Act::Jump],
             true,
             (0.0, 128.0),
-            false,
+            None,
         );
         assert!((intent.direction.length() - 1.0).abs() < 0.001);
         assert!(intent.direction.y > 0.7);
@@ -1552,11 +1563,11 @@ mod tests {
             &[Act::Jump, Act::Duck],
             true,
             (0.0, 128.0),
-            false,
+            None,
         );
         assert!(opposite.direction.length() < f32::EPSILON);
         controls.movement_options.run_boost = true;
-        let up = controls.intent(&keys, &map, &[Act::Jump], true, (0.0, 128.0), false);
+        let up = controls.intent(&keys, &map, &[Act::Jump], true, (0.0, 128.0), None);
         assert!((up.direction.y * up.speed - 6.0).abs() < 0.001);
         let boosted = controls.intent(
             &keys,
@@ -1564,7 +1575,7 @@ mod tests {
             &[Act::Forward, Act::Jump],
             true,
             (0.0, 128.0),
-            false,
+            None,
         );
         assert!(
             (boosted.direction.y * boosted.speed - intent.direction.y * intent.speed).abs() < 0.001
@@ -2634,7 +2645,7 @@ mod tests {
         let mut keys = ButtonInput::default();
         // On, with nothing held, and with the keyboard elsewhere.
         for focused in [true, false] {
-            let intent = controls.intent(&keys, &map, &[], focused, (0.0, 0.0), false);
+            let intent = controls.intent(&keys, &map, &[], focused, (0.0, 0.0), None);
             assert_eq!(intent.mode, MovementMode::Forward);
             // Along the player's heading.
             let radians = eq_client_core::render_heading(0.0);
@@ -2647,11 +2658,11 @@ mod tests {
         }
         // Turning keeps it running.
         keys.press(KeyCode::ArrowLeft);
-        let intent = controls.intent(&keys, &map, &[], true, (0.0, 0.0), false);
+        let intent = controls.intent(&keys, &map, &[], true, (0.0, 0.0), None);
         assert!(intent.direction != Vec3::ZERO && intent.turn != 0.0);
         // Back wins while held.
         keys.press(KeyCode::ArrowDown);
-        let intent = controls.intent(&keys, &map, &[], true, (0.0, 0.0), false);
+        let intent = controls.intent(&keys, &map, &[], true, (0.0, 0.0), None);
         assert_eq!(intent.mode, MovementMode::Backward);
     }
 
@@ -2668,20 +2679,20 @@ mod tests {
         assert!(!keys.pressed(KeyCode::ArrowUp));
         assert_ne!(
             controls
-                .intent(&keys, &KeyMap::default(), &[], true, (0.0, 0.0), false)
+                .intent(&keys, &KeyMap::default(), &[], true, (0.0, 0.0), None)
                 .direction,
             Vec3::ZERO
         );
         assert_eq!(
             controls
-                .intent(&keys, &KeyMap::default(), &[], false, (0.0, 0.0), false)
+                .intent(&keys, &KeyMap::default(), &[], false, (0.0, 0.0), None)
                 .direction,
             Vec3::ZERO
         );
         keys.clear();
         assert_eq!(
             controls
-                .intent(&keys, &KeyMap::default(), &[], true, (0.0, 0.0), false)
+                .intent(&keys, &KeyMap::default(), &[], true, (0.0, 0.0), None)
                 .direction,
             Vec3::ZERO
         );
@@ -2689,7 +2700,7 @@ mod tests {
         keys.release(KeyCode::ArrowDown);
         assert_eq!(
             controls
-                .intent(&keys, &KeyMap::default(), &[], true, (0.0, 0.0), false)
+                .intent(&keys, &KeyMap::default(), &[], true, (0.0, 0.0), None)
                 .mode,
             MovementMode::Backward
         );
@@ -2855,12 +2866,12 @@ mod tests {
             keys.press(KeyCode::ArrowRight);
             assert_eq!(
                 controls
-                    .intent(&keys, &map, &[], true, (0.0, heading), false)
+                    .intent(&keys, &map, &[], true, (0.0, heading), None)
                     .direction,
                 Vec3::ZERO
             );
             controls.strafe_speed = Some(3.0);
-            let right = controls.intent(&keys, &map, &[], true, (0.0, heading), false);
+            let right = controls.intent(&keys, &map, &[], true, (0.0, heading), None);
             assert_eq!(right.mode, MovementMode::Strafe);
             assert!(right.preserve_facing);
             assert_eq!(right.speed, 3.0);
@@ -2868,18 +2879,18 @@ mod tests {
             assert!(right.direction.dot(facing.cross(Vec3::Y)) > 0.999);
             keys.reset_all();
             keys.press(KeyCode::ArrowLeft);
-            let left = controls.intent(&keys, &map, &[], true, (0.0, heading), false);
+            let left = controls.intent(&keys, &map, &[], true, (0.0, heading), None);
             assert!((left.direction + right.direction).length() < 0.0001);
             assert_eq!(
                 controls
-                    .intent(&keys, &map, &[], false, (0.0, heading), false)
+                    .intent(&keys, &map, &[], false, (0.0, heading), None)
                     .direction,
                 Vec3::ZERO
             );
             keys.press(KeyCode::ArrowRight);
             assert_eq!(
                 controls
-                    .intent(&keys, &map, &[], true, (0.0, heading), false)
+                    .intent(&keys, &map, &[], true, (0.0, heading), None)
                     .direction,
                 Vec3::ZERO
             );
@@ -2899,7 +2910,7 @@ mod tests {
         assert_eq!(titanium.keys(Act::CameraForward).count(), 0);
         let held = |scripted: &[Act], focused, heading| {
             controls
-                .intent(&keys, &titanium, scripted, focused, (0.0, heading), false)
+                .intent(&keys, &titanium, scripted, focused, (0.0, heading), None)
                 .direction
         };
         assert!((held(&[Act::CameraForward], true, 0.0).length() - 1.0).abs() < 1e-4);
@@ -3135,6 +3146,158 @@ mod tests {
                 visual.from.rotation
             );
         }
+    }
+
+    #[test]
+    fn physical_turn_keys_strafe_only_while_the_world_owns_mouse_look() {
+        let heading = eq_client_core::render_heading(0.0);
+        let right = Vec3::new(heading.sin(), 0.0, heading.cos()).cross(Vec3::Y);
+        let origin = Vec3::new(0.0, 3.0, 0.0);
+        for (act, key, side) in [
+            (Act::TurnLeft, KeyCode::KeyA, -1.0),
+            (Act::TurnRight, KeyCode::KeyD, 1.0),
+        ] {
+            for world_owns_look in [false, true] {
+                let (mut app, receiver) = app();
+                app.init_resource::<MouseLook>()
+                    .init_resource::<ButtonInput<MouseButton>>()
+                    .init_resource::<crate::items::ItemState>()
+                    .init_resource::<crate::inventory::InventoryState>()
+                    .add_systems(PreUpdate, crate::camera::look);
+                crate::keys::testing::bind(&mut app, act, crate::keys::Chord::key(key));
+                app.world_mut().resource_mut::<Controls>().strafe_speed = Some(3.0);
+                app.world_mut()
+                    .resource_mut::<ButtonInput<KeyCode>>()
+                    .reset_all();
+                app.world_mut()
+                    .resource_mut::<crate::chat::ChatState>()
+                    .hovered = !world_owns_look;
+                app.world_mut()
+                    .resource_mut::<ButtonInput<MouseButton>>()
+                    .press(MouseButton::Right);
+                app.update();
+                assert!(receiver.try_recv().is_err());
+                assert_eq!(app.world().resource::<MouseLook>().held, world_owns_look);
+
+                // Leaving the chat panel with the button held cannot start a look.
+                app.world_mut()
+                    .resource_mut::<crate::chat::ChatState>()
+                    .hovered = false;
+                app.world_mut()
+                    .resource_mut::<ButtonInput<MouseButton>>()
+                    .clear();
+                app.world_mut()
+                    .resource_mut::<crate::keys::Typing>()
+                    .composing = true;
+                app.world_mut()
+                    .resource_mut::<ButtonInput<KeyCode>>()
+                    .press(key);
+                app.update();
+                assert!(receiver.try_recv().is_err());
+                app.world_mut()
+                    .resource_mut::<crate::keys::Typing>()
+                    .composing = false;
+                app.update();
+                let ClientCommand::Move(request) = receiver.try_recv().unwrap() else {
+                    panic!("expected a movement proposal");
+                };
+                let position = Vec3::from_array(eq_client_core::render_position(request.position));
+                if world_owns_look {
+                    assert_eq!(request.mode, MovementMode::Strafe);
+                    assert!((position - origin - right * side * 0.3).length() < 0.001);
+                    assert!(arc(0.0, request.position.heading).abs() < 0.001);
+                    accept(&mut app, &request);
+                    app.world_mut()
+                        .resource_mut::<ButtonInput<MouseButton>>()
+                        .release(MouseButton::Right);
+                    app.update();
+                    let ClientCommand::Move(turn) = receiver.try_recv().unwrap() else {
+                        panic!("expected turning on release");
+                    };
+                    assert!(!app.world().resource::<MouseLook>().held);
+                    assert_eq!(turn.mode, MovementMode::Forward);
+                    assert!(
+                        Vec3::from_array(eq_client_core::render_position(turn.position))
+                            .abs_diff_eq(position, 0.001)
+                    );
+                    assert!(arc(request.position.heading, turn.position.heading) * side < 0.0);
+                } else {
+                    assert_eq!(request.mode, MovementMode::Forward);
+                    assert!(position.abs_diff_eq(origin, 0.001));
+                    assert!(arc(0.0, request.position.heading) * side < 0.0);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn remapped_turn_keys_respect_strafe_grants_focus_and_semantic_actions() {
+        let map = crate::keys::testing::map(&[
+            (Act::TurnLeft, crate::keys::Chord::key(KeyCode::KeyA)),
+            (Act::StrafeRight, crate::keys::Chord::key(KeyCode::KeyE)),
+        ]);
+        let mut keys = ButtonInput::default();
+        keys.press(KeyCode::KeyA);
+        let looking = MouseLook {
+            held: true,
+            left: false,
+        };
+        let both = MouseLook {
+            held: true,
+            left: true,
+        };
+        let mut controls = Controls {
+            speed: Some(6.0),
+            ..default()
+        };
+        let intent =
+            |controls: &Controls, keys: &ButtonInput<KeyCode>, scripted: &[Act], focused, look| {
+                controls.intent(keys, &map, scripted, focused, (0.0, 0.0), Some(look))
+            };
+
+        let no_grant = intent(&controls, &keys, &[], true, &looking);
+        assert_eq!(no_grant.direction, Vec3::ZERO);
+        assert!(no_grant.turn.abs() < f32::EPSILON);
+        controls.strafe_speed = Some(3.0);
+        let unfocused = intent(&controls, &keys, &[], false, &looking);
+        assert_eq!(unfocused.direction, Vec3::ZERO);
+        assert!(unfocused.turn.abs() < f32::EPSILON);
+        controls.stunned = true;
+        let stunned = intent(&controls, &keys, &[], true, &looking);
+        assert_eq!(stunned.direction, Vec3::ZERO);
+        assert!(stunned.turn.abs() < f32::EPSILON);
+        controls.stunned = false;
+
+        let forward = intent(&controls, &keys, &[], true, &both);
+        assert_eq!(forward.mode, MovementMode::Forward);
+        assert!(forward.direction.abs_diff_eq(Vec3::NEG_Z, 0.001));
+        assert!(forward.turn.abs() < f32::EPSILON);
+        keys.press(KeyCode::ArrowUp);
+        let forward = intent(&controls, &keys, &[], true, &looking);
+        let heading = eq_client_core::render_heading(0.0);
+        assert_eq!(forward.mode, MovementMode::Forward);
+        assert!(
+            forward
+                .direction
+                .abs_diff_eq(Vec3::new(heading.sin(), 0.0, heading.cos()), 0.001)
+        );
+        assert!(forward.turn.abs() < f32::EPSILON);
+        let turns = intent(
+            &controls,
+            &ButtonInput::default(),
+            &[Act::TurnLeft],
+            true,
+            &looking,
+        );
+        assert_eq!(turns.direction, Vec3::ZERO);
+        assert!((turns.turn - 1.0).abs() < f32::EPSILON);
+
+        keys.reset_all();
+        keys.press(KeyCode::KeyE);
+        let explicit = intent(&controls, &keys, &[], true, &looking);
+        assert_eq!(explicit.mode, MovementMode::Strafe);
+        assert!((explicit.speed - 3.0).abs() < f32::EPSILON);
+        assert!(explicit.turn.abs() < f32::EPSILON);
     }
 
     #[test]
@@ -3626,8 +3789,13 @@ mod tests {
         let pose = crate::camera::orbit_transform(orbit);
         world.entity_mut(entity).insert(pose);
         app.add_systems(Update, crate::camera::toggle_free.before(input));
+        app.insert_resource(MouseLook {
+            held: true,
+            left: false,
+        });
         {
             let mut controls = app.world_mut().resource_mut::<Controls>();
+            controls.strafe_speed = Some(3.0);
             controls.autorun = true;
             controls.moving = true;
             controls.jump = Some(Instant::now());

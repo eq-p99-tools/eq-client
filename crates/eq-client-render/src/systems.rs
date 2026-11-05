@@ -15,14 +15,15 @@ use bevy::prelude::*;
 /// trade, combat and motion) empty: every resource the windows keep, in one
 /// list that the tests' app starts from too.
 pub(super) fn init_presentation(app: &mut App) {
-    // Use the installed table, or the explicit Titanium fallback offline.
+    // Use the selected installation's bindings, or the Titanium fallback offline.
     let keys = app
         .world()
         .get_resource::<crate::ViewerSettings>()
         .map_or_else(keys::KeyMap::default, |settings| {
-            keys::KeyMap::for_client(settings.0.installed_client)
+            keys::KeyMap::for_settings(&settings.0)
         });
-    app.insert_resource(keys);
+    app.insert_resource(keys::bindings::Bindings::with_installed(keys.clone()))
+        .insert_resource(keys);
     app.init_resource::<spell_effects::SpellParticles>()
         .init_resource::<sounds::Sounds>()
         .init_resource::<doors::Hinges>()
@@ -73,7 +74,6 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<keys::Typing>()
         .init_resource::<keys::presses::Presses>()
         .init_resource::<character_create::Editor>()
-        .init_resource::<keys::bindings::Bindings>()
         .init_resource::<training::Chosen>()
         .init_resource::<raid::RaidChoice>()
         .init_resource::<confirm::Asked>()
