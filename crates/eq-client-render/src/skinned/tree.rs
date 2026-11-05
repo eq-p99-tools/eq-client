@@ -151,7 +151,9 @@ pub(super) fn pieces(
             }
             Element::Listbox(list) => controls::listbox(window, art, list, &inside, context.id),
             Element::TextBox(text) if context.id == WindowId::Chat => {
-                chat_box(window, art, text, (&inside, context.tab_frame));
+                let divider = text.id.as_deref() == Some("CWChatInput")
+                    && chat_needs_divider(art, text, pieces);
+                chat_box(window, art, text, (&inside, context.tab_frame), divider);
             }
             Element::TextBox(text) => text_box(window, art, text, &inside, context.id),
             Element::Tabs(tabs) if TABBED.contains(&context.id) => {
@@ -306,6 +308,30 @@ pub(super) fn text_box(
     });
 }
 
+/// A skin's input top or adjacent transcript bottom already separates the
+/// two boxes when the skin supplies a drawable edge there.
+fn chat_needs_divider(
+    art: &mut crate::sheets::Art,
+    input: &eq_client_assets::sidl::TextBox,
+    pieces: &[(String, Element)],
+) -> bool {
+    let top = input
+        .template
+        .as_ref()
+        .and_then(|frame| frame.border.top.as_ref());
+    let bottom = pieces.iter().find_map(|(_, element)| match element {
+        Element::TextBox(output) if output.id.as_deref() == Some("CWChatOutput") => output
+            .template
+            .as_ref()
+            .and_then(|frame| frame.border.bottom.as_ref()),
+        _ => None,
+    });
+    [top, bottom]
+        .into_iter()
+        .flatten()
+        .all(|edge| art.cut(edge).is_none())
+}
+
 /// One of the chat window's boxes, filled with the client's chat: its tabs
 /// and lines in the output box, and the line the player types in the input
 /// box.
@@ -314,6 +340,7 @@ pub(super) fn chat_box(
     art: &mut crate::sheets::Art,
     text: &eq_client_assets::sidl::TextBox,
     (inside, tab_frame): (&Area, Option<&eq_client_assets::sidl::FrameLook>),
+    divider: bool,
 ) {
     let area = text.anchors.map_or(text.area, |anchors| {
         anchors.within(inside.width, inside.height)
@@ -401,6 +428,7 @@ pub(super) fn chat_box(
                                 position_type: PositionType::Absolute,
                                 ..default()
                             },
+                            divider,
                         ),
                         _ => (),
                     }

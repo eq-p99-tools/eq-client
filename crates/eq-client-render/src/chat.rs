@@ -368,16 +368,21 @@ fn skinned_tabs(
         });
 }
 
-/// The skin's input box, with nothing of the client's own in it: the line
-/// the player types, and the caret alone while typing.
-pub(super) fn skinned_input(parent: &mut ChildSpawnerCommands, node: Node) {
+/// The skin's input box, with a top edge where its layout has no divider.
+pub(super) fn skinned_input(parent: &mut ChildSpawnerCommands, node: Node, divider: bool) {
+    let divider = if divider { 1.0 } else { 0.0 };
     parent
         .spawn((
             Button,
             InputBox,
             Bare,
+            BorderColor::all(theme::EDGE_LIGHT.with_alpha(0.6)),
             Node {
-                padding: UiRect::axes(px(4), px(1)),
+                border: UiRect::top(px(divider)),
+                padding: UiRect {
+                    top: px(1.0 - divider),
+                    ..UiRect::axes(px(4), px(1))
+                },
                 align_items: AlignItems::Center,
                 overflow: Overflow::clip(),
                 ..node
@@ -2499,7 +2504,7 @@ mod tests {
                 let tab_frame = eq_client_assets::sidl::FrameLook::default();
                 commands.spawn(Node::default()).with_children(|window| {
                     skinned_output(window, Node::default(), (&mut art, Some(&tab_frame)));
-                    skinned_input(window, Node::default());
+                    skinned_input(window, Node::default(), false);
                 });
             })
             .unwrap();
