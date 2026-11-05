@@ -256,6 +256,8 @@ pub enum ClickTarget {
     Scribe,
     /// The inventory's auto-store-cursor button.
     Store,
+    /// Explicit cursor-item destroy selection, followed by ordinary Yes/No.
+    Destroy,
     /// A spellbook row on the open page, from zero.
     BookRow(usize),
     /// The spellbook's memorize button for a gem, from zero.
@@ -756,6 +758,7 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["slot", slot] => ClickTarget::Slot(value(slot, "a slot number")?),
         ["scribe"] => ClickTarget::Scribe,
         ["store"] => ClickTarget::Store,
+        ["destroy"] => ClickTarget::Destroy,
         ["book", row] => ClickTarget::BookRow(value(row, "a book row number")?),
         ["loot", place] => {
             ClickTarget::Trade(TradeClick::Take(value(place, "a place on the corpse")?))
@@ -1757,6 +1760,32 @@ chat tell Friend inc now
             "click option shiny",
         ] {
             assert!(parse(bad, base).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn destruction_requires_separate_ordinary_confirmation_clicks() {
+        assert_eq!(
+            parse(
+                "click destroy\nclick answer no\nclick destroy\nclick answer yes\n",
+                Path::new("private")
+            )
+            .unwrap(),
+            [
+                Step::Click(ClickTarget::Destroy),
+                Step::Click(ClickTarget::Answer(false)),
+                Step::Click(ClickTarget::Destroy),
+                Step::Click(ClickTarget::Answer(true))
+            ]
+        );
+        for invalid in [
+            "destroy",
+            "destroy 30",
+            "click destroy 30",
+            "click destroy all",
+            "click destroy yes",
+        ] {
+            assert!(parse(invalid, Path::new("private")).is_err());
         }
     }
 

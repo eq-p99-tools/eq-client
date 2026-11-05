@@ -525,7 +525,10 @@ type Buttons<'w, 's> = Query<
         &'static InheritedVisibility,
         Option<&'static super::inventory::SlotButton>,
         Has<super::spellbook::ScribeCursor>,
-        Has<super::inventory::StoreCursor>,
+        (
+            Has<super::inventory::StoreCursor>,
+            Option<&'static super::inventory::destruction::Action>,
+        ),
         (
             Option<&'static super::spellbook::BookEntry>,
             Option<&'static super::spellbook::BookPlace>,
@@ -2217,7 +2220,7 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
         visibility,
         slot,
         scribe,
-        store,
+        (store, destroy),
         (row, place, turns, spell_gem, hot_button),
         gem,
         trade,
@@ -2277,6 +2280,7 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
             ClickTarget::Slot(number) => slot.is_some_and(|slot| slot.0.0 == number),
             ClickTarget::Scribe => scribe,
             ClickTarget::Store => store,
+            ClickTarget::Destroy => destroy == Some(&super::inventory::destruction::Action::Select),
             ClickTarget::BookRow(number) => row.is_some_and(|row| row.0 == number),
             ClickTarget::BookPlace(number) => place.is_some_and(|place| place.0 == number),
             ClickTarget::BookPage(forward) => turns.is_some_and(|turns| turns.0 == forward),

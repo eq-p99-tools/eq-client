@@ -72,6 +72,51 @@ fn result(
 }
 
 #[test]
+fn destroy_submission_result_applies_once_and_cannot_remove_a_newer_cursor() {
+    for newer in [false, true] {
+        let mut world = setup();
+        let mut item = world.inventory().items()[&InventorySlot(22)].clone();
+        item.slot = InventorySlot::CURSOR;
+        item.bag_slots = 0;
+        game(
+            &mut world,
+            WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![item.clone()])),
+        );
+        world.plan_inventory_as(Some(crate::inventory::MoveRules::EqEmu));
+        let request = world.prepare_cursor_destruction().unwrap();
+        if newer {
+            item.details.id += 1;
+            game(
+                &mut world,
+                WorldEvent::Inventory(InventoryUpdate::Set(vec![item.clone()])),
+            );
+        }
+        let submitted = WorldEvent::InventoryAction {
+            session_id: request.session_id,
+            revision: request.revision,
+            sequence: None,
+            update: Some(InventoryUpdate::DestroyCursor),
+            error: None,
+        };
+        game(&mut world, submitted.clone());
+        if newer {
+            assert_eq!(world.inventory().items()[&InventorySlot::CURSOR], item);
+        } else {
+            assert!(
+                !world
+                    .inventory()
+                    .items()
+                    .contains_key(&InventorySlot::CURSOR)
+            );
+            assert!(world.inventory().predicted());
+        }
+        let after = world.inventory().clone();
+        game(&mut world, submitted);
+        assert_eq!(world.inventory(), &after);
+    }
+}
+
+#[test]
 fn successive_moves_project_before_replies_and_results_never_apply_twice() {
     let mut world = setup();
     let mut worker = world.inventory().clone();

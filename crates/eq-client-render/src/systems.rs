@@ -181,7 +181,7 @@ pub(super) fn schedule(app: &mut App) {
         (
             options::tell_choices,
             (items::input, chat::links::input).chain(),
-            inventory::input,
+            (inventory::input, inventory::destruction::input).chain(),
             coins::input,
             inventory::colors::input,
             interact::input,

@@ -1140,6 +1140,11 @@ fn behave(
             crate::outbox::Needs::Nothing,
         )),
         Does::Picks(action) => drawn.insert((Button, action, skin())),
+        Does::Destroys => drawn.insert((
+            Button,
+            super::inventory::destruction::Action::Select,
+            skin(),
+        )),
         Does::Trades(action) => {
             trades(drawn, action, skin());
             &mut *drawn
@@ -1354,6 +1359,7 @@ fn caption(
         | Does::Combines(_)
         | Does::Maps(_)
         | Does::HotbarPage(_)
+        | Does::Destroys
         | Does::Picks(_)
         | Does::Trades(_)
         | Does::TurnsSpellbook(_)

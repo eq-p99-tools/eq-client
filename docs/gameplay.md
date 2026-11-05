@@ -82,7 +82,17 @@ guard, not a claim about every server's maximum range.
 Coin boxes support purse, cursor, personal-bank and give-window moves where the
 session offers them. Click to choose an amount, or Shift-click to pick up all;
 click another box with coins on the cursor to place/convert them. Shared banking,
-dropping carried items and destroying items have no client action yet.
+dropping carried items and destroying coins have no client action yet.
+
+On P99 and Titanium EQEmu, **Destroy cursor item** asks before destroying the
+whole cursor item or stack. **No**, Escape, closing inventory, or any inventory
+or admission change cancels that confirmation. Place queued cursor items and
+empty containers first; populated containers are outside this initial slice.
+A submission removes the item only as a local prediction. It is never retried,
+and elapsed time does not confirm destruction. Until a received cursor update or
+new inventory snapshot, the original item's weight remains in a conservative
+load bound and another destruction is unavailable. Re-entering the world obtains
+a fresh inventory snapshot when no such update arrives.
 
 Inventory requests carry the admission and expected item state. Sent moves can
 be predicted, but server corrections override them. Contradictory or unsupported

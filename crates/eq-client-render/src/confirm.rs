@@ -27,6 +27,12 @@ pub(crate) enum Question {
         scope: eq_client_core::deletion::Scope,
         request_id: u64,
     },
+    /// A frozen whole cursor item; the inventory controller owns its metadata.
+    DestroyItem {
+        session_id: u64,
+        revision: u64,
+        item_id: u32,
+    },
     /// Whether to delete this spell from this place in the book for good
     /// ([`eq_client_core::qol::Fix::AskBeforeDeletingSpells`]).
     DeleteSpell {
@@ -42,6 +48,14 @@ impl Question {
     fn text(self, names: &crate::spellbook::SpellNames, online: &OnlineState) -> String {
         match self {
             Self::DeleteCharacter { .. } => online.deletion.prompt().filter(|request| crate::character_delete::question(request) == self).map_or_else(String::new, |request| format!("Delete character {}? This may permanently remove the character. Choose Yes to confirm this exact name, or No to cancel.", request.name())),
+            Self::DestroyItem { session_id, revision, item_id } => {
+                let inventory = online.world().inventory();
+                inventory.items().get(&eq_client_core::inventory::InventorySlot::CURSOR)
+                    .filter(|item| online.world().session_id() == Some(session_id)
+                        && inventory.revision() == revision && item.details.id == item_id)
+                    .map_or_else(String::new, |item| format!("Destroy all {} of {}? This cannot be undone.",
+                        item.stack_count.unwrap_or(1), item.details.name))
+            }
             Self::DeleteSpell { spell, .. } => {
                 format!(
                     "Delete {} from your spell book for good?",

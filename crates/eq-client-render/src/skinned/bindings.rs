@@ -123,6 +123,8 @@ pub(super) enum Does {
     HotbarPage(bool),
     /// Does this to the quantity window's amount, as Accept takes it.
     Picks(crate::inventory::SplitAction),
+    /// Explicit cursor-item destruction through the inventory confirmation.
+    Destroys,
     /// Does this to the loot open on a corpse or the merchant open, as the
     /// loot window's Done ends the loot and the merchant window's Buy buys.
     Trades(crate::trade::Action),
@@ -179,6 +181,9 @@ pub(super) fn does(id: &str, owner: WindowId) -> Option<Does> {
     }
     if let Some(does) = trading_button(id, owner) {
         return Some(does);
+    }
+    if owner == WindowId::Inventory && id == "IW_Destroy" {
+        return Some(Does::Destroys);
     }
     if owner == WindowId::Item {
         return Some(if id == "IconButton" {

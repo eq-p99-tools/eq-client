@@ -123,7 +123,7 @@ impl InventoryState {
     /// Refuses the player's action: the inventory's line says why, and so
     /// does the chat (`say_refusals`), as the official client says its
     /// refusals. Progress, such as a move under way, stays in the line.
-    fn refuse(&mut self, refusal: String) {
+    pub(super) fn refuse(&mut self, refusal: String) {
         self.actions.message.clone_from(&refusal);
         if !refusal.is_empty() {
             self.refused.push(refusal);
@@ -270,6 +270,9 @@ impl InventoryState {
         present_error: bool,
         inventory: &Inventory,
     ) {
+        if self.destruction_result(session_id, revision, error.as_deref()) {
+            return;
+        }
         let Some((pending_session, pending_revision, to_cursor)) = self.actions.pending else {
             return;
         };

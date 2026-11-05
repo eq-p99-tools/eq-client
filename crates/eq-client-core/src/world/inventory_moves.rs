@@ -43,6 +43,51 @@ impl Moves {
 }
 
 impl ClientWorld {
+    /// Freezes one whole cursor instance for explicit destructive confirmation.
+    ///
+    /// # Errors
+    /// Refuses unavailable providers/admissions, pending moves, uncertain state,
+    /// populated containers and cursor queues.
+    pub fn prepare_cursor_destruction(&self) -> Result<crate::inventory::InventoryDestroy> {
+        let request = crate::inventory::InventoryDestroy {
+            session_id: self.session_id().context("Enter the world first")?,
+            revision: self.inventory().revision(),
+            item: self
+                .inventory()
+                .items()
+                .get(&crate::inventory::InventorySlot::CURSOR)
+                .context("The cursor is empty")?
+                .clone(),
+            created: std::time::Instant::now(),
+        };
+        self.check_cursor_destruction(&request)?;
+        Ok(request)
+    }
+
+    /// Revalidates the frozen admission, revision, whole quantity and identity.
+    ///
+    /// # Errors
+    /// Changed inventory or session requires a new explicit confirmation.
+    pub fn check_cursor_destruction(
+        &self,
+        request: &crate::inventory::InventoryDestroy,
+    ) -> Result<()> {
+        ensure!(
+            self.in_world() && self.accepts_reply(request.session_id),
+            "Inventory admission changed"
+        );
+        ensure!(
+            !self.inventory_moves_pending(),
+            "Finish the pending inventory move first"
+        );
+        let rules = self
+            .inventory_moves
+            .rules
+            .context("Inventory policy is unavailable")?;
+        self.inventory().plan_destroy(rules, request)?;
+        Ok(())
+    }
+
     /// Configures host placement from the network producer's inventory policy.
     /// Missing policy refuses moves; the installed generation is not a fallback.
     /// A changed policy discards the overlay while outstanding results drain.
@@ -137,6 +182,10 @@ impl ClientWorld {
         }
         let before = self.offering();
         let mut apply = error.is_none() && update.is_some();
+        if matches!(update, Some(InventoryUpdate::DestroyCursor)) {
+            // A late submission result cannot destroy a newer received cursor.
+            apply &= self.inventory.revision() == revision;
+        }
         if let Some(sequence) = sequence {
             let Some(pending) = self.inventory_moves.pending.front() else {
                 changes.ignored = true;
