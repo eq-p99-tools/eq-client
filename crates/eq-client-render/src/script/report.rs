@@ -69,6 +69,12 @@ pub(super) fn state(
     let position = transform.map(placement);
     let prediction_inputs = prediction_inputs(online.world().inventory());
     let slots = buff_slots(online);
+    let buff_slot_records = online.world().buffs().slots().map(|slots| {
+        slots
+            .iter()
+            .map(|(slot, buff)| (*slot, buff.spell_id))
+            .collect::<Vec<_>>()
+    });
     let effects: Vec<u16> = online.world().buffs().effects().keys().copied().collect();
     let posture = online
         .world()
@@ -124,6 +130,9 @@ pub(super) fn state(
         ?gems,
         ?cooldowns,
         ?book,
+        buff_revision = online.world().buffs().revision(),
+        ?buff_slot_records,
+        buff_cancellation = ?online.world().buffs().cancellation(),
         ?slots,
         ?effects,
         ?items,

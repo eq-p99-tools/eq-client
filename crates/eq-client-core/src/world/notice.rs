@@ -203,6 +203,8 @@ pub enum Notice {
     },
     /// The world's answer to `/who all`.
     WhoList(crate::who::WhoList),
+    /// Submission or an observed outcome of an explicit buff cancellation.
+    BuffCancellation(crate::buffs::cancel::Update),
     /// A cast request was refused, and why.
     CastRefused {
         /// The spell asked for.

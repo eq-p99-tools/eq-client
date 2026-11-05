@@ -66,7 +66,9 @@ merchant action.
 - `ability combat number` or `ability abilities number`: a button counted from 1 on an Actions page.
 - `training row`: a training row counted from 1.
 - `train` or `training_done`: the training window's buttons.
-- `buff number` or `song number`: a buff button counted from 1.
+- `buff number` or `song number`: a buff button counted from 1. `right_click`
+  uses ordinary beneficial-buff cancellation, including current slot, spell-data
+  and admission checks. Unslotted inferred effects never supply a cancel slot.
 - `answer yes` or `answer no`: the confirmation dialog.
 - `page next` or `page back`: the reading window's page controls.
 

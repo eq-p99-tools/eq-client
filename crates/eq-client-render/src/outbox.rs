@@ -215,7 +215,9 @@ impl Outbox {
             }
             if matches!(
                 command,
-                ClientCommand::CastSpell { .. } | ClientCommand::UseItem(_)
+                ClientCommand::CastSpell { .. }
+                    | ClientCommand::UseItem(_)
+                    | ClientCommand::CancelBuff(_)
             ) && !self.spell_ready.load(Ordering::Relaxed)
             {
                 return Err(Refusal::SpellData);

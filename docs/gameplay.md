@@ -151,6 +151,15 @@ HP/mana/endurance values, maximums and estimates are not interchangeable. A
 missing bar percentage can mean a missing reliable denominator. Quarm does not
 supply Titanium endurance data.
 
+On Titanium servers offering buff cancellation, right-click a known beneficial
+buff in the Effects or Songs window to request removal. Harmful effects, effects
+with unavailable spell data and effects whose server slot is unknown cannot be
+cancelled. A buff stays visible until received state removes it. If the selected
+slot changes while the button is held, release cancels the selection. A request
+with no matching update is reported as unconfirmed and is never retried
+automatically. P99 cancellation remains gated while its exact emission contract
+is investigated; a compatible attended check is still pending.
+
 ## Targeting and interaction
 
 Click a rendered entity, use Tab/Shift+Tab to cycle the nearby rendered set, or

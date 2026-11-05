@@ -1234,6 +1234,12 @@ impl ClientWorld {
             } => self.cast_refused((*session_id, *spell_id), reason, news),
             WorldEvent::BuffSnapshot(buffs) => self.buff_snapshot(buffs, now),
             WorldEvent::Buff(update) => self.buff(update, now, news),
+            WorldEvent::BuffCancellation(update) => {
+                if self.accepts_reply(update.session_id) && self.death.is_none() {
+                    self.buffs.cancellation_news(update.clone());
+                    news.notices.push(Notice::BuffCancellation(update.clone()));
+                } else { news.ignored = true; }
+            }
             WorldEvent::SpellEffect(effect) => self.spell_effect(effect, (now, spells), news),
             WorldEvent::SpellBook(book) => self.spell_book = Some(book.clone()),
             WorldEvent::BookAction(status) => self.book_action_news(status),
@@ -1418,6 +1424,7 @@ impl ClientWorld {
             }
             Reset::Zoning { .. } => self.drop_actions(),
             Reset::Died => {
+                self.buffs.clear_cancellation();
                 self.casting.cast = None;
                 self.casting.interrupted = None;
                 self.casting.reset_cooldowns();
@@ -1433,6 +1440,7 @@ impl ClientWorld {
     /// Drops the actions in flight: a cast, its request and interruption, and
     /// a spellbook change.
     fn drop_actions(&mut self) {
+        self.buffs.clear_cancellation();
         self.casting.drop_actions();
         self.book_action = None;
     }

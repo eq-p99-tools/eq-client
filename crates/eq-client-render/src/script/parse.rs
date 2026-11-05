@@ -1865,6 +1865,22 @@ chat tell Friend inc now
     }
 
     #[test]
+    fn right_click_buff_uses_the_ordinary_effects_button_target() {
+        assert_eq!(
+            parse(
+                "right_click buff 4\nright_click song 1\n",
+                Path::new("private")
+            )
+            .unwrap(),
+            [
+                Step::RightClick(ClickTarget::Buff(true, 3)),
+                Step::RightClick(ClickTarget::Buff(false, 0))
+            ]
+        );
+        assert!(parse("right_click buff 0\n", Path::new("private")).is_err());
+    }
+
+    #[test]
     fn parses_the_skins_effects_window_buttons() {
         assert_eq!(
             parse(

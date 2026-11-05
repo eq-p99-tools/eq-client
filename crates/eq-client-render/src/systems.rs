@@ -297,7 +297,12 @@ pub(super) fn schedule(app: &mut App) {
                 (hud::hotbar::presentation, hud::hotbar::fit_words).chain(),
                 spellbook::scribe_presentation,
                 buffs::update,
-                (buffs::hover, buffs::skinned_details, buffs::short_window),
+                (
+                    buffs::hover,
+                    buffs::skinned_details,
+                    buffs::short_window,
+                    buffs::cancel,
+                ),
                 (
                     (spell_icons::update, skinned::gem::pieces),
                     logs::write,
