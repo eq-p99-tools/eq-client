@@ -1573,12 +1573,10 @@ mod tests {
         use super::*;
         use bevy::input::mouse::MouseWheel;
         let mut app = App::new();
+        camera::testing::install_look(&mut app);
         app.init_resource::<chat::ChatState>()
             .init_resource::<items::ItemState>()
             .init_resource::<inventory::InventoryState>()
-            .init_resource::<ButtonInput<MouseButton>>()
-            .init_resource::<camera::MouseLook>()
-            .add_message::<MouseMotion>()
             .add_message::<MouseWheel>()
             .init_resource::<windows::pointer::Wheel>()
             .init_resource::<options::OptionsState>()
@@ -1586,7 +1584,7 @@ mod tests {
             .insert_resource(online::OnlineState::new(false))
             .add_systems(
                 Update,
-                (camera::look, windows::pointer::wheel, orbit_camera).chain(),
+                (camera::turn, windows::pointer::wheel, orbit_camera).chain(),
             );
         let mut window = Window {
             focused: true,
@@ -1612,9 +1610,7 @@ mod tests {
                 Projection::Orthographic(OrthographicProjection::default_3d()),
             ))
             .id();
-        app.world_mut()
-            .resource_mut::<ButtonInput<MouseButton>>()
-            .press(MouseButton::Right);
+        camera::testing::button(&mut app, MouseButton::Right, true);
         // Dragged far and wheeled out: it tilts to its steepest and
         // backs off past the chase camera's 200 units.
         for _ in 0..20 {
@@ -1644,12 +1640,10 @@ mod tests {
         use super::*;
         use bevy::input::mouse::MouseWheel;
         let mut app = App::new();
+        camera::testing::install_look(&mut app);
         app.init_resource::<chat::ChatState>()
             .init_resource::<items::ItemState>()
             .init_resource::<inventory::InventoryState>()
-            .init_resource::<ButtonInput<MouseButton>>()
-            .init_resource::<camera::MouseLook>()
-            .add_message::<MouseMotion>()
             .add_message::<MouseWheel>()
             .init_resource::<windows::pointer::Wheel>()
             .init_resource::<options::OptionsState>()
@@ -1657,7 +1651,7 @@ mod tests {
             .insert_resource(online::OnlineState::new(false))
             .add_systems(
                 Update,
-                (camera::look, windows::pointer::wheel, orbit_camera).chain(),
+                (camera::turn, windows::pointer::wheel, orbit_camera).chain(),
             );
         let mut window = Window {
             focused: true,
@@ -1702,9 +1696,7 @@ mod tests {
                 Transform::default(),
             ))
             .id();
-        app.world_mut()
-            .resource_mut::<ButtonInput<MouseButton>>()
-            .press(MouseButton::Right);
+        camera::testing::button(&mut app, MouseButton::Right, true);
         let send_input = |app: &mut App| {
             app.world_mut().write_message(MouseMotion {
                 delta: Vec2::new(20.0, 10.0),
@@ -1725,6 +1717,8 @@ mod tests {
         app.world_mut().get_mut::<ComputedNode>(panel).unwrap().size = Vec2::ZERO;
         app.update();
         assert_eq!(app.world().get::<OrbitCamera>(camera).unwrap().yaw, 0.0);
+        camera::testing::button(&mut app, MouseButton::Right, false);
+        camera::testing::button(&mut app, MouseButton::Right, true);
         send_input(&mut app);
         app.update();
         let state = app.world().get::<OrbitCamera>(camera).unwrap();
@@ -1743,6 +1737,8 @@ mod tests {
                 UiGlobalTransform::default(),
             ))
             .id();
+        camera::testing::button(&mut app, MouseButton::Right, false);
+        camera::testing::button(&mut app, MouseButton::Right, true);
         send_input(&mut app);
         app.update();
         let state = app.world().get::<OrbitCamera>(camera).unwrap();
@@ -1765,6 +1761,8 @@ mod tests {
             options.options.invert_y = true;
             options.options.wheel_zoom = false;
         }
+        camera::testing::button(&mut app, MouseButton::Right, false);
+        camera::testing::button(&mut app, MouseButton::Right, true);
         send_input(&mut app);
         app.update();
         let state = app.world().get::<OrbitCamera>(camera).unwrap();

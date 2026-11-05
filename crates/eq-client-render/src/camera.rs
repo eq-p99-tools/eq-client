@@ -4,8 +4,9 @@ use crate::{
     Collision, Player, PlayerBody, ProjectionStyle, chat, inventory, items, online, options,
     sounds, windows,
 };
-use bevy::input::mouse::MouseMotion;
+use bevy::input::mouse::{MouseButtonInput, MouseMotion};
 use bevy::prelude::*;
+use bevy::window::{PrimaryWindow, WindowFocused};
 use eq_client_core::movement::CollisionWorld;
 #[derive(Component)]
 pub(super) struct OrbitCamera {
@@ -143,53 +144,41 @@ pub(crate) fn fly_camera(
     }
 }
 
-/// The right button's look: from a press over the world (not over a
-/// window) until the button is let go, the mouse belongs to the look
-/// wherever the pointer goes, and the windows see none of its buttons, as
-/// the Titanium program skips feeding the mouse to its windows while its
-/// look is on (0x4a9cd2, cleared at 0x4a8ba2; program read N2 of 11-01). A
-/// press that begins over a window stays the window's (inferred, recording
-/// checklist 6.350).
+/// A right press over the world keeps the look until release, even if the
+/// pointer moves over UI. Left presses during that look belong to movement.
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct MouseLook {
     /// The right button is held from a press over the world.
     pub(crate) held: bool,
-    /// The left button is held during the look. The program refuses a left
-    /// click while its look is on (0x4a91a4), so the press goes to the look
-    /// alone: it runs the player the way the camera faces (6.341).
+    /// The left button is held from a press that belonged to this look.
     pub(crate) left: bool,
 }
 
-impl MouseLook {
-    /// Follows the right button for one frame: a fresh press starts a look
-    /// only where the world, not a window, is under the pointer (`free`);
-    /// letting go, or the window losing the focus, ends it.
-    pub(crate) fn follow(&mut self, buttons: &ButtonInput<MouseButton>, focused: bool, free: bool) {
-        if !focused || !buttons.pressed(MouseButton::Right) {
-            self.held = false;
-        } else if buttons.just_pressed(MouseButton::Right) {
-            self.held = free;
-        }
-    }
+/// The horizontal input owned by an attached online look this frame.
+#[derive(Resource, Default)]
+pub(crate) struct MouseAim(pub(crate) Option<f32>);
 
-    /// Takes the left button for the look while it is on, so nothing else
-    /// sees it pressed, clicked or let go: no window, target or door.
-    fn take_left(&mut self, buttons: &mut ButtonInput<MouseButton>) {
-        self.left = self.held && buttons.pressed(MouseButton::Left);
-        if self.held {
-            buttons.reset(MouseButton::Left);
-        }
-    }
+#[derive(Default)]
+pub(crate) struct LookOwnership {
+    admission: Option<u64>,
+    /// A captured left press stays hidden from UI and world clicks through
+    /// release, even if the right button ends the look first.
+    left: bool,
 }
 
-/// Starts, keeps or ends the right button's look, before the windows see
-/// the mouse, and takes the left button for it while it is on.
-#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+/// Reads native button edges before UI focus. The button resource can then
+/// hide a captured press without also erasing the look's held state.
+#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(crate) fn look(
     mut look: ResMut<MouseLook>,
     mut buttons: ResMut<ButtonInput<MouseButton>>,
-    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    mut ownership: Local<LookOwnership>,
+    mut events: MessageReader<MouseButtonInput>,
+    mut focus: MessageReader<WindowFocused>,
+    windows: Query<(Entity, &Window), With<PrimaryWindow>>,
     ui: windows::pointer::PointerUi,
+    online: Res<online::OnlineState>,
+    script: Option<Res<crate::script::Script>>,
     (chat, items, inventory): (
         Res<chat::ChatState>,
         Res<items::ItemState>,
@@ -197,13 +186,75 @@ pub(crate) fn look(
     ),
 ) {
     let window = windows.single().ok();
-    let focused = window.is_some_and(|window| window.focused);
+    let primary = window.map(|(entity, _)| entity);
+    let mut focused = window.is_some_and(|(_, window)| window.focused);
+    for event in focus.read() {
+        focused &= Some(event.window) != primary || event.focused;
+    }
+    let admission = online.world().session_id();
+    let playing = online.selection.is_none()
+        && !online.world().is_dead()
+        && (!online.enabled || online.world().connected());
+    let available =
+        focused && playing && !script.is_some_and(|script| script.background_owns_input());
+    if !available || ownership.admission != admission {
+        *look = MouseLook::default();
+    }
+    ownership.admission = admission;
     let over_ui = window
-        .and_then(Window::physical_cursor_position)
+        .and_then(|(_, window)| window.physical_cursor_position())
         .is_some_and(|cursor| ui.contains(cursor));
     let free = !over_ui && !chat.hovered && !items.hovered && !inventory.hovered;
-    look.follow(&buttons, focused, free);
-    look.take_left(&mut buttons);
+    let mut mask_left = ownership.left;
+    for event in events.read().filter(|event| Some(event.window) == primary) {
+        match (event.button, event.state.is_pressed()) {
+            (MouseButton::Right, true) => look.held = available && free,
+            (MouseButton::Right, false) => *look = MouseLook::default(),
+            (MouseButton::Left, true) => {
+                look.left = look.held;
+                ownership.left = look.left;
+                mask_left = ownership.left;
+            }
+            (MouseButton::Left, false) => {
+                look.left = false;
+                ownership.left = false;
+            }
+            _ => {}
+        }
+    }
+    if !focused {
+        ownership.left = false;
+    }
+    if mask_left {
+        buttons.reset(MouseButton::Left);
+    }
+}
+
+/// Samples horizontal look before locomotion. Online the attached view follows
+/// the actor's rotation, and offline the same input turns the orbit directly.
+#[allow(clippy::needless_pass_by_value)]
+pub(super) fn turn(
+    look: Res<MouseLook>,
+    online: Res<online::OnlineState>,
+    options: Res<options::OptionsState>,
+    mut aim: ResMut<MouseAim>,
+    mut motion: MessageReader<MouseMotion>,
+    mut cameras: Query<&mut OrbitCamera, Without<FreeCamera>>,
+) {
+    aim.0 = None;
+    if !look.held {
+        motion.clear();
+        return;
+    }
+    let horizontal = motion.read().map(|event| event.delta.x).sum::<f32>();
+    if let Ok(mut camera) = cameras.single_mut() {
+        let yaw = -horizontal * options.options.turn_per_pixel();
+        if online.enabled {
+            aim.0 = Some(yaw);
+        } else {
+            camera.yaw += yaw;
+        }
+    }
 }
 
 /// The chase view's pitch as it first opens: a little above the player,
@@ -283,7 +334,11 @@ impl CameraBody {
     }
 }
 
-#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+#[allow(
+    clippy::needless_pass_by_value,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
 pub(super) fn orbit_camera(
     collision: Option<Res<Collision>>,
     time: Res<Time>,
@@ -304,11 +359,12 @@ pub(super) fn orbit_camera(
         Option<&mut Projection>,
         Has<FreeCamera>,
     )>,
-    bodies: Query<&PlayerBody, With<Player>>,
+    players: Query<(&PlayerBody, &Transform), (With<Player>, Without<OrbitCamera>)>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     ui: windows::pointer::PointerUi,
 ) {
-    let body = bodies.single().ok();
+    let player = players.single().ok();
+    let body = player.map(|(body, _)| body);
     let body = CameraBody {
         head: body.map_or(0.0, |body| body.height * HEAD_LINE),
         feet: body.map(|body| body.feet_offset),
@@ -360,7 +416,13 @@ pub(super) fn orbit_camera(
             }
             continue;
         }
-        camera.yaw -= drag.x * turn;
+        if playing
+            && online.enabled
+            && look.held
+            && let Some((_, player)) = player
+        {
+            start_behind(&mut camera, player);
+        }
         let world = collision.as_ref().and_then(|world| world.0.as_ref());
         if !playing {
             camera.reset_view();
@@ -678,6 +740,39 @@ pub(super) fn eased_distance(shown: f32, allowed: f32, seconds: f32) -> f32 {
 }
 
 #[cfg(test)]
+pub(super) mod testing {
+    use super::*;
+    use bevy::input::{ButtonState, mouse::mouse_button_input_system};
+
+    pub(crate) fn install_look(app: &mut App) {
+        app.init_resource::<MouseLook>()
+            .init_resource::<MouseAim>()
+            .init_resource::<ButtonInput<MouseButton>>()
+            .add_message::<MouseButtonInput>()
+            .add_message::<MouseMotion>()
+            .add_message::<WindowFocused>()
+            .add_systems(PreUpdate, (mouse_button_input_system, look).chain());
+    }
+
+    pub(crate) fn button(app: &mut App, button: MouseButton, pressed: bool) {
+        let world = app.world_mut();
+        let window = world
+            .query_filtered::<Entity, With<PrimaryWindow>>()
+            .single(world)
+            .unwrap();
+        world.write_message(MouseButtonInput {
+            button,
+            state: if pressed {
+                ButtonState::Pressed
+            } else {
+                ButtonState::Released
+            },
+            window,
+        });
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::keys::Act;
@@ -951,42 +1046,40 @@ mod tests {
         assert_eq!(after.far.to_bits(), distance.to_bits());
     }
 
-    /// The right button held since an earlier frame: pressed, not fresh.
-    fn held() -> ButtonInput<MouseButton> {
-        let mut buttons = ButtonInput::default();
-        buttons.press(MouseButton::Right);
-        buttons.clear_just_pressed(MouseButton::Right);
-        buttons
-    }
-
     #[test]
     fn a_look_begun_over_the_world_lasts_over_windows_until_let_go() {
-        let mut look = MouseLook::default();
-        let mut buttons = ButtonInput::default();
-        buttons.press(MouseButton::Right);
-        look.follow(&buttons, true, true);
-        assert!(look.held);
+        let mut app = crate::testing::app();
+        testing::install_look(&mut app);
+        testing::button(&mut app, MouseButton::Right, true);
+        app.update();
+        assert!(app.world().resource::<MouseLook>().held);
         // The pointer passes over a window while the button stays down.
-        look.follow(&held(), true, false);
-        assert!(look.held);
-        // Let go over the window: the look ends, and nothing starts again
-        // until a fresh press.
-        look.follow(&ButtonInput::default(), true, false);
-        assert!(!look.held);
-        look.follow(&held(), true, true);
-        assert!(!look.held);
+        app.world_mut().resource_mut::<chat::ChatState>().hovered = true;
+        app.update();
+        assert!(app.world().resource::<MouseLook>().held);
+        testing::button(&mut app, MouseButton::Right, false);
+        app.update();
+        assert!(!app.world().resource::<MouseLook>().held);
     }
 
     #[test]
     fn a_press_begun_over_a_window_stays_the_windows() {
-        let mut look = MouseLook::default();
-        let mut buttons = ButtonInput::default();
-        buttons.press(MouseButton::Right);
-        look.follow(&buttons, true, false);
-        assert!(!look.held);
+        let mut app = crate::testing::app();
+        testing::install_look(&mut app);
+        app.world_mut().resource_mut::<chat::ChatState>().hovered = true;
+        testing::button(&mut app, MouseButton::Right, true);
+        testing::button(&mut app, MouseButton::Left, true);
+        app.update();
+        assert!(!app.world().resource::<MouseLook>().held);
+        assert!(
+            app.world()
+                .resource::<ButtonInput<MouseButton>>()
+                .just_pressed(MouseButton::Left)
+        );
         // Dragged off the window onto the world, it still turns nothing.
-        look.follow(&held(), true, true);
-        assert!(!look.held);
+        app.world_mut().resource_mut::<chat::ChatState>().hovered = false;
+        app.update();
+        assert!(!app.world().resource::<MouseLook>().held);
     }
 
     #[test]
@@ -1098,34 +1191,69 @@ mod tests {
     }
 
     #[test]
-    fn the_look_takes_the_left_button_from_everything_else() {
-        let mut look = MouseLook::default();
-        let mut buttons = ButtonInput::default();
-        buttons.press(MouseButton::Right);
-        buttons.press(MouseButton::Left);
-        look.follow(&buttons, true, true);
-        look.take_left(&mut buttons);
-        assert!(look.left);
-        assert!(!buttons.pressed(MouseButton::Left));
-        assert!(!buttons.just_pressed(MouseButton::Left));
-        // Without a look, the left button is the windows' and the world's.
-        let mut look = MouseLook::default();
-        let mut buttons = ButtonInput::default();
-        buttons.press(MouseButton::Left);
-        look.take_left(&mut buttons);
-        assert!(!look.left);
-        assert!(buttons.just_pressed(MouseButton::Left));
+    fn captured_left_press_and_release_never_reach_click_consumers() {
+        let mut app = crate::testing::app();
+        testing::install_look(&mut app);
+        testing::button(&mut app, MouseButton::Right, true);
+        app.update();
+        testing::button(&mut app, MouseButton::Left, true);
+        for _ in 0..3 {
+            app.update();
+            assert!(app.world().resource::<MouseLook>().left);
+            let buttons = app.world().resource::<ButtonInput<MouseButton>>();
+            assert!(!buttons.pressed(MouseButton::Left));
+            assert!(!buttons.just_pressed(MouseButton::Left));
+        }
+        // Release the right button first, then release left over a UI control.
+        testing::button(&mut app, MouseButton::Right, false);
+        app.update();
+        assert!(!app.world().resource::<MouseLook>().left);
+        testing::button(&mut app, MouseButton::Left, false);
+        app.update();
+        assert!(
+            !app.world()
+                .resource::<ButtonInput<MouseButton>>()
+                .just_released(MouseButton::Left)
+        );
+        // Two ordinary clicks remain available to UI and the door tracker.
+        for _ in 0..2 {
+            testing::button(&mut app, MouseButton::Left, true);
+            app.update();
+            assert!(
+                app.world()
+                    .resource::<ButtonInput<MouseButton>>()
+                    .just_pressed(MouseButton::Left)
+            );
+            testing::button(&mut app, MouseButton::Left, false);
+            app.update();
+            assert!(
+                app.world()
+                    .resource::<ButtonInput<MouseButton>>()
+                    .just_released(MouseButton::Left)
+            );
+        }
     }
 
     #[test]
     fn losing_the_focus_ends_the_look() {
-        let mut look = MouseLook::default();
-        let mut buttons = ButtonInput::default();
-        buttons.press(MouseButton::Right);
-        look.follow(&buttons, true, true);
-        look.follow(&held(), false, true);
-        assert!(!look.held);
-        look.follow(&held(), true, true);
-        assert!(!look.held);
+        let mut app = crate::testing::app();
+        testing::install_look(&mut app);
+        testing::button(&mut app, MouseButton::Right, true);
+        testing::button(&mut app, MouseButton::Left, true);
+        app.update();
+        assert!(app.world().resource::<MouseLook>().left);
+        let world = app.world_mut();
+        let window = world
+            .query_filtered::<Entity, With<PrimaryWindow>>()
+            .single(world)
+            .unwrap();
+        // Even a focus round trip in one frame ends the native hold.
+        for focused in [false, true] {
+            world.write_message(WindowFocused { window, focused });
+        }
+        for _ in 0..2 {
+            app.update();
+            assert_eq!(*app.world().resource::<MouseLook>(), MouseLook::default());
+        }
     }
 }

@@ -61,6 +61,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<inventory::InventoryState>()
         .init_resource::<motion::Controls>()
         .init_resource::<crate::camera::MouseLook>()
+        .init_resource::<crate::camera::MouseAim>()
         .init_resource::<entities::NearbyEntities>()
         .init_resource::<names::NameTags>()
         .init_resource::<item_models::ItemLibrary>()
@@ -245,7 +246,13 @@ pub(super) fn schedule(app: &mut App) {
                     .chain(),
             ),
             windows::input,
-            (crate::camera::toggle_free, move_player, motion::input).chain(),
+            (
+                crate::camera::toggle_free,
+                crate::camera::turn,
+                move_player,
+                motion::input,
+            )
+                .chain(),
         )
             .chain()
             .in_set(Stage::Input),

@@ -104,26 +104,24 @@ fn app() -> (App, Entity, Entity, Entity) {
     .init_resource::<Assets<Mesh>>()
     .init_resource::<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>()
     .insert_resource(time)
-    .init_resource::<ButtonInput<MouseButton>>()
     .init_resource::<chat::ChatState>()
     .init_resource::<items::ItemState>()
     .init_resource::<inventory::InventoryState>()
     .init_resource::<options::OptionsState>()
-    .init_resource::<camera::MouseLook>()
     .init_resource::<windows::pointer::Wheel>()
-    .add_message::<MouseMotion>()
     .add_message::<MouseWheel>()
     .insert_resource(online::OnlineState::new(false))
     .add_systems(
         Update,
         (
-            camera::look,
+            camera::turn,
             windows::pointer::wheel,
             camera::orbit_camera,
             camera::show_player,
         )
             .chain(),
     );
+    camera::testing::install_look(&mut app);
     let mut window = Window {
         focused: true,
         ..default()
@@ -166,9 +164,7 @@ fn wheel(app: &mut App, window: Entity, lines: f32) {
 }
 
 fn start_look(app: &mut App) {
-    app.world_mut()
-        .resource_mut::<ButtonInput<MouseButton>>()
-        .press(MouseButton::Right);
+    camera::testing::button(app, MouseButton::Right, true);
 }
 
 fn drag(app: &mut App, delta: Vec2) {
