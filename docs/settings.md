@@ -112,10 +112,10 @@ line. Server health and combat updates remain authoritative.
 The two spellbook choices are independent. Enable both to read and memorize
 through the book UI while remaining standing.
 
-Long Chase Camera retains the chase height range and compensates the far plane
+Long Chase Camera extends the orbit distance and compensates the far plane
 beyond 200 units so distant camera placement still shows the scene around the
-character. Disabling it restores the classic chase limit; top-down projection
-keeps its own range.
+character. Disabling it restores the 200-unit limit. Top-down projection has
+its own range.
 
 Always-on improvements:
 

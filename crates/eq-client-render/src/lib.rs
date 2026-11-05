@@ -1294,7 +1294,7 @@ mod tests {
         };
         let requested = orbit_transform(&camera);
         let mut under = OrbitCamera { ..camera };
-        let inside = unobstructed_orbit(&mut under, Some(&roof), 0.0, 1.0 / 60.0);
+        let inside = unobstructed_orbit(&mut under, Some(&roof), 0.0, None, 1.0 / 60.0);
         assert!(inside.translation.y < 8.0);
         assert!(
             (inside.translation.length() - (8.0 / 60.0_f32.to_radians().sin() - 0.5)).abs() < 0.001
@@ -1303,7 +1303,7 @@ mod tests {
         assert_eq!(under.radius, 40.0);
         let mut open = OrbitCamera { ..camera };
         assert_eq!(
-            unobstructed_orbit(&mut open, None, 0.0, 1.0 / 60.0),
+            unobstructed_orbit(&mut open, None, 0.0, None, 1.0 / 60.0),
             requested
         );
         let mut outside = OrbitCamera {
@@ -1312,7 +1312,7 @@ mod tests {
         };
         let expected = orbit_transform(&outside);
         assert_eq!(
-            unobstructed_orbit(&mut outside, Some(&roof), 0.0, 1.0 / 60.0),
+            unobstructed_orbit(&mut outside, Some(&roof), 0.0, None, 1.0 / 60.0),
             expected
         );
     }
@@ -1364,9 +1364,10 @@ mod tests {
                 },
                 Some(&roof),
                 rise,
+                None,
                 frame,
             );
-            let pose = unobstructed_orbit(&mut camera, Some(&roof), rise, frame);
+            let pose = unobstructed_orbit(&mut camera, Some(&roof), rise, None, frame);
             let distance = (pose.translation - camera.focus).length();
             let limit = (unobstructed.translation - camera.focus).length();
             assert!(
@@ -1385,11 +1386,11 @@ mod tests {
         );
         // Out in the open again, a few frames later it is back at the radius.
         for _ in 0..60 {
-            unobstructed_orbit(&mut camera, Some(&roof), rise, frame);
+            unobstructed_orbit(&mut camera, Some(&roof), rise, None, frame);
         }
         assert_eq!(camera.pulled, None);
         assert_eq!(
-            unobstructed_orbit(&mut camera, Some(&roof), rise, frame),
+            unobstructed_orbit(&mut camera, Some(&roof), rise, None, frame),
             orbit_transform(&camera)
         );
     }
@@ -1417,12 +1418,12 @@ mod tests {
         // The middle's line alone is clear, so it stays out at the radius.
         let mut waist_only = OrbitCamera { ..camera };
         assert_eq!(
-            unobstructed_orbit(&mut waist_only, Some(&lintel), 0.0, 1.0 / 60.0),
+            unobstructed_orbit(&mut waist_only, Some(&lintel), 0.0, None, 1.0 / 60.0),
             requested
         );
         // With the head's line, it comes in to this side of the lintel.
         let mut both = OrbitCamera { ..camera };
-        let pose = unobstructed_orbit(&mut both, Some(&lintel), rise, 1.0 / 60.0);
+        let pose = unobstructed_orbit(&mut both, Some(&lintel), rise, None, 1.0 / 60.0);
         assert!(pose.translation.z < 10.0, "{:?}", pose.translation);
         assert_eq!(pose.rotation, requested.rotation);
         let head = Vec3::Y * rise;
@@ -1766,9 +1767,8 @@ mod tests {
         app.update();
         let state = app.world().get::<OrbitCamera>(camera).unwrap();
         assert!(state.pitch > previous.1);
-        // The distance behind the player stays; only the height moved.
-        let behind = |radius: f32, pitch: f32| radius * pitch.cos();
-        assert!((behind(state.radius, state.pitch) - behind(previous.2, previous.1)).abs() < 1e-3);
+        // With wheel zoom disabled, pitching keeps the orbit radius fixed.
+        assert!((state.radius - previous.2).abs() < f32::EPSILON);
     }
 
     #[test]
