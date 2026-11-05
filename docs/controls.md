@@ -65,6 +65,10 @@ considered through the normal session command. This keeps the current target.
 The server still checks each requested action; an unread interaction radius
 is left to its existing checks.
 
+Double-click a visible door with the left button to use it within reach.
+Two clicks must land on the same door. The Use key still finds a door or
+object near the character.
+
 ## Camera and windows
 
 The **EQ menu** at the bottom right opens and hides windows, including Map,

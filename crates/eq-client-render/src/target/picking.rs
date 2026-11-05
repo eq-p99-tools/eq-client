@@ -228,7 +228,7 @@ fn triangles_distance(
         let [Some(a), Some(b), Some(c)] = indices.map(|index| vertices.get(index).copied()) else {
             return;
         };
-        if let Some(hit) = triangle_distance(origin, direction, [a, b, c])
+        if let Some(hit) = triangle_distance(origin, direction, [a, b, c], true)
             && nearest.is_none_or(|previous| hit < previous)
         {
             nearest = Some(hit);
@@ -247,13 +247,18 @@ fn triangles_distance(
     nearest
 }
 
-/// Double-sided intersection, excluding degenerate triangles and hits behind the camera.
-fn triangle_distance(origin: Vec3, direction: Vec3, [vertex, b, c]: [Vec3; 3]) -> Option<f32> {
+/// Ray intersection with a triangle, optionally excluding its back face.
+pub(crate) fn triangle_distance(
+    origin: Vec3,
+    direction: Vec3,
+    [vertex, b, c]: [Vec3; 3],
+    double_sided: bool,
+) -> Option<f32> {
     let edge1 = b - vertex;
     let edge2 = c - vertex;
     let cross = direction.cross(edge2);
     let determinant = edge1.dot(cross);
-    if !determinant.is_finite() || determinant.abs() < 1e-7 {
+    if !determinant.is_finite() || determinant.abs() < 1e-7 || !double_sided && determinant < 0.0 {
         return None;
     }
     let offset = origin - vertex;

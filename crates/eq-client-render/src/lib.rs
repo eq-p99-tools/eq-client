@@ -724,6 +724,7 @@ fn spawn_static_zone(
                 .filter(|primitive| gpu_assets::drawn(primitive))
                 .cloned()
                 .collect();
+            let pick = doors::PickMesh::from_model(&model);
             let primitives = create_render_primitives(
                 model.primitives,
                 &model.materials,
@@ -738,6 +739,7 @@ fn spawn_static_zone(
                 doors::Model {
                     primitives: primitives.clone(),
                     collision: model.collision,
+                    pick,
                 },
             );
             drawn_models.push(drawn);
