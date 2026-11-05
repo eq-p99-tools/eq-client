@@ -814,6 +814,7 @@ fn spell_gem(
             node,
         ))
         .with_children(|gem_node| {
+            let skin = art.drawing_skin();
             let whole = at(0.0, 0.0, area.width, area.height);
             let mut piece = |gem_node: &mut ChildSpawnerCommands, part: Option<&Piece>, which| {
                 if let Some(image) = part.and_then(|part| art.cut(part)) {
@@ -821,31 +822,11 @@ fn spell_gem(
                 }
             };
             piece(gem_node, gem.background.as_ref(), gem::GemPiece::Background);
-            // The spell's square icon at the skin's icon offset, else where
-            // it always sat; and where the skin has gem icons, the spell's
-            // cell, at the offset or centred, for a client whose spells name
-            // one, in place of the square icon.
-            let icon = (area.height - 6.0).max(8.0);
-            let place = gem.icon_offset.unwrap_or(super::spell_icons::INSET);
-            let gems = gem.icons.clone().filter(|gems| !gems.sheets.is_empty());
-            gem_node.spawn(super::spell_icons::gem_square_artwork(
+            gem_node.spawn(super::spell_icons::gem_artwork(
                 usize::from(index),
-                place,
-                icon,
-                gems.is_some(),
+                gem,
+                skin,
             ));
-            if let Some(gems) = gems {
-                #[allow(clippy::cast_precision_loss, reason = "cells are small")]
-                let place = gem.icon_offset.unwrap_or((
-                    (area.width - gems.cell_width as f32) / 2.0,
-                    (area.height - gems.cell_height as f32) / 2.0,
-                ));
-                gem_node.spawn(super::spell_icons::gem_artwork(
-                    usize::from(index),
-                    gems,
-                    place,
-                ));
-            }
             piece(gem_node, gem.highlight.as_ref(), gem::GemPiece::Highlight);
             piece(gem_node, gem.holder.as_ref(), gem::GemPiece::Holder);
         });

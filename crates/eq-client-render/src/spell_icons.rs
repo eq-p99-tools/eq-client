@@ -1,5 +1,9 @@
 //! Spell artwork from the user's installation, in the skin the windows follow.
 use bevy::prelude::*;
+use eq_client_assets::{
+    sidl::{IconGrid, Piece, SpellGem},
+    ui::{Area, InstalledClient},
+};
 
 pub(super) enum Source {
     Effect(u16),
@@ -20,12 +24,65 @@ pub(super) struct Artwork {
     source: Source,
     shown: Option<u32>,
     initialized: bool,
-    /// The skin's gem icons, which a gem shows in place of the square icon
-    /// where the skin has them and the spell names its cell.
-    gems: Option<eq_client_assets::sidl::IconGrid>,
-    /// Whether a gem-icon artwork beside this square icon shows the spell
-    /// instead, where the spell names its cell.
-    beside_gems: bool,
+    gem: Option<GemArtwork>,
+}
+
+/// The authored gem grid and placement, with the square fallback's bounds.
+struct GemArtwork {
+    grid: Option<IconGrid>,
+    offset: Option<(f32, f32)>,
+    slot_size: Vec2,
+    square: Area,
+    skin: Option<String>,
+}
+
+impl GemArtwork {
+    /// Resolve one image and its display rectangle in the slot's skin. Titanium's
+    /// paired grids use the same spell index. Mac-era definitions supply a gem
+    /// index separately from the renderer's choice of atlas.
+    fn image(
+        &self,
+        art: &mut super::sheets::Art,
+        names: &super::spellbook::SpellNames,
+        client: InstalledClient,
+        index: usize,
+        spell: u32,
+    ) -> Option<(ImageNode, Area)> {
+        let icon = match client {
+            InstalledClient::Titanium => names.icon(spell),
+            InstalledClient::EqMac => names.gem_icon(spell),
+        };
+        let cell = self
+            .grid
+            .as_ref()
+            .zip(icon)
+            .and_then(|(grid, icon)| grid.cell(icon));
+        report_gem(index, spell, names, icon, cell.as_ref());
+        art.draw_in(self.skin.clone());
+        let gem = cell.and_then(|cell| {
+            let image = art.cut(&cell)?;
+            let Vec2 {
+                x: width,
+                y: height,
+            } = image.rect?.size();
+            let (x, y) = self.offset.unwrap_or((
+                (self.slot_size.x - width) / 2.0,
+                (self.slot_size.y - height) / 2.0,
+            ));
+            Some((
+                image,
+                Area {
+                    x,
+                    y,
+                    width,
+                    height,
+                },
+            ))
+        });
+        let picture = gem.or_else(|| Some((art.spell(names.icon(spell)?)?, self.square)));
+        art.draw_in(None);
+        picture
+    }
 }
 
 /// Where artwork sits in its button when nothing else places it.
@@ -47,8 +104,7 @@ pub(super) fn artwork_at(
             source,
             shown: None,
             initialized: false,
-            gems: None,
-            beside_gems: false,
+            gem: None,
         },
         ImageNode::default(),
         Node {
@@ -63,52 +119,32 @@ pub(super) fn artwork_at(
     )
 }
 
-/// A gem's square icon, at this place and size in the gem; `beside_gems`
-/// where a gem-icon artwork shows the spells that name their cell.
-pub(super) fn gem_square_artwork(
-    index: usize,
-    place: (f32, f32),
-    size: f32,
-    beside_gems: bool,
-) -> impl Bundle {
-    let (mut artwork, image, node, focus) = artwork_at(Source::Gem(index), place, size);
-    artwork.beside_gems = beside_gems;
+/// One artwork child inside a skinned memorized slot. Gem cells use the
+/// grid's dimensions and the skin's offset, or center in the slot.
+pub(super) fn gem_artwork(index: usize, gem: &SpellGem, skin: Option<String>) -> impl Bundle {
+    let (x, y) = gem.icon_offset.unwrap_or(INSET);
+    let size = (gem.area.height - 6.0).max(8.0);
+    let (mut artwork, image, node, focus) = artwork_at(Source::Gem(index), (x, y), size);
+    artwork.gem = Some(GemArtwork {
+        grid: gem.icons.clone(),
+        offset: gem.icon_offset,
+        slot_size: Vec2::new(gem.area.width, gem.area.height),
+        square: Area {
+            x,
+            y,
+            width: size,
+            height: size,
+        },
+        skin,
+    });
     (artwork, image, node, focus)
-}
-
-/// A gem's spell as the skin's gem icons draw it, one cell's size, at this
-/// place in the gem.
-pub(super) fn gem_artwork(
-    index: usize,
-    gems: eq_client_assets::sidl::IconGrid,
-    (left, top): (f32, f32),
-) -> impl Bundle {
-    let (width, height) = (gems.cell_width, gems.cell_height);
-    (
-        Artwork {
-            source: Source::Gem(index),
-            shown: None,
-            initialized: false,
-            gems: Some(gems),
-            beside_gems: false,
-        },
-        ImageNode::default(),
-        Node {
-            position_type: PositionType::Absolute,
-            left: px(left),
-            top: px(top),
-            width: px(width),
-            height: px(height),
-            ..default()
-        },
-        bevy::ui::FocusPolicy::Pass,
-    )
 }
 
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn update(
     online: Res<super::online::OnlineState>,
     names: Res<super::spellbook::SpellNames>,
+    settings: Res<super::ViewerSettings>,
     book: Res<super::spellbook::BookView>,
     bindings: Res<super::hud::hotbar::Bindings>,
     mut art: super::sheets::Art,
@@ -161,23 +197,18 @@ pub(super) fn update(
         artwork.initialized = true;
         artwork.shown = spell;
         node.display = Display::None;
-        if let (Source::Gem(index), Some(spell)) = (&artwork.source, spell) {
-            report_gem(*index, spell, &names, artwork.gems.as_ref());
-        }
-        // A gem shows the spell's gem icon where the skin has them; the
-        // square icon where the skin or the spell data lacks it.
-        let gem = artwork.gems.as_ref().and_then(|gems| {
-            let cell = gems.cell(names.gem_icon(spell?)?)?;
-            art.cut(&cell)
-        });
-        if let Some(piece) = gem {
-            *image = piece;
-            node.display = Display::Flex;
-            continue;
-        }
-        if artwork.gems.is_some()
-            || (artwork.beside_gems && spell.and_then(|spell| names.gem_icon(spell)).is_some())
+        if let (Source::Gem(index), Some(gem), Some(spell)) = (&artwork.source, &artwork.gem, spell)
         {
+            if let Some((piece, area)) =
+                gem.image(&mut art, &names, settings.0.installed_client, *index, spell)
+            {
+                *image = piece;
+                node.left = px(area.x);
+                node.top = px(area.y);
+                node.width = px(area.width);
+                node.height = px(area.height);
+                node.display = Display::Flex;
+            }
             continue;
         }
         let Some(icon) = spell.and_then(|spell| names.icon(spell)) else {
@@ -192,19 +223,18 @@ pub(super) fn update(
 }
 
 /// One debug line for what a gem's spell resolves to: its tint field and
-/// colour, and its icon field and the skin cell that field picks.
+/// colour, and the index and skin cell selected for its artwork.
 fn report_gem(
     index: usize,
     spell: u32,
     names: &super::spellbook::SpellNames,
-    gems: Option<&eq_client_assets::sidl::IconGrid>,
+    icon: Option<u32>,
+    cell: Option<&Piece>,
 ) {
     let field = names.gem_tint_field(spell);
     let tint = names.gem_tint(spell);
-    let icon = names.gem_icon(spell);
-    let cell = gems.zip(icon).and_then(|(gems, icon)| gems.cell(icon));
     debug!(
-        "Gem {} holds spell {spell}: tint field {field:?} -> {}, icon field {icon:?} -> {}",
+        "Gem {} holds spell {spell}: tint field {field:?} -> {}, gem index {icon:?} -> {}",
         index + 1,
         tint.map_or_else(|| "none".to_owned(), |tint| format!("{tint:#010x}")),
         cell.map_or_else(
@@ -217,6 +247,93 @@ fn report_gem(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn titanium_memorized_spells_use_gem_cells_at_the_authored_size() {
+        let mut app = crate::testing::app();
+        crate::sheets::testing::blank(&mut app);
+        let sheet = crate::sheets::testing::sheet(
+            &mut app,
+            "synthetic-gems.tga",
+            image::RgbaImage::from_pixel(80, 64, image::Rgba([255; 4])),
+        );
+        app.world_mut()
+            .resource_mut::<crate::ViewerSettings>()
+            .0
+            .eq_directory = Some("synthetic-install".into());
+        let mut fields = vec!["0"; 145];
+        fields[0] = "73";
+        fields[57] = "1";
+        fields[144] = "3";
+        app.insert_resource(crate::spellbook::SpellNames::parse(&fields.join("^")));
+        let mut online = app.world_mut().resource_mut::<crate::online::OnlineState>();
+        let mut player = crate::online::testing::player(1);
+        player.memorized_spells[0] = Some(73);
+        crate::online::testing::admit(&mut online, 7, player);
+        let mut book = eq_client_core::SpellBook::default();
+        book.apply(&eq_client_core::SpellUpdate::Slot {
+            slot: 1,
+            spell_id: 73,
+            mode: 0,
+        });
+        crate::online::testing::news(&mut online, [eq_client_core::WorldEvent::SpellBook(book)]);
+
+        let gem = SpellGem {
+            id: None,
+            area: Area {
+                x: 0.0,
+                y: 0.0,
+                width: 36.0,
+                height: 28.0,
+            },
+            holder: None,
+            background: None,
+            highlight: None,
+            icon_offset: None,
+            icons: Some(IconGrid {
+                sheets: vec![Piece {
+                    texture: "synthetic-gems.tga".into(),
+                    x: 4,
+                    y: 8,
+                    width: 72,
+                    height: 56,
+                }],
+                cell_width: 36,
+                cell_height: 28,
+                vertical: false,
+            }),
+        };
+        let memorized = app.world_mut().spawn(gem_artwork(0, &gem, None)).id();
+        let page = app
+            .world_mut()
+            .spawn(artwork(Source::BookPlace(1), 40.0))
+            .id();
+        app.add_systems(Update, update);
+        app.update();
+
+        let image = app.world().get::<ImageNode>(memorized).unwrap();
+        assert_eq!(image.image, sheet);
+        assert_eq!(image.rect, Some(Rect::new(40.0, 36.0, 76.0, 64.0)));
+        let node = app.world().get::<Node>(memorized).unwrap();
+        assert_eq!(node.display, Display::Flex);
+        assert_eq!((node.left, node.top), (px(0), px(0)));
+        assert_eq!((node.width, node.height), (px(36), px(28)));
+        let book_image = app.world().get::<ImageNode>(page).unwrap();
+        assert_ne!(book_image.image, sheet);
+        assert_eq!(book_image.rect, Some(Rect::new(120.0, 0.0, 160.0, 40.0)));
+
+        // This index still exists in the book grid, but the gem grid ends.
+        fields[144] = "7";
+        app.insert_resource(crate::spellbook::SpellNames::parse(&fields.join("^")));
+        app.update();
+        let image = app.world().get::<ImageNode>(memorized).unwrap();
+        assert_ne!(image.image, sheet);
+        assert_eq!(image.rect, Some(Rect::new(40.0, 40.0, 80.0, 80.0)));
+        let node = app.world().get::<Node>(memorized).unwrap();
+        assert_eq!(node.display, Display::Flex);
+        assert_eq!((node.left, node.top), (px(3), px(2)));
+        assert_eq!((node.width, node.height), (px(22), px(22)));
+    }
 
     #[test]
     fn mac_book_icons_use_the_shared_book_and_gem_column_and_clear_on_page_turn() {
