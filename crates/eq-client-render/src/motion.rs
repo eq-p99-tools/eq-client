@@ -374,6 +374,7 @@ impl Controls {
         intent
     }
 
+    /// Composes granted longitudinal and lateral ground motion as independent components.
     fn diagonal(
         &self,
         intent: &MotionInput,
