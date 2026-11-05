@@ -180,6 +180,12 @@ the selected channel. `/say`, `/tell`, `/auction`, `/ooc`, `/guild`, `/group`,
 `/shout` and `/raid` select channels explicitly, subject to server support.
 Closing composition does not send its unfinished text.
 
+`/ex`, `/exi`, and `/exit` disconnect immediately and close the client.
+`/q`, `/qu`, `/qui`, and `/quit` disconnect immediately and return to the
+login screen (or close an offline preview). These commands take no arguments
+and skip the camp and logout sequence. Use `/camp` to camp to character
+select or `/camp desktop` to camp and then close the client.
+
 Item links stay purple and retain their structured payload. Clicking one requests
 item details where item inspection is offered; received definitions are cached
 for the session and shown read-only. Inspection does not equip/use an item.

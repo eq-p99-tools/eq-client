@@ -161,6 +161,7 @@ pub(super) fn schedule(app: &mut App) {
                 navigation::update,
                 map::search_focus,
                 chat::input,
+                login::depart,
                 skinned::type_amount,
                 map::search_input,
             )

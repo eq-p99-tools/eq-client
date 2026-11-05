@@ -125,6 +125,8 @@ pub(super) struct ChatState {
     /// A window a slash command opens or closes, as `/raidwindow` does the
     /// Raid window, waiting for the toggle.
     pub toggled: Option<super::windows::WindowId>,
+    /// An explicit disconnect to handle before other gameplay input.
+    pub departure: Option<super::login::Departure>,
     draft: String,
     refusals: Refusals,
 }
@@ -1015,6 +1017,10 @@ fn submit_draft(
 ) {
     let result = (|| -> Result<(), Unsent> {
         let draft = typed_command(state.draft.trim()).into_owned();
+        if let Some(request) = departure_request(&draft) {
+            state.departure = Some(request?);
+            return Ok(());
+        }
         if let Some(request) = client_request(&draft, state) {
             return Ok(request?);
         }
@@ -1046,6 +1052,25 @@ fn submit_draft(
         // The draft stays, to send again.
         Err(Unsent::Refused) => (),
     }
+}
+
+/// These local commands never go through chat, the game queue, or camp.
+fn departure_request(input: &str) -> Option<Result<super::login::Departure, String>> {
+    use super::login::Departure;
+    let command = input.strip_prefix('/')?;
+    let (name, words) = command
+        .split_once(char::is_whitespace)
+        .unwrap_or((command, ""));
+    let (destination, command) = match name.to_ascii_lowercase().as_str() {
+        "ex" | "exi" | "exit" => (Departure::Desktop, "/exit"),
+        "q" | "qu" | "qui" | "quit" => (Departure::Login, "/quit"),
+        _ => return None,
+    };
+    Some(if words.trim().is_empty() {
+        Ok(destination)
+    } else {
+        Err(format!("Use {command} without arguments"))
+    })
 }
 
 /// Sends a game slash command for scripts and buttons; ordinary chat is
@@ -1807,6 +1832,169 @@ mod tests {
         assert_eq!(zone_who_request("/who all"), None);
         assert_eq!(zone_who_request("/whoever"), None);
         assert!(zone_who_request("/who 1 2 3").unwrap().is_err());
+    }
+
+    #[test]
+    fn departure_requires_an_exact_alias_without_arguments() {
+        use crate::login::Departure;
+
+        for name in ["/ex", "/EXI", "/exit"] {
+            assert_eq!(departure_request(name), Some(Ok(Departure::Desktop)));
+        }
+        for name in ["/q", "/Qu", "/qui", "/QUIT"] {
+            assert_eq!(departure_request(name), Some(Ok(Departure::Login)));
+        }
+        for unrelated in [
+            "/e",
+            "/exits",
+            "/exitnow",
+            "/quick",
+            "/quitter",
+            "/camp desktop",
+        ] {
+            assert_eq!(departure_request(unrelated), None);
+        }
+        for invalid in ["/exit desktop", "/qu now", "/QUIT\tnow"] {
+            assert!(matches!(departure_request(invalid), Some(Err(_))));
+        }
+    }
+
+    /// The front end must move on before this worker finishes.
+    struct Stopping(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+    impl crate::login::Worker for Stopping {
+        fn stop(&self) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        fn finished(&self) -> bool {
+            false
+        }
+        fn reason(&self) -> Option<String> {
+            None
+        }
+        fn closed(&self) -> bool {
+            false
+        }
+    }
+
+    fn enter_draft(app: &mut App, draft: &str) {
+        let world = app.world_mut();
+        draft.clone_into(&mut world.resource_mut::<ChatState>().draft);
+        world.resource_mut::<crate::keys::Typing>().composing = true;
+        world
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Enter);
+        world.write_message(KeyboardInput {
+            key_code: KeyCode::Enter,
+            logical_key: Key::Enter,
+            state: bevy::input::ButtonState::Pressed,
+            text: None,
+            repeat: false,
+            window: Entity::PLACEHOLDER,
+        });
+        app.update();
+    }
+
+    #[test]
+    fn typed_departure_detaches_the_admission_before_login_input_or_exit() {
+        use crate::login::{
+            FrontEnd, Screen, Session,
+            testing::{Fake, Heard, server},
+        };
+        use std::sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, Ordering},
+            mpsc::{TryRecvError, sync_channel},
+        };
+        for (alias, closes) in [("/qu", false), ("/EXI", true)] {
+            let heard = Arc::new(Mutex::new(Heard::default()));
+            let stopped = Arc::new(AtomicBool::new(false));
+            let (news, updates) = sync_channel(4);
+            let (commands, queue) = sync_channel(4);
+            let (front, updates, commands) = FrontEnd::launched(
+                Box::new(Fake {
+                    servers: vec![server("Example", "remembered")],
+                    heard: heard.clone(),
+                }),
+                Some(Session {
+                    inventory_move_rules: None,
+                    spell_provider: eq_client_core::spell_tables::Binding::new(
+                        eq_client_core::spell_tables::Policy::Installed,
+                    ),
+                    updates,
+                    commands,
+                    worker: Box::new(Stopping(stopped.clone())),
+                }),
+            );
+            let mut online = crate::online::OnlineState::new(true);
+            crate::online::testing::admit(&mut online, 4, crate::online::testing::player(12));
+            online.camp_to(eq_client_core::camp::CampTo::Desktop);
+            crate::online::testing::news(
+                &mut online,
+                [eq_client_core::WorldEvent::Camp(
+                    eq_client_core::CampStatus::LoggingOut,
+                )],
+            );
+            assert_eq!(front.screen(&online), Screen::World);
+
+            let mut app = crate::testing::app();
+            app.insert_resource(front)
+                .insert_resource(online)
+                .insert_resource(crate::online::Updates(Mutex::new(updates)))
+                .insert_resource(crate::outbox::Outbox::new(commands))
+                .init_resource::<Assets<Mesh>>()
+                .init_resource::<Assets<StandardMaterial>>()
+                .init_resource::<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>()
+                .add_message::<KeyboardInput>()
+                .add_message::<AppExit>()
+                .add_systems(
+                    Update,
+                    (
+                        input,
+                        crate::login::depart,
+                        crate::login::form,
+                        crate::online::leave,
+                    )
+                        .chain(),
+                );
+            let old_scene = app.world_mut().spawn(crate::SceneEntity).id();
+            app.world_mut()
+                .resource_mut::<crate::options::OptionsState>()
+                .options
+                .qol
+                .set(Fix::ExitAtOnce, !closes);
+            enter_draft(&mut app, alias);
+
+            let world = app.world();
+            let online = world.resource::<crate::online::OnlineState>();
+            let front = world.resource::<FrontEnd>();
+            assert!(stopped.load(Ordering::SeqCst));
+            assert!(!front.running());
+            assert_eq!(front.screen(online), Screen::Login);
+            assert_eq!(front.account, "remembered");
+            assert_eq!(
+                heard.lock().unwrap().connects,
+                [] as [(usize, String, String); 0]
+            );
+            assert!(online.world().ended());
+            assert_eq!(online.world().session_id(), None);
+            assert!(online.world().player().is_none());
+            assert!(online.world().camp_completion().is_none());
+            assert!(world.get_entity(old_scene).is_err());
+            assert!(world.resource::<crate::keys::Typing>().logging_in);
+            assert!(!world.resource::<crate::keys::Typing>().composing);
+            assert!(matches!(queue.try_recv(), Err(TryRecvError::Disconnected)));
+            assert!(
+                news.try_send(eq_client_core::WorldUpdate::Connection(
+                    eq_client_core::world::Link::Ended,
+                ))
+                .is_err()
+            );
+            assert_eq!(
+                world.resource::<Messages<AppExit>>().len(),
+                usize::from(closes)
+            );
+        }
     }
 
     #[test]

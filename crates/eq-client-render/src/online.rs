@@ -169,7 +169,40 @@ impl OnlineState {
         self.deletion.ended();
         self.world.restart();
         self.selection = None;
+        self.loading.clear();
         self.held.clear();
+    }
+
+    /// Clears a session the player cancelled. An ended link tells the
+    /// script runner to release its input, without implying logout success.
+    pub(super) fn disconnect(
+        &mut self,
+        panels: &mut Panels,
+        scene: &mut super::zone::Scene,
+        commands: &mut Commands,
+    ) {
+        self.restart();
+        let changes = self.tell(
+            &WorldUpdate::Connection(eq_client_core::world::Link::Ended),
+            std::time::Instant::now(),
+            &NoSpells,
+        );
+        if let Some(reason) = changes.reset {
+            self.reset_presentation(reason, panels, scene, commands);
+        }
+        scene.leave(commands, &mut self.regions);
+    }
+
+    fn reset_presentation(
+        &mut self,
+        reason: Reset,
+        panels: &mut Panels,
+        scene: &mut super::zone::Scene,
+        commands: &mut Commands,
+    ) {
+        self.loading.clear();
+        panels.forget(reason, self);
+        scene.forget(reason, commands);
     }
 
     /// Bind host planning to the selected worker's placement policy.
@@ -496,8 +529,6 @@ impl Panels<'_> {
             Reset::Entered | Reset::Camped | Reset::Lost { ended: true, .. }
         ) {
             state.deletion.ended();
-        }
-        if matches!(reason, Reset::Entered | Reset::Camped) {
             // Requests and choices made in the old admission are void.
             *self.combat = super::combat::CombatState::default();
             *self.items = super::items::ItemState::default();
@@ -672,9 +703,7 @@ pub(super) fn receive(
         trace(&update, &changes, &state.world);
         panels.merchant_news(&update, &changes, &state.world);
         if let Some(reason) = changes.reset {
-            state.loading.clear();
-            panels.forget(reason, &mut state);
-            scene.forget(reason, &mut commands);
+            state.reset_presentation(reason, &mut panels, &mut scene, &mut commands);
         }
         panels.show(&changes, &mut state, messages.as_deref(), &mut chat);
         if let Some(moved) = &changes.moved {

@@ -170,6 +170,8 @@ pub(crate) struct FrontEnd {
     /// What a script asked of the screen showing, which it does as a press
     /// of its button would.
     pub(crate) request: Option<Request>,
+    /// The Enter that submitted a slash command belongs to chat.
+    skip_form_input: bool,
     /// The session running, if any.
     session: Option<Running>,
     /// Sessions asked to stop, kept until their threads end so that none is
@@ -408,8 +410,7 @@ impl FrontEnd {
     ) {
         online.restart();
         online.plan_inventory_as(session.inventory_move_rules);
-        link.spells.bind(session.spell_provider);
-        link.outbox.set_spell_ready(link.spells.ready());
+        link.bind_spells(session.spell_provider);
         link.attach(Some(session.updates), Some(session.commands));
         self.session = Some(Running {
             worker: session.worker,
@@ -434,10 +435,15 @@ impl FrontEnd {
             self.closing.push(running.worker);
         }
         link.attach(None, None);
+        link.bind_spells(eq_client_core::spell_tables::Binding::new(
+            eq_client_core::spell_tables::Policy::Installed,
+        ));
         self.highlighted = None;
+        self.request = None;
         // The account typed stays for another try, as the official login
         // screen keeps it; the password goes.
         let typed = std::mem::take(&mut self.account);
+        self.password.zeroize();
         self.refresh();
         if !typed.trim().is_empty() {
             self.account = typed;
@@ -515,6 +521,11 @@ impl Link<'_> {
             *receiver = updates;
         }
         self.outbox.connect(commands);
+    }
+
+    fn bind_spells(&mut self, binding: eq_client_core::spell_tables::Binding) {
+        self.spells.bind(binding);
+        self.outbox.set_spell_ready(self.spells.ready());
     }
 }
 
@@ -599,6 +610,49 @@ pub(super) fn quit(
         front.back_to_login(&mut online, &mut link);
     } else {
         exit.write(AppExit::Success);
+    }
+}
+
+/// Where an explicit disconnect takes the player.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Departure {
+    Login,
+    Desktop,
+}
+
+/// Handles chat's disconnect before the rest of the frame's gameplay input.
+/// Closing a transport may send a disconnect notice; no camp or logout
+/// request is queued and the front end doesn't wait for a server reply.
+pub(super) fn depart(
+    mut commands: Commands,
+    mut chat: ResMut<super::chat::ChatState>,
+    (mut front, mut online, mut link): (ResMut<FrontEnd>, ResMut<OnlineState>, Link),
+    (mut panels, mut scene): (super::online::Panels, super::zone::Scene),
+    mut typing: ResMut<super::keys::Typing>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    let Some(destination) = chat.departure else {
+        return;
+    };
+    chat.departure = None;
+    chat.requested_target = None;
+    chat.zone_who = None;
+    chat.asked = None;
+    front.end(None, &mut link);
+    online.disconnect(&mut panels, &mut scene, &mut commands);
+
+    let has_login = front.has_login();
+    front.skip_form_input = has_login;
+    typing.logging_in = has_login;
+    typing.composing = false;
+    typing.counting = false;
+    typing.map_search = false;
+    typing.creating_character = false;
+    if destination == Departure::Desktop || !has_login {
+        info!("Exit requested: disconnecting immediately");
+        exit.write(AppExit::Success);
+    } else {
+        info!("Quit requested: disconnecting to login");
     }
 }
 
