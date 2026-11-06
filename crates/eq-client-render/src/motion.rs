@@ -865,7 +865,15 @@ pub(super) fn input(
         .mouse_heading
         .filter(|heading| arc(current_heading, *heading) != 0.0);
     let mouse_steering = mouse_aim.is_some() || mouse_snapshot.is_some();
-    let turning_with_mouse = mouse_step != 0.0 || mouse_snapshot.is_some();
+    // The ground integrator suppresses new lateral acceleration during
+    // active yaw. A completed turn may still await its position sample.
+    let active_mouse_yaw =
+        mouse_step != 0.0 || snapshot_dialect && mouse_aim.is_some_and(|yaw| yaw != 0.0);
+    let heading_update = if mouse_snapshot.is_some() {
+        HeadingUpdate::Snapshot
+    } else {
+        HeadingUpdate::Rate
+    };
     let steered_heading = mouse_snapshot.unwrap_or_else(|| {
         if mouse_step == 0.0 {
             current_heading
@@ -944,7 +952,8 @@ pub(super) fn input(
         && !airborne
         && controls.jump.is_none()
         && controls.facing.is_none()
-        && !turning_with_mouse
+        && mouse_step == 0.0
+        && mouse_snapshot.is_none()
         && diagonal.is_none()
     {
         controls.held = Some(Held::NoSpeed);
@@ -977,6 +986,7 @@ pub(super) fn input(
         _ => jump,
     };
     let previous_airborne = controls.airborne.clone();
+    let diagonal_heading = mouse_snapshot.unwrap_or(current_heading);
     // A combined input keeps one body heading and both signed component
     // budgets. Run the usual sweep on a copy before selecting that sample.
     // A slide that spends one component on the other or a ledge that needs
@@ -987,7 +997,7 @@ pub(super) fn input(
                 && !jump
                 && !airborne
                 && controls.facing.is_none()
-                && !turning_with_mouse
+                && !active_mouse_yaw
                 && world.support(feet).is_some()
         })
         .and_then(|intent| {
@@ -1026,12 +1036,13 @@ pub(super) fn input(
             };
             let resolved = world_position(
                 (landing + Vec3::Y * body.feet_offset).to_array(),
-                current_heading,
+                diagonal_heading,
             );
             (world.support(landing).is_some()
-                && intent.request.admits(
+                && intent.request.admits_with_heading(
                     accepted.position,
                     resolved,
+                    heading_update,
                     intent.longitudinal,
                     intent.lateral,
                     span,
@@ -1091,7 +1102,7 @@ pub(super) fn input(
     // its direction unless mouse-look is steering the body. The sent heading
     // follows the facing within the same sample budget as the position.
     let facing = if matches!(mode, MovementMode::GroundedDiagonal(_)) {
-        current_heading
+        diagonal_heading
     } else if mouse_steering {
         steered_heading
     } else if Vec2::new(direction.x, direction.z) == Vec2::ZERO || preserve_facing {
@@ -1113,11 +1124,7 @@ pub(super) fn input(
             mode,
             session_id: stamp.session_id,
             position: position_sent,
-            heading: if mouse_snapshot.is_some() {
-                HeadingUpdate::Snapshot
-            } else {
-                HeadingUpdate::Rate
-            },
+            heading: heading_update,
             created: stamp.created,
         })
     });
@@ -4091,8 +4098,223 @@ mod tests {
         }
     }
 
+    fn keyboard_mouse_look_app() -> (App, mpsc::Receiver<ClientCommand>, Entity, Entity) {
+        use bevy::input::keyboard::{Key, KeyboardFocusLost, KeyboardInput, keyboard_input_system};
+        let (mut app, receiver, camera, player) = mouse_look_app();
+        app.init_resource::<ButtonInput<Key>>()
+            .add_message::<KeyboardInput>()
+            .add_message::<KeyboardFocusLost>()
+            .add_systems(
+                PreUpdate,
+                (keyboard_input_system, crate::keys::presses::capture).chain(),
+            );
+        for (act, key) in [
+            (Act::Forward, KeyCode::KeyW),
+            (Act::TurnLeft, KeyCode::KeyA),
+            (Act::TurnRight, KeyCode::KeyD),
+        ] {
+            crate::keys::testing::bind(&mut app, act, crate::keys::Chord::key(key));
+        }
+        let mut controls = app.world_mut().resource_mut::<Controls>();
+        controls.diagonal_rates.run = Some(3.0);
+        controls.strafe_speed = Some(4.0);
+        (app, receiver, camera, player)
+    }
+
+    fn native_movement_key(app: &mut App, key_code: KeyCode, pressed: bool) {
+        use bevy::input::{
+            ButtonState,
+            keyboard::{Key, KeyboardInput},
+        };
+        let world = app.world_mut();
+        let window = world
+            .query_filtered::<Entity, With<bevy::window::PrimaryWindow>>()
+            .single(world)
+            .unwrap();
+        let letter = match key_code {
+            KeyCode::KeyW => "w",
+            KeyCode::KeyA => "a",
+            KeyCode::KeyD => "d",
+            _ => unreachable!("this fixture only assigns W/A/D"),
+        };
+        world.write_message(KeyboardInput {
+            key_code,
+            logical_key: Key::Character(letter.into()),
+            state: if pressed {
+                ButtonState::Pressed
+            } else {
+                ButtonState::Released
+            },
+            text: None,
+            repeat: false,
+            window,
+        });
+    }
+
+    fn assert_diagonal_step(
+        app: &App,
+        from: eq_client_core::WorldPosition,
+        request: &MovementRequest,
+        side: StrafeSide,
+    ) {
+        assert_eq!(
+            request.mode,
+            MovementMode::GroundedDiagonal(GroundedDiagonal {
+                along: DiagonalAlong::Run,
+                side
+            })
+        );
+        let facing = turned_to(request.position.heading) * Vec3::Z;
+        let delta = Vec3::from_array(eq_client_core::render_position(request.position))
+            - Vec3::from_array(eq_client_core::render_position(from));
+        let span = app.world().resource::<Controls>().sent_span;
+        let sign = if side == StrafeSide::Left { -1.0 } else { 1.0 };
+        assert!((delta.dot(facing) - 6.0 * span).abs() < 0.001);
+        assert!((delta.dot(facing.cross(Vec3::Y)) - sign * 3.0 * span).abs() < 0.001);
+    }
+
     #[test]
-    fn held_mouse_forward_and_strafe_combine_after_the_applied_turn() {
+    fn native_diagonal_keys_start_together_or_join_forward_on_the_first_sample() {
+        for (key, side) in [
+            (KeyCode::KeyA, StrafeSide::Left),
+            (KeyCode::KeyD, StrafeSide::Right),
+        ] {
+            for already_forward in [false, true] {
+                let (mut app, receiver, _, player) = keyboard_mouse_look_app();
+                crate::camera::testing::button(&mut app, MouseButton::Right, true);
+                native_movement_key(&mut app, KeyCode::KeyW, true);
+                let from = if already_forward {
+                    app.update();
+                    let ClientCommand::Move(forward) = receiver.try_recv().unwrap() else {
+                        panic!("expected forward movement");
+                    };
+                    assert_eq!(forward.mode, MovementMode::Forward);
+                    native_movement_key(&mut app, key, true);
+                    app.update();
+                    assert!(receiver.try_recv().is_err());
+                    accept(&mut app, &forward);
+                    forward.position
+                } else {
+                    native_movement_key(&mut app, key, true);
+                    world_position([0.0, 3.0, 0.0], 0.0)
+                };
+                app.update();
+                let ClientCommand::Move(chord) = receiver.try_recv().unwrap() else {
+                    panic!("expected a diagonal on the first eligible sample");
+                };
+                assert_eq!(chord.heading, HeadingUpdate::Rate);
+                assert_diagonal_step(&app, from, &chord, side);
+
+                accept(&mut app, &chord);
+                native_movement_key(&mut app, key, false);
+                app.update();
+                let ClientCommand::Move(released) = receiver.try_recv().unwrap() else {
+                    panic!("expected forward after strafe release");
+                };
+                assert_eq!(released.mode, MovementMode::Forward);
+                assert!((released.position.x - chord.position.x).abs() < 0.001);
+                assert!(released.position.y > chord.position.y);
+                assert!(
+                    app.world()
+                        .get::<Transform>(player)
+                        .unwrap()
+                        .translation
+                        .abs_diff_eq(
+                            Vec3::from_array(eq_client_core::render_position(chord.position)),
+                            0.001,
+                        )
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn settled_mouse_yaw_and_physical_diagonal_share_the_first_movement_snapshot() {
+        use eq_network_game::movement::{MotionSession, UpdateGate};
+        for (key, side) in [
+            (KeyCode::KeyA, StrafeSide::Left),
+            (KeyCode::KeyD, StrafeSide::Right),
+        ] {
+            let (mut app, receiver, camera, player) = keyboard_mouse_look_app();
+            crate::camera::testing::button(&mut app, MouseButton::Right, true);
+            native_movement_key(&mut app, KeyCode::KeyW, true);
+            native_movement_key(&mut app, key, true);
+            for pixels in [2.0, 3.0, 4.0] {
+                app.world_mut().resource_mut::<Controls>().last_accepted = Instant::now();
+                mouse_drag(&mut app, pixels, 0.0);
+                app.update();
+                assert!(receiver.try_recv().is_err());
+            }
+            let pending = app.world().resource::<Controls>().mouse_heading.unwrap();
+            assert!(arc(0.0, pending) < -1.0);
+            assert_attached_heading(&app, camera, player, pending);
+
+            // RMB is still held, but this frame has zero yaw. The chord and
+            // the pending facing use one sample and one displacement budget.
+            app.world_mut().resource_mut::<Controls>().last_accepted = Instant::now()
+                .checked_sub(Duration::from_millis(100))
+                .unwrap();
+            app.update();
+            assert_eq!(app.world().resource::<MouseAim>().horizontal, Some(0.0));
+            let ClientCommand::Move(mut chord) = receiver.try_recv().unwrap() else {
+                panic!("expected a settled snapshot and diagonal together");
+            };
+            assert_eq!(chord.heading, HeadingUpdate::Snapshot);
+            assert!(arc(pending, chord.position.heading).abs() < 0.001);
+            let origin = world_position([0.0, 3.0, 0.0], 0.0);
+            assert_diagonal_step(&app, origin, &chord, side);
+
+            let start = Instant::now();
+            let spacing = Duration::from_millis(280);
+            let mut session = MotionSession::new(11, 7, origin, start)
+                .unwrap()
+                .with_heading_snapshots(true)
+                .with_gate(Some(UpdateGate::Changed { spacing }));
+            session
+                .calibrate(
+                    eq_client_core::MotionCalibration {
+                        units_per_second: 6.0,
+                        diagonal: DiagonalRates {
+                            run: Some(3.0),
+                            walk: None,
+                        },
+                        strafe: None,
+                        walk: None,
+                        backward: None,
+                        velocity_scale: 1.0,
+                        animation: 1,
+                    },
+                    start,
+                )
+                .unwrap();
+            chord.created = start + Duration::from_millis(100);
+            session
+                .send_move_sample(&chord, chord.created, |_| panic!("paced chord sent early"))
+                .unwrap();
+            assert_eq!(session.position(), chord.position);
+            accept(&mut app, &chord);
+            native_movement_key(&mut app, key, false);
+            native_movement_key(&mut app, KeyCode::KeyW, false);
+            app.update();
+            assert_attached_heading(&app, camera, player, pending);
+            let ClientCommand::Move(stop) = receiver.try_recv().unwrap() else {
+                panic!("expected a stop on release");
+            };
+            assert_eq!(stop.position, chord.position);
+            assert!(
+                session
+                    .tick_sample(start + spacing, |sample| {
+                        assert_eq!(sample.position, chord.position);
+                        assert_eq!((sample.animation, sample.delta_heading), (1, 0));
+                        Ok(())
+                    })
+                    .unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn fresh_mouse_yaw_suppresses_new_strafe_only_for_its_frame() {
         let (mut app, receiver, _, _) = mouse_look_app();
         let mut controls = app.world_mut().resource_mut::<Controls>();
         controls.diagonal_rates.run = Some(3.0);
@@ -4109,6 +4331,10 @@ mod tests {
         };
         assert_eq!(turn.mode, MovementMode::Forward);
         assert!(arc(0.0, turn.position.heading) < -1.0);
+        // The next mouse delta arrives during the previous proposal's wait.
+        mouse_drag(&mut app, 2.0, 0.0);
+        app.update();
+        assert!(receiver.try_recv().is_err());
         accept(&mut app, &turn);
 
         app.update();
@@ -4122,10 +4348,8 @@ mod tests {
                 side: StrafeSide::Right,
             })
         );
-        assert_eq!(
-            combined.position.heading.to_bits(),
-            turn.position.heading.to_bits()
-        );
+        assert_eq!(combined.heading, HeadingUpdate::Snapshot);
+        assert!(arc(turn.position.heading, combined.position.heading) < -0.5);
     }
 
     #[test]
