@@ -2150,7 +2150,6 @@ fn label(
         .is_chat()
         .then(|| label.anchors.map(reflow::Geometry))
         .flatten();
-    let buff_name = buff_label(owner, label.eq_type);
     match (label.eq_type, bag) {
         _ if hotbar_page => aligned_in(
             window,
@@ -2159,27 +2158,11 @@ fn label(
             (text, hotbar::page::Number),
             geometry,
         ),
-        (Some(_), _) if let Some((effects, index)) = buff_name => aligned_in(
-            window,
-            node,
-            label.align,
-            (text, Shows::BuffName(effects, index)),
-            geometry,
-        ),
-        (Some(kind), _) if let Some(gem) = gem_label(kind) => {
-            aligned_in(
-                window,
-                node,
-                label.align,
-                (text, Shows::GemName(gem)),
-                geometry,
-            );
-        }
         (Some(kind), _) => aligned_in(
             window,
             node,
             label.align,
-            (text, Shows::Label(kind)),
+            (text, numbered_label(owner, kind)),
             geometry,
         ),
         (None, Some(bag)) => aligned_in(window, node, label.align, (text, bag), geometry),
@@ -2208,6 +2191,17 @@ fn label(
             aligned_in(window, node, label.align, (text, shows), geometry);
         }
         (None, None) => plain_label(window, name, label, text, node, geometry, owner),
+    }
+}
+
+/// Resolves a skin's numeric label, including its buff and gem name bindings.
+fn numbered_label(owner: WindowId, kind: u32) -> Shows {
+    if let Some((effects, index)) = buff_label(owner, Some(kind)) {
+        Shows::BuffName(effects, index)
+    } else if let Some(gem) = gem_label(kind) {
+        Shows::GemName(gem)
+    } else {
+        Shows::Label(kind)
     }
 }
 
