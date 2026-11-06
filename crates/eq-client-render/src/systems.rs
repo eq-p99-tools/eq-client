@@ -47,6 +47,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<spellbook::BookView>()
         .init_resource::<spellbook::BookSelection>()
         .init_resource::<spellbook::BookHand>()
+        .init_resource::<spellbook::sets::Sets>()
         .init_resource::<sheets::Sheets>()
         .init_resource::<skinned::Screens>()
         .init_resource::<skinned::CursorLook>()
@@ -160,6 +161,7 @@ pub(super) fn schedule(app: &mut App) {
                 // A scrollbar's press scrolls its box as the wheel does.
                 skinned::scrollbar::scroll,
                 map::search_focus,
+                spellbook::sets::follow,
                 spellbook::search::focus,
                 spellbook::search::capture,
                 chat::input,
@@ -257,6 +259,7 @@ pub(super) fn schedule(app: &mut App) {
                 crate::camera::turn,
                 move_player,
                 motion::input,
+                spellbook::sets::ui::input,
             )
                 .chain(),
         )
@@ -346,6 +349,7 @@ pub(super) fn schedule(app: &mut App) {
                         spellbook::book_frames,
                         spellbook::book_present,
                         spellbook::search::present,
+                        spellbook::sets::ui::present,
                     ),
                     skinned::tabs,
                     abilities::present,

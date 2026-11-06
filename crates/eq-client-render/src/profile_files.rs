@@ -121,10 +121,27 @@ impl Store {
 
     /// Reads unsaved state before disk, including after returning to a profile.
     pub(crate) fn read(&self, name: &str) -> Option<String> {
-        self.pending
-            .get(name)
-            .map(|pending| pending.text.clone())
-            .or_else(|| std::fs::read_to_string(self.directory.as_ref()?.join(name)).ok())
+        self.read_result(name).ok().flatten()
+    }
+
+    /// Distinguishes a missing profile file from one that could not be read.
+    pub(crate) fn read_result(&self, name: &str) -> std::io::Result<Option<String>> {
+        if let Some(pending) = self.pending.get(name) {
+            return Ok(Some(pending.text.clone()));
+        }
+        let Some(directory) = &self.directory else {
+            return Ok(None);
+        };
+        match std::fs::read_to_string(directory.join(name)) {
+            Ok(text) => Ok(Some(text)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Whether the latest changes still need to reach disk.
+    pub(crate) fn pending(&self, name: &str) -> bool {
+        self.pending.contains_key(name)
     }
 
     /// Records the loaded codec's canonical form without scheduling a write.

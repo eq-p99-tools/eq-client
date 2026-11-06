@@ -533,6 +533,7 @@ pub(crate) fn apply(
             };
             title_bottom = draw(window, screen, &mut art, &context);
             if book_footer {
+                let base_height = screen.area.height + crate::spellbook::search::FOOTER_HEIGHT;
                 crate::spellbook::search::spawn(
                     window,
                     at(
@@ -541,6 +542,10 @@ pub(crate) fn apply(
                         screen.area.width,
                         crate::spellbook::search::FOOTER_HEIGHT,
                     ),
+                );
+                crate::spellbook::sets::ui::spawn(
+                    window,
+                    Some((frame, screen.area.width, base_height)),
                 );
             }
         });

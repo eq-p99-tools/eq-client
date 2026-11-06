@@ -7,6 +7,7 @@ mod lines;
 mod scribe;
 pub(crate) mod search;
 mod seat;
+pub(crate) mod sets;
 mod skinned;
 pub(super) use lines::say as say_book_lines;
 pub(super) use scribe::presentation as scribe_presentation;
@@ -347,6 +348,7 @@ pub(super) fn spawn(commands: &mut Commands) {
 /// Keeps refreshed rows inside one collapsible container beneath the title bar.
 fn spawn_body(parent: &mut ChildSpawnerCommands) {
     search::spawn(parent, Node::default());
+    sets::ui::spawn(parent, None);
     super::book_delete::spawn(parent);
     parent.spawn((
         Text::new(""),
@@ -1549,10 +1551,16 @@ mod tests {
         // A request sent says nothing until the server answers.
         assert_eq!(app.world().resource::<BookSelection>().message, "");
         // Even an identical rejection is a new reply, and shows.
-        crate::online::testing::book_action(
-            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
-            eq_client_core::BookActionStatus::Rejected("Example rejection".into()),
-        );
+        app.world_mut()
+            .resource_scope(|world, mut online: Mut<crate::online::OnlineState>| {
+                crate::online::testing::book_news(
+                    &mut online,
+                    world.resource::<crate::outbox::Outbox>(),
+                    eq_client_core::WorldEvent::BookAction(
+                        eq_client_core::BookActionStatus::Rejected("Example rejection".into()),
+                    ),
+                );
+            });
         app.update();
         assert!(
             app.world()

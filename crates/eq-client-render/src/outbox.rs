@@ -6,9 +6,13 @@
 //! report it there. Windows grey out
 //! what the session does not offer from the same answer, the world's
 //! capability report.
+mod book;
+
+pub(crate) use self::book::BOOK_TIMEOUT;
+use self::book::{BookQueue, Expected};
 use crate::theme;
 use bevy::prelude::*;
-use eq_client_core::{Capability, ClientCommand, world::ClientWorld};
+use eq_client_core::{Capability, ClientCommand, WorldEvent, world::ClientWorld};
 use std::{
     sync::{
         Mutex,
@@ -40,6 +44,12 @@ pub(crate) enum Refusal {
     Unavailable(Capability),
     /// This provider has no complete, usable spell replay for the current zone.
     SpellData,
+    /// A saved layout owns the spellbook until its current step settles.
+    SpellSet,
+    /// The previous local edit is still awaiting its result.
+    BookPending,
+    /// An edit may have reached the server and its result is unknown.
+    BookUnconfirmed,
     /// The queue to the session is full.
     Busy,
     /// The session has ended.
@@ -56,6 +66,11 @@ impl Refusal {
             Self::Dead => "You can't do that while dead",
             Self::Unavailable(_) => UNAVAILABLE,
             Self::SpellData => "Spell data is not ready for casting",
+            Self::SpellSet => "Wait for the spell set to finish",
+            Self::BookPending => "Wait for the current spellbook change",
+            Self::BookUnconfirmed => {
+                "Spellbook change unconfirmed. Wait for the reply or re-enter the zone."
+            }
             Self::Busy => "Too many requests at once; try again",
             Self::Ended => "The connection has ended",
         }
@@ -93,6 +108,20 @@ pub(crate) struct Outbox {
     queue: Option<SyncSender<ClientCommand>>,
     spell_ready: AtomicBool,
     refused: Mutex<Vec<Refusal>>,
+    book: Mutex<BookQueue>,
+}
+
+fn interrupts_apply(command: &ClientCommand) -> bool {
+    matches!(
+        command,
+        ClientCommand::Move(_)
+            | ClientCommand::Jump { .. }
+            | ClientCommand::SetPosture { .. }
+            | ClientCommand::CastSpell { .. }
+            | ClientCommand::UseItem(_)
+            | ClientCommand::Camp { .. }
+            | ClientCommand::ExitAtOnce { .. }
+    )
 }
 
 impl Outbox {
@@ -101,6 +130,7 @@ impl Outbox {
             queue,
             spell_ready: AtomicBool::new(true),
             refused: Mutex::new(Vec::new()),
+            book: Mutex::default(),
         }
     }
 
@@ -111,6 +141,51 @@ impl Outbox {
     /// Sends to another session's queue from now on, or to none.
     pub(crate) fn connect(&mut self, queue: Option<SyncSender<ClientCommand>>) {
         self.queue = queue;
+        self.book = Mutex::default();
+    }
+
+    /// Claims the book between set steps only after any manual edit settles.
+    pub(crate) fn begin_spell_set(&self, world: &ClientWorld, now: Instant) -> Result<(), Refusal> {
+        let mut book = self.book.lock().map_err(|_| Refusal::Busy)?;
+        book.can_edit(world.session_id(), false, now)?;
+        if crate::spellbook::action_pending(world) {
+            return Err(Refusal::BookPending);
+        }
+        book.applying = true;
+        book.interrupted = false;
+        Ok(())
+    }
+
+    /// Feed ordered results before input can hand the spellbook to Apply.
+    pub(crate) fn book_news(&self, event: &WorldEvent, session: Option<u64>) {
+        if matches!(event, WorldEvent::BookAction(_) | WorldEvent::Spell(_))
+            && let Ok(mut book) = self.book.lock()
+        {
+            book.observe(event, session);
+        }
+    }
+
+    /// A fresh admission supplies a new authoritative book and gem layout.
+    pub(crate) fn reset_book(&self) {
+        if let Ok(mut book) = self.book.lock() {
+            book.reset();
+        }
+    }
+
+    pub(crate) fn applying_spell_set(&self) -> bool {
+        self.book.lock().is_ok_and(|book| book.applying)
+    }
+
+    pub(crate) fn spell_set_interrupted(&self) -> bool {
+        self.book
+            .lock()
+            .map_or(true, |book| !book.applying || book.interrupted)
+    }
+
+    pub(crate) fn end_spell_set(&self) {
+        if let Ok(mut book) = self.book.lock() {
+            book.applying = false;
+        }
     }
 
     /// The stamp for a command made now in the current admission.
@@ -148,23 +223,65 @@ impl Outbox {
     /// # Errors
     /// Refuses a command the session cannot take now.
     pub(crate) fn send(&self, world: &ClientWorld, command: ClientCommand) -> Result<(), Refusal> {
-        self.try_send(world, command)
+        self.send_owned(world, command, false)
+    }
+
+    /// The active set's single step uses the same outbox checks as a click.
+    pub(crate) fn spell_set_step(
+        &self,
+        world: &ClientWorld,
+        command: ClientCommand,
+    ) -> Result<(), Refusal> {
+        self.send_owned(world, command, true)
+    }
+
+    fn send_owned(
+        &self,
+        world: &ClientWorld,
+        command: ClientCommand,
+        set_step: bool,
+    ) -> Result<(), Refusal> {
+        self.try_send(world, command, set_step)
             .inspect_err(|refusal| self.refused(*refusal))
     }
 
-    fn try_send(&self, world: &ClientWorld, command: ClientCommand) -> Result<(), Refusal> {
-        self.check(world, &command)?
-            .try_send(command)
-            .map_err(|error| match error {
+    fn try_send(
+        &self,
+        world: &ClientWorld,
+        command: ClientCommand,
+        set_step: bool,
+    ) -> Result<(), Refusal> {
+        let edit = Expected::from_command(&command);
+        let interrupt = interrupts_apply(&command);
+        self.check(world, &command).and_then(|queue| {
+            let mut book = (edit.is_some() || interrupt)
+                .then(|| self.book.lock().map_err(|_| Refusal::Busy))
+                .transpose()?;
+            let edit = edit.map(|expected| (expected, command.session_id(), Instant::now()));
+            if let (Some((_, session, now)), Some(book)) = (edit, book.as_mut()) {
+                if session != world.session_id() {
+                    return Err(Refusal::Away);
+                }
+                book.can_edit(session, set_step, now)?;
+            }
+            queue.try_send(command).map_err(|error| match error {
                 TrySendError::Full(_) => Refusal::Busy,
                 TrySendError::Disconnected(_) => Refusal::Ended,
-            })
+            })?;
+            if let Some(book) = book.as_mut() {
+                if let Some((expected, session, now)) = edit {
+                    book.sent(expected, session, now);
+                }
+                book.interrupted |= book.applying && interrupt;
+            }
+            Ok(())
+        })
     }
 
     /// Sends a command the player did not ask for, such as a setting the
     /// session must know. A refusal is not shown; the caller tries again.
     pub(crate) fn tell(&self, world: &ClientWorld, command: ClientCommand) -> bool {
-        self.try_send(world, command).is_ok()
+        self.try_send(world, command, false).is_ok()
     }
 
     /// Stamps a command made now and sends it.
@@ -190,7 +307,7 @@ impl Outbox {
         command: impl FnOnce(Stamp) -> ClientCommand,
     ) -> Result<(), Refusal> {
         let stamp = self.try_stamp(world)?;
-        self.try_send(world, command(stamp))
+        self.try_send(world, command(stamp), false)
     }
 
     /// The queue, if the session can take this command now.

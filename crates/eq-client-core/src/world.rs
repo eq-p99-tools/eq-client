@@ -1389,6 +1389,7 @@ impl ClientWorld {
                 // The server sends the inventory again after each admission.
                 self.inventory = Inventory::default();
                 self.spell_book = None;
+                self.book_action = None;
                 self.buffs.clear();
                 self.casting.interrupted = None;
             }

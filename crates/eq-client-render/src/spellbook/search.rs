@@ -1,5 +1,5 @@
 //! Compact read-only browse results, in increasing server book-slot order.
-use super::{BookView, SpellNames, known_entries};
+use super::{BookView, SpellNames, known_entries, sets};
 use crate::{
     keys::{Typing, search},
     theme::{self, Size},
@@ -96,6 +96,7 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands, node: Node) {
                 Tooltip("Find learned spells by name. Enter or Escape finishes. Delete or Clear restores the book.".into()),
             ));
             theme::button_with(row, Clear, "Clear", Size::Small);
+            sets::ui::toggle(row);
         });
 }
 
@@ -108,10 +109,14 @@ pub(crate) fn focus(
     frames: Query<(&WindowId, &Frame)>,
     fields: Query<&Interaction, With<Field>>,
     clears: Query<&Interaction, With<Clear>>,
+    (sets, names): (
+        Option<Res<sets::Sets>>,
+        Query<&Interaction, With<sets::ui::NameField>>,
+    ),
     mut typing: ResMut<Typing>,
     mut view: ResMut<BookView>,
 ) {
-    let was_focused = typing.spell_search;
+    let was_focused = typing.spell_search || typing.spell_set_name;
     let available = shown.displayed(WindowId::Spellbook)
         && windows.single().is_ok_and(|window| window.focused)
         && frames
@@ -124,11 +129,18 @@ pub(crate) fn focus(
         && !typing.editing_script;
     if !available {
         typing.spell_search = false;
+        typing.spell_set_name = false;
     } else if mouse.any_just_pressed([MouseButton::Left, MouseButton::Right]) {
-        typing.spell_search = fields
-            .iter()
-            .any(|interaction| *interaction == Interaction::Pressed);
-        if typing.spell_search {
+        typing.spell_set_name = mouse.just_pressed(MouseButton::Left)
+            && sets.as_ref().is_some_and(|sets| sets.can_edit_name())
+            && names
+                .iter()
+                .any(|interaction| *interaction == Interaction::Pressed);
+        typing.spell_search = !typing.spell_set_name
+            && fields
+                .iter()
+                .any(|interaction| *interaction == Interaction::Pressed);
+        if typing.spell_search || typing.spell_set_name {
             typing.composing = false;
             typing.counting = false;
             typing.map_search = false;
@@ -141,7 +153,10 @@ pub(crate) fn focus(
             view.search.query.clear();
         }
     }
-    typing.spell_search_claimed = was_focused || typing.spell_search;
+    if sets.as_ref().is_none_or(|sets| !sets.can_edit_name()) {
+        typing.spell_set_name = false;
+    }
+    typing.spell_search_claimed = was_focused || typing.spell_search || typing.spell_set_name;
 }
 
 /// Suppress both this frame's bindings and native repeat from keys pressed in
@@ -193,25 +208,34 @@ pub(crate) fn capture(
 pub(crate) fn input(
     mut keyboard: MessageReader<KeyboardInput>,
     mut typing: ResMut<Typing>,
-    mut view: ResMut<BookView>,
+    (mut view, mut sets): (ResMut<BookView>, Option<ResMut<sets::Sets>>),
     keys: Res<ButtonInput<Key>>,
     mut clipboard: Option<ResMut<Clipboard>>,
     mut pending: Local<Option<ClipboardRead>>,
+    mut name_editor: Local<bool>,
 ) {
-    if !typing.spell_search {
+    if !typing.spell_search && !typing.spell_set_name {
         keyboard.clear();
         *pending = None;
         return;
     }
+    if *name_editor != typing.spell_set_name {
+        *pending = None;
+        *name_editor = typing.spell_set_name;
+    }
+    let text = if typing.spell_set_name {
+        let Some(sets) = sets.as_mut() else {
+            return;
+        };
+        sets.name_input()
+    } else {
+        &mut view.search.query
+    };
     let events: Vec<_> = keyboard.read().cloned().collect();
-    if let Some(finish) = search::edit(
-        &mut view.search.query,
-        &events,
-        &keys,
-        clipboard.as_deref_mut(),
-        &mut pending,
-    ) {
+    if let Some(finish) = search::edit(text, &events, &keys, clipboard.as_deref_mut(), &mut pending)
+    {
         typing.spell_search = false;
+        typing.spell_set_name = false;
         typing.escape_consumed |= finish == search::Finish::Escape;
         *pending = None;
     }

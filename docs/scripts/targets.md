@@ -16,6 +16,11 @@ Use these targets after `click`, `right_click` or `hover`. For a held click, put
 - `book_page next` or `book_page back`: turn a spellbook page.
 - `memorize gem`: choose gem 1 to 8 when memorizing.
 - `spell_gem gem`: a gem from 1 to 8.
+- `button spellbook SpellSets_Toggle`: open the saved layouts panel. While it is
+  open, use the same prefix with `SpellSets_Name`, `SpellSets_Save`,
+  `SpellSets_Previous`, `SpellSets_Next`, `SpellSets_Rename`,
+  `SpellSets_Delete`, `SpellSets_Apply` or `SpellSets_Cancel`. After focusing the
+  name field, `press` sends its usual key input.
 - `hot_button number`: a hotbar button from 1 to 10.
 - `tint slot [color]`: open a bag's color picker, or choose a palette color.
 - `coins place kind`: a coin box; place is `purse`, `bank` or `give`; kind is `platinum`, `gold`, `silver` or `copper`.
