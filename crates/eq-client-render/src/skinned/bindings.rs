@@ -225,12 +225,10 @@ pub(super) fn does(id: &str, owner: WindowId) -> Option<Does> {
             _ => hot_button(id).map_or(Does::Nothing, Does::HotButton),
         });
     }
-    if owner == WindowId::Book {
-        match id {
-            "LeftButton" => return Some(Does::TurnsPage(false)),
-            "RightButton" => return Some(Does::TurnsPage(true)),
-            _ => (),
-        }
+    match (owner, id) {
+        (WindowId::Book, "LeftButton") => return Some(Does::TurnsPage(false)),
+        (WindowId::Book, "RightButton") => return Some(Does::TurnsPage(true)),
+        _ => (),
     }
     if owner == WindowId::Quantity {
         return Some(match id {

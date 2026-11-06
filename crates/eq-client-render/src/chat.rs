@@ -1579,6 +1579,26 @@ fn camp_destination(input: &str) -> Option<eq_client_core::camp::CampTo> {
         .flatten()
 }
 
+/// Builds the Bard's explicit song stop after checking the input and admission.
+fn stop_song_command(
+    words: &str,
+    world: &eq_client_core::world::ClientWorld,
+    stamp: impl FnOnce() -> Result<crate::outbox::Stamp, String>,
+) -> Result<ClientCommand, String> {
+    if !words.trim().is_empty() {
+        return Err("Use /stopsong without arguments".into());
+    }
+    let player = world.player().ok_or("Enter the world first")?;
+    if player.class != Some(8) {
+        return Err("Only Bards can stop a song".into());
+    }
+    let stamp = stamp()?;
+    Ok(ClientCommand::StopSong {
+        session_id: stamp.session_id,
+        created: stamp.created,
+    })
+}
+
 /// Slash commands that are game actions rather than chat; None means ordinary chat.
 fn game_commands(
     input: &str,
@@ -1610,20 +1630,7 @@ fn game_commands(
         return Some(commands);
     }
     Some(match name.as_str() {
-        "stopsong" => (|| {
-            if !words.trim().is_empty() {
-                return Err("Use /stopsong without arguments".into());
-            }
-            let player = online.world().player().ok_or("Enter the world first")?;
-            if player.class != Some(8) {
-                return Err("Only Bards can stop a song".into());
-            }
-            let stamp = stamp()?;
-            Ok(vec![ClientCommand::StopSong {
-                session_id: stamp.session_id,
-                created: stamp.created,
-            }])
-        })(),
+        "stopsong" => stop_song_command(words, online.world(), stamp).map(|command| vec![command]),
         "who" => eq_client_core::who::parse(words).and_then(|request| {
             if !request.everywhere {
                 return Err("The zone's /who is listed by chat, not sent".into());

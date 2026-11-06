@@ -569,7 +569,7 @@ fn answer(
         (Edit::Deleting, Some(BookActionStatus::Rejected(_) | BookActionStatus::Cancelled(_))) => {
             chat.history.push(system_line(
                 messages.said_text(4029, "The spell stays in the book."),
-            ))
+            ));
         }
         (
             Edit::Moving,

@@ -127,7 +127,7 @@ mod tests {
                 .init_resource::<Assets<SkinnedMeshInverseBindposes>>()
                 .init_resource::<Assets<StandardMaterial>>()
                 .add_systems(Startup, |mut commands: Commands| {
-                    crate::spellbook::spawn(&mut commands)
+                    crate::spellbook::spawn(&mut commands);
                 })
                 .add_systems(Update, (receive, crate::spellbook::update, say).chain());
             app.world_mut()
