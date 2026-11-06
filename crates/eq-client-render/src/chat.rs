@@ -1683,6 +1683,16 @@ fn game_commands(
         }),
         "sit" => posture(eq_client_core::Posture::Sitting).map(|command| vec![command]),
         "stand" => posture(eq_client_core::Posture::Standing).map(|command| vec![command]),
+        "ranged" => {
+            if words.trim().is_empty() {
+                stamp().and_then(|stamp| {
+                    super::combat::ranged_command(online.world(), stamp)
+                        .map(|command| vec![command])
+                })
+            } else {
+                Err("Use /ranged without arguments".into())
+            }
+        }
         _ => return None,
     })
 }

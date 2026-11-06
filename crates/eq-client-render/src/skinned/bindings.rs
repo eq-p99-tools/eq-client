@@ -259,6 +259,7 @@ pub(super) fn does(id: &str, owner: WindowId) -> Option<Does> {
         "IW_Skills" => Does::Toggles(WindowId::Skills),
         "GVW_Give_Button" | "TRDW_Trade_Button" => Does::Gives,
         "ACP_MeleeAttackButton" => Does::Bound(Binding::Attack),
+        "ACP_RangeAttackButton" => Does::Bound(Binding::RangedAttack),
         "AMP_SitButton" => Does::Bound(Binding::Sit),
         "AMP_StandButton" => Does::Bound(Binding::Stand),
         "AMP_CampButton" => Does::Bound(Binding::Camp),

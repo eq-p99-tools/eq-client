@@ -11,6 +11,26 @@ use eq_client_core::{
 
 use super::hud::messages::Messages;
 
+/// Capture the current target and loadout for a single Actions, hotbar or
+/// slash-command request. The session checks both again before sending.
+pub(super) fn ranged_command(
+    world: &eq_client_core::world::ClientWorld,
+    stamp: crate::outbox::Stamp,
+) -> Result<ClientCommand, String> {
+    use eq_client_core::combat::ranged::{RangedAttack, RangedLoadout};
+    let target = world
+        .target_intent()
+        .filter(|target| target.spawn_id.is_some())
+        .ok_or("Select a ranged attack target first")?;
+    let loadout = RangedLoadout::current(world.inventory())?;
+    Ok(ClientCommand::RangedAttack(RangedAttack {
+        session_id: stamp.session_id,
+        target,
+        loadout,
+        created: stamp.created,
+    }))
+}
+
 /// Local request state; nothing here claims the server accepted a request.
 #[derive(Resource, Default)]
 pub(super) struct CombatState {

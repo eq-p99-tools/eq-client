@@ -2521,6 +2521,7 @@ mod tests {
         use eq_client_assets::sidl::{Button, ButtonLook, Element};
         let kinds = [
             ("ACP_MeleeAttackButton", Binding::Attack),
+            ("ACP_RangeAttackButton", Binding::RangedAttack),
             ("AMP_SitButton", Binding::Sit),
             ("AMP_StandButton", Binding::Stand),
             ("AMP_CampButton", Binding::Camp),

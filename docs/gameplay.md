@@ -199,6 +199,12 @@ because its window opened. Ground pickups and doors use reach checks. World
 tradeskill containers and combines exist where `Tradeskills` is offered, rather
 than being universally unsupported.
 
+For a single Titanium ranged attack, equip a bow and arrows or a throwing
+weapon and select a target. Click Ranged Attack in Actions or type `/ranged`.
+The Actions control can be bound to the hotbar. The request checks the current
+target, loadout, reach and unmodified weapon delay. Damage and projectile
+consumption appear when reported by the server.
+
 With Titanium, Buy and Sell open the existing quantity picker when more than
 one unit is available; a single unit goes directly through the same checked
 submission. The picker starts at one and is bounded by the received stack,

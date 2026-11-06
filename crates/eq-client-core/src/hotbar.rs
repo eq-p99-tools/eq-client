@@ -36,6 +36,8 @@ pub enum Binding {
     /// Turns melee auto-attack on or off, as the Actions window's Melee
     /// Attack does.
     Attack,
+    /// Fires or throws once, as the Actions window's Ranged Attack does.
+    RangedAttack,
     /// Camps, as the Actions window's Camp does.
     Camp,
     /// Invites the target into the player's group.
@@ -72,6 +74,7 @@ impl Binding {
             Self::Stand => "stand".to_owned(),
             Self::Ability(ability) => format!("ability {}", ability.skill()),
             Self::Attack => "attack".to_owned(),
+            Self::RangedAttack => "ranged".to_owned(),
             Self::Camp => "camp".to_owned(),
             Self::Invite => "invite".to_owned(),
             Self::Follow => "follow".to_owned(),
@@ -94,6 +97,7 @@ impl Binding {
             ["stand"] => Self::Stand,
             ["ability", skill] => Self::Ability(Ability::from_skill(skill.parse().ok()?)?),
             ["attack"] => Self::Attack,
+            ["ranged"] => Self::RangedAttack,
             ["camp"] => Self::Camp,
             ["invite"] => Self::Invite,
             ["follow"] => Self::Follow,
@@ -199,6 +203,7 @@ mod tests {
         let mut hotbar = Hotbar::default();
         hotbar.0[2] = None;
         hotbar.0[3] = Some(Binding::Ability(Ability::Kick));
+        hotbar.0[5] = Some(Binding::RangedAttack);
         hotbar.0[4] = Some(Binding::Item {
             slot: InventorySlot(23),
             id: 13027,
@@ -208,6 +213,7 @@ mod tests {
         assert!(text.contains("slot_3 = none\n"));
         assert!(text.contains("slot_4 = ability 30\n"));
         assert!(text.contains("slot_5 = item 23 13027\n"));
+        assert!(text.contains("slot_6 = ranged\n"));
         assert!(text.contains("slot_1 = gem 1\n") && text.contains("slot_10 = stand\n"));
         assert_eq!(Hotbar::read(&text, Hotbar::default()), hotbar);
         // Unknown slots, kinds and numbers keep the defaults.

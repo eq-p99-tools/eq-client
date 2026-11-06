@@ -612,7 +612,7 @@ pub(super) fn parse_step(line: &str) -> Result<Step, String> {
 /// those that change nothing beyond the test characters.
 fn parse_slash(words: &[&str]) -> Result<Step, String> {
     Ok(match words {
-        [command] if matches!(*command, "camp" | "sit" | "stand") => {
+        [command] if matches!(*command, "camp" | "sit" | "stand" | "ranged") => {
             Step::Slash(format!("/{command}"))
         }
         ["camp", "desktop"] => Step::Slash("/camp desktop".into()),
@@ -1461,6 +1461,16 @@ mod tests {
         for bad in ["slash camp server", "slash camp desktop now"] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn ranged_slash_uses_the_current_target_and_takes_no_arguments() {
+        let base = Path::new("private");
+        assert_eq!(
+            parse("slash ranged\n", base).unwrap(),
+            [Step::Slash("/ranged".into())]
+        );
+        assert!(parse("slash ranged 12\n", base).is_err());
     }
 
     #[test]

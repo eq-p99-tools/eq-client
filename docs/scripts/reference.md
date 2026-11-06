@@ -71,6 +71,8 @@ Approach, walk and chase hold the camera-relative forward command, independent o
 - `screenshot filename.png`: capture beside the script; the argument must be a filename.
 - `sound filename.wav`: play a sound from the installed game assets.
 - `slash command [arguments]`: run one of the supported game slash commands, without a leading slash.
+  `slash ranged` requests one shot or throw against the current target on Titanium.
+  Watch the server's combat and inventory updates for the result.
   `slash camp desktop` uses the ordinary camp destination and current QoL exit choice.
   The immediate disconnect aliases typed in chat are not script slash commands.
 - `gm command [arguments]`: an allowed GM command on a network-constrained local test session only.
