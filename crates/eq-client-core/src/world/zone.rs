@@ -400,6 +400,7 @@ impl super::ClientWorld {
             .filter(|player| player.spawn_id == change.spawn_id)
         {
             player.appearance.apply(change);
+            self.held_models.clear_hand(change.slot);
         }
     }
 

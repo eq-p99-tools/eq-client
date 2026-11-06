@@ -1233,6 +1233,7 @@ fn chest() -> crate::inventory::InventoryItem {
         },
         slot: InventorySlot(17),
         details: crate::ItemDetails {
+            base_held_model: None,
             equipment: Some(crate::EquipmentRules::default()),
             bonuses: Some(crate::ItemBonuses {
                 hit_points: 100,

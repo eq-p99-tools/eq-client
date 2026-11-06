@@ -19,6 +19,7 @@ impl ClientWorld {
     pub(super) fn inventory_news(&mut self, update: &InventoryUpdate, changes: &mut Changes) {
         self.inventory_moves.interrupt();
         self.inventory.apply(update.clone());
+        self.held_models.received(&self.inventory, update);
         changes.inventory = true;
         self.refresh_item_hp();
     }

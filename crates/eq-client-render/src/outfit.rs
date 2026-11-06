@@ -247,9 +247,15 @@ fn worn(
             .spawn(remote.id)
             .map(|spawn| &spawn.state)
             .map(|spawn| (spawn.race, spawn.appearance)),
-        (None, None) => world
-            .player()
-            .map(|player| (player.race, player.appearance)),
+        (None, None) => world.player().map(|player| {
+            let mut look = player.appearance;
+            for slot in [outfit::TextureSlot::Primary, outfit::TextureSlot::Secondary] {
+                if let Some(estimate) = world.held_model_estimate(slot) {
+                    look.materials[slot.index()] = u32::from(estimate.material());
+                }
+            }
+            (player.race, look)
+        }),
     }
     .unwrap_or_default();
     (look, remote.is_some() || listed.is_some() || show_helm)

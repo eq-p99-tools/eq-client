@@ -132,6 +132,7 @@ mod tests {
             },
             slot: InventorySlot(23),
             details: ItemDetails {
+                base_held_model: None,
                 equipment: None,
                 bonuses: None,
                 id: 17_009,

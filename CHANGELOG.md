@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Refresh the player's held models and paperdoll after a submitted Titanium
+  equipment move when the item definition supplies a base model. Received
+  wear and inventory corrections take precedence.
 - Add the off-by-default Jesus Mode option. Walk on mapped water and lava
   reached from above at ordinary ground speed where gameplay departures
   are offered.

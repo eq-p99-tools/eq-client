@@ -95,6 +95,7 @@ impl ClientWorld {
         if self.inventory_moves.rules != rules {
             self.inventory_moves.interrupt();
             self.inventory_moves.rules = rules;
+            self.held_models = super::held_models::HeldModels::default();
         }
     }
 
@@ -211,6 +212,9 @@ impl ClientWorld {
             || sequence.is_none_or(|sequence| sequence.after.is_none());
         self.inventory_moves.refused |= error.is_some();
         if apply && let Some(update) = update {
+            if self.inventory_moves.rules == Some(MoveRules::EqEmu) && self.in_world() {
+                self.held_models.submitted(&self.inventory, update);
+            }
             self.inventory.apply(update.clone());
         }
         if self.inventory_moves.pending.is_empty() {

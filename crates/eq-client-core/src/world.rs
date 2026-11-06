@@ -15,6 +15,7 @@ mod changes;
 mod character;
 mod control;
 mod group;
+mod held_models;
 mod inventory_moves;
 mod items;
 mod landings;
@@ -33,6 +34,7 @@ mod zone;
 pub use casting::{CastNews, Casting, Cooldowns, NoSpells, SpellCatalog, SpellTiming};
 pub use changes::{Changes, Moved, Reply, Reset};
 pub use group::{Group, GroupNotice};
+pub use held_models::HeldModelEstimate;
 pub use items::ItemCache;
 pub use landings::Landing;
 pub use link::Link;
@@ -323,6 +325,7 @@ pub struct ClientWorld {
     vitals: Vitals,
     inventory: Inventory,
     inventory_moves: inventory_moves::Moves,
+    held_models: held_models::HeldModels,
     /// Where the player's coins are, as the session keeps and tells them.
     wallet: crate::money::Wallet,
     /// Cursor receipt is independent of the bank balance, which is not carried.
@@ -1400,6 +1403,7 @@ impl ClientWorld {
     /// Forgets what the reason makes stale, and says so.
     fn reset(&mut self, reason: Reset) -> Changes {
         self.movement_options_result = None;
+        self.held_models = held_models::HeldModels::default();
         if matches!(
             reason,
             Reset::Entered | Reset::Camped | Reset::Lost { ended: true, .. }

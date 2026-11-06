@@ -231,6 +231,7 @@ mod tests {
             charges: 0,
             bag_slots: 0,
             details: eq_client_core::ItemDetails {
+                base_held_model: None,
                 equipment: None,
                 bonuses: None,
                 id: 42,

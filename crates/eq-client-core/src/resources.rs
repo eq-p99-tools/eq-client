@@ -260,6 +260,7 @@ mod tests {
             charges: 0,
             bag_slots: 0,
             details: ItemDetails {
+                base_held_model: None,
                 equipment: Some(EquipmentRules::default()),
                 bonuses: Some(ItemBonuses {
                     mana: 15,
@@ -353,6 +354,7 @@ mod tests {
             level2: 20,
         };
         let mut item = ItemDetails {
+            base_held_model: None,
             equipment: Some(EquipmentRules {
                 required_level: 10,
                 recommended_level: 20,

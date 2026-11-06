@@ -1119,6 +1119,7 @@ mod tests {
             InventoryItem, InventorySlot, InventoryUpdate, ItemPlacement,
         };
         let details = eq_client_core::ItemDetails {
+            base_held_model: None,
             equipment: None,
             bonuses: None,
             id: 301,

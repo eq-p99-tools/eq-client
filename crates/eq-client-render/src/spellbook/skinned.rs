@@ -671,6 +671,7 @@ mod tests {
             rules: eq_client_core::inventory::ItemPlacement::default(),
             slot: InventorySlot::CURSOR,
             details: eq_client_core::ItemDetails {
+                base_held_model: None,
                 equipment: None,
                 bonuses: None,
                 id: 15000 + spell,
