@@ -121,6 +121,13 @@ imposed. Oversized frames retain the existing viewport reachability behavior.
 The Scripts window has a Close button instead of minimize/restore. Closing it
 preserves the document and any running script; use Stop to end execution.
 
+## Spellbook search
+
+Click **Search spells** to type, or paste with **Ctrl+V**. **Enter** and
+**Escape** leave the results on screen and return keyboard control.
+**Delete** while typing or **Clear** restores the normal book. Use the
+book's page controls to browse more results.
+
 ## Map
 
 **Backspace** or **M** opens the map on every server, including P99 and Quarm,

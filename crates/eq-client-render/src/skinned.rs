@@ -519,6 +519,11 @@ pub(crate) fn apply(
         *border = BorderColor::all(Color::NONE);
         commands.entity(frame).despawn_children();
         let mut title_bottom = None;
+        let book_footer =
+            *id == WindowId::Spellbook && screen.area.width > 0.0 && screen.area.height > 0.0;
+        if book_footer {
+            node.height = px(screen.area.height + crate::spellbook::search::FOOTER_HEIGHT);
+        }
         commands.entity(frame).with_children(|window| {
             let context = Context {
                 id: *id,
@@ -527,6 +532,17 @@ pub(crate) fn apply(
                 tab_frame: screen.tab_frame.as_deref(),
             };
             title_bottom = draw(window, screen, &mut art, &context);
+            if book_footer {
+                crate::spellbook::search::spawn(
+                    window,
+                    at(
+                        0.0,
+                        screen.area.height,
+                        screen.area.width,
+                        crate::spellbook::search::FOOTER_HEIGHT,
+                    ),
+                );
+            }
         });
         art.draw_in(None);
         state.drawn_from_skin(&mut node, title_bottom);

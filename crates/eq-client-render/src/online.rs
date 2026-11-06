@@ -530,8 +530,7 @@ impl Panels<'_> {
                 **book = super::spellbook::BookSelection::default();
             }
             if let Some(view) = self.book_view.as_mut() {
-                view.page = 0;
-                view.spread = 0;
+                **view = super::spellbook::BookView::default();
             }
         }
         match reason {

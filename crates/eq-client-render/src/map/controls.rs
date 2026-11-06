@@ -1,7 +1,7 @@
 //! Map search and watch controls share normal keyboard, click and scrolling rules.
 use super::{MapView, entities, watch::WatchState};
 use crate::{
-    keys::Typing,
+    keys::{Typing, search},
     online::OnlineState,
     theme,
     tooltip::Tooltip,
@@ -75,63 +75,25 @@ pub(crate) fn input(
     mut clipboard: Option<ResMut<Clipboard>>,
     mut pending: Local<Option<ClipboardRead>>,
 ) {
-    if !typing.map_search {
+    if !typing.map_search || typing.spell_search_claimed {
         keyboard.clear();
         *pending = None;
         return;
     }
-    if let Some(result) = pending.as_mut().and_then(ClipboardRead::poll_result) {
-        if let Ok(text) = result {
-            append_search(&mut view.query, &text);
-        }
-        *pending = None;
-    }
-    let events: Vec<_> = keyboard.read().cloned().collect();
-    let modifiers = crate::keys::modifiers::snapshots(&events, &keys);
-    for (event, held) in events
-        .iter()
-        .zip(modifiers)
-        .filter(|(event, _)| event.state.is_pressed())
-    {
-        if !typing.map_search {
-            break;
-        }
-        if crate::keys::modifiers::chorded(held) {
-            if held[0]
-                && !held[2]
-                && !held[3]
-                && matches!(&event.logical_key, Key::Character(text) if text.eq_ignore_ascii_case("v"))
-                && let Some(clipboard) = clipboard.as_mut()
-            {
-                *pending = Some(clipboard.fetch_text());
-            }
-            continue;
-        }
-        match event.logical_key {
-            Key::Escape => {
-                typing.map_search = false;
-                typing.escape_consumed = true;
-            }
-            Key::Enter => typing.map_search = false,
-            Key::Backspace => {
-                view.query.pop();
-            }
-            Key::Delete => view.query.clear(),
-            _ if typing.map_search => {
-                append_search(&mut view.query, event.text.as_deref().unwrap_or_default());
-            }
-            _ => (),
-        }
-    }
-}
-
-/// Bound search input on UTF-8 boundaries and ignore multiline/control content.
-fn append_search(query: &mut String, text: &str) {
-    for c in text.chars().filter(|c| !c.is_control()) {
-        if query.len() + c.len_utf8() > 128 {
-            break;
-        }
-        query.push(c);
+    let events: Vec<_> = keyboard
+        .read_with_id()
+        .filter(|(_, id)| !typing.spell_search_captured(*id))
+        .map(|(event, _)| event.clone())
+        .collect();
+    if let Some(finish) = search::edit(
+        &mut view.query,
+        &events,
+        &keys,
+        clipboard.as_deref_mut(),
+        &mut pending,
+    ) {
+        typing.map_search = false;
+        typing.escape_consumed |= finish == search::Finish::Escape;
     }
 }
 
@@ -384,7 +346,7 @@ mod tests {
         app.update();
         assert_eq!(app.world().resource::<MapView>().query, "");
         let mut query = "x".repeat(126);
-        append_search(&mut query, "\n\ré雪");
+        search::append(&mut query, "\n\ré雪");
         assert_eq!(query.len(), 128);
         assert!(query.ends_with('é'));
     }

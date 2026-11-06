@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Search learned spells in the spellbook by name. Results follow book-slot
+  order and preserve the source spell and slot for inspection and memorizing.
+  Clearing search restores normal browsing.
+
 - Draw the larger local player arrow above other map markers and labels. Show
   travel direction with a line and colored tip, and limit ground item squares
   to the same range as nearby item models.

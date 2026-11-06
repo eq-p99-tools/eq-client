@@ -7,13 +7,16 @@
 //! first action slot, and Ctrl+1 binds that slot. Movement is the exception:
 //! a movement key moves whatever is held with it.
 use super::windows::WindowId;
-use bevy::{prelude::*, window::PrimaryWindow};
-use std::collections::BTreeMap;
+use bevy::{
+    ecs::message::MessageId, input::keyboard::KeyboardInput, prelude::*, window::PrimaryWindow,
+};
+use std::collections::{BTreeMap, HashSet};
 
 pub(crate) mod bindings;
 mod installed;
 pub(crate) mod modifiers;
 pub(crate) mod presses;
+pub(crate) mod search;
 
 /// Something a key press asks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -619,6 +622,14 @@ pub(crate) struct Typing {
     pub logging_in: bool,
     /// The map's local entity search owns text input.
     pub map_search: bool,
+    /// The spellbook's local search owns text input.
+    pub spell_search: bool,
+    /// Whether the spell search consumed this frame's keyboard events.
+    pub spell_search_claimed: bool,
+    /// Keys pressed in the editor stay there through their native repeats.
+    pub spell_search_held: HashSet<KeyCode>,
+    /// Ordered input claimed by the spell search during this frame.
+    pub spell_search_events: HashSet<MessageId<KeyboardInput>>,
     /// A key assignment is being edited, including its finishing frame.
     pub rebinding: bool,
     /// A script document or path field owns the keyboard.
@@ -628,6 +639,13 @@ pub(crate) struct Typing {
     /// This frame's Escape closed the chat line or left the quantity
     /// window's number, so nothing else takes it.
     pub escape_consumed: bool,
+}
+
+impl Typing {
+    /// Whether another reader should skip keyboard input owned by the book.
+    pub(crate) fn spell_search_captured(&self, id: MessageId<KeyboardInput>) -> bool {
+        self.spell_search_claimed || self.spell_search_events.contains(&id)
+    }
 }
 
 /// The keyboard as the game sees it: the bindings, and whether the game has
@@ -665,6 +683,7 @@ impl Keys<'_, '_> {
             && !self.typing.counting
             && !self.typing.logging_in
             && !self.typing.map_search
+            && !self.typing.spell_search
             && !self.typing.rebinding
             && self.window_focused()
     }

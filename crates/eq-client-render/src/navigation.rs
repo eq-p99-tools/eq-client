@@ -59,15 +59,17 @@ impl NavigationKeys {
 pub(super) fn update(
     mut events: MessageReader<KeyboardInput>,
     windows: Query<&Window, With<PrimaryWindow>>,
+    typing: Option<Res<crate::keys::Typing>>,
     mut navigation: ResMut<NavigationKeys>,
 ) {
     navigation.keys.clear();
     let focused = windows.single().is_ok_and(|window| window.focused);
-    if !focused {
+    let typing = typing.map(Res::into_inner);
+    if !focused || typing.is_some_and(|typing| typing.spell_search_claimed) {
         *navigation = NavigationKeys::default();
     }
-    for event in events.read() {
-        if focused {
+    for (event, id) in events.read_with_id() {
+        if focused && !typing.is_some_and(|typing| typing.spell_search_captured(id)) {
             navigation.apply(event.key_code, &event.logical_key, event.state);
         }
     }

@@ -5,6 +5,7 @@ use crate::theme::{self, Size};
 use bevy::prelude::*;
 mod lines;
 mod scribe;
+pub(crate) mod search;
 mod seat;
 mod skinned;
 pub(super) use lines::say as say_book_lines;
@@ -42,6 +43,38 @@ pub(super) struct BookView {
     pub(super) page: usize,
     /// The skin's book's open pages: the first two are 0, the next two 1.
     pub(crate) spread: usize,
+    search: search::Search,
+}
+
+impl BookView {
+    /// The original skin spread or the independently paged search results.
+    pub(crate) fn displayed_spread(&self) -> usize {
+        if self.search.active() {
+            self.search.page
+        } else {
+            self.spread
+        }
+    }
+
+    pub(super) fn row_spell(
+        &self,
+        book: Option<&eq_client_core::SpellBook>,
+        row: usize,
+    ) -> Option<u32> {
+        if self.search.active() {
+            let &(slot, spell) = self
+                .search
+                .entries
+                .get(self.search.page * ROWS_PER_PAGE + row)?;
+            return skinned::Entry { slot, spell }.kept(book).then_some(spell);
+        }
+        book?
+            .slots()
+            .iter()
+            .flatten()
+            .nth(self.page * ROWS_PER_PAGE + row)
+            .copied()
+    }
 }
 
 type BookRows<'w, 's> = Query<
@@ -63,6 +96,8 @@ type BookRows<'w, 's> = Query<
 pub(super) struct BookSelection {
     deletion: super::book_delete::Confirmation,
     selected: Option<u32>,
+    /// Searches preserve the exact slot as well as the ID, even for duplicate IDs.
+    search_slot: Option<usize>,
     location: Option<(u32, usize)>,
     message: String,
     reply_revision: u64,
@@ -311,6 +346,7 @@ pub(super) fn spawn(commands: &mut Commands) {
 
 /// Keeps refreshed rows inside one collapsible container beneath the title bar.
 fn spawn_body(parent: &mut ChildSpawnerCommands) {
+    search::spawn(parent, Node::default());
     super::book_delete::spawn(parent);
     parent.spawn((
         Text::new(""),
@@ -371,7 +407,11 @@ fn spawn_body(parent: &mut ChildSpawnerCommands) {
 }
 
 /// Browses known spells and requests gem assignments without predicting server state.
-#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+#[allow(
+    clippy::needless_pass_by_value,
+    clippy::too_many_arguments,
+    clippy::too_many_lines
+)]
 pub(super) fn update(
     shown: Res<super::windows::Shown>,
     keys: crate::keys::Keys,
@@ -421,35 +461,53 @@ pub(super) fn update(
                 Err(error) => crate::outbox::window_line(&error),
             };
     }
-    let entries = known_entries(world.spell_book());
-    if selection
-        .selected
-        .is_some_and(|selected| !entries.iter().any(|(_, id)| *id == selected))
-    {
+    let state = &mut *state;
+    let searching = state.search.active();
+    let ordinary = (!searching).then(|| known_entries(world.spell_book()));
+    let entries = ordinary.as_deref().unwrap_or(&state.search.entries);
+    if selection.selected.is_some_and(|selected| {
+        searching != selection.search_slot.is_some()
+            || !entries.iter().any(|(slot, id)| {
+                *id == selected && selection.search_slot.is_none_or(|picked| picked == *slot)
+            })
+    }) {
         selection.selected = None;
+        selection.search_slot = None;
+        selection.location = None;
     }
     let pages = entries.len().div_ceil(ROWS_PER_PAGE).max(1);
-    if let Some(page) = selection.relocated_page(&entries) {
+    if !searching && let Some(page) = selection.relocated_page(entries) {
         state.page = page;
     }
-    turn_page(&buttons, &mut state.page, accepts_input);
-    state.page = state.page.min(pages - 1);
+    let page = if searching {
+        &mut state.search.page
+    } else {
+        &mut state.page
+    };
+    let old_page = *page;
+    turn_page(&buttons, page, accepts_input);
+    *page = (*page).min(pages - 1);
+    let row_clicks = accepts_input && !state.search.changed && (!searching || *page == old_page);
     refresh_rows(
         &mut rows,
-        &entries,
-        state.page,
+        entries,
+        *page,
         &mut selection,
         &names,
-        accepts_input,
+        (row_clicks, searching),
     );
-    delete_input(
-        &deletion_clicks,
-        &mut selection,
-        (world, outbox.as_deref()),
-        &names,
-        (accepts_input && !pending, asks),
-    );
-    refresh_actions(&mut deletion, &selection.deletion);
+    if searching {
+        selection.deletion.cancel();
+    } else {
+        delete_input(
+            &deletion_clicks,
+            &mut selection,
+            (world, outbox.as_deref()),
+            &names,
+            (accepts_input && !pending, asks),
+        );
+    }
+    refresh_actions(&mut deletion, &selection.deletion, !searching);
     let clicked_gems: Vec<u8> = gem_clicks.iter().map(|GemChoice(gem)| *gem).collect();
     let (requested, gem_hint) = refresh_gems(
         (&mut gems, &clicked_gems),
@@ -464,7 +522,7 @@ pub(super) fn update(
             online.as_deref(),
             world.spell_book(),
             outbox.as_deref(),
-            selection.selected,
+            (selection.selected, selection.search_slot),
             gem,
         );
         selection.message = match queued {
@@ -480,7 +538,14 @@ pub(super) fn update(
             Err(error) => crate::outbox::window_line(&error),
         };
     }
-    let label = book_label(world, &names, &selection, &entries, state.page, pages);
+    let label = book_label(
+        world,
+        &names,
+        &selection,
+        entries,
+        (*page, pages),
+        searching,
+    );
     refresh_labels(&mut text, &label, gem_hint.as_deref());
 }
 
@@ -546,9 +611,13 @@ type DeleteControls<'w, 's> = Query<
 >;
 
 /// Replaces editing controls with confirmation controls for the pending selection.
-fn refresh_actions(buttons: &mut DeleteControls, confirmation: &super::book_delete::Confirmation) {
+fn refresh_actions(
+    buttons: &mut DeleteControls,
+    confirmation: &super::book_delete::Confirmation,
+    visible: bool,
+) {
     for (action, mut node) in buttons.iter_mut() {
-        node.display = if confirmation.visible(*action) {
+        node.display = if visible && confirmation.visible(*action) {
             Display::Flex
         } else {
             Display::None
@@ -677,18 +746,22 @@ fn refresh_rows(
     page: usize,
     selection: &mut BookSelection,
     names: &SpellNames,
-    accepts_input: bool,
+    (accepts_input, searching): (bool, bool),
 ) {
     for (interaction, row, _, _, _) in rows.iter() {
         if accepts_input && interaction.is_changed() && *interaction == Interaction::Pressed {
-            selection.selected = entries.get(page * ROWS_PER_PAGE + row.0).map(|(_, id)| *id);
+            let entry = entries.get(page * ROWS_PER_PAGE + row.0);
+            selection.selected = entry.map(|(_, id)| *id);
+            selection.search_slot = entry.filter(|_| searching).map(|(slot, _)| *slot);
         }
     }
     for (interaction, row, mut value, mut node, mut background) in rows.iter_mut() {
         if let Some((slot, id)) = entries.get(page * ROWS_PER_PAGE + row.0) {
             node.display = Display::Flex;
             value.0 = format!("{} | {}", slot + 1, names.label(*id));
-            background.0 = if selection.selected == Some(*id) {
+            background.0 = if selection.selected == Some(*id)
+                && selection.search_slot.is_none_or(|picked| picked == *slot)
+            {
                 theme::BUTTON_ON
             } else if *interaction == Interaction::Hovered {
                 theme::BUTTON_HOVER
@@ -719,11 +792,17 @@ fn book_label(
     names: &SpellNames,
     selection: &BookSelection,
     entries: &[(usize, u32)],
-    page: usize,
-    pages: usize,
+    (page, pages): (usize, usize),
+    searching: bool,
 ) -> String {
     let mut label = if world.spell_book().is_none() {
         "Spellbook unavailable".into()
+    } else if searching {
+        if entries.is_empty() {
+            "No matching spells".into()
+        } else {
+            format!("{} matches · Page {} / {}", entries.len(), page + 1, pages)
+        }
     } else if entries.is_empty() {
         "No scribed spells".into()
     } else {
@@ -836,17 +915,19 @@ fn request_memorize(
     online: Option<&super::online::OnlineState>,
     book: Option<&eq_client_core::SpellBook>,
     outbox: Option<&crate::outbox::Outbox>,
-    selected: Option<u32>,
+    (selected, slot): (Option<u32>, Option<usize>),
     gem: u8,
 ) -> anyhow::Result<u32> {
     use anyhow::{Context, ensure};
     let spell_id = selected.context("Select a spell first")?;
     ensure!(gem < 8, "Choose a gem from 1 to 8");
     let (online, outbox) = online.zip(outbox).context("Connect to memorize a spell")?;
+    let slots = book.context("Spellbook unavailable")?.slots();
     ensure!(
-        book.context("Spellbook unavailable")?
-            .slots()
-            .contains(&Some(spell_id)),
+        slot.map_or_else(
+            || slots.contains(&Some(spell_id)),
+            |slot| slots.get(slot) == Some(&Some(spell_id)),
+        ),
         "The selected spell is no longer in the spellbook"
     );
     outbox.post(online.world(), |stamp| {

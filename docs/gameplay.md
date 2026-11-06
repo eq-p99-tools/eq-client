@@ -123,6 +123,12 @@ interrupt a cast; estimated completion time alone does not report success.
 Spellbook operations serialize outstanding edits and wait for matching answers.
 Deletion confirmation is invalidated when its selection or admission changes.
 
+Click **Search spells** in the book to filter learned spells by name. The
+search ignores case and fills each results page in original book-slot order.
+Unknown names are shown as **Spell** followed by the ID and can be found by that
+label. Select a result to inspect or memorize it. Clear the search to return
+to the previous page and rearrange or delete spells where supported.
+
 The 5-by-2 hotbar holds ten actions. Click or use the number bindings to activate
 them. Hold a gem, supported item or Actions button to pick up its hotkey, then
 place it on a hotbutton. This hotkey cursor is distinct from the EQ item cursor.

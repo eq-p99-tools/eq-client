@@ -128,9 +128,10 @@ pub(crate) fn show(
                 None,
             ),
             // Two pages to a spread, counted from one.
-            Shows::BookPage(right) => {
-                ((book.spread * 2 + 1 + usize::from(right)).to_string(), None)
-            }
+            Shows::BookPage(right) => (
+                (book.displayed_spread() * 2 + 1 + usize::from(right)).to_string(),
+                None,
+            ),
             // The sign shows with the number before it.
             Shows::MemberPercent(place) => (
                 if world.group_health(place).is_some() {
