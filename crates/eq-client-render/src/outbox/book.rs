@@ -1,7 +1,10 @@
 //! Local arbitration for the worker's untagged spellbook results.
 use super::Refusal;
 use eq_client_core::{BookActionStatus, ClientCommand, SpellUpdate, WorldEvent};
-use std::time::{Duration, Instant};
+use std::{
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 
 /// Covers normal preparation and the worker's reply window. A late result
 /// can still change the gems, so elapsed time does not release the book.
@@ -72,6 +75,28 @@ impl Expected {
     }
 }
 
+/// The terminal outcome of one edit, delivered by the queue that owns it.
+pub(crate) enum BookEditOutcome {
+    Confirmed,
+    Refused(String),
+}
+
+/// Keeps an edit's answer for its caller even after the book is free again.
+#[derive(Clone, Default)]
+pub(crate) struct BookEditReceipt(Arc<Mutex<Option<BookEditOutcome>>>);
+
+impl BookEditReceipt {
+    pub(crate) fn take(&self) -> Option<BookEditOutcome> {
+        self.0.lock().ok()?.take()
+    }
+
+    fn finish(self, outcome: BookEditOutcome) {
+        if let Ok(mut result) = self.0.lock() {
+            *result = Some(outcome);
+        }
+    }
+}
+
 struct Pending {
     expected: Expected,
     session: Option<u64>,
@@ -79,6 +104,7 @@ struct Pending {
     unconfirmed: bool,
     acknowledged: bool,
     observed: bool,
+    receipt: Option<BookEditReceipt>,
 }
 
 impl BookQueue {
@@ -104,7 +130,13 @@ impl BookQueue {
         }
     }
 
-    pub(super) fn sent(&mut self, expected: Expected, session: Option<u64>, now: Instant) {
+    pub(super) fn sent(
+        &mut self,
+        expected: Expected,
+        session: Option<u64>,
+        now: Instant,
+        receipt: Option<BookEditReceipt>,
+    ) {
         self.pending = Some(Pending {
             expected,
             session,
@@ -112,12 +144,24 @@ impl BookQueue {
             unconfirmed: false,
             acknowledged: false,
             observed: false,
+            receipt,
         });
     }
 
     pub(super) fn observe(&mut self, event: &WorldEvent, session: Option<u64>) {
-        self.pending
-            .take_if(|pending| pending.session == session && pending.observe(event));
+        let Some(pending) = self
+            .pending
+            .as_mut()
+            .filter(|pending| pending.session == session)
+        else {
+            return;
+        };
+        if let Some(outcome) = pending.observe(event) {
+            if let Some(receipt) = pending.receipt.take() {
+                receipt.finish(outcome);
+            }
+            self.pending = None;
+        }
     }
 
     /// Mark a possibly submitted request unknown without dropping its reply match.
@@ -142,7 +186,7 @@ impl BookQueue {
 impl Pending {
     /// The worker's tracked confirmation can arrive before the world update.
     /// A forget requires its submission followed by an exact gem clear.
-    fn observe(&mut self, event: &WorldEvent) -> bool {
+    fn observe(&mut self, event: &WorldEvent) -> Option<BookEditOutcome> {
         let forgetting = matches!(self.expected, Expected::Forget(..));
         match event {
             WorldEvent::BookAction(BookActionStatus::Unconfirmed) => {
@@ -155,15 +199,15 @@ impl Pending {
                 self.acknowledged = true;
             }
             WorldEvent::BookAction(
-                BookActionStatus::Rejected(_) | BookActionStatus::Cancelled(_),
+                BookActionStatus::Rejected(reason) | BookActionStatus::Cancelled(reason),
             ) if !forgetting || !self.acknowledged => {
-                return true;
+                return Some(BookEditOutcome::Refused(reason.clone()));
             }
             WorldEvent::Spell(update) if (!forgetting || self.acknowledged) => {
                 self.observed |= self.expected.matches(update);
             }
             _ => {}
         }
-        self.acknowledged && self.observed
+        (self.acknowledged && self.observed).then_some(BookEditOutcome::Confirmed)
     }
 }
