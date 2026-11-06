@@ -3,7 +3,7 @@ use crate::online::testing as session;
 use eq_client_core::WorldEvent;
 
 #[test]
-fn cardinal_travel_arrows_point_in_map_coordinates() {
+fn cardinal_travel_indicators_point_in_map_coordinates() {
     for direction in [Vec2::X, Vec2::NEG_X, Vec2::Y, Vec2::NEG_Y] {
         assert!((rotation(direction) * Vec2::NEG_Y - direction).length() < 0.0001);
     }
@@ -144,7 +144,7 @@ fn local_pose_tracks_the_scene_each_frame_and_falls_back_while_loading() {
 }
 
 #[test]
-fn markers_and_arrows_refresh_from_events_and_search_without_node_replacement() {
+fn markers_and_travel_indicators_refresh_from_events_and_search_without_node_replacement() {
     let mut app = crate::testing::app();
     session::admit(
         &mut app.world_mut().resource_mut::<OnlineState>(),
@@ -176,15 +176,17 @@ fn markers_and_arrows_refresh_from_events_and_search_without_node_replacement() 
         .find(|(_, marker)| marker.0 == 2)
         .unwrap()
         .0;
-    let arrow = world
-        .query::<(Entity, &ChildOf)>()
+    let indicator = world
+        .query_filtered::<(Entity, &ChildOf), With<Travel>>()
         .iter(world)
         .find(|(_, parent)| parent.parent() == marker)
         .unwrap()
         .0;
-    assert_eq!(world.get::<Node>(arrow).unwrap().display, Display::Flex);
+    let dot = world.get::<Children>(indicator).unwrap()[0];
+    assert_eq!(world.get::<Node>(indicator).unwrap().display, Display::Flex);
     assert!(
-        (world.get::<UiTransform>(arrow).unwrap().rotation * Vec2::NEG_Y - Vec2::NEG_X).length()
+        (world.get::<UiTransform>(indicator).unwrap().rotation * Vec2::NEG_Y - Vec2::NEG_X)
+            .length()
             < 0.001
     );
     let before = world.get::<Node>(marker).unwrap().left;
@@ -203,16 +205,43 @@ fn markers_and_arrows_refresh_from_events_and_search_without_node_replacement() 
     );
     app.update();
     assert_ne!(app.world().get::<Node>(marker).unwrap().left, before);
-    assert!(app.world().get::<ImageNode>(arrow).unwrap().color.alpha() < 0.3);
+    assert!(app.world().get::<BackgroundColor>(dot).unwrap().0.alpha() < 0.3);
+    assert!(
+        app.world()
+            .get::<BackgroundColor>(indicator)
+            .unwrap()
+            .0
+            .alpha()
+            < 0.3
+    );
     app.world_mut()
         .resource_mut::<super::super::WatchState>()
         .add("Gabober");
     app.update();
-    assert!(app.world().get::<ImageNode>(arrow).unwrap().color.alpha() > 0.9);
+    assert!(app.world().get::<BackgroundColor>(dot).unwrap().0.alpha() > 0.9);
+    session::news(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        [WorldEvent::Position {
+            spawn_id: 2,
+            position: WorldPosition {
+                x: 100.0,
+                ..default()
+            },
+            velocity: [0.0; 3],
+            forward: 0.0,
+        }],
+    );
+    app.update();
+    assert_eq!(
+        app.world().get::<Node>(indicator).unwrap().display,
+        Display::None
+    );
     session::news(
         &mut app.world_mut().resource_mut::<OnlineState>(),
         [WorldEvent::Despawn(2)],
     );
     app.update();
-    assert!(app.world().get_entity(marker).is_err() && app.world().get_entity(arrow).is_err());
+    assert!(app.world().get_entity(marker).is_err());
+    assert!(app.world().get_entity(indicator).is_err());
+    assert!(app.world().get_entity(dot).is_err());
 }

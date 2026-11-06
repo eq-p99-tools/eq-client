@@ -47,8 +47,9 @@ pub(crate) struct PlayerArrow;
 
 /// How wide and tall the player's arrow is, in pixels.
 const ARROW: u32 = 17;
-/// Half the arrow's size, where its middle is.
-const HALF_ARROW: f32 = 8.5;
+/// Give the local player's facing arrow a modest lift in size and depth.
+const OWN_ARROW_SIZE: f32 = 20.0;
+const OWN_ARROW_DEPTH: i32 = 7;
 /// The arrow's corners, pointing up: its point, a wing, the notch at its
 /// back and the other wing. Longer than it is wide and notched at the back,
 /// so the point cannot be mistaken once the arrow turns.
@@ -437,12 +438,12 @@ pub(crate) fn draw(
             PlayerArrow,
             bevy::ui::FocusPolicy::Pass,
             ImageNode::new(images.add(arrow())),
-            // Over the labels, which are drawn again whenever the map is.
-            ZIndex(1),
+            // Above every entity and label, below the canvas's controls.
+            ZIndex(OWN_ARROW_DEPTH),
             Node {
                 position_type: PositionType::Absolute,
-                width: px(ARROW),
-                height: px(ARROW),
+                width: px(OWN_ARROW_SIZE),
+                height: px(OWN_ARROW_SIZE),
                 ..default()
             },
             UiTransform::default(),
@@ -454,10 +455,10 @@ pub(crate) fn draw(
         let at = player.map(|position| (projection.place(map_point(position)), position.heading));
         let wanted = match at {
             Some((at, heading))
-                if at.x >= 0.0 && at.y >= 0.0 && at.x <= size.x && at.y <= size.y =>
+                if heading.is_finite() && at.cmpge(Vec2::ZERO).all() && at.cmple(size).all() =>
             {
-                arrow.left = px(at.x - HALF_ARROW);
-                arrow.top = px(at.y - HALF_ARROW);
+                arrow.left = px(at.x - OWN_ARROW_SIZE / 2.0);
+                arrow.top = px(at.y - OWN_ARROW_SIZE / 2.0);
                 let rotation = facing(heading);
                 if transform.rotation != rotation {
                     transform.rotation = rotation;
@@ -532,7 +533,7 @@ fn arrow() -> Image {
     arrow_picture(ARROW_FILL, ARROW_EDGE)
 }
 
-/// One shared arrow silhouette; travel arrows tint a white copy per entity.
+/// One shared facing silhouette; remote players tint a white copy per entity.
 #[allow(clippy::cast_precision_loss)] // A few pixels.
 fn arrow_picture(fill: [u8; 4], edge: [u8; 4]) -> Image {
     let filled = |x: u32, y: u32| in_dart(x as f32 + 0.5, y as f32 + 0.5);
@@ -691,6 +692,105 @@ mod tests {
         assert_eq!(at(middle, 0), ARROW_EDGE);
         assert_eq!(at(middle, ARROW - 2)[3], 0);
         assert_eq!(at(0, 0)[3], 0);
+    }
+
+    #[test]
+    fn local_facing_stays_above_a_pinned_overlap_inside_the_canvas() {
+        use crate::online::testing as session;
+        let mut app = crate::testing::app();
+        let canvas = app
+            .world_mut()
+            .spawn((
+                MapCanvas,
+                ImageNode::default(),
+                ComputedNode {
+                    size: Vec2::splat(500.0),
+                    ..default()
+                },
+            ))
+            .id();
+        let mut online = OnlineState::new(true);
+        session::admit(&mut online, 1, session::player(1));
+        let mut npc = session::pet(2, 1);
+        npc.position = online.world().player().unwrap().position;
+        session::spawns(&mut online, vec![npc]);
+        app.insert_resource(online)
+            .add_systems(Update, (draw, update_entities, update_items).chain());
+        app.update();
+        app.world_mut()
+            .resource_scope(|world, mut view: Mut<MapView>| {
+                view.admission = Some(1);
+                entities::select_preview(&mut view, world.resource::<OnlineState>().world(), 2);
+            });
+        app.update();
+        let scale = app.world().resource::<MapView>().projection.unwrap().scale;
+        let mut online = app.world_mut().resource_mut::<OnlineState>();
+        let mut position = online.world().player().unwrap().position;
+        position.x -= 7.0 / scale;
+        session::news(
+            &mut online,
+            [eq_client_core::WorldEvent::Objects(
+                eq_client_core::ground::ObjectUpdate::Spawn(eq_client_core::ground::GroundObject {
+                    drop_id: 70_000,
+                    model: "IT63_ACTORDEF".into(),
+                    position,
+                    object_type: 0,
+                }),
+            )],
+        );
+        app.update();
+        let world = app.world_mut();
+        let (arrow, node, transform, visible, facing_depth, parent) = world
+            .query_filtered::<(Entity, &Node, &UiTransform, &Visibility, &ZIndex, &ChildOf), With<PlayerArrow>>()
+            .single(world)
+            .unwrap();
+        assert_eq!(*visible, Visibility::Inherited);
+        assert_eq!(parent.parent(), canvas);
+        assert!(world.get::<GlobalZIndex>(arrow).is_none());
+        assert_eq!(
+            world.get::<bevy::ui::FocusPolicy>(arrow),
+            Some(&bevy::ui::FocusPolicy::Pass)
+        );
+        let (left, top, width) = (node.left, node.top, node.width);
+        let facing_depth = facing_depth.0;
+        assert_eq!(transform.rotation, facing(0.0));
+        let (_, npc, depth) = world
+            .query::<(&entities::Marker, &Node, &ZIndex)>()
+            .iter(world)
+            .find(|(marker, _, _)| marker.0 == 2)
+            .unwrap();
+        let centre = |start, width| match (start, width) {
+            (Val::Px(start), Val::Px(width)) => start + width / 2.0,
+            _ => unreachable!("absolute marker placement uses pixels"),
+        };
+        assert_eq!(centre(left, width), centre(npc.left, npc.width));
+        assert_eq!(centre(top, width), centre(npc.top, npc.height));
+        assert!(centre(px(0), width) > centre(px(0), npc.width));
+        assert!(facing_depth > depth.0);
+        let right = |node: &Node| centre(node.left, node.width) + centre(px(0), node.width);
+        let npc_right = right(npc);
+        let (_, own, own_depth) = world
+            .query::<(&entities::Marker, &Node, &ZIndex)>()
+            .iter(world)
+            .find(|(marker, _, _)| marker.0 == 1)
+            .unwrap();
+        let own_right = right(own);
+        assert!(facing_depth > own_depth.0);
+        let (item, hit_policy) = world
+            .query_filtered::<(&Node, &bevy::ui::FocusPolicy), With<items::ItemMarker>>()
+            .single(world)
+            .unwrap();
+        assert_eq!(*hit_policy, bevy::ui::FocusPolicy::Block);
+        // The item extends past both blocking markers and is inspectable
+        // through the larger, pointer-pass local arrow.
+        let hit = centre(item.left, item.width) + 2.0;
+        let arrow_right = centre(left, width) + centre(px(0), width);
+        assert!(hit > own_right && hit > npc_right && hit < arrow_right && hit < right(item));
+        let controls_depth = world
+            .query_filtered::<&ZIndex, With<entities::Legend>>()
+            .single(world)
+            .unwrap();
+        assert!(facing_depth < controls_depth.0);
     }
 
     #[test]

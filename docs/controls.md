@@ -137,13 +137,16 @@ The map shows all server-reported entities with known positions, independently
 of 3D render distance. Purple arrows are players and point in their facing
 direction, including while stopped. NPCs are circles with level-relative con
 colors, with received consider results preferred over estimates. Corpses and
-unknown entities are gray. Small gold squares are ground items; hover to see
+unknown entities are gray. Small gold squares show ground items within 240
+units of your reported position; hover to see
 their model and position. World fixtures such as forges are excluded, and map
 item markers do not pick up or target anything. The current TAKP and Quarm adapters
 do not expose ground items, so those servers have no ground-item markers.
-Your arrow follows the displayed
-character and its facing; smaller travel arrows beside you and NPCs disappear
-on stops/stale reports. Remote positions remain the last ones reported by the server.
+Your larger arrow follows the displayed character and its facing and appears
+above other markers and map labels. A short black line with a colored tip shows
+the direction you or an NPC are moving. It disappears when movement stops or
+the report goes stale. Remote positions remain the last ones reported by the
+server.
 
 Hover for details or click to pin an inspector; repeated clicks cycle overlapping
 markers. Search matches part of a displayed name. **Track** saves an exact name;

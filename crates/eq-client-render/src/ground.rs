@@ -8,7 +8,7 @@ use eq_client_core::ground::{GroundObject, ObjectKind};
 use std::collections::BTreeMap;
 
 /// Objects are drawn this close to the player, as doors are.
-const DRAW_RADIUS: f32 = 240.0;
+pub(super) const DRAW_RADIUS: f32 = 240.0;
 /// What an item without an installed model shows: the small bag servers use
 /// by default.
 const DEFAULT_ITEM_MODEL: &str = "IT63";

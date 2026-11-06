@@ -1,4 +1,4 @@
-//! Live player placement and travel arrows, separate from facing and map fitting.
+//! Live player placement and travel indicators, separate from facing and map fitting.
 use super::{entities::Marker, map_point};
 use crate::online::OnlineState;
 use bevy::prelude::*;
@@ -93,23 +93,42 @@ pub(crate) fn sample(
     motion.observe(world.session_id(), pose, Instant::now());
 }
 
-/// A travel arrow is a child of its dot, so clipping and position follow it.
+/// A travel indicator follows its marker's position and clipping.
 #[derive(Component)]
 pub(crate) struct Travel;
 
-pub(super) fn arrow() -> impl Bundle {
+const LINE_LENGTH: f32 = 10.0;
+const LINE_WIDTH: f32 = 3.0;
+const DOT_SIZE: f32 = 5.0;
+
+pub(super) fn indicator() -> impl Bundle {
     (
         Travel,
-        ImageNode::default(),
+        BackgroundColor(Color::BLACK),
+        BorderColor::all(crate::theme::INK),
         UiTransform::default(),
         bevy::ui::FocusPolicy::Pass,
         Node {
             position_type: PositionType::Absolute,
-            width: px(super::ARROW),
-            height: px(super::ARROW),
+            width: px(LINE_WIDTH),
+            height: px(LINE_LENGTH),
+            border: UiRect::horizontal(px(1)),
             display: Display::None,
             ..default()
         },
+        children![(
+            BackgroundColor(Color::NONE),
+            bevy::ui::FocusPolicy::Pass,
+            Node {
+                position_type: PositionType::Absolute,
+                top: px(-1),
+                left: px((LINE_WIDTH - DOT_SIZE) / 2.0 - 1.0),
+                width: px(DOT_SIZE),
+                height: px(DOT_SIZE),
+                border_radius: BorderRadius::all(percent(50)),
+                ..default()
+            },
+        )],
     )
 }
 
@@ -121,7 +140,7 @@ fn travel(world: &ClientWorld, id: u16, dialect: GameDialect, now: Instant) -> O
     }
     let spawn = world.spawn(id)?;
     let state = &spawn.state;
-    if !matches!(state.kind, SpawnKind::Player | SpawnKind::Npc)
+    if state.kind != SpawnKind::Npc
         || now.saturating_duration_since(spawn.reported) > REPORT_FRESHNESS
         || !state
             .velocity
@@ -139,41 +158,51 @@ fn unit(delta: Vec2) -> Option<Vec2> {
     (delta.is_finite() && delta.length_squared() > 0.000_001).then(|| delta.normalize())
 }
 
-/// The texture points up; UI rotation is clockwise with screen Y down.
+/// The indicator points up; UI rotation is clockwise with screen Y down.
 fn rotation(direction: Vec2) -> Rot2 {
     Rot2::radians(direction.x.atan2(-direction.y))
 }
 
-/// Update all arrows every frame, including stop/stale reports and search opacity.
+/// Update all travel indicators, including stop/stale reports and search opacity.
 #[allow(clippy::needless_pass_by_value, clippy::type_complexity)]
 pub(crate) fn draw(
     online: Res<OnlineState>,
     settings: Res<crate::ViewerSettings>,
     motion: Res<MapMotion>,
-    mut images: ResMut<Assets<Image>>,
-    mut art: Local<Option<Handle<Image>>>,
     markers: Query<(&Marker, &Node, &BackgroundColor), Without<Travel>>,
-    mut arrows: Query<(&ChildOf, &mut Node, &mut UiTransform, &mut ImageNode), With<Travel>>,
+    mut indicators: Query<
+        (
+            &ChildOf,
+            &Children,
+            &mut Node,
+            &mut UiTransform,
+            &mut BorderColor,
+            &mut BackgroundColor,
+        ),
+        With<Travel>,
+    >,
+    mut dots: Query<&mut BackgroundColor, (Without<Marker>, Without<Travel>)>,
 ) {
-    if arrows.is_empty() {
+    if indicators.is_empty() {
         return;
     }
-    let art = art.get_or_insert_with(|| images.add(super::arrow_picture([255; 4], [0, 0, 0, 255])));
     let world = online.world();
     let dialect = crate::entities::dialect(settings.0.installed_client);
     let now = Instant::now();
-    for (parent, mut node, mut transform, mut image) in &mut arrows {
-        let Ok((marker, dot, color)) = markers.get(parent.parent()) else {
+    let own_has_heading = motion
+        .player(world)
+        .is_some_and(|pose| pose.heading.is_finite());
+    for (parent, children, mut node, mut transform, mut border, mut line) in &mut indicators {
+        let Ok((marker, marker_node, fill)) = markers.get(parent.parent()) else {
             continue;
         };
-        let own = world
-            .player()
-            .is_some_and(|player| player.spawn_id == marker.0);
+        let own = world.is_player(marker.0);
         let direction = if own {
-            motion.direction
-        } else if world.is_player(marker.0) {
-            None // A player's marker already shows facing, including at rest.
+            motion
+                .direction
+                .filter(|_| motion.admission == world.session_id())
         } else {
+            // Other players keep their facing arrows.
             travel(world, marker.0, dialect, now)
         };
         let Some(direction) = direction else {
@@ -182,15 +211,21 @@ pub(crate) fn draw(
             }
             continue;
         };
-        let Val::Px(diameter) = dot.width else {
+        let Val::Px(diameter) = marker_node.width else {
             continue;
         };
-        let at = Vec2::splat(diameter / 2.0) + direction * (diameter / 2.0 + 9.0);
+        let centre = Vec2::splat(diameter / 2.0);
+        let visual_diameter = if own && own_has_heading {
+            super::OWN_ARROW_SIZE
+        } else {
+            diameter
+        };
+        let at = centre + direction * (visual_diameter / 2.0 + LINE_LENGTH / 2.0 + 2.0);
         if node.display != Display::Flex {
             node.display = Display::Flex;
         }
-        let left = px(at.x - super::HALF_ARROW);
-        let top = px(at.y - super::HALF_ARROW);
+        let left = px(at.x - LINE_WIDTH / 2.0);
+        let top = px(at.y - LINE_LENGTH / 2.0);
         if node.left != left {
             node.left = left;
         }
@@ -201,16 +236,14 @@ pub(crate) fn draw(
         if transform.rotation != rotation {
             transform.rotation = rotation;
         }
-        if image.image != *art {
-            image.image = art.clone();
-        }
-        let color = if own {
-            super::entities::PLAYER
-        } else {
-            color.0
-        };
-        if image.color != color {
-            image.color = color;
+        let color = if own { super::entities::PLAYER } else { fill.0 };
+        let alpha = color.alpha();
+        border.set_if_neq(BorderColor::all(crate::theme::INK.with_alpha(alpha)));
+        line.set_if_neq(BackgroundColor(Color::BLACK.with_alpha(alpha)));
+        if let Some(&dot) = children.first()
+            && let Ok(mut fill) = dots.get_mut(dot)
+        {
+            fill.set_if_neq(BackgroundColor(color));
         }
     }
 }

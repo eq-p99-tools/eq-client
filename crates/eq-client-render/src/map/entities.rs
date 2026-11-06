@@ -476,7 +476,7 @@ fn add_marker(
                 Tooltip::default(),
                 ZIndex(look.depth),
             ))
-            .with_child(super::motion::arrow());
+            .with_child(super::motion::indicator());
     });
 }
 
@@ -493,20 +493,17 @@ fn shape(
     look: Look,
     arrow: &Handle<Image>,
 ) {
-    node.border_radius = if entity.kind == SpawnKind::Npc {
+    let unknown_facing = entity.kind == SpawnKind::Player && !entity.position.heading.is_finite();
+    node.border_radius = if entity.kind == SpawnKind::Npc || unknown_facing {
         BorderRadius::all(percent(50))
     } else {
         BorderRadius::ZERO
     };
-    if entity.kind == SpawnKind::Player && !entity.own {
+    if entity.kind == SpawnKind::Player && !entity.own && !unknown_facing {
         background.0 = Color::NONE;
         image.image = arrow.clone();
         image.color = look.fill;
-        transform.rotation = if entity.position.heading.is_finite() {
-            super::facing(entity.position.heading)
-        } else {
-            Rot2::IDENTITY
-        };
+        transform.rotation = super::facing(entity.position.heading);
         // Only an emphasized player needs an extra selection outline.
         if look.diameter == MARKER_SIZE {
             *border = BorderColor::all(Color::NONE);
@@ -514,6 +511,9 @@ fn shape(
     } else {
         image.color = Color::NONE;
         transform.rotation = Rot2::IDENTITY;
+        if entity.own && unknown_facing {
+            background.0 = PLAYER;
+        }
     }
 }
 

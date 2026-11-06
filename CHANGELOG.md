@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Draw the larger local player arrow above other map markers and labels. Show
+  travel direction with a line and colored tip, and limit ground item squares
+  to the same range as nearby item models.
+
 - Cover the chase camera's 89-degree pitch bound in both directions on the
   classic and long leash, including the view's heading and eye-centered zoom.
 

@@ -2,7 +2,10 @@
 use super::{MapCanvas, MapView, entities, map_point};
 use crate::{online::OnlineState, tooltip::Tooltip};
 use bevy::prelude::*;
-use eq_client_core::ground::{GroundObject, ObjectKind};
+use eq_client_core::{
+    WorldPosition,
+    ground::{GroundObject, ObjectKind},
+};
 use std::collections::BTreeSet;
 
 const SIZE: f32 = 6.0;
@@ -11,8 +14,12 @@ const INK: Color = Color::srgb_u8(240, 205, 100);
 #[derive(Component)]
 pub(crate) struct ItemMarker(u32);
 
-fn visible(object: &GroundObject) -> bool {
-    object.kind() == ObjectKind::Item && entities::finite(object.position)
+fn visible(object: &GroundObject, origin: Option<WorldPosition>) -> bool {
+    let Some(origin) = origin else { return false };
+    let p = object.position;
+    let delta = Vec3::new(p.x - origin.x, p.y - origin.y, p.z - origin.z);
+    object.kind() == ObjectKind::Item
+        && delta.length_squared() <= crate::ground::DRAW_RADIUS.powi(2)
 }
 
 /// Reconcile server-reported items; fixtures are not loose items to pick up.
@@ -30,10 +37,18 @@ pub(crate) fn update(
     let Some(projection) = view.projection else {
         return;
     };
-    let objects = online.world().objects().entries();
+    let world = online.world();
+    let origin = world
+        .player()
+        .filter(|_| world.connected())
+        .map(|player| player.position);
+    let objects = world.objects().entries();
     let mut drawn = BTreeSet::new();
     for (entity, marker, mut node, mut tooltip, interaction) in &mut markers {
-        let Some(object) = objects.get(&marker.0).filter(|object| visible(object)) else {
+        let Some(object) = objects
+            .get(&marker.0)
+            .filter(|object| visible(object, origin))
+        else {
             commands.entity(entity).despawn();
             continue;
         };
@@ -59,7 +74,7 @@ pub(crate) fn update(
     }
     for object in objects
         .values()
-        .filter(|object| visible(object) && !drawn.contains(&object.drop_id))
+        .filter(|object| visible(object, origin) && !drawn.contains(&object.drop_id))
     {
         let mut node = Node {
             position_type: PositionType::Absolute,
@@ -108,6 +123,7 @@ mod tests {
                 item(70_000, "IT10", 20.0),    // Object IDs are wider than spawn IDs.
                 item(3, "FORGE", 0.0),
                 item(4, "IT63", f32::NAN),
+                item(5, "IT63", 241.0),
             ]))],
         );
         app.insert_resource(online)
@@ -160,6 +176,23 @@ mod tests {
                 .contains("Object 70000")
         );
         assert!(app.world().get::<entities::Action>(entity).is_none());
+        session::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [WorldEvent::Position {
+                spawn_id: 1,
+                position: WorldPosition {
+                    x: 400.0,
+                    ..default()
+                },
+                velocity: [0.0; 3],
+                forward: 0.0,
+            }],
+        );
+        app.update();
+        let nearby = markers(&mut app);
+        assert_eq!(nearby.len(), 1);
+        assert!(nearby.contains_key(&5));
+        assert!(app.world().get_entity(entity).is_err());
         session::admit(
             &mut app.world_mut().resource_mut::<OnlineState>(),
             2,
