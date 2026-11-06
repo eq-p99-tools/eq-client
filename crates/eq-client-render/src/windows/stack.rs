@@ -32,6 +32,18 @@ impl Stack {
         self.0.push(id);
     }
 
+    /// A detached chat group stays open across HUD rebuilds. Its membership
+    /// determines when it joins or leaves the stack.
+    pub(crate) fn sync_chat_groups(&mut self, groups: &crate::chat::Groups) {
+        self.0
+            .retain(|id| !matches!(id, WindowId::ChatGroup(_)) || groups.contains(*id));
+        for id in groups.detached() {
+            if !self.0.contains(&id) {
+                self.0.push(id);
+            }
+        }
+    }
+
     /// The windows from the front to the back.
     pub(crate) fn front_to_back(&self) -> impl Iterator<Item = WindowId> + '_ {
         self.0.iter().rev().copied()
@@ -202,7 +214,7 @@ pub(crate) fn raise_opened(
     mut stack: ResMut<Stack>,
 ) {
     for (id, node) in &frames {
-        if !id.describe().layer.stacked() {
+        if !id.describe().layer.stacked() || matches!(id, WindowId::ChatGroup(_)) {
             continue;
         }
         if node.display == Display::None {

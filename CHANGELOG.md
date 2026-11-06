@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Keep detached chat windows in their previous stack order when the HUD is
+  rebuilt. The skinned dock stays bare when empty, and chat links remain
+  clickable when their lines are nested within the viewport.
 - Report a local scripted `give` refusal through the script result once.
   Native click refusals still appear in chat.
 - Draw server-reported rain and snow in zones with a sky. See the World

@@ -362,6 +362,7 @@ pub(super) fn reconcile(
     frames: Query<(Entity, &WindowId), With<Panel>>,
     mut stack: ResMut<super::windows::Stack>,
 ) {
+    stack.sync_chat_groups(&state.groups);
     if !frames.iter().any(|(_, id)| *id == WindowId::Chat) {
         return;
     }
@@ -372,7 +373,6 @@ pub(super) fn reconcile(
     }
     for id in state.groups.detached() {
         if !frames.iter().any(|(_, frame)| *frame == id) {
-            stack.raise(id);
             let frame = spawn_group(&mut commands, id);
             commands.entity(frame).insert(GlobalZIndex(stack.z(id)));
         }
@@ -460,7 +460,7 @@ pub(super) fn sync_tabs(
             .entity(entity)
             .despawn_children()
             .with_children(|parent| {
-                if group.tabs.is_empty() {
+                if group.tabs.is_empty() && strip.skin.is_none() {
                     parent.spawn(theme::text("Drop a chat tab here", Size::Small, theme::INK));
                 }
                 let art_skin = strip.skin.as_ref().and_then(|(_, skin)| skin.clone());
@@ -3162,9 +3162,67 @@ mod tests {
     }
     #[test]
     fn closing_a_detached_frame_returns_its_tabs_to_the_main_strip() {
+        for via_escape in [false, true] {
+            let mut app = crate::testing::app();
+            app.add_systems(Startup, |mut commands: Commands| spawn(&mut commands))
+                .add_systems(Update, (close_groups, reconcile, sync_tabs).chain());
+            let detached = app
+                .world_mut()
+                .resource_mut::<ChatState>()
+                .groups
+                .detach(WindowId::Chat, ChatTab::Guild)
+                .unwrap();
+            app.update();
+
+            let world = app.world_mut();
+            let frame = chat_frame(world, detached);
+            let tab_group = |world: &mut World| {
+                world
+                    .query::<&TabButton>()
+                    .iter(world)
+                    .find(|button| button.0 == ChatTab::Guild)
+                    .unwrap()
+                    .1
+            };
+            assert_eq!(tab_group(world), detached);
+            if via_escape {
+                world.insert_resource(crate::escape::Escape::Close(detached));
+                app.update();
+            } else {
+                let close = world
+                    .query::<(Entity, &CloseGroup)>()
+                    .iter(world)
+                    .find(|(_, close)| close.0 == detached)
+                    .unwrap()
+                    .0;
+                crate::clicks::testing::click(&mut app, close);
+            }
+            assert!(app.world().get_entity(frame).is_err());
+            let world = app.world_mut();
+            assert_eq!(tab_group(world), WindowId::Chat);
+            assert_eq!(
+                world.resource::<ChatState>().groups.active(WindowId::Chat),
+                Some(ChatTab::Guild)
+            );
+        }
+    }
+
+    fn chat_frame(world: &mut World, id: WindowId) -> Entity {
+        world
+            .query_filtered::<(Entity, &WindowId), With<Panel>>()
+            .iter(world)
+            .find(|(_, window)| **window == id)
+            .unwrap()
+            .0
+    }
+
+    #[test]
+    fn rebuilding_detached_chat_preserves_its_place_in_the_window_stack() {
+        use crate::windows::{Stack, raise_opened};
+
         let mut app = crate::testing::app();
         app.add_systems(Startup, |mut commands: Commands| spawn(&mut commands))
-            .add_systems(Update, (close_groups, reconcile, sync_tabs).chain());
+            .add_systems(Update, (raise_opened, reconcile).chain());
         let detached = app
             .world_mut()
             .resource_mut::<ChatState>()
@@ -3172,36 +3230,190 @@ mod tests {
             .detach(WindowId::Chat, ChatTab::Guild)
             .unwrap();
         app.update();
-
         let world = app.world_mut();
-        let frame = world
-            .query_filtered::<(Entity, &WindowId), With<Panel>>()
-            .iter(world)
-            .find(|(_, id)| **id == detached)
-            .unwrap()
-            .0;
-        let close = world
-            .query::<(Entity, &CloseGroup)>()
-            .iter(world)
-            .find(|(_, close)| close.0 == detached)
-            .unwrap()
-            .0;
-        let tab = |world: &mut World| {
-            let (id, button) = world
-                .query::<(Entity, &TabButton)>()
-                .iter(world)
-                .find(|(_, button)| button.0 == ChatTab::Guild)
-                .unwrap();
-            (id, button.1)
-        };
-        assert_eq!(tab(world).1, detached);
-        crate::clicks::testing::click(&mut app, close);
-        assert!(app.world().get_entity(frame).is_err());
-        let world = app.world_mut();
-        assert_eq!(tab(world).1, WindowId::Chat);
         assert_eq!(
-            world.resource::<ChatState>().groups.active(WindowId::Chat),
-            Some(ChatTab::Guild)
+            world.resource::<Stack>().front_to_back().next(),
+            Some(detached)
+        );
+        world.resource_mut::<Stack>().raise(WindowId::Inventory);
+        let frame = chat_frame(world, detached);
+        world.despawn(frame);
+        // Route also sees the recreated Node on the following frame.
+        app.update();
+        app.update();
+        let world = app.world_mut();
+        let rebuilt = chat_frame(world, detached);
+        let stack = world.resource::<Stack>();
+        assert_ne!(rebuilt, frame);
+        assert_eq!(stack.front_to_back().next(), Some(WindowId::Inventory));
+        assert_eq!(
+            world.get::<GlobalZIndex>(rebuilt).unwrap().0,
+            stack.z(detached)
+        );
+
+        world.resource_mut::<ChatState>().groups.close(detached);
+        app.update();
+        assert!(
+            !app.world()
+                .resource::<Stack>()
+                .front_to_back()
+                .any(|id| id == detached)
+        );
+        let reopened = app
+            .world_mut()
+            .resource_mut::<ChatState>()
+            .groups
+            .detach(WindowId::Chat, ChatTab::Tell)
+            .unwrap();
+        assert_eq!(reopened, detached);
+        app.update();
+        assert_eq!(
+            app.world().resource::<Stack>().front_to_back().next(),
+            Some(reopened)
+        );
+    }
+
+    #[test]
+    fn an_empty_skinned_chat_strip_keeps_its_drop_target_without_a_client_hint() {
+        let mut app = crate::testing::app();
+        app.add_systems(Startup, |mut commands: Commands| {
+            commands.spawn_empty().with_children(|parent| {
+                tab_strip(parent, WindowId::Chat, None);
+                tab_strip(parent, WindowId::Chat, Some((default(), None)));
+            });
+        })
+        .add_systems(Update, sync_tabs);
+        let world = app.world_mut();
+        for tab in ChatTab::ALL {
+            world
+                .resource_mut::<ChatState>()
+                .groups
+                .detach(WindowId::Chat, tab)
+                .unwrap();
+        }
+        app.update();
+        let world = app.world_mut();
+        let strips: BTreeMap<_, _> = world
+            .query_filtered::<(Entity, &TabStrip), With<crate::windows::KeepsPress>>()
+            .iter(world)
+            .map(|(entity, strip)| (strip.skin.is_some(), entity))
+            .collect();
+        assert_eq!(strips.len(), 2);
+        let labels: Vec<_> = world
+            .query::<(&Text, &ChildOf)>()
+            .iter(world)
+            .filter(|(text, _)| text.0 == "Drop a chat tab here")
+            .map(|(_, parent)| parent.parent())
+            .collect();
+        assert_eq!(labels, [strips[&false]]);
+    }
+
+    #[test]
+    fn a_nested_chat_line_only_links_in_its_frontmost_viewport() {
+        use bevy::{
+            ecs::system::RunSystemOnce,
+            text::{
+                ComputedTextBlock, LineBreak, RunGeometry, TextBounds, TextLayoutInfo, TextPipeline,
+            },
+            ui::ComputedStackIndex,
+        };
+
+        let mut app = crate::testing::app();
+        app.add_systems(Update, crate::items::link_input);
+        let world = app.world_mut();
+        world
+            .query_filtered::<&mut Window, With<PrimaryWindow>>()
+            .single_mut(world)
+            .unwrap()
+            .set_physical_cursor_position(Some(bevy::math::DVec2::splat(50.0)));
+        let node = ComputedNode {
+            size: Vec2::splat(100.0),
+            ..default()
+        };
+        let transform = UiGlobalTransform::from_translation(Vec2::splat(50.0));
+        let viewport = world
+            .spawn((
+                Viewport,
+                crate::windows::KeepsPress,
+                node,
+                transform,
+                ComputedStackIndex(1),
+            ))
+            .id();
+        let column = world.spawn(ChildOf(viewport)).id();
+        let wrapper = world.spawn(ChildOf(column)).id();
+        let paragraph = world
+            .run_system_once(move |mut commands: Commands| {
+                let mut paragraph = commands.spawn((
+                    LineId(1),
+                    node,
+                    transform,
+                    InheritedVisibility::VISIBLE,
+                    ChildOf(wrapper),
+                ));
+                paragraph.with_children(|parent| {
+                    links::spawn_text(parent, "https://example.com", Color::WHITE, Size::Small);
+                });
+                paragraph.id()
+            })
+            .unwrap();
+        let span = world
+            .query_filtered::<Entity, With<links::WebLink>>()
+            .single(world)
+            .unwrap();
+        let mut block = ComputedTextBlock::default();
+        // Register the span without depending on a font or glyph shaping.
+        // The synthetic run below supplies the laid-out link's bounds.
+        TextPipeline::default()
+            .update_buffer(
+                &Assets::default(),
+                std::iter::once((
+                    span,
+                    1,
+                    "",
+                    &TextFont::default(),
+                    Color::WHITE,
+                    default(),
+                    default(),
+                )),
+                LineBreak::NoWrap,
+                Justify::Left,
+                TextBounds::UNBOUNDED,
+                1.0,
+                &mut block,
+                &mut default(),
+                &mut default(),
+                Vec2::splat(100.0),
+                16.0,
+            )
+            .unwrap();
+        world.entity_mut(paragraph).insert((
+            block,
+            TextLayoutInfo {
+                run_geometry: vec![RunGeometry {
+                    section_index: 0,
+                    bounds: Rect::new(0.0, 0.0, 100.0, 100.0),
+                    ..default()
+                }],
+                ..default()
+            },
+        ));
+        app.update();
+        assert_eq!(
+            app.world().get::<Interaction>(span),
+            Some(&Interaction::Hovered)
+        );
+        app.world_mut().spawn((
+            Viewport,
+            crate::windows::KeepsPress,
+            node,
+            transform,
+            ComputedStackIndex(2),
+        ));
+        app.update();
+        assert_eq!(
+            app.world().get::<Interaction>(span),
+            Some(&Interaction::None)
         );
     }
 

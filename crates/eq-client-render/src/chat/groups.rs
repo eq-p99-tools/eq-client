@@ -53,7 +53,7 @@ impl Groups {
         self.groups.contains_key(&id)
     }
 
-    pub(super) fn detached(&self) -> impl Iterator<Item = WindowId> + '_ {
+    pub(crate) fn detached(&self) -> impl Iterator<Item = WindowId> + '_ {
         self.groups.keys().copied().filter(|id| *id != MAIN)
     }
 

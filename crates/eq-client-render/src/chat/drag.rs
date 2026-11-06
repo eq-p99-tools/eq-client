@@ -3,7 +3,7 @@ use super::{ChatState, TabButton, TabStrip, groups::Insert};
 use crate::{
     clicks::LeftButton,
     theme::{self, Size},
-    windows::{Layouts, WindowId, pointer::PointerUi},
+    windows::{Layouts, WindowId, logical_rect, pointer::PointerUi},
 };
 use bevy::{prelude::*, window::PrimaryWindow};
 use eq_client_core::chat::ChatTab;
@@ -87,9 +87,8 @@ impl Drop {
             && let Some(inverse) = transform.try_inverse()
         {
             let after = inverse.transform_point2(cursor).x > 0.0;
-            let size = node.size() * node.inverse_scale_factor();
-            let origin = transform.translation * node.inverse_scale_factor() - size * 0.5;
-            let edge = origin.x + if after { size.x } else { 0.0 };
+            let rect = logical_rect(node, transform);
+            let edge = if after { rect.max.x } else { rect.min.x };
             return Self::Dock(
                 *group,
                 if after {
@@ -97,17 +96,15 @@ impl Drop {
                 } else {
                     Insert::Before(*tab)
                 },
-                Rect::new(edge - 1.0, origin.y, edge + 1.0, origin.y + size.y),
+                Rect::new(edge - 1.0, rect.min.y, edge + 1.0, rect.max.y),
             );
         }
         if let Ok((strip, node, transform)) = strips.get(hit) {
-            let size = node.size() * node.inverse_scale_factor();
-            let start = transform.translation * node.inverse_scale_factor() - size * 0.5;
-            let end = start + size;
+            let rect = logical_rect(node, transform);
             return Self::Dock(
                 strip.id,
                 Insert::End,
-                Rect::new(start.x, end.y - 2.0, end.x, end.y),
+                Rect::new(rect.min.x, rect.max.y - 2.0, rect.max.x, rect.max.y),
             );
         }
         Self::Cancel
