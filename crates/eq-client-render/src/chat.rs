@@ -298,7 +298,7 @@ fn spawn_group(commands: &mut Commands, id: WindowId) -> Entity {
         super::windows::drag_anywhere(commands, frame, id);
     }
     commands.entity(frame).with_children(|root| {
-        tab_strip(root, id, None);
+        tab_strip(root, id, false, None);
         lines(root, false, id);
         root.spawn(Node {
             column_gap: px(5),
@@ -401,7 +401,7 @@ pub(super) fn skinned_output(
         })
         .with_children(|output| {
             let skin = tab_frame.map(|look| (look.clone(), art.drawing_skin()));
-            tab_strip(output, id, skin);
+            tab_strip(output, id, true, skin);
             viewport = lines(output, true, id);
         });
     viewport
@@ -412,12 +412,15 @@ pub(super) fn skinned_output(
 pub(super) struct TabStrip {
     id: WindowId,
     painted: Option<Vec<ChatTab>>,
+    /// Drawn inside skinned output, which may have no authored tab frame.
+    bare: bool,
     skin: Option<(eq_client_assets::sidl::FrameLook, Option<String>)>,
 }
 
 fn tab_strip(
     parent: &mut ChildSpawnerCommands,
     id: WindowId,
+    bare: bool,
     skin: Option<(eq_client_assets::sidl::FrameLook, Option<String>)>,
 ) {
     let gap = if skin.is_some() { 2.0 } else { 3.0 };
@@ -425,6 +428,7 @@ fn tab_strip(
         TabStrip {
             id,
             painted: None,
+            bare,
             skin,
         },
         super::windows::KeepsPress,
@@ -460,7 +464,7 @@ pub(super) fn sync_tabs(
             .entity(entity)
             .despawn_children()
             .with_children(|parent| {
-                if group.tabs.is_empty() && strip.skin.is_none() {
+                if group.tabs.is_empty() && !strip.bare {
                     parent.spawn(theme::text("Drop a chat tab here", Size::Small, theme::INK));
                 }
                 let art_skin = strip.skin.as_ref().and_then(|(_, skin)| skin.clone());
@@ -3316,12 +3320,22 @@ mod tests {
     #[test]
     fn an_empty_skinned_chat_strip_keeps_its_drop_target_without_a_client_hint() {
         let mut app = crate::testing::app();
-        app.add_systems(Startup, |mut commands: Commands| {
-            commands.spawn_empty().with_children(|parent| {
-                tab_strip(parent, WindowId::Chat, None);
-                tab_strip(parent, WindowId::Chat, Some((default(), None)));
-            });
-        })
+        app.add_systems(
+            Startup,
+            |mut commands: Commands, mut art: crate::sheets::Art| {
+                commands.spawn_empty().with_children(|parent| {
+                    tab_strip(parent, WindowId::Chat, false, None);
+                    for tab_frame in [None, Some(default())] {
+                        skinned_output(
+                            parent,
+                            Node::default(),
+                            (&mut art, tab_frame.as_ref()),
+                            WindowId::Chat,
+                        );
+                    }
+                });
+            },
+        )
         .add_systems(Update, sync_tabs);
         let world = app.world_mut();
         for tab in ChatTab::ALL {
@@ -3336,16 +3350,19 @@ mod tests {
         let strips: BTreeMap<_, _> = world
             .query_filtered::<(Entity, &TabStrip), With<crate::windows::KeepsPress>>()
             .iter(world)
-            .map(|(entity, strip)| (strip.skin.is_some(), entity))
+            .map(|(entity, strip)| ((strip.bare, strip.skin.is_some()), entity))
             .collect();
-        assert_eq!(strips.len(), 2);
+        assert_eq!(
+            strips.keys().copied().collect::<Vec<_>>(),
+            [(false, false), (true, false), (true, true)]
+        );
         let labels: Vec<_> = world
             .query::<(&Text, &ChildOf)>()
             .iter(world)
             .filter(|(text, _)| text.0 == "Drop a chat tab here")
             .map(|(_, parent)| parent.parent())
             .collect();
-        assert_eq!(labels, [strips[&false]]);
+        assert_eq!(labels, [strips[&(false, false)]]);
     }
 
     #[test]
