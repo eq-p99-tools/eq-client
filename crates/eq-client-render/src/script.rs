@@ -1660,7 +1660,7 @@ pub(super) fn drive(
         }
         Step::Gm(_) | Step::Chat(_) => {
             let line = match &step {
-                Step::Gm(command) => gm_chat(command, script.local),
+                Step::Gm(command) => gm_chat(command, script.local, online.world()),
                 Step::Chat(chat) => local_chat(chat, script.local),
                 _ => return,
             };
@@ -2065,13 +2065,33 @@ fn may_run(unattended: bool, reported_focus: Option<bool>, window_focused: bool)
     unattended || (reported_focus == Some(true) && window_focused)
 }
 
-/// The say line carrying a `gm` step's `#` command, refused unless the session is
-/// on a local `EQEmu` or TAKP server.
-fn gm_chat(command: &str, allowed: bool) -> Result<eq_client_core::OutboundChat, String> {
+/// The say line carrying a validated local GM command. Targeted cleanup
+/// requires an NPC selection reconciled with the current admission.
+fn gm_chat(
+    command: &str,
+    allowed: bool,
+    world: &eq_client_core::world::ClientWorld,
+) -> Result<eq_client_core::OutboundChat, String> {
     if !allowed {
         return Err(
             "gm steps only run on a local EQEmu or TAKP server (EQ_PROTOCOL=eqemu or takp)".into(),
         );
+    }
+    let words: Vec<_> = command.split_ascii_whitespace().collect();
+    let command = parse::gm_command(&words)?;
+    let depop = command == "depop";
+    let full_spawn = words.first() == Some(&"spawn") && words.len() > 5;
+    if (depop || full_spawn) && world.generation() != eq_client_core::GameDialect::Titanium {
+        return Err("Full fixture spawn and depop require local EQEmu".into());
+    }
+    if depop
+        && !world
+            .target_intent()
+            .and_then(|target| target.spawn_id)
+            .and_then(|id| world.spawn(id))
+            .is_some_and(|spawn| spawn.state.kind == eq_client_core::SpawnKind::Npc)
+    {
+        return Err("gm depop needs a current NPC target".into());
     }
     Ok(eq_client_core::OutboundChat::Say(format!("#{command}")))
 }
@@ -4000,9 +4020,10 @@ mod tests {
 
     #[test]
     fn gm_commands_only_reach_a_local_eqemu_session() {
-        assert!(gm_chat("summon", false).is_err());
+        let world = eq_client_core::world::ClientWorld::default();
+        assert!(gm_chat("summon", false, &world).is_err());
         assert_eq!(
-            gm_chat("givemoney 0 0 5 0", true).unwrap(),
+            gm_chat("givemoney 0 0 5 0", true, &world).unwrap(),
             eq_client_core::OutboundChat::Say("#givemoney 0 0 5 0".into())
         );
         assert!(!Script::new(vec![Step::Gm("summon".into())]).local);
@@ -4014,6 +4035,7 @@ mod tests {
 
     #[test]
     fn a_stun_fixture_keeps_both_local_session_gates() {
+        let world = eq_client_core::world::ClientWorld::default();
         let program = Program::parse("gm stun 8000", std::path::Path::new(".")).unwrap();
         assert_eq!(
             program.instructions()[0].step(),
@@ -4021,11 +4043,76 @@ mod tests {
         );
         assert!(program.check_local_commands(false).is_err());
         assert!(program.check_local_commands(true).is_ok());
-        assert!(gm_chat("stun 8000", false).is_err());
+        assert!(gm_chat("stun 8000", false, &world).is_err());
         assert_eq!(
-            gm_chat("stun 8000", true).unwrap(),
+            gm_chat("stun 8000", true, &world).unwrap(),
             eq_client_core::OutboundChat::Say("#stun 8000".into())
         );
+    }
+
+    #[test]
+    fn full_fixture_setup_requires_local_titanium_at_runtime() {
+        use crate::online::{OnlineState, testing as session};
+        use eq_client_core::{GameDialect, OutboundChat};
+
+        let command = "spawn ScriptFixture 60 1 0 200 2 1 0 0 0 3";
+        let mut online = OnlineState::new(true);
+        session::admit(&mut online, 1, session::player(7));
+        assert!(gm_chat(command, false, online.world()).is_err());
+        assert_eq!(
+            gm_chat(command, true, online.world()),
+            Ok(OutboundChat::Say(format!("#{command}")))
+        );
+        assert!(gm_chat("spawn ScriptFixture 60 1 0 200", true, online.world()).is_err());
+        session::generation(&mut online, GameDialect::EqMac);
+        assert!(gm_chat(command, true, online.world()).is_err());
+        assert!(gm_chat("spawn ScriptFixture 1 1", true, online.world()).is_ok());
+    }
+
+    #[test]
+    fn depop_only_queues_for_the_reconciled_current_npc() {
+        use crate::online::{OnlineState, testing as session};
+        use eq_client_core::{OutboundChat, SpawnKind, WorldEvent, targets::TargetState};
+
+        let mut online = OnlineState::new(true);
+        session::admit(&mut online, 1, session::player(7));
+        let mut npc = session::pet(8, 0);
+        npc.kind = SpawnKind::Npc;
+        npc.pet_owner = None;
+        let mut corpse = npc.clone();
+        corpse.kind = SpawnKind::NpcCorpse;
+        corpse.spawn_id = 9;
+        session::spawns(&mut online, vec![npc.clone(), corpse]);
+        let target = |spawn_id, revision| WorldEvent::TargetChanged {
+            session_id: 1,
+            request_id: 0,
+            state: TargetState {
+                revision,
+                spawn_id: Some(spawn_id),
+                available: true,
+            },
+        };
+        for (spawn_id, revision) in [(7, 1), (9, 2)] {
+            session::news(&mut online, [target(spawn_id, revision)]);
+            assert!(gm_chat("depop", true, online.world()).is_err());
+        }
+        session::news(&mut online, [target(8, 3)]);
+        assert_eq!(
+            gm_chat("depop", true, online.world()),
+            Ok(OutboundChat::Say("#depop".into()))
+        );
+        assert!(gm_chat("depop", false, online.world()).is_err());
+        assert!(gm_chat("depop 1", true, online.world()).is_err());
+        assert!(gm_chat("depopzone", true, online.world()).is_err());
+
+        // A reused spawn ID cannot inherit the original selection.
+        session::news(
+            &mut online,
+            [WorldEvent::Despawn(8), WorldEvent::Spawns(vec![npc])],
+        );
+        assert!(gm_chat("depop", true, online.world()).is_err());
+        online.select_target(Some(8));
+        assert!(gm_chat("depop", true, online.world()).is_err());
     }
 
     #[test]

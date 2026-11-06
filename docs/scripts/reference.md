@@ -79,6 +79,16 @@ Approach, walk and chase hold the camera-relative forward command, independent o
 - `gm command [arguments]`: an allowed GM command on a network-constrained local test session only.
   `gm stun 8000` requests an 8,000-millisecond server stun for a local fixture.
   Check received `own_stun` state; command submission alone does not establish the effect.
+  On local EQEmu, use
+  `gm spawn NAME RACE LEVEL TEXTURE HEALTH GENDER CLASS PRIMARY_MODEL SECONDARY_MODEL 0 BODY_TYPE`
+  for a temporary NPC with explicit health and body type. Use a fresh alphabetic
+  name, positive health, and decimal fields. The merchant ID is fixed at zero.
+  The short `gm spawn NAME [RACE [LEVEL [TEXTURE]]]` form uses server defaults
+  for the remaining fields.
+  To remove a temporary NPC, confirm that its current incarnation is selected
+  and run `gm depop` without arguments. Keep that NPC selected until its
+  removal is observed. EQEmu acts on its current target and starts no respawn
+  timer. A queued command does not establish creation or removal.
 - `chat channel message`: chat on a network-constrained local test session only.
 - `quit`: close the client.
 
