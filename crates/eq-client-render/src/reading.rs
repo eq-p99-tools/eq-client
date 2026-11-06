@@ -7,7 +7,10 @@ use crate::{
     windows::{Shown, WindowId},
 };
 use bevy::prelude::*;
-use eq_client_core::{books::BookText, world::ClientWorld};
+use eq_client_core::{
+    books::{BookText, ReadingWindow},
+    world::ClientWorld,
+};
 
 /// How many characters a line of a book's page holds, and how many lines a
 /// page holds, as the skin's default book pages (190 by 246 pixels) fit
@@ -34,13 +37,11 @@ pub(crate) enum Text {
     Number(usize),
 }
 
-/// The supported note/book window. `EQMac` uses nonzero kinds for books;
-/// Titanium's item-information/unknown kinds are not reading windows.
+/// Map the session's supported reading text to the corresponding UI window.
 fn window_for(world: &ClientWorld) -> Option<WindowId> {
-    let text = world.reading()?;
-    match (world.generation(), text.kind) {
-        (_, 0) => Some(WindowId::Note),
-        (eq_client_core::GameDialect::EqMac, _) | (_, 1) => Some(WindowId::Book),
+    match world.reading_window()? {
+        ReadingWindow::Note => Some(WindowId::Note),
+        ReadingWindow::Book => Some(WindowId::Book),
         _ => None,
     }
 }

@@ -555,12 +555,16 @@ pub(super) fn input(
         typing.composing = true;
         typing.counting = false;
     }
-    // The quantity window's number has the keyboard: its keys are its own.
-    if typing.counting || typing.map_search {
+    // Local text fields keep their keys out of chat.
+    if typing.counting || typing.map_search || typing.spell_search_claimed {
         keyboard.clear();
         paste.clear();
     }
-    let events: Vec<_> = keyboard.read().cloned().collect();
+    let events: Vec<_> = keyboard
+        .read_with_id()
+        .filter(|(_, id)| !typing.spell_search_captured(*id))
+        .map(|(event, _)| event.clone())
+        .collect();
     let empty = ButtonInput::default();
     let submit = compose(
         &mut state,

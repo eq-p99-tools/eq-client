@@ -117,15 +117,6 @@ fn file_name(profile: Option<&CharacterProfile>) -> String {
     crate::profile_files::name("options", SHARED, profile)
 }
 
-/// Gives the world the player's choice of what a session may leave to them
-/// to turn on, as their options change.
-#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
-pub(crate) fn choose(state: Res<OptionsState>, mut online: ResMut<crate::online::OnlineState>) {
-    if state.is_changed() {
-        online.choose(state.options.qol.unlocked());
-    }
-}
-
 /// Tells each admission what the session may eat and drink on its own, and
 /// tells it again when the player changes that.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.

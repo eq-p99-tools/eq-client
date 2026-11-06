@@ -10,7 +10,7 @@ use eq_network::{
     assets::Assets,
     client::{
         CancellationToken, Client, ClientConfig, ClientEvent, ClientIdentity, ConnectionState,
-        LoginError, RecordEvent, RunOptions, ServerProtocol,
+        LoginError, PlayerAdmissionError, RecordEvent, RunOptions, ServerProtocol,
     },
 };
 use std::{
@@ -178,9 +178,7 @@ impl SessionWorker {
                             }
                             Some(WorldUpdate::Game(event))
                         }
-                        ClientEvent::Status(status) => {
-                            Some(WorldUpdate::Connection(link(status.state)))
-                        }
+                        ClientEvent::Status(status) => status_update(status.state),
                         ClientEvent::Progress(stage) => Some(progress_update(stage)),
                         ClientEvent::Record(record) => match record.event {
                             RecordEvent::Chat(event) => chat_update(event),
@@ -339,9 +337,12 @@ impl eq_client_render::Worker for SessionWorker {
 /// Why a session ended, as the login screen says it: the login server's
 /// refusal of the account, or what went wrong, in the library's words.
 fn player_words(error: &anyhow::Error) -> String {
-    match error.downcast_ref::<LoginError>() {
-        Some(refusal) => refusal.to_string(),
-        None => format!("The session ended: {error}"),
+    if let Some(refusal) = error.downcast_ref::<LoginError>() {
+        refusal.to_string()
+    } else if let Some(admission) = error.downcast_ref::<PlayerAdmissionError>() {
+        format!("{admission}. Log in again to retry entering the character.")
+    } else {
+        format!("The session ended: {error}")
     }
 }
 
@@ -352,21 +353,24 @@ fn progress_update(stage: eq_network::client::ConnectionStage) -> WorldUpdate {
         ConnectionStage::Ready => Link::Connected,
         ConnectionStage::ConnectingZone
         | ConnectionStage::LoadingCharacter
-        | ConnectionStage::EnteringWorld => Link::Entering,
+        | ConnectionStage::EnteringWorld
+        | ConnectionStage::Recording => Link::Entering,
         // The login and world servers, and the stages a later protocol adds
         // before the zone.
         _ => Link::LoggingIn,
     })
 }
 
-/// The session's coarse state in the player's terms.
-fn link(state: ConnectionState) -> Link {
-    match state {
+/// The worker sends the terminal update for an error after storing the reason.
+/// The network reports Disconnected before returning that error.
+fn status_update(state: ConnectionState) -> Option<WorldUpdate> {
+    Some(WorldUpdate::Connection(match state {
         ConnectionState::Connected => Link::Connected,
         ConnectionState::Zoning => Link::Zoning,
-        ConnectionState::Disconnected | ConnectionState::Stopped => Link::Ended,
+        ConnectionState::Disconnected => return None,
+        ConnectionState::Stopped => Link::Ended,
         _ => Link::LoggingIn,
-    }
+    }))
 }
 
 /// The session's client, configured from the login: the login server, the
@@ -644,6 +648,22 @@ mod tests {
             receiver.try_recv(),
             Err(mpsc::TryRecvError::Disconnected)
         ));
+    }
+
+    #[test]
+    fn failed_player_admission_maps_to_an_actionable_terminal_reason() {
+        use eq_network::client::ConnectionStage;
+
+        assert!(matches!(
+            progress_update(ConnectionStage::Recording),
+            WorldUpdate::Connection(Link::Entering)
+        ));
+        assert!(status_update(ConnectionState::Disconnected).is_none());
+        assert_eq!(
+            player_words(&PlayerAdmissionError.into()),
+            "The zone connected, but your character data could not be read. \
+             Log in again to retry entering the character."
+        );
     }
 
     #[test]

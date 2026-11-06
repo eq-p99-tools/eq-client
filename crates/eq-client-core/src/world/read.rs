@@ -396,6 +396,12 @@ impl ClientWorld {
         self.reading.as_ref()
     }
 
+    /// The supported window for the current reading text.
+    #[must_use]
+    pub fn reading_window(&self) -> Option<crate::books::ReadingWindow> {
+        self.reading()?.window(self.generation())
+    }
+
     /// The world container open for the player, such as a forge.
     #[must_use]
     pub fn container(&self) -> Option<&crate::ground::ContainerView> {

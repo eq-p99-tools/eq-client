@@ -283,7 +283,7 @@ pub(super) fn input(
                 Choice::Spawn(id, _) => {
                     // An NPC clicked with an item on the cursor is asked to
                     // take it, as well as targeted.
-                    super::give::offer(id, &mut online, &outbox);
+                    let _ = super::give::offer(id, &mut online, &outbox);
                     proposal = Some(Some(id));
                 }
                 Choice::Nothing if mouse.just_pressed(MouseButton::Left) => {
@@ -1100,11 +1100,7 @@ mod tests {
         (app, rx, label, bar)
     }
 
-    #[test]
-    #[allow(clippy::too_many_lines)] // Exercises the scene system and its real picking inputs.
-    fn a_door_uses_two_completed_scene_clicks_and_ignores_drags_and_ui_clicks() {
-        let (mut app, commands, ..) = target_app();
-        let center = Vec2::new(400.0, 300.0);
+    fn scene_camera(app: &mut App) {
         let mut camera = Camera::default();
         camera.computed.clip_from_view =
             Mat4::perspective_infinite_reverse_rh(std::f32::consts::FRAC_PI_4, 4.0 / 3.0, 0.1);
@@ -1124,6 +1120,91 @@ mod tests {
                 view: default(),
             },
         ));
+    }
+
+    #[test]
+    fn a_native_spawn_click_queues_one_offer_and_keeps_the_outbox_feedback() {
+        use crate::online::testing as session;
+        use eq_client_core::inventory::{InventorySlot, InventoryUpdate};
+
+        const NPC: u16 = 42;
+        let (mut app, commands, ..) = target_app();
+        scene_camera(&mut app);
+        let mut meshes = Assets::<Mesh>::default();
+        let body = app
+            .world_mut()
+            .spawn((
+                Transform::default(),
+                Mesh3d(meshes.add(Cuboid::new(2.0, 2.0, 2.0))),
+            ))
+            .id();
+        app.insert_resource(meshes);
+        app.world_mut()
+            .resource_mut::<NearbyEntities>()
+            .rendered
+            .insert(NPC, body);
+        {
+            let mut online = app.world_mut().resource_mut::<OnlineState>();
+            session::spawns(&mut online, vec![session::pet(NPC, 99)]);
+            online.select_target(Some(NPC));
+            let mut item = crate::preview::items().into_iter().next().unwrap();
+            item.slot = InventorySlot::CURSOR;
+            session::inventory(&mut online, InventoryUpdate::Snapshot(vec![item]));
+        }
+        let mut windows = app
+            .world_mut()
+            .query_filtered::<&mut Window, With<PrimaryWindow>>();
+        windows
+            .single_mut(app.world_mut())
+            .unwrap()
+            .set_cursor_position(Some(Vec2::new(400.0, 300.0)));
+        let click = |app: &mut App| {
+            let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
+            mouse.reset(MouseButton::Left);
+            mouse.press(MouseButton::Left);
+            app.update();
+        };
+
+        // The existing target is unchanged, so only the offer enters the queue.
+        click(&mut app);
+        assert!(matches!(
+            commands.try_recv().unwrap(),
+            ClientCommand::OfferTrade {
+                session_id: 1,
+                with_id: NPC,
+                ..
+            }
+        ));
+        // Clicking again while the offer is pending is a silent no-op.
+        click(&mut app);
+        assert!(commands.try_recv().is_err());
+        assert_eq!(
+            app.world().resource::<Outbox>().take_refused(),
+            Vec::<crate::outbox::Refusal>::new()
+        );
+
+        app.world_mut().resource_mut::<OnlineState>().close_trade();
+        app.world_mut().resource_mut::<Outbox>().connect(None);
+        click(&mut app);
+        assert_eq!(
+            app.world().resource::<Outbox>().take_refused(),
+            [crate::outbox::Refusal::Offline]
+        );
+        assert!(
+            app.world()
+                .resource::<OnlineState>()
+                .world()
+                .exchange()
+                .is_none()
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // Exercises the scene system and its real picking inputs.
+    fn a_door_uses_two_completed_scene_clicks_and_ignores_drags_and_ui_clicks() {
+        let (mut app, commands, ..) = target_app();
+        let center = Vec2::new(400.0, 300.0);
+        scene_camera(&mut app);
         app.init_resource::<Time>()
             .init_resource::<super::super::doors::Hinges>();
         let source = eq_client_assets::ZoneModel {

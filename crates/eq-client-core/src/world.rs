@@ -1145,9 +1145,7 @@ impl ClientWorld {
             }
             // A book or note to read, and a request the session would not send.
             WorldEvent::BookText(text) => {
-                if self.in_world()
-                    && (self.generation == crate::GameDialect::EqMac || text.kind <= 1)
-                {
+                if self.in_world() && text.window(self.generation).is_some() {
                     self.reading = Some(text.clone());
                 } else {
                     news.ignored = true;

@@ -74,7 +74,7 @@ impl Entry {
     }
 
     /// Whether the book still keeps this spell in this place.
-    fn kept(self, book: Option<&eq_client_core::SpellBook>) -> bool {
+    pub(super) fn kept(self, book: Option<&eq_client_core::SpellBook>) -> bool {
         book.and_then(|book| book.slots().get(self.slot))
             .copied()
             .flatten()
@@ -90,7 +90,21 @@ impl BookView {
 
     /// The spell in the place a button on the open pages shows.
     pub(crate) fn spell(&self, book: Option<&eq_client_core::SpellBook>, place: u8) -> Option<u32> {
-        book?.slots().get(self.slot(place)).copied().flatten()
+        self.entry(book, place).map(|entry| entry.spell)
+    }
+
+    fn entry(&self, book: Option<&eq_client_core::SpellBook>, place: u8) -> Option<Entry> {
+        if self.search.active() {
+            let &(slot, spell) = self
+                .search
+                .entries
+                .get(self.search.page * PLACES + usize::from(place))?;
+            let entry = Entry { slot, spell };
+            return entry.kept(book).then_some(entry);
+        }
+        let slot = self.slot(place);
+        let spell = book?.slots().get(slot).copied().flatten()?;
+        Some(Entry { slot, spell })
     }
 }
 
@@ -107,7 +121,7 @@ type Arrows<'w, 's> = crate::clicks::Clicks<'w, 's, TurnsPages>;
 /// swaps the chosen one with the place clicked, and the Delete key deletes
 /// the chosen spell, asking first where the player wants that, only while
 /// no box takes the keyboard.
-#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+#[allow(clippy::needless_pass_by_value, clippy::too_many_lines)]
 pub(crate) fn clicks(
     (keys, mouse): (crate::keys::Keys, Res<ButtonInput<MouseButton>>),
     (shown, skinned): (Res<crate::windows::Shown>, Res<crate::skinned::Skinned>),
@@ -130,7 +144,8 @@ pub(crate) fn clicks(
     if !open || hand.held.is_some_and(|held| !held.kept(book)) {
         hand.held = None;
     }
-    if !open || hand.chosen.is_some_and(|chosen| !chosen.kept(book)) {
+    let searching = view.search.active();
+    if !open || searching || hand.chosen.is_some_and(|chosen| !chosen.kept(book)) {
         hand.chosen = None;
     }
     follow_deleting(
@@ -144,25 +159,45 @@ pub(crate) fn clicks(
     // An item or coins taken onto the cursor take the place of a spell from
     // the book, so a gem can no longer memorize it; what the official client
     // does is not checked yet.
-    if world
-        .inventory()
-        .items()
-        .contains_key(&InventorySlot::CURSOR)
-        || crate::coins::on_cursor(world).is_some()
-    {
+    let cursor = world.inventory().items().get(&InventorySlot::CURSOR);
+    let cursor_busy = cursor.is_some() || crate::coins::on_cursor(world).is_some();
+    if cursor_busy {
         hand.held = None;
     }
-    let spreads = book.map_or(1, |book| book.slots().len().div_ceil(PLACES).max(1));
-    view.spread = view.spread.min(spreads - 1);
-    if !keys.focused() {
+    let spreads = if searching {
+        view.search.entries.len().div_ceil(PLACES).max(1)
+    } else {
+        book.map_or(1, |book| book.slots().len().div_ceil(PLACES).max(1))
+    };
+    let view = &mut *view;
+    let page = if searching {
+        &mut view.search.page
+    } else {
+        &mut view.spread
+    };
+    let old_page = *page;
+    *page = (*page).min(spreads - 1);
+    if !keys.focused() || view.search.changed {
         return;
     }
     for TurnsPages(forward) in arrows.iter() {
-        view.spread = if *forward {
-            (view.spread + 1).min(spreads - 1)
+        *page = if *forward {
+            (*page + 1).min(spreads - 1)
         } else {
-            view.spread.saturating_sub(1)
+            page.saturating_sub(1)
         };
+    }
+    if searching {
+        if view.search.page == old_page
+            && mouse.just_pressed(MouseButton::Left)
+            && !cursor_busy
+            && let Some((_, place)) = places
+                .iter()
+                .find(|(interaction, _)| **interaction == Interaction::Pressed)
+        {
+            hand.held = view.entry(book, place.0);
+        }
+        return;
     }
     if keys.input.just_pressed(KeyCode::Delete) {
         delete_key(
@@ -206,7 +241,6 @@ pub(crate) fn clicks(
     };
     let slot = view.slot(place);
     let in_place = view.spell(book, place);
-    let cursor = world.inventory().items().get(&InventorySlot::CURSOR);
     match (cursor.and_then(|item| item.scroll_spell), cursor, in_place) {
         (Some(scroll), ..) => {
             let refusal = scribe(
@@ -233,22 +267,39 @@ pub(crate) fn clicks(
 pub(crate) fn present(
     online: Res<crate::online::OnlineState>,
     (view, names, hand): (Res<BookView>, Res<SpellNames>, Res<BookHand>),
-    mut places: Query<(&BookPlace, &mut crate::tooltip::Tooltip)>,
+    mut places: Query<(&BookPlace, &mut crate::tooltip::Tooltip, &mut Node), Without<ChosenMark>>,
     mut marks: Query<(&ChosenMark, &mut Node)>,
 ) {
     let book = online.world().spell_book();
-    for (place, mut tooltip) in &mut places {
-        let wanted = view.spell(book, place.0).map_or_else(String::new, |spell| {
+    let searching = view.search.active();
+    for (place, mut tooltip, mut node) in &mut places {
+        let entry = view.entry(book, place.0);
+        let wanted = entry.map_or_else(String::new, |Entry { slot, spell }| {
+            if searching {
+                return format!(
+                    "{} · Book slot {}\n{}",
+                    names.label(spell),
+                    slot + 1,
+                    names.details(spell)
+                );
+            }
             format!("{}\n{}", names.label(spell), names.details(spell))
         });
+        let display = if searching && entry.is_none() {
+            Display::None
+        } else {
+            Display::Flex
+        };
+        if node.display != display {
+            node.display = display;
+        }
         if tooltip.0 != wanted {
             tooltip.0 = wanted;
         }
     }
     for (ChosenMark(place), mut node) in &mut marks {
-        let chosen = hand
-            .chosen
-            .is_some_and(|chosen| chosen.slot == view.slot(*place));
+        let selection = if searching { hand.held } else { hand.chosen };
+        let chosen = selection.is_some() && selection == view.entry(book, *place);
         let display = if chosen { Display::Flex } else { Display::None };
         if node.display != display {
             node.display = display;
@@ -576,6 +627,9 @@ pub(crate) fn memorize(
     requests: Option<&mut ActionRequests>,
 ) -> Option<Said> {
     let world = online.world();
+    if !held.kept(world.spell_book()) {
+        return Some(Said::own("That spell is no longer in its book slot."));
+    }
     if world.gems().contains(&Some(held.spell)) {
         return Some(messages.said_text(12052, "That spell is in a gem already."));
     }
@@ -587,7 +641,7 @@ pub(crate) fn memorize(
         Some(online),
         world.spell_book(),
         Some(outbox),
-        Some(held.spell),
+        (Some(held.spell), Some(held.slot)),
         gem,
     )
     .ok()?;
@@ -725,7 +779,10 @@ mod tests {
 
     #[test]
     fn a_place_on_the_open_pages_is_its_place_in_the_book() {
-        let view = BookView { page: 0, spread: 2 };
+        let view = BookView {
+            spread: 2,
+            ..default()
+        };
         assert_eq!(view.slot(0), 32);
         assert_eq!(view.slot(15), 47);
         let online = online();

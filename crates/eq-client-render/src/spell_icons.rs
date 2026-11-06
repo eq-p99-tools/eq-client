@@ -178,14 +178,7 @@ pub(super) fn update(
             Source::Gem(index) => online.world().gem(index),
             Source::Action(index) => bindings.gem(index).and_then(|gem| online.world().gem(gem)),
             Source::BookPlace(place) => book.spell(online.world().spell_book(), place),
-            Source::Book(index) => online.world().spell_book().and_then(|spells| {
-                spells
-                    .slots()
-                    .iter()
-                    .flatten()
-                    .nth(book.page * super::spellbook::ROWS_PER_PAGE + index)
-                    .copied()
-            }),
+            Source::Book(index) => book.row_spell(online.world().spell_book(), index),
         };
         if artwork.initialized
             && artwork.shown == spell

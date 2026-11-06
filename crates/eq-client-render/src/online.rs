@@ -223,12 +223,6 @@ impl OnlineState {
         self.world.tick(now, spells);
     }
 
-    /// The player's choice, from their options, of what a session may leave
-    /// to them to turn on.
-    pub(super) fn choose(&mut self, chosen: Vec<eq_client_core::Capability>) {
-        self.world.choose(chosen);
-    }
-
     /// The character choice in progress, with the world it is made in.
     pub(super) fn choosing(
         &mut self,
@@ -536,8 +530,7 @@ impl Panels<'_> {
                 **book = super::spellbook::BookSelection::default();
             }
             if let Some(view) = self.book_view.as_mut() {
-                view.page = 0;
-                view.spread = 0;
+                **view = super::spellbook::BookView::default();
             }
         }
         match reason {

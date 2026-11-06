@@ -182,7 +182,7 @@ fn calculate(
         modifiers.add(projected);
     }
     let strength = i64::from(base.strength) + modifiers.strength;
-    let eqmac_fatigue = if world.generation() == eq_client_core::GameDialect::EqMac {
+    let eqmac_fatigue = if world.generation().uses_fatigue_for_carry_capacity() {
         Some(EqMacFatigueInputs {
             strength,
             stamina: Some(
@@ -280,7 +280,7 @@ pub(crate) fn load(
 /// Display current capacity through the network-owned fatigue formula without
 /// changing the posted report or manufacturing a new acceptance receipt.
 fn effective_capacity(world: &ClientWorld, inputs: SpeedInputs) -> u32 {
-    if world.generation() == eq_client_core::GameDialect::EqMac {
+    if world.generation().uses_fatigue_for_carry_capacity() {
         inputs.eqmac_capacity(world.nourishment().and_then(|n| n.fatigue))
     } else {
         inputs.capacity

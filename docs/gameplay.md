@@ -84,10 +84,10 @@ session offers them. Click to choose an amount, or Shift-click to pick up all;
 click another box with coins on the cursor to place/convert them. Shared banking,
 dropping carried items and destroying coins have no client action yet.
 
-On P99 and Titanium EQEmu, **Destroy cursor item** asks before destroying the
-whole cursor item or stack. **No**, Escape, closing inventory, or any inventory
-or admission change cancels that confirmation. Place queued cursor items and
-empty containers first; populated containers are outside this initial slice.
+Where the inventory policy supports it, **Destroy cursor item** asks before
+destroying the whole cursor item or stack. **No**, Escape, closing inventory,
+or any inventory or admission change cancels that confirmation. Place queued
+cursor items and empty containers first.
 A submission removes the item only as a local prediction. It is never retried,
 and elapsed time does not confirm destruction. Until a received cursor update or
 new inventory snapshot, the original item's weight remains in a conservative
@@ -123,6 +123,12 @@ interrupt a cast; estimated completion time alone does not report success.
 Spellbook operations serialize outstanding edits and wait for matching answers.
 Deletion confirmation is invalidated when its selection or admission changes.
 
+Click **Search spells** in the book to filter learned spells by name. The
+search ignores case and fills each results page in original book-slot order.
+Unknown names are shown as **Spell** followed by the ID and can be found by that
+label. Select a result to inspect or memorize it. Clear the search to return
+to the previous page and rearrange or delete spells where supported.
+
 The 5-by-2 hotbar holds ten actions. Click or use the number bindings to activate
 them. Hold a gem, supported item or Actions button to pick up its hotkey, then
 place it on a hotbutton. This hotkey cursor is distinct from the EQ item cursor.
@@ -156,10 +162,11 @@ buff in the Effects or Songs window to request removal (the right button is
 inferred, recording checklist 6.387). Harmful effects, effects
 with unavailable spell data and effects whose server slot is unknown cannot be
 cancelled. A buff stays visible until received state removes it. If the selected
-slot changes while the button is held, release cancels the selection. A request
-with no matching update is reported as unconfirmed and is never retried
-automatically. P99 cancellation remains gated while its exact emission contract
-is investigated; a compatible attended check is still pending.
+slot changes while the button is held, release cancels the selection. The buff
+may expire on its own during a request. With no matching fade, the client
+reports the request as unconfirmed. Requests are never retried automatically.
+P99 cancellation remains gated while its exact emission contract is
+investigated; a compatible attended check is still pending.
 
 ## Targeting and interaction
 

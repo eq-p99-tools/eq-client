@@ -213,7 +213,7 @@ fn player_for_use(state: &super::online::OnlineState) -> Option<&eq_client_core:
     {
         return None;
     }
-    if state.world().generation() == eq_client_core::GameDialect::EqMac {
+    if state.world().generation().requires_clear_cursor_for_doors() {
         let inventory = state.world().inventory();
         if !inventory.received()
             || inventory.stale()

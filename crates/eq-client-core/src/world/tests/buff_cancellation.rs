@@ -31,6 +31,8 @@ fn cancellation_reports_are_scoped_progress_and_never_membership_authority() {
     assert!(world.buffs().cancellation().is_none());
     for progress in [
         Progress::Submitted,
+        Progress::Changed,
+        Progress::FadeObserved,
         Progress::Unresolved,
         Progress::Refused("Constructed refusal".into()),
     ] {

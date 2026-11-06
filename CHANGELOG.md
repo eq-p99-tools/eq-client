@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+- Stop a scripted `give` at the failing line when the target or cursor is
+  unsuitable, an exchange is in progress, or the local session queue refuses
+  the offer. A queued offer still awaits the server's answer.
+
+- Search learned spells in the spellbook by name. Results follow book-slot
+  order and preserve the source spell and slot for inspection and memorizing.
+  Clearing search restores normal browsing.
+
+- Draw the larger local player arrow above other map markers and labels. Show
+  travel direction with a line and colored tip, and limit ground item squares
+  to the same range as nearby item models.
+
+- Cover the chase camera's 89-degree pitch bound in both directions on the
+  classic and long leash, including the view's heading and eye-centered zoom.
+
+- Explain movement pauses in the System chat while the client applies movement
+  options, once per wait in the current admission.
+- Use networking policy for mouse-heading snapshots, movement fatigue, door
+  cursor checks and note/book routing. Describe unresolved buff-cancellation
+  requests in terms of the missing fade.
+- Document the current server availability of buff cancellation, cursor-item
+  destruction, merchant quantities, movement and book options, and list polls.
+- Breaking API: removed the unused `qol::Kind::Unlocks` variant,
+  `Fix::unlocks`, `Fix::unlocking` and `Settings::unlocked`.
+- API: `ClientWorld::reading_window` returns the pinned networking's
+  `books::ReadingWindow` for the open text; buff cancellation adopts
+  `Progress::FadeObserved` and `Progress::Changed` from the pinned networking.
+- Show the networking's player-admission failure on the login screen before
+  the session ends, instead of a bare disconnect.
+
 - The Quality of Life page's gameplay departures (Walk While Winded, Memorize
   Without Sitting, Run a Little Faster, Fly) are offered only where the session
   lists `Capability::GameplayDepartures`. Elsewhere they are greyed out and the
@@ -31,6 +61,9 @@
   Window-layout v2 retains sizes and reads legacy position-only records.
 - API: `sidl::Screen::sizable` preserves `Sizable::{Omitted, Invalid, Fixed,
   Enabled}`. Screen struct literals must supply the authored declaration.
+- Return to login with a specific retry message when the server completes a
+  zone handshake but the client cannot read the character data. This also
+  applies when entering a transfer destination.
 - Distinguish a received camp logout reply from the normal local close deadline.
   Both preserve the requested selection or desktop destination. Retain the
   departing admission and evidence in lifecycle reports; a deadline alone does

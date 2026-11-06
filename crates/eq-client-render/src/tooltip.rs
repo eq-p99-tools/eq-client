@@ -86,9 +86,7 @@ pub(crate) fn show(
         .filter(|(interaction, .., scripted)| **interaction != Interaction::None && !scripted)
         .find_map(|(_, tooltip, needs, placed, _)| {
             let line = match needs {
-                Some(needs) if greys && !needs.offered(online.world()) => {
-                    Some(needs.reason(online.world()))
-                }
+                Some(needs) if greys && !needs.offered(online.world()) => Some(needs.reason()),
                 _ => tooltip.map(|tooltip| tooltip.0.clone()),
             }?;
             let middle =
