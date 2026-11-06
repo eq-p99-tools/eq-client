@@ -5,20 +5,31 @@ use eq_client_core::{
     WorldPosition,
     movement::{CollisionWorld, LiquidContact},
 };
+use std::time::{Duration, Instant};
 
 /// Titanium's explicit relocation floor probe starts one unit above the
 /// received origin. Ordinary fall and stair rules use their own probes.
 const TITANIUM_PLACEMENT_PROBE: f32 = 1.0;
 
+/// Doors can change collision within an admission. A held placement gets a
+/// new probe without making every frame pay for the footprint raycasts.
+const RECHECK_INTERVAL: Duration = Duration::from_millis(500);
+
+#[derive(Clone, Copy)]
+enum Assessment {
+    Clear,
+    HeldUntil(Instant),
+}
+
 /// Caches the geometry check for the current received placement.
 #[derive(Clone, Copy, Default)]
 pub(super) struct Check {
-    result: Option<(ServerPlacement, bool)>,
+    result: Option<(ServerPlacement, Assessment)>,
 }
 
 impl Check {
     /// Holds new motion only while its starting point is still the suspect
-    /// received placement. A later server correction gets its own check.
+    /// received placement and the installed geometry offers no way down.
     pub(super) fn holds(
         &mut self,
         server: Option<ServerPlacement>,
@@ -26,13 +37,20 @@ impl Check {
         collision: &CollisionWorld,
         body: &PlayerBody,
         chat: &mut chat::ChatState,
+        now: Instant,
     ) -> bool {
         let Some(server) = server.filter(|entry| entry.position == position) else {
             self.result = None;
             return false;
         };
-        if let Some((_, held)) = self.result.filter(|(previous, _)| *previous == server) {
-            return held;
+        let previous = self
+            .result
+            .filter(|(placement, _)| *placement == server)
+            .map(|(_, assessment)| assessment);
+        match previous {
+            Some(Assessment::Clear) => return false,
+            Some(Assessment::HeldUntil(recheck)) if now < recheck => return true,
+            _ => {}
         }
         let origin = Vec3::from_array(eq_client_core::render_position(position));
         let feet = origin - Vec3::Y * body.feet_offset;
@@ -41,8 +59,9 @@ impl Check {
                 collision.floor_above_placement(origin, TITANIUM_PLACEMENT_PROBE, body.size)
             }
             _ => None,
-        };
-        if let Some(floor) = floor {
+        }
+        .filter(|_| !collision.liquid_below(feet));
+        if let Some(floor) = floor.filter(|_| previous.is_none()) {
             warn!(
                 admission = server.admission_id,
                 source = ?server.source,
@@ -51,10 +70,15 @@ impl Check {
                 "Movement held below the installed floor"
             );
             chat.history.push(chat::system_line(
-                "The server placed you below the installed floor. Waiting for a new server placement.",
+                "The server placed you below the installed floor. Movement is paused.",
             ));
         }
-        self.result = Some((server, floor.is_some()));
+        let assessment = if floor.is_some() {
+            Assessment::HeldUntil(now + RECHECK_INTERVAL)
+        } else {
+            Assessment::Clear
+        };
+        self.result = Some((server, assessment));
         floor.is_some()
     }
 }

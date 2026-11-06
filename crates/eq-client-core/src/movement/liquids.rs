@@ -290,6 +290,17 @@ impl CollisionWorld {
             .is_some_and(|liquids| liquids.liquid_at(feet + Vec3::Y * SOLES).is_some())
     }
 
+    /// Whether the ordinary fall probe reaches mapped water or lava below the feet.
+    #[must_use]
+    pub fn liquid_below(&self, feet: Vec3) -> bool {
+        let from = feet + Vec3::Y * SOLES;
+        let to = from - Vec3::Y * FALL_REACH;
+        self.liquids.as_ref().is_some_and(|liquids| {
+            liquids.passes_through(from, to, Liquid::Water)
+                || liquids.passes_through(from, to, Liquid::Lava)
+        })
+    }
+
     /// The longest part of a stride that stays clear of the zone's liquids,
     /// found by halving as a ledge's supported part is.
     pub(super) fn dry_part(

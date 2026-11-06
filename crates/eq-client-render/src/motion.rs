@@ -890,6 +890,7 @@ pub(super) fn input(
             world,
             body,
             &mut chat,
+            now,
         )
     {
         controls.held = Some(Held::PlacementBlocked);
@@ -1859,6 +1860,7 @@ fn arc(from: f32, to: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    use eq_client_core::movement::{Liquid, Liquids};
 
     fn movement_choice(app: &mut App, fix: Fix, on: bool) {
         app.world_mut()
@@ -3201,6 +3203,13 @@ mod tests {
         );
     }
 
+    fn flat_surface(y: f32) -> [[[f32; 3]; 3]; 2] {
+        [
+            [[-20.0, y, -20.0], [20.0, y, -20.0], [20.0, y, 20.0]],
+            [[-20.0, y, -20.0], [20.0, y, 20.0], [-20.0, y, 20.0]],
+        ]
+    }
+
     fn app() -> (App, mpsc::Receiver<ClientCommand>) {
         let (sender, receiver) = mpsc::sync_channel(2);
         let mut app = App::new();
@@ -3249,11 +3258,7 @@ mod tests {
                 name_parts: eq_client_core::names::NameParts::default(),
             },
         );
-        let floor = eq_client_core::movement::CollisionWorld::new([
-            [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
-            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
-        ])
-        .unwrap();
+        let floor = CollisionWorld::new(flat_surface(0.0)).unwrap();
         let mut keys = ButtonInput::<KeyCode>::default();
         keys.press(KeyCode::KeyW);
         app.insert_resource(state)
@@ -3306,9 +3311,18 @@ mod tests {
         (app, receiver)
     }
 
+    fn stationary_airborne_app() -> (App, mpsc::Receiver<ClientCommand>) {
+        let (mut app, receiver) = app();
+        app.world_mut().resource_mut::<Controls>().airborne = Some(AirborneController::default());
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        (app, receiver)
+    }
+
     #[test]
     fn an_unsupported_server_placement_holds_fall_until_a_fresh_correction() {
-        let (mut app, receiver) = app();
+        let (mut app, receiver) = stationary_airborne_app();
         let mut player = online::testing::player(7);
         player.position = world_position([0.0, -5.25, 0.0], 0.0);
         online::testing::admit(
@@ -3316,10 +3330,6 @@ mod tests {
             12,
             player,
         );
-        app.world_mut().resource_mut::<Controls>().airborne = Some(AirborneController::default());
-        app.world_mut()
-            .resource_mut::<ButtonInput<KeyCode>>()
-            .clear();
         app.update();
         assert_eq!(
             app.world().resource::<Controls>().held,
@@ -3372,58 +3382,117 @@ mod tests {
         );
     }
 
-    fn liquid_pool(liquid: eq_client_core::movement::Liquid) -> CollisionWorld {
-        use eq_client_core::movement::{Liquid, Liquids};
+    #[test]
+    fn a_held_placement_rechecks_for_a_new_landing_surface() {
+        use eq_client_core::movement::CollisionMesh;
 
-        struct Pool(Liquid);
-        impl Liquids for Pool {
-            fn liquid_at(&self, point: Vec3) -> Option<Liquid> {
-                (point.y <= 0.0).then_some(self.0)
-            }
-            fn passes_through(&self, from: Vec3, to: Vec3, liquid: Liquid) -> bool {
-                liquid == self.0 && from.y.min(to.y) <= 0.0
-            }
-            fn first_outside(
-                &self,
-                from: Vec3,
-                to: Vec3,
-                liquid: Liquid,
-            ) -> Option<std::ops::Range<f64>> {
-                if liquid != self.0 || from.y > 0.0 {
-                    return Some(0.0..1.0);
-                }
-                let (from, to) = (f64::from(from.y), f64::from(to.y));
-                (to > 0.0).then_some((from / (from - to))..1.0)
-            }
-            fn liquid_surface(&self, top: Vec3, bottom: f32) -> Option<(f32, Liquid)> {
-                (top.y > 0.0 && bottom < 0.0).then_some((0.0, self.0))
-            }
-            fn within(&self, _: Vec3, _: Vec3) -> Option<Box<dyn Liquids>> {
-                None
-            }
+        let (mut app, receiver) = stationary_airborne_app();
+        let placed = world_position([0.0, -5.0, 0.0], 0.0);
+        online::testing::place(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            placed,
+        );
+        let world = app.world_mut();
+        let body = *world.query::<&PlayerBody>().single(world).unwrap();
+        let server = world.resource::<online::OnlineState>().server_placement();
+        let mut check = placement::Check::default();
+        // Seed the hold using the production check with a due timestamp so
+        // the next input frame can retry without a sleep in the fixture.
+        let held_at = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
+        world.resource_scope(|world, mut chat: Mut<crate::chat::ChatState>| {
+            assert!(check.holds(
+                server,
+                placed,
+                world.resource::<Collision>().0.as_ref().unwrap(),
+                &body,
+                &mut chat,
+                held_at,
+            ));
+        });
+        world.resource_mut::<Controls>().placement = check;
+        world
+            .resource_mut::<Collision>()
+            .0
+            .as_mut()
+            .unwrap()
+            .set_door_obstacles(vec![(
+                7,
+                std::sync::Arc::new(CollisionMesh::new(flat_surface(-15.0)).unwrap()),
+            )]);
+        app.update();
+        let ClientCommand::Move(fall) = receiver.try_recv().unwrap() else {
+            panic!("expected an ordinary fall toward the new collider");
+        };
+        assert_eq!(fall.mode, MovementMode::Fall);
+        assert!(fall.position.z < placed.z);
+        let online = app.world().resource::<online::OnlineState>();
+        assert_eq!(online.server_placement().unwrap().position, placed);
+    }
+
+    struct Pool {
+        top: f32,
+        liquid: Liquid,
+    }
+
+    impl Liquids for Pool {
+        fn liquid_at(&self, point: Vec3) -> Option<Liquid> {
+            (point.y <= self.top).then_some(self.liquid)
         }
-        CollisionWorld::new([
-            [
-                [-20.0, -12.0, -20.0],
-                [20.0, -12.0, -20.0],
-                [20.0, -12.0, 20.0],
-            ],
-            [
-                [-20.0, -12.0, -20.0],
-                [20.0, -12.0, 20.0],
-                [-20.0, -12.0, 20.0],
-            ],
-        ])
-        .unwrap()
-        .with_liquids(Pool(liquid))
+        fn passes_through(&self, from: Vec3, to: Vec3, liquid: Liquid) -> bool {
+            liquid == self.liquid && from.y.min(to.y) <= self.top
+        }
+        fn first_outside(
+            &self,
+            from: Vec3,
+            to: Vec3,
+            liquid: Liquid,
+        ) -> Option<std::ops::Range<f64>> {
+            if liquid != self.liquid || from.y > self.top {
+                return Some(0.0..1.0);
+            }
+            let (from, to, top) = (f64::from(from.y), f64::from(to.y), f64::from(self.top));
+            (to > top).then_some(((from - top) / (from - to))..1.0)
+        }
+        fn liquid_surface(&self, top: Vec3, bottom: f32) -> Option<(f32, Liquid)> {
+            (top.y > self.top && bottom < self.top).then_some((self.top, self.liquid))
+        }
+        fn within(&self, _: Vec3, _: Vec3) -> Option<Box<dyn Liquids>> {
+            None
+        }
+    }
+
+    fn liquid_pool(liquid: Liquid) -> CollisionWorld {
+        CollisionWorld::new(flat_surface(-12.0))
+            .unwrap()
+            .with_liquids(Pool { top: 0.0, liquid })
+    }
+
+    #[test]
+    fn a_fresh_placement_between_a_bridge_and_mapped_liquid_can_fall() {
+        for liquid in [Liquid::Water, Liquid::Lava] {
+            let (mut app, receiver) = stationary_airborne_app();
+            let bridge = CollisionWorld::new(flat_surface(0.0))
+                .unwrap()
+                .with_liquids(Pool { top: -9.0, liquid });
+            app.insert_resource(Collision(Some(bridge)));
+            let placed = world_position([0.0, -5.0, 0.0], 0.0);
+            online::testing::place(
+                &mut app.world_mut().resource_mut::<online::OnlineState>(),
+                placed,
+            );
+            app.update();
+            let ClientCommand::Move(fall) = receiver.try_recv().unwrap() else {
+                panic!("expected an ordinary fall above {liquid:?}");
+            };
+            assert_eq!(fall.mode, MovementMode::Fall);
+            assert!(fall.position.z < placed.z);
+        }
     }
 
     #[test]
     fn a_water_correction_uses_the_swim_grant_and_a_dry_correction_leaves_it() {
         let (mut app, receiver) = app();
-        app.insert_resource(Collision(Some(liquid_pool(
-            eq_client_core::movement::Liquid::Water,
-        ))));
+        app.insert_resource(Collision(Some(liquid_pool(Liquid::Water))));
         let placed = world_position([0.0, -4.0, 0.0], 0.0);
         online::testing::place(
             &mut app.world_mut().resource_mut::<online::OnlineState>(),
