@@ -1,9 +1,10 @@
 //! The installed client's translocate question and Yes/No answer. The
 //! network session owns the deadline and follows server movement messages.
-//! `EQMac` also declines a new offer if the dialog was already busy.
+//! A client whose rules say so also declines a new offer if the dialog was
+//! already busy ([`TranslocateQuestion::declines_when_busy`]).
 use crate::{hud::messages::Messages, online::OnlineState, outbox::Outbox};
 use bevy::prelude::*;
-use eq_client_assets::ui::{InstalledClient, TranslocateQuestion};
+use eq_client_assets::ui::TranslocateQuestion;
 use eq_client_core::{ClientCommand, chat::ChatLine, confirmations::ConsentId, world::ClientWorld};
 
 /// What the dialog asks about the offer waiting, in the installed client's
@@ -53,15 +54,16 @@ pub(crate) fn answer(
     Some(crate::chat::system_line(messages.said(line, &[])))
 }
 
-/// Says No to a new Mac-era offer if the dialog already asks something
-/// else. The network session separately owns expiry and checks the token.
+/// Says No to a new offer if the dialog already asks something else, where
+/// the installed client's rules say it does. The network session separately
+/// owns expiry and checks the token.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn decline_unasked(
     (mut online, outbox, asked): (ResMut<OnlineState>, Res<Outbox>, Res<crate::confirm::Asked>),
     settings: Res<crate::ViewerSettings>,
     mut seen: Local<Option<ConsentId>>,
 ) {
-    if settings.0.installed_client != InstalledClient::EqMac {
+    if !settings.0.installed_client.translocate_offer().declines_when_busy {
         return;
     }
     let Some(id) = online.world().translocate().map(|question| question.id) else {
@@ -83,6 +85,7 @@ mod tests {
         online::testing,
         windows::{Shown, WindowId},
     };
+    use eq_client_assets::ui::InstalledClient;
     use eq_client_core::{
         WorldEvent,
         confirmations::{ConsentKind, ConsentOffer},

@@ -35,7 +35,6 @@
 - Keep Titanium mana and endurance estimates available for confirmed effects
   whose mechanics cannot alter those capacities, including instrument-scaled
   effects in that category.
-
 - Use `/pet target` to select your visible pet, including a charmed NPC.
   Pet orders use the current pet identity, and attack uses the current
   target selection. Ownership loss, death and spawn replacement clear stale
@@ -44,11 +43,13 @@
   and exchange coin observations for local transaction checks.
 - Show Titanium EQEmu translocate consent and bind each resurrection or
   translocate answer to the question displayed. A held click cannot answer a
-  replacement. Death, zoning, link loss and expiry dismiss the offer. Script
-  reports distinguish the current and displayed tokens from a worker answer,
-  expiry, interruption or refusal.
-- `ClientWorld::resurrection` and `translocate` now return scoped offers.
-  Front ends that dismiss a queued answer use `dismiss_consent(id)`.
+  replacement. Death, zoning and link loss dismiss the offer; an offer left
+  unanswered is declined after the session's deadline. Script reports
+  distinguish the current and displayed tokens from a worker answer, expiry,
+  interruption or refusal.
+- Scripts on a local EQEmu session can `gm spawn` a temporary NPC fixture
+  with explicit fields and `gm depop` the selected one; `move` accepts
+  `camera_forward` and `camera_back`.
 - Wade and swim through mapped water in Titanium EQEmu sessions. Look up
   or down while swimming to surface or dive, and follow a supported bank
   back onto land. The bounded swim rate does not model swimming skill,

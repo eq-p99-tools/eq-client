@@ -692,15 +692,16 @@ impl InstalledClient {
     /// whether the server offers translocate and owns the answer window.
     #[must_use]
     pub const fn translocate_offer(self) -> TranslocateQuestion {
-        let (named, to_bind, declined) = match self {
-            Self::Titanium => (9063, 9062, None),
-            Self::EqMac => (10017, 10016, Some(10018)),
+        let (named, to_bind, declined, declines_when_busy) = match self {
+            Self::Titanium => (9063, 9062, None, false),
+            Self::EqMac => (10017, 10016, Some(10018), true),
         };
         TranslocateQuestion {
             named,
             to_bind,
             bind_spells: &[1334, 1422, 3243],
             declined,
+            declines_when_busy,
         }
     }
 
@@ -770,6 +771,10 @@ pub struct TranslocateQuestion {
     pub bind_spells: &'static [u32],
     /// The line the client says after the player's No, if any.
     pub declined: Option<u32>,
+    /// Whether the client says No by itself to an offer that comes while
+    /// its dialog already asks something else (the Mac-era client does,
+    /// recording checklist 6.253).
+    pub declines_when_busy: bool,
 }
 
 /// The picture an installed client covers the screen with while it loads a

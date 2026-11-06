@@ -251,7 +251,8 @@ and coin updates remain the session's responsibility.
 On Titanium EQEmu, resurrection and translocate offers open a Yes or No dialog.
 An answer applies to the displayed offer. If the question changes while a
 button is held, release and click again to answer the replacement. The dialog
-closes on death, a zone transfer, a lost connection or expiry. The server's
+closes on death, a zone transfer or a lost connection, and an offer left
+unanswered past the session's deadline is declined for you. The server's
 movement and recovery messages determine what follows a Yes.
 
 Grouping, raids, pets, training, reading and consent dialogs have separate

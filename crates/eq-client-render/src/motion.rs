@@ -3627,6 +3627,45 @@ mod tests {
     }
 
     #[test]
+    fn jesus_mode_is_inert_where_the_session_withholds_gameplay_departures() {
+        let (mut app, receiver) = app();
+        {
+            let mut state = app.world_mut().resource_mut::<online::OnlineState>();
+            let capabilities: Vec<_> = eq_client_core::Capability::ALL
+                .into_iter()
+                .filter(|capability| *capability != eq_client_core::Capability::GameplayDepartures)
+                .collect();
+            let mut player = online::testing::player(7);
+            player.position = world_position([0.0, 3.0, 0.0], 0.0);
+            online::testing::news(
+                &mut state,
+                [eq_client_core::WorldEvent::Entered {
+                    capabilities,
+                    choices: Vec::new(),
+                    session_id: 12,
+                    zone: "qeytoqrg".into(),
+                    player: Box::new(player),
+                    far_clip: None,
+                    spell_landing_flag: None,
+                }],
+            );
+            online::testing::connect(&mut state, true);
+        }
+        app.insert_resource(Collision(Some(liquid_pool(
+            eq_client_core::movement::Liquid::Water,
+        ))));
+        app.world_mut().resource_mut::<Controls>().airborne = Some(AirborneController::default());
+        movement_choice(&mut app, Fix::JesusMode, true);
+        app.update();
+        let ClientCommand::Move(falling) = receiver.try_recv().unwrap() else {
+            panic!("expected ordinary gravity where the departure is withheld");
+        };
+        assert_eq!(falling.session_id, 12);
+        assert_eq!(falling.mode, MovementMode::Fall);
+        assert!(falling.position.z < 3.0);
+    }
+
+    #[test]
     #[allow(
         clippy::float_cmp,
         reason = "Exact equality verifies unchanged or explicitly assigned state"
