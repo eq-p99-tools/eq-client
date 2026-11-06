@@ -209,6 +209,11 @@ pub enum Notice {
     WhoList(crate::who::WhoList),
     /// Submission or an observed outcome of an explicit buff cancellation.
     BuffCancellation(crate::buffs::cancel::Update),
+    /// A manual song stop whose server outcome is unknown.
+    SongStopUnconfirmed {
+        /// Whether the worker released a local casting hold.
+        released_cast: bool,
+    },
     /// A cast request was refused, and why.
     CastRefused {
         /// The spell asked for.

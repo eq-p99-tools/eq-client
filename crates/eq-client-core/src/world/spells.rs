@@ -72,6 +72,40 @@ impl ClientWorld {
         }
     }
 
+    /// Applies the session's local release without changing buffs or cooldowns.
+    pub(super) fn song_stop_unconfirmed(
+        &mut self,
+        session_id: u64,
+        spell_id: Option<u32>,
+        changes: &mut Changes,
+    ) {
+        let Some(own_id) = self.player.as_ref().map(|player| player.spawn_id) else {
+            changes.ignored = true;
+            return;
+        };
+        if !self.accepts_reply(session_id) || self.death.is_some() {
+            changes.ignored = true;
+            return;
+        }
+        if let Some(spell_id) = spell_id {
+            if !self.casting.release_unconfirmed(spell_id) {
+                changes.ignored = true;
+                return;
+            }
+            if self
+                .zone
+                .casts
+                .get(&own_id)
+                .is_some_and(|cast| u32::from(cast.spell_id) == spell_id)
+            {
+                self.zone.casts.remove(&own_id);
+            }
+        }
+        changes.notices.push(Notice::SongStopUnconfirmed {
+            released_cast: spell_id.is_some(),
+        });
+    }
+
     /// The server refused the player's cast.
     pub(super) fn cast_refused(
         &self,

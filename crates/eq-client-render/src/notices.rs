@@ -392,6 +392,14 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
                 Progress::Submitted | Progress::FadeObserved | Progress::Changed => Vec::new(),
             }
         }
+        Notice::SongStopUnconfirmed { released_cast } => chat(
+            if *released_cast {
+                "Song stop unconfirmed. You can try casting again."
+            } else {
+                "Song stop requested. Song state is unconfirmed."
+            }
+            .into(),
+        ),
         Notice::CastRefused { spell_id, reason } => {
             chat(format!("Cast rejected (spell {spell_id}): {reason}").into())
         }

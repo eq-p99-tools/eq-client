@@ -25,8 +25,10 @@
   hotbar binding, `/ranged`, or the script step `slash ranged`. The client
   rechecks the target and equipment before sending and shows server-reported
   combat and inventory updates.
-- Use `/stopsong` as a Bard on Titanium EQEmu. Gems keep their usual cast
-  controls, and song effects follow the server's updates.
+- Use `/stopsong` as a Bard on Titanium EQEmu. If a starting song has no
+  matching cast update within one second of the stop, the client marks the
+  stop unconfirmed and lets you try another gem. Song effects follow the
+  server's updates.
 - Stop spell-set apply with the actual reset reason and keep the panel's
   selection and draft through temporary interruptions. An unanswered book edit
   remains unconfirmed after a same-admission link interruption.

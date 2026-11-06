@@ -776,6 +776,31 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
     press(&mut app);
     assert!(rx.try_recv().is_err());
     assert!(feedback(&app).contains("Already casting"));
+    testing::news(
+        &mut online(&mut app),
+        [WorldEvent::SongStopUnconfirmed {
+            session_id: 7,
+            spell_id: Some(73),
+        }],
+    );
+    assert!(rx.try_recv().is_err());
+    press(&mut app);
+    assert!(matches!(
+        rx.try_recv().unwrap(),
+        ClientCommand::CastSpell {
+            gem: 0,
+            spell_id: 73,
+            ..
+        }
+    ));
+    testing::spell(
+        &mut online(&mut app),
+        SpellUpdate::Began {
+            caster_id: 12,
+            spell_id: 73,
+            duration_ms: 2000,
+        },
+    );
     testing::spell(
         &mut online(&mut app),
         SpellUpdate::Mana {

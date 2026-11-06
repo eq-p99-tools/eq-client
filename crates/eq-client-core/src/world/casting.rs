@@ -220,6 +220,20 @@ impl Casting {
         }
     }
 
+    /// Releases the identified local hold without recording a server outcome.
+    pub(super) fn release_unconfirmed(&mut self, spell_id: u32) -> bool {
+        let active = self.cast.map(|(spell, ..)| u32::from(spell));
+        if active.or(self.pending) != Some(spell_id)
+            || self.pending.is_some_and(|pending| pending != spell_id)
+        {
+            return false;
+        }
+        self.cast = None;
+        self.pending = None;
+        self.requested = None;
+        true
+    }
+
     /// Drops what was in flight: the cast, the request and the interruption.
     pub(super) fn drop_actions(&mut self) {
         self.cast = None;

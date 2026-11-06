@@ -143,8 +143,10 @@ binding to cast. Shift-click forgetting is separate from casting. Casts use the
 selected target or self when none is selected. Movement and posture changes can
 interrupt a cast. The cast timer estimates progress while the server reports
 the result. On Titanium EQEmu, Bards can type `/stopsong` during a song cast
-or while a song is pulsing, then use the next gem when casting is available.
-Existing song buffs fade on their own server-reported schedule.
+or while a song is pulsing. If the server gives no matching cast update
+within one second, the client releases the casting hold and reports that
+the stop is unconfirmed. You can then use a gem to try another cast.
+Existing song buffs and gem timers follow the server's updates.
 
 Spellbook operations serialize edits and wait for matching answers. If the
 same zone connection resumes after an interruption, a pending edit is

@@ -834,6 +834,137 @@ fn only_the_players_lasting_effects_wait_for_a_slot_and_a_fade_clears_them() {
 }
 
 #[test]
+fn a_silent_song_stop_releases_only_its_local_cast_hold() {
+    let mut world = admitted();
+    game(&mut world, WorldEvent::BuffSnapshot(vec![Some(buff(10))]));
+    let buff_revision = world.buffs().revision();
+    let now = Instant::now();
+    world.casting.cooldowns.restore(
+        &[Some(43), None, None, None, None, None, None, None],
+        Some([3000, 0, 0, 0, 0, 0, 0, 0]),
+        now,
+    );
+
+    for began in [false, true] {
+        game(
+            &mut world,
+            WorldEvent::CastPending {
+                session_id: 1,
+                spell_id: Some(42),
+            },
+        );
+        if began {
+            game(
+                &mut world,
+                WorldEvent::CastPending {
+                    session_id: 1,
+                    spell_id: None,
+                },
+            );
+            game(
+                &mut world,
+                WorldEvent::Spell(SpellUpdate::Began {
+                    caster_id: 9,
+                    spell_id: 42,
+                    duration_ms: 3000,
+                }),
+            );
+        }
+        let different = game(
+            &mut world,
+            WorldEvent::SongStopUnconfirmed {
+                session_id: 1,
+                spell_id: Some(43),
+            },
+        );
+        assert!(different.ignored);
+        assert_eq!(world.casting().cast.is_some(), began);
+        assert_eq!(world.casting().pending.is_some(), !began);
+
+        let stop = game(
+            &mut world,
+            WorldEvent::SongStopUnconfirmed {
+                session_id: 1,
+                spell_id: Some(42),
+            },
+        );
+        assert_eq!(
+            stop.notices,
+            [Notice::SongStopUnconfirmed {
+                released_cast: true
+            }]
+        );
+        assert_eq!(stop.cast, None);
+        assert!(world.casting().cast.is_none());
+        assert!(world.casting().pending.is_none());
+        assert!(world.casting().interrupted.is_none());
+        assert!(!world.zone.casts.contains_key(&9));
+        assert!(world.completed_cast_of(9).is_none());
+        assert_eq!(world.buffs().revision(), buff_revision);
+        assert_eq!(world.buffs().slots().unwrap()[&0].duration_ticks, 10);
+        assert_eq!(world.player().unwrap().mana, 0);
+        assert!(world.casting().cooldowns.remaining(42, now).is_zero());
+        assert_eq!(
+            world.casting().cooldowns.remaining(43, now),
+            std::time::Duration::from_secs(3),
+        );
+    }
+}
+
+#[test]
+fn an_idle_song_stop_or_an_old_admission_cannot_release_a_new_cast() {
+    let mut world = admitted();
+    game(
+        &mut world,
+        WorldEvent::CastPending {
+            session_id: 1,
+            spell_id: Some(42),
+        },
+    );
+    game(&mut world, entered(2));
+    connection(&mut world, true, false);
+    assert!(world.casting().pending.is_none());
+    game(&mut world, WorldEvent::SpellEffect(effect(9, 4)));
+    let effect_revision = world.buffs().revision();
+    assert_eq!(world.buffs().effects().len(), 1);
+    game(
+        &mut world,
+        WorldEvent::Spell(SpellUpdate::Began {
+            caster_id: 9,
+            spell_id: 42,
+            duration_ms: 3000,
+        }),
+    );
+
+    let stale = game(
+        &mut world,
+        WorldEvent::SongStopUnconfirmed {
+            session_id: 1,
+            spell_id: Some(42),
+        },
+    );
+    assert!(stale.ignored);
+    assert!(stale.notices.is_empty());
+    let idle = game(
+        &mut world,
+        WorldEvent::SongStopUnconfirmed {
+            session_id: 2,
+            spell_id: None,
+        },
+    );
+    assert_eq!(
+        idle.notices,
+        [Notice::SongStopUnconfirmed {
+            released_cast: false
+        }]
+    );
+    assert_eq!(idle.cast, None);
+    assert_eq!(world.buffs().revision(), effect_revision);
+    assert_eq!(world.buffs().effects().len(), 1);
+    assert_eq!(world.casting().cast.map(|(spell, ..)| spell), Some(42));
+}
+
+#[test]
 fn an_interruption_is_the_players_own_and_mana_cannot_undo_it() {
     let mut world = admitted();
     let now = Instant::now();
