@@ -5,6 +5,32 @@
 use super::windows::{Shown, WindowId};
 use bevy::prelude::*;
 
+/// Routes /pet target through the ordinary selection path.
+pub(super) fn target_command(
+    input: &str,
+    online: &mut super::online::OnlineState,
+    outbox: &super::outbox::Outbox,
+) -> Option<Result<(), String>> {
+    let mut words = input.split_whitespace();
+    if !words.next()?.eq_ignore_ascii_case("/pet") || !words.next()?.eq_ignore_ascii_case("target")
+    {
+        return None;
+    }
+    Some((|| {
+        if words.next().is_some() {
+            return Err("Use /pet target without arguments".into());
+        }
+        let world = online.world();
+        let pet = world
+            .pet()
+            .filter(|pet| !pet.state.invisible)
+            .and(world.pet_intent())
+            .ok_or("No visible pet to target")?;
+        super::target::try_select(online, outbox, Some(pet.spawn_id), Some(pet))
+            .map_err(|refusal| refusal.text().to_owned())
+    })())
+}
+
 /// Opens the pet window for a new pet, shown as the Pet Window Popup option
 /// says, and closes it after the last one.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
@@ -12,9 +38,12 @@ pub(super) fn window(
     online: Res<super::online::OnlineState>,
     options: Res<super::options::OptionsState>,
     mut shown: ResMut<Shown>,
-    mut had: Local<Option<u16>>,
+    mut had: Local<Option<(u16, u64)>>,
 ) {
-    let pet = online.world().pet().map(|pet| pet.state.spawn_id);
+    let pet = online
+        .world()
+        .pet()
+        .map(|pet| (pet.state.spawn_id, pet.revision));
     if pet == *had {
         return;
     }
@@ -33,6 +62,50 @@ mod tests {
     use crate::online::{OnlineState, testing};
     use bevy::prelude::*;
     use eq_client_core::WorldEvent;
+
+    #[test]
+    fn pet_target_uses_normal_selection_and_rejects_an_invisible_pet() {
+        use eq_client_core::ClientCommand;
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+        let outbox = crate::outbox::Outbox::new(Some(sender));
+        let qol = eq_client_core::qol::Settings::default();
+        let target_pet = |online: &mut OnlineState| {
+            crate::chat::submit_game_command("/PeT  TaRgEt", online, &outbox, &qol)
+        };
+        assert!(target_pet(&mut online).is_err());
+        assert!(receiver.try_recv().is_err());
+
+        testing::spawn_entry(&mut online, 8, testing::pet(8, 7));
+        let identity = eq_client_core::pets::PetIdentity {
+            spawn_id: 8,
+            revision: 2,
+        };
+        testing::news(
+            &mut online,
+            [WorldEvent::OwnPet {
+                session_id: 1,
+                pet: Some(identity),
+            }],
+        );
+        target_pet(&mut online).unwrap();
+        assert!(
+            matches!(receiver.try_recv().unwrap(), ClientCommand::SelectTarget {
+            session_id: 1, spawn_id: Some(8), expected_pet: Some(pet), ..
+        } if pet == identity)
+        );
+        assert_eq!(online.world().target().selected, Some(8));
+        testing::news(
+            &mut online,
+            [WorldEvent::Visibility {
+                spawn_id: 8,
+                invisible: true,
+            }],
+        );
+        assert!(target_pet(&mut online).is_err());
+        assert!(receiver.try_recv().is_err());
+    }
 
     fn pet_frames(app: &mut App) -> usize {
         let mut frames = app.world_mut().query::<&WindowId>();

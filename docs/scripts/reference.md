@@ -67,12 +67,17 @@ Approach, walk and chase hold the camera-relative forward command, independent o
 ## Diagnostics and commands
 
 - `report [label]`: log a state summary with an optional label.
+  `pet_ownership` reports the current pet and owner IDs, zone admission ID and
+  pet identity revision as JSON. It is null when the session has no resolved
+  pet identity.
 - `trace milliseconds`: log movement and frame timing for a bounded duration.
 - `screenshot filename.png`: capture beside the script; the argument must be a filename.
 - `sound filename.wav`: play a sound from the installed game assets.
 - `slash command [arguments]`: run one of the supported game slash commands, without a leading slash.
   `slash ranged` requests one shot or throw against the current target on Titanium.
   Watch the server's combat and inventory updates for the result.
+  `slash pet target` selects your visible pet. Pet orders complete the script
+  step when queued. Read subsequent server observations to check their effects.
   `slash camp desktop` uses the ordinary camp destination and current QoL exit choice.
   `slash stopsong` queues the Bard's stop request on Titanium EQEmu.
   The immediate disconnect aliases typed in chat are not script slash commands.

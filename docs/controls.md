@@ -76,6 +76,18 @@ Two clicks must land on the same door. The Use key still finds a door or
 object near the character. The double-click itself, its 500 ms window and
 its 4-pixel slop are inferred (recording checklist 6.385).
 
+## Pets
+
+On Project 1999 and Titanium EQEmu, `/pet target` selects your visible pet
+through ordinary targeting. Select an opponent before using `/pet attack`.
+The Pet Info window and `/pet` also offer back off, follow, guard, sit,
+stand, taunt and get lost. Use `/pet health` for a health report or
+`/pet leader` to ask who owns the selected pet. Project 1999 sessions
+refuse hold, feign, spellhold and focus.
+
+Pet Info follows ownership reports for summoned and charmed pets. Its
+health, posture and buffs come from server updates.
+
 ## Camera and windows
 
 The **EQ menu** at the bottom right opens and hides windows, including Map,

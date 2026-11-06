@@ -759,7 +759,6 @@ impl ClientWorld {
             | WorldEvent::ZoneUnavailable { .. }
             | WorldEvent::ServerTick(_)
             | WorldEvent::Stun(_)
-            | WorldEvent::Charm(_)
             | WorldEvent::Controlled(_)
             | WorldEvent::Berserk(_)
             | WorldEvent::Spun
@@ -1117,11 +1116,31 @@ impl ClientWorld {
             // The player's pet: whose pet a spawn is, its buffs, and the
             // commands the session would not send.
             WorldEvent::PetOwner { spawn_id, owner } => {
-                if let Some(spawn) = self.zone.spawns.get_mut(spawn_id) {
-                    spawn.state.pet_owner = *owner;
+                self.zone.pet_owner(*spawn_id, *owner);
+            }
+            WorldEvent::Charm(charm) => {
+                if let Some(spawn) = self.zone.spawns.get(&charm.pet_id) {
+                    self.zone.pet_owner(charm.pet_id, charm.pet_owner(spawn.state.pet_owner));
                 }
             }
-            WorldEvent::PetBuffs(buffs) => self.zone.pet_buffs = Some(buffs.clone()),
+            WorldEvent::OwnPet { session_id, pet } => {
+                if self.session_id == Some(*session_id) {
+                    if pet.is_none() {
+                        self.zone.pet_buffs = None;
+                    }
+                    self.zone.own_pet = *pet;
+                } else {
+                    news.ignored = true;
+                }
+            }
+            WorldEvent::PetBuffs(buffs) => {
+                if self.death.is_none()
+                    && self.player().and_then(|player| self.pet_of(player.spawn_id))
+                        .is_some_and(|pet| pet.state.spawn_id == buffs.pet)
+                {
+                    self.zone.pet_buffs = Some(buffs.clone());
+                }
+            }
             WorldEvent::PetRefused {
                 session_id,
                 reason,
@@ -1438,6 +1457,8 @@ impl ClientWorld {
                 self.drop_actions();
             }
             Reset::Died => {
+                self.zone.own_pet = None;
+                self.zone.pet_buffs = None;
                 self.buffs.clear_cancellation();
                 self.casting.cast = None;
                 self.casting.interrupted = None;

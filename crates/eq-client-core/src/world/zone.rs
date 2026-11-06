@@ -30,6 +30,8 @@ pub(super) struct Zone {
     pub(super) weather: Option<crate::clock::Weather>,
     /// The player's pet's buffs, as the server last said.
     pub(super) pet_buffs: Option<crate::pets::PetBuffs>,
+    /// The session's identity for this admission's currently owned pet.
+    pub(super) own_pet: Option<crate::pets::PetIdentity>,
     /// The guildmaster the player is training with, and what they teach.
     pub(super) training: Option<crate::training::TrainingOffer>,
     /// The world container the player asked to open, until the server
@@ -78,6 +80,7 @@ impl Zone {
 
     /// A spawn leaves the zone, and its motion and casts with it.
     pub(super) fn vanish(&mut self, id: u16) {
+        self.forget_pet(id);
         self.spawns.remove(&id);
         self.considered.remove(&id);
         self.motions.remove(&id);
@@ -85,6 +88,26 @@ impl Zone {
         self.completions.remove(&id);
         self.landings.remove(&id);
         self.deaths.remove(&id);
+    }
+
+    /// Apply an owner change to the named spawn. Identical reports are
+    /// common on charm and preserve the already received pet buffs.
+    pub(super) fn pet_owner(&mut self, id: u16, owner: Option<u16>) {
+        if let Some(spawn) = self.spawns.get_mut(&id)
+            && spawn.state.pet_owner != owner
+        {
+            spawn.state.pet_owner = owner;
+            self.forget_pet(id);
+        }
+    }
+
+    fn forget_pet(&mut self, id: u16) {
+        if self.own_pet.is_some_and(|pet| pet.spawn_id == id) {
+            self.own_pet = None;
+        }
+        if self.pet_buffs.as_ref().is_some_and(|buffs| buffs.pet == id) {
+            self.pet_buffs = None;
+        }
     }
 
     /// The server's word on a spawn the player considered.
@@ -180,6 +203,7 @@ impl Zone {
         (dialect, now): (crate::GameDialect, Instant),
         revision: &mut u64,
     ) {
+        self.forget_pet(id);
         if let Some(spawn) = self.spawns.get_mut(&id) {
             *revision = revision.wrapping_add(1);
             spawn.health = Some(0);
@@ -193,6 +217,7 @@ impl Zone {
                 spawn.reported = now;
             }
             spawn.state.kind = kind;
+            spawn.state.pet_owner = None;
             still_if_corpse(&mut spawn.state);
             spawn.revision = *revision;
         }

@@ -4764,6 +4764,7 @@ mod tests {
                 request_id: 1,
                 session_id: 11,
                 spawn_id: None,
+                expected_pet: None,
             })
             .unwrap();
         app.insert_resource(crate::outbox::Outbox::new(Some(sender)));

@@ -15,9 +15,10 @@ pub fn command(words: &str) -> Option<PetCommand> {
         "attack" => PetCommand::Attack,
         "back" | "back off" | "backoff" => PetCommand::BackOff,
         "get lost" | "go away" => PetCommand::GetLost,
-        "health" | "report health" => PetCommand::Health,
+        "health" | "report health" | "health report" => PetCommand::Health,
         "guard" | "guard here" => PetCommand::GuardHere,
-        "follow" | "follow me" | "guard me" => PetCommand::Follow,
+        "follow" | "follow me" => PetCommand::Follow,
+        "guard me" => PetCommand::GuardMe,
         "sit" | "sit down" | "sit on" => PetCommand::Sit,
         "stand" | "stand up" | "sit off" => PetCommand::Stand,
         "taunt" => PetCommand::Taunt,
@@ -42,7 +43,8 @@ mod tests {
         assert_eq!(command("Back  Off"), Some(PetCommand::BackOff));
         assert_eq!(command("get lost"), Some(PetCommand::GetLost));
         assert_eq!(command("sit down"), Some(PetCommand::Sit));
-        assert_eq!(command("guard me"), Some(PetCommand::Follow));
+        assert_eq!(command("guard me"), Some(PetCommand::GuardMe));
+        assert_eq!(command("health report"), Some(PetCommand::Health));
         assert_eq!(command("dance"), None);
         assert_eq!(command(""), None);
     }

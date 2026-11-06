@@ -22,6 +22,10 @@
   whose mechanics cannot alter those capacities, including instrument-scaled
   effects in that category.
 
+- Use `/pet target` to select your visible pet, including a charmed NPC.
+  Pet orders use the current pet identity, and attack uses the current
+  target selection. Ownership loss, death and spawn replacement clear stale
+  pet details. `/pet guard me` sends its own Titanium command.
 - Report a local scripted `give` refusal through the script result once.
   Native click refusals still appear in chat.
 - Draw server-reported rain and snow in zones with a sky. See the World

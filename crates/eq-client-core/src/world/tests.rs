@@ -3374,6 +3374,88 @@ fn the_player_has_the_pet_they_own_and_its_buffs() {
 }
 
 #[test]
+fn pet_buffs_and_command_identity_follow_ownership_and_incarnation() {
+    use crate::{
+        control::Charm,
+        pets::{PetBuffs, PetIdentity},
+    };
+    let mut world = admitted();
+    let charm = |owner_id, charmed| {
+        WorldEvent::Charm(Charm {
+            owner_id,
+            pet_id: 5,
+            charmed,
+        })
+    };
+    let identity = |revision| PetIdentity {
+        spawn_id: 5,
+        revision,
+    };
+    let projection = |session_id, revision| WorldEvent::OwnPet {
+        session_id,
+        pet: Some(identity(revision)),
+    };
+    let buffs = WorldEvent::PetBuffs(PetBuffs {
+        pet: 5,
+        slots: vec![None],
+    });
+    let pet = || SpawnState {
+        pet_owner: Some(9),
+        ..spawn(5)
+    };
+
+    game(&mut world, buffs.clone());
+    game(&mut world, charm(Some(9), true));
+    assert_eq!(world.pet().map(|pet| pet.state.spawn_id), Some(5));
+    assert!(world.pet_buffs().is_none());
+    game(&mut world, projection(1, 1));
+    game(&mut world, buffs.clone());
+    game(&mut world, charm(None, false));
+    game(&mut world, charm(Some(20), false));
+    assert_eq!(world.pet_intent(), Some(identity(1)));
+    assert!(world.pet_buffs().is_some());
+
+    game(&mut world, charm(Some(9), false));
+    assert!(world.pet().is_none());
+    game(&mut world, buffs.clone());
+    game(&mut world, charm(Some(9), true));
+    game(&mut world, projection(1, 2));
+    assert_eq!(world.pet_intent(), Some(identity(2)));
+    assert!(world.pet_buffs().is_none());
+
+    game(&mut world, buffs.clone());
+    game(&mut world, WorldEvent::Spawns(vec![pet()]));
+    assert!(world.pet_intent().is_none());
+    assert!(world.pet_buffs().is_none());
+    game(&mut world, projection(1, 3));
+    game(&mut world, buffs);
+    game(
+        &mut world,
+        WorldEvent::Death(Death {
+            spawn_id: 5,
+            killer_id: 0,
+            corpse_id: 5,
+            bind_zone_id: 0,
+            corpse_name: None,
+        }),
+    );
+    assert_eq!(world.spawn(5).unwrap().state.kind, SpawnKind::NpcCorpse);
+    assert!(world.pet().is_none());
+    assert!(world.pet_buffs().is_none());
+
+    game(&mut world, entered(2));
+    connection(&mut world, true, false);
+    game(&mut world, WorldEvent::Spawns(vec![pet()]));
+    assert!(game(&mut world, projection(1, 3)).ignored);
+    assert!(world.pet_intent().is_none());
+    game(&mut world, projection(2, 1));
+    assert_eq!(world.pet_intent(), Some(identity(1)));
+    game(&mut world, WorldEvent::DeathBind { session_id: 2 });
+    assert!(world.pet().is_none());
+    assert!(world.pet_intent().is_none());
+}
+
+#[test]
 fn last_names_change_by_the_name_spawned_with() {
     let mut world = admitted();
     game(

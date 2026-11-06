@@ -1195,6 +1195,9 @@ fn submit_draft(
         if let Some(request) = client_request(&draft, state) {
             return Ok(request?);
         }
+        if let Some(result) = super::pet::target_command(&draft, online, outbox) {
+            return Ok(result?);
+        }
         if let Some(commands) = game_commands(&draft, online, outbox, qol) {
             for command in commands? {
                 outbox.send(online.world(), command)?;
@@ -1257,6 +1260,9 @@ pub(super) fn submit_game_command(
     outbox: &crate::outbox::Outbox,
     qol: &Settings,
 ) -> Result<(), String> {
+    if let Some(result) = super::pet::target_command(input, online, outbox) {
+        return result;
+    }
     let commands = game_commands(input, online, outbox, qol)
         .ok_or_else(|| format!("{input} is not a game command"))??;
     for command in commands {
@@ -1599,7 +1605,7 @@ fn stop_song_command(
     })
 }
 
-/// Builds a pet order for the current admission and target.
+/// Builds a pet order from the current ownership and selected target.
 fn pet_order(
     words: &str,
     world: &eq_client_core::world::ClientWorld,
@@ -1607,10 +1613,13 @@ fn pet_order(
 ) -> Result<ClientCommand, String> {
     let command = eq_client_core::pet::command(words)
         .ok_or_else(|| format!("Unknown pet command: {words}"))?;
+    let stamp = stamp()?;
     Ok(ClientCommand::Pet {
-        session_id: stamp()?.session_id,
+        session_id: stamp.session_id,
         command,
-        target: world.target().selected,
+        pet: world.pet_intent(),
+        target: world.target_intent().filter(|_| command.names_target()),
+        created: stamp.created,
     })
 }
 

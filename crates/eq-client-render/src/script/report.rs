@@ -161,6 +161,7 @@ pub(super) fn state(
         game_time = ?online.world().game_time(std::time::Instant::now()),
         sky = ?online.world().sky(),
         ?pet,
+        pet_ownership = %pet_ownership(online.world()),
         training = ?training(online),
         practice_points = ?online.world().player().and_then(|player| player.practice_points),
         resurrection = ?resurrection(online),
@@ -364,6 +365,19 @@ fn pet(online: &crate::online::OnlineState) -> Option<impl std::fmt::Debug> {
                 .collect::<Vec<_>>()
         }),
     ))
+}
+
+/// The active pet order identity and the observed owner it refers to.
+fn pet_ownership(world: &eq_client_core::world::ClientWorld) -> serde_json::Value {
+    let (Some(identity), Some(pet)) = (world.pet_intent(), world.pet()) else {
+        return serde_json::Value::Null;
+    };
+    serde_json::json!({
+        "session_id": world.session_id(),
+        "owner_id": pet.state.pet_owner,
+        "pet_id": identity.spawn_id,
+        "revision": identity.revision,
+    })
 }
 
 /// A nearby spawn's gear: its id, materials per texture slot, the chest's
