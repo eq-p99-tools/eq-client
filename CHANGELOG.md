@@ -26,6 +26,11 @@
   destruction, merchant quantities, movement and book options, and list polls.
 - Breaking API: removed the unused `qol::Kind::Unlocks` variant,
   `Fix::unlocks`, `Fix::unlocking` and `Settings::unlocked`.
+- API: `ClientWorld::reading_window` returns the pinned networking's
+  `books::ReadingWindow` for the open text; buff cancellation adopts
+  `Progress::FadeObserved` and `Progress::Changed` from the pinned networking.
+- Show the networking's player-admission failure on the login screen before
+  the session ends, instead of a bare disconnect.
 
 - The Quality of Life page's gameplay departures (Walk While Winded, Memorize
   Without Sitting, Run a Little Faster, Fly) are offered only where the session
