@@ -63,7 +63,8 @@ pub(crate) fn decline_unasked(
     settings: Res<crate::ViewerSettings>,
     mut seen: Local<Option<ConsentId>>,
 ) {
-    if !settings.0.installed_client.translocate_offer().declines_when_busy {
+    let rules = settings.0.installed_client.translocate_offer();
+    if !rules.declines_when_busy {
         return;
     }
     let Some(id) = online.world().translocate().map(|question| question.id) else {
