@@ -24,11 +24,6 @@ pub enum Kind {
     /// not. Like every feature that sends, the session offers it only where
     /// the server type lists it ([`Fix::needs`]).
     Acts,
-    /// Turns on what a server type leaves to the player ([`Fix::needs`]),
-    /// where its own client keeps it off. It works only where the session
-    /// lists it among the player's choices, and only once the player turns
-    /// it on.
-    Unlocks,
 }
 
 /// Whether the player can turn a fix off.
@@ -396,8 +391,6 @@ impl Fix {
     /// deletes spells has one to ask about, tells come with talking, and
     /// only a session that takes the world's damage from the client has any
     /// to hold back.
-    /// For a fix that unlocks, what it turns on, which the session must
-    /// leave to the player.
     #[must_use]
     pub const fn needs(self) -> Option<Capability> {
         match self {
@@ -405,10 +398,8 @@ impl Fix {
             Self::AskBeforeDeletingSpells => Some(Capability::DeletingSpells),
             Self::FlashOnTells => Some(Capability::Talking),
             Self::TakeEnvironmentalDamage => Some(Capability::EnvironmentalDamage),
-            // The departures from the official client's movement and
-            // memorization are offered only where the server type lists
-            // them (a player's own server), never on a public server; the
-            // controls grey out everywhere else.
+            // All current server policies offer these opt-ins for testing.
+            // The controls can still reflect a policy that withholds them.
             Self::WalkWhileWinded | Self::RunBoost | Self::Fly | Self::MemorizeWhileStanding => {
                 Some(Capability::GameplayDepartures)
             }
@@ -435,24 +426,6 @@ impl Fix {
             | Self::WeaponRatio
             | Self::WindowsApart => None,
         }
-    }
-
-    /// What the fix turns on where the session leaves it to the player, if
-    /// it unlocks anything.
-    #[must_use]
-    pub const fn unlocks(self) -> Option<Capability> {
-        match self.kind() {
-            Kind::Unlocks => self.needs(),
-            Kind::Shows | Kind::Guards | Kind::Acts => None,
-        }
-    }
-
-    /// The fix that turns this on where the session leaves it to the player.
-    #[must_use]
-    pub fn unlocking(capability: Capability) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|fix| fix.unlocks() == Some(capability))
     }
 
     /// Whether it is always on or the player's choice: windows the skin
@@ -556,17 +529,6 @@ impl Settings {
             self.0[fix as usize] = on;
         }
     }
-
-    /// What the fixes that are on turn on where the session leaves it to
-    /// the player.
-    #[must_use]
-    pub fn unlocked(&self) -> Vec<Capability> {
-        Fix::ALL
-            .into_iter()
-            .filter(|fix| self.on(*fix))
-            .filter_map(Fix::unlocks)
-            .collect()
-    }
 }
 
 #[cfg(test)]
@@ -583,16 +545,6 @@ mod tests {
             // session offers only where its server type lists it.
             if fix.kind() == Kind::Acts {
                 assert!(fix.needs().is_some(), "{fix:?} names no feature");
-            }
-            // A fix that unlocks names what it turns on, and is off until
-            // the player turns it on.
-            if fix.kind() == Kind::Unlocks {
-                assert!(fix.unlocks().is_some(), "{fix:?} unlocks nothing");
-                assert_eq!(
-                    fix.availability(),
-                    Availability::Setting { default: false },
-                    "{fix:?}"
-                );
             }
         }
         // The settings come first, in the page's order.
@@ -703,7 +655,6 @@ mod tests {
         assert!(!Fix::ALL.iter().any(|fix| fix.label().contains("unsafe")));
         settings.set(Fix::TakeEnvironmentalDamage, false);
         assert!(!settings.on(Fix::TakeEnvironmentalDamage));
-        assert_eq!(settings.unlocked(), []);
     }
 
     #[test]
@@ -712,9 +663,5 @@ mod tests {
         settings.set(Fix::MapEverywhere, false);
         assert!(settings.on(Fix::MapEverywhere));
         assert_eq!(Fix::MapEverywhere.needs(), None);
-        assert_eq!(settings.unlocked(), []);
-        assert_eq!(Fix::unlocking(Capability::Map), None);
-        assert_eq!(Fix::unlocking(Capability::Inventory), None);
-        assert_eq!(Fix::SkipModifiedFood.unlocks(), None);
     }
 }

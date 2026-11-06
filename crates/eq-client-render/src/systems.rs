@@ -314,7 +314,7 @@ pub(super) fn schedule(app: &mut App) {
                 (
                     (spell_icons::update, skinned::gem::pieces),
                     logs::write,
-                    (options::toggle, options::choose, options::tell_session).chain(),
+                    (options::toggle, options::tell_session).chain(),
                 ),
                 (outbox::show, inventory::say_refusals),
                 (hud::action_bar::cast_window, hud::action_bar::update),

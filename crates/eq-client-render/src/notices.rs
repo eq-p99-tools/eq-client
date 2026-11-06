@@ -379,10 +379,9 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
                     chat(format!("Buff cancellation refused: {reason}").into())
                 }
                 Progress::Unresolved => chat(
-                    "Buff cancellation is unconfirmed; no matching slot removal was received"
-                        .into(),
+                    "Buff cancellation is unconfirmed. No matching buff fade was received.".into(),
                 ),
-                _ => Vec::new(),
+                Progress::Submitted | Progress::FadeObserved | Progress::Changed => Vec::new(),
             }
         }
         Notice::CastRefused { spell_id, reason } => {

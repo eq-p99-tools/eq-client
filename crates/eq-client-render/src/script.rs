@@ -2200,10 +2200,9 @@ fn reach(
 ) -> Result<Entity, String> {
     let entity = find(target, buttons, layout).ok_or("click target is not visible")?;
     match (target, needs.get(entity)) {
-        (ClickTarget::Button(..), Ok(needs)) if !needs.offered(world) => Err(format!(
-            "that button is greyed out: {}",
-            needs.reason(world)
-        )),
+        (ClickTarget::Button(..), Ok(needs)) if !needs.offered(world) => {
+            Err(format!("that button is greyed out: {}", needs.reason()))
+        }
         _ => Ok(entity),
     }
 }

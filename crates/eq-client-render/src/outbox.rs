@@ -83,10 +83,6 @@ pub(crate) fn window_line(error: &anyhow::Error) -> String {
 /// The reason a control is greyed out, and the line a refused key shows.
 pub(crate) const UNAVAILABLE: &str = "Not available on this server";
 
-/// The reason a setting that turns on what a session may leave to the player
-/// is greyed out where the session does not, in the client's own words.
-pub(crate) const NOT_LEFT: &str = "Only for servers that keep this off";
-
 /// The reason a skin's control this client does not have yet is greyed out,
 /// in the client's own words.
 pub(crate) const MISSING: &str = "Not in this client yet";
@@ -257,9 +253,6 @@ pub(crate) fn show(outbox: Res<Outbox>, mut chat: ResMut<super::chat::ChatState>
 pub(crate) enum Needs {
     /// Something the session lets the player do, such as casting.
     Capability(Capability),
-    /// A setting that turns on what the session leaves to the player, which
-    /// matters only where the session does.
-    Choice(Capability),
     /// Automatic looting requires item results, not receipt-only echoes.
     AutomaticLoot,
     /// An ability, which the server type must also list.
@@ -279,21 +272,13 @@ impl Needs {
         if toggle == eq_client_core::options::Toggle::Qol(eq_client_core::qol::Fix::AutoLoot) {
             return Some(Self::AutomaticLoot);
         }
-        let unlocks = match toggle {
-            eq_client_core::options::Toggle::Qol(fix) => fix.unlocks(),
-            _ => None,
-        };
-        match unlocks {
-            Some(capability) => Some(Self::Choice(capability)),
-            None => toggle.needs().map(Self::Capability),
-        }
+        toggle.needs().map(Self::Capability)
     }
 
     /// Whether the session offers what the control needs.
     pub(crate) fn offered(self, world: &ClientWorld) -> bool {
         match self {
             Self::Capability(capability) => offered(world, capability),
-            Self::Choice(capability) => world.session_id().is_none() || world.leaves(capability),
             Self::AutomaticLoot => {
                 offered(world, Capability::Looting) && world.loot_continuation().automatic()
             }
@@ -306,28 +291,13 @@ impl Needs {
     }
 
     /// Why the control is greyed out while it is not offered: shown on hover.
-    /// What the session leaves to the player names the setting that turns it
-    /// on.
-    pub(crate) fn reason(self, world: &ClientWorld) -> String {
-        let setting = match self {
-            Self::Capability(capability) if world.leaves(capability) => {
-                eq_client_core::qol::Fix::unlocking(capability)
-            }
-            _ => None,
-        };
-        match (self, setting) {
-            (_, Some(fix)) => format!(
-                "Turn on \"{}\" on the Options window's QoL page",
-                fix.label()
-            ),
-            (Self::Missing, None) => MISSING.to_owned(),
-            (Self::AutomaticLoot, None) => {
+    pub(crate) fn reason(self) -> String {
+        match self {
+            Self::Missing => MISSING.to_owned(),
+            Self::AutomaticLoot => {
                 "Automatic looting needs supported item results on this session.".to_owned()
             }
-            (Self::Choice(_), None) => NOT_LEFT.to_owned(),
-            (Self::Capability(_) | Self::Ability(_) | Self::Nothing, None) => {
-                UNAVAILABLE.to_owned()
-            }
+            Self::Capability(_) | Self::Ability(_) | Self::Nothing => UNAVAILABLE.to_owned(),
         }
     }
 }
@@ -672,12 +642,8 @@ mod tests {
         // No session offers it, nor the preview offline.
         assert!(!Needs::Missing.offered(&ClientWorld::default()));
         assert!(!Needs::Missing.offered(&admitted(Capability::ALL.to_vec())));
-        let world = ClientWorld::default();
-        assert_eq!(Needs::Missing.reason(&world), MISSING);
-        assert_eq!(
-            Needs::Capability(Capability::Casting).reason(&world),
-            UNAVAILABLE
-        );
+        assert_eq!(Needs::Missing.reason(), MISSING);
+        assert_eq!(Needs::Capability(Capability::Casting).reason(), UNAVAILABLE);
     }
 
     #[test]
@@ -688,18 +654,10 @@ mod tests {
         // local map UI no longer needs or requests that capability.
         let map = Needs::Capability(Capability::Map);
         assert!(!map.offered(&world));
-        // The setting itself is offered where the session leaves the map to
-        // the player.
         assert_eq!(Needs::of(Toggle::Qol(Fix::MapEverywhere)), None);
-        assert!(Needs::Choice(Capability::Map).offered(&world));
         world.choose(vec![Capability::Map]);
         assert!(map.offered(&world));
-        // Where the session offers the map, or nothing, the setting is
-        // greyed, with its own reason.
-        let offering = admitted(vec![Capability::Map]);
-        assert!(!Needs::Choice(Capability::Map).offered(&offering));
-        assert_eq!(Needs::Choice(Capability::Map).reason(&offering), NOT_LEFT);
-        assert!(Needs::Capability(Capability::Map).offered(&offering));
+        assert!(map.offered(&admitted(vec![Capability::Map])));
         // The saved food preference needs the session's meal capability.
         assert_eq!(
             Needs::of(Toggle::Qol(Fix::SkipModifiedFood)),

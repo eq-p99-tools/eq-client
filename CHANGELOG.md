@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Explain movement pauses in the System chat while the client applies movement
+  options, once per wait in the current admission.
+- Use networking policy for mouse-heading snapshots, movement fatigue, door
+  cursor checks and note/book routing. Describe unresolved buff-cancellation
+  requests in terms of the missing fade.
+- Document the current server availability of buff cancellation, cursor-item
+  destruction, merchant quantities, movement and book options, and list polls.
+- Breaking API: removed the unused `qol::Kind::Unlocks` variant,
+  `Fix::unlocks`, `Fix::unlocking` and `Settings::unlocked`.
+
 - The Quality of Life page's gameplay departures (Walk While Winded, Memorize
   Without Sitting, Run a Little Faster, Fly) are offered only where the session
   lists `Capability::GameplayDepartures`. Elsewhere they are greyed out and the

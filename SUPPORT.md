@@ -16,8 +16,8 @@ Quarm/TAKP behavior. Frontends use runtime capabilities, not server-name flags.
 ## Server policy snapshot
 
 The following summarizes the networking revision pinned by this application's
-Cargo.lock: `87c04c1200b3e7cd9e917b49dfd79100acc93af9`. Its
-[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/87c04c1200b3e7cd9e917b49dfd79100acc93af9/crates/eq-network/src/client/session/servers.rs)
+Cargo.lock: `b78ecf82ddb86182df21bf6ba83d6c92595c0769`. Its
+[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/b78ecf82ddb86182df21bf6ba83d6c92595c0769/crates/eq-network/src/client/session/servers.rs)
 are the source for this table. **Yes means provided by that policy**, not a live
 certification, and individual operations still validate their prerequisites.
 
@@ -30,9 +30,15 @@ certification, and individual operations still validate their prerequisites.
 | Jumping | Yes | Yes | Yes | Yes |
 | Sitting, standing and ducking | Yes | Yes | Yes | Yes |
 | Casting and basic spellbook | Yes | Yes | Yes | Yes |
+| Beneficial-buff cancellation | No | Yes | No | No |
 | Move / delete book entries | Yes / No | Yes / Yes | No / No | No / No |
+| Read the spellbook standing | Yes (opt-in) | Yes (opt-in) | Yes (opt-in) | Yes (opt-in) |
+| Memorize without sitting | Yes (opt-in) | Yes (opt-in) | Yes (opt-in) | Yes (opt-in) |
+| Run boost, flight and movement while stunned | Yes (opt-in) | Yes (opt-in) | Yes (opt-in) | Yes (opt-in) |
 | Item/coin moves and personal banking | Yes | Yes | Yes | Yes |
-| Merchants | Yes | Yes | No | No |
+| Cursor-item destruction | Yes | Yes | No | No |
+| Merchants | Yes | Yes | Yes | Yes |
+| Merchant quantity picker | Yes | Yes | No | No |
 | Exchanges/giving | Yes | Yes | No | Yes |
 | Supported abilities | Yes | Yes | Yes | Yes |
 | Targeting | Yes | Yes | Yes | Yes |
@@ -42,7 +48,10 @@ certification, and individual operations still validate their prerequisites.
 | Ground-item state and pickup | Yes | Yes | Yes | Yes |
 | Camping and zone transfers | Yes | Yes | Yes | Yes |
 | Groups | Yes | Yes | No | Yes |
-| Raids, training, reading and tradeskills | No | Yes | No | No |
+| Raids and training | No | Yes | No | No |
+| Read inventory books and notes | Yes | Yes | Yes | Yes |
+| Tradeskills | Yes (carried combines) | Yes | No | No |
+| Answer list presence polls | Yes (opt-in) | No | No | No |
 | Pets and corpse commands | Yes | Yes | No | No |
 | Resurrection / translocate answers | No / No | Yes / Yes | No / No | No / Yes |
 | Character creation UI and script | Yes | Yes | Yes | Yes |
@@ -51,10 +60,11 @@ Quarm additionally offers ground movement, jumps, falls, posture, camping and
 zone transfers through the shared EQMac path, plus target selection/clearing.
 It also offers casting, basic spellbook actions, the supported EQMac abilities,
 and guarded item/coin moves. Normal attack toggles and considering are now offered;
-local submission/refusal is not an authoritative combat outcome. Quarm merchants,
-meals and exchanges remain disabled. Valid item moves send immediately in order,
-without a pending-move hold or pacing timer; predictions retain their uncertainty
-until server evidence resolves it. Contradictory updates require a complete
+local submission/refusal is not an authoritative combat outcome. The Quarm
+policy offers merchants and meals. Exchanges remain unavailable. Valid item moves
+send immediately in order, without a pending-move hold or pacing timer;
+predictions retain their uncertainty until server evidence resolves it.
+Contradictory updates require a complete
 snapshot. Coin transfers remain a local ledger until server updates replace it.
 These confirmation limits also govern movement readiness.
 Posture controls use `Capability::Posture`, independently of `Moving`. The newly
@@ -62,6 +72,13 @@ enabled combat, loot and ground-item paths are source-derived and tested with
 synthetic fixtures; their live validation is tracked separately. Swimming, boats
 and client-reported bleed-out remain Quarm gaps. P99 still does not offer deletion
 of spellbook entries.
+
+The merchant quantity picker is available with the Titanium installation. The
+Mac-era merchant controls buy one unit or sell the selected stack directly.
+The movement and memorization options are offered on all current server
+policies for testing and start off. Reading the spellbook standing is a
+separate preference. The P99 list reply is off by default and applies to
+supported presence polls without joining a list.
 
 Quarm offers individual corpse-item requests; TAKP looting remains unavailable.
 An EQMac receipt retires only the corpse-view row and matching manual pending
@@ -93,11 +110,11 @@ affected mechanics unavailable while chat remains usable. See [installed spell
 providers](docs/spell-providers.md). These source and synthetic checks add no live
 compatibility certification.
 
-The pinned networking [combat](https://github.com/eq-p99-tools/eq-network/blob/87c04c1200b3e7cd9e917b49dfd79100acc93af9/docs/quarm-combat.md),
-[loot](https://github.com/eq-p99-tools/eq-network/blob/87c04c1200b3e7cd9e917b49dfd79100acc93af9/docs/eqmac-looting.md) and
-[world-object](https://github.com/eq-p99-tools/eq-network/blob/87c04c1200b3e7cd9e917b49dfd79100acc93af9/docs/eqmac-world-objects.md)
+The pinned networking [combat](https://github.com/eq-p99-tools/eq-network/blob/b78ecf82ddb86182df21bf6ba83d6c92595c0769/docs/quarm-combat.md),
+[loot](https://github.com/eq-p99-tools/eq-network/blob/b78ecf82ddb86182df21bf6ba83d6c92595c0769/docs/eqmac-looting.md) and
+[world-object](https://github.com/eq-p99-tools/eq-network/blob/b78ecf82ddb86182df21bf6ba83d6c92595c0769/docs/eqmac-world-objects.md)
 contracts record their limits and controlled live checklists. The dated
-[P99/Quarm gap report](https://github.com/eq-p99-tools/eq-network/blob/87c04c1200b3e7cd9e917b49dfd79100acc93af9/docs/public-server-gaps.md)
+[P99/Quarm gap report](https://github.com/eq-p99-tools/eq-network/blob/b78ecf82ddb86182df21bf6ba83d6c92595c0769/docs/public-server-gaps.md)
 retains the earlier inspection and its scenario-specific evidence.
 
 ### Public-parity checks, 2026-11-02

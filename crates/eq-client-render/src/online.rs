@@ -223,12 +223,6 @@ impl OnlineState {
         self.world.tick(now, spells);
     }
 
-    /// The player's choice, from their options, of what a session may leave
-    /// to them to turn on.
-    pub(super) fn choose(&mut self, chosen: Vec<eq_client_core::Capability>) {
-        self.world.choose(chosen);
-    }
-
     /// The character choice in progress, with the world it is made in.
     pub(super) fn choosing(
         &mut self,

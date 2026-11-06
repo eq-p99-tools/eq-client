@@ -658,7 +658,10 @@ pub(super) fn input(
     collision: Res<Collision>,
     outbox: Res<crate::outbox::Outbox>,
     options: Res<crate::options::OptionsState>,
-    movement_sync: Option<Res<crate::options::MovementSync>>,
+    (movement_sync, mut told_wait): (
+        Option<Res<crate::options::MovementSync>>,
+        Local<Option<u64>>,
+    ),
     mut controls: ResMut<Controls>,
     players: Query<(&PlayerBody, &Transform), With<Player>>,
     cameras: Query<(&OrbitCamera, Has<crate::camera::FreeCamera>)>,
@@ -671,21 +674,31 @@ pub(super) fn input(
 ) {
     let client = settings.0.installed_client;
     if !online.enabled || !online.world().connected() || online.world().is_dead() {
+        *told_wait = None;
         controls.reset(None);
         controls.held = Some(Held::Withdrawn);
         return;
     }
     let detached = cameras.single().is_ok_and(|(_, free)| free);
+    let session_id = online.world().session_id();
     let movement = eq_client_core::movement::offered_options(&options.options.qol, online.world());
     if movement_sync
         .as_ref()
-        .is_some_and(|sync| !sync.ready(online.world().session_id(), movement))
+        .is_some_and(|sync| !sync.ready(session_id, movement))
     {
+        // Say why once for this wait, including when the queue keeps retrying.
+        if *told_wait != session_id {
+            chat.history.push(crate::chat::system_line(
+                "Movement paused while your movement settings are applied.",
+            ));
+            *told_wait = session_id;
+        }
         controls.pause_prediction();
         controls.mouse_heading = None;
         controls.held = Some(Held::Gate);
         return;
     }
+    *told_wait = None;
     controls.choose_movement(movement);
     let flying = controls.movement_options.fly;
     let stunned = controls.observe_stun(online.world());
@@ -704,7 +717,7 @@ pub(super) fn input(
     let scripted_facing = focused.then(|| keys.scripted_facing()).flatten();
     let scripted = keys.scripted();
     let scripted_turn = scripted.contains(&Act::TurnLeft) || scripted.contains(&Act::TurnRight);
-    let snapshot_dialect = online.world().generation() == eq_client_core::GameDialect::Titanium;
+    let heading_snapshots = online.world().generation().supports_heading_snapshots();
     let mouse_allowed = focused
         && scripted_facing.is_none()
         && !scripted_turn
@@ -713,7 +726,7 @@ pub(super) fn input(
         .as_ref()
         .and_then(|aim| aim.horizontal)
         .filter(|_| mouse_allowed);
-    if !snapshot_dialect || !mouse_allowed {
+    if !heading_snapshots || !mouse_allowed {
         controls.mouse_heading = None;
     } else if let Some(yaw) = mouse_aim.filter(|yaw| *yaw != 0.0)
         && let Ok((_, player)) = players.single()
@@ -726,7 +739,7 @@ pub(super) fn input(
         );
         controls.mouse_heading = Some(eq_client_core::world_heading(drawn_yaw + yaw));
     }
-    if let Some(yaw) = mouse_aim.filter(|_| !snapshot_dialect) {
+    if let Some(yaw) = mouse_aim.filter(|_| !heading_snapshots) {
         let limit = MOUSE_WIRE_RATE * MAX_CYCLE;
         controls.mouse_turn =
             (controls.mouse_turn + yaw * (512.0 / std::f32::consts::TAU)).clamp(-limit, limit);
@@ -868,7 +881,7 @@ pub(super) fn input(
     // The ground integrator suppresses new lateral acceleration during
     // active yaw. A completed turn may still await its position sample.
     let active_mouse_yaw =
-        mouse_step != 0.0 || snapshot_dialect && mouse_aim.is_some_and(|yaw| yaw != 0.0);
+        mouse_step != 0.0 || heading_snapshots && mouse_aim.is_some_and(|yaw| yaw != 0.0);
     let heading_update = if mouse_snapshot.is_some() {
         HeadingUpdate::Snapshot
     } else {
@@ -3323,6 +3336,17 @@ mod tests {
     #[test]
     fn departure_motion_waits_for_matching_local_policy_application() {
         let (mut app, receiver) = app();
+        let wait_count = |app: &App| {
+            app.world()
+                .resource::<crate::chat::ChatState>()
+                .history
+                .lines(eq_client_core::chat::ChatTab::System)
+                .into_iter()
+                .filter(|(_, line)| {
+                    line.message.text == "Movement paused while your movement settings are applied."
+                })
+                .count()
+        };
         app.init_resource::<crate::options::MovementSync>()
             .add_systems(Update, crate::options::tell_choices.before(input));
         app.world_mut()
@@ -3331,6 +3355,7 @@ mod tests {
             .qol
             .set(Fix::RunBoost, true);
         app.update();
+        assert_eq!(wait_count(&app), 1);
         let commands: Vec<_> = receiver.try_iter().collect();
         let (request_id, options) = commands
             .iter()
@@ -3357,6 +3382,7 @@ mod tests {
             }],
         );
         app.update();
+        assert_eq!(wait_count(&app), 1);
         assert!(
             !receiver
                 .try_iter()
@@ -3371,6 +3397,7 @@ mod tests {
             }],
         );
         app.update();
+        assert_eq!(wait_count(&app), 1);
         assert!(
             !receiver
                 .try_iter()
@@ -3385,6 +3412,30 @@ mod tests {
                 .try_iter()
                 .any(|command| matches!(command, ClientCommand::Move(_)))
         );
+        app.world_mut()
+            .resource_mut::<crate::options::OptionsState>()
+            .options
+            .qol
+            .set(Fix::RunBoost, false);
+        app.update();
+        app.update();
+        assert_eq!(wait_count(&app), 2);
+
+        // A new admission has its own wait even if the last one never cleared.
+        while receiver.try_recv().is_ok() {}
+        crate::online::testing::admit(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            12,
+            crate::online::testing::player(7),
+        );
+        app.world_mut()
+            .resource_mut::<crate::options::OptionsState>()
+            .options
+            .qol
+            .set(Fix::RunBoost, true);
+        app.update();
+        app.update();
+        assert_eq!(wait_count(&app), 3);
     }
 
     /// The model's rotation when it faces this heading.
