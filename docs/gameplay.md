@@ -256,6 +256,11 @@ unanswered past the session's deadline is declined for you. The server's
 movement and recovery messages determine what follows a Yes.
 
 Grouping, raids, pets, training, reading and consent dialogs have separate
-capabilities by server. Camp uses timed preparation and acknowledgement where
-offered. The local `--demo-trade` mode previews loot, merchant and trade UI.
+capabilities by server. Pet Info can hold an early buff snapshot while the
+spawn table identifies your pet. It shows buffs once there is one living
+owned pet with the matching spawn ID. A despawn, replacement, death or
+ownership conflict invalidates the old snapshot for that ID.
+
+Camp uses timed preparation and acknowledgement where offered. The local
+`--demo-trade` mode previews loot, merchant and trade UI.
 See the [policy matrix](../SUPPORT.md).

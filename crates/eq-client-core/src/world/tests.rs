@@ -1,6 +1,7 @@
 mod buff_cancellation;
 mod loot_requests;
 mod own_stun;
+mod pet_buffs;
 mod qol;
 mod wear;
 mod weather;
@@ -3586,9 +3587,8 @@ fn pet_buffs_and_command_identity_follow_ownership_and_incarnation() {
     game(&mut world, buffs.clone());
     game(&mut world, charm(Some(9), true));
     assert_eq!(world.pet().map(|pet| pet.state.spawn_id), Some(5));
-    assert!(world.pet_buffs().is_none());
+    assert!(world.pet_buffs().is_some());
     game(&mut world, projection(1, 1));
-    game(&mut world, buffs.clone());
     game(&mut world, charm(None, false));
     game(&mut world, charm(Some(20), false));
     assert_eq!(world.pet_intent(), Some(identity(1)));

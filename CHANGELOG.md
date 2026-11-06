@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Retain an early pet buff snapshot until the owned pet resolves. Discard it
+  when the spawn is replaced or its ownership conflicts.
 - Hold Titanium movement after a fresh placement below a nearby installed
   floor with neither a lower surface nor mapped liquid below. Preserve the
   received position and resume when a correction or collision change permits it.

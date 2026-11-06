@@ -457,10 +457,7 @@ impl ClientWorld {
     #[must_use]
     pub fn pet_buffs(&self) -> Option<&crate::pets::PetBuffs> {
         let pet = self.pet()?.state.spawn_id;
-        self.zone
-            .pet_buffs
-            .as_ref()
-            .filter(|buffs| buffs.pet == pet)
+        self.zone.pet_buffs.for_pet(pet)
     }
 
     /// The zone's spawns, by spawn ID.
