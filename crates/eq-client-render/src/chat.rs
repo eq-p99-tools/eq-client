@@ -1599,6 +1599,21 @@ fn stop_song_command(
     })
 }
 
+/// Builds a pet order for the current admission and target.
+fn pet_order(
+    words: &str,
+    world: &eq_client_core::world::ClientWorld,
+    stamp: impl FnOnce() -> Result<crate::outbox::Stamp, String>,
+) -> Result<ClientCommand, String> {
+    let command = eq_client_core::pet::command(words)
+        .ok_or_else(|| format!("Unknown pet command: {words}"))?;
+    Ok(ClientCommand::Pet {
+        session_id: stamp()?.session_id,
+        command,
+        target: world.target().selected,
+    })
+}
+
 /// Slash commands that are game actions rather than chat; None means ordinary chat.
 fn game_commands(
     input: &str,
@@ -1649,15 +1664,7 @@ fn game_commands(
             }]
         }),
         // A command to the player's pet, aimed at the target where it takes one.
-        "pet" => eq_client_core::pet::command(words)
-            .ok_or_else(|| format!("Unknown pet command: {words}"))
-            .and_then(|command| {
-                Ok(vec![ClientCommand::Pet {
-                    session_id: stamp()?.session_id,
-                    command,
-                    target: online.world().target().selected,
-                }])
-            }),
+        "pet" => pet_order(words, online.world(), stamp).map(|command| vec![command]),
         // The ordinary camp sits and prepares first. Immediate exit is an
         // explicit opt-in, still completed by the session's logout reply.
         "camp" => eq_client_core::camp::destination(words).and_then(|_| {
