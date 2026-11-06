@@ -8,7 +8,7 @@
 //! capability report.
 mod book;
 
-pub(crate) use self::book::{BOOK_TIMEOUT, BookEditOutcome, BookEditReceipt};
+pub(crate) use self::book::{BOOK_TIMEOUT, BookEditReceipt};
 use self::book::{BookQueue, Expected};
 use crate::theme;
 use bevy::prelude::*;
@@ -247,23 +247,40 @@ impl Outbox {
         &self,
         world: &ClientWorld,
         command: impl FnOnce(Stamp) -> ClientCommand,
-    ) -> Result<(), Refusal> {
+    ) -> Result<BookEditReceipt, Refusal> {
         let stamp = self.try_stamp(world)?;
-        self.try_send(world, command(stamp), true, None)
+        self.try_book_edit(world, command(stamp), true)
     }
 
-    /// Sends a manual book edit and gives its caller the matching terminal result.
+    /// Stamps a manual book edit and gives its caller its progress and result.
     pub(crate) fn post_book_edit(
         &self,
         world: &ClientWorld,
         command: impl FnOnce(Stamp) -> ClientCommand,
     ) -> Result<BookEditReceipt, Refusal> {
         let stamp = self.stamp(world)?;
-        let command = command(stamp);
+        self.send_book_edit(world, command(stamp))
+    }
+
+    /// Sends a prepared manual book edit and gives its caller its progress and result.
+    pub(crate) fn send_book_edit(
+        &self,
+        world: &ClientWorld,
+        command: ClientCommand,
+    ) -> Result<BookEditReceipt, Refusal> {
+        self.try_book_edit(world, command, false)
+            .inspect_err(|refusal| self.refused(*refusal))
+    }
+
+    fn try_book_edit(
+        &self,
+        world: &ClientWorld,
+        command: ClientCommand,
+        set_step: bool,
+    ) -> Result<BookEditReceipt, Refusal> {
         debug_assert!(Expected::from_command(&command).is_some());
-        let receipt = BookEditReceipt::default();
-        self.try_send(world, command, false, Some(&receipt))
-            .inspect_err(|refusal| self.refused(*refusal))?;
+        let receipt = BookEditReceipt::new(command.session_id().ok_or(Refusal::NotAdmitted)?);
+        self.try_send(world, command, set_step, Some(&receipt))?;
         Ok(receipt)
     }
 

@@ -12,10 +12,12 @@ use super::{BookView, SpellNames, action_pending, note, prepare_scribe};
 use crate::chat::{ChatState, Said, system_line};
 use crate::confirm::{Asked, Question};
 use crate::hud::action_bar::{ActionRequests, BookChange};
-use crate::outbox::{BookEditOutcome, BookEditReceipt};
+use crate::outbox::BookEditReceipt;
 use crate::windows::WindowId;
 use bevy::prelude::*;
-use eq_client_core::{Capability, ClientCommand, inventory::InventorySlot, qol::Fix};
+use eq_client_core::{
+    BookActionStatus, Capability, ClientCommand, inventory::InventorySlot, qol::Fix,
+};
 
 /// The places on the two open pages: eight on each.
 pub(crate) const PLACES: usize = 16;
@@ -57,7 +59,6 @@ pub(crate) struct BookHand {
 /// A local edit awaiting a worker result in the admission where it was sent.
 struct PendingEdit {
     kind: Edit,
-    admission: Option<u64>,
     receipt: BookEditReceipt,
 }
 
@@ -404,7 +405,6 @@ fn choose(
             };
             hand.editing = Some(PendingEdit {
                 kind: Edit::Moving,
-                admission: world.session_id(),
                 receipt,
             });
             if let Some(requests) = requests {
@@ -534,7 +534,6 @@ fn delete(
     if let Ok(receipt) = sent {
         hand.editing = Some(PendingEdit {
             kind: Edit::Deleting,
-            admission: world.session_id(),
             receipt,
         });
         if let Some(requests) = requests {
@@ -559,22 +558,27 @@ fn answer(
     let Some(edit) = hand.editing.as_ref() else {
         return;
     };
-    if edit.admission != world.session_id() || world.ended() {
+    if world.ended() || !edit.receipt.belongs_to(world.session_id()) {
         hand.editing = None;
         return;
     }
-    let Some(outcome) = edit.receipt.take() else {
-        return;
-    };
-    match (edit.kind, outcome) {
-        (Edit::Deleting, BookEditOutcome::Confirmed) => chat.history.push(system_line(
+    match (edit.kind, edit.receipt.status()) {
+        (Edit::Deleting, Some(BookActionStatus::Confirmed)) => chat.history.push(system_line(
             messages.said_text(4028, "The spell is gone from the book."),
         )),
-        (Edit::Deleting, BookEditOutcome::Refused(_)) => chat.history.push(system_line(
-            messages.said_text(4029, "The spell stays in the book."),
-        )),
-        (Edit::Moving, BookEditOutcome::Refused(reason)) => chat.refuse(Said::own(reason)),
-        (Edit::Moving, BookEditOutcome::Confirmed) => (),
+        (Edit::Deleting, Some(BookActionStatus::Rejected(_) | BookActionStatus::Cancelled(_))) => {
+            chat.history.push(system_line(
+                messages.said_text(4029, "The spell stays in the book."),
+            ))
+        }
+        (
+            Edit::Moving,
+            Some(BookActionStatus::Rejected(reason) | BookActionStatus::Cancelled(reason)),
+        ) => {
+            chat.refuse(Said::own(reason));
+        }
+        (Edit::Moving, Some(BookActionStatus::Confirmed)) => (),
+        _ => return,
     }
     hand.editing = None;
 }
@@ -608,10 +612,10 @@ fn scribe(
         Ok(command) => command,
         Err(error) => return Some(Said::own(error.to_string())),
     };
-    outbox.send(world, command).ok()?;
+    let receipt = outbox.send_book_edit(world, command).ok()?;
     note(
         requests,
-        (BookChange::Scribe, scroll),
+        (BookChange::Scribe, scroll, receipt),
         format!("Scribing {}", names.label(scroll)),
     );
     None
@@ -638,7 +642,7 @@ pub(crate) fn memorize(
         return Some(Said::own("Wait for the current spell action"));
     }
     // The outbox says why a memorization it holds back did not go.
-    let spell = super::request_memorize(
+    let (spell, receipt) = super::request_memorize(
         Some(online),
         world.spell_book(),
         Some(outbox),
@@ -648,7 +652,7 @@ pub(crate) fn memorize(
     .ok()?;
     note(
         requests,
-        (BookChange::Memorize, spell),
+        (BookChange::Memorize, spell, receipt),
         format!("Memorizing {} into gem {}", names.label(spell), gem + 1),
     );
     None
@@ -657,9 +661,7 @@ pub(crate) fn memorize(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eq_client_core::{
-        BookActionStatus, ClientCommand, SpellUpdate, WorldEvent, WorldUpdate, world::Link,
-    };
+    use eq_client_core::{SpellUpdate, WorldEvent, WorldUpdate, world::Link};
 
     fn scroll(spell: u32) -> eq_client_core::inventory::InventoryItem {
         eq_client_core::inventory::InventoryItem {

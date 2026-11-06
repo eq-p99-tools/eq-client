@@ -452,10 +452,10 @@ pub(super) fn update(
     if !pending && accepts_input && scribe.any() {
         selection.message =
             match request_scribe(online.as_deref(), world.spell_book(), outbox.as_deref()) {
-                Ok(spell) => {
+                Ok((spell, receipt)) => {
                     note(
                         requests.as_deref_mut(),
-                        (BookChange::Scribe, spell),
+                        (BookChange::Scribe, spell, receipt),
                         format!("Scribing {}", names.label(spell)),
                     );
                     String::new()
@@ -528,11 +528,11 @@ pub(super) fn update(
             gem,
         );
         selection.message = match queued {
-            Ok(spell) => {
+            Ok((spell, receipt)) => {
                 let label = format!("Memorizing {} into gem {}", names.label(spell), gem + 1);
                 note(
                     requests.as_deref_mut(),
-                    (BookChange::Memorize, spell),
+                    (BookChange::Memorize, spell, receipt),
                     label,
                 );
                 String::new()
@@ -555,7 +555,7 @@ pub(super) fn update(
 /// and to which spell, for the skin's book's gauges and the chat's lines.
 fn note(
     requests: Option<&mut super::hud::action_bar::ActionRequests>,
-    (change, spell): (BookChange, u32),
+    (change, spell, receipt): (BookChange, u32, crate::outbox::BookEditReceipt),
     label: String,
 ) {
     if let Some(requests) = requests {
@@ -564,6 +564,8 @@ fn note(
             label,
             change,
             spell,
+            receipt,
+            began: false,
         });
     }
 }
@@ -922,7 +924,7 @@ fn request_memorize(
     outbox: Option<&crate::outbox::Outbox>,
     (selected, slot): (Option<u32>, Option<usize>),
     gem: u8,
-) -> anyhow::Result<u32> {
+) -> anyhow::Result<(u32, crate::outbox::BookEditReceipt)> {
     use anyhow::{Context, ensure};
     let spell_id = selected.context("Select a spell first")?;
     ensure!(gem < 8, "Choose a gem from 1 to 8");
@@ -935,7 +937,7 @@ fn request_memorize(
         ),
         "The selected spell is no longer in the spellbook"
     );
-    outbox.post(online.world(), |stamp| {
+    let receipt = outbox.post_book_edit(online.world(), |stamp| {
         eq_client_core::ClientCommand::MemorizeSpell {
             session_id: stamp.session_id,
             gem,
@@ -943,7 +945,7 @@ fn request_memorize(
             created: stamp.created,
         }
     })?;
-    Ok(spell_id)
+    Ok((spell_id, receipt))
 }
 
 /// Sends the current cursor scroll without consuming or inserting it locally.
@@ -951,7 +953,7 @@ fn request_scribe(
     online: Option<&super::online::OnlineState>,
     book: Option<&eq_client_core::SpellBook>,
     outbox: Option<&crate::outbox::Outbox>,
-) -> anyhow::Result<u32> {
+) -> anyhow::Result<(u32, crate::outbox::BookEditReceipt)> {
     use anyhow::Context;
     let (state, outbox) = online.zip(outbox).context("Connect to scribe a scroll")?;
     let stamp = outbox.stamp(state.world())?;
@@ -959,8 +961,8 @@ fn request_scribe(
     let eq_client_core::ClientCommand::ScribeSpell { spell_id, .. } = command else {
         anyhow::bail!("Scribe request was not a scribe");
     };
-    outbox.send(state.world(), command)?;
-    Ok(spell_id)
+    let receipt = outbox.send_book_edit(state.world(), command)?;
+    Ok((spell_id, receipt))
 }
 
 /// Shares admission, cursor and book validation between presentation and

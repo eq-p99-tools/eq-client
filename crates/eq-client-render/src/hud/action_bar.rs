@@ -41,6 +41,18 @@ pub(crate) struct BookRequest {
     pub(crate) label: String,
     pub(crate) change: BookChange,
     pub(crate) spell: u32,
+    pub(crate) receipt: crate::outbox::BookEditReceipt,
+    pub(crate) began: bool,
+}
+
+impl BookRequest {
+    fn active_status(
+        &self,
+        world: &eq_client_core::world::ClientWorld,
+    ) -> Option<BookActionStatus> {
+        (world.in_world() && self.receipt.belongs_to(world.session_id())).then_some(())?;
+        self.receipt.status()
+    }
 }
 
 #[derive(Component)]
@@ -138,7 +150,7 @@ pub(crate) fn book_progress(
         .book
         .as_ref()
         .filter(|request| request.change == change)?;
-    match world.book_action()? {
+    match request.active_status(world)? {
         BookActionStatus::Preparing => Some(fraction(request.since, BOOK_PREPARATION, now)),
         BookActionStatus::AwaitingReply => Some(1.0),
         _ => None,
@@ -200,9 +212,13 @@ pub(super) fn current(
         })
     };
     let book = || {
-        let book = requests.book.as_ref();
+        let status = world.book_action();
+        let book = requests
+            .book
+            .as_ref()
+            .filter(|request| request.active_status(world).as_ref() == status);
         let book_label = || book.map_or("Changing spells", |request| request.label.as_str());
-        match world.book_action() {
+        match status {
             Some(BookActionStatus::Preparing) => Some(Shown {
                 label: book_label().into(),
                 progress: book.map(|request| fraction(request.since, BOOK_PREPARATION, now)),
@@ -400,6 +416,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "exercise cast, book receipt and camp in sequence"
+    )]
     fn casting_wins_then_book_changes_then_camping() {
         let names = crate::spellbook::SpellNames::default();
         let messages = super::super::messages::Messages::load(
@@ -434,12 +454,30 @@ mod tests {
         assert_eq!(camping.label, "Camping (15s)");
         assert!((camping.progress.unwrap() - 0.5).abs() < 0.01);
 
-        testing::book_action(&mut online, BookActionStatus::Preparing);
+        let (queue, _sent) = std::sync::mpsc::sync_channel(1);
+        let outbox = crate::outbox::Outbox::new(Some(queue));
+        let receipt = outbox
+            .post_book_edit(online.world(), |stamp| {
+                eq_client_core::ClientCommand::MemorizeSpell {
+                    session_id: stamp.session_id,
+                    gem: 1,
+                    spell_id: 202,
+                    created: stamp.created,
+                }
+            })
+            .unwrap();
+        testing::book_news(
+            &mut online,
+            &outbox,
+            eq_client_core::WorldEvent::BookAction(BookActionStatus::Preparing),
+        );
         requests.book = Some(BookRequest {
             since: now.checked_sub(Duration::from_secs(1)).unwrap(),
             label: "Memorizing Courage into gem 2".into(),
             change: BookChange::Memorize,
             spell: 202,
+            receipt,
+            began: false,
         });
         let book = shown(&online, &requests).unwrap();
         assert_eq!(book.label, "Memorizing Courage into gem 2");
@@ -448,7 +486,11 @@ mod tests {
         let gauge = |change| book_progress(online.world(), &requests, change, now);
         assert!((gauge(BookChange::Memorize).unwrap() - 0.2).abs() < 0.01);
         assert_eq!(gauge(BookChange::Scribe), None);
-        testing::book_action(&mut online, BookActionStatus::AwaitingReply);
+        testing::book_news(
+            &mut online,
+            &outbox,
+            eq_client_core::WorldEvent::BookAction(BookActionStatus::AwaitingReply),
+        );
         assert_eq!(shown(&online, &requests).unwrap().progress, None);
         assert_eq!(
             book_progress(online.world(), &requests, BookChange::Memorize, now),
@@ -476,7 +518,16 @@ mod tests {
                 keep_casting: false,
             },
         );
-        testing::book_action(&mut online, BookActionStatus::Confirmed);
+        for event in [
+            eq_client_core::WorldEvent::BookAction(BookActionStatus::Confirmed),
+            eq_client_core::WorldEvent::Spell(SpellUpdate::Slot {
+                slot: 1,
+                spell_id: 202,
+                mode: 1,
+            }),
+        ] {
+            testing::book_news(&mut online, &outbox, event);
+        }
         testing::news(
             &mut online,
             [eq_client_core::WorldEvent::Camp(

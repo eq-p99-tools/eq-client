@@ -75,24 +75,32 @@ impl Expected {
     }
 }
 
-/// The terminal outcome of one edit, delivered by the queue that owns it.
-pub(crate) enum BookEditOutcome {
-    Confirmed,
-    Refused(String),
+/// Keeps one edit's progress and answer for its callers after the book is free.
+#[derive(Clone)]
+pub(crate) struct BookEditReceipt {
+    session: u64,
+    status: Arc<Mutex<Option<BookActionStatus>>>,
 }
 
-/// Keeps an edit's answer for its caller even after the book is free again.
-#[derive(Clone, Default)]
-pub(crate) struct BookEditReceipt(Arc<Mutex<Option<BookEditOutcome>>>);
-
 impl BookEditReceipt {
-    pub(crate) fn take(&self) -> Option<BookEditOutcome> {
-        self.0.lock().ok()?.take()
+    pub(super) fn new(session: u64) -> Self {
+        Self {
+            session,
+            status: Arc::default(),
+        }
     }
 
-    fn finish(self, outcome: BookEditOutcome) {
-        if let Ok(mut result) = self.0.lock() {
-            *result = Some(outcome);
+    pub(crate) fn belongs_to(&self, session: Option<u64>) -> bool {
+        session == Some(self.session)
+    }
+
+    pub(crate) fn status(&self) -> Option<BookActionStatus> {
+        self.status.lock().ok()?.clone()
+    }
+
+    fn publish(&self, status: BookActionStatus) {
+        if let Ok(mut latest) = self.status.lock() {
+            *latest = Some(status);
         }
     }
 }
@@ -158,7 +166,7 @@ impl BookQueue {
         };
         if let Some(outcome) = pending.observe(event) {
             if let Some(receipt) = pending.receipt.take() {
-                receipt.finish(outcome);
+                receipt.publish(outcome);
             }
             self.pending = None;
         }
@@ -174,7 +182,8 @@ impl BookQueue {
         else {
             return false;
         };
-        let was_unconfirmed = std::mem::replace(&mut pending.unconfirmed, true);
+        let was_unconfirmed = pending.unconfirmed;
+        pending.progress(&BookActionStatus::Unconfirmed);
         !self.applying && !was_unconfirmed
     }
 
@@ -184,30 +193,49 @@ impl BookQueue {
 }
 
 impl Pending {
+    fn progress(&mut self, status: &BookActionStatus) {
+        if matches!(status, BookActionStatus::Unconfirmed) {
+            self.unconfirmed = true;
+        }
+        if let Some(receipt) = &self.receipt {
+            let status = if self.unconfirmed {
+                BookActionStatus::Unconfirmed
+            } else {
+                status.clone()
+            };
+            receipt.publish(status);
+        }
+    }
+
     /// The worker's tracked confirmation can arrive before the world update.
     /// A forget requires its submission followed by an exact gem clear.
-    fn observe(&mut self, event: &WorldEvent) -> Option<BookEditOutcome> {
+    fn observe(&mut self, event: &WorldEvent) -> Option<BookActionStatus> {
         let forgetting = matches!(self.expected, Expected::Forget(..));
         match event {
-            WorldEvent::BookAction(BookActionStatus::Unconfirmed) => {
-                self.unconfirmed = true;
-            }
-            WorldEvent::BookAction(BookActionStatus::Submitted) if forgetting => {
-                self.acknowledged = true;
+            WorldEvent::BookAction(
+                status @ (BookActionStatus::Preparing
+                | BookActionStatus::Submitted
+                | BookActionStatus::AwaitingReply
+                | BookActionStatus::Unconfirmed),
+            ) => {
+                if forgetting && matches!(status, BookActionStatus::Submitted) {
+                    self.acknowledged = true;
+                }
+                self.progress(status);
             }
             WorldEvent::BookAction(BookActionStatus::Confirmed) if !forgetting => {
                 self.acknowledged = true;
             }
             WorldEvent::BookAction(
-                BookActionStatus::Rejected(reason) | BookActionStatus::Cancelled(reason),
+                status @ (BookActionStatus::Rejected(_) | BookActionStatus::Cancelled(_)),
             ) if !forgetting || !self.acknowledged => {
-                return Some(BookEditOutcome::Refused(reason.clone()));
+                return Some(status.clone());
             }
             WorldEvent::Spell(update) if (!forgetting || self.acknowledged) => {
                 self.observed |= self.expected.matches(update);
             }
             _ => {}
         }
-        (self.acknowledged && self.observed).then_some(BookEditOutcome::Confirmed)
+        (self.acknowledged && self.observed).then_some(BookActionStatus::Confirmed)
     }
 }

@@ -2,7 +2,7 @@
 use super::{AdmissionGems, Gems};
 use crate::{
     hud::action_bar::{ActionRequests, BookChange},
-    outbox::{BOOK_TIMEOUT as STEP_TIMEOUT, Outbox, Stamp},
+    outbox::{BOOK_TIMEOUT as STEP_TIMEOUT, BookEditReceipt, Outbox, Stamp},
 };
 use eq_client_core::{
     BookActionStatus, ClientCommand, PostureState, SpellBook, world::ClientWorld,
@@ -68,7 +68,7 @@ impl Step {
 
 struct Pending {
     step: Step,
-    revision: u64,
+    receipt: BookEditReceipt,
     since: Instant,
 }
 
@@ -189,7 +189,7 @@ impl Apply {
             self.stop("Character actions were interrupted.");
         }
         self.posture = posture;
-        if !self.settle(world, &actual, now) {
+        if !self.settle(&actual, now) {
             return None;
         }
         if actual != self.seen {
@@ -202,16 +202,16 @@ impl Apply {
             return Some(format!("Applied {} · 8/8 gems match", self.name));
         };
         match submit(step, &self.target, &actual, world, outbox) {
-            Ok(()) => {
+            Ok(receipt) => {
                 self.pending = Some(Pending {
                     step,
-                    revision: world.book_action_revision(),
+                    receipt: receipt.clone(),
                     since: now,
                 });
                 if let Step::Memorize(gem, spell) = step {
                     super::super::note(
                         requests,
-                        (BookChange::Memorize, spell),
+                        (BookChange::Memorize, spell, receipt),
                         format!("Memorizing {} into gem {}", names.label(spell), gem + 1),
                     );
                 } else if let Some(requests) = requests {
@@ -223,9 +223,8 @@ impl Apply {
         }
     }
 
-    /// A new status is necessary but insufficient: the exact gem must also
-    /// have the requested value. An unrelated update never advances the set.
-    fn settle(&mut self, world: &ClientWorld, actual: &Gems, now: Instant) -> bool {
+    /// Advances only when this step's reply and the current layout agree.
+    fn settle(&mut self, actual: &Gems, now: Instant) -> bool {
         let Some(pending) = &self.pending else {
             return true;
         };
@@ -233,19 +232,19 @@ impl Apply {
         let value = pending.step.value();
         let mut expected = self.seen;
         expected[slot] = value;
-        let reply = (world.book_action_revision() != pending.revision).then(|| world.book_action());
-        let failure = match reply {
-            Some(Some(
-                BookActionStatus::Cancelled(reason) | BookActionStatus::Rejected(reason),
-            )) => Some(reason.clone()),
-            _ if reply == Some(Some(&BookActionStatus::Unconfirmed))
+        let reply = pending.receipt.status();
+        let failure = match &reply {
+            Some(BookActionStatus::Cancelled(reason) | BookActionStatus::Rejected(reason)) => {
+                Some(reason.clone())
+            }
+            _ if reply == Some(BookActionStatus::Unconfirmed)
                 || now.saturating_duration_since(pending.since) >= STEP_TIMEOUT =>
             {
                 Some(format!("No confirmation for gem {}.", slot + 1))
             }
             _ => None,
         };
-        if reply == Some(None) && actual[slot] == value {
+        if reply == Some(BookActionStatus::Confirmed) && actual[slot] == value {
             self.seen = expected;
             self.pending = None;
             return true;
@@ -288,15 +287,14 @@ fn submit(
     current: &Gems,
     world: &ClientWorld,
     outbox: &Outbox,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<BookEditReceipt> {
     use anyhow::Context;
     check_learned(
         target,
         current,
         world.spell_book().context("Spellbook unavailable")?,
     )?;
-    outbox.spell_set_step(world, |stamp| step.command(stamp))?;
-    Ok(())
+    Ok(outbox.spell_set_step(world, |stamp| step.command(stamp))?)
 }
 
 /// Preserve matching gems. Clear a spell's old, mismatched slot before
