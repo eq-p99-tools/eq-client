@@ -4,6 +4,9 @@
 
 - Report a local scripted `give` refusal through the script result once.
   Native click refusals still appear in chat.
+- Draw server-reported rain and snow in zones with a sky. See the World
+  Clearly hides precipitation locally. Try the offline sequence with
+  `--demo-weather`.
 
 - Stop a scripted `give` at the failing line when the target or cursor is
   unsuitable, an exchange is in progress, or the local session queue refuses

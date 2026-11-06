@@ -7,13 +7,17 @@ use super::{Player, SceneInfo, Stage, TerrainSurface, setup_scene, world_positio
 use bevy::prelude::*;
 use eq_client_core::{
     CharacterChoice, Coins, SpawnKind, WorldEvent, WorldPosition, WorldUpdate,
+    clock::{Fog, Weather, ZoneSky},
     exchange::ExchangeUpdate,
     inventory::{InventoryItem, InventorySlot, InventoryUpdate},
     loot::{LootResponse, LootUpdate},
     merchant::{MerchantItem, MerchantUpdate},
     render_position,
 };
-use std::sync::mpsc::{Receiver, SyncSender};
+use std::{
+    sync::mpsc::{Receiver, SyncSender},
+    time::Duration,
+};
 
 /// What the offline preview shows.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -36,6 +40,8 @@ pub struct Preview {
     pub creation: Option<eq_client_core::character_creation::Draft>,
     /// Loot and merchant windows with synthetic items.
     pub trade: bool,
+    /// Synthetic light rain, heavy rain, snow and clear weather in sequence.
+    pub weather: bool,
 }
 
 /// An offline selection audit. A rendered image never marks its spot reviewed.
@@ -64,7 +70,7 @@ pub struct SelectionCapture {
 impl Preview {
     /// Whether the preview admits its player into the zone on screen.
     const fn admits(&self) -> bool {
-        self.entities || self.inventory || self.spellbook || self.trade
+        self.entities || self.inventory || self.spellbook || self.trade || self.weather
     }
 
     const fn any(&self) -> bool {
@@ -147,6 +153,9 @@ pub(crate) fn install(app: &mut App, preview: Preview) -> Option<Receiver<WorldU
         app.add_systems(Update, chat.in_set(Shows))
             .add_systems(Update, entities.run_if(in_world).in_set(Stage::Scene));
     }
+    if preview.weather {
+        app.add_systems(Update, weather.run_if(in_world).in_set(Stage::Scene));
+    }
     app.insert_resource(Switches(preview));
     Some(receiver)
 }
@@ -221,7 +230,12 @@ pub(crate) fn player(
 /// Admits the preview's player where the viewer stands, in the zone on
 /// screen, as a session would; every part of the preview fills that world.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
-fn admit(news: Res<News>, scene: Res<SceneInfo>, players: Query<&Transform, With<Player>>) {
+fn admit(
+    news: Res<News>,
+    scene: Res<SceneInfo>,
+    players: Query<&Transform, With<Player>>,
+    switches: Res<Switches>,
+) {
     let Ok(standing) = players.single() else {
         return;
     };
@@ -240,6 +254,40 @@ fn admit(news: Res<News>, scene: Res<SceneInfo>, players: Query<&Transform, With
     news.tell(WorldUpdate::Connection(
         eq_client_core::world::Link::Connected,
     ));
+    if switches.0.weather {
+        news.game(WorldEvent::Sky(ZoneSky {
+            sky: 1,
+            time_type: 1,
+            fog: [Fog {
+                color: [0; 3],
+                near: 0.0,
+                far: 0.0,
+            }; 4],
+        }));
+    }
+}
+
+/// Sends each phase once through the same event path as live weather.
+#[allow(clippy::needless_pass_by_value)]
+fn weather(
+    news: Res<News>,
+    time: Res<Time>,
+    mut start: Local<Option<Duration>>,
+    mut last: Local<Option<Weather>>,
+) {
+    let elapsed = time
+        .elapsed()
+        .saturating_sub(*start.get_or_insert(time.elapsed()));
+    let phase = match elapsed.as_secs() {
+        0..4 => Weather::Rain { intensity: 2 },
+        4..8 => Weather::Rain { intensity: 9 },
+        8..12 => Weather::Snow { intensity: 7 },
+        _ => Weather::Clear,
+    };
+    if *last != Some(phase) {
+        news.game(WorldEvent::Weather(phase));
+        *last = Some(phase);
+    }
 }
 
 /// Offers two synthetic characters to choose from, each with a synthetic

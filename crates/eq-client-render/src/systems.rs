@@ -7,8 +7,8 @@ use crate::{
     move_player, names, navigation, navmesh_prebuild, notices, online, options, orbit_camera,
     outbox, outfit, paperdoll, pet, profile_files, raid, reading, resources, schedule_screenshot,
     select_preview, sheets, skills, skin, skinned, sounds, speed, spell_effects, spell_icons,
-    spellbook, target, tooltip, trade, tradeskills, training, translocate, update_hud, whereabouts,
-    who, windows,
+    spellbook, target, tooltip, trade, tradeskills, training, translocate, update_hud, weather,
+    whereabouts, who, windows,
 };
 use bevy::prelude::*;
 /// Starts the presentation state (HUD, windows, chat, targeting, inventory,
@@ -34,6 +34,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<hud::action_bar::ActionRequests>()
         .init_resource::<combat::CombatState>()
         .init_resource::<combat_text::CombatText>()
+        .init_resource::<weather::Field>()
         .init_resource::<trade::TradeState>()
         .init_resource::<escape::Escape>()
         .init_resource::<windows::pointer::Wheel>()
@@ -282,6 +283,7 @@ pub(super) fn schedule(app: &mut App) {
                 motion::interpolate,
                 crate::camera::fly_camera,
                 orbit_camera,
+                weather::update,
                 crate::camera::show_player,
                 update_hud,
                 // Opens the give, quantity and training windows before their

@@ -373,6 +373,7 @@ pub(super) struct Panels<'w> {
     book_view: Option<ResMut<'w, super::spellbook::BookView>>,
     sounds: ResMut<'w, super::sounds::Sounds>,
     combat_text: Option<ResMut<'w, super::combat_text::CombatText>>,
+    weather: Option<ResMut<'w, super::weather::Field>>,
 }
 
 impl Panels<'_> {
@@ -518,6 +519,12 @@ impl Panels<'_> {
 
     /// Forgets what the world's reset made stale on screen and in the panels.
     fn forget(&mut self, reason: Reset, state: &mut OnlineState) {
+        if !matches!(reason, Reset::Died)
+            && let Some(weather) = self.weather.as_mut()
+        {
+            // A rejected transfer can restore the same admission in this batch.
+            **weather = super::weather::Field::default();
+        }
         if matches!(
             reason,
             Reset::Entered | Reset::Camped | Reset::Lost { ended: true, .. }

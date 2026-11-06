@@ -114,6 +114,9 @@ struct Arguments {
     /// Preview loot, merchant and trade windows with synthetic items and no network connection.
     #[arg(long, conflicts_with = "online")]
     demo_trade: bool,
+    /// Preview a synthetic rain, snow and clearing sequence offline.
+    #[arg(long, conflicts_with = "online")]
+    demo_weather: bool,
 
     /// Select the nearest rendered player once, without moving or attacking.
     #[arg(long)]
@@ -308,7 +311,8 @@ fn mode(arguments: &Arguments, script: Option<&[Step]>) -> Result<Mode, &'static
         || arguments.demo_inventory
         || arguments.demo_spellbook
         || arguments.demo_character_select
-        || arguments.demo_trade;
+        || arguments.demo_trade
+        || arguments.demo_weather;
     if arguments.offline || arguments.inspect_only || demo {
         return if logs_in {
             Err("a script's login step needs the login screen, which this run leaves out")
@@ -521,20 +525,11 @@ fn main() {
             None
         }
     };
-    let preview = Preview {
-        entities: arguments.demo_entities,
-        inventory: arguments.demo_inventory,
-        bank: arguments.demo_bank,
-        spellbook: arguments.demo_spellbook,
-        character_select: arguments.demo_character_select,
-        trade: arguments.demo_trade,
-        ..Preview::default()
-    };
     // The window's display, kept by the viewer for the session's weekly
     // machine report, which is made off the window's thread.
     let display = DisplaySnapshot::default();
     let source = match start {
-        None => Source::Offline(preview),
+        None => offline_source(&arguments),
         Some(start) => online_source(
             start,
             mode,
@@ -562,6 +557,20 @@ fn main() {
     let exit = eq_client_render::run(zone, character, config, source);
     tracing::info!("The client ends with status {exit}");
     std::process::exit(exit);
+}
+
+/// Configures the synthetic content of an offline run.
+fn offline_source(arguments: &Arguments) -> Source {
+    Source::Offline(Preview {
+        entities: arguments.demo_entities,
+        inventory: arguments.demo_inventory,
+        bank: arguments.demo_bank,
+        spellbook: arguments.demo_spellbook,
+        character_select: arguments.demo_character_select,
+        trade: arguments.demo_trade,
+        weather: arguments.demo_weather,
+        ..Preview::default()
+    })
 }
 
 /// The login screens, over the presets and the run's installation, and for
@@ -869,6 +878,13 @@ mod tests {
         parse_window_size, presets, run_client, seconds,
     };
     use clap::Parser;
+
+    #[test]
+    fn the_weather_demo_requires_no_session_and_conflicts_with_online() {
+        let args = Arguments::try_parse_from(["eq-client", "--demo-weather"]).unwrap();
+        assert_eq!(mode(&args, None), Ok(Mode::Offline));
+        assert!(Arguments::try_parse_from(["eq-client", "--demo-weather", "--online"]).is_err());
+    }
 
     #[test]
     fn background_scripts_are_explicit_and_require_an_execution_source() {

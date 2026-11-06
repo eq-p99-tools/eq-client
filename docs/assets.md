@@ -42,6 +42,7 @@ cargo run -p eq-client --release --locked -- --eq-dir "/path/to/EverQuest" --off
 | `--demo-spellbook` | Synthetic spellbook with installed names/icons |
 | `--demo-character-select` | Character selection without a connection |
 | `--demo-trade` | Loot, merchant and trade windows |
+| `--demo-weather` | Synthetic light rain, heavy rain, snow and clearing |
 | `--terrain-only` | Hide placed objects to inspect terrain/materials |
 | `--character-model HUM` | Choose the offline character model code |
 
@@ -76,6 +77,24 @@ An explicitly online screenshot still logs into the server; keep that separate
 from an offline render check. `--script` and `--screenshot` conflict; scripts have
 their own screenshot action.
 
+To inspect weather, launch an outdoor scene with `--demo-weather --zone ecommons`.
+Use a preview profile with See the World Clearly off. The demo supplies its own
+outdoor sky and sends light rain, heavy rain, snow and clear at four-second
+intervals through the normal weather reducer. Run the following with
+`--script` from a private scenario file to capture each settled phase.
+
+```text
+wait_online
+wait 2000
+screenshot rain-light.png
+wait 4000
+screenshot rain-heavy.png
+wait 4000
+screenshot snow.png
+wait 4000
+screenshot clear.png
+```
+
 Inspect a local character archive:
 
 ```console
@@ -99,3 +118,8 @@ format. Day/night lighting has provisional presentation tuning. Swimming and
 client-detected same-zone teleport pads remain incomplete. See
 [gameplay](gameplay.md) for action limitations and
 [support](../SUPPORT.md) for server-specific policy.
+
+Rain and snow use procedural particles and the zone's sky marker. The client
+waits for a sky report and skips precipitation in zones marked with no sky.
+Particle density, drift and fades are provisional. How shelter within a zone
+affects weather remains unresolved.
