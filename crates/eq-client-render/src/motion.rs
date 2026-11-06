@@ -874,11 +874,17 @@ pub(super) fn input(
         controls.held = Some(Held::NoBody);
         return;
     };
-    let surface_world = (!flying
+    let origin = Vec3::from_array(eq_client_core::render_position(accepted.position));
+    let feet = origin - Vec3::Y * body.feet_offset;
+    let surface_world = if !flying
         && !swimming
-        && options.options.qol.on(Fix::WaterWalking)
-        && online.world().can(Capability::GameplayDepartures))
-    .then(|| world.with_water_support());
+        && options.options.qol.on(Fix::JesusMode)
+        && online.world().can(Capability::GameplayDepartures)
+    {
+        world.with_liquid_support(feet, body.height)
+    } else {
+        None
+    };
     let world = surface_world.as_ref().unwrap_or(world);
     if let Some(player) = online.world().player() {
         let position = player.position;
@@ -1017,8 +1023,6 @@ pub(super) fn input(
         }
         controls.climb_sent = Some((session, per_step));
     }
-    let origin = Vec3::from_array(eq_client_core::render_position(accepted.position));
-    let feet = origin - Vec3::Y * body.feet_offset;
     // A jump or fall keeps going after the keys are released, and a player
     // who may fall starts to where no ground is under them, as the server
     // can leave them after a move it makes (a `#goto` into the air).
@@ -2140,7 +2144,7 @@ mod tests {
                 Fix::WalkWhileWinded,
                 Fix::RunBoost,
                 Fix::Fly,
-                Fix::WaterWalking,
+                Fix::JesusMode,
             ] {
                 movement_choice(&mut app, fix, true);
             }
@@ -3281,16 +3285,16 @@ mod tests {
         (app, receiver)
     }
 
-    fn water_pool() -> CollisionWorld {
-        use eq_client_core::movement::{CollisionWorld, Liquid, Liquids};
+    fn liquid_pool(liquid: eq_client_core::movement::Liquid) -> CollisionWorld {
+        use eq_client_core::movement::{Liquid, Liquids};
 
-        struct Pool;
+        struct Pool(Liquid);
         impl Liquids for Pool {
             fn liquid_at(&self, point: Vec3) -> Option<Liquid> {
-                (point.y <= 0.0).then_some(Liquid::Water)
+                (point.y <= 0.0).then_some(self.0)
             }
             fn passes_through(&self, from: Vec3, to: Vec3, liquid: Liquid) -> bool {
-                liquid == Liquid::Water && from.y.min(to.y) <= 0.0
+                liquid == self.0 && from.y.min(to.y) <= 0.0
             }
             fn first_outside(
                 &self,
@@ -3298,14 +3302,14 @@ mod tests {
                 to: Vec3,
                 liquid: Liquid,
             ) -> Option<std::ops::Range<f64>> {
-                if liquid != Liquid::Water || from.y > 0.0 {
+                if liquid != self.0 || from.y > 0.0 {
                     return Some(0.0..1.0);
                 }
                 let (from, to) = (f64::from(from.y), f64::from(to.y));
                 (to > 0.0).then_some((from / (from - to))..1.0)
             }
-            fn water_surface(&self, top: Vec3, bottom: f32) -> Option<f32> {
-                (top.y > 0.0 && bottom < 0.0).then_some(0.0)
+            fn liquid_surface(&self, top: Vec3, bottom: f32) -> Option<(f32, Liquid)> {
+                (top.y > 0.0 && bottom < 0.0).then_some((0.0, self.0))
             }
             fn within(&self, _: Vec3, _: Vec3) -> Option<Box<dyn Liquids>> {
                 None
@@ -3324,13 +3328,15 @@ mod tests {
             ],
         ])
         .unwrap()
-        .with_liquids(Pool)
+        .with_liquids(Pool(liquid))
     }
 
     #[test]
     fn a_water_correction_uses_the_swim_grant_and_a_dry_correction_leaves_it() {
         let (mut app, receiver) = app();
-        app.insert_resource(Collision(Some(water_pool())));
+        app.insert_resource(Collision(Some(liquid_pool(
+            eq_client_core::movement::Liquid::Water,
+        ))));
         let placed = world_position([0.0, -4.0, 0.0], 0.0);
         online::testing::place(
             &mut app.world_mut().resource_mut::<online::OnlineState>(),
@@ -3368,7 +3374,7 @@ mod tests {
     }
 
     #[test]
-    fn water_walking_uses_ground_motion_and_respects_corrections_and_admission() {
+    fn jesus_mode_uses_ground_motion_and_respects_corrections_and_admission() {
         let (mut app, receiver) = app();
         let arm = |app: &mut App, session| {
             let mut controls = app.world_mut().resource_mut::<Controls>();
@@ -3390,9 +3396,11 @@ mod tests {
             assert_eq!(proposal.session_id, session);
             proposal
         };
-        app.insert_resource(Collision(Some(water_pool())));
+        app.insert_resource(Collision(Some(liquid_pool(
+            eq_client_core::movement::Liquid::Water,
+        ))));
         arm(&mut app, 11);
-        movement_choice(&mut app, Fix::WaterWalking, true);
+        movement_choice(&mut app, Fix::JesusMode, true);
         let walking = next_move(&mut app, 11);
         assert_eq!(walking.mode, MovementMode::Forward);
         assert!((walking.position.z - 3.0).abs() < 0.001);
@@ -3400,12 +3408,12 @@ mod tests {
         assert!(walking.position.x.hypot(walking.position.y) < 0.61);
         accept(&mut app, &walking);
 
-        movement_choice(&mut app, Fix::WaterWalking, false);
+        movement_choice(&mut app, Fix::JesusMode, false);
         let falling = next_move(&mut app, 11);
         assert_eq!(falling.mode, MovementMode::Fall);
         assert!(falling.position.z < walking.position.z);
 
-        movement_choice(&mut app, Fix::WaterWalking, true);
+        movement_choice(&mut app, Fix::JesusMode, true);
         let submerged = world_position([0.0, -4.0, 0.0], 0.0);
         online::testing::place(
             &mut app.world_mut().resource_mut::<online::OnlineState>(),
@@ -3430,6 +3438,34 @@ mod tests {
         app.insert_resource(Collision(Some(dry)));
         arm(&mut app, 12);
         let falling = next_move(&mut app, 12);
+        assert_eq!(falling.mode, MovementMode::Fall);
+        assert!(falling.position.z < walking.position.z);
+    }
+
+    #[test]
+    fn jesus_mode_moves_over_lava_with_an_ordinary_sample() {
+        let (mut app, receiver) = app();
+        app.insert_resource(Collision(Some(liquid_pool(
+            eq_client_core::movement::Liquid::Lava,
+        ))));
+        app.world_mut().resource_mut::<Controls>().airborne = Some(AirborneController::default());
+        movement_choice(&mut app, Fix::JesusMode, true);
+        app.update();
+        let ClientCommand::Move(walking) = receiver.try_recv().unwrap() else {
+            panic!("expected a grounded movement proposal");
+        };
+        assert_eq!(walking.mode, MovementMode::Forward);
+        assert!((walking.position.z - 3.0).abs() < 0.001);
+        assert!(walking.position.x < -0.01);
+        assert!(walking.position.x.hypot(walking.position.y) < 0.61);
+        assert!(receiver.try_recv().is_err());
+        accept(&mut app, &walking);
+
+        movement_choice(&mut app, Fix::JesusMode, false);
+        app.update();
+        let ClientCommand::Move(falling) = receiver.try_recv().unwrap() else {
+            panic!("expected ordinary gravity after disabling the option");
+        };
         assert_eq!(falling.mode, MovementMode::Fall);
         assert!(falling.position.z < walking.position.z);
     }

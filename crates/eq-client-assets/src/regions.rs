@@ -208,11 +208,11 @@ impl ZoneRegions {
                 .is_some()
     }
 
-    /// Highest mapped water entry along a downward ray that starts above liquid.
+    /// Highest mapped water or lava entry along a downward ray from above.
     /// The entry must follow resolved dry space along the ray.
     #[must_use]
     #[allow(clippy::cast_possible_truncation)] // Interpolation stays between f32 endpoints.
-    pub fn water_surface(&self, top: [f32; 3], bottom: f32) -> Option<f32> {
+    pub fn liquid_surface(&self, top: [f32; 3], bottom: f32) -> Option<(f32, Liquid)> {
         if self.liquids.is_empty()
             || !top.iter().all(|value| value.is_finite())
             || !bottom.is_finite()
@@ -223,11 +223,15 @@ impl ZoneRegions {
         }
         let end = [top[0], bottom, top[2]];
         let (span, kind) = self.first_matching_span(top, end, |kind| kind != SpanKind::Dry)?;
-        if span.start <= 0.0 || kind != SpanKind::Wet(Liquid::Water) {
+        let SpanKind::Wet(liquid) = kind else {
+            return None;
+        };
+        if span.start <= 0.0 {
             return None;
         }
         let height = f64::from(top[1]);
-        Some(((f64::from(bottom) - height).mul_add(span.start, height)) as f32)
+        let surface = ((f64::from(bottom) - height).mul_add(span.start, height)) as f32;
+        Some((surface, liquid))
     }
 
     /// First positive-length span outside a liquid, measured in fractions of
@@ -721,26 +725,31 @@ mod tests {
     }
 
     #[test]
-    fn water_surface_uses_the_first_entry_from_air() {
+    fn liquid_surface_uses_the_first_entry_from_air() {
         let mut regions = layers();
         let top = [0.0, 1.0, 0.0];
-        assert_eq!(regions.water_surface(top, -20.0), None);
+        let (surface, liquid) = regions.liquid_surface(top, -20.0).unwrap();
+        assert!(surface.abs() < 1e-6);
+        assert_eq!(liquid, Liquid::Lava);
+        assert_eq!(regions.liquid_surface([0.0, -0.05, 0.0], -20.0), None);
         regions.liquids.remove(&1);
-        let surface = regions.water_surface(top, -20.0).unwrap();
+        let (surface, liquid) = regions.liquid_surface(top, -20.0).unwrap();
         assert!((surface + 0.125).abs() < 1e-6);
-        assert_eq!(regions.water_surface(top, -0.1), None);
-        assert_eq!(regions.water_surface([0.0, -0.5, 0.0], -20.0), None);
-        assert_eq!(regions.water_surface([f32::NAN, 1.0, 0.0], -20.0), None);
+        assert_eq!(liquid, Liquid::Water);
+        assert_eq!(regions.liquid_surface(top, -0.1), None);
+        assert_eq!(regions.liquid_surface([0.0, -0.5, 0.0], -20.0), None);
+        assert_eq!(regions.liquid_surface([f32::NAN, 1.0, 0.0], -20.0), None);
 
         // Two adjacent water leaves are one body of water.
         regions.liquids.insert(1, Liquid::Water);
-        assert_eq!(regions.water_surface([0.0, -0.1, 0.0], -20.0), None);
-        let surface = regions.water_surface(top, -20.0).unwrap();
+        assert_eq!(regions.liquid_surface([0.0, -0.1, 0.0], -20.0), None);
+        let (surface, liquid) = regions.liquid_surface(top, -20.0).unwrap();
         assert!(surface.abs() < 1e-6);
+        assert_eq!(liquid, Liquid::Water);
     }
 
     #[test]
-    fn water_surface_requires_a_resolved_dry_prefix() {
+    fn liquid_surface_requires_a_resolved_dry_prefix() {
         let mut regions = layers();
         regions.liquids.remove(&1);
         let (top, bottom) = ([0.0, 1.0, 0.0], [0.0, -1.0, 0.0]);
@@ -756,7 +765,7 @@ mod tests {
         };
         for unresolved in [None, Some(2), Some(3)] {
             regions.nodes[2].front = unresolved;
-            assert_eq!(regions.water_surface(top, bottom[1]), None);
+            assert_eq!(regions.liquid_surface(top, bottom[1]), None);
             assert!(regions.passes_through(top, bottom, Liquid::Water));
         }
         // Swimming still treats an unresolved span as outside the water.

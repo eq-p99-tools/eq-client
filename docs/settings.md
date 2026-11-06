@@ -82,7 +82,7 @@ session; a setting does not manufacture an unoffered server capability.
 
 These choices take effect in the current session. Controls are unavailable where
 their required session feature is absent. Walk While Winded, Memorize Without
-Sitting, Run a Little Faster, Fly and Water Walking depart from the official client's
+Sitting, Run a Little Faster, Fly and Jesus Mode depart from the official client's
 behaviour, so they are offered only where the server type lists gameplay
 departures; where it does not, they are greyed out and the session keeps the
 official client's movement and memorization whatever the saved settings say.
@@ -98,7 +98,7 @@ Unsafe choices sit together at the page's end:
 | Take Environmental Damage | `take_environmental_damage` | On | Reports supported environmental damage; disabling it withholds reports |
 | Run a Little Faster | `run_boost` | Off | Increases verified forward running speed by 10 percent; walk, strafe and backward speed remain unchanged |
 | Fly | `fly` | Off | Bounded flight through Jump and Duck bindings for ascent/descent, retaining solid collision; disabling restores gravity |
-| Water Walking (Jesus Mode) | `water_walking` | Off | Stand and move on mapped water reached from above, using ordinary ground speed and collision |
+| Jesus Mode | `jesus_mode` | Off | Stand and move on mapped water or lava reached from above, using ordinary ground speed and collision |
 | Exit at Once | `exit_at_once` | Off | Requests logout without automatic sitting or camp preparation; waits for the server outcome |
 
 Gameplay departures are explicit client policies, taken only where the server

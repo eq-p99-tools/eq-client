@@ -4,6 +4,7 @@ mod airborne;
 mod choices;
 mod falls;
 mod flight;
+mod jesus_mode;
 mod liquids;
 mod navigator;
 pub mod navmesh;
@@ -11,7 +12,6 @@ mod pace;
 mod path;
 mod route;
 mod swimming;
-mod water_walking;
 pub use airborne::{AirborneController, Landing, MotionStep, PROVISIONAL_PHYSICS, VerticalPhysics};
 pub use choices::{offered_options, options};
 pub use eq_network_game::movement::MovementOptions;
@@ -131,7 +131,7 @@ pub struct CollisionWorld {
     /// Each obstacle with the door it belongs to, if any.
     obstacles: Vec<(Option<u8>, Arc<CollisionMesh>)>,
     liquids: Option<Arc<dyn Liquids>>,
-    water_support: bool,
+    liquid_support: bool,
 }
 
 impl CollisionWorld {
@@ -144,7 +144,7 @@ impl CollisionWorld {
             terrain: Arc::new(CollisionMesh::new(triangles)?),
             obstacles: Vec::new(),
             liquids: None,
-            water_support: false,
+            liquid_support: false,
         })
     }
 
@@ -175,7 +175,7 @@ impl CollisionWorld {
                 .cloned()
                 .collect(),
             liquids: self.liquids.clone(),
-            water_support: self.water_support,
+            liquid_support: self.liquid_support,
         }
     }
 
@@ -200,7 +200,7 @@ impl CollisionWorld {
                 .cloned()
                 .collect(),
             liquids: self.liquids.clone(),
-            water_support: self.water_support,
+            liquid_support: self.liquid_support,
         }
     }
 
@@ -291,7 +291,7 @@ impl CollisionWorld {
     pub fn ground(&self, position: Vec3, step_up: f32, drop: f32) -> Option<f32> {
         self.solid_ground(position, step_up, drop)
             .into_iter()
-            .chain(self.water_ground(position, step_up, drop))
+            .chain(self.liquid_ground(position, step_up, drop))
             .max_by(f32::total_cmp)
     }
 

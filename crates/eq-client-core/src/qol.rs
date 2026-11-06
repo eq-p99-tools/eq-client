@@ -106,8 +106,8 @@ pub enum Fix {
     RunBoost,
     /// Bounded flight using Jump to ascend and Duck to descend, retaining collision.
     Fly,
-    /// Lets ordinary ground movement stand on mapped water.
-    WaterWalking,
+    /// Lets ordinary ground movement stand on mapped water and lava.
+    JesusMode,
     /// Requests logout without sitting or camp preparation, then waits for its outcome.
     ExitAtOnce,
     /// Makes the local map and known entity positions available on every
@@ -168,7 +168,7 @@ impl Fix {
         Self::TakeEnvironmentalDamage,
         Self::RunBoost,
         Self::Fly,
-        Self::WaterWalking,
+        Self::JesusMode,
         Self::ExitAtOnce,
         Self::MapEverywhere,
         Self::FrameCap,
@@ -207,7 +207,7 @@ impl Fix {
             Self::ShowInvisible => "show_invisible",
             Self::AnswerListPolls => "answer_list_polls",
             Self::Fly => "fly",
-            Self::WaterWalking => "water_walking",
+            Self::JesusMode => "jesus_mode",
             Self::ExitAtOnce => "exit_at_once",
             Self::FrameCap => "frame_cap",
             Self::GreyedControls => "greyed_controls",
@@ -250,7 +250,7 @@ impl Fix {
             Self::ShowInvisible => "Show Invisible Entities",
             Self::AnswerListPolls => "Answer List Presence Polls",
             Self::Fly => "Fly",
-            Self::WaterWalking => "Water Walking (Jesus Mode)",
+            Self::JesusMode => "Jesus Mode",
             Self::ExitAtOnce => "Exit at Once",
             Self::FrameCap => "Cap Frames at 60",
             Self::GreyedControls => "Grey Out What Is Unavailable",
@@ -324,8 +324,8 @@ impl Fix {
             Self::Fly => {
                 "Fly using your Jump binding to ascend and Duck binding to descend. Movement remains bounded and collides with solid geometry. Turning this off restores gravity."
             }
-            Self::WaterWalking => {
-                "Walk on mapped water at your ordinary ground speed. Reach the surface from shore or above."
+            Self::JesusMode => {
+                "Walk on mapped water and lava at your ordinary ground speed. Reach the surface from shore or above."
             }
             Self::ExitAtOnce => {
                 "Request logout without automatic sitting or the camp countdown. Wait for the server response before leaving the session."
@@ -371,7 +371,7 @@ impl Fix {
             | Self::RunBoost
             | Self::AutoLoot
             | Self::Fly
-            | Self::WaterWalking
+            | Self::JesusMode
             | Self::ExitAtOnce => Kind::Acts,
             Self::HiddenWindows
             | Self::MapEverywhere
@@ -411,7 +411,7 @@ impl Fix {
             Self::WalkWhileWinded
             | Self::RunBoost
             | Self::Fly
-            | Self::WaterWalking
+            | Self::JesusMode
             | Self::MemorizeWhileStanding => Some(Capability::GameplayDepartures),
             // A server with no looting has no corpse to open by itself.
             Self::AutoLoot => Some(Capability::Looting),
@@ -470,7 +470,7 @@ impl Fix {
             | Self::ShowInvisible
             | Self::AnswerListPolls
             | Self::Fly
-            | Self::WaterWalking
+            | Self::JesusMode
             | Self::ExitAtOnce
             | Self::FloatingCombatText => Availability::Setting { default: false },
             Self::MapEverywhere
@@ -502,7 +502,7 @@ impl Fix {
             Self::TakeEnvironmentalDamage
                 | Self::RunBoost
                 | Self::Fly
-                | Self::WaterWalking
+                | Self::JesusMode
                 | Self::ExitAtOnce
         )
     }
@@ -613,7 +613,7 @@ mod tests {
                 Fix::TakeEnvironmentalDamage,
                 Fix::RunBoost,
                 Fix::Fly,
-                Fix::WaterWalking,
+                Fix::JesusMode,
                 Fix::ExitAtOnce,
             ]
         );
@@ -638,15 +638,12 @@ mod tests {
             Fix::ShowInvisible,
             Fix::AnswerListPolls,
             Fix::Fly,
-            Fix::WaterWalking,
+            Fix::JesusMode,
             Fix::ExitAtOnce,
         ] {
             assert!(!settings.on(fix), "{fix:?}");
         }
-        assert_eq!(
-            Fix::WaterWalking.needs(),
-            Some(Capability::GameplayDepartures)
-        );
+        assert_eq!(Fix::JesusMode.needs(), Some(Capability::GameplayDepartures));
         assert!(settings.on(Fix::TakeEnvironmentalDamage));
     }
 
@@ -670,7 +667,7 @@ mod tests {
                 Fix::TakeEnvironmentalDamage,
                 Fix::RunBoost,
                 Fix::Fly,
-                Fix::WaterWalking,
+                Fix::JesusMode,
                 Fix::ExitAtOnce
             ]
         );

@@ -89,6 +89,10 @@ Approach, walk and chase hold the camera-relative forward command, independent o
   geometry: `unknown`, `unmarked`, `wading`, `surface`, `submerged` or
   `lava`. `unmarked` means no liquid at the sampled points, and
   `submerged` is not a breath report.
+  `mapped_liquid_at_session_origin` reports water or lava at the character
+  origin. `mapped_liquid_surface_at_session_feet` reports a mapped liquid
+  top at standing height in the feet's center column. Both fields use local
+  geometry and are null when their query finds no mapped liquid.
 - `trace milliseconds`: log movement and frame timing for a bounded duration.
 - `screenshot filename.png`: capture beside the script; the argument must be a filename.
 - `sound filename.wav`: play a sound from the installed game assets.

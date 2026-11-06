@@ -509,13 +509,13 @@ mod tests {
         let mut options = Options::default();
         options.set(Toggle::InvertY, true);
         options.set(Toggle::Qol(Fix::SkipModifiedFood), false);
-        options.set(Toggle::Qol(Fix::WaterWalking), true);
+        options.set(Toggle::Qol(Fix::JesusMode), true);
         options.show_names = ShowNames::Last;
         let text = options.text();
         assert!(text.starts_with(HEADER));
         assert!(text.contains("invert_y = true\n"));
         assert!(text.contains("skip_modified_food = false\n"));
-        assert!(text.contains("water_walking = true\n"));
+        assert!(text.contains("jesus_mode = true\n"));
         assert!(text.contains("hidden_windows = false\n"));
         assert!(text.contains("show_names = 2\n"));
         assert_eq!(Options::read(&text, Options::default()), options);
@@ -525,7 +525,7 @@ mod tests {
             Options::default(),
         );
         assert!(!before.qol.on(Fix::SkipModifiedFood));
-        assert!(!before.qol.on(Fix::WaterWalking));
+        assert!(!before.qol.on(Fix::JesusMode));
         assert!(before.get(Toggle::Qol(Fix::HiddenWindows)));
         // Unknown names, bad values and missing options keep the defaults.
         let defaults = Options {

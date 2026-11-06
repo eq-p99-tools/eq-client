@@ -5,7 +5,7 @@ use crate::{
 use bevy::prelude::*;
 use eq_client_core::{
     WorldPosition,
-    movement::{CollisionWorld, LiquidContact, SwimDepth},
+    movement::{CollisionWorld, Liquid, LiquidContact, SwimDepth},
 };
 use serde_json::{Value, json};
 
@@ -23,11 +23,16 @@ pub(in crate::script) fn report(
         .filter(|_| world.connected() && !world.is_dead());
     let session_position = admission.and_then(|_| world.player().map(|p| p.position));
     let rendered_position = admission.and(transform).map(super::placement);
-    let contact = session_position.zip(geometry).map_or(
-        LiquidContact::Unknown,
+    let liquid = session_position.zip(geometry).map_or(
+        LiquidObservation::UNKNOWN,
         |(position, (body, collision))| {
             let origin = Vec3::from_array(eq_client_core::render_position(position));
-            collision.liquid_contact(origin - Vec3::Y * body.feet_offset, body.height)
+            let feet = origin - Vec3::Y * body.feet_offset;
+            LiquidObservation {
+                contact: collision.liquid_contact(feet, body.height),
+                origin: collision.liquid_at(origin),
+                surface: collision.liquid_surface_at_feet(feet),
+            }
         },
     );
     let movement_state = snapshot(
@@ -35,10 +40,31 @@ pub(in crate::script) fn report(
         session_position,
         rendered_position,
         online.server_placement(),
-        contact,
+        liquid,
         world.can(eq_client_core::Capability::Swimming),
     );
     info!(label, %movement_state, "Script movement report");
+}
+
+struct LiquidObservation {
+    contact: LiquidContact,
+    origin: Option<Liquid>,
+    surface: Option<Liquid>,
+}
+
+impl LiquidObservation {
+    const UNKNOWN: Self = Self {
+        contact: LiquidContact::Unknown,
+        origin: None,
+        surface: None,
+    };
+}
+
+fn liquid_name(liquid: Liquid) -> &'static str {
+    match liquid {
+        Liquid::Water => "water",
+        Liquid::Lava => "lava",
+    }
 }
 
 fn snapshot(
@@ -46,7 +72,7 @@ fn snapshot(
     session_position: Option<WorldPosition>,
     rendered_position: Option<(f32, f32, f32, f32)>,
     server: Option<ServerPlacement>,
-    contact: LiquidContact,
+    liquid: LiquidObservation,
     swimming_offered: bool,
 ) -> Value {
     let received = server
@@ -66,7 +92,7 @@ fn snapshot(
         "session_position": session_position,
         "rendered_position": rendered,
         "last_server_placement": received,
-        "liquid_contact_at_session_position": match contact {
+        "liquid_contact_at_session_position": match liquid.contact {
             LiquidContact::Unknown => "unknown",
             LiquidContact::Unmarked => "unmarked",
             LiquidContact::Wading => "wading",
@@ -74,6 +100,8 @@ fn snapshot(
             LiquidContact::Swimming(SwimDepth::Submerged) => "submerged",
             LiquidContact::Lava => "lava",
         },
+        "mapped_liquid_at_session_origin": liquid.origin.map(liquid_name),
+        "mapped_liquid_surface_at_session_feet": liquid.surface.map(liquid_name),
         "swimming_offered": swimming_offered,
     })
 }
@@ -138,7 +166,11 @@ mod tests {
             Some(session),
             Some((0.0, 0.0, 4.0, 0.0)),
             Some(received),
-            LiquidContact::Swimming(SwimDepth::Submerged),
+            LiquidObservation {
+                contact: LiquidContact::Swimming(SwimDepth::Submerged),
+                origin: Some(Liquid::Water),
+                surface: None,
+            },
             true,
         );
         assert_eq!(value["session_position"]["z"], 3.0);
@@ -146,16 +178,33 @@ mod tests {
         assert_eq!(value["last_server_placement"]["position"]["z"], 8.0);
         assert_eq!(value["last_server_placement"]["source"], "position_update");
         assert_eq!(value["liquid_contact_at_session_position"], "submerged");
+        assert_eq!(value["mapped_liquid_at_session_origin"], "water");
+        assert!(value["mapped_liquid_surface_at_session_feet"].is_null());
 
         let newer = snapshot(
             Some(3),
             None,
             None,
             Some(received),
-            LiquidContact::Unknown,
+            LiquidObservation::UNKNOWN,
             true,
         );
         assert!(newer["last_server_placement"].is_null());
         assert_eq!(newer["liquid_contact_at_session_position"], "unknown");
+        let over_lava = snapshot(
+            Some(2),
+            Some(session),
+            None,
+            None,
+            LiquidObservation {
+                contact: LiquidContact::Unmarked,
+                origin: None,
+                surface: Some(Liquid::Lava),
+            },
+            true,
+        );
+        assert_eq!(over_lava["liquid_contact_at_session_position"], "unmarked");
+        assert!(over_lava["mapped_liquid_at_session_origin"].is_null());
+        assert_eq!(over_lava["mapped_liquid_surface_at_session_feet"], "lava");
     }
 }

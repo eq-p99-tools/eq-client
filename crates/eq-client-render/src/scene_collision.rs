@@ -46,8 +46,14 @@ impl eq_client_core::movement::Liquids for ZoneLiquids {
             .first_outside(from.to_array(), to.to_array(), asset_liquid(liquid))
     }
 
-    fn water_surface(&self, top: Vec3, bottom: f32) -> Option<f32> {
-        self.0.water_surface(top.to_array(), bottom)
+    fn liquid_surface(
+        &self,
+        top: Vec3,
+        bottom: f32,
+    ) -> Option<(f32, eq_client_core::movement::Liquid)> {
+        self.0
+            .liquid_surface(top.to_array(), bottom)
+            .map(|(surface, liquid)| (surface, movement_liquid(liquid)))
     }
 
     fn within(&self, low: Vec3, high: Vec3) -> Option<Box<dyn eq_client_core::movement::Liquids>> {

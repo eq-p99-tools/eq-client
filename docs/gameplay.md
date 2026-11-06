@@ -37,16 +37,15 @@ marked by the installed zone's regions. Wade or fall into water, move in any
 horizontal direction, and use first-person or mouse-look pitch to swim up or
 down with forward or backward input. The surface holds the swimmer in the water,
 and a supported bank returns them to ordinary movement. Automated ground routes,
-P99, and EQMac-era sessions retain the deep-water guard. Lava entry remains
-guarded.
+P99, and EQMac-era sessions retain the deep-water guard. Ordinary movement
+guards against entering lava.
 
-**Water Walking (Jesus Mode)** is an opt-in QoL setting where the session
-offers gameplay departures. Walk from shore or land on mapped water to use
-its surface as ground. Your usual movement speed, solid collision, and
-falling rules apply. If you enable it while submerged, reach the surface
-from above before using it. Turning it off restores ordinary water movement
-on the next sample. Scripted ground route finding continues to use solid
-terrain.
+**Jesus Mode** is an opt-in QoL setting where the session offers gameplay
+departures. Walk from shore or land on mapped water or lava to use the
+surface as ground. Your usual movement speed, solid collision, and falling
+rules apply. A placement inside lava uses ordinary movement and recovery.
+Turning the setting off restores ordinary movement on the next sample.
+Scripted ground route finding uses solid terrain.
 
 The swim rate is a conservative bound based on the session's current movement
 grant. Skill-based speed, breath, water breathing, and drowning are not modeled

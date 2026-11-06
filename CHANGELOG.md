@@ -2,8 +2,8 @@
 
 ## Unreleased
 
-- Add the off-by-default Water Walking (Jesus Mode) option. Walk on mapped
-  water reached from above at ordinary ground speed where gameplay departures
+- Add the off-by-default Jesus Mode option. Walk on mapped water and lava
+  reached from above at ordinary ground speed where gameplay departures
   are offered.
 - Center the target name and draw it in bold where the face is available.
 - Keep detached chat windows in their previous stack order when the HUD is
