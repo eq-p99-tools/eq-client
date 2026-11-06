@@ -140,7 +140,7 @@ impl ClientWorld {
 
     /// The session's word on the spellbook change in flight.
     pub(super) fn book_action_news(&mut self, status: &BookActionStatus) {
-        self.book_action = (!matches!(status, BookActionStatus::Confirmed)).then(|| status.clone());
+        self.book_action = Some(status.clone());
         self.book_action_revision = self.book_action_revision.wrapping_add(1);
     }
 }

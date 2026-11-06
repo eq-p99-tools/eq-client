@@ -21,9 +21,17 @@ pub(crate) fn say(
     requests: Res<ActionRequests>,
     (names, messages): (Res<SpellNames>, Res<Messages>),
     mut chat: ResMut<ChatState>,
-    (mut seen, mut following): (Local<u64>, Local<Option<Instant>>),
+    (mut seen, mut following, mut admission): (
+        Local<u64>,
+        Local<Option<Instant>>,
+        Local<Option<u64>>,
+    ),
 ) {
     let world = online.world();
+    if *admission != world.session_id() {
+        *admission = world.session_id();
+        *following = None;
+    }
     let revision = world.book_action_revision();
     if *seen == revision {
         return;
@@ -33,7 +41,7 @@ pub(crate) fn say(
         *following = None;
         return;
     };
-    let status = world.book_action();
+    let status = world.book_action_status();
     if let Some(said) = line(request, status, &mut following, (&names, &messages)) {
         chat.history.push(system_line(said));
     }
@@ -65,8 +73,7 @@ fn line(
             let own = format!("{began} {name}.");
             Some(messages.said_or(begins, &[name], &own))
         }
-        // The session clears a change the server confirmed.
-        None if ours => {
+        Some(BookActionStatus::Confirmed) if ours => {
             *following = None;
             let own = format!("{name} is {ended}.");
             Some(messages.said_or(ends, &[name], &own))
@@ -140,12 +147,72 @@ mod tests {
             None
         );
         assert_eq!(
-            text(&memorizing, None, &mut following).as_deref(),
+            text(
+                &memorizing,
+                Some(&BookActionStatus::Confirmed),
+                &mut following
+            )
+            .as_deref(),
             Some("End Synthetic spell")
         );
         // A later change the server confirms, such as a move, is not this
         // memorization's end.
-        assert_eq!(text(&memorizing, None, &mut following), None);
+        assert_eq!(
+            text(
+                &memorizing,
+                Some(&BookActionStatus::Confirmed),
+                &mut following
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn a_link_reset_in_the_awaiting_reply_frame_does_not_announce_completion() {
+        use crate::online::{OnlineState, testing};
+        use eq_client_core::{SpellUpdate, WorldEvent, WorldUpdate, world::Link};
+
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        testing::book_action(&mut online, BookActionStatus::Preparing);
+        let mut app = crate::testing::app();
+        app.insert_resource(online)
+            .insert_resource(ActionRequests {
+                book: Some(request(BookChange::Memorize)),
+            })
+            .insert_resource(SpellNames::parse("42^Synthetic spell"))
+            .init_resource::<Messages>()
+            .add_systems(Update, say);
+        app.update();
+        let newest = |app: &App| app.world().resource::<ChatState>().newest();
+        assert_eq!(newest(&app), "Memorizing Synthetic spell.");
+
+        {
+            let mut online = app.world_mut().resource_mut::<OnlineState>();
+            testing::book_action(&mut online, BookActionStatus::AwaitingReply);
+            testing::apply(&mut online, &WorldUpdate::Connection(Link::Zoning));
+            assert!(online.world().book_action_status().is_none());
+        }
+        app.update();
+        assert_eq!(newest(&app), "Memorizing Synthetic spell.");
+
+        {
+            let mut online = app.world_mut().resource_mut::<OnlineState>();
+            testing::apply(&mut online, &WorldUpdate::Connection(Link::Connected));
+            testing::news(
+                &mut online,
+                [
+                    WorldEvent::BookAction(BookActionStatus::Confirmed),
+                    WorldEvent::Spell(SpellUpdate::Slot {
+                        slot: 0,
+                        spell_id: 42,
+                        mode: 1,
+                    }),
+                ],
+            );
+        }
+        app.update();
+        assert_eq!(newest(&app), "Synthetic spell is memorized.");
     }
 
     #[test]

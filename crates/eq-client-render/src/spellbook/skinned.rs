@@ -52,9 +52,14 @@ pub(crate) struct BookHand {
     /// The spell a right click chose, which a right click on another place
     /// swaps with that place and the Delete key deletes.
     pub(crate) chosen: Option<Entry>,
-    /// A deletion or a move the server has not answered yet, with the
-    /// book's reply count when it went.
-    editing: Option<(Edit, u64)>,
+    editing: Option<PendingEdit>,
+}
+
+/// A local edit awaiting a worker result in the admission where it was sent.
+struct PendingEdit {
+    kind: Edit,
+    admission: Option<u64>,
+    revision: u64,
 }
 
 /// A change to the book's entries in flight.
@@ -398,7 +403,11 @@ fn choose(
             if sent.is_err() {
                 return Vec::new();
             }
-            hand.editing = Some((Edit::Moving, world.book_action_revision()));
+            hand.editing = Some(PendingEdit {
+                kind: Edit::Moving,
+                admission: world.session_id(),
+                revision: world.book_action_revision(),
+            });
             if let Some(requests) = requests {
                 // The move is the book's change now, not a memorization or a
                 // scribe for the gauges and the chat's lines to follow.
@@ -524,7 +533,11 @@ fn delete(
         created: stamp.created,
     });
     if sent.is_ok() {
-        hand.editing = Some((Edit::Deleting, world.book_action_revision()));
+        hand.editing = Some(PendingEdit {
+            kind: Edit::Deleting,
+            admission: world.session_id(),
+            revision: world.book_action_revision(),
+        });
         if let Some(requests) = requests {
             // The deletion is the book's change now, not a memorization or a
             // scribe for the gauges and the chat's lines to follow.
@@ -544,38 +557,33 @@ fn answer(
     messages: &crate::hud::messages::Messages,
     chat: &mut ChatState,
 ) {
-    let Some((edit, sent)) = hand.editing else {
+    let Some(edit) = hand.editing.as_ref() else {
         return;
     };
-    if world.book_action_revision() == sent {
+    if edit.admission != world.session_id() || world.ended() {
+        hand.editing = None;
         return;
     }
-    let status = world.book_action();
-    if matches!(
-        status,
-        Some(
-            BookActionStatus::Preparing
-                | BookActionStatus::Submitted
-                | BookActionStatus::AwaitingReply
-        )
-    ) {
+    if world.book_action_revision() == edit.revision {
         return;
     }
-    hand.editing = None;
-    match (edit, status) {
-        // The session clears a change the server confirmed.
-        (Edit::Deleting, None) => chat.history.push(system_line(
+    match (edit.kind, world.book_action_status()) {
+        (Edit::Deleting, Some(BookActionStatus::Confirmed)) => chat.history.push(system_line(
             messages.said_text(4028, "The spell is gone from the book."),
         )),
-        (Edit::Deleting, Some(_)) => chat.history.push(system_line(
-            messages.said_text(4029, "The spell stays in the book."),
-        )),
+        (Edit::Deleting, Some(BookActionStatus::Rejected(_) | BookActionStatus::Cancelled(_))) => {
+            chat.history.push(system_line(
+                messages.said_text(4029, "The spell stays in the book."),
+            ))
+        }
         (
             Edit::Moving,
             Some(BookActionStatus::Rejected(reason) | BookActionStatus::Cancelled(reason)),
         ) => chat.refuse(Said::own(reason.clone())),
-        (Edit::Moving, _) => (),
+        (Edit::Moving, Some(BookActionStatus::Confirmed)) => (),
+        _ => return,
     }
+    hand.editing = None;
 }
 
 /// Scribes the scroll on the cursor into this empty place of the book; what
@@ -936,6 +944,62 @@ mod tests {
         assert_ne!(chat.newest(), "");
         // With nothing chosen, the key does nothing.
         delete(&mut hand, online.world(), &outbox, None);
+        assert!(sent.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_timed_out_skinned_delete_can_still_report_late_success() {
+        use eq_client_core::{SpellUpdate, WorldEvent, WorldUpdate, world::Link};
+
+        let mut online = online();
+        let mut hand = BookHand {
+            chosen: Some(Entry { slot: 1, spell: 42 }),
+            ..BookHand::default()
+        };
+        let (queue, sent) = std::sync::mpsc::sync_channel(1);
+        let outbox = crate::outbox::Outbox::new(Some(queue));
+        let messages = crate::hud::messages::Messages::default();
+        let mut chat = ChatState::default();
+        delete(&mut hand, online.world(), &outbox, None);
+        assert!(matches!(
+            sent.try_recv().unwrap(),
+            ClientCommand::DeleteSpell {
+                slot: 1,
+                spell_id: 42,
+                ..
+            }
+        ));
+
+        for status in [
+            BookActionStatus::AwaitingReply,
+            BookActionStatus::Unconfirmed,
+        ] {
+            crate::online::testing::book_news(&mut online, &outbox, WorldEvent::BookAction(status));
+            answer(&mut hand, online.world(), &messages, &mut chat);
+            assert!(hand.editing.is_some());
+            assert_eq!(online.world().spell_book().unwrap().slots()[1], Some(42));
+            assert_eq!(chat.newest(), "");
+        }
+
+        for link in [Link::Zoning, Link::Connected] {
+            crate::online::testing::apply(&mut online, &WorldUpdate::Connection(link));
+            answer(&mut hand, online.world(), &messages, &mut chat);
+            assert!(hand.editing.is_some());
+            assert_eq!(chat.newest(), "");
+        }
+        for event in [
+            WorldEvent::BookAction(BookActionStatus::Confirmed),
+            WorldEvent::Spell(SpellUpdate::BookDeletion {
+                slot: 1,
+                success: true,
+            }),
+        ] {
+            crate::online::testing::book_news(&mut online, &outbox, event);
+        }
+        answer(&mut hand, online.world(), &messages, &mut chat);
+        assert!(hand.editing.is_none());
+        assert_eq!(online.world().spell_book().unwrap().slots()[1], None);
+        assert_eq!(chat.newest(), "The spell is gone from the book.");
         assert!(sent.try_recv().is_err());
     }
 

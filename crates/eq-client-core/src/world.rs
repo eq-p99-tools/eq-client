@@ -325,7 +325,7 @@ pub struct ClientWorld {
     casting: Casting,
     buffs: BuffTracker,
     spell_book: Option<SpellBook>,
-    /// The spellbook change in flight, until confirmed.
+    /// The spellbook change's latest worker status, until a reset.
     book_action: Option<BookActionStatus>,
     /// When each ability timer the session started runs out; servers keep
     /// them across zones.

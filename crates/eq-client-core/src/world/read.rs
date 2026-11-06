@@ -751,6 +751,16 @@ impl ClientWorld {
     /// The spellbook change in flight, until confirmed.
     #[must_use]
     pub const fn book_action(&self) -> Option<&BookActionStatus> {
+        match self.book_action_status() {
+            Some(BookActionStatus::Confirmed) => None,
+            status => status,
+        }
+    }
+
+    /// The last worker status, including explicit confirmation when received.
+    /// An absent status supplies no evidence that a request succeeded.
+    #[must_use]
+    pub const fn book_action_status(&self) -> Option<&BookActionStatus> {
         self.book_action.as_ref()
     }
 
