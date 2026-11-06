@@ -47,7 +47,11 @@ Key names are case-insensitive. Combine them with `+`, such as `alt+1`. Supporte
 - `camera heading pitch [distance]`: position the camera; pitch is -89 to 0 degrees. Use `camera player offset pitch [distance]` for an offset from the player's heading.
 - `face`: turn the camera toward the target.
 - `face heading`: turn the character to an absolute heading at the ordinary turn rate, waiting up to 5 seconds for server confirmation.
-- `move command milliseconds`: hold `forward`, `back`, `strafe_left`, `strafe_right`, `turn_left` or `turn_right`, independent of key bindings.
+- `move command milliseconds`: hold `forward`, `back`, `camera_forward`,
+  `camera_back`, `strafe_left`, `strafe_right`, `turn_left` or `turn_right`,
+  independent of key bindings. In mapped water on Titanium EQEmu, a negative
+  camera pitch makes `camera_forward` dive and `camera_back` rise. Set pitch
+  to zero for level movement.
 - `approach range milliseconds`: approach the current target.
 - `approach object kind range milliseconds`: approach a tradeskill container type.
 - `walk range milliseconds`: follow a searched path toward the target.
@@ -70,12 +74,21 @@ Approach, walk and chase hold the camera-relative forward command, independent o
   `pet_ownership` reports the current pet and owner IDs, zone admission ID and
   pet identity revision as JSON. It is null when the session has no resolved
   pet identity.
-  The companion `Script economy report` event contains versioned JSON with the admission,
-  merchant identity and catalog revision, up to 80 stock rows, the current
+  The companion `Script economy report` event contains versioned JSON with
+  the admission, merchant identity and catalog revision, up to 80 stock rows, the current
   selection and displayed single-unit quote, and up to 32 corpse rows.
   Total row counts reveal truncation. The report also shows the coins offered
   on each side of an open exchange. Check the ordinary report's item and
   purse fields for delivery and final balances.
+  The `Script movement report` logs a small `movement_state` object. Its
+  `session_position` is the working position used for collision (including
+  local proposals); `rendered_position` is the drawn avatar;
+  `last_server_placement` is the last admission or received placement in
+  the current admission. None of these identifies a server acknowledgement
+  for a particular proposal. `liquid_contact_at_session_position` is local
+  geometry: `unknown`, `unmarked`, `wading`, `surface`, `submerged` or
+  `lava`. `unmarked` means no liquid at the sampled points, and
+  `submerged` is not a breath report.
 - `trace milliseconds`: log movement and frame timing for a bounded duration.
 - `screenshot filename.png`: capture beside the script; the argument must be a filename.
 - `sound filename.wav`: play a sound from the installed game assets.

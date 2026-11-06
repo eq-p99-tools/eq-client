@@ -229,6 +229,8 @@ pub enum Step {
 pub enum MoveCommand {
     Forward,
     Back,
+    CameraForward,
+    CameraBack,
     StrafeLeft,
     StrafeRight,
     TurnLeft,
@@ -240,6 +242,8 @@ impl MoveCommand {
         Some(match name {
             "forward" => Self::Forward,
             "back" => Self::Back,
+            "camera_forward" => Self::CameraForward,
+            "camera_back" => Self::CameraBack,
             "strafe_left" => Self::StrafeLeft,
             "strafe_right" => Self::StrafeRight,
             "turn_left" => Self::TurnLeft,

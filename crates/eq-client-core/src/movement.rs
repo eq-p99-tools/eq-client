@@ -10,10 +10,12 @@ pub mod navmesh;
 mod pace;
 mod path;
 mod route;
+mod swimming;
 pub use airborne::{AirborneController, Landing, MotionStep, PROVISIONAL_PHYSICS, VerticalPhysics};
 pub use choices::{offered_options, options};
 pub use eq_network_game::movement::MovementOptions;
 pub use falls::{HARMLESS_DROP, fall_damage};
+use liquids::LiquidGuard;
 pub use liquids::{GuardView, Liquid, Liquids};
 pub use navigator::{
     Fallback, GridNavigator, Navigator, Planned, Refusals, RouteSearch, Scope, SearchRequest,
@@ -21,6 +23,7 @@ pub use navigator::{
 pub use pace::{ANIMATION_UNITS_PER_SECOND, record_speed, runs};
 pub use path::{PathProgress, PathSearch};
 pub use route::{Background, Route, RouteStep, SearchTiming};
+pub use swimming::{LiquidContact, SwimDepth};
 
 #[derive(Clone, Copy)]
 enum Support {
@@ -400,16 +403,27 @@ impl CollisionWorld {
     /// stays within one sample's grounded height budget, which the network guard
     /// enforces; a flight too steep for it continues on the next sample.
     fn walk(&self, feet: Vec3, displacement: Vec3, height: f32, support: Support) -> Vec3 {
+        self.walk_with_guard(feet, displacement, height, support, LiquidGuard::All)
+    }
+
+    fn walk_with_guard(
+        &self,
+        feet: Vec3,
+        displacement: Vec3,
+        height: f32,
+        support: Support,
+        liquids: LiquidGuard,
+    ) -> Vec3 {
         const STRIDE: f32 = 0.5;
         if !feet.is_finite() || !displacement.is_finite() || !height.is_finite() || height < 1.0 {
             return feet;
         }
         // Feet in deep water or lava now may go anywhere, so they can leave.
-        let guarded = !self.submerged(feet, height);
+        let guarded = !self.inside_guarded_liquid(feet, height, liquids);
         if matches!(support, Support::Airborne) {
             let next = self.stride(feet, displacement, height, support);
             // In the air, a move whose fall would end in deep water or lava is not made.
-            return if guarded && !self.dry(next, height) {
+            return if guarded && !self.clear_move(feet, next, height, liquids) {
                 feet
             } else {
                 next
@@ -422,9 +436,9 @@ impl CollisionWorld {
         let mut position = feet;
         for _ in 0..count {
             let mut next = self.stride(position, part, height, support);
-            let wet = guarded && !self.dry(next, height);
+            let wet = guarded && !self.clear_move(position, next, height, liquids);
             if wet {
-                next = self.dry_part(position, part, height, support);
+                next = self.dry_part(position, part, height, support, liquids);
             }
             // A walk on the ground keeps to a riser a sample up and down. One
             // the airborne controller makes (a step's) descends a stride at a

@@ -35,6 +35,11 @@
   expiry, interruption or refusal.
 - `ClientWorld::resurrection` and `translocate` now return scoped offers.
   Front ends that dismiss a queued answer use `dismiss_consent(id)`.
+- Wade and swim through mapped water in Titanium EQEmu sessions. Look up
+  or down while swimming to surface or dive, and follow a supported bank
+  back onto land. The bounded swim rate does not model swimming skill,
+  breath, or drowning. Script reports separate local liquid contact,
+  rendered position, and the last server placement.
 
 - Report a local scripted `give` refusal through the script result once.
   Native click refusals still appear in chat.

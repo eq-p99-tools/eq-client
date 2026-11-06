@@ -53,6 +53,8 @@ pub(super) struct Controls {
     /// Vertical momentum, present only when the session accepts falls; without it,
     /// stepping off a ledge stops at the edge.
     pub airborne: Option<eq_client_core::movement::AirborneController>,
+    /// Dry-side momentum to keep if the session refuses a proposed water entry.
+    water_entry_rollback: Option<AirborneController>,
     /// Why the movement guard refused the latest sample, until one is sent.
     pub refused: Option<String>,
     /// When a jump was pressed since the last sample; only where falls are simulated.
@@ -149,6 +151,7 @@ impl Default for Controls {
             taps: TapBuffer::default(),
             visual: None,
             airborne: None,
+            water_entry_rollback: None,
             refused: None,
             jump: None,
             last_jump: None,
@@ -582,6 +585,15 @@ impl Controls {
         self.last_answer = Some(now);
     }
 
+    /// A local result either keeps the water entry or restores the dry-side motion.
+    pub(super) fn resolve_water_entry(&mut self, refused: bool) {
+        if let Some(previous) = self.water_entry_rollback.take()
+            && refused
+        {
+            self.airborne = Some(previous);
+        }
+    }
+
     /// Whether a sample is out and its answer has not come back.
     pub const fn waiting(&self) -> bool {
         self.waiting
@@ -760,11 +772,30 @@ pub(super) fn input(
         controls.autorun = false;
     }
     let now = Instant::now();
+    let water_enabled =
+        client == InstalledClient::Titanium && !flying && online.world().can(Capability::Swimming);
+    let swimming = water_enabled
+        && collision
+            .0
+            .as_ref()
+            .zip(players.single().ok())
+            .zip(online.world().player())
+            .is_some_and(|((world, (body, _)), player)| {
+                let origin = Vec3::from_array(eq_client_core::render_position(player.position));
+                world
+                    .swim_depth(origin - Vec3::Y * body.feet_offset, body.height)
+                    .is_some()
+            });
+    if swimming {
+        controls.jump = None;
+        controls.crouch = None;
+    }
     // Held until the next sample; jumps rise and fall like falls, so only
     // where the session takes both, and no sooner after the last than the
     // installed client allows.
     if focused
         && !flying
+        && !swimming
         && !online.world().is_stunned()
         && keys.pressed(Act::Jump)
         && controls.airborne.is_some()
@@ -922,12 +953,41 @@ pub(super) fn input(
     );
     let MotionInput {
         mode,
-        speed,
-        direction,
-        turn,
+        mut speed,
+        mut direction,
+        mut turn,
         preserve_facing,
         diagonal,
     } = intent;
+    if swimming {
+        speed = eq_network_game::movement::swim_speed(controls.speed.unwrap_or(0.0));
+        if !focused || controls.stun_active {
+            direction = Vec3::ZERO;
+            turn = 0.0;
+        } else {
+            let sampled = sample_keys(&sampled, map);
+            let held = map.holding(&sampled, scripted);
+            let camera_forward = held.held(Act::CameraForward);
+            let camera_back = held.held(Act::CameraBack);
+            let pitched = camera.is_first_person()
+                || look.as_ref().is_some_and(|look| look.held)
+                || camera_forward != camera_back;
+            let longitudinal = mode == MovementMode::Backward
+                || held.held(Act::Forward) != held.held(Act::Back)
+                || controls.autorun
+                || camera_forward != camera_back
+                || look.as_ref().is_some_and(|look| look.held && look.left);
+            if pitched && longitudinal && mode != MovementMode::Strafe && direction != Vec3::ZERO {
+                let backing = mode == MovementMode::Backward || camera_back && !camera_forward;
+                let pitch = if backing {
+                    -camera.view_pitch()
+                } else {
+                    camera.view_pitch()
+                };
+                direction = (direction * pitch.cos() + Vec3::Y * pitch.sin()).normalize_or_zero();
+            }
+        }
+    }
     let physics = climbing(physics(client, online.world().zone_gravity()), client, body);
     // The session's guard counts a grounded climb by the body's own reach a
     // step, where the program's is read; it hears it at each admission and
@@ -954,6 +1014,7 @@ pub(super) fn input(
     // who may fall starts to where no ground is under them, as the server
     // can leave them after a move it makes (a `#goto` into the air).
     let airborne = !flying
+        && !swimming
         && controls
             .airborne
             .as_ref()
@@ -1009,6 +1070,7 @@ pub(super) fn input(
             standing
                 && !jump
                 && !airborne
+                && !swimming
                 && controls.facing.is_none()
                 && !active_mouse_yaw
                 && world.support(feet).is_some()
@@ -1017,7 +1079,7 @@ pub(super) fn input(
             let displacement = intent.velocity * span;
             let mut trial = previous_airborne.clone();
             let landing = if let Some(controller) = trial.as_mut() {
-                let landed = fall_step(
+                let landed = fall_step_with_water(
                     controller,
                     world,
                     physics,
@@ -1027,7 +1089,11 @@ pub(super) fn input(
                     span,
                     body.height,
                     false,
+                    water_enabled,
                 );
+                if water_enabled && world.swim_depth(landed, body.height).is_some() {
+                    return None;
+                }
                 if controller.velocity() != 0.0
                     || controller.peak().is_some()
                     || controller.take_landing().is_some()
@@ -1062,7 +1128,13 @@ pub(super) fn input(
                 ))
             .then_some((landing, trial, intent.request, displacement))
         });
-    let (landing, mode, jumped) = if let Some((landing, trial, request, displacement)) = combined {
+    let (landing, mode, jumped) = if swimming {
+        (
+            world.swim_step(feet, delta, body.height),
+            MovementMode::Swim,
+            false,
+        )
+    } else if let Some((landing, trial, request, displacement)) = combined {
         controls.airborne = trial;
         delta = displacement;
         (landing, MovementMode::GroundedDiagonal(request), false)
@@ -1071,7 +1143,7 @@ pub(super) fn input(
             _ if flying => (world.fly_step(feet, delta, body.height), mode, false),
             Some(airborne) => {
                 let rising = airborne.velocity() > 0.0;
-                let landing = fall_step(
+                let landing = fall_step_with_water(
                     airborne,
                     world,
                     physics,
@@ -1081,6 +1153,7 @@ pub(super) fn input(
                     span,
                     body.height,
                     jump,
+                    water_enabled,
                 );
                 let falling = airborne.velocity() < 0.0
                     || feet.y - landing.y > eq_client_core::movement::MAX_GROUNDED_STEP;
@@ -1111,6 +1184,11 @@ pub(super) fn input(
     }
     let position = landing + Vec3::Y * body.feet_offset;
     let position = stop_at_zone_line(&online.regions, origin, position);
+    let entering = water_enabled
+        && !swimming
+        && world
+            .swim_depth(position - Vec3::Y * body.feet_offset, body.height)
+            .is_some();
     // The turn keys turn at their own rate. Camera-relative movement faces
     // its direction unless mouse-look is steering the body. The sent heading
     // follows the facing within the same sample budget as the position.
@@ -1146,6 +1224,14 @@ pub(super) fn input(
         controls.send_failed(reason);
         controls.held = Some(Held::Refused);
         return;
+    }
+    if entering {
+        controls.water_entry_rollback = previous_airborne;
+    }
+    if (entering || swimming)
+        && let Some(airborne) = controls.airborne.as_mut()
+    {
+        airborne.reset();
     }
     controls.recent.record(now, delta, position - origin);
     // The host's movement session budgets each sample from the previous
@@ -1229,6 +1315,24 @@ pub(super) fn fall_step(
     height: f32,
     jump: bool,
 ) -> Vec3 {
+    fall_step_with_water(
+        airborne, world, physics, climb, feet, delta, span, height, jump, false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fall_step_with_water(
+    airborne: &mut AirborneController,
+    world: &CollisionWorld,
+    physics: VerticalPhysics,
+    climb: Option<f32>,
+    feet: Vec3,
+    delta: Vec3,
+    span: f32,
+    height: f32,
+    jump: bool,
+    water_enabled: bool,
+) -> Vec3 {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // At most five slices.
     let slices = (span / 0.05).ceil().clamp(1.0, 5.0) as u8;
     let slice = f32::from(slices);
@@ -1237,17 +1341,17 @@ pub(super) fn fall_step(
     let mut rising = start;
     for index in 0..slices {
         let mut trial = airborne.clone();
-        let next = trial.step(
-            world,
-            position,
-            physics,
-            eq_client_core::movement::MotionStep {
-                horizontal: delta / slice,
-                jump: jump && index == 0,
-                seconds: span / slice,
-                height,
-            },
-        );
+        let step = eq_client_core::movement::MotionStep {
+            horizontal: delta / slice,
+            jump: jump && index == 0,
+            seconds: span / slice,
+            height,
+        };
+        let next = if water_enabled {
+            trial.step_into_water(world, position, physics, step)
+        } else {
+            trial.step(world, position, physics, step)
+        };
         // A jump that started in this slice rises from its own speed.
         if index == 0 && trial.velocity() > start {
             rising = physics.jump_speed.max(start);
@@ -1267,6 +1371,9 @@ pub(super) fn fall_step(
         }
         *airborne = trial;
         position = next;
+        if water_enabled && world.swim_depth(position, height).is_some() {
+            break;
+        }
     }
     position
 }
@@ -3157,6 +3264,72 @@ mod tests {
             bevy::window::PrimaryWindow,
         ));
         (app, receiver)
+    }
+
+    #[test]
+    fn a_water_correction_uses_the_swim_grant_and_a_dry_correction_leaves_it() {
+        use eq_client_core::movement::{CollisionWorld, Liquid, Liquids};
+
+        struct Pool;
+        impl Liquids for Pool {
+            fn liquid_at(&self, point: Vec3) -> Option<Liquid> {
+                (point.y <= 0.0).then_some(Liquid::Water)
+            }
+            fn passes_through(&self, from: Vec3, to: Vec3, liquid: Liquid) -> bool {
+                liquid == Liquid::Water && from.y.min(to.y) <= 0.0
+            }
+            fn within(&self, _: Vec3, _: Vec3) -> Option<Box<dyn Liquids>> {
+                None
+            }
+        }
+        let (mut app, receiver) = app();
+        let floor = CollisionWorld::new([
+            [
+                [-20.0, -12.0, -20.0],
+                [20.0, -12.0, -20.0],
+                [20.0, -12.0, 20.0],
+            ],
+            [
+                [-20.0, -12.0, -20.0],
+                [20.0, -12.0, 20.0],
+                [-20.0, -12.0, 20.0],
+            ],
+        ])
+        .unwrap()
+        .with_liquids(Pool);
+        app.insert_resource(Collision(Some(floor)));
+        let placed = world_position([0.0, -4.0, 0.0], 0.0);
+        online::testing::place(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            placed,
+        );
+        app.update();
+        let ClientCommand::Move(swim) = receiver.try_recv().unwrap() else {
+            panic!("expected a bounded swim proposal");
+        };
+        assert_eq!(swim.mode, MovementMode::Swim);
+        assert!(
+            swim.position.z > placed.z,
+            "camera pitch should raise a forward stroke"
+        );
+        assert!(swim.position.z - placed.z < 0.1);
+        assert!(receiver.try_recv().is_err());
+
+        let bank = world_position([0.0, 3.0, 0.0], 0.0);
+        online::testing::place(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            bank,
+        );
+        {
+            let mut controls = app.world_mut().resource_mut::<Controls>();
+            controls.reset(Some(6.0));
+            controls.last_accepted = Instant::now() - Duration::from_millis(100);
+        }
+        app.update();
+        let ClientCommand::Move(ordinary) = receiver.try_recv().unwrap() else {
+            panic!("expected ordinary motion after the new placement");
+        };
+        assert_eq!(ordinary.mode, MovementMode::Forward);
     }
 
     #[test]

@@ -1,6 +1,8 @@
 //! State a script logs for later review.
 mod economy;
 mod lifecycle;
+mod movement;
+pub(super) use movement::report as movement_state;
 
 use bevy::prelude::*;
 

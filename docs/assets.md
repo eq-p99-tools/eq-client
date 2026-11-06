@@ -117,8 +117,9 @@ This is route planning, not server permission to move or teleport.
 
 Models, UI layouts and movement rules remain incomplete across client versions.
 Sound loading currently handles Titanium WAV assets, not the Mac-era sound
-format. Day/night lighting has provisional presentation tuning. Swimming and
-client-detected same-zone teleport pads remain incomplete. See
+format. Day/night lighting has provisional presentation tuning. Swimming uses
+mapped water on Titanium EQEmu; it does not establish breath or damage. Same-zone
+teleport pads detected by the client remain incomplete. See
 [gameplay](gameplay.md) for action limitations and
 [support](../SUPPORT.md) for server-specific policy.
 

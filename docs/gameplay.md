@@ -32,9 +32,19 @@ policies. P99 jump notices are capture-backed; Quarm's movement and transfers
 reuse the source-checked EQMac path. New public-server scenarios still need live
 verification. Physics uses installed-client
 rules and zone gravity where available, with an explicit provisional fallback
-when those data cannot be read. Swimming is incomplete: the water/lava guard
-prevents entering deep water or lava while allowing escape from an existing
-hazard. The server remains authoritative over corrections and zone admission.
+when those data cannot be read. Titanium EQEmu sessions can swim in water
+marked by the installed zone's regions. Wade or fall into water, move in any
+horizontal direction, and use first-person or mouse-look pitch to swim up or
+down with forward or backward input. The surface holds the swimmer in the water,
+and a supported bank returns them to ordinary movement. Automated ground routes,
+P99, and EQMac-era sessions retain the deep-water guard. Lava entry remains
+guarded.
+
+The swim rate is a conservative bound based on the session's current movement
+grant. Skill-based speed, breath, water breathing, and drowning are not modeled
+by this path. A server placement replaces the local prediction; a movement
+proposal alone does not confirm server position, wet state, or any resource
+change.
 
 Installed WLD boundary regions supply zone-line detection. Numbered boundaries
 resolve through the server's destination table; older absolute boundaries carry

@@ -176,8 +176,10 @@ protocol/reducer tests, official-client observations, offline asset renders and
 live custom-client runs are different kinds of evidence. Do not label an entire
 server either fully tested or wholly untested based on one of them.
 
-The native client still has incomplete model/UI coverage, swimming, client-side
-same-zone teleporter detection and some cooldown/resource information. Character
+The native client still has incomplete model/UI coverage, client-side same-zone
+teleporter detection and some cooldown/resource information. Bounded swimming
+in mapped water is available for Titanium EQEmu; breath, damage, and P99 and
+EQMac swimming are still pending. Character
 creation has UI and scenario paths on all four policies; named deletion with an
 explicit confirmation is offered on all four, and an absence from a refreshed
 list never claims permanent deletion.

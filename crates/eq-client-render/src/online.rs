@@ -29,6 +29,7 @@ pub(super) struct OnlineState {
     /// The current zone's regions, from its assets.
     pub regions: eq_client_assets::regions::ZoneRegions,
     pub enabled: bool,
+    server_placement: Option<ServerPlacement>,
     loading: super::background::Background<Result<super::zone::PreparedEntry, String>>,
     /// A new zone's admission and the news after it, held back while the
     /// loading screen waits for the player's casting gesture over the zone
@@ -36,7 +37,50 @@ pub(super) struct OnlineState {
     held: Vec<WorldUpdate>,
 }
 
+/// Last server-sourced placement for the current admission, not a move receipt.
+#[derive(Clone, Copy)]
+pub(super) struct ServerPlacement {
+    pub admission_id: u64,
+    pub position: eq_client_core::WorldPosition,
+    pub source: PlacementSource,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum PlacementSource {
+    Admission,
+    PositionUpdate,
+}
+
 impl OnlineState {
+    /// The last server placement remains separate from local motion submissions.
+    pub(super) fn server_placement(&self) -> Option<ServerPlacement> {
+        self.server_placement.filter(|entry| {
+            self.world.connected() && self.world.session_id() == Some(entry.admission_id)
+        })
+    }
+
+    fn observe_server_placement(&mut self, changes: &Changes) {
+        if changes.reset.is_some() {
+            self.server_placement = None;
+        }
+        let received = if let Some(position) = changes.placed {
+            Some((position, PlacementSource::PositionUpdate))
+        } else if changes.entered {
+            self.world
+                .player()
+                .map(|p| (p.position, PlacementSource::Admission))
+        } else {
+            None
+        };
+        if let Some((admission_id, (position, source))) = self.world.session_id().zip(received) {
+            self.server_placement = Some(ServerPlacement {
+                admission_id,
+                position,
+                source,
+            });
+        }
+    }
+
     /// Whether the admitted zone's scene is still loading in the background.
     /// A zone whose files fail to load is not: its spawns still show.
     pub(crate) fn scene_loading(&self) -> bool {
@@ -309,6 +353,7 @@ impl OnlineState {
             deletion: default(),
             regions: eq_client_assets::regions::ZoneRegions::default(),
             enabled,
+            server_placement: None,
             loading: default(),
             held: Vec::new(),
         }
@@ -489,6 +534,7 @@ impl Panels<'_> {
         );
 
         self.motion.accepted();
+        self.motion.resolve_water_entry(moved.refused.is_some());
         self.motion.refused.clone_from(&moved.refused);
         if let Some(transform) = drawn {
             self.motion.display_sample(transform, moved.position);
@@ -705,6 +751,7 @@ pub(super) fn receive(
     for update in news {
         let (changes, before, old_gems) =
             apply(&mut state.world, &update, spells, outbox.as_deref());
+        state.observe_server_placement(&changes);
         trace(&update, &changes, &state.world);
         panels.merchant_news(&update, &changes, &state.world);
         if let Some(reason) = changes.reset {
@@ -981,7 +1028,8 @@ pub(crate) mod testing {
 
     /// Applies one update as the session's receiver hands it over.
     pub(crate) fn apply(state: &mut OnlineState, update: &WorldUpdate) {
-        state.world.apply(update, Instant::now(), &NoSpells);
+        let changes = state.world.apply(update, Instant::now(), &NoSpells);
+        state.observe_server_placement(&changes);
     }
 
     /// Applies session news to the world.
@@ -996,7 +1044,8 @@ pub(crate) mod testing {
         now: Instant,
     ) {
         for event in events {
-            state.world.apply(&WorldUpdate::Game(event), now, &NoSpells);
+            let changes = state.world.apply(&WorldUpdate::Game(event), now, &NoSpells);
+            state.observe_server_placement(&changes);
         }
     }
 

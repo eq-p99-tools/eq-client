@@ -1,6 +1,5 @@
-//! The zone's water and lava, which every walk keeps out of. The client
-//! cannot swim yet, and reports no burns or drowning to the server, so a
-//! step stops before the head would go under water or the feet into lava;
+//! The zone's water and lava. Ground navigation and admissions without
+//! swimming stop before the head goes under water or the feet enter lava;
 //! shallow water is waded while the head stays above it. A move in the air,
 //! or off a ledge, is judged by its fall: the head stays out of water and
 //! the soles out of lava all the way down to where it ends, so a fall
@@ -17,7 +16,7 @@ use glam::Vec3;
 /// What fills a point of the zone, where it is not air.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Liquid {
-    /// Water, which the head stays above.
+    /// Water, which can be waded or swum.
     Water,
     /// Lava, which the feet stay out of.
     Lava,
@@ -60,14 +59,21 @@ pub struct GuardView {
     pub dry: bool,
 }
 
+/// Which liquids an ordinary move must stay clear of.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum LiquidGuard {
+    All,
+    Lava,
+}
+
 /// How far above the feet they are tested for lava, so that the plane of
 /// the floor under them never decides it.
-const SOLES: f32 = 0.1;
+pub(super) const SOLES: f32 = 0.1;
 /// How far below the feet the floor a fall would end on is looked for.
 const FALL_REACH: f32 = 10_000.0;
 
 impl CollisionWorld {
-    /// Keeps every walk in this world out of the zone's water and lava.
+    /// Attaches the zone's water and lava queries to its collision world.
     #[must_use]
     pub fn with_liquids(mut self, liquids: impl Liquids + 'static) -> Self {
         self.liquids = Some(std::sync::Arc::new(liquids));
@@ -100,23 +106,50 @@ impl CollisionWorld {
     /// not clear, and over no floor at all, as over a sea drawn without a
     /// bed, the fall is followed as far as one is looked for.
     pub(super) fn dry(&self, feet: Vec3, height: f32) -> bool {
+        self.dry_with_guard(feet, height, LiquidGuard::All)
+    }
+
+    fn dry_with_guard(&self, feet: Vec3, height: f32, guard: LiquidGuard) -> bool {
         if self.liquids.is_none() {
             return true;
         }
         let end = self.rest(feet).unwrap_or(feet - Vec3::Y * FALL_REACH);
-        self.clear(feet, end, height)
+        self.clear(feet, end, height, guard)
     }
 
     /// Whether feet moving straight from one place to another keep the head
     /// of a body this tall out of water and the soles out of lava the whole
     /// way.
-    fn clear(&self, from: Vec3, to: Vec3, height: f32) -> bool {
+    fn clear(&self, from: Vec3, to: Vec3, height: f32, guard: LiquidGuard) -> bool {
         let Some(liquids) = &self.liquids else {
             return true;
         };
         let (head, soles) = (Vec3::Y * height, Vec3::Y * SOLES);
-        !liquids.passes_through(from + head, to + head, Liquid::Water)
+        (guard == LiquidGuard::Lava
+            || !liquids.passes_through(from + head, to + head, Liquid::Water))
             && !liquids.passes_through(from + soles, to + soles, Liquid::Lava)
+    }
+
+    /// A water-aware walk also checks the travelled segment for thin lava.
+    pub(super) fn clear_move(&self, from: Vec3, to: Vec3, height: f32, guard: LiquidGuard) -> bool {
+        (guard == LiquidGuard::All || self.clear(from, to, height, guard))
+            && self.dry_with_guard(to, height, guard)
+    }
+
+    pub(super) fn inside_guarded_liquid(
+        &self,
+        feet: Vec3,
+        height: f32,
+        guard: LiquidGuard,
+    ) -> bool {
+        match guard {
+            LiquidGuard::All => self.submerged(feet, height),
+            LiquidGuard::Lava => self.liquid_at(feet + Vec3::Y * SOLES) == Some(Liquid::Lava),
+        }
+    }
+
+    pub(super) fn liquid_at(&self, point: Vec3) -> Option<Liquid> {
+        self.liquids.as_ref()?.liquid_at(point)
     }
 
     /// Where a fall straight down from `feet` to `end` is held, short of
@@ -127,14 +160,20 @@ impl CollisionWorld {
     /// them. Nothing holds a fall that stays clear, nor one
     /// from feet whose fall was never clear, as over water or lava the
     /// server put them above.
-    pub(super) fn held(&self, feet: Vec3, end: Vec3, height: f32) -> Option<Vec3> {
-        if self.clear(feet, end, height) || !self.dry(feet, height) {
+    pub(super) fn held(
+        &self,
+        feet: Vec3,
+        end: Vec3,
+        height: f32,
+        guard: LiquidGuard,
+    ) -> Option<Vec3> {
+        if self.clear(feet, end, height, guard) || !self.dry_with_guard(feet, height, guard) {
             return None;
         }
         let (mut clear, mut wet) = (0.0, 1.0);
         for _ in 0..12 {
             let fraction = f32::midpoint(clear, wet);
-            if self.clear(feet, feet.lerp(end, fraction), height) {
+            if self.clear(feet, feet.lerp(end, fraction), height, guard) {
                 clear = fraction;
             } else {
                 wet = fraction;
@@ -146,14 +185,22 @@ impl CollisionWorld {
     /// How much of a straight move keeps feet clear of the zone's liquids
     /// as they come to rest, found by halving: all of it for feet in deep
     /// water or lava now, so they can leave.
-    pub(super) fn dry_fraction(&self, feet: Vec3, displacement: Vec3, height: f32) -> f32 {
-        if self.submerged(feet, height) || self.dry(feet + displacement, height) {
+    pub(super) fn dry_fraction(
+        &self,
+        feet: Vec3,
+        displacement: Vec3,
+        height: f32,
+        guard: LiquidGuard,
+    ) -> f32 {
+        if self.inside_guarded_liquid(feet, height, guard)
+            || self.clear_move(feet, feet + displacement, height, guard)
+        {
             return 1.0;
         }
         let (mut dry, mut wet) = (0.0, 1.0);
         for _ in 0..12 {
             let fraction = f32::midpoint(dry, wet);
-            if self.dry(feet + displacement * fraction, height) {
+            if self.clear_move(feet, feet + displacement * fraction, height, guard) {
                 dry = fraction;
             } else {
                 wet = fraction;
@@ -194,13 +241,14 @@ impl CollisionWorld {
         displacement: Vec3,
         height: f32,
         support: Support,
+        guard: LiquidGuard,
     ) -> Vec3 {
         let (mut dry, mut wet) = (0.0, 1.0);
         let mut reached = feet;
         for _ in 0..12 {
             let fraction = f32::midpoint(dry, wet);
             let next = self.stride(feet, displacement * fraction, height, support);
-            if self.dry(next, height) {
+            if self.clear_move(feet, next, height, guard) {
                 dry = fraction;
                 reached = next;
             } else {

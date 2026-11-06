@@ -1763,6 +1763,8 @@ pub(super) fn drive(
             script.acts = vec![match command {
                 MoveCommand::Forward => Act::Forward,
                 MoveCommand::Back => Act::Back,
+                MoveCommand::CameraForward => Act::CameraForward,
+                MoveCommand::CameraBack => Act::CameraBack,
                 MoveCommand::StrafeLeft => Act::StrafeLeft,
                 MoveCommand::StrafeRight => Act::StrafeRight,
                 MoveCommand::TurnLeft => Act::TurnLeft,
@@ -1806,6 +1808,15 @@ pub(super) fn drive(
                 &observed,
                 players.single().ok(),
                 cameras.single().ok(),
+            );
+            report::movement_state(
+                label,
+                &online,
+                players.single().ok(),
+                bodies
+                    .single()
+                    .ok()
+                    .zip(collision.as_deref().and_then(|world| world.0.as_ref())),
             );
             report::surroundings(&online, &observed);
             report::game_messages(&mut script.chat_seen, &chat);
