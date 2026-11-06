@@ -874,6 +874,12 @@ pub(super) fn input(
         controls.held = Some(Held::NoBody);
         return;
     };
+    let surface_world = (!flying
+        && !swimming
+        && options.options.qol.on(Fix::WaterWalking)
+        && online.world().can(Capability::GameplayDepartures))
+    .then(|| world.with_water_support());
+    let world = surface_world.as_ref().unwrap_or(world);
     if let Some(player) = online.world().player() {
         let position = player.position;
         let boundary = online
@@ -2130,7 +2136,12 @@ mod tests {
     fn every_movement_opt_in_keeps_unknown_disconnected_and_dead_gates() {
         for state in 0..3 {
             let (mut app, receiver) = app();
-            for fix in [Fix::WalkWhileWinded, Fix::RunBoost, Fix::Fly] {
+            for fix in [
+                Fix::WalkWhileWinded,
+                Fix::RunBoost,
+                Fix::Fly,
+                Fix::WaterWalking,
+            ] {
                 movement_choice(&mut app, fix, true);
             }
             match state {
@@ -3270,8 +3281,7 @@ mod tests {
         (app, receiver)
     }
 
-    #[test]
-    fn a_water_correction_uses_the_swim_grant_and_a_dry_correction_leaves_it() {
+    fn water_pool() -> CollisionWorld {
         use eq_client_core::movement::{CollisionWorld, Liquid, Liquids};
 
         struct Pool;
@@ -3294,12 +3304,14 @@ mod tests {
                 let (from, to) = (f64::from(from.y), f64::from(to.y));
                 (to > 0.0).then_some((from / (from - to))..1.0)
             }
+            fn water_surface(&self, top: Vec3, bottom: f32) -> Option<f32> {
+                (top.y > 0.0 && bottom < 0.0).then_some(0.0)
+            }
             fn within(&self, _: Vec3, _: Vec3) -> Option<Box<dyn Liquids>> {
                 None
             }
         }
-        let (mut app, receiver) = app();
-        let floor = CollisionWorld::new([
+        CollisionWorld::new([
             [
                 [-20.0, -12.0, -20.0],
                 [20.0, -12.0, -20.0],
@@ -3312,8 +3324,13 @@ mod tests {
             ],
         ])
         .unwrap()
-        .with_liquids(Pool);
-        app.insert_resource(Collision(Some(floor)));
+        .with_liquids(Pool)
+    }
+
+    #[test]
+    fn a_water_correction_uses_the_swim_grant_and_a_dry_correction_leaves_it() {
+        let (mut app, receiver) = app();
+        app.insert_resource(Collision(Some(water_pool())));
         let placed = world_position([0.0, -4.0, 0.0], 0.0);
         online::testing::place(
             &mut app.world_mut().resource_mut::<online::OnlineState>(),
@@ -3348,6 +3365,71 @@ mod tests {
             panic!("expected ordinary motion after the new placement");
         };
         assert_eq!(ordinary.mode, MovementMode::Forward);
+    }
+
+    #[test]
+    fn water_walking_uses_ground_motion_and_respects_corrections_and_admission() {
+        let (mut app, receiver) = app();
+        let arm = |app: &mut App, session| {
+            let mut controls = app.world_mut().resource_mut::<Controls>();
+            controls.reset(Some(6.0));
+            controls.airborne = Some(AirborneController::default());
+            controls.last_accepted = Instant::now() - Duration::from_millis(100);
+            controls.climb_sent = Some((
+                session,
+                eq_client_assets::falls::TITANIUM.climb_per_step(3.0, 6.0),
+            ));
+        };
+        let next_move = |app: &mut App, session| {
+            app.update();
+            let ClientCommand::Move(proposal) = receiver.try_recv().unwrap() else {
+                panic!("expected a movement proposal");
+            };
+            assert_eq!(proposal.session_id, session);
+            proposal
+        };
+        app.insert_resource(Collision(Some(water_pool())));
+        arm(&mut app, 11);
+        movement_choice(&mut app, Fix::WaterWalking, true);
+        let walking = next_move(&mut app, 11);
+        assert_eq!(walking.mode, MovementMode::Forward);
+        assert!((walking.position.z - 3.0).abs() < 0.001);
+        assert!(walking.position.x < -0.01);
+        assert!(walking.position.x.hypot(walking.position.y) < 0.61);
+        accept(&mut app, &walking);
+
+        movement_choice(&mut app, Fix::WaterWalking, false);
+        let falling = next_move(&mut app, 11);
+        assert_eq!(falling.mode, MovementMode::Fall);
+        assert!(falling.position.z < walking.position.z);
+
+        movement_choice(&mut app, Fix::WaterWalking, true);
+        let submerged = world_position([0.0, -4.0, 0.0], 0.0);
+        online::testing::place(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            submerged,
+        );
+        arm(&mut app, 11);
+        let swimming = next_move(&mut app, 11);
+        assert_eq!(swimming.mode, MovementMode::Swim);
+        assert!(swimming.position.z - submerged.z < 0.1);
+
+        let mut online = app.world_mut().resource_mut::<online::OnlineState>();
+        let mut player = online.world().player().unwrap().clone();
+        player.position = world_position([0.0, 3.0, 0.0], 0.0);
+        online::testing::admit(&mut online, 12, player);
+        // The new zone has a floor but no mapped water at the old surface.
+        let dry = CollisionWorld::new([[
+            [-20.0, -12.0, -20.0],
+            [20.0, -12.0, -20.0],
+            [0.0, -12.0, 20.0],
+        ]])
+        .unwrap();
+        app.insert_resource(Collision(Some(dry)));
+        arm(&mut app, 12);
+        let falling = next_move(&mut app, 12);
+        assert_eq!(falling.mode, MovementMode::Fall);
+        assert!(falling.position.z < walking.position.z);
     }
 
     #[test]

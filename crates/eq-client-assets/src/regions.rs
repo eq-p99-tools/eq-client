@@ -201,6 +201,28 @@ impl ZoneRegions {
                 .is_some()
     }
 
+    /// Highest mapped water entry along a downward ray that starts above liquid.
+    /// A ray already in liquid, or one crossing lava first, has no walkable top.
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation)] // Interpolation stays between f32 endpoints.
+    pub fn water_surface(&self, top: [f32; 3], bottom: f32) -> Option<f32> {
+        if self.liquids.is_empty()
+            || !top.iter().all(|value| value.is_finite())
+            || !bottom.is_finite()
+            || top[1] <= bottom
+            || self.liquid_at(top).is_some()
+        {
+            return None;
+        }
+        let end = [top[0], bottom, top[2]];
+        let (span, kind) = self.first_liquid_span(top, end, |kind| kind.is_some())?;
+        if span.start <= 0.0 || kind != Some(Liquid::Water) {
+            return None;
+        }
+        let height = f64::from(top[1]);
+        Some(((f64::from(bottom) - height).mul_add(span.start, height)) as f32)
+    }
+
     /// First positive-length span outside a liquid, measured in fractions of
     /// the segment from start to end. An unknown span counts as outside.
     /// Crossing a plane between two wet leaves leaves no dry span.
@@ -211,6 +233,7 @@ impl ZoneRegions {
         liquid: Liquid,
     ) -> Option<Range<f64>> {
         self.first_liquid_span(start, end, |kind| kind != Some(liquid))
+            .map(|(span, _)| span)
     }
 
     fn first_liquid_span(
@@ -218,9 +241,9 @@ impl ZoneRegions {
         start: [f32; 3],
         end: [f32; 3],
         matches: impl Fn(Option<Liquid>) -> bool,
-    ) -> Option<Range<f64>> {
+    ) -> Option<(Range<f64>, Option<Liquid>)> {
         if !start.iter().chain(&end).all(|v| v.is_finite()) {
-            return matches(None).then_some(0.0..1.0);
+            return matches(None).then_some((0.0..1.0, None));
         }
         // Push the far part first so the next pop follows the direction of travel.
         let mut parts = vec![(Some(0), 0.0_f64..1.0, 0)];
@@ -230,13 +253,14 @@ impl ZoneRegions {
                 .filter(|_| depth < self.nodes.len());
             let Some(node) = node else {
                 if matches(None) {
-                    return Some(part);
+                    return Some((part, None));
                 }
                 continue;
             };
             if let Some(region) = node.region {
-                if matches(self.liquids.get(&region).copied()) {
-                    return Some(part);
+                let kind = self.liquids.get(&region).copied();
+                if matches(kind) {
+                    return Some((part, kind));
                 }
                 continue;
             }
@@ -252,7 +276,7 @@ impl ZoneRegions {
             let b = distance(end);
             if !a.is_finite() || !b.is_finite() || (a == 0.0 && b == 0.0) {
                 if matches(None) {
-                    return Some(part);
+                    return Some((part, None));
                 }
                 continue;
             }
@@ -684,6 +708,25 @@ mod tests {
             routes: BTreeMap::new(),
             liquids: BTreeMap::from([(1, Liquid::Lava), (2, Liquid::Water)]),
         }
+    }
+
+    #[test]
+    fn water_surface_uses_the_first_entry_from_air() {
+        let mut regions = layers();
+        let top = [0.0, 1.0, 0.0];
+        assert_eq!(regions.water_surface(top, -20.0), None);
+        regions.liquids.remove(&1);
+        let surface = regions.water_surface(top, -20.0).unwrap();
+        assert!((surface + 0.125).abs() < 1e-6);
+        assert_eq!(regions.water_surface(top, -0.1), None);
+        assert_eq!(regions.water_surface([0.0, -0.5, 0.0], -20.0), None);
+        assert_eq!(regions.water_surface([f32::NAN, 1.0, 0.0], -20.0), None);
+
+        // Two adjacent water leaves are one body of water.
+        regions.liquids.insert(1, Liquid::Water);
+        assert_eq!(regions.water_surface([0.0, -0.1, 0.0], -20.0), None);
+        let surface = regions.water_surface(top, -20.0).unwrap();
+        assert!(surface.abs() < 1e-6);
     }
 
     #[test]

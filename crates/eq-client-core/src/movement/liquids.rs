@@ -46,6 +46,12 @@ pub trait Liquids: Send + Sync {
         Some(0.0..0.0)
     }
 
+    /// The top of known water entered by a vertical ray from above.
+    /// Missing surface data leaves ordinary solid ground as the only support.
+    fn water_surface(&self, _top: Vec3, _bottom: f32) -> Option<f32> {
+        None
+    }
+
     /// The liquids within the box from `low` to `high`, answering
     /// [`liquid_at`](Self::liquid_at) for points in it as these do, made to
     /// answer faster many times over; None when none are in the box. The
@@ -103,8 +109,13 @@ impl CollisionWorld {
     /// server placed a little inside their floor find that floor. Feet over
     /// no floor at all never come to rest.
     fn rest(&self, feet: Vec3) -> Option<Vec3> {
-        self.ray_distance(feet + Vec3::Y * LIFT, -Vec3::Y, FALL_REACH)
-            .map(|distance| feet + Vec3::Y * (LIFT - distance))
+        let floor = self
+            .ray_distance(feet + Vec3::Y * LIFT, -Vec3::Y, FALL_REACH)
+            .map(|distance| feet.y + (LIFT - distance))
+            .into_iter()
+            .chain(self.water_ground(feet, LIFT, FALL_REACH - LIFT))
+            .max_by(f32::total_cmp)?;
+        Some(Vec3::new(feet.x, floor, feet.z))
     }
 
     /// Whether feet here stay clear of the zone's liquids as they come to
@@ -140,7 +151,12 @@ impl CollisionWorld {
 
     /// A water-aware walk also checks the travelled segment for thin lava.
     pub(super) fn clear_move(&self, from: Vec3, to: Vec3, height: f32, guard: LiquidGuard) -> bool {
-        (guard == LiquidGuard::All || self.clear(from, to, height, guard))
+        let along = if self.water_support {
+            LiquidGuard::Lava
+        } else {
+            guard
+        };
+        (along == LiquidGuard::All || self.clear(from, to, height, along))
             && self.dry_with_guard(to, height, guard)
     }
 
@@ -332,6 +348,28 @@ impl Liquids for Boxes {
             reached = reached.max(span.end);
         }
         (reached < 1.0).then_some(reached..1.0)
+    }
+
+    fn water_surface(&self, top: Vec3, bottom: f32) -> Option<f32> {
+        if self.liquid_at(top).is_some() {
+            return None;
+        }
+        let surface = self
+            .0
+            .iter()
+            .filter(|(low, high, liquid)| {
+                *liquid == Liquid::Water
+                    && top.x >= low.x
+                    && top.x <= high.x
+                    && top.z >= low.z
+                    && top.z <= high.z
+                    && high.y < top.y
+                    && high.y > bottom
+            })
+            .map(|(_, high, _)| high.y)
+            .max_by(f32::total_cmp)?;
+        (!self.passes_through(top, Vec3::new(top.x, surface, top.z), Liquid::Lava))
+            .then_some(surface)
     }
 
     fn within(&self, low: Vec3, high: Vec3) -> Option<Box<dyn Liquids>> {

@@ -40,6 +40,14 @@ and a supported bank returns them to ordinary movement. Automated ground routes,
 P99, and EQMac-era sessions retain the deep-water guard. Lava entry remains
 guarded.
 
+**Water Walking (Jesus Mode)** is an opt-in QoL setting where the session
+offers gameplay departures. Walk from shore or land on mapped water to use
+its surface as ground. Your usual movement speed, solid collision, and
+falling rules apply. If you enable it while submerged, reach the surface
+from above before using it. Turning it off restores ordinary water movement
+on the next sample. Scripted ground route finding continues to use solid
+terrain.
+
 The swim rate is a conservative bound based on the session's current movement
 grant. Skill-based speed, breath, water breathing, and drowning are not modeled
 by this path. A server placement replaces the local prediction; a movement

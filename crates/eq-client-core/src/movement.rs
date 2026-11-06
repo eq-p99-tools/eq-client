@@ -11,6 +11,7 @@ mod pace;
 mod path;
 mod route;
 mod swimming;
+mod water_walking;
 pub use airborne::{AirborneController, Landing, MotionStep, PROVISIONAL_PHYSICS, VerticalPhysics};
 pub use choices::{offered_options, options};
 pub use eq_network_game::movement::MovementOptions;
@@ -128,6 +129,7 @@ pub struct CollisionWorld {
     /// Each obstacle with the door it belongs to, if any.
     obstacles: Vec<(Option<u8>, Arc<CollisionMesh>)>,
     liquids: Option<Arc<dyn Liquids>>,
+    water_support: bool,
 }
 
 impl CollisionWorld {
@@ -140,6 +142,7 @@ impl CollisionWorld {
             terrain: Arc::new(CollisionMesh::new(triangles)?),
             obstacles: Vec::new(),
             liquids: None,
+            water_support: false,
         })
     }
 
@@ -170,6 +173,7 @@ impl CollisionWorld {
                 .cloned()
                 .collect(),
             liquids: self.liquids.clone(),
+            water_support: self.water_support,
         }
     }
 
@@ -194,6 +198,7 @@ impl CollisionWorld {
                 .cloned()
                 .collect(),
             liquids: self.liquids.clone(),
+            water_support: self.water_support,
         }
     }
 
@@ -282,6 +287,13 @@ impl CollisionWorld {
     /// been floor before is floor at its height. They sweep a sphere down
     /// where this casts a ray (checklist 6.336).
     pub fn ground(&self, position: Vec3, step_up: f32, drop: f32) -> Option<f32> {
+        self.solid_ground(position, step_up, drop)
+            .into_iter()
+            .chain(self.water_ground(position, step_up, drop))
+            .max_by(f32::total_cmp)
+    }
+
+    fn solid_ground(&self, position: Vec3, step_up: f32, drop: f32) -> Option<f32> {
         // Both window edges are inclusive: the ray starts a hair above the top one,
         // since a ray starting on a surface can miss it, and runs a hair past the
         // bottom one, since mesh traversal can discard an endpoint contact.
