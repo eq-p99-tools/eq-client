@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Cover the chase camera's 89-degree pitch bound in both directions on the
+  classic and long leash, including the view's heading and eye-centered zoom.
+
 - Explain movement pauses in the System chat while the client applies movement
   options, once per wait in the current admission.
 - Use networking policy for mouse-heading snapshots, movement fatigue, door

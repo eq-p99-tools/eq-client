@@ -3,7 +3,7 @@ use crate::{Player, PlayerBody, camera, chat, inventory, items, online, options,
 use bevy::input::mouse::{MouseMotion, MouseScrollUnit, MouseWheel};
 use bevy::input::touch::TouchPhase;
 use bevy::window::PrimaryWindow;
-use eq_client_assets::camera::TITANIUM;
+use eq_client_assets::camera::{ChaseLeash, TITANIUM};
 
 fn head_only(head: f32) -> CameraBody {
     CameraBody { head, feet: None }
@@ -53,6 +53,28 @@ fn inward_zoom_enters_first_person_and_outward_zoom_keeps_the_view_heading() {
     assert!((to_eye.length() - camera.radius).abs() < 1e-5);
     assert!((camera.yaw - yaw - 0.4).abs() < 1e-5);
     assert!(camera.radius > close);
+}
+
+#[test]
+fn chase_pitch_stops_short_of_both_poles_on_either_leash() {
+    for leash in [ChaseLeash::Program, ChaseLeash::Long] {
+        let mut camera = orbit();
+        camera.radius = 100.0;
+        let body = head_only(2.4);
+        let eye = camera.focus + Vec3::Y * body.head;
+        let heading = Quat::from_rotation_y(camera.yaw) * Vec3::NEG_Z;
+        for (tilt, sign) in [(1_000.0, -1.0), (-1_000.0, 1.0)] {
+            let pose = camera.attached_view(TITANIUM.on_leash(leash), tilt, 0.0, None, body, 0.016);
+            assert!(matches!(camera.view, View::Chase));
+            let forward = *pose.forward();
+            let horizontal = Vec3::new(forward.x, 0.0, forward.z);
+            assert!((forward.y - sign * 89.0_f32.to_radians().sin()).abs() < 1e-6);
+            assert!(horizontal.normalize().abs_diff_eq(heading, 1e-4));
+            let toward_eye = eye - pose.translation;
+            assert!(toward_eye.normalize().abs_diff_eq(forward, 1e-5));
+            assert!((toward_eye.length() - 100.0).abs() < 1e-3);
+        }
+    }
 }
 
 #[test]
