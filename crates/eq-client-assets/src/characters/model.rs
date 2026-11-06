@@ -566,9 +566,9 @@ use glam::Quat;
 impl CharacterAsset {
     /// A one-triangle model for tests: a root bone and a child bone the
     /// triangle hangs from, one unit up, whose `P01` turns it a quarter turn
-    /// about WLD up over a second and back, and whose `D05` lays it on the
-    /// ground behind the soles over a second, two to four units back along
-    /// heading 0.
+    /// about WLD up over a second and back. `C05` thrusts the child forward;
+    /// `D05` lays it on the ground behind the soles. Its catalog has one
+    /// synthetic helmet entry for testing texture selection and fallback.
     #[must_use]
     pub fn testing() -> Self {
         let still = LocalTransform {
@@ -582,6 +582,10 @@ impl CharacterAsset {
         };
         let turned = LocalTransform {
             rotation: Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+            ..raised
+        };
+        let swung = LocalTransform {
+            translation: Vec3::new(2.0, 0.0, 1.0),
             ..raised
         };
         let lain = LocalTransform {
@@ -604,7 +608,7 @@ impl CharacterAsset {
             materials: vec![None],
             pieces: vec![Piece::Body(0)],
             source: PathBuf::new(),
-            catalog: HashMap::new(),
+            catalog: HashMap::from([("TSTHE0301_MDF".into(), (None, MaterialMode::Opaque))]),
             parents: vec![None, Some(0)],
             base_pose: vec![still, raised],
             clips: HashMap::from([
@@ -615,6 +619,16 @@ impl CharacterAsset {
                         Some(AnimationTrack {
                             frames: vec![raised, turned],
                             interval: 1.0,
+                        }),
+                    ],
+                ),
+                (
+                    "C05".into(),
+                    vec![
+                        None,
+                        Some(AnimationTrack {
+                            frames: vec![raised, swung],
+                            interval: 0.25,
                         }),
                     ],
                 ),

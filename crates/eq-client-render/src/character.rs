@@ -12,6 +12,7 @@ use bevy::{
     prelude::*,
 };
 use eq_client_assets::characters::{CharacterAsset, STANDING_CLIP};
+use eq_client_core::world::Motion;
 use std::sync::Arc;
 
 use super::{create_render_primitives, create_texture_images};
@@ -521,16 +522,18 @@ pub(super) fn animate(
         // The latest of the spawn's swing and its completed cast, which
         // plays its spell's casting gesture.
         let latest = id.and_then(|id| {
-            let swing = world
-                .motion_of(id)
-                .map(|motion| (motion.count, motion.action));
+            let swing = world.motion_of(id);
             let cast = world.completed_cast_of(id).and_then(|done| {
-                Some((
-                    done.count,
-                    spells.casting_animation(u32::from(done.spell_id))?,
-                ))
+                Some(Motion {
+                    count: done.count,
+                    action: spells.casting_animation(u32::from(done.spell_id))?,
+                    speed: 1.0,
+                })
             });
-            swing.max(cast)
+            swing
+                .into_iter()
+                .chain(cast)
+                .max_by_key(|motion| motion.count)
         });
         character.swings.follow(latest, dt);
         if posture == Some(eq_client_core::PostureState::Frozen)
@@ -648,13 +651,13 @@ impl AnimatedCharacter {
     /// The casting gesture it is playing, if any: the seconds since it began
     /// and the seconds left of its clip.
     pub(super) fn casting_gesture(&self) -> Option<(f32, f32)> {
-        let (_, action, _) = self.swings.latest?;
-        if !(42..=44).contains(&action) {
+        let (motion, since) = self.swings.latest?;
+        if !(42..=44).contains(&motion.action) {
             return None;
         }
         let length = |clip: &str| self.asset.clip_seconds(clip);
         let gesture = self.swings.gesture(length)?;
-        Some((gesture.since, length(gesture.clip)? - gesture.since))
+        Some((since, (length(gesture.clip)? - gesture.at) / motion.speed))
     }
 }
 
@@ -835,8 +838,8 @@ impl std::fmt::Display for DrawnSoles {
 struct Gesture {
     /// The clip, such as `C05`.
     clip: &'static str,
-    /// Seconds since it came.
-    since: f32,
+    /// Time in the clip after applying the playback speed.
+    at: f32,
 }
 
 /// The swings the server sent for one character and the casts it completed,
@@ -845,25 +848,25 @@ struct Gesture {
 struct Swings {
     /// Whether the character has followed the world's motions yet.
     followed: bool,
-    /// The latest swing's or completed cast's count and animation number,
-    /// and the seconds since it came.
-    latest: Option<(u64, u16, f32)>,
+    /// The latest cue and the wall-clock seconds since it came.
+    latest: Option<(Motion, f32)>,
 }
 
 impl Swings {
     /// Follows the world's latest swing or completed cast for the
-    /// character, its count and animation number, over a frame of `dt`
-    /// seconds. A new one starts from its beginning, two alike in a row
-    /// included; the one already there when the character was first drawn
-    /// came before it and is over.
-    fn follow(&mut self, news: Option<(u64, u16)>, dt: f32) {
-        let latest = self
-            .latest
-            .map(|(count, action, since)| (count, action, since + dt));
+    /// character over a frame of `dt` seconds. A new one starts from its
+    /// beginning, two alike in a row included. A cue already retained when
+    /// the character is first drawn is treated as over.
+    fn follow(&mut self, news: Option<Motion>, dt: f32) {
+        let latest = self.latest.map(|(motion, since)| (motion, since + dt));
         self.latest = match news {
-            Some((count, action)) if latest.is_none_or(|(last, ..)| last != count) => {
+            Some(mut motion) if latest.is_none_or(|(last, _)| last.count != motion.count) => {
+                // Use authored timing when the cue has no usable rate.
+                if !motion.speed.is_finite() || motion.speed <= 0.0 {
+                    motion.speed = 1.0;
+                }
                 let since = if self.followed { 0.0 } else { f32::INFINITY };
-                Some((count, action, since))
+                Some((motion, since))
             }
             _ => latest,
         };
@@ -876,9 +879,10 @@ impl Swings {
     /// during a cast, only once it completes, as the official client does
     /// (checked against it, 10-14).
     fn gesture(&self, length: impl Fn(&str) -> Option<f32>) -> Option<Gesture> {
-        let (_, action, since) = self.latest?;
-        let clip = played_clip(action, |clip| length(clip).is_some())?;
-        (since < length(clip)?).then_some(Gesture { clip, since })
+        let (motion, since) = self.latest?;
+        let clip = played_clip(motion.action, |clip| length(clip).is_some())?;
+        let at = since * motion.speed;
+        (at < length(clip)?).then_some(Gesture { clip, at })
     }
 }
 
@@ -951,7 +955,7 @@ fn chosen_clip(
         return (DEATH, Some(since));
     }
     match (gesture, rise) {
-        (Some(Gesture { clip, since }), _) if !posed(posture) => ((clip, true), Some(since)),
+        (Some(Gesture { clip, at }), _) if !posed(posture) => ((clip, true), Some(at)),
         (_, Some(at)) if !posed(posture) && !moving => (SITTING_CLIP, Some(at)),
         _ => (posture_clip(posture, moving), None),
     }
@@ -1273,6 +1277,83 @@ mod tests {
     }
 
     #[test]
+    fn received_swings_sample_at_their_rate_return_to_idle_and_yield_to_death() {
+        use crate::online::{OnlineState, testing as session};
+        use eq_client_core::{Death, WorldEvent, combat::Animation};
+        use std::time::{Duration, Instant};
+
+        let mut app = crate::testing::app();
+        testing::stores(app.world_mut());
+        app.add_systems(Update, animate);
+        session::admit(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            1,
+            session::player(7),
+        );
+        let prepared = testing::prepared(app.world_mut());
+        let root = testing::drawn(app.world_mut(), &prepared);
+        app.world_mut().entity_mut(root).insert(crate::Player);
+        let frame = |app: &mut App| {
+            app.world_mut()
+                .resource_mut::<Time>()
+                .advance_by(Duration::from_millis(100));
+            app.update();
+        };
+        let swing = |app: &mut App, speed| {
+            session::news(
+                &mut app.world_mut().resource_mut::<OnlineState>(),
+                [WorldEvent::Animation(Animation {
+                    spawn_id: 7,
+                    action: 5,
+                    speed,
+                })],
+            );
+        };
+        let pose_is = |app: &App, (clip, held): (&str, bool), at| {
+            let world = app.world();
+            let character = world.get::<AnimatedCharacter>(root).unwrap();
+            assert_eq!(character.clip, (clip, held));
+            let expected = character.asset.joints(clip, at, !held)[1];
+            let joint = world.get::<Transform>(character.joints[1]).unwrap();
+            assert!(joint.to_matrix().abs_diff_eq(expected, 0.0001));
+        };
+
+        frame(&mut app);
+        for (speed, at) in [(0.5, 0.05), (2.0, 0.2), (0.0, 0.1)] {
+            swing(&mut app, speed);
+            frame(&mut app);
+            pose_is(&app, ("C05", true), 0.0);
+            frame(&mut app);
+            pose_is(&app, ("C05", true), at);
+        }
+
+        swing(&mut app, 2.0);
+        for _ in 0..4 {
+            frame(&mut app);
+        }
+        pose_is(&app, (STANDING_CLIP, false), 0.0);
+
+        swing(&mut app, 0.5);
+        frame(&mut app);
+        pose_is(&app, ("C05", true), 0.0);
+        session::news_at(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [WorldEvent::Death(Death {
+                spawn_id: 7,
+                killer_id: 0,
+                corpse_id: 7,
+                bind_zone_id: 0,
+                corpse_name: None,
+            })],
+            Instant::now().checked_sub(Duration::from_secs(2)).unwrap(),
+        );
+        frame(&mut app);
+        pose_is(&app, DEATH, 2.0);
+        frame(&mut app);
+        pose_is(&app, DEATH, 2.0);
+    }
+
+    #[test]
     fn a_skin_that_does_not_fit_its_mesh_is_refused() {
         fn skin(bones: &[usize]) -> eq_client_assets::characters::SkinBind<'_> {
             eq_client_assets::characters::SkinBind {
@@ -1299,7 +1380,7 @@ mod tests {
         use eq_client_core::PostureState;
         let swing = Gesture {
             clip: "C05",
-            since: 0.1,
+            at: 0.1,
         };
         // One that arrived dead lies; one seen dying falls from its death.
         let now = std::time::Instant::now();
@@ -1565,7 +1646,7 @@ mod tests {
         use eq_client_core::PostureState;
         let swing = Some(Gesture {
             clip: "C05",
-            since: 0.25,
+            at: 0.25,
         });
         for moving in [false, true] {
             assert_eq!(
@@ -1642,7 +1723,7 @@ mod tests {
         use eq_client_core::PostureState;
         let swing = Some(Gesture {
             clip: "C05",
-            since: 0.25,
+            at: 0.25,
         });
         assert_eq!(
             chosen_clip(None, Some(PostureState::Standing), false, swing, Some(0.5)),
@@ -1662,43 +1743,50 @@ mod tests {
             "T05" => Some(1.2),
             _ => None,
         };
-        let playing = |clip, since| Some(Gesture { clip, since });
+        let playing = |clip, at| Some(Gesture { clip, at });
+        let motion = |count, action| {
+            Some(Motion {
+                count,
+                action,
+                speed: 1.0,
+            })
+        };
         // The swing already there when the character is first drawn is over.
         let mut swings = Swings::default();
-        swings.follow(Some((3, 5)), 0.0);
+        swings.follow(motion(3, 5), 0.0);
         assert_eq!(swings.gesture(length), None);
         // A new one plays from its start, and a second alike restarts it.
-        swings.follow(Some((4, 5)), 0.1);
+        swings.follow(motion(4, 5), 0.1);
         assert_eq!(swings.gesture(length), playing("C05", 0.0));
-        swings.follow(Some((4, 5)), 0.5);
-        swings.follow(Some((5, 5)), 0.1);
+        swings.follow(motion(4, 5), 0.5);
+        swings.follow(motion(5, 5), 0.1);
         assert_eq!(swings.gesture(length), playing("C05", 0.0));
         // It ends with its clip, and the stance shows again.
-        swings.follow(Some((5, 5)), 0.5);
+        swings.follow(motion(5, 5), 0.5);
         assert!(matches!(
             swings.gesture(length),
-            Some(Gesture { since, .. }) if (since - 0.5).abs() < 0.0001
+            Some(Gesture { at, .. }) if (at - 0.5).abs() < 0.0001
         ));
-        swings.follow(Some((5, 5)), 0.3);
+        swings.follow(motion(5, 5), 0.3);
         assert_eq!(swings.gesture(length), None);
         // A completed cast plays its gesture once the same way.
-        swings.follow(Some((6, 43)), 0.1);
+        swings.follow(motion(6, 43), 0.1);
         assert_eq!(swings.gesture(length), playing("T05", 0.0));
-        swings.follow(Some((6, 43)), 1.3);
+        swings.follow(motion(6, 43), 1.3);
         assert_eq!(swings.gesture(length), None);
         // A model without the clip plays the lowest of its kind it has.
-        swings.follow(Some((7, 8)), 0.1);
+        swings.follow(motion(7, 8), 0.1);
         assert_eq!(swings.gesture(length), playing("C05", 0.0));
-        swings.follow(Some((8, 42)), 0.1);
+        swings.follow(motion(8, 42), 0.1);
         assert_eq!(swings.gesture(length), playing("T05", 0.0));
         // One with none of its kind plays nothing for it.
         let bare = |clip: &str| (clip == "P01").then_some(1.0);
-        swings.follow(Some((9, 8)), 0.1);
+        swings.follow(motion(9, 8), 0.1);
         assert_eq!(swings.gesture(bare), None);
         // A character first drawn before any swing or cast plays the first.
         let mut fresh = Swings::default();
         fresh.follow(None, 0.1);
-        fresh.follow(Some((10, 5)), 0.1);
+        fresh.follow(motion(10, 5), 0.1);
         assert!(matches!(
             fresh.gesture(length),
             Some(Gesture { clip: "C05", .. })

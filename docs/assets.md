@@ -11,6 +11,9 @@ Keep archives, extracted assets, derived caches and screenshots outside Git.
 
 Classic model rendering includes animation, face/armor textures, robes, helmets
 and held-item attachments where installed data and the model support them.
+Helmet dyes follow the surface drawn, so an exposed face keeps its color.
+One-shot animations use the received playback rate when it is positive and
+finite, with the authored rate as the fallback.
 Missing models use visible fallbacks; an implemented loader is not a claim of
 complete coverage for every race, armor set, animation or custom UI atlas.
 Terrain, collision and zone regions share coordinate conversions in

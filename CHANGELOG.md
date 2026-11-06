@@ -7,6 +7,8 @@
   clickable when their lines are nested within the viewport.
 - Give spellbook search and set names the same input focus rule as other
   controls, including when a local script runs with the window unfocused.
+- Apply received helmet dyes to numbered helmet textures while preserving the
+  exposed face. Draw received one-shot animations at their playback rate.
 - Report a local scripted `give` refusal through the script result once.
   Native click refusals still appear in chat.
 - Draw server-reported rain and snow in zones with a sky. See the World
