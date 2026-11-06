@@ -28,7 +28,9 @@ pub(super) struct Check {
 }
 
 fn same_xyz(first: WorldPosition, second: WorldPosition) -> bool {
-    [first.x, first.y, first.z] == [second.x, second.y, second.z]
+    [first.x, first.y, first.z]
+        .into_iter()
+        .eq([second.x, second.y, second.z])
 }
 
 impl Check {

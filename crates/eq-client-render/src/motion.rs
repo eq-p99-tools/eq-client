@@ -3420,8 +3420,8 @@ mod tests {
     fn a_held_placement_turns_at_the_received_xyz_without_repeating_its_warning() {
         let (mut app, receiver) = stationary_airborne_app();
         let mut player = online::testing::player(7);
-        let received = world_position([2.375, -5.25, -3.625], 0.0);
-        player.position = received;
+        let initial_placement = world_position([2.375, -5.25, -3.625], 0.0);
+        player.position = initial_placement;
         online::testing::generation(
             &mut app.world_mut().resource_mut::<online::OnlineState>(),
             eq_client_core::GameDialect::Titanium,
@@ -3446,7 +3446,7 @@ mod tests {
 
         let correction = eq_client_core::WorldPosition {
             heading: 128.0,
-            ..received
+            ..initial_placement
         };
         online::testing::place(
             &mut app.world_mut().resource_mut::<online::OnlineState>(),
