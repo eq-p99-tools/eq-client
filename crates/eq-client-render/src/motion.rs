@@ -1,4 +1,6 @@
 //! Calibrated P99 input; no movement is generated without a session grant.
+mod placement;
+
 use super::{
     Collision, OrbitCamera, Player, PlayerBody,
     camera::{MouseAim, MouseLook},
@@ -16,7 +18,10 @@ use eq_client_core::{
     Capability, ClientCommand, DiagonalAlong, DiagonalRates, GroundedDiagonal, HeadingUpdate,
     MovementMode, MovementRequest, Posture, StrafeSide,
     hazards::Hazard,
-    movement::{AirborneController, CollisionWorld, Landing, PROVISIONAL_PHYSICS, VerticalPhysics},
+    movement::{
+        AirborneController, CollisionWorld, Landing, PROVISIONAL_PHYSICS, VerticalPhysics,
+        swim_speed,
+    },
     qol::{Fix, Settings},
     world::ClientWorld,
     world_position,
@@ -48,11 +53,14 @@ pub(super) struct Controls {
     sent_span: f32,
     sent_yaw: SentYaw,
     boundary: BoundaryTracker,
+    placement: placement::Check,
     taps: TapBuffer,
     visual: Option<VisualMotion>,
     /// Vertical momentum, present only when the session accepts falls; without it,
     /// stepping off a ledge stops at the edge.
     pub airborne: Option<eq_client_core::movement::AirborneController>,
+    /// Dry-side momentum to keep if the session refuses a proposed water entry.
+    water_entry_rollback: Option<AirborneController>,
     /// Why the movement guard refused the latest sample, until one is sent.
     pub refused: Option<String>,
     /// When a jump was pressed since the last sample; only where falls are simulated.
@@ -126,6 +134,8 @@ pub(super) enum Held {
     NoSpeed,
     /// The player's body, the camera or the zone's collision is missing.
     NoBody,
+    /// A fresh server placement is below the installed collision floor.
+    PlacementBlocked,
     /// The session's queue refused the sample.
     Refused,
 }
@@ -146,9 +156,11 @@ impl Default for Controls {
             sent_span: 0.1,
             sent_yaw: SentYaw::Ordinary,
             boundary: BoundaryTracker::default(),
+            placement: placement::Check::default(),
             taps: TapBuffer::default(),
             visual: None,
             airborne: None,
+            water_entry_rollback: None,
             refused: None,
             jump: None,
             last_jump: None,
@@ -464,6 +476,7 @@ impl Controls {
             last_answer: self.last_answer,
             last_jump: self.last_jump,
             walking: self.walking,
+            placement: self.placement,
             stun_revision: self.stun_revision,
             movement_options: self.movement_options,
             ..Self::default()
@@ -580,6 +593,15 @@ impl Controls {
         self.waiting = false;
         self.last_accepted = now;
         self.last_answer = Some(now);
+    }
+
+    /// A local result either keeps the water entry or restores the dry-side motion.
+    pub(super) fn resolve_water_entry(&mut self, refused: bool) {
+        if let Some(previous) = self.water_entry_rollback.take()
+            && refused
+        {
+            self.airborne = Some(previous);
+        }
     }
 
     /// Whether a sample is out and its answer has not come back.
@@ -760,11 +782,30 @@ pub(super) fn input(
         controls.autorun = false;
     }
     let now = Instant::now();
+    let water_enabled =
+        client == InstalledClient::Titanium && !flying && online.world().can(Capability::Swimming);
+    let swimming = water_enabled
+        && collision
+            .0
+            .as_ref()
+            .zip(players.single().ok())
+            .zip(online.world().player())
+            .is_some_and(|((world, (body, _)), player)| {
+                let origin = Vec3::from_array(eq_client_core::render_position(player.position));
+                world
+                    .swim_depth(origin - Vec3::Y * body.feet_offset, body.height)
+                    .is_some()
+            });
+    if swimming {
+        controls.jump = None;
+        controls.crouch = None;
+    }
     // Held until the next sample; jumps rise and fall like falls, so only
     // where the session takes both, and no sooner after the last than the
     // installed client allows.
     if focused
         && !flying
+        && !swimming
         && !online.world().is_stunned()
         && keys.pressed(Act::Jump)
         && controls.airborne.is_some()
@@ -840,6 +881,33 @@ pub(super) fn input(
         controls.held = Some(Held::NoBody);
         return;
     };
+    if client == InstalledClient::Titanium
+        && !flying
+        && controls.airborne.is_some()
+        && controls.placement.holds(
+            online.server_placement(),
+            accepted.position,
+            world,
+            body,
+            &mut chat,
+            now,
+        )
+    {
+        controls.held = Some(Held::PlacementBlocked);
+        return;
+    }
+    let origin = Vec3::from_array(eq_client_core::render_position(accepted.position));
+    let feet = origin - Vec3::Y * body.feet_offset;
+    let surface_world = if !flying
+        && !swimming
+        && options.options.qol.on(Fix::JesusMode)
+        && online.world().can(Capability::GameplayDepartures)
+    {
+        world.with_liquid_support(feet, body.height)
+    } else {
+        None
+    };
+    let world = surface_world.as_ref().unwrap_or(world);
     if let Some(player) = online.world().player() {
         let position = player.position;
         let boundary = online
@@ -922,12 +990,41 @@ pub(super) fn input(
     );
     let MotionInput {
         mode,
-        speed,
-        direction,
-        turn,
+        mut speed,
+        mut direction,
+        mut turn,
         preserve_facing,
         diagonal,
     } = intent;
+    if swimming {
+        speed = swim_speed(controls.speed.unwrap_or(0.0));
+        if !focused || controls.stun_active {
+            direction = Vec3::ZERO;
+            turn = 0.0;
+        } else {
+            let sampled = sample_keys(&sampled, map);
+            let held = map.holding(&sampled, scripted);
+            let camera_forward = held.held(Act::CameraForward);
+            let camera_back = held.held(Act::CameraBack);
+            let pitched = camera.is_first_person()
+                || look.as_ref().is_some_and(|look| look.held)
+                || camera_forward != camera_back;
+            let longitudinal = mode == MovementMode::Backward
+                || held.held(Act::Forward) != held.held(Act::Back)
+                || controls.autorun
+                || camera_forward != camera_back
+                || look.as_ref().is_some_and(|look| look.held && look.left);
+            if pitched && longitudinal && mode != MovementMode::Strafe && direction != Vec3::ZERO {
+                let backing = mode == MovementMode::Backward || camera_back && !camera_forward;
+                let pitch = if backing {
+                    -camera.view_pitch()
+                } else {
+                    camera.view_pitch()
+                };
+                direction = (direction * pitch.cos() + Vec3::Y * pitch.sin()).normalize_or_zero();
+            }
+        }
+    }
     let physics = climbing(physics(client, online.world().zone_gravity()), client, body);
     // The session's guard counts a grounded climb by the body's own reach a
     // step, where the program's is read; it hears it at each admission and
@@ -948,12 +1045,11 @@ pub(super) fn input(
         }
         controls.climb_sent = Some((session, per_step));
     }
-    let origin = Vec3::from_array(eq_client_core::render_position(accepted.position));
-    let feet = origin - Vec3::Y * body.feet_offset;
     // A jump or fall keeps going after the keys are released, and a player
     // who may fall starts to where no ground is under them, as the server
     // can leave them after a move it makes (a `#goto` into the air).
     let airborne = !flying
+        && !swimming
         && controls
             .airborne
             .as_ref()
@@ -1009,6 +1105,7 @@ pub(super) fn input(
             standing
                 && !jump
                 && !airborne
+                && !swimming
                 && controls.facing.is_none()
                 && !active_mouse_yaw
                 && world.support(feet).is_some()
@@ -1017,7 +1114,7 @@ pub(super) fn input(
             let displacement = intent.velocity * span;
             let mut trial = previous_airborne.clone();
             let landing = if let Some(controller) = trial.as_mut() {
-                let landed = fall_step(
+                let landed = fall_step_with_water(
                     controller,
                     world,
                     physics,
@@ -1027,7 +1124,11 @@ pub(super) fn input(
                     span,
                     body.height,
                     false,
+                    water_enabled,
                 );
+                if water_enabled && world.swim_depth(landed, body.height).is_some() {
+                    return None;
+                }
                 if controller.velocity() != 0.0
                     || controller.peak().is_some()
                     || controller.take_landing().is_some()
@@ -1062,7 +1163,13 @@ pub(super) fn input(
                 ))
             .then_some((landing, trial, intent.request, displacement))
         });
-    let (landing, mode, jumped) = if let Some((landing, trial, request, displacement)) = combined {
+    let (landing, mode, jumped) = if swimming {
+        (
+            world.swim_step(feet, delta, body.height),
+            MovementMode::Swim,
+            false,
+        )
+    } else if let Some((landing, trial, request, displacement)) = combined {
         controls.airborne = trial;
         delta = displacement;
         (landing, MovementMode::GroundedDiagonal(request), false)
@@ -1071,7 +1178,7 @@ pub(super) fn input(
             _ if flying => (world.fly_step(feet, delta, body.height), mode, false),
             Some(airborne) => {
                 let rising = airborne.velocity() > 0.0;
-                let landing = fall_step(
+                let landing = fall_step_with_water(
                     airborne,
                     world,
                     physics,
@@ -1081,6 +1188,7 @@ pub(super) fn input(
                     span,
                     body.height,
                     jump,
+                    water_enabled,
                 );
                 let falling = airborne.velocity() < 0.0
                     || feet.y - landing.y > eq_client_core::movement::MAX_GROUNDED_STEP;
@@ -1111,6 +1219,11 @@ pub(super) fn input(
     }
     let position = landing + Vec3::Y * body.feet_offset;
     let position = stop_at_zone_line(&online.regions, origin, position);
+    let entering = water_enabled
+        && !swimming
+        && world
+            .swim_depth(position - Vec3::Y * body.feet_offset, body.height)
+            .is_some();
     // The turn keys turn at their own rate. Camera-relative movement faces
     // its direction unless mouse-look is steering the body. The sent heading
     // follows the facing within the same sample budget as the position.
@@ -1146,6 +1259,14 @@ pub(super) fn input(
         controls.send_failed(reason);
         controls.held = Some(Held::Refused);
         return;
+    }
+    if entering {
+        controls.water_entry_rollback = previous_airborne;
+    }
+    if (entering || swimming)
+        && let Some(airborne) = controls.airborne.as_mut()
+    {
+        airborne.reset();
     }
     controls.recent.record(now, delta, position - origin);
     // The host's movement session budgets each sample from the previous
@@ -1217,6 +1338,7 @@ fn unsupported(world: &eq_client_core::movement::CollisionWorld, feet: Vec3) -> 
 /// speed less gravity carries it in the sample (the guard's own rule after
 /// the session's jump notice). A larger climb takes several accepted
 /// samples instead of one that would be refused and retried forever.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn fall_step(
     airborne: &mut eq_client_core::movement::AirborneController,
@@ -1229,6 +1351,24 @@ pub(super) fn fall_step(
     height: f32,
     jump: bool,
 ) -> Vec3 {
+    fall_step_with_water(
+        airborne, world, physics, climb, feet, delta, span, height, jump, false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fall_step_with_water(
+    airborne: &mut AirborneController,
+    world: &CollisionWorld,
+    physics: VerticalPhysics,
+    climb: Option<f32>,
+    feet: Vec3,
+    delta: Vec3,
+    span: f32,
+    height: f32,
+    jump: bool,
+    water_enabled: bool,
+) -> Vec3 {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // At most five slices.
     let slices = (span / 0.05).ceil().clamp(1.0, 5.0) as u8;
     let slice = f32::from(slices);
@@ -1237,17 +1377,17 @@ pub(super) fn fall_step(
     let mut rising = start;
     for index in 0..slices {
         let mut trial = airborne.clone();
-        let next = trial.step(
-            world,
-            position,
-            physics,
-            eq_client_core::movement::MotionStep {
-                horizontal: delta / slice,
-                jump: jump && index == 0,
-                seconds: span / slice,
-                height,
-            },
-        );
+        let step = eq_client_core::movement::MotionStep {
+            horizontal: delta / slice,
+            jump: jump && index == 0,
+            seconds: span / slice,
+            height,
+        };
+        let next = if water_enabled {
+            trial.step_into_water(world, position, physics, step)
+        } else {
+            trial.step(world, position, physics, step)
+        };
         // A jump that started in this slice rises from its own speed.
         if index == 0 && trial.velocity() > start {
             rising = physics.jump_speed.max(start);
@@ -1267,6 +1407,9 @@ pub(super) fn fall_step(
         }
         *airborne = trial;
         position = next;
+        if water_enabled && world.swim_depth(position, height).is_some() {
+            break;
+        }
     }
     position
 }
@@ -1717,6 +1860,7 @@ fn arc(from: f32, to: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    use eq_client_core::movement::{Liquid, Liquids};
 
     fn movement_choice(app: &mut App, fix: Fix, on: bool) {
         app.world_mut()
@@ -2019,7 +2163,12 @@ mod tests {
     fn every_movement_opt_in_keeps_unknown_disconnected_and_dead_gates() {
         for state in 0..3 {
             let (mut app, receiver) = app();
-            for fix in [Fix::WalkWhileWinded, Fix::RunBoost, Fix::Fly] {
+            for fix in [
+                Fix::WalkWhileWinded,
+                Fix::RunBoost,
+                Fix::Fly,
+                Fix::JesusMode,
+            ] {
                 movement_choice(&mut app, fix, true);
             }
             match state {
@@ -3054,6 +3203,13 @@ mod tests {
         );
     }
 
+    fn flat_surface(y: f32) -> [[[f32; 3]; 3]; 2] {
+        [
+            [[-20.0, y, -20.0], [20.0, y, -20.0], [20.0, y, 20.0]],
+            [[-20.0, y, -20.0], [20.0, y, 20.0], [-20.0, y, 20.0]],
+        ]
+    }
+
     fn app() -> (App, mpsc::Receiver<ClientCommand>) {
         let (sender, receiver) = mpsc::sync_channel(2);
         let mut app = App::new();
@@ -3102,11 +3258,7 @@ mod tests {
                 name_parts: eq_client_core::names::NameParts::default(),
             },
         );
-        let floor = eq_client_core::movement::CollisionWorld::new([
-            [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
-            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
-        ])
-        .unwrap();
+        let floor = CollisionWorld::new(flat_surface(0.0)).unwrap();
         let mut keys = ButtonInput::<KeyCode>::default();
         keys.press(KeyCode::KeyW);
         app.insert_resource(state)
@@ -3157,6 +3309,369 @@ mod tests {
             bevy::window::PrimaryWindow,
         ));
         (app, receiver)
+    }
+
+    fn stationary_airborne_app() -> (App, mpsc::Receiver<ClientCommand>) {
+        let (mut app, receiver) = app();
+        app.world_mut().resource_mut::<Controls>().airborne = Some(AirborneController::default());
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        (app, receiver)
+    }
+
+    #[test]
+    fn an_unsupported_server_placement_holds_fall_until_a_fresh_correction() {
+        let (mut app, receiver) = stationary_airborne_app();
+        let mut player = online::testing::player(7);
+        player.position = world_position([0.0, -5.25, 0.0], 0.0);
+        online::testing::admit(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            12,
+            player,
+        );
+        app.update();
+        assert_eq!(
+            app.world().resource::<Controls>().held,
+            Some(Held::PlacementBlocked)
+        );
+        assert!(receiver.try_recv().is_err());
+
+        // A new authoritative sample still on the wrong side of the floor
+        // holds independently and remains the visible server evidence.
+        let below = world_position([0.0, -5.0, 0.0], 0.0);
+        online::testing::place(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            below,
+        );
+        app.update();
+        let online = app.world().resource::<online::OnlineState>();
+        assert_eq!(online.server_placement().unwrap().position, below);
+        assert_eq!(online.world().player().unwrap().position, below);
+        assert_eq!(
+            app.world().resource::<Controls>().held,
+            Some(Held::PlacementBlocked)
+        );
+        assert!(receiver.try_recv().is_err());
+
+        // The same admitted player is subsequently placed above the floor.
+        // A high valid placement must still emit the ordinary fall.
+        let above = world_position([0.0, 12.0, 0.0], 0.0);
+        online::testing::place(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            above,
+        );
+        app.world_mut().resource_mut::<Controls>().climb_sent = Some((
+            12,
+            eq_client_assets::falls::TITANIUM.climb_per_step(3.0, 6.0),
+        ));
+        app.update();
+        let ClientCommand::Move(fall) = receiver.try_recv().unwrap() else {
+            panic!("expected a fall from the corrected placement");
+        };
+        assert_eq!(fall.session_id, 12);
+        assert_eq!(fall.mode, MovementMode::Fall);
+        assert!(fall.position.z < above.z);
+        assert_eq!(
+            app.world()
+                .resource::<online::OnlineState>()
+                .server_placement()
+                .unwrap()
+                .position,
+            above
+        );
+    }
+
+    #[test]
+    fn a_held_placement_rechecks_for_a_new_landing_surface() {
+        use eq_client_core::movement::CollisionMesh;
+
+        let (mut app, receiver) = stationary_airborne_app();
+        let placed = world_position([0.0, -5.0, 0.0], 0.0);
+        online::testing::place(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            placed,
+        );
+        let world = app.world_mut();
+        let body = *world.query::<&PlayerBody>().single(world).unwrap();
+        let server = world.resource::<online::OnlineState>().server_placement();
+        let mut check = placement::Check::default();
+        // Seed the hold using the production check with a due timestamp so
+        // the next input frame can retry without a sleep in the fixture.
+        let held_at = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
+        world.resource_scope(|world, mut chat: Mut<crate::chat::ChatState>| {
+            assert!(check.holds(
+                server,
+                placed,
+                world.resource::<Collision>().0.as_ref().unwrap(),
+                &body,
+                &mut chat,
+                held_at,
+            ));
+        });
+        world.resource_mut::<Controls>().placement = check;
+        world
+            .resource_mut::<Collision>()
+            .0
+            .as_mut()
+            .unwrap()
+            .set_door_obstacles(vec![(
+                7,
+                std::sync::Arc::new(CollisionMesh::new(flat_surface(-15.0)).unwrap()),
+            )]);
+        app.update();
+        let ClientCommand::Move(fall) = receiver.try_recv().unwrap() else {
+            panic!("expected an ordinary fall toward the new collider");
+        };
+        assert_eq!(fall.mode, MovementMode::Fall);
+        assert!(fall.position.z < placed.z);
+        let online = app.world().resource::<online::OnlineState>();
+        assert_eq!(online.server_placement().unwrap().position, placed);
+    }
+
+    struct Pool {
+        top: f32,
+        liquid: Liquid,
+    }
+
+    impl Liquids for Pool {
+        fn liquid_at(&self, point: Vec3) -> Option<Liquid> {
+            (point.y <= self.top).then_some(self.liquid)
+        }
+        fn passes_through(&self, from: Vec3, to: Vec3, liquid: Liquid) -> bool {
+            liquid == self.liquid && from.y.min(to.y) <= self.top
+        }
+        fn first_outside(
+            &self,
+            from: Vec3,
+            to: Vec3,
+            liquid: Liquid,
+        ) -> Option<std::ops::Range<f64>> {
+            if liquid != self.liquid || from.y > self.top {
+                return Some(0.0..1.0);
+            }
+            let (from, to, top) = (f64::from(from.y), f64::from(to.y), f64::from(self.top));
+            (to > top).then_some(((from - top) / (from - to))..1.0)
+        }
+        fn liquid_surface(&self, top: Vec3, bottom: f32) -> Option<(f32, Liquid)> {
+            (top.y > self.top && bottom < self.top).then_some((self.top, self.liquid))
+        }
+        fn within(&self, _: Vec3, _: Vec3) -> Option<Box<dyn Liquids>> {
+            None
+        }
+    }
+
+    fn liquid_pool(liquid: Liquid) -> CollisionWorld {
+        CollisionWorld::new(flat_surface(-12.0))
+            .unwrap()
+            .with_liquids(Pool { top: 0.0, liquid })
+    }
+
+    #[test]
+    fn a_fresh_placement_between_a_bridge_and_mapped_liquid_can_fall() {
+        for liquid in [Liquid::Water, Liquid::Lava] {
+            let (mut app, receiver) = stationary_airborne_app();
+            let bridge = CollisionWorld::new(flat_surface(0.0))
+                .unwrap()
+                .with_liquids(Pool { top: -9.0, liquid });
+            app.insert_resource(Collision(Some(bridge)));
+            let placed = world_position([0.0, -5.0, 0.0], 0.0);
+            online::testing::place(
+                &mut app.world_mut().resource_mut::<online::OnlineState>(),
+                placed,
+            );
+            app.update();
+            let ClientCommand::Move(fall) = receiver.try_recv().unwrap() else {
+                panic!("expected an ordinary fall above {liquid:?}");
+            };
+            assert_eq!(fall.mode, MovementMode::Fall);
+            assert!(fall.position.z < placed.z);
+        }
+    }
+
+    #[test]
+    fn a_water_correction_uses_the_swim_grant_and_a_dry_correction_leaves_it() {
+        let (mut app, receiver) = app();
+        app.insert_resource(Collision(Some(liquid_pool(Liquid::Water))));
+        let placed = world_position([0.0, -4.0, 0.0], 0.0);
+        online::testing::place(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            placed,
+        );
+        app.update();
+        let ClientCommand::Move(swim) = receiver.try_recv().unwrap() else {
+            panic!("expected a bounded swim proposal");
+        };
+        assert_eq!(swim.mode, MovementMode::Swim);
+        assert!(
+            swim.position.z > placed.z,
+            "camera pitch should raise a forward stroke"
+        );
+        assert!(swim.position.z - placed.z < 0.1);
+        assert!(receiver.try_recv().is_err());
+
+        let bank = world_position([0.0, 3.0, 0.0], 0.0);
+        online::testing::place(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            bank,
+        );
+        {
+            let mut controls = app.world_mut().resource_mut::<Controls>();
+            controls.reset(Some(6.0));
+            controls.last_accepted = Instant::now()
+                .checked_sub(Duration::from_millis(100))
+                .unwrap();
+        }
+        app.update();
+        let ClientCommand::Move(ordinary) = receiver.try_recv().unwrap() else {
+            panic!("expected ordinary motion after the new placement");
+        };
+        assert_eq!(ordinary.mode, MovementMode::Forward);
+    }
+
+    #[test]
+    fn jesus_mode_uses_ground_motion_and_respects_corrections_and_admission() {
+        let (mut app, receiver) = app();
+        let arm = |app: &mut App, session| {
+            let mut controls = app.world_mut().resource_mut::<Controls>();
+            controls.reset(Some(6.0));
+            controls.airborne = Some(AirborneController::default());
+            controls.last_accepted = Instant::now()
+                .checked_sub(Duration::from_millis(100))
+                .unwrap();
+            controls.climb_sent = Some((
+                session,
+                eq_client_assets::falls::TITANIUM.climb_per_step(3.0, 6.0),
+            ));
+        };
+        let next_move = |app: &mut App, session| {
+            app.update();
+            let ClientCommand::Move(proposal) = receiver.try_recv().unwrap() else {
+                panic!("expected a movement proposal");
+            };
+            assert_eq!(proposal.session_id, session);
+            proposal
+        };
+        app.insert_resource(Collision(Some(liquid_pool(
+            eq_client_core::movement::Liquid::Water,
+        ))));
+        arm(&mut app, 11);
+        movement_choice(&mut app, Fix::JesusMode, true);
+        let walking = next_move(&mut app, 11);
+        assert_eq!(walking.mode, MovementMode::Forward);
+        assert!((walking.position.z - 3.0).abs() < 0.001);
+        assert!(walking.position.x < -0.01);
+        assert!(walking.position.x.hypot(walking.position.y) < 0.61);
+        accept(&mut app, &walking);
+
+        movement_choice(&mut app, Fix::JesusMode, false);
+        let falling = next_move(&mut app, 11);
+        assert_eq!(falling.mode, MovementMode::Fall);
+        assert!(falling.position.z < walking.position.z);
+
+        movement_choice(&mut app, Fix::JesusMode, true);
+        let submerged = world_position([0.0, -4.0, 0.0], 0.0);
+        online::testing::place(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            submerged,
+        );
+        arm(&mut app, 11);
+        let swimming = next_move(&mut app, 11);
+        assert_eq!(swimming.mode, MovementMode::Swim);
+        assert!(swimming.position.z - submerged.z < 0.1);
+
+        let mut online = app.world_mut().resource_mut::<online::OnlineState>();
+        let mut player = online.world().player().unwrap().clone();
+        player.position = world_position([0.0, 3.0, 0.0], 0.0);
+        online::testing::admit(&mut online, 12, player);
+        // The new zone has a floor but no mapped water at the old surface.
+        let dry = CollisionWorld::new([[
+            [-20.0, -12.0, -20.0],
+            [20.0, -12.0, -20.0],
+            [0.0, -12.0, 20.0],
+        ]])
+        .unwrap();
+        app.insert_resource(Collision(Some(dry)));
+        arm(&mut app, 12);
+        let falling = next_move(&mut app, 12);
+        assert_eq!(falling.mode, MovementMode::Fall);
+        assert!(falling.position.z < walking.position.z);
+    }
+
+    #[test]
+    fn jesus_mode_moves_over_lava_with_an_ordinary_sample() {
+        let (mut app, receiver) = app();
+        app.insert_resource(Collision(Some(liquid_pool(
+            eq_client_core::movement::Liquid::Lava,
+        ))));
+        app.world_mut().resource_mut::<Controls>().airborne = Some(AirborneController::default());
+        movement_choice(&mut app, Fix::JesusMode, true);
+        app.update();
+        let ClientCommand::Move(walking) = receiver.try_recv().unwrap() else {
+            panic!("expected a grounded movement proposal");
+        };
+        assert_eq!(walking.mode, MovementMode::Forward);
+        assert!((walking.position.z - 3.0).abs() < 0.001);
+        assert!(walking.position.x < -0.01);
+        assert!(walking.position.x.hypot(walking.position.y) < 0.61);
+        assert!(receiver.try_recv().is_err());
+        accept(&mut app, &walking);
+
+        movement_choice(&mut app, Fix::JesusMode, false);
+        app.update();
+        let ClientCommand::Move(falling) = receiver.try_recv().unwrap() else {
+            panic!("expected ordinary gravity after disabling the option");
+        };
+        assert_eq!(falling.mode, MovementMode::Fall);
+        assert!(falling.position.z < walking.position.z);
+    }
+
+    #[test]
+    fn jesus_mode_is_inert_where_the_session_withholds_gameplay_departures() {
+        let (mut app, receiver) = app();
+        {
+            let mut state = app.world_mut().resource_mut::<online::OnlineState>();
+            let capabilities: Vec<_> = eq_client_core::Capability::ALL
+                .into_iter()
+                .filter(|capability| *capability != eq_client_core::Capability::GameplayDepartures)
+                .collect();
+            let mut player = online::testing::player(7);
+            player.position = world_position([0.0, 3.0, 0.0], 0.0);
+            online::testing::news(
+                &mut state,
+                [eq_client_core::WorldEvent::Entered {
+                    capabilities,
+                    choices: Vec::new(),
+                    session_id: 12,
+                    zone: "qeytoqrg".into(),
+                    player: Box::new(player),
+                    far_clip: None,
+                    spell_landing_flag: None,
+                }],
+            );
+            online::testing::connect(&mut state, true);
+        }
+        app.insert_resource(Collision(Some(liquid_pool(
+            eq_client_core::movement::Liquid::Water,
+        ))));
+        {
+            // The session has heard this body's climb for the new admission,
+            // as the fixture arranges for session 11.
+            let mut controls = app.world_mut().resource_mut::<Controls>();
+            controls.airborne = Some(AirborneController::default());
+            controls.climb_sent = Some((
+                12,
+                eq_client_assets::falls::TITANIUM.climb_per_step(3.0, 6.0),
+            ));
+        }
+        movement_choice(&mut app, Fix::JesusMode, true);
+        app.update();
+        let ClientCommand::Move(falling) = receiver.try_recv().unwrap() else {
+            panic!("expected ordinary gravity where the departure is withheld");
+        };
+        assert_eq!(falling.session_id, 12);
+        assert_eq!(falling.mode, MovementMode::Fall);
+        assert!(falling.position.z < 3.0);
     }
 
     #[test]
@@ -4764,6 +5279,7 @@ mod tests {
                 request_id: 1,
                 session_id: 11,
                 spawn_id: None,
+                expected_pet: None,
             })
             .unwrap();
         app.insert_resource(crate::outbox::Outbox::new(Some(sender)));

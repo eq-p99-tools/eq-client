@@ -44,12 +44,16 @@ pub(super) fn spawn(commands: &mut Commands) {
     super::windows::passive(commands, frame);
     super::windows::identify(commands, frame, super::windows::WindowId::Target);
     commands.entity(frame).with_children(|panel| {
-        panel.spawn((
-            TargetName,
-            Text::new("No target"),
-            theme::font(Size::Heading),
-            TextColor(theme::INK_WARM),
-        ));
+        centered_line(
+            panel,
+            Node::default(),
+            (
+                TargetName,
+                Text::new("No target"),
+                theme::bold_font(Size::Heading),
+                TextColor(theme::INK_WARM),
+            ),
+        );
         panel
             .spawn((
                 Node {
@@ -70,13 +74,35 @@ pub(super) fn spawn(commands: &mut Commands) {
                     BackgroundColor(theme::HP),
                 ));
             });
-        panel.spawn((
-            TargetDetails,
-            Text::new("Click or Tab to select"),
-            theme::font(Size::Small),
-            TextColor(theme::INK),
-        ));
+        centered_line(
+            panel,
+            Node::default(),
+            (
+                TargetDetails,
+                theme::text("Click or Tab to select", Size::Small, theme::INK),
+            ),
+        );
     });
+}
+
+/// Centers a line in its box. Auto margins absorb spare room and leave an
+/// oversized name at the left edge so clipping keeps the start readable.
+pub(super) fn centered_line(parent: &mut ChildSpawnerCommands, bounds: Node, text: impl Bundle) {
+    parent
+        .spawn(Node {
+            align_items: AlignItems::Center,
+            overflow: Overflow::clip(),
+            ..bounds
+        })
+        .with_child((
+            text,
+            Node {
+                flex_shrink: 0.0,
+                margin: UiRect::axes(Val::Auto, px(0)),
+                ..default()
+            },
+            TextLayout::new(Justify::Left, LineBreak::NoWrap),
+        ));
 }
 
 /// Picks visible model triangles or cycles the stable ID order of nearby rendered entities.
@@ -312,25 +338,35 @@ pub(super) fn input(
 /// Shared submission for scene, keyboard and map choices. A failed send never
 /// changes the local target; choosing the current target sends nothing again.
 pub(crate) fn select(online: &mut OnlineState, outbox: &Outbox, selected: Option<u16>) {
+    if let Err(refusal) = try_select(online, outbox, selected, None) {
+        outbox.refused(refusal);
+    }
+}
+
+/// Selects a spawn and reports queue refusal to callers with their own status.
+pub(super) fn try_select(
+    online: &mut OnlineState,
+    outbox: &Outbox,
+    selected: Option<u16>,
+    expected_pet: Option<eq_client_core::pets::PetIdentity>,
+) -> Result<(), crate::outbox::Refusal> {
     if selected == online.world().target().selected && !online.world().target_stale() {
-        return;
+        return Ok(());
     }
     let request_id = online.world().next_target_request();
     // Offline, the choice is the viewer's alone; online, the outbox says
     // why a choice did not leave.
-    if online.enabled
-        && outbox
-            .post(online.world(), |stamp| ClientCommand::SelectTarget {
-                session_id: stamp.session_id,
-                request_id,
-                spawn_id: selected,
-            })
-            .is_err()
-    {
-        return;
+    if online.enabled {
+        outbox.try_post(online.world(), |stamp| ClientCommand::SelectTarget {
+            session_id: stamp.session_id,
+            request_id,
+            spawn_id: selected,
+            expected_pet,
+        })?;
     }
     // A choice sent says nothing, as in the official client.
     online.select_target(selected);
+    Ok(())
 }
 
 /// What a click's ray meets of one targetable spawn, line of sight
@@ -1337,7 +1373,8 @@ mod tests {
             ClientCommand::SelectTarget {
                 request_id: 1,
                 session_id: 1,
-                spawn_id: Some(7)
+                spawn_id: Some(7),
+                expected_pet: None,
             }
         ));
         assert_eq!(app.world().get::<Text>(label).unwrap().0, "You");

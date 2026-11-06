@@ -2,6 +2,60 @@
 
 ## Unreleased
 
+- Hold Titanium movement after a fresh placement below a nearby installed
+  floor with neither a lower surface nor mapped liquid below. Preserve the
+  received position and resume when a correction or collision change permits it.
+- Include the admitted size, local body, floor support, and target sightline
+  in script movement reports.
+- Refresh the player's held models and paperdoll after a submitted Titanium
+  equipment move when the item definition supplies a base model. Received
+  wear and inventory corrections take precedence.
+- Add the off-by-default Jesus Mode option. Walk on mapped water and lava
+  reached from above at ordinary ground speed where gameplay departures
+  are offered.
+- Center the target name and draw it in bold where the face is available.
+- Keep detached chat windows in their previous stack order when the HUD is
+  rebuilt. The skinned dock stays bare when empty, and chat links remain
+  clickable when their lines are nested within the viewport.
+- Give spellbook search and set names the same input focus rule as other
+  controls, including when a local script runs with the window unfocused.
+- Apply received helmet dyes to numbered helmet textures while preserving the
+  exposed face. Draw received one-shot animations at their playback rate.
+- Fire a bow or throw a weapon once from the Titanium Actions window, a
+  hotbar binding, `/ranged`, or the script step `slash ranged`. The client
+  rechecks the target and equipment before sending and shows server-reported
+  combat and inventory updates.
+- Use `/stopsong` as a Bard on Titanium EQEmu. If a starting song has no
+  matching cast update within one second of the stop, the client marks the
+  stop unconfirmed and lets you try another gem. Song effects follow the
+  server's updates.
+- Stop spell-set apply with the actual reset reason and keep the panel's
+  selection and draft through temporary interruptions. An unanswered book edit
+  remains unconfirmed after a same-admission link interruption.
+- Keep Titanium mana and endurance estimates available for confirmed effects
+  whose mechanics cannot alter those capacities, including instrument-scaled
+  effects in that category.
+- Use `/pet target` to select your visible pet, including a charmed NPC.
+  Pet orders use the current pet identity, and attack uses the current
+  target selection. Ownership loss, death and spawn replacement clear stale
+  pet details. `/pet guard me` sends its own Titanium command.
+- Script reports include bounded merchant stock, selected quote, corpse listing
+  and exchange coin observations for local transaction checks.
+- Show Titanium EQEmu translocate consent and bind each resurrection or
+  translocate answer to the question displayed. A held click cannot answer a
+  replacement. Death, zoning and link loss dismiss the offer; an offer left
+  unanswered is declined after the session's deadline. Script reports
+  distinguish the current and displayed tokens from a worker answer, expiry,
+  interruption or refusal.
+- Scripts on a local EQEmu session can `gm spawn` a temporary NPC fixture
+  with explicit fields and `gm depop` the selected one; `move` accepts
+  `camera_forward` and `camera_back`.
+- Wade and swim through mapped water in Titanium EQEmu sessions. Look up
+  or down while swimming to surface or dive, and follow a supported bank
+  back onto land. The bounded swim rate does not model swimming skill,
+  breath, or drowning. Script reports separate local liquid contact,
+  rendered position, and the last server placement.
+
 - Report a local scripted `give` refusal through the script result once.
   Native click refusals still appear in chat.
 - Draw server-reported rain and snow in zones with a sky. See the World
@@ -10,9 +64,8 @@
 - Save, rename, delete and apply named spell gem layouts from the spellbook.
   Sets are stored per character and world. Spellbook changes wait for their
   individual results: a memorize, forget, delete or swap made while the
-  previous one is unanswered is refused with "Wait for the current spellbook
-  change", and a change unanswered for 40 s asks for a zone re-entry. An
-  interrupted set reports the last observed layout.
+  previous one is unanswered is refused. An interrupted set reports the last
+  observed layout.
 - Drag chat tabs to reorder them, open a separate chat window, or dock them into
   another tab strip. Closing a detached window returns its tabs to the main chat.
   Each character keeps the tab arrangement and window placements.

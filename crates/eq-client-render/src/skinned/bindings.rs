@@ -225,12 +225,10 @@ pub(super) fn does(id: &str, owner: WindowId) -> Option<Does> {
             _ => hot_button(id).map_or(Does::Nothing, Does::HotButton),
         });
     }
-    if owner == WindowId::Book {
-        match id {
-            "LeftButton" => return Some(Does::TurnsPage(false)),
-            "RightButton" => return Some(Does::TurnsPage(true)),
-            _ => (),
-        }
+    match (owner, id) {
+        (WindowId::Book, "LeftButton") => return Some(Does::TurnsPage(false)),
+        (WindowId::Book, "RightButton") => return Some(Does::TurnsPage(true)),
+        _ => (),
     }
     if owner == WindowId::Quantity {
         return Some(match id {
@@ -259,6 +257,7 @@ pub(super) fn does(id: &str, owner: WindowId) -> Option<Does> {
         "IW_Skills" => Does::Toggles(WindowId::Skills),
         "GVW_Give_Button" | "TRDW_Trade_Button" => Does::Gives,
         "ACP_MeleeAttackButton" => Does::Bound(Binding::Attack),
+        "ACP_RangeAttackButton" => Does::Bound(Binding::RangedAttack),
         "AMP_SitButton" => Does::Bound(Binding::Sit),
         "AMP_StandButton" => Does::Bound(Binding::Stand),
         "AMP_CampButton" => Does::Bound(Binding::Camp),

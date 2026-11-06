@@ -43,7 +43,7 @@ impl CollisionWorld {
     /// Flight puts the capsule at the actual feet. A touching floor must not
     /// consume the mesh's nearest hit and conceal a later wall. Visit candidate
     /// triangles through the BVH and retire only nonclosing face contacts.
-    fn flight_sweep(
+    pub(super) fn flight_sweep(
         &self,
         feet: Vec3,
         delta: Vec3,

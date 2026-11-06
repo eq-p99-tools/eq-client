@@ -10,7 +10,6 @@ use crate::hud::action_bar::{ActionRequests, BookChange, BookRequest};
 use crate::hud::messages::Messages;
 use bevy::prelude::*;
 use eq_client_core::BookActionStatus;
-use std::time::Instant;
 
 /// Says a memorization's or a scribe's lines as the session reports it: its
 /// beginning once the player sits for it, its end once the server answers,
@@ -18,33 +17,38 @@ use std::time::Instant;
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn say(
     online: Res<crate::online::OnlineState>,
-    requests: Res<ActionRequests>,
+    mut requests: ResMut<ActionRequests>,
     (names, messages): (Res<SpellNames>, Res<Messages>),
     mut chat: ResMut<ChatState>,
-    (mut seen, mut following): (Local<u64>, Local<Option<Instant>>),
 ) {
     let world = online.world();
-    let revision = world.book_action_revision();
-    if *seen == revision {
-        return;
-    }
-    *seen = revision;
-    let Some(request) = requests.book.as_ref() else {
-        *following = None;
+    let Some(request) = requests.book.as_mut() else {
         return;
     };
-    let status = world.book_action();
-    if let Some(said) = line(request, status, &mut following, (&names, &messages)) {
+    if world.ended() || !request.receipt.belongs_to(world.session_id()) {
+        requests.book = None;
+        return;
+    }
+    let Some(status) = request.receipt.status() else {
+        return;
+    };
+    if let Some(said) = line(request, &status, (&names, &messages)) {
         chat.history.push(system_line(said));
+    }
+    if matches!(
+        status,
+        BookActionStatus::Confirmed
+            | BookActionStatus::Cancelled(_)
+            | BookActionStatus::Rejected(_)
+    ) {
+        requests.book = None;
     }
 }
 
-/// The line the session's news about this request calls for, if any: the
-/// request whose lines are being said is the one whose beginning was said.
+/// Formats the line for this request's own progress or outcome.
 fn line(
-    request: &BookRequest,
-    status: Option<&BookActionStatus>,
-    following: &mut Option<Instant>,
+    request: &mut BookRequest,
+    status: &BookActionStatus,
     (names, messages): (&SpellNames, &Messages),
 ) -> Option<Said> {
     // The official lines by eqstr id: the beginning and the end, each with
@@ -57,27 +61,20 @@ fn line(
         ),
         BookChange::Scribe => ((12049, 12006, 12044), ("Scribing", "scribed", "Scribing")),
     };
-    let name = names.label(request.spell);
-    let ours = *following == Some(request.since);
     match status {
-        Some(BookActionStatus::Preparing) if !ours => {
-            *following = Some(request.since);
+        BookActionStatus::Preparing if !request.began => {
+            request.began = true;
+            let name = names.label(request.spell);
             let own = format!("{began} {name}.");
             Some(messages.said_or(begins, &[name], &own))
         }
-        // The session clears a change the server confirmed.
-        None if ours => {
-            *following = None;
+        BookActionStatus::Confirmed if request.began => {
+            let name = names.label(request.spell);
             let own = format!("{name} is {ended}.");
             Some(messages.said_or(ends, &[name], &own))
         }
-        Some(BookActionStatus::Cancelled(_)) if ours => {
-            *following = None;
+        BookActionStatus::Cancelled(_) if request.began => {
             Some(messages.said_text(stops, &format!("{stopped} stopped.")))
-        }
-        Some(BookActionStatus::Rejected(_)) => {
-            *following = None;
-            None
         }
         _ => None,
     }
@@ -86,91 +83,208 @@ fn line(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::online::{OnlineState, Updates, receive, testing};
+    use crate::spellbook::{BookEntry, GemChoice, ScribeCursor};
+    use crate::windows::{Shown, WindowId};
+    use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
+    use eq_client_core::{
+        ClientCommand, SpellBook, SpellUpdate, WorldEvent, WorldUpdate,
+        chat::ChatTab,
+        inventory::{InventorySlot, InventoryUpdate},
+        world::Link,
+    };
+    use std::sync::{Mutex, mpsc};
 
-    fn request(change: BookChange) -> BookRequest {
-        BookRequest {
-            since: Instant::now(),
-            label: String::new(),
-            change,
-            spell: 42,
+    struct Fixture {
+        app: App,
+        updates: mpsc::Sender<WorldUpdate>,
+        sent: mpsc::Receiver<ClientCommand>,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let mut online = OnlineState::new(true);
+            testing::admit(&mut online, 1, testing::player(7));
+            let mut book = SpellBook::default();
+            book.apply(&SpellUpdate::Slot {
+                slot: 1,
+                spell_id: 42,
+                mode: 0,
+            });
+            testing::book(&mut online, book);
+            let mut scroll = crate::preview::items().remove(0);
+            scroll.slot = InventorySlot::CURSOR;
+            scroll.scroll_spell = Some(73);
+            testing::inventory(&mut online, InventoryUpdate::Snapshot(vec![scroll]));
+            let mut app = crate::testing::app();
+            let (updates, incoming) = mpsc::channel();
+            let (queue, sent) = mpsc::sync_channel(4);
+            app.insert_resource(online)
+                .insert_resource(crate::outbox::Outbox::new(Some(queue)))
+                .insert_resource(SpellNames::parse("42^Synthetic spell\n73^Synthetic scroll"))
+                .insert_resource(Updates(Mutex::new(Some(incoming))))
+                .init_resource::<Assets<Mesh>>()
+                .init_resource::<Assets<SkinnedMeshInverseBindposes>>()
+                .init_resource::<Assets<StandardMaterial>>()
+                .add_systems(Startup, |mut commands: Commands| {
+                    crate::spellbook::spawn(&mut commands);
+                })
+                .add_systems(Update, (receive, crate::spellbook::update, say).chain());
+            app.world_mut()
+                .resource_mut::<Shown>()
+                .open(WindowId::Spellbook);
+            app.update();
+            Self { app, updates, sent }
+        }
+
+        fn click<T: Component>(&mut self, matches: impl Fn(&T) -> bool) {
+            let world = self.app.world_mut();
+            let control = world
+                .query::<(Entity, &T)>()
+                .iter(world)
+                .find(|(_, value)| matches(value))
+                .unwrap()
+                .0;
+            crate::clicks::testing::click(&mut self.app, control);
+        }
+
+        fn memorize(&mut self) {
+            self.click(|row: &BookEntry| row.0 == 0);
+            self.click(|gem: &GemChoice| gem.0 == 0);
+            assert!(matches!(
+                self.sent.try_recv().unwrap(),
+                ClientCommand::MemorizeSpell {
+                    session_id: 1,
+                    gem: 0,
+                    spell_id: 42,
+                    ..
+                }
+            ));
+            self.frame([status(BookActionStatus::Preparing)]);
+            assert_eq!(self.line_count("Memorizing Synthetic spell."), 1);
+        }
+
+        fn frame(&mut self, updates: impl IntoIterator<Item = WorldUpdate>) {
+            for update in updates {
+                self.updates.send(update).unwrap();
+            }
+            self.app.update();
+        }
+
+        fn line_count(&self, text: &str) -> usize {
+            self.app
+                .world()
+                .resource::<ChatState>()
+                .history
+                .lines(ChatTab::All)
+                .iter()
+                .filter(|(_, line)| line.message.text == text)
+                .count()
+        }
+
+        fn world(&self) -> &eq_client_core::world::ClientWorld {
+            self.app.world().resource::<OnlineState>().world()
         }
     }
 
-    /// The text of the line for this news, if any.
-    fn text(
-        request: &BookRequest,
-        status: Option<&BookActionStatus>,
-        following: &mut Option<Instant>,
-    ) -> Option<String> {
-        let names = SpellNames::parse("42^Synthetic spell");
-        // Stand-in words, not the official ones, under their ids.
-        let messages = Messages::parse(
-            "EQST0002\n0 6\n12053 Begin %1\n12007 End %1\n12045 Stop\n12049 Scribe %1\n12006 Scribed %1\n12044 Scribe stop\n",
-        );
-        line(request, status, following, (&names, &messages)).map(|said| said.words.text)
+    fn status(status: BookActionStatus) -> WorldUpdate {
+        WorldUpdate::Game(WorldEvent::BookAction(status))
+    }
+
+    fn spell(update: SpellUpdate) -> WorldUpdate {
+        WorldUpdate::Game(WorldEvent::Spell(update))
     }
 
     #[test]
-    fn a_memorization_says_when_it_begins_and_ends_once_each() {
-        let memorizing = request(BookChange::Memorize);
-        let mut following = None;
-        assert_eq!(
-            text(
-                &memorizing,
-                Some(&BookActionStatus::Preparing),
-                &mut following
-            )
-            .as_deref(),
-            Some("Begin Synthetic spell")
+    fn a_rejected_memorize_does_not_consume_a_later_fallback_delete_confirmation() {
+        use crate::book_delete::Action;
+
+        let mut fixture = Fixture::new();
+        fixture.memorize();
+        fixture.frame([
+            status(BookActionStatus::Rejected("Memorize refused".into())),
+            WorldUpdate::Connection(Link::Zoning),
+        ]);
+        assert!(fixture.world().book_action_status().is_none());
+        assert!(
+            fixture
+                .app
+                .world()
+                .resource::<ActionRequests>()
+                .book
+                .is_none()
         );
-        assert_eq!(
-            text(
-                &memorizing,
-                Some(&BookActionStatus::Preparing),
-                &mut following
-            ),
-            None
-        );
-        assert_eq!(
-            text(
-                &memorizing,
-                Some(&BookActionStatus::AwaitingReply),
-                &mut following
-            ),
-            None
-        );
-        assert_eq!(
-            text(&memorizing, None, &mut following).as_deref(),
-            Some("End Synthetic spell")
-        );
-        // A later change the server confirms, such as a move, is not this
-        // memorization's end.
-        assert_eq!(text(&memorizing, None, &mut following), None);
+        fixture.frame([WorldUpdate::Connection(Link::Connected)]);
+
+        fixture.click(|action: &Action| *action == Action::Select);
+        fixture.click(|action: &Action| *action == Action::Confirm);
+        assert!(matches!(
+            fixture.sent.try_recv().unwrap(),
+            ClientCommand::DeleteSpell {
+                session_id: 1,
+                slot: 1,
+                spell_id: 42,
+                ..
+            }
+        ));
+        fixture.frame([
+            status(BookActionStatus::Confirmed),
+            spell(SpellUpdate::BookDeletion {
+                slot: 1,
+                success: true,
+            }),
+        ]);
+
+        assert_eq!(fixture.world().gem(0), None);
+        assert_eq!(fixture.world().spell_book().unwrap().slots()[1], None);
+        assert_eq!(fixture.line_count("Synthetic spell is memorized."), 0);
     }
 
     #[test]
-    fn a_scribe_says_when_it_stops_and_a_refusal_says_nothing() {
-        let scribing = request(BookChange::Scribe);
-        let mut following = None;
-        assert_eq!(
-            text(
-                &scribing,
-                Some(&BookActionStatus::Preparing),
-                &mut following
-            )
-            .as_deref(),
-            Some("Scribe Synthetic spell")
-        );
-        let cancelled = BookActionStatus::Cancelled("moved".into());
-        assert_eq!(
-            text(&scribing, Some(&cancelled), &mut following).as_deref(),
-            Some("Scribe stop")
-        );
-        assert_eq!(text(&scribing, Some(&cancelled), &mut following), None);
-        // One the session refuses before the player sits says nothing.
-        let refused = request(BookChange::Memorize);
-        let rejected = BookActionStatus::Rejected("busy".into());
-        assert_eq!(text(&refused, Some(&rejected), &mut following), None);
-        assert_eq!(text(&refused, None, &mut following), None);
+    fn a_resumed_memorize_announces_only_its_exact_late_confirmation_once() {
+        let mut fixture = Fixture::new();
+        fixture.memorize();
+        fixture.frame([
+            status(BookActionStatus::AwaitingReply),
+            WorldUpdate::Connection(Link::Zoning),
+        ]);
+        fixture.frame([
+            WorldUpdate::Connection(Link::Connected),
+            status(BookActionStatus::Unconfirmed),
+            status(BookActionStatus::Confirmed),
+            spell(SpellUpdate::Slot {
+                slot: 1,
+                spell_id: 42,
+                mode: 1,
+            }),
+        ]);
+        assert_eq!(fixture.line_count("Synthetic spell is memorized."), 0);
+        fixture.frame([spell(SpellUpdate::Slot {
+            slot: 0,
+            spell_id: 42,
+            mode: 1,
+        })]);
+        fixture.app.update();
+        assert_eq!(fixture.world().gem(0), Some(42));
+        assert_eq!(fixture.line_count("Memorizing Synthetic spell."), 1);
+        assert_eq!(fixture.line_count("Synthetic spell is memorized."), 1);
+    }
+
+    #[test]
+    fn scribe_chat_preserves_the_own_cancellation_through_a_link_reset() {
+        let mut fixture = Fixture::new();
+        fixture.click(|_: &ScribeCursor| true);
+        assert!(matches!(
+            fixture.sent.try_recv().unwrap(),
+            ClientCommand::ScribeSpell { spell_id: 73, .. }
+        ));
+        fixture.frame([status(BookActionStatus::Preparing)]);
+        fixture.frame([
+            status(BookActionStatus::Cancelled("The character moved".into())),
+            WorldUpdate::Connection(Link::Zoning),
+        ]);
+        assert_eq!(fixture.line_count("Scribing Synthetic scroll."), 1);
+        assert_eq!(fixture.line_count("Scribing stopped."), 1);
+        assert_eq!(fixture.line_count("Synthetic scroll is scribed."), 0);
     }
 }

@@ -13,7 +13,7 @@ pub(super) const MAX_WAIT: Duration = Duration::from_mins(2);
 const MAX_TRACE: Duration = Duration::from_secs(10);
 const MAX_WALK: Duration = Duration::from_mins(1);
 /// `EQEmu` GM commands a script may send, without the leading `#`.
-const GM_COMMANDS: [&str; 36] = [
+const GM_COMMANDS: [&str; 37] = [
     // The server's own view of the player's stats, weight and coins among
     // them, said back in chat; reads only.
     "showstats",
@@ -40,6 +40,8 @@ const GM_COMMANDS: [&str; 36] = [
     "viewrecipe",
     // A temporary NPC at the GM's feet, and coins or items on the target.
     "spawn",
+    // Removes only the selected NPC without starting a respawn timer.
+    "depop",
     "npcloot",
     "castspell",
     "damage",
@@ -227,6 +229,8 @@ pub enum Step {
 pub enum MoveCommand {
     Forward,
     Back,
+    CameraForward,
+    CameraBack,
     StrafeLeft,
     StrafeRight,
     TurnLeft,
@@ -238,6 +242,8 @@ impl MoveCommand {
         Some(match name {
             "forward" => Self::Forward,
             "back" => Self::Back,
+            "camera_forward" => Self::CameraForward,
+            "camera_back" => Self::CameraBack,
             "strafe_left" => Self::StrafeLeft,
             "strafe_right" => Self::StrafeRight,
             "turn_left" => Self::TurnLeft,
@@ -612,7 +618,7 @@ pub(super) fn parse_step(line: &str) -> Result<Step, String> {
 /// those that change nothing beyond the test characters.
 fn parse_slash(words: &[&str]) -> Result<Step, String> {
     Ok(match words {
-        [command] if matches!(*command, "camp" | "sit" | "stand") => {
+        [command] if matches!(*command, "camp" | "sit" | "stand" | "ranged" | "stopsong") => {
             Step::Slash(format!("/{command}"))
         }
         ["camp", "desktop"] => Step::Slash("/camp desktop".into()),
@@ -968,9 +974,13 @@ fn coin_kind(word: &str) -> Result<eq_client_core::money::Coin, String> {
     })
 }
 
-/// `gm <command> [arguments]`: an allowed `EQEmu` command without its `#`, with up
-/// to four plain arguments.
+/// `gm <command> [arguments]`: an allowed local test command without its `#`.
 fn parse_gm(words: &[&str]) -> Result<Step, String> {
+    gm_command(words).map(Step::Gm)
+}
+
+/// Validate the text for both parsed and programmatically constructed steps.
+pub(super) fn gm_command(words: &[&str]) -> Result<String, String> {
     let [command, arguments @ ..] = words else {
         return Err("gm takes a command".into());
     };
@@ -982,13 +992,62 @@ fn parse_gm(words: &[&str]) -> Result<Step, String> {
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | ':'))
     };
-    if arguments.len() > 4 || !arguments.iter().all(plain) {
-        return Err("gm takes up to four plain arguments".into());
+    if !arguments.iter().all(plain) {
+        return Err("gm takes plain arguments".into());
+    }
+    match *command {
+        "spawn" => match arguments {
+            [_, ..] if arguments.len() <= 4 => (),
+            _ if fixture_spawn(arguments) => (),
+            _ => return Err(concat!(
+                "gm spawn takes a name and up to three short arguments, or ",
+                "NAME RACE LEVEL TEXTURE HEALTH GENDER CLASS PRIMARY_MODEL SECONDARY_MODEL 0 BODY_TYPE"
+            ).into()),
+        },
+        "depop" if !arguments.is_empty() => return Err("gm depop takes no arguments".into()),
+        _ if arguments.len() > 4 => return Err("gm takes up to four plain arguments".into()),
+        _ => (),
     }
     if *command == "rules" && !matches!(arguments, ["set", _, _] | ["reload"]) {
         return Err("gm rules takes set <Category:Rule> <value> or reload".into());
     }
-    Ok(Step::Gm(words.join(" ")))
+    Ok(words.join(" "))
+}
+
+/// The complete `EQEmu` temporary NPC form uses explicit decimal fields.
+/// Keep the merchant unset so the fixture cannot expose merchant stock.
+fn fixture_spawn(arguments: &[&str]) -> bool {
+    let [
+        name,
+        race,
+        level,
+        texture,
+        health,
+        gender,
+        class,
+        primary,
+        secondary,
+        "0",
+        body,
+    ] = arguments
+    else {
+        return false;
+    };
+    let within = |word: &str, low, high| {
+        word.parse::<u32>()
+            .is_ok_and(|value| (low..=high).contains(&value))
+    };
+    (1..=60).contains(&name.len())
+        && name.bytes().all(|byte| byte.is_ascii_alphabetic())
+        && within(race, 1, u32::from(u16::MAX))
+        && within(level, 1, u32::from(u8::MAX))
+        && within(texture, 0, u32::from(u8::MAX))
+        && within(health, 1, 2_100_000_000)
+        && within(gender, 0, 2)
+        && within(class, 1, u32::from(u8::MAX))
+        && within(primary, 0, u32::MAX)
+        && within(secondary, 0, u32::MAX)
+        && within(body, 0, u32::from(u8::MAX))
 }
 
 /// A window's key, such as `skills`, as the window registry spells it.
@@ -1464,6 +1523,16 @@ mod tests {
     }
 
     #[test]
+    fn ranged_slash_uses_the_current_target_and_takes_no_arguments() {
+        let base = Path::new("private");
+        assert_eq!(
+            parse("slash ranged\n", base).unwrap(),
+            [Step::Slash("/ranged".into())]
+        );
+        assert!(parse("slash ranged 12\n", base).is_err());
+    }
+
+    #[test]
     fn moving_steps_name_commands_and_key_steps_name_the_keypad() {
         let base = Path::new("private");
         assert_eq!(
@@ -1651,6 +1720,44 @@ mod tests {
             "gm rules set Character:FoodLossPerUpdate",
         ] {
             assert!(parse(bad, base).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn gm_fixture_commands_validate_the_complete_spawn_and_bare_depop() {
+        let base = Path::new("private");
+        for command in [
+            "spawn ScriptFixture",
+            "spawn ScriptFixture 1 1 0",
+            "spawn ScriptFixture 60 1 0 200 2 1 0 0 0 3",
+            "depop",
+        ] {
+            assert_eq!(
+                parse(&format!("gm {command}"), base).unwrap(),
+                [Step::Gm(command.into())]
+            );
+        }
+        for command in [
+            "spawn",
+            "spawn ScriptFixture 60 1 0 200",
+            "spawn ScriptFixture 60 1 0 200 2 1 0 0 0",
+            "spawn ScriptFixture 60 1 0 200 2 1 0 0 0 3 extra",
+            "spawn ScriptFixture 60 1 0 200 2 1 0 0 0 undead",
+            "spawn ScriptFixture 60 1 0 - 2 1 0 0 0 3",
+            "spawn ScriptFixture 60 1 0 0 2 1 0 0 0 3",
+            "spawn ScriptFixture 60 1 0 2100000001 2 1 0 0 0 3",
+            "spawn ScriptFixture 60 1 0 200 3 1 0 0 0 3",
+            "spawn ScriptFixture 60 1 0 200 2 1 -1 0 0 3",
+            "spawn ScriptFixture 60 1 0 200 2 1 0 0 1 3",
+            "spawn ScriptFixture 60 1 0 200 2 1 0 0 0 256",
+            "spawn ScriptFixture2 60 1 0 200 2 1 0 0 0 3",
+            "depop ScriptFixture",
+            "depop 1",
+            "depopall",
+            "depopzone",
+            "damage 1 2 3 4 5",
+        ] {
+            assert!(parse(&format!("gm {command}"), base).is_err(), "{command}");
         }
     }
 

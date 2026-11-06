@@ -650,6 +650,16 @@ impl Typing {
     }
 }
 
+/// Whether the primary window is focused or the current script can use input
+/// without native focus. Background runs must hold their per-frame guard.
+pub(crate) fn window_owns_input(
+    windows: &Query<&Window, With<PrimaryWindow>>,
+    script: Option<&crate::script::Script>,
+) -> bool {
+    windows.single().is_ok_and(|window| window.focused)
+        || script.is_some_and(crate::script::Script::unattended)
+}
+
 /// The keyboard as the game sees it: the bindings, and whether the game has
 /// the keyboard at all (the window has focus, the chat is not being typed
 /// in and no login screen is up). Systems that take keys read them through
@@ -666,15 +676,9 @@ pub(crate) struct Keys<'w, 's> {
 }
 
 impl Keys<'_, '_> {
-    /// Whether native focus or the current script's input policy owns the
-    /// window. Background scripts qualify only after their per-frame native
-    /// input guard succeeds; local/offline default behavior is retained.
+    /// Whether native focus or the script's input policy owns the window.
     pub(crate) fn window_focused(&self) -> bool {
-        self.windows.single().is_ok_and(|window| window.focused)
-            || self
-                .script
-                .as_ref()
-                .is_some_and(|script| script.unattended())
+        window_owns_input(&self.windows, self.script.as_deref())
     }
 
     /// Whether the game has the keyboard.

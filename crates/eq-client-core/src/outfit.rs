@@ -178,17 +178,21 @@ pub fn material(
     }
 }
 
-/// The tint on the slot that dresses this base material, if any. Robes take
-/// the chest's tint and a helm the head's (`helm` says the material is on a
-/// helmed head); faces are never tinted.
+/// The tint for the material actually drawn. Robes take the chest's tint.
+/// On a helmed head, a numbered helmet material or a separately named
+/// helmet surface takes the head's tint. Material 00 face surfaces keep
+/// their original color, including the exposed face under a helm.
 #[must_use]
-pub fn tint(base: &str, helm: bool, appearance: &Appearance) -> Option<[u8; 3]> {
-    let base = base.to_ascii_uppercase();
-    if base.starts_with("CLK") {
+pub fn tint(material: &str, helm: bool, appearance: &Appearance) -> Option<[u8; 3]> {
+    let material = material.to_ascii_uppercase();
+    if material.starts_with("CLK") {
         return appearance.tint(TextureSlot::Chest);
     }
-    match parse(&base).and_then(|name| slot(name.part)) {
-        Some(TextureSlot::Head) => None,
+    let name = parse(&material);
+    match name.as_ref().and_then(|name| slot(name.part)) {
+        Some(TextureSlot::Head) => name
+            .filter(|name| helm && name.material != "00")
+            .and_then(|_| appearance.tint(TextureSlot::Head)),
         Some(slot) => appearance.tint(slot),
         None if helm => appearance.tint(TextureSlot::Head),
         None => None,
@@ -335,6 +339,35 @@ mod tests {
         assert_eq!(tint("HELM14_MDF", false, &look), None);
         // Robes take the chest's tint.
         assert_eq!(tint("CLK0401_MDF", false, &look), Some([200, 10, 10]));
+    }
+
+    #[test]
+    fn helmet_dye_follows_the_authored_surface_on_human_and_barbarian_heads() {
+        for (race, body, head, helmet, base_face, face) in [
+            (1, 1, 3, "HELM15_MDF", "HUMHE0001_MDF", "HUMHE0021_MDF"),
+            (2, 0, 1, "BAMHE0102_MDF", "BAMHE0001_MDF", "BAMHE0021_MDF"),
+        ] {
+            let mut look = wearing(TextureSlot::Head, u32::from(head));
+            look.materials[TextureSlot::Chest.index()] = 13;
+            look.face = 2;
+            look.tints[TextureSlot::Head.index()] = Some([12, 35, 180]);
+            let shape_with_helm = |helm| shape(race, &look, helm, |body| body <= 1, |n| n == head);
+            assert_eq!(shape_with_helm(true), Shape { body, head });
+            assert_eq!(shape_with_helm(false), Shape { body, head: 0 });
+
+            let has = |name: &str| name == helmet || name == face;
+            let selected = material(helmet, true, &look, has);
+            assert_eq!(selected, helmet);
+            assert_eq!(tint(&selected, true, &look), Some([12, 35, 180]));
+
+            let uncovered = material(base_face, false, &look, has);
+            assert_eq!(uncovered, face);
+            assert_eq!(tint(&uncovered, false, &look), None);
+
+            let exposed = material(base_face, true, &look, has);
+            assert_eq!(exposed, face);
+            assert_eq!(tint(&exposed, true, &look), None);
+        }
     }
 
     #[test]

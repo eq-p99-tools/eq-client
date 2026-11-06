@@ -54,6 +54,7 @@ mod tests {
 
     fn item(id: u32) -> ItemDetails {
         ItemDetails {
+            base_held_model: None,
             equipment: None,
             bonuses: None,
             id,

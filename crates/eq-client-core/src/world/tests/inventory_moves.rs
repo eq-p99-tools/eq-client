@@ -3,6 +3,8 @@ use super::*;
 use crate::inventory::{
     InventoryActor, InventoryMove, InventorySlot, InventoryUpdate, MoveQuantity,
 };
+use crate::outfit::{TextureSlot, WearChange};
+use std::num::NonZeroU16;
 
 fn setup() -> ClientWorld {
     let mut world = admitted();
@@ -69,6 +71,264 @@ fn result(
             error: error.map(str::to_owned),
         },
     )
+}
+
+fn held_item(slot: InventorySlot, id: u32, model: u16) -> crate::inventory::InventoryItem {
+    let mut item = chest();
+    item.slot = slot;
+    item.rules.item_type = 0; // One-handed slash.
+    item.details.id = id;
+    item.details.slots = 1 << 13;
+    item.details.bonuses = Some(crate::ItemBonuses::default());
+    item.details.base_held_model = NonZeroU16::new(model);
+    item
+}
+
+fn own_primary_wear(world: &mut ClientWorld, material: u32) {
+    game(
+        world,
+        WorldEvent::WearChange(WearChange {
+            spawn_id: 9,
+            slot: TextureSlot::Primary,
+            material,
+            tint: None,
+        }),
+    );
+}
+
+fn held_swap(model: u16) -> ClientWorld {
+    let mut world = admitted();
+    own_primary_wear(&mut world, 37);
+    game(
+        &mut world,
+        inventory(vec![
+            held_item(InventorySlot(13), 101, 37),
+            held_item(InventorySlot::CURSOR, 102, model),
+        ]),
+    );
+    world
+}
+
+fn submit_primary_swap(world: &mut ClientWorld) {
+    let request = queue(world, 30, 13);
+    assert!(world.held_model_estimate(TextureSlot::Primary).is_none());
+    let prediction = world
+        .worker_inventory()
+        .plan_move(&request, actor())
+        .unwrap();
+    result(world, &request, Some(prediction), None);
+}
+
+#[test]
+fn same_zone_held_swap_keeps_submitted_provenance_through_silence() {
+    use HeldModelEstimate::{ReceivedInventory, Submitted};
+    let mut world = held_swap(38);
+    submit_primary_swap(&mut world);
+    let primary = |world: &ClientWorld| world.held_model_estimate(TextureSlot::Primary);
+    assert_eq!(primary(&world), Some(Submitted(38)));
+    game(&mut world, WorldEvent::Inventory(InventoryUpdate::Settled));
+    assert!(!world.worker_inventory().predicted());
+    assert_eq!(primary(&world), Some(Submitted(38)));
+    game(
+        &mut world,
+        WorldEvent::Inventory(InventoryUpdate::Set(vec![held_item(
+            InventorySlot::CURSOR,
+            101,
+            37,
+        )])),
+    );
+    assert_eq!(primary(&world), Some(Submitted(38)));
+    assert_eq!(
+        world
+            .player()
+            .unwrap()
+            .appearance
+            .material(TextureSlot::Primary),
+        37
+    );
+
+    game(
+        &mut world,
+        WorldEvent::Inventory(InventoryUpdate::Set(vec![held_item(
+            InventorySlot(13),
+            102,
+            38,
+        )])),
+    );
+    assert_eq!(primary(&world), Some(ReceivedInventory(38)));
+    own_primary_wear(&mut world, 93);
+    assert_eq!(primary(&world), None);
+    // A later slot echo cannot replace the received appearance with a base model.
+    game(
+        &mut world,
+        WorldEvent::Inventory(InventoryUpdate::Set(vec![held_item(
+            InventorySlot(13),
+            102,
+            38,
+        )])),
+    );
+    assert_eq!(primary(&world), None);
+    assert_eq!(
+        world
+            .player()
+            .unwrap()
+            .appearance
+            .material(TextureSlot::Primary),
+        93
+    );
+}
+
+#[test]
+fn refused_or_corrected_held_swaps_leave_received_wear_in_charge() {
+    let primary = |world: &ClientWorld| world.held_model_estimate(TextureSlot::Primary);
+    let mut refused = held_swap(38);
+    let request = queue(&mut refused, 30, 13);
+    result(&mut refused, &request, None, Some("Refused locally"));
+    assert_eq!(primary(&refused), None);
+
+    for settled in [false, true] {
+        let mut corrected = held_swap(38);
+        submit_primary_swap(&mut corrected);
+        if settled {
+            game(
+                &mut corrected,
+                WorldEvent::Inventory(InventoryUpdate::Settled),
+            );
+        }
+        game(
+            &mut corrected,
+            WorldEvent::Inventory(InventoryUpdate::Set(vec![held_item(
+                InventorySlot(13),
+                101,
+                37,
+            )])),
+        );
+        assert_eq!(primary(&corrected), None);
+        assert_eq!(
+            corrected.worker_inventory().items()[&InventorySlot(13)]
+                .details
+                .id,
+            101
+        );
+        assert_eq!(
+            corrected
+                .player()
+                .unwrap()
+                .appearance
+                .material(TextureSlot::Primary),
+            37
+        );
+    }
+}
+
+#[test]
+fn a_matching_hand_receipt_without_model_retracts_only_the_visual_estimate() {
+    let mut world = held_swap(38);
+    submit_primary_swap(&mut world);
+    assert_eq!(
+        world.held_model_estimate(TextureSlot::Primary),
+        Some(HeldModelEstimate::Submitted(38))
+    );
+    game(
+        &mut world,
+        WorldEvent::Inventory(InventoryUpdate::Set(vec![held_item(
+            InventorySlot(13),
+            102,
+            0,
+        )])),
+    );
+    assert_eq!(world.held_model_estimate(TextureSlot::Primary), None);
+    assert!(!world.worker_inventory().stale());
+    assert_eq!(
+        world
+            .worker_inventory()
+            .prediction_origins()
+            .map(|(slot, _)| slot)
+            .collect::<Vec<_>>(),
+        [InventorySlot::CURSOR]
+    );
+}
+
+#[test]
+fn secondary_move_can_display_and_clear_a_held_model() {
+    use HeldModelEstimate::{ReceivedInventory, Submitted};
+    let mut world = admitted();
+    let mut shield = held_item(InventorySlot::CURSOR, 103, 205);
+    shield.details.slots = 1 << 14;
+    shield.rules.item_type = 8; // Shield.
+    game(&mut world, inventory(vec![shield]));
+
+    let submit = |world: &mut ClientWorld, from, to| {
+        let request = queue(world, from, to);
+        let prediction = world
+            .worker_inventory()
+            .plan_move(&request, actor())
+            .unwrap();
+        result(world, &request, Some(prediction), None);
+    };
+    let secondary = |world: &ClientWorld| world.held_model_estimate(TextureSlot::Secondary);
+    submit(&mut world, 30, 14);
+    assert_eq!(secondary(&world), Some(Submitted(205)));
+    assert_eq!(world.held_model_estimate(TextureSlot::Primary), None);
+
+    game(
+        &mut world,
+        WorldEvent::WearChange(WearChange {
+            spawn_id: 9,
+            slot: TextureSlot::Secondary,
+            material: 205,
+            tint: None,
+        }),
+    );
+    assert_eq!(secondary(&world), None);
+    game(&mut world, WorldEvent::Inventory(InventoryUpdate::Settled));
+    submit(&mut world, 14, 30);
+    assert_eq!(secondary(&world), Some(Submitted(0)));
+    game(
+        &mut world,
+        WorldEvent::Inventory(InventoryUpdate::Remove(InventorySlot(14))),
+    );
+    assert_eq!(secondary(&world), Some(ReceivedInventory(0)));
+    assert_eq!(
+        world
+            .player()
+            .unwrap()
+            .appearance
+            .material(TextureSlot::Secondary),
+        205
+    );
+}
+
+#[test]
+fn a_new_admission_or_unknown_base_model_uses_received_appearance() {
+    let mut world = held_swap(38);
+    submit_primary_swap(&mut world);
+    let mut admission = entered(2);
+    let WorldEvent::Entered { player, .. } = &mut admission else {
+        unreachable!();
+    };
+    player.appearance.materials[TextureSlot::Primary.index()] = 44;
+    game(&mut world, admission);
+    connection(&mut world, true, false);
+    assert!(world.held_model_estimate(TextureSlot::Primary).is_none());
+    assert_eq!(
+        world
+            .player()
+            .unwrap()
+            .appearance
+            .material(TextureSlot::Primary),
+        44
+    );
+
+    let mut unknown = held_swap(0);
+    submit_primary_swap(&mut unknown);
+    assert!(unknown.held_model_estimate(TextureSlot::Primary).is_none());
+    assert_eq!(
+        unknown.worker_inventory().items()[&InventorySlot(13)]
+            .details
+            .id,
+        102
+    );
 }
 
 #[test]

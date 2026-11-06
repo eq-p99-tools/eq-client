@@ -217,7 +217,7 @@ fn refusal_timeout_and_resets_end_without_another_mutation() {
                 "No confirmation for gem 2."
             }
             "reset" => {
-                active.invalidate(None);
+                active.invalidate("The admission ended.", None);
                 "The admission ended."
             }
             _ => {
@@ -295,7 +295,10 @@ fn manual_forgets_serialize_and_apply_waits_for_the_exact_gem() {
     h.expect(Step::Forget(1, 73));
     h.status(BookActionStatus::Submitted);
     h.update(0, 42, 2); // Delayed/repeated update for the first gem.
-    assert_eq!(h.online.world().book_action(), None);
+    assert_eq!(
+        h.online.world().book_action(),
+        Some(&BookActionStatus::Submitted)
+    );
     assert!(h.start(target).is_err());
     h.quiet();
     h.update(1, 73, 2);

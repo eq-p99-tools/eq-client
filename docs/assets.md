@@ -11,6 +11,18 @@ Keep archives, extracted assets, derived caches and screenshots outside Git.
 
 Classic model rendering includes animation, face/armor textures, robes, helmets
 and held-item attachments where installed data and the model support them.
+Helmet dyes follow the surface drawn, so an exposed face keeps its color.
+One-shot animations use the received playback rate when it is positive and
+finite, with the authored rate as the fallback.
+
+For the player and their paperdoll, a submitted Titanium equipment move can
+show the item's base held model while the server's appearance is pending.
+The estimate uses the item definition and can differ from ornamented wear.
+Silence leaves it an estimate. Received wear, inventory corrections and a new
+zone admission take precedence.
+Other players see the server's appearance updates. EQEmu can relay a player's
+wear message to other clients. [EQEmu wear handler](https://github.com/EQEmu/EQEmu/blob/master/zone/client_packet.cpp#L15096-L15112)
+
 Missing models use visible fallbacks; an implemented loader is not a claim of
 complete coverage for every race, armor set, animation or custom UI atlas.
 Terrain, collision and zone regions share coordinate conversions in
@@ -114,8 +126,9 @@ This is route planning, not server permission to move or teleport.
 
 Models, UI layouts and movement rules remain incomplete across client versions.
 Sound loading currently handles Titanium WAV assets, not the Mac-era sound
-format. Day/night lighting has provisional presentation tuning. Swimming and
-client-detected same-zone teleport pads remain incomplete. See
+format. Day/night lighting has provisional presentation tuning. Swimming uses
+mapped water on Titanium EQEmu; it does not establish breath or damage. Same-zone
+teleport pads detected by the client remain incomplete. See
 [gameplay](gameplay.md) for action limitations and
 [support](../SUPPORT.md) for server-specific policy.
 

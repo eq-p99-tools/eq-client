@@ -1,5 +1,5 @@
 //! Explicit vertical physics for offline locomotion; no protocol tuning is assumed.
-use super::{CollisionWorld, Support};
+use super::{CollisionWorld, LiquidGuard, Support};
 use glam::Vec3;
 
 /// Explicit local tuning, separate from network motion calibration.
@@ -194,6 +194,30 @@ impl AirborneController {
         physics: VerticalPhysics,
         input: MotionStep,
     ) -> Vec3 {
+        self.step_with_guard(world, feet, physics, input, LiquidGuard::All)
+    }
+
+    /// Ground and air motion for a session that can transition into water.
+    /// The caller stops the ordinary motion at water entry and resets the fall.
+    pub fn step_into_water(
+        &mut self,
+        world: &CollisionWorld,
+        feet: Vec3,
+        physics: VerticalPhysics,
+        input: MotionStep,
+    ) -> Vec3 {
+        self.step_with_guard(world, feet, physics, input, LiquidGuard::Lava)
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn step_with_guard(
+        &mut self,
+        world: &CollisionWorld,
+        feet: Vec3,
+        physics: VerticalPhysics,
+        input: MotionStep,
+        liquids: LiquidGuard,
+    ) -> Vec3 {
         if !feet.is_finite()
             || !input.horizontal.is_finite()
             || !input.height.is_finite()
@@ -269,7 +293,13 @@ impl AirborneController {
         } else {
             Support::Airborne
         };
-        let position = world.walk(feet, horizontal, input.height, support);
+        if liquids == LiquidGuard::Lava && world.swim_depth(feet, input.height).is_some() {
+            return feet;
+        }
+        let position = world.walk_with_guard(feet, horizontal, input.height, support, liquids);
+        if liquids == LiquidGuard::Lava && world.swim_depth(position, input.height).is_some() {
+            return position;
+        }
         if self.velocity <= 0.0
             && let Some(floor) = world.support(position)
         {
@@ -306,7 +336,7 @@ impl AirborneController {
         // A fall that comes down lower than it was judged stops short of
         // water and lava.
         let held = if distance < 0.0 {
-            world.held(position, target, input.height)
+            world.held(position, target, input.height, liquids)
         } else {
             None
         };
@@ -326,6 +356,11 @@ impl AirborneController {
                 target
             }
             Ok(None) => {
+                if liquids == LiquidGuard::Lava
+                    && let Some(entry) = world.water_entry(position, target, input.height)
+                {
+                    return entry;
+                }
                 self.peak = self.peak.map(|peak| peak.max(target.y));
                 if landed {
                     // The program lands at the speed of the step that ended
@@ -334,7 +369,15 @@ impl AirborneController {
                 }
                 target
             }
-            Ok(Some(hit)) => self.blocked(world, position, distance, &hit, speed, input.height),
+            Ok(Some(hit)) => self.blocked(
+                world,
+                position,
+                distance,
+                &hit,
+                speed,
+                input.height,
+                liquids,
+            ),
             Err(_) => position,
         }
     }
@@ -346,6 +389,7 @@ impl AirborneController {
     /// a slope.
     /// A slide that would carry the feet into lava or the head under water
     /// stops short of it, and the fall is held where it stops.
+    #[allow(clippy::too_many_arguments)]
     fn blocked(
         &mut self,
         world: &CollisionWorld,
@@ -354,9 +398,15 @@ impl AirborneController {
         hit: &parry3d::query::ShapeCastHit,
         end: f32,
         height: f32,
+        liquids: LiquidGuard,
     ) -> Vec3 {
         let fraction = (hit.time_of_impact - 0.005 / distance.abs()).clamp(0.0, 1.0);
         let contact = position + Vec3::Y * distance * fraction;
+        if liquids == LiquidGuard::Lava
+            && let Some(entry) = world.water_entry(position, contact, height)
+        {
+            return entry;
+        }
         self.peak = self.peak.map(|peak| peak.max(contact.y));
         // The obstacle's surface normal (the hit's is the capsule's own).
         let surface = -Vec3::new(hit.normal1.x, hit.normal1.y, hit.normal1.z);
@@ -370,7 +420,7 @@ impl AirborneController {
         let (slide, held) = if resting {
             (Vec3::ZERO, false)
         } else {
-            let fraction = world.dry_fraction(contact, slide, height);
+            let fraction = world.dry_fraction(contact, slide, height, liquids);
             (slide * fraction, fraction < 1.0)
         };
         if slide.length_squared() <= 1e-8 {
@@ -382,12 +432,17 @@ impl AirborneController {
             return contact;
         }
         self.velocity = end;
-        match world.sweep(contact, slide, height) {
+        let end = match world.sweep(contact, slide, height) {
             Ok(None) => contact + slide,
             Ok(Some(block)) => {
                 contact + slide * (block.time_of_impact - 0.005 / slide.length()).clamp(0.0, 1.0)
             }
             Err(_) => contact,
+        };
+        if liquids == LiquidGuard::Lava {
+            world.water_entry(contact, end, height).unwrap_or(end)
+        } else {
+            end
         }
     }
 }

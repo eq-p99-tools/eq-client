@@ -29,6 +29,7 @@ pub(super) struct OnlineState {
     /// The current zone's regions, from its assets.
     pub regions: eq_client_assets::regions::ZoneRegions,
     pub enabled: bool,
+    server_placement: Option<ServerPlacement>,
     loading: super::background::Background<Result<super::zone::PreparedEntry, String>>,
     /// A new zone's admission and the news after it, held back while the
     /// loading screen waits for the player's casting gesture over the zone
@@ -36,7 +37,50 @@ pub(super) struct OnlineState {
     held: Vec<WorldUpdate>,
 }
 
+/// Last server-sourced placement for the current admission, not a move receipt.
+#[derive(Clone, Copy, PartialEq)]
+pub(super) struct ServerPlacement {
+    pub admission_id: u64,
+    pub position: eq_client_core::WorldPosition,
+    pub source: PlacementSource,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum PlacementSource {
+    Admission,
+    PositionUpdate,
+}
+
 impl OnlineState {
+    /// The last server placement remains separate from local motion submissions.
+    pub(super) fn server_placement(&self) -> Option<ServerPlacement> {
+        self.server_placement.filter(|entry| {
+            self.world.connected() && self.world.session_id() == Some(entry.admission_id)
+        })
+    }
+
+    fn observe_server_placement(&mut self, changes: &Changes) {
+        if changes.reset.is_some() {
+            self.server_placement = None;
+        }
+        let received = if let Some(position) = changes.placed {
+            Some((position, PlacementSource::PositionUpdate))
+        } else if changes.entered {
+            self.world
+                .player()
+                .map(|p| (p.position, PlacementSource::Admission))
+        } else {
+            None
+        };
+        if let Some((admission_id, (position, source))) = self.world.session_id().zip(received) {
+            self.server_placement = Some(ServerPlacement {
+                admission_id,
+                position,
+                source,
+            });
+        }
+    }
+
     /// Whether the admitted zone's scene is still loading in the background.
     /// A zone whose files fail to load is not: its spawns still show.
     pub(crate) fn scene_loading(&self) -> bool {
@@ -203,7 +247,7 @@ impl OnlineState {
     ) {
         self.loading.clear();
         if let Some(sets) = panels.spell_sets.as_mut() {
-            sets.reset(old_gems);
+            sets.reset(reason, old_gems);
         }
         panels.forget(reason, self);
         scene.forget(reason, commands);
@@ -257,14 +301,9 @@ impl OnlineState {
         self.world.close_loot();
     }
 
-    /// The player answered the resurrection offered.
-    pub(super) fn answer_resurrection(&mut self) {
-        self.world.answer_resurrection();
-    }
-
-    /// The translocate offered was answered.
-    pub(super) fn answer_translocate(&mut self) {
-        self.world.answer_translocate();
+    /// The front end queued an answer to this exact offer.
+    pub(super) fn dismiss_consent(&mut self, id: eq_client_core::confirmations::ConsentId) {
+        self.world.dismiss_consent(id);
     }
 
     /// The player closed the book or note they were reading.
@@ -314,6 +353,7 @@ impl OnlineState {
             deletion: default(),
             regions: eq_client_assets::regions::ZoneRegions::default(),
             enabled,
+            server_placement: None,
             loading: default(),
             held: Vec::new(),
         }
@@ -494,6 +534,7 @@ impl Panels<'_> {
         );
 
         self.motion.accepted();
+        self.motion.resolve_water_entry(moved.refused.is_some());
         self.motion.refused.clone_from(&moved.refused);
         if let Some(transform) = drawn {
             self.motion.display_sample(transform, moved.position);
@@ -710,6 +751,7 @@ pub(super) fn receive(
     for update in news {
         let (changes, before, old_gems) =
             apply(&mut state.world, &update, spells, outbox.as_deref());
+        state.observe_server_placement(&changes);
         trace(&update, &changes, &state.world);
         panels.merchant_news(&update, &changes, &state.world);
         if let Some(reason) = changes.reset {
@@ -794,11 +836,12 @@ fn apply(
     if let Some(outbox) = outbox
         && !changes.ignored
     {
-        if matches!(
-            changes.reset,
-            Some(Reset::Entered | Reset::Camped | Reset::Lost { ended: true, .. })
-        ) {
-            outbox.reset_book();
+        match changes.reset {
+            Some(Reset::Entered | Reset::Camped | Reset::Lost { ended: true, .. }) => {
+                outbox.reset_book();
+            }
+            Some(Reset::Lost { ended: false, .. }) => outbox.interrupt_book(world.session_id()),
+            _ => {}
         }
         if let WorldUpdate::Game(event) = update {
             outbox.book_news(event, world.session_id());
@@ -985,7 +1028,8 @@ pub(crate) mod testing {
 
     /// Applies one update as the session's receiver hands it over.
     pub(crate) fn apply(state: &mut OnlineState, update: &WorldUpdate) {
-        state.world.apply(update, Instant::now(), &NoSpells);
+        let changes = state.world.apply(update, Instant::now(), &NoSpells);
+        state.observe_server_placement(&changes);
     }
 
     /// Applies session news to the world.
@@ -1000,7 +1044,8 @@ pub(crate) mod testing {
         now: Instant,
     ) {
         for event in events {
-            state.world.apply(&WorldUpdate::Game(event), now, &NoSpells);
+            let changes = state.world.apply(&WorldUpdate::Game(event), now, &NoSpells);
+            state.observe_server_placement(&changes);
         }
     }
 
@@ -1243,6 +1288,66 @@ mod tests {
     use eq_client_core::PlayerState;
 
     mod spell_notices;
+
+    #[test]
+    fn a_resumed_admission_keeps_manual_book_ownership_until_the_matching_reply() {
+        use crate::outbox::{Outbox, Refusal};
+        use eq_client_core::{
+            BookActionStatus, ClientCommand, SpellBook, SpellUpdate, world::Link,
+        };
+        use std::sync::mpsc;
+
+        let mut state = OnlineState::new(true);
+        let mut player = testing::player(7);
+        player.memorized_spells[1] = Some(42);
+        testing::admit(&mut state, 5, player);
+        testing::book(&mut state, SpellBook::default());
+        let (sender, sent) = mpsc::sync_channel(4);
+        let outbox = Outbox::new(Some(sender));
+        let forget = |stamp: crate::outbox::Stamp| ClientCommand::ForgetSpell {
+            session_id: stamp.session_id,
+            gem: 1,
+            spell_id: 42,
+            created: stamp.created,
+        };
+        outbox.post(state.world(), forget).unwrap();
+        sent.try_recv().unwrap();
+        for update in [
+            WorldUpdate::Game(WorldEvent::BookAction(BookActionStatus::Submitted)),
+            WorldUpdate::Connection(Link::Zoning),
+            WorldUpdate::Connection(Link::Zoning),
+            WorldUpdate::Connection(Link::Connected),
+        ] {
+            apply(&mut state.world, &update, &NoSpells, Some(&outbox));
+        }
+        assert_eq!(state.world().session_id(), Some(5));
+        assert!(state.world().in_world());
+        assert!(state.world().spell_book().is_some());
+        assert_eq!(outbox.take_refused(), [Refusal::BookUnconfirmed]);
+
+        for (slot, spell_id) in [(0, 42), (1, 73), (1, 42)] {
+            assert_eq!(
+                outbox.post(state.world(), forget),
+                Err(Refusal::BookUnconfirmed)
+            );
+            assert!(matches!(sent.try_recv(), Err(mpsc::TryRecvError::Empty)));
+            let update = WorldUpdate::Game(WorldEvent::Spell(SpellUpdate::Slot {
+                slot,
+                spell_id,
+                mode: 2,
+            }));
+            apply(&mut state.world, &update, &NoSpells, Some(&outbox));
+            assert_eq!(
+                state.world().gem(1),
+                ((slot, spell_id) != (1, 42)).then_some(42)
+            );
+        }
+
+        assert_eq!(
+            outbox.begin_spell_set(state.world(), std::time::Instant::now()),
+            Ok(())
+        );
+    }
 
     #[test]
     fn a_camp_to_the_desktop_ends_the_program_once_camped_and_a_plain_one_does_not() {

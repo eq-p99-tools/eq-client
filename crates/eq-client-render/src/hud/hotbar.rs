@@ -118,6 +118,7 @@ impl Bindings {
             | Action::Item { .. }
             | Action::Ability(_)
             | Action::Attack
+            | Action::RangedAttack
             | Action::Camp
             | Action::Invite
             | Action::Follow
@@ -274,6 +275,7 @@ pub(crate) const fn command(action: Action) -> Option<&'static str> {
     match action {
         Action::Sit => Some("/sit"),
         Action::Stand => Some("/stand"),
+        Action::RangedAttack => Some("/ranged"),
         Action::Camp => Some("/camp"),
         Action::Invite => Some("/invite"),
         Action::Follow => Some("/follow"),
@@ -431,6 +433,7 @@ fn faces(action: Option<Action>, world: &ClientWorld) -> (String, String) {
             | Action::Stand
             | Action::Ability(_)
             | Action::Attack
+            | Action::RangedAttack
             | Action::Camp
             | Action::Invite
             | Action::Follow
@@ -502,6 +505,7 @@ pub(crate) fn caption_text(action: Option<Action>, world: &ClientWorld) -> Strin
         Some(Action::Item { .. }) => "Item".into(),
         Some(Action::Ability(ability)) => ability.name().into(),
         Some(Action::Attack) => "Attack".into(),
+        Some(Action::RangedAttack) => "Ranged".into(),
         Some(Action::Camp) => "Camp".into(),
         Some(Action::Invite) => "Invite".into(),
         Some(Action::Follow) => "Follow".into(),
@@ -541,6 +545,9 @@ fn hovered_detail(
         Some(Action::Sit) => "Sit down".into(),
         Some(Action::Stand) => "Stand up".into(),
         Some(Action::Attack) => "Melee attack\nTurns auto attack on or off".into(),
+        Some(Action::RangedAttack) => {
+            "Ranged attack\nFires or throws once at the current target".into()
+        }
         Some(Action::Camp) => "Camp\nSits down and leaves the world".into(),
         Some(Action::Invite) => "Invite\nInvites the target into your group".into(),
         Some(Action::Follow) => "Follow\nJoins the group you were invited to".into(),
@@ -603,6 +610,7 @@ pub(crate) fn need(action: Option<Action>) -> crate::outbox::Needs {
         Some(Action::Ability(ability)) => Needs::Ability(ability),
         Some(Action::Gem(_) | Action::Item { .. }) => Needs::Capability(Capability::Casting),
         Some(Action::Attack) => Needs::Capability(Capability::Combat),
+        Some(Action::RangedAttack) => Needs::Capability(Capability::RangedCombat),
         Some(Action::Camp) => Needs::Capability(Capability::Camping),
         Some(Action::Invite | Action::Follow | Action::Disband) => {
             Needs::Capability(Capability::Grouping)

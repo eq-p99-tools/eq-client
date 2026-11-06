@@ -1972,17 +1972,28 @@ fn gauge_layer(
     };
     if under && let Some(kind) = gauge.eq_type {
         let ink = gauge.text_color.map_or(theme::INK_BRIGHT, rgb);
-        parent.spawn((
-            Shows::GaugeText(kind),
-            theme::text("", Size::Small, ink),
-            at(
-                gauge.text_offset.0,
-                gauge.text_offset.1,
-                gauge.area.width,
-                12.0,
-            ),
-            TextLayout::new(Justify::Left, LineBreak::NoWrap),
-        ));
+        let (x, y) = gauge.text_offset;
+        if kind != 6 {
+            parent.spawn((
+                Shows::GaugeText(kind),
+                theme::text("", Size::Small, ink),
+                at(x, y, gauge.area.width, 12.0),
+                TextLayout::new(Justify::Left, LineBreak::NoWrap),
+            ));
+        } else if (-gauge.area.width..gauge.area.width).contains(&x) {
+            // Some skins park the gauge's name outside it and supply a
+            // separate label. Leave that gauge name hidden.
+            super::target::centered_line(
+                parent,
+                at(0.0, y, gauge.area.width, 12.0),
+                (
+                    Shows::GaugeText(kind),
+                    Text::default(),
+                    theme::bold_font(Size::Small),
+                    TextColor(ink),
+                ),
+            );
+        }
     }
     parent.spawn(placed(parts.bar)).with_children(|bar| {
         if under && let Some(piece) = &look.background {
@@ -2118,17 +2129,27 @@ fn label(
         || page_number.is_some()
         || hotbar_page;
     let words = if filled { "" } else { label.text.as_str() };
-    let text = theme::text(
-        words,
-        font(label.font),
-        label.color.map_or(theme::INK_BRIGHT, rgb),
-    );
+    let size = font(label.font);
+    let ink = label.color.map_or(theme::INK_BRIGHT, rgb);
     let node = label_node(label, inside);
+    if owner == WindowId::Target && label.eq_type == Some(28) {
+        super::target::centered_line(
+            window,
+            node,
+            (
+                Shows::Label(28),
+                Text::new(words),
+                theme::bold_font(size),
+                TextColor(ink),
+            ),
+        );
+        return;
+    }
+    let text = theme::text(words, size, ink);
     let geometry = owner
         .is_chat()
         .then(|| label.anchors.map(reflow::Geometry))
         .flatten();
-    let buff_name = buff_label(owner, label.eq_type);
     match (label.eq_type, bag) {
         _ if hotbar_page => aligned_in(
             window,
@@ -2137,27 +2158,11 @@ fn label(
             (text, hotbar::page::Number),
             geometry,
         ),
-        (Some(_), _) if let Some((effects, index)) = buff_name => aligned_in(
-            window,
-            node,
-            label.align,
-            (text, Shows::BuffName(effects, index)),
-            geometry,
-        ),
-        (Some(kind), _) if let Some(gem) = gem_label(kind) => {
-            aligned_in(
-                window,
-                node,
-                label.align,
-                (text, Shows::GemName(gem)),
-                geometry,
-            );
-        }
         (Some(kind), _) => aligned_in(
             window,
             node,
             label.align,
-            (text, Shows::Label(kind)),
+            (text, numbered_label(owner, kind)),
             geometry,
         ),
         (None, Some(bag)) => aligned_in(window, node, label.align, (text, bag), geometry),
@@ -2186,6 +2191,17 @@ fn label(
             aligned_in(window, node, label.align, (text, shows), geometry);
         }
         (None, None) => plain_label(window, name, label, text, node, geometry, owner),
+    }
+}
+
+/// Resolves a skin's numeric label, including its buff and gem name bindings.
+fn numbered_label(owner: WindowId, kind: u32) -> Shows {
+    if let Some((effects, index)) = buff_label(owner, Some(kind)) {
+        Shows::BuffName(effects, index)
+    } else if let Some(gem) = gem_label(kind) {
+        Shows::GemName(gem)
+    } else {
+        Shows::Label(kind)
     }
 }
 
@@ -2521,6 +2537,7 @@ mod tests {
         use eq_client_assets::sidl::{Button, ButtonLook, Element};
         let kinds = [
             ("ACP_MeleeAttackButton", Binding::Attack),
+            ("ACP_RangeAttackButton", Binding::RangedAttack),
             ("AMP_SitButton", Binding::Sit),
             ("AMP_StandButton", Binding::Stand),
             ("AMP_CampButton", Binding::Camp),
@@ -4517,6 +4534,31 @@ mod tests {
                 });
             })
             .unwrap();
+    }
+
+    #[test]
+    fn a_target_gauge_name_parked_outside_its_box_stays_hidden() {
+        let mut app = crate::testing::app();
+        draw_gauges(
+            &mut app,
+            [8.0, -100.0, 200.0]
+                .into_iter()
+                .map(|x| Gauge {
+                    eq_type: Some(6),
+                    text_offset: (x, 0.0),
+                    ..test_gauge(default(), 0.0, 16.0)
+                })
+                .collect(),
+        );
+        let world = app.world_mut();
+        assert_eq!(
+            world
+                .query::<&Shows>()
+                .iter(world)
+                .filter(|shows| **shows == Shows::GaugeText(6))
+                .count(),
+            1,
+        );
     }
 
     /// Each gauge's fill, with the bar it lies in and the gauge's root.

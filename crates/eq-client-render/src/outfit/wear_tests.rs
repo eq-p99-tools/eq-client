@@ -6,6 +6,86 @@ use eq_client_core::{
     outfit::{TextureSlot, WearChange},
 };
 
+#[test]
+fn submitted_hand_changes_redress_the_avatar_and_paperdoll_in_the_same_zone() {
+    use crate::item_models::{ItemLibrary, Shape};
+    use crate::online::{OnlineState, testing};
+    use eq_client_core::inventory::{InventorySlot, InventoryUpdate};
+    use std::num::NonZeroU16;
+
+    let mut online = OnlineState::new(true);
+    let mut player = testing::player(7);
+    player.appearance.materials[TextureSlot::Primary.index()] = 42;
+    testing::admit(&mut online, 5, player);
+    let mut original = crate::preview::items().remove(0);
+    original.details.base_held_model = NonZeroU16::new(42);
+    let mut replacement = original.clone();
+    replacement.slot = InventorySlot::CURSOR;
+    replacement.details.id += 1;
+    replacement.details.base_held_model = NonZeroU16::new(43);
+    testing::inventory(
+        &mut online,
+        InventoryUpdate::Snapshot(vec![original.clone(), replacement.clone()]),
+    );
+
+    let mut world = World::new();
+    let figures = [character(&mut world), character(&mut world)];
+    let mut library = ItemLibrary::default();
+    for name in ["IT42", "IT43"] {
+        library.insert(
+            name,
+            Shape {
+                primitives: Vec::new(),
+                bounds: None,
+                flat: false,
+            },
+        );
+    }
+    world.insert_resource(library);
+    world.insert_resource(crate::ViewerSettings::default());
+    world.insert_resource(crate::options::OptionsState::new(default()));
+    world.init_resource::<Wardrobe>();
+    world.insert_resource(online);
+    let held = |world: &World, figure| {
+        let character = world
+            .get::<crate::character::AnimatedCharacter>(figure)
+            .unwrap();
+        let held = character.held[0].as_ref().unwrap();
+        (held.entity, held.number)
+    };
+    world.run_system_once(dress).unwrap();
+    let before = figures.map(|figure| held(&world, figure));
+    assert_eq!(before.map(|(_, model)| model), [42; 2]);
+
+    {
+        let mut online = world.resource_mut::<OnlineState>();
+        let revision = online.world().worker_inventory().revision();
+        std::mem::swap(&mut original.slot, &mut replacement.slot);
+        testing::news(
+            &mut online,
+            [
+                WorldEvent::InventoryAction {
+                    session_id: 5,
+                    revision,
+                    sequence: None,
+                    update: Some(InventoryUpdate::Prediction(vec![original, replacement])),
+                    error: None,
+                },
+                WorldEvent::Inventory(InventoryUpdate::Settled),
+            ],
+        );
+        let player = online.world().player().unwrap();
+        assert_eq!(player.appearance.material(TextureSlot::Primary), 42);
+    }
+    world.run_system_once(dress).unwrap();
+    assert_eq!(figures.map(|figure| held(&world, figure).1), [43; 2]);
+    assert!(
+        before
+            .into_iter()
+            .all(|(entity, _)| world.get_entity(entity).is_err())
+    );
+}
+
 fn character(world: &mut World) -> Entity {
     crate::character::testing::stores(world);
     let prepared = crate::character::testing::prepared(world);

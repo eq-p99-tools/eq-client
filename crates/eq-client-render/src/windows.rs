@@ -13,9 +13,9 @@ mod stack;
 mod store;
 pub(super) use layout::Layouts;
 pub(crate) use registry::{Layer, Opening, Placement, Toggle, WindowId};
-#[cfg(test)]
-pub(crate) use stack::toggle;
 pub(crate) use stack::{SelectorButton, Shown, Stack};
+#[cfg(test)]
+pub(crate) use stack::{raise_opened, restack, toggle};
 
 /// A part of a window a press lands on and stays on, though it is no button
 /// and reacts to no pointer: a list, so a press on its rows or headings never
@@ -115,7 +115,12 @@ pub(crate) fn frame(commands: &mut Commands, id: WindowId, mut node: Node) -> En
 /// Visible windows and standalone controls consume pointer input before the world.
 pub(super) type PointerSurface = Or<(With<Frame>, With<Button>)>;
 
-/// Wheel travel since the last read, in logical pixels; positive scrolls up.
+/// The layout rectangle in logical pixels for an axis-aligned UI node.
+pub(super) fn logical_rect(node: &ComputedNode, transform: &UiGlobalTransform) -> Rect {
+    let scale = node.inverse_scale_factor();
+    Rect::from_center_size(transform.translation * scale, node.size() * scale)
+}
+
 /// Whether a physical cursor position lies inside a laid-out UI node.
 pub(super) fn contains(cursor: Vec2, transform: &UiGlobalTransform, node: &ComputedNode) -> bool {
     transform.try_inverse().is_some_and(|inverse| {

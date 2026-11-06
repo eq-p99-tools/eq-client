@@ -13,8 +13,12 @@ impl ClientWorld {
     pub(super) fn spell(&mut self, update: &SpellUpdate, now: Instant, changes: &mut Changes) {
         self.cast_news(update, now);
         // Forgetting a gem is answered only by the gem emptying.
-        if matches!(update, SpellUpdate::Slot { mode: 2, .. })
-            && matches!(self.book_action, Some(BookActionStatus::Submitted))
+        if matches!(self.book_action, Some(BookActionStatus::Submitted))
+            && let SpellUpdate::Slot { slot, mode: 2, .. } = *update
+            && usize::try_from(slot)
+                .ok()
+                .and_then(|index| self.gem(index))
+                .is_some_and(|spell| update.clears_gem(slot, spell))
         {
             self.book_action = None;
         }
@@ -63,6 +67,48 @@ impl ClientWorld {
     ) {
         if self.accepts_reply(session_id) && self.death.is_none() {
             self.casting.pend(spell_id);
+        } else {
+            changes.ignored = true;
+        }
+    }
+
+    /// Releases an identified local cast without inventing a spell result.
+    pub(super) fn release_cast_hold(&mut self, session_id: u64, spell_id: u32) -> bool {
+        let Some(own_id) = self.player.as_ref().map(|player| player.spawn_id) else {
+            return false;
+        };
+        if !self.accepts_reply(session_id)
+            || self.death.is_some()
+            || !self.casting.release_hold(spell_id)
+        {
+            return false;
+        }
+        if self
+            .zone
+            .casts
+            .get(&own_id)
+            .is_some_and(|cast| u32::from(cast.spell_id) == spell_id)
+        {
+            self.zone.casts.remove(&own_id);
+        }
+        true
+    }
+
+    /// Applies the session's local release without changing buffs or cooldowns.
+    pub(super) fn song_stop_unconfirmed(
+        &mut self,
+        session_id: u64,
+        spell_id: Option<u32>,
+        changes: &mut Changes,
+    ) {
+        let applies = match spell_id {
+            Some(spell_id) => self.release_cast_hold(session_id, spell_id),
+            None => self.accepts_reply(session_id) && self.death.is_none(),
+        };
+        if applies {
+            changes.notices.push(Notice::SongStopUnconfirmed {
+                released_cast: spell_id.is_some(),
+            });
         } else {
             changes.ignored = true;
         }
@@ -136,7 +182,7 @@ impl ClientWorld {
 
     /// The session's word on the spellbook change in flight.
     pub(super) fn book_action_news(&mut self, status: &BookActionStatus) {
-        self.book_action = (!matches!(status, BookActionStatus::Confirmed)).then(|| status.clone());
+        self.book_action = Some(status.clone());
         self.book_action_revision = self.book_action_revision.wrapping_add(1);
     }
 }

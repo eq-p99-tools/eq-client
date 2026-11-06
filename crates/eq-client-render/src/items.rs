@@ -409,13 +409,13 @@ pub(super) fn link_input(
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     paragraphs: Query<
         (
+            Entity,
             &UiGlobalTransform,
             &ComputedNode,
             &bevy::text::TextLayoutInfo,
             &bevy::text::ComputedTextBlock,
             &InheritedVisibility,
             Option<&bevy::ui::CalculatedClip>,
-            &ChildOf,
         ),
         With<super::chat::LineId>,
     >,
@@ -443,13 +443,14 @@ pub(super) fn link_input(
     else {
         return;
     };
-    for (transform, node, layout, block, visible, clip, parent) in &paragraphs {
-        if !parents
-            .get(parent.parent())
-            .is_ok_and(|parent| parent.parent() == viewport)
-            || !visible.get()
+    for (paragraph, transform, node, layout, block, visible, clip) in &paragraphs {
+        if !visible.get()
             || node.is_empty()
             || clip.is_some_and(|c| !c.clip.contains(cursor))
+            || parents
+                .iter_ancestors(paragraph)
+                .find(|ancestor| viewports.contains(*ancestor))
+                != Some(viewport)
         {
             continue;
         }

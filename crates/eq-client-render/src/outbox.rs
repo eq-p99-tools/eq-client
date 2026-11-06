@@ -8,7 +8,7 @@
 //! capability report.
 mod book;
 
-pub(crate) use self::book::BOOK_TIMEOUT;
+pub(crate) use self::book::{BOOK_TIMEOUT, BookEditReceipt};
 use self::book::{BookQueue, Expected};
 use crate::theme;
 use bevy::prelude::*;
@@ -172,6 +172,17 @@ impl Outbox {
         }
     }
 
+    /// An interrupted link can resume with the same worker and book request.
+    pub(crate) fn interrupt_book(&self, session: Option<u64>) {
+        let newly_unconfirmed = self
+            .book
+            .lock()
+            .is_ok_and(|mut book| book.interrupt(session));
+        if newly_unconfirmed {
+            self.refused(Refusal::BookUnconfirmed);
+        }
+    }
+
     pub(crate) fn applying_spell_set(&self) -> bool {
         self.book.lock().is_ok_and(|book| book.applying)
     }
@@ -223,7 +234,8 @@ impl Outbox {
     /// # Errors
     /// Refuses a command the session cannot take now.
     pub(crate) fn send(&self, world: &ClientWorld, command: ClientCommand) -> Result<(), Refusal> {
-        self.send_owned(world, command, false)
+        self.try_send(world, command, false, None)
+            .inspect_err(|refusal| self.refused(*refusal))
     }
 
     /// Stamps and sends the active set's single step through the same checks
@@ -235,19 +247,41 @@ impl Outbox {
         &self,
         world: &ClientWorld,
         command: impl FnOnce(Stamp) -> ClientCommand,
-    ) -> Result<(), Refusal> {
+    ) -> Result<BookEditReceipt, Refusal> {
         let stamp = self.try_stamp(world)?;
-        self.try_send(world, command(stamp), true)
+        self.try_book_edit(world, command(stamp), true)
     }
 
-    fn send_owned(
+    /// Stamps a manual book edit and gives its caller its progress and result.
+    pub(crate) fn post_book_edit(
+        &self,
+        world: &ClientWorld,
+        command: impl FnOnce(Stamp) -> ClientCommand,
+    ) -> Result<BookEditReceipt, Refusal> {
+        let stamp = self.stamp(world)?;
+        self.send_book_edit(world, command(stamp))
+    }
+
+    /// Sends a prepared manual book edit and gives its caller its progress and result.
+    pub(crate) fn send_book_edit(
+        &self,
+        world: &ClientWorld,
+        command: ClientCommand,
+    ) -> Result<BookEditReceipt, Refusal> {
+        self.try_book_edit(world, command, false)
+            .inspect_err(|refusal| self.refused(*refusal))
+    }
+
+    fn try_book_edit(
         &self,
         world: &ClientWorld,
         command: ClientCommand,
         set_step: bool,
-    ) -> Result<(), Refusal> {
-        self.try_send(world, command, set_step)
-            .inspect_err(|refusal| self.refused(*refusal))
+    ) -> Result<BookEditReceipt, Refusal> {
+        debug_assert!(Expected::from_command(&command).is_some());
+        let receipt = BookEditReceipt::new(command.session_id().ok_or(Refusal::NotAdmitted)?);
+        self.try_send(world, command, set_step, Some(&receipt))?;
+        Ok(receipt)
     }
 
     fn try_send(
@@ -255,6 +289,7 @@ impl Outbox {
         world: &ClientWorld,
         command: ClientCommand,
         set_step: bool,
+        receipt: Option<&BookEditReceipt>,
     ) -> Result<(), Refusal> {
         let edit = Expected::from_command(&command);
         let interrupt = interrupts_apply(&command);
@@ -275,7 +310,7 @@ impl Outbox {
             })?;
             if let Some(book) = book.as_mut() {
                 if let Some((expected, session, now)) = edit {
-                    book.sent(expected, session, now);
+                    book.sent(expected, session, now, receipt.cloned());
                 }
                 book.interrupted |= book.applying && interrupt;
             }
@@ -286,7 +321,7 @@ impl Outbox {
     /// Sends a command the player did not ask for, such as a setting the
     /// session must know. A refusal is not shown; the caller tries again.
     pub(crate) fn tell(&self, world: &ClientWorld, command: ClientCommand) -> bool {
-        self.try_send(world, command, false).is_ok()
+        self.try_send(world, command, false, None).is_ok()
     }
 
     /// Stamps a command made now and sends it.
@@ -312,7 +347,7 @@ impl Outbox {
         command: impl FnOnce(Stamp) -> ClientCommand,
     ) -> Result<(), Refusal> {
         let stamp = self.try_stamp(world)?;
-        self.try_send(world, command(stamp), false)
+        self.try_send(world, command(stamp), false, None)
     }
 
     /// The queue, if the session can take this command now.

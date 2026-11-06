@@ -32,9 +32,26 @@ policies. P99 jump notices are capture-backed; Quarm's movement and transfers
 reuse the source-checked EQMac path. New public-server scenarios still need live
 verification. Physics uses installed-client
 rules and zone gravity where available, with an explicit provisional fallback
-when those data cannot be read. Swimming is incomplete: the water/lava guard
-prevents entering deep water or lava while allowing escape from an existing
-hazard. The server remains authoritative over corrections and zone admission.
+when those data cannot be read. Titanium EQEmu sessions can swim in water
+marked by the installed zone's regions. Wade or fall into water, move in any
+horizontal direction, and use first-person or mouse-look pitch to swim up or
+down with forward or backward input. The surface holds the swimmer in the water,
+and a supported bank returns them to ordinary movement. Automated ground routes,
+P99, and EQMac-era sessions retain the deep-water guard. Ordinary movement
+guards against entering lava.
+
+**Jesus Mode** is an opt-in QoL setting where the session offers gameplay
+departures. Walk from shore or land on mapped water or lava to use the
+surface as ground. Your usual movement speed, solid collision, and falling
+rules apply. A placement inside lava uses ordinary movement and recovery.
+Turning the setting off restores ordinary movement on the next sample.
+Scripted ground route finding uses solid terrain.
+
+The swim rate is a conservative bound based on the session's current movement
+grant. Skill-based speed, breath, water breathing, and drowning are not modeled
+by this path. A server placement replaces the local prediction; a movement
+proposal alone does not confirm server position, wet state, or any resource
+change.
 
 Installed WLD boundary regions supply zone-line detection. Numbered boundaries
 resolve through the server's destination table; older absolute boundaries carry
@@ -45,7 +62,12 @@ standing in a rejected boundary does not continuously resend requests.
 Server-directed transfers and death/bind offers suspend old-zone actions, use
 the world/zone handoff, and install a new admission with its own placement and
 state. Same-zone server relocations and rejected-zone rewinds update the local
-controller without unnecessarily reconnecting. Client detection of same-zone
+controller without unnecessarily reconnecting. If a fresh Titanium placement
+is below a nearby installed floor with neither a lower landing surface nor
+mapped liquid below, movement pauses. The client reports the conflict, preserves
+the received position, and rechecks held placements as collision changes or the
+server corrects the position. A server using different zone geometry can cause
+this conflict. Client detection of same-zone
 teleport pads remains incomplete. Initial login, boundary crossing, teleport,
 death and respawn are separate validation scenarios; success in one does not
 establish the others.
@@ -119,9 +141,19 @@ spell actions are source-checked and tested offline; public validation is pendin
 Select a spell and destination gem to memorize; click a populated gem or use its
 binding to cast. Shift-click forgetting is separate from casting. Casts use the
 selected target or self when none is selected. Movement and posture changes can
-interrupt a cast; estimated completion time alone does not report success.
-Spellbook operations serialize outstanding edits and wait for matching answers.
-Deletion confirmation is invalidated when its selection or admission changes.
+interrupt a cast. The cast timer estimates progress while the server reports
+the result. On Titanium EQEmu, Bards can type `/stopsong` during a song cast
+or while a song is pulsing. If the server gives no matching cast update
+within one second, the client releases the casting hold and reports that
+the stop is unconfirmed. You can then use a gem to try another cast.
+Existing song buffs and gem timers follow the server's updates.
+
+Spellbook operations serialize edits and wait for matching answers. If the
+same zone connection resumes after an interruption, a pending edit is
+reported as unconfirmed. Wait for the matching reply or re-enter the zone
+before editing again. An unanswered scribe also holds inventory actions
+while the scroll's result is unknown. Deletion confirmation is invalidated
+when its selection or admission changes.
 
 Click **Search spells** in the book to filter learned spells by name. The
 search ignores case and fills each results page in original book-slot order.
@@ -141,9 +173,10 @@ learned before starting and follows the usual memorization rules, including
 your **Memorize While Standing** setting. Progress counts slots that match the
 saved layout. Moving, casting, changing posture, closing the book or clicking
 **Cancel apply** stops subsequent requests. The current request may still
-finish, and confirmed changes remain in your gems. Apply again to continue
-from your current layout. If a gem clear remains unconfirmed, wait for its
-reply or re-enter the zone before making another spellbook change.
+finish, and confirmed changes remain in your gems. Death, a transfer and a
+temporary link interruption stop apply and keep the panel's selection and
+draft until the admission changes. Apply again from your current layout
+once the outstanding edit settles.
 
 The 5-by-2 hotbar holds ten actions. Click or use the number bindings to activate
 them. Hold a gem, supported item or Actions button to pick up its hotkey, then
@@ -181,8 +214,9 @@ cancelled. A buff stays visible until received state removes it. If the selected
 slot changes while the button is held, release cancels the selection. The buff
 may expire on its own during a request. With no matching fade, the client
 reports the request as unconfirmed. Requests are never retried automatically.
-P99 cancellation remains gated while its exact emission contract is
-investigated; a compatible attended check is still pending.
+P99 cancellation remains gated pending evidence for the complete request and
+matching server fade. The enabled Titanium EQEmu path covers one initialized
+current-record request.
 
 ## Targeting and interaction
 
@@ -199,6 +233,12 @@ because its window opened. Ground pickups and doors use reach checks. World
 tradeskill containers and combines exist where `Tradeskills` is offered, rather
 than being universally unsupported.
 
+For a single Titanium ranged attack, equip a bow and arrows or a throwing
+weapon and select a target. Click Ranged Attack in Actions or type `/ranged`.
+The Actions control can be bound to the hotbar. The request checks the current
+target, loadout, reach and unmodified weapon delay. Damage and projectile
+consumption appear when reported by the server.
+
 With Titanium, Buy and Sell open the existing quantity picker when more than
 one unit is available; a single unit goes directly through the same checked
 submission. The picker starts at one and is bounded by the received stack,
@@ -208,8 +248,14 @@ the selection. Only one merchant action can be pending. An unanswered action
 shows an unknown outcome and is never retried automatically; received items
 and coin updates remain the session's responsibility.
 
-Grouping, raids, pets, training, reading and resurrection/translocate dialogs have
-client paths with distinct capabilities. See the [policy matrix](../SUPPORT.md)
-before assuming a visible window can act on P99, Quarm or another server. Camp
-uses a timed preparation and acknowledgement flow where offered. Local
-`--demo-trade` previews loot/merchant/trade UI without confirming a live protocol.
+On Titanium EQEmu, resurrection and translocate offers open a Yes or No dialog.
+An answer applies to the displayed offer. If the question changes while a
+button is held, release and click again to answer the replacement. The dialog
+closes on death, a zone transfer or a lost connection, and an offer left
+unanswered past the session's deadline is declined for you. The server's
+movement and recovery messages determine what follows a Yes.
+
+Grouping, raids, pets, training, reading and consent dialogs have separate
+capabilities by server. Camp uses timed preparation and acknowledgement where
+offered. The local `--demo-trade` mode previews loot, merchant and trade UI.
+See the [policy matrix](../SUPPORT.md).

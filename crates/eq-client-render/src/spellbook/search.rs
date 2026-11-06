@@ -1,7 +1,7 @@
 //! Compact read-only browse results, in increasing server book-slot order.
 use super::{BookView, SpellNames, known_entries, sets};
 use crate::{
-    keys::{Typing, search},
+    keys::{Typing, search, window_owns_input},
     theme::{self, Size},
     tooltip::Tooltip,
     windows::{self, Frame, Shown, WindowId},
@@ -118,12 +118,8 @@ pub(crate) fn focus(
     mut view: ResMut<BookView>,
 ) {
     let was_focused = typing.spell_search || typing.spell_set_name;
-    let owns_input = windows.single().is_ok_and(|window| window.focused)
-        || script
-            .as_deref()
-            .is_some_and(crate::script::Script::background_owns_input);
     let available = shown.displayed(WindowId::Spellbook)
-        && owns_input
+        && window_owns_input(&windows, script.as_deref())
         && frames
             .iter()
             .any(|(id, frame)| *id == WindowId::Spellbook && !frame.minimized())

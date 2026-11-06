@@ -1,5 +1,8 @@
 //! State a script logs for later review.
+mod economy;
 mod lifecycle;
+mod movement;
+pub(super) use movement::report as movement_state;
 
 use bevy::prelude::*;
 
@@ -31,6 +34,7 @@ pub(super) fn state(
     // Keep named views here: appending a resource to Observed must not change
     // which resource a report mistakes for its spell catalog.
     let hud = &observed.0;
+    let trade = &observed.2;
     let spells = observed.8.as_deref();
     let option_values = observed.9.as_ref().map(|state| {
         eq_client_core::options::Toggle::all()
@@ -96,6 +100,7 @@ pub(super) fn state(
                 .as_millis()
         })
     });
+    info!(label, state = %economy::state(online.world(), trade), "Script economy report");
     info!(
         label,
         zone = online.world().zone(),
@@ -161,9 +166,20 @@ pub(super) fn state(
         game_time = ?online.world().game_time(std::time::Instant::now()),
         sky = ?online.world().sky(),
         ?pet,
+        pet_ownership = %pet_ownership(online.world()),
         training = ?training(online),
         practice_points = ?online.world().player().and_then(|player| player.practice_points),
         resurrection = ?resurrection(online),
+        resurrection_consent = ?online.world().resurrection().map(|question| {
+            (question.id, question.expires_at.saturating_duration_since(now).as_millis())
+        }),
+        translocate_consent = ?online.world().translocate().map(|question| {
+            (question.id, question.offer.spell_id, question.offer.zone_id,
+                question.expires_at.saturating_duration_since(now).as_millis())
+        }),
+        consent_presented = ?observed.10.as_deref().and_then(crate::confirm::Asked::presented),
+        consent_closure = ?online.world().last_consent_close(),
+        consent_refusal = ?online.world().last_consent_refusal(),
         readable = ?readable(online),
         containers = ?containers(online),
         combining = ?online.world().combining(),
@@ -344,7 +360,7 @@ fn containers(online: &crate::online::OnlineState) -> Vec<(i32, u32, u8)> {
 
 /// The resurrection waiting for an answer: its caster, corpse and spell.
 fn resurrection(online: &crate::online::OnlineState) -> Option<(String, String, u32)> {
-    let offer = online.world().resurrection()?;
+    let offer = &online.world().resurrection()?.offer;
     Some((offer.caster.clone(), offer.corpse.clone(), offer.spell_id))
 }
 
@@ -364,6 +380,19 @@ fn pet(online: &crate::online::OnlineState) -> Option<impl std::fmt::Debug> {
                 .collect::<Vec<_>>()
         }),
     ))
+}
+
+/// The active pet order identity and the observed owner it refers to.
+fn pet_ownership(world: &eq_client_core::world::ClientWorld) -> serde_json::Value {
+    let (Some(identity), Some(pet)) = (world.pet_intent(), world.pet()) else {
+        return serde_json::Value::Null;
+    };
+    serde_json::json!({
+        "session_id": world.session_id(),
+        "owner_id": pet.state.pet_owner,
+        "pet_id": identity.spawn_id,
+        "revision": identity.revision,
+    })
 }
 
 /// A nearby spawn's gear: its id, materials per texture slot, the chest's

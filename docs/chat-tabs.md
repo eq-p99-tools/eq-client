@@ -13,6 +13,7 @@ Escape cancels a tab drag. Releasing over other controls, or moving the pointer
 out of the client window, also cancels the drag. Close a detached window with its close box or with
 Escape when it is the foremost closable window. Its tabs return to the main
 chat. The main chat also stays available as a dock when all its tabs are detached.
+Detached windows keep their stack order when zoning rebuilds the HUD.
 
 Each window shows its selected tab. A moved tab keeps its channel filter,
 scrollback, unread tracking and scroll position for the current session. Tabs share

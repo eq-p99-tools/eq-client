@@ -228,6 +228,38 @@ fn release(app: &mut App, key_code: KeyCode, logical_key: Key) {
 }
 
 #[test]
+fn an_unfocused_spellbook_accepts_input_from_an_attended_local_script() {
+    use crate::script::{InputMode, Script};
+
+    let (mut app, _) = app();
+    app.add_systems(Startup, |mut commands: Commands| {
+        crate::spellbook::spawn(&mut commands);
+    })
+    .add_systems(Update, focus);
+    let world = app.world_mut();
+    world
+        .query_filtered::<&mut Window, With<PrimaryWindow>>()
+        .single_mut(world)
+        .unwrap()
+        .focused = false;
+    app.update();
+    let world = app.world_mut();
+    let field = world
+        .query_filtered::<Entity, With<Field>>()
+        .single(world)
+        .unwrap();
+    clicks::click(&mut app, field);
+    assert!(!app.world().resource::<Typing>().spell_search);
+    app.insert_resource(
+        Script::new(Vec::new())
+            .local_session(true)
+            .input_mode(InputMode::Attended),
+    );
+    clicks::click(&mut app, field);
+    assert!(app.world().resource::<Typing>().spell_search);
+}
+
+#[test]
 fn search_typing_and_repeats_never_reach_chat_or_movement() {
     let (mut app, sent) = app();
     navigation::install(&mut app);

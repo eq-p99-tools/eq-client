@@ -15,7 +15,7 @@ use std::sync::Arc;
 mod wear_tests;
 
 /// A dressed material: the model's archive, the material's name and its tint.
-type Look = (PathBuf, String, Option<[u8; 3]>);
+type Look = (PathBuf, String, [u8; 3]);
 
 /// Texture identity excludes tint so all colors share one decoded image.
 type Texture = (PathBuf, String);
@@ -52,31 +52,38 @@ impl Wardrobe {
         materials: &mut Assets<StandardMaterial>,
     ) -> Asset<Handle<StandardMaterial>> {
         let base_name = base_name.to_ascii_uppercase();
-        let tint = outfit::tint(&base_name, helm, look);
-        let name = outfit::material(&base_name, helm, look, |name| asset.has_material(name));
-        if name == base_name && tint.is_none() {
-            return Asset::Ready(base.clone());
-        }
-        let key = (asset.source().to_owned(), name.clone(), tint);
+        let selected = outfit::material(&base_name, helm, look, |name| asset.has_material(name));
+        let (name, original) = if selected == base_name {
+            (base_name, base.clone())
+        } else {
+            let texture_key = (asset.source().to_owned(), selected.clone());
+            match self.textures.get(&texture_key) {
+                Some(Some(material)) => (selected, material.clone()),
+                Some(None) => (base_name, base.clone()),
+                None => {
+                    let asset = Arc::clone(asset);
+                    self.loads.request(texture_key, move || {
+                        asset
+                            .material_texture(&selected)
+                            .inspect_err(|error| {
+                                warn!("Armor texture {selected} unavailable: {error}");
+                            })
+                            .ok()
+                            .flatten()
+                    });
+                    return Asset::Pending;
+                }
+            }
+        };
+        // A helmet texture may replace a face surface. If the read failed,
+        // tint the fallback according to its own material name.
+        let Some(tint) = outfit::tint(&name, helm, look) else {
+            return Asset::Ready(original);
+        };
+        let key = (asset.source().to_owned(), name, tint);
         if let Some(handle) = self.materials.get(&key) {
             return Asset::Ready(handle.clone());
         }
-        let texture_key = (asset.source().to_owned(), name.clone());
-        let original = if name == base_name {
-            base.clone()
-        } else if let Some(texture) = self.textures.get(&texture_key) {
-            texture.clone().unwrap_or_else(|| base.clone())
-        } else {
-            let asset = Arc::clone(asset);
-            self.loads.request(texture_key, move || {
-                asset
-                    .material_texture(&name)
-                    .inspect_err(|error| warn!("Armor texture {name} unavailable: {error}"))
-                    .ok()
-                    .flatten()
-            });
-            return Asset::Pending;
-        };
         let handle = tinted(&original, tint, materials);
         self.materials.insert(key, handle.clone());
         Asset::Ready(handle)
@@ -86,12 +93,9 @@ impl Wardrobe {
 /// A tint changes the material only; its image handles remain shared.
 fn tinted(
     base: &Handle<StandardMaterial>,
-    tint: Option<[u8; 3]>,
+    [red, green, blue]: [u8; 3],
     materials: &mut Assets<StandardMaterial>,
 ) -> Handle<StandardMaterial> {
-    let Some([red, green, blue]) = tint else {
-        return base.clone();
-    };
     let Some(mut material) = materials.get(base).cloned() else {
         return base.clone();
     };
@@ -243,9 +247,15 @@ fn worn(
             .spawn(remote.id)
             .map(|spawn| &spawn.state)
             .map(|spawn| (spawn.race, spawn.appearance)),
-        (None, None) => world
-            .player()
-            .map(|player| (player.race, player.appearance)),
+        (None, None) => world.player().map(|player| {
+            let mut look = player.appearance;
+            for slot in [outfit::TextureSlot::Primary, outfit::TextureSlot::Secondary] {
+                if let Some(estimate) = world.held_model_estimate(slot) {
+                    look.materials[slot.index()] = u32::from(estimate.material());
+                }
+            }
+            (player.race, look)
+        }),
     }
     .unwrap_or_default();
     (look, remote.is_some() || listed.is_some() || show_helm)
@@ -332,8 +342,8 @@ mod tests {
             base_color: Color::WHITE.with_alpha(0.5),
             ..default()
         });
-        let red = tinted(&base, Some([255, 0, 0]), &mut materials);
-        let blue = tinted(&base, Some([0, 0, 255]), &mut materials);
+        let red = tinted(&base, [255, 0, 0], &mut materials);
+        let blue = tinted(&base, [0, 0, 255], &mut materials);
         assert_ne!(red, blue);
         for handle in [&base, &red, &blue] {
             let material = materials.get(handle).unwrap();
@@ -345,6 +355,41 @@ mod tests {
             Color::WHITE.with_alpha(0.5)
         );
         assert_eq!(images.len(), 1);
+    }
+
+    #[test]
+    fn wardrobe_dyes_a_resolved_helmet_and_keeps_a_fallback_face_untinted() {
+        let asset = Arc::new(CharacterAsset::testing());
+        let mut wardrobe = Wardrobe::default();
+        let mut materials = Assets::<StandardMaterial>::default();
+        let face = materials.add(StandardMaterial::default());
+        let helmet = materials.add(StandardMaterial::default());
+        let key = (asset.source().to_owned(), "TSTHE0301_MDF".to_owned());
+        wardrobe.textures.insert(key.clone(), Some(helmet.clone()));
+        let mut look = Appearance::default();
+        let head = outfit::TextureSlot::Head.index();
+        look.materials[head] = 3;
+        look.tints[head] = Some([12, 35, 180]);
+
+        let part = ("TSTHE0001_MDF", true);
+        let Asset::Ready(dyed) = wardrobe.material(&asset, part, &face, &look, &mut materials)
+        else {
+            panic!("helmet texture already loaded");
+        };
+        assert_ne!(dyed, helmet);
+        assert_ne!(dyed, face);
+        assert_eq!(
+            materials.get(&dyed).unwrap().base_color,
+            Color::srgb_u8(12, 35, 180)
+        );
+
+        wardrobe.textures.insert(key, None);
+        let Asset::Ready(fallback) = wardrobe.material(&asset, part, &face, &look, &mut materials)
+        else {
+            panic!("missing helmet texture already resolved");
+        };
+        assert_eq!(fallback, face);
+        assert_eq!(materials.get(&face).unwrap().base_color, Color::WHITE);
     }
 
     #[test]

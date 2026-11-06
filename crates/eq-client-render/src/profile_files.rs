@@ -33,7 +33,12 @@ impl Profile {
 
     /// The named identity used by this client's settings files.
     pub(crate) fn key(&self) -> Option<CharacterProfile> {
-        self.0.clone()
+        self.key_ref().cloned()
+    }
+
+    /// Borrows the profile for followers that only copy on a switch.
+    pub(crate) fn key_ref(&self) -> Option<&CharacterProfile> {
+        self.0.as_ref()
     }
 }
 

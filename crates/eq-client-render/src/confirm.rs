@@ -10,6 +10,7 @@ use crate::{
     windows::{Shown, WindowId},
 };
 use bevy::prelude::*;
+use eq_client_core::confirmations::{ConsentId, ConsentKind};
 
 /// The confirmation dialog's Yes (true) or No (false).
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,6 +73,7 @@ impl Question {
 pub(crate) struct Asked {
     question: Option<Question>,
     answer: Option<(Question, bool)>,
+    presented: Option<ConsentId>,
 }
 
 impl Asked {
@@ -91,6 +93,11 @@ impl Asked {
         self.question
     }
 
+    /// The server offer whose question the confirmation window last drew.
+    pub(crate) const fn presented(&self) -> Option<ConsentId> {
+        self.presented
+    }
+
     /// Takes back the waiting question, unanswered.
     pub(crate) fn withdraw(&mut self) {
         self.question = None;
@@ -104,26 +111,19 @@ impl Asked {
     }
 }
 
-/// The translocate waiting for the player's answer, and the installed
-/// client's rules for asking it; None where the client asks about none.
-fn translocate(
-    online: &OnlineState,
-    settings: &crate::ViewerSettings,
-) -> Option<eq_client_assets::ui::TranslocateQuestion> {
-    online.world().translocate()?;
-    settings.0.installed_client.translocate_offer()
+/// The server question that takes precedence in the confirmation window.
+fn current_consent(online: &OnlineState) -> Option<ConsentId> {
+    online
+        .world()
+        .resurrection()
+        .map(|question| question.id)
+        .or_else(|| online.world().translocate().map(|question| question.id))
 }
 
 /// Keeps the confirmation dialog open while a question waits for an answer.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
-pub(crate) fn window(
-    (online, settings): (Res<OnlineState>, Res<crate::ViewerSettings>),
-    asked: Res<Asked>,
-    mut shown: ResMut<Shown>,
-) {
-    let asking = online.world().resurrection().is_some()
-        || translocate(&online, &settings).is_some()
-        || asked.question.is_some();
+pub(crate) fn window(online: Res<OnlineState>, asked: Res<Asked>, mut shown: ResMut<Shown>) {
+    let asking = current_consent(&online).is_some() || asked.question.is_some();
     if asking != shown.is_open(WindowId::Confirmation) {
         if asking {
             shown.open(WindowId::Confirmation);
@@ -149,40 +149,73 @@ pub(crate) fn buttons(
     let Some(yes) = buttons.iter().next().map(|answer| answer.0) else {
         return;
     };
-    if online.world().resurrection().is_some() {
-        super::resurrection::answer(&mut online, &outbox, yes);
-    } else if let Some(rules) = translocate(&online, &settings) {
-        let declined = rules.declined.zip(messages.as_deref());
-        if let Some(line) = super::translocate::answer(&mut online, &outbox, yes, declined) {
-            chat.history.push(line);
+    let current = current_consent(&online);
+    // A frame may have received a replacement before it draws the question.
+    if current != asked.presented {
+        return;
+    }
+    match current {
+        Some(id) if id.kind == ConsentKind::Resurrection => {
+            super::resurrection::answer(&mut online, &outbox, id, yes);
         }
-    } else if let Some(question) = asked.question.take() {
-        asked.answer = Some((question, yes));
+        Some(id) => {
+            let rules = settings.0.installed_client.translocate_offer();
+            let declined = rules.declined.zip(messages.as_deref());
+            if let Some(line) = super::translocate::answer(&mut online, &outbox, id, yes, declined)
+            {
+                chat.history.push(line);
+            }
+        }
+        None => {
+            if let Some(question) = asked.question.take() {
+                asked.answer = Some((question, yes));
+            }
+        }
     }
 }
 
 /// Shows the dialog's question.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn show(
-    (online, asked, settings): (Res<OnlineState>, Res<Asked>, Res<crate::ViewerSettings>),
+    (online, mut asked, settings): (Res<OnlineState>, ResMut<Asked>, Res<crate::ViewerSettings>),
     (messages, names): (
         Option<Res<crate::hud::messages::Messages>>,
         Res<crate::spellbook::SpellNames>,
     ),
     mut texts: Query<&mut Text, With<QuestionText>>,
+    controls: Query<Entity, With<AnswerButton>>,
+    mouse: Option<ResMut<crate::clicks::LeftButton>>,
 ) {
+    let current = if texts.is_empty() {
+        None
+    } else {
+        current_consent(&online)
+    };
+    if asked.presented != current {
+        // A press that began on the old question must not answer a new one.
+        if let Some(mut mouse) = mouse {
+            for control in &controls {
+                mouse.claim(control);
+            }
+        }
+        asked.presented = current;
+    }
     if texts.is_empty() {
         return;
     }
-    let wanted = if online.world().resurrection().is_some() {
-        super::resurrection::question(online.world(), messages.as_deref())
-    } else if let Some(rules) = translocate(&online, &settings) {
-        super::translocate::question(online.world(), rules, messages.as_deref())
-    } else {
-        asked
+    let wanted = match current {
+        Some(id) if id.kind == ConsentKind::Resurrection => {
+            super::resurrection::question(online.world(), messages.as_deref())
+        }
+        Some(_) => super::translocate::question(
+            online.world(),
+            settings.0.installed_client.translocate_offer(),
+            messages.as_deref(),
+        ),
+        None => asked
             .question
             .map(|question| question.text(&names, &online))
-            .unwrap_or_default()
+            .unwrap_or_default(),
     };
     for mut text in &mut texts {
         if text.0 != wanted {
@@ -194,6 +227,67 @@ pub(crate) fn show(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_press_started_on_one_offer_cannot_answer_its_replacement() {
+        use crate::{clicks::testing as clicks, online::testing};
+        use eq_client_core::{ClientCommand, WorldEvent, confirmations::ConsentOffer};
+        use std::time::{Duration, Instant};
+
+        let mut app = crate::testing::app();
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        app.insert_resource(Outbox::new(Some(tx)))
+            .init_resource::<Asked>()
+            .init_resource::<crate::chat::ChatState>()
+            .add_systems(Update, (buttons, window, show).chain());
+        let yes = app
+            .world_mut()
+            .spawn((Interaction::None, AnswerButton(true)))
+            .id();
+        let text = app.world_mut().spawn((QuestionText, Text::default())).id();
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        let offer = |sequence, caster: &[u8]| {
+            let mut body = vec![0; 92];
+            body[..4].copy_from_slice(&4u32.to_le_bytes());
+            body[12..12 + caster.len()].copy_from_slice(caster);
+            WorldEvent::TranslocateOffer(ConsentOffer {
+                id: ConsentId {
+                    session_id: 1,
+                    kind: ConsentKind::Translocate,
+                    sequence,
+                },
+                offer: eq_client_core::confirmations::titanium_translocate(&body).unwrap(),
+                expires_at: Instant::now() + Duration::from_secs(300),
+            })
+        };
+        testing::news(&mut online, [offer(1, b"First")]);
+        app.insert_resource(online);
+        app.update();
+        assert!(app.world().get::<Text>(text).unwrap().0.contains("First"));
+        clicks::press(&mut app, Some(yes));
+        testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [offer(2, b"Second")],
+        );
+        app.update();
+        assert!(app.world().get::<Text>(text).unwrap().0.contains("Second"));
+        clicks::release(&mut app, Some(yes));
+        assert!(rx.try_recv().is_err());
+        clicks::click(&mut app, yes);
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ClientCommand::AnswerTranslocate {
+                session_id: 1,
+                offer_id: ConsentId {
+                    session_id: 1,
+                    kind: ConsentKind::Translocate,
+                    sequence: 2
+                },
+                accept: true,
+            })
+        ));
+    }
 
     #[test]
     fn a_question_of_the_clients_own_waits_for_its_answer() {

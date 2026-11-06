@@ -6,7 +6,13 @@ use super::{
 };
 use crate::{
     BookActionStatus, Coins, Death, PlayerState, PostureState, SpellBook, ZoneOffer,
-    buffs::BuffTracker, combat::ConColor, doors::DoorTable, ground::Objects, inventory::Inventory,
+    buffs::BuffTracker,
+    combat::ConColor,
+    confirmations::{ConsentClosure, ConsentId, ConsentOffer, TranslocateOffer},
+    doors::DoorTable,
+    ground::Objects,
+    inventory::Inventory,
+    resurrection::ResurrectionOffer,
 };
 use std::collections::BTreeMap;
 
@@ -371,30 +377,49 @@ impl ClientWorld {
     /// The player's pet: the spawn the player owns.
     #[must_use]
     pub fn pet(&self) -> Option<&Spawn> {
+        if !self.in_world() {
+            return None;
+        }
         self.pet_of(self.player.as_ref()?.spawn_id)
+    }
+
+    /// The owned pet identity the session expects on a queued order.
+    #[must_use]
+    pub fn pet_intent(&self) -> Option<crate::pets::PetIdentity> {
+        let id = self.pet()?.state.spawn_id;
+        self.zone.own_pet.filter(|pet| pet.spawn_id == id)
     }
 
     /// The pet a spawn owns, while it is in view.
     #[must_use]
     pub fn pet_of(&self, owner: u16) -> Option<&Spawn> {
-        self.zone
-            .spawns
-            .values()
-            .find(|spawn| spawn.state.pet_owner == Some(owner))
+        let id =
+            crate::pets::owned_pet(owner, self.zone.spawns.values().map(|spawn| &spawn.state))?;
+        self.zone.spawns.get(&id)
     }
 
-    /// The translocate offered and not yet answered, and when it came.
+    /// The translocate offered and not yet answered.
     #[must_use]
-    pub fn translocate(
-        &self,
-    ) -> Option<(&crate::confirmations::TranslocateOffer, std::time::Instant)> {
-        self.translocate.as_ref().map(|(offer, at)| (offer, *at))
+    pub const fn translocate(&self) -> Option<&ConsentOffer<TranslocateOffer>> {
+        self.translocate.as_ref()
     }
 
     /// The resurrection offered and not yet answered.
     #[must_use]
-    pub fn resurrection(&self) -> Option<&crate::resurrection::ResurrectionOffer> {
+    pub const fn resurrection(&self) -> Option<&ConsentOffer<ResurrectionOffer>> {
         self.resurrection.as_ref()
+    }
+
+    /// The last session disposition, including its original admission.
+    #[must_use]
+    pub const fn last_consent_close(&self) -> Option<(ConsentId, ConsentClosure)> {
+        self.last_consent_close
+    }
+
+    /// The offer ID from the last refusal received in the current admission.
+    #[must_use]
+    pub const fn last_consent_refusal(&self) -> Option<ConsentId> {
+        self.last_consent_refusal
     }
 
     /// The book or note open to read.
@@ -467,7 +492,7 @@ impl ClientWorld {
             .expect("target sequence exhausted")
     }
 
-    /// Current target identity for a queued ability. A pending local choice,
+    /// Current target identity for a queued action. A pending local choice,
     /// unresolved server ID or lost incarnation has no usable identity.
     #[must_use]
     pub fn target_intent(&self) -> Option<eq_network_game::targets::TargetState> {
@@ -751,6 +776,16 @@ impl ClientWorld {
     /// The spellbook change in flight, until confirmed.
     #[must_use]
     pub const fn book_action(&self) -> Option<&BookActionStatus> {
+        match self.book_action_status() {
+            Some(BookActionStatus::Confirmed) => None,
+            status => status,
+        }
+    }
+
+    /// The last worker status, including explicit confirmation when received.
+    /// An absent status supplies no evidence that a request succeeded.
+    #[must_use]
+    pub const fn book_action_status(&self) -> Option<&BookActionStatus> {
         self.book_action.as_ref()
     }
 

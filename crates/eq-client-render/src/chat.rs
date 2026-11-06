@@ -298,7 +298,7 @@ fn spawn_group(commands: &mut Commands, id: WindowId) -> Entity {
         super::windows::drag_anywhere(commands, frame, id);
     }
     commands.entity(frame).with_children(|root| {
-        tab_strip(root, id, None);
+        tab_strip(root, id, false, None);
         lines(root, false, id);
         root.spawn(Node {
             column_gap: px(5),
@@ -362,6 +362,7 @@ pub(super) fn reconcile(
     frames: Query<(Entity, &WindowId), With<Panel>>,
     mut stack: ResMut<super::windows::Stack>,
 ) {
+    stack.sync_chat_groups(&state.groups);
     if !frames.iter().any(|(_, id)| *id == WindowId::Chat) {
         return;
     }
@@ -372,7 +373,6 @@ pub(super) fn reconcile(
     }
     for id in state.groups.detached() {
         if !frames.iter().any(|(_, frame)| *frame == id) {
-            stack.raise(id);
             let frame = spawn_group(&mut commands, id);
             commands.entity(frame).insert(GlobalZIndex(stack.z(id)));
         }
@@ -401,7 +401,7 @@ pub(super) fn skinned_output(
         })
         .with_children(|output| {
             let skin = tab_frame.map(|look| (look.clone(), art.drawing_skin()));
-            tab_strip(output, id, skin);
+            tab_strip(output, id, true, skin);
             viewport = lines(output, true, id);
         });
     viewport
@@ -412,12 +412,15 @@ pub(super) fn skinned_output(
 pub(super) struct TabStrip {
     id: WindowId,
     painted: Option<Vec<ChatTab>>,
+    /// Drawn inside skinned output, which may have no authored tab frame.
+    bare: bool,
     skin: Option<(eq_client_assets::sidl::FrameLook, Option<String>)>,
 }
 
 fn tab_strip(
     parent: &mut ChildSpawnerCommands,
     id: WindowId,
+    bare: bool,
     skin: Option<(eq_client_assets::sidl::FrameLook, Option<String>)>,
 ) {
     let gap = if skin.is_some() { 2.0 } else { 3.0 };
@@ -425,6 +428,7 @@ fn tab_strip(
         TabStrip {
             id,
             painted: None,
+            bare,
             skin,
         },
         super::windows::KeepsPress,
@@ -460,7 +464,7 @@ pub(super) fn sync_tabs(
             .entity(entity)
             .despawn_children()
             .with_children(|parent| {
-                if group.tabs.is_empty() {
+                if group.tabs.is_empty() && !strip.bare {
                     parent.spawn(theme::text("Drop a chat tab here", Size::Small, theme::INK));
                 }
                 let art_skin = strip.skin.as_ref().and_then(|(_, skin)| skin.clone());
@@ -1191,6 +1195,9 @@ fn submit_draft(
         if let Some(request) = client_request(&draft, state) {
             return Ok(request?);
         }
+        if let Some(result) = super::pet::target_command(&draft, online, outbox) {
+            return Ok(result?);
+        }
         if let Some(commands) = game_commands(&draft, online, outbox, qol) {
             for command in commands? {
                 outbox.send(online.world(), command)?;
@@ -1253,6 +1260,9 @@ pub(super) fn submit_game_command(
     outbox: &crate::outbox::Outbox,
     qol: &Settings,
 ) -> Result<(), String> {
+    if let Some(result) = super::pet::target_command(input, online, outbox) {
+        return result;
+    }
     let commands = game_commands(input, online, outbox, qol)
         .ok_or_else(|| format!("{input} is not a game command"))??;
     for command in commands {
@@ -1575,6 +1585,44 @@ fn camp_destination(input: &str) -> Option<eq_client_core::camp::CampTo> {
         .flatten()
 }
 
+/// Builds the Bard's explicit song stop after checking the input and admission.
+fn stop_song_command(
+    words: &str,
+    world: &eq_client_core::world::ClientWorld,
+    stamp: impl FnOnce() -> Result<crate::outbox::Stamp, String>,
+) -> Result<ClientCommand, String> {
+    if !words.trim().is_empty() {
+        return Err("Use /stopsong without arguments".into());
+    }
+    let player = world.player().ok_or("Enter the world first")?;
+    if player.class != Some(8) {
+        return Err("Only Bards can stop a song".into());
+    }
+    let stamp = stamp()?;
+    Ok(ClientCommand::StopSong {
+        session_id: stamp.session_id,
+        created: stamp.created,
+    })
+}
+
+/// Builds a pet order from the current ownership and selected target.
+fn pet_order(
+    words: &str,
+    world: &eq_client_core::world::ClientWorld,
+    stamp: impl FnOnce() -> Result<crate::outbox::Stamp, String>,
+) -> Result<ClientCommand, String> {
+    let command = eq_client_core::pet::command(words)
+        .ok_or_else(|| format!("Unknown pet command: {words}"))?;
+    let stamp = stamp()?;
+    Ok(ClientCommand::Pet {
+        session_id: stamp.session_id,
+        command,
+        pet: world.pet_intent(),
+        target: world.target_intent().filter(|_| command.names_target()),
+        created: stamp.created,
+    })
+}
+
 /// Slash commands that are game actions rather than chat; None means ordinary chat.
 fn game_commands(
     input: &str,
@@ -1606,6 +1654,7 @@ fn game_commands(
         return Some(commands);
     }
     Some(match name.as_str() {
+        "stopsong" => stop_song_command(words, online.world(), stamp).map(|command| vec![command]),
         "who" => eq_client_core::who::parse(words).and_then(|request| {
             if !request.everywhere {
                 return Err("The zone's /who is listed by chat, not sent".into());
@@ -1624,15 +1673,7 @@ fn game_commands(
             }]
         }),
         // A command to the player's pet, aimed at the target where it takes one.
-        "pet" => eq_client_core::pet::command(words)
-            .ok_or_else(|| format!("Unknown pet command: {words}"))
-            .and_then(|command| {
-                Ok(vec![ClientCommand::Pet {
-                    session_id: stamp()?.session_id,
-                    command,
-                    target: online.world().target().selected,
-                }])
-            }),
+        "pet" => pet_order(words, online.world(), stamp).map(|command| vec![command]),
         // The ordinary camp sits and prepares first. Immediate exit is an
         // explicit opt-in, still completed by the session's logout reply.
         "camp" => eq_client_core::camp::destination(words).and_then(|_| {
@@ -1679,6 +1720,16 @@ fn game_commands(
         }),
         "sit" => posture(eq_client_core::Posture::Sitting).map(|command| vec![command]),
         "stand" => posture(eq_client_core::Posture::Standing).map(|command| vec![command]),
+        "ranged" => {
+            if words.trim().is_empty() {
+                stamp().and_then(|stamp| {
+                    super::combat::ranged_command(online.world(), stamp)
+                        .map(|command| vec![command])
+                })
+            } else {
+                Err("Use /ranged without arguments".into())
+            }
+        }
         _ => return None,
     })
 }
@@ -1754,6 +1805,13 @@ pub(super) fn scroll(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::{
+        ecs::system::RunSystemOnce,
+        text::{
+            ComputedTextBlock, LineBreak, RunGeometry, TextBounds, TextLayoutInfo, TextPipeline,
+        },
+        ui::ComputedStackIndex,
+    };
 
     #[test]
     fn random_rolls_to_100_to_one_number_or_between_two() {
@@ -2070,6 +2128,27 @@ mod tests {
             window: Entity::PLACEHOLDER,
         });
         app.update();
+    }
+
+    #[test]
+    fn stop_song_is_a_scoped_bard_action_through_the_game_command_path() {
+        let mut online = super::super::online::OnlineState::new(true);
+        let (queue, received) = std::sync::mpsc::sync_channel(2);
+        let outbox = crate::outbox::Outbox::new(Some(queue));
+        let qol = Settings::default();
+        let mut player = super::super::online::testing::player(7);
+        super::super::online::testing::admit(&mut online, 4, player.clone());
+        assert!(submit_game_command("/stopsong", &mut online, &outbox, &qol).is_err());
+
+        player.class = Some(8);
+        super::super::online::testing::admit(&mut online, 5, player);
+        assert!(submit_game_command("/stopsong now", &mut online, &outbox, &qol).is_err());
+        assert!(received.try_recv().is_err());
+        submit_game_command("/StopSong", &mut online, &outbox, &qol).unwrap();
+        assert!(matches!(
+            received.try_recv(),
+            Ok(ClientCommand::StopSong { session_id: 5, .. })
+        ));
     }
 
     #[test]
@@ -3162,46 +3241,303 @@ mod tests {
     }
     #[test]
     fn closing_a_detached_frame_returns_its_tabs_to_the_main_strip() {
-        let mut app = crate::testing::app();
-        app.add_systems(Startup, |mut commands: Commands| spawn(&mut commands))
-            .add_systems(Update, (close_groups, reconcile, sync_tabs).chain());
-        let detached = app
-            .world_mut()
-            .resource_mut::<ChatState>()
-            .groups
-            .detach(WindowId::Chat, ChatTab::Guild)
-            .unwrap();
-        app.update();
-
-        let world = app.world_mut();
-        let frame = world
-            .query_filtered::<(Entity, &WindowId), With<Panel>>()
-            .iter(world)
-            .find(|(_, id)| **id == detached)
-            .unwrap()
-            .0;
-        let close = world
-            .query::<(Entity, &CloseGroup)>()
-            .iter(world)
-            .find(|(_, close)| close.0 == detached)
-            .unwrap()
-            .0;
-        let tab = |world: &mut World| {
-            let (id, button) = world
-                .query::<(Entity, &TabButton)>()
-                .iter(world)
-                .find(|(_, button)| button.0 == ChatTab::Guild)
+        for via_escape in [false, true] {
+            let mut app = crate::testing::app();
+            app.add_systems(Startup, |mut commands: Commands| spawn(&mut commands))
+                .add_systems(Update, (close_groups, reconcile, sync_tabs).chain());
+            let detached = app
+                .world_mut()
+                .resource_mut::<ChatState>()
+                .groups
+                .detach(WindowId::Chat, ChatTab::Guild)
                 .unwrap();
-            (id, button.1)
-        };
-        assert_eq!(tab(world).1, detached);
-        crate::clicks::testing::click(&mut app, close);
-        assert!(app.world().get_entity(frame).is_err());
+            app.update();
+
+            let world = app.world_mut();
+            let frame = hud_frame(world, detached);
+            let tab_group = |world: &mut World| {
+                world
+                    .query::<&TabButton>()
+                    .iter(world)
+                    .find(|button| button.0 == ChatTab::Guild)
+                    .unwrap()
+                    .1
+            };
+            assert_eq!(tab_group(world), detached);
+            if via_escape {
+                world.insert_resource(crate::escape::Escape::Close(detached));
+                app.update();
+            } else {
+                let close = world
+                    .query::<(Entity, &CloseGroup)>()
+                    .iter(world)
+                    .find(|(_, close)| close.0 == detached)
+                    .unwrap()
+                    .0;
+                crate::clicks::testing::click(&mut app, close);
+            }
+            assert!(app.world().get_entity(frame).is_err());
+            let world = app.world_mut();
+            assert_eq!(tab_group(world), WindowId::Chat);
+            assert_eq!(
+                world.resource::<ChatState>().groups.active(WindowId::Chat),
+                Some(ChatTab::Guild)
+            );
+        }
+    }
+
+    fn hud_frame(world: &mut World, id: WindowId) -> Entity {
+        world
+            .query_filtered::<(Entity, &WindowId), With<crate::hud::HudRoot>>()
+            .iter(world)
+            .find(|(_, window)| **window == id)
+            .unwrap()
+            .0
+    }
+
+    #[test]
+    fn rebuilding_detached_chat_preserves_its_place_in_the_window_stack() {
+        use crate::windows::{Shown, Stack, raise_opened, restack};
+        use bevy::{ecs::system::RunSystemOnce, mesh::skinning::SkinnedMeshInverseBindposes};
+
+        let inventory = WindowId::Inventory;
+        let build_hud = |mut commands: Commands| crate::hud::spawn(&mut commands);
+        for inventory_in_front in [false, true] {
+            let mut app = crate::testing::app();
+            app.init_resource::<Assets<Mesh>>()
+                .init_resource::<Assets<StandardMaterial>>()
+                .init_resource::<Assets<SkinnedMeshInverseBindposes>>()
+                .add_systems(Startup, build_hud)
+                .add_systems(
+                    Update,
+                    (raise_opened, restack, crate::inventory::update, reconcile).chain(),
+                );
+            app.world_mut().resource_mut::<Shown>().open(inventory);
+            // Route observes the inventory after presentation has shown it.
+            app.update();
+            app.update();
+            let detached = app
+                .world_mut()
+                .resource_mut::<ChatState>()
+                .groups
+                .detach(WindowId::Chat, ChatTab::Guild)
+                .unwrap();
+            app.update();
+            if inventory_in_front {
+                app.world_mut().resource_mut::<Stack>().raise(inventory);
+            }
+            app.update();
+            let ids = [inventory, detached];
+            let z = |world: &World, id| world.get::<GlobalZIndex>(id).unwrap().0;
+            let frames = ids.map(|id| hud_frame(app.world_mut(), id));
+            assert_eq!(
+                z(app.world(), frames[0]) > z(app.world(), frames[1]),
+                inventory_in_front
+            );
+
+            // Leave through the production root cleanup, then rebuild through
+            // the same HUD builder as a newly loaded zone.
+            app.world_mut()
+                .run_system_once(|mut commands: Commands, mut scene: crate::zone::Scene| {
+                    scene.leave(&mut commands, &mut default());
+                })
+                .unwrap();
+            assert!(
+                frames
+                    .iter()
+                    .all(|&frame| app.world().get_entity(frame).is_err())
+            );
+            app.update();
+            app.world_mut().run_system_once(build_hud).unwrap();
+            let rebuilt_inventory = hud_frame(app.world_mut(), inventory);
+            assert_eq!(
+                app.world().get::<Node>(rebuilt_inventory).unwrap().display,
+                Display::None
+            );
+            app.update();
+            app.update();
+            let rebuilt = ids.map(|id| hud_frame(app.world_mut(), id));
+            assert_ne!(rebuilt[0], frames[0]);
+            assert_ne!(rebuilt[1], frames[1]);
+            assert_eq!(
+                app.world().get::<Node>(rebuilt[0]).unwrap().display,
+                Display::Flex
+            );
+            assert_eq!(
+                z(app.world(), rebuilt[0]) > z(app.world(), rebuilt[1]),
+                inventory_in_front
+            );
+
+            let world = app.world_mut();
+            world.resource_mut::<ChatState>().groups.close(detached);
+            app.update();
+            assert!(
+                !app.world()
+                    .resource::<Stack>()
+                    .front_to_back()
+                    .any(|id| id == detached)
+            );
+            let reopened = app
+                .world_mut()
+                .resource_mut::<ChatState>()
+                .groups
+                .detach(WindowId::Chat, ChatTab::Tell)
+                .unwrap();
+            assert_eq!(reopened, detached);
+            app.update();
+            assert_eq!(
+                app.world().resource::<Stack>().front_to_back().next(),
+                Some(reopened)
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_skinned_chat_strip_keeps_its_drop_target_without_a_client_hint() {
+        let mut app = crate::testing::app();
+        app.add_systems(
+            Startup,
+            |mut commands: Commands, mut art: crate::sheets::Art| {
+                commands.spawn_empty().with_children(|parent| {
+                    tab_strip(parent, WindowId::Chat, false, None);
+                    for tab_frame in [None, Some(default())] {
+                        skinned_output(
+                            parent,
+                            Node::default(),
+                            (&mut art, tab_frame.as_ref()),
+                            WindowId::Chat,
+                        );
+                    }
+                });
+            },
+        )
+        .add_systems(Update, sync_tabs);
         let world = app.world_mut();
-        assert_eq!(tab(world).1, WindowId::Chat);
+        for tab in ChatTab::ALL {
+            world
+                .resource_mut::<ChatState>()
+                .groups
+                .detach(WindowId::Chat, tab)
+                .unwrap();
+        }
+        app.update();
+        let world = app.world_mut();
+        let strips: BTreeMap<_, _> = world
+            .query_filtered::<(Entity, &TabStrip), With<crate::windows::KeepsPress>>()
+            .iter(world)
+            .map(|(entity, strip)| ((strip.bare, strip.skin.is_some()), entity))
+            .collect();
         assert_eq!(
-            world.resource::<ChatState>().groups.active(WindowId::Chat),
-            Some(ChatTab::Guild)
+            strips.keys().copied().collect::<Vec<_>>(),
+            [(false, false), (true, false), (true, true)]
+        );
+        let labels: Vec<_> = world
+            .query::<(&Text, &ChildOf)>()
+            .iter(world)
+            .filter(|(text, _)| text.0 == "Drop a chat tab here")
+            .map(|(_, parent)| parent.parent())
+            .collect();
+        assert_eq!(labels, [strips[&(false, false)]]);
+    }
+
+    #[test]
+    fn a_nested_chat_line_only_links_in_its_frontmost_viewport() {
+        let mut app = crate::testing::app();
+        app.add_systems(Update, crate::items::link_input);
+        let world = app.world_mut();
+        world
+            .query_filtered::<&mut Window, With<PrimaryWindow>>()
+            .single_mut(world)
+            .unwrap()
+            .set_physical_cursor_position(Some(bevy::math::DVec2::splat(50.0)));
+        let node = ComputedNode {
+            size: Vec2::splat(100.0),
+            ..default()
+        };
+        let transform = UiGlobalTransform::from_translation(Vec2::splat(50.0));
+        let viewport = world
+            .spawn((
+                Viewport,
+                crate::windows::KeepsPress,
+                node,
+                transform,
+                ComputedStackIndex(1),
+            ))
+            .id();
+        let column = world.spawn(ChildOf(viewport)).id();
+        let wrapper = world.spawn(ChildOf(column)).id();
+        let paragraph = world
+            .run_system_once(move |mut commands: Commands| {
+                let mut paragraph = commands.spawn((
+                    LineId(1),
+                    node,
+                    transform,
+                    InheritedVisibility::VISIBLE,
+                    ChildOf(wrapper),
+                ));
+                paragraph.with_children(|parent| {
+                    links::spawn_text(parent, "https://example.com", Color::WHITE, Size::Small);
+                });
+                paragraph.id()
+            })
+            .unwrap();
+        let span = world
+            .query_filtered::<Entity, With<links::WebLink>>()
+            .single(world)
+            .unwrap();
+        let mut block = ComputedTextBlock::default();
+        // Register the span without depending on a font or glyph shaping.
+        // The synthetic run below supplies the laid-out link's bounds.
+        TextPipeline::default()
+            .update_buffer(
+                &Assets::default(),
+                std::iter::once((
+                    span,
+                    1,
+                    "",
+                    &TextFont::default(),
+                    Color::WHITE,
+                    default(),
+                    default(),
+                )),
+                LineBreak::NoWrap,
+                Justify::Left,
+                TextBounds::UNBOUNDED,
+                1.0,
+                &mut block,
+                &mut default(),
+                &mut default(),
+                Vec2::splat(100.0),
+                16.0,
+            )
+            .unwrap();
+        world.entity_mut(paragraph).insert((
+            block,
+            TextLayoutInfo {
+                run_geometry: vec![RunGeometry {
+                    section_index: 0,
+                    bounds: Rect::new(0.0, 0.0, 100.0, 100.0),
+                    ..default()
+                }],
+                ..default()
+            },
+        ));
+        app.update();
+        assert_eq!(
+            app.world().get::<Interaction>(span),
+            Some(&Interaction::Hovered)
+        );
+        app.world_mut().spawn((
+            Viewport,
+            crate::windows::KeepsPress,
+            node,
+            transform,
+            ComputedStackIndex(2),
+        ));
+        app.update();
+        assert_eq!(
+            app.world().get::<Interaction>(span),
+            Some(&Interaction::None)
         );
     }
 

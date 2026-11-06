@@ -834,6 +834,184 @@ fn only_the_players_lasting_effects_wait_for_a_slot_and_a_fade_clears_them() {
 }
 
 #[test]
+fn a_silent_song_stop_releases_only_its_local_cast_hold() {
+    let mut world = admitted();
+    game(&mut world, WorldEvent::BuffSnapshot(vec![Some(buff(10))]));
+    let buff_revision = world.buffs().revision();
+    let now = Instant::now();
+    world.casting.cooldowns.restore(
+        &[Some(43), None, None, None, None, None, None, None],
+        Some([3000, 0, 0, 0, 0, 0, 0, 0]),
+        now,
+    );
+
+    for began in [false, true] {
+        game(
+            &mut world,
+            WorldEvent::CastPending {
+                session_id: 1,
+                spell_id: Some(42),
+            },
+        );
+        if began {
+            game(
+                &mut world,
+                WorldEvent::CastPending {
+                    session_id: 1,
+                    spell_id: None,
+                },
+            );
+            game(
+                &mut world,
+                WorldEvent::Spell(SpellUpdate::Began {
+                    caster_id: 9,
+                    spell_id: 42,
+                    duration_ms: 3000,
+                }),
+            );
+        }
+        let different = game(
+            &mut world,
+            WorldEvent::SongStopUnconfirmed {
+                session_id: 1,
+                spell_id: Some(43),
+            },
+        );
+        assert!(different.ignored);
+        assert_eq!(world.casting().cast.is_some(), began);
+        assert_eq!(world.casting().pending.is_some(), !began);
+
+        let stop = game(
+            &mut world,
+            WorldEvent::SongStopUnconfirmed {
+                session_id: 1,
+                spell_id: Some(42),
+            },
+        );
+        assert_eq!(
+            stop.notices,
+            [Notice::SongStopUnconfirmed {
+                released_cast: true
+            }]
+        );
+        assert_eq!(stop.cast, None);
+        assert!(world.casting().cast.is_none());
+        assert!(world.casting().pending.is_none());
+        assert!(world.casting().interrupted.is_none());
+        assert!(!world.zone.casts.contains_key(&9));
+        assert!(world.completed_cast_of(9).is_none());
+        assert_eq!(world.buffs().revision(), buff_revision);
+        assert_eq!(world.buffs().slots().unwrap()[&0].duration_ticks, 10);
+        assert_eq!(world.player().unwrap().mana, 0);
+        assert!(world.casting().cooldowns.remaining(42, now).is_zero());
+        assert_eq!(
+            world.casting().cooldowns.remaining(43, now),
+            std::time::Duration::from_secs(3),
+        );
+    }
+}
+
+#[test]
+fn an_idle_song_stop_or_an_old_admission_cannot_release_a_new_cast() {
+    let mut world = admitted();
+    game(
+        &mut world,
+        WorldEvent::CastPending {
+            session_id: 1,
+            spell_id: Some(42),
+        },
+    );
+    game(&mut world, entered(2));
+    connection(&mut world, true, false);
+    assert!(world.casting().pending.is_none());
+    game(&mut world, WorldEvent::SpellEffect(effect(9, 4)));
+    let effect_revision = world.buffs().revision();
+    assert_eq!(world.buffs().effects().len(), 1);
+    game(
+        &mut world,
+        WorldEvent::Spell(SpellUpdate::Began {
+            caster_id: 9,
+            spell_id: 42,
+            duration_ms: 3000,
+        }),
+    );
+
+    let stale = game(
+        &mut world,
+        WorldEvent::SongStopUnconfirmed {
+            session_id: 1,
+            spell_id: Some(42),
+        },
+    );
+    assert!(stale.ignored);
+    assert_eq!(stale.notices, []);
+    let idle = game(
+        &mut world,
+        WorldEvent::SongStopUnconfirmed {
+            session_id: 2,
+            spell_id: None,
+        },
+    );
+    assert_eq!(
+        idle.notices,
+        [Notice::SongStopUnconfirmed {
+            released_cast: false
+        }]
+    );
+    assert_eq!(idle.cast, None);
+    assert_eq!(world.buffs().revision(), effect_revision);
+    assert_eq!(world.buffs().effects().len(), 1);
+    assert_eq!(world.casting().cast.map(|(spell, ..)| spell), Some(42));
+}
+
+#[test]
+fn a_superseded_song_cannot_end_the_different_cast_that_started() {
+    let begin = |spell_id| {
+        WorldEvent::Spell(SpellUpdate::Began {
+            caster_id: 9,
+            spell_id,
+            duration_ms: 3000,
+        })
+    };
+    let mana = |spell_id| {
+        WorldEvent::Spell(SpellUpdate::Mana {
+            spell_id,
+            keep_casting: false,
+        })
+    };
+    let pending = |spell_id| WorldEvent::CastPending {
+        session_id: 1,
+        spell_id,
+    };
+
+    for old_began in [false, true] {
+        let mut world = admitted();
+        game(&mut world, pending(Some(42)));
+        if old_began {
+            game(&mut world, pending(None));
+            game(&mut world, begin(42));
+        }
+
+        let superseded = game(
+            &mut world,
+            WorldEvent::CastSuperseded {
+                session_id: 1,
+                spell_id: 42,
+            },
+        );
+        assert!(!superseded.ignored);
+        assert_eq!(superseded.notices, []);
+        assert_eq!(superseded.cast, None);
+        assert_eq!(world.casting().pending, None);
+        assert_eq!(world.casting().cast, None);
+        assert_eq!(game(&mut world, begin(43)).cast, Some(CastNews::Began));
+        assert_eq!(game(&mut world, mana(42)).cast, None);
+        assert_eq!(world.casting().cast.map(|(spell, ..)| spell), Some(43));
+        assert_eq!(game(&mut world, mana(43)).cast, Some(CastNews::Ended));
+    }
+}
+
+#[test]
 fn an_interruption_is_the_players_own_and_mana_cannot_undo_it() {
     let mut world = admitted();
     let now = Instant::now();
@@ -1233,6 +1411,7 @@ fn chest() -> crate::inventory::InventoryItem {
         },
         slot: InventorySlot(17),
         details: crate::ItemDetails {
+            base_held_model: None,
             equipment: Some(crate::EquipmentRules::default()),
             bonuses: Some(crate::ItemBonuses {
                 hit_points: 100,
@@ -3374,6 +3553,88 @@ fn the_player_has_the_pet_they_own_and_its_buffs() {
 }
 
 #[test]
+fn pet_buffs_and_command_identity_follow_ownership_and_incarnation() {
+    use crate::{
+        control::Charm,
+        pets::{PetBuffs, PetIdentity},
+    };
+    let mut world = admitted();
+    let charm = |owner_id, charmed| {
+        WorldEvent::Charm(Charm {
+            owner_id,
+            pet_id: 5,
+            charmed,
+        })
+    };
+    let identity = |revision| PetIdentity {
+        spawn_id: 5,
+        revision,
+    };
+    let projection = |session_id, revision| WorldEvent::OwnPet {
+        session_id,
+        pet: Some(identity(revision)),
+    };
+    let buffs = WorldEvent::PetBuffs(PetBuffs {
+        pet: 5,
+        slots: vec![None],
+    });
+    let pet = || SpawnState {
+        pet_owner: Some(9),
+        ..spawn(5)
+    };
+
+    game(&mut world, buffs.clone());
+    game(&mut world, charm(Some(9), true));
+    assert_eq!(world.pet().map(|pet| pet.state.spawn_id), Some(5));
+    assert!(world.pet_buffs().is_none());
+    game(&mut world, projection(1, 1));
+    game(&mut world, buffs.clone());
+    game(&mut world, charm(None, false));
+    game(&mut world, charm(Some(20), false));
+    assert_eq!(world.pet_intent(), Some(identity(1)));
+    assert!(world.pet_buffs().is_some());
+
+    game(&mut world, charm(Some(9), false));
+    assert!(world.pet().is_none());
+    game(&mut world, buffs.clone());
+    game(&mut world, charm(Some(9), true));
+    game(&mut world, projection(1, 2));
+    assert_eq!(world.pet_intent(), Some(identity(2)));
+    assert!(world.pet_buffs().is_none());
+
+    game(&mut world, buffs.clone());
+    game(&mut world, WorldEvent::Spawns(vec![pet()]));
+    assert!(world.pet_intent().is_none());
+    assert!(world.pet_buffs().is_none());
+    game(&mut world, projection(1, 3));
+    game(&mut world, buffs);
+    game(
+        &mut world,
+        WorldEvent::Death(Death {
+            spawn_id: 5,
+            killer_id: 0,
+            corpse_id: 5,
+            bind_zone_id: 0,
+            corpse_name: None,
+        }),
+    );
+    assert_eq!(world.spawn(5).unwrap().state.kind, SpawnKind::NpcCorpse);
+    assert!(world.pet().is_none());
+    assert!(world.pet_buffs().is_none());
+
+    game(&mut world, entered(2));
+    connection(&mut world, true, false);
+    game(&mut world, WorldEvent::Spawns(vec![pet()]));
+    assert!(game(&mut world, projection(1, 3)).ignored);
+    assert!(world.pet_intent().is_none());
+    game(&mut world, projection(2, 1));
+    assert_eq!(world.pet_intent(), Some(identity(1)));
+    game(&mut world, WorldEvent::DeathBind { session_id: 2 });
+    assert!(world.pet().is_none());
+    assert!(world.pet_intent().is_none());
+}
+
+#[test]
 fn last_names_change_by_the_name_spawned_with() {
     let mut world = admitted();
     game(
@@ -3488,20 +3749,59 @@ fn training_opens_raises_skills_with_a_line_and_closes() {
 }
 
 #[test]
-fn a_resurrection_offer_is_forgotten_when_the_player_enters_a_zone() {
+fn resurrection_consent_is_scoped_to_the_offer_and_admission() {
     let mut world = admitted();
-    // An offer from Tester to Example's corpse: the caster's name at 92 and
-    // the corpse's at 160 of the 228 bytes.
-    let mut body = vec![0; 228];
-    body[92..98].copy_from_slice(b"Tester");
-    body[160..177].copy_from_slice(b"Example's corpse0");
-    let offer = crate::resurrection::titanium_offer(&body).unwrap();
-    game(&mut world, WorldEvent::Resurrection(offer));
-    assert!(world.resurrection().is_some());
-    // The session that held the offer ends with the zone; the next zone's
-    // knows nothing of it, so neither does the world.
-    game(&mut world, entered(2));
+    let event = |session_id, sequence| {
+        let mut body = vec![0; 228];
+        body[24..31].copy_from_slice(b"Example");
+        body[92..98].copy_from_slice(b"Tester");
+        body[160..177].copy_from_slice(b"Example's corpse0");
+        WorldEvent::Resurrection(ConsentOffer {
+            id: ConsentId {
+                session_id,
+                kind: ConsentKind::Resurrection,
+                sequence,
+            },
+            offer: crate::resurrection::titanium_offer(&body).unwrap(),
+            expires_at: Instant::now() + std::time::Duration::from_secs(300),
+        })
+    };
+    game(&mut world, event(1, 1));
+    let first = world.resurrection().unwrap().id;
+    game(&mut world, event(1, 2));
+    let second = world.resurrection().unwrap().id;
+    world.dismiss_consent(first);
+    game(
+        &mut world,
+        WorldEvent::ConsentClosed {
+            id: first,
+            closure: ConsentClosure::AnswerSent { accept: true },
+        },
+    );
+    assert_eq!(world.resurrection().unwrap().id, second);
+    assert_eq!(
+        world.last_consent_close(),
+        Some((first, ConsentClosure::AnswerSent { accept: true }))
+    );
+    assert!(world.in_world());
+
+    game(&mut world, WorldEvent::DeathBind { session_id: 1 });
     assert!(world.resurrection().is_none());
+    assert!(game(&mut world, event(1, 3)).ignored);
+    game(&mut world, entered(2));
+    connection(&mut world, true, false);
+    assert!(game(&mut world, event(1, 4)).ignored);
+    game(&mut world, event(2, 1));
+    let next = world.resurrection().unwrap().id;
+    let late = game(
+        &mut world,
+        WorldEvent::ConsentClosed {
+            id: first,
+            closure: ConsentClosure::Expired,
+        },
+    );
+    assert!(late.ignored);
+    assert_eq!(world.resurrection().unwrap().id, next);
 }
 
 #[test]

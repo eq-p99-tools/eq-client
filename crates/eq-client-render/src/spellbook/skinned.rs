@@ -12,6 +12,7 @@ use super::{BookView, SpellNames, action_pending, note, prepare_scribe};
 use crate::chat::{ChatState, Said, system_line};
 use crate::confirm::{Asked, Question};
 use crate::hud::action_bar::{ActionRequests, BookChange};
+use crate::outbox::BookEditReceipt;
 use crate::windows::WindowId;
 use bevy::prelude::*;
 use eq_client_core::{
@@ -52,9 +53,13 @@ pub(crate) struct BookHand {
     /// The spell a right click chose, which a right click on another place
     /// swaps with that place and the Delete key deletes.
     pub(crate) chosen: Option<Entry>,
-    /// A deletion or a move the server has not answered yet, with the
-    /// book's reply count when it went.
-    editing: Option<(Edit, u64)>,
+    editing: Option<PendingEdit>,
+}
+
+/// A local edit awaiting a worker result in the admission where it was sent.
+struct PendingEdit {
+    kind: Edit,
+    receipt: BookEditReceipt,
 }
 
 /// A change to the book's entries in flight.
@@ -387,7 +392,7 @@ fn choose(
                 return Vec::new();
             };
             // The outbox says why a move it holds back did not go.
-            let sent = outbox.post(world, |stamp| ClientCommand::SwapSpell {
+            let sent = outbox.post_book_edit(world, |stamp| ClientCommand::SwapSpell {
                 session_id: stamp.session_id,
                 from,
                 to,
@@ -395,10 +400,13 @@ fn choose(
                 to_spell: in_place,
                 created: stamp.created,
             });
-            if sent.is_err() {
+            let Ok(receipt) = sent else {
                 return Vec::new();
-            }
-            hand.editing = Some((Edit::Moving, world.book_action_revision()));
+            };
+            hand.editing = Some(PendingEdit {
+                kind: Edit::Moving,
+                receipt,
+            });
             if let Some(requests) = requests {
                 // The move is the book's change now, not a memorization or a
                 // scribe for the gauges and the chat's lines to follow.
@@ -517,14 +525,17 @@ fn delete(
     hand.chosen = None;
     let slot = u16::try_from(chosen.slot).ok()?;
     // The outbox says why a deletion it holds back did not go.
-    let sent = outbox.post(world, |stamp| ClientCommand::DeleteSpell {
+    let sent = outbox.post_book_edit(world, |stamp| ClientCommand::DeleteSpell {
         session_id: stamp.session_id,
         slot,
         spell_id: chosen.spell,
         created: stamp.created,
     });
-    if sent.is_ok() {
-        hand.editing = Some((Edit::Deleting, world.book_action_revision()));
+    if let Ok(receipt) = sent {
+        hand.editing = Some(PendingEdit {
+            kind: Edit::Deleting,
+            receipt,
+        });
         if let Some(requests) = requests {
             // The deletion is the book's change now, not a memorization or a
             // scribe for the gauges and the chat's lines to follow.
@@ -544,38 +555,32 @@ fn answer(
     messages: &crate::hud::messages::Messages,
     chat: &mut ChatState,
 ) {
-    let Some((edit, sent)) = hand.editing else {
+    let Some(edit) = hand.editing.as_ref() else {
         return;
     };
-    if world.book_action_revision() == sent {
+    if world.ended() || !edit.receipt.belongs_to(world.session_id()) {
+        hand.editing = None;
         return;
     }
-    let status = world.book_action();
-    if matches!(
-        status,
-        Some(
-            BookActionStatus::Preparing
-                | BookActionStatus::Submitted
-                | BookActionStatus::AwaitingReply
-        )
-    ) {
-        return;
-    }
-    hand.editing = None;
-    match (edit, status) {
-        // The session clears a change the server confirmed.
-        (Edit::Deleting, None) => chat.history.push(system_line(
+    match (edit.kind, edit.receipt.status()) {
+        (Edit::Deleting, Some(BookActionStatus::Confirmed)) => chat.history.push(system_line(
             messages.said_text(4028, "The spell is gone from the book."),
         )),
-        (Edit::Deleting, Some(_)) => chat.history.push(system_line(
-            messages.said_text(4029, "The spell stays in the book."),
-        )),
+        (Edit::Deleting, Some(BookActionStatus::Rejected(_) | BookActionStatus::Cancelled(_))) => {
+            chat.history.push(system_line(
+                messages.said_text(4029, "The spell stays in the book."),
+            ));
+        }
         (
             Edit::Moving,
             Some(BookActionStatus::Rejected(reason) | BookActionStatus::Cancelled(reason)),
-        ) => chat.refuse(Said::own(reason.clone())),
-        (Edit::Moving, _) => (),
+        ) => {
+            chat.refuse(Said::own(reason));
+        }
+        (Edit::Moving, Some(BookActionStatus::Confirmed)) => (),
+        _ => return,
     }
+    hand.editing = None;
 }
 
 /// Scribes the scroll on the cursor into this empty place of the book; what
@@ -607,10 +612,10 @@ fn scribe(
         Ok(command) => command,
         Err(error) => return Some(Said::own(error.to_string())),
     };
-    outbox.send(world, command).ok()?;
+    let receipt = outbox.send_book_edit(world, command).ok()?;
     note(
         requests,
-        (BookChange::Scribe, scroll),
+        (BookChange::Scribe, scroll, receipt),
         format!("Scribing {}", names.label(scroll)),
     );
     None
@@ -637,7 +642,7 @@ pub(crate) fn memorize(
         return Some(Said::own("Wait for the current spell action"));
     }
     // The outbox says why a memorization it holds back did not go.
-    let spell = super::request_memorize(
+    let (spell, receipt) = super::request_memorize(
         Some(online),
         world.spell_book(),
         Some(outbox),
@@ -647,7 +652,7 @@ pub(crate) fn memorize(
     .ok()?;
     note(
         requests,
-        (BookChange::Memorize, spell),
+        (BookChange::Memorize, spell, receipt),
         format!("Memorizing {} into gem {}", names.label(spell), gem + 1),
     );
     None
@@ -656,7 +661,7 @@ pub(crate) fn memorize(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eq_client_core::ClientCommand;
+    use eq_client_core::{SpellUpdate, WorldEvent, WorldUpdate, world::Link};
 
     fn scroll(spell: u32) -> eq_client_core::inventory::InventoryItem {
         eq_client_core::inventory::InventoryItem {
@@ -666,6 +671,7 @@ mod tests {
             rules: eq_client_core::inventory::ItemPlacement::default(),
             slot: InventorySlot::CURSOR,
             details: eq_client_core::ItemDetails {
+                base_held_model: None,
                 equipment: None,
                 bonuses: None,
                 id: 15000 + spell,
@@ -928,14 +934,77 @@ mod tests {
         let mut chat = ChatState::default();
         answer(&mut hand, online.world(), &messages, &mut chat);
         assert_eq!(chat.newest(), "");
-        crate::online::testing::book_action(&mut online, BookActionStatus::AwaitingReply);
+        for status in [BookActionStatus::AwaitingReply, BookActionStatus::Confirmed] {
+            crate::online::testing::book_news(&mut online, &outbox, WorldEvent::BookAction(status));
+            answer(&mut hand, online.world(), &messages, &mut chat);
+            assert_eq!(chat.newest(), "");
+        }
+        crate::online::testing::book_news(
+            &mut online,
+            &outbox,
+            WorldEvent::Spell(SpellUpdate::BookDeletion {
+                slot: 9,
+                success: true,
+            }),
+        );
         answer(&mut hand, online.world(), &messages, &mut chat);
-        assert_eq!(chat.newest(), "");
-        crate::online::testing::book_action(&mut online, BookActionStatus::Confirmed);
-        answer(&mut hand, online.world(), &messages, &mut chat);
-        assert_ne!(chat.newest(), "");
+        assert_eq!(chat.newest(), "The spell is gone from the book.");
         // With nothing chosen, the key does nothing.
         delete(&mut hand, online.world(), &outbox, None);
+        assert!(sent.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_timed_out_skinned_delete_can_still_report_late_success() {
+        let mut online = online();
+        let mut hand = BookHand {
+            chosen: Some(Entry { slot: 1, spell: 42 }),
+            ..BookHand::default()
+        };
+        let (queue, sent) = std::sync::mpsc::sync_channel(1);
+        let outbox = crate::outbox::Outbox::new(Some(queue));
+        let messages = crate::hud::messages::Messages::default();
+        let mut chat = ChatState::default();
+        delete(&mut hand, online.world(), &outbox, None);
+        assert!(matches!(
+            sent.try_recv().unwrap(),
+            ClientCommand::DeleteSpell {
+                slot: 1,
+                spell_id: 42,
+                ..
+            }
+        ));
+
+        for status in [
+            BookActionStatus::AwaitingReply,
+            BookActionStatus::Unconfirmed,
+        ] {
+            crate::online::testing::book_news(&mut online, &outbox, WorldEvent::BookAction(status));
+            answer(&mut hand, online.world(), &messages, &mut chat);
+            assert!(hand.editing.is_some());
+            assert_eq!(online.world().spell_book().unwrap().slots()[1], Some(42));
+            assert_eq!(chat.newest(), "");
+        }
+
+        for link in [Link::Zoning, Link::Connected] {
+            crate::online::testing::apply(&mut online, &WorldUpdate::Connection(link));
+            answer(&mut hand, online.world(), &messages, &mut chat);
+            assert!(hand.editing.is_some());
+            assert_eq!(chat.newest(), "");
+        }
+        for event in [
+            WorldEvent::BookAction(BookActionStatus::Confirmed),
+            WorldEvent::Spell(SpellUpdate::BookDeletion {
+                slot: 1,
+                success: true,
+            }),
+        ] {
+            crate::online::testing::book_news(&mut online, &outbox, event);
+        }
+        answer(&mut hand, online.world(), &messages, &mut chat);
+        assert!(hand.editing.is_none());
+        assert_eq!(online.world().spell_book().unwrap().slots()[1], None);
+        assert_eq!(chat.newest(), "The spell is gone from the book.");
         assert!(sent.try_recv().is_err());
     }
 
@@ -1049,6 +1118,105 @@ mod tests {
             }
         ));
         assert_eq!(app.world().resource::<Asked>().question(), None);
+    }
+
+    #[test]
+    fn a_rejected_skinned_delete_keeps_its_result_when_the_link_resumes() {
+        use crate::online::{OnlineState, Updates, receive};
+        use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
+        use eq_client_core::chat::ChatTab;
+        use std::sync::{Mutex, mpsc};
+
+        let (mut app, sent) = book_app();
+        let (updates, incoming) = mpsc::channel();
+        app.insert_resource(Updates(Mutex::new(Some(incoming))))
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<SkinnedMeshInverseBindposes>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .add_systems(Update, receive.before(clicks));
+
+        press_delete(&mut app);
+        app.update();
+        answer_dialog(&mut app, true);
+        app.update();
+        assert!(matches!(
+            sent.try_recv().unwrap(),
+            ClientCommand::DeleteSpell {
+                slot: 1,
+                spell_id: 42,
+                ..
+            }
+        ));
+
+        for update in [
+            WorldUpdate::Game(WorldEvent::BookAction(BookActionStatus::Rejected(
+                "Server rejected spellbook deletion".into(),
+            ))),
+            WorldUpdate::Game(WorldEvent::Spell(SpellUpdate::BookDeletion {
+                slot: 1,
+                success: false,
+            })),
+            WorldUpdate::Connection(Link::Zoning),
+        ] {
+            updates.send(update).unwrap();
+        }
+        app.update();
+        let world = app.world().resource::<OnlineState>().world();
+        assert!(world.book_action_status().is_none());
+        assert!(!world.connected());
+        assert!(app.world().resource::<BookHand>().editing.is_none());
+        assert_eq!(
+            app.world().resource::<ChatState>().newest(),
+            "The spell stays in the book."
+        );
+
+        updates
+            .send(WorldUpdate::Connection(Link::Connected))
+            .unwrap();
+        app.update();
+        let world = app.world().resource::<OnlineState>().world();
+        assert_eq!(world.session_id(), Some(7));
+        app.world()
+            .resource::<crate::outbox::Outbox>()
+            .post(world, |stamp| ClientCommand::MemorizeSpell {
+                session_id: stamp.session_id,
+                gem: 0,
+                spell_id: 42,
+                created: stamp.created,
+            })
+            .unwrap();
+        assert!(matches!(
+            sent.try_recv().unwrap(),
+            ClientCommand::MemorizeSpell { gem: 0, .. }
+        ));
+        for event in [
+            WorldEvent::BookAction(BookActionStatus::Confirmed),
+            WorldEvent::Spell(SpellUpdate::Slot {
+                slot: 0,
+                spell_id: 42,
+                mode: 1,
+            }),
+        ] {
+            updates.send(WorldUpdate::Game(event)).unwrap();
+        }
+        app.update();
+        let world = app.world().resource::<OnlineState>().world();
+        assert_eq!(world.gem(0), Some(42));
+        assert_eq!(world.spell_book().unwrap().slots()[1], Some(42));
+        let chat = app.world().resource::<ChatState>();
+        let lines = chat.history.lines(ChatTab::All);
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|(_, line)| line.message.text == "The spell stays in the book.")
+                .count(),
+            1
+        );
+        assert!(
+            lines
+                .iter()
+                .all(|(_, line)| line.message.text != "The spell is gone from the book.")
+        );
     }
 
     #[test]

@@ -4,16 +4,19 @@ mod airborne;
 mod choices;
 mod falls;
 mod flight;
+mod jesus_mode;
 mod liquids;
 mod navigator;
 pub mod navmesh;
 mod pace;
 mod path;
 mod route;
+mod swimming;
 pub use airborne::{AirborneController, Landing, MotionStep, PROVISIONAL_PHYSICS, VerticalPhysics};
 pub use choices::{offered_options, options};
 pub use eq_network_game::movement::MovementOptions;
 pub use falls::{HARMLESS_DROP, fall_damage};
+use liquids::LiquidGuard;
 pub use liquids::{GuardView, Liquid, Liquids};
 pub use navigator::{
     Fallback, GridNavigator, Navigator, Planned, Refusals, RouteSearch, Scope, SearchRequest,
@@ -21,6 +24,7 @@ pub use navigator::{
 pub use pace::{ANIMATION_UNITS_PER_SECOND, record_speed, runs};
 pub use path::{PathProgress, PathSearch};
 pub use route::{Background, Route, RouteStep, SearchTiming};
+pub use swimming::{LiquidContact, SwimDepth};
 
 #[derive(Clone, Copy)]
 enum Support {
@@ -45,9 +49,11 @@ enum Support {
     Airborne,
 }
 
+struct LavaContact;
+
 pub use eq_network_game::movement::{
     Carried, EQMAC_FALL_SPEED, MAX_FALL_SPEED, MAX_GROUNDED_STEP, PROGRAM_STEP_SECONDS, ZBetween,
-    between_reports, carry, climb_reach, program_steps,
+    between_reports, carry, climb_reach, program_steps, swim_speed,
 };
 use glam::Vec3;
 use parry3d::{
@@ -67,6 +73,17 @@ const CAPSULE_RADIUS: f32 = 0.4;
 const SKIN: f32 = 0.03;
 /// How far from the capsule's centre the ground under it is sampled.
 const SUPPORT_SPREAD: f32 = 0.4;
+const SUPPORT_OFFSETS: [(f32, f32); 9] = [
+    (0.0, 0.0),
+    (SUPPORT_SPREAD, 0.0),
+    (-SUPPORT_SPREAD, 0.0),
+    (0.0, SUPPORT_SPREAD),
+    (0.0, -SUPPORT_SPREAD),
+    (0.282_842_7, 0.282_842_7),
+    (-0.282_842_7, 0.282_842_7),
+    (0.282_842_7, -0.282_842_7),
+    (-0.282_842_7, -0.282_842_7),
+];
 /// How far across the ground from the feet any one movement probe reaches,
 /// beyond the distance moved: the capsule with its skin, or the ground
 /// samples around it.
@@ -125,6 +142,7 @@ pub struct CollisionWorld {
     /// Each obstacle with the door it belongs to, if any.
     obstacles: Vec<(Option<u8>, Arc<CollisionMesh>)>,
     liquids: Option<Arc<dyn Liquids>>,
+    liquid_support: bool,
 }
 
 impl CollisionWorld {
@@ -137,6 +155,7 @@ impl CollisionWorld {
             terrain: Arc::new(CollisionMesh::new(triangles)?),
             obstacles: Vec::new(),
             liquids: None,
+            liquid_support: false,
         })
     }
 
@@ -167,6 +186,7 @@ impl CollisionWorld {
                 .cloned()
                 .collect(),
             liquids: self.liquids.clone(),
+            liquid_support: self.liquid_support,
         }
     }
 
@@ -191,6 +211,7 @@ impl CollisionWorld {
                 .cloned()
                 .collect(),
             liquids: self.liquids.clone(),
+            liquid_support: self.liquid_support,
         }
     }
 
@@ -279,6 +300,13 @@ impl CollisionWorld {
     /// been floor before is floor at its height. They sweep a sphere down
     /// where this casts a ray (checklist 6.336).
     pub fn ground(&self, position: Vec3, step_up: f32, drop: f32) -> Option<f32> {
+        self.solid_ground(position, step_up, drop)
+            .into_iter()
+            .chain(self.liquid_ground(position, step_up, drop))
+            .max_by(f32::total_cmp)
+    }
+
+    fn solid_ground(&self, position: Vec3, step_up: f32, drop: f32) -> Option<f32> {
         // Both window edges are inclusive: the ray starts a hair above the top one,
         // since a ray starting on a surface can miss it, and runs a hair past the
         // bottom one, since mesh traversal can discard an endpoint contact.
@@ -368,6 +396,47 @@ impl CollisionWorld {
         self.walk(feet, displacement, height, Support::Required)
     }
 
+    /// Finds a nearby solid surface above a fresh placement's whole footprint
+    /// when the placement probe has no floor below it. This is evidence that
+    /// gravity cannot land the body in place. `probe_lift` is measured from
+    /// the received origin and `body_size` bounds the upward diagnosis.
+    #[must_use]
+    pub fn floor_above_placement(
+        &self,
+        origin: Vec3,
+        probe_lift: f32,
+        body_size: f32,
+    ) -> Option<f32> {
+        if !origin.is_finite() || !body_size.is_finite() || !(0.0..body_size).contains(&probe_lift)
+        {
+            return None;
+        }
+        let probe = origin + Vec3::Y * probe_lift;
+        let range = body_size - probe_lift;
+        let bottom = self
+            .meshes()
+            .map(|mesh| mesh.local_aabb().mins.y)
+            .fold(probe.y, f32::min);
+        let drop = probe.y - bottom;
+        let mut center = None;
+        for (x, z) in SUPPORT_OFFSETS {
+            let sample = probe + Vec3::new(x, 0.0, z);
+            let ray = Ray::new(Vector::from_array(sample.to_array()), Vector::Y);
+            let height = sample.y + self.terrain.mesh.cast_local_ray(&ray, range, false)?;
+            // A lower floor can be a tunnel or the landing of an ordinary fall.
+            if self.ground(sample, 0.0, drop).is_some() {
+                return None;
+            }
+            // A ledge or uneven overhead obstruction is ambiguous. Require
+            // one coherent surface across the same probes used for support.
+            let floor = *center.get_or_insert(height);
+            if (height - floor).abs() > 0.5 {
+                return None;
+            }
+        }
+        center
+    }
+
     /// The floor the airborne controller stands feet here on, as its step
     /// finds it: under the footprint, from just above the feet to a little
     /// below them. None means the next step falls.
@@ -378,18 +447,7 @@ impl CollisionWorld {
 
     /// Samples support under the capsule footprint, including contact before its center reaches a stair.
     fn support_height(&self, position: Vec3, step_up: f32, drop: f32) -> Option<f32> {
-        const OFFSETS: [(f32, f32); 9] = [
-            (0.0, 0.0),
-            (SUPPORT_SPREAD, 0.0),
-            (-SUPPORT_SPREAD, 0.0),
-            (0.0, SUPPORT_SPREAD),
-            (0.0, -SUPPORT_SPREAD),
-            (0.282_842_7, 0.282_842_7),
-            (-0.282_842_7, 0.282_842_7),
-            (0.282_842_7, -0.282_842_7),
-            (-0.282_842_7, -0.282_842_7),
-        ];
-        OFFSETS
+        SUPPORT_OFFSETS
             .into_iter()
             .filter_map(|(x, z)| self.ground(position + Vec3::new(x, 0.0, z), step_up, drop))
             .max_by(f32::total_cmp)
@@ -400,20 +458,28 @@ impl CollisionWorld {
     /// stays within one sample's grounded height budget, which the network guard
     /// enforces; a flight too steep for it continues on the next sample.
     fn walk(&self, feet: Vec3, displacement: Vec3, height: f32, support: Support) -> Vec3 {
+        self.walk_with_guard(feet, displacement, height, support, LiquidGuard::All)
+    }
+
+    fn walk_with_guard(
+        &self,
+        feet: Vec3,
+        displacement: Vec3,
+        height: f32,
+        support: Support,
+        liquids: LiquidGuard,
+    ) -> Vec3 {
         const STRIDE: f32 = 0.5;
         if !feet.is_finite() || !displacement.is_finite() || !height.is_finite() || height < 1.0 {
             return feet;
         }
         // Feet in deep water or lava now may go anywhere, so they can leave.
-        let guarded = !self.submerged(feet, height);
+        let guarded = !self.inside_guarded_liquid(feet, height, liquids);
         if matches!(support, Support::Airborne) {
-            let next = self.stride(feet, displacement, height, support);
             // In the air, a move whose fall would end in deep water or lava is not made.
-            return if guarded && !self.dry(next, height) {
-                feet
-            } else {
-                next
-            };
+            return self
+                .guarded_stride(feet, displacement, height, support, liquids, guarded)
+                .unwrap_or(feet);
         }
         let horizontal = Vec3::new(displacement.x, 0.0, displacement.z);
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // Clamped.
@@ -421,11 +487,10 @@ impl CollisionWorld {
         let part = horizontal / f32::from(count);
         let mut position = feet;
         for _ in 0..count {
-            let mut next = self.stride(position, part, height, support);
-            let wet = guarded && !self.dry(next, height);
-            if wet {
-                next = self.dry_part(position, part, height, support);
-            }
+            let next = self.guarded_stride(position, part, height, support, liquids, guarded);
+            let wet = next.is_none();
+            let next =
+                next.unwrap_or_else(|| self.dry_part(position, part, height, support, liquids));
             // A walk on the ground keeps to a riser a sample up and down. One
             // the airborne controller makes (a step's) descends a stride at a
             // time within its drop, and past it the controller falls, so only
@@ -440,7 +505,10 @@ impl CollisionWorld {
             }
             let moved = next.distance_squared(position) > 1e-10;
             position = next;
-            if !moved || wet {
+            if !moved
+                || wet
+                || liquids == LiquidGuard::Lava && self.swim_depth(position, height).is_some()
+            {
                 break;
             }
         }
@@ -449,7 +517,29 @@ impl CollisionWorld {
 
     /// One stride: to the ground under its end, sliding along walls, stepping up
     /// a riser the capsule can clear, and stepping down across then down.
-    fn stride(&self, feet: Vec3, displacement: Vec3, height: f32, support: Support) -> Vec3 {
+    #[allow(clippy::too_many_lines)]
+    fn stride(
+        &self,
+        feet: Vec3,
+        displacement: Vec3,
+        height: f32,
+        support: Support,
+        liquids: LiquidGuard,
+        check_lava: bool,
+    ) -> Result<Vec3, LavaContact> {
+        let entry = |from, to| {
+            let water = if liquids == LiquidGuard::Lava {
+                self.water_entry(from, to, height)
+            } else {
+                None
+            };
+            // Only the portion reached by the solid sweep and before any
+            // transition to swimming is part of this movement leg.
+            if check_lava && !self.clear(from, water.unwrap_or(to), height, LiquidGuard::Lava) {
+                return Err(LavaContact);
+            }
+            Ok(water)
+        };
         let mut position = feet;
         let mut remaining = Vec3::new(displacement.x, 0.0, displacement.z);
         for _ in 0..3 {
@@ -518,29 +608,40 @@ impl CollisionWorld {
             };
             if delta.length_squared() < 0.000_001 {
                 if descending {
-                    position = self.settle(position, target.y, height);
+                    let settled = self.settle(position, target.y, height);
+                    position = entry(position, settled)?.unwrap_or(settled);
                 }
                 break;
             }
             match self.sweep(position, delta, height) {
                 Ok(None) => {
-                    position = if descending {
-                        self.settle(position + delta, target.y, height)
-                    } else {
-                        target
-                    };
-                    break;
+                    let swept = position + delta;
+                    if let Some(water) = entry(position, swept)? {
+                        return Ok(water);
+                    }
+                    if descending {
+                        let settled = self.settle(swept, target.y, height);
+                        return Ok(entry(swept, settled)?.unwrap_or(settled));
+                    }
+                    return Ok(target);
                 }
                 Ok(Some(hit)) => {
                     if !matches!(support, Support::Airborne)
                         && target.y > position.y
                         && self.can_step_up(position, target, height)
                     {
-                        position = target;
-                        break;
+                        let lifted = Vec3::new(position.x, target.y, position.z);
+                        if let Some(water) = entry(position, lifted)? {
+                            return Ok(water);
+                        }
+                        return Ok(entry(lifted, target)?.unwrap_or(target));
                     }
                     let fraction = (hit.time_of_impact - 0.005 / delta.length()).clamp(0.0, 1.0);
-                    position += delta * fraction;
+                    let reached = position + delta * fraction;
+                    if let Some(water) = entry(position, reached)? {
+                        return Ok(water);
+                    }
+                    position = reached;
                     // A mostly vertical contact is a floor or ceiling edge, not a
                     // wall to slide along; normalizing its small horizontal part
                     // would cancel all forward motion.
@@ -560,7 +661,7 @@ impl CollisionWorld {
                 Err(_) => break,
             }
         }
-        position
+        Ok(position)
     }
 
     /// Lowers the feet onto `floor`, or onto whatever the capsule meets first. A
@@ -653,6 +754,34 @@ mod tests {
             [[-20.0, y, -20.0], [20.0, y, 20.0], [-20.0, y, 20.0]],
         ]
     }
+    #[test]
+    fn placement_checks_require_a_nearby_surface_and_no_lower_floor() {
+        let level = CollisionWorld::new(floor(0.0)).unwrap();
+        let below = Vec3::Y * -5.0;
+        assert!(level.floor_above_placement(below, 1.0, 7.0).unwrap().abs() < 0.001);
+        assert!(level.floor_above_placement(below, 1.0, 4.0).is_none());
+        // A surface already in the native probe's reach stays on the
+        // ordinary collision path.
+        assert!(
+            level
+                .floor_above_placement(Vec3::Y * -0.5, 1.0, 7.0)
+                .is_none()
+        );
+        assert!(
+            level
+                .floor_above_placement(Vec3::Y * 12.0, 1.0, 7.0)
+                .is_none()
+        );
+        assert!(
+            level
+                .floor_above_placement(below + Vec3::X * 20.0, 1.0, 7.0)
+                .is_none()
+        );
+
+        let layers = CollisionWorld::new(floor(-18.0).into_iter().chain(floor(0.0))).unwrap();
+        assert!(layers.floor_above_placement(below, 1.0, 7.0).is_none());
+    }
+
     #[test]
     fn view_rays_use_nearest_static_or_dynamic_solid_and_respect_range() {
         let mut world = CollisionWorld::new(floor(0.0)).unwrap();

@@ -172,6 +172,10 @@ pub enum Notice {
     TrainingRefused(String),
     /// An answer to a resurrection was not sent, and why.
     ResurrectionRefused(String),
+    /// An answer to a translocate was not sent, and why.
+    TranslocateRefused(String),
+    /// A consent prompt reached its local deadline.
+    ConsentExpired(crate::confirmations::ConsentKind),
     /// A request to read was not sent, and why.
     ReadRefused(String),
     /// The world container the player asked to open is in use by someone
@@ -205,6 +209,11 @@ pub enum Notice {
     WhoList(crate::who::WhoList),
     /// Submission or an observed outcome of an explicit buff cancellation.
     BuffCancellation(crate::buffs::cancel::Update),
+    /// A manual song stop whose server outcome is unknown.
+    SongStopUnconfirmed {
+        /// Whether the worker released a local casting hold.
+        released_cast: bool,
+    },
     /// A cast request was refused, and why.
     CastRefused {
         /// The spell asked for.

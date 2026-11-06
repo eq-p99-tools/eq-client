@@ -682,6 +682,7 @@ pub(crate) fn items() -> Vec<InventoryItem> {
             charges: 0,
             bag_slots: bag,
             details: ItemDetails {
+                base_held_model: None,
                 equipment: None,
                 bonuses: None,
                 id,

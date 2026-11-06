@@ -15,6 +15,7 @@ mod changes;
 mod character;
 mod control;
 mod group;
+mod held_models;
 mod inventory_moves;
 mod items;
 mod landings;
@@ -33,6 +34,7 @@ mod zone;
 pub use casting::{CastNews, Casting, Cooldowns, NoSpells, SpellCatalog, SpellTiming};
 pub use changes::{Changes, Moved, Reply, Reset};
 pub use group::{Group, GroupNotice};
+pub use held_models::HeldModelEstimate;
 pub use items::ItemCache;
 pub use landings::Landing;
 pub use link::Link;
@@ -46,7 +48,11 @@ pub use who::ZonePlayer;
 
 use crate::{
     BookActionStatus, CharacterChoice, Death, PlayerState, PostureState, SpawnState, SpellBook,
-    WorldEvent, WorldUpdate, ZoneOffer, buffs::BuffTracker, inventory::Inventory,
+    WorldEvent, WorldUpdate, ZoneOffer,
+    buffs::BuffTracker,
+    confirmations::{ConsentClosure, ConsentId, ConsentKind, ConsentOffer, TranslocateOffer},
+    inventory::Inventory,
+    resurrection::ResurrectionOffer,
 };
 use std::{collections::BTreeMap, time::Instant};
 
@@ -265,9 +271,12 @@ pub struct ClientWorld {
     bled_out: Option<i64>,
     pending_transfer: Option<ZoneOffer>,
     /// The resurrection offered and not yet answered.
-    resurrection: Option<crate::resurrection::ResurrectionOffer>,
-    /// The translocate offered and not yet answered, and when it came.
-    translocate: Option<(crate::confirmations::TranslocateOffer, Instant)>,
+    resurrection: Option<ConsentOffer<ResurrectionOffer>>,
+    /// The translocate offered and not yet answered.
+    translocate: Option<ConsentOffer<TranslocateOffer>>,
+    /// The session's last reported disposition of a consent prompt.
+    last_consent_close: Option<(ConsentId, ConsentClosure)>,
+    last_consent_refusal: Option<ConsentId>,
     /// The book or note open to read.
     reading: Option<crate::books::BookText>,
     /// The tradeskill container whose combine waits for the server.
@@ -316,6 +325,7 @@ pub struct ClientWorld {
     vitals: Vitals,
     inventory: Inventory,
     inventory_moves: inventory_moves::Moves,
+    held_models: held_models::HeldModels,
     /// Where the player's coins are, as the session keeps and tells them.
     wallet: crate::money::Wallet,
     /// Cursor receipt is independent of the bank balance, which is not carried.
@@ -325,7 +335,7 @@ pub struct ClientWorld {
     casting: Casting,
     buffs: BuffTracker,
     spell_book: Option<SpellBook>,
-    /// The spellbook change in flight, until confirmed.
+    /// The spellbook change's latest worker status, until a reset.
     book_action: Option<BookActionStatus>,
     /// When each ability timer the session started runs out; servers keep
     /// them across zones.
@@ -497,16 +507,17 @@ impl ClientWorld {
         self.bled_out.take()
     }
 
-    /// The player answered the resurrection offered; whatever comes of it
-    /// arrives as news.
-    pub fn answer_resurrection(&mut self) {
-        self.resurrection = None;
-    }
-
-    /// The player, or the client for them, answered the translocate
-    /// offered; whatever comes of it arrives as news.
-    pub fn answer_translocate(&mut self) {
-        self.translocate = None;
+    /// Dismisses the exact prompt whose answer the front end queued.
+    /// The worker's disposition and the server's result arrive separately.
+    pub fn dismiss_consent(&mut self, id: ConsentId) {
+        match id.kind {
+            ConsentKind::Resurrection => {
+                let _ = self.resurrection.take_if(|current| current.id == id);
+            }
+            ConsentKind::Translocate => {
+                let _ = self.translocate.take_if(|current| current.id == id);
+            }
+        }
     }
 
     /// The player closed the book or note they were reading.
@@ -737,7 +748,7 @@ impl ClientWorld {
             // (the session puts a reward's coins in the purse), a sacrifice
             // offer and a player becoming a corpse wait for their front ends
             // too; until one answers, an offer goes unanswered, as it did
-            // unread. A translocate refused is only the session's log. A quest's change to the stats, a
+            // unread. A quest's change to the stats, a
             // skill's button ready again, the reuse timers of disciplines and
             // of spells that share one, and the discipline begun or ended
             // are not shown yet either, nor the effects the server plays
@@ -759,7 +770,6 @@ impl ClientWorld {
             | WorldEvent::ZoneUnavailable { .. }
             | WorldEvent::ServerTick(_)
             | WorldEvent::Stun(_)
-            | WorldEvent::Charm(_)
             | WorldEvent::Controlled(_)
             | WorldEvent::Berserk(_)
             | WorldEvent::Spun
@@ -770,7 +780,6 @@ impl ClientWorld {
             | WorldEvent::Ding
             | WorldEvent::SacrificeOffer(_)
             | WorldEvent::SacrificeRefused { .. }
-            | WorldEvent::TranslocateRefused { .. }
             | WorldEvent::BecameCorpse { .. }
             | WorldEvent::StatsChanged(_)
             | WorldEvent::SkillReset(_)
@@ -1117,11 +1126,31 @@ impl ClientWorld {
             // The player's pet: whose pet a spawn is, its buffs, and the
             // commands the session would not send.
             WorldEvent::PetOwner { spawn_id, owner } => {
-                if let Some(spawn) = self.zone.spawns.get_mut(spawn_id) {
-                    spawn.state.pet_owner = *owner;
+                self.zone.pet_owner(*spawn_id, *owner);
+            }
+            WorldEvent::Charm(charm) => {
+                if let Some(spawn) = self.zone.spawns.get(&charm.pet_id) {
+                    self.zone.pet_owner(charm.pet_id, charm.pet_owner(spawn.state.pet_owner));
                 }
             }
-            WorldEvent::PetBuffs(buffs) => self.zone.pet_buffs = Some(buffs.clone()),
+            WorldEvent::OwnPet { session_id, pet } => {
+                if self.session_id == Some(*session_id) {
+                    if pet.is_none() {
+                        self.zone.pet_buffs = None;
+                    }
+                    self.zone.own_pet = *pet;
+                } else {
+                    news.ignored = true;
+                }
+            }
+            WorldEvent::PetBuffs(buffs) => {
+                if self.death.is_none()
+                    && self.player().and_then(|player| self.pet_of(player.spawn_id))
+                        .is_some_and(|pet| pet.state.spawn_id == buffs.pet)
+                {
+                    self.zone.pet_buffs = Some(buffs.clone());
+                }
+            }
             WorldEvent::PetRefused {
                 session_id,
                 reason,
@@ -1202,14 +1231,44 @@ impl ClientWorld {
                     news.ignored = true;
                 }
             }
-            // A resurrection to answer, and an answer the session would not send.
-            WorldEvent::Resurrection(offer) => self.resurrection = Some(offer.clone()),
-            // A translocate to answer, where the installed client asks.
-            WorldEvent::TranslocateOffer(offer) => self.translocate = Some((offer.clone(), now)),
-            WorldEvent::ResurrectionRefused { session_id, reason } => {
+            WorldEvent::Resurrection(offer) => {
+                if self.in_world() && self.session_id == Some(offer.id.session_id) {
+                    self.resurrection = Some(offer.clone());
+                } else {
+                    news.ignored = true;
+                }
+            }
+            WorldEvent::TranslocateOffer(offer) => {
+                if self.in_world() && self.session_id == Some(offer.id.session_id) {
+                    self.translocate = Some(offer.clone());
+                } else {
+                    news.ignored = true;
+                }
+            }
+            WorldEvent::ConsentClosed { id, closure } => {
+                if self.session_id == Some(id.session_id) {
+                    self.dismiss_consent(*id);
+                    self.last_consent_close = Some((*id, *closure));
+                    if *closure == ConsentClosure::Expired {
+                        news.notices.push(Notice::ConsentExpired(id.kind));
+                    }
+                } else {
+                    news.ignored = true;
+                }
+            }
+            WorldEvent::ResurrectionRefused { session_id, offer_id, reason } => {
                 if self.session_id == Some(*session_id) {
+                    self.last_consent_refusal = Some(*offer_id);
                     news.notices
                         .push(Notice::ResurrectionRefused(reason.clone()));
+                } else {
+                    news.ignored = true;
+                }
+            }
+            WorldEvent::TranslocateRefused { session_id, offer_id, reason } => {
+                if self.session_id == Some(*session_id) {
+                    self.last_consent_refusal = Some(*offer_id);
+                    news.notices.push(Notice::TranslocateRefused(reason.clone()));
                 } else {
                     news.ignored = true;
                 }
@@ -1236,6 +1295,12 @@ impl ClientWorld {
                 session_id,
                 spell_id,
             } => self.cast_pending(*session_id, *spell_id, news),
+            WorldEvent::CastSuperseded { session_id, spell_id } => {
+                news.ignored = !self.release_cast_hold(*session_id, *spell_id);
+            }
+            WorldEvent::SongStopUnconfirmed { session_id, spell_id } => {
+                self.song_stop_unconfirmed(*session_id, *spell_id, news);
+            }
             WorldEvent::CastRejected {
                 session_id,
                 spell_id,
@@ -1344,6 +1409,7 @@ impl ClientWorld {
     /// Forgets what the reason makes stale, and says so.
     fn reset(&mut self, reason: Reset) -> Changes {
         self.movement_options_result = None;
+        self.held_models = held_models::HeldModels::default();
         if matches!(
             reason,
             Reset::Entered | Reset::Camped | Reset::Lost { ended: true, .. }
@@ -1375,6 +1441,8 @@ impl ClientWorld {
         self.target = Target::default();
         self.motion = None;
         self.reading = None;
+        self.resurrection = None;
+        self.translocate = None;
         if reason != Reset::Died {
             self.camp = None;
             self.camp_to = crate::camp::CampTo::default();
@@ -1422,10 +1490,10 @@ impl ClientWorld {
                 self.drop_actions();
                 if ended || !transferring {
                     self.casting.reset_cooldowns();
-                    self.spell_book = None;
                     self.buffs.clear();
                 }
                 if ended {
+                    self.spell_book = None;
                     self.servers = None;
                     self.characters = None;
                     self.pending_transfer = None;
@@ -1437,18 +1505,23 @@ impl ClientWorld {
                 self.zone.weather = None;
                 self.drop_actions();
             }
-            Reset::Died => {
-                self.buffs.clear_cancellation();
-                self.casting.cast = None;
-                self.casting.interrupted = None;
-                self.casting.reset_cooldowns();
-                self.book_action = None;
-            }
+            Reset::Died => self.reset_after_death(),
         }
         Changes {
             reset: Some(reason),
             ..Changes::default()
         }
+    }
+
+    /// Clears the local pet and spell state that cannot survive death.
+    fn reset_after_death(&mut self) {
+        self.zone.own_pet = None;
+        self.zone.pet_buffs = None;
+        self.buffs.clear_cancellation();
+        self.casting.cast = None;
+        self.casting.interrupted = None;
+        self.casting.reset_cooldowns();
+        self.book_action = None;
     }
 
     /// Drops the actions in flight: a cast, its request and interruption, and
@@ -1462,10 +1535,9 @@ impl ClientWorld {
     /// Forgets the admission and its zone.
     fn forget_admission(&mut self) {
         self.characters = None;
+        self.last_consent_refusal = None;
         self.items = ItemCache::default();
         self.pending_transfer = None;
-        self.resurrection = None;
-        self.translocate = None;
         self.reading = None;
         self.combining = None;
         self.group = None;

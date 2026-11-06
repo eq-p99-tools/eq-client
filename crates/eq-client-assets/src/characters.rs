@@ -241,13 +241,9 @@ mod tests {
     #[ignore = "requires EQ_PROBE_INSTALL, a user-owned client installation"]
     fn installed_models_name_their_materials_and_find_other_looks() {
         let install = std::env::var("EQ_PROBE_INSTALL").unwrap();
-        let human = super::load_installed_character(
-            std::path::Path::new(&install),
-            "qeynos2",
-            "HUM",
-            &super::DonorArchives::default(),
-        )
-        .unwrap();
+        let install = std::path::Path::new(&install);
+        let donors = super::DonorArchives::default();
+        let human = super::load_installed_character(install, "qeynos2", "HUM", &donors).unwrap();
         let materials: Vec<_> = human.materials.iter().flatten().collect();
         println!("HUM materials: {materials:?}");
         assert!(
@@ -287,6 +283,21 @@ mod tests {
             assert!(human.pieces.contains(&piece), "{piece:?}");
         }
         assert!(human.has_material("CLK0701_MDF") && human.has_material("CLK1006_MDF"));
+
+        // The Barbarian leather head uses a numbered helmet surface and a
+        // separate face. Both need to survive the installed-model load.
+        let barbarian = super::load_global_character(install, "BAM", &donors).unwrap();
+        for name in ["BAMHE0102_MDF", "BAMHE0001_MDF"] {
+            assert!(
+                barbarian
+                    .pieces
+                    .iter()
+                    .zip(&barbarian.materials)
+                    .any(|(piece, material)| *piece == super::Piece::Head(1)
+                        && material.as_deref() == Some(name))
+            );
+            assert!(barbarian.material_texture(name).unwrap().is_some());
+        }
     }
 
     #[test]

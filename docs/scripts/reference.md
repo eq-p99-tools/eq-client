@@ -47,7 +47,11 @@ Key names are case-insensitive. Combine them with `+`, such as `alt+1`. Supporte
 - `camera heading pitch [distance]`: position the camera; pitch is -89 to 0 degrees. Use `camera player offset pitch [distance]` for an offset from the player's heading.
 - `face`: turn the camera toward the target.
 - `face heading`: turn the character to an absolute heading at the ordinary turn rate, waiting up to 5 seconds for server confirmation.
-- `move command milliseconds`: hold `forward`, `back`, `strafe_left`, `strafe_right`, `turn_left` or `turn_right`, independent of key bindings.
+- `move command milliseconds`: hold `forward`, `back`, `camera_forward`,
+  `camera_back`, `strafe_left`, `strafe_right`, `turn_left` or `turn_right`,
+  independent of key bindings. In mapped water on Titanium EQEmu, a negative
+  camera pitch makes `camera_forward` dive and `camera_back` rise. Set pitch
+  to zero for level movement.
 - `approach range milliseconds`: approach the current target.
 - `approach object kind range milliseconds`: approach a tradeskill container type.
 - `walk range milliseconds`: follow a searched path toward the target.
@@ -67,15 +71,62 @@ Approach, walk and chase hold the camera-relative forward command, independent o
 ## Diagnostics and commands
 
 - `report [label]`: log a state summary with an optional label.
+  `pet_ownership` reports the current pet and owner IDs, zone admission ID and
+  pet identity revision as JSON. It is null when the session has no resolved
+  pet identity.
+  The companion `Script economy report` event contains versioned JSON with
+  the admission, merchant identity and catalog revision, up to 80 stock rows, the current
+  selection and displayed single-unit quote, and up to 32 corpse rows.
+  Total row counts reveal truncation. The report also shows the coins offered
+  on each side of an open exchange. Check the ordinary report's item and
+  purse fields for delivery and final balances.
+  The `Script movement report` logs a small `movement_state` object. Its
+  `session_position` is the working position used for collision (including
+  local proposals); `rendered_position` is the drawn avatar;
+  `last_server_placement` is the last admission or received placement in
+  the current admission. None of these identifies a server acknowledgement
+  for a particular proposal. `liquid_contact_at_session_position` is local
+  geometry: `unknown`, `unmarked`, `wading`, `surface`, `submerged` or
+  `lava`. `unmarked` means no liquid at the sampled points, and
+  `submerged` is not a breath report.
+  `mapped_liquid_at_session_origin` reports water or lava at the character
+  origin. `mapped_liquid_surface_at_session_feet` reports a mapped liquid
+  top at standing height in the feet's center column. Both fields use local
+  geometry and are null when their query finds no mapped liquid.
+  `local_geometry` shows the reported admission size when supplied, the loaded
+  body's resolved size and feet offset, and whether collision is ready.
+  `support_z_at_session_feet` is the EQ Z returned by the local movement
+  support probe, or null when it finds no support or cannot run.
+  `selected_target_los` is null when the ray cannot be evaluated. Otherwise it
+  identifies the selected spawn and its incarnation revision and says whether
+  solid client collision leaves the segment from the session origin to the
+  spawn's reported origin clear. Server spell range, line of sight, and
+  acceptance require separate evidence.
 - `trace milliseconds`: log movement and frame timing for a bounded duration.
 - `screenshot filename.png`: capture beside the script; the argument must be a filename.
 - `sound filename.wav`: play a sound from the installed game assets.
 - `slash command [arguments]`: run one of the supported game slash commands, without a leading slash.
+  `slash ranged` requests one shot or throw against the current target on Titanium.
+  Watch the server's combat and inventory updates for the result.
+  `slash pet target` selects your visible pet. Pet orders complete the script
+  step when queued. Read subsequent server observations to check their effects.
   `slash camp desktop` uses the ordinary camp destination and current QoL exit choice.
+  `slash stopsong` queues the Bard's stop request on Titanium EQEmu.
   The immediate disconnect aliases typed in chat are not script slash commands.
 - `gm command [arguments]`: an allowed GM command on a network-constrained local test session only.
   `gm stun 8000` requests an 8,000-millisecond server stun for a local fixture.
   Check received `own_stun` state; command submission alone does not establish the effect.
+  On local EQEmu, use
+  `gm spawn NAME RACE LEVEL TEXTURE HEALTH GENDER CLASS PRIMARY_MODEL SECONDARY_MODEL 0 BODY_TYPE`
+  for a temporary NPC with explicit health and body type. Use a fresh alphabetic
+  name, positive health, and decimal fields. The merchant ID is fixed at zero.
+  The short `gm spawn NAME [RACE [LEVEL [TEXTURE]]]` form uses server defaults
+  for the remaining fields.
+  To remove a temporary NPC, confirm that its current incarnation is selected
+  and run `gm depop` without arguments. The zone worker rechecks the same
+  admission and target revision before sending. Keep that NPC selected until
+  its removal is observed, since EQEmu acts on its current target and starts
+  no respawn timer. A queued command does not establish creation or removal.
 - `chat channel message`: chat on a network-constrained local test session only.
 - `quit`: close the client.
 
@@ -101,6 +152,23 @@ These commands support scripts that deliberately start before world entry. They 
   Ordinary Back / Disconnect remains available. Absence is not a server deletion
   acknowledgment or proof of database purge.
 - `wait_online`: wait for a zone admission and player before continuing.
+
+## Recovery consent reports
+
+On a server that offers resurrection or translocate, wait for
+`consent_presented` to match the current offer before using
+`click answer yes` or `click answer no`. These actions use the ordinary
+confirmation buttons. `resurrection_consent` reports the offer token and
+milliseconds remaining. `translocate_consent` also reports the spell and
+offered zone IDs. Each token includes the admission, kind and sequence.
+
+`consent_closure` reports the last token and worker disposition. An
+`AnswerSent` records the submitted Yes or No. An `Expired` records a local
+deadline and submitted decline. An `Interrupted` records a lifecycle
+boundary. `consent_refusal` identifies the last refused answer in the current
+admission. Compare tokens when reading these fields after a replacement or
+zone admission. Read the ordinary position, zone, admission and state reports
+for server movement or recovery.
 
 ## Character-deletion report
 

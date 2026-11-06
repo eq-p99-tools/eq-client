@@ -93,7 +93,8 @@ fn pin_and_track_are_local_and_target_posts_exactly_one_selection_command() {
         ClientCommand::SelectTarget {
             request_id: 1,
             session_id: 1,
-            spawn_id: Some(2)
+            spawn_id: Some(2),
+            expected_pet: None,
         }
     ));
     assert!(receive.try_recv().is_err());
@@ -187,6 +188,7 @@ fn full_outbox_keeps_the_old_target_and_self_target_needs_no_spawn_entry() {
             request_id: 1,
             session_id: stamp.session_id,
             spawn_id: None,
+            expected_pet: None,
         })
         .unwrap();
     pin(&mut app, 2);

@@ -1,6 +1,5 @@
-//! The zone's water and lava, which every walk keeps out of. The client
-//! cannot swim yet, and reports no burns or drowning to the server, so a
-//! step stops before the head would go under water or the feet into lava;
+//! The zone's water and lava. Ground navigation and admissions without
+//! swimming stop before the head goes under water or the feet enter lava;
 //! shallow water is waded while the head stays above it. A move in the air,
 //! or off a ledge, is judged by its fall: the head stays out of water and
 //! the soles out of lava all the way down to where it ends, so a fall
@@ -11,15 +10,17 @@
 //! it was judged, as the floating capsule lets the feet do beside such an
 //! edge. Feet that are in deep water or lava now may go anywhere, so they
 //! can leave.
+use super::jesus_mode::LIQUID_SURFACE_SLOP;
 use super::{CollisionWorld, LIFT, Support};
 use glam::Vec3;
+use std::ops::Range;
 
 /// What fills a point of the zone, where it is not air.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Liquid {
-    /// Water, which the head stays above.
+    /// Water, which can be waded or swum.
     Water,
-    /// Lava, which the feet stay out of.
+    /// Lava, which ordinary movement guards against entering.
     Lava,
 }
 
@@ -38,6 +39,19 @@ pub trait Liquids: Send + Sync {
     /// Whether a straight path from one point to another passes through
     /// this liquid anywhere, however thin.
     fn passes_through(&self, from: Vec3, to: Vec3, liquid: Liquid) -> bool;
+
+    /// The first positive-length span outside the liquid, as segment fractions.
+    /// None means continuous coverage. An empty span means the provider
+    /// cannot establish coverage, so a swimmer must hold its position.
+    fn first_outside(&self, _from: Vec3, _to: Vec3, _liquid: Liquid) -> Option<Range<f64>> {
+        Some(0.0..0.0)
+    }
+
+    /// The top and kind of known liquid entered by a vertical ray from above.
+    /// Missing surface data leaves ordinary solid ground as the only support.
+    fn liquid_surface(&self, _top: Vec3, _bottom: f32) -> Option<(f32, Liquid)> {
+        None
+    }
 
     /// The liquids within the box from `low` to `high`, answering
     /// [`liquid_at`](Self::liquid_at) for points in it as these do, made to
@@ -60,14 +74,21 @@ pub struct GuardView {
     pub dry: bool,
 }
 
+/// Which liquids an ordinary move must stay clear of.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum LiquidGuard {
+    All,
+    Lava,
+}
+
 /// How far above the feet they are tested for lava, so that the plane of
 /// the floor under them never decides it.
-const SOLES: f32 = 0.1;
+pub(super) const SOLES: f32 = 0.1;
 /// How far below the feet the floor a fall would end on is looked for.
 const FALL_REACH: f32 = 10_000.0;
 
 impl CollisionWorld {
-    /// Keeps every walk in this world out of the zone's water and lava.
+    /// Attaches the zone's water and lava queries to its collision world.
     #[must_use]
     pub fn with_liquids(mut self, liquids: impl Liquids + 'static) -> Self {
         self.liquids = Some(std::sync::Arc::new(liquids));
@@ -89,8 +110,13 @@ impl CollisionWorld {
     /// server placed a little inside their floor find that floor. Feet over
     /// no floor at all never come to rest.
     fn rest(&self, feet: Vec3) -> Option<Vec3> {
-        self.ray_distance(feet + Vec3::Y * LIFT, -Vec3::Y, FALL_REACH)
-            .map(|distance| feet + Vec3::Y * (LIFT - distance))
+        let floor = self
+            .ray_distance(feet + Vec3::Y * LIFT, -Vec3::Y, FALL_REACH)
+            .map(|distance| feet.y + (LIFT - distance))
+            .into_iter()
+            .chain(self.liquid_ground(feet, LIFT, FALL_REACH - LIFT))
+            .max_by(f32::total_cmp)?;
+        Some(Vec3::new(feet.x, floor, feet.z))
     }
 
     /// Whether feet here stay clear of the zone's liquids as they come to
@@ -100,23 +126,87 @@ impl CollisionWorld {
     /// not clear, and over no floor at all, as over a sea drawn without a
     /// bed, the fall is followed as far as one is looked for.
     pub(super) fn dry(&self, feet: Vec3, height: f32) -> bool {
+        self.dry_with_guard(feet, height, LiquidGuard::All)
+    }
+
+    fn dry_with_guard(&self, feet: Vec3, height: f32, guard: LiquidGuard) -> bool {
         if self.liquids.is_none() {
             return true;
         }
         let end = self.rest(feet).unwrap_or(feet - Vec3::Y * FALL_REACH);
-        self.clear(feet, end, height)
+        self.clear(feet, end, height, guard)
     }
 
     /// Whether feet moving straight from one place to another keep the head
     /// of a body this tall out of water and the soles out of lava the whole
     /// way.
-    fn clear(&self, from: Vec3, to: Vec3, height: f32) -> bool {
+    pub(super) fn clear(&self, from: Vec3, to: Vec3, height: f32, guard: LiquidGuard) -> bool {
         let Some(liquids) = &self.liquids else {
             return true;
         };
         let (head, soles) = (Vec3::Y * height, Vec3::Y * SOLES);
-        !liquids.passes_through(from + head, to + head, Liquid::Water)
+        (guard == LiquidGuard::Lava
+            || !liquids.passes_through(from + head, to + head, Liquid::Water))
             && !liquids.passes_through(from + soles, to + soles, Liquid::Lava)
+            && (!self.liquid_support
+                || !liquids.passes_through(
+                    from + Vec3::Y * LIQUID_SURFACE_SLOP,
+                    to + Vec3::Y * LIQUID_SURFACE_SLOP,
+                    Liquid::Lava,
+                ))
+    }
+
+    fn clear_move(&self, from: Vec3, to: Vec3, height: f32, guard: LiquidGuard) -> bool {
+        (guard == LiquidGuard::All && !self.liquid_support
+            || self.clear(from, to, height, LiquidGuard::Lava))
+            && self.dry_with_guard(to, height, guard)
+    }
+
+    pub(super) fn guarded_stride(
+        &self,
+        feet: Vec3,
+        displacement: Vec3,
+        height: f32,
+        support: Support,
+        guard: LiquidGuard,
+        guarded: bool,
+    ) -> Option<Vec3> {
+        let next = self
+            .stride(
+                feet,
+                displacement,
+                height,
+                support,
+                guard,
+                guarded && self.liquid_support,
+            )
+            .ok()?;
+        let dry = !guarded
+            || if self.liquid_support {
+                // Lava along the traveled path was checked by each swept leg.
+                self.dry_with_guard(next, height, guard)
+            } else {
+                self.clear_move(feet, next, height, guard)
+            };
+        dry.then_some(next)
+    }
+
+    pub(super) fn inside_guarded_liquid(
+        &self,
+        feet: Vec3,
+        height: f32,
+        guard: LiquidGuard,
+    ) -> bool {
+        match guard {
+            LiquidGuard::All => self.submerged(feet, height),
+            LiquidGuard::Lava => self.liquid_at(feet + Vec3::Y * SOLES) == Some(Liquid::Lava),
+        }
+    }
+
+    /// The local zone's mapped water or lava at this point in renderer space.
+    #[must_use]
+    pub fn liquid_at(&self, point: Vec3) -> Option<Liquid> {
+        self.liquids.as_ref()?.liquid_at(point)
     }
 
     /// Where a fall straight down from `feet` to `end` is held, short of
@@ -127,14 +217,20 @@ impl CollisionWorld {
     /// them. Nothing holds a fall that stays clear, nor one
     /// from feet whose fall was never clear, as over water or lava the
     /// server put them above.
-    pub(super) fn held(&self, feet: Vec3, end: Vec3, height: f32) -> Option<Vec3> {
-        if self.clear(feet, end, height) || !self.dry(feet, height) {
+    pub(super) fn held(
+        &self,
+        feet: Vec3,
+        end: Vec3,
+        height: f32,
+        guard: LiquidGuard,
+    ) -> Option<Vec3> {
+        if self.clear(feet, end, height, guard) || !self.dry_with_guard(feet, height, guard) {
             return None;
         }
         let (mut clear, mut wet) = (0.0, 1.0);
         for _ in 0..12 {
             let fraction = f32::midpoint(clear, wet);
-            if self.clear(feet, feet.lerp(end, fraction), height) {
+            if self.clear(feet, feet.lerp(end, fraction), height, guard) {
                 clear = fraction;
             } else {
                 wet = fraction;
@@ -146,14 +242,22 @@ impl CollisionWorld {
     /// How much of a straight move keeps feet clear of the zone's liquids
     /// as they come to rest, found by halving: all of it for feet in deep
     /// water or lava now, so they can leave.
-    pub(super) fn dry_fraction(&self, feet: Vec3, displacement: Vec3, height: f32) -> f32 {
-        if self.submerged(feet, height) || self.dry(feet + displacement, height) {
+    pub(super) fn dry_fraction(
+        &self,
+        feet: Vec3,
+        displacement: Vec3,
+        height: f32,
+        guard: LiquidGuard,
+    ) -> f32 {
+        if self.inside_guarded_liquid(feet, height, guard)
+            || self.clear_move(feet, feet + displacement, height, guard)
+        {
             return 1.0;
         }
         let (mut dry, mut wet) = (0.0, 1.0);
         for _ in 0..12 {
             let fraction = f32::midpoint(dry, wet);
-            if self.dry(feet + displacement * fraction, height) {
+            if self.clear_move(feet, feet + displacement * fraction, height, guard) {
                 dry = fraction;
             } else {
                 wet = fraction;
@@ -186,6 +290,17 @@ impl CollisionWorld {
             .is_some_and(|liquids| liquids.liquid_at(feet + Vec3::Y * SOLES).is_some())
     }
 
+    /// Whether the ordinary fall probe reaches mapped water or lava below the feet.
+    #[must_use]
+    pub fn liquid_below(&self, feet: Vec3) -> bool {
+        let from = feet + Vec3::Y * SOLES;
+        let to = from - Vec3::Y * FALL_REACH;
+        self.liquids.as_ref().is_some_and(|liquids| {
+            liquids.passes_through(from, to, Liquid::Water)
+                || liquids.passes_through(from, to, Liquid::Lava)
+        })
+    }
+
     /// The longest part of a stride that stays clear of the zone's liquids,
     /// found by halving as a ledge's supported part is.
     pub(super) fn dry_part(
@@ -194,13 +309,15 @@ impl CollisionWorld {
         displacement: Vec3,
         height: f32,
         support: Support,
+        guard: LiquidGuard,
     ) -> Vec3 {
         let (mut dry, mut wet) = (0.0, 1.0);
         let mut reached = feet;
         for _ in 0..12 {
             let fraction = f32::midpoint(dry, wet);
-            let next = self.stride(feet, displacement * fraction, height, support);
-            if self.dry(next, height) {
+            if let Some(next) =
+                self.guarded_stride(feet, displacement * fraction, height, support, guard, true)
+            {
                 dry = fraction;
                 reached = next;
             } else {
@@ -225,6 +342,27 @@ pub(super) fn submerged_in(liquids: &dyn Liquids, feet: Vec3, height: f32) -> bo
 pub(super) struct Boxes(pub(super) Vec<(Vec3, Vec3, Liquid)>);
 
 #[cfg(test)]
+fn box_span(from: Vec3, to: Vec3, low: Vec3, high: Vec3) -> Option<Range<f64>> {
+    let from = from.as_dvec3();
+    let path = to.as_dvec3() - from;
+    let (mut enter, mut leave) = (0.0_f64, 1.0_f64);
+    for axis in 0..3 {
+        let (low, high) = (f64::from(low[axis]), f64::from(high[axis]));
+        if path[axis] == 0.0 {
+            if !(low..=high).contains(&from[axis]) {
+                return None;
+            }
+            continue;
+        }
+        let a = (low - from[axis]) / path[axis];
+        let b = (high - from[axis]) / path[axis];
+        enter = enter.max(a.min(b));
+        leave = leave.min(a.max(b));
+    }
+    (enter <= leave).then_some(enter..leave)
+}
+
+#[cfg(test)]
 impl Liquids for Boxes {
     fn liquid_at(&self, point: Vec3) -> Option<Liquid> {
         self.0
@@ -234,28 +372,45 @@ impl Liquids for Boxes {
     }
 
     fn passes_through(&self, from: Vec3, to: Vec3, liquid: Liquid) -> bool {
-        // The slab test: the path meets a box where it is between every pair
-        // of the box's faces at once.
-        let path = to - from;
         self.0
             .iter()
-            .filter(|(_, _, filled)| *filled == liquid)
-            .any(|(low, high, _)| {
-                let (mut enter, mut leave) = (0.0_f32, 1.0_f32);
-                for axis in 0..3 {
-                    if path[axis] == 0.0 {
-                        if from[axis] < low[axis] || from[axis] > high[axis] {
-                            return false;
-                        }
-                        continue;
-                    }
-                    let a = (low[axis] - from[axis]) / path[axis];
-                    let b = (high[axis] - from[axis]) / path[axis];
-                    enter = enter.max(a.min(b));
-                    leave = leave.min(a.max(b));
-                }
-                enter <= leave
+            .any(|&(low, high, kind)| kind == liquid && box_span(from, to, low, high).is_some())
+    }
+
+    fn first_outside(&self, from: Vec3, to: Vec3, liquid: Liquid) -> Option<Range<f64>> {
+        let mut spans: Vec<_> = self
+            .0
+            .iter()
+            .filter(|(_, _, kind)| *kind == liquid)
+            .filter_map(|&(low, high, _)| box_span(from, to, low, high))
+            .collect();
+        spans.sort_by(|a, b| a.start.total_cmp(&b.start));
+        let mut reached: f64 = 0.0;
+        for span in spans {
+            if span.start > reached {
+                return Some(reached..span.start);
+            }
+            reached = reached.max(span.end);
+        }
+        (reached < 1.0).then_some(reached..1.0)
+    }
+
+    fn liquid_surface(&self, top: Vec3, bottom: f32) -> Option<(f32, Liquid)> {
+        if self.liquid_at(top).is_some() {
+            return None;
+        }
+        self.0
+            .iter()
+            .filter(|(low, high, _)| {
+                top.x >= low.x
+                    && top.x <= high.x
+                    && top.z >= low.z
+                    && top.z <= high.z
+                    && high.y < top.y
+                    && high.y > bottom
             })
+            .map(|(_, high, liquid)| (high.y, *liquid))
+            .max_by(|(left, _), (right, _)| left.total_cmp(right))
     }
 
     fn within(&self, low: Vec3, high: Vec3) -> Option<Box<dyn Liquids>> {

@@ -1,7 +1,10 @@
 //! Local arbitration for the worker's untagged spellbook results.
 use super::Refusal;
 use eq_client_core::{BookActionStatus, ClientCommand, SpellUpdate, WorldEvent};
-use std::time::{Duration, Instant};
+use std::{
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 
 /// Covers normal preparation and the worker's reply window. A late result
 /// can still change the gems, so elapsed time does not release the book.
@@ -16,7 +19,7 @@ pub(super) struct BookQueue {
 
 #[derive(Clone, Copy)]
 pub(super) enum Expected {
-    Forget(u8),
+    Forget(u8, u32),
     Slot { slot: u32, spell: u32, mode: u32 },
     Delete(u16),
     Swap(u16, u16),
@@ -25,7 +28,7 @@ pub(super) enum Expected {
 impl Expected {
     pub(super) fn from_command(command: &ClientCommand) -> Option<Self> {
         Some(match *command {
-            ClientCommand::ForgetSpell { gem, .. } => Self::Forget(gem),
+            ClientCommand::ForgetSpell { gem, spell_id, .. } => Self::Forget(gem, spell_id),
             ClientCommand::MemorizeSpell { gem, spell_id, .. } => Self::Slot {
                 slot: u32::from(gem),
                 spell: spell_id,
@@ -44,7 +47,7 @@ impl Expected {
 
     fn matches(self, update: &SpellUpdate) -> bool {
         match (self, update) {
-            (Self::Forget(gem), SpellUpdate::Slot { slot, mode: 2, .. }) => u32::from(gem) == *slot,
+            (Self::Forget(gem, spell), update) => update.clears_gem(u32::from(gem), spell),
             (
                 Self::Slot { slot, spell, mode },
                 SpellUpdate::Slot {
@@ -72,12 +75,44 @@ impl Expected {
     }
 }
 
+/// Keeps one edit's progress and answer for its callers after the book is free.
+#[derive(Clone, Debug)]
+pub(crate) struct BookEditReceipt {
+    session: u64,
+    status: Arc<Mutex<Option<BookActionStatus>>>,
+}
+
+impl BookEditReceipt {
+    pub(super) fn new(session: u64) -> Self {
+        Self {
+            session,
+            status: Arc::default(),
+        }
+    }
+
+    pub(crate) fn belongs_to(&self, session: Option<u64>) -> bool {
+        session == Some(self.session)
+    }
+
+    pub(crate) fn status(&self) -> Option<BookActionStatus> {
+        self.status.lock().ok()?.clone()
+    }
+
+    fn publish(&self, status: BookActionStatus) {
+        if let Ok(mut latest) = self.status.lock() {
+            *latest = Some(status);
+        }
+    }
+}
+
 struct Pending {
     expected: Expected,
     session: Option<u64>,
     since: Instant,
+    unconfirmed: bool,
     acknowledged: bool,
     observed: bool,
+    receipt: Option<BookEditReceipt>,
 }
 
 impl BookQueue {
@@ -92,7 +127,10 @@ impl BookQueue {
         }
         self.pending.take_if(|pending| pending.session != session);
         match &self.pending {
-            Some(pending) if now.saturating_duration_since(pending.since) >= BOOK_TIMEOUT => {
+            Some(pending)
+                if pending.unconfirmed
+                    || now.saturating_duration_since(pending.since) >= BOOK_TIMEOUT =>
+            {
                 Err(Refusal::BookUnconfirmed)
             }
             Some(_) => Err(Refusal::BookPending),
@@ -100,19 +138,53 @@ impl BookQueue {
         }
     }
 
-    pub(super) fn sent(&mut self, expected: Expected, session: Option<u64>, now: Instant) {
+    pub(super) fn sent(
+        &mut self,
+        expected: Expected,
+        session: Option<u64>,
+        now: Instant,
+        receipt: Option<BookEditReceipt>,
+    ) {
         self.pending = Some(Pending {
             expected,
             session,
             since: now,
+            unconfirmed: false,
             acknowledged: false,
             observed: false,
+            receipt,
         });
     }
 
     pub(super) fn observe(&mut self, event: &WorldEvent, session: Option<u64>) {
-        self.pending
-            .take_if(|pending| pending.session == session && pending.observe(event));
+        let Some(pending) = self
+            .pending
+            .as_mut()
+            .filter(|pending| pending.session == session)
+        else {
+            return;
+        };
+        if let Some(outcome) = pending.observe(event) {
+            if let Some(receipt) = pending.receipt.take() {
+                receipt.publish(outcome);
+            }
+            self.pending = None;
+        }
+    }
+
+    /// Mark a possibly submitted request unknown without dropping its reply match.
+    /// Returns whether a manual edit has newly become unconfirmed.
+    pub(super) fn interrupt(&mut self, session: Option<u64>) -> bool {
+        let Some(pending) = self
+            .pending
+            .as_mut()
+            .filter(|pending| pending.session == session)
+        else {
+            return false;
+        };
+        let was_unconfirmed = pending.unconfirmed;
+        pending.progress(&BookActionStatus::Unconfirmed);
+        !self.applying && !was_unconfirmed
     }
 
     pub(super) fn reset(&mut self) {
@@ -121,27 +193,49 @@ impl BookQueue {
 }
 
 impl Pending {
-    /// The worker's tracked confirmation can arrive before the corresponding
-    /// world update. A forget has only a submission and an exact gem clear.
-    fn observe(&mut self, event: &WorldEvent) -> bool {
-        let forgetting = matches!(self.expected, Expected::Forget(_));
+    fn progress(&mut self, status: &BookActionStatus) {
+        if matches!(status, BookActionStatus::Unconfirmed) {
+            self.unconfirmed = true;
+        }
+        if let Some(receipt) = &self.receipt {
+            let status = if self.unconfirmed {
+                BookActionStatus::Unconfirmed
+            } else {
+                status.clone()
+            };
+            receipt.publish(status);
+        }
+    }
+
+    /// The worker's tracked confirmation can arrive before the world update.
+    /// A forget requires its submission followed by an exact gem clear.
+    fn observe(&mut self, event: &WorldEvent) -> Option<BookActionStatus> {
+        let forgetting = matches!(self.expected, Expected::Forget(..));
         match event {
-            WorldEvent::BookAction(BookActionStatus::Submitted) if forgetting => {
-                self.acknowledged = true;
+            WorldEvent::BookAction(
+                status @ (BookActionStatus::Preparing
+                | BookActionStatus::Submitted
+                | BookActionStatus::AwaitingReply
+                | BookActionStatus::Unconfirmed),
+            ) => {
+                if forgetting && matches!(status, BookActionStatus::Submitted) {
+                    self.acknowledged = true;
+                }
+                self.progress(status);
             }
             WorldEvent::BookAction(BookActionStatus::Confirmed) if !forgetting => {
                 self.acknowledged = true;
             }
             WorldEvent::BookAction(
-                BookActionStatus::Rejected(_) | BookActionStatus::Cancelled(_),
+                status @ (BookActionStatus::Rejected(_) | BookActionStatus::Cancelled(_)),
             ) if !forgetting || !self.acknowledged => {
-                return true;
+                return Some(status.clone());
             }
             WorldEvent::Spell(update) if (!forgetting || self.acknowledged) => {
                 self.observed |= self.expected.matches(update);
             }
             _ => {}
         }
-        self.acknowledged && self.observed
+        (self.acknowledged && self.observed).then_some(BookActionStatus::Confirmed)
     }
 }
