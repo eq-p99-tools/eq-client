@@ -1758,6 +1758,13 @@ pub(super) fn scroll(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::{
+        ecs::system::RunSystemOnce,
+        text::{
+            ComputedTextBlock, LineBreak, RunGeometry, TextBounds, TextLayoutInfo, TextPipeline,
+        },
+        ui::ComputedStackIndex,
+    };
 
     #[test]
     fn random_rolls_to_100_to_one_number_or_between_two() {
@@ -3367,14 +3374,6 @@ mod tests {
 
     #[test]
     fn a_nested_chat_line_only_links_in_its_frontmost_viewport() {
-        use bevy::{
-            ecs::system::RunSystemOnce,
-            text::{
-                ComputedTextBlock, LineBreak, RunGeometry, TextBounds, TextLayoutInfo, TextPipeline,
-            },
-            ui::ComputedStackIndex,
-        };
-
         let mut app = crate::testing::app();
         app.add_systems(Update, crate::items::link_input);
         let world = app.world_mut();
