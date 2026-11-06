@@ -154,9 +154,13 @@ pub(crate) struct MouseLook {
     pub(crate) left: bool,
 }
 
-/// The horizontal input owned by an attached online look this frame.
 #[derive(Resource, Default)]
-pub(crate) struct MouseAim(pub(crate) Option<f32>);
+pub(crate) struct MouseAim {
+    /// Horizontal input owned by an attached online look this frame.
+    pub(crate) horizontal: Option<f32>,
+    /// Focus, admission or exclusive input ownership changed.
+    pub(crate) interrupted: bool,
+}
 
 #[derive(Default)]
 pub(crate) struct LookOwnership {
@@ -171,6 +175,7 @@ pub(crate) struct LookOwnership {
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(crate) fn look(
     mut look: ResMut<MouseLook>,
+    mut aim: ResMut<MouseAim>,
     mut buttons: ResMut<ButtonInput<MouseButton>>,
     mut ownership: Local<LookOwnership>,
     mut events: MessageReader<MouseButtonInput>,
@@ -197,7 +202,8 @@ pub(crate) fn look(
         && (!online.enabled || online.world().connected());
     let available =
         focused && playing && !script.is_some_and(|script| script.background_owns_input());
-    if !available || ownership.admission != admission {
+    aim.interrupted = !available || ownership.admission != admission;
+    if aim.interrupted {
         *look = MouseLook::default();
     }
     ownership.admission = admission;
@@ -241,7 +247,7 @@ pub(super) fn turn(
     mut motion: MessageReader<MouseMotion>,
     mut cameras: Query<&mut OrbitCamera, Without<FreeCamera>>,
 ) {
-    aim.0 = None;
+    aim.horizontal = None;
     if !look.held {
         motion.clear();
         return;
@@ -250,7 +256,7 @@ pub(super) fn turn(
     if let Ok(mut camera) = cameras.single_mut() {
         let yaw = -horizontal * options.options.turn_per_pixel();
         if online.enabled {
-            aim.0 = Some(yaw);
+            aim.horizontal = Some(yaw);
         } else {
             camera.yaw += yaw;
         }

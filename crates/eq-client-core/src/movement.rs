@@ -737,12 +737,12 @@ mod tests {
             start,
         );
         guard.set_speed(Some(60.0), start);
-        let request = eq_network_game::movement::MovementRequest {
-            session_id: 7,
-            mode: eq_network_game::movement::MovementMode::Forward,
-            position: crate::world_position(position.to_array(), 0.0),
-            created: now,
-        };
+        let request = eq_network_game::movement::MovementRequest::new(
+            eq_network_game::movement::MovementMode::Forward,
+            7,
+            crate::world_position(position.to_array(), 0.0),
+            now,
+        );
         assert!(guard.accept(&request, now).is_ok());
     }
 

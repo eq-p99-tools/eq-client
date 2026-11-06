@@ -13,8 +13,8 @@ use eq_client_assets::{
     ui::InstalledClient,
 };
 use eq_client_core::{
-    Capability, ClientCommand, DiagonalAlong, DiagonalRates, GroundedDiagonal, MovementMode,
-    MovementRequest, Posture, StrafeSide,
+    Capability, ClientCommand, DiagonalAlong, DiagonalRates, GroundedDiagonal, HeadingUpdate,
+    MovementMode, MovementRequest, Posture, StrafeSide,
     hazards::Hazard,
     movement::{AirborneController, CollisionWorld, Landing, PROVISIONAL_PHYSICS, VerticalPhysics},
     qol::{Fix, Settings},
@@ -46,8 +46,7 @@ pub(super) struct Controls {
     /// Seconds of play the latest sample sent covers: the model shows it
     /// over that long once the session accepts it.
     sent_span: f32,
-    /// The latest request steers body and camera together.
-    sent_mouse_steering: bool,
+    sent_yaw: SentYaw,
     boundary: BoundaryTracker,
     taps: TapBuffer,
     visual: Option<VisualMotion>,
@@ -71,6 +70,8 @@ pub(super) struct Controls {
     facing: Option<f32>,
     /// Owned horizontal mouse input waiting for a movement sample, in heading units.
     mouse_turn: f32,
+    /// Latest immediately displayed Titanium mouse heading awaiting a sample.
+    mouse_heading: Option<f32>,
     /// What the samples sent lately asked of the controller and moved.
     pub recent: RecentMotion,
     /// The latest sample's request stamp, and when the session last answered
@@ -91,6 +92,14 @@ pub(super) struct Controls {
     stun_active: bool,
     /// Explicit departures; the session checks the same choices independently.
     movement_options: eq_client_core::movement::MovementOptions,
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum SentYaw {
+    #[default]
+    Ordinary,
+    MouseRate,
+    MouseSnapshot,
 }
 
 /// How far a jump from standing still has come on a client that crouches
@@ -135,7 +144,7 @@ impl Default for Controls {
             queued_at: Instant::now(),
             moving: false,
             sent_span: 0.1,
-            sent_mouse_steering: false,
+            sent_yaw: SentYaw::Ordinary,
             boundary: BoundaryTracker::default(),
             taps: TapBuffer::default(),
             visual: None,
@@ -147,6 +156,7 @@ impl Default for Controls {
             unreported: None,
             facing: None,
             mouse_turn: 0.0,
+            mouse_heading: None,
             recent: RecentMotion::default(),
             last_sent: None,
             last_answer: None,
@@ -253,6 +263,13 @@ impl Controls {
     /// turn in the sample's span is the player facing a new way at once, so
     /// it shows at once while the positions still play.
     pub fn display_sample(&mut self, from: Transform, position: eq_client_core::WorldPosition) {
+        if self.refused.is_some()
+            || self
+                .mouse_heading
+                .is_some_and(|heading| arc(heading, position.heading) == 0.0)
+        {
+            self.mouse_heading = None;
+        }
         let rotation = Quat::from_rotation_y(eq_client_core::render_heading(
             self.facing.unwrap_or(position.heading),
         ));
@@ -271,12 +288,16 @@ impl Controls {
         let limit = TURN_RATE * span / 512.0 * std::f32::consts::TAU;
         // A turn key turns at most the limit in a span; the 1% margin keeps
         // rounding in the angle between two rotations from making that a snap.
-        let snap = !self.sent_mouse_steering && asked.angle_between(rotation) > limit * 1.01;
+        let snap = match self.sent_yaw {
+            SentYaw::Ordinary => asked.angle_between(rotation) > limit * 1.01,
+            SentYaw::MouseRate => false,
+            SentYaw::MouseSnapshot => true,
+        };
         let segment = Segment {
             to,
             span,
             snap,
-            follow_heading: self.sent_mouse_steering,
+            follow_heading: self.sent_yaw != SentYaw::Ordinary,
         };
         match self.visual.as_mut().filter(|visual| !visual.finished()) {
             Some(visual) => {
@@ -467,6 +488,7 @@ impl Controls {
             self.crouch = None;
             self.facing = None;
             self.mouse_turn = 0.0;
+            self.mouse_heading = None;
         }
         if changed && revision.is_some() {
             self.moving = false;
@@ -491,6 +513,7 @@ impl Controls {
         self.crouch = None;
         self.facing = None;
         self.mouse_turn = 0.0;
+        self.mouse_heading = None;
         self.moving = false;
         // The session starts a fresh budget and schedules its paced stop when
         // its option command arrives. Do not immediately spend a full sample
@@ -572,9 +595,9 @@ const MAX_CYCLE: f32 = 0.25;
 /// way the player faces, in heading units a second.
 const TURN_RATE: f32 = 240.0;
 
-/// The mouse can turn faster than the keys. Keep both directions within the
-/// signed turn rate the movement session can encode.
-const MOUSE_TURN_RATE: f32 = 511.0;
+/// Where the wire has no heading snapshot intent, keep mouse turning inside
+/// the existing rate representation.
+const MOUSE_WIRE_RATE: f32 = 511.0;
 
 /// Holds short press edges across the send throttle, never across focus loss or expiry.
 #[derive(Default)]
@@ -637,7 +660,7 @@ pub(super) fn input(
     options: Res<crate::options::OptionsState>,
     movement_sync: Option<Res<crate::options::MovementSync>>,
     mut controls: ResMut<Controls>,
-    players: Query<&PlayerBody, With<Player>>,
+    players: Query<(&PlayerBody, &Transform), With<Player>>,
     cameras: Query<(&OrbitCamera, Has<crate::camera::FreeCamera>)>,
     (settings, messages, mut chat): (
         Res<crate::ViewerSettings>,
@@ -659,6 +682,7 @@ pub(super) fn input(
         .is_some_and(|sync| !sync.ready(online.world().session_id(), movement))
     {
         controls.pause_prediction();
+        controls.mouse_heading = None;
         controls.held = Some(Held::Gate);
         return;
     }
@@ -672,6 +696,7 @@ pub(super) fn input(
         controls.facing = None;
     }
     if controls.speed.is_none() && controls.airborne.is_none() {
+        controls.mouse_heading = None;
         controls.held = Some(Held::Withdrawn);
         return;
     }
@@ -679,14 +704,30 @@ pub(super) fn input(
     let scripted_facing = focused.then(|| keys.scripted_facing()).flatten();
     let scripted = keys.scripted();
     let scripted_turn = scripted.contains(&Act::TurnLeft) || scripted.contains(&Act::TurnRight);
+    let snapshot_dialect = online.world().generation() == eq_client_core::GameDialect::Titanium;
+    let mouse_allowed = focused
+        && scripted_facing.is_none()
+        && !scripted_turn
+        && !aim.as_ref().is_some_and(|aim| aim.interrupted);
     let mouse_aim = aim
         .as_ref()
-        .and_then(|aim| aim.0)
-        .filter(|_| focused && scripted_facing.is_none() && !scripted_turn);
-    if let Some(yaw) = mouse_aim {
-        // The frame loop can collect several deltas before the next wire
-        // sample. Retain at most one maximum sample's worth of pending turn.
-        let limit = MOUSE_TURN_RATE * MAX_CYCLE;
+        .and_then(|aim| aim.horizontal)
+        .filter(|_| mouse_allowed);
+    if !snapshot_dialect || !mouse_allowed {
+        controls.mouse_heading = None;
+    } else if let Some(yaw) = mouse_aim.filter(|yaw| *yaw != 0.0)
+        && let Ok((_, player)) = players.single()
+    {
+        // Start from the current drawn actor, then apply every owned delta
+        // while the next movement sample waits for its normal opportunity.
+        let drawn_yaw = controls.mouse_heading.map_or_else(
+            || player.rotation.to_euler(EulerRot::YXZ).0,
+            eq_client_core::render_heading,
+        );
+        controls.mouse_heading = Some(eq_client_core::world_heading(drawn_yaw + yaw));
+    }
+    if let Some(yaw) = mouse_aim.filter(|_| !snapshot_dialect) {
+        let limit = MOUSE_WIRE_RATE * MAX_CYCLE;
         controls.mouse_turn =
             (controls.mouse_turn + yaw * (512.0 / std::f32::consts::TAU)).clamp(-limit, limit);
     } else {
@@ -777,7 +818,7 @@ pub(super) fn input(
             return;
         }
     }
-    let (Ok(body), Ok((camera, _)), Some(world), Some(accepted)) = (
+    let (Ok((body, _)), Ok((camera, _)), Some(world), Some(accepted)) = (
         players.single(),
         cameras.single(),
         collision.0.as_ref(),
@@ -818,23 +859,33 @@ pub(super) fn input(
         now.saturating_duration_since(sent).max(elapsed)
     });
     let span = controls.span(since_sent);
-    let mouse_limit = MOUSE_TURN_RATE * span;
+    let mouse_limit = MOUSE_WIRE_RATE * span;
     let mouse_step = controls.mouse_turn.clamp(-mouse_limit, mouse_limit);
-    let steered_heading = if mouse_step == 0.0 {
-        current_heading
-    } else {
-        (current_heading + mouse_step).rem_euclid(512.0)
-    };
+    let mouse_snapshot = controls
+        .mouse_heading
+        .filter(|heading| arc(current_heading, *heading) != 0.0);
+    let mouse_steering = mouse_aim.is_some() || mouse_snapshot.is_some();
+    let turning_with_mouse = mouse_step != 0.0 || mouse_snapshot.is_some();
+    let steered_heading = mouse_snapshot.unwrap_or_else(|| {
+        if mouse_step == 0.0 {
+            current_heading
+        } else {
+            (current_heading + mouse_step).rem_euclid(512.0)
+        }
+    });
+    if mouse_snapshot.is_none() {
+        controls.mouse_heading = None;
+    }
     // A script's `face` step turns the player as moving with the
     // camera-relative keys does: the facing it names at once, the heading
     // sent toward it at the turn keys' rate.
     if let Some(heading) = scripted_facing {
         controls.facing = Some(heading.rem_euclid(512.0));
-    } else if mouse_aim.is_some() {
+    } else if mouse_steering {
         controls.facing = None;
     }
     let shown = controls.facing.unwrap_or(steered_heading);
-    let yaw = if mouse_aim.is_some() {
+    let yaw = if mouse_steering {
         crate::camera::behind(eq_client_core::render_heading(steered_heading))
     } else {
         camera.yaw
@@ -893,7 +944,7 @@ pub(super) fn input(
         && !airborne
         && controls.jump.is_none()
         && controls.facing.is_none()
-        && mouse_step == 0.0
+        && !turning_with_mouse
         && diagonal.is_none()
     {
         controls.held = Some(Held::NoSpeed);
@@ -936,7 +987,7 @@ pub(super) fn input(
                 && !jump
                 && !airborne
                 && controls.facing.is_none()
-                && mouse_step == 0.0
+                && !turning_with_mouse
                 && world.support(feet).is_some()
         })
         .and_then(|intent| {
@@ -1041,14 +1092,14 @@ pub(super) fn input(
     // follows the facing within the same sample budget as the position.
     let facing = if matches!(mode, MovementMode::GroundedDiagonal(_)) {
         current_heading
-    } else if mouse_aim.is_some() {
+    } else if mouse_steering {
         steered_heading
     } else if Vec2::new(direction.x, direction.z) == Vec2::ZERO || preserve_facing {
         (shown + turn * TURN_RATE * span).rem_euclid(512.0)
     } else {
         eq_client_core::world_heading(direction.x.atan2(direction.z))
     };
-    let heading = if mouse_aim.is_some() {
+    let heading = if mouse_steering {
         facing
     } else {
         turn_toward(current_heading, facing, TURN_RATE * span)
@@ -1062,6 +1113,11 @@ pub(super) fn input(
             mode,
             session_id: stamp.session_id,
             position: position_sent,
+            heading: if mouse_snapshot.is_some() {
+                HeadingUpdate::Snapshot
+            } else {
+                HeadingUpdate::Rate
+            },
             created: stamp.created,
         })
     });
@@ -1076,7 +1132,13 @@ pub(super) fn input(
     // request's stamp to this one's, so the next span runs from the stamp.
     controls.last_sent = Some(created);
     controls.sent_span = span;
-    controls.sent_mouse_steering = mouse_aim.is_some();
+    controls.sent_yaw = if mouse_snapshot.is_some() {
+        SentYaw::MouseSnapshot
+    } else if mouse_aim.is_some() {
+        SentYaw::MouseRate
+    } else {
+        SentYaw::Ordinary
+    };
     controls.mouse_turn -= mouse_step;
     controls.held = None;
     // A landing's damage follows the sample that lands.
@@ -1108,7 +1170,7 @@ pub(super) fn input(
         controls.unreported = report_fall(&outbox, online.world(), &options.options.qol, cost);
     }
     controls.moving = position.distance_squared(origin) > 0.000_001
-        || (heading - current_heading).abs() > f32::EPSILON;
+        || mouse_snapshot.is_none() && (heading - current_heading).abs() > f32::EPSILON;
     // Until the heading sent reaches the facing, the model shows the facing.
     controls.facing = (arc(heading, facing).abs() > 0.01).then_some(facing);
     controls.waiting = true;
@@ -1465,37 +1527,60 @@ impl VisualMotion {
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn interpolate(
     time: Res<Time>,
+    online: Res<online::OnlineState>,
     mut controls: ResMut<Controls>,
-    mut players: Query<&mut Transform, With<Player>>,
+    mut players: Query<(Entity, &mut Transform), With<Player>>,
     mut cameras: Query<(&mut OrbitCamera, Has<crate::camera::FreeCamera>)>,
+    mut displayed_mouse: Local<Option<Entity>>,
 ) {
-    let Some(visual) = controls.visual.as_mut() else {
+    let preview = controls.mouse_heading;
+    if controls.visual.is_none() && preview.is_none() && displayed_mouse.is_none() {
+        return;
+    }
+    let Ok((entity, mut transform)) = players.single_mut() else {
+        *displayed_mouse = None;
         return;
     };
-    let Ok(mut transform) = players.single_mut() else {
-        return;
-    };
-    let seconds = time.delta_secs();
-    let before = transform.translation;
-    visual.advance(seconds, &mut transform);
-    if seconds > 0.0 {
-        let moved = transform.translation - before;
-        debug!(
-            target: "eq_client_render::motion::pace",
-            seconds,
-            shown_speed = moved.with_y(0.0).length() / seconds,
-            waiting = visual.queue.len(),
-            "Shown pace"
-        );
+    let had_preview = displayed_mouse.take() == Some(entity);
+    let mut follow_heading = false;
+    if let Some(visual) = controls.visual.as_mut() {
+        let seconds = time.delta_secs();
+        let before = transform.translation;
+        visual.advance(seconds, &mut transform);
+        if seconds > 0.0 {
+            let moved = transform.translation - before;
+            debug!(
+                target: "eq_client_render::motion::pace",
+                seconds,
+                shown_speed = moved.with_y(0.0).length() / seconds,
+                waiting = visual.queue.len(),
+                "Shown pace"
+            );
+        }
+        follow_heading = visual.follow_heading;
+        if visual.finished() {
+            controls.visual = None;
+        }
+    }
+    if let Some(heading) = preview {
+        // Position still plays only accepted samples. An older queued pose
+        // never overwrites the latest local mouse orientation.
+        transform.rotation = Quat::from_rotation_y(eq_client_core::render_heading(heading));
+        *displayed_mouse = Some(entity);
+    } else if had_preview && let Some(player) = online.world().player() {
+        // A withdrawn or interrupted preview must not leave its pose behind.
+        let rotation =
+            Quat::from_rotation_y(eq_client_core::render_heading(player.position.heading));
+        transform.rotation = rotation;
+        if let Some(visual) = controls.visual.as_mut() {
+            visual.face(rotation);
+        }
     }
     for (mut camera, free) in &mut cameras {
         camera.focus = transform.translation;
-        if visual.follow_heading && !free {
+        if (follow_heading || preview.is_some() || had_preview) && !free {
             crate::camera::start_behind(&mut camera, &transform);
         }
-    }
-    if visual.finished() {
-        controls.visual = None;
     }
 }
 
@@ -3221,6 +3306,7 @@ mod tests {
         let ClientCommand::Move(request) = receiver.try_recv().unwrap() else {
             panic!("expected turn")
         };
+        assert_eq!(request.heading, HeadingUpdate::Rate);
         assert!((request.position.heading - 488.0).abs() < 0.001);
         assert!(request.position.x.abs() < 0.001 && request.position.y.abs() < 0.001);
         assert!((turn_toward(508.0, 4.0, 3.0) - 511.0).abs() < 0.001);
@@ -3771,6 +3857,7 @@ mod tests {
             .single(world)
             .unwrap();
         world.get_mut::<Transform>(player).unwrap().rotation = turned_to(0.0);
+        app.update();
         (app, receiver, camera, player)
     }
 
@@ -3790,7 +3877,7 @@ mod tests {
     }
 
     #[test]
-    fn attached_mouse_yaw_turns_in_place_through_the_wire_and_model() {
+    fn attached_mouse_half_turn_is_immediate_and_uses_the_normal_send_opportunity() {
         let (mut app, receiver, camera, player) = mouse_look_app();
         crate::camera::testing::button(&mut app, MouseButton::Right, true);
         mouse_drag(&mut app, 0.0, 20.0);
@@ -3800,8 +3887,9 @@ mod tests {
 
         let start = Instant::now();
         let origin = world_position([0.0, 3.0, 0.0], 0.0);
-        let mut session =
-            eq_network_game::movement::MotionSession::new(11, 7, origin, start).unwrap();
+        let mut session = eq_network_game::movement::MotionSession::new(11, 7, origin, start)
+            .unwrap()
+            .with_heading_snapshots(true);
         session
             .calibrate(
                 eq_client_core::MotionCalibration {
@@ -3816,47 +3904,136 @@ mod tests {
                 start,
             )
             .unwrap();
-        mouse_drag(&mut app, 200.0, 0.0);
+        let pixels = std::f32::consts::PI
+            / app
+                .world()
+                .resource::<crate::options::OptionsState>()
+                .options
+                .turn_per_pixel();
+        app.world_mut().resource_mut::<Controls>().last_accepted = Instant::now();
+        mouse_drag(&mut app, pixels, 0.0);
+        app.update();
+        assert!(receiver.try_recv().is_err());
+        assert_attached_heading(&app, camera, player, 256.0);
+        assert_eq!(
+            app.world().get::<Transform>(player).unwrap().translation,
+            Vec3::new(0.0, 3.0, 0.0)
+        );
+
+        // Releasing after applying the turn leaves that completed orientation
+        // available for the next sample without another mouse event.
+        crate::camera::testing::button(&mut app, MouseButton::Right, false);
+        app.world_mut().resource_mut::<Controls>().last_accepted = Instant::now()
+            .checked_sub(Duration::from_millis(100))
+            .unwrap();
         app.update();
         let ClientCommand::Move(mut first) = receiver.try_recv().unwrap() else {
             panic!("expected a stationary mouse turn");
         };
         assert_eq!(first.mode, MovementMode::Forward);
+        assert_eq!(first.heading, HeadingUpdate::Snapshot);
         assert_eq!(
             (first.position.x, first.position.y, first.position.z),
             (origin.x, origin.y, origin.z)
         );
-        let turned = arc(origin.heading, first.position.heading);
-        assert!((-MOUSE_TURN_RATE * 0.1 - 0.001..-TURN_RATE * 0.1).contains(&turned));
-        assert_attached_heading(&app, camera, player, origin.heading);
+        assert!(arc(256.0, first.position.heading).abs() < 0.001);
+        assert_attached_heading(&app, camera, player, 256.0);
         first.created = start + Duration::from_millis(100);
         session
             .send_move_sample(&first, first.created, |sample| {
                 assert_eq!(sample.animation, 0);
-                assert!(sample.delta_heading < -240 && sample.delta_heading >= -511);
+                assert_eq!(sample.delta_heading, 0);
                 Ok(())
             })
             .unwrap();
         accept(&mut app, &first);
 
-        // With the buttons still held, the remainder of the bounded turn
-        // continues across samples even though there is no new mouse event.
         app.update();
-        assert_attached_heading(&app, camera, player, first.position.heading);
-        let ClientCommand::Move(second) = receiver.try_recv().unwrap() else {
-            panic!("expected the remaining turn");
+        assert!(receiver.try_recv().is_err());
+        assert_attached_heading(&app, camera, player, 256.0);
+    }
+
+    #[test]
+    fn a_rapid_mouse_reversal_during_forward_ignores_older_playback_yaw() {
+        let (mut app, receiver, camera, player) = mouse_look_app();
+        crate::camera::testing::button(&mut app, MouseButton::Right, true);
+        crate::camera::testing::button(&mut app, MouseButton::Left, true);
+        app.update();
+        let ClientCommand::Move(old) = receiver.try_recv().unwrap() else {
+            panic!("expected a forward step");
         };
-        assert!(
-            (arc(origin.heading, second.position.heading) + 512.0 / std::f32::consts::TAU).abs()
-                < 0.001
-        );
-        assert_eq!(
-            (second.position.x, second.position.y, second.position.z),
-            (origin.x, origin.y, origin.z)
-        );
-        accept(&mut app, &second);
+        let pixels = std::f32::consts::PI
+            / app
+                .world()
+                .resource::<crate::options::OptionsState>()
+                .options
+                .turn_per_pixel();
+        mouse_drag(&mut app, -pixels, 0.0);
         app.update();
-        assert_attached_heading(&app, camera, player, second.position.heading);
+        assert_attached_heading(&app, camera, player, 256.0);
+        assert!(receiver.try_recv().is_err(), "another sample is in flight");
+        assert_eq!(
+            app.world().get::<Transform>(player).unwrap().translation,
+            Vec3::new(0.0, 3.0, 0.0)
+        );
+        accept(&mut app, &old);
+        app.update();
+        assert_attached_heading(&app, camera, player, 256.0);
+        let old_point = Vec3::from_array(eq_client_core::render_position(old.position));
+        assert!(
+            app.world()
+                .get::<Transform>(player)
+                .unwrap()
+                .translation
+                .abs_diff_eq(old_point, 0.001)
+        );
+        let ClientCommand::Move(reversed) = receiver.try_recv().unwrap() else {
+            panic!("expected a forward step after reversing");
+        };
+        assert_eq!(reversed.heading, HeadingUpdate::Snapshot);
+        let displacement =
+            Vec3::from_array(eq_client_core::render_position(reversed.position)) - old_point;
+        assert!(
+            displacement
+                .normalize()
+                .abs_diff_eq(turned_to(256.0) * Vec3::Z, 0.001)
+        );
+        let span = app.world().resource::<Controls>().sent_span;
+        assert!((displacement.length() - 6.0 * span).abs() < 0.001);
+    }
+
+    #[test]
+    fn blur_and_authoritative_placement_drop_unsent_mouse_heading() {
+        for corrected in [false, true] {
+            let (mut app, receiver, camera, player) = mouse_look_app();
+            crate::camera::testing::button(&mut app, MouseButton::Right, true);
+            app.world_mut().resource_mut::<Controls>().last_accepted = Instant::now();
+            mouse_drag(&mut app, 80.0, 0.0);
+            app.update();
+            assert!(receiver.try_recv().is_err());
+            let shown = app.world().get::<Transform>(player).unwrap().rotation;
+            assert!(shown.angle_between(turned_to(0.0)) > 0.1);
+            let expected = if corrected {
+                let world = app.world_mut();
+                crate::online::testing::place(
+                    &mut world.resource_mut::<online::OnlineState>(),
+                    world_position([0.0, 3.0, 0.0], 64.0),
+                );
+                world.resource_mut::<Controls>().reset(None);
+                64.0
+            } else {
+                let world = app.world_mut();
+                world
+                    .query::<&mut Window>()
+                    .single_mut(world)
+                    .unwrap()
+                    .focused = false;
+                0.0
+            };
+            app.update();
+            assert!(receiver.try_recv().is_err());
+            assert_attached_heading(&app, camera, player, expected);
+        }
     }
 
     #[test]
@@ -3871,10 +4048,10 @@ mod tests {
             for x in [0.0, 60.0, 0.0, 0.0] {
                 mouse_drag(&mut app, x, 0.0);
                 app.update();
-                assert_attached_heading(&app, camera, player, position.heading);
                 let ClientCommand::Move(request) = receiver.try_recv().unwrap() else {
                     panic!("expected a held forward sample");
                 };
+                assert_attached_heading(&app, camera, player, request.position.heading);
                 assert_eq!(request.mode, MovementMode::Forward);
                 let displacement =
                     Vec3::from_array(eq_client_core::render_position(request.position))
