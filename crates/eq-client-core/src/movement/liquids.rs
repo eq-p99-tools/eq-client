@@ -139,7 +139,7 @@ impl CollisionWorld {
     /// Whether feet moving straight from one place to another keep the head
     /// of a body this tall out of water and the soles out of lava the whole
     /// way.
-    fn clear(&self, from: Vec3, to: Vec3, height: f32, guard: LiquidGuard) -> bool {
+    pub(super) fn clear(&self, from: Vec3, to: Vec3, height: f32, guard: LiquidGuard) -> bool {
         let Some(liquids) = &self.liquids else {
             return true;
         };
@@ -149,15 +149,39 @@ impl CollisionWorld {
             && !liquids.passes_through(from + soles, to + soles, Liquid::Lava)
     }
 
-    /// A water-aware walk also checks the travelled segment for thin lava.
-    pub(super) fn clear_move(&self, from: Vec3, to: Vec3, height: f32, guard: LiquidGuard) -> bool {
-        let along = if self.water_support {
-            LiquidGuard::Lava
-        } else {
-            guard
-        };
-        (along == LiquidGuard::All || self.clear(from, to, height, along))
+    fn clear_move(&self, from: Vec3, to: Vec3, height: f32, guard: LiquidGuard) -> bool {
+        (guard == LiquidGuard::All && !self.water_support
+            || self.clear(from, to, height, LiquidGuard::Lava))
             && self.dry_with_guard(to, height, guard)
+    }
+
+    pub(super) fn guarded_stride(
+        &self,
+        feet: Vec3,
+        displacement: Vec3,
+        height: f32,
+        support: Support,
+        guard: LiquidGuard,
+        guarded: bool,
+    ) -> Option<Vec3> {
+        let next = self
+            .stride(
+                feet,
+                displacement,
+                height,
+                support,
+                guard,
+                guarded && self.water_support,
+            )
+            .ok()?;
+        let dry = !guarded
+            || if self.water_support {
+                // Lava along the traveled path was checked by each swept leg.
+                self.dry_with_guard(next, height, guard)
+            } else {
+                self.clear_move(feet, next, height, guard)
+            };
+        dry.then_some(next)
     }
 
     pub(super) fn inside_guarded_liquid(
@@ -271,8 +295,9 @@ impl CollisionWorld {
         let mut reached = feet;
         for _ in 0..12 {
             let fraction = f32::midpoint(dry, wet);
-            let next = self.stride(feet, displacement * fraction, height, support, guard);
-            if self.clear_move(feet, next, height, guard) {
+            if let Some(next) =
+                self.guarded_stride(feet, displacement * fraction, height, support, guard, true)
+            {
                 dry = fraction;
                 reached = next;
             } else {

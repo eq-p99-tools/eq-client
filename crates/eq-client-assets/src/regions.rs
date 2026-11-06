@@ -45,6 +45,13 @@ pub enum Liquid {
     Lava,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SpanKind {
+    Dry,
+    Wet(Liquid),
+    Unresolved,
+}
+
 /// The prefixes `EQEmu`'s water maps read a region's name by before its
 /// user data: water, lava, zone line, player-versus-player, slime, ice and
 /// `VWA` regions.
@@ -197,12 +204,12 @@ impl ZoneRegions {
     pub fn passes_through(&self, start: [f32; 3], end: [f32; 3], liquid: Liquid) -> bool {
         !self.liquids.is_empty()
             && self
-                .first_liquid_span(start, end, |kind| kind == Some(liquid))
+                .first_matching_span(start, end, |kind| kind == SpanKind::Wet(liquid))
                 .is_some()
     }
 
     /// Highest mapped water entry along a downward ray that starts above liquid.
-    /// A ray already in liquid, or one crossing lava first, has no walkable top.
+    /// The entry must follow resolved dry space along the ray.
     #[must_use]
     #[allow(clippy::cast_possible_truncation)] // Interpolation stays between f32 endpoints.
     pub fn water_surface(&self, top: [f32; 3], bottom: f32) -> Option<f32> {
@@ -215,8 +222,8 @@ impl ZoneRegions {
             return None;
         }
         let end = [top[0], bottom, top[2]];
-        let (span, kind) = self.first_liquid_span(top, end, |kind| kind.is_some())?;
-        if span.start <= 0.0 || kind != Some(Liquid::Water) {
+        let (span, kind) = self.first_matching_span(top, end, |kind| kind != SpanKind::Dry)?;
+        if span.start <= 0.0 || kind != SpanKind::Wet(Liquid::Water) {
             return None;
         }
         let height = f64::from(top[1]);
@@ -232,18 +239,18 @@ impl ZoneRegions {
         end: [f32; 3],
         liquid: Liquid,
     ) -> Option<Range<f64>> {
-        self.first_liquid_span(start, end, |kind| kind != Some(liquid))
+        self.first_matching_span(start, end, |kind| kind != SpanKind::Wet(liquid))
             .map(|(span, _)| span)
     }
 
-    fn first_liquid_span(
+    fn first_matching_span(
         &self,
         start: [f32; 3],
         end: [f32; 3],
-        matches: impl Fn(Option<Liquid>) -> bool,
-    ) -> Option<(Range<f64>, Option<Liquid>)> {
+        matches: impl Fn(SpanKind) -> bool,
+    ) -> Option<(Range<f64>, SpanKind)> {
         if !start.iter().chain(&end).all(|v| v.is_finite()) {
-            return matches(None).then_some((0.0..1.0, None));
+            return matches(SpanKind::Unresolved).then_some((0.0..1.0, SpanKind::Unresolved));
         }
         // Push the far part first so the next pop follows the direction of travel.
         let mut parts = vec![(Some(0), 0.0_f64..1.0, 0)];
@@ -252,13 +259,16 @@ impl ZoneRegions {
                 .and_then(|i| self.nodes.get(i))
                 .filter(|_| depth < self.nodes.len());
             let Some(node) = node else {
-                if matches(None) {
-                    return Some((part, None));
+                if matches(SpanKind::Unresolved) {
+                    return Some((part, SpanKind::Unresolved));
                 }
                 continue;
             };
             if let Some(region) = node.region {
-                let kind = self.liquids.get(&region).copied();
+                let kind = self
+                    .liquids
+                    .get(&region)
+                    .map_or(SpanKind::Dry, |&liquid| SpanKind::Wet(liquid));
                 if matches(kind) {
                     return Some((part, kind));
                 }
@@ -275,8 +285,8 @@ impl ZoneRegions {
             let a = distance(start);
             let b = distance(end);
             if !a.is_finite() || !b.is_finite() || (a == 0.0 && b == 0.0) {
-                if matches(None) {
-                    return Some((part, None));
+                if matches(SpanKind::Unresolved) {
+                    return Some((part, SpanKind::Unresolved));
                 }
                 continue;
             }
@@ -727,6 +737,34 @@ mod tests {
         assert_eq!(regions.water_surface([0.0, -0.1, 0.0], -20.0), None);
         let surface = regions.water_surface(top, -20.0).unwrap();
         assert!(surface.abs() < 1e-6);
+    }
+
+    #[test]
+    fn water_surface_requires_a_resolved_dry_prefix() {
+        let mut regions = layers();
+        regions.liquids.remove(&1);
+        let (top, bottom) = ([0.0, 1.0, 0.0], [0.0, -1.0, 0.0]);
+        // Keep valid dry air at the start of the probe. The unresolved
+        // interval just before mapped water can be missing, cyclic or
+        // coplanar with a later split.
+        regions.nodes[3] = Node {
+            normal: [1.0, 0.0, 0.0],
+            distance: 0.0,
+            region: None,
+            front: None,
+            back: None,
+        };
+        for unresolved in [None, Some(2), Some(3)] {
+            regions.nodes[2].front = unresolved;
+            assert_eq!(regions.water_surface(top, bottom[1]), None);
+            assert!(regions.passes_through(top, bottom, Liquid::Water));
+        }
+        // Swimming still treats an unresolved span as outside the water.
+        regions.nodes[0].front = None;
+        assert_eq!(
+            regions.first_outside(top, bottom, Liquid::Water),
+            Some(0.0..0.5)
+        );
     }
 
     #[test]

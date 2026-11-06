@@ -117,6 +117,43 @@ mod tests {
     }
 
     #[test]
+    fn water_walking_checks_the_swept_legs_of_a_shore_drop() {
+        let start = Vec3::new(0.25, 1.0, 0.0);
+        let delta = Vec3::X * 0.5;
+        let landing = Vec3::X * 0.75;
+        let terrain = CollisionWorld::new(
+            floor(-8.0, 0.0, 1.0)
+                .into_iter()
+                .chain(floor(0.0, 8.0, -12.0)),
+        )
+        .unwrap();
+        let with_lava = |left, right, low, high| {
+            let lava = (
+                Vec3::new(left, low, -8.0),
+                Vec3::new(right, high, 8.0),
+                Liquid::Lava,
+            );
+            terrain
+                .clone()
+                .with_liquids(Boxes(vec![lava, lake()]))
+                .with_water_support()
+        };
+        // The capsule travels at the bank's height before dropping. The
+        // proposed chord misses a strip at its soles on that first leg.
+        let across_lava = with_lava(0.44, 0.46, 1.08, 1.12);
+        let stopped = across_lava.step(start, delta, 6.0);
+        assert!((0.35..0.44).contains(&stopped.x), "{stopped:?}");
+        // The vertical settle can also cross a strip missed by the chord.
+        let above_drop = with_lava(0.73, 0.76, 0.80, 0.85);
+        let stopped = above_drop.step(start, delta, 6.0);
+        assert!((0.55..0.73).contains(&stopped.x), "{stopped:?}");
+        // A strip lower in the same column intersects only the chord.
+        let above_lava = with_lava(0.44, 0.46, 0.67, 0.73);
+        let reached = above_lava.step(start, delta, 6.0);
+        assert!(reached.distance(landing) < 0.001, "{reached:?}");
+    }
+
+    #[test]
     fn water_walking_uses_normal_jump_and_landing() {
         let world = CollisionWorld::new(banks())
             .unwrap()

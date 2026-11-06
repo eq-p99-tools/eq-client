@@ -49,6 +49,8 @@ enum Support {
     Airborne,
 }
 
+struct LavaContact;
+
 pub use eq_network_game::movement::{
     Carried, EQMAC_FALL_SPEED, MAX_FALL_SPEED, MAX_GROUNDED_STEP, PROGRAM_STEP_SECONDS, ZBetween,
     between_reports, carry, climb_reach, program_steps, swim_speed,
@@ -433,13 +435,10 @@ impl CollisionWorld {
         // Feet in deep water or lava now may go anywhere, so they can leave.
         let guarded = !self.inside_guarded_liquid(feet, height, liquids);
         if matches!(support, Support::Airborne) {
-            let next = self.stride(feet, displacement, height, support, liquids);
             // In the air, a move whose fall would end in deep water or lava is not made.
-            return if guarded && !self.clear_move(feet, next, height, liquids) {
-                feet
-            } else {
-                next
-            };
+            return self
+                .guarded_stride(feet, displacement, height, support, liquids, guarded)
+                .unwrap_or(feet);
         }
         let horizontal = Vec3::new(displacement.x, 0.0, displacement.z);
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // Clamped.
@@ -447,11 +446,10 @@ impl CollisionWorld {
         let part = horizontal / f32::from(count);
         let mut position = feet;
         for _ in 0..count {
-            let mut next = self.stride(position, part, height, support, liquids);
-            let wet = guarded && !self.clear_move(position, next, height, liquids);
-            if wet {
-                next = self.dry_part(position, part, height, support, liquids);
-            }
+            let next = self.guarded_stride(position, part, height, support, liquids, guarded);
+            let wet = next.is_none();
+            let next =
+                next.unwrap_or_else(|| self.dry_part(position, part, height, support, liquids));
             // A walk on the ground keeps to a riser a sample up and down. One
             // the airborne controller makes (a step's) descends a stride at a
             // time within its drop, and past it the controller falls, so only
@@ -486,13 +484,20 @@ impl CollisionWorld {
         height: f32,
         support: Support,
         liquids: LiquidGuard,
-    ) -> Vec3 {
+        check_lava: bool,
+    ) -> Result<Vec3, LavaContact> {
         let entry = |from, to| {
-            if liquids == LiquidGuard::Lava {
+            let water = if liquids == LiquidGuard::Lava {
                 self.water_entry(from, to, height)
             } else {
                 None
+            };
+            // Only the portion reached by the solid sweep and before any
+            // transition to swimming is part of this movement leg.
+            if check_lava && !self.clear(from, water.unwrap_or(to), height, LiquidGuard::Lava) {
+                return Err(LavaContact);
             }
+            Ok(water)
         };
         let mut position = feet;
         let mut remaining = Vec3::new(displacement.x, 0.0, displacement.z);
@@ -563,21 +568,21 @@ impl CollisionWorld {
             if delta.length_squared() < 0.000_001 {
                 if descending {
                     let settled = self.settle(position, target.y, height);
-                    position = entry(position, settled).unwrap_or(settled);
+                    position = entry(position, settled)?.unwrap_or(settled);
                 }
                 break;
             }
             match self.sweep(position, delta, height) {
                 Ok(None) => {
                     let swept = position + delta;
-                    if let Some(water) = entry(position, swept) {
-                        return water;
+                    if let Some(water) = entry(position, swept)? {
+                        return Ok(water);
                     }
                     if descending {
                         let settled = self.settle(swept, target.y, height);
-                        return entry(swept, settled).unwrap_or(settled);
+                        return Ok(entry(swept, settled)?.unwrap_or(settled));
                     }
-                    return target;
+                    return Ok(target);
                 }
                 Ok(Some(hit)) => {
                     if !matches!(support, Support::Airborne)
@@ -585,14 +590,15 @@ impl CollisionWorld {
                         && self.can_step_up(position, target, height)
                     {
                         let lifted = Vec3::new(position.x, target.y, position.z);
-                        return entry(position, lifted)
-                            .or_else(|| entry(lifted, target))
-                            .unwrap_or(target);
+                        if let Some(water) = entry(position, lifted)? {
+                            return Ok(water);
+                        }
+                        return Ok(entry(lifted, target)?.unwrap_or(target));
                     }
                     let fraction = (hit.time_of_impact - 0.005 / delta.length()).clamp(0.0, 1.0);
                     let reached = position + delta * fraction;
-                    if let Some(water) = entry(position, reached) {
-                        return water;
+                    if let Some(water) = entry(position, reached)? {
+                        return Ok(water);
                     }
                     position = reached;
                     // A mostly vertical contact is a floor or ceiling edge, not a
@@ -614,7 +620,7 @@ impl CollisionWorld {
                 Err(_) => break,
             }
         }
-        position
+        Ok(position)
     }
 
     /// Lowers the feet onto `floor`, or onto whatever the capsule meets first. A

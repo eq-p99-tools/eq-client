@@ -3374,7 +3374,9 @@ mod tests {
             let mut controls = app.world_mut().resource_mut::<Controls>();
             controls.reset(Some(6.0));
             controls.airborne = Some(AirborneController::default());
-            controls.last_accepted = Instant::now() - Duration::from_millis(100);
+            controls.last_accepted = Instant::now()
+                .checked_sub(Duration::from_millis(100))
+                .unwrap();
             controls.climb_sent = Some((
                 session,
                 eq_client_assets::falls::TITANIUM.climb_per_step(3.0, 6.0),
