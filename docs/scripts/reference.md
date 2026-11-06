@@ -86,9 +86,10 @@ Approach, walk and chase hold the camera-relative forward command, independent o
   The short `gm spawn NAME [RACE [LEVEL [TEXTURE]]]` form uses server defaults
   for the remaining fields.
   To remove a temporary NPC, confirm that its current incarnation is selected
-  and run `gm depop` without arguments. Keep that NPC selected until its
-  removal is observed. EQEmu acts on its current target and starts no respawn
-  timer. A queued command does not establish creation or removal.
+  and run `gm depop` without arguments. The zone worker rechecks the same
+  admission and target revision before sending. Keep that NPC selected until
+  its removal is observed, since EQEmu acts on its current target and starts
+  no respawn timer. A queued command does not establish creation or removal.
 - `chat channel message`: chat on a network-constrained local test session only.
 - `quit`: close the client.
 
