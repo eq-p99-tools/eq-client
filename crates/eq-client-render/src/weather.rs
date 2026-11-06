@@ -55,7 +55,8 @@ fn visible_weather(
     {
         return None;
     }
-    let strength = |value: u32| f32::from(u8::try_from(value.min(10)).unwrap_or(10)) / 10.0;
+    #[allow(clippy::cast_precision_loss, reason = "intensity is capped at 10")]
+    let strength = |value: u32| value.min(10) as f32 / 10.0;
     let density = match world.weather()? {
         Weather::Rain { intensity } => [strength(intensity), 0.0],
         Weather::Snow { intensity } => [0.0, strength(intensity)],
