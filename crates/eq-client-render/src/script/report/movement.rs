@@ -40,7 +40,7 @@ pub(in crate::script) fn report(
         session_position,
         rendered_position,
         online.server_placement(),
-        liquid,
+        &liquid,
         world.can(eq_client_core::Capability::Swimming),
     );
     info!(label, %movement_state, "Script movement report");
@@ -72,7 +72,7 @@ fn snapshot(
     session_position: Option<WorldPosition>,
     rendered_position: Option<(f32, f32, f32, f32)>,
     server: Option<ServerPlacement>,
-    liquid: LiquidObservation,
+    liquid: &LiquidObservation,
     swimming_offered: bool,
 ) -> Value {
     let received = server
