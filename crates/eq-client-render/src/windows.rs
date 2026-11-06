@@ -15,7 +15,7 @@ pub(super) use layout::Layouts;
 pub(crate) use registry::{Layer, Opening, Placement, Toggle, WindowId};
 pub(crate) use stack::{SelectorButton, Shown, Stack};
 #[cfg(test)]
-pub(crate) use stack::{raise_opened, toggle};
+pub(crate) use stack::{raise_opened, restack, toggle};
 
 /// A part of a window a press lands on and stays on, though it is no button
 /// and reacts to no pointer: a list, so a press on its rows or headings never

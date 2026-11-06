@@ -3175,7 +3175,7 @@ mod tests {
             app.update();
 
             let world = app.world_mut();
-            let frame = chat_frame(world, detached);
+            let frame = hud_frame(world, detached);
             let tab_group = |world: &mut World| {
                 world
                     .query::<&TabButton>()
@@ -3207,9 +3207,9 @@ mod tests {
         }
     }
 
-    fn chat_frame(world: &mut World, id: WindowId) -> Entity {
+    fn hud_frame(world: &mut World, id: WindowId) -> Entity {
         world
-            .query_filtered::<(Entity, &WindowId), With<Panel>>()
+            .query_filtered::<(Entity, &WindowId), With<crate::hud::HudRoot>>()
             .iter(world)
             .find(|(_, window)| **window == id)
             .unwrap()
@@ -3218,59 +3218,99 @@ mod tests {
 
     #[test]
     fn rebuilding_detached_chat_preserves_its_place_in_the_window_stack() {
-        use crate::windows::{Stack, raise_opened};
+        use crate::windows::{Shown, Stack, raise_opened, restack};
+        use bevy::{ecs::system::RunSystemOnce, mesh::skinning::SkinnedMeshInverseBindposes};
 
-        let mut app = crate::testing::app();
-        app.add_systems(Startup, |mut commands: Commands| spawn(&mut commands))
-            .add_systems(Update, (raise_opened, reconcile).chain());
-        let detached = app
-            .world_mut()
-            .resource_mut::<ChatState>()
-            .groups
-            .detach(WindowId::Chat, ChatTab::Guild)
-            .unwrap();
-        app.update();
-        let world = app.world_mut();
-        assert_eq!(
-            world.resource::<Stack>().front_to_back().next(),
-            Some(detached)
-        );
-        world.resource_mut::<Stack>().raise(WindowId::Inventory);
-        let frame = chat_frame(world, detached);
-        world.despawn(frame);
-        // Route also sees the recreated Node on the following frame.
-        app.update();
-        app.update();
-        let world = app.world_mut();
-        let rebuilt = chat_frame(world, detached);
-        let stack = world.resource::<Stack>();
-        assert_ne!(rebuilt, frame);
-        assert_eq!(stack.front_to_back().next(), Some(WindowId::Inventory));
-        assert_eq!(
-            world.get::<GlobalZIndex>(rebuilt).unwrap().0,
-            stack.z(detached)
-        );
+        let inventory = WindowId::Inventory;
+        let build_hud = |mut commands: Commands| crate::hud::spawn(&mut commands);
+        for inventory_in_front in [false, true] {
+            let mut app = crate::testing::app();
+            app.init_resource::<Assets<Mesh>>()
+                .init_resource::<Assets<StandardMaterial>>()
+                .init_resource::<Assets<SkinnedMeshInverseBindposes>>()
+                .add_systems(Startup, build_hud)
+                .add_systems(
+                    Update,
+                    (raise_opened, restack, crate::inventory::update, reconcile).chain(),
+                );
+            app.world_mut().resource_mut::<Shown>().open(inventory);
+            // Route observes the inventory after presentation has shown it.
+            app.update();
+            app.update();
+            let detached = app
+                .world_mut()
+                .resource_mut::<ChatState>()
+                .groups
+                .detach(WindowId::Chat, ChatTab::Guild)
+                .unwrap();
+            app.update();
+            if inventory_in_front {
+                app.world_mut().resource_mut::<Stack>().raise(inventory);
+            }
+            app.update();
+            let ids = [inventory, detached];
+            let z = |world: &World, id| world.get::<GlobalZIndex>(id).unwrap().0;
+            let frames = ids.map(|id| hud_frame(app.world_mut(), id));
+            assert_eq!(
+                z(app.world(), frames[0]) > z(app.world(), frames[1]),
+                inventory_in_front
+            );
 
-        world.resource_mut::<ChatState>().groups.close(detached);
-        app.update();
-        assert!(
-            !app.world()
-                .resource::<Stack>()
-                .front_to_back()
-                .any(|id| id == detached)
-        );
-        let reopened = app
-            .world_mut()
-            .resource_mut::<ChatState>()
-            .groups
-            .detach(WindowId::Chat, ChatTab::Tell)
-            .unwrap();
-        assert_eq!(reopened, detached);
-        app.update();
-        assert_eq!(
-            app.world().resource::<Stack>().front_to_back().next(),
-            Some(reopened)
-        );
+            // Leave through the production root cleanup, then rebuild through
+            // the same HUD builder as a newly loaded zone.
+            app.world_mut()
+                .run_system_once(|mut commands: Commands, mut scene: crate::zone::Scene| {
+                    scene.leave(&mut commands, &mut default());
+                })
+                .unwrap();
+            assert!(
+                frames
+                    .iter()
+                    .all(|&frame| app.world().get_entity(frame).is_err())
+            );
+            app.update();
+            app.world_mut().run_system_once(build_hud).unwrap();
+            let rebuilt_inventory = hud_frame(app.world_mut(), inventory);
+            assert_eq!(
+                app.world().get::<Node>(rebuilt_inventory).unwrap().display,
+                Display::None
+            );
+            app.update();
+            app.update();
+            let rebuilt = ids.map(|id| hud_frame(app.world_mut(), id));
+            assert_ne!(rebuilt[0], frames[0]);
+            assert_ne!(rebuilt[1], frames[1]);
+            assert_eq!(
+                app.world().get::<Node>(rebuilt[0]).unwrap().display,
+                Display::Flex
+            );
+            assert_eq!(
+                z(app.world(), rebuilt[0]) > z(app.world(), rebuilt[1]),
+                inventory_in_front
+            );
+
+            let world = app.world_mut();
+            world.resource_mut::<ChatState>().groups.close(detached);
+            app.update();
+            assert!(
+                !app.world()
+                    .resource::<Stack>()
+                    .front_to_back()
+                    .any(|id| id == detached)
+            );
+            let reopened = app
+                .world_mut()
+                .resource_mut::<ChatState>()
+                .groups
+                .detach(WindowId::Chat, ChatTab::Tell)
+                .unwrap();
+            assert_eq!(reopened, detached);
+            app.update();
+            assert_eq!(
+                app.world().resource::<Stack>().front_to_back().next(),
+                Some(reopened)
+            );
+        }
     }
 
     #[test]

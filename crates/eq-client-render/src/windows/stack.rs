@@ -210,16 +210,24 @@ type ChangedFrames<'w, 's> =
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn raise_opened(
     frames: ChangedFrames,
+    shown: Res<Shown>,
     mut open: Local<BTreeSet<WindowId>>,
     mut stack: ResMut<Stack>,
 ) {
+    // A player-opened window can lose its frame during a HUD rebuild.
+    // Forget the opening when its logical state closes, even without a frame.
+    open.retain(|id| id.describe().toggle != Toggle::Opens || shown.displayed(*id));
     for (id, node) in &frames {
-        if !id.describe().layer.stacked() || matches!(id, WindowId::ChatGroup(_)) {
+        let description = id.describe();
+        if !description.layer.stacked() || matches!(id, WindowId::ChatGroup(_)) {
             continue;
         }
+        let player_opened = description.toggle == Toggle::Opens;
         if node.display == Display::None {
-            open.remove(id);
-        } else if open.insert(*id) {
+            if !player_opened {
+                open.remove(id);
+            }
+        } else if (!player_opened || shown.displayed(*id)) && open.insert(*id) {
             stack.raise(*id);
         }
     }
@@ -385,6 +393,9 @@ mod tests {
             display: Display::Flex,
             ..default()
         };
+        app.world_mut()
+            .resource_mut::<Shown>()
+            .open(WindowId::Inventory);
         set(&mut app, inventory, shown.clone());
         app.update();
         assert_eq!(front(&app), Some(WindowId::Inventory));
@@ -403,12 +414,28 @@ mod tests {
         );
         app.update();
         assert_eq!(front(&app), Some(WindowId::Merchant));
+        // A close while the frame is absent still ends that opening.
+        app.world_mut().despawn(inventory);
+        app.world_mut()
+            .resource_mut::<Shown>()
+            .close(WindowId::Inventory);
+        app.update();
+        let inventory = frame(&mut app, WindowId::Inventory);
+        app.world_mut()
+            .resource_mut::<Shown>()
+            .open(WindowId::Inventory);
+        set(&mut app, inventory, Node::default());
+        app.update();
+        assert_eq!(front(&app), Some(WindowId::Inventory));
     }
 
     #[test]
     fn tools_share_the_world_stack_but_stay_above_the_front_end() {
         let mut app = crate::testing::app();
         app.add_systems(Update, (raise_opened, restack).chain());
+        app.world_mut()
+            .resource_mut::<Shown>()
+            .open(WindowId::Scripts);
         let scripts = app
             .world_mut()
             .spawn((
@@ -419,6 +446,9 @@ mod tests {
             ))
             .id();
         app.update();
+        app.world_mut()
+            .resource_mut::<Shown>()
+            .open(WindowId::Options);
         let options = app
             .world_mut()
             .spawn((
