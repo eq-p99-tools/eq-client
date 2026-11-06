@@ -79,7 +79,12 @@ fn sit(world: &ClientWorld, posture: Option<PostureState>, outbox: Option<&crate
         posture,
         None | Some(PostureState::Standing | PostureState::Ducking)
     );
-    if !standing || !world.connected() || world.is_dead() || super::action_pending(world) {
+    if !standing
+        || !world.connected()
+        || world.is_dead()
+        || super::action_pending(world)
+        || outbox.applying_spell_set()
+    {
         return;
     }
     // The outbox shows why a sit did not go.

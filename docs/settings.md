@@ -10,8 +10,10 @@ preferences are written to the separate settings directory.
 Settings such as windows, options, hotbar, key bindings and map watches are kept
 per world/character. Shared files seed characters that have no saved settings.
 For example, `keys.txt` seeds `keys-<world>-<character>.txt`; file-name components
-are sanitized. `login-servers.txt` holds [login presets](login.md). These files can
-contain account/character identifiers and should not be committed.
+are sanitized. Saved spell sets live in `spell-sets-v1-<world>-<character>.txt`,
+where both names are written as hexadecimal bytes so that two names the sanitizer
+would merge keep separate files. `login-servers.txt` holds [login presets](login.md).
+These files can contain account/character identifiers and should not be committed.
 
 Window-layout v2 records retain an optional full chat size alongside position
 and minimized state. Existing v1 position-only records remain readable and use
@@ -69,7 +71,7 @@ session; a setting does not manufacture an unoffered server capability.
 | Corpses Lie Along the Ground | `corpses_along_ground` | On | Tilts bodies to the floor slope |
 | Long Chase Camera | `long_chase_camera` | On | Extends chase zoom beyond the classic 200-unit limit, up to 20,000 |
 | Free Camera | `free_camera` | On | Lets a user-assigned Toggle Free Camera key detach the camera and fly it; off, the key does nothing |
-| See the World Clearly | `clear_view` | Off | Lights outdoor night as noon and removes distance fog |
+| See the World Clearly | `clear_view` | Off | Lights outdoor night as noon and hides distance fog, rain and snow |
 | Walk While Winded | `walk_while_winded` | Off | Allows horizontal movement while stunned; other stun restrictions remain |
 | Loot Corpses Automatically | `auto_loot` | Off | Opens newly slain NPC corpses naming the player as killer within 20 units, then uses reply-driven Loot All; leaves NO DROP items for manual looting |
 | Floating Combat Text | `floating_combat_text` | Off | Draws received positive damage above known targets, in addition to chat |
@@ -106,8 +108,9 @@ known-speed and finite-coordinate checks remain in effect.
 The Options window's Particles page contains Show Spell Effects. It starts from
 `eqclient.ini` (`ShowSpellEffects`, with `SpellParticleDensity` as a fallback)
 and is kept per character. It controls particle drawing, leaving spell sounds,
-chat and server outcomes unchanged. See the World Clearly currently changes
-lighting and distance fog; this client does not draw weather particles.
+chat and server outcomes unchanged. See the World Clearly controls weather
+visibility separately. The client retains the server's report while particles
+are hidden, so turning the setting off shows the current weather.
 
 Environmental damage is offered on P99, EQEmu and TAKP in the locked policy, with
 different supported hazards. The setting's unsafe label concerns withholding

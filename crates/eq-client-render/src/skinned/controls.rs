@@ -769,7 +769,7 @@ pub(super) fn listbox(
         BackgroundColor(theme::INSET),
         crate::windows::KeepsPress,
     ));
-    if owner == WindowId::Chat {
+    if owner.is_chat() {
         if let Some(anchors) = list.anchors {
             drawn.insert(super::reflow::Geometry(anchors));
         } else if list.area.is_none() {
@@ -812,7 +812,7 @@ pub(super) fn listbox(
             },
             ScrollPosition::default(),
         ));
-        if owner == WindowId::Chat {
+        if owner.is_chat() {
             let insets = list
                 .template
                 .as_ref()

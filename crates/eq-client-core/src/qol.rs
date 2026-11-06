@@ -77,8 +77,7 @@ pub enum Fix {
     FreeCamera,
     /// Lets the player see the scene clearly regardless of the outdoor
     /// hour: nights are lit as noon lights them, the zone's distance fog
-    /// stays off the view, and any rain or snow will too once the client
-    /// draws weather at all (inferred choice of what belongs together).
+    /// stays off the view, and any rain or snow stays out of sight.
     /// Nothing the world sees changes.
     ClearView,
     /// Allows horizontal movement while stunned; other stun restrictions remain.
@@ -294,7 +293,7 @@ impl Fix {
                 "Let the Toggle Free Camera key detach the camera from your character and fly it anywhere until the key returns it. Your character never moves. Turn it off to keep the camera on your character."
             }
             Self::ClearView => {
-                "Light the night as if it were noon and remove distance fog. This changes the local scene; weather particles are not currently rendered."
+                "Light the night as if it were noon and hide distance fog, rain and snow in your view."
             }
             Self::WalkWhileWinded => {
                 "Allow horizontal movement while stunned. Attacks, spells, items and jumping still obey stun restrictions."

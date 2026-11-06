@@ -7,8 +7,8 @@ use crate::{
     move_player, names, navigation, navmesh_prebuild, notices, online, options, orbit_camera,
     outbox, outfit, paperdoll, pet, profile_files, raid, reading, resources, schedule_screenshot,
     select_preview, sheets, skills, skin, skinned, sounds, speed, spell_effects, spell_icons,
-    spellbook, target, tooltip, trade, tradeskills, training, translocate, update_hud, whereabouts,
-    who, windows,
+    spellbook, target, tooltip, trade, tradeskills, training, translocate, update_hud, weather,
+    whereabouts, who, windows,
 };
 use bevy::prelude::*;
 /// Starts the presentation state (HUD, windows, chat, targeting, inventory,
@@ -34,6 +34,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<hud::action_bar::ActionRequests>()
         .init_resource::<combat::CombatState>()
         .init_resource::<combat_text::CombatText>()
+        .init_resource::<weather::Field>()
         .init_resource::<trade::TradeState>()
         .init_resource::<escape::Escape>()
         .init_resource::<windows::pointer::Wheel>()
@@ -46,6 +47,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<spellbook::BookView>()
         .init_resource::<spellbook::BookSelection>()
         .init_resource::<spellbook::BookHand>()
+        .init_resource::<spellbook::sets::Sets>()
         .init_resource::<sheets::Sheets>()
         .init_resource::<skinned::Screens>()
         .init_resource::<skinned::CursorLook>()
@@ -159,8 +161,10 @@ pub(super) fn schedule(app: &mut App) {
                 // A scrollbar's press scrolls its box as the wheel does.
                 skinned::scrollbar::scroll,
                 map::search_focus,
+                spellbook::sets::follow,
                 spellbook::search::focus,
                 spellbook::search::capture,
+                chat::drag_tabs,
                 chat::input,
                 spellbook::search::input,
                 spellbook::search::refresh,
@@ -250,12 +254,13 @@ pub(super) fn schedule(app: &mut App) {
                 )
                     .chain(),
             ),
-            windows::input,
+            (chat::close_groups, windows::input).chain(),
             (
                 crate::camera::toggle_free,
                 crate::camera::turn,
                 move_player,
                 motion::input,
+                spellbook::sets::ui::input,
             )
                 .chain(),
         )
@@ -270,7 +275,7 @@ pub(super) fn schedule(app: &mut App) {
                 inventory::feedback,
                 inventory::scroll,
                 (skinned::cursor_look, inventory::cursor::update).chain(),
-                (chat::follow_options, chat::look, chat::refresh).chain(),
+                (chat::follow_options, chat::look).chain(),
                 items::update,
                 items::scroll,
                 target::update,
@@ -282,6 +287,7 @@ pub(super) fn schedule(app: &mut App) {
                 motion::interpolate,
                 crate::camera::fly_camera,
                 orbit_camera,
+                weather::update,
                 crate::camera::show_player,
                 update_hud,
                 // Opens the give, quantity and training windows before their
@@ -324,7 +330,9 @@ pub(super) fn schedule(app: &mut App) {
                 (hud::action_bar::cast_window, hud::action_bar::update),
                 skinned::frames,
                 (
+                    chat::reconcile,
                     skinned::apply,
+                    (chat::sync_tabs, chat::refresh).chain(),
                     map::ensure_window,
                     skinned::place_own,
                     skinned::looks::load,
@@ -344,6 +352,7 @@ pub(super) fn schedule(app: &mut App) {
                         spellbook::book_frames,
                         spellbook::book_present,
                         spellbook::search::present,
+                        spellbook::sets::ui::present,
                     ),
                     skinned::tabs,
                     abilities::present,
@@ -426,6 +435,8 @@ pub(crate) enum Stage {
 
 /// Registers the startup work of the overlays and the windows' shared systems.
 pub(super) fn install_overlays(app: &mut App) {
+    app.init_resource::<chat::TabDrag>()
+        .add_systems(Update, chat::paint_drag.in_set(Stage::Present));
     app.add_systems(Startup, tooltip::spawn);
     // Text spans need their shaped-run hit test before the click tracker,
     // just as controls need Bevy's focus and the script's pointer first.

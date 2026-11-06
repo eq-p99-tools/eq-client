@@ -584,6 +584,15 @@ impl ClientWorld {
             // The time of day, and how the zone's sky looks.
             WorldEvent::TimeOfDay(time) => self.time = Some((*time, now)),
             WorldEvent::Sky(sky) => self.zone.sky = Some(*sky),
+            WorldEvent::Weather(weather) => {
+                // The session forwards this untagged event on its ordered
+                // admitted stream. There is no report to carry between zones.
+                if self.connected && self.session_id.is_some() && self.pending_transfer.is_none() {
+                    self.zone.weather = Some(*weather);
+                } else {
+                    news.ignored = true;
+                }
+            }
             WorldEvent::ZoneDescription(description) => self.described(description),
             WorldEvent::ServerSelection {
                 selection_id,
@@ -719,10 +728,9 @@ impl ClientWorld {
             }
             WorldEvent::Expansions(expansions) => self.expansions = Some(*expansions),
 
-            // Nothing here shows the world's other rules,
-            // its chat server, a zone it says is down, the zone's weather or
-            // its header beyond the sky and the clip yet, nor applies
-            // charm or other server control, spins players or shows their
+            // Nothing here shows the world's other rules, its chat server,
+            // a zone it says is down, or the rest of the zone header. Nor
+            // does it apply charm or other server control, spin players or show their
             // hiding's end. Berserk remains informational; raw stun durations
             // are interpreted by the session's OwnStun. The target
             // the server sets and whom it targets, a quest's reward and ding
@@ -749,7 +757,6 @@ impl ClientWorld {
             WorldEvent::SpellTable(_)
             | WorldEvent::ChatServer(_)
             | WorldEvent::ZoneUnavailable { .. }
-            | WorldEvent::Weather(_)
             | WorldEvent::ServerTick(_)
             | WorldEvent::Stun(_)
             | WorldEvent::Charm(_)
@@ -1382,6 +1389,7 @@ impl ClientWorld {
                 // The server sends the inventory again after each admission.
                 self.inventory = Inventory::default();
                 self.spell_book = None;
+                self.book_action = None;
                 self.buffs.clear();
                 self.casting.interrupted = None;
             }
@@ -1410,6 +1418,7 @@ impl ClientWorld {
                 ended,
                 transferring,
             } => {
+                self.zone.weather = None;
                 self.drop_actions();
                 if ended || !transferring {
                     self.casting.reset_cooldowns();
@@ -1424,7 +1433,10 @@ impl ClientWorld {
                     self.forget_zone();
                 }
             }
-            Reset::Zoning { .. } => self.drop_actions(),
+            Reset::Zoning { .. } => {
+                self.zone.weather = None;
+                self.drop_actions();
+            }
             Reset::Died => {
                 self.buffs.clear_cancellation();
                 self.casting.cast = None;

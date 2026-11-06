@@ -125,6 +125,8 @@ preserves the document and any running script; use Stop to end execution.
 
 Click **Search spells** to type, or paste with **Ctrl+V**. **Enter** and
 **Escape** leave the results on screen and return keyboard control.
+Search takes over keys already held when the field gains focus. Release them
+and press them again after leaving the field to use them for gameplay.
 **Delete** while typing or **Clear** restores the normal book. Use the
 book's page controls to browse more results.
 
@@ -183,7 +185,9 @@ The map cannot reveal entities the server has not sent. An old false
 ## Chat and links
 
 Chat has All/channel tabs, unread counts and independent scrolling, retaining up
-to 200 messages per channel group. Scroll within chat to read history; **Latest**
+to 200 messages per channel group. Drag a tab to reorder it, drop it on the game
+view to open a separate chat window, or drop it on another tab strip to dock it;
+see [detachable chat tabs](chat-tabs.md). Scroll within chat to read history; **Latest**
 resumes following. Installed string tables format game messages, and installed
 color settings apply where their message types are known.
 

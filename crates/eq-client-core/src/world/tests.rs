@@ -3,6 +3,7 @@ mod loot_requests;
 mod own_stun;
 mod qol;
 mod wear;
+mod weather;
 
 use super::*;
 mod inventory_moves;

@@ -624,7 +624,9 @@ pub(crate) struct Typing {
     pub map_search: bool,
     /// The spellbook's local search owns text input.
     pub spell_search: bool,
-    /// Whether the spell search consumed this frame's keyboard events.
+    /// The saved spell set name owns text input.
+    pub spell_set_name: bool,
+    /// Whether a spellbook text field consumed this frame's keyboard events.
     pub spell_search_claimed: bool,
     /// Keys pressed in the editor stay there through their native repeats.
     pub spell_search_held: HashSet<KeyCode>,
@@ -684,6 +686,7 @@ impl Keys<'_, '_> {
             && !self.typing.logging_in
             && !self.typing.map_search
             && !self.typing.spell_search
+            && !self.typing.spell_set_name
             && !self.typing.rebinding
             && self.window_focused()
     }

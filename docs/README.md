@@ -6,6 +6,7 @@
 | --- | --- |
 | [Logging in](login.md) | Installations, presets, world/character selection, optional environment configuration |
 | [Controls, maps and chat](controls.md) | Key bindings, free camera, windows, entity maps, chat and links |
+| [Detachable chat tabs](chat-tabs.md) | Reordering, detaching and docking chat tabs, and where each character's arrangement is kept |
 | [Gameplay](gameplay.md) | Movement/zoning, inventory, banking, spells, combat and interaction |
 | [Settings](settings.md) | Per-character files, display options and quality-of-life choices |
 | [Assets and offline previews](assets.md) | Installed assets, rendering limits, synthetic demos and screenshots |

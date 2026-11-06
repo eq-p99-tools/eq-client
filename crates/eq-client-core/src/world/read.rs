@@ -120,6 +120,13 @@ impl ClientWorld {
         self.zone.sky
     }
 
+    /// The server's last weather report for this admission. Silence is distinct
+    /// from explicit clear weather and from an unrecognized weather kind.
+    #[must_use]
+    pub const fn weather(&self) -> Option<crate::clock::Weather> {
+        self.zone.weather
+    }
+
     /// The world server's short name.
     #[must_use]
     pub fn world_name(&self) -> Option<&str> {

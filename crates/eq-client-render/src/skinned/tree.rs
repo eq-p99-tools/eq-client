@@ -80,6 +80,21 @@ pub(super) fn draw(
             );
         }
     }
+    let authored_title = screen.title_bar.is_some()
+        && screen
+            .template
+            .as_ref()
+            .is_some_and(|template| template.title[1].is_some());
+    if matches!(context.id, WindowId::ChatGroup(_)) && !authored_title {
+        let tall = 18.0;
+        super::chat_close_box(
+            window,
+            (&inside, tall, Vec2::new(width, height)),
+            context.id,
+        );
+        inside.y += tall;
+        inside.height = (inside.height - tall).max(0.0);
+    }
     let title_bottom = (inside.y > 0.0 && screen.title_bar.is_some()).then_some(inside.y);
     let insets = screen
         .template
@@ -150,10 +165,17 @@ pub(super) fn pieces(
                 controls::combobox(window, art, combobox, &inside, context.id);
             }
             Element::Listbox(list) => controls::listbox(window, art, list, &inside, context.id),
-            Element::TextBox(text) if context.id == WindowId::Chat => {
+            Element::TextBox(text) if context.id.is_chat() => {
                 let divider = text.id.as_deref() == Some("CWChatInput")
                     && chat_needs_divider(art, text, pieces);
-                chat_box(window, art, text, (&inside, context.tab_frame), divider);
+                chat_box(
+                    window,
+                    art,
+                    text,
+                    (&inside, context.tab_frame),
+                    divider,
+                    context.id,
+                );
             }
             Element::TextBox(text) => text_box(window, art, text, &inside, context.id),
             Element::Tabs(tabs) if TABBED.contains(&context.id) => {
@@ -341,6 +363,7 @@ pub(super) fn chat_box(
     text: &eq_client_assets::sidl::TextBox,
     (inside, tab_frame): (&Area, Option<&eq_client_assets::sidl::FrameLook>),
     divider: bool,
+    group: WindowId,
 ) {
     let area = text.anchors.map_or(text.area, |anchors| {
         anchors.within(inside.width, inside.height)
@@ -406,6 +429,7 @@ pub(super) fn chat_box(
                                     ..default()
                                 },
                                 (art, tab_frame),
+                                group,
                             );
                             if let Some(look) = bar {
                                 scrollbar::retained(
@@ -413,7 +437,7 @@ pub(super) fn chat_box(
                                     art,
                                     look,
                                     &client,
-                                    (lines, Some(WindowId::Chat)),
+                                    (lines, Some(group)),
                                     Vec2::new(client.width, client.height),
                                 );
                             }
@@ -429,6 +453,7 @@ pub(super) fn chat_box(
                                 ..default()
                             },
                             divider,
+                            group,
                         ),
                         _ => (),
                     }
@@ -455,7 +480,7 @@ pub(super) fn view(
         area.width,
         area.height,
     ));
-    if context.id == WindowId::Chat {
+    if context.id.is_chat() {
         outer.insert(Geometry(view.anchors.unwrap_or(
             eq_client_assets::sidl::Anchors {
                 left: eq_client_assets::sidl::Anchor::Start(area.x),
@@ -536,7 +561,7 @@ pub(super) fn view(
             }
         });
         if let Some(look) = bar {
-            if context.id == WindowId::Chat {
+            if context.id.is_chat() {
                 scrollbar::retained(
                     frame,
                     art,
@@ -608,7 +633,7 @@ fn first_page(
         width: at.width,
         height: at.height,
     };
-    if context.id == WindowId::Chat {
+    if context.id.is_chat() {
         let axis = if page.area.is_some() {
             super::reflow::Axis::Start
         } else {

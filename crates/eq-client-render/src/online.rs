@@ -181,6 +181,7 @@ impl OnlineState {
         scene: &mut super::zone::Scene,
         commands: &mut Commands,
     ) {
+        let old_gems = super::spellbook::sets::snapshot(&self.world);
         self.restart();
         let changes = self.tell(
             &WorldUpdate::Connection(eq_client_core::world::Link::Ended),
@@ -188,19 +189,22 @@ impl OnlineState {
             &NoSpells,
         );
         if let Some(reason) = changes.reset {
-            self.reset_presentation(reason, panels, scene, commands);
+            self.reset_presentation((reason, old_gems), panels, scene, commands);
         }
         scene.leave(commands, &mut self.regions);
     }
 
     fn reset_presentation(
         &mut self,
-        reason: Reset,
+        (reason, old_gems): (Reset, Option<super::spellbook::sets::AdmissionGems>),
         panels: &mut Panels,
         scene: &mut super::zone::Scene,
         commands: &mut Commands,
     ) {
         self.loading.clear();
+        if let Some(sets) = panels.spell_sets.as_mut() {
+            sets.reset(old_gems);
+        }
         panels.forget(reason, self);
         scene.forget(reason, commands);
     }
@@ -371,8 +375,10 @@ pub(super) struct Panels<'w> {
     items: ResMut<'w, super::items::ItemState>,
     book: Option<ResMut<'w, super::spellbook::BookSelection>>,
     book_view: Option<ResMut<'w, super::spellbook::BookView>>,
+    spell_sets: Option<ResMut<'w, super::spellbook::sets::Sets>>,
     sounds: ResMut<'w, super::sounds::Sounds>,
     combat_text: Option<ResMut<'w, super::combat_text::CombatText>>,
+    weather: Option<ResMut<'w, super::weather::Field>>,
 }
 
 impl Panels<'_> {
@@ -518,6 +524,12 @@ impl Panels<'_> {
 
     /// Forgets what the world's reset made stale on screen and in the panels.
     fn forget(&mut self, reason: Reset, state: &mut OnlineState) {
+        if !matches!(reason, Reset::Died)
+            && let Some(weather) = self.weather.as_mut()
+        {
+            // A rejected transfer can restore the same admission in this batch.
+            **weather = super::weather::Field::default();
+        }
         if matches!(
             reason,
             Reset::Entered | Reset::Camped | Reset::Lost { ended: true, .. }
@@ -618,6 +630,10 @@ pub(super) fn carry_as(settings: Res<ViewerSettings>, mut state: ResMut<OnlineSt
 /// world decides what each update means; this only hands its changes to the
 /// panels, the chat and the scene.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+#[allow(
+    clippy::too_many_lines,
+    reason = "keep ordered world reduction, panel resets and zone loading together"
+)]
 pub(super) fn receive(
     mut commands: Commands,
     (updates, front, outbox): (
@@ -669,7 +685,7 @@ pub(super) fn receive(
         }
     })
     .collect();
-    if let Some(outbox) = outbox {
+    if let Some(outbox) = outbox.as_deref() {
         outbox.set_spell_ready(
             spell_names
                 .as_deref()
@@ -692,11 +708,12 @@ pub(super) fn receive(
     let waiting = loading.is_some_and(|loading| loading.waiting());
     let news = state.news(batch.into_iter().chain(lost), waiting);
     for update in news {
-        let (changes, before) = apply(&mut state.world, &update, spells);
+        let (changes, before, old_gems) =
+            apply(&mut state.world, &update, spells, outbox.as_deref());
         trace(&update, &changes, &state.world);
         panels.merchant_news(&update, &changes, &state.world);
         if let Some(reason) = changes.reset {
-            state.reset_presentation(reason, &mut panels, &mut scene, &mut commands);
+            state.reset_presentation((reason, old_gems), &mut panels, &mut scene, &mut commands);
         }
         panels.show(&changes, &mut state, messages.as_deref(), &mut chat);
         if let Some(moved) = &changes.moved {
@@ -717,6 +734,9 @@ pub(super) fn receive(
             let at = |p: eq_client_core::WorldPosition| [p.x, p.y, p.z];
             info!(from = ?before.map(at), to = ?at(position), "Server corrected the player");
             panels.motion.reset(None);
+            if let Some(sets) = panels.spell_sets.as_mut() {
+                sets.interrupt("The server moved the character.");
+            }
             scene.place(&mut commands, super::zone::placement(position), None);
         }
         if let WorldUpdate::Chat(line) = update {
@@ -756,16 +776,35 @@ pub(super) fn leave(mut state: ResMut<OnlineState>, mut exit: MessageWriter<AppE
     }
 }
 
-/// Applies one piece of news to the world, and says where the player stood
-/// before it, so a server correction can say where it moved them from.
+/// Applies one update, settles any local book request it answers, and
+/// preserves the old position and gems for corrections and resets.
 fn apply(
     world: &mut ClientWorld,
     update: &WorldUpdate,
     spells: &dyn SpellCatalog,
-) -> (Changes, Option<eq_client_core::WorldPosition>) {
+    outbox: Option<&super::outbox::Outbox>,
+) -> (
+    Changes,
+    Option<eq_client_core::WorldPosition>,
+    Option<super::spellbook::sets::AdmissionGems>,
+) {
     let before = world.player().map(|player| player.position);
+    let old_gems = super::spellbook::sets::snapshot(world);
     let changes = world.apply(update, std::time::Instant::now(), spells);
-    (changes, before)
+    if let Some(outbox) = outbox
+        && !changes.ignored
+    {
+        if matches!(
+            changes.reset,
+            Some(Reset::Entered | Reset::Camped | Reset::Lost { ended: true, .. })
+        ) {
+            outbox.reset_book();
+        }
+        if let WorldUpdate::Game(event) = update {
+            outbox.book_news(event, world.session_id());
+        }
+    }
+    (changes, before, old_gems)
 }
 
 /// Logs the session's word on how the player may move: a withdrawal (no
@@ -1167,6 +1206,16 @@ pub(crate) mod testing {
     /// Reports how the spellbook change in flight stands.
     pub(crate) fn book_action(state: &mut OnlineState, status: eq_client_core::BookActionStatus) {
         news(state, [WorldEvent::BookAction(status)]);
+    }
+
+    /// Delivers a book result to both the world and the outgoing queue.
+    pub(crate) fn book_news(
+        state: &mut OnlineState,
+        outbox: &crate::outbox::Outbox,
+        event: WorldEvent,
+    ) {
+        outbox.book_news(&event, state.world.session_id());
+        news(state, [event]);
     }
 
     /// Reports a spell notice.

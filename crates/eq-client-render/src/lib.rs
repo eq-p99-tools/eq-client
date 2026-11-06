@@ -108,6 +108,7 @@ mod trade;
 mod tradeskills;
 mod training;
 mod translocate;
+mod weather;
 mod whereabouts;
 mod who;
 mod window_size;

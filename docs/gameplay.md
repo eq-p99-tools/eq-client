@@ -129,6 +129,22 @@ Unknown names are shown as **Spell** followed by the ID and can be found by that
 label. Select a result to inspect or memorize it. Clear the search to return
 to the previous page and rearrange or delete spells where supported.
 
+Open **Spell sets** next to the book search to manage this character's saved
+gem layouts. Enter a name and click **Save current** to store all eight gems.
+Use the arrows to choose a set and hover its name to see its slots. Edit the
+name field and click **Rename**, or use **Delete** and **Confirm delete** to
+remove the saved layout.
+
+**Apply** restores the selected layout one gem change at a time, including
+clearing gems saved as empty. The client checks that replacement spells are
+learned before starting and follows the usual memorization rules, including
+your **Memorize While Standing** setting. Progress counts slots that match the
+saved layout. Moving, casting, changing posture, closing the book or clicking
+**Cancel apply** stops subsequent requests. The current request may still
+finish, and confirmed changes remain in your gems. Apply again to continue
+from your current layout. If a gem clear remains unconfirmed, wait for its
+reply or re-enter the zone before making another spellbook change.
+
 The 5-by-2 hotbar holds ten actions. Click or use the number bindings to activate
 them. Hold a gem, supported item or Actions button to pick up its hotkey, then
 place it on a hotbutton. This hotkey cursor is distinct from the EQ item cursor.

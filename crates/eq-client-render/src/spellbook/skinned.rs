@@ -898,10 +898,20 @@ mod tests {
             }
         ));
         assert!(hand.chosen.is_none());
+        // The worker confirms the swap before forwarding the new slots.
+        for event in [
+            eq_client_core::WorldEvent::BookAction(BookActionStatus::Confirmed),
+            eq_client_core::WorldEvent::Spell(eq_client_core::SpellUpdate::BookSwap {
+                from: 1,
+                to: 9,
+            }),
+        ] {
+            crate::online::testing::book_news(&mut online, &outbox, event);
+        }
         // The Delete key deletes the chosen spell; the answer is said once
         // the server gives it.
         choose(
-            (1, Some(42)),
+            (9, Some(42)),
             &mut hand,
             (online.world(), &outbox),
             (&messages, None),
@@ -910,7 +920,7 @@ mod tests {
         assert!(matches!(
             sent.try_recv().unwrap(),
             ClientCommand::DeleteSpell {
-                slot: 1,
+                slot: 9,
                 spell_id: 42,
                 ..
             }

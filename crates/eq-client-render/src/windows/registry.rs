@@ -30,6 +30,8 @@ pub(crate) enum WindowId {
     ShortEffects,
     /// Chat.
     Chat,
+    /// A detached chat group, keyed by its layout slot.
+    ChatGroup(u8),
     /// The inventory and, drawn by the client's own chrome, the bank.
     Inventory,
     /// The bank, drawn from the skin, while a banker is near.
@@ -334,10 +336,15 @@ const fn floating(
 impl WindowId {
     /// Scripts has open/close states only; other titled windows may collapse.
     pub(crate) const fn can_minimize(self) -> bool {
-        !matches!(self, Self::Scripts)
+        !matches!(self, Self::Scripts | Self::ChatGroup(_))
     }
 
-    /// Every window, in the order the selector lists the toggled ones.
+    /// The primary chat and its detached instances use the same authored widgets.
+    pub(crate) const fn is_chat(self) -> bool {
+        matches!(self, Self::Chat | Self::ChatGroup(_))
+    }
+
+    /// Every singleton window, in the order the selector lists the toggled ones.
     /// Bags are left out: there is one for each slot that can hold a bag
     /// (see [`WindowId::bags`]), and none of them is toggled.
     pub(crate) const ALL: [Self; 33] = [
@@ -394,7 +401,7 @@ impl WindowId {
             Self::CastBar => Some("CastingWindow"),
             Self::Effects => Some("BuffWindow"),
             Self::ShortEffects => Some("ShortDurationBuffWindow"),
-            Self::Chat => Some("ChatWindow"),
+            Self::Chat | Self::ChatGroup(_) => Some("ChatWindow"),
             Self::Inventory => Some("InventoryWindow"),
             Self::Bank => Some("BankWnd"),
             Self::Bag(_) | Self::WorldContainer => Some("ContainerWindow"),
@@ -431,14 +438,19 @@ impl WindowId {
             Self::Chat => Some(Cow::Borrowed("MainChat")),
             Self::Bag(slot @ 22..=29) => Some(Cow::Owned(format!("BagInv{}", slot - 21))),
             Self::Bag(slot @ 2000..=2015) => Some(Cow::Owned(format!("BagBank{}", slot - 1999))),
-            // The bags' window; a world container keeps a place of its own.
-            Self::Bag(_) | Self::WorldContainer => None,
+            // Detached chat and world containers keep their own placements.
+            Self::ChatGroup(_) | Self::Bag(_) | Self::WorldContainer => None,
             _ => self.official().map(Cow::Borrowed),
         }
     }
 
-    /// The window with this saved name ([`Self::key`]), bags aside.
+    /// The window with this saved name, including a detached chat group.
     pub(crate) fn named(name: &str) -> Option<Self> {
+        if let Some(slot) = name.strip_prefix("chat-group-") {
+            let slot: u8 = slot.parse().ok()?;
+            let limit = eq_client_core::chat::ChatTab::ALL.len();
+            return (slot != 0 && usize::from(slot) <= limit).then_some(Self::ChatGroup(slot));
+        }
         Self::ALL.into_iter().find(|id| id.key() == name)
     }
 
@@ -454,6 +466,7 @@ impl WindowId {
             Self::Effects => "effects",
             Self::ShortEffects => "short-effects",
             Self::Chat => "chat",
+            Self::ChatGroup(slot) => return Cow::Owned(format!("chat-group-{slot}")),
             Self::Inventory => "inventory",
             Self::Bank => "bank",
             Self::Bag(slot) => return Cow::Owned(format!("bag-{slot}")),
@@ -485,6 +498,9 @@ impl WindowId {
     /// The window whose placement is saved under this name, now or before
     /// windows had ids.
     pub(crate) fn saved_under(name: &str) -> Option<Self> {
+        if name.starts_with("chat-group-") {
+            return Self::named(name);
+        }
         if name.starts_with("bag-") {
             return Self::bags().find(|bag| bag.key() == name);
         }
@@ -496,7 +512,7 @@ impl WindowId {
     /// Where the window opens and how it behaves. The default placements are
     /// laid out so that no two windows that can be open together cover each
     /// other on a 1280 by 720 screen.
-    #[allow(clippy::too_many_lines)] // One table of every window, side by side.
+    #[allow(clippy::too_many_lines, clippy::cast_lossless)] // The slot offset is const.
     pub(crate) const fn describe(self) -> Description {
         match self {
             // Clear of the skin's spell gems along the left edge.
@@ -537,6 +553,15 @@ impl WindowId {
                 )
             },
             Self::Chat => hud("CHAT", Placement::BottomLeft(20.0, 16.0), &["CHAT"]),
+            Self::ChatGroup(slot) => Description {
+                opening: Opening::Own,
+                ..floating(
+                    "CHAT",
+                    Placement::TopLeft(36.0 + slot as f32 * 20.0, 48.0 + slot as f32 * 20.0),
+                    false,
+                    &[],
+                )
+            },
             Self::Selector => Description {
                 persists: false,
                 opening: Opening::Own,

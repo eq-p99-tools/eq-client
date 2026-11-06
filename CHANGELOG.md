@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Report a local scripted `give` refusal through the script result once.
+  Native click refusals still appear in chat.
+- Draw server-reported rain and snow in zones with a sky. See the World
+  Clearly hides precipitation locally. Try the offline sequence with
+  `--demo-weather`.
+- Save, rename, delete and apply named spell gem layouts from the spellbook.
+  Sets are stored per character and world. Spellbook changes wait for their
+  individual results: a memorize, forget, delete or swap made while the
+  previous one is unanswered is refused with "Wait for the current spellbook
+  change", and a change unanswered for 40 s asks for a zone re-entry. An
+  interrupted set reports the last observed layout.
+- Drag chat tabs to reorder them, open a separate chat window, or dock them into
+  another tab strip. Closing a detached window returns its tabs to the main chat.
+  Each character keeps the tab arrangement and window placements.
 - Stop a scripted `give` at the failing line when the target or cursor is
   unsuitable, an exchange is in progress, or the local session queue refuses
   the offer. A queued offer still awaits the server's answer.

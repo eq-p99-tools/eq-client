@@ -407,35 +407,27 @@ pub(super) fn spawn_message(
 pub(super) fn link_input(
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
-    paragraphs: Query<(
-        &UiGlobalTransform,
-        &ComputedNode,
-        &bevy::text::TextLayoutInfo,
-        &bevy::text::ComputedTextBlock,
-        &InheritedVisibility,
-        Option<&bevy::ui::CalculatedClip>,
-    )>,
-    mut links: Query<&mut Interaction, Or<(With<ItemButton>, With<super::chat::links::WebLink>)>>,
-    viewports: Query<
-        &Interaction,
+    paragraphs: Query<
         (
-            With<super::chat::Viewport>,
-            Without<ItemButton>,
-            Without<super::chat::links::WebLink>,
+            &UiGlobalTransform,
+            &ComputedNode,
+            &bevy::text::TextLayoutInfo,
+            &bevy::text::ComputedTextBlock,
+            &InheritedVisibility,
+            Option<&bevy::ui::CalculatedClip>,
+            &ChildOf,
         ),
+        With<super::chat::LineId>,
     >,
+    mut links: Query<&mut Interaction, Or<(With<ItemButton>, With<super::chat::links::WebLink>)>>,
+    viewports: Query<(), With<super::chat::Viewport>>,
+    parents: Query<&ChildOf>,
+    pointer: super::windows::pointer::PointerUi,
 ) {
     for mut interaction in &mut links {
         if *interaction != Interaction::None {
             *interaction = Interaction::None;
         }
-    }
-    // Links live in chat lines; a window drawn over the chat keeps the pointer.
-    if !viewports
-        .iter()
-        .any(|viewport| *viewport != Interaction::None)
-    {
-        return;
     }
     let Some(cursor) = windows
         .single()
@@ -444,8 +436,21 @@ pub(super) fn link_input(
     else {
         return;
     };
-    for (transform, node, layout, block, visible, clip) in &paragraphs {
-        if !visible.get() || node.is_empty() || clip.is_some_and(|c| !c.clip.contains(cursor)) {
+    // Only the viewport in front can receive a link click.
+    let Some(viewport) = pointer
+        .top_at(cursor)
+        .filter(|hit| viewports.contains(*hit))
+    else {
+        return;
+    };
+    for (transform, node, layout, block, visible, clip, parent) in &paragraphs {
+        if !parents
+            .get(parent.parent())
+            .is_ok_and(|parent| parent.parent() == viewport)
+            || !visible.get()
+            || node.is_empty()
+            || clip.is_some_and(|c| !c.clip.contains(cursor))
+        {
             continue;
         }
         let Some(inverse) = transform.try_inverse() else {

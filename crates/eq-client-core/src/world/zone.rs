@@ -26,6 +26,8 @@ pub(super) struct Zone {
     pub(super) trade: Trade,
     /// How the zone's sky and fog look, once the zone says.
     pub(super) sky: Option<crate::clock::ZoneSky>,
+    /// The last weather report in this admission.
+    pub(super) weather: Option<crate::clock::Weather>,
     /// The player's pet's buffs, as the server last said.
     pub(super) pet_buffs: Option<crate::pets::PetBuffs>,
     /// The guildmaster the player is training with, and what they teach.
