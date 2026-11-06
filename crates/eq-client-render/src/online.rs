@@ -38,14 +38,14 @@ pub(super) struct OnlineState {
 }
 
 /// Last server-sourced placement for the current admission, not a move receipt.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(super) struct ServerPlacement {
     pub admission_id: u64,
     pub position: eq_client_core::WorldPosition,
     pub source: PlacementSource,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PlacementSource {
     Admission,
     PositionUpdate,

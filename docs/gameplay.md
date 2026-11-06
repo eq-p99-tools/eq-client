@@ -62,7 +62,11 @@ standing in a rejected boundary does not continuously resend requests.
 Server-directed transfers and death/bind offers suspend old-zone actions, use
 the world/zone handoff, and install a new admission with its own placement and
 state. Same-zone server relocations and rejected-zone rewinds update the local
-controller without unnecessarily reconnecting. Client detection of same-zone
+controller without unnecessarily reconnecting. If a fresh Titanium placement
+is below a nearby installed floor with no lower surface to land on, movement
+waits for a new server placement. The client reports the conflict and preserves
+the received position. A server using different zone geometry can cause this
+conflict. Client detection of same-zone
 teleport pads remains incomplete. Initial login, boundary crossing, teleport,
 death and respawn are separate validation scenarios; success in one does not
 establish the others.

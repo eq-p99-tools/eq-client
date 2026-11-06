@@ -73,6 +73,17 @@ const CAPSULE_RADIUS: f32 = 0.4;
 const SKIN: f32 = 0.03;
 /// How far from the capsule's centre the ground under it is sampled.
 const SUPPORT_SPREAD: f32 = 0.4;
+const SUPPORT_OFFSETS: [(f32, f32); 9] = [
+    (0.0, 0.0),
+    (SUPPORT_SPREAD, 0.0),
+    (-SUPPORT_SPREAD, 0.0),
+    (0.0, SUPPORT_SPREAD),
+    (0.0, -SUPPORT_SPREAD),
+    (0.282_842_7, 0.282_842_7),
+    (-0.282_842_7, 0.282_842_7),
+    (0.282_842_7, -0.282_842_7),
+    (-0.282_842_7, -0.282_842_7),
+];
 /// How far across the ground from the feet any one movement probe reaches,
 /// beyond the distance moved: the capsule with its skin, or the ground
 /// samples around it.
@@ -385,6 +396,47 @@ impl CollisionWorld {
         self.walk(feet, displacement, height, Support::Required)
     }
 
+    /// Finds a nearby solid surface above a fresh placement's whole footprint
+    /// when the placement probe has no floor below it. This is evidence that
+    /// gravity cannot land the body in place. `probe_lift` is measured from
+    /// the received origin and `body_size` bounds the upward diagnosis.
+    #[must_use]
+    pub fn floor_above_placement(
+        &self,
+        origin: Vec3,
+        probe_lift: f32,
+        body_size: f32,
+    ) -> Option<f32> {
+        if !origin.is_finite() || !body_size.is_finite() || !(0.0..body_size).contains(&probe_lift)
+        {
+            return None;
+        }
+        let probe = origin + Vec3::Y * probe_lift;
+        let range = body_size - probe_lift;
+        let bottom = self
+            .meshes()
+            .map(|mesh| mesh.local_aabb().mins.y)
+            .fold(probe.y, f32::min);
+        let drop = probe.y - bottom;
+        let mut center = None;
+        for (x, z) in SUPPORT_OFFSETS {
+            let sample = probe + Vec3::new(x, 0.0, z);
+            let ray = Ray::new(Vector::from_array(sample.to_array()), Vector::Y);
+            let height = sample.y + self.terrain.mesh.cast_local_ray(&ray, range, false)?;
+            // A lower floor can be a tunnel or the landing of an ordinary fall.
+            if self.ground(sample, 0.0, drop).is_some() {
+                return None;
+            }
+            // A ledge or uneven overhead obstruction is ambiguous. Require
+            // one coherent surface across the same probes used for support.
+            let floor = *center.get_or_insert(height);
+            if (height - floor).abs() > 0.5 {
+                return None;
+            }
+        }
+        center
+    }
+
     /// The floor the airborne controller stands feet here on, as its step
     /// finds it: under the footprint, from just above the feet to a little
     /// below them. None means the next step falls.
@@ -395,18 +447,7 @@ impl CollisionWorld {
 
     /// Samples support under the capsule footprint, including contact before its center reaches a stair.
     fn support_height(&self, position: Vec3, step_up: f32, drop: f32) -> Option<f32> {
-        const OFFSETS: [(f32, f32); 9] = [
-            (0.0, 0.0),
-            (SUPPORT_SPREAD, 0.0),
-            (-SUPPORT_SPREAD, 0.0),
-            (0.0, SUPPORT_SPREAD),
-            (0.0, -SUPPORT_SPREAD),
-            (0.282_842_7, 0.282_842_7),
-            (-0.282_842_7, 0.282_842_7),
-            (0.282_842_7, -0.282_842_7),
-            (-0.282_842_7, -0.282_842_7),
-        ];
-        OFFSETS
+        SUPPORT_OFFSETS
             .into_iter()
             .filter_map(|(x, z)| self.ground(position + Vec3::new(x, 0.0, z), step_up, drop))
             .max_by(f32::total_cmp)
@@ -713,6 +754,34 @@ mod tests {
             [[-20.0, y, -20.0], [20.0, y, 20.0], [-20.0, y, 20.0]],
         ]
     }
+    #[test]
+    fn placement_checks_require_a_nearby_surface_and_no_lower_floor() {
+        let level = CollisionWorld::new(floor(0.0)).unwrap();
+        let below = Vec3::Y * -5.0;
+        assert!(level.floor_above_placement(below, 1.0, 7.0).unwrap().abs() < 0.001);
+        assert!(level.floor_above_placement(below, 1.0, 4.0).is_none());
+        // A surface already in the native probe's reach stays on the
+        // ordinary collision path.
+        assert!(
+            level
+                .floor_above_placement(Vec3::Y * -0.5, 1.0, 7.0)
+                .is_none()
+        );
+        assert!(
+            level
+                .floor_above_placement(Vec3::Y * 12.0, 1.0, 7.0)
+                .is_none()
+        );
+        assert!(
+            level
+                .floor_above_placement(below + Vec3::X * 20.0, 1.0, 7.0)
+                .is_none()
+        );
+
+        let layers = CollisionWorld::new(floor(-18.0).into_iter().chain(floor(0.0))).unwrap();
+        assert!(layers.floor_above_placement(below, 1.0, 7.0).is_none());
+    }
+
     #[test]
     fn view_rays_use_nearest_static_or_dynamic_solid_and_respect_range() {
         let mut world = CollisionWorld::new(floor(0.0)).unwrap();

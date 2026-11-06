@@ -1,4 +1,6 @@
 //! Calibrated P99 input; no movement is generated without a session grant.
+mod placement;
+
 use super::{
     Collision, OrbitCamera, Player, PlayerBody,
     camera::{MouseAim, MouseLook},
@@ -51,6 +53,7 @@ pub(super) struct Controls {
     sent_span: f32,
     sent_yaw: SentYaw,
     boundary: BoundaryTracker,
+    placement: placement::Check,
     taps: TapBuffer,
     visual: Option<VisualMotion>,
     /// Vertical momentum, present only when the session accepts falls; without it,
@@ -131,6 +134,8 @@ pub(super) enum Held {
     NoSpeed,
     /// The player's body, the camera or the zone's collision is missing.
     NoBody,
+    /// A fresh server placement is below the installed collision floor.
+    PlacementBlocked,
     /// The session's queue refused the sample.
     Refused,
 }
@@ -151,6 +156,7 @@ impl Default for Controls {
             sent_span: 0.1,
             sent_yaw: SentYaw::Ordinary,
             boundary: BoundaryTracker::default(),
+            placement: placement::Check::default(),
             taps: TapBuffer::default(),
             visual: None,
             airborne: None,
@@ -470,6 +476,7 @@ impl Controls {
             last_answer: self.last_answer,
             last_jump: self.last_jump,
             walking: self.walking,
+            placement: self.placement,
             stun_revision: self.stun_revision,
             movement_options: self.movement_options,
             ..Self::default()
@@ -874,6 +881,20 @@ pub(super) fn input(
         controls.held = Some(Held::NoBody);
         return;
     };
+    if client == InstalledClient::Titanium
+        && !flying
+        && controls.airborne.is_some()
+        && controls.placement.holds(
+            online.server_placement(),
+            accepted.position,
+            world,
+            body,
+            &mut chat,
+        )
+    {
+        controls.held = Some(Held::PlacementBlocked);
+        return;
+    }
     let origin = Vec3::from_array(eq_client_core::render_position(accepted.position));
     let feet = origin - Vec3::Y * body.feet_offset;
     let surface_world = if !flying
@@ -3283,6 +3304,72 @@ mod tests {
             bevy::window::PrimaryWindow,
         ));
         (app, receiver)
+    }
+
+    #[test]
+    fn an_unsupported_server_placement_holds_fall_until_a_fresh_correction() {
+        let (mut app, receiver) = app();
+        let mut player = online::testing::player(7);
+        player.position = world_position([0.0, -5.25, 0.0], 0.0);
+        online::testing::admit(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            12,
+            player,
+        );
+        app.world_mut().resource_mut::<Controls>().airborne = Some(AirborneController::default());
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
+        app.update();
+        assert_eq!(
+            app.world().resource::<Controls>().held,
+            Some(Held::PlacementBlocked)
+        );
+        assert!(receiver.try_recv().is_err());
+
+        // A new authoritative sample still on the wrong side of the floor
+        // holds independently and remains the visible server evidence.
+        let below = world_position([0.0, -5.0, 0.0], 0.0);
+        online::testing::place(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            below,
+        );
+        app.update();
+        let online = app.world().resource::<online::OnlineState>();
+        assert_eq!(online.server_placement().unwrap().position, below);
+        assert_eq!(online.world().player().unwrap().position, below);
+        assert_eq!(
+            app.world().resource::<Controls>().held,
+            Some(Held::PlacementBlocked)
+        );
+        assert!(receiver.try_recv().is_err());
+
+        // The same admitted player is subsequently placed above the floor.
+        // A high valid placement must still emit the ordinary fall.
+        let above = world_position([0.0, 12.0, 0.0], 0.0);
+        online::testing::place(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            above,
+        );
+        app.world_mut().resource_mut::<Controls>().climb_sent = Some((
+            12,
+            eq_client_assets::falls::TITANIUM.climb_per_step(3.0, 6.0),
+        ));
+        app.update();
+        let ClientCommand::Move(fall) = receiver.try_recv().unwrap() else {
+            panic!("expected a fall from the corrected placement");
+        };
+        assert_eq!(fall.session_id, 12);
+        assert_eq!(fall.mode, MovementMode::Fall);
+        assert!(fall.position.z < above.z);
+        assert_eq!(
+            app.world()
+                .resource::<online::OnlineState>()
+                .server_placement()
+                .unwrap()
+                .position,
+            above
+        );
     }
 
     fn liquid_pool(liquid: eq_client_core::movement::Liquid) -> CollisionWorld {

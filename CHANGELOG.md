@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Hold Titanium movement after a fresh placement below a nearby installed
+  floor when there is no lower surface to land on. Preserve the received
+  position and resume normal physics on a valid server correction.
 - Refresh the player's held models and paperdoll after a submitted Titanium
   equipment move when the item definition supplies a base model. Received
   wear and inventory corrections take precedence.
