@@ -1,6 +1,6 @@
 //! The installed client's translocate question and Yes/No answer. The
 //! network session owns the deadline and follows server movement messages.
-//! EQMac also declines a new offer if the dialog was already busy.
+//! `EQMac` also declines a new offer if the dialog was already busy.
 use crate::{hud::messages::Messages, online::OnlineState, outbox::Outbox};
 use bevy::prelude::*;
 use eq_client_assets::ui::{InstalledClient, TranslocateQuestion};

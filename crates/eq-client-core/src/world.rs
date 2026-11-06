@@ -1495,20 +1495,23 @@ impl ClientWorld {
                 self.zone.weather = None;
                 self.drop_actions();
             }
-            Reset::Died => {
-                self.zone.own_pet = None;
-                self.zone.pet_buffs = None;
-                self.buffs.clear_cancellation();
-                self.casting.cast = None;
-                self.casting.interrupted = None;
-                self.casting.reset_cooldowns();
-                self.book_action = None;
-            }
+            Reset::Died => self.reset_after_death(),
         }
         Changes {
             reset: Some(reason),
             ..Changes::default()
         }
+    }
+
+    /// Clears the local pet and spell state that cannot survive death.
+    fn reset_after_death(&mut self) {
+        self.zone.own_pet = None;
+        self.zone.pet_buffs = None;
+        self.buffs.clear_cancellation();
+        self.casting.cast = None;
+        self.casting.interrupted = None;
+        self.casting.reset_cooldowns();
+        self.book_action = None;
     }
 
     /// Drops the actions in flight: a cast, its request and interruption, and
