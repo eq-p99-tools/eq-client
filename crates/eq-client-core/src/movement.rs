@@ -11,7 +11,7 @@ mod pace;
 mod path;
 mod route;
 pub use airborne::{AirborneController, Landing, MotionStep, PROVISIONAL_PHYSICS, VerticalPhysics};
-pub use choices::options;
+pub use choices::{offered_options, options};
 pub use eq_network_game::movement::MovementOptions;
 pub use falls::{HARMLESS_DROP, fall_damage};
 pub use liquids::{GuardView, Liquid, Liquids};

@@ -73,7 +73,8 @@ is left to its existing checks.
 
 Double-click a visible door with the left button to use it within reach.
 Two clicks must land on the same door. The Use key still finds a door or
-object near the character.
+object near the character. The double-click itself, its 500 ms window and
+its 4-pixel slop are inferred (recording checklist 6.385).
 
 ## Camera and windows
 
@@ -90,8 +91,9 @@ Right-drag changes the view without changing the character's heading. The
 wheel zooms along the current sightline unless a UI surface owns the wheel.
 Zooming close enters first person and hides the local body and gear. Zooming out
 returns to the chase view. Death, zone/session changes and character previews
-restore third person. The chase camera can look almost straight up or down.
-It pulls in when terrain, roofs or walls obstruct the view and returns to the
+restore third person. The chase camera can look almost straight up or down
+(89°; the limit and the first-person snap and return distances are inferred,
+recording checklist 6.386). It pulls in when terrain, roofs or walls obstruct the view and returns to the
 chosen zoom as the way clears. `--camera orthographic` selects the
 isometric-style projection with its own zoom range.
 
@@ -183,7 +185,9 @@ Closing composition does not send its unfinished text.
 `/ex`, `/exi`, and `/exit` disconnect immediately and close the client.
 `/q`, `/qu`, `/qui`, and `/quit` disconnect immediately and return to the
 login screen (or close an offline preview). These commands take no arguments
-and skip the camp and logout sequence. Use `/camp` to camp to character
+and skip the camp and logout sequence. That the official client's aliases
+leave at once, and what they send first, is inferred (recording checklist
+6.384). Use `/camp` to camp to character
 select or `/camp desktop` to camp and then close the client.
 
 Item links stay purple and retain their structured payload. Clicking one requests

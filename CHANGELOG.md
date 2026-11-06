@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- The Quality of Life page's gameplay departures (Walk While Winded, Memorize
+  Without Sitting, Run a Little Faster, Fly) are offered only where the session
+  lists `Capability::GameplayDepartures` (a stock EQEmu server). Elsewhere they
+  are greyed out and the session keeps the official client's movement and
+  memorization whatever the saved settings say; movement input is never held
+  waiting for a choice the server type refuses.
+- API: `movement::offered_options` is the movement choice a session takes;
+  `qol::Fix::needs` names `Capability::GameplayDepartures` for the four
+  departures.
+- Quality of Life page: See the World Clearly, Walk While Winded, Loot Corpses
+  Automatically, Floating Combat Text, Read the Spellbook Standing, Memorize
+  Without Sitting, Show Invisible Entities, Answer List Presence Polls, and the
+  unsafe Run a Little Faster, Fly and Exit at Once, all off by default; the
+  Particles page's Show Spell Effects. First-person view at minimum chase zoom
+  and head-focused zoom; chase pitch to 89°. Titanium `[KeyMaps]` movement and
+  posture bindings are read from the installation. Simultaneous forward/back
+  and strafe ground movement, mouse-look steering with immediate Titanium
+  turns, door double-click, cursor-item destruction with confirmation, the
+  merchant quantity picker, right-click beneficial-buff cancellation,
+  `/exit` and `/quit` aliases, memorized spell-gem artwork, and settled
+  animation transitions.
 - Resize explicitly sizable installed chat screens by their edges and corners,
   retaining widgets, anchored content, clipping and full size across rebuilds
   and restarts. Fixed Inventory and Spellbook remain fixed. The 160×100 logical

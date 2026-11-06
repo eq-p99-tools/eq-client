@@ -79,7 +79,12 @@ session; a setting does not manufacture an unoffered server capability.
 | Answer List Presence Polls | `answer_list_polls` | Off | Answers supported P99 presence polls after a local delay; does not join a list or answer numeric challenges |
 
 These choices take effect in the current session. Controls are unavailable where
-their required session feature is absent. Automatic looting requires supported
+their required session feature is absent. Walk While Winded, Memorize Without
+Sitting, Run a Little Faster and Fly depart from the official client's
+behaviour, so they are offered only where the server type lists gameplay
+departures (a stock EQEmu server); on P99, Quarm and TAKP they are greyed out
+and the session keeps the official client's movement and memorization whatever
+the saved settings say. Automatic looting requires supported
 item results; receipt-only echoes cannot advance it. It attempts each observed
 death once, retains corpse identity, and stops on refusal. Turning it off stops
 further automatic requests while leaving the ordinary loot window available.
@@ -93,8 +98,9 @@ Unsafe choices sit together at the page's end:
 | Fly | `fly` | Off | Bounded flight through Jump and Duck bindings for ascent/descent, retaining solid collision; disabling restores gravity |
 | Exit at Once | `exit_at_once` | Off | Requests logout without automatic sitting or camp preparation; waits for the server outcome |
 
-Gameplay departures are explicit client policies. They do not establish server
-acceptance, permission, or absence of detection. Movement identity, freshness,
+Gameplay departures are explicit client policies, taken only where the server
+type offers them. They do not establish server acceptance, permission, or
+absence of detection. Movement identity, freshness,
 known-speed and finite-coordinate checks remain in effect.
 
 The Options window's Particles page contains Show Spell Effects. It starts from

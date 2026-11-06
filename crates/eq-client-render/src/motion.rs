@@ -676,7 +676,7 @@ pub(super) fn input(
         return;
     }
     let detached = cameras.single().is_ok_and(|(_, free)| free);
-    let movement = eq_client_core::movement::options(&options.options.qol);
+    let movement = eq_client_core::movement::offered_options(&options.options.qol, online.world());
     if movement_sync
         .as_ref()
         .is_some_and(|sync| !sync.ready(online.world().session_id(), movement))

@@ -152,7 +152,8 @@ missing bar percentage can mean a missing reliable denominator. Quarm does not
 supply Titanium endurance data.
 
 On Titanium servers offering buff cancellation, right-click a known beneficial
-buff in the Effects or Songs window to request removal. Harmful effects, effects
+buff in the Effects or Songs window to request removal (the right button is
+inferred, recording checklist 6.387). Harmful effects, effects
 with unavailable spell data and effects whose server slot is unknown cannot be
 cancelled. A buff stays visible until received state removes it. If the selected
 slot changes while the button is held, release cancels the selection. A request

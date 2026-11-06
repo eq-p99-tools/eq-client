@@ -360,10 +360,9 @@ impl Fix {
             | Self::AskBeforeDeletingSpells
             | Self::TakeEnvironmentalDamage
             | Self::HotbarItemGuard => Kind::Guards,
-            // Speed lifted past the world's gift, and looting nobody asked
-            // for, are sends the official client would not make on their
-            // own; the world holds the player still by other means, and
-            // these ride its own packets under its own leave.
+            // Sends the official client would not make on its own: departures
+            // the session takes only where the server type offers them, and
+            // looting, replies and a logout nobody asked for at that moment.
             Self::AnswerListPolls
             | Self::MemorizeWhileStanding
             | Self::WalkWhileWinded
@@ -406,15 +405,18 @@ impl Fix {
             Self::AskBeforeDeletingSpells => Some(Capability::DeletingSpells),
             Self::FlashOnTells => Some(Capability::Talking),
             Self::TakeEnvironmentalDamage => Some(Capability::EnvironmentalDamage),
-            // The three that send ride features the session only offers
-            // where a server type lists them: a server that never lets the
-            // session move the player has nothing to walk or run with, and
-            // a server with no looting has no corpse to open by itself.
-            Self::WalkWhileWinded | Self::RunBoost | Self::Fly => Some(Capability::Moving),
+            // The departures from the official client's movement and
+            // memorization are offered only where the server type lists
+            // them (a player's own server), never on a public server; the
+            // controls grey out everywhere else.
+            Self::WalkWhileWinded | Self::RunBoost | Self::Fly | Self::MemorizeWhileStanding => {
+                Some(Capability::GameplayDepartures)
+            }
+            // A server with no looting has no corpse to open by itself.
             Self::AutoLoot => Some(Capability::Looting),
             Self::AnswerListPolls => Some(Capability::AnsweringListPolls),
             Self::ExitAtOnce => Some(Capability::Camping),
-            Self::ReadWhileStanding | Self::MemorizeWhileStanding => Some(Capability::Spellbook),
+            Self::ReadWhileStanding => Some(Capability::Spellbook),
             Self::HiddenWindows
             | Self::MapEverywhere
             | Self::ShowTimesInChat

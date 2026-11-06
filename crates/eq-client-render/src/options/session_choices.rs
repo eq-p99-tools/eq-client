@@ -116,12 +116,13 @@ pub(crate) fn tell(
         *told = Told::default();
         return;
     };
-    let movement = eq_client_core::movement::options(&state.options.qol);
-    if world.can(Capability::Moving) {
-        movement_sync.tell(world, &outbox, movement);
-    }
+    // Where the session offers no departures the official movement is wanted,
+    // which every admission starts with, so nothing is sent and input is
+    // never held waiting for a choice the server type refuses.
+    let movement = eq_client_core::movement::offered_options(&state.options.qol, world);
+    movement_sync.tell(world, &outbox, movement);
     let memorize_without_sitting = state.options.qol.on(Fix::MemorizeWhileStanding);
-    if world.can(Capability::Spellbook)
+    if world.can(Capability::GameplayDepartures)
         && told.book != Some((session_id, memorize_without_sitting))
         && outbox.tell(
             world,
@@ -213,6 +214,68 @@ mod tests {
         assert!(
             matches!(receiver.try_recv().unwrap(), ClientCommand::SetMovementOptions { session_id: 2, options, .. } if options.run_boost)
         );
+    }
+
+    #[test]
+    fn a_session_without_departures_sends_no_options_and_holds_no_input() {
+        let mut online = OnlineState::new(true);
+        let capabilities: Vec<_> = Capability::ALL
+            .into_iter()
+            .filter(|capability| *capability != Capability::GameplayDepartures)
+            .collect();
+        testing::news(
+            &mut online,
+            [eq_client_core::WorldEvent::Entered {
+                capabilities,
+                choices: Vec::new(),
+                session_id: 3,
+                zone: "qeytoqrg".into(),
+                player: Box::new(testing::player(7)),
+                far_clip: None,
+                spell_landing_flag: None,
+            }],
+        );
+        testing::connect(&mut online, true);
+        let (sender, receiver) = std::sync::mpsc::sync_channel(8);
+        let mut app = App::new();
+        app.insert_resource(online)
+            .init_resource::<super::super::OptionsState>()
+            .init_resource::<MovementSync>()
+            .insert_resource(crate::outbox::Outbox::new(Some(sender)))
+            .add_systems(Update, tell);
+        {
+            let mut state = app.world_mut().resource_mut::<super::super::OptionsState>();
+            for fix in [Fix::RunBoost, Fix::Fly, Fix::MemorizeWhileStanding] {
+                state.options.qol.set(fix, true);
+            }
+        }
+        app.update();
+        app.update();
+        // The official client's movement is what this session takes, and
+        // it is applied from admission, so input is never gated on it.
+        let world = app.world().resource::<OnlineState>();
+        let wanted = eq_client_core::movement::offered_options(
+            &app.world()
+                .resource::<super::super::OptionsState>()
+                .options
+                .qol,
+            world.world(),
+        );
+        assert_eq!(wanted, MovementOptions::default());
+        assert!(
+            app.world()
+                .resource::<MovementSync>()
+                .ready(Some(3), MovementOptions::default())
+        );
+        for command in receiver.try_iter() {
+            assert!(
+                !matches!(
+                    command,
+                    ClientCommand::SetMovementOptions { .. } | ClientCommand::SetBookOptions { .. }
+                ),
+                "{command:?} sent where departures are not offered"
+            );
+        }
     }
 
     fn ready(app: &App, options: MovementOptions) -> bool {
