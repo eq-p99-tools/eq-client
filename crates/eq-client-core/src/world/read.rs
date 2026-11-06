@@ -20,13 +20,13 @@ impl ClientWorld {
     /// Revision of the inputs delivered by the worker for liquid proposals.
     #[must_use]
     pub const fn liquid_hazard_revision(&self) -> Option<u64> {
-        self.liquid_hazard_revision
+        self.liquid_hazards.revision
     }
 
     /// Whether an own size or illusion change invalidated the admitted model.
     #[must_use]
     pub const fn own_model_changed(&self) -> bool {
-        self.own_model_changed
+        self.liquid_hazards.own_model_changed
     }
 
     /// Latest session request for host-owned movement inputs; reset on admission.

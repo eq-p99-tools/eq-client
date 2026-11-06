@@ -186,6 +186,13 @@ pub struct MotionGrant {
     pub falls: bool,
 }
 
+#[derive(Default)]
+struct LiquidHazardInputs {
+    revision: Option<u64>,
+    /// A received own model change can invalidate the admitted head basis.
+    own_model_changed: bool,
+}
+
 /// What the server has told the client, kept by one writer. Its fields go
 /// in order of how long they last: the connection's, the admission's, the
 /// character's, and the zone's, which leaving the zone forgets in one step.
@@ -229,9 +236,7 @@ pub struct ClientWorld {
 
     // The admission: from entering a zone until the next admission.
     session_id: Option<u64>,
-    liquid_hazard_revision: Option<u64>,
-    /// A received own model change can invalidate the admitted head basis.
-    own_model_changed: bool,
+    liquid_hazards: LiquidHazardInputs,
     /// The session's interpreted stun state and latest revision; None is
     /// unknown/unconfigured, not proof of clear control.
     own_stun: Option<(u64, crate::control::StunState)>,
@@ -596,7 +601,7 @@ impl ClientWorld {
         match event {
             WorldEvent::LiquidHazardRevision { session_id, revision } => {
                 if self.session_id == Some(*session_id) {
-                    self.liquid_hazard_revision = Some(*revision);
+                    self.liquid_hazards.revision = Some(*revision);
                 }
             }
             // The connection, the characters on offer and the admission.
@@ -871,7 +876,7 @@ impl ClientWorld {
                     && let Some(player) = self.player.as_mut()
                 {
                     use eq_network_game::appearance::AppearanceChange;
-                    self.own_model_changed |= matches!(
+                    self.liquid_hazards.own_model_changed |= matches!(
                         change,
                         AppearanceChange::Size(_) | AppearanceChange::Illusion(_)
                     );
@@ -1548,8 +1553,7 @@ impl ClientWorld {
 
     /// Forgets the admission and its zone.
     fn forget_admission(&mut self) {
-        self.liquid_hazard_revision = None;
-        self.own_model_changed = false;
+        self.liquid_hazards = LiquidHazardInputs::default();
         self.characters = None;
         self.last_consent_refusal = None;
         self.items = ItemCache::default();
