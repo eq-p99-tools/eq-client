@@ -50,6 +50,8 @@ pub(super) struct AnimatedCharacter {
     rise: Option<f32>,
     /// The swings the server sent for the spawn drawn.
     swings: Swings,
+    /// Whether the last sampled pose showed a one-shot gesture.
+    showing_gesture: bool,
     /// How far the model hangs above its root, in the root's units: what
     /// lifts a pose's top to the root's [`super::names::Overhead`].
     lift: f32,
@@ -464,6 +466,7 @@ fn hang(
             clip: (STANDING_CLIP, false),
             rise: None,
             swings: Swings::default(),
+            showing_gesture: false,
             lift,
             scale,
             soles: prepared.soles,
@@ -535,7 +538,7 @@ pub(super) fn animate(
                 .chain(cast)
                 .max_by_key(|motion| motion.count)
         });
-        character.swings.follow(latest, dt);
+        let new_gesture = character.swings.follow(latest, dt);
         if posture == Some(eq_client_core::PostureState::Frozen)
             && corpse.is_none()
             && !(own && world.is_dead())
@@ -549,11 +552,6 @@ pub(super) fn animate(
         } else {
             (character.moving_for - dt).max(0.0)
         };
-        if character.since_pose < 1.0 / 30.0 {
-            continue;
-        }
-        let step = character.since_pose;
-        character.since_pose = 0.0;
         // A corpse seen dying falls from its death; one that arrived dead
         // lies in the death clip's last frame.
         let lying = corpse.map(|corpse| corpse.lying(now)).or_else(|| {
@@ -565,7 +563,28 @@ pub(super) fn animate(
                 None
             }
         });
-        let (selected, pinned) = character.next_clip(lying, posture, step);
+        let pose_due = character.since_pose >= 1.0 / 30.0;
+        let gesture = if (pose_due || new_gesture || character.showing_gesture)
+            && lying.is_none()
+            && !posed(posture)
+        {
+            character
+                .swings
+                .gesture(|clip| character.asset.clip_seconds(clip))
+        } else {
+            None
+        };
+        // Pose at a gesture's start and end even between the regular samples.
+        // A short swing can otherwise expire without ever reaching the joints.
+        let showing_gesture = gesture.is_some();
+        let gesture_changed =
+            showing_gesture != character.showing_gesture || (showing_gesture && new_gesture);
+        if !pose_due && !gesture_changed {
+            continue;
+        }
+        character.showing_gesture = showing_gesture;
+        let step = std::mem::take(&mut character.since_pose);
+        let (selected, pinned) = character.next_clip(lying, posture, gesture, step);
         let selected = paced(
             selected,
             character.clip,
@@ -635,9 +654,9 @@ impl AnimatedCharacter {
         &mut self,
         lying: Option<f32>,
         posture: Option<eq_client_core::PostureState>,
+        gesture: Option<Gesture>,
         step: f32,
     ) -> ((&'static str, bool), Option<f32>) {
-        let gesture = self.swings.gesture(|clip| self.asset.clip_seconds(clip));
         let moving = self.moving_for > 0.0;
         self.rise = rising(
             self.rise,
@@ -855,22 +874,24 @@ struct Swings {
 impl Swings {
     /// Follows the world's latest swing or completed cast for the
     /// character over a frame of `dt` seconds. A new one starts from its
-    /// beginning, two alike in a row included. A cue already retained when
-    /// the character is first drawn is treated as over.
-    fn follow(&mut self, news: Option<Motion>, dt: f32) {
+    /// beginning, two alike in a row included. Returns true for a new cue.
+    /// A cue already retained when the character is first drawn is treated as over.
+    fn follow(&mut self, news: Option<Motion>, dt: f32) -> bool {
         let latest = self.latest.map(|(motion, since)| (motion, since + dt));
-        self.latest = match news {
-            Some(mut motion) if latest.is_none_or(|(last, _)| last.count != motion.count) => {
-                // Use authored timing when the cue has no usable rate.
-                if !motion.speed.is_finite() || motion.speed <= 0.0 {
-                    motion.speed = 1.0;
-                }
-                let since = if self.followed { 0.0 } else { f32::INFINITY };
-                Some((motion, since))
+        let news = news.filter(|motion| latest.is_none_or(|(last, _)| last.count != motion.count));
+        let new = news.is_some() && self.followed;
+        self.latest = if let Some(mut motion) = news {
+            // Use authored timing when the cue has no usable rate.
+            if !motion.speed.is_finite() || motion.speed <= 0.0 {
+                motion.speed = 1.0;
             }
-            _ => latest,
+            let since = if new { 0.0 } else { f32::INFINITY };
+            Some((motion, since))
+        } else {
+            latest
         };
         self.followed = true;
+        new
     }
 
     /// What the character plays over its stance: the latest swing or
@@ -1293,12 +1314,11 @@ mod tests {
         let prepared = testing::prepared(app.world_mut());
         let root = testing::drawn(app.world_mut(), &prepared);
         app.world_mut().entity_mut(root).insert(crate::Player);
-        let frame = |app: &mut App| {
-            app.world_mut()
-                .resource_mut::<Time>()
-                .advance_by(Duration::from_millis(100));
+        let advance = |app: &mut App, delta| {
+            app.world_mut().resource_mut::<Time>().advance_by(delta);
             app.update();
         };
+        let frame = |app: &mut App| advance(app, Duration::from_millis(100));
         let swing = |app: &mut App, speed| {
             session::news(
                 &mut app.world_mut().resource_mut::<OnlineState>(),
@@ -1333,8 +1353,19 @@ mod tests {
         }
         pose_is(&app, (STANDING_CLIP, false), 0.0);
 
+        // The previous frame just sampled idle. At 120 Hz the 19.6 ms
+        // swing would be over before the next scheduled 30 Hz pose.
+        let fast_frame = |app: &mut App| advance(app, Duration::from_micros(8_334));
+        swing(&mut app, 25.5);
+        for _ in 0..3 {
+            fast_frame(&mut app);
+            pose_is(&app, ("C05", true), 0.0);
+        }
+        fast_frame(&mut app);
+        pose_is(&app, (STANDING_CLIP, false), 0.0);
+
         swing(&mut app, 0.5);
-        frame(&mut app);
+        fast_frame(&mut app);
         pose_is(&app, ("C05", true), 0.0);
         session::news_at(
             &mut app.world_mut().resource_mut::<OnlineState>(),
@@ -1347,7 +1378,7 @@ mod tests {
             })],
             Instant::now().checked_sub(Duration::from_secs(2)).unwrap(),
         );
-        frame(&mut app);
+        fast_frame(&mut app);
         pose_is(&app, DEATH, 2.0);
         frame(&mut app);
         pose_is(&app, DEATH, 2.0);
