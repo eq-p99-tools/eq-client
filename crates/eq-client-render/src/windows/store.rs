@@ -1,4 +1,4 @@
-//! Window placements kept between runs. As the official client keeps them per
+//! Window placements and chat groups kept between runs. As the official client keeps layouts per
 //! character, each character on each world has its own file in the user's
 //! settings directory; a shared file covers the screens before a character
 //! enters and seeds characters that have none yet.
@@ -23,7 +23,7 @@ pub(super) struct Store {
     since_check: Duration,
 }
 
-/// Loads the placements of whoever is playing and saves changes to their file.
+/// Loads the current character's window layout and saves changes to their file.
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn persist(
     (time, windows): (
@@ -34,11 +34,11 @@ pub(super) fn persist(
         Res<crate::ViewerSettings>,
         Res<crate::profile_files::Profile>,
     ),
-    mut drag: ResMut<super::DragState>,
-    mut exits: MessageReader<AppExit>,
+    (mut drag, mut exits): (ResMut<super::DragState>, MessageReader<AppExit>),
     mut layouts: ResMut<Layouts>,
     mut store: Local<Store>,
     mut frames: Query<(&mut super::Frame, &mut Node)>,
+    mut chat: Option<ResMut<crate::chat::ChatState>>,
 ) {
     let exiting = exits.read().count() > 0;
     if exiting {
@@ -53,7 +53,7 @@ pub(super) fn persist(
             frame.clear_size(&mut node);
         }
         if store.files.loaded {
-            save(&mut store, &layouts);
+            save(&mut store, &layouts, chat.as_ref().map(|chat| &chat.groups));
         } else {
             store.files.open(settings.0.settings_directory.as_ref());
         }
@@ -63,6 +63,9 @@ pub(super) fn persist(
         if store.files.directory.is_some() {
             let text = own.or_else(|| store.files.read(SHARED)).unwrap_or_default();
             layouts.0 = decode(&text);
+            if let Some(chat) = &mut chat {
+                chat.groups = crate::chat::Groups::read(&text);
+            }
         } else {
             for saved in layouts.0.values_mut() {
                 saved.size = None;
@@ -81,14 +84,15 @@ pub(super) fn persist(
                 Vec2::new(window.width(), window.height()),
             );
         }
-        store.files.loaded_text(encode(&layouts.0));
+        let text = profile_text(&layouts, chat.as_ref().map(|chat| &chat.groups));
+        store.files.loaded_text(text);
         store.since_check = Duration::ZERO;
         return;
     }
     store.since_check += time.delta();
     if (store.since_check >= SAVE_INTERVAL || exiting) && drag.active.is_none() {
         store.since_check = Duration::ZERO;
-        save(&mut store, &layouts);
+        save(&mut store, &layouts, chat.as_ref().map(|chat| &chat.groups));
     }
 }
 
@@ -151,9 +155,19 @@ fn seed(
 }
 
 /// Writes the placements to the profile's file when they changed since last time.
-fn save(store: &mut Store, layouts: &Layouts) {
+fn save(store: &mut Store, layouts: &Layouts, groups: Option<&crate::chat::Groups>) {
     let name = file_name(store.files.profile.as_ref());
-    store.files.save(name, encode(&layouts.0), Instant::now());
+    store
+        .files
+        .save(name, profile_text(layouts, groups), Instant::now());
+}
+
+fn profile_text(layouts: &Layouts, groups: Option<&crate::chat::Groups>) -> String {
+    let mut text = encode_placements(&layouts.0, groups);
+    if let Some(groups) = groups {
+        groups.write(&mut text);
+    }
+    text
 }
 
 /// The shared file, or the profile's own.
@@ -163,11 +177,23 @@ fn file_name(profile: Option<&CharacterProfile>) -> String {
 
 /// One line per window: four edges, four margins, positioning, whether it is
 /// minimized, then a tab and the window's name.
+#[cfg(test)]
 fn encode(layouts: &BTreeMap<super::WindowId, Saved>) -> String {
+    encode_placements(layouts, None)
+}
+
+fn encode_placements(
+    layouts: &BTreeMap<super::WindowId, Saved>,
+    groups: Option<&crate::chat::Groups>,
+) -> String {
     let mut text = format!("{HEADER}\n");
     for (id, saved) in layouts {
         // Windows left where they open follow the client's defaults instead.
-        if !saved.placed || !id.describe().persists {
+        if !saved.placed
+            || !id.describe().persists
+            || (matches!(id, super::WindowId::ChatGroup(_))
+                && groups.is_some_and(|groups| !groups.contains(*id)))
+        {
             continue;
         }
         let key = id.key();
@@ -507,12 +533,19 @@ mod tests {
 
     #[test]
     fn each_character_gets_its_own_placements_back_and_saves_changes() {
+        use super::super::WindowId;
+
         let directory = std::env::temp_dir().join(format!("eq-windows-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
-        let chat = BTreeMap::from([(super::super::WindowId::Chat, saved(px(71), false))]);
+        let detached = WindowId::ChatGroup(1);
+        let chat = BTreeMap::from([
+            (WindowId::Chat, saved(px(71), false)),
+            (detached, saved(px(255), false)),
+        ]);
+        let groups = crate::chat::Groups::read("chat-tabs\tchat-group-1 Guild Guild Tell\n");
         std::fs::write(
             directory.join("windows-ExampleWorld-Example.txt"),
-            encode(&chat),
+            profile_text(&Layouts(chat.clone()), Some(&groups)),
         )
         .unwrap();
         let mut online = crate::online::OnlineState::new(true);
@@ -528,6 +561,7 @@ mod tests {
             .init_resource::<Layouts>()
             .init_resource::<super::super::DragState>()
             .init_resource::<crate::profile_files::Profile>()
+            .init_resource::<crate::chat::ChatState>()
             .insert_resource(online)
             .insert_resource(crate::ViewerSettings(crate::ViewerConfig {
                 settings_directory: Some(directory.clone()),
@@ -536,6 +570,10 @@ mod tests {
             .add_systems(Update, (crate::profile_files::follow, persist).chain());
         app.update();
         let loaded = app.world().resource::<Layouts>().0.clone();
+        assert_eq!(
+            app.world().resource::<crate::chat::ChatState>().groups,
+            groups
+        );
         // The player moves the chat window; closing the client saves it.
         app.world_mut()
             .resource_mut::<Layouts>()
@@ -561,6 +599,12 @@ mod tests {
             decode(&written)[&super::super::WindowId::Chat].edges[0],
             px(12)
         );
+        assert_eq!(decode(&written)[&detached].edges[0], px(255));
+        assert_eq!(crate::chat::Groups::read(&written), groups);
         assert!(other.is_empty());
+        assert_eq!(
+            app.world().resource::<crate::chat::ChatState>().groups,
+            crate::chat::Groups::default()
+        );
     }
 }

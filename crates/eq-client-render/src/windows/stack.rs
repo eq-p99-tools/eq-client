@@ -39,7 +39,7 @@ impl Stack {
 
     /// Where a floating window draws: in front of every window below it in
     /// the stack.
-    fn z(&self, id: WindowId) -> i32 {
+    pub(crate) fn z(&self, id: WindowId) -> i32 {
         let place = self.0.iter().position(|other| *other == id).unwrap_or(0);
         Layer::Floating.base() + i32::try_from(place).unwrap_or(0)
     }

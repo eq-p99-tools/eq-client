@@ -21,6 +21,30 @@ pub(super) struct Saved {
 #[derive(Resource, Default)]
 pub(crate) struct Layouts(pub(super) BTreeMap<super::WindowId, Saved>);
 
+impl Layouts {
+    /// Place a newly detached group at the drop, replacing the saved layout
+    /// of any previous group that used this slot.
+    pub(crate) fn place_chat_group(&mut self, id: super::WindowId, position: Vec2) {
+        self.0.insert(
+            id,
+            Saved {
+                entity: Entity::PLACEHOLDER,
+                edges: [
+                    px(position.x.max(0.0)),
+                    px(position.y.max(0.0)),
+                    Val::Auto,
+                    Val::Auto,
+                ],
+                margin: UiRect::ZERO,
+                position_type: PositionType::Absolute,
+                minimized: false,
+                placed: true,
+                size: None,
+            },
+        );
+    }
+}
+
 /// Keeps explicitly placed panels reachable after resizing or UI scale changes.
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn constrain(

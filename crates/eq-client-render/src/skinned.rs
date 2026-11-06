@@ -103,7 +103,7 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::Book => "EQUI_BookWindow.xml",
         WindowId::Map => "EQUI_MapViewWnd.xml",
         WindowId::Actions => "EQUI_HotButtonWnd.xml",
-        WindowId::Chat => "EQUI_ChatWindow.xml",
+        WindowId::Chat | WindowId::ChatGroup(_) => "EQUI_ChatWindow.xml",
         WindowId::Status | WindowId::Scripts => return None,
     };
     Some((file, id.official()?))
@@ -476,7 +476,7 @@ pub(crate) fn apply(
             &mut screens,
             directory,
             (&skin.0, *id),
-            hidden_too || *id == WindowId::Map,
+            hidden_too || *id == WindowId::Map || id.is_chat(),
         );
         let places = online
             .as_deref()
@@ -497,6 +497,10 @@ pub(crate) fn apply(
         let Some(screen) = screens.get(directory, &from, *id) else {
             continue;
         };
+        // Keep a recoverable chat if neither skin defines a usable screen.
+        if id.is_chat() && (screen.area.width <= 0.0 || screen.area.height <= 0.0) {
+            continue;
+        }
         let fitted = places.and_then(|places| fit::fitted(screen, places));
         let screen = fitted.as_ref().unwrap_or(screen);
         // This first retained reflow contract belongs to chat. Other authored
@@ -937,7 +941,7 @@ fn button(
         }
         None => window.spawn(node),
     };
-    if owner == WindowId::Chat
+    if owner.is_chat()
         && let Some(anchors) = button.anchors
     {
         drawn.insert(reflow::Geometry(anchors));
@@ -1696,27 +1700,35 @@ fn title_boxes(
         owner.describe().toggle != crate::windows::Toggle::Never || items::framed_while_open(owner);
     let mut right = inside.x + inside.width;
     for (wanted, look, close) in [
-        (bar.close_box, &template.close_box, true),
-        (bar.minimize_box, &template.minimize_box, false),
+        (
+            bar.close_box || matches!(owner, WindowId::ChatGroup(_)),
+            &template.close_box,
+            true,
+        ),
+        (
+            bar.minimize_box && owner.can_minimize(),
+            &template.minimize_box,
+            false,
+        ),
     ] {
-        let Some((look, normal)) = look
-            .as_ref()
-            .filter(|_| wanted)
-            .and_then(|look| Some((look, look.normal.as_ref()?)))
-        else {
+        let button = look.as_ref().filter(|_| wanted).and_then(|look| {
+            let normal = look.normal.as_ref()?;
+            let (width, height) = (to_f32(normal.width), to_f32(normal.height));
+            right -= width;
+            Some((look, width, height, art.cut(normal)?))
+        });
+        let Some((look, width, height, image)) = button else {
+            if close && matches!(owner, WindowId::ChatGroup(_)) {
+                chat_close_box(window, (inside, tall, parent), owner);
+            }
             continue;
         };
-        let (width, height) = (to_f32(normal.width), to_f32(normal.height));
-        right -= width;
         let node = at(
             right,
             inside.y + (tall - height).max(0.0) / 2.0,
             width,
             height,
         );
-        let Some(image) = art.cut(normal) else {
-            continue;
-        };
         let mut drawn = window.spawn((
             image,
             node,
@@ -1745,6 +1757,9 @@ fn title_boxes(
             (true, _) if owner == WindowId::Merchant => drawn.insert(crate::trade::Action::EndShop),
             // The item display closes as the client's own panel's Close does.
             (true, _) if owner == WindowId::Item => drawn.insert(super::items::CloseItem),
+            (true, _) if matches!(owner, WindowId::ChatGroup(_)) => {
+                drawn.insert(crate::chat::CloseGroup(owner))
+            }
             (true, true) => drawn.insert(items::Closes(owner)),
             // The client keeps this window open: its close box is one more
             // control the client does not have yet.
@@ -1752,6 +1767,38 @@ fn title_boxes(
             (false, _) => drawn.insert(super::windows::Minimize(frame)),
         };
     }
+}
+
+/// Keeps the detached window's close action reachable when the skin omits its art.
+fn chat_close_box(
+    window: &mut ChildSpawnerCommands,
+    (inside, tall, parent): (&Area, f32, Vec2),
+    owner: WindowId,
+) {
+    let width = 18.0;
+    let area = Area {
+        x: (inside.x + inside.width - width).max(inside.x),
+        y: inside.y,
+        width,
+        height: tall,
+    };
+    window
+        .spawn((
+            Button,
+            TitleBox {
+                window: owner,
+                close: true,
+            },
+            crate::chat::CloseGroup(owner),
+            Node {
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..at(area.x, area.y, area.width, area.height)
+            },
+            reflow::Geometry::from_area(area, parent, reflow::Axis::End, reflow::Axis::Start),
+            BackgroundColor(theme::BUTTON),
+        ))
+        .with_child(theme::text("×", Size::Body, theme::INK_BRIGHT));
 }
 
 /// Whose a gauge is, for one that shows only while its owner is there, by
@@ -2077,7 +2124,8 @@ fn label(
         label.color.map_or(theme::INK_BRIGHT, rgb),
     );
     let node = label_node(label, inside);
-    let geometry = (owner == WindowId::Chat)
+    let geometry = owner
+        .is_chat()
         .then(|| label.anchors.map(reflow::Geometry))
         .flatten();
     let buff_name = buff_label(owner, label.eq_type);

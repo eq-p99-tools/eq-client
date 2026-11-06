@@ -63,6 +63,10 @@
   merchant quantity picker, right-click beneficial-buff cancellation,
   `/exit` and `/quit` aliases, memorized spell-gem artwork, and settled
   animation transitions.
+- Drag chat tabs to reorder them, open a separate chat window, or dock them into
+  another tab strip. Closing a detached window returns its tabs to the main chat.
+  Each character keeps the tab arrangement and window placements.
+
 - Resize explicitly sizable installed chat screens by their edges and corners,
   retaining widgets, anchored content, clipping and full size across rebuilds
   and restarts. Fixed Inventory and Spellbook remain fixed. The 160×100 logical

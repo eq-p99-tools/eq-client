@@ -154,7 +154,7 @@ pub(super) fn eligible_scope(
     id: super::WindowId,
     screen: &eq_client_assets::sidl::Screen,
 ) -> Option<u64> {
-    (id == super::WindowId::Chat && screen.sizable == eq_client_assets::sidl::Sizable::Enabled)
+    (id.is_chat() && screen.sizable == eq_client_assets::sidl::Sizable::Enabled)
         .then(|| scope(skin, screen))
 }
 
@@ -175,12 +175,13 @@ mod tests {
             screen.sizable = sizable;
             for id in [
                 super::super::WindowId::Chat,
+                super::super::WindowId::ChatGroup(1),
                 super::super::WindowId::Inventory,
                 super::super::WindowId::Spellbook,
             ] {
                 assert_eq!(
                     eligible_scope("synthetic", id, &screen).is_some(),
-                    id == super::super::WindowId::Chat && sizable == Sizable::Enabled
+                    id.is_chat() && sizable == Sizable::Enabled
                 );
             }
         }

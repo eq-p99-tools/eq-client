@@ -164,6 +164,7 @@ pub(super) fn schedule(app: &mut App) {
                 spellbook::sets::follow,
                 spellbook::search::focus,
                 spellbook::search::capture,
+                chat::drag_tabs,
                 chat::input,
                 spellbook::search::input,
                 spellbook::search::refresh,
@@ -253,7 +254,7 @@ pub(super) fn schedule(app: &mut App) {
                 )
                     .chain(),
             ),
-            windows::input,
+            (chat::close_groups, windows::input).chain(),
             (
                 crate::camera::toggle_free,
                 crate::camera::turn,
@@ -274,7 +275,7 @@ pub(super) fn schedule(app: &mut App) {
                 inventory::feedback,
                 inventory::scroll,
                 (skinned::cursor_look, inventory::cursor::update).chain(),
-                (chat::follow_options, chat::look, chat::refresh).chain(),
+                (chat::follow_options, chat::look).chain(),
                 items::update,
                 items::scroll,
                 target::update,
@@ -329,7 +330,9 @@ pub(super) fn schedule(app: &mut App) {
                 (hud::action_bar::cast_window, hud::action_bar::update),
                 skinned::frames,
                 (
+                    chat::reconcile,
                     skinned::apply,
+                    (chat::sync_tabs, chat::refresh).chain(),
                     map::ensure_window,
                     skinned::place_own,
                     skinned::looks::load,
@@ -432,6 +435,8 @@ pub(crate) enum Stage {
 
 /// Registers the startup work of the overlays and the windows' shared systems.
 pub(super) fn install_overlays(app: &mut App) {
+    app.init_resource::<chat::TabDrag>()
+        .add_systems(Update, chat::paint_drag.in_set(Stage::Present));
     app.add_systems(Startup, tooltip::spawn);
     // Text spans need their shaped-run hit test before the click tracker,
     // just as controls need Bevy's focus and the script's pointer first.

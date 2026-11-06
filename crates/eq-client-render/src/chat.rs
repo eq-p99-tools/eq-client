@@ -1,5 +1,8 @@
 //! Tabbed chat, with mobile palette colors and independent scroll positions.
-use crate::theme::{self, Size};
+use crate::{
+    theme::{self, Size},
+    windows::WindowId,
+};
 use bevy::{
     input::keyboard::{Key, KeyboardInput},
     prelude::*,
@@ -12,8 +15,13 @@ use eq_client_core::{
 };
 use std::collections::{BTreeMap, HashSet};
 
+mod drag;
+mod groups;
 pub(super) mod links;
 mod paste;
+
+pub(super) use drag::{TabDrag, drag_tabs, paint as paint_drag};
+pub(crate) use groups::Groups;
 
 /// Words the client says in the chat, and whose they are: the official
 /// client's, read from its string table, or this client's own, which the
@@ -106,7 +114,7 @@ impl Default for TabView {
 #[derive(Resource, Default)]
 pub(super) struct ChatState {
     pub history: ChatHistory,
-    active: ChatTab,
+    pub(crate) groups: Groups,
     views: BTreeMap<ChatTab, TabView>,
     pub hovered: bool,
     /// A `/target Name` request waiting for target selection to resolve it.
@@ -183,7 +191,7 @@ impl ChatState {
     /// the newest, for tests of its place.
     pub(crate) fn scrolled_for_tests(offset: f32) -> Self {
         let mut state = Self::default();
-        let view = state.views.entry(state.active).or_default();
+        let view = state.views.entry(ChatTab::All).or_default();
         view.follow = false;
         view.offset = offset;
         state
@@ -200,6 +208,14 @@ impl ChatState {
 }
 #[derive(Component)]
 pub(super) struct Panel;
+/// The chat surface a control or text box belongs to.
+#[derive(Component, Clone, Copy)]
+pub(super) struct InGroup(WindowId);
+
+fn group(marker: Option<&InGroup>) -> WindowId {
+    marker.map_or(WindowId::Chat, |group| group.0)
+}
+
 #[derive(Component)]
 pub(super) struct Viewport;
 /// The active tab's lines, kept between redraws.
@@ -222,17 +238,19 @@ pub(super) struct LineId(u64);
 #[derive(Component)]
 pub(super) struct Placeholder;
 #[derive(Component)]
-pub(super) struct TabButton(pub(super) ChatTab);
+pub(super) struct TabButton(pub(super) ChatTab, WindowId);
 #[derive(Component)]
-pub(super) struct TabLabel(ChatTab);
+pub(super) struct TabLabel(ChatTab, WindowId);
 #[derive(Component)]
-pub(super) struct Latest;
+pub(super) struct Latest(WindowId);
 #[derive(Component)]
 pub(super) struct InputBox;
 #[derive(Component)]
 pub(super) struct InputLabel;
 #[derive(Component)]
-pub(super) struct Send;
+pub(super) struct Send(WindowId);
+#[derive(Component)]
+pub(crate) struct CloseGroup(pub(crate) WindowId);
 /// A part of the chat drawn in the skin: it keeps the skin's look, with no
 /// fill, border or words of the client's own.
 #[derive(Component)]
@@ -243,14 +261,19 @@ pub(super) struct Bare;
 /// the skin instead, with the same tabs, lines and input in its boxes
 /// ([`skinned_output`], [`skinned_input`]).
 pub(super) fn spawn(commands: &mut Commands) {
+    spawn_group(commands, WindowId::Chat);
+}
+
+fn spawn_group(commands: &mut Commands, id: WindowId) -> Entity {
+    let detached = id != WindowId::Chat;
     let frame = super::windows::frame(
         commands,
-        super::windows::WindowId::Chat,
+        id,
         Node {
             width: px(420),
-            max_width: percent(95),
+            max_width: if detached { Val::Auto } else { percent(95) },
             height: px(202),
-            max_height: percent(45),
+            max_height: if detached { Val::Auto } else { percent(45) },
             padding: UiRect::all(px(8)),
             flex_direction: FlexDirection::Column,
             row_gap: px(6),
@@ -260,11 +283,23 @@ pub(super) fn spawn(commands: &mut Commands) {
     commands.entity(frame).insert((
         super::hud::HudRoot,
         Panel,
+        InGroup(id),
         super::windows::pointer::TakesWheel,
     ));
+    if detached {
+        // The fallback uses flex layout; the skin will replace the sizing
+        // scope with its own when it supplies authored anchors.
+        commands.entity(frame).queue(|mut entity: EntityWorldMut| {
+            entity
+                .get_mut::<super::windows::Frame>()
+                .unwrap()
+                .sizing(Some(u64::MAX), Vec2::new(420.0, 202.0));
+        });
+        super::windows::drag_anywhere(commands, frame, id);
+    }
     commands.entity(frame).with_children(|root| {
-        tab_row(root);
-        lines(root, false);
+        tab_strip(root, id, None);
+        lines(root, false, id);
         root.spawn(Node {
             column_gap: px(5),
             align_items: AlignItems::Center,
@@ -274,6 +309,7 @@ pub(super) fn spawn(commands: &mut Commands) {
         .with_children(|row| {
             typing_box(
                 row,
+                id,
                 Node {
                     flex_grow: 1.0,
                     min_width: px(0),
@@ -282,7 +318,7 @@ pub(super) fn spawn(commands: &mut Commands) {
                     ..default()
                 },
             );
-            theme::button_with(row, Send, "Send", Size::Body);
+            theme::button_with(row, Send(id), "Send", Size::Body);
         });
         root.spawn(Node {
             justify_content: JustifyContent::SpaceBetween,
@@ -296,9 +332,51 @@ pub(super) fn spawn(commands: &mut Commands) {
                 Size::Small,
                 theme::INK,
             ));
-            theme::button_with(footer, Latest, "Latest", Size::Small);
+            theme::button_with(footer, Latest(id), "Latest", Size::Small);
         });
     });
+    frame
+}
+
+/// The close box and Escape both return detached tabs to the main dock.
+#[allow(clippy::needless_pass_by_value)]
+pub(super) fn close_groups(
+    mut state: ResMut<ChatState>,
+    buttons: crate::clicks::Clicks<CloseGroup>,
+    escape: Res<crate::escape::Escape>,
+) {
+    for CloseGroup(id) in buttons.iter() {
+        state.groups.close(*id);
+    }
+    if let crate::escape::Escape::Close(id @ WindowId::ChatGroup(_)) = *escape {
+        state.groups.close(id);
+    }
+}
+
+/// Detached groups exist only while the world HUD is present. Their
+/// membership and tab views survive rebuilding it after zoning.
+#[allow(clippy::needless_pass_by_value)]
+pub(super) fn reconcile(
+    mut commands: Commands,
+    state: Res<ChatState>,
+    frames: Query<(Entity, &WindowId), With<Panel>>,
+    mut stack: ResMut<super::windows::Stack>,
+) {
+    if !frames.iter().any(|(_, id)| *id == WindowId::Chat) {
+        return;
+    }
+    for (entity, id) in &frames {
+        if !state.groups.contains(*id) {
+            commands.entity(entity).despawn();
+        }
+    }
+    for id in state.groups.detached() {
+        if !frames.iter().any(|(_, frame)| *frame == id) {
+            stack.raise(id);
+            let frame = spawn_group(&mut commands, id);
+            commands.entity(frame).insert(GlobalZIndex(stack.z(id)));
+        }
+    }
 }
 
 /// The skin's output box, filled with the chat's tabs along its top, in
@@ -311,6 +389,7 @@ pub(super) fn skinned_output(
         &mut crate::sheets::Art,
         Option<&eq_client_assets::sidl::FrameLook>,
     ),
+    id: WindowId,
 ) -> Entity {
     let mut viewport = Entity::PLACEHOLDER;
     parent
@@ -321,62 +400,126 @@ pub(super) fn skinned_output(
             ..node
         })
         .with_children(|output| {
-            match tab_frame {
-                Some(look) => skinned_tabs(output, art, look),
-                None => tab_row(output),
-            }
-            viewport = lines(output, true);
+            let skin = tab_frame.map(|look| (look.clone(), art.drawing_skin()));
+            tab_strip(output, id, skin);
+            viewport = lines(output, true, id);
         });
     viewport
 }
 
-/// The chat's tabs in the skin's tab frame, as a skinned window's tabs of
-/// words are drawn; the shown tab's words are lit.
-fn skinned_tabs(
+/// A retained tab strip. Only membership changes rebuild its controls.
+#[derive(Component)]
+pub(super) struct TabStrip {
+    id: WindowId,
+    painted: Option<Vec<ChatTab>>,
+    skin: Option<(eq_client_assets::sidl::FrameLook, Option<String>)>,
+}
+
+fn tab_strip(
     parent: &mut ChildSpawnerCommands,
-    art: &mut crate::sheets::Art,
-    look: &eq_client_assets::sidl::FrameLook,
+    id: WindowId,
+    skin: Option<(eq_client_assets::sidl::FrameLook, Option<String>)>,
 ) {
-    parent
-        .spawn(Node {
+    let gap = if skin.is_some() { 2.0 } else { 3.0 };
+    parent.spawn((
+        TabStrip {
+            id,
+            painted: None,
+            skin,
+        },
+        super::windows::KeepsPress,
+        Interaction::None,
+        BackgroundColor(Color::NONE),
+        Node {
             flex_wrap: FlexWrap::Wrap,
-            column_gap: px(2),
-            row_gap: px(2),
+            column_gap: px(gap),
+            row_gap: px(gap),
+            min_height: px(20),
             flex_shrink: 0.0,
             ..default()
-        })
-        .with_children(|tabs| {
-            for tab in ChatTab::ALL {
-                let mut cell = tabs.spawn((Button, TabButton(tab), Bare));
-                super::skinned::frame_tab(
-                    &mut cell,
-                    art,
-                    look,
-                    Node {
-                        height: px(super::skinned::WORD_TAB_HEIGHT),
-                        align_items: AlignItems::Center,
-                        flex_shrink: 0.0,
-                        ..default()
-                    },
-                );
-                cell.with_child((
-                    TabLabel(tab),
-                    Bare,
-                    Text::new(tab.label()),
-                    theme::font(Size::Small),
-                    TextColor(theme::INK),
-                ));
-            }
-        });
+        },
+    ));
+}
+
+/// Creates the tabs with the strip's skin and visual order after a move.
+#[allow(clippy::needless_pass_by_value)]
+pub(super) fn sync_tabs(
+    mut commands: Commands,
+    state: Res<ChatState>,
+    mut strips: Query<(Entity, &mut TabStrip)>,
+    mut art: crate::sheets::Art,
+) {
+    for (entity, mut strip) in &mut strips {
+        let Some(group) = state.groups.get(strip.id) else {
+            continue;
+        };
+        if strip.painted.as_deref() == Some(group.tabs.as_slice()) {
+            continue;
+        }
+        commands
+            .entity(entity)
+            .despawn_children()
+            .with_children(|parent| {
+                if group.tabs.is_empty() {
+                    parent.spawn(theme::text("Drop a chat tab here", Size::Small, theme::INK));
+                }
+                let art_skin = strip.skin.as_ref().and_then(|(_, skin)| skin.clone());
+                art.draw_in(art_skin);
+                for &tab in &group.tabs {
+                    let mut cell = parent.spawn((Button, TabButton(tab, strip.id)));
+                    if let Some((look, _)) = &strip.skin {
+                        cell.insert(Bare);
+                        super::skinned::frame_tab(
+                            &mut cell,
+                            &mut art,
+                            look,
+                            Node {
+                                height: px(super::skinned::WORD_TAB_HEIGHT),
+                                align_items: AlignItems::Center,
+                                flex_shrink: 0.0,
+                                ..default()
+                            },
+                        );
+                    } else {
+                        cell.insert((
+                            Node {
+                                padding: UiRect::axes(px(3), px(3)),
+                                border: UiRect::bottom(px(2)),
+                                ..default()
+                            },
+                            BackgroundColor(theme::BUTTON),
+                            BorderColor::all(theme::EDGE),
+                        ));
+                    }
+                    cell.with_children(|button| {
+                        let mut words = button.spawn((
+                            TabLabel(tab, strip.id),
+                            theme::text(tab.label(), Size::Small, theme::INK),
+                        ));
+                        if strip.skin.is_some() {
+                            words.insert(Bare);
+                        }
+                    });
+                }
+                art.draw_in(None);
+            });
+        strip.painted = Some(group.tabs.clone());
+    }
 }
 
 /// The skin's input box, with a top edge where its layout has no divider.
-pub(super) fn skinned_input(parent: &mut ChildSpawnerCommands, node: Node, divider: bool) {
+pub(super) fn skinned_input(
+    parent: &mut ChildSpawnerCommands,
+    node: Node,
+    divider: bool,
+    id: WindowId,
+) {
     let divider = if divider { 1.0 } else { 0.0 };
     parent
         .spawn((
             Button,
             InputBox,
+            InGroup(id),
             Bare,
             BorderColor::all(theme::EDGE_LIGHT.with_alpha(0.6)),
             Node {
@@ -393,6 +536,7 @@ pub(super) fn skinned_input(parent: &mut ChildSpawnerCommands, node: Node, divid
         .with_children(|input| {
             input.spawn((
                 InputLabel,
+                InGroup(id),
                 Bare,
                 Text::new(""),
                 theme::font(Size::Body),
@@ -401,48 +545,14 @@ pub(super) fn skinned_input(parent: &mut ChildSpawnerCommands, node: Node, divid
         });
 }
 
-/// The chat's tabs, one for each group of channels, with their unread
-/// counts.
-fn tab_row(parent: &mut ChildSpawnerCommands) {
-    parent
-        .spawn(Node {
-            flex_wrap: FlexWrap::Wrap,
-            column_gap: px(3),
-            row_gap: px(3),
-            flex_shrink: 0.0,
-            ..default()
-        })
-        .with_children(|tabs| {
-            for tab in ChatTab::ALL {
-                tabs.spawn((
-                    Button,
-                    TabButton(tab),
-                    Node {
-                        padding: UiRect::axes(px(3), px(3)),
-                        border: UiRect::bottom(px(2)),
-                        ..default()
-                    },
-                    BackgroundColor(theme::BUTTON),
-                    BorderColor::all(theme::EDGE),
-                ))
-                .with_children(|button| {
-                    button.spawn((
-                        TabLabel(tab),
-                        Text::new(tab.label()),
-                        theme::font(Size::Small),
-                        TextColor(theme::INK),
-                    ));
-                });
-            }
-        });
-}
-
 /// The active tab's lines, which scroll on their own; drawn in the skin
 /// (`bare`), an empty tab is an empty box.
-fn lines(parent: &mut ChildSpawnerCommands, bare: bool) -> Entity {
+fn lines(parent: &mut ChildSpawnerCommands, bare: bool, id: WindowId) -> Entity {
     parent
         .spawn((
             Viewport,
+            InGroup(id),
+            super::windows::KeepsPress,
             // Hovered only when no window drawn over the chat takes the pointer.
             Interaction::default(),
             ScrollPosition::default(),
@@ -456,6 +566,7 @@ fn lines(parent: &mut ChildSpawnerCommands, bare: bool) -> Entity {
         .with_children(|viewport| {
             viewport.spawn((
                 Content { bare, ..default() },
+                InGroup(id),
                 Node {
                     width: percent(100),
                     flex_direction: FlexDirection::Column,
@@ -469,11 +580,12 @@ fn lines(parent: &mut ChildSpawnerCommands, bare: bool) -> Entity {
 }
 
 /// The line the player types into, which shows the draft.
-fn typing_box(parent: &mut ChildSpawnerCommands, node: Node) {
+fn typing_box(parent: &mut ChildSpawnerCommands, id: WindowId, node: Node) {
     parent
         .spawn((
             Button,
             InputBox,
+            InGroup(id),
             node,
             BackgroundColor(theme::WELL),
             BorderColor::all(theme::EDGE),
@@ -481,6 +593,7 @@ fn typing_box(parent: &mut ChildSpawnerCommands, node: Node) {
         .with_children(|input| {
             input.spawn((
                 InputLabel,
+                InGroup(id),
                 Text::new("Press Enter to chat"),
                 theme::font(Size::Body),
                 TextColor(theme::INK),
@@ -489,7 +602,12 @@ fn typing_box(parent: &mut ChildSpawnerCommands, node: Node) {
 }
 
 /// Routes tab presses and wheel input, reserving the wheel from the camera over chat.
-#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::needless_pass_by_value,
+    clippy::type_complexity,
+    clippy::too_many_lines
+)]
 pub(super) fn input(
     mut state: ResMut<ChatState>,
     mut online: ResMut<super::online::OnlineState>,
@@ -502,18 +620,22 @@ pub(super) fn input(
     keys: Option<Res<ButtonInput<Key>>>,
     mut clipboard: Option<ResMut<bevy::clipboard::Clipboard>>,
     mut paste: Local<paste::Paste>,
-    windows: Query<&Window, With<PrimaryWindow>>,
-    panels: Query<(Entity, &UiGlobalTransform, &ComputedNode), With<Panel>>,
+    (windows, pointer): (
+        Query<&Window, With<PrimaryWindow>>,
+        super::windows::pointer::PointerUi,
+    ),
+    panels: Query<(Entity, Option<&InGroup>), With<Panel>>,
     wheel: Res<super::windows::pointer::Wheel>,
     (tabs, latest): (
         crate::clicks::Clicks<TabButton>,
         crate::clicks::Clicks<Latest>,
     ),
-    input_box: Query<&Interaction, (With<InputBox>, Changed<Interaction>)>,
+    input_box: Query<(&Interaction, Option<&InGroup>), (With<InputBox>, Changed<Interaction>)>,
     send: crate::clicks::Clicks<Send>,
-    viewport: Query<&ComputedNode, With<Viewport>>,
+    viewports: Query<(&ComputedNode, Option<&InGroup>), With<Viewport>>,
+    drag: Option<Res<TabDrag>>,
 ) {
-    typing.escape_consumed = false;
+    typing.escape_consumed = drag.as_ref().is_some_and(|drag| drag.escaped);
     if typing.editing_script {
         paste.clear();
         keyboard.clear();
@@ -529,18 +651,17 @@ pub(super) fn input(
         state.hovered = false;
         return;
     }
-    state.hovered = windows
-        .single()
-        .ok()
-        .and_then(Window::physical_cursor_position)
-        .is_some_and(|cursor| {
-            panels.iter().any(|(_, transform, node)| {
-                transform.try_inverse().is_some_and(|inverse| {
-                    let local = inverse.transform_point2(cursor).abs();
-                    local.cmple(node.size() * 0.5).all()
-                })
-            })
-        });
+    state.hovered = drag.as_deref().is_some_and(TabDrag::dragging)
+        || windows
+            .single()
+            .ok()
+            .and_then(Window::physical_cursor_position)
+            .and_then(|cursor| pointer.top_at(cursor))
+            .is_some_and(|top| {
+                panels
+                    .iter()
+                    .any(|(panel, _)| pointer.descends_from(top, panel))
+            });
     // A click on the game, anywhere outside the chat window, acts as any
     // click does and gives the keyboard back to the game; the line keeps
     // what was typed, which Enter brings back (Titanium per Adam, 10-19;
@@ -551,10 +672,21 @@ pub(super) fn input(
     {
         typing.composing = false;
     }
-    if input_box.iter().any(|value| *value == Interaction::Pressed) {
+    for TabButton(tab, id) in tabs.iter() {
+        state.groups.select(*id, *tab);
+    }
+    if let Some((_, marker)) = input_box
+        .iter()
+        .find(|(value, _)| **value == Interaction::Pressed)
+        && state.groups.focus(group(marker))
+    {
         typing.composing = true;
         typing.counting = false;
     }
+    let send = send
+        .iter()
+        .next()
+        .is_some_and(|Send(id)| state.groups.focus(*id));
     // Local text fields keep their keys out of chat.
     if typing.counting || typing.map_search || typing.spell_search_claimed {
         keyboard.clear();
@@ -562,7 +694,10 @@ pub(super) fn input(
     }
     let events: Vec<_> = keyboard
         .read_with_id()
-        .filter(|(_, id)| !typing.spell_search_captured(*id))
+        .filter(|(event, id)| {
+            !(typing.spell_search_captured(*id)
+                || typing.escape_consumed && event.logical_key == Key::Escape)
+        })
         .map(|(event, _)| event.clone())
         .collect();
     let empty = ButtonInput::default();
@@ -574,7 +709,7 @@ pub(super) fn input(
         clipboard.as_deref_mut(),
         &mut paste,
         online.world().session_id(),
-    ) || send.any();
+    ) || send;
     if submit {
         paste.clear();
         if state.draft.trim().is_empty() {
@@ -587,26 +722,26 @@ pub(super) fn input(
             submit_draft(&mut state, &mut typing, &mut online, &outbox, &qol);
         }
     }
-    for TabButton(tab) in tabs.iter() {
-        state.active = *tab;
+    for Latest(id) in latest.iter() {
+        if let Some(tab) = state.groups.active(*id) {
+            state.views.entry(tab).or_default().follow = true;
+        }
     }
-    let active = state.active;
-    if latest.any() {
-        state.views.entry(active).or_default().follow = true;
-    }
-    if wheel
-        .surface
-        .is_some_and(|surface| panels.contains(surface))
-        && wheel.pixels != 0.0
+    if wheel.pixels != 0.0
+        && let Some((_, marker)) = wheel.surface.and_then(|surface| panels.get(surface).ok())
+        && let Some(active) = state.groups.active(group(marker))
+        && let Some((node, _)) = viewports
+            .iter()
+            .find(|(_, owner)| group(*owner) == group(marker))
+        && !node.is_empty()
     {
-        let maximum = viewport.single().map_or(0.0, |node| {
-            ((node.content_size().y - node.size().y) * node.inverse_scale_factor()).max(0.0)
-        });
+        let maximum =
+            ((node.content_size().y - node.size().y) * node.inverse_scale_factor()).max(0.0);
         let view = state.views.entry(active).or_default();
         if view.follow {
             view.offset = maximum;
         }
-        view.offset = (view.offset - wheel.pixels).clamp(0.0, maximum);
+        view.offset = (view.offset.min(maximum) - wheel.pixels).clamp(0.0, maximum);
         view.follow = view.offset >= maximum - 1.0;
     }
 }
@@ -759,7 +894,13 @@ pub(super) fn refresh(
     mut commands: Commands,
     mut state: ResMut<ChatState>,
     typing: Res<crate::keys::Typing>,
-    mut contents: Query<(Entity, &mut Content, Option<&Children>)>,
+    mut contents: Query<(
+        Entity,
+        &mut Content,
+        Option<&Children>,
+        Option<&InGroup>,
+        Option<&ComputedNode>,
+    )>,
     rendered: Query<(Option<&LineId>, Has<Placeholder>)>,
     mut labels: Query<(&TabLabel, &mut Text, &mut TextColor, Has<Bare>), Without<InputLabel>>,
     mut buttons: Query<
@@ -771,30 +912,44 @@ pub(super) fn refresh(
         ),
         (Without<InputBox>, Without<Bare>),
     >,
-    mut input_labels: Query<(&mut Text, Has<Bare>), (With<InputLabel>, Without<TabLabel>)>,
-    mut input_boxes: Query<&mut BorderColor, (With<InputBox>, Without<TabButton>, Without<Bare>)>,
+    mut input_labels: Query<
+        (&mut Text, Has<Bare>, Option<&InGroup>),
+        (With<InputLabel>, Without<TabLabel>),
+    >,
+    mut input_boxes: Query<
+        (&mut BorderColor, Option<&InGroup>),
+        (With<InputBox>, Without<TabButton>, Without<Bare>),
+    >,
     (look, options): (Option<Res<ChatLook>>, Res<super::options::OptionsState>),
     (online, messages): (
         Res<super::online::OnlineState>,
         Option<Res<crate::hud::messages::Messages>>,
     ),
 ) {
-    let active = state.active;
     let revision = state.history.revision();
-    let following = state.views.entry(active).or_default().follow;
-    if following {
-        if active == ChatTab::All {
-            for tab in ChatTab::ALL {
-                state.views.entry(tab).or_default().seen = revision;
+    let ChatState { groups, views, .. } = &mut *state;
+    for (_, _, _, marker, node) in &contents {
+        if node.is_some_and(ComputedNode::is_empty) {
+            continue;
+        }
+        let Some(group) = groups.get(group(marker)) else {
+            continue;
+        };
+        let Some(active) = group.active else { continue };
+        if views.entry(active).or_default().follow {
+            if active == ChatTab::All {
+                for &tab in &group.tabs {
+                    views.entry(tab).or_default().seen = revision;
+                }
+            } else {
+                views.entry(active).or_default().seen = revision;
             }
-        } else {
-            state.views.entry(active).or_default().seen = revision;
         }
     }
-    for (TabLabel(tab), mut text, mut color, bare) in &mut labels {
+    for (TabLabel(tab, id), mut text, mut color, bare) in &mut labels {
         // A skinned tab has no fill to show it is the one shown: its words
         // are lit instead.
-        let wanted = if bare && *tab == active {
+        let wanted = if bare && Some(*tab) == state.groups.active(*id) {
             theme::INK_BRIGHT
         } else {
             theme::INK
@@ -821,46 +976,54 @@ pub(super) fn refresh(
             text.0 = label;
         }
     }
-    for (TabButton(tab), interaction, mut background, mut border) in &mut buttons {
-        background.0 = theme::button(true, *tab == active, *interaction);
-        *border = BorderColor::all(if *tab == active {
+    for (TabButton(tab, id), interaction, mut background, mut border) in &mut buttons {
+        let active = Some(*tab) == state.groups.active(*id);
+        background.0 = theme::button(true, active, *interaction);
+        *border = BorderColor::all(if active {
             theme::EDGE_HOVER
         } else {
             theme::EDGE
         });
     }
-    for (mut text, bare) in &mut input_labels {
-        text.0 = if state.draft.is_empty() {
-            if typing.composing {
-                "|"
-            } else if bare {
-                ""
-            } else {
-                "Press Enter to chat"
-            }
-            .into()
-        } else if typing.composing {
+    for (mut text, bare, marker) in &mut input_labels {
+        let id = group(marker);
+        let owner = state.groups.owner() == id;
+        let wanted = if owner && typing.composing {
             format!("{}|", state.draft)
-        } else {
+        } else if owner && !state.draft.is_empty() {
             state.draft.clone()
-        };
-    }
-    for mut border in &mut input_boxes {
-        *border = BorderColor::all(if typing.composing {
-            theme::FOCUS
+        } else if bare || state.groups.active(id).is_none() {
+            String::new()
         } else {
-            theme::EDGE
-        });
+            "Press Enter to chat".into()
+        };
+        if text.0 != wanted {
+            text.0 = wanted;
+        }
     }
-    // Only the active tab's lines exist, as laying out every tab's lines each frame
-    // would cost more than redrawing one tab when it is chosen.
+    for (mut border, marker) in &mut input_boxes {
+        *border = BorderColor::all(
+            if typing.composing && state.groups.owner() == group(marker) {
+                theme::FOCUS
+            } else {
+                theme::EDGE
+            },
+        );
+    }
+    // Each group only lays out its active tab's lines.
     // The skinned chat's lines take the player's colours and font, which
     // can arrive after its first lines: those are drawn again.
     let restyled = look.as_ref().is_some_and(Res::is_changed);
     // Lines drawn with their times, or without, are drawn again once the
     // player turns the times on or off.
     let times = options.options.qol.on(Fix::ShowTimesInChat);
-    for (column, mut content, children) in &mut contents {
+    for (column, mut content, children, marker, _) in &mut contents {
+        let Some(active) = state.groups.active(group(marker)) else {
+            if content.tab.take().is_some() {
+                commands.entity(column).despawn_children();
+            }
+            continue;
+        };
         if restyled && content.bare {
             content.tab = None;
         }
@@ -1037,7 +1200,11 @@ fn submit_draft(
             }
             return Ok(());
         }
-        let message = outbound(state.active, state.draft.trim())?;
+        let active = state
+            .groups
+            .active(state.groups.owner())
+            .unwrap_or_default();
+        let message = outbound(active, state.draft.trim())?;
         outbox.send(online.world(), ClientCommand::SendChat(message))?;
         Ok(())
     })();
@@ -1047,8 +1214,9 @@ fn submit_draft(
             // Sent lines return the keyboard to the game, and the chat to its
             // newest line; a line sent says nothing more.
             typing.composing = false;
-            let active = state.active;
-            state.views.entry(active).or_default().follow = true;
+            if let Some(active) = state.groups.active(state.groups.owner()) {
+                state.views.entry(active).or_default().follow = true;
+            }
         }
         // The draft stays, to mend and send again. Each line typed is
         // answered, however soon the same one comes again.
@@ -1564,10 +1732,15 @@ fn outbound(tab: ChatTab, input: &str) -> Result<OutboundChat, String> {
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn scroll(
     state: Res<ChatState>,
-    mut query: Query<(&ComputedNode, &mut ScrollPosition), With<Viewport>>,
+    mut query: Query<(&ComputedNode, &mut ScrollPosition, Option<&InGroup>), With<Viewport>>,
 ) {
-    let view = state.views.get(&state.active).copied().unwrap_or_default();
-    for (node, mut scroll) in &mut query {
+    for (node, mut scroll, marker) in &mut query {
+        let view = state
+            .groups
+            .active(group(marker))
+            .and_then(|tab| state.views.get(&tab))
+            .copied()
+            .unwrap_or_default();
         let maximum =
             ((node.content_size().y - node.size().y) * node.inverse_scale_factor()).max(0.0);
         scroll.y = if view.follow {
@@ -2528,6 +2701,7 @@ mod tests {
         // The chat window: 300 by 200 at (24, 110).
         app.world_mut().spawn((
             Panel,
+            super::super::windows::KeepsPress,
             ComputedNode {
                 size: Vec2::new(300.0, 200.0),
                 inverse_scale_factor: 1.0,
@@ -2690,16 +2864,24 @@ mod tests {
         app.init_resource::<crate::sheets::Sheets>()
             .init_resource::<Assets<Image>>()
             .init_resource::<crate::skin::UiSkin>()
-            .insert_resource(crate::ViewerSettings(crate::ViewerConfig::default()));
+            .insert_resource(crate::ViewerSettings(crate::ViewerConfig::default()))
+            .init_resource::<ChatState>()
+            .add_systems(Update, sync_tabs);
         app.world_mut()
             .run_system_once(|mut commands: Commands, mut art: crate::sheets::Art| {
                 let tab_frame = eq_client_assets::sidl::FrameLook::default();
                 commands.spawn(Node::default()).with_children(|window| {
-                    skinned_output(window, Node::default(), (&mut art, Some(&tab_frame)));
-                    skinned_input(window, Node::default(), false);
+                    skinned_output(
+                        window,
+                        Node::default(),
+                        (&mut art, Some(&tab_frame)),
+                        WindowId::Chat,
+                    );
+                    skinned_input(window, Node::default(), false, WindowId::Chat);
                 });
             })
             .unwrap();
+        app.update();
         let world = app.world_mut();
         let count = |world: &mut World, filter: fn(EntityRef) -> bool| {
             world
@@ -2863,13 +3045,16 @@ mod tests {
         );
         let button = app
             .world_mut()
-            .spawn((TabButton(ChatTab::System), Interaction::None))
+            .spawn((
+                TabButton(ChatTab::System, WindowId::Chat),
+                Interaction::None,
+            ))
             .id();
         crate::clicks::testing::click(&mut app, button);
         assert_eq!(shown(&mut app), expected[1..]);
         app.world_mut()
             .entity_mut(button)
-            .insert(TabButton(ChatTab::Guild));
+            .insert(TabButton(ChatTab::Guild, WindowId::Chat));
         crate::clicks::testing::click(&mut app, button);
         assert_eq!(shown(&mut app), expected[..1]);
         // Receive another system line while a different filter is selected.
@@ -2879,7 +3064,7 @@ mod tests {
         assert_eq!(shown(&mut app), expected[..1]);
         app.world_mut()
             .entity_mut(button)
-            .insert(TabButton(ChatTab::All));
+            .insert(TabButton(ChatTab::All, WindowId::Chat));
         crate::clicks::testing::click(&mut app, button);
         let mut all = expected.to_vec();
         all.push("Synthetic local refusal.");
@@ -2925,7 +3110,7 @@ mod tests {
         app.world_mut().spawn(Content::default());
         let button = app
             .world_mut()
-            .spawn((TabButton(ChatTab::Guild), Interaction::None))
+            .spawn((TabButton(ChatTab::Guild, WindowId::Chat), Interaction::None))
             .id();
         for line in crate::preview::chat_lines() {
             app.world_mut()
@@ -2934,7 +3119,13 @@ mod tests {
                 .push(line);
         }
         crate::clicks::testing::click(&mut app, button);
-        assert_eq!(app.world().resource::<ChatState>().active, ChatTab::Guild);
+        assert_eq!(
+            app.world()
+                .resource::<ChatState>()
+                .groups
+                .active(WindowId::Chat),
+            Some(ChatTab::Guild)
+        );
         // Each line reads in its log's words: without the installed table,
         // in this client's words for who spoke and where.
         let messages = shown(&mut app);
@@ -2944,7 +3135,7 @@ mod tests {
         );
         app.world_mut()
             .entity_mut(button)
-            .insert(TabButton(ChatTab::Auction));
+            .insert(TabButton(ChatTab::Auction, WindowId::Chat));
         crate::clicks::testing::click(&mut app, button);
         let messages = shown(&mut app);
         assert_eq!(
@@ -2969,6 +3160,149 @@ mod tests {
             7
         );
     }
+    #[test]
+    fn closing_a_detached_frame_returns_its_tabs_to_the_main_strip() {
+        let mut app = crate::testing::app();
+        app.add_systems(Startup, |mut commands: Commands| spawn(&mut commands))
+            .add_systems(Update, (close_groups, reconcile, sync_tabs).chain());
+        let detached = app
+            .world_mut()
+            .resource_mut::<ChatState>()
+            .groups
+            .detach(WindowId::Chat, ChatTab::Guild)
+            .unwrap();
+        app.update();
+
+        let world = app.world_mut();
+        let frame = world
+            .query_filtered::<(Entity, &WindowId), With<Panel>>()
+            .iter(world)
+            .find(|(_, id)| **id == detached)
+            .unwrap()
+            .0;
+        let close = world
+            .query::<(Entity, &CloseGroup)>()
+            .iter(world)
+            .find(|(_, close)| close.0 == detached)
+            .unwrap()
+            .0;
+        let tab = |world: &mut World| {
+            let (id, button) = world
+                .query::<(Entity, &TabButton)>()
+                .iter(world)
+                .find(|(_, button)| button.0 == ChatTab::Guild)
+                .unwrap();
+            (id, button.1)
+        };
+        assert_eq!(tab(world).1, detached);
+        crate::clicks::testing::click(&mut app, close);
+        assert!(app.world().get_entity(frame).is_err());
+        let world = app.world_mut();
+        assert_eq!(tab(world).1, WindowId::Chat);
+        assert_eq!(
+            world.resource::<ChatState>().groups.active(WindowId::Chat),
+            Some(ChatTab::Guild)
+        );
+    }
+
+    #[test]
+    fn detached_chat_keeps_its_view_links_and_outgoing_channel() {
+        let (mut app, receiver) = slash_app(true);
+        app.init_resource::<crate::options::OptionsState>()
+            .add_systems(Update, refresh.after(input))
+            .add_systems(PostUpdate, scroll);
+        let world = app.world_mut();
+        let mut chat = world.resource_mut::<ChatState>();
+        for line in crate::preview::chat_lines() {
+            chat.history.push(line);
+        }
+        chat.groups.select(WindowId::Chat, ChatTab::Guild);
+        let detached = chat
+            .groups
+            .detach(WindowId::Chat, ChatTab::Auction)
+            .unwrap();
+        chat.views.insert(
+            ChatTab::Auction,
+            TabView {
+                offset: 35.0,
+                follow: false,
+                seen: 0,
+            },
+        );
+        chat.draft = "synthetic auction".into();
+        let main_input = world.spawn((InputLabel, Bare, Text::default())).id();
+        let float_input = world
+            .spawn((InputLabel, Bare, InGroup(detached), Text::default()))
+            .id();
+        let main = world.spawn(Content::default()).id();
+        let floating = world.spawn((Content::default(), InGroup(detached))).id();
+        let viewport = world
+            .spawn((
+                Viewport,
+                InGroup(detached),
+                ScrollPosition::default(),
+                ComputedNode {
+                    size: Vec2::new(200.0, 100.0),
+                    content_size: Vec2::new(200.0, 220.0),
+                    inverse_scale_factor: 1.0,
+                    ..default()
+                },
+            ))
+            .id();
+        world.resource_mut::<crate::keys::Typing>().composing = true;
+        app.update();
+
+        let world = app.world();
+        let line = |column| world.get::<Children>(column).unwrap()[0];
+        assert!(
+            world
+                .get::<Text>(line(main))
+                .unwrap()
+                .0
+                .contains("Meet by the tunnel")
+        );
+        let auction = line(floating);
+        let spans = world.get::<Children>(auction).unwrap();
+        assert!(spans.iter().any(|span| {
+            world
+                .get::<TextSpan>(span)
+                .is_some_and(|text| text.0.contains("WTS"))
+        }));
+        assert!(spans.iter().any(|span| {
+            world
+                .get::<crate::items::ItemButton>(span)
+                .is_some_and(|link| link.0.item_id == 42)
+        }));
+        assert_eq!(world.get::<Text>(main_input).unwrap().0, "");
+        assert_eq!(
+            world.get::<Text>(float_input).unwrap().0,
+            "synthetic auction|"
+        );
+        assert!((world.get::<ScrollPosition>(viewport).unwrap().y - 35.0).abs() < f32::EPSILON);
+        assert_eq!(world.resource::<ChatState>().history.revision(), 7);
+        assert_eq!(
+            world.resource::<ChatState>().views[&ChatTab::Auction].seen,
+            0
+        );
+
+        app.world_mut().write_message(KeyboardInput {
+            key_code: KeyCode::Enter,
+            logical_key: Key::Enter,
+            state: bevy::input::ButtonState::Pressed,
+            text: None,
+            repeat: false,
+            window: Entity::PLACEHOLDER,
+        });
+        app.update();
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            ClientCommand::SendChat(OutboundChat::Auction(text)) if text == "synthetic auction"
+        ));
+        let chat = app.world().resource::<ChatState>();
+        assert!(chat.views[&ChatTab::Auction].follow);
+        assert_eq!(chat.history.revision(), 7);
+    }
+
     #[test]
     fn messages_do_not_force_a_scrolled_tab_back_to_latest() {
         let mut app = App::new();

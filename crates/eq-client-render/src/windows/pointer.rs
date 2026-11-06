@@ -38,6 +38,7 @@ type WheelSurfaces<'w, 's> = Query<
         &'static ComputedNode,
         &'static ComputedStackIndex,
         Option<&'static InheritedVisibility>,
+        Has<crate::chat::Panel>,
     ),
     With<TakesWheel>,
 >;
@@ -49,6 +50,7 @@ pub(crate) fn wheel(
     mut events: MessageReader<MouseWheel>,
     windows: Query<&Window, With<PrimaryWindow>>,
     surfaces: WheelSurfaces,
+    pointer: PointerUi,
     mut wheel: ResMut<Wheel>,
 ) {
     let (mut pixels, mut lines) = (0.0, 0.0);
@@ -72,13 +74,15 @@ pub(crate) fn wheel(
         pixels,
         lines,
         surface: cursor.and_then(|cursor| {
+            let top = (pixels != 0.0).then(|| pointer.top_at(cursor)).flatten();
             surfaces
                 .iter()
-                .filter(|(_, transform, node, _, visibility)| {
+                .filter(|(entity, transform, node, _, visibility, chat)| {
                     visibility.is_none_or(|visibility| visibility.get())
                         && super::contains(cursor, transform, node)
+                        && (!chat || top.is_none_or(|top| pointer.descends_from(top, *entity)))
                 })
-                .max_by_key(|(_, _, _, stack, _)| stack.0)
+                .max_by_key(|(_, _, _, stack, ..)| stack.0)
                 .map(|(entity, ..)| entity)
         }),
     };
@@ -127,6 +131,17 @@ impl PointerUi<'_, '_> {
             || self.top_at(cursor).is_some()
     }
 
+    /// Whether the hit surface belongs to this window or is the window itself.
+    pub(crate) fn descends_from(&self, mut entity: Entity, ancestor: Entity) -> bool {
+        while entity != ancestor {
+            let Ok(parent) = self.parents.get(entity) else {
+                return false;
+            };
+            entity = parent.parent();
+        }
+        true
+    }
+
     /// The frontmost control or blocking panel at an event's original position.
     /// This also works when several pointer events arrive in one rendered frame.
     pub(crate) fn top_at(&self, cursor: Vec2) -> Option<Entity> {
@@ -154,6 +169,79 @@ mod tests {
 
     #[derive(Resource, Default)]
     struct Hit(bool);
+
+    #[test]
+    fn the_wheel_scrolls_only_the_chat_under_the_frontmost_surface() {
+        let mut app = App::new();
+        app.init_resource::<Wheel>()
+            .add_message::<MouseWheel>()
+            .add_systems(Update, wheel);
+        let mut window = Window::default();
+        window.set_physical_cursor_position(Some(bevy::math::DVec2::splat(50.0)));
+        let window = app.world_mut().spawn((window, PrimaryWindow)).id();
+        let mut panel = |stack| {
+            app.world_mut()
+                .spawn((
+                    crate::chat::Panel,
+                    super::super::Frame::default(),
+                    TakesWheel,
+                    ComputedNode {
+                        size: Vec2::splat(200.0),
+                        ..default()
+                    },
+                    UiGlobalTransform::from_translation(Vec2::splat(50.0)),
+                    ComputedStackIndex(stack),
+                    InheritedVisibility::VISIBLE,
+                ))
+                .id()
+        };
+        let back = panel(1);
+        let front = panel(2);
+        let child = app
+            .world_mut()
+            .spawn((
+                Button,
+                ChildOf(front),
+                ComputedNode {
+                    size: Vec2::splat(40.0),
+                    ..default()
+                },
+                UiGlobalTransform::from_translation(Vec2::splat(50.0)),
+                ComputedStackIndex(3),
+                InheritedVisibility::VISIBLE,
+            ))
+            .id();
+        let cover = app
+            .world_mut()
+            .spawn((
+                super::super::Frame::default(),
+                ComputedNode {
+                    size: Vec2::splat(60.0),
+                    ..default()
+                },
+                UiGlobalTransform::from_translation(Vec2::splat(50.0)),
+                ComputedStackIndex(4),
+                InheritedVisibility::VISIBLE,
+            ))
+            .id();
+        let turn = |app: &mut App| {
+            app.world_mut().write_message(MouseWheel {
+                unit: MouseScrollUnit::Line,
+                phase: bevy::input::touch::TouchPhase::Moved,
+                x: 0.0,
+                y: 1.0,
+                window,
+            });
+            app.update();
+            app.world().resource::<Wheel>().surface
+        };
+        assert_eq!(turn(&mut app), None);
+        app.world_mut().despawn(cover);
+        assert_eq!(turn(&mut app), Some(front));
+        app.world_mut().despawn(child);
+        app.world_mut().despawn(front);
+        assert_eq!(turn(&mut app), Some(back));
+    }
 
     #[test]
     fn clipped_and_hidden_controls_do_not_block_world_input() {

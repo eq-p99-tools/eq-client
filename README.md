@@ -60,7 +60,7 @@ in the EverQuest installation, so the week's wait survives restarts.
   surface. Layouts are saved per character.
 
 See the [documentation index](docs/README.md) for
-[controls, maps and chat](docs/controls.md), [gameplay](docs/gameplay.md),
+[controls, maps and chat](docs/controls.md), [detachable chat tabs](docs/chat-tabs.md), [gameplay](docs/gameplay.md),
 [settings](docs/settings.md), and [assets and offline previews](docs/assets.md).
 The shortcuts above are defaults and can be reassigned.
 

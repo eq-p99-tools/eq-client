@@ -193,7 +193,11 @@ fn images(world: &mut World) -> BTreeMap<String, Entity> {
 #[allow(clippy::too_many_lines)]
 fn resize_reflows_real_nested_chat_widgets_clips_and_perimeter_without_replacement() {
     use eq_client_assets::sidl::{Sizable, TextBox, View, WindowTemplate};
-    for scale in [0.75, 1.25, 2.0] {
+    for (scale, id) in [
+        (0.75, WindowId::Chat),
+        (1.25, WindowId::ChatGroup(1)),
+        (2.0, WindowId::ChatGroup(2)),
+    ] {
         let (look, pixels) = fixture();
         let mut app = app(scale, pixels);
         app.init_resource::<crate::keys::Typing>();
@@ -318,7 +322,7 @@ fn resize_reflows_real_nested_chat_widgets_clips_and_perimeter_without_replaceme
                             &screen,
                             &mut art,
                             &Context {
-                                id: WindowId::Chat,
+                                id,
                                 paperdoll: None,
                                 depth: 0,
                                 tab_frame: None,
@@ -330,6 +334,16 @@ fn resize_reflows_real_nested_chat_widgets_clips_and_perimeter_without_replaceme
             .unwrap();
         app.update();
         let world = app.world_mut();
+        let closes = world
+            .query::<&crate::chat::CloseGroup>()
+            .iter(world)
+            .map(|close| close.0)
+            .collect::<Vec<_>>();
+        if id == WindowId::Chat {
+            assert_eq!(closes, []);
+        } else {
+            assert_eq!(closes, [id]);
+        }
         let input = world
             .query_filtered::<Entity, With<crate::chat::InputBox>>()
             .single(world)

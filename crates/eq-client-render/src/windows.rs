@@ -47,7 +47,12 @@ pub(super) fn register_layout(app: &mut App) {
             .in_set(super::Stage::Route),
     );
     app.init_resource::<Moves>();
-    app.add_systems(Update, store::persist.in_set(super::Stage::Present));
+    app.add_systems(
+        Update,
+        store::persist
+            .before(super::chat::reconcile)
+            .in_set(super::Stage::Present),
+    );
     app.add_systems(PostUpdate, block_clicks);
     // A window rebuilt on zoning takes back its old place first, so a
     // scripted move waiting for it lands after and wins.
@@ -352,6 +357,12 @@ pub(super) fn title_bar(parent: &mut ChildSpawnerCommands, frame: Entity, id: Wi
                         theme::text("_", Size::Body, theme::INK_BRIGHT),
                     ));
                 });
+            } else if matches!(id, WindowId::ChatGroup(_)) {
+                button
+                    .insert(crate::chat::CloseGroup(id))
+                    .with_children(|button| {
+                        button.spawn(theme::text("×", Size::Body, theme::INK_BRIGHT));
+                    });
             } else {
                 button
                     .insert((

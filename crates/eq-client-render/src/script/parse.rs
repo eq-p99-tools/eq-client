@@ -1719,7 +1719,20 @@ chat tell Friend inc now
                 Step::Drag("chat".into(), bevy::math::Vec2::new(700.5, 450.0)),
             ]
         );
-        for bad in ["drag", "drag chat 1", "drag nowhere 1 2", "drag chat -5 2"] {
+        assert_eq!(
+            parse("drag chat-group-1 400 300\n", base).unwrap(),
+            [Step::Drag(
+                "chat-group-1".into(),
+                bevy::math::Vec2::new(400.0, 300.0)
+            )]
+        );
+        for bad in [
+            "drag",
+            "drag chat 1",
+            "drag nowhere 1 2",
+            "drag chat -5 2",
+            "drag chat-group-0 400 300",
+        ] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
     }
