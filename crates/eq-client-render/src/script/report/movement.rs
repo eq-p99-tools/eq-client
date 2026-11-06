@@ -166,7 +166,7 @@ mod tests {
             Some(session),
             Some((0.0, 0.0, 4.0, 0.0)),
             Some(received),
-            LiquidObservation {
+            &LiquidObservation {
                 contact: LiquidContact::Swimming(SwimDepth::Submerged),
                 origin: Some(Liquid::Water),
                 surface: None,
@@ -186,7 +186,7 @@ mod tests {
             None,
             None,
             Some(received),
-            LiquidObservation::UNKNOWN,
+            &LiquidObservation::UNKNOWN,
             true,
         );
         assert!(newer["last_server_placement"].is_null());
@@ -196,7 +196,7 @@ mod tests {
             Some(session),
             None,
             None,
-            LiquidObservation {
+            &LiquidObservation {
                 contact: LiquidContact::Unmarked,
                 origin: None,
                 surface: Some(Liquid::Lava),
