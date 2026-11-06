@@ -16,7 +16,10 @@ use eq_client_core::{
     Capability, ClientCommand, DiagonalAlong, DiagonalRates, GroundedDiagonal, HeadingUpdate,
     MovementMode, MovementRequest, Posture, StrafeSide,
     hazards::Hazard,
-    movement::{AirborneController, CollisionWorld, Landing, PROVISIONAL_PHYSICS, VerticalPhysics},
+    movement::{
+        AirborneController, CollisionWorld, Landing, PROVISIONAL_PHYSICS, VerticalPhysics,
+        swim_speed,
+    },
     qol::{Fix, Settings},
     world::ClientWorld,
     world_position,
@@ -960,7 +963,7 @@ pub(super) fn input(
         diagonal,
     } = intent;
     if swimming {
-        speed = eq_network_game::movement::swim_speed(controls.speed.unwrap_or(0.0));
+        speed = swim_speed(controls.speed.unwrap_or(0.0));
         if !focused || controls.stun_active {
             direction = Vec3::ZERO;
             turn = 0.0;

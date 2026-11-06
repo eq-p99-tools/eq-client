@@ -50,7 +50,7 @@ enum Support {
 
 pub use eq_network_game::movement::{
     Carried, EQMAC_FALL_SPEED, MAX_FALL_SPEED, MAX_GROUNDED_STEP, PROGRAM_STEP_SECONDS, ZBetween,
-    between_reports, carry, climb_reach, program_steps,
+    between_reports, carry, climb_reach, program_steps, swim_speed,
 };
 use glam::Vec3;
 use parry3d::{

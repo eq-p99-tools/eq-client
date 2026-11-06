@@ -34,7 +34,7 @@ impl OrbitCamera {
         }
     }
 
-    pub(super) fn is_first_person(&self) -> bool {
+    pub(crate) fn is_first_person(&self) -> bool {
         matches!(self.view, View::FirstPerson { .. })
     }
 
