@@ -5,6 +5,8 @@
 - Hold Titanium movement after a fresh placement below a nearby installed
   floor with neither a lower surface nor mapped liquid below. Preserve the
   received position and resume when a correction or collision change permits it.
+- Include the admitted size, local body, floor support, and target sightline
+  in script movement reports.
 - Refresh the player's held models and paperdoll after a submitted Titanium
   equipment move when the item definition supplies a base model. Received
   wear and inventory corrections take precedence.

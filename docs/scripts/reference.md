@@ -93,6 +93,15 @@ Approach, walk and chase hold the camera-relative forward command, independent o
   origin. `mapped_liquid_surface_at_session_feet` reports a mapped liquid
   top at standing height in the feet's center column. Both fields use local
   geometry and are null when their query finds no mapped liquid.
+  `local_geometry` shows the reported admission size when supplied, the loaded
+  body's resolved size and feet offset, and whether collision is ready.
+  `support_z_at_session_feet` is the EQ Z returned by the local movement
+  support probe, or null when it finds no support or cannot run.
+  `selected_target_los` is null when the ray cannot be evaluated. Otherwise it
+  identifies the selected spawn and its incarnation revision and says whether
+  solid client collision leaves the segment from the session origin to the
+  spawn's reported origin clear. Server spell range, line of sight, and
+  acceptance require separate evidence.
 - `trace milliseconds`: log movement and frame timing for a bounded duration.
 - `screenshot filename.png`: capture beside the script; the argument must be a filename.
 - `sound filename.wav`: play a sound from the installed game assets.

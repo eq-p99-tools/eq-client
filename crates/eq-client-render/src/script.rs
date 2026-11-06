@@ -1813,10 +1813,8 @@ pub(super) fn drive(
                 label,
                 &online,
                 players.single().ok(),
-                bodies
-                    .single()
-                    .ok()
-                    .zip(collision.as_deref().and_then(|world| world.0.as_ref())),
+                bodies.single().ok(),
+                collision.as_deref().and_then(|world| world.0.as_ref()),
             );
             report::surroundings(&online, &observed);
             report::game_messages(&mut script.chat_seen, &chat);
