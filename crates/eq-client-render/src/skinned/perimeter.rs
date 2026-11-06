@@ -2,7 +2,11 @@
 //! Titanium's frame rectangles (0x5c04f0) and client extents (0x5c03e0)
 //! distinguish those sizes from the widths/heights of the stretched middles.
 //! Source alpha margins are never trimmed to determine layout.
-use super::{at, pixel_edges, to_f32};
+use super::{
+    at, pixel_edges,
+    reflow::{Axis, Geometry},
+    to_f32,
+};
 use bevy::prelude::*;
 use eq_client_assets::sidl::{Border, Piece};
 
@@ -106,27 +110,52 @@ pub(super) fn draw(
     parent
         .spawn((
             pixel_edges::Frame,
+            Geometry::inset(0.0, 0.0, 0.0, 0.0),
             Node {
                 overflow: Overflow::clip(),
                 ..at(0.0, 0.0, width, height)
             },
         ))
         .with_children(|parent| {
-            for (piece, min, max) in pieces {
+            for (index, (piece, min, max)) in pieces.into_iter().enumerate() {
                 let Some(piece) = piece else {
                     continue;
                 };
                 let span = max - min;
                 if piece.width > 0
                     && piece.height > 0
-                    && span.x > 0.0
-                    && span.y > 0.0
                     && let Some(image) = art.cut(piece)
                 {
                     parent.spawn((
                         image,
                         at(min.x, min.y, span.x, span.y),
-                        pixel_edges::Piece(Rect { min, max }),
+                        pixel_edges::Piece(Rect {
+                            min,
+                            max: min + span.max(Vec2::ZERO),
+                        }),
+                        Geometry::from_area(
+                            eq_client_assets::ui::Area {
+                                x: min.x,
+                                y: min.y,
+                                width: span.x,
+                                height: span.y,
+                            },
+                            outer,
+                            if matches!(index, 1 | 7) {
+                                Axis::Stretch
+                            } else if matches!(index, 2..=6) {
+                                Axis::End
+                            } else {
+                                Axis::Start
+                            },
+                            if matches!(index, 4 | 10) {
+                                Axis::Stretch
+                            } else if matches!(index, 5..=8 | 11) {
+                                Axis::End
+                            } else {
+                                Axis::Start
+                            },
+                        ),
                     ));
                 }
             }

@@ -419,6 +419,53 @@ fn a_hotbuttons_camp_and_group_kinds_send_what_their_buttons_send() {
 }
 
 #[test]
+fn opted_in_camp_hotbutton_sends_no_sit_and_flight_duck_sends_no_posture() {
+    let (tx, rx) = std::sync::mpsc::sync_channel(4);
+    let mut app = bar_app(tx);
+    app.init_resource::<crate::options::OptionsState>();
+    {
+        let mut options = app
+            .world_mut()
+            .resource_mut::<crate::options::OptionsState>();
+        options
+            .options
+            .qol
+            .set(eq_client_core::qol::Fix::ExitAtOnce, true);
+        options.options.qol.set(eq_client_core::qol::Fix::Fly, true);
+    }
+    app.world_mut().resource_mut::<hotbar::Bindings>().0[0] = Some(hotbar::Action::Camp);
+    tap(&mut app, KeyCode::Digit1);
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(ClientCommand::ExitAtOnce { session_id: 7, .. })
+    ));
+    assert!(rx.try_recv().is_err());
+    crate::keys::testing::bind(
+        &mut app,
+        crate::keys::Act::Duck,
+        crate::keys::Chord::key(KeyCode::KeyC),
+    );
+    tap(&mut app, KeyCode::KeyC);
+    assert!(
+        rx.try_recv().is_err(),
+        "flight owns Duck without changing posture"
+    );
+    app.world_mut()
+        .resource_mut::<crate::options::OptionsState>()
+        .options
+        .qol
+        .set(eq_client_core::qol::Fix::Fly, false);
+    tap(&mut app, KeyCode::KeyC);
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(ClientCommand::SetPosture {
+            posture: eq_client_core::Posture::Ducking,
+            ..
+        })
+    ));
+}
+
+#[test]
 fn estimated_resource_bars_fill_and_clear_with_their_maxima() {
     let mut app = App::new();
     let mut state = OnlineState::new(true);

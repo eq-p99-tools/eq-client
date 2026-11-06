@@ -1,7 +1,9 @@
 //! Conservative ground locomotion and continuous collision queries.
 
 mod airborne;
+mod choices;
 mod falls;
+mod flight;
 mod liquids;
 mod navigator;
 pub mod navmesh;
@@ -9,6 +11,8 @@ mod pace;
 mod path;
 mod route;
 pub use airborne::{AirborneController, Landing, MotionStep, PROVISIONAL_PHYSICS, VerticalPhysics};
+pub use choices::{offered_options, options};
+pub use eq_network_game::movement::MovementOptions;
 pub use falls::{HARMLESS_DROP, fall_damage};
 pub use liquids::{GuardView, Liquid, Liquids};
 pub use navigator::{
@@ -733,12 +737,12 @@ mod tests {
             start,
         );
         guard.set_speed(Some(60.0), start);
-        let request = eq_network_game::movement::MovementRequest {
-            session_id: 7,
-            mode: eq_network_game::movement::MovementMode::Forward,
-            position: crate::world_position(position.to_array(), 0.0),
-            created: now,
-        };
+        let request = eq_network_game::movement::MovementRequest::new(
+            eq_network_game::movement::MovementMode::Forward,
+            7,
+            crate::world_position(position.to_array(), 0.0),
+            now,
+        );
         assert!(guard.accept(&request, now).is_ok());
     }
 

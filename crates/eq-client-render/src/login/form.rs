@@ -70,7 +70,11 @@ pub(crate) fn form(
     let visible = front.has_login() && front.screen(&online) == Screen::Login;
     let official = look.is_some_and(|look| look.official());
     let typing: Vec<_> = typed.read().filter(|key| key.state.is_pressed()).collect();
-    if visible && keys.window_focused() && !keys.editing_script() {
+    let skip_input = front.skip_form_input;
+    if skip_input {
+        front.skip_form_input = false;
+    }
+    if visible && !skip_input && keys.window_focused() && !keys.editing_script() {
         let pressed = buttons.iter().copied().collect::<Vec<_>>();
         let cancel = pressed.contains(&Action::Cancel);
         if pressed.contains(&Action::Quit) || (cancel && !front.running()) {

@@ -151,6 +151,7 @@ pub(super) fn update(
     ),
     mut particles: ResMut<SpellParticles>,
     mut sounds: ResMut<super::sounds::Sounds>,
+    options: Res<super::options::OptionsState>,
     mut bodies: Bodies,
     places: Query<&GlobalTransform>,
     camera: Query<&GlobalTransform, With<super::OrbitCamera>>,
@@ -198,6 +199,21 @@ pub(super) fn update(
         let place = (!own).then(|| body.at(Placement::Chest));
         for number in heard {
             sounds.play_number(number, place);
+        }
+        if !options.on(eq_client_core::options::Toggle::SpellEffects) {
+            // The player has the official choice for spell effects off (the
+            // installation's `ShowSpellEffects`, or its particles page set
+            // to no density): whatever the spell started above is put away
+            // again, drawn sprays and all. The sounds keep playing, and
+            // chat and the action bar still say what was cast and what
+            // landed.
+            running.sprays.retain(|spray| {
+                if let Some(drawn) = &spray.drawn {
+                    commands.entity(drawn.entity).despawn();
+                }
+                false
+            });
+            continue;
         }
         for spray in &mut running.sprays {
             let starting = spray.until.is_none_or(|until| now < until);

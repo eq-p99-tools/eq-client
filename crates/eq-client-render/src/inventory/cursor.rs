@@ -67,7 +67,7 @@ pub(crate) fn update(
     mut commands: Commands,
     state: Res<InventoryState>,
     online: Res<crate::online::OnlineState>,
-    windows: Query<&Window, With<PrimaryWindow>>,
+    windows: Query<(Entity, &Window), With<PrimaryWindow>>,
     (scale, look, scripted): (
         Option<Res<UiScale>>,
         Res<crate::skinned::CursorLook>,
@@ -82,6 +82,8 @@ pub(crate) fn update(
     mut root: Query<(Entity, &mut Node, &mut BackgroundColor), With<Overlay>>,
     mut stamp: Local<Option<Drawn>>,
     mut art: crate::sheets::Art,
+    drag: Res<crate::windows::DragState>,
+    mut resize_cursor: Local<Option<bevy::window::SystemCursorIcon>>,
 ) {
     let Ok((entity, mut node, mut background)) = root.single_mut() else {
         return;
@@ -118,7 +120,7 @@ pub(crate) fn update(
                 .is_some_and(|script| script.pointer_owned())
         })
         .map(|pointer| pointer.0 / factor);
-    let pointer = windows.single().ok().and_then(|window| {
+    let pointer = windows.single().ok().and_then(|(_, window)| {
         let pointer = match (script_pointer, window.cursor_position()) {
             (Some(pointer), _) => Some(pointer),
             (None, Some(pointer)) => window.focused.then_some(pointer / factor),
@@ -127,6 +129,19 @@ pub(crate) fn update(
         Some((pointer, window.size() / factor))
     });
     let carried = item.is_some() || coins.is_some() || spell.is_some() || hotkey.is_some();
+    if let Ok((entity, window)) = windows.single() {
+        let icon = (!carried && window.focused)
+            .then(|| drag.resize_cursor())
+            .flatten();
+        if icon != *resize_cursor {
+            commands
+                .entity(entity)
+                .insert(bevy::window::CursorIcon::System(
+                    icon.unwrap_or(bevy::window::SystemCursorIcon::Default),
+                ));
+        }
+        *resize_cursor = icon;
+    }
     node.display = if carried && pointer.is_some() {
         Display::Flex
     } else {

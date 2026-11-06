@@ -1,7 +1,7 @@
 //! A navigation mesh over a zone's collision triangles: the walkable floor as
 //! convex polygons, joined where the walker can step from one to the next.
 //!
-//! rerecast builds the polygons a square tile at a time ([`build`]); the
+//! rerecast builds the polygons a square tile at a time (the `build` module); the
 //! tiles are joined where their border edges meet. A built mesh is cached by
 //! its input ([`cache`]). [`MeshNavigator`] plans routes over it: an A* over
 //! the polygons, the funnel through their shared edges, then every leg

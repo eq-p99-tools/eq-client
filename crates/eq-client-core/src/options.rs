@@ -48,6 +48,12 @@ pub enum Toggle {
     /// Plays sounds; the official client keeps the choice as `Sound` in
     /// `eqclient.ini`, this client per character.
     Sound,
+    /// Plays the installation's spell-effect particles, as the official
+    /// client's does; the official client keeps the choice as
+    /// `ShowSpellEffects` in `eqclient.ini` (and as a zero
+    /// `SpellParticleDensity`), this client per character. The Options
+    /// window's Particles page is its official home.
+    SpellEffects,
     /// A quality-of-life setting, on the Options window's quality-of-life
     /// page, which only this client has.
     Qol(Fix),
@@ -55,7 +61,7 @@ pub enum Toggle {
 
 impl Toggle {
     /// The official client's own toggles, in the order a file lists them.
-    pub const OFFICIAL: [Self; 9] = [
+    pub const OFFICIAL: [Self; 10] = [
         Self::PetWindowPopup,
         Self::TargetRing,
         Self::ShowHelm,
@@ -65,6 +71,7 @@ impl Toggle {
         Self::WheelZoom,
         Self::Log,
         Self::Sound,
+        Self::SpellEffects,
     ];
 
     /// Every toggle, in the order a file lists them: the official client's,
@@ -88,6 +95,7 @@ impl Toggle {
             Self::WheelZoom => "wheel_zoom",
             Self::Log => "log",
             Self::Sound => "sound",
+            Self::SpellEffects => "spell_effects",
             Self::Qol(fix) => fix.key(),
         }
     }
@@ -105,7 +113,8 @@ impl Toggle {
             | Self::InvertY
             | Self::WheelZoom
             | Self::Log
-            | Self::Sound => None,
+            | Self::Sound
+            | Self::SpellEffects => None,
             Self::Qol(fix) => fix.needs(),
         }
     }
@@ -272,6 +281,8 @@ pub struct Options {
     pub log: bool,
     /// See [`Toggle::Sound`].
     pub sound: bool,
+    /// See [`Toggle::SpellEffects`].
+    pub spell_effects: bool,
     /// Which quality-of-life fixes are on ([`Toggle::Qol`]).
     pub qol: qol::Settings,
     /// How much of a player's name shows over their head, as `/shownames`
@@ -311,6 +322,7 @@ impl Default for Options {
             wheel_zoom: true,
             log: true,
             sound: true,
+            spell_effects: true,
             qol,
             show_names: ShowNames::Everything,
             clip_plane: 100,
@@ -336,6 +348,7 @@ impl Options {
             Toggle::WheelZoom => self.wheel_zoom,
             Toggle::Log => self.log,
             Toggle::Sound => self.sound,
+            Toggle::SpellEffects => self.spell_effects,
             Toggle::Qol(fix) => self.qol.on(fix),
         }
     }
@@ -352,6 +365,7 @@ impl Options {
             Toggle::WheelZoom => &mut self.wheel_zoom,
             Toggle::Log => &mut self.log,
             Toggle::Sound => &mut self.sound,
+            Toggle::SpellEffects => &mut self.spell_effects,
             Toggle::Qol(fix) => {
                 self.qol.set(fix, on);
                 return;

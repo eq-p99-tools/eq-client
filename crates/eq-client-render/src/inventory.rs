@@ -1,6 +1,7 @@
 //! Compact inventory drawer with validated slot moves and local item inspection.
 pub(super) mod colors;
 pub(super) mod cursor;
+pub(crate) mod destruction;
 mod interaction;
 mod layout;
 #[cfg(test)]
@@ -35,6 +36,7 @@ pub(super) struct InventoryState {
     /// The banker in reach, by name, while the bank is open.
     banker: String,
     actions: interaction::Actions,
+    destruction: destruction::Destruction,
     /// Refusals of the player's actions, on their way to the chat.
     refused: Vec<String>,
     /// What the player's actions said besides, such as a buff's fade, on
@@ -106,7 +108,7 @@ impl InventoryState {
     /// Whether an action is under way that Escape cancels: a split, or
     /// storing the cursor's item.
     pub(super) const fn action_under_way(&self) -> bool {
-        self.actions.auto_store || self.actions.split.is_some()
+        self.actions.auto_store || self.actions.split.is_some() || self.destruction.selecting()
     }
 
     /// Uses the same item controller for action-bar and inventory activation.
@@ -157,6 +159,7 @@ impl InventoryState {
     /// Forgets the window's state along with the inventory the world forgot.
     pub fn forget(&mut self) {
         self.cancel_actions();
+        self.destruction = destruction::Destruction::default();
         self.demo_news.clear();
         self.demo = false;
         self.bank_open = false;
@@ -282,6 +285,7 @@ pub(super) fn spawn(commands: &mut Commands) {
                 ..default()
             },
         ));
+        destruction::spawn(panel);
         panel.spawn((
             Rows,
             Node {
@@ -351,7 +355,7 @@ pub(super) fn input(
     }
     if *escape == super::escape::Escape::Inventory {
         state.actions.auto_store = false;
-        state.actions.split = None;
+        state.cancel_split();
         if state.actions.pending.is_none() {
             state.actions.message.clear();
         }
@@ -359,7 +363,7 @@ pub(super) fn input(
     }
     // A closed inventory ends its own actions; slots in an open bag or bank
     // still take clicks.
-    if !shown.is_open(super::windows::WindowId::Inventory) {
+    if !shown.is_open(super::windows::WindowId::Inventory) && !state.picking_merchant() {
         state.actions.auto_store = false;
         state.actions.split = None;
     }

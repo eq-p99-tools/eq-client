@@ -1,10 +1,12 @@
 //! Target selection never moves, attacks, casts, or sends chat.
+mod door_click;
 pub(super) mod marker;
-mod picking;
+pub(super) mod picking;
 use super::{entities::NearbyEntities, online::OnlineState};
 use crate::theme::{self, Size};
 use crate::{keys::Act, outbox::Outbox};
 use bevy::{prelude::*, window::PrimaryWindow};
+use door_click::{Door, DoorClicks};
 use eq_client_assets::ui::{ClickMiss, InstalledClient, SpawnPick, TargetByName};
 use eq_client_core::{ClientCommand, SpawnKind, targeting::cycle};
 use picking::PosedBox;
@@ -81,17 +83,23 @@ pub(super) fn spawn(commands: &mut Commands) {
 #[allow(
     clippy::too_many_arguments,
     clippy::needless_pass_by_value,
-    clippy::too_many_lines
+    clippy::too_many_lines,
+    clippy::type_complexity
 )]
 pub(super) fn input(
     settings: Option<Res<super::ViewerSettings>>,
     mut attempted: Local<bool>,
+    mut door_clicks: Local<DoorClicks>,
     keys: super::keys::Keys,
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     // The world camera; the paperdoll's camera films the inventory figure.
     cameras: Query<(&Camera, &GlobalTransform), With<super::OrbitCamera>>,
     picker: picking::Picker,
+    (doors, door_models): (
+        Query<(Entity, &super::doors::DoorEntity, &Transform, &Visibility)>,
+        Option<Res<super::doors::Models>>,
+    ),
     ground: Query<(&super::ground::GroundEntity, &Transform)>,
     collision: Option<Res<super::Collision>>,
     nearby: Res<NearbyEntities>,
@@ -113,6 +121,7 @@ pub(super) fn input(
         .filter(|id| online.world().spawn(*id).is_some() || online.world().is_player(*id));
     // The world forgets the target when the connection drops or the player dies.
     if !online.world().connected() || online.world().is_dead() {
+        door_clicks.cancel();
         return;
     }
     let ids = targetable(nearby.rendered.keys().copied(), &online);
@@ -147,7 +156,25 @@ pub(super) fn input(
             info!("One-shot target: selecting nearby player spawn {id}");
         }
     }
-    let accepts_input = keys.escape_free();
+    let cursor = windows
+        .single()
+        .ok()
+        .filter(|window| {
+            keys.escape_free()
+                && !presses.taken()
+                && !chat.hovered
+                && window
+                    .physical_cursor_position()
+                    .is_none_or(|cursor| !ui.contains(cursor))
+        })
+        .and_then(Window::cursor_position);
+    let door_cursor = cursor.filter(|_| {
+        !mouse.pressed(MouseButton::Right)
+            && !mouse.just_pressed(MouseButton::Right)
+            && !keys.pressed(Act::Use)
+    });
+    let now = std::time::Instant::now();
+    let door_release = door_clicks.track(online.world().session_id(), door_cursor, &mouse, now);
     if let Some(name) = requested {
         let rule = settings.as_ref().map_or(TargetByName::Nearest, |s| {
             s.0.installed_client.target_by_name()
@@ -164,55 +191,82 @@ pub(super) fn input(
         proposal = own_id.map(Some);
     } else if let Some(act) = keys.first([Act::TargetNext, Act::TargetPrevious]) {
         proposal = Some(cycle(&ids, current, act == Act::TargetPrevious));
-    } else if accepts_input
-        && mouse.any_just_pressed([MouseButton::Left, MouseButton::Right])
-        // A click that put down or threw away a hotkey does nothing else.
-        && !presses.taken()
-        && !chat.hovered
-        && let (Ok(window), Ok((camera, camera_transform))) = (windows.single(), cameras.single())
+    } else if let Some(cursor) = cursor
+        && (door_release || mouse.any_just_pressed([MouseButton::Left, MouseButton::Right]))
+        && let Ok((camera, camera_transform)) = cameras.single()
+        && let Ok(ray) = camera.viewport_to_world(camera_transform, cursor)
     {
-        let over_ui = window
-            .physical_cursor_position()
-            .is_some_and(|cursor| ui.contains(cursor));
-        if !over_ui
-            && let Some(cursor) = window.cursor_position()
-            && let Ok(ray) = camera.viewport_to_world(camera_transform, cursor)
-        {
-            let blocked = |distance: f32| {
-                collision
-                    .as_ref()
-                    .and_then(|collision| collision.0.as_ref())
-                    .and_then(|world| world.ray_distance(ray.origin, *ray.direction, distance))
-                    .is_some_and(|obstruction| obstruction + 0.01 < distance)
-            };
-            let client = settings
+        let blocked = |distance: f32, ignore_door: Option<u8>| {
+            collision
                 .as_ref()
-                .map_or_else(InstalledClient::default, |s| s.0.installed_client);
-            let rule = client.spawn_pick();
-            let shown = |point: Vec3| camera.world_to_viewport(camera_transform, point).ok();
-            let spawns: Vec<Candidate> = ids
-                .iter()
-                .map(|id| {
-                    let pick = picker.pick(nearby.rendered[id], ray);
-                    Candidate {
-                        id: *id,
-                        hit: pick.hit.filter(|distance| !blocked(*distance)),
-                        posed: pick.posed.and_then(|posed| {
-                            let distance = posed.entry(ray).filter(|d| !blocked(*d))?;
-                            let offset = shown(posed.middle())?.distance(cursor);
-                            Some(PosedHit { distance, offset })
-                        }),
-                        shown: pick.posed.and_then(|posed| shown_rect(&posed, shown)),
-                    }
+                .and_then(|collision| collision.0.as_ref())
+                .and_then(|world| match ignore_door {
+                    Some(door) => world.without_doors(&[door]).ray_distance(
+                        ray.origin,
+                        *ray.direction,
+                        distance,
+                    ),
+                    None => world.ray_distance(ray.origin, *ray.direction, distance),
                 })
-                .collect();
-            let item = super::ground::hit(
-                ray,
-                ground.iter(),
-                crate::outbox::offered(online.world(), eq_client_core::Capability::WorldContainers),
-            )
-            .filter(|hit| !blocked(hit.1));
-            let choice = choose(rule, &spawns, item);
+                .is_some_and(|obstruction| obstruction + 0.01 < distance)
+        };
+        let client = settings
+            .as_ref()
+            .map_or_else(InstalledClient::default, |s| s.0.installed_client);
+        let rule = client.spawn_pick();
+        let shown = |point: Vec3| camera.world_to_viewport(camera_transform, point).ok();
+        let spawns: Vec<Candidate> = ids
+            .iter()
+            .map(|id| {
+                let pick = picker.pick(nearby.rendered[id], ray);
+                Candidate {
+                    id: *id,
+                    hit: pick.hit.filter(|distance| !blocked(*distance, None)),
+                    posed: pick.posed.and_then(|posed| {
+                        let distance = posed.entry(ray).filter(|d| !blocked(*d, None))?;
+                        let offset = shown(posed.middle())?.distance(cursor);
+                        Some(PosedHit { distance, offset })
+                    }),
+                    shown: pick.posed.and_then(|posed| shown_rect(&posed, shown)),
+                }
+            })
+            .collect();
+        let item = super::ground::hit(
+            ray,
+            ground.iter(),
+            crate::outbox::offered(online.world(), eq_client_core::Capability::WorldContainers),
+        )
+        .filter(|hit| !blocked(hit.1, None));
+        let door = if let Some(models) = door_models.as_ref().filter(|_| door_cursor.is_some()) {
+            doors
+                .iter()
+                .filter_map(|(entity, door, transform, visibility)| {
+                    let distance = super::doors::hit(ray, door, transform, *visibility, models)
+                        .filter(|d| !blocked(*d, Some(door.id)))?;
+                    Some((
+                        Door {
+                            entity,
+                            id: door.id,
+                        },
+                        distance,
+                    ))
+                })
+                .min_by(|a, b| a.1.total_cmp(&b.1).then(a.0.id.cmp(&b.0.id)))
+        } else {
+            None
+        };
+        let choice = choose(rule, &spawns, item, door);
+        let picked_door = match choice {
+            Choice::Door(door) => Some(door),
+            _ => None,
+        };
+        if door_release && let Some(id) = door_clicks.release(picked_door, cursor, now) {
+            super::doors::click(id, &online, &outbox);
+        }
+        if mouse.just_pressed(MouseButton::Left) {
+            door_clicks.press(picked_door, cursor, now);
+        }
+        if mouse.any_just_pressed([MouseButton::Left, MouseButton::Right]) {
             report_click(cursor, &spawns, choice);
             match choice {
                 // Clicking an item on the ground picks it up and keeps the target.
@@ -239,9 +293,11 @@ pub(super) fn input(
                         ClickMiss::ClearTarget => proposal = Some(None),
                     }
                 }
-                Choice::Item(_) | Choice::Nothing => (),
+                Choice::Door(_) | Choice::Item(_) | Choice::Nothing => (),
             }
         }
+    } else if door_release || mouse.just_pressed(MouseButton::Left) {
+        door_clicks.cancel();
     }
     let Some(selected) = proposal else {
         return;
@@ -308,19 +364,31 @@ enum Choice {
     Spawn(u16, Found),
     /// An object on the ground, by its drop id.
     Item(u32),
+    Door(Door),
     Nothing,
 }
 
 /// The click's pick by the installed generation's rule: the nearest drawn
-/// triangle, or a ground item nearer than it; then, by
+/// triangle, a ground item or door nearer than it; then, by
 /// [`SpawnPick::TrianglesThenPosedBox`], the posed box whose middle shows
 /// nearest the cursor, a tie going to the nearer. A ground item the ray
 /// hits beats a spawn found only by its box.
-fn choose(rule: SpawnPick, spawns: &[Candidate], item: Option<(u32, f32)>) -> Choice {
+fn choose(
+    rule: SpawnPick,
+    spawns: &[Candidate],
+    item: Option<(u32, f32)>,
+    door: Option<(Door, f32)>,
+) -> Choice {
     let exact = spawns
         .iter()
         .filter_map(|spawn| Some((spawn.id, spawn.hit?)))
         .min_by(|a, b| a.1.total_cmp(&b.1));
+    if let Some((door, distance)) = door
+        && exact.is_none_or(|(_, spawn)| distance < spawn)
+        && item.is_none_or(|(_, item)| distance < item)
+    {
+        return Choice::Door(door);
+    }
     match (exact, item) {
         (exact, Some((drop_id, distance))) if exact.is_none_or(|(_, nearer)| distance < nearer) => {
             return Choice::Item(drop_id);
@@ -1033,6 +1101,146 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // Exercises the scene system and its real picking inputs.
+    fn a_door_uses_two_completed_scene_clicks_and_ignores_drags_and_ui_clicks() {
+        let (mut app, commands, ..) = target_app();
+        let center = Vec2::new(400.0, 300.0);
+        let mut camera = Camera::default();
+        camera.computed.clip_from_view =
+            Mat4::perspective_infinite_reverse_rh(std::f32::consts::FRAC_PI_4, 4.0 / 3.0, 0.1);
+        camera.computed.target_info = Some(bevy::camera::RenderTargetInfo {
+            physical_size: UVec2::new(800, 600),
+            scale_factor: 1.0,
+        });
+        app.world_mut().spawn((
+            camera,
+            GlobalTransform::from_translation(Vec3::new(0.0, 0.0, 10.0)),
+            crate::OrbitCamera {
+                focus: Vec3::ZERO,
+                radius: 10.0,
+                yaw: 0.0,
+                pitch: 0.0,
+                pulled: None,
+                view: default(),
+            },
+        ));
+        app.init_resource::<Time>()
+            .init_resource::<super::super::doors::Hinges>();
+        let source = eq_client_assets::ZoneModel {
+            name: "TEST".into(),
+            primitives: vec![eq_client_assets::ZonePrimitive {
+                positions: vec![[-2.0, -2.0, 0.0], [2.0, -2.0, 0.0], [0.0, 2.0, 0.0]],
+                indices: vec![0, 1, 2],
+                normals: Vec::new(),
+                texture_coordinates: Vec::new(),
+                texture: None,
+                material_mode: eq_client_assets::MaterialMode::Opaque,
+            }],
+            materials: vec![eq_client_assets::ObjectMaterial { double_sided: true }],
+            collision: Vec::new(),
+        };
+        let mut models = super::super::doors::Models::default();
+        models.0.insert(
+            "TEST".into(),
+            super::super::doors::Model {
+                // Simulate render-world extraction. No CPU mesh remains.
+                primitives: vec![(Handle::default(), Handle::default())],
+                collision: Vec::new(),
+                pick: super::super::doors::PickMesh::from_model(&source),
+            },
+        );
+        app.insert_resource(models)
+            .add_systems(Update, super::super::doors::reconcile.before(input));
+        let mut bytes = [0u8; 80];
+        bytes[..4].copy_from_slice(b"TEST");
+        bytes[52] = 100;
+        crate::online::testing::doors(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            &eq_client_core::doors::decode(0x4c24, &bytes)
+                .unwrap()
+                .unwrap(),
+            std::time::Instant::now(),
+        );
+        app.update();
+
+        let frame = |app: &mut App, cursor, pressed| {
+            let mut windows = app
+                .world_mut()
+                .query_filtered::<&mut Window, With<PrimaryWindow>>();
+            windows
+                .single_mut(app.world_mut())
+                .unwrap()
+                .set_cursor_position(Some(cursor));
+            let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
+            mouse.clear();
+            if pressed {
+                mouse.press(MouseButton::Left);
+            } else {
+                mouse.release(MouseButton::Left);
+            }
+            app.update();
+        };
+        let click = |app: &mut App| {
+            frame(app, center, true);
+            frame(app, center, false);
+        };
+        click(&mut app);
+        assert!(commands.try_recv().is_err());
+
+        // The second press drags away and comes back. Neither its release nor
+        // the following single click can complete the initial pair.
+        frame(&mut app, center, true);
+        frame(&mut app, center + Vec2::X * 12.0, true);
+        frame(&mut app, center, false);
+        click(&mut app);
+        assert!(commands.try_recv().is_err());
+
+        app.world_mut()
+            .resource_mut::<super::super::chat::ChatState>()
+            .hovered = true;
+        click(&mut app);
+        assert!(commands.try_recv().is_err());
+        app.world_mut()
+            .resource_mut::<super::super::chat::ChatState>()
+            .hovered = false;
+
+        click(&mut app);
+        frame(&mut app, center, true);
+        assert!(commands.try_recv().is_err());
+        frame(&mut app, center, false);
+        assert!(matches!(
+            commands.try_recv().unwrap(),
+            ClientCommand::ClickDoor {
+                session_id: 1,
+                door_id: 0,
+                ..
+            }
+        ));
+        click(&mut app);
+        assert!(commands.try_recv().is_err());
+        assert_eq!(
+            app.world()
+                .resource::<OnlineState>()
+                .world()
+                .doors()
+                .entries()[&0]
+                .action,
+            None
+        );
+
+        let wall = eq_client_core::movement::CollisionWorld::new([[
+            [-2.0, -2.0, 5.0],
+            [2.0, -2.0, 5.0],
+            [0.0, 2.0, 5.0],
+        ]])
+        .unwrap();
+        app.insert_resource(super::super::Collision(Some(wall)));
+        click(&mut app);
+        click(&mut app);
+        assert!(commands.try_recv().is_err());
+    }
+
+    #[test]
     fn self_target_uses_profile_without_a_nearby_entity_and_survives_culling() {
         let (mut app, rx, label, bar) = target_app();
         app.world_mut()
@@ -1141,7 +1349,7 @@ mod tests {
             candidate(4, None, Some((5.0, 0.0))),
         ];
         assert_eq!(
-            choose(rule, &spawns, None),
+            choose(rule, &spawns, None, None),
             Choice::Spawn(3, Found::Triangles)
         );
     }
@@ -1157,7 +1365,7 @@ mod tests {
             candidate(4, None, None),
         ];
         assert_eq!(
-            choose(rule, &spawns, None),
+            choose(rule, &spawns, None, None),
             Choice::Spawn(3, Found::PosedBox)
         );
         // A tie on screen goes to the nearer.
@@ -1165,32 +1373,65 @@ mod tests {
             candidate(2, None, Some((40.0, 4.0))),
             candidate(3, None, Some((10.0, 4.0))),
         ];
-        assert_eq!(choose(rule, &tied, None), Choice::Spawn(3, Found::PosedBox));
+        assert_eq!(
+            choose(rule, &tied, None, None),
+            Choice::Spawn(3, Found::PosedBox)
+        );
         // Nothing entered, nothing picked.
-        assert_eq!(choose(rule, &spawns[2..], None), Choice::Nothing);
-        assert_eq!(choose(rule, &[], None), Choice::Nothing);
+        assert_eq!(choose(rule, &spawns[2..], None, None), Choice::Nothing);
+        assert_eq!(choose(rule, &[], None, None), Choice::Nothing);
     }
 
     #[test]
     fn ground_items_rank_with_the_triangles_and_beat_a_box() {
         let rule = SpawnPick::TrianglesThenPosedBox;
         let hit = [candidate(2, Some(20.0), None)];
-        assert_eq!(choose(rule, &hit, Some((7, 15.0))), Choice::Item(7));
+        assert_eq!(choose(rule, &hit, Some((7, 15.0)), None), Choice::Item(7));
         assert_eq!(
-            choose(rule, &hit, Some((7, 25.0))),
+            choose(rule, &hit, Some((7, 25.0)), None),
             Choice::Spawn(2, Found::Triangles)
         );
         let boxed = [candidate(2, None, Some((5.0, 0.0)))];
-        assert_eq!(choose(rule, &boxed, Some((7, 25.0))), Choice::Item(7));
+        assert_eq!(choose(rule, &boxed, Some((7, 25.0)), None), Choice::Item(7));
+    }
+
+    #[test]
+    fn visible_door_competes_with_exact_hits_and_precedes_spawn_box_fallback() {
+        let rule = SpawnPick::TrianglesThenPosedBox;
+        let door = Door {
+            entity: Entity::PLACEHOLDER,
+            id: 7,
+        };
+        let exact = [candidate(1, Some(20.0), None)];
+        let fallback = [candidate(1, None, Some((5.0, 0.0)))];
+        assert_eq!(
+            choose(rule, &exact, None, Some((door, 19.0))),
+            Choice::Door(door)
+        );
+        assert_eq!(
+            choose(rule, &exact, None, Some((door, 20.0))),
+            Choice::Spawn(1, Found::Triangles)
+        );
+        assert_eq!(
+            choose(rule, &fallback, None, Some((door, 19.0))),
+            Choice::Door(door)
+        );
+        assert_eq!(
+            choose(rule, &fallback, Some((8, 18.0)), Some((door, 19.0))),
+            Choice::Item(8)
+        );
     }
 
     #[test]
     fn the_triangles_rule_ignores_boxes() {
         let spawns = [candidate(2, None, Some((5.0, 0.0)))];
-        assert_eq!(choose(SpawnPick::Triangles, &spawns, None), Choice::Nothing);
+        assert_eq!(
+            choose(SpawnPick::Triangles, &spawns, None, None),
+            Choice::Nothing
+        );
         let hit = [candidate(2, Some(5.0), None)];
         assert_eq!(
-            choose(SpawnPick::Triangles, &hit, None),
+            choose(SpawnPick::Triangles, &hit, None, None),
             Choice::Spawn(2, Found::Triangles)
         );
     }
@@ -1210,7 +1451,7 @@ mod tests {
         // A click that enters no box and hits no triangle picks nothing.
         let away = [candidate(2, None, None)];
         assert_eq!(
-            choose(SpawnPick::TrianglesThenPosedBox, &away, None),
+            choose(SpawnPick::TrianglesThenPosedBox, &away, None, None),
             Choice::Nothing
         );
     }

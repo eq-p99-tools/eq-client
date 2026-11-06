@@ -100,6 +100,7 @@ type Surfaces<'w, 's> = Query<
 #[derive(SystemParam)]
 pub(crate) struct PointerUi<'w, 's> {
     script: Option<Res<'w, crate::script::Script>>,
+    drag: Option<Res<'w, super::DragState>>,
     surfaces: Surfaces<'w, 's>,
     clipping: Query<
         'w,
@@ -122,6 +123,7 @@ impl PointerUi<'_, '_> {
         self.script
             .as_ref()
             .is_some_and(|script| script.background_owns_input())
+            || self.drag.as_ref().is_some_and(|drag| drag.active.is_some())
             || self.top_at(cursor).is_some()
     }
 

@@ -609,7 +609,7 @@ fn delete_input(
 }
 
 /// Book actions wait for outstanding casts or server assignment confirmation.
-fn action_pending(world: &ClientWorld) -> bool {
+pub(crate) fn action_pending(world: &ClientWorld) -> bool {
     world.casting().cast.is_some()
         || world.casting().pending.is_some()
         || matches!(

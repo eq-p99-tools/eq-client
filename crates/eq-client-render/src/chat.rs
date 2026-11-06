@@ -8,7 +8,7 @@ use bevy::{
 use eq_client_core::{
     ClientCommand, OutboundChat,
     chat::{Arrival, ChannelName, ChatHistory, ChatLine, ChatTab, Message, Source, channel_rgb},
-    qol::Fix,
+    qol::{Fix, Settings},
 };
 use std::collections::{BTreeMap, HashSet};
 
@@ -125,6 +125,8 @@ pub(super) struct ChatState {
     /// A window a slash command opens or closes, as `/raidwindow` does the
     /// Raid window, waiting for the toggle.
     pub toggled: Option<super::windows::WindowId>,
+    /// An explicit disconnect to handle before other gameplay input.
+    pub departure: Option<super::login::Departure>,
     draft: String,
     refusals: Refusals,
 }
@@ -368,16 +370,21 @@ fn skinned_tabs(
         });
 }
 
-/// The skin's input box, with nothing of the client's own in it: the line
-/// the player types, and the caret alone while typing.
-pub(super) fn skinned_input(parent: &mut ChildSpawnerCommands, node: Node) {
+/// The skin's input box, with a top edge where its layout has no divider.
+pub(super) fn skinned_input(parent: &mut ChildSpawnerCommands, node: Node, divider: bool) {
+    let divider = if divider { 1.0 } else { 0.0 };
     parent
         .spawn((
             Button,
             InputBox,
             Bare,
+            BorderColor::all(theme::EDGE_LIGHT.with_alpha(0.6)),
             Node {
-                padding: UiRect::axes(px(4), px(1)),
+                border: UiRect::top(px(divider)),
+                padding: UiRect {
+                    top: px(1.0 - divider),
+                    ..UiRect::axes(px(4), px(1))
+                },
                 align_items: AlignItems::Center,
                 overflow: Overflow::clip(),
                 ..node
@@ -486,7 +493,10 @@ fn typing_box(parent: &mut ChildSpawnerCommands, node: Node) {
 pub(super) fn input(
     mut state: ResMut<ChatState>,
     mut online: ResMut<super::online::OnlineState>,
-    outbox: Res<crate::outbox::Outbox>,
+    (outbox, options): (
+        Res<crate::outbox::Outbox>,
+        Option<Res<crate::options::OptionsState>>,
+    ),
     mut typing: ResMut<crate::keys::Typing>,
     (mut keyboard, mouse): (MessageReader<KeyboardInput>, Res<ButtonInput<MouseButton>>),
     keys: Option<Res<ButtonInput<Key>>>,
@@ -567,7 +577,10 @@ pub(super) fn input(
             // Enter on an empty line closes the input, as in the official client.
             typing.composing = false;
         } else {
-            submit_draft(&mut state, &mut typing, &mut online, &outbox);
+            let qol = options
+                .as_ref()
+                .map_or_else(Settings::default, |options| options.options.qol);
+            submit_draft(&mut state, &mut typing, &mut online, &outbox, &qol);
         }
     }
     for TabButton(tab) in tabs.iter() {
@@ -1000,13 +1013,18 @@ fn submit_draft(
     typing: &mut crate::keys::Typing,
     online: &mut super::online::OnlineState,
     outbox: &crate::outbox::Outbox,
+    qol: &Settings,
 ) {
     let result = (|| -> Result<(), Unsent> {
         let draft = typed_command(state.draft.trim()).into_owned();
+        if let Some(request) = departure_request(&draft) {
+            state.departure = Some(request?);
+            return Ok(());
+        }
         if let Some(request) = client_request(&draft, state) {
             return Ok(request?);
         }
-        if let Some(commands) = game_commands(&draft, online, outbox) {
+        if let Some(commands) = game_commands(&draft, online, outbox, qol) {
             for command in commands? {
                 outbox.send(online.world(), command)?;
             }
@@ -1036,19 +1054,42 @@ fn submit_draft(
     }
 }
 
+/// These local commands never go through chat, the game queue, or camp.
+fn departure_request(input: &str) -> Option<Result<super::login::Departure, String>> {
+    use super::login::Departure;
+    let command = input.strip_prefix('/')?;
+    let (name, words) = command
+        .split_once(char::is_whitespace)
+        .unwrap_or((command, ""));
+    let (destination, command) = match name.to_ascii_lowercase().as_str() {
+        "ex" | "exi" | "exit" => (Departure::Desktop, "/exit"),
+        "q" | "qu" | "qui" | "quit" => (Departure::Login, "/quit"),
+        _ => return None,
+    };
+    Some(if words.trim().is_empty() {
+        Ok(destination)
+    } else {
+        Err(format!("Use {command} without arguments"))
+    })
+}
+
 /// Sends a game slash command for scripts and buttons; ordinary chat is
 /// never sent this way.
 pub(super) fn submit_game_command(
     input: &str,
-    online: &super::online::OnlineState,
+    online: &mut super::online::OnlineState,
     outbox: &crate::outbox::Outbox,
+    qol: &Settings,
 ) -> Result<(), String> {
-    let commands = game_commands(input, online, outbox)
+    let commands = game_commands(input, online, outbox, qol)
         .ok_or_else(|| format!("{input} is not a game command"))??;
     for command in commands {
         outbox
             .send(online.world(), command)
             .map_err(|refusal| refusal.text().to_owned())?;
+    }
+    if let Some(to) = camp_destination(input) {
+        online.camp_to(to);
     }
     Ok(())
 }
@@ -1058,11 +1099,12 @@ pub(super) fn submit_game_command(
 /// (`outbox::show`).
 pub(super) fn run_game_command(
     command: &str,
-    online: &super::online::OnlineState,
+    online: &mut super::online::OnlineState,
     outbox: &crate::outbox::Outbox,
     chat: &mut ChatState,
+    qol: &Settings,
 ) {
-    if let Err(reason) = submit_game_command(command, online, outbox) {
+    if let Err(reason) = submit_game_command(command, online, outbox, qol) {
         chat.refuse(reason);
     }
 }
@@ -1366,6 +1408,7 @@ fn game_commands(
     input: &str,
     online: &super::online::OnlineState,
     outbox: &crate::outbox::Outbox,
+    qol: &Settings,
 ) -> Option<Result<Vec<ClientCommand>, String>> {
     let command = input.strip_prefix('/')?.trim();
     let (name, words) = command
@@ -1418,9 +1461,16 @@ fn game_commands(
                     target: online.world().target().selected,
                 }])
             }),
-        // Camping requires sitting, so sit first as a player would; the
-        // words say only where the camp ends (`camp::destination`).
+        // The ordinary camp sits and prepares first. Immediate exit is an
+        // explicit opt-in, still completed by the session's logout reply.
         "camp" => eq_client_core::camp::destination(words).and_then(|_| {
+            if qol.on(Fix::ExitAtOnce) {
+                let stamp = stamp()?;
+                return Ok(vec![ClientCommand::ExitAtOnce {
+                    session_id: stamp.session_id,
+                    created: stamp.created,
+                }]);
+            }
             let sit = posture(eq_client_core::Posture::Sitting)?;
             let stamp = stamp()?;
             Ok(vec![
@@ -1727,10 +1777,15 @@ mod tests {
         let outbox = crate::outbox::Outbox::new(Some(queue));
         crate::online::testing::admit(&mut online, 4, crate::online::testing::player(12));
         assert!(matches!(
-            game_commands(&typed_command("/ all wiz 50 60"), &online, &outbox)
-                .unwrap()
-                .unwrap()
-                .as_slice(),
+            game_commands(
+                &typed_command("/ all wiz 50 60"),
+                &online,
+                &outbox,
+                &Settings::default()
+            )
+            .unwrap()
+            .unwrap()
+            .as_slice(),
             [ClientCommand::WhoAll {
                 session_id: 4,
                 filter: eq_client_core::who::WhoFilter {
@@ -1745,7 +1800,13 @@ mod tests {
         let mut state = ChatState::default();
         let mut typing = crate::keys::Typing::default();
         "/".clone_into(&mut state.draft);
-        submit_draft(&mut state, &mut typing, &mut online, &outbox);
+        submit_draft(
+            &mut state,
+            &mut typing,
+            &mut online,
+            &outbox,
+            &Settings::default(),
+        );
         assert_eq!(
             state.zone_who,
             Some(eq_client_core::who::WhoFilter::default())
@@ -1774,13 +1835,180 @@ mod tests {
     }
 
     #[test]
+    fn departure_requires_an_exact_alias_without_arguments() {
+        use crate::login::Departure;
+
+        for name in ["/ex", "/EXI", "/exit"] {
+            assert_eq!(departure_request(name), Some(Ok(Departure::Desktop)));
+        }
+        for name in ["/q", "/Qu", "/qui", "/QUIT"] {
+            assert_eq!(departure_request(name), Some(Ok(Departure::Login)));
+        }
+        for unrelated in [
+            "/e",
+            "/exits",
+            "/exitnow",
+            "/quick",
+            "/quitter",
+            "/camp desktop",
+        ] {
+            assert_eq!(departure_request(unrelated), None);
+        }
+        for invalid in ["/exit desktop", "/qu now", "/QUIT\tnow"] {
+            assert!(matches!(departure_request(invalid), Some(Err(_))));
+        }
+    }
+
+    /// The front end must move on before this worker finishes.
+    struct Stopping(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+    impl crate::login::Worker for Stopping {
+        fn stop(&self) {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        fn finished(&self) -> bool {
+            false
+        }
+        fn reason(&self) -> Option<String> {
+            None
+        }
+        fn closed(&self) -> bool {
+            false
+        }
+    }
+
+    fn enter_draft(app: &mut App, draft: &str) {
+        let world = app.world_mut();
+        draft.clone_into(&mut world.resource_mut::<ChatState>().draft);
+        world.resource_mut::<crate::keys::Typing>().composing = true;
+        world
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Enter);
+        world.write_message(KeyboardInput {
+            key_code: KeyCode::Enter,
+            logical_key: Key::Enter,
+            state: bevy::input::ButtonState::Pressed,
+            text: None,
+            repeat: false,
+            window: Entity::PLACEHOLDER,
+        });
+        app.update();
+    }
+
+    #[test]
+    fn typed_departure_detaches_the_admission_before_login_input_or_exit() {
+        use crate::login::{
+            FrontEnd, Screen, Session,
+            testing::{Fake, Heard, server},
+        };
+        use std::sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, Ordering},
+            mpsc::{TryRecvError, sync_channel},
+        };
+        for (alias, closes) in [("/qu", false), ("/EXI", true)] {
+            let heard = Arc::new(Mutex::new(Heard::default()));
+            let stopped = Arc::new(AtomicBool::new(false));
+            let (news, updates) = sync_channel(4);
+            let (commands, queue) = sync_channel(4);
+            let (front, updates, commands) = FrontEnd::launched(
+                Box::new(Fake {
+                    servers: vec![server("Example", "remembered")],
+                    heard: heard.clone(),
+                }),
+                Some(Session {
+                    inventory_move_rules: None,
+                    spell_provider: eq_client_core::spell_tables::Binding::new(
+                        eq_client_core::spell_tables::Policy::Installed,
+                    ),
+                    updates,
+                    commands,
+                    worker: Box::new(Stopping(stopped.clone())),
+                }),
+            );
+            let mut online = crate::online::OnlineState::new(true);
+            crate::online::testing::admit(&mut online, 4, crate::online::testing::player(12));
+            online.camp_to(eq_client_core::camp::CampTo::Desktop);
+            crate::online::testing::news(
+                &mut online,
+                [eq_client_core::WorldEvent::Camp(
+                    eq_client_core::CampStatus::LoggingOut,
+                )],
+            );
+            assert_eq!(front.screen(&online), Screen::World);
+
+            let mut app = crate::testing::app();
+            app.insert_resource(front)
+                .insert_resource(online)
+                .insert_resource(crate::online::Updates(Mutex::new(updates)))
+                .insert_resource(crate::outbox::Outbox::new(commands))
+                .init_resource::<Assets<Mesh>>()
+                .init_resource::<Assets<StandardMaterial>>()
+                .init_resource::<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>()
+                .add_message::<KeyboardInput>()
+                .add_message::<AppExit>()
+                .add_systems(
+                    Update,
+                    (
+                        input,
+                        crate::login::depart,
+                        crate::login::form,
+                        crate::online::leave,
+                    )
+                        .chain(),
+                );
+            let old_scene = app.world_mut().spawn(crate::SceneEntity).id();
+            app.world_mut()
+                .resource_mut::<crate::options::OptionsState>()
+                .options
+                .qol
+                .set(Fix::ExitAtOnce, !closes);
+            enter_draft(&mut app, alias);
+
+            let world = app.world();
+            let online = world.resource::<crate::online::OnlineState>();
+            let front = world.resource::<FrontEnd>();
+            assert!(stopped.load(Ordering::SeqCst));
+            assert!(!front.running());
+            assert_eq!(front.screen(online), Screen::Login);
+            assert_eq!(front.account, "remembered");
+            assert_eq!(
+                heard.lock().unwrap().connects,
+                [] as [(usize, String, String); 0]
+            );
+            assert!(online.world().ended());
+            assert_eq!(online.world().session_id(), None);
+            assert!(online.world().player().is_none());
+            assert!(online.world().camp_completion().is_none());
+            assert!(world.get_entity(old_scene).is_err());
+            assert!(world.resource::<crate::keys::Typing>().logging_in);
+            assert!(!world.resource::<crate::keys::Typing>().composing);
+            assert!(matches!(queue.try_recv(), Err(TryRecvError::Disconnected)));
+            assert!(
+                news.try_send(eq_client_core::WorldUpdate::Connection(
+                    eq_client_core::world::Link::Ended,
+                ))
+                .is_err()
+            );
+            assert_eq!(
+                world.resource::<Messages<AppExit>>().len(),
+                usize::from(closes)
+            );
+        }
+    }
+
+    #[test]
     fn camp_sits_first_and_game_commands_never_become_chat() {
         let mut online = super::super::online::OnlineState::new(true);
         let (queue, _received) = std::sync::mpsc::sync_channel(4);
         let outbox = crate::outbox::Outbox::new(Some(queue));
-        assert!(game_commands("/say hello", &online, &outbox).is_none());
-        assert!(game_commands("hello", &online, &outbox).is_none());
-        assert!(game_commands("/camp", &online, &outbox).unwrap().is_err());
+        assert!(game_commands("/say hello", &online, &outbox, &Settings::default()).is_none());
+        assert!(game_commands("hello", &online, &outbox, &Settings::default()).is_none());
+        assert!(
+            game_commands("/camp", &online, &outbox, &Settings::default())
+                .unwrap()
+                .is_err()
+        );
         crate::online::testing::admit(
             &mut online,
             4,
@@ -1811,7 +2039,9 @@ mod tests {
                 name_parts: eq_client_core::names::NameParts::default(),
             },
         );
-        let commands = game_commands("/CAMP", &online, &outbox).unwrap().unwrap();
+        let commands = game_commands("/CAMP", &online, &outbox, &Settings::default())
+            .unwrap()
+            .unwrap();
         assert!(matches!(
             commands.as_slice(),
             [
@@ -1825,7 +2055,7 @@ mod tests {
             ]
         ));
         assert!(matches!(
-            game_commands("/stand", &online, &outbox)
+            game_commands("/stand", &online, &outbox, &Settings::default())
                 .unwrap()
                 .unwrap()
                 .as_slice(),
@@ -1835,7 +2065,7 @@ mod tests {
             }]
         ));
         // Words after a command that takes none make it chat.
-        assert!(game_commands("/sit down", &online, &outbox).is_none());
+        assert!(game_commands("/sit down", &online, &outbox, &Settings::default()).is_none());
     }
 
     #[test]
@@ -1847,7 +2077,7 @@ mod tests {
         crate::online::testing::admit(&mut online, 4, crate::online::testing::player(12));
         for typed in ["/camp desktop", "/CAMP Desktop"] {
             assert!(matches!(
-                game_commands(typed, &online, &outbox)
+                game_commands(typed, &online, &outbox, &Settings::default())
                     .unwrap()
                     .unwrap()
                     .as_slice(),
@@ -1864,7 +2094,7 @@ mod tests {
         assert_eq!(camp_destination("/camp"), Some(CampTo::CharacterSelect));
         assert_eq!(camp_destination("/camping desktop"), None);
         // Another word is refused in the client's words, never sent as chat.
-        let refusal = game_commands("/camp server", &online, &outbox)
+        let refusal = game_commands("/camp server", &online, &outbox, &Settings::default())
             .unwrap()
             .unwrap_err();
         assert!(refusal.contains("/camp desktop"), "{refusal}");
@@ -1875,10 +2105,22 @@ mod tests {
         let mut state = ChatState::default();
         let mut typing = crate::keys::Typing::default();
         "/camp server".clone_into(&mut state.draft);
-        submit_draft(&mut state, &mut typing, &mut online, &outbox);
+        submit_draft(
+            &mut state,
+            &mut typing,
+            &mut online,
+            &outbox,
+            &Settings::default(),
+        );
         assert!(received.try_recv().is_err());
         "/camp desktop".clone_into(&mut state.draft);
-        submit_draft(&mut state, &mut typing, &mut online, &outbox);
+        submit_draft(
+            &mut state,
+            &mut typing,
+            &mut online,
+            &outbox,
+            &Settings::default(),
+        );
         assert!(matches!(
             received.try_recv(),
             Ok(ClientCommand::SetPosture { .. })
@@ -1901,13 +2143,108 @@ mod tests {
     }
 
     #[test]
+    fn immediate_camp_sends_one_logout_intent_and_waits_for_the_session() {
+        use eq_client_core::camp::CampTo;
+        let mut online = super::super::online::OnlineState::new(true);
+        let (queue, received) = std::sync::mpsc::sync_channel(8);
+        let outbox = crate::outbox::Outbox::new(Some(queue));
+        crate::online::testing::admit(&mut online, 4, crate::online::testing::player(12));
+        let mut qol = Settings::default();
+        qol.set(Fix::ExitAtOnce, true);
+        for typed in ["/camp", "/CAMP Desktop"] {
+            assert!(matches!(
+                game_commands(typed, &online, &outbox, &qol)
+                    .unwrap()
+                    .unwrap()
+                    .as_slice(),
+                [ClientCommand::ExitAtOnce { session_id: 4, .. }]
+            ));
+        }
+        assert!(
+            game_commands("/camp server", &online, &outbox, &qol)
+                .unwrap()
+                .is_err()
+        );
+        assert!(received.try_recv().is_err());
+
+        // Buttons and script slash steps share this submission path. The
+        // destination is remembered, but neither queueing nor LoggingOut is a
+        // server acknowledgement that the character left.
+        submit_game_command("/camp desktop", &mut online, &outbox, &qol).unwrap();
+        assert!(matches!(
+            received.try_recv(),
+            Ok(ClientCommand::ExitAtOnce { session_id: 4, .. })
+        ));
+        assert!(received.try_recv().is_err());
+        assert!(online.world().connected() && !online.world().leaving());
+        crate::online::testing::news(
+            &mut online,
+            [eq_client_core::WorldEvent::Camp(
+                eq_client_core::CampStatus::LoggingOut,
+            )],
+        );
+        assert_eq!(
+            online.world().camp().map(|camp| camp.to),
+            Some(CampTo::Desktop)
+        );
+        assert!(!online.world().leaving());
+        crate::online::testing::news(
+            &mut online,
+            [eq_client_core::WorldEvent::Camp(
+                eq_client_core::CampStatus::Camped,
+            )],
+        );
+        assert!(online.world().leaving());
+    }
+
+    #[test]
+    fn immediate_camp_still_refuses_dead_disconnected_or_unoffered_requests() {
+        let mut online = super::super::online::OnlineState::new(true);
+        let (queue, received) = std::sync::mpsc::sync_channel(8);
+        let outbox = crate::outbox::Outbox::new(Some(queue));
+        let mut qol = Settings::default();
+        qol.set(Fix::ExitAtOnce, true);
+        assert!(submit_game_command("/camp", &mut online, &outbox, &qol).is_err());
+        crate::online::testing::news(
+            &mut online,
+            [eq_client_core::WorldEvent::Entered {
+                capabilities: Vec::new(),
+                choices: Vec::new(),
+                session_id: 3,
+                zone: "qeytoqrg".into(),
+                player: Box::new(crate::online::testing::player(12)),
+                far_clip: None,
+                spell_landing_flag: None,
+            }],
+        );
+        crate::online::testing::connect(&mut online, true);
+        assert!(submit_game_command("/camp", &mut online, &outbox, &qol).is_err());
+        crate::online::testing::admit(&mut online, 4, crate::online::testing::player(12));
+        crate::online::testing::connect(&mut online, false);
+        assert!(submit_game_command("/camp", &mut online, &outbox, &qol).is_err());
+        crate::online::testing::connect(&mut online, true);
+        crate::online::testing::news(
+            &mut online,
+            [eq_client_core::WorldEvent::Death(eq_client_core::Death {
+                spawn_id: 12,
+                killer_id: 0,
+                corpse_id: 0,
+                bind_zone_id: 0,
+                corpse_name: None,
+            })],
+        );
+        assert!(submit_game_command("/camp", &mut online, &outbox, &qol).is_err());
+        assert!(received.try_recv().is_err());
+    }
+
+    #[test]
     fn who_consent_corpse_and_pet_commands_reach_the_game() {
         let mut online = super::super::online::OnlineState::new(true);
         let (queue, _received) = std::sync::mpsc::sync_channel(4);
         let outbox = crate::outbox::Outbox::new(Some(queue));
         crate::online::testing::admit(&mut online, 4, crate::online::testing::player(12));
         assert!(matches!(
-            game_commands("/who all wiz 50 60", &online, &outbox)
+            game_commands("/who all wiz 50 60", &online, &outbox, &Settings::default())
                 .unwrap()
                 .unwrap()
                 .as_slice(),
@@ -1920,30 +2257,34 @@ mod tests {
                 },
             }]
         ));
-        assert!(game_commands("/who", &online, &outbox).unwrap().is_err());
+        assert!(
+            game_commands("/who", &online, &outbox, &Settings::default())
+                .unwrap()
+                .is_err()
+        );
         // Consent names a player; the corpse commands want a corpse targeted,
         // but a drop without one drops them all.
         assert!(matches!(
-            game_commands("/consent Helper", &online, &outbox)
+            game_commands("/consent Helper", &online, &outbox, &Settings::default())
                 .unwrap()
                 .unwrap()
                 .as_slice(),
             [ClientCommand::Consent { session_id: 4, name, given: true }] if name == "Helper"
         ));
         assert!(matches!(
-            game_commands("/deny Helper", &online, &outbox)
+            game_commands("/deny Helper", &online, &outbox, &Settings::default())
                 .unwrap()
                 .unwrap()
                 .as_slice(),
             [ClientCommand::Consent { given: false, .. }]
         ));
         assert_eq!(
-            game_commands("/corpsedrag", &online, &outbox).unwrap(),
+            game_commands("/corpsedrag", &online, &outbox, &Settings::default()).unwrap(),
             Err("You must first target a corpse.".into())
         );
         // A pet command aims at the target; unknown words say so.
         assert!(matches!(
-            game_commands("/pet back off", &online, &outbox)
+            game_commands("/pet back off", &online, &outbox, &Settings::default())
                 .unwrap()
                 .unwrap()
                 .as_slice(),
@@ -1953,11 +2294,11 @@ mod tests {
             }]
         ));
         assert_eq!(
-            game_commands("/pet dance", &online, &outbox).unwrap(),
+            game_commands("/pet dance", &online, &outbox, &Settings::default()).unwrap(),
             Err("Unknown pet command: dance".into())
         );
         assert!(matches!(
-            game_commands("/corpsedrop", &online, &outbox)
+            game_commands("/corpsedrop", &online, &outbox, &Settings::default())
                 .unwrap()
                 .unwrap()
                 .as_slice(),
@@ -2351,7 +2692,7 @@ mod tests {
                 let tab_frame = eq_client_assets::sidl::FrameLook::default();
                 commands.spawn(Node::default()).with_children(|window| {
                     skinned_output(window, Node::default(), (&mut art, Some(&tab_frame)));
-                    skinned_input(window, Node::default());
+                    skinned_input(window, Node::default(), false);
                 });
             })
             .unwrap();

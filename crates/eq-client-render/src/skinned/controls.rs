@@ -5,7 +5,7 @@
 //! keeps nothing for is drawn greyed out, as its buttons are.
 use super::{Area, WindowId, at, border, picture, to_f32};
 use crate::inventory::{InventoryState, SplitAction};
-use crate::keys::{KeyGroup, KeyMap, Typing};
+use crate::keys::{Chord, KeyGroup, KeyMap, Typing};
 use crate::options::OptionsState;
 use crate::theme::{self, Size};
 use bevy::{prelude::*, ui::RelativeCursorPosition};
@@ -769,6 +769,13 @@ pub(super) fn listbox(
         BackgroundColor(theme::INSET),
         crate::windows::KeepsPress,
     ));
+    if owner == WindowId::Chat {
+        if let Some(anchors) = list.anchors {
+            drawn.insert(super::reflow::Geometry(anchors));
+        } else if list.area.is_none() {
+            drawn.insert(super::reflow::Geometry::inset(0.0, 0.0, 0.0, 0.0));
+        }
+    }
     if listing.is_none() {
         drawn.insert(super::missing());
     }
@@ -805,6 +812,20 @@ pub(super) fn listbox(
             },
             ScrollPosition::default(),
         ));
+        if owner == WindowId::Chat {
+            let insets = list
+                .template
+                .as_ref()
+                .map_or_else(super::frame::Insets::default, |template| {
+                    super::border_insets(&template.border)
+                });
+            rows.insert(super::reflow::Geometry::inset(
+                client.x + 2.0,
+                client.y + heading + 2.0,
+                insets.right + 2.0 + bar_width,
+                insets.bottom + 2.0,
+            ));
+        }
         let scrolled = rows.id();
         if let Some(listing) = listing {
             let columns = list.columns.iter().map(|column| column.width).collect();
@@ -923,11 +944,8 @@ pub(crate) fn fill_lists(
             }
             let cells = [
                 act.command(),
-                chords
-                    .first()
-                    .map(|chord| chord.label())
-                    .unwrap_or_default(),
-                chords.get(1).map(|chord| chord.label()).unwrap_or_default(),
+                chords[0].map(Chord::label).unwrap_or_default(),
+                chords[1].map(Chord::label).unwrap_or_default(),
             ];
             let row = commands
                 .spawn((

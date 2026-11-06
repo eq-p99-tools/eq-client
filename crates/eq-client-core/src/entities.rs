@@ -61,6 +61,21 @@ pub fn nearby<'a>(
     radius: f32,
     limit: usize,
 ) -> Vec<u16> {
+    nearby_with_invisible(spawns, own_id, position, rendered, radius, limit, false)
+}
+
+/// Selects nearby entities for local presentation, optionally including known
+/// invisible spawns. This does not change their reported visibility or permit
+/// targeting or other interaction with them.
+pub fn nearby_with_invisible<'a>(
+    spawns: impl IntoIterator<Item = &'a SpawnState>,
+    own_id: u16,
+    position: WorldPosition,
+    rendered: &BTreeSet<u16>,
+    radius: f32,
+    limit: usize,
+    show_invisible: bool,
+) -> Vec<u16> {
     if !radius.is_finite() || radius <= 0.0 {
         return Vec::new();
     }
@@ -68,7 +83,7 @@ pub fn nearby<'a>(
         .into_iter()
         .filter_map(|spawn| {
             if spawn.spawn_id == own_id
-                || spawn.invisible
+                || (spawn.invisible && !show_invisible)
                 || matches!(spawn.kind, SpawnKind::Unknown(_))
             {
                 return None;
@@ -272,6 +287,31 @@ mod tests {
             ),
             vec![2]
         );
+    }
+
+    #[test]
+    fn showing_invisible_is_local_and_keeps_range_self_and_kind_filters() {
+        let mut hidden = spawn(2, 5.0);
+        hidden.invisible = true;
+        let mut distant = spawn(3, 201.0);
+        distant.invisible = true;
+        let mut unknown = spawn(4, 2.0);
+        unknown.kind = SpawnKind::Unknown(99);
+        let all = [spawn(1, 0.0), hidden, distant, unknown];
+        let select = |show| {
+            nearby_with_invisible(
+                &all,
+                1,
+                WorldPosition::default(),
+                &BTreeSet::new(),
+                200.0,
+                64,
+                show,
+            )
+        };
+        assert_eq!(select(false), []);
+        assert_eq!(select(true), [2]);
+        assert!(all[1].invisible);
     }
     #[test]
     fn exit_margin_prevents_boundary_churn_but_never_admits_distant_new_entities() {

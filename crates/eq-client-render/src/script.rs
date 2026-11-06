@@ -6,8 +6,8 @@
 //! Attended clicks wait for the real pointer to leave the window. Explicit
 //! background ownership isolates native UI focus without moving that pointer;
 //! each click
-//! and hover first glides the script's own pointer to its control (see
-//! [`pointer`]), scrolling a list the control has scrolled out of view as
+//! and hover first glides the script's own pointer to its control (the
+//! `pointer` module), scrolling a list the control has scrolled out of view as
 //! the wheel does, and lands only on the control under it. A followed
 //! script keeps reading complete lines appended to its file, under the same limits.
 //! `gm` and `chat` steps require a network-constrained local EQEmu/TAKP session.
@@ -289,7 +289,7 @@ impl Script {
         self
     }
 
-    /// Marks the session local-only (see [`Script::local`]); set only when the
+    /// Marks the session local-only (the `Script::local` field); set only when the
     /// network session refuses servers outside this machine's network.
     #[must_use]
     pub fn local_session(mut self, local: bool) -> Self {
@@ -345,7 +345,7 @@ impl Script {
             || self.clicked.is_some()
     }
 
-    /// Marks the run offline (see [`Script::offline`]).
+    /// Marks the run offline (the `Script::offline` field).
     #[must_use]
     pub fn offline_preview(mut self, offline: bool) -> Self {
         self.offline = offline;
@@ -525,7 +525,10 @@ type Buttons<'w, 's> = Query<
         &'static InheritedVisibility,
         Option<&'static super::inventory::SlotButton>,
         Has<super::spellbook::ScribeCursor>,
-        Has<super::inventory::StoreCursor>,
+        (
+            Has<super::inventory::StoreCursor>,
+            Option<&'static super::inventory::destruction::Action>,
+        ),
         (
             Option<&'static super::spellbook::BookEntry>,
             Option<&'static super::spellbook::BookPlace>,
@@ -616,6 +619,7 @@ type Observed<'w> = (
     Option<Res<'w, super::doors::Hinges>>,
     Option<Res<'w, super::zone_navmesh::ZoneNavMesh>>,
     Option<Res<'w, crate::spellbook::SpellNames>>,
+    Option<Res<'w, crate::options::OptionsState>>,
 );
 
 type Input<'w, 's> = (Keyboard<'w, 's>, ResMut<'w, ButtonInput<MouseButton>>);
@@ -921,8 +925,17 @@ pub(super) fn drive(
             // ordinary click/menu handlers observe the release.
             script.menu_opening = Some(MenuOpening::Released { target, since: now });
         }
+        let menu_entry = script
+            .current
+            .as_ref()
+            .is_some_and(|(step, _)| entry_target(step).is_some());
         script.release(&mut keys, &mut mouse);
         script.current = None;
+        if menu_entry {
+            // The entry's release reaches its handler later this frame.
+            // Dispatching another entry now would see the old open menu.
+            return;
+        }
     }
     if let Some((step, since)) = script.current.clone() {
         let elapsed = now.saturating_sub(since);
@@ -1515,6 +1528,10 @@ pub(super) fn drive(
         script.awaited = None;
         script.approached = None;
         script.deleting = None;
+        if entry_target(&step).is_some() {
+            // A held menu entry also closes the menu after this release.
+            return;
+        }
     }
     script.progress.complete_step();
     if !script.advance(now) {
@@ -1616,8 +1633,13 @@ pub(super) fn drive(
             return;
         }
         Step::Slash(command) => {
-            let queued = super::chat::client_request(command, &mut chat)
-                .unwrap_or_else(|| super::chat::submit_game_command(command, &online, &observed.1));
+            let qol = observed
+                .9
+                .as_ref()
+                .map_or_else(Default::default, |options| options.options.qol);
+            let queued = super::chat::client_request(command, &mut chat).unwrap_or_else(|| {
+                super::chat::submit_game_command(command, &mut online, &observed.1, &qol)
+            });
             if let Err(error) = queued {
                 script.stop(&mut keys, &mut mouse, &error);
             }
@@ -1722,6 +1744,7 @@ pub(super) fn drive(
             for mut camera in &mut cameras {
                 // The view holds the pitch and distance within its own
                 // ranges from the next frame, as it holds the mouse's.
+                camera.reset_view();
                 camera.yaw = super::behind(eq_client_core::render_heading(base + *heading));
                 camera.pitch = pitch.to_radians();
                 if let Some(radius) = radius {
@@ -1772,7 +1795,13 @@ pub(super) fn drive(
             script.pointed = script.hovering.take().or(script.pointed);
         }
         Step::Report(label) => {
-            report::state(label, &online, &observed, players.single().ok());
+            report::state(
+                label,
+                &online,
+                &observed,
+                players.single().ok(),
+                cameras.single().ok(),
+            );
             report::surroundings(&online, &observed);
             report::game_messages(&mut script.chat_seen, &chat);
             return;
@@ -2191,7 +2220,7 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
         visibility,
         slot,
         scribe,
-        store,
+        (store, destroy),
         (row, place, turns, spell_gem, hot_button),
         gem,
         trade,
@@ -2251,6 +2280,7 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
             ClickTarget::Slot(number) => slot.is_some_and(|slot| slot.0.0 == number),
             ClickTarget::Scribe => scribe,
             ClickTarget::Store => store,
+            ClickTarget::Destroy => destroy == Some(&super::inventory::destruction::Action::Select),
             ClickTarget::BookRow(number) => row.is_some_and(|row| row.0 == number),
             ClickTarget::BookPlace(number) => place.is_some_and(|place| place.0 == number),
             ClickTarget::BookPage(forward) => turns.is_some_and(|turns| turns.0 == forward),
@@ -3976,6 +4006,22 @@ mod tests {
         // Offline, steps run unattended but a gm step is still refused.
         let offline = Script::new(Vec::new()).offline_preview(true);
         assert!(offline.offline && !offline.local);
+    }
+
+    #[test]
+    fn a_stun_fixture_keeps_both_local_session_gates() {
+        let program = Program::parse("gm stun 8000", std::path::Path::new(".")).unwrap();
+        assert_eq!(
+            program.instructions()[0].step(),
+            &Step::Gm("stun 8000".into())
+        );
+        assert!(program.check_local_commands(false).is_err());
+        assert!(program.check_local_commands(true).is_ok());
+        assert!(gm_chat("stun 8000", false).is_err());
+        assert_eq!(
+            gm_chat("stun 8000", true).unwrap(),
+            eq_client_core::OutboundChat::Say("#stun 8000".into())
+        );
     }
 
     #[test]

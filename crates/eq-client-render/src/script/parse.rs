@@ -13,7 +13,7 @@ pub(super) const MAX_WAIT: Duration = Duration::from_mins(2);
 const MAX_TRACE: Duration = Duration::from_secs(10);
 const MAX_WALK: Duration = Duration::from_mins(1);
 /// `EQEmu` GM commands a script may send, without the leading `#`.
-const GM_COMMANDS: [&str; 35] = [
+const GM_COMMANDS: [&str; 36] = [
     // The server's own view of the player's stats, weight and coins among
     // them, said back in chat; reads only.
     "showstats",
@@ -43,6 +43,8 @@ const GM_COMMANDS: [&str; 35] = [
     "npcloot",
     "castspell",
     "damage",
+    // A server-issued stun for a local test fixture; duration is milliseconds.
+    "stun",
     "givemoney",
     "zone",
     "goto",
@@ -254,6 +256,8 @@ pub enum ClickTarget {
     Scribe,
     /// The inventory's auto-store-cursor button.
     Store,
+    /// Explicit cursor-item destroy selection, followed by ordinary Yes/No.
+    Destroy,
     /// A spellbook row on the open page, from zero.
     BookRow(usize),
     /// The spellbook's memorize button for a gem, from zero.
@@ -611,6 +615,7 @@ fn parse_slash(words: &[&str]) -> Result<Step, String> {
         [command] if matches!(*command, "camp" | "sit" | "stand") => {
             Step::Slash(format!("/{command}"))
         }
+        ["camp", "desktop"] => Step::Slash("/camp desktop".into()),
         ["target", name @ ..] if !name.is_empty() => {
             Step::Slash(format!("/target {}", name.join(" ")))
         }
@@ -753,6 +758,7 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["slot", slot] => ClickTarget::Slot(value(slot, "a slot number")?),
         ["scribe"] => ClickTarget::Scribe,
         ["store"] => ClickTarget::Store,
+        ["destroy"] => ClickTarget::Destroy,
         ["book", row] => ClickTarget::BookRow(value(row, "a book row number")?),
         ["loot", place] => {
             ClickTarget::Trade(TradeClick::Take(value(place, "a place on the corpse")?))
@@ -1446,6 +1452,18 @@ mod tests {
     }
 
     #[test]
+    fn desktop_camp_uses_the_game_command_owner_and_rejects_other_destinations() {
+        let base = Path::new("private");
+        assert_eq!(
+            parse("slash camp desktop\n", base).unwrap(),
+            [Step::Slash("/camp desktop".into())]
+        );
+        for bad in ["slash camp server", "slash camp desktop now"] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
     fn moving_steps_name_commands_and_key_steps_name_the_keypad() {
         let base = Path::new("private");
         assert_eq!(
@@ -1746,6 +1764,32 @@ chat tell Friend inc now
     }
 
     #[test]
+    fn destruction_requires_separate_ordinary_confirmation_clicks() {
+        assert_eq!(
+            parse(
+                "click destroy\nclick answer no\nclick destroy\nclick answer yes\n",
+                Path::new("private")
+            )
+            .unwrap(),
+            [
+                Step::Click(ClickTarget::Destroy),
+                Step::Click(ClickTarget::Answer(false)),
+                Step::Click(ClickTarget::Destroy),
+                Step::Click(ClickTarget::Answer(true))
+            ]
+        );
+        for invalid in [
+            "destroy",
+            "destroy 30",
+            "click destroy 30",
+            "click destroy all",
+            "click destroy yes",
+        ] {
+            assert!(parse(invalid, Path::new("private")).is_err());
+        }
+    }
+
+    #[test]
     fn parses_a_sound_by_its_file_name() {
         let base = Path::new("private");
         assert_eq!(
@@ -1818,6 +1862,22 @@ chat tell Friend inc now
             ]
         );
         assert!(parse("click chat_tab nowhere\n", Path::new("private")).is_err());
+    }
+
+    #[test]
+    fn right_click_buff_uses_the_ordinary_effects_button_target() {
+        assert_eq!(
+            parse(
+                "right_click buff 4\nright_click song 1\n",
+                Path::new("private")
+            )
+            .unwrap(),
+            [
+                Step::RightClick(ClickTarget::Buff(true, 3)),
+                Step::RightClick(ClickTarget::Buff(false, 0))
+            ]
+        );
+        assert!(parse("right_click buff 0\n", Path::new("private")).is_err());
     }
 
     #[test]

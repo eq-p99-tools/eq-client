@@ -31,6 +31,15 @@ Run a script from the workbench while logged in to act on your current character
 
 Click targets include `slot 22`, `spell_gem 1`, `hot_button 1`, and `character 1`. They refer to controls, not arbitrary desktop coordinates. An invalid target produces a source-line error.
 
+`click destroy` selects the whole cursor item or stack for destruction on P99
+and Titanium EQEmu. It opens the ordinary confirmation; `click answer yes`
+confirms that exact admission, inventory revision, item and quantity, while
+`click answer no` cancels. Any inventory change cancels consent. This first
+slice refuses populated containers, queued cursor items and unresolved inventory
+predictions. A sent destruction remains a local prediction until received
+inventory evidence arrives; scripts must not repeat it on an uncertain result.
+Coin destruction and ground dropping have no script action.
+
 Key names are case-insensitive. Combine them with `+`, such as `alt+1`. Supported names include letters, digits, `f1` to `f12`, `space`, `escape`, `enter`, `backspace`, `delete`, `tab`, `slash`, `up`, `down`, `left`, `right`, `shift`, `ctrl`, `alt`, `numlock`, `insert`, `home`, `end`, `pageup`, `pagedown`, `numpad0` to `numpad9`, `numpad_add`, `numpad_subtract`, `numpad_multiply`, `numpad_divide`, `numpad_decimal` and `numpad_enter`.
 
 ## Camera and movement
@@ -57,7 +66,11 @@ Approach, walk and chase hold the camera-relative forward command, independent o
 - `screenshot filename.png`: capture beside the script; the argument must be a filename.
 - `sound filename.wav`: play a sound from the installed game assets.
 - `slash command [arguments]`: run one of the supported game slash commands, without a leading slash.
+  `slash camp desktop` uses the ordinary camp destination and current QoL exit choice.
+  The immediate disconnect aliases typed in chat are not script slash commands.
 - `gm command [arguments]`: an allowed GM command on a network-constrained local test session only.
+  `gm stun 8000` requests an 8,000-millisecond server stun for a local fixture.
+  Check received `own_stun` state; command submission alone does not establish the effect.
 - `chat channel message`: chat on a network-constrained local test session only.
 - `quit`: close the client.
 

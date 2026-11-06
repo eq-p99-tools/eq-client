@@ -2,34 +2,38 @@
 //! Keep shared-input and deferred-entity ordering visible at this composition boundary.
 use crate::{
     abilities, buffs, character, character_create, character_select, chat, clicks, coins, combat,
-    confirm, daylight, doors, entities, escape, exit_after_screenshot, give, ground, group, hud,
-    interact, inventory, item_models, items, keys, login, logs, map, motion, move_player, names,
-    navigation, navmesh_prebuild, notices, online, options, orbit_camera, outbox, outfit,
-    paperdoll, pet, profile_files, raid, reading, resources, schedule_screenshot, select_preview,
-    sheets, skills, skin, skinned, sounds, speed, spell_effects, spell_icons, spellbook, target,
-    tooltip, trade, tradeskills, training, translocate, update_hud, whereabouts, who, windows,
+    combat_text, confirm, daylight, doors, entities, escape, exit_after_screenshot, give, ground,
+    group, hud, interact, inventory, item_models, items, keys, login, logs, map, motion,
+    move_player, names, navigation, navmesh_prebuild, notices, online, options, orbit_camera,
+    outbox, outfit, paperdoll, pet, profile_files, raid, reading, resources, schedule_screenshot,
+    select_preview, sheets, skills, skin, skinned, sounds, speed, spell_effects, spell_icons,
+    spellbook, target, tooltip, trade, tradeskills, training, translocate, update_hud, whereabouts,
+    who, windows,
 };
 use bevy::prelude::*;
 /// Starts the presentation state (HUD, windows, chat, targeting, inventory,
 /// trade, combat and motion) empty: every resource the windows keep, in one
 /// list that the tests' app starts from too.
 pub(super) fn init_presentation(app: &mut App) {
-    // Use the installed table, or the explicit Titanium fallback offline.
+    // Use the selected installation's bindings, or the Titanium fallback offline.
     let keys = app
         .world()
         .get_resource::<crate::ViewerSettings>()
         .map_or_else(keys::KeyMap::default, |settings| {
-            keys::KeyMap::for_client(settings.0.installed_client)
+            keys::KeyMap::for_settings(&settings.0)
         });
-    app.insert_resource(keys);
+    app.insert_resource(keys::bindings::Bindings::with_installed(keys.clone()))
+        .insert_resource(keys);
     app.init_resource::<spell_effects::SpellParticles>()
         .init_resource::<sounds::Sounds>()
         .init_resource::<doors::Hinges>()
         .init_resource::<options::OptionsState>()
+        .init_resource::<options::MovementSync>()
         .init_resource::<logs::ChatLog>()
         .init_resource::<hud::HudState>()
         .init_resource::<hud::action_bar::ActionRequests>()
         .init_resource::<combat::CombatState>()
+        .init_resource::<combat_text::CombatText>()
         .init_resource::<trade::TradeState>()
         .init_resource::<escape::Escape>()
         .init_resource::<windows::pointer::Wheel>()
@@ -57,6 +61,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<inventory::InventoryState>()
         .init_resource::<motion::Controls>()
         .init_resource::<crate::camera::MouseLook>()
+        .init_resource::<crate::camera::MouseAim>()
         .init_resource::<entities::NearbyEntities>()
         .init_resource::<names::NameTags>()
         .init_resource::<item_models::ItemLibrary>()
@@ -70,7 +75,6 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<keys::Typing>()
         .init_resource::<keys::presses::Presses>()
         .init_resource::<character_create::Editor>()
-        .init_resource::<keys::bindings::Bindings>()
         .init_resource::<training::Chosen>()
         .init_resource::<raid::RaidChoice>()
         .init_resource::<confirm::Asked>()
@@ -157,6 +161,7 @@ pub(super) fn schedule(app: &mut App) {
                 navigation::update,
                 map::search_focus,
                 chat::input,
+                login::depart,
                 skinned::type_amount,
                 map::search_input,
             )
@@ -176,8 +181,9 @@ pub(super) fn schedule(app: &mut App) {
     .add_systems(
         Update,
         (
+            options::tell_choices,
             (items::input, chat::links::input).chain(),
-            inventory::input,
+            (inventory::input, inventory::destruction::input).chain(),
             coins::input,
             inventory::colors::input,
             interact::input,
@@ -241,7 +247,13 @@ pub(super) fn schedule(app: &mut App) {
                     .chain(),
             ),
             windows::input,
-            (crate::camera::toggle_free, move_player, motion::input).chain(),
+            (
+                crate::camera::toggle_free,
+                crate::camera::turn,
+                move_player,
+                motion::input,
+            )
+                .chain(),
         )
             .chain()
             .in_set(Stage::Input),
@@ -266,6 +278,7 @@ pub(super) fn schedule(app: &mut App) {
                 motion::interpolate,
                 crate::camera::fly_camera,
                 orbit_camera,
+                crate::camera::show_player,
                 update_hud,
                 // Opens the give, quantity and training windows before their
                 // frames are drawn.
@@ -292,17 +305,16 @@ pub(super) fn schedule(app: &mut App) {
                 (hud::hotbar::presentation, hud::hotbar::fit_words).chain(),
                 spellbook::scribe_presentation,
                 buffs::update,
-                (buffs::hover, buffs::skinned_details, buffs::short_window),
+                (
+                    buffs::hover,
+                    buffs::skinned_details,
+                    buffs::short_window,
+                    buffs::cancel,
+                ),
                 (
                     (spell_icons::update, skinned::gem::pieces),
                     logs::write,
-                    (
-                        options::toggle,
-                        options::persist,
-                        options::choose,
-                        options::tell_session,
-                    )
-                        .chain(),
+                    (options::toggle, options::choose, options::tell_session).chain(),
                 ),
                 (outbox::show, inventory::say_refusals),
                 (hud::action_bar::cast_window, hud::action_bar::update),
@@ -375,6 +387,7 @@ pub(super) fn schedule(app: &mut App) {
                 sounds::update,
                 target::marker::update,
                 (names::request, names::update).chain(),
+                combat_text::update,
                 (schedule_screenshot, select_preview::next_capture).chain(),
                 exit_after_screenshot,
             )
@@ -431,6 +444,12 @@ pub(super) fn install_overlays(app: &mut App) {
         Update,
         profile_files::follow
             .after(Stage::Receive)
+            .before(Stage::Scene),
+    );
+    app.add_systems(
+        Update,
+        options::persist
+            .after(profile_files::follow)
             .before(Stage::Scene),
     );
     skin::register(app);

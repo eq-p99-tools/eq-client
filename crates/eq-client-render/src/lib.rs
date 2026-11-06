@@ -44,6 +44,7 @@ mod chat;
 mod clicks;
 mod coins;
 mod combat;
+mod combat_text;
 mod confirm;
 mod creation_preview;
 mod daylight;
@@ -307,6 +308,7 @@ fn seed_official_options(
         for (toggle, setting) in [
             (Toggle::Log, official.log),
             (Toggle::Sound, official.sound),
+            (Toggle::SpellEffects, official.spell_effects),
             (Toggle::PcNames, official.pc_names),
             (Toggle::NpcNames, official.npc_names),
         ] {
@@ -722,6 +724,7 @@ fn spawn_static_zone(
                 .filter(|primitive| gpu_assets::drawn(primitive))
                 .cloned()
                 .collect();
+            let pick = doors::PickMesh::from_model(&model);
             let primitives = create_render_primitives(
                 model.primitives,
                 &model.materials,
@@ -736,6 +739,7 @@ fn spawn_static_zone(
                 doors::Model {
                     primitives: primitives.clone(),
                     collision: model.collision,
+                    pick,
                 },
             );
             drawn_models.push(drawn);
@@ -1288,10 +1292,11 @@ mod tests {
             yaw: 0.75,
             pitch: -60.0_f32.to_radians(),
             pulled: None,
+            view: default(),
         };
         let requested = orbit_transform(&camera);
         let mut under = OrbitCamera { ..camera };
-        let inside = unobstructed_orbit(&mut under, Some(&roof), 0.0, 1.0 / 60.0);
+        let inside = unobstructed_orbit(&mut under, Some(&roof), 0.0, None, 1.0 / 60.0);
         assert!(inside.translation.y < 8.0);
         assert!(
             (inside.translation.length() - (8.0 / 60.0_f32.to_radians().sin() - 0.5)).abs() < 0.001
@@ -1300,7 +1305,7 @@ mod tests {
         assert_eq!(under.radius, 40.0);
         let mut open = OrbitCamera { ..camera };
         assert_eq!(
-            unobstructed_orbit(&mut open, None, 0.0, 1.0 / 60.0),
+            unobstructed_orbit(&mut open, None, 0.0, None, 1.0 / 60.0),
             requested
         );
         let mut outside = OrbitCamera {
@@ -1309,7 +1314,7 @@ mod tests {
         };
         let expected = orbit_transform(&outside);
         assert_eq!(
-            unobstructed_orbit(&mut outside, Some(&roof), 0.0, 1.0 / 60.0),
+            unobstructed_orbit(&mut outside, Some(&roof), 0.0, None, 1.0 / 60.0),
             expected
         );
     }
@@ -1340,6 +1345,7 @@ mod tests {
             yaw: 0.75,
             pitch: -60.0_f32.to_radians(),
             pulled: None,
+            view: default(),
         };
         // Walking under the roof's edge and back out, a frame at a time, with
         // the head's line as well as the middle's.
@@ -1360,9 +1366,10 @@ mod tests {
                 },
                 Some(&roof),
                 rise,
+                None,
                 frame,
             );
-            let pose = unobstructed_orbit(&mut camera, Some(&roof), rise, frame);
+            let pose = unobstructed_orbit(&mut camera, Some(&roof), rise, None, frame);
             let distance = (pose.translation - camera.focus).length();
             let limit = (unobstructed.translation - camera.focus).length();
             assert!(
@@ -1381,11 +1388,11 @@ mod tests {
         );
         // Out in the open again, a few frames later it is back at the radius.
         for _ in 0..60 {
-            unobstructed_orbit(&mut camera, Some(&roof), rise, frame);
+            unobstructed_orbit(&mut camera, Some(&roof), rise, None, frame);
         }
         assert_eq!(camera.pulled, None);
         assert_eq!(
-            unobstructed_orbit(&mut camera, Some(&roof), rise, frame),
+            unobstructed_orbit(&mut camera, Some(&roof), rise, None, frame),
             orbit_transform(&camera)
         );
     }
@@ -1406,18 +1413,19 @@ mod tests {
             yaw: 0.0,
             pitch: -0.15,
             pulled: None,
+            view: default(),
         };
         let requested = orbit_transform(&camera);
         let rise = 6.0 * HEAD_LINE;
         // The middle's line alone is clear, so it stays out at the radius.
         let mut waist_only = OrbitCamera { ..camera };
         assert_eq!(
-            unobstructed_orbit(&mut waist_only, Some(&lintel), 0.0, 1.0 / 60.0),
+            unobstructed_orbit(&mut waist_only, Some(&lintel), 0.0, None, 1.0 / 60.0),
             requested
         );
         // With the head's line, it comes in to this side of the lintel.
         let mut both = OrbitCamera { ..camera };
-        let pose = unobstructed_orbit(&mut both, Some(&lintel), rise, 1.0 / 60.0);
+        let pose = unobstructed_orbit(&mut both, Some(&lintel), rise, None, 1.0 / 60.0);
         assert!(pose.translation.z < 10.0, "{:?}", pose.translation);
         assert_eq!(pose.rotation, requested.rotation);
         let head = Vec3::Y * rise;
@@ -1565,12 +1573,10 @@ mod tests {
         use super::*;
         use bevy::input::mouse::MouseWheel;
         let mut app = App::new();
+        camera::testing::install_look(&mut app);
         app.init_resource::<chat::ChatState>()
             .init_resource::<items::ItemState>()
             .init_resource::<inventory::InventoryState>()
-            .init_resource::<ButtonInput<MouseButton>>()
-            .init_resource::<camera::MouseLook>()
-            .add_message::<MouseMotion>()
             .add_message::<MouseWheel>()
             .init_resource::<windows::pointer::Wheel>()
             .init_resource::<options::OptionsState>()
@@ -1578,7 +1584,7 @@ mod tests {
             .insert_resource(online::OnlineState::new(false))
             .add_systems(
                 Update,
-                (camera::look, windows::pointer::wheel, orbit_camera).chain(),
+                (camera::turn, windows::pointer::wheel, orbit_camera).chain(),
             );
         let mut window = Window {
             focused: true,
@@ -1598,14 +1604,13 @@ mod tests {
                     pitch: -1.0,
                     radius: 300.0,
                     pulled: None,
+                    view: default(),
                 },
                 Transform::default(),
                 Projection::Orthographic(OrthographicProjection::default_3d()),
             ))
             .id();
-        app.world_mut()
-            .resource_mut::<ButtonInput<MouseButton>>()
-            .press(MouseButton::Right);
+        camera::testing::button(&mut app, MouseButton::Right, true);
         // Dragged far and wheeled out: it tilts to its steepest and
         // backs off past the chase camera's 200 units.
         for _ in 0..20 {
@@ -1635,12 +1640,10 @@ mod tests {
         use super::*;
         use bevy::input::mouse::MouseWheel;
         let mut app = App::new();
+        camera::testing::install_look(&mut app);
         app.init_resource::<chat::ChatState>()
             .init_resource::<items::ItemState>()
             .init_resource::<inventory::InventoryState>()
-            .init_resource::<ButtonInput<MouseButton>>()
-            .init_resource::<camera::MouseLook>()
-            .add_message::<MouseMotion>()
             .add_message::<MouseWheel>()
             .init_resource::<windows::pointer::Wheel>()
             .init_resource::<options::OptionsState>()
@@ -1648,7 +1651,7 @@ mod tests {
             .insert_resource(online::OnlineState::new(false))
             .add_systems(
                 Update,
-                (camera::look, windows::pointer::wheel, orbit_camera).chain(),
+                (camera::turn, windows::pointer::wheel, orbit_camera).chain(),
             );
         let mut window = Window {
             focused: true,
@@ -1688,13 +1691,12 @@ mod tests {
                     pitch: -0.5,
                     radius: 40.0,
                     pulled: None,
+                    view: default(),
                 },
                 Transform::default(),
             ))
             .id();
-        app.world_mut()
-            .resource_mut::<ButtonInput<MouseButton>>()
-            .press(MouseButton::Right);
+        camera::testing::button(&mut app, MouseButton::Right, true);
         let send_input = |app: &mut App| {
             app.world_mut().write_message(MouseMotion {
                 delta: Vec2::new(20.0, 10.0),
@@ -1715,6 +1717,8 @@ mod tests {
         app.world_mut().get_mut::<ComputedNode>(panel).unwrap().size = Vec2::ZERO;
         app.update();
         assert_eq!(app.world().get::<OrbitCamera>(camera).unwrap().yaw, 0.0);
+        camera::testing::button(&mut app, MouseButton::Right, false);
+        camera::testing::button(&mut app, MouseButton::Right, true);
         send_input(&mut app);
         app.update();
         let state = app.world().get::<OrbitCamera>(camera).unwrap();
@@ -1733,6 +1737,8 @@ mod tests {
                 UiGlobalTransform::default(),
             ))
             .id();
+        camera::testing::button(&mut app, MouseButton::Right, false);
+        camera::testing::button(&mut app, MouseButton::Right, true);
         send_input(&mut app);
         app.update();
         let state = app.world().get::<OrbitCamera>(camera).unwrap();
@@ -1755,13 +1761,14 @@ mod tests {
             options.options.invert_y = true;
             options.options.wheel_zoom = false;
         }
+        camera::testing::button(&mut app, MouseButton::Right, false);
+        camera::testing::button(&mut app, MouseButton::Right, true);
         send_input(&mut app);
         app.update();
         let state = app.world().get::<OrbitCamera>(camera).unwrap();
         assert!(state.pitch > previous.1);
-        // The distance behind the player stays; only the height moved.
-        let behind = |radius: f32, pitch: f32| radius * pitch.cos();
-        assert!((behind(state.radius, state.pitch) - behind(previous.2, previous.1)).abs() < 1e-3);
+        // With wheel zoom disabled, pitching keeps the orbit radius fixed.
+        assert!((state.radius - previous.2).abs() < f32::EPSILON);
     }
 
     #[test]
@@ -1800,6 +1807,7 @@ mod tests {
             yaw: 0.0,
             pitch: 0.0,
             pulled: None,
+            view: default(),
         });
         let player = app
             .world_mut()

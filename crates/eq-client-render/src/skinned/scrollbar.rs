@@ -66,54 +66,93 @@ pub(crate) fn spawn(
     inside: &Area,
     (scrolled, window): (Entity, Option<WindowId>),
 ) {
+    draw(parent, art, look, inside, (scrolled, window), None);
+}
+
+pub(super) fn retained(
+    parent: &mut ChildSpawnerCommands,
+    art: &mut crate::sheets::Art,
+    look: &ScrollbarLook,
+    inside: &Area,
+    target: (Entity, Option<WindowId>),
+    parent_size: Vec2,
+) {
+    draw(parent, art, look, inside, target, Some(parent_size));
+}
+
+fn draw(
+    parent: &mut ChildSpawnerCommands,
+    art: &mut crate::sheets::Art,
+    look: &ScrollbarLook,
+    inside: &Area,
+    (scrolled, window): (Entity, Option<WindowId>),
+    parent_size: Option<Vec2>,
+) {
     let width = width(look);
     let height = |piece: Option<&Piece>| piece.map_or(width, |piece| to_f32(piece.height));
     let up = height(look.up.normal.as_ref());
     let down = height(look.down.normal.as_ref());
-    parent
-        .spawn((
-            Scrollbar { scrolled },
-            at(
-                inside.x + inside.width - width,
-                inside.y,
-                width,
-                inside.height,
+    let mut outer = parent.spawn((
+        Scrollbar { scrolled },
+        at(
+            inside.x + inside.width - width,
+            inside.y,
+            width,
+            inside.height,
+        ),
+    ));
+    if let Some(parent_size) = parent_size {
+        // Both horizontal edges follow the right edge, keeping the bar narrow.
+        outer.insert(super::reflow::Geometry(eq_client_assets::sidl::Anchors {
+            left: eq_client_assets::sidl::Anchor::End(
+                parent_size.x - inside.x - inside.width + width,
             ),
-        ))
-        .with_children(|bar| {
-            let id = bar.target_entity();
-            let arrow = |bar: &mut ChildSpawnerCommands,
-                         art: &mut crate::sheets::Art,
-                         look: &eq_client_assets::sidl::ButtonLook,
-                         (node, up): (Node, bool)| {
-                let mut arrow = bar.spawn((
-                    Button,
-                    SkinButton(look.clone()),
-                    ScrollArrow {
-                        bar: id,
-                        window,
-                        up,
-                    },
-                    node,
-                ));
-                if let Some(image) = look.normal.as_ref().and_then(|piece| art.cut(piece)) {
-                    arrow.insert(image);
-                }
-            };
-            arrow(bar, art, &look.up, (at(0.0, 0.0, width, up), true));
-            gutter(
-                bar,
-                art,
-                look,
-                (id, width, up, (inside.height - up - down).max(0.0)),
-            );
-            arrow(
-                bar,
-                art,
-                &look.down,
-                (at(0.0, inside.height - down, width, down), false),
-            );
-        });
+            top: eq_client_assets::sidl::Anchor::Start(inside.y),
+            right: eq_client_assets::sidl::Anchor::End(parent_size.x - inside.x - inside.width),
+            bottom: eq_client_assets::sidl::Anchor::End(parent_size.y - inside.y - inside.height),
+        }));
+    }
+    outer.with_children(|bar| {
+        let id = bar.target_entity();
+        let arrow = |bar: &mut ChildSpawnerCommands,
+                     art: &mut crate::sheets::Art,
+                     look: &eq_client_assets::sidl::ButtonLook,
+                     (node, up): (Node, bool)| {
+            let mut arrow = bar.spawn((
+                Button,
+                SkinButton(look.clone()),
+                ScrollArrow {
+                    bar: id,
+                    window,
+                    up,
+                },
+                node,
+            ));
+            if let Some(image) = look.normal.as_ref().and_then(|piece| art.cut(piece)) {
+                arrow.insert(image);
+            }
+        };
+        arrow(bar, art, &look.up, (at(0.0, 0.0, width, up), true));
+        gutter(
+            bar,
+            art,
+            look,
+            (id, width, up, (inside.height - up - down).max(0.0)),
+        );
+        arrow(
+            bar,
+            art,
+            &look.down,
+            (
+                Node {
+                    top: Val::Auto,
+                    bottom: px(0),
+                    ..at(0.0, inside.height - down, width, down)
+                },
+                false,
+            ),
+        );
+    });
 }
 
 /// A scrollbar's gutter, this far down it and this long, with its thumb.
@@ -128,7 +167,11 @@ fn gutter(
         Gutter { bar: id },
         Button,
         RelativeCursorPosition::default(),
-        at(0.0, top, width, length),
+        Node {
+            height: Val::Auto,
+            bottom: px(height(look.down.normal.as_ref())),
+            ..at(0.0, top, width, length)
+        },
     ));
     if let Some(image) = look.gutter.as_deref().and_then(|file| art.texture(file)) {
         gutter.insert(ImageNode {

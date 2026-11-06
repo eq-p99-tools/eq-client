@@ -1023,6 +1023,10 @@ pub struct OfficialOptions {
     pub log: Option<bool>,
     /// Whether sounds play: `Sound` in `[Defaults]`.
     pub sound: Option<bool>,
+    /// Whether spell-effect particles play: `ShowSpellEffects` in
+    /// `[Defaults]`, or a non-zero `SpellParticleDensity` where that is the
+    /// key the installation carries.
+    pub spell_effects: Option<bool>,
     /// The Display page's Show PC Names: `PCNames` in `[Options]`.
     pub pc_names: Option<bool>,
     /// The Display page's Show NPC Names: `NPCNames` in `[Options]`.
@@ -1050,6 +1054,13 @@ fn options_from_ini(text: &str) -> OfficialOptions {
     OfficialOptions {
         log: flag("Defaults", "Log"),
         sound: flag("Defaults", "Sound"),
+        spell_effects: flag("Defaults", "ShowSpellEffects").or_else(|| {
+            // Some installations carry the choice as the particles page's
+            // density instead; zero density means the same "off".
+            ini_value(text, "Defaults", "SpellParticleDensity")
+                .and_then(|value| value.trim().parse::<i64>().ok())
+                .map(|density| density != 0)
+        }),
         pc_names: flag("Options", "PCNames"),
         npc_names: flag("Options", "NPCNames"),
         show_names_level: ini_value(text, "Defaults", "ShowNamesLevel")
@@ -1695,6 +1706,23 @@ Log=maybe
     }
 
     #[test]
+    fn spell_effects_preference_uses_its_flag_then_density_fallback() {
+        let effects = |text| options_from_ini(text).spell_effects;
+        assert_eq!(
+            effects("[Defaults]\nShowSpellEffects=FALSE\nSpellParticleDensity=5\n"),
+            Some(false)
+        );
+        assert_eq!(
+            effects("[Defaults]\nShowSpellEffects=TRUE\nSpellParticleDensity=0\n"),
+            Some(true)
+        );
+        assert_eq!(effects("[Defaults]\nSpellParticleDensity=0\n"), Some(false));
+        assert_eq!(effects("[Defaults]\nSpellParticleDensity=5\n"), Some(true));
+        assert_eq!(effects("[Other]\nShowSpellEffects=FALSE\n"), None);
+        assert_eq!(effects("[Defaults]\nShowSpellEffects=maybe\n"), None);
+    }
+
+    #[test]
     fn an_ini_key_is_set_in_its_section_and_nothing_else_moves() {
         let set = |text| set_ini_value(text, "Defaults", "LastSysInfoDate", "1700000000");
         // A key the section already holds keeps its place and its line's
@@ -1786,6 +1814,7 @@ MouseSensitivity=4
             OfficialOptions {
                 log: None,
                 sound: None,
+                spell_effects: None,
                 pc_names: Some(true),
                 npc_names: Some(false),
                 show_names_level: Some(4),

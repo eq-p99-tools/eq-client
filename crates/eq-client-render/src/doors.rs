@@ -13,6 +13,77 @@ pub(super) struct Models(pub BTreeMap<String, Model>);
 pub(super) struct Model {
     pub primitives: Primitives,
     pub collision: Vec<[[f32; 3]; 3]>,
+    pub pick: Vec<PickMesh>,
+}
+
+/// Keeps just the drawn positions and indices available after GPU extraction.
+pub(super) struct PickMesh {
+    positions: Vec<[f32; 3]>,
+    indices: Vec<u32>,
+    double_sided: bool,
+}
+
+impl PickMesh {
+    pub(super) fn from_model(model: &eq_client_assets::ZoneModel) -> Vec<Self> {
+        model
+            .primitives
+            .iter()
+            .enumerate()
+            .filter(|(_, primitive)| super::gpu_assets::drawn(primitive))
+            .map(|(index, primitive)| Self {
+                positions: primitive.positions.clone(),
+                indices: primitive.indices.clone(),
+                double_sided: model
+                    .materials
+                    .get(index)
+                    .is_none_or(|flags| flags.double_sided),
+            })
+            .collect()
+    }
+}
+
+/// Nearest drawn triangle on this door's current model and hinge pose.
+pub(super) fn hit(
+    ray: Ray3d,
+    door: &DoorEntity,
+    transform: &Transform,
+    visibility: Visibility,
+    models: &Models,
+) -> Option<f32> {
+    if visibility == Visibility::Hidden {
+        return None;
+    }
+    let model = models.0.get(&door.model)?;
+    let inverse = transform.to_matrix().inverse();
+    let origin = inverse.transform_point3(ray.origin);
+    // Keep the transformed direction unnormalized so distances stay in world units.
+    let direction = inverse.transform_vector3(*ray.direction);
+    model
+        .pick
+        .iter()
+        .flat_map(|mesh| {
+            mesh.indices
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .filter_map(move |indices| {
+                    let [Some(a), Some(b), Some(c)] = indices.map(|index| {
+                        mesh.positions
+                            .get(index as usize)
+                            .copied()
+                            .map(Vec3::from_array)
+                    }) else {
+                        return None;
+                    };
+                    super::target::picking::triangle_distance(
+                        origin,
+                        direction,
+                        [a, b, c],
+                        mesh.double_sided,
+                    )
+                })
+        })
+        .min_by(f32::total_cmp)
 }
 
 /// Rebuilds only this small obstacle when its rendered pose changes.
@@ -37,7 +108,7 @@ fn collider(model: &Model, transform: &Transform) -> Option<Arc<CollisionMesh>> 
 
 #[derive(Component)]
 pub(super) struct DoorEntity {
-    id: u8,
+    pub(super) id: u8,
     model: String,
     /// How far the door has swung from its placed heading, in EQ heading units.
     swing: f32,
@@ -118,6 +189,24 @@ fn posed(door: &eq_client_core::doors::Door, swing: f32) -> Transform {
 pub(super) fn nearest(
     state: &super::online::OnlineState,
 ) -> Option<(f32, &eq_client_core::doors::Door)> {
+    let player = player_for_use(state)?;
+    let now = std::time::Instant::now();
+    state
+        .world()
+        .doors()
+        .entries()
+        .values()
+        .filter_map(|door| {
+            state
+                .world()
+                .doors()
+                .use_distance(door.id, player.position, now)
+                .map(|distance| (distance, door))
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+}
+
+fn player_for_use(state: &super::online::OnlineState) -> Option<&eq_client_core::PlayerState> {
     if !state.world().connected()
         || state.world().is_dead()
         || !crate::outbox::offered(state.world(), eq_client_core::Capability::Doors)
@@ -135,21 +224,24 @@ pub(super) fn nearest(
             return None;
         }
     }
-    let player = state.world().player()?;
-    let now = std::time::Instant::now();
-    state
-        .world()
-        .doors()
-        .entries()
-        .values()
-        .filter_map(|door| {
-            state
-                .world()
-                .doors()
-                .use_distance(door.id, player.position, now)
-                .map(|distance| (distance, door))
-        })
-        .min_by(|a, b| a.0.total_cmp(&b.0))
+    state.world().player()
+}
+
+/// Uses the door under the pointer with the same reach and eligibility as Use.
+pub(super) fn click(
+    door_id: u8,
+    state: &super::online::OnlineState,
+    outbox: &crate::outbox::Outbox,
+) {
+    if let Some(player) = player_for_use(state)
+        && state
+            .world()
+            .doors()
+            .use_distance(door_id, player.position, std::time::Instant::now())
+            .is_some()
+    {
+        open(door_id, state, outbox);
+    }
 }
 
 /// Asks to use a door; no state is predicted. A click sent says nothing; a
@@ -305,6 +397,7 @@ mod tests {
                 [[0.0, 0.0, 0.0], [4.0, 0.0, 0.0], [4.0, 10.0, 0.0]],
                 [[0.0, 0.0, 0.0], [4.0, 10.0, 0.0], [0.0, 10.0, 0.0]],
             ],
+            pick: Vec::new(),
         };
         let mut world = CollisionWorld::new([
             [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
@@ -464,6 +557,7 @@ mod tests {
                     [[-10.0, 0.5, -10.0], [10.0, 0.5, -10.0], [10.0, 0.5, 10.0]],
                     [[-10.0, 0.5, -10.0], [10.0, 0.5, 10.0], [-10.0, 0.5, 10.0]],
                 ],
+                pick: Vec::new(),
             },
         );
         let mut app = App::new();

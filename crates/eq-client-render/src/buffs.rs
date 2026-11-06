@@ -1,4 +1,4 @@
-//! Compact server-owned buff display; clicking never cancels an effect.
+//! Received buff display and explicit right-click cancellation of a beneficial slot.
 use super::{online::OnlineState, spell_icons, spellbook::SpellNames, windows};
 use crate::theme::{self, Size};
 use bevy::prelude::*;
@@ -15,6 +15,118 @@ pub(super) struct Entry(u32);
 pub(super) struct Unplaced(u16);
 #[derive(Component)]
 pub(super) struct Hint;
+
+/// A right press binds the actual slot and provider result. Releasing over a
+/// replacement, another control or another admission cancels that selection.
+#[derive(Default)]
+pub(super) struct CancelSelection(Option<(Entity, eq_client_core::buffs::cancel::Request)>);
+
+#[allow(
+    clippy::needless_pass_by_value,
+    clippy::type_complexity,
+    clippy::too_many_arguments
+)]
+pub(super) fn cancel(
+    mouse: Res<ButtonInput<MouseButton>>,
+    online: Res<OnlineState>,
+    names: Res<SpellNames>,
+    outbox: Res<crate::outbox::Outbox>,
+    buttons: Query<(
+        Entity,
+        &Interaction,
+        Option<&Entry>,
+        Option<&crate::skinned::Shows>,
+    )>,
+    mut selected: Local<CancelSelection>,
+    mut chat: ResMut<crate::chat::ChatState>,
+) {
+    let world = online.world();
+    if mouse.just_pressed(MouseButton::Right) {
+        selected.0 = None;
+        for (entity, interaction, entry, shows) in &buttons {
+            if *interaction == Interaction::None {
+                continue;
+            }
+            let slot = entry.map(|entry| entry.0).or_else(|| {
+                let crate::skinned::Shows::Buff(window, button) = *shows? else {
+                    return None;
+                };
+                match world.buffs().in_window(window, button)? {
+                    eq_client_core::buffs::Shown::Slot(slot, _) => Some(slot),
+                    eq_client_core::buffs::Shown::Unplaced(_) => None,
+                }
+            });
+            let Some(slot) = slot else {
+                continue;
+            };
+            let Some(buff) = world.buffs().slots().and_then(|slots| slots.get(&slot)) else {
+                continue;
+            };
+            let Some(stamp) = outbox.peek(world) else {
+                continue;
+            };
+            selected.0 = Some((
+                entity,
+                eq_client_core::buffs::cancel::Request {
+                    session_id: stamp.session_id,
+                    revision: world.buffs().revision(),
+                    slot,
+                    spell_id: buff.spell_id,
+                    beneficial: names.beneficial(buff.spell_id),
+                    cancellable: cancellable(&names, buff.spell_id),
+                    created: stamp.created,
+                },
+            ));
+            break;
+        }
+    }
+    if mouse.just_released(MouseButton::Right) {
+        let Some((entity, request)) = selected.0.take() else {
+            return;
+        };
+        if !buttons
+            .get(entity)
+            .is_ok_and(|(_, interaction, _, _)| *interaction != Interaction::None)
+        {
+            return;
+        }
+        let check = (|| {
+            anyhow::ensure!(
+                world.session_id() == Some(request.session_id),
+                "The zone visit changed"
+            );
+            anyhow::ensure!(
+                names.beneficial(request.spell_id) == request.beneficial,
+                "Spell data changed; select the buff again"
+            );
+            anyhow::ensure!(
+                cancellable(&names, request.spell_id) == request.cancellable,
+                "Spell effects changed; select the buff again"
+            );
+            request.check(world.buffs().revision(), world.buffs().slots())
+        })();
+        if let Err(error) = check {
+            chat.refuse(format!("Buff cancellation refused: {error}"));
+            return;
+        }
+        let _ = outbox.send(world, eq_client_core::ClientCommand::CancelBuff(request));
+    }
+    if !mouse.pressed(MouseButton::Right) {
+        selected.0 = None;
+    }
+}
+
+/// Ordinary cancellation excludes effect 101.
+/// Missing mechanics never become permission to cancel.
+fn cancellable(names: &SpellNames, spell: u32) -> Option<bool> {
+    Some(
+        !names
+            .mechanics(spell)?
+            .effects
+            .iter()
+            .any(|effect| effect.id == 101),
+    )
+}
 
 /// Rebuilds only buff content, keeping the title bar and its saved layout
 /// intact. Where the skin draws the window, it keeps only the frame, which
@@ -100,7 +212,13 @@ pub(super) fn update(
         commands.entity(frame).add_child(body);
         body
     };
-    content(&mut commands, body, buffs, online.world().buffs().effects());
+    content(
+        &mut commands,
+        body,
+        buffs,
+        online.world().buffs().effects(),
+        online.world().buffs().long_slots(),
+    );
 }
 
 /// Builds icons from occupied server slots without renumbering holes.
@@ -109,6 +227,7 @@ fn content(
     body: Entity,
     buffs: &BTreeMap<u32, eq_client_core::Buff>,
     effects: &BTreeMap<u16, eq_client_core::SpellEffect>,
+    long_slots: u32,
 ) {
     commands.entity(body).with_children(|parent| {
         parent
@@ -122,6 +241,18 @@ fn content(
                 for &slot in buffs.keys() {
                     grid.spawn((
                         Entry(slot),
+                        crate::skinned::Shows::Buff(
+                            if slot < long_slots {
+                                eq_client_core::buffs::EffectWindow::Long
+                            } else {
+                                eq_client_core::buffs::EffectWindow::Short
+                            },
+                            if slot < long_slots {
+                                slot
+                            } else {
+                                slot - long_slots
+                            },
+                        ),
                         Button,
                         Node {
                             width: px(42),
@@ -440,6 +571,176 @@ fn base_duration_label(duration: Option<eq_client_assets::spells::BaseDuration>)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn synthetic_buff(spell_id: u32) -> eq_client_core::Buff {
+        eq_client_core::Buff {
+            spell_id,
+            caster_level: 12,
+            effect_type: 2,
+            bard_modifier: 10,
+            duration_ticks: 30,
+            counters: 0,
+            caster_id: 7,
+        }
+    }
+
+    fn cancellation_fixture(
+        skinned: bool,
+        beneficial: Option<bool>,
+    ) -> (
+        App,
+        Entity,
+        std::sync::mpsc::Receiver<eq_client_core::ClientCommand>,
+    ) {
+        let mut app = crate::testing::app();
+        let (sender, receiver) = std::sync::mpsc::sync_channel(8);
+        let mut online = OnlineState::new(true);
+        crate::online::testing::admit(&mut online, 5, crate::online::testing::player(7));
+        crate::online::testing::buffs(&mut online, BTreeMap::from([(3, synthetic_buff(42))]));
+        let names = beneficial.map_or_else(SpellNames::default, |beneficial| {
+            let mut fields = vec!["0"; 203];
+            fields[0] = "42";
+            fields[1] = "Constructed buff";
+            fields[83] = if beneficial { "1" } else { "0" };
+            SpellNames::parse(&fields.join("^"))
+        });
+        app.insert_resource(online)
+            .insert_resource(names)
+            .insert_resource(crate::outbox::Outbox::new(Some(sender)))
+            .add_systems(Update, cancel);
+        let mut button = app
+            .world_mut()
+            .spawn((Node::default(), Button, Interaction::Hovered));
+        if skinned {
+            button.insert(crate::skinned::Shows::Buff(
+                eq_client_core::buffs::EffectWindow::Long,
+                3,
+            ));
+        } else {
+            button.insert(Entry(3));
+        }
+        let button_id = button.id();
+        (app, button_id, receiver)
+    }
+
+    fn right_press(app: &mut App) {
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Right);
+        app.update();
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .clear_just_pressed(MouseButton::Right);
+    }
+
+    fn right_release(app: &mut App) {
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .release(MouseButton::Right);
+        app.update();
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .clear();
+    }
+
+    #[test]
+    fn right_click_submits_the_exact_current_beneficial_slot_in_both_presentations() {
+        for skinned in [false, true] {
+            let (mut app, _, receiver) = cancellation_fixture(skinned, Some(true));
+            right_press(&mut app);
+            assert!(receiver.try_recv().is_err());
+            right_release(&mut app);
+            let eq_client_core::ClientCommand::CancelBuff(request) = receiver.try_recv().unwrap()
+            else {
+                panic!("wrong command")
+            };
+            assert_eq!(
+                (
+                    request.session_id,
+                    request.revision,
+                    request.slot,
+                    request.spell_id
+                ),
+                (5, 1, 3, 42)
+            );
+            assert_eq!(request.beneficial, Some(true));
+            assert_eq!(
+                app.world()
+                    .resource::<OnlineState>()
+                    .world()
+                    .buffs()
+                    .slots()
+                    .unwrap()[&3]
+                    .spell_id,
+                42
+            );
+            assert!(receiver.try_recv().is_err());
+        }
+    }
+
+    #[test]
+    fn right_release_cannot_follow_replacement_admission_or_pointer_changes() {
+        for change in 0..4 {
+            let (mut app, button, receiver) = cancellation_fixture(true, Some(true));
+            right_press(&mut app);
+            match change {
+                0 => crate::online::testing::buffs(
+                    &mut app.world_mut().resource_mut::<OnlineState>(),
+                    BTreeMap::from([(3, synthetic_buff(43))]),
+                ),
+                1 => crate::online::testing::admit(
+                    &mut app.world_mut().resource_mut::<OnlineState>(),
+                    6,
+                    crate::online::testing::player(7),
+                ),
+                2 => *app.world_mut().get_mut::<Interaction>(button).unwrap() = Interaction::None,
+                _ => {
+                    app.world_mut().insert_resource(SpellNames::default());
+                }
+            }
+            right_release(&mut app);
+            assert!(receiver.try_recv().is_err(), "change {change}");
+        }
+    }
+
+    #[test]
+    fn harmful_unknown_and_unslotted_effects_never_submit_a_cancel() {
+        for beneficial in [None, Some(false)] {
+            let (mut app, _, receiver) = cancellation_fixture(true, beneficial);
+            right_press(&mut app);
+            right_release(&mut app);
+            assert!(receiver.try_recv().is_err());
+        }
+        let (mut app, _, receiver) = cancellation_fixture(true, Some(true));
+        let mut fields = vec!["0"; 203];
+        fields[0] = "42";
+        fields[1] = "Constructed blocked buff";
+        fields[83] = "1";
+        fields[86] = "101";
+        app.insert_resource(SpellNames::parse(&fields.join("^")));
+        right_press(&mut app);
+        right_release(&mut app);
+        assert!(receiver.try_recv().is_err());
+        let (mut app, _, receiver) = cancellation_fixture(true, Some(true));
+        crate::online::testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [eq_client_core::WorldEvent::SpellEffect(
+                eq_client_core::SpellEffect {
+                    target_id: 7,
+                    caster_id: 7,
+                    caster_level: 12,
+                    instrument_modifier: 10,
+                    spell_id: 42,
+                    spell_level: 12,
+                    effect_flag: 4,
+                    push: None,
+                },
+            )],
+        );
+        right_press(&mut app);
+        right_release(&mut app);
+        assert!(receiver.try_recv().is_err());
+    }
 
     #[test]
     fn a_buff_says_about_how_long_it_has_left() {

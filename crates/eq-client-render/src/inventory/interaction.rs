@@ -21,6 +21,8 @@ pub(super) struct Actions {
     pub message: String,
     /// Coins the quantity picker took, for the coins system to move.
     pub coins: Option<CoinTransfer>,
+    /// Confirmed UI intent, revalidated and submitted by the merchant owner.
+    pub merchant: Option<(crate::trade::MerchantSelection, u32)>,
 }
 
 /// What handing the cursor's item to an opening give window did.
@@ -43,6 +45,7 @@ pub(super) enum Picked {
     Stack(InventorySlot),
     /// Coins of one kind in a place.
     Coins(CoinPlace, Coin),
+    Merchant(crate::trade::MerchantSelection),
 }
 
 pub(super) struct SplitSelection {
@@ -64,10 +67,63 @@ pub(crate) enum SplitAction {
     Cancel,
 }
 impl InventoryState {
+    pub(crate) fn select_merchant(
+        &mut self,
+        selection: crate::trade::MerchantSelection,
+        available: u32,
+    ) {
+        self.actions.auto_store = false;
+        self.actions.merchant = None;
+        self.actions.split = Some(SplitSelection {
+            picked: Picked::Merchant(selection),
+            revision: 0,
+            amount: 1,
+            available,
+        });
+        self.revision = self.revision.wrapping_add(1);
+    }
+
+    pub(crate) fn picking_merchant(&self) -> bool {
+        self.actions
+            .split
+            .as_ref()
+            .is_some_and(|split| matches!(split.picked, Picked::Merchant(_)))
+    }
+
+    pub(crate) fn merchant_quantity(&self) -> Option<u32> {
+        self.actions
+            .split
+            .as_ref()
+            .and_then(|split| matches!(split.picked, Picked::Merchant(_)).then_some(split.amount))
+    }
+
+    pub(crate) fn cancel_merchant(&mut self) {
+        if self.picking_merchant() || self.actions.merchant.is_some() {
+            self.cancel_split();
+        }
+    }
+
+    pub(crate) fn refresh_merchant(
+        &mut self,
+        trade: &crate::trade::TradeState,
+        world: &eq_client_core::world::ClientWorld,
+    ) {
+        if self.actions.merchant.is_some_and(|(selection, _)| !selection.current(trade, world)) || self.actions.split.as_ref().is_some_and(|split| {
+            matches!(split.picked, Picked::Merchant(selection) if !selection.current(trade, world))
+        }) {
+            self.cancel_split();
+            self.refuse("Merchant or inventory changed; choose the item again".into());
+        }
+    }
+
+    pub(crate) fn take_merchant(&mut self) -> Option<(crate::trade::MerchantSelection, u32)> {
+        self.actions.merchant.take()
+    }
+
     /// Refuses the player's action: the inventory's line says why, and so
     /// does the chat (`say_refusals`), as the official client says its
     /// refusals. Progress, such as a move under way, stays in the line.
-    fn refuse(&mut self, refusal: String) {
+    pub(super) fn refuse(&mut self, refusal: String) {
         self.actions.message.clone_from(&refusal);
         if !refusal.is_empty() {
             self.refused.push(refusal);
@@ -214,6 +270,9 @@ impl InventoryState {
         present_error: bool,
         inventory: &Inventory,
     ) {
+        if self.destruction_result(session_id, revision, error.as_deref()) {
+            return;
+        }
         let Some((pending_session, pending_revision, to_cursor)) = self.actions.pending else {
             return;
         };
@@ -388,6 +447,7 @@ impl InventoryState {
 
     /// Closes the quantity picker without taking anything.
     pub(crate) fn cancel_split(&mut self) {
+        self.actions.merchant = None;
         if self.actions.split.take().is_some() {
             self.revision = self.revision.wrapping_add(1);
         }
@@ -410,7 +470,7 @@ impl InventoryState {
         self.revision = self.revision.wrapping_add(1);
         let stack = match selection.picked {
             Picked::Stack(slot) => Some(slot),
-            Picked::Coins(..) => None,
+            Picked::Coins(..) | Picked::Merchant(_) => None,
         };
         if stack.is_some() && selection.revision != online.world().inventory().revision() {
             self.refuse("Inventory changed; choose the stack again".into());
@@ -427,6 +487,9 @@ impl InventoryState {
             SplitAction::Confirm if selection.amount == 0 => return,
             SplitAction::Confirm => {
                 match selection.picked {
+                    Picked::Merchant(merchant) => {
+                        self.actions.merchant = Some((merchant, selection.amount));
+                    }
                     Picked::Stack(slot) => {
                         if let Err(error) =
                             self.try_click(slot, NonZeroU32::new(selection.amount), online, sender)

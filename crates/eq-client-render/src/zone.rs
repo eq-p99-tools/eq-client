@@ -224,6 +224,9 @@ impl Scene<'_, '_> {
     /// Forgets the spawns drawn for an admission the world forgot: a new one,
     /// a camp, or a session that ended.
     pub(super) fn forget(&mut self, reason: Reset, commands: &mut Commands) {
+        for (_, mut camera) in &mut self.cameras {
+            camera.reset_view();
+        }
         let gone = matches!(
             reason,
             Reset::Entered | Reset::Camped | Reset::Lost { ended: true, .. }
@@ -342,6 +345,7 @@ impl Scene<'_, '_> {
         // Each zone entry starts the camera behind the player's new heading;
         // its pitch and zoom stay as chosen. Inferred, item 6.240.
         for (_, mut camera) in &mut self.cameras {
+            camera.reset_view();
             super::start_behind(&mut camera, &placed);
         }
         player

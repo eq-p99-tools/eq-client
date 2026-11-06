@@ -6,10 +6,14 @@
 //! without an installation, keeps the client's own chrome.
 #[cfg(test)]
 mod hotbar_drag_tests;
+mod particles;
+mod qol;
 mod tree;
 #[cfg(test)]
+use qol::pages as with_qol_page;
+use tree::draw;
+#[cfg(test)]
 use tree::{augment_section, text_box};
-use tree::{draw, tab_strip};
 
 mod presentation;
 pub(crate) use presentation::show;
@@ -18,7 +22,7 @@ use presentation::{fraction, gauge_text, label_text, raid_text, shown_now};
 
 mod bindings;
 pub(crate) use bindings::PET_COMMANDS;
-use bindings::{Does, buff_label, does, pet_posture_button, qol_checkbox_id};
+use bindings::{Does, buff_label, does, pet_posture_button};
 #[cfg(test)]
 use bindings::{GroupButton, RaidButton, effect_label, selector_button};
 mod controls;
@@ -30,6 +34,8 @@ pub(crate) mod looks;
 #[cfg(test)]
 mod merchant_grid_tests;
 mod perimeter;
+mod reflow;
+pub(crate) use reflow::update as reflow_layout;
 mod pixel_edges;
 pub(crate) use pixel_edges::register as register_border_pixels;
 #[cfg(test)]
@@ -493,6 +499,17 @@ pub(crate) fn apply(
         };
         let fitted = places.and_then(|places| fit::fitted(screen, places));
         let screen = fitted.as_ref().unwrap_or(screen);
+        // This first retained reflow contract belongs to chat. Other authored
+        // sizable screens are preserved by the parser without assuming that
+        // their widgets share chat's sizing policy.
+        let sizing = reflow::eligible_scope(&from, *id, screen);
+        state.sizing(sizing, Vec2::new(screen.area.width, screen.area.height));
+        let mut effective = screen.clone();
+        if let Some(size) = state.preferred_size() {
+            effective.area.width = size.x;
+            effective.area.height = size.y;
+        }
+        let screen = &effective;
         commands.entity(frame).insert(Drawn(from.clone(), places));
         art.draw_in((from != skin.0).then(|| from.clone()));
         skinned.0.insert(*id);
@@ -797,6 +814,7 @@ fn spell_gem(
             node,
         ))
         .with_children(|gem_node| {
+            let skin = art.drawing_skin();
             let whole = at(0.0, 0.0, area.width, area.height);
             let mut piece = |gem_node: &mut ChildSpawnerCommands, part: Option<&Piece>, which| {
                 if let Some(image) = part.and_then(|part| art.cut(part)) {
@@ -804,31 +822,11 @@ fn spell_gem(
                 }
             };
             piece(gem_node, gem.background.as_ref(), gem::GemPiece::Background);
-            // The spell's square icon at the skin's icon offset, else where
-            // it always sat; and where the skin has gem icons, the spell's
-            // cell, at the offset or centred, for a client whose spells name
-            // one, in place of the square icon.
-            let icon = (area.height - 6.0).max(8.0);
-            let place = gem.icon_offset.unwrap_or(super::spell_icons::INSET);
-            let gems = gem.icons.clone().filter(|gems| !gems.sheets.is_empty());
-            gem_node.spawn(super::spell_icons::gem_square_artwork(
+            gem_node.spawn(super::spell_icons::gem_artwork(
                 usize::from(index),
-                place,
-                icon,
-                gems.is_some(),
+                gem,
+                skin,
             ));
-            if let Some(gems) = gems {
-                #[allow(clippy::cast_precision_loss, reason = "cells are small")]
-                let place = gem.icon_offset.unwrap_or((
-                    (area.width - gems.cell_width as f32) / 2.0,
-                    (area.height - gems.cell_height as f32) / 2.0,
-                ));
-                gem_node.spawn(super::spell_icons::gem_artwork(
-                    usize::from(index),
-                    gems,
-                    place,
-                ));
-            }
             piece(gem_node, gem.highlight.as_ref(), gem::GemPiece::Highlight);
             piece(gem_node, gem.holder.as_ref(), gem::GemPiece::Holder);
         });
@@ -842,164 +840,6 @@ fn coin_count(inner: &mut ChildSpawnerCommands, area: Area, shows: Shows, ink: C
         Align::Right,
         (shows, theme::text("", Size::Body, ink)),
     );
-}
-
-/// The skin's pages of a tab box, and for the Options window a last page,
-/// its quality-of-life page, with a checkbox for each setting, drawn with the
-/// skin's own checkbox, in the room a page has inside a window this tall.
-fn with_qol_page(
-    pages: &[eq_client_assets::sidl::Page],
-    owner: WindowId,
-    inside_height: f32,
-) -> std::borrow::Cow<'_, [eq_client_assets::sidl::Page]> {
-    use eq_client_assets::sidl::Element;
-    if owner != WindowId::Options {
-        return std::borrow::Cow::Borrowed(pages);
-    }
-    let checkbox =
-        pages
-            .iter()
-            .flat_map(|page| &page.pieces)
-            .find_map(|(_, element)| match element {
-                Element::Button(button) if button.checkbox => Some(button.clone()),
-                _ => None,
-            });
-    let (Some(checkbox), Some(first)) = (checkbox, pages.first()) else {
-        return std::borrow::Cow::Borrowed(pages);
-    };
-    let qol = eq_client_assets::sidl::Page {
-        name: "EQC_QoLPage".to_owned(),
-        title: Some("QoL".to_owned()),
-        area: first.area,
-        template: first.template.clone(),
-        pieces: Vec::new(),
-        icon: [None, None],
-        title_colors: first.title_colors,
-        tooltip: Some("Quality-of-life fixes only this client has.".to_owned()),
-    };
-    // The page's room under the row of tabs, its own tab among them.
-    let room = inside_height - tab_strip(pages.iter().chain([&qol]));
-    let mut pieces = qol_checkboxes(&checkbox, room);
-    pieces.extend(qol_scale(pages, &checkbox, room));
-    let mut all = pages.to_vec();
-    all.push(eq_client_assets::sidl::Page { pieces, ..qol });
-    std::borrow::Cow::Owned(all)
-}
-
-/// The quality-of-life page's interface scale, in the next place after its checkboxes:
-/// a caption, a slider cut from the skin's first slider on the Options
-/// window's pages, and the label that shows its value, cut from that
-/// slider's own; none where the skin has no slider and value label.
-fn qol_scale(
-    pages: &[eq_client_assets::sidl::Page],
-    checkbox: &eq_client_assets::sidl::Button,
-    room: f32,
-) -> Vec<(String, eq_client_assets::sidl::Element)> {
-    use eq_client_assets::sidl::Element;
-    let pieces = || pages.iter().flat_map(|page| &page.pieces);
-    let slider = pieces().find_map(|(_, element)| match element {
-        Element::Slider(slider) => Some(slider.clone()),
-        _ => None,
-    });
-    let label = pieces().find_map(|(name, element)| match element {
-        Element::Label(label) if name.ends_with("ValueLabel") => Some(label.clone()),
-        _ => None,
-    });
-    let (Some(mut slider), Some(mut value)) = (slider, label) else {
-        return Vec::new();
-    };
-    // The caption over the slider, in the next place with room for both
-    // down the page, else at the top of the next column.
-    let tall = value.area.height + 2.0 + slider.area.height;
-    let first = eq_client_core::qol::Fix::settings().count();
-    let (x, y, width) = (first..first + 64)
-        .map(|index| qol_place(checkbox, room, index))
-        .find(|&(_, y, _)| y + tall <= room - 10.0 || y <= 10.0)
-        .unwrap_or_default();
-    let mut caption = value.clone();
-    caption.eq_type = None;
-    "Interface scale".clone_into(&mut caption.text);
-    caption.area = Area {
-        x,
-        y,
-        width,
-        height: value.area.height,
-    };
-    slider.id = Some(controls::UI_SCALE_SLIDER.to_owned());
-    slider.area.x = x;
-    slider.area.y = y + value.area.height + 2.0;
-    slider.area.width = slider
-        .area
-        .width
-        .min(width - value.area.width.max(40.0) - 4.0);
-    value.eq_type = None;
-    value.area.x = slider.area.x + slider.area.width + 4.0;
-    value.area.y = slider.area.y;
-    vec![
-        ("EQC_QoL_UiScaleLabel".to_owned(), Element::Label(caption)),
-        (
-            controls::UI_SCALE_SLIDER.to_owned(),
-            Element::Slider(slider),
-        ),
-        (controls::UI_SCALE_VALUE.to_owned(), Element::Label(value)),
-    ]
-}
-
-/// A checkbox cut from the skin's own for each quality-of-life setting, in
-/// their order, one under another down a page this tall and then on down
-/// the next column.
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "a page holds few rows"
-)]
-fn qol_checkboxes(
-    checkbox: &eq_client_assets::sidl::Button,
-    room: f32,
-) -> Vec<(String, eq_client_assets::sidl::Element)> {
-    eq_client_core::qol::Fix::settings()
-        .enumerate()
-        .map(|(index, fix)| {
-            let mut checkbox = checkbox.clone();
-            let id = qol_checkbox_id(fix);
-            let (x, y, width) = qol_place(&checkbox, room, index);
-            checkbox.id = Some(id.clone());
-            checkbox.text = Some(fix.label().to_owned());
-            checkbox.tooltip = Some(fix.tooltip().to_owned());
-            checkbox.area.x = x;
-            checkbox.area.y = y;
-            checkbox.area.width = width;
-            (id, eq_client_assets::sidl::Element::Button(checkbox))
-        })
-        .collect()
-}
-
-/// Where the quality-of-life page's place this far along sits, and how wide it is: one
-/// under another down a page this tall, then on down the next column, each
-/// as tall as the skin's checkbox and two such rows for the scale.
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "a page holds few rows"
-)]
-fn qol_place(
-    checkbox: &eq_client_assets::sidl::Button,
-    room: f32,
-    index: usize,
-) -> (f32, f32, f32) {
-    /// Room left around the places, and between columns.
-    const MARGIN: f32 = 10.0;
-    /// Room between one place and the next one down.
-    const GAP: f32 = 6.0;
-    let row = checkbox.area.height + GAP;
-    let width = checkbox.area.width.max(190.0);
-    // As many rows as fit inside the margins, and at least one.
-    let rows = (((room - 2.0 * MARGIN + GAP) / row).floor() as usize).max(1);
-    (
-        MARGIN + to_f32(u32::try_from(index / rows).unwrap_or(u32::MAX)) * (width + MARGIN),
-        MARGIN + to_f32(u32::try_from(index % rows).unwrap_or(u32::MAX)) * row,
-        width,
-    )
 }
 
 /// The gem, counted from 0, whose spell a label names, by the label's number
@@ -1076,6 +916,11 @@ fn button(
         }
         None => window.spawn(node),
     };
+    if owner == WindowId::Chat
+        && let Some(anchors) = button.anchors
+    {
+        drawn.insert(reflow::Geometry(anchors));
+    }
     behave(&mut drawn, does, (button, area), owner);
     if let Some(id) = &button.id {
         drawn.insert(SkinId {
@@ -1276,6 +1121,11 @@ fn behave(
             crate::outbox::Needs::Nothing,
         )),
         Does::Picks(action) => drawn.insert((Button, action, skin())),
+        Does::Destroys => drawn.insert((
+            Button,
+            super::inventory::destruction::Action::Select,
+            skin(),
+        )),
         Does::Trades(action) => {
             trades(drawn, action, skin());
             &mut *drawn
@@ -1490,6 +1340,7 @@ fn caption(
         | Does::Combines(_)
         | Does::Maps(_)
         | Does::HotbarPage(_)
+        | Does::Destroys
         | Does::Picks(_)
         | Does::Trades(_)
         | Does::TurnsSpellbook(_)
@@ -1545,13 +1396,17 @@ pub(crate) struct SlashButton(pub(crate) &'static str);
 /// shows in chat.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn slash(
-    online: Res<super::online::OnlineState>,
+    mut online: ResMut<super::online::OnlineState>,
     outbox: Res<crate::outbox::Outbox>,
     mut chat: ResMut<super::chat::ChatState>,
     buttons: crate::clicks::Clicks<SlashButton>,
+    options: Option<Res<crate::options::OptionsState>>,
 ) {
+    let qol = options
+        .as_ref()
+        .map_or_else(Default::default, |options| options.options.qol);
     for SlashButton(command) in buttons.iter() {
-        super::chat::run_game_command(command, &online, &outbox, &mut chat);
+        super::chat::run_game_command(command, &mut online, &outbox, &mut chat, &qol);
     }
 }
 
@@ -1709,8 +1564,39 @@ fn title(
     let tall = to_f32(middle.height);
     let wide = |piece: &Option<Piece>| piece.as_ref().map_or(0.0, |piece| to_f32(piece.width));
     let (left_width, right_width) = (wide(left), wide(right));
+    let parent = Vec2::new(screen.area.width, screen.area.height);
+    let picture = |window: &mut ChildSpawnerCommands,
+                   art: &mut crate::sheets::Art,
+                   piece: &Piece,
+                   node: Node,
+                   horizontal: reflow::Axis| {
+        let geometry = reflow::Geometry::from_area(
+            Area {
+                x: if let Val::Px(x) = node.left { x } else { 0.0 },
+                y: inside.y,
+                width: if let Val::Px(width) = node.width {
+                    width
+                } else {
+                    0.0
+                },
+                height: tall,
+            },
+            parent,
+            horizontal,
+            reflow::Axis::Start,
+        );
+        if let Some(image) = art.cut(piece) {
+            window.spawn((image, node, geometry));
+        }
+    };
     if let Some(piece) = left {
-        picture(window, art, piece, at(inside.x, inside.y, left_width, tall));
+        picture(
+            window,
+            art,
+            piece,
+            at(inside.x, inside.y, left_width, tall),
+            reflow::Axis::Start,
+        );
     }
     let middle_width = inside.width - left_width - right_width;
     picture(
@@ -1718,6 +1604,7 @@ fn title(
         art,
         middle,
         at(inside.x + left_width, inside.y, middle_width, tall),
+        reflow::Axis::Stretch,
     );
     // Where the official client writes it on the bar is not checked yet:
     // after the bar's left end, in the middle of its height.
@@ -1728,7 +1615,22 @@ fn title(
     let ink = screen.title_color.map_or(theme::INK_BRIGHT, rgb);
     if let Some(words) = &screen.title {
         let text = theme::text(words.as_str(), font(screen.font), ink);
-        aligned(window, node, Align::Left, text);
+        window
+            .spawn((
+                node,
+                reflow::Geometry::from_area(
+                    Area {
+                        x: inside.x + left_width,
+                        y: inside.y,
+                        width: middle_width,
+                        height: tall,
+                    },
+                    parent,
+                    reflow::Axis::Stretch,
+                    reflow::Axis::Start,
+                ),
+            ))
+            .with_child((text, TextLayout::new(Justify::Left, LineBreak::NoWrap)));
     } else if owner == WindowId::Item {
         // The item display gives no words of its own: the item's name goes
         // there (`items::update`).
@@ -1740,9 +1642,15 @@ fn title(
     }
     if let Some(piece) = right {
         let x = inside.x + inside.width - right_width;
-        picture(window, art, piece, at(x, inside.y, right_width, tall));
+        picture(
+            window,
+            art,
+            piece,
+            at(x, inside.y, right_width, tall),
+            reflow::Axis::End,
+        );
     }
-    title_boxes(window, art, (template, bar), (inside, tall), owner);
+    title_boxes(window, art, (template, bar), (inside, tall, parent), owner);
     inside.y += tall;
     inside.height -= tall;
 }
@@ -1759,7 +1667,7 @@ fn title_boxes(
         &eq_client_assets::sidl::WindowTemplate,
         eq_client_assets::sidl::TitleBar,
     ),
-    (inside, tall): (&Area, f32),
+    (inside, tall, parent): (&Area, f32, Vec2),
     owner: WindowId,
 ) {
     let frame = window.target_entity();
@@ -1791,6 +1699,17 @@ fn title_boxes(
         let mut drawn = window.spawn((
             image,
             node,
+            reflow::Geometry::from_area(
+                Area {
+                    x: right,
+                    y: inside.y + (tall - height).max(0.0) / 2.0,
+                    width,
+                    height,
+                },
+                parent,
+                reflow::Axis::End,
+                reflow::Axis::Start,
+            ),
             Button,
             SkinButton(look.clone()),
             TitleBox {
@@ -2097,9 +2016,6 @@ fn label(
     inside: &Area,
     owner: WindowId,
 ) {
-    let area = label.anchors.map_or(label.area, |anchors| {
-        anchors.within(inside.width, inside.height)
-    });
     let bag = match owner {
         WindowId::Bag(bag) if name == "Container_Label" => {
             Some(items::BagPart::Name(InventorySlot(bag)))
@@ -2139,6 +2055,76 @@ fn label(
         font(label.font),
         label.color.map_or(theme::INK_BRIGHT, rgb),
     );
+    let node = label_node(label, inside);
+    let geometry = (owner == WindowId::Chat)
+        .then(|| label.anchors.map(reflow::Geometry))
+        .flatten();
+    let buff_name = buff_label(owner, label.eq_type);
+    match (label.eq_type, bag) {
+        _ if hotbar_page => aligned_in(
+            window,
+            node,
+            label.align,
+            (text, hotbar::page::Number),
+            geometry,
+        ),
+        (Some(_), _) if let Some((effects, index)) = buff_name => aligned_in(
+            window,
+            node,
+            label.align,
+            (text, Shows::BuffName(effects, index)),
+            geometry,
+        ),
+        (Some(kind), _) if let Some(gem) = gem_label(kind) => {
+            aligned_in(
+                window,
+                node,
+                label.align,
+                (text, Shows::GemName(gem)),
+                geometry,
+            );
+        }
+        (Some(kind), _) => aligned_in(
+            window,
+            node,
+            label.align,
+            (text, Shows::Label(kind)),
+            geometry,
+        ),
+        (None, Some(bag)) => aligned_in(window, node, label.align, (text, bag), geometry),
+        (None, None) if banker => {
+            aligned_in(window, node, label.align, (text, Shows::Banker), geometry);
+        }
+        (None, None) if let Some(side) = page_number => {
+            aligned_in(
+                window,
+                node,
+                label.align,
+                (text, super::reading::Text::Number(side)),
+                geometry,
+            );
+        }
+        (None, None) if let Some(shows) = counted => {
+            aligned_in(window, node, label.align, (text, shows), geometry);
+        }
+        (None, None) if partner => {
+            aligned_in(window, node, label.align, (text, Shows::Partner), geometry);
+        }
+        (None, None) if trader => {
+            aligned_in(window, node, label.align, (text, Shows::Trader), geometry);
+        }
+        (None, None) if let Some(shows) = named => {
+            aligned_in(window, node, label.align, (text, shows), geometry);
+        }
+        (None, None) => plain_label(window, name, label, text, node, geometry, owner),
+    }
+}
+
+/// The authored label rectangle, including its wrapping anchor policy.
+fn label_node(label: &Label, inside: &Area) -> Node {
+    let area = label.anchors.map_or(label.area, |anchors| {
+        anchors.within(inside.width, inside.height)
+    });
     let mut node = at(
         inside.x + area.x,
         inside.y + area.y,
@@ -2149,52 +2135,35 @@ fn label(
     if line_at_top(label.anchors, label.wraps) {
         node.height = Val::Auto;
     }
-    let buff_name = buff_label(owner, label.eq_type);
-    match (label.eq_type, bag) {
-        _ if hotbar_page => aligned(window, node, label.align, (text, hotbar::page::Number)),
-        (Some(_), _) if let Some((effects, index)) = buff_name => aligned(
+    node
+}
+
+/// Draws a label with no live domain binding, including option slider values.
+fn plain_label(
+    window: &mut ChildSpawnerCommands,
+    name: &str,
+    label: &Label,
+    text: impl Bundle,
+    node: Node,
+    geometry: Option<reflow::Geometry>,
+    owner: WindowId,
+) {
+    match controls::value_label(name, owner) {
+        Some(controls::ValueLabel::Shows(level)) => aligned_in(
             window,
             node,
             label.align,
-            (text, Shows::BuffName(effects, index)),
+            (text, controls::LevelValue(level)),
+            geometry,
         ),
-        (Some(kind), _) if let Some(gem) = gem_label(kind) => {
-            aligned(window, node, label.align, (text, Shows::GemName(gem)));
-        }
-        (Some(kind), _) => aligned(window, node, label.align, (text, Shows::Label(kind))),
-        (None, Some(bag)) => aligned(window, node, label.align, (text, bag)),
-        (None, None) if banker => aligned(window, node, label.align, (text, Shows::Banker)),
-        (None, None) if let Some(side) = page_number => {
-            aligned(
-                window,
-                node,
-                label.align,
-                (text, super::reading::Text::Number(side)),
-            );
-        }
-        (None, None) if let Some(shows) = counted => {
-            aligned(window, node, label.align, (text, shows));
-        }
-        (None, None) if partner => aligned(window, node, label.align, (text, Shows::Partner)),
-        (None, None) if trader => aligned(window, node, label.align, (text, Shows::Trader)),
-        (None, None) if let Some(shows) = named => {
-            aligned(window, node, label.align, (text, shows));
-        }
-        (None, None) => match controls::value_label(name, owner) {
-            Some(controls::ValueLabel::Shows(level)) => aligned(
-                window,
-                node,
-                label.align,
-                (text, controls::LevelValue(level)),
-            ),
-            Some(controls::ValueLabel::Blank) => aligned(
-                window,
-                node,
-                label.align,
-                theme::text("", font(label.font), theme::INK_DIM),
-            ),
-            None => aligned(window, node, label.align, text),
-        },
+        Some(controls::ValueLabel::Blank) => aligned_in(
+            window,
+            node,
+            label.align,
+            theme::text("", font(label.font), theme::INK_DIM),
+            geometry,
+        ),
+        None => aligned_in(window, node, label.align, text, geometry),
     }
 }
 
@@ -2217,9 +2186,19 @@ fn line_at_top(anchors: Option<Anchors>, wraps: bool) -> bool {
 /// one line in the middle of the box's height.
 pub(crate) fn aligned(
     window: &mut ChildSpawnerCommands,
+    node: Node,
+    align: Align,
+    text: impl Bundle,
+) {
+    aligned_in(window, node, align, text, None);
+}
+
+fn aligned_in(
+    window: &mut ChildSpawnerCommands,
     mut node: Node,
     align: Align,
     text: impl Bundle,
+    geometry: Option<reflow::Geometry>,
 ) {
     node.justify_content = match align {
         Align::Left => JustifyContent::FlexStart,
@@ -2231,9 +2210,11 @@ pub(crate) fn aligned(
     // (inferred, recording item 6.220).
     node.align_items = AlignItems::Center;
     node.overflow = Overflow::clip();
-    window
-        .spawn(node)
-        .with_child((text, TextLayout::new(Justify::Left, LineBreak::NoWrap)));
+    let mut drawn = window.spawn(node);
+    if let Some(geometry) = geometry {
+        drawn.insert(geometry);
+    }
+    drawn.with_child((text, TextLayout::new(Justify::Left, LineBreak::NoWrap)));
 }
 
 /// A piece of the skin, stretched over this node.
@@ -2293,6 +2274,7 @@ mod tests {
             height: 14,
         };
         let screen = |titlebar: bool, title: Option<&str>| Screen {
+            sizable: eq_client_assets::sidl::Sizable::Omitted,
             name: "Window".into(),
             title: title.map(str::to_owned),
             title_color: None,
@@ -2362,6 +2344,7 @@ mod tests {
     #[test]
     fn an_unplaced_window_opens_where_the_skin_puts_it_unless_it_says_otherwise() {
         let screen = Screen {
+            sizable: eq_client_assets::sidl::Sizable::Omitted,
             name: "Window".into(),
             title: None,
             title_color: None,
@@ -2499,6 +2482,7 @@ mod tests {
             })
         };
         let screen = Screen {
+            sizable: eq_client_assets::sidl::Sizable::Omitted,
             name: "ActionsWindow".into(),
             title: None,
             title_color: None,
@@ -2574,6 +2558,7 @@ mod tests {
             height: 40.0,
         };
         let screen = Screen {
+            sizable: eq_client_assets::sidl::Sizable::Omitted,
             name: "HotButtonWnd".into(),
             title: None,
             title_color: None,
@@ -2662,6 +2647,7 @@ mod tests {
             })
         };
         let screen = Screen {
+            sizable: eq_client_assets::sidl::Sizable::Omitted,
             name: "HotButtonWnd".into(),
             title: None,
             title_color: None,
@@ -2761,6 +2747,7 @@ mod tests {
             })
         };
         let screen = Screen {
+            sizable: eq_client_assets::sidl::Sizable::Omitted,
             name: "Container".into(),
             title: None,
             title_color: None,
@@ -2913,6 +2900,7 @@ mod tests {
             header: None,
         });
         Screen {
+            sizable: eq_client_assets::sidl::Sizable::Omitted,
             name: "OptionsWindow".into(),
             title: None,
             title_color: None,
@@ -3188,6 +3176,7 @@ mod tests {
     ) -> Vec<(f32, f32, f32, bool)> {
         use eq_client_assets::sidl::{Button, ButtonLook, Element, Piece};
         let screen = Screen {
+            sizable: eq_client_assets::sidl::Sizable::Omitted,
             name: "ItemDisplayWindow".into(),
             title: None,
             title_color: None,
@@ -3426,10 +3415,21 @@ mod tests {
             title_colors: [None, None],
             tooltip: None,
         };
-        let pages = with_qol_page(std::slice::from_ref(&general), WindowId::Options, 400.0);
+        let settings: Vec<_> = Fix::settings().collect();
+        // Tall enough, with room to spare, that a page this high holds every
+        // setting in one column whatever today's count is — the row pitch is
+        // the skin's checkbox height plus the gap, and the column wrap itself
+        // is what the short page below checks.
+        let inside =
+            26.0 * (to_f32(u32::try_from(settings.len()).unwrap_or_default()) + 2.0) + 60.0;
+        let pages = with_qol_page(
+            std::slice::from_ref(&general),
+            WindowId::Options,
+            Vec2::new(5000.0, inside),
+            None,
+        );
         assert_eq!(pages.len(), 2);
         assert_eq!(pages[1].title.as_deref(), Some("QoL"));
-        let settings: Vec<_> = Fix::settings().collect();
         assert_eq!(pages[1].pieces.len(), settings.len());
         let mut above: Option<Area> = None;
         for ((_, piece), fix) in pages[1].pieces.iter().zip(settings.iter().copied()) {
@@ -3450,7 +3450,12 @@ mod tests {
             above = Some(checkbox.area);
         }
         // A page too short for another row goes on in the next column.
-        let short = with_qol_page(std::slice::from_ref(&general), WindowId::Options, 70.0);
+        let short = with_qol_page(
+            std::slice::from_ref(&general),
+            WindowId::Options,
+            Vec2::new(5000.0, 70.0),
+            None,
+        );
         let areas: Vec<Area> = short[1]
             .pieces
             .iter()
@@ -3466,11 +3471,87 @@ mod tests {
             with_qol_page(
                 std::slice::from_ref(&general),
                 WindowId::ActionsWindow,
-                400.0
+                Vec2::new(400.0, 400.0),
+                None
             )
             .len(),
             1
         );
+    }
+
+    #[test]
+    fn the_qol_page_caps_its_unsafe_choices_with_a_caption() {
+        use eq_client_assets::sidl::{Align, Button, ButtonLook, Element, Label, Page};
+        let checkbox = Button {
+            id: Some("OGP_PetWindowPopupCheckbox".into()),
+            area: Area {
+                x: 10.0,
+                y: 175.0,
+                width: 150.0,
+                height: 20.0,
+            },
+            placed: true,
+            anchors: None,
+            look: ButtonLook::default(),
+            checkbox: true,
+            text: Some("Pet Window Popup".into()),
+            text_color: None,
+            font: None,
+            decal: None,
+            decal_area: None,
+            tooltip: None,
+        };
+        let line = Label {
+            area: Area {
+                x: 10.0,
+                y: 20.0,
+                width: 80.0,
+                height: 14.0,
+            },
+            anchors: None,
+            eq_type: Some(13322),
+            text: "General".into(),
+            color: None,
+            align: Align::Left,
+            font: None,
+            wraps: false,
+        };
+        let general = Page {
+            name: "OptionsGeneralPage".into(),
+            title: Some("General".into()),
+            area: None,
+            template: None,
+            pieces: vec![
+                ("checkbox".into(), Element::Button(checkbox)),
+                ("caption".into(), Element::Label(line)),
+            ],
+            icon: [None, None],
+            title_colors: [None, None],
+            tooltip: None,
+        };
+        let pages = with_qol_page(
+            std::slice::from_ref(&general),
+            WindowId::Options,
+            Vec2::new(400.0, 1200.0),
+            None,
+        );
+        let settings: Vec<_> = eq_client_core::qol::Fix::settings().collect();
+        let first_unsafe = settings.iter().position(|fix| fix.is_unsafe()).unwrap();
+        // The page holds every setting, and one caption line ahead of the
+        // unsafe run that closes it.
+        assert_eq!(pages[1].pieces.len(), settings.len() + 1);
+        let (id, piece) = &pages[1].pieces[first_unsafe];
+        let Element::Label(caption) = piece else {
+            panic!("a caption ahead of the unsafe settings")
+        };
+        assert_eq!(id, "EQC_QoL_UnsafeCaption");
+        assert_eq!(caption.text, "Unsafe");
+        assert!(caption.eq_type.is_none());
+        // It sits directly over the first of them.
+        let (_, Element::Button(boxed)) = &pages[1].pieces[first_unsafe + 1] else {
+            panic!("a checkbox")
+        };
+        assert_eq!(boxed.text.as_deref(), Some(settings[first_unsafe].label()));
     }
 
     #[test]
@@ -3539,10 +3620,12 @@ mod tests {
             ..general.clone()
         };
         let skin = [general.clone(), display];
-        let pages = with_qol_page(&skin, WindowId::Options, 400.0);
+        let pages = with_qol_page(&skin, WindowId::Options, Vec2::new(400.0, 400.0), None);
         let qol = &pages[2].pieces;
-        assert_eq!(qol.len(), settings.len() + 3);
-        let last_checkbox = match &qol[settings.len() - 1].1 {
+        // One row for the unsafe caption ahead of the last settings, and the
+        // scale's own three below them all.
+        assert_eq!(qol.len(), settings.len() + 4);
+        let last_checkbox = match &qol[settings.len()].1 {
             Element::Button(checkbox) => checkbox.area,
             _ => panic!("a checkbox"),
         };
@@ -3550,7 +3633,7 @@ mod tests {
             (_, Element::Label(caption)),
             (slider_id, Element::Slider(slider)),
             (value_id, Element::Label(value)),
-        ] = &qol[settings.len()..]
+        ] = &qol[settings.len() + 1..]
         else {
             panic!("a caption, a slider and its value")
         };
@@ -4724,6 +4807,7 @@ mod tests {
             )
         };
         let mut screen = Screen {
+            sizable: eq_client_assets::sidl::Sizable::Omitted,
             name: "CursorAttachment".into(),
             title: None,
             title_color: None,

@@ -2,6 +2,7 @@
 //! Pixel sampling below is a CPU UV check, not a GPU/native render comparison.
 mod capture;
 mod capture_pixels;
+mod tabbed;
 
 use super::*;
 use bevy::{
@@ -18,6 +19,7 @@ use bevy::{
 use std::{collections::BTreeMap, fmt::Write as _};
 
 const SHEET: &str = "synthetic-border.tga";
+
 const TAGS: [(&str, u16, u16); 12] = [
     ("TopLeft", 7, 3),
     ("Top", 2, 2),
@@ -98,6 +100,7 @@ fn app(scale: f32, pixels: image::RgbaImage) -> App {
             PostUpdate,
             (
                 propagate_ui_target_cameras,
+                reflow::update,
                 ui_layout_system,
                 pixel_edges::snap,
                 update_clipping_system,
@@ -165,9 +168,10 @@ fn bounds(world: &World, entity: Entity) -> Rect {
 
 fn images(world: &mut World) -> BTreeMap<String, Entity> {
     world
-        .query::<(Entity, &ImageNode)>()
+        .query::<(Entity, &ImageNode, &ComputedNode)>()
         .iter(world)
-        .map(|(entity, image)| {
+        .filter(|(_, _, node)| node.size().cmpgt(Vec2::ZERO).all())
+        .map(|(entity, image, _)| {
             let rect = image.rect.unwrap();
             let row = rect.min.y;
             let tag = TAGS
@@ -183,6 +187,229 @@ fn images(world: &mut World) -> BTreeMap<String, Entity> {
             (tag.to_owned(), entity)
         })
         .collect()
+}
+
+#[test]
+#[allow(clippy::too_many_lines)]
+fn resize_reflows_real_nested_chat_widgets_clips_and_perimeter_without_replacement() {
+    use eq_client_assets::sidl::{Sizable, TextBox, View, WindowTemplate};
+    for scale in [0.75, 1.25, 2.0] {
+        let (look, pixels) = fixture();
+        let mut app = app(scale, pixels);
+        app.init_resource::<crate::keys::Typing>();
+        let outer = WindowTemplate {
+            border: look.clone(),
+            title: [
+                look.top_left.clone(),
+                look.top.clone(),
+                look.top_right.clone(),
+            ],
+            close_box: Some(ButtonLook {
+                normal: look.top_left.clone(),
+                ..default()
+            }),
+            minimize_box: Some(ButtonLook {
+                normal: look.top_right.clone(),
+                ..default()
+            }),
+            ..default()
+        };
+        let text = |id: &str, anchors| {
+            Element::TextBox(TextBox {
+                id: Some(id.into()),
+                area: Area {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 100.0,
+                    height: 50.0,
+                },
+                anchors: Some(anchors),
+                template: None,
+                color: None,
+                font: None,
+                scrollbar: (id == "CWChatOutput")
+                    .then(eq_client_assets::sidl::ScrollbarLook::default),
+            })
+        };
+        let screen = Screen {
+            name: "SyntheticChat".into(),
+            title: None,
+            title_color: None,
+            font: None,
+            area: Area {
+                x: 0.0,
+                y: 0.0,
+                width: 400.0,
+                height: 250.0,
+            },
+            sizable: Sizable::Enabled,
+            template: Some(outer.clone()),
+            border: true,
+            title_bar: Some(eq_client_assets::sidl::TitleBar {
+                close_box: true,
+                minimize_box: true,
+            }),
+            transparent: false,
+            tooltip: None,
+            tab_frame: None,
+            pieces: vec![
+                (
+                    "Label".into(),
+                    Element::Label(eq_client_assets::sidl::Label {
+                        area: screen_area(),
+                        anchors: Some(Anchors {
+                            left: Anchor::Start(12.0),
+                            top: Anchor::Start(42.0),
+                            right: Anchor::End(12.0),
+                            bottom: Anchor::Start(62.0),
+                        }),
+                        eq_type: None,
+                        text: "retained label".into(),
+                        color: None,
+                        align: Align::Left,
+                        font: None,
+                        wraps: false,
+                    }),
+                ),
+                (
+                    "Output".into(),
+                    text(
+                        "CWChatOutput",
+                        reflow::Geometry::inset(8.0, 8.0, 8.0, 40.0).0,
+                    ),
+                ),
+                (
+                    "Nested".into(),
+                    Element::View(Box::new(View {
+                        name: "Nested".into(),
+                        area: screen_area(),
+                        anchors: Some(reflow::Geometry::inset(20.0, 80.0, 20.0, 10.0).0),
+                        template: Some(outer),
+                        border: true,
+                        tooltip: None,
+                        scrollbar: None,
+                        pieces: vec![(
+                            "Input".into(),
+                            text(
+                                "CWChatInput",
+                                Anchors {
+                                    left: Anchor::Start(6.0),
+                                    top: Anchor::End(26.0),
+                                    right: Anchor::End(6.0),
+                                    bottom: Anchor::End(6.0),
+                                },
+                            ),
+                        )],
+                    })),
+                ),
+            ],
+        };
+        let root = app
+            .world_mut()
+            .run_system_once(move |mut commands: Commands, mut art: crate::sheets::Art| {
+                commands
+                    .spawn((
+                        at(7.0, 11.0, 400.0, 250.0),
+                        crate::windows::Frame::default(),
+                    ))
+                    .with_children(|root| {
+                        draw(
+                            root,
+                            &screen,
+                            &mut art,
+                            &Context {
+                                id: WindowId::Chat,
+                                paperdoll: None,
+                                depth: 0,
+                                tab_frame: None,
+                            },
+                        );
+                    })
+                    .id()
+            })
+            .unwrap();
+        app.update();
+        let world = app.world_mut();
+        let input = world
+            .query_filtered::<Entity, With<crate::chat::InputBox>>()
+            .single(world)
+            .unwrap();
+        let label = world
+            .query_filtered::<Entity, With<crate::chat::InputLabel>>()
+            .single(world)
+            .unwrap();
+        world.get_mut::<Text>(label).unwrap().0 = "a retained draft".into();
+        let lines = world
+            .query_filtered::<Entity, With<crate::chat::Viewport>>()
+            .single(world)
+            .unwrap();
+        world.get_mut::<ScrollPosition>(lines).unwrap().y = 37.0;
+        world.resource_mut::<crate::keys::Typing>().composing = true;
+        let entities: Vec<_> = world
+            .query_filtered::<Entity, With<Node>>()
+            .iter(world)
+            .collect();
+        let old_input = bounds(world, input);
+        let old_lines = bounds(world, lines);
+        let label_box = world
+            .query::<(&Text, &ChildOf)>()
+            .iter(world)
+            .find(|(text, _)| text.0 == "retained label")
+            .unwrap()
+            .1
+            .parent();
+        let old_label = bounds(world, label_box);
+        {
+            let mut node = world.get_mut::<Node>(root).unwrap();
+            node.width = px(600);
+            node.height = px(370);
+        }
+        app.update();
+        let world = app.world_mut();
+        let new_input = bounds(world, input);
+        let new_lines = bounds(world, lines);
+        let near = |actual: f32, expected: f32| {
+            assert!(
+                (actual - expected).abs() <= 1.0,
+                "{actual} versus {expected}"
+            );
+        };
+        near(new_input.width() - old_input.width(), 200.0 * scale);
+        near(new_input.min.y - old_input.min.y, 120.0 * scale);
+        near(new_input.height(), old_input.height());
+        near(new_lines.width() - old_lines.width(), 200.0 * scale);
+        near(new_lines.height() - old_lines.height(), 120.0 * scale);
+        near(
+            bounds(world, label_box).width() - old_label.width(),
+            200.0 * scale,
+        );
+        assert_eq!(world.get::<ScrollPosition>(lines).unwrap().y, 37.0);
+        assert_eq!(world.get::<Text>(label).unwrap().0, "a retained draft");
+        assert!(world.resource::<crate::keys::Typing>().composing);
+        assert_eq!(
+            world
+                .query_filtered::<Entity, With<Node>>()
+                .iter(world)
+                .collect::<std::collections::BTreeSet<_>>(),
+            entities.into_iter().collect()
+        );
+        let clip = world.get::<CalculatedClip>(input).unwrap().clip;
+        assert!(clip.max.cmple(bounds(world, root).max).all());
+        let perimeter = world
+            .query::<(&reflow::Geometry, &pixel_edges::Piece)>()
+            .iter(world)
+            .count();
+        assert!(perimeter >= 24); // Both the owner and nested view keep all twelve pieces.
+    }
+}
+
+fn screen_area() -> Area {
+    Area {
+        x: 0.0,
+        y: 0.0,
+        width: 200.0,
+        height: 100.0,
+    }
 }
 
 fn pixel(image: &Image, at: UVec2) -> [u8; 4] {

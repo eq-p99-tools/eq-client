@@ -533,7 +533,10 @@ pub(super) fn animate(
             swing.max(cast)
         });
         character.swings.follow(latest, dt);
-        if posture == Some(eq_client_core::PostureState::Frozen) && !(own && world.is_dead()) {
+        if posture == Some(eq_client_core::PostureState::Frozen)
+            && corpse.is_none()
+            && !(own && world.is_dead())
+        {
             continue;
         }
         character.elapsed += dt;

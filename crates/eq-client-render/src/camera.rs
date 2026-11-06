@@ -1,19 +1,25 @@
 //! Chase camera placement, input arbitration and collision-aware zoom.
+mod attached;
 use crate::{
     Collision, Player, PlayerBody, ProjectionStyle, chat, inventory, items, online, options,
     sounds, windows,
 };
-use bevy::input::mouse::MouseMotion;
+use bevy::input::mouse::{MouseButtonInput, MouseMotion};
 use bevy::prelude::*;
+use bevy::window::{PrimaryWindow, WindowFocused};
+use eq_client_core::movement::CollisionWorld;
 #[derive(Component)]
 pub(super) struct OrbitCamera {
+    /// Body center before the view chooses its pivot.
     pub(super) focus: Vec3,
+    /// Requested distance along the sightline, before collision pulls it in.
     pub(super) radius: f32,
     pub(super) yaw: f32,
     pub(super) pitch: f32,
     /// The distance shown while a roof or wall holds the camera short of
     /// `radius`; None once it is back out at the chosen zoom.
     pub(super) pulled: Option<f32>,
+    pub(super) view: attached::View,
 }
 
 /// A detached view. Its transform is the camera's alone; the orbit keeps
@@ -138,53 +144,46 @@ pub(crate) fn fly_camera(
     }
 }
 
-/// The right button's look: from a press over the world (not over a
-/// window) until the button is let go, the mouse belongs to the look
-/// wherever the pointer goes, and the windows see none of its buttons, as
-/// the Titanium program skips feeding the mouse to its windows while its
-/// look is on (0x4a9cd2, cleared at 0x4a8ba2; program read N2 of 11-01). A
-/// press that begins over a window stays the window's (inferred, recording
-/// checklist 6.350).
+/// A right press over the world keeps the look until release, even if the
+/// pointer moves over UI. Left presses during that look belong to movement.
 #[derive(Resource, Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct MouseLook {
     /// The right button is held from a press over the world.
     pub(crate) held: bool,
-    /// The left button is held during the look. The program refuses a left
-    /// click while its look is on (0x4a91a4), so the press goes to the look
-    /// alone: it runs the player the way the camera faces (6.341).
+    /// The left button is held from a press that belonged to this look.
     pub(crate) left: bool,
 }
 
-impl MouseLook {
-    /// Follows the right button for one frame: a fresh press starts a look
-    /// only where the world, not a window, is under the pointer (`free`);
-    /// letting go, or the window losing the focus, ends it.
-    pub(crate) fn follow(&mut self, buttons: &ButtonInput<MouseButton>, focused: bool, free: bool) {
-        if !focused || !buttons.pressed(MouseButton::Right) {
-            self.held = false;
-        } else if buttons.just_pressed(MouseButton::Right) {
-            self.held = free;
-        }
-    }
-
-    /// Takes the left button for the look while it is on, so nothing else
-    /// sees it pressed, clicked or let go: no window, target or door.
-    fn take_left(&mut self, buttons: &mut ButtonInput<MouseButton>) {
-        self.left = self.held && buttons.pressed(MouseButton::Left);
-        if self.held {
-            buttons.reset(MouseButton::Left);
-        }
-    }
+#[derive(Resource, Default)]
+pub(crate) struct MouseAim {
+    /// Horizontal input owned by an attached online look this frame.
+    pub(crate) horizontal: Option<f32>,
+    /// Focus, admission or exclusive input ownership changed.
+    pub(crate) interrupted: bool,
 }
 
-/// Starts, keeps or ends the right button's look, before the windows see
-/// the mouse, and takes the left button for it while it is on.
-#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+#[derive(Default)]
+pub(crate) struct LookOwnership {
+    admission: Option<u64>,
+    /// A captured left press stays hidden from UI and world clicks through
+    /// release, even if the right button ends the look first.
+    left: bool,
+}
+
+/// Reads native button edges before UI focus. The button resource can then
+/// hide a captured press without also erasing the look's held state.
+#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(crate) fn look(
     mut look: ResMut<MouseLook>,
+    mut aim: ResMut<MouseAim>,
     mut buttons: ResMut<ButtonInput<MouseButton>>,
-    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    mut ownership: Local<LookOwnership>,
+    mut events: MessageReader<MouseButtonInput>,
+    mut focus: MessageReader<WindowFocused>,
+    windows: Query<(Entity, &Window), With<PrimaryWindow>>,
     ui: windows::pointer::PointerUi,
+    online: Res<online::OnlineState>,
+    script: Option<Res<crate::script::Script>>,
     (chat, items, inventory): (
         Res<chat::ChatState>,
         Res<items::ItemState>,
@@ -192,13 +191,76 @@ pub(crate) fn look(
     ),
 ) {
     let window = windows.single().ok();
-    let focused = window.is_some_and(|window| window.focused);
+    let primary = window.map(|(entity, _)| entity);
+    let mut focused = window.is_some_and(|(_, window)| window.focused);
+    for event in focus.read() {
+        focused &= Some(event.window) != primary || event.focused;
+    }
+    let admission = online.world().session_id();
+    let playing = online.selection.is_none()
+        && !online.world().is_dead()
+        && (!online.enabled || online.world().connected());
+    let available =
+        focused && playing && !script.is_some_and(|script| script.background_owns_input());
+    aim.interrupted = !available || ownership.admission != admission;
+    if aim.interrupted {
+        *look = MouseLook::default();
+    }
+    ownership.admission = admission;
     let over_ui = window
-        .and_then(Window::physical_cursor_position)
+        .and_then(|(_, window)| window.physical_cursor_position())
         .is_some_and(|cursor| ui.contains(cursor));
     let free = !over_ui && !chat.hovered && !items.hovered && !inventory.hovered;
-    look.follow(&buttons, focused, free);
-    look.take_left(&mut buttons);
+    let mut mask_left = ownership.left;
+    for event in events.read().filter(|event| Some(event.window) == primary) {
+        match (event.button, event.state.is_pressed()) {
+            (MouseButton::Right, true) => look.held = available && free,
+            (MouseButton::Right, false) => *look = MouseLook::default(),
+            (MouseButton::Left, true) => {
+                look.left = look.held;
+                ownership.left = look.left;
+                mask_left = ownership.left;
+            }
+            (MouseButton::Left, false) => {
+                look.left = false;
+                ownership.left = false;
+            }
+            _ => {}
+        }
+    }
+    if !focused {
+        ownership.left = false;
+    }
+    if mask_left {
+        buttons.reset(MouseButton::Left);
+    }
+}
+
+/// Samples horizontal look before locomotion. Online the attached view follows
+/// the actor's rotation, and offline the same input turns the orbit directly.
+#[allow(clippy::needless_pass_by_value)]
+pub(super) fn turn(
+    look: Res<MouseLook>,
+    online: Res<online::OnlineState>,
+    options: Res<options::OptionsState>,
+    mut aim: ResMut<MouseAim>,
+    mut motion: MessageReader<MouseMotion>,
+    mut cameras: Query<&mut OrbitCamera, Without<FreeCamera>>,
+) {
+    aim.horizontal = None;
+    if !look.held {
+        motion.clear();
+        return;
+    }
+    let horizontal = motion.read().map(|event| event.delta.x).sum::<f32>();
+    if let Ok(mut camera) = cameras.single_mut() {
+        let yaw = -horizontal * options.options.turn_per_pixel();
+        if online.enabled {
+            aim.horizontal = Some(yaw);
+        } else {
+            camera.yaw += yaw;
+        }
+    }
 }
 
 /// The chase view's pitch as it first opens: a little above the player,
@@ -230,6 +292,7 @@ pub(super) fn spawn_camera(
         yaw: 0.0,
         pitch: CHASE_PITCH,
         pulled: None,
+        view: default(),
     };
     // The first zone is entered before this camera exists, so it starts
     // behind the player here; later entries turn it in `Scene::enter`.
@@ -259,7 +322,29 @@ pub(super) fn camera_relative_direction(horizontal: f32, vertical: f32, yaw: f32
     (right * horizontal + forward * vertical).normalize_or_zero()
 }
 
-#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+/// The head above the body center and the feet below it, in world units.
+#[derive(Clone, Copy)]
+struct CameraBody {
+    head: f32,
+    feet: Option<f32>,
+}
+
+impl CameraBody {
+    /// Shared eye point for chase and first person, shortened by low ceilings.
+    fn eye(self, center: Vec3, world: Option<&CollisionWorld>) -> Vec3 {
+        let head = self.head.max(0.0);
+        let eye = world
+            .and_then(|world| world.ray_distance(center, Vec3::Y, head))
+            .map_or(head, |hit| (hit - 0.1).max(0.0));
+        center + Vec3::Y * eye
+    }
+}
+
+#[allow(
+    clippy::needless_pass_by_value,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
 pub(super) fn orbit_camera(
     collision: Option<Res<Collision>>,
     time: Res<Time>,
@@ -280,11 +365,19 @@ pub(super) fn orbit_camera(
         Option<&mut Projection>,
         Has<FreeCamera>,
     )>,
-    bodies: Query<&PlayerBody, With<Player>>,
+    players: Query<(&PlayerBody, &Transform), (With<Player>, Without<OrbitCamera>)>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     ui: windows::pointer::PointerUi,
 ) {
-    let head = bodies.single().map_or(0.0, |body| body.height * HEAD_LINE);
+    let player = players.single().ok();
+    let body = player.map(|(body, _)| body);
+    let body = CameraBody {
+        head: body.map_or(0.0, |body| body.height * HEAD_LINE),
+        feet: body.map(|body| body.feet_offset),
+    };
+    let playing = online.selection.is_none()
+        && !online.world().is_dead()
+        && (!online.enabled || online.world().connected());
     let accepts_input = windows.single().is_ok_and(|window| {
         window.focused
             && !window
@@ -301,7 +394,8 @@ pub(super) fn orbit_camera(
     };
     // A turn over a window scrolls the window, never the camera too; with
     // the wheel's zoom turned off, it does nothing here.
-    let scroll = if !accepts_input
+    let scroll = if !playing
+        || !accepts_input
         || !options.options.wheel_zoom
         || wheel.surface.is_some()
         || chat.hovered
@@ -321,80 +415,89 @@ pub(super) fn orbit_camera(
     for (mut camera, mut transform, projection, free) in &mut cameras {
         let turn = options.options.turn_per_pixel();
         if free {
-            let clip = clip.map(|clip| clip + past_program(camera.radius, program));
-            if let Some(mut projection) = projection
-                && !fitted(&projection, camera.radius, clip)
-            {
-                fit_projection(&mut projection, camera.radius, clip);
+            let radius = camera.radius;
+            let clip = clip.map(|clip| clip + past_program(radius, program));
+            if let Some(mut projection) = projection {
+                fit_view_projection(&mut projection, radius, clip, false);
             }
             continue;
         }
-        camera.yaw -= drag.x * turn;
-        // The limits are the program's chase camera's, with the distance on
-        // the player's leash. The top-down
-        // orthographic view is not in the program, so it keeps this
-        // client's own pitch and zoom ranges.
+        if playing
+            && online.enabled
+            && look.held
+            && let Some((_, player)) = player
+        {
+            start_behind(&mut camera, player);
+        }
+        let world = collision.as_ref().and_then(|world| world.0.as_ref());
+        if !playing {
+            camera.reset_view();
+        }
+        // The orthographic view keeps its own pitch and zoom ranges.
         if matches!(projection.as_deref(), Some(Projection::Orthographic(_))) {
+            if camera.is_first_person() {
+                camera.reset_view();
+            }
             top_down(&mut camera, drag.y * turn * rise, (-scroll * 0.12).exp());
+            *transform = unobstructed_orbit(&mut camera, world, body.head, None, time.delta_secs());
         } else {
-            chase(
-                &mut camera,
+            *transform = camera.attached_view(
                 limits,
-                drag.y * turn * rise * HEIGHT_PER_RADIAN,
-                (-scroll * 0.12).exp(),
+                drag.y * turn * rise,
+                scroll,
+                world,
+                body,
+                time.delta_secs(),
             );
         }
         let radius = camera.radius;
         let clip = clip.map(|clip| clip + past_program(radius, program));
-        if let Some(mut projection) = projection
-            && !fitted(&projection, radius, clip)
-        {
-            fit_projection(&mut projection, radius, clip);
+        if let Some(mut projection) = projection {
+            let close_upward_orbit =
+                camera.pitch > 0.0 && transform.translation.distance_squared(camera.focus) < 4.0;
+            fit_view_projection(
+                &mut projection,
+                radius,
+                clip,
+                camera.is_first_person() || close_upward_orbit,
+            );
         }
-        *transform = unobstructed_orbit(
-            &mut camera,
-            collision.as_ref().and_then(|world| world.0.as_ref()),
-            head,
-            time.delta_secs(),
-        );
     }
 }
 
-/// How many units the chase camera rises for each radian today's mouse
-/// sensitivity used to tilt it: the whole 30-unit range for about a
-/// quarter turn's movement. The program's own mapping of the mouse to the
-/// height is not traced (inferred, recording checklist 6.348).
-const HEIGHT_PER_RADIAN: f32 = 20.0;
+/// Changes visibility on the existing local model/gear hierarchy in the
+/// frame the camera enters or leaves first person.
+#[allow(clippy::needless_pass_by_value)]
+pub(crate) fn show_player(
+    cameras: Query<(&OrbitCamera, Has<FreeCamera>)>,
+    mut players: Query<&mut Visibility, With<Player>>,
+) {
+    let hidden = cameras
+        .single()
+        .is_ok_and(|(camera, free)| !free && camera.is_first_person());
+    for mut visibility in &mut players {
+        visibility.set_if_neq(if hidden {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        });
+    }
+}
 
-/// Moves the chase camera as the installed client's does: it sits a height
-/// above the player and a distance behind, each held within the client's
-/// range ([`eq_client_assets::camera::CameraLimits`]), and looks down at
-/// the player from there, with no angle limit of its own. `raise` raises
-/// the height by that many units (the mouse moved down raises it, as it
-/// tilted the view down before); `zoom` multiplies the distance. A zoom
-/// keeps the height, so the view tilts as the distance changes.
+/// Stops short of either pole so the orbit retains its horizontal heading.
+const MAX_CHASE_PITCH: f32 = 89.0_f32.to_radians();
+
+/// Drag changes the angle and zoom changes the distance along that sightline.
+/// The selected leash bounds that distance before collision adjusts the pose.
 pub(super) fn chase(
     camera: &mut OrbitCamera,
     limits: eq_client_assets::camera::CameraLimits,
-    raise: f32,
+    tilt: f32,
     zoom: f32,
 ) {
-    let (least_height, most_height) = limits.chase_height;
     let (least_distance, most_distance) = limits.chase_distance;
-    let height = camera.radius * (-camera.pitch).sin() + raise;
-    let distance = camera.radius * camera.pitch.cos() * zoom;
-    let clamped = (
-        height.clamp(least_height, most_height),
-        distance.clamp(least_distance, most_distance),
-    );
-    // Left where it is when nothing moved it and it is within its ranges.
-    #[allow(clippy::float_cmp)] // Exactly no movement asked.
-    if raise == 0.0 && zoom == 1.0 && clamped == (height, distance) {
-        return;
-    }
-    let (height, distance) = clamped;
-    camera.radius = height.hypot(distance);
-    camera.pitch = -height.atan2(distance);
+    camera.pitch = (camera.pitch - tilt).clamp(-MAX_CHASE_PITCH, MAX_CHASE_PITCH);
+    camera.radius = (camera.radius * zoom).clamp(least_distance, most_distance);
 }
 
 /// How far behind the player the player lets the chase camera go: this
@@ -516,46 +619,83 @@ fn fit_projection(projection: &mut Projection, radius: f32, clip: Option<f32>) {
     }
 }
 
-pub(super) fn orbit_transform(camera: &OrbitCamera) -> Transform {
-    let rotation = Quat::from_euler(EulerRot::YXZ, camera.yaw, camera.pitch, 0.0);
-    let position = camera.focus + rotation * Vec3::new(0.0, 0.0, camera.radius);
-    Transform::from_translation(position).looking_at(camera.focus, Vec3::Y)
+/// Fits scene reach and leaves nearby surfaces visible in a close view.
+fn fit_view_projection(projection: &mut Projection, radius: f32, clip: Option<f32>, close: bool) {
+    if !fitted(projection, radius, clip) {
+        fit_projection(projection, radius, clip);
+    }
+    if let Projection::Perspective(perspective) = projection {
+        perspective.near = if close { 0.1 } else { 1.0 };
+    }
 }
 
-/// Keeps the camera on the player's side of roofs and walls without changing
-/// the chosen zoom: it pulls in at once to just short of whatever stands
-/// between it and the player, then eases back out as the way clears, never
-/// past the chosen radius. Both the line from the focus (the body's middle)
-/// and the line from near the top of the head, `head` above it, must reach
-/// the camera clear, so a wall top never hides the head while the waist is in
-/// view. Display only; inferred, item 6.233.
+pub(super) fn orbit_transform(camera: &OrbitCamera) -> Transform {
+    orbit_pose(camera, camera.focus)
+}
+
+fn orbit_pose(camera: &OrbitCamera, pivot: Vec3) -> Transform {
+    let rotation = Quat::from_euler(EulerRot::YXZ, camera.yaw, camera.pitch, 0.0);
+    let position = pivot + rotation * Vec3::new(0.0, 0.0, camera.radius);
+    Transform::from_translation(position).with_rotation(rotation)
+}
+
+/// Body-centered framing for the top-down view, with a second ray at the head.
 pub(super) fn unobstructed_orbit(
     camera: &mut OrbitCamera,
-    collision: Option<&eq_client_core::movement::CollisionWorld>,
+    collision: Option<&CollisionWorld>,
     head: f32,
+    feet: Option<f32>,
     seconds: f32,
 ) -> Transform {
-    let mut pose = orbit_transform(camera);
-    let offset = pose.translation - camera.focus;
-    let distance = offset.length();
+    let center = camera.focus;
+    place_orbit(
+        camera,
+        collision,
+        center,
+        center + Vec3::Y * head,
+        feet,
+        seconds,
+    )
+}
+
+/// Shortens the sightline to keep the camera on the player's side of geometry.
+/// Also checks a ray from the other body point and preserves the chosen zoom
+/// as the camera eases back out. The floor bound is relative to the pivot.
+fn place_orbit(
+    camera: &mut OrbitCamera,
+    collision: Option<&CollisionWorld>,
+    pivot: Vec3,
+    other_origin: Vec3,
+    clearance_below_pivot: Option<f32>,
+    seconds: f32,
+) -> Transform {
+    let mut pose = orbit_pose(camera, pivot);
+    let distance = camera.radius;
     if distance <= 0.001 {
         camera.pulled = None;
         return pose;
     }
-    let direction = offset / distance;
-    let allowed = collision.map_or(distance, |world| {
-        let along_focus = world
-            .ray_distance(camera.focus, direction, distance)
-            .map_or(distance, |hit| (hit - 0.5).max(0.01));
-        clear_of_head(world, camera.focus, Vec3::Y * head, direction, along_focus)
+    let direction = *pose.back();
+    let requested = match clearance_below_pivot {
+        Some(clearance) if direction.y < 0.0 => {
+            distance.min((clearance - 0.1).max(0.0) / -direction.y)
+        }
+        _ => distance,
+    };
+    let allowed = collision.map_or(requested, |world| {
+        let along_pivot = world
+            .ray_distance(pivot, direction, requested)
+            .map_or(requested, |hit| (hit - 0.5).max(0.0));
+        clear_sightline(world, pivot, other_origin, direction, along_pivot).min(along_pivot)
     });
     camera.pulled = camera
         .pulled
         .map(|shown| eased_distance(shown, allowed, seconds))
-        .or((allowed < distance).then_some(allowed))
-        .filter(|shown| distance - shown > PULLED_DONE);
-    if let Some(shown) = camera.pulled {
-        pose.translation = camera.focus + direction * shown;
+        .or((allowed < requested).then_some(allowed))
+        .filter(|shown| requested - shown > PULLED_DONE);
+    let shown = camera.pulled.unwrap_or(allowed);
+    if shown < distance {
+        pose.translation = pivot + direction * shown;
     }
     pose
 }
@@ -564,29 +704,23 @@ pub(super) fn unobstructed_orbit(
 /// middle: near the top of the head.
 pub(super) const HEAD_LINE: f32 = 0.4;
 
-/// How many times the head line is cast before the distance it gives stands.
-const HEAD_CASTS: usize = 3;
-
-/// The distance along the orbit, at most `along_focus`, at which the line from
-/// the head (`rise` above the focus) to the camera is clear: each hit pulls the
-/// camera in by the share of the line that was clear, then the line is cast
-/// again, a bounded number of times.
-fn clear_of_head(
-    world: &eq_client_core::movement::CollisionWorld,
-    focus: Vec3,
-    rise: Vec3,
+/// Pulls the camera in when the line from the other body point is blocked,
+/// recasting along the shortened line a bounded number of times.
+fn clear_sightline(
+    world: &CollisionWorld,
+    pivot: Vec3,
+    other_origin: Vec3,
     direction: Vec3,
-    along_focus: f32,
+    along_pivot: f32,
 ) -> f32 {
-    let head = focus + rise;
-    let mut distance = along_focus;
-    for _ in 0..HEAD_CASTS {
-        let line = focus + direction * distance - head;
+    let mut distance = along_pivot;
+    for _ in 0..3 {
+        let line = pivot + direction * distance - other_origin;
         let length = line.length();
         if length <= 0.001 {
             break;
         }
-        let Some(hit) = world.ray_distance(head, line / length, length) else {
+        let Some(hit) = world.ray_distance(other_origin, line / length, length) else {
             break;
         };
         distance = (distance * (hit - 0.5).max(0.0) / length).max(0.01);
@@ -608,6 +742,39 @@ pub(super) fn eased_distance(shown: f32, allowed: f32, seconds: f32) -> f32 {
         allowed
     } else {
         shown + (allowed - shown) * (1.0 - (-seconds.max(0.0) / PULL_OUT_SECONDS).exp())
+    }
+}
+
+#[cfg(test)]
+pub(super) mod testing {
+    use super::*;
+    use bevy::input::{ButtonState, mouse::mouse_button_input_system};
+
+    pub(crate) fn install_look(app: &mut App) {
+        app.init_resource::<MouseLook>()
+            .init_resource::<MouseAim>()
+            .init_resource::<ButtonInput<MouseButton>>()
+            .add_message::<MouseButtonInput>()
+            .add_message::<MouseMotion>()
+            .add_message::<WindowFocused>()
+            .add_systems(PreUpdate, (mouse_button_input_system, look).chain());
+    }
+
+    pub(crate) fn button(app: &mut App, button: MouseButton, pressed: bool) {
+        let world = app.world_mut();
+        let window = world
+            .query_filtered::<Entity, With<PrimaryWindow>>()
+            .single(world)
+            .unwrap();
+        world.write_message(MouseButtonInput {
+            button,
+            state: if pressed {
+                ButtonState::Pressed
+            } else {
+                ButtonState::Released
+            },
+            window,
+        });
     }
 }
 
@@ -696,6 +863,7 @@ mod tests {
             yaw: 0.0,
             pitch: -0.35,
             pulled: None,
+            view: default(),
         };
         let camera = app.world_mut().spawn((orbit_transform(&orbit), orbit)).id();
         (app, camera, player)
@@ -734,7 +902,7 @@ mod tests {
                 .get::<Transform>(camera)
                 .unwrap()
                 .translation
-                .abs_diff_eq(orbit_transform(orbit).translation, 1e-5)
+                .abs_diff_eq(orbit_transform(orbit).translation + Vec3::Y * 2.4, 1e-5)
         );
     }
 
@@ -790,7 +958,7 @@ mod tests {
                 .get::<Transform>(camera)
                 .unwrap()
                 .translation
-                .abs_diff_eq(orbit_transform(orbit).translation, 1e-5)
+                .abs_diff_eq(orbit_transform(orbit).translation + Vec3::Y * 2.4, 1e-5)
         );
         assert!((orbit.radius - 30.0).abs() < 1e-5 && (orbit.pitch + 0.35).abs() < 1e-5);
     }
@@ -884,42 +1052,40 @@ mod tests {
         assert_eq!(after.far.to_bits(), distance.to_bits());
     }
 
-    /// The right button held since an earlier frame: pressed, not fresh.
-    fn held() -> ButtonInput<MouseButton> {
-        let mut buttons = ButtonInput::default();
-        buttons.press(MouseButton::Right);
-        buttons.clear_just_pressed(MouseButton::Right);
-        buttons
-    }
-
     #[test]
     fn a_look_begun_over_the_world_lasts_over_windows_until_let_go() {
-        let mut look = MouseLook::default();
-        let mut buttons = ButtonInput::default();
-        buttons.press(MouseButton::Right);
-        look.follow(&buttons, true, true);
-        assert!(look.held);
+        let mut app = crate::testing::app();
+        testing::install_look(&mut app);
+        testing::button(&mut app, MouseButton::Right, true);
+        app.update();
+        assert!(app.world().resource::<MouseLook>().held);
         // The pointer passes over a window while the button stays down.
-        look.follow(&held(), true, false);
-        assert!(look.held);
-        // Let go over the window: the look ends, and nothing starts again
-        // until a fresh press.
-        look.follow(&ButtonInput::default(), true, false);
-        assert!(!look.held);
-        look.follow(&held(), true, true);
-        assert!(!look.held);
+        app.world_mut().resource_mut::<chat::ChatState>().hovered = true;
+        app.update();
+        assert!(app.world().resource::<MouseLook>().held);
+        testing::button(&mut app, MouseButton::Right, false);
+        app.update();
+        assert!(!app.world().resource::<MouseLook>().held);
     }
 
     #[test]
     fn a_press_begun_over_a_window_stays_the_windows() {
-        let mut look = MouseLook::default();
-        let mut buttons = ButtonInput::default();
-        buttons.press(MouseButton::Right);
-        look.follow(&buttons, true, false);
-        assert!(!look.held);
+        let mut app = crate::testing::app();
+        testing::install_look(&mut app);
+        app.world_mut().resource_mut::<chat::ChatState>().hovered = true;
+        testing::button(&mut app, MouseButton::Right, true);
+        testing::button(&mut app, MouseButton::Left, true);
+        app.update();
+        assert!(!app.world().resource::<MouseLook>().held);
+        assert!(
+            app.world()
+                .resource::<ButtonInput<MouseButton>>()
+                .just_pressed(MouseButton::Left)
+        );
         // Dragged off the window onto the world, it still turns nothing.
-        look.follow(&held(), true, true);
-        assert!(!look.held);
+        app.world_mut().resource_mut::<chat::ChatState>().hovered = false;
+        app.update();
+        assert!(!app.world().resource::<MouseLook>().held);
     }
 
     #[test]
@@ -977,7 +1143,7 @@ mod tests {
     }
 
     #[test]
-    fn the_chase_camera_stays_within_its_height_and_distance() {
+    fn the_classic_chase_leash_bounds_distance_at_steep_pitch() {
         let limits = eq_client_assets::camera::TITANIUM;
         let mut camera = OrbitCamera {
             focus: Vec3::ZERO,
@@ -985,29 +1151,22 @@ mod tests {
             yaw: 0.0,
             pitch: -0.2,
             pulled: None,
+            view: default(),
         };
-        // Raised as far as it goes: 30 units over the player.
+        // Pitch can be changed at the current distance.
         chase(&mut camera, limits, 1000.0, 1.0);
-        let height = |camera: &OrbitCamera| camera.radius * (-camera.pitch).sin();
-        let distance = |camera: &OrbitCamera| camera.radius * camera.pitch.cos();
-        assert!((height(&camera) - 30.0).abs() < 1e-3);
-        // Lowered as far as it goes: level with the player, never under.
-        chase(&mut camera, limits, -1000.0, 1.0);
-        assert!(height(&camera).abs() < 1e-3);
-        assert!(camera.pitch.abs() < 1e-6);
-        // Zoomed far out and in, it keeps to 200 and 2 units.
-        chase(&mut camera, limits, 10.0, 100.0);
-        assert!((distance(&camera) - 200.0).abs() < 1e-3);
-        assert!((height(&camera) - 10.0).abs() < 1e-3);
-        chase(&mut camera, limits, 0.0, 0.0);
-        assert!((distance(&camera) - 2.0).abs() < 1e-3);
-        // Close in, the same height looks nearly straight down.
-        assert!((height(&camera) - 10.0).abs() < 1e-3);
-        assert!(camera.pitch < -1.3);
+        assert!((camera.radius - 100.0).abs() < 1e-3);
+        let before = orbit_transform(&camera);
+        for (zoom, distance) in [(100.0, 200.0), (0.0, 2.0)] {
+            chase(&mut camera, limits, 0.0, zoom);
+            let pose = orbit_transform(&camera);
+            assert!((pose.translation.distance(camera.focus) - distance).abs() < 1e-3);
+            assert!(pose.forward().abs_diff_eq(*before.forward(), 1e-5));
+        }
     }
 
     #[test]
-    fn the_long_leash_lets_the_chase_camera_go_far_and_keeps_its_height() {
+    fn the_long_leash_extends_scene_reach_at_steep_pitch() {
         use eq_client_assets::camera::{ChaseLeash, TITANIUM};
         let mut options = eq_client_core::options::Options::default();
         // The long leash by default.
@@ -1019,20 +1178,14 @@ mod tests {
             yaw: 0.0,
             pitch: -0.2,
             pulled: None,
+            view: default(),
         };
-        let height = |camera: &OrbitCamera| camera.radius * (-camera.pitch).sin();
-        let distance = |camera: &OrbitCamera| camera.radius * camera.pitch.cos();
-        chase(&mut camera, limits, 10.0, 30.0);
-        assert!((distance(&camera) - 100.0 * 0.2_f32.cos() * 30.0).abs() < 0.1);
-        chase(&mut camera, limits, 0.0, 100.0);
-        assert!((distance(&camera) - 20_000.0).abs() < 0.1);
-        // The height keeps to the program's range.
-        chase(&mut camera, limits, 1000.0, 1.0);
-        assert!((height(&camera) - 30.0).abs() < 1e-2);
-        chase(&mut camera, limits, -1000.0, 1.0);
-        assert!(height(&camera).abs() < 1e-3);
-        // Out past the program's 200, the far plane moves out with it.
-        assert!((past_program(camera.radius, TITANIUM) - 19_800.0).abs() < 0.1);
+        chase(&mut camera, limits, 0.0, 1_000.0);
+        for tilt in [-1000.0, 1000.0] {
+            chase(&mut camera, limits, tilt, 1.0);
+            assert!((camera.radius - 20_000.0).abs() < 0.1);
+            assert!((past_program(camera.radius, TITANIUM) - 19_800.0).abs() < 0.1);
+        }
         assert!(past_program(150.0, TITANIUM).abs() < f32::EPSILON);
         // Turned off, the program's limit.
         options
@@ -1040,38 +1193,73 @@ mod tests {
             .set(eq_client_core::qol::Fix::LongChaseCamera, false);
         assert_eq!(leash(&options), ChaseLeash::Program);
         chase(&mut camera, TITANIUM.on_leash(leash(&options)), 0.0, 1.0);
-        assert!((distance(&camera) - 200.0).abs() < 1e-3);
+        assert!((camera.radius - 200.0).abs() < 1e-3);
     }
 
     #[test]
-    fn the_look_takes_the_left_button_from_everything_else() {
-        let mut look = MouseLook::default();
-        let mut buttons = ButtonInput::default();
-        buttons.press(MouseButton::Right);
-        buttons.press(MouseButton::Left);
-        look.follow(&buttons, true, true);
-        look.take_left(&mut buttons);
-        assert!(look.left);
-        assert!(!buttons.pressed(MouseButton::Left));
-        assert!(!buttons.just_pressed(MouseButton::Left));
-        // Without a look, the left button is the windows' and the world's.
-        let mut look = MouseLook::default();
-        let mut buttons = ButtonInput::default();
-        buttons.press(MouseButton::Left);
-        look.take_left(&mut buttons);
-        assert!(!look.left);
-        assert!(buttons.just_pressed(MouseButton::Left));
+    fn captured_left_press_and_release_never_reach_click_consumers() {
+        let mut app = crate::testing::app();
+        testing::install_look(&mut app);
+        testing::button(&mut app, MouseButton::Right, true);
+        app.update();
+        testing::button(&mut app, MouseButton::Left, true);
+        for _ in 0..3 {
+            app.update();
+            assert!(app.world().resource::<MouseLook>().left);
+            let buttons = app.world().resource::<ButtonInput<MouseButton>>();
+            assert!(!buttons.pressed(MouseButton::Left));
+            assert!(!buttons.just_pressed(MouseButton::Left));
+        }
+        // Release the right button first, then release left over a UI control.
+        testing::button(&mut app, MouseButton::Right, false);
+        app.update();
+        assert!(!app.world().resource::<MouseLook>().left);
+        testing::button(&mut app, MouseButton::Left, false);
+        app.update();
+        assert!(
+            !app.world()
+                .resource::<ButtonInput<MouseButton>>()
+                .just_released(MouseButton::Left)
+        );
+        // Two ordinary clicks remain available to UI and the door tracker.
+        for _ in 0..2 {
+            testing::button(&mut app, MouseButton::Left, true);
+            app.update();
+            assert!(
+                app.world()
+                    .resource::<ButtonInput<MouseButton>>()
+                    .just_pressed(MouseButton::Left)
+            );
+            testing::button(&mut app, MouseButton::Left, false);
+            app.update();
+            assert!(
+                app.world()
+                    .resource::<ButtonInput<MouseButton>>()
+                    .just_released(MouseButton::Left)
+            );
+        }
     }
 
     #[test]
     fn losing_the_focus_ends_the_look() {
-        let mut look = MouseLook::default();
-        let mut buttons = ButtonInput::default();
-        buttons.press(MouseButton::Right);
-        look.follow(&buttons, true, true);
-        look.follow(&held(), false, true);
-        assert!(!look.held);
-        look.follow(&held(), true, true);
-        assert!(!look.held);
+        let mut app = crate::testing::app();
+        testing::install_look(&mut app);
+        testing::button(&mut app, MouseButton::Right, true);
+        testing::button(&mut app, MouseButton::Left, true);
+        app.update();
+        assert!(app.world().resource::<MouseLook>().left);
+        let world = app.world_mut();
+        let window = world
+            .query_filtered::<Entity, With<PrimaryWindow>>()
+            .single(world)
+            .unwrap();
+        // Even a focus round trip in one frame ends the native hold.
+        for focused in [false, true] {
+            world.write_message(WindowFocused { window, focused });
+        }
+        for _ in 0..2 {
+            app.update();
+            assert_eq!(*app.world().resource::<MouseLook>(), MouseLook::default());
+        }
     }
 }

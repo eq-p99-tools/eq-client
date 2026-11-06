@@ -82,7 +82,17 @@ guard, not a claim about every server's maximum range.
 Coin boxes support purse, cursor, personal-bank and give-window moves where the
 session offers them. Click to choose an amount, or Shift-click to pick up all;
 click another box with coins on the cursor to place/convert them. Shared banking,
-dropping carried items and destroying items have no client action yet.
+dropping carried items and destroying coins have no client action yet.
+
+On P99 and Titanium EQEmu, **Destroy cursor item** asks before destroying the
+whole cursor item or stack. **No**, Escape, closing inventory, or any inventory
+or admission change cancels that confirmation. Place queued cursor items and
+empty containers first; populated containers are outside this initial slice.
+A submission removes the item only as a local prediction. It is never retried,
+and elapsed time does not confirm destruction. Until a received cursor update or
+new inventory snapshot, the original item's weight remains in a conservative
+load bound and another destruction is unavailable. Re-entering the world obtains
+a fresh inventory snapshot when no such update arrives.
 
 Inventory requests carry the admission and expected item state. Sent moves can
 be predicted, but server corrections override them. Contradictory or unsupported
@@ -141,6 +151,16 @@ HP/mana/endurance values, maximums and estimates are not interchangeable. A
 missing bar percentage can mean a missing reliable denominator. Quarm does not
 supply Titanium endurance data.
 
+On Titanium servers offering buff cancellation, right-click a known beneficial
+buff in the Effects or Songs window to request removal (the right button is
+inferred, recording checklist 6.387). Harmful effects, effects
+with unavailable spell data and effects whose server slot is unknown cannot be
+cancelled. A buff stays visible until received state removes it. If the selected
+slot changes while the button is held, release cancels the selection. A request
+with no matching update is reported as unconfirmed and is never retried
+automatically. P99 cancellation remains gated while its exact emission contract
+is investigated; a compatible attended check is still pending.
+
 ## Targeting and interaction
 
 Click a rendered entity, use Tab/Shift+Tab to cycle the nearby rendered set, or
@@ -155,6 +175,15 @@ with players have separate interaction state; a trade is not complete merely
 because its window opened. Ground pickups and doors use reach checks. World
 tradeskill containers and combines exist where `Tradeskills` is offered, rather
 than being universally unsupported.
+
+With Titanium, Buy and Sell open the existing quantity picker when more than
+one unit is available; a single unit goes directly through the same checked
+submission. The picker starts at one and is bounded by the received stack,
+stock and known purse. The selected name and quote follow its count. Cancel,
+closing the merchant or changing its catalog, inventory or admission discards
+the selection. Only one merchant action can be pending. An unanswered action
+shows an unknown outcome and is never retried automatically; received items
+and coin updates remain the session's responsibility.
 
 Grouping, raids, pets, training, reading and resurrection/translocate dialogs have
 client paths with distinct capabilities. See the [policy matrix](../SUPPORT.md)

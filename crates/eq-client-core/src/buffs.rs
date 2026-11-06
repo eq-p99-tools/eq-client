@@ -1,5 +1,6 @@
 //! Admission-scoped buff state, independent of rendering and local spell assets.
 use crate::{Buff, BuffUpdate, SpellEffect};
+pub use eq_network_game::buffs::cancel;
 use std::{
     collections::BTreeMap,
     time::{Duration, Instant},
@@ -65,6 +66,8 @@ impl Shown<'_> {
 /// Server slots and observed lasting effects awaiting explicit slot information.
 #[derive(Clone, Debug, Default)]
 pub struct BuffTracker {
+    revision: u64,
+    cancellation: Option<cancel::Update>,
     slots: Option<BTreeMap<u32, Buff>>,
     /// When the server last gave each slot's buff, which its ticks count
     /// down from.
@@ -83,6 +86,8 @@ impl BuffTracker {
     /// which holds this many slots, given at `now`, discarding
     /// previous-admission effects.
     pub fn replace_snapshot(&mut self, slots: BTreeMap<u32, Buff>, long_slots: u32, now: Instant) {
+        self.revision = self.revision.wrapping_add(1);
+        self.cancellation = None;
         self.given = slots.keys().map(|slot| (*slot, now)).collect();
         self.slots = Some(slots);
         self.long_slots = long_slots;
@@ -119,6 +124,12 @@ impl BuffTracker {
         }
     }
 
+    /// Number of slots in the admission table, which the long window shows.
+    #[must_use]
+    pub const fn long_slots(&self) -> u32 {
+        self.long_slots
+    }
+
     /// Whether the player has a short effect, such as a song.
     #[must_use]
     pub fn has_short(&self) -> bool {
@@ -139,6 +150,28 @@ impl BuffTracker {
     /// Clears all state on disconnect, death or a new zone admission.
     pub fn clear(&mut self) {
         *self = Self::default();
+    }
+
+    /// Revision of received snapshots and own-player slot notifications.
+    #[must_use]
+    pub const fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// The last cancellation report, separate from received membership.
+    #[must_use]
+    pub const fn cancellation(&self) -> Option<&cancel::Update> {
+        self.cancellation.as_ref()
+    }
+
+    /// Records an admission-filtered report without predicting membership.
+    pub(crate) fn cancellation_news(&mut self, update: cancel::Update) {
+        self.cancellation = Some(update);
+    }
+
+    /// Drops request progress while keeping received membership.
+    pub(crate) fn clear_cancellation(&mut self) {
+        self.cancellation = None;
     }
 
     /// Returns occupied server slots; `None` means no snapshot has arrived.
@@ -205,10 +238,11 @@ impl BuffTracker {
 
     /// Applies an explicit replacement or fade, given at `now`, after entity
     /// filtering by the session. A fade removes its unslotted effect too,
-    /// and one naming no slot the table holds removes the slotted buff of
+    /// and one carrying the unknown-slot sentinel removes the slotted buff of
     /// its spell: TAKP fades a buff by its spell alone, as its own client
     /// finds it. Repeated empty-slot fades are harmless.
     pub fn apply(&mut self, update: BuffUpdate, now: Instant) {
+        self.revision = self.revision.wrapping_add(1);
         if let Ok(id) = u16::try_from(update.spell_id)
             && self.effects.remove(&id).is_some()
         {
@@ -219,9 +253,13 @@ impl BuffTracker {
             if let Some(buff) = update.buff {
                 slots.insert(update.slot, buff);
                 self.given.insert(update.slot, now);
-            } else if slots.remove(&update.slot).is_some() {
+            } else if slots
+                .get(&update.slot)
+                .is_some_and(|buff| buff.spell_id == update.spell_id)
+            {
+                slots.remove(&update.slot);
                 self.given.remove(&update.slot);
-            } else {
+            } else if update.slot == eq_network_game::buffs::UNKNOWN_SLOT {
                 slots.retain(|_, buff| buff.spell_id != update.spell_id);
                 self.given.retain(|slot, _| slots.contains_key(slot));
             }
@@ -296,6 +334,42 @@ pub fn invisibility_drop(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancellation_revision_tracks_received_slots_and_preserves_late_fade_replacements() {
+        let mut state = BuffTracker::default();
+        state.replace_snapshot(BTreeMap::from([(3, buff(42))]), 25, now());
+        assert_eq!(state.revision(), 1);
+        let request = cancel::Request {
+            session_id: 5,
+            revision: state.revision(),
+            slot: 3,
+            spell_id: 42,
+            beneficial: Some(true),
+            cancellable: Some(true),
+            created: now(),
+        };
+        assert!(request.check(state.revision(), state.slots()).is_ok());
+        state.cancellation_news(request.update(cancel::Progress::Submitted));
+        assert_eq!(state.slots().unwrap()[&3].spell_id, 42);
+        state.apply(update(3, 43, true), now());
+        assert_eq!(state.revision(), 2);
+        assert!(request.check(state.revision(), state.slots()).is_err());
+        state.apply(update(3, 42, false), now());
+        assert_eq!(state.slots().unwrap()[&3].spell_id, 43);
+        state.apply(update(3, u32::MAX, false), now());
+        assert_eq!(state.slots().unwrap()[&3].spell_id, 43);
+        state.observe_effect(effect(43), now());
+        assert!(state.slots().unwrap().is_empty());
+        assert_eq!(
+            state.revision(),
+            4,
+            "Unslotted landings do not invent slot revisions"
+        );
+        state.clear();
+        assert_eq!(state.revision(), 0);
+        assert!(state.cancellation().is_none());
+    }
 
     #[test]
     fn the_long_window_shows_the_tables_slots_and_the_short_one_those_after() {

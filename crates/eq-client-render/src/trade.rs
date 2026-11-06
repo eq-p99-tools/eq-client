@@ -9,8 +9,11 @@ use eq_client_core::{ClientCommand, SpawnKind, inventory::InventoryItem, world::
 
 use super::windows;
 
+mod auto_loot;
 mod loot_requests;
 mod merchant;
+mod merchant_quantity;
+pub(crate) use merchant_quantity::Selection as MerchantSelection;
 mod spawn_use;
 use loot_requests::PendingLoot;
 pub(crate) use merchant::{
@@ -27,10 +30,14 @@ const BANKER_CLASS: u8 = 40;
 /// lists, which say what is on the corpse and for sale.
 #[derive(Resource, Default)]
 pub(super) struct TradeState {
+    automatic: auto_loot::AutoLoot,
     /// One scene click, consumed once in its own admission.
     right_clicked: Option<(u64, u16)>,
     loot: Option<LootWindow>,
     merchant: Option<MerchantWindow>,
+    merchant_pending: Option<merchant_quantity::Pending>,
+    /// Revisions bound when the current item was selected.
+    merchant_choice: Option<MerchantSelection>,
     revision: u64,
     /// How the installed client prices its merchant window, where its
     /// program's rules are read.
@@ -85,6 +92,7 @@ impl TradeState {
             return false;
         };
         window.chosen = Some(Chosen::Carried(slot));
+        self.merchant_choice = None;
         self.changed();
         true
     }
@@ -150,6 +158,15 @@ impl TradeState {
     /// merchant window once the server opens a merchant, named as the
     /// merchant is shown.
     pub(super) fn follow(&mut self, world: &ClientWorld) {
+        if self
+            .merchant_choice
+            .is_some_and(|selection| !selection.same_shop(world))
+        {
+            self.merchant = None;
+            self.merchant_choice = None;
+            self.merchant_pending = None;
+            self.changed();
+        }
         if self.loot.is_some() && world.loot().is_none() {
             self.loot = None;
             self.changed();
@@ -157,6 +174,8 @@ impl TradeState {
         match (self.merchant.is_some(), world.merchant()) {
             (true, None) => {
                 self.merchant = None;
+                self.merchant_pending = None;
+                self.merchant_choice = None;
                 self.changed();
             }
             (false, Some(merchant)) => {
@@ -314,16 +333,29 @@ pub(super) fn input(
     (mut chat, mut shown): (ResMut<super::chat::ChatState>, ResMut<windows::Shown>),
     buttons: crate::clicks::Clicks<Action>,
     escape: Res<super::escape::Escape>,
-    (settings, messages): (
+    (settings, messages, mut inventory, skinned): (
         Res<crate::ViewerSettings>,
         Res<super::hud::messages::Messages>,
+        ResMut<crate::inventory::InventoryState>,
+        Option<Res<crate::skinned::Skinned>>,
     ),
+    options: Option<Res<crate::options::OptionsState>>,
 ) {
+    trade.follow_automatic(
+        online.world(),
+        options
+            .as_ref()
+            .is_some_and(|options| options.options.qol.on(eq_client_core::qol::Fix::AutoLoot)),
+    );
     let prices = settings.0.installed_client.merchant_prices();
     if trade.prices != prices {
         trade.prices = prices;
     }
     trade.follow(online.world());
+    inventory.refresh_merchant(&trade, online.world());
+    if trade.chosen().is_some() && trade.merchant_choice.is_none() {
+        trade.merchant_choice = trade.quantity_selection(online.world());
+    }
     let right_clicked =
         trade.take_right_click(online.world(), settings.0.installed_client, &outbox);
     // Only a player in the world trades; the outbox stamps what they ask.
@@ -474,7 +506,81 @@ pub(super) fn input(
         .world()
         .merchant()
         .map(|merchant| merchant.merchant_id);
+    let closing = clicked.contains(&Action::EndShop);
+    if closing {
+        inventory.cancel_merchant();
+    } else if let Some((selection, quantity)) = inventory.take_merchant()
+        && let Err(reason) =
+            trade.submit_quantity(online.world(), &outbox, stamp, selection, quantity)
+    {
+        chat.refuse(reason.to_owned());
+    }
     for action in clicked {
+        if settings.0.installed_client == eq_client_assets::ui::InstalledClient::Titanium
+            && matches!(
+                action,
+                Action::Buy(_) | Action::Sell(_) | Action::BuyChosen | Action::SellChosen
+            )
+        {
+            if closing {
+                continue;
+            }
+            let choice = match action {
+                Action::Buy(slot) => Some(Chosen::Ware(slot)),
+                Action::Sell(slot) => Some(Chosen::Carried(slot)),
+                Action::BuyChosen => trade
+                    .chosen()
+                    .filter(|choice| matches!(choice, Chosen::Ware(_))),
+                Action::SellChosen => trade
+                    .chosen()
+                    .filter(|choice| matches!(choice, Chosen::Carried(_))),
+                _ => None,
+            };
+            if let Some(choice) = choice {
+                let current = !matches!(action, Action::BuyChosen | Action::SellChosen)
+                    || trade
+                        .merchant_choice
+                        .is_none_or(|selection| selection.current(&trade, online.world()));
+                if !current {
+                    chat.refuse("Merchant or inventory changed; choose the item again".to_owned());
+                    continue;
+                }
+                match trade.quantity_limit(online.world(), choice) {
+                    Ok(limit) => {
+                        if let Some(window) = trade.merchant.as_mut() {
+                            window.chosen = Some(choice);
+                        }
+                        trade.changed();
+                        if let Some(selection) = trade.quantity_selection(online.world()) {
+                            trade.merchant_choice = Some(selection);
+                            inventory.cancel_merchant();
+                            if limit == 1 {
+                                if let Err(reason) = trade.submit_quantity(
+                                    online.world(),
+                                    &outbox,
+                                    stamp,
+                                    selection,
+                                    1,
+                                ) {
+                                    chat.refuse(reason.to_owned());
+                                }
+                            } else {
+                                inventory.select_merchant(selection, limit);
+                                // Unskinned inventories contain the existing picker.
+                                if skinned
+                                    .as_ref()
+                                    .is_none_or(|skin| !skin.has(windows::WindowId::Quantity))
+                                {
+                                    shown.open(windows::WindowId::Inventory);
+                                }
+                            }
+                        }
+                    }
+                    Err(reason) => chat.refuse(reason.to_owned()),
+                }
+            }
+            continue;
+        }
         // The skin's Buy and Sell act on what its window has chosen.
         let chosen = trade.chosen();
         let action = match (action, chosen) {
@@ -620,6 +726,7 @@ pub(super) fn input(
                 {
                     window.chosen = Some(Chosen::Ware(slot));
                     trade.changed();
+                    trade.merchant_choice = trade.quantity_selection(online.world());
                 }
             }
             Action::BuyChosen | Action::SellChosen => (),
@@ -651,7 +758,15 @@ pub(super) fn input(
         .filter(|_| online.world().loot_continuation().automatic())
         .and(online.world().loot())
         .filter(|loot| loot.listed)
-        .map(|loot| (loot.corpse_id, loot.items.keys().next().copied()));
+        .map(|loot| {
+            let automatic = trade.automatic.active == Some((session_id, loot.corpse_id));
+            let place = loot
+                .items
+                .iter()
+                .find(|(_, item)| !automatic || !no_drop(item))
+                .map(|(place, _)| *place);
+            (loot.corpse_id, place)
+        });
     match next {
         Some((corpse_id, Some(place))) => {
             if send(
@@ -691,6 +806,14 @@ pub(super) fn input(
             trade.changed();
         }
         Some(_) | None => (),
+    }
+    // Explicit input has priority over starting another automatic corpse.
+    if !keys.pressed(super::keys::Act::Loot)
+        && !keys.pressed(super::keys::Act::Trade)
+        && buttons.iter().next().is_none()
+        && matches!(*escape, super::escape::Escape::Unused)
+    {
+        trade.open_automatic(&mut online, &outbox, stamp);
     }
 }
 
@@ -1068,6 +1191,7 @@ mod tests {
         .init_resource::<crate::notices::Lines>()
         .init_resource::<super::super::chat::ChatState>()
         .init_resource::<crate::ViewerSettings>()
+        .init_resource::<crate::inventory::InventoryState>()
         .init_resource::<crate::hud::messages::Messages>()
         .init_resource::<super::super::escape::Escape>()
         .init_resource::<ButtonInput<KeyCode>>()
@@ -1466,6 +1590,7 @@ mod tests {
             .init_resource::<crate::notices::Lines>()
             .init_resource::<super::super::chat::ChatState>()
             .init_resource::<crate::ViewerSettings>()
+            .init_resource::<crate::inventory::InventoryState>()
             .init_resource::<crate::hud::messages::Messages>()
             .init_resource::<super::super::escape::Escape>()
             .init_resource::<ButtonInput<KeyCode>>()
@@ -1590,6 +1715,7 @@ mod tests {
             .init_resource::<crate::notices::Lines>()
             .init_resource::<super::super::chat::ChatState>()
             .init_resource::<crate::ViewerSettings>()
+            .init_resource::<crate::inventory::InventoryState>()
             .init_resource::<crate::hud::messages::Messages>()
             .init_resource::<super::super::escape::Escape>()
             .init_resource::<ButtonInput<KeyCode>>()
@@ -1681,6 +1807,7 @@ mod tests {
             );
             app.insert_resource(online)
                 .init_resource::<TradeState>()
+                .init_resource::<crate::inventory::InventoryState>()
                 .insert_resource(crate::outbox::Outbox::new(Some(sender)))
                 .init_resource::<crate::notices::Lines>()
                 .init_resource::<super::super::chat::ChatState>()
@@ -1729,8 +1856,11 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn the_skins_merchant_window_buys_and_sells_what_it_has_chosen() {
+    fn merchant_window_fixture() -> (
+        App,
+        std::sync::mpsc::Receiver<ClientCommand>,
+        Vec<InventoryItem>,
+    ) {
         use eq_client_core::{WorldEvent, WorldUpdate, inventory::InventorySlot, world::NoSpells};
         let mut online = super::super::online::OnlineState::new(true);
         crate::online::testing::admit(&mut online, 1, crate::online::testing::player(7));
@@ -1743,6 +1873,10 @@ mod tests {
             eq_client_core::inventory::InventoryUpdate::Snapshot(items.clone()),
         );
         shop_opened(&mut online, 8);
+        crate::online::testing::news(
+            &mut online,
+            [WorldEvent::Coins(eq_client_core::Coins::from_copper(1_000))],
+        );
         online.tell(
             &WorldUpdate::Game(WorldEvent::Merchant(MerchantUpdate::Item(Box::new(
                 MerchantItem {
@@ -1771,6 +1905,7 @@ mod tests {
             .init_resource::<crate::notices::Lines>()
             .init_resource::<super::super::chat::ChatState>()
             .init_resource::<crate::ViewerSettings>()
+            .init_resource::<crate::inventory::InventoryState>()
             .init_resource::<crate::hud::messages::Messages>()
             .init_resource::<super::super::escape::Escape>()
             .init_resource::<ButtonInput<KeyCode>>()
@@ -1783,6 +1918,13 @@ mod tests {
             },
             bevy::window::PrimaryWindow,
         ));
+        (app, receiver, items)
+    }
+
+    #[test]
+    fn the_skins_merchant_window_buys_and_sells_what_it_has_chosen() {
+        use eq_client_core::{WorldEvent, WorldUpdate, inventory::InventorySlot};
+        let (mut app, receiver, items) = merchant_window_fixture();
         let press = |app: &mut App, action| {
             let button = app
                 .world_mut()
@@ -1790,6 +1932,15 @@ mod tests {
                 .id();
             crate::clicks::testing::click(app, button);
             app.world_mut().despawn(button);
+        };
+        let receive = |app: &mut App, update| {
+            app.world_mut()
+                .resource_scope(|world, mut trade: Mut<TradeState>| {
+                    trade.merchant_news(
+                        &WorldUpdate::Game(WorldEvent::Merchant(update)),
+                        world.resource::<crate::online::OnlineState>().world(),
+                    );
+                });
         };
         // Buy and Sell do nothing until something is chosen.
         press(&mut app, Action::BuyChosen);
@@ -1808,6 +1959,14 @@ mod tests {
                 ..
             })
         ));
+        receive(
+            &mut app,
+            MerchantUpdate::Bought {
+                slot: 3,
+                quantity: 1,
+                price: 10,
+            },
+        );
         // A carried item chosen, as a click on it chooses it, is sold.
         assert!(app.world_mut().resource_mut::<TradeState>().offer(23));
         assert!(!app.world_mut().resource_mut::<TradeState>().offer(13));
@@ -1816,6 +1975,14 @@ mod tests {
             receiver.try_recv(),
             Ok(ClientCommand::Sell { slot: 23, .. })
         ));
+        receive(
+            &mut app,
+            MerchantUpdate::Sold {
+                slot: 23,
+                quantity: 1,
+                price: 1,
+            },
+        );
         assert_eq!(app.world().resource::<TradeState>().chosen(), None);
         // A bag with something in it is not sold, whichever button asks.
         let mut bag = items[0].clone();

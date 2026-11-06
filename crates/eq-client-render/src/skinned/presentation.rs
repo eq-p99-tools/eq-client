@@ -78,16 +78,7 @@ pub(crate) fn show(
 ) {
     let world = online.world();
     let load = crate::speed::load(world, &names);
-    for (shows, mut visibility) in &mut boxes {
-        let Some(shown) = shown_now(*shows, world, &combat, &trade) else {
-            continue;
-        };
-        visibility.set_if_neq(if shown {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
-        });
-    }
+    show_boxes(&mut boxes, world, &combat, &trade);
     for (shows, mut node, step) in &mut fills {
         if let Shows::Fill(kind) = *shows {
             let fraction = filled(world, (hud.resource_estimate, &requests), kind);
@@ -121,9 +112,16 @@ pub(crate) fn show(
             ),
             Shows::Banker => (inventory.banker().to_owned(), None),
             Shows::PracticePoints => (crate::training::practice_points(world), None),
-            Shows::Corpse | Shows::Merchant | Shows::ChosenName | Shows::ChosenPrice => {
-                (trading_text(*shows, &trade, world, &messages), None)
-            }
+            Shows::Corpse | Shows::Merchant | Shows::ChosenName | Shows::ChosenPrice => (
+                trading_text(
+                    *shows,
+                    &trade,
+                    world,
+                    &messages,
+                    inventory.merchant_quantity(),
+                ),
+                None,
+            ),
             Shows::BookName(place) => (
                 book.spell(world.spell_book(), place)
                     .map_or_else(String::new, |spell| names.label(spell)),
@@ -179,6 +177,25 @@ pub(crate) fn show(
     }
 }
 
+/// Applies conditional visibility without changing controls or world state.
+fn show_boxes(
+    boxes: &mut Query<(&Shows, &mut Visibility)>,
+    world: &eq_client_core::world::ClientWorld,
+    combat: &crate::combat::CombatState,
+    trade: &crate::trade::TradeState,
+) {
+    for (shows, mut visibility) in boxes {
+        let Some(shown) = shown_now(*shows, world, combat, trade) else {
+            continue;
+        };
+        visibility.set_if_neq(if shown {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        });
+    }
+}
+
 /// What the Raid window's count of members and their average level say:
 /// nought outside a raid, as the skin's own text says.
 pub(super) fn raid_text(shows: Shows, world: &eq_client_core::world::ClientWorld) -> String {
@@ -201,13 +218,27 @@ pub(super) fn trading_text(
     trade: &crate::trade::TradeState,
     world: &eq_client_core::world::ClientWorld,
     messages: &crate::hud::messages::Messages,
+    quantity: Option<u32>,
 ) -> String {
-    let chosen = || crate::trade::chosen(trade, world);
+    let chosen = || {
+        crate::trade::chosen(trade, world).map(|(item, price)| {
+            (
+                item,
+                quantity.map_or(price, |count| trade.quantity_quote(world, count)),
+            )
+        })
+    };
     match shows {
         Shows::Corpse => trade.corpse().unwrap_or_default().to_owned(),
         Shows::Merchant => trade.merchant().unwrap_or_default().to_owned(),
-        Shows::ChosenName => {
-            chosen().map_or_else(String::new, |(item, _)| item.details.name.clone())
+        Shows::ChosenName => chosen().map_or_else(String::new, |(item, _)| {
+            quantity.map_or_else(
+                || item.details.name.clone(),
+                |count| format!("{} x{count}", item.details.name),
+            )
+        }),
+        Shows::ChosenPrice if trade.merchant_status().is_some() => {
+            trade.merchant_status().unwrap_or_default().into()
         }
         Shows::ChosenPrice => match (trade.prices(), trade.chosen(), chosen()) {
             (Some(prices), Some(kind), Some((_, Some(price)))) => price_text(
@@ -216,11 +247,16 @@ pub(super) fn trading_text(
                 price,
                 messages,
             ),
-            (_, _, chosen) => chosen
-                .and_then(|(_, price)| price)
-                .map_or_else(String::new, |price| {
-                    crate::trade::coin_text(u64::from(price))
-                }),
+            (_, _, chosen) => chosen.and_then(|(_, price)| price).map_or_else(
+                || {
+                    if chosen.is_some() {
+                        "Price unknown".into()
+                    } else {
+                        String::new()
+                    }
+                },
+                |price| crate::trade::coin_text(u64::from(price)),
+            ),
         },
         _ => String::new(),
     }

@@ -372,6 +372,19 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
             messages,
         )),
         Notice::TargetRefused(reason) => chat(format!("Target rejected: {reason}").into()),
+        Notice::BuffCancellation(update) => {
+            use eq_client_core::buffs::cancel::Progress;
+            match &update.progress {
+                Progress::Refused(reason) => {
+                    chat(format!("Buff cancellation refused: {reason}").into())
+                }
+                Progress::Unresolved => chat(
+                    "Buff cancellation is unconfirmed; no matching slot removal was received"
+                        .into(),
+                ),
+                _ => Vec::new(),
+            }
+        }
         Notice::CastRefused { spell_id, reason } => {
             chat(format!("Cast rejected (spell {spell_id}): {reason}").into())
         }
@@ -544,6 +557,9 @@ fn camp_lines(camp: &CampStatus, messages: Option<&Messages>) -> Vec<Said> {
         }
         CampStatus::LoggingOut => vec!["Logging out...".into()],
         CampStatus::Camped => Vec::new(),
+        CampStatus::ClosedWithoutReply => {
+            vec!["The zone connection closed after logout; no logout reply was received.".into()]
+        }
         CampStatus::Rejected(reason) => vec![reason.as_str().into()],
     }
 }
@@ -1283,6 +1299,13 @@ mod tests {
             [(Place::Chat, "Server message 12293".into())]
         );
         assert_eq!(wording(&Notice::Camp(CampStatus::Camped), None), []);
+        assert_eq!(
+            wording(&Notice::Camp(CampStatus::ClosedWithoutReply), None),
+            [(
+                Place::Chat,
+                "The zone connection closed after logout; no logout reply was received.".into()
+            )]
+        );
     }
 
     #[test]

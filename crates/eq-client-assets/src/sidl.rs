@@ -648,6 +648,9 @@ pub struct Screen {
     pub title_bar: Option<TitleBar>,
     /// Whether it has a border.
     pub border: bool,
+    /// The authored `Style_Sizable` value, preserving missing and malformed
+    /// fields separately. Only an explicit true offers resizing.
+    pub sizable: Sizable,
     /// Whether the skin draws no background for it (`Style_Transparent`),
     /// so what lies behind shows between its pieces: inferred from the
     /// setting's name, not checked against the official client.
@@ -661,6 +664,33 @@ pub struct Screen {
     /// frame every tab box names in the six skins installed on the PC this
     /// was written on (counted); unchecked against the official client.
     pub tab_frame: Option<Box<FrameLook>>,
+}
+
+/// An authored sizing declaration. Decoration never implies this capability.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Sizable {
+    /// No declaration was present; no sizing capability is inferred.
+    #[default]
+    Omitted,
+    /// A declaration was present without a recognized boolean value.
+    Invalid,
+    /// The screen explicitly disallows sizing.
+    Fixed,
+    /// The screen explicitly offers sizing.
+    Enabled,
+}
+
+impl Sizable {
+    fn read(node: roxmltree::Node<'_, '_>) -> Self {
+        let Some(field) = child(node, "Style_Sizable") else {
+            return Self::Omitted;
+        };
+        match field.text().map(str::trim) {
+            Some(value) if value.eq_ignore_ascii_case("true") => Self::Enabled,
+            Some(value) if value.eq_ignore_ascii_case("false") => Self::Fixed,
+            _ => Self::Invalid,
+        }
+    }
 }
 
 /// The pieces and window templates a skin's windows refer to by name.
@@ -820,6 +850,7 @@ impl Library {
                 minimize_box: flag(screen, "Style_Minimizebox"),
             }),
             border: flag(screen, "Style_Border"),
+            sizable: Sizable::read(screen),
             transparent: flag(screen, "Style_Transparent"),
             tooltip: text_of(screen, "TooltipReference").map(str::to_owned),
             pieces,
@@ -1463,6 +1494,37 @@ const fn to_f32(value: u32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sizable_preserves_explicit_omitted_invalid_and_first_declaration() {
+        for (field, expected) in [
+            ("", Sizable::Omitted),
+            ("<Style_Sizable>true</Style_Sizable>", Sizable::Enabled),
+            ("<Style_Sizable>false</Style_Sizable>", Sizable::Fixed),
+            ("<Style_Sizable> TRUE </Style_Sizable>", Sizable::Enabled),
+            ("<Style_Sizable>yes</Style_Sizable>", Sizable::Invalid),
+            ("<Style_Sizable/>", Sizable::Invalid),
+            (
+                "<Style_Sizable>false</Style_Sizable><Style_Sizable>true</Style_Sizable>",
+                Sizable::Fixed,
+            ),
+        ] {
+            let xml = format!(
+                "<XML><Screen item=\"Example\"><Size><CX>450</CX><CY>240</CY></Size><Style_Border>true</Style_Border>{field}</Screen></XML>"
+            );
+            let screen = Library::parse("<XML/>", "<XML/>")
+                .unwrap()
+                .screen(&xml, "Example")
+                .unwrap();
+            assert_eq!(screen.sizable, expected);
+            assert_eq!((screen.area.width, screen.area.height), (450.0, 240.0));
+        }
+        let doc = roxmltree::Document::parse(
+            "<Screen><Screen><Style_Sizable>true</Style_Sizable></Screen></Screen>",
+        )
+        .unwrap();
+        assert_eq!(Sizable::read(doc.root_element()), Sizable::Omitted);
+    }
 
     const ANIMATIONS: &str = r#"<XML>
         <Ui2DAnimation item="A_Fill"><Frames><Texture>pieces.tga</Texture>

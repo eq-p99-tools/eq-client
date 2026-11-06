@@ -307,6 +307,15 @@ impl ClientWorld {
         self.death.is_some()
     }
 
+    /// Latest admission-scoped feedback from the local movement worker. Success
+    /// establishes its installed policy, not server acceptance or a speed grant.
+    #[must_use]
+    pub const fn movement_options_result(
+        &self,
+    ) -> Option<&(u64, Result<crate::movement::MovementOptions, String>)> {
+        self.movement_options_result.as_ref()
+    }
+
     /// When this admission first established own death, for the avatar's
     /// death animation. This does not establish a corpse in the entity map.
     #[must_use]

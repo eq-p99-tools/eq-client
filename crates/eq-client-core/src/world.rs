@@ -173,6 +173,8 @@ pub struct MotionGrant {
     pub walk_units_per_second: Option<f32>,
     /// Moving sideways, when calibrated apart.
     pub strafe_units_per_second: Option<f32>,
+    /// Lateral rates when holding longitudinal input in the calibrated ground mode.
+    pub diagonal: crate::DiagonalRates,
     /// Whether the session sends falling samples.
     pub falls: bool,
 }
@@ -223,6 +225,8 @@ pub struct ClientWorld {
     /// The session's interpreted stun state and latest revision; None is
     /// unknown/unconfigured, not proof of clear control.
     own_stun: Option<(u64, crate::control::StunState)>,
+    /// Latest local worker policy feedback, never a server movement ACK.
+    movement_options_result: Option<(u64, Result<crate::movement::MovementOptions, String>)>,
     /// What the admission lets the player do.
     capabilities: Vec<crate::Capability>,
     /// What the admission leaves to the player, which they may do once they
@@ -304,6 +308,8 @@ pub struct ClientWorld {
     /// Where the last camp ended, until a front end takes it: one to the
     /// desktop ends the program.
     camped: Option<crate::camp::CampTo>,
+    /// Evidence retained separately from taking the local desktop destination.
+    camp_completion: Option<crate::camp::Completion>,
 
     // The character: from admission until camping.
     player: Option<PlayerState>,
@@ -437,6 +443,13 @@ impl ClientWorld {
     #[must_use]
     pub fn leaving(&self) -> bool {
         self.camped == Some(crate::camp::CampTo::Desktop)
+    }
+
+    /// The last completed camp's scope and evidence, until the next camp or
+    /// admission. A local deadline does not confirm server logout or cleanup.
+    #[must_use]
+    pub fn camp_completion(&self) -> Option<crate::camp::Completion> {
+        self.camp_completion
     }
 
     /// The player's own choice of target, which the client tells the session
@@ -612,6 +625,16 @@ impl ClientWorld {
                     news.ignored = true;
                 }
             }
+            WorldEvent::MovementOptionsApplied { session_id, request_id, options } => {
+                if self.accepts_reply(*session_id) {
+                    self.movement_options_result = Some((*request_id, Ok(*options)));
+                } else { news.ignored = true; }
+            }
+            WorldEvent::MovementOptionsRefused { session_id, request_id, reason } => {
+                if self.accepts_reply(*session_id) {
+                    self.movement_options_result = Some((*request_id, Err(reason.clone())));
+                } else { news.ignored = true; }
+            }
             WorldEvent::SpeedInputsAccepted(accepted) => {
                 if self.in_world()
                     && self.session_id == Some(accepted.session_id)
@@ -628,6 +651,7 @@ impl ClientWorld {
                 backward_units_per_second,
                 walk_units_per_second,
                 strafe_units_per_second,
+                diagonal,
                 falls,
             } => self.grant_motion(
                 *session_id,
@@ -636,6 +660,7 @@ impl ClientWorld {
                     backward_units_per_second: *backward_units_per_second,
                     walk_units_per_second: *walk_units_per_second,
                     strafe_units_per_second: *strafe_units_per_second,
+                    diagonal: *diagonal,
                     falls: *falls,
                 },
                 news,
@@ -1213,6 +1238,12 @@ impl ClientWorld {
             } => self.cast_refused((*session_id, *spell_id), reason, news),
             WorldEvent::BuffSnapshot(buffs) => self.buff_snapshot(buffs, now),
             WorldEvent::Buff(update) => self.buff(update, now, news),
+            WorldEvent::BuffCancellation(update) => {
+                if self.accepts_reply(update.session_id) && self.death.is_none() {
+                    self.buffs.cancellation_news(update.clone());
+                    news.notices.push(Notice::BuffCancellation(update.clone()));
+                } else { news.ignored = true; }
+            }
             WorldEvent::SpellEffect(effect) => self.spell_effect(effect, (now, spells), news),
             WorldEvent::SpellBook(book) => self.spell_book = Some(book.clone()),
             WorldEvent::BookAction(status) => self.book_action_news(status),
@@ -1223,6 +1254,16 @@ impl ClientWorld {
     /// A death: a spawn becomes a corpse, and the player's own death holds
     /// them until the server offers to return them home.
     fn died(&mut self, death: &Death, now: Instant) -> Changes {
+        let killed = u16::try_from(death.spawn_id).ok().filter(|id| {
+            self.player
+                .as_ref()
+                .is_some_and(|player| u32::from(player.spawn_id) == death.killer_id)
+                && self
+                    .zone
+                    .spawns
+                    .get(id)
+                    .is_some_and(|spawn| spawn.state.kind == crate::SpawnKind::Npc)
+        });
         let own = self
             .player
             .as_ref()
@@ -1272,6 +1313,7 @@ impl ClientWorld {
             }
         };
         changes.notices.splice(0..0, slain);
+        changes.kills.extend(killed);
         changes
     }
 
@@ -1296,6 +1338,7 @@ impl ClientWorld {
 
     /// Forgets what the reason makes stale, and says so.
     fn reset(&mut self, reason: Reset) -> Changes {
+        self.movement_options_result = None;
         if matches!(
             reason,
             Reset::Entered | Reset::Camped | Reset::Lost { ended: true, .. }
@@ -1333,6 +1376,7 @@ impl ClientWorld {
         }
         match reason {
             Reset::Entered => {
+                self.camp_completion = None;
                 self.forget_admission();
                 self.wallet = crate::money::Wallet::default();
                 self.known_cursor_coins = None;
@@ -1344,7 +1388,8 @@ impl ClientWorld {
                 self.casting.interrupted = None;
             }
             Reset::Camped => {
-                // The character is gone, and with them everything about them.
+                // Local camp completion invalidates the character projection;
+                // its reply/deadline evidence is retained separately.
                 self.forget_admission();
                 self.book_action = None;
                 self.casting = Casting::default();
@@ -1383,6 +1428,7 @@ impl ClientWorld {
             }
             Reset::Zoning { .. } => self.drop_actions(),
             Reset::Died => {
+                self.buffs.clear_cancellation();
                 self.casting.cast = None;
                 self.casting.interrupted = None;
                 self.casting.reset_cooldowns();
@@ -1398,6 +1444,7 @@ impl ClientWorld {
     /// Drops the actions in flight: a cast, its request and interruption, and
     /// a spellbook change.
     fn drop_actions(&mut self) {
+        self.buffs.clear_cancellation();
         self.casting.drop_actions();
         self.book_action = None;
     }

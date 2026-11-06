@@ -1,5 +1,7 @@
+mod buff_cancellation;
 mod loot_requests;
 mod own_stun;
+mod qol;
 mod wear;
 
 use super::*;
@@ -604,6 +606,7 @@ fn input_acceptance_is_current_and_never_supplies_movement_permission() {
     game(
         &mut world,
         WorldEvent::MotionState {
+            diagonal: crate::DiagonalRates::default(),
             session_id: 1,
             units_per_second: None,
             backward_units_per_second: None,
@@ -951,6 +954,47 @@ fn each_spawns_latest_swing_is_kept_with_a_count_that_never_repeats() {
     game(&mut world, entered(3));
     game(&mut world, swing(9, 8));
     assert!(world.motion_of(9).unwrap().count > last);
+}
+
+#[test]
+fn a_replaced_spawn_cannot_complete_or_keep_the_previous_actors_cast() {
+    let mut world = admitted();
+    let began = |spell_id| {
+        WorldEvent::Spell(SpellUpdate::Began {
+            caster_id: 5,
+            spell_id,
+            duration_ms: 3000,
+        })
+    };
+    let mut landing = effect(5, 4);
+    landing.caster_id = 5;
+    game(&mut world, began(42));
+    game(&mut world, WorldEvent::SpellEffect(landing.clone()));
+    game(&mut world, swing(5, 5));
+    game(&mut world, began(43));
+    game(&mut world, swing(9, 8));
+    let own_motion = world.motion_of(9);
+    assert!(world.motion_of(5).is_some());
+    assert!(world.completed_cast_of(5).is_some());
+    assert!(world.landing_on(5).is_some());
+    assert_eq!(world.casting_of(5), Some(43));
+
+    // A Spawn record is a new incarnation even without a preceding Despawn.
+    game(&mut world, WorldEvent::Spawns(vec![spawn(5)]));
+    assert_eq!(world.motion_of(5), None);
+    assert_eq!(world.completed_cast_of(5), None);
+    assert_eq!(world.landing_on(5), None);
+    assert_eq!(world.casting_of(5), None);
+    assert_eq!(world.motion_of(9), own_motion);
+    // The former actor's delayed landing cannot complete the new one's cast.
+    game(&mut world, WorldEvent::SpellEffect(landing.clone()));
+    assert_eq!(world.completed_cast_of(5), None);
+    // New received activity still works and has a later motion identity.
+    game(&mut world, began(44));
+    landing.spell_id = 44;
+    game(&mut world, WorldEvent::SpellEffect(landing));
+    assert_eq!(world.completed_cast_of(5).unwrap().spell_id, 44);
+    assert!(world.completed_cast_of(5).unwrap().count > own_motion.unwrap().count);
 }
 
 #[test]
@@ -2727,6 +2771,46 @@ fn a_desktop_camp_leaves_the_program_once_camped_and_a_plain_one_does_not() {
 }
 
 #[test]
+fn a_local_camp_deadline_keeps_its_destination_and_unconfirmed_evidence() {
+    use crate::camp::{CampOutcome, Completion};
+
+    for to in [CampTo::CharacterSelect, CampTo::Desktop] {
+        for (status, outcome) in [
+            (CampStatus::Camped, CampOutcome::LogoutReply),
+            (CampStatus::ClosedWithoutReply, CampOutcome::LocalDeadline),
+        ] {
+            let mut world = admitted();
+            let admission_id = world.session_id();
+            world.camp_to(to);
+            game(&mut world, WorldEvent::Camp(CampStatus::Preparing));
+            game(&mut world, WorldEvent::Camp(CampStatus::LoggingOut));
+            let changes = game(&mut world, WorldEvent::Camp(status));
+            assert_eq!(changes.reset, Some(Reset::Camped));
+            assert!(world.player().is_none() && world.session_id().is_none());
+            assert_eq!(world.leaving(), to == CampTo::Desktop);
+            let expected = Some(Completion {
+                admission_id,
+                destination: to,
+                outcome,
+            });
+            assert_eq!(world.camp_completion(), expected);
+            assert_eq!(world.take_leaving(), to == CampTo::Desktop);
+            assert!(!world.take_leaving());
+            assert_eq!(
+                world.camp_completion(),
+                expected,
+                "taking the exit does not erase evidence"
+            );
+            game(&mut world, entered(8));
+            assert!(
+                world.camp_completion().is_none(),
+                "a new admission does not inherit it"
+            );
+        }
+    }
+}
+
+#[test]
 fn item_definitions_last_for_the_admission() {
     let mut world = admitted();
     game(&mut world, WorldEvent::ItemDetails(chest().details));
@@ -2934,7 +3018,12 @@ fn loot_and_shop_replies_say_what_the_player_got_or_was_refused() {
 
 #[test]
 fn the_session_grants_motion_until_any_reset() {
+    let diagonal = crate::DiagonalRates {
+        run: Some(5.0),
+        walk: None,
+    };
     let grant = |session_id| WorldEvent::MotionState {
+        diagonal,
         session_id,
         units_per_second: Some(20.0),
         backward_units_per_second: None,
@@ -2946,6 +3035,7 @@ fn the_session_grants_motion_until_any_reset() {
     assert!(game(&mut world, grant(2)).ignored);
     assert!(game(&mut world, grant(1)).motion);
     assert_eq!(world.motion().map(|grant| grant.falls), Some(true));
+    assert_eq!(world.motion().map(|grant| grant.diagonal), Some(diagonal));
     connection(&mut world, false, false);
     assert!(world.motion().is_none());
 }

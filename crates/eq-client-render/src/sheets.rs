@@ -108,6 +108,11 @@ impl Art<'_> {
         self.sheets.drawing = skin;
     }
 
+    /// The override used by a window when its widgets retain artwork for later.
+    pub(crate) fn drawing_skin(&self) -> Option<String> {
+        self.sheets.drawing.clone()
+    }
+
     /// One of the skin's textures, whole, such as a window's background.
     pub(crate) fn texture(&mut self, file: &str) -> Option<Handle<Image>> {
         let directory = self.settings.0.eq_directory.as_deref()?;
@@ -189,7 +194,7 @@ pub(crate) mod testing {
     use super::*;
 
     /// Supplies generated artwork to the ordinary skin rectangle/upload path.
-    pub(crate) fn sheet(app: &mut App, file: &str, pixels: image::RgbaImage) {
+    pub(crate) fn sheet(app: &mut App, file: &str, pixels: image::RgbaImage) -> Handle<Image> {
         let skin = app
             .world()
             .resource::<super::super::skin::UiSkin>()
@@ -202,7 +207,8 @@ pub(crate) mod testing {
         app.world_mut()
             .resource_mut::<Sheets>()
             .read
-            .insert((skin, file.to_owned()), Some(handle));
+            .insert((skin, file.to_owned()), Some(handle.clone()));
+        handle
     }
 
     /// Stands in for the skin's sheets: every sheet reads as one blank image.

@@ -169,7 +169,40 @@ impl OnlineState {
         self.deletion.ended();
         self.world.restart();
         self.selection = None;
+        self.loading.clear();
         self.held.clear();
+    }
+
+    /// Clears a session the player cancelled. An ended link tells the
+    /// script runner to release its input, without implying logout success.
+    pub(super) fn disconnect(
+        &mut self,
+        panels: &mut Panels,
+        scene: &mut super::zone::Scene,
+        commands: &mut Commands,
+    ) {
+        self.restart();
+        let changes = self.tell(
+            &WorldUpdate::Connection(eq_client_core::world::Link::Ended),
+            std::time::Instant::now(),
+            &NoSpells,
+        );
+        if let Some(reason) = changes.reset {
+            self.reset_presentation(reason, panels, scene, commands);
+        }
+        scene.leave(commands, &mut self.regions);
+    }
+
+    fn reset_presentation(
+        &mut self,
+        reason: Reset,
+        panels: &mut Panels,
+        scene: &mut super::zone::Scene,
+        commands: &mut Commands,
+    ) {
+        self.loading.clear();
+        panels.forget(reason, self);
+        scene.forget(reason, commands);
     }
 
     /// Bind host planning to the selected worker's placement policy.
@@ -345,9 +378,17 @@ pub(super) struct Panels<'w> {
     book: Option<ResMut<'w, super::spellbook::BookSelection>>,
     book_view: Option<ResMut<'w, super::spellbook::BookView>>,
     sounds: ResMut<'w, super::sounds::Sounds>,
+    combat_text: Option<ResMut<'w, super::combat_text::CombatText>>,
 }
 
 impl Panels<'_> {
+    /// Reconcile merchant intent only with admitted worker updates.
+    fn merchant_news(&mut self, update: &WorldUpdate, changes: &Changes, world: &ClientWorld) {
+        if !changes.ignored {
+            self.trade.merchant_news(update, world);
+        }
+    }
+
     /// Shows what the world's changes mean for the panels: the inventory, the
     /// notices, motion, the trade windows and the answers to the panels' own
     /// requests; and plays the sounds the server names.
@@ -358,6 +399,12 @@ impl Panels<'_> {
         messages: Option<&hud::messages::Messages>,
         chat: &mut super::chat::ChatState,
     ) {
+        // Capture received facts here; action/draw systems apply the current
+        // character's options after its profile has loaded for this frame.
+        self.trade.killed(state.world(), &changes.kills);
+        if let Some(text) = self.combat_text.as_mut() {
+            text.hear(state.world(), &changes.damage, true);
+        }
         if changes.inventory {
             self.inventory.refresh(state.world.inventory().stale());
         }
@@ -437,7 +484,15 @@ impl Panels<'_> {
     }
 
     /// The session sent the player's move, or refused it.
-    fn moved(&mut self, moved: &Moved, drawn: Option<Transform>) {
+    fn moved(&mut self, admission_id: Option<u64>, moved: &Moved, drawn: Option<Transform>) {
+        debug!(
+            admission_id = ?admission_id,
+            position = ?moved.position,
+            outcome = if moved.refused.is_some() { "local_refused" } else { "transport_submitted" },
+            refused = ?moved.refused,
+            "Current-admission movement worker result; no server acknowledgment implied"
+        );
+
         self.motion.accepted();
         self.motion.refused.clone_from(&moved.refused);
         if let Some(transform) = drawn {
@@ -474,8 +529,6 @@ impl Panels<'_> {
             Reset::Entered | Reset::Camped | Reset::Lost { ended: true, .. }
         ) {
             state.deletion.ended();
-        }
-        if matches!(reason, Reset::Entered | Reset::Camped) {
             // Requests and choices made in the old admission are void.
             *self.combat = super::combat::CombatState::default();
             *self.items = super::items::ItemState::default();
@@ -648,14 +701,13 @@ pub(super) fn receive(
     for update in news {
         let (changes, before) = apply(&mut state.world, &update, spells);
         trace(&update, &changes, &state.world);
+        panels.merchant_news(&update, &changes, &state.world);
         if let Some(reason) = changes.reset {
-            state.loading.clear();
-            panels.forget(reason, &mut state);
-            scene.forget(reason, &mut commands);
+            state.reset_presentation(reason, &mut panels, &mut scene, &mut commands);
         }
         panels.show(&changes, &mut state, messages.as_deref(), &mut chat);
         if let Some(moved) = &changes.moved {
-            panels.moved(moved, scene.player());
+            panels.moved(state.world.session_id(), moved, scene.player());
         }
         // Offline, the zone on screen is the viewer's own, and the preview
         // admits its player into it.
@@ -731,6 +783,7 @@ fn log_grant(grant: eq_client_core::world::MotionGrant) {
         backward_units_per_second,
         walk_units_per_second,
         strafe_units_per_second,
+        diagonal,
         falls,
     } = grant;
     if units_per_second.is_none() {
@@ -741,6 +794,7 @@ fn log_grant(grant: eq_client_core::world::MotionGrant) {
             ?backward_units_per_second,
             ?walk_units_per_second,
             ?strafe_units_per_second,
+            ?diagonal,
             falls,
             "Movement granted"
         );

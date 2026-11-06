@@ -112,8 +112,16 @@ pub(crate) fn update(
             .spawn(*id)
             .map(|spawn| &spawn.state)
             .filter(|spawn| shown(spawn.kind))
+            .filter(|spawn| {
+                !spawn.invisible || options.qol.on(eq_client_core::qol::Fix::ShowInvisible)
+            })
         {
             let said = words(&spawn.name, spawn.kind, &spawn.name_parts, &spawn.listing);
+            let said = if spawn.invisible {
+                format!("({said})")
+            } else {
+                said
+            };
             let player = spawn.kind == eq_client_core::SpawnKind::Player;
             let drawn = painter.paint(*id, player, spawn.race, &spawn.listing);
             wanted.insert(*root, (said, drawn));
@@ -399,6 +407,44 @@ mod tests {
     }
 
     #[test]
+    fn revealed_names_are_marked_without_granting_invisible_targeting() {
+        let mut app = app();
+        testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [WorldEvent::Visibility {
+                spawn_id: 3,
+                invisible: true,
+            }],
+        );
+        app.update();
+        assert!(
+            !shown(&mut app)
+                .iter()
+                .any(|name| name.contains("a gnoll") && !name.contains("pup"))
+        );
+        app.world_mut()
+            .resource_mut::<crate::options::OptionsState>()
+            .options
+            .qol
+            .set(eq_client_core::qol::Fix::ShowInvisible, true);
+        app.update();
+        assert!(shown(&mut app).contains(&"(a gnoll)".to_owned()));
+        assert_eq!(
+            crate::target::unavailable(app.world().resource::<OnlineState>(), 3),
+            Some("This entity is invisible")
+        );
+        assert!(
+            app.world()
+                .resource::<OnlineState>()
+                .world()
+                .spawn(3)
+                .unwrap()
+                .state
+                .invisible
+        );
+    }
+
+    #[test]
     fn names_take_the_installed_clients_colours() {
         let mut app = app();
         let colour = |app: &mut App, words: &str| {
@@ -466,6 +512,7 @@ mod tests {
                 yaw: 0.0,
                 pitch: 0.0,
                 pulled: None,
+                view: default(),
             },
         ));
         // The gnoll stands behind a wall; everyone else in the open.

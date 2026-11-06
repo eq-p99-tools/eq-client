@@ -2,8 +2,8 @@
 //! Widget behavior and live values remain with the skin owner and presentation module.
 use super::{
     Context, ScrolledText, ScrolledView, Shows, SkinPage, SkinTab, TABBED, TabFace, TabWords,
-    WORD_TAB_HEIGHT, aligned, at, border, button, controls, frame, frame_tab, gauge, items, label,
-    looks, rgb, scrollbar, spell_gem, title, to_f32, with_qol_page,
+    WORD_TAB_HEIGHT, aligned, at, border, border_insets, button, controls, frame, frame_tab, gauge,
+    items, label, looks, reflow::Geometry, rgb, scrollbar, spell_gem, title, to_f32,
 };
 use crate::{
     theme::{self, Size},
@@ -41,7 +41,11 @@ pub(super) fn draw(
     // between its pieces, and a look saved for it has nothing to tint or fade:
     // the skin's setting wins (inferred, as is what the setting means).
     if !screen.transparent {
-        let mut backdrop = window.spawn((looks::Backdrop(context.id), at(0.0, 0.0, width, height)));
+        let mut backdrop = window.spawn((
+            looks::Backdrop(context.id),
+            at(0.0, 0.0, width, height),
+            Geometry::inset(0.0, 0.0, 0.0, 0.0),
+        ));
         if context.id == WindowId::Map {
             backdrop.insert(crate::map::Backdrop::Artwork);
         }
@@ -77,6 +81,13 @@ pub(super) fn draw(
         }
     }
     let title_bottom = (inside.y > 0.0 && screen.title_bar.is_some()).then_some(inside.y);
+    let insets = screen
+        .template
+        .as_ref()
+        .filter(|_| screen.border)
+        .map_or_else(frame::Insets::default, |template| {
+            border_insets(&template.border)
+        });
     // As in the official client, nothing shows outside the client area: the
     // skin parks pieces there that only some windows use, such as a
     // container's augment labels.
@@ -87,10 +98,13 @@ pub(super) fn draw(
         height: inside.height,
     };
     window
-        .spawn(Node {
-            overflow: Overflow::clip(),
-            ..at(inside.x, inside.y, inside.width, inside.height)
-        })
+        .spawn((
+            Node {
+                overflow: Overflow::clip(),
+                ..at(inside.x, inside.y, inside.width, inside.height)
+            },
+            Geometry::inset(inside.x, inside.y, insets.right, insets.bottom),
+        ))
         .with_children(|area| pieces(area, art, &screen.pieces, &client, context));
     title_bottom
 }
@@ -137,7 +151,9 @@ pub(super) fn pieces(
             }
             Element::Listbox(list) => controls::listbox(window, art, list, &inside, context.id),
             Element::TextBox(text) if context.id == WindowId::Chat => {
-                chat_box(window, art, text, (&inside, context.tab_frame));
+                let divider = text.id.as_deref() == Some("CWChatInput")
+                    && chat_needs_divider(art, text, pieces);
+                chat_box(window, art, text, (&inside, context.tab_frame), divider);
             }
             Element::TextBox(text) => text_box(window, art, text, &inside, context.id),
             Element::Tabs(tabs) if TABBED.contains(&context.id) => {
@@ -152,23 +168,7 @@ pub(super) fn pieces(
                 tabbed(window, art, tabs, &at, context);
             }
             // The first page shows; the client has nothing for the others yet.
-            Element::Tabs(tabs) => {
-                if let Some(page) = tabs.pages.first() {
-                    let at = page.area.unwrap_or(Area {
-                        x: 0.0,
-                        y: 0.0,
-                        width: inside.width,
-                        height: inside.height,
-                    });
-                    let page_inside = Area {
-                        x: inside.x + at.x,
-                        y: inside.y + at.y,
-                        width: at.width,
-                        height: at.height,
-                    };
-                    self::pieces(window, art, &page.pieces, &page_inside, context);
-                }
-            }
+            Element::Tabs(tabs) => first_page(window, art, tabs, &inside, context),
             Element::View(view) if view.name == "IW_CharacterView" => {
                 items::figure(window, view, &inside, context.paperdoll);
             }
@@ -308,6 +308,30 @@ pub(super) fn text_box(
     });
 }
 
+/// A skin's input top or adjacent transcript bottom already separates the
+/// two boxes when the skin supplies a drawable edge there.
+fn chat_needs_divider(
+    art: &mut crate::sheets::Art,
+    input: &eq_client_assets::sidl::TextBox,
+    pieces: &[(String, Element)],
+) -> bool {
+    let top = input
+        .template
+        .as_ref()
+        .and_then(|frame| frame.border.top.as_ref());
+    let bottom = pieces.iter().find_map(|(_, element)| match element {
+        Element::TextBox(output) if output.id.as_deref() == Some("CWChatOutput") => output
+            .template
+            .as_ref()
+            .and_then(|frame| frame.border.bottom.as_ref()),
+        _ => None,
+    });
+    [top, bottom]
+        .into_iter()
+        .flatten()
+        .all(|edge| art.cut(edge).is_none())
+}
+
 /// One of the chat window's boxes, filled with the client's chat: its tabs
 /// and lines in the output box, and the line the player types in the input
 /// box.
@@ -316,18 +340,33 @@ pub(super) fn chat_box(
     art: &mut crate::sheets::Art,
     text: &eq_client_assets::sidl::TextBox,
     (inside, tab_frame): (&Area, Option<&eq_client_assets::sidl::FrameLook>),
+    divider: bool,
 ) {
     let area = text.anchors.map_or(text.area, |anchors| {
         anchors.within(inside.width, inside.height)
     });
     window
-        .spawn(at(
-            inside.x + area.x,
-            inside.y + area.y,
-            area.width,
-            area.height,
+        .spawn((
+            at(
+                inside.x + area.x,
+                inside.y + area.y,
+                area.width,
+                area.height,
+            ),
+            Geometry(text.anchors.unwrap_or(eq_client_assets::sidl::Anchors {
+                left: eq_client_assets::sidl::Anchor::Start(area.x),
+                top: eq_client_assets::sidl::Anchor::Start(area.y),
+                right: eq_client_assets::sidl::Anchor::Start(area.x + area.width),
+                bottom: eq_client_assets::sidl::Anchor::Start(area.y + area.height),
+            })),
         ))
         .with_children(|frame| {
+            let insets = text
+                .template
+                .as_ref()
+                .map_or_else(frame::Insets::default, |template| {
+                    border_insets(&template.border)
+                });
             let client = text.template.as_ref().map_or(
                 Area {
                     x: 0.0,
@@ -337,27 +376,63 @@ pub(super) fn chat_box(
                 },
                 |template| border(frame, art, &template.border, (area.width, area.height)),
             );
-            match text.id.as_deref() {
-                // The output scrolls, with the skin's scrollbar beside its
-                // lines where the skin gives it one.
-                Some("CWChatOutput") => {
-                    let bar = text.scrollbar.as_ref();
-                    let width = bar.map_or(0.0, scrollbar::width);
-                    let lines = crate::chat::skinned_output(
-                        frame,
-                        at(client.x, client.y, client.width - width, client.height),
-                        (art, tab_frame),
-                    );
-                    if let Some(look) = bar {
-                        scrollbar::spawn(frame, art, look, &client, (lines, Some(WindowId::Chat)));
-                    }
-                }
-                Some("CWChatInput") => crate::chat::skinned_input(
-                    frame,
+            // A dedicated client container makes every nested anchor relative
+            // to the same clipped inset rectangle, including input and bar.
+            frame
+                .spawn((
                     at(client.x, client.y, client.width, client.height),
-                ),
-                _ => (),
-            }
+                    Geometry::inset(client.x, client.y, insets.right, insets.bottom),
+                ))
+                .with_children(|frame| {
+                    let client = Area {
+                        x: 0.0,
+                        y: 0.0,
+                        ..client
+                    };
+                    match text.id.as_deref() {
+                        // The output scrolls, with the skin's scrollbar beside its
+                        // lines where the skin gives it one.
+                        Some("CWChatOutput") => {
+                            let bar = text.scrollbar.as_ref();
+                            let width = bar.map_or(0.0, scrollbar::width);
+                            let lines = crate::chat::skinned_output(
+                                frame,
+                                Node {
+                                    left: px(0),
+                                    top: px(0),
+                                    right: px(width),
+                                    bottom: px(0),
+                                    position_type: PositionType::Absolute,
+                                    ..default()
+                                },
+                                (art, tab_frame),
+                            );
+                            if let Some(look) = bar {
+                                scrollbar::retained(
+                                    frame,
+                                    art,
+                                    look,
+                                    &client,
+                                    (lines, Some(WindowId::Chat)),
+                                    Vec2::new(client.width, client.height),
+                                );
+                            }
+                        }
+                        Some("CWChatInput") => crate::chat::skinned_input(
+                            frame,
+                            Node {
+                                left: px(0),
+                                top: px(0),
+                                right: px(0),
+                                bottom: px(0),
+                                position_type: PositionType::Absolute,
+                                ..default()
+                            },
+                            divider,
+                        ),
+                        _ => (),
+                    }
+                });
         });
 }
 
@@ -374,72 +449,107 @@ pub(super) fn view(
     let area = view.anchors.map_or(view.area, |anchors| {
         anchors.within(inside.width, inside.height)
     });
-    window
-        .spawn(at(
-            inside.x + area.x,
-            inside.y + area.y,
-            area.width,
-            area.height,
-        ))
-        .with_children(|frame| {
-            let mut client = Area {
-                x: 0.0,
-                y: 0.0,
-                width: area.width,
-                height: area.height,
-            };
-            if let Some(template) = view.template.as_ref().filter(|_| view.border) {
-                client = border(frame, art, &template.border, (area.width, area.height));
-            }
-            // One the skin gives a scrollbar scrolls its pieces beside it, as
-            // the loot window's slots do.
-            let bar = view.scrollbar.as_ref();
-            let width = client.width - bar.map_or(0.0, scrollbar::width);
-            let mut clipped = frame.spawn(Node {
+    let mut outer = window.spawn(at(
+        inside.x + area.x,
+        inside.y + area.y,
+        area.width,
+        area.height,
+    ));
+    if context.id == WindowId::Chat {
+        outer.insert(Geometry(view.anchors.unwrap_or(
+            eq_client_assets::sidl::Anchors {
+                left: eq_client_assets::sidl::Anchor::Start(area.x),
+                top: eq_client_assets::sidl::Anchor::Start(area.y),
+                right: eq_client_assets::sidl::Anchor::Start(area.x + area.width),
+                bottom: eq_client_assets::sidl::Anchor::Start(area.y + area.height),
+            },
+        )));
+    }
+    outer.with_children(|frame| {
+        let insets = view
+            .template
+            .as_ref()
+            .filter(|_| view.border)
+            .map_or_else(frame::Insets::default, |template| {
+                border_insets(&template.border)
+            });
+        let mut client = Area {
+            x: 0.0,
+            y: 0.0,
+            width: area.width,
+            height: area.height,
+        };
+        if let Some(template) = view.template.as_ref().filter(|_| view.border) {
+            client = border(frame, art, &template.border, (area.width, area.height));
+        }
+        // One the skin gives a scrollbar scrolls its pieces beside it, as
+        // the loot window's slots do.
+        let bar = view.scrollbar.as_ref();
+        let width = client.width - bar.map_or(0.0, scrollbar::width);
+        let mut clipped = frame.spawn((
+            Node {
                 overflow: if bar.is_some() {
                     Overflow::scroll_y()
                 } else {
                     Overflow::clip()
                 },
                 ..at(client.x, client.y, width.max(0.0), client.height)
-            });
+            },
+            Geometry::inset(
+                client.x,
+                client.y,
+                insets.right + bar.map_or(0.0, scrollbar::width),
+                insets.bottom,
+            ),
+        ));
+        if bar.is_some() {
+            clipped.insert((
+                ScrollPosition::default(),
+                ScrolledView,
+                crate::windows::pointer::TakesWheel,
+            ));
+        }
+        let scrolled = clipped.id();
+        clipped.with_children(|clipped| {
+            let origin = Area {
+                x: 0.0,
+                y: 0.0,
+                width,
+                height: client.height,
+            };
+            pieces(clipped, art, &view.pieces, &origin, context);
             if bar.is_some() {
-                clipped.insert((
-                    ScrollPosition::default(),
-                    ScrolledView,
-                    crate::windows::pointer::TakesWheel,
-                ));
-            }
-            let scrolled = clipped.id();
-            clipped.with_children(|clipped| {
-                let origin = Area {
-                    x: 0.0,
-                    y: 0.0,
-                    width,
-                    height: client.height,
-                };
-                pieces(clipped, art, &view.pieces, &origin, context);
-                if bar.is_some() {
-                    // As tall as its lowest piece, so all of them scroll into
-                    // view.
-                    let bottom = view
-                        .pieces
-                        .iter()
-                        .filter_map(|(_, element)| placed_area(element))
-                        .map(|area| area.y + area.height)
-                        .fold(0.0, f32::max);
-                    clipped.spawn(Node {
-                        width: px(1),
-                        height: px(bottom),
-                        flex_shrink: 0.0,
-                        ..default()
-                    });
-                }
-            });
-            if let Some(look) = bar {
-                scrollbar::spawn(frame, art, look, &client, (scrolled, Some(context.id)));
+                // As tall as its lowest piece, so all of them scroll into
+                // view.
+                let bottom = view
+                    .pieces
+                    .iter()
+                    .filter_map(|(_, element)| placed_area(element))
+                    .map(|area| area.y + area.height)
+                    .fold(0.0, f32::max);
+                clipped.spawn(Node {
+                    width: px(1),
+                    height: px(bottom),
+                    flex_shrink: 0.0,
+                    ..default()
+                });
             }
         });
+        if let Some(look) = bar {
+            if context.id == WindowId::Chat {
+                scrollbar::retained(
+                    frame,
+                    art,
+                    look,
+                    &client,
+                    (scrolled, Some(context.id)),
+                    Vec2::new(area.width, area.height),
+                );
+            } else {
+                scrollbar::spawn(frame, art, look, &client, (scrolled, Some(context.id)));
+            }
+        }
+    });
 }
 
 /// Whether a piece is part of a container window's augment section: its
@@ -475,6 +585,63 @@ pub(super) const fn placed_area(element: &Element) -> Option<Area> {
     }
 }
 
+/// Draws the first authored page where the window has no tab-selection UI.
+fn first_page(
+    window: &mut ChildSpawnerCommands,
+    art: &mut crate::sheets::Art,
+    tabs: &eq_client_assets::sidl::TabBox,
+    inside: &Area,
+    context: &Context,
+) {
+    let Some(page) = tabs.pages.first() else {
+        return;
+    };
+    let at = page.area.unwrap_or(Area {
+        x: 0.0,
+        y: 0.0,
+        width: inside.width,
+        height: inside.height,
+    });
+    let page_inside = Area {
+        x: inside.x + at.x,
+        y: inside.y + at.y,
+        width: at.width,
+        height: at.height,
+    };
+    if context.id == WindowId::Chat {
+        let axis = if page.area.is_some() {
+            super::reflow::Axis::Start
+        } else {
+            super::reflow::Axis::Stretch
+        };
+        window
+            .spawn((
+                super::at(
+                    page_inside.x,
+                    page_inside.y,
+                    page_inside.width,
+                    page_inside.height,
+                ),
+                Geometry::from_area(at, Vec2::new(inside.width, inside.height), axis, axis),
+            ))
+            .with_children(|page_area| {
+                self::pieces(
+                    page_area,
+                    art,
+                    &page.pieces,
+                    &Area {
+                        x: 0.0,
+                        y: 0.0,
+                        ..page_inside
+                    },
+                    context,
+                );
+            });
+    } else {
+        self::pieces(window, art, &page.pieces, &page_inside, context);
+    }
+}
+
 /// A tab box with every page: a row of tabs, each with its page's picture
 /// or its words, across the top, and the chosen page below. A tab of words
 /// is as wide as the font lays them out.
@@ -485,8 +652,46 @@ pub(super) fn tabbed(
     inside: &Area,
     context: &Context,
 ) {
-    let pages = with_qol_page(&tabs.pages, context.id, inside.height);
+    let particle_pages = super::particles::pages(&tabs.pages, context.id);
+    let pages = super::qol::pages(
+        &particle_pages,
+        context.id,
+        Vec2::new(inside.width, inside.height),
+        tabs.page_frame.as_ref(),
+    );
     let pages = pages.as_ref();
+    if context.id == WindowId::Options {
+        // Added client pages can exceed the skin's single row. As with chat's
+        // tabs, let the row wrap at its measured intrinsic widths. Its height
+        // participates in layout so no tab overlaps the page below it.
+        window
+            .spawn(Node {
+                flex_direction: FlexDirection::Column,
+                ..at(inside.x, inside.y, inside.width, inside.height)
+            })
+            .with_children(|column| {
+                let origin = Area {
+                    x: 0.0,
+                    y: 0.0,
+                    ..*inside
+                };
+                tabbed_pages(column, art, tabs, pages, &origin, context);
+            });
+    } else {
+        tabbed_pages(window, art, tabs, pages, inside, context);
+    }
+}
+
+/// Builds the tabs and pages; Options alone uses a wrapping, flowing strip.
+fn tabbed_pages(
+    window: &mut ChildSpawnerCommands,
+    art: &mut crate::sheets::Art,
+    tabs: &eq_client_assets::sidl::TabBox,
+    pages: &[eq_client_assets::sidl::Page],
+    inside: &Area,
+    context: &Context,
+) {
+    let wrapping = context.id == WindowId::Options;
     let tab_box: std::sync::Arc<str> = tabs.name.as_str().into();
     let tab = |index| SkinTab {
         window: context.id,
@@ -495,17 +700,31 @@ pub(super) fn tabbed(
         index,
     };
     let strip = tab_strip(pages.iter());
+    let row = if wrapping {
+        Node {
+            width: px((inside.width - 4.0).max(0.0)),
+            min_height: px(strip - 2.0),
+            flex_wrap: FlexWrap::Wrap,
+            flex_shrink: 0.0,
+            row_gap: px(2),
+            align_self: AlignSelf::Center,
+            margin: UiRect::vertical(px(1)),
+            ..default()
+        }
+    } else {
+        at(
+            inside.x + 2.0,
+            inside.y + 1.0,
+            inside.width - 4.0,
+            strip - 1.0,
+        )
+    };
     window
         .spawn(Node {
             flex_direction: FlexDirection::Row,
             align_items: AlignItems::FlexStart,
             column_gap: px(2),
-            ..at(
-                inside.x + 2.0,
-                inside.y + 1.0,
-                inside.width - 4.0,
-                strip - 1.0,
-            )
+            ..row
         })
         .with_children(|row| {
             for (index, page) in pages.iter().enumerate() {
@@ -523,29 +742,92 @@ pub(super) fn tabbed(
         ..*context
     };
     for (index, page) in pages.iter().enumerate() {
-        window
-            .spawn((
-                SkinPage(tab(index)),
-                Node {
-                    display: Display::None,
-                    overflow: Overflow::clip(),
-                    ..at(inside.x, inside.y + strip, area.width, area.height)
-                },
-            ))
-            .with_children(|page_area| {
-                // The skin's page frame, where it names one, with the page's
-                // pieces inside it.
-                let inside = tabs.page_frame.as_ref().map_or(area, |look| {
-                    let insets = frame::around(page_area, art, look);
-                    Area {
-                        x: insets.left,
-                        y: insets.top,
-                        width: area.width - insets.left - insets.right,
-                        height: area.height - insets.top - insets.bottom,
-                    }
-                });
-                pieces(page_area, art, &page.pieces, &inside, &within);
-            });
+        let node = if wrapping {
+            Node {
+                width: percent(100),
+                min_height: px(0),
+                flex_basis: px(0),
+                flex_grow: 1.0,
+                overflow: Overflow::scroll_y(),
+                ..default()
+            }
+        } else {
+            Node {
+                overflow: Overflow::clip(),
+                ..at(inside.x, inside.y + strip, area.width, area.height)
+            }
+        };
+        let mut viewport = window.spawn((
+            SkinPage(tab(index)),
+            Node {
+                display: Display::None,
+                ..node
+            },
+        ));
+        if wrapping {
+            viewport.insert((
+                ScrollPosition::default(),
+                ScrolledView,
+                crate::windows::pointer::TakesWheel,
+            ));
+        }
+        viewport.with_children(|viewport| {
+            tabbed_page_contents(viewport, art, tabs, page, area, &within);
+        });
+    }
+}
+
+/// Keeps page coordinates intact beneath either kind of tab strip.
+fn tabbed_page_contents(
+    viewport: &mut ChildSpawnerCommands,
+    art: &mut crate::sheets::Art,
+    tabs: &eq_client_assets::sidl::TabBox,
+    page: &eq_client_assets::sidl::Page,
+    area: Area,
+    context: &Context,
+) {
+    let area = if let Some(content) = super::qol::content_height(page) {
+        let insets = tabs
+            .page_frame
+            .as_ref()
+            .map_or_else(frame::Insets::default, frame::insets);
+        Area {
+            height: area.height.max(insets.top + content + insets.bottom),
+            ..area
+        }
+    } else {
+        area
+    };
+    let draw_page = |page_area: &mut ChildSpawnerCommands| {
+        // The skin's page frame, where it names one, with the page's
+        // pieces inside it.
+        let inside = tabs.page_frame.as_ref().map_or(area, |look| {
+            let insets = frame::around(page_area, art, look);
+            Area {
+                x: insets.left,
+                y: insets.top,
+                width: area.width - insets.left - insets.right,
+                height: area.height - insets.top - insets.bottom,
+            }
+        });
+        pieces(page_area, art, &page.pieces, &inside, context);
+    };
+    if context.id == WindowId::Options {
+        // Preserve authored page coordinates and the complete generated
+        // content extent. If extra tab rows reduce the viewport, the
+        // ordinary wheel owner can reach its bottom controls instead of
+        // clipping them permanently.
+        viewport
+            .spawn(Node {
+                width: px(area.width),
+                height: px(area.height),
+                flex_shrink: 0.0,
+                ..default()
+            })
+            .with_children(draw_page);
+    } else {
+        let mut draw_page = draw_page;
+        draw_page(viewport);
     }
 }
 

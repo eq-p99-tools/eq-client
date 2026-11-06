@@ -95,6 +95,18 @@ fn snapshot(world: &ClientWorld, view: Option<View>, online_enabled: bool) -> St
         "has_player": world.player().is_some(), "in_world": world.in_world(),
         "dead": world.is_dead(), "transfer_pending": world.pending_transfer().is_some(),
         "active_world_scope": null, "last_link": null,
+        "camp_completion": world.camp_completion().map(|completion| json!({
+            "currency": "last_completed_camp",
+            "admission_id": completion.admission_id,
+            "destination": match completion.destination {
+                eq_client_core::camp::CampTo::CharacterSelect => "character_select",
+                eq_client_core::camp::CampTo::Desktop => "desktop",
+            },
+            "evidence": match completion.outcome {
+                eq_client_core::camp::CampOutcome::LogoutReply => "logout_reply",
+                eq_client_core::camp::CampOutcome::LocalDeadline => "local_deadline_without_reply",
+            },
+        })),
     });
     report["selection"] = json!({
         "state": selection_state, "snapshot": offered,
@@ -490,6 +502,32 @@ mod tests {
         );
         world.restart();
         assert_eq!(report(&world, None)["selection"]["state"], "absent");
+    }
+
+    #[test]
+    fn camp_reports_keep_received_reply_separate_from_the_local_deadline() {
+        use eq_client_core::{CampStatus, camp::CampTo};
+
+        for (status, evidence) in [
+            (CampStatus::Camped, "logout_reply"),
+            (
+                CampStatus::ClosedWithoutReply,
+                "local_deadline_without_reply",
+            ),
+        ] {
+            let mut world = ClientWorld::default();
+            admitted(&mut world, "Disposable", "qeynos");
+            world.camp_to(CampTo::Desktop);
+            apply(&mut world, &WorldUpdate::Game(WorldEvent::Camp(status)));
+            let value = report(&world, None);
+            assert_eq!(
+                value["lifecycle"]["camp_completion"],
+                json!({
+                    "currency": "last_completed_camp", "admission_id": 12,
+                    "destination": "desktop", "evidence": evidence,
+                })
+            );
+        }
     }
 
     #[test]

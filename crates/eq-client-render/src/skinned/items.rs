@@ -597,7 +597,8 @@ pub(crate) fn quantity(
     if *opened && !open {
         state.cancel_split();
     }
-    let wanted = state.splitting() && skinned.has(WindowId::Inventory);
+    let wanted =
+        state.splitting() && (state.picking_merchant() || skinned.has(WindowId::Inventory));
     if wanted && !open {
         shown.open(WindowId::Quantity);
     } else if !wanted && open {

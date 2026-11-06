@@ -2,8 +2,8 @@
 use super::{Act, Chord, KeyMap, Typing, key_name, scan_key};
 use crate::profile_files::{CharacterProfile, Store};
 use bevy::{input::keyboard::KeyboardInput, prelude::*, window::PrimaryWindow};
-use std::fmt::Write as _;
 use std::time::Instant;
+use std::{collections::BTreeMap, fmt::Write as _};
 
 /// A primary or alternate key cell in the Keyboard page.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
@@ -16,7 +16,18 @@ pub(crate) struct Assignment {
 #[derive(Resource, Default)]
 pub(crate) struct Bindings {
     pub(crate) active: Option<Assignment>,
+    installed: Option<KeyMap>,
     store: Store,
+    read_only: bool,
+}
+
+impl Bindings {
+    pub(crate) fn with_installed(map: KeyMap) -> Self {
+        Self {
+            installed: Some(map),
+            ..default()
+        }
+    }
 }
 
 // These, together with the scan table, cover the ordinary keyboard. Modifier
@@ -64,31 +75,44 @@ impl Chord {
 }
 
 impl KeyMap {
-    fn assign(&mut self, cell: Assignment, chord: Option<Chord>) {
-        let chords = self.0.entry(cell.act).or_default();
-        if cell.slot < chords.len() {
-            chords.remove(cell.slot);
-        }
-        if let Some(chord) = chord {
-            // A chord has one owner, including when it changes hands.
-            for chords in self.0.values_mut() {
-                chords.retain(|bound| *bound != chord);
+    pub(super) fn unbind(&mut self, chord: Chord) {
+        for slot in self.0.values_mut().flatten() {
+            if *slot == Some(chord) {
+                *slot = None;
             }
-            let chords = self.0.entry(cell.act).or_default();
-            chords.insert(cell.slot.min(chords.len()), chord);
         }
     }
 
+    fn assign(&mut self, cell: Assignment, chord: Option<Chord>) {
+        if let Some(chord) = chord {
+            // A chord has one owner, including when it changes hands.
+            self.unbind(chord);
+        }
+        self.0.entry(cell.act).or_default()[cell.slot] = chord;
+    }
+
     fn text(&self) -> String {
-        let mut text = String::from("# eq-client keys v1\n");
+        let mut text = String::from("# eq-client keys v2\n");
         for (act, chords) in self.assignments() {
-            let labels = chords.iter().map(|chord| chord.label()).collect::<Vec<_>>();
-            writeln!(text, "{act:?} = {}", labels.join(", ")).expect("write to String");
+            let [primary, alternate] =
+                chords.map(|chord| chord.map_or_else(String::new, Chord::label));
+            if alternate.is_empty() {
+                writeln!(text, "{act:?} = {primary}").expect("write to String");
+            } else {
+                writeln!(text, "{act:?} = {primary}, {alternate}").expect("write to String");
+            }
         }
         text
     }
 
-    fn read(text: &str, mut defaults: Self) -> Self {
+    fn read(text: &str, mut defaults: Self) -> Option<Self> {
+        let sparse = match text.lines().next() {
+            Some("# eq-client keys v2") => true,
+            Some("# eq-client keys v1") | None => false,
+            Some(header) if header.starts_with("# eq-client keys v") => return None,
+            Some(_) => false,
+        };
+        let mut overrides = BTreeMap::new();
         for line in text.lines() {
             let Some((name, value)) = line.split_once('=') else {
                 continue;
@@ -99,23 +123,45 @@ impl KeyMap {
                 .find(|act| format!("{act:?}") == name.trim())
                 .copied();
             let Some(act) = act else { continue };
-            let value = value.trim();
-            let chords = if value.is_empty() {
-                Some(Vec::new())
-            } else {
-                value
-                    .split(',')
-                    .map(|part| Chord::read(part.trim()))
-                    .collect::<Option<Vec<_>>>()
+            let Some(chords) = read_slots(value, sparse) else {
+                continue;
             };
-            if let Some(chords) = chords.filter(|chords| chords.len() <= 2) {
-                defaults.0.insert(act, Vec::new());
+            if sparse {
+                overrides.insert(act, chords);
+            } else {
+                defaults.0.insert(act, [None; 2]);
                 for (slot, chord) in chords.into_iter().enumerate() {
-                    defaults.assign(Assignment { act, slot }, Some(chord));
+                    defaults.assign(Assignment { act, slot }, chord);
                 }
             }
         }
-        defaults
+        // Saved choices take precedence over the installed seed. A v2 file
+        // can also retain a shared chord carried over from the native map.
+        for chord in overrides.values().flatten().flatten() {
+            defaults.unbind(*chord);
+        }
+        defaults.0.extend(overrides);
+        Some(defaults)
+    }
+}
+
+fn read_slots(value: &str, sparse: bool) -> Option<[Option<Chord>; 2]> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Some([None; 2]);
+    }
+    let read = |part: &str| {
+        let part = part.trim();
+        if sparse && part.is_empty() {
+            Some(None)
+        } else {
+            Chord::read(part).map(Some)
+        }
+    };
+    if let Some((primary, alternate)) = value.split_once(',') {
+        Some([read(primary)?, read(alternate)?])
+    } else {
+        Some([read(value)?, None])
     }
 }
 
@@ -137,7 +183,7 @@ pub(crate) fn persist(
     let now = Instant::now();
     state.store.retry(now);
     if state.store.loaded && state.store.profile == profile.key() {
-        if changed {
+        if changed && !state.read_only {
             state
                 .store
                 .save(file_name(state.store.profile.as_ref()), map.text(), now);
@@ -146,7 +192,9 @@ pub(crate) fn persist(
     }
     if state.store.loaded {
         let name = file_name(state.store.profile.as_ref());
-        state.store.save(name, map.text(), now);
+        if !state.read_only {
+            state.store.save(name, map.text(), now);
+        }
     } else {
         state.store.open(settings.0.settings_directory.as_ref());
     }
@@ -157,7 +205,17 @@ pub(crate) fn persist(
         .read(&file_name(state.store.profile.as_ref()))
         .or_else(|| state.store.read("keys.txt"))
         .unwrap_or_default();
-    *map = KeyMap::read(&text, KeyMap::for_client(settings.0.installed_client));
+    let installed = state
+        .installed
+        .get_or_insert_with(|| KeyMap::for_settings(&settings.0));
+    let loaded = KeyMap::read(&text, installed.clone());
+    state.read_only = loaded.is_none();
+    *map = loaded.unwrap_or_else(|| {
+        warn!(
+            "Unsupported key file version; using installed bindings and leaving the file untouched"
+        );
+        installed.clone()
+    });
     state.store.loaded_text(map.text());
 }
 
@@ -233,7 +291,7 @@ mod tests {
             Some(Chord::ctrl_shift(KeyCode::F11)),
         );
         let text = map.text();
-        let loaded = KeyMap::read(&text, KeyMap::default());
+        let loaded = KeyMap::read(&text, KeyMap::default()).unwrap();
         assert_eq!(loaded.text(), text);
         assert_eq!(
             loaded.chords(Act::FreeCamera),
@@ -243,7 +301,8 @@ mod tests {
         let loaded = KeyMap::read(
             "FreeCamera = UnknownKey\nCameraUp = Ctrl+PageUp\nFutureAction = F2",
             loaded,
-        );
+        )
+        .unwrap();
         assert_eq!(loaded.label(Act::FreeCamera), "C");
         assert_eq!(loaded.label(Act::CameraUp), "Ctrl+PageUp");
     }
@@ -252,7 +311,7 @@ mod tests {
     fn saved_mac_bindings_override_new_starting_keys_including_cleared_actions() {
         let saved = "Attack = G, Alt+Q\nConsider = K\nDuck = C\nTurnLeft = Q\nStand = \n";
         let defaults = || KeyMap::for_client(eq_client_assets::ui::InstalledClient::EqMac);
-        let loaded = KeyMap::read(saved, defaults());
+        let loaded = KeyMap::read(saved, defaults()).unwrap();
         assert_eq!(
             loaded.chords(Act::Attack),
             [Chord::key(KeyCode::KeyG), Chord::alt(KeyCode::KeyQ)]
@@ -262,7 +321,7 @@ mod tests {
         assert_eq!(loaded.chords(Act::TurnLeft), [Chord::key(KeyCode::KeyQ)]);
         assert_eq!(loaded.chords(Act::Stand), []);
         let text = loaded.text();
-        assert_eq!(KeyMap::read(&text, defaults()).text(), text);
+        assert_eq!(KeyMap::read(&text, defaults()).unwrap().text(), text);
     }
 
     #[test]
@@ -272,17 +331,66 @@ mod tests {
             let loaded = KeyMap::read(
                 "Attack = \nDuck = Z\nTrade = U\nUse = \nSitStand = \n",
                 KeyMap::for_client(client),
-            );
+            )
+            .unwrap();
             assert_eq!(loaded.chords(Act::Attack), []);
             assert_eq!(loaded.chords(Act::Use), []);
             assert_eq!(loaded.chords(Act::SitStand), []);
             assert_eq!(loaded.chords(Act::Duck), [Chord::key(KeyCode::KeyZ)]);
             assert_eq!(loaded.chords(Act::Trade), [Chord::key(KeyCode::KeyU)]);
             assert_eq!(
-                KeyMap::read(&loaded.text(), KeyMap::for_client(client)).text(),
+                KeyMap::read(&loaded.text(), KeyMap::for_client(client))
+                    .unwrap()
+                    .text(),
                 loaded.text()
             );
         }
+    }
+
+    #[test]
+    fn sparse_installed_slots_and_duplicates_survive_save_and_yield_to_profile_edits() {
+        let mut installed = KeyMap::default();
+        let chord = Some(Chord::key(KeyCode::KeyW));
+        installed.0.insert(Act::Forward, [None, chord]);
+        installed.0.insert(Act::TurnLeft, [chord, None]);
+        let text = installed.text();
+        assert!(text.contains("Forward = , W"));
+        let restored = KeyMap::read(&text, KeyMap::default()).unwrap();
+        assert_eq!(restored.0, installed.0);
+
+        let profile =
+            KeyMap::read("# eq-client keys v1\nForward =\nTurnLeft = A\n", installed).unwrap();
+        assert_eq!(profile.chords(Act::Forward), [] as [Chord; 0]);
+        assert_eq!(profile.chords(Act::TurnLeft), [Chord::key(KeyCode::KeyA)]);
+        let mut changed = restored;
+        changed.assign(cell(), chord);
+        assert_eq!(changed.0[&Act::Forward], [None, None]);
+        assert_eq!(changed.0[&Act::TurnLeft], [None, None]);
+    }
+
+    #[test]
+    fn an_unknown_key_file_version_remains_untouched_after_an_edit() {
+        let directory =
+            std::env::temp_dir().join(format!("eq-client-unknown-key-file-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let file = directory.join("keys.txt");
+        let future = "# eq-client keys v99\nFreeCamera = C\n";
+        std::fs::write(&file, future).unwrap();
+        let mut app = crate::testing::app();
+        app.world_mut()
+            .resource_mut::<crate::ViewerSettings>()
+            .0
+            .settings_directory = Some(directory.clone());
+        app.add_systems(Update, persist);
+        app.update();
+        assert_eq!(app.world().resource::<KeyMap>().label(Act::FreeCamera), "");
+        app.world_mut()
+            .resource_mut::<KeyMap>()
+            .assign(cell(), Some(Chord::key(KeyCode::F9)));
+        app.update();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), future);
+        std::fs::remove_file(file).unwrap();
+        std::fs::remove_dir(directory).unwrap();
     }
 
     #[test]

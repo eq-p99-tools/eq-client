@@ -123,6 +123,8 @@ pub(super) enum Does {
     HotbarPage(bool),
     /// Does this to the quantity window's amount, as Accept takes it.
     Picks(crate::inventory::SplitAction),
+    /// Explicit cursor-item destruction through the inventory confirmation.
+    Destroys,
     /// Does this to the loot open on a corpse or the merchant open, as the
     /// loot window's Done ends the loot and the merchant window's Buy buys.
     Trades(crate::trade::Action),
@@ -179,6 +181,9 @@ pub(super) fn does(id: &str, owner: WindowId) -> Option<Does> {
     }
     if let Some(does) = trading_button(id, owner) {
         return Some(does);
+    }
+    if owner == WindowId::Inventory && id == "IW_Destroy" {
+        return Some(Does::Destroys);
     }
     if owner == WindowId::Item {
         return Some(if id == "IconButton" {
@@ -352,7 +357,7 @@ pub(super) fn hot_button(id: &str) -> Option<usize> {
 
 /// The skin's Options window checkboxes for the official client's options
 /// this client keeps, by screen ID.
-const OPTION_CHECKBOXES: [(&str, eq_client_core::options::Toggle); 7] = {
+const OPTION_CHECKBOXES: [(&str, eq_client_core::options::Toggle); 8] = {
     use eq_client_core::options::Toggle;
     [
         ("OGP_PetWindowPopupCheckbox", Toggle::PetWindowPopup),
@@ -362,6 +367,7 @@ const OPTION_CHECKBOXES: [(&str, eq_client_core::options::Toggle); 7] = {
         ("ODP_NPCNamesCheckbox", Toggle::NpcNames),
         ("OMP_InvertYAxisCheckbox", Toggle::InvertY),
         ("OMP_MouseWheelZoomCheckbox", Toggle::WheelZoom),
+        ("EQC_SpellEffectsCheckbox", Toggle::SpellEffects),
     ]
 };
 

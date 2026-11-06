@@ -17,6 +17,27 @@ pub enum CampTo {
     Desktop,
 }
 
+/// The evidence that ended the local camp lifecycle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CampOutcome {
+    /// The zone's logout reply was received.
+    LogoutReply,
+    /// The client's documented close deadline elapsed without that reply.
+    /// This does not confirm server logout or cleanup.
+    LocalDeadline,
+}
+
+/// The last completed camp, scoped to its departing admission when known.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Completion {
+    /// The admission that camped; absent when the host never knew one.
+    pub admission_id: Option<u64>,
+    /// The requested local destination.
+    pub destination: CampTo,
+    /// Received reply or local deadline, without inferring server cleanup.
+    pub outcome: CampOutcome,
+}
+
 /// Where the words after `/camp` say the camp ends: none, the character
 /// list; `desktop`, in any case, out of the program.
 ///
