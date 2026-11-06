@@ -226,13 +226,18 @@ impl Outbox {
         self.send_owned(world, command, false)
     }
 
-    /// The active set's single step uses the same outbox checks as a click.
+    /// Stamps and sends the active set's single step through the same checks
+    /// as a click. The set owns the refusal feedback, so nothing is shown here.
+    ///
+    /// # Errors
+    /// Refuses a command the session cannot take now.
     pub(crate) fn spell_set_step(
         &self,
         world: &ClientWorld,
-        command: ClientCommand,
+        command: impl FnOnce(Stamp) -> ClientCommand,
     ) -> Result<(), Refusal> {
-        self.send_owned(world, command, true)
+        let stamp = self.try_stamp(world)?;
+        self.try_send(world, command(stamp), true)
     }
 
     fn send_owned(

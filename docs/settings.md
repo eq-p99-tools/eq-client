@@ -10,8 +10,10 @@ preferences are written to the separate settings directory.
 Settings such as windows, options, hotbar, key bindings and map watches are kept
 per world/character. Shared files seed characters that have no saved settings.
 For example, `keys.txt` seeds `keys-<world>-<character>.txt`; file-name components
-are sanitized. `login-servers.txt` holds [login presets](login.md). These files can
-contain account/character identifiers and should not be committed.
+are sanitized. Saved spell sets live in `spell-sets-v1-<world>-<character>.txt`,
+where both names are written as hexadecimal bytes so that two names the sanitizer
+would merge keep separate files. `login-servers.txt` holds [login presets](login.md).
+These files can contain account/character identifiers and should not be committed.
 
 Window-layout v2 records retain an optional full chat size alongside position
 and minimized state. Existing v1 position-only records remain readable and use

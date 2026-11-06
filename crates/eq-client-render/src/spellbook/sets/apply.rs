@@ -285,8 +285,7 @@ fn submit(
         current,
         world.spell_book().context("Spellbook unavailable")?,
     )?;
-    let stamp = outbox.stamp(world)?;
-    outbox.spell_set_step(world, step.command(stamp))?;
+    outbox.spell_set_step(world, |stamp| step.command(stamp))?;
     Ok(())
 }
 

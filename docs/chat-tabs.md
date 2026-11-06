@@ -9,8 +9,8 @@ game view. To dock it again, drop it onto another window's tab strip. Drag a
 window by its title to move it. Resize from its edges or corners where the
 window supports resizing.
 
-Escape cancels a tab drag. Releasing over other controls or outside the client
-also cancels the drag. Close a detached window with its close box or with
+Escape cancels a tab drag. Releasing over other controls, or moving the pointer
+out of the client window, also cancels the drag. Close a detached window with its close box or with
 Escape when it is the foremost closable window. Its tabs return to the main
 chat. The main chat also stays available as a dock when all its tabs are detached.
 
