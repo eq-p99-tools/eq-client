@@ -222,6 +222,84 @@ fn refused_or_corrected_held_swaps_leave_received_wear_in_charge() {
 }
 
 #[test]
+fn a_matching_hand_receipt_without_model_retracts_only_the_visual_estimate() {
+    let mut world = held_swap(38);
+    submit_primary_swap(&mut world);
+    assert_eq!(
+        world.held_model_estimate(TextureSlot::Primary),
+        Some(HeldModelEstimate::Submitted(38))
+    );
+    game(
+        &mut world,
+        WorldEvent::Inventory(InventoryUpdate::Set(vec![held_item(
+            InventorySlot(13),
+            102,
+            0,
+        )])),
+    );
+    assert_eq!(world.held_model_estimate(TextureSlot::Primary), None);
+    assert!(!world.worker_inventory().stale());
+    assert_eq!(
+        world
+            .worker_inventory()
+            .prediction_origins()
+            .map(|(slot, _)| slot)
+            .collect::<Vec<_>>(),
+        [InventorySlot::CURSOR]
+    );
+}
+
+#[test]
+fn secondary_move_can_display_and_clear_a_held_model() {
+    use HeldModelEstimate::{ReceivedInventory, Submitted};
+    let mut world = admitted();
+    let mut shield = held_item(InventorySlot::CURSOR, 103, 205);
+    shield.details.slots = 1 << 14;
+    shield.rules.item_type = 8; // Shield.
+    game(&mut world, inventory(vec![shield]));
+
+    let submit = |world: &mut ClientWorld, from, to| {
+        let request = queue(world, from, to);
+        let prediction = world
+            .worker_inventory()
+            .plan_move(&request, actor())
+            .unwrap();
+        result(world, &request, Some(prediction), None);
+    };
+    let secondary = |world: &ClientWorld| world.held_model_estimate(TextureSlot::Secondary);
+    submit(&mut world, 30, 14);
+    assert_eq!(secondary(&world), Some(Submitted(205)));
+    assert_eq!(world.held_model_estimate(TextureSlot::Primary), None);
+
+    game(
+        &mut world,
+        WorldEvent::WearChange(WearChange {
+            spawn_id: 9,
+            slot: TextureSlot::Secondary,
+            material: 205,
+            tint: None,
+        }),
+    );
+    assert_eq!(secondary(&world), None);
+    game(&mut world, WorldEvent::Inventory(InventoryUpdate::Settled));
+    submit(&mut world, 14, 30);
+    assert_eq!(secondary(&world), Some(Submitted(0)));
+    game(
+        &mut world,
+        WorldEvent::Inventory(InventoryUpdate::Remove(InventorySlot(14))),
+    );
+    assert_eq!(secondary(&world), Some(ReceivedInventory(0)));
+    assert_eq!(
+        world
+            .player()
+            .unwrap()
+            .appearance
+            .material(TextureSlot::Secondary),
+        205
+    );
+}
+
+#[test]
 fn a_new_admission_or_unknown_base_model_uses_received_appearance() {
     let mut world = held_swap(38);
     submit_primary_swap(&mut world);
