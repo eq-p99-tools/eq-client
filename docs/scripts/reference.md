@@ -56,8 +56,9 @@ Key names are case-insensitive. Combine them with `+`, such as `alt+1`. Supporte
 - `give`: queue an offer of the cursor item or coins to the current NPC or
   player target. The run stops at this line if the offer cannot be queued,
   including when the cursor is empty, the target is unsuitable, or an exchange
-  is already pending or open. The step completes when the local queue accepts
-  the offer. The server's answer separately determines whether an exchange opens.
+  is already pending or open. The script result carries the local refusal.
+  The step completes when the local queue accepts the offer. The server's
+  answer separately determines whether an exchange opens.
 
 Movement uses the client's ordinary movement and collision behavior. It is not a teleport. Walk uses a ready navigation mesh when `--navmesh` is enabled and falls back to grid search otherwise. A reachable destination and the session's movement grant are still required. Keep the camera attached when using movement scripts; free-camera mode consumes movement input for the camera.
 

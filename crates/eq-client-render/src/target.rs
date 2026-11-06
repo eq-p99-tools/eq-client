@@ -283,7 +283,11 @@ pub(super) fn input(
                 Choice::Spawn(id, _) => {
                     // An NPC clicked with an item on the cursor is asked to
                     // take it, as well as targeted.
-                    let _ = super::give::offer(id, &mut online, &outbox);
+                    if let Err(super::give::OfferFailure::Refused(refusal)) =
+                        super::give::offer(id, &mut online, &outbox)
+                    {
+                        outbox.refused(refusal);
+                    }
                     proposal = Some(Some(id));
                 }
                 Choice::Nothing if mouse.just_pressed(MouseButton::Left) => {

@@ -52,8 +52,8 @@ impl OfferFailure {
 /// on the cursor. A queued offer still awaits the server's answer.
 ///
 /// # Errors
-/// Returns a local precondition failure or the refusal already shown by the
-/// outbox.
+/// Returns a local precondition failure or a typed outbox refusal. The caller
+/// owns the feedback.
 pub(crate) fn offer(
     spawn_id: u16,
     online: &mut OnlineState,
@@ -81,7 +81,7 @@ pub(crate) fn offer(
         return Err(OfferFailure::ExchangeInProgress);
     }
     outbox
-        .post(world, |stamp| ClientCommand::OfferTrade {
+        .try_post(world, |stamp| ClientCommand::OfferTrade {
             session_id: stamp.session_id,
             with_id: spawn_id,
             created: stamp.created,
@@ -341,7 +341,7 @@ mod tests {
             offer(NPC, &mut online(&mut app), &offline),
             Err(OfferFailure::Refused(Refusal::Offline))
         );
-        assert_eq!(offline.take_refused(), [Refusal::Offline]);
+        assert_eq!(offline.take_refused(), []);
         assert!(online(&mut app).world().exchange().is_none());
         app.world_mut()
             .resource_scope(|world, mut online: Mut<OnlineState>| {

@@ -1,9 +1,9 @@
 //! The one way the client's commands leave for the session. The outbox
 //! stamps a command with the admission it belongs to and the time it was
 //! made, refuses what the session cannot take (no session, something the
-//! server does not offer, a full or closed queue) with one reason, and says
-//! every refusal in one place: the chat, as the official client says its
-//! refusals. Windows grey out
+//! server does not offer, a full or closed queue) with one reason. By default
+//! refusals go to chat. A caller with its own status can take the refusal and
+//! report it there. Windows grey out
 //! what the session does not offer from the same answer, the world's
 //! capability report.
 use crate::theme;
@@ -118,18 +118,17 @@ impl Outbox {
     /// # Errors
     /// Refuses, and shows why, when there is no session or admission.
     pub(crate) fn stamp(&self, world: &ClientWorld) -> Result<Stamp, Refusal> {
-        let stamp = if self.queue.is_none() {
-            Err(Refusal::Offline)
-        } else {
-            world
-                .session_id()
-                .map(|session_id| Stamp {
-                    session_id,
-                    created: Instant::now(),
-                })
-                .ok_or(Refusal::NotAdmitted)
-        };
-        stamp.inspect_err(|refusal| self.refused(*refusal))
+        self.try_stamp(world)
+            .inspect_err(|refusal| self.refused(*refusal))
+    }
+
+    fn try_stamp(&self, world: &ClientWorld) -> Result<Stamp, Refusal> {
+        self.queue.as_ref().ok_or(Refusal::Offline)?;
+        let session_id = world.session_id().ok_or(Refusal::NotAdmitted)?;
+        Ok(Stamp {
+            session_id,
+            created: Instant::now(),
+        })
     }
 
     /// The stamp a command made now would carry, for checking a request
@@ -149,20 +148,23 @@ impl Outbox {
     /// # Errors
     /// Refuses a command the session cannot take now.
     pub(crate) fn send(&self, world: &ClientWorld, command: ClientCommand) -> Result<(), Refusal> {
-        let sent = self.check(world, &command).and_then(|queue| {
-            queue.try_send(command).map_err(|error| match error {
+        self.try_send(world, command)
+            .inspect_err(|refusal| self.refused(*refusal))
+    }
+
+    fn try_send(&self, world: &ClientWorld, command: ClientCommand) -> Result<(), Refusal> {
+        self.check(world, &command)?
+            .try_send(command)
+            .map_err(|error| match error {
                 TrySendError::Full(_) => Refusal::Busy,
                 TrySendError::Disconnected(_) => Refusal::Ended,
             })
-        });
-        sent.inspect_err(|refusal| self.refused(*refusal))
     }
 
     /// Sends a command the player did not ask for, such as a setting the
     /// session must know. A refusal is not shown; the caller tries again.
     pub(crate) fn tell(&self, world: &ClientWorld, command: ClientCommand) -> bool {
-        self.check(world, &command)
-            .is_ok_and(|queue| queue.try_send(command).is_ok())
+        self.try_send(world, command).is_ok()
     }
 
     /// Stamps a command made now and sends it.
@@ -174,8 +176,21 @@ impl Outbox {
         world: &ClientWorld,
         command: impl FnOnce(Stamp) -> ClientCommand,
     ) -> Result<(), Refusal> {
-        let stamp = self.stamp(world)?;
-        self.send(world, command(stamp))
+        self.try_post(world, command)
+            .inspect_err(|refusal| self.refused(*refusal))
+    }
+
+    /// Stamps and sends a command when the caller owns refusal feedback.
+    ///
+    /// # Errors
+    /// Refuses a command the session cannot take now.
+    pub(super) fn try_post(
+        &self,
+        world: &ClientWorld,
+        command: impl FnOnce(Stamp) -> ClientCommand,
+    ) -> Result<(), Refusal> {
+        let stamp = self.try_stamp(world)?;
+        self.try_send(world, command(stamp))
     }
 
     /// The queue, if the session can take this command now.
@@ -222,7 +237,8 @@ impl Outbox {
         Ok(queue)
     }
 
-    fn refused(&self, refusal: Refusal) {
+    /// Queues a refusal for the normal chat feedback.
+    pub(super) fn refused(&self, refusal: Refusal) {
         debug!(?refusal, "Command refused");
         if let Ok(mut refused) = self.refused.lock() {
             refused.push(refusal);
@@ -238,7 +254,7 @@ impl Outbox {
     }
 }
 
-/// Says this frame's last refusal in the chat, where every refusal is said.
+/// Says this frame's last refusal queued for chat.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn show(outbox: Res<Outbox>, mut chat: ResMut<super::chat::ChatState>) {
     if let Some(refusal) = outbox.take_refused().pop() {

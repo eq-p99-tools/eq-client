@@ -4808,11 +4808,14 @@ mod tests {
     }
 
     #[test]
-    fn scripted_give_reports_a_full_or_closed_queue_without_marking_an_exchange() {
+    fn scripted_give_reports_a_full_or_closed_queue_only_in_the_script_result() {
         use crate::{
+            chat::ChatState,
             online::OnlineState,
-            outbox::{Outbox, Refusal},
+            outbox::{self, Refusal},
         };
+        use bevy::ecs::system::RunSystemOnce;
+        use eq_client_core::chat::ChatTab;
 
         for refusal in [Refusal::Busy, Refusal::Ended] {
             // A rendezvous channel is full until a receiver waits for a send.
@@ -4820,7 +4823,15 @@ mod tests {
             let rx = (refusal == Refusal::Busy).then_some(rx);
             assert_give_stops(&mut app, refusal.text());
             assert!(rx.is_none_or(|rx| rx.try_recv().is_err()));
-            assert_eq!(app.world().resource::<Outbox>().take_refused(), [refusal]);
+            app.world_mut().run_system_once(outbox::show).unwrap();
+            assert!(
+                !app.world()
+                    .resource::<ChatState>()
+                    .history
+                    .lines(ChatTab::All)
+                    .iter()
+                    .any(|(_, line)| line.message.text == refusal.text())
+            );
             assert!(
                 app.world()
                     .resource::<OnlineState>()

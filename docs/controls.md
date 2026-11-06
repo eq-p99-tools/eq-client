@@ -125,6 +125,8 @@ preserves the document and any running script; use Stop to end execution.
 
 Click **Search spells** to type, or paste with **Ctrl+V**. **Enter** and
 **Escape** leave the results on screen and return keyboard control.
+Search takes over keys already held when the field gains focus. Release them
+and press them again after leaving the field to use them for gameplay.
 **Delete** while typing or **Clear** restores the normal book. Use the
 book's page controls to browse more results.
 

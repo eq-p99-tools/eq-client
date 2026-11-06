@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Report a local scripted `give` refusal through the script result once.
+  Native click refusals still appear in chat.
+
 - Stop a scripted `give` at the failing line when the target or cursor is
   unsuitable, an exchange is in progress, or the local session queue refuses
   the offer. A queued offer still awaits the server's answer.
