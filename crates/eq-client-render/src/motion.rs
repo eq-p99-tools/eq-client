@@ -3654,7 +3654,16 @@ mod tests {
         app.insert_resource(Collision(Some(liquid_pool(
             eq_client_core::movement::Liquid::Water,
         ))));
-        app.world_mut().resource_mut::<Controls>().airborne = Some(AirborneController::default());
+        {
+            // The session has heard this body's climb for the new admission,
+            // as the fixture arranges for session 11.
+            let mut controls = app.world_mut().resource_mut::<Controls>();
+            controls.airborne = Some(AirborneController::default());
+            controls.climb_sent = Some((
+                12,
+                eq_client_assets::falls::TITANIUM.climb_per_step(3.0, 6.0),
+            ));
+        }
         movement_choice(&mut app, Fix::JesusMode, true);
         app.update();
         let ClientCommand::Move(falling) = receiver.try_recv().unwrap() else {
