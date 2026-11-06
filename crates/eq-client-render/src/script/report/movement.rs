@@ -22,7 +22,7 @@ pub(in crate::script) fn report(
         .session_id()
         .filter(|_| world.connected() && !world.is_dead());
     let session_position = admission.and_then(|_| world.player().map(|p| p.position));
-    let rendered_position = admission.and_then(|_| transform).map(super::placement);
+    let rendered_position = admission.and(transform).map(super::placement);
     let contact = session_position.zip(geometry).map_or(
         LiquidContact::Unknown,
         |(position, (body, collision))| {

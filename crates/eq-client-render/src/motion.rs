@@ -1306,6 +1306,7 @@ fn unsupported(world: &eq_client_core::movement::CollisionWorld, feet: Vec3) -> 
 /// speed less gravity carries it in the sample (the guard's own rule after
 /// the session's jump notice). A larger climb takes several accepted
 /// samples instead of one that would be refused and retried forever.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn fall_step(
     airborne: &mut eq_client_core::movement::AirborneController,
@@ -3338,7 +3339,9 @@ mod tests {
         {
             let mut controls = app.world_mut().resource_mut::<Controls>();
             controls.reset(Some(6.0));
-            controls.last_accepted = Instant::now() - Duration::from_millis(100);
+            controls.last_accepted = Instant::now()
+                .checked_sub(Duration::from_millis(100))
+                .unwrap();
         }
         app.update();
         let ClientCommand::Move(ordinary) = receiver.try_recv().unwrap() else {
