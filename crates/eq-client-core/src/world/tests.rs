@@ -944,7 +944,7 @@ fn an_idle_song_stop_or_an_old_admission_cannot_release_a_new_cast() {
         },
     );
     assert!(stale.ignored);
-    assert!(stale.notices.is_empty());
+    assert_eq!(stale.notices, []);
     let idle = game(
         &mut world,
         WorldEvent::SongStopUnconfirmed {
@@ -1000,7 +1000,7 @@ fn a_superseded_song_cannot_end_the_different_cast_that_started() {
             },
         );
         assert!(!superseded.ignored);
-        assert!(superseded.notices.is_empty());
+        assert_eq!(superseded.notices, []);
         assert_eq!(superseded.cast, None);
         assert_eq!(world.casting().pending, None);
         assert_eq!(world.casting().cast, None);
