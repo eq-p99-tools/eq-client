@@ -1646,11 +1646,16 @@ pub(super) fn drive(
             return;
         }
         Step::Give => {
-            let Some(target) = online.world().target().selected else {
+            let world = online.world();
+            let Some(target) = world.target().selected else {
                 script.stop(&mut keys, &mut mouse, "give needs a target");
                 return;
             };
-            super::give::offer(target, &mut online, &observed.1);
+            if world.target_stale() {
+                script.stop(&mut keys, &mut mouse, "give target is no longer available");
+            } else if let Err(failure) = super::give::offer(target, &mut online, &observed.1) {
+                script.stop(&mut keys, &mut mouse, failure.text());
+            }
             return;
         }
         Step::Gm(_) | Step::Chat(_) => {
@@ -4707,6 +4712,155 @@ mod tests {
         assert_eq!(status.line(), Some(3));
         assert_eq!(status.phase(), Phase::Failed);
         assert!(status.events().back().unwrap().message.contains("target"));
+    }
+
+    const GIVE_TARGET: u16 = 42;
+
+    fn give_app(
+        capacity: usize,
+    ) -> (
+        App,
+        std::sync::mpsc::Receiver<eq_client_core::ClientCommand>,
+    ) {
+        use crate::online::{OnlineState, testing as session};
+        use eq_client_core::inventory::{InventorySlot, InventoryUpdate};
+
+        let mut app = pointing(Vec::new());
+        let window = app
+            .world_mut()
+            .query_filtered::<Entity, With<PrimaryWindow>>()
+            .single(app.world())
+            .unwrap();
+        set_focus(&mut app, window, true);
+        let program = Program::parse("give\nreport after give\n", Path::new(".")).unwrap();
+        let mut online = OnlineState::new(true);
+        session::admit(&mut online, 9, session::player(7));
+        session::spawns(&mut online, vec![session::pet(GIVE_TARGET, 99)]);
+        online.select_target(Some(GIVE_TARGET));
+        let mut item = crate::preview::items().into_iter().next().unwrap();
+        item.slot = InventorySlot::CURSOR;
+        session::inventory(&mut online, InventoryUpdate::Snapshot(vec![item]));
+        let (tx, rx) = std::sync::mpsc::sync_channel(capacity);
+        app.insert_resource(Script::from_program(program))
+            .insert_resource(online)
+            .insert_resource(crate::outbox::Outbox::new(Some(tx)));
+        (app, rx)
+    }
+
+    fn assert_give_stops(app: &mut App, reason: &str) {
+        frame_at(app, 0);
+        frame_at(app, 10);
+        assert!(!app.world().contains_resource::<Script>());
+        let status = app.world().resource::<RunStatus>();
+        assert_eq!(status.phase(), Phase::Failed);
+        assert_eq!(status.line(), Some(1));
+        assert_eq!(status.progress(), (0, 2));
+        assert_eq!(status.events().back().unwrap().message, reason);
+    }
+
+    #[test]
+    fn scripted_give_stops_before_the_next_line_when_the_offer_is_inapplicable() {
+        use crate::{
+            online::{OnlineState, testing as session},
+            outbox::{Outbox, Refusal},
+        };
+        use eq_client_core::{WorldEvent, exchange::ExchangeUpdate, inventory::InventoryUpdate};
+
+        type Setup = fn(&mut OnlineState);
+        let cases: [(Setup, &str); 5] = [
+            (|online| online.select_target(None), "give needs a target"),
+            (
+                |online| session::inventory(online, InventoryUpdate::Snapshot(Vec::new())),
+                "give needs an item or coins on the cursor",
+            ),
+            (
+                |online| online.select_target(Some(7)),
+                "give needs an NPC or another player",
+            ),
+            (
+                |online| session::spawns(online, vec![session::pet(GIVE_TARGET, 100)]),
+                "give target is no longer available",
+            ),
+            (
+                |online| {
+                    online.offer_trade(GIVE_TARGET);
+                    session::news(
+                        online,
+                        [WorldEvent::Exchange(ExchangeUpdate::Opened {
+                            with: u32::from(GIVE_TARGET),
+                        })],
+                    );
+                    assert!(online.world().exchange().unwrap().open);
+                },
+                "give cannot start while an exchange is pending or open",
+            ),
+        ];
+        for (setup, reason) in cases {
+            let (mut app, rx) = give_app(1);
+            setup(&mut app.world_mut().resource_mut::<OnlineState>());
+            assert_give_stops(&mut app, reason);
+            assert!(rx.try_recv().is_err());
+            assert_eq!(
+                app.world().resource::<Outbox>().take_refused(),
+                Vec::<Refusal>::new()
+            );
+        }
+    }
+
+    #[test]
+    fn scripted_give_reports_a_full_or_closed_queue_without_marking_an_exchange() {
+        use crate::{
+            online::OnlineState,
+            outbox::{Outbox, Refusal},
+        };
+
+        for refusal in [Refusal::Busy, Refusal::Ended] {
+            // A rendezvous channel is full until a receiver waits for a send.
+            let (mut app, rx) = give_app(0);
+            let rx = (refusal == Refusal::Busy).then_some(rx);
+            assert_give_stops(&mut app, refusal.text());
+            assert!(rx.is_none_or(|rx| rx.try_recv().is_err()));
+            assert_eq!(app.world().resource::<Outbox>().take_refused(), [refusal]);
+            assert!(
+                app.world()
+                    .resource::<OnlineState>()
+                    .world()
+                    .exchange()
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn scripted_give_queues_one_offer_and_advances_before_the_server_answers() {
+        use eq_client_core::{ClientCommand, inventory::InventorySlot};
+
+        let (mut app, rx) = give_app(2);
+        frame_at(&mut app, 0);
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            ClientCommand::OfferTrade {
+                session_id: 9,
+                with_id: GIVE_TARGET,
+                ..
+            }
+        ));
+        frame_at(&mut app, 10);
+        frame_at(&mut app, 20);
+        let status = app.world().resource::<RunStatus>();
+        assert_eq!(status.phase(), Phase::Completed);
+        assert_eq!(status.progress(), (2, 2));
+        let world = app.world().resource::<crate::online::OnlineState>().world();
+        let exchange = world.exchange().unwrap();
+        assert_eq!(exchange.with, GIVE_TARGET);
+        assert!(!exchange.open);
+        assert!(
+            world
+                .inventory()
+                .items()
+                .contains_key(&InventorySlot::CURSOR)
+        );
+        assert!(rx.try_recv().is_err());
     }
 
     /// A node laid out square around `middle`, `side` across and `stack`

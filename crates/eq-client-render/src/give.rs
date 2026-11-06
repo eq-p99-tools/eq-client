@@ -12,7 +12,7 @@
 use crate::inventory::Handed;
 use crate::{
     online::OnlineState,
-    outbox::Outbox,
+    outbox::{Outbox, Refusal},
     windows::{Shown, WindowId},
 };
 use bevy::prelude::*;
@@ -28,35 +28,67 @@ use eq_client_core::{
 #[derive(Component)]
 pub(crate) struct GiveButton;
 
-/// Asks a clicked NPC or another player to take what the player holds on
-/// the cursor, an item or coins; nothing happens with an empty cursor, as in
-/// the official client. The outbox says a refusal itself.
-pub(crate) fn offer(spawn_id: u16, online: &mut OnlineState, outbox: &Outbox) {
+/// Why no local trade offer was queued.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OfferFailure {
+    EmptyCursor,
+    UnsuitableTarget,
+    ExchangeInProgress,
+    Refused(Refusal),
+}
+
+impl OfferFailure {
+    pub(crate) const fn text(self) -> &'static str {
+        match self {
+            Self::EmptyCursor => "give needs an item or coins on the cursor",
+            Self::UnsuitableTarget => "give needs an NPC or another player",
+            Self::ExchangeInProgress => "give cannot start while an exchange is pending or open",
+            Self::Refused(refusal) => refusal.text(),
+        }
+    }
+}
+
+/// Queues an offer to an NPC or another player while holding an item or coins
+/// on the cursor. A queued offer still awaits the server's answer.
+///
+/// # Errors
+/// Returns a local precondition failure or the refusal already shown by the
+/// outbox.
+pub(crate) fn offer(
+    spawn_id: u16,
+    online: &mut OnlineState,
+    outbox: &Outbox,
+) -> Result<(), OfferFailure> {
     let world = online.world();
     let holding = world
         .inventory()
         .items()
         .contains_key(&InventorySlot::CURSOR)
         || crate::coins::on_cursor(world).is_some();
+    if !holding {
+        return Err(OfferFailure::EmptyCursor);
+    }
     let other = world
         .player()
         .is_some_and(|player| player.spawn_id != spawn_id);
     let takes = world
         .spawn(spawn_id)
         .is_some_and(|spawn| matches!(spawn.state.kind, SpawnKind::Npc | SpawnKind::Player));
-    if !holding || !other || !takes || world.exchange().is_some() {
-        return;
+    if !other || !takes {
+        return Err(OfferFailure::UnsuitableTarget);
     }
-    let sent = outbox
+    if world.exchange().is_some() {
+        return Err(OfferFailure::ExchangeInProgress);
+    }
+    outbox
         .post(world, |stamp| ClientCommand::OfferTrade {
             session_id: stamp.session_id,
             with_id: spawn_id,
             created: stamp.created,
         })
-        .is_ok();
-    if sent {
-        online.offer_trade(spawn_id);
-    }
+        .map_err(OfferFailure::Refused)?;
+    online.offer_trade(spawn_id);
+    Ok(())
 }
 
 /// A side of a trade.
@@ -304,11 +336,16 @@ mod tests {
     fn the_npcs_answer_opens_the_window_with_the_cursor_item_in_it() {
         let (mut app, rx) = app();
         // Without a session, nothing is asked.
-        offer(NPC, &mut online(&mut app), &Outbox::new(None));
+        let offline = Outbox::new(None);
+        assert_eq!(
+            offer(NPC, &mut online(&mut app), &offline),
+            Err(OfferFailure::Refused(Refusal::Offline))
+        );
+        assert_eq!(offline.take_refused(), [Refusal::Offline]);
         assert!(online(&mut app).world().exchange().is_none());
         app.world_mut()
             .resource_scope(|world, mut online: Mut<OnlineState>| {
-                offer(NPC, &mut online, world.resource::<Outbox>());
+                offer(NPC, &mut online, world.resource::<Outbox>()).unwrap();
             });
         assert!(matches!(
             rx.try_recv().unwrap(),

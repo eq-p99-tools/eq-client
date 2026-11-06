@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Stop a scripted `give` at the failing line when the target or cursor is
+  unsuitable, an exchange is in progress, or the local session queue refuses
+  the offer. A queued offer still awaits the server's answer.
+
 - Search learned spells in the spellbook by name. Results follow book-slot
   order and preserve the source spell and slot for inspection and memorizing.
   Clearing search restores normal browsing.
