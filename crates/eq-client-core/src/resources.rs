@@ -110,6 +110,8 @@ pub fn eqemu_equipped_modifiers(
     let race_bit = match base_race {
         1..=12 => base_race - 1,
         128 => 12,
+        130 => 13,
+        330 => 14,
         _ => return Err(EquipmentUnavailable::UnknownCharacter),
     };
     let mut result = Vec::new();
@@ -162,7 +164,13 @@ pub fn eqemu_equipment_by_level(
     let rules = item.equipment?;
     if u32::from(level) < rules.required_level {
         return Some(ScaledEquipment {
-            bonuses: ItemBonuses::default(),
+            bonuses: ItemBonuses {
+                fire_resistance: item
+                    .bonuses
+                    .and_then(|bonuses| bonuses.fire_resistance)
+                    .map(|_| 0),
+                ..ItemBonuses::default()
+            },
             worn: None,
         });
     }
@@ -172,6 +180,7 @@ pub fn eqemu_equipment_by_level(
         bonuses: ItemBonuses {
             strength: scale(raw.strength),
             stamina: scale(raw.stamina),
+            fire_resistance: raw.fire_resistance.map(scale),
             agility: scale(raw.agility),
             dexterity: scale(raw.dexterity),
             charisma: scale(raw.charisma),

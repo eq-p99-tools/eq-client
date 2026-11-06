@@ -118,6 +118,8 @@ pub(super) fn state(
         camera_yaw = ?camera.map(|camera| camera.yaw),
         camera_pitch = ?camera.map(crate::OrbitCamera::view_pitch),
         ?own_stun,
+        air_remaining = ?observed.11.as_deref().and_then(crate::breath::State::air)
+            .map(|air| (air.remaining, air.capacity.get())),
         local_movement_policy_feedback = ?online.world().movement_options_result(),
         ?option_values,
         ?known_invisible_count,

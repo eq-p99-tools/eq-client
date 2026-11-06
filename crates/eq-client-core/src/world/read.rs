@@ -17,6 +17,18 @@ use crate::{
 use std::collections::BTreeMap;
 
 impl ClientWorld {
+    /// Revision of the inputs delivered by the worker for liquid proposals.
+    #[must_use]
+    pub const fn liquid_hazard_revision(&self) -> Option<u64> {
+        self.liquid_hazard_revision
+    }
+
+    /// Whether an own size or illusion change invalidated the admitted model.
+    #[must_use]
+    pub const fn own_model_changed(&self) -> bool {
+        self.own_model_changed
+    }
+
     /// Latest session request for host-owned movement inputs; reset on admission.
     #[must_use]
     pub const fn speed_input_revision(&self) -> Option<u64> {

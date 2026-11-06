@@ -30,6 +30,7 @@ pub(super) struct OnlineState {
     pub regions: eq_client_assets::regions::ZoneRegions,
     pub enabled: bool,
     server_placement: Option<ServerPlacement>,
+    placement_revision: u64,
     loading: super::background::Background<Result<super::zone::PreparedEntry, String>>,
     /// A new zone's admission and the news after it, held back while the
     /// loading screen waits for the player's casting gesture over the zone
@@ -59,7 +60,15 @@ impl OnlineState {
         })
     }
 
+    /// A received placement or reset breaks continuity for local hazards.
+    pub(super) const fn placement_revision(&self) -> u64 {
+        self.placement_revision
+    }
+
     fn observe_server_placement(&mut self, changes: &Changes) {
+        if changes.reset.is_some() || changes.entered || changes.placed.is_some() {
+            self.placement_revision = self.placement_revision.wrapping_add(1);
+        }
         if changes.reset.is_some() {
             self.server_placement = None;
         }
@@ -354,6 +363,7 @@ impl OnlineState {
             regions: eq_client_assets::regions::ZoneRegions::default(),
             enabled,
             server_placement: None,
+            placement_revision: 0,
             loading: default(),
             held: Vec::new(),
         }
@@ -1053,6 +1063,7 @@ pub(crate) mod testing {
     pub(crate) fn player(spawn_id: u16) -> PlayerState {
         PlayerState {
             name: "Example".into(),
+            titanium_environment: None,
             base_attributes: None,
             deity: None,
             class: Some(1),
@@ -1553,6 +1564,7 @@ mod tests {
             .add_systems(Update, receive);
         let player = PlayerState {
             name: "Example".into(),
+            titanium_environment: None,
             base_attributes: None,
             deity: None,
             class: Some(1),
@@ -2085,6 +2097,7 @@ mod tests {
         let mut state = OnlineState::new(true);
         let player = PlayerState {
             name: "Example".into(),
+            titanium_environment: None,
             base_attributes: None,
             deity: None,
             class: Some(1),

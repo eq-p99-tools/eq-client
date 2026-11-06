@@ -35,6 +35,7 @@ mod asset_loads;
 mod attention;
 mod background;
 mod book_delete;
+mod breath;
 mod buffs;
 mod character;
 mod character_create;
@@ -669,6 +670,7 @@ fn setup_scene(
             character,
             placed,
             body,
+            native_head: None,
             // The offline viewer stands its model at the mesh's own size,
             // with no spawn to size it by.
             scale: 1.0,
@@ -1530,6 +1532,7 @@ mod tests {
                             height: 6.0,
                             size: 6.0,
                         },
+                        native_head: None,
                         scale: 1.0,
                     }
                     .prepare(false),

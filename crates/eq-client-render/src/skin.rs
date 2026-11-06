@@ -76,6 +76,7 @@ mod tests {
             1,
             eq_client_core::PlayerState {
                 name: name.into(),
+                titanium_environment: None,
                 base_attributes: None,
                 deity: None,
                 class: Some(1),

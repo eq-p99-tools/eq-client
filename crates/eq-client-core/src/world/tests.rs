@@ -20,6 +20,7 @@ use crate::{
 fn player(spawn_id: u16) -> PlayerState {
     PlayerState {
         name: "Example".into(),
+        titanium_environment: None,
         base_attributes: None,
         deity: None,
         class: Some(1),

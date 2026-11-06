@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Show Air Remaining during ordinary mapped Titanium immersion, including
+  WLD lava that restricts breathing at the head. Local-only EQEmu sessions
+  report drowning after depletion and lava heat from mapped body contact.
+  Turning off Take Environmental Damage withholds the reports while air
+  still runs. **Gills for days** starts off and disables the local air
+  counter and meter. Lava heat continues to follow the damage setting.
 - An unconfirmed spellbook edit releases the book for other edits when the
   session reports its timeout. A retry with the same possible reply requires
   a fresh admission. Received gem clears update the slot independently of

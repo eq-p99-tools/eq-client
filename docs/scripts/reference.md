@@ -71,6 +71,8 @@ Approach, walk and chase hold the camera-relative forward command, independent o
 ## Diagnostics and commands
 
 - `report [label]`: log a state summary with an optional label.
+  `air_remaining` gives the local air reserve and capacity in ticks while
+  Air Remaining is active.
   `pet_ownership` reports the current pet and owner IDs, zone admission ID and
   pet identity revision as JSON. It is null when the session has no resolved
   pet identity.

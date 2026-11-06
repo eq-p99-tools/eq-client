@@ -194,7 +194,11 @@ fn validate_food(inventory: &crate::inventory::Inventory) -> Result<(), Estimate
         .chain(inventory.prediction_origins().filter_map(|(_, item)| item))
         .filter(|item| item.slot.is_carried() && matches!(item.rules.item_type, 14 | 15))
     {
-        if item.details.bonuses.ok_or(EstimateUnavailable::Food)? != crate::ItemBonuses::default()
+        if item
+            .details
+            .bonuses
+            .ok_or(EstimateUnavailable::Food)?
+            .has_modifiers()
             || item
                 .details
                 .equipment

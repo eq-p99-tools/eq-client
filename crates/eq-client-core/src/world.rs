@@ -229,6 +229,9 @@ pub struct ClientWorld {
 
     // The admission: from entering a zone until the next admission.
     session_id: Option<u64>,
+    liquid_hazard_revision: Option<u64>,
+    /// A received own model change can invalidate the admitted head basis.
+    own_model_changed: bool,
     /// The session's interpreted stun state and latest revision; None is
     /// unknown/unconfigured, not proof of clear control.
     own_stun: Option<(u64, crate::control::StunState)>,
@@ -591,6 +594,11 @@ impl ClientWorld {
         let mut changes = Changes::default();
         let news = &mut changes;
         match event {
+            WorldEvent::LiquidHazardRevision { session_id, revision } => {
+                if self.session_id == Some(*session_id) {
+                    self.liquid_hazard_revision = Some(*revision);
+                }
+            }
             // The connection, the characters on offer and the admission.
             WorldEvent::WorldName { short_name } => self.world_name = Some(short_name.clone()),
             // The time of day, and how the zone's sky looks.
@@ -862,6 +870,11 @@ impl ClientWorld {
                 if self.is_player(*spawn_id)
                     && let Some(player) = self.player.as_mut()
                 {
+                    use eq_network_game::appearance::AppearanceChange;
+                    self.own_model_changed |= matches!(
+                        change,
+                        AppearanceChange::Size(_) | AppearanceChange::Illusion(_)
+                    );
                     player.appearance.apply_update(change);
                 }
             }
@@ -1535,6 +1548,8 @@ impl ClientWorld {
 
     /// Forgets the admission and its zone.
     fn forget_admission(&mut self) {
+        self.liquid_hazard_revision = None;
+        self.own_model_changed = false;
         self.characters = None;
         self.last_consent_refusal = None;
         self.items = ItemCache::default();

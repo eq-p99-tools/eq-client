@@ -1544,6 +1544,7 @@ mod tests {
             1,
             eq_client_core::PlayerState {
                 name: "Example".into(),
+                titanium_environment: None,
                 base_attributes: None,
                 spawn_id: 7,
                 race: 1,

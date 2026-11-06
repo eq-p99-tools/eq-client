@@ -16,6 +16,7 @@ fn caster() -> PlayerState {
     gems[0] = Some(73);
     PlayerState {
         name: "Example".into(),
+        titanium_environment: None,
         base_attributes: None,
         deity: None,
         class: Some(2),

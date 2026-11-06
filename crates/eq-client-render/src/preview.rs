@@ -201,6 +201,7 @@ pub(crate) fn player(
 ) -> eq_client_core::PlayerState {
     eq_client_core::PlayerState {
         name: "Preview".into(),
+        titanium_environment: None,
         base_attributes: None,
         deity: None,
         class: Some(1),

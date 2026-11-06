@@ -75,9 +75,10 @@ fn project(effects: &[Effect], level: u16, instrument: u32) -> Result<Modifiers,
 fn food(
     inventory: &eq_client_core::inventory::Inventory,
     level: u16,
-) -> Result<Modifiers, Missing> {
+) -> Result<(Modifiers, Option<i64>), Missing> {
     let mut modifiers = Modifiers::default();
     let mut meals = [false; 2];
+    let mut fire_resistance = Some(0);
     for slot in (22..=29).flat_map(|root| {
         let slot = eq_client_core::inventory::InventorySlot(root);
         std::iter::once(slot).chain((0..10).filter_map(move |index| slot.child(index)))
@@ -97,6 +98,9 @@ fn food(
             .ok_or(Missing::Inventory)?;
         modifiers.strength += i64::from(bonus.bonuses.strength);
         modifiers.stamina += i64::from(bonus.bonuses.stamina);
+        fire_resistance = fire_resistance
+            .zip(bonus.bonuses.fire_resistance)
+            .map(|(total, resistance)| total + i64::from(resistance));
         if bonus.worn.is_some() {
             return Err(Missing::Effects);
         }
@@ -112,7 +116,25 @@ fn food(
     }) {
         return Err(Missing::Prediction);
     }
-    Ok(modifiers)
+    if inventory.prediction_origins().any(|(_, item)| {
+        item.is_some_and(|item| {
+            matches!(item.rules.item_type, 14 | 15)
+                && item.details.bonuses.and_then(|bonus| bonus.fire_resistance) != Some(0)
+        })
+    }) {
+        fire_resistance = None;
+    }
+    Ok((modifiers, fire_resistance))
+}
+
+/// Stamina and known fire resistance from the same stat food used for movement.
+pub(super) fn food_environment(
+    inventory: &eq_client_core::inventory::Inventory,
+    level: u16,
+) -> Option<(i64, Option<i64>)> {
+    food(inventory, level)
+        .ok()
+        .map(|(modifiers, fire)| (modifiers.stamina, fire))
 }
 
 /// Effective inputs from complete inventory, purse and buff membership.
@@ -140,7 +162,7 @@ fn calculate(
         }
         _ => Missing::Inventory,
     })?;
-    let mut modifiers = food(inventory, u16::from(player.level))?;
+    let (mut modifiers, _) = food(inventory, u16::from(player.level))?;
     for (_, item) in equipped {
         modifiers.strength += i64::from(item.bonuses.strength);
         modifiers.stamina += i64::from(item.bonuses.stamina);

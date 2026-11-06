@@ -32,6 +32,7 @@ fn item_binding_uses_current_inventory_and_never_activates_replacement_items() {
         9,
         eq_client_core::PlayerState {
             name: "Example".into(),
+            titanium_environment: None,
             base_attributes: None,
             deity: None,
             class: Some(1),
