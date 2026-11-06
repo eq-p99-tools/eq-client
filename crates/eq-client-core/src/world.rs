@@ -46,7 +46,11 @@ pub use who::ZonePlayer;
 
 use crate::{
     BookActionStatus, CharacterChoice, Death, PlayerState, PostureState, SpawnState, SpellBook,
-    WorldEvent, WorldUpdate, ZoneOffer, buffs::BuffTracker, inventory::Inventory,
+    WorldEvent, WorldUpdate, ZoneOffer,
+    buffs::BuffTracker,
+    confirmations::{ConsentClosure, ConsentId, ConsentKind, ConsentOffer, TranslocateOffer},
+    inventory::Inventory,
+    resurrection::ResurrectionOffer,
 };
 use std::{collections::BTreeMap, time::Instant};
 
@@ -265,9 +269,12 @@ pub struct ClientWorld {
     bled_out: Option<i64>,
     pending_transfer: Option<ZoneOffer>,
     /// The resurrection offered and not yet answered.
-    resurrection: Option<crate::resurrection::ResurrectionOffer>,
-    /// The translocate offered and not yet answered, and when it came.
-    translocate: Option<(crate::confirmations::TranslocateOffer, Instant)>,
+    resurrection: Option<ConsentOffer<ResurrectionOffer>>,
+    /// The translocate offered and not yet answered.
+    translocate: Option<ConsentOffer<TranslocateOffer>>,
+    /// The session's last reported disposition of a consent prompt.
+    last_consent_close: Option<(ConsentId, ConsentClosure)>,
+    last_consent_refusal: Option<ConsentId>,
     /// The book or note open to read.
     reading: Option<crate::books::BookText>,
     /// The tradeskill container whose combine waits for the server.
@@ -497,16 +504,17 @@ impl ClientWorld {
         self.bled_out.take()
     }
 
-    /// The player answered the resurrection offered; whatever comes of it
-    /// arrives as news.
-    pub fn answer_resurrection(&mut self) {
-        self.resurrection = None;
-    }
-
-    /// The player, or the client for them, answered the translocate
-    /// offered; whatever comes of it arrives as news.
-    pub fn answer_translocate(&mut self) {
-        self.translocate = None;
+    /// Dismisses the exact prompt whose answer the front end queued.
+    /// The worker's disposition and the server's result arrive separately.
+    pub fn dismiss_consent(&mut self, id: ConsentId) {
+        match id.kind {
+            ConsentKind::Resurrection => {
+                let _ = self.resurrection.take_if(|current| current.id == id);
+            }
+            ConsentKind::Translocate => {
+                let _ = self.translocate.take_if(|current| current.id == id);
+            }
+        }
     }
 
     /// The player closed the book or note they were reading.
@@ -737,7 +745,7 @@ impl ClientWorld {
             // (the session puts a reward's coins in the purse), a sacrifice
             // offer and a player becoming a corpse wait for their front ends
             // too; until one answers, an offer goes unanswered, as it did
-            // unread. A translocate refused is only the session's log. A quest's change to the stats, a
+            // unread. A quest's change to the stats, a
             // skill's button ready again, the reuse timers of disciplines and
             // of spells that share one, and the discipline begun or ended
             // are not shown yet either, nor the effects the server plays
@@ -769,7 +777,6 @@ impl ClientWorld {
             | WorldEvent::Ding
             | WorldEvent::SacrificeOffer(_)
             | WorldEvent::SacrificeRefused { .. }
-            | WorldEvent::TranslocateRefused { .. }
             | WorldEvent::BecameCorpse { .. }
             | WorldEvent::StatsChanged(_)
             | WorldEvent::SkillReset(_)
@@ -1221,14 +1228,44 @@ impl ClientWorld {
                     news.ignored = true;
                 }
             }
-            // A resurrection to answer, and an answer the session would not send.
-            WorldEvent::Resurrection(offer) => self.resurrection = Some(offer.clone()),
-            // A translocate to answer, where the installed client asks.
-            WorldEvent::TranslocateOffer(offer) => self.translocate = Some((offer.clone(), now)),
-            WorldEvent::ResurrectionRefused { session_id, reason } => {
+            WorldEvent::Resurrection(offer) => {
+                if self.in_world() && self.session_id == Some(offer.id.session_id) {
+                    self.resurrection = Some(offer.clone());
+                } else {
+                    news.ignored = true;
+                }
+            }
+            WorldEvent::TranslocateOffer(offer) => {
+                if self.in_world() && self.session_id == Some(offer.id.session_id) {
+                    self.translocate = Some(offer.clone());
+                } else {
+                    news.ignored = true;
+                }
+            }
+            WorldEvent::ConsentClosed { id, closure } => {
+                if self.session_id == Some(id.session_id) {
+                    self.dismiss_consent(*id);
+                    self.last_consent_close = Some((*id, *closure));
+                    if *closure == ConsentClosure::Expired {
+                        news.notices.push(Notice::ConsentExpired(id.kind));
+                    }
+                } else {
+                    news.ignored = true;
+                }
+            }
+            WorldEvent::ResurrectionRefused { session_id, offer_id, reason } => {
                 if self.session_id == Some(*session_id) {
+                    self.last_consent_refusal = Some(*offer_id);
                     news.notices
                         .push(Notice::ResurrectionRefused(reason.clone()));
+                } else {
+                    news.ignored = true;
+                }
+            }
+            WorldEvent::TranslocateRefused { session_id, offer_id, reason } => {
+                if self.session_id == Some(*session_id) {
+                    self.last_consent_refusal = Some(*offer_id);
+                    news.notices.push(Notice::TranslocateRefused(reason.clone()));
                 } else {
                     news.ignored = true;
                 }
@@ -1394,6 +1431,8 @@ impl ClientWorld {
         self.target = Target::default();
         self.motion = None;
         self.reading = None;
+        self.resurrection = None;
+        self.translocate = None;
         if reason != Reset::Died {
             self.camp = None;
             self.camp_to = crate::camp::CampTo::default();
@@ -1483,10 +1522,9 @@ impl ClientWorld {
     /// Forgets the admission and its zone.
     fn forget_admission(&mut self) {
         self.characters = None;
+        self.last_consent_refusal = None;
         self.items = ItemCache::default();
         self.pending_transfer = None;
-        self.resurrection = None;
-        self.translocate = None;
         self.reading = None;
         self.combining = None;
         self.group = None;

@@ -172,6 +172,10 @@ pub enum Notice {
     TrainingRefused(String),
     /// An answer to a resurrection was not sent, and why.
     ResurrectionRefused(String),
+    /// An answer to a translocate was not sent, and why.
+    TranslocateRefused(String),
+    /// A consent prompt reached its local deadline.
+    ConsentExpired(crate::confirmations::ConsentKind),
     /// A request to read was not sent, and why.
     ReadRefused(String),
     /// The world container the player asked to open is in use by someone

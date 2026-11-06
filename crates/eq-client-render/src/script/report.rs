@@ -168,6 +168,16 @@ pub(super) fn state(
         training = ?training(online),
         practice_points = ?online.world().player().and_then(|player| player.practice_points),
         resurrection = ?resurrection(online),
+        resurrection_consent = ?online.world().resurrection().map(|question| {
+            (question.id, question.expires_at.saturating_duration_since(now).as_millis())
+        }),
+        translocate_consent = ?online.world().translocate().map(|question| {
+            (question.id, question.offer.spell_id, question.offer.zone_id,
+                question.expires_at.saturating_duration_since(now).as_millis())
+        }),
+        consent_presented = ?observed.10.as_deref().and_then(crate::confirm::Asked::presented),
+        consent_closure = ?online.world().last_consent_close(),
+        consent_refusal = ?online.world().last_consent_refusal(),
         readable = ?readable(online),
         containers = ?containers(online),
         combining = ?online.world().combining(),
@@ -348,7 +358,7 @@ fn containers(online: &crate::online::OnlineState) -> Vec<(i32, u32, u8)> {
 
 /// The resurrection waiting for an answer: its caster, corpse and spell.
 fn resurrection(online: &crate::online::OnlineState) -> Option<(String, String, u32)> {
-    let offer = online.world().resurrection()?;
+    let offer = &online.world().resurrection()?.offer;
     Some((offer.caster.clone(), offer.corpse.clone(), offer.spell_id))
 }
 

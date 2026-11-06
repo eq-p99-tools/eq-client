@@ -257,14 +257,9 @@ impl OnlineState {
         self.world.close_loot();
     }
 
-    /// The player answered the resurrection offered.
-    pub(super) fn answer_resurrection(&mut self) {
-        self.world.answer_resurrection();
-    }
-
-    /// The translocate offered was answered.
-    pub(super) fn answer_translocate(&mut self) {
-        self.world.answer_translocate();
+    /// The front end queued an answer to this exact offer.
+    pub(super) fn dismiss_consent(&mut self, id: eq_client_core::confirmations::ConsentId) {
+        self.world.dismiss_consent(id);
     }
 
     /// The player closed the book or note they were reading.

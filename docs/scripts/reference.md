@@ -127,6 +127,23 @@ These commands support scripts that deliberately start before world entry. They 
   acknowledgment or proof of database purge.
 - `wait_online`: wait for a zone admission and player before continuing.
 
+## Recovery consent reports
+
+On a server that offers resurrection or translocate, wait for
+`consent_presented` to match the current offer before using
+`click answer yes` or `click answer no`. These actions use the ordinary
+confirmation buttons. `resurrection_consent` reports the offer token and
+milliseconds remaining. `translocate_consent` also reports the spell and
+offered zone IDs. Each token includes the admission, kind and sequence.
+
+`consent_closure` reports the last token and worker disposition. An
+`AnswerSent` records the submitted Yes or No. An `Expired` records a local
+deadline and submitted decline. An `Interrupted` records a lifecycle
+boundary. `consent_refusal` identifies the last refused answer in the current
+admission. Compare tokens when reading these fields after a replacement or
+zone admission. Read the ordinary position, zone, admission and state reports
+for server movement or recovery.
+
 ## Character-deletion report
 
 The `character_deletion` field in `Script report` and `Character deletion

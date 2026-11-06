@@ -688,20 +688,19 @@ impl InstalledClient {
     }
 
     /// How this client asks the player about a translocate cast on them,
-    /// from the program; None until read for this client, whose offers then
-    /// go unanswered as before. The Mac-era client's is TAKP Batch 1 R8
-    /// (recording checklist item 6.253).
+    /// using the installed client's string IDs. The zone session decides
+    /// whether the server offers translocate and owns the answer window.
     #[must_use]
-    pub const fn translocate_offer(self) -> Option<TranslocateQuestion> {
-        match self {
-            Self::Titanium => None,
-            Self::EqMac => Some(TranslocateQuestion {
-                named: 10017,
-                to_bind: 10016,
-                bind_spells: &[1334, 1422, 3243],
-                declined: Some(10018),
-                expires_ms: 3_600_000,
-            }),
+    pub const fn translocate_offer(self) -> TranslocateQuestion {
+        let (named, to_bind, declined) = match self {
+            Self::Titanium => (9063, 9062, None),
+            Self::EqMac => (10017, 10016, Some(10018)),
+        };
+        TranslocateQuestion {
+            named,
+            to_bind,
+            bind_spells: &[1334, 1422, 3243],
+            declined,
         }
     }
 
@@ -771,9 +770,6 @@ pub struct TranslocateQuestion {
     pub bind_spells: &'static [u32],
     /// The line the client says after the player's No, if any.
     pub declined: Option<u32>,
-    /// How long the offer waits for an answer before the client says No by
-    /// itself, in milliseconds (the program's clock unit is unsure, 6.253).
-    pub expires_ms: u64,
 }
 
 /// The picture an installed client covers the screen with while it loads a

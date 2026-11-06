@@ -28,6 +28,13 @@
   pet details. `/pet guard me` sends its own Titanium command.
 - Script reports include bounded merchant stock, selected quote, corpse listing
   and exchange coin observations for local transaction checks.
+- Show Titanium EQEmu translocate consent and bind each resurrection or
+  translocate answer to the question displayed. A held click cannot answer a
+  replacement. Death, zoning, link loss and expiry dismiss the offer. Script
+  reports distinguish the current and displayed tokens from a worker answer,
+  expiry, interruption or refusal.
+- `ClientWorld::resurrection` and `translocate` now return scoped offers.
+  Front ends that dismiss a queued answer use `dismiss_consent(id)`.
 
 - Report a local scripted `give` refusal through the script result once.
   Native click refusals still appear in chat.

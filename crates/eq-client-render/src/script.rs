@@ -620,6 +620,7 @@ type Observed<'w> = (
     Option<Res<'w, super::zone_navmesh::ZoneNavMesh>>,
     Option<Res<'w, crate::spellbook::SpellNames>>,
     Option<Res<'w, crate::options::OptionsState>>,
+    Option<Res<'w, crate::confirm::Asked>>,
 );
 
 type Input<'w, 's> = (Keyboard<'w, 's>, ResMut<'w, ButtonInput<MouseButton>>);

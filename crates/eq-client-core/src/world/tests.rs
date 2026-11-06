@@ -3570,20 +3570,59 @@ fn training_opens_raises_skills_with_a_line_and_closes() {
 }
 
 #[test]
-fn a_resurrection_offer_is_forgotten_when_the_player_enters_a_zone() {
+fn resurrection_consent_is_scoped_to_the_offer_and_admission() {
     let mut world = admitted();
-    // An offer from Tester to Example's corpse: the caster's name at 92 and
-    // the corpse's at 160 of the 228 bytes.
-    let mut body = vec![0; 228];
-    body[92..98].copy_from_slice(b"Tester");
-    body[160..177].copy_from_slice(b"Example's corpse0");
-    let offer = crate::resurrection::titanium_offer(&body).unwrap();
-    game(&mut world, WorldEvent::Resurrection(offer));
-    assert!(world.resurrection().is_some());
-    // The session that held the offer ends with the zone; the next zone's
-    // knows nothing of it, so neither does the world.
-    game(&mut world, entered(2));
+    let event = |session_id, sequence| {
+        let mut body = vec![0; 228];
+        body[24..31].copy_from_slice(b"Example");
+        body[92..98].copy_from_slice(b"Tester");
+        body[160..177].copy_from_slice(b"Example's corpse0");
+        WorldEvent::Resurrection(ConsentOffer {
+            id: ConsentId {
+                session_id,
+                kind: ConsentKind::Resurrection,
+                sequence,
+            },
+            offer: crate::resurrection::titanium_offer(&body).unwrap(),
+            expires_at: Instant::now() + std::time::Duration::from_secs(300),
+        })
+    };
+    game(&mut world, event(1, 1));
+    let first = world.resurrection().unwrap().id;
+    game(&mut world, event(1, 2));
+    let second = world.resurrection().unwrap().id;
+    world.dismiss_consent(first);
+    game(
+        &mut world,
+        WorldEvent::ConsentClosed {
+            id: first,
+            closure: ConsentClosure::AnswerSent { accept: true },
+        },
+    );
+    assert_eq!(world.resurrection().unwrap().id, second);
+    assert_eq!(
+        world.last_consent_close(),
+        Some((first, ConsentClosure::AnswerSent { accept: true }))
+    );
+    assert!(world.in_world());
+
+    game(&mut world, WorldEvent::DeathBind { session_id: 1 });
     assert!(world.resurrection().is_none());
+    assert!(game(&mut world, event(1, 3)).ignored);
+    game(&mut world, entered(2));
+    connection(&mut world, true, false);
+    assert!(game(&mut world, event(1, 4)).ignored);
+    game(&mut world, event(2, 1));
+    let next = world.resurrection().unwrap().id;
+    let late = game(
+        &mut world,
+        WorldEvent::ConsentClosed {
+            id: first,
+            closure: ConsentClosure::Expired,
+        },
+    );
+    assert!(late.ignored);
+    assert_eq!(world.resurrection().unwrap().id, next);
 }
 
 #[test]

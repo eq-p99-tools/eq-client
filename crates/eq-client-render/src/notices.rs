@@ -335,7 +335,15 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         | Notice::CombatRefused(reason)
         | Notice::TrainingRefused(reason)
         | Notice::ResurrectionRefused(reason)
+        | Notice::TranslocateRefused(reason)
         | Notice::ReadRefused(reason) => chat(reason.as_str().into()),
+        Notice::ConsentExpired(kind) => {
+            use eq_client_core::confirmations::ConsentKind;
+            chat(match kind {
+                ConsentKind::Resurrection => "The resurrection offer expired.".into(),
+                ConsentKind::Translocate => "The translocate offer expired.".into(),
+            })
+        }
         // eqstr 1406, where the installation has it.
         Notice::ContainerInUse => chat(official(Some(1406), &[], "That is in use.", messages)),
         Notice::SkillUp { skill, value } => chat(skill_up(*skill, *value, messages)),

@@ -224,8 +224,13 @@ the selection. Only one merchant action can be pending. An unanswered action
 shows an unknown outcome and is never retried automatically; received items
 and coin updates remain the session's responsibility.
 
-Grouping, raids, pets, training, reading and resurrection/translocate dialogs have
-client paths with distinct capabilities. See the [policy matrix](../SUPPORT.md)
-before assuming a visible window can act on P99, Quarm or another server. Camp
-uses a timed preparation and acknowledgement flow where offered. Local
-`--demo-trade` previews loot/merchant/trade UI without confirming a live protocol.
+On Titanium EQEmu, resurrection and translocate offers open a Yes or No dialog.
+An answer applies to the displayed offer. If the question changes while a
+button is held, release and click again to answer the replacement. The dialog
+closes on death, a zone transfer, a lost connection or expiry. The server's
+movement and recovery messages determine what follows a Yes.
+
+Grouping, raids, pets, training, reading and consent dialogs have separate
+capabilities by server. Camp uses timed preparation and acknowledgement where
+offered. The local `--demo-trade` mode previews loot, merchant and trade UI.
+See the [policy matrix](../SUPPORT.md).

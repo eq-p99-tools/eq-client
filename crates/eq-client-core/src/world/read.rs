@@ -6,7 +6,13 @@ use super::{
 };
 use crate::{
     BookActionStatus, Coins, Death, PlayerState, PostureState, SpellBook, ZoneOffer,
-    buffs::BuffTracker, combat::ConColor, doors::DoorTable, ground::Objects, inventory::Inventory,
+    buffs::BuffTracker,
+    combat::ConColor,
+    confirmations::{ConsentClosure, ConsentId, ConsentOffer, TranslocateOffer},
+    doors::DoorTable,
+    ground::Objects,
+    inventory::Inventory,
+    resurrection::ResurrectionOffer,
 };
 use std::collections::BTreeMap;
 
@@ -392,18 +398,28 @@ impl ClientWorld {
         self.zone.spawns.get(&id)
     }
 
-    /// The translocate offered and not yet answered, and when it came.
+    /// The translocate offered and not yet answered.
     #[must_use]
-    pub fn translocate(
-        &self,
-    ) -> Option<(&crate::confirmations::TranslocateOffer, std::time::Instant)> {
-        self.translocate.as_ref().map(|(offer, at)| (offer, *at))
+    pub const fn translocate(&self) -> Option<&ConsentOffer<TranslocateOffer>> {
+        self.translocate.as_ref()
     }
 
     /// The resurrection offered and not yet answered.
     #[must_use]
-    pub fn resurrection(&self) -> Option<&crate::resurrection::ResurrectionOffer> {
+    pub const fn resurrection(&self) -> Option<&ConsentOffer<ResurrectionOffer>> {
         self.resurrection.as_ref()
+    }
+
+    /// The last session disposition, including its original admission.
+    #[must_use]
+    pub const fn last_consent_close(&self) -> Option<(ConsentId, ConsentClosure)> {
+        self.last_consent_close
+    }
+
+    /// The offer ID from the last refusal received in the current admission.
+    #[must_use]
+    pub const fn last_consent_refusal(&self) -> Option<ConsentId> {
+        self.last_consent_refusal
     }
 
     /// The book or note open to read.
