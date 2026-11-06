@@ -1295,6 +1295,9 @@ impl ClientWorld {
                 session_id,
                 spell_id,
             } => self.cast_pending(*session_id, *spell_id, news),
+            WorldEvent::CastSuperseded { session_id, spell_id } => {
+                news.ignored = !self.release_cast_hold(*session_id, *spell_id);
+            }
             WorldEvent::SongStopUnconfirmed { session_id, spell_id } => {
                 self.song_stop_unconfirmed(*session_id, *spell_id, news);
             }

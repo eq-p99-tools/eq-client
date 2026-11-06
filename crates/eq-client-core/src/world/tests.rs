@@ -965,6 +965,53 @@ fn an_idle_song_stop_or_an_old_admission_cannot_release_a_new_cast() {
 }
 
 #[test]
+fn a_superseded_song_cannot_end_the_different_cast_that_started() {
+    let begin = |spell_id| {
+        WorldEvent::Spell(SpellUpdate::Began {
+            caster_id: 9,
+            spell_id,
+            duration_ms: 3000,
+        })
+    };
+    let mana = |spell_id| {
+        WorldEvent::Spell(SpellUpdate::Mana {
+            spell_id,
+            keep_casting: false,
+        })
+    };
+    let pending = |spell_id| WorldEvent::CastPending {
+        session_id: 1,
+        spell_id,
+    };
+
+    for old_began in [false, true] {
+        let mut world = admitted();
+        game(&mut world, pending(Some(42)));
+        if old_began {
+            game(&mut world, pending(None));
+            game(&mut world, begin(42));
+        }
+
+        let superseded = game(
+            &mut world,
+            WorldEvent::CastSuperseded {
+                session_id: 1,
+                spell_id: 42,
+            },
+        );
+        assert!(!superseded.ignored);
+        assert!(superseded.notices.is_empty());
+        assert_eq!(superseded.cast, None);
+        assert_eq!(world.casting().pending, None);
+        assert_eq!(world.casting().cast, None);
+        assert_eq!(game(&mut world, begin(43)).cast, Some(CastNews::Began));
+        assert_eq!(game(&mut world, mana(42)).cast, None);
+        assert_eq!(world.casting().cast.map(|(spell, ..)| spell), Some(43));
+        assert_eq!(game(&mut world, mana(43)).cast, Some(CastNews::Ended));
+    }
+}
+
+#[test]
 fn an_interruption_is_the_players_own_and_mana_cannot_undo_it() {
     let mut world = admitted();
     let now = Instant::now();
