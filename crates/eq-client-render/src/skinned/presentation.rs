@@ -60,13 +60,13 @@ pub(super) fn fill_to(node: &mut Mut<Node>, step: Option<&Step>, fraction: f32) 
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn show(
     online: Res<crate::online::OnlineState>,
-    (hud, inventory, names, messages, breath): (
+    (hud, inventory, names, messages): (
         Res<crate::hud::HudState>,
         Res<crate::inventory::InventoryState>,
         Res<crate::spellbook::SpellNames>,
         Res<crate::hud::messages::Messages>,
-        Res<crate::breath::State>,
     ),
+    breath: Res<crate::breath::State>,
     (combat, trade, book, requests): (
         Res<crate::combat::CombatState>,
         Res<crate::trade::TradeState>,
@@ -80,16 +80,12 @@ pub(crate) fn show(
     let world = online.world();
     let load = crate::speed::load(world, &names);
     show_boxes(&mut boxes, world, &combat, &trade);
-    for (shows, mut node, step) in &mut fills {
-        if let Shows::Fill(kind) = *shows {
-            let fraction = if kind == 8 {
-                breath.air().map_or(0.0, eq_client_core::breath::Air::ratio)
-            } else {
-                filled(world, (hud.resource_estimate, &requests), kind)
-            };
-            fill_to(&mut node, step, fraction.clamp(0.0, 1.0));
-        }
-    }
+    fill_gauges(
+        &mut fills,
+        world,
+        (hud.resource_estimate, &requests),
+        &breath,
+    );
     for (shows, mut text, mut color) in &mut texts {
         let (wanted, tint) = match *shows {
             Shows::GaugeText(kind) => gauge_text(world, kind),
@@ -179,6 +175,24 @@ pub(crate) fn show(
             && color.0 != tint
         {
             color.0 = tint;
+        }
+    }
+}
+
+fn fill_gauges(
+    fills: &mut Query<(&Shows, &mut Node, Option<&Step>), Without<Text>>,
+    world: &eq_client_core::world::ClientWorld,
+    estimate_and_requests: (Option<(u32, u32)>, &crate::hud::action_bar::ActionRequests),
+    breath: &crate::breath::State,
+) {
+    for (shows, mut node, step) in fills {
+        if let Shows::Fill(kind) = *shows {
+            let fraction = if kind == 8 {
+                breath.air().map_or(0.0, eq_client_core::breath::Air::ratio)
+            } else {
+                filled(world, estimate_and_requests, kind)
+            };
+            fill_to(&mut node, step, fraction.clamp(0.0, 1.0));
         }
     }
 }

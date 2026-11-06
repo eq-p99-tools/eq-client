@@ -8,7 +8,7 @@ use eq_client_core::{
     world::ClientWorld,
 };
 
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 struct Effects {
     stamina: i64,
     breath_level: i64,
@@ -209,7 +209,7 @@ mod tests {
         testing::admit(&mut online, 5, player.clone());
         assert!(read(online.world(), &spells, &player, Need::Heat).is_none());
         testing::inventory(&mut online, InventoryUpdate::Snapshot(vec![]));
-        testing::buffs(&mut online, Default::default());
+        testing::buffs(&mut online, std::collections::BTreeMap::default());
         let inputs = read(online.world(), &spells, &player, Need::Heat).unwrap();
         assert_eq!(inputs.fire_resistance, Some(25));
         assert_eq!(inputs.stamina, Some(75));

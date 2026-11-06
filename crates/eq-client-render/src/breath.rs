@@ -185,10 +185,10 @@ fn submerged(
         return (Sample::CanBreathe, None);
     }
     let capacity = titanium_capacity(race, inputs.stamina, inputs.breath_level);
-    let maximum_hp = if !inputs.invulnerable {
-        inputs.maximum_hp(world)
-    } else {
+    let maximum_hp = if inputs.invulnerable {
         None
+    } else {
+        inputs.maximum_hp(world)
     };
     (
         capacity.map_or(Sample::Unknown, Sample::Submerged),
@@ -196,7 +196,7 @@ fn submerged(
     )
 }
 
-/// A small meter for skins without a usable BreathWindow.
+/// A small meter for skins without a usable `BreathWindow`.
 #[derive(Component)]
 pub(super) struct Fallback;
 
