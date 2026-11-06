@@ -64,13 +64,13 @@ the world/zone handoff, and install a new admission with its own placement and
 state. Same-zone server relocations and rejected-zone rewinds update the local
 controller without unnecessarily reconnecting. If a fresh Titanium placement
 is below a nearby installed floor with neither a lower landing surface nor
-mapped liquid below, movement pauses. The client reports the conflict, preserves
-the received position, and rechecks held placements as collision changes or the
-server corrects the position. A server using different zone geometry can cause
-this conflict. Client detection of same-zone
-teleport pads remains incomplete. Initial login, boundary crossing, teleport,
-death and respawn are separate validation scenarios; success in one does not
-establish the others.
+mapped liquid below, travel pauses. Turning still works at the received XYZ
+when the session grants movement input. The client warns once for the held
+location and rechecks as collision changes or the server corrects the position.
+A server using different zone geometry can cause this conflict. Client detection
+of same-zone teleport pads remains incomplete. Initial login, boundary crossing,
+teleport, death and respawn are separate validation scenarios; success in one
+does not establish the others.
 
 ## Inventory and banking
 

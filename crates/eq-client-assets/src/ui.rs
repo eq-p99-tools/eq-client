@@ -690,6 +690,8 @@ impl InstalledClient {
     /// How this client asks the player about a translocate cast on them,
     /// using the installed client's string IDs. The zone session decides
     /// whether the server offers translocate and owns the answer window.
+    /// Titanium's `eqstr_us.txt` IDs 9063 and 9062 are selected at
+    /// `eqgame.exe` 0x45618c and 0x4561a5, respectively.
     #[must_use]
     pub const fn translocate_offer(self) -> TranslocateQuestion {
         let (named, to_bind, declined, declines_when_busy) = match self {

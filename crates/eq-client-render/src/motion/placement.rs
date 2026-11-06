@@ -27,6 +27,10 @@ pub(super) struct Check {
     result: Option<(ServerPlacement, Assessment)>,
 }
 
+fn same_xyz(first: WorldPosition, second: WorldPosition) -> bool {
+    [first.x, first.y, first.z] == [second.x, second.y, second.z]
+}
+
 impl Check {
     /// Holds new motion only while its starting point is still the suspect
     /// received placement and the installed geometry offers no way down.
@@ -39,13 +43,16 @@ impl Check {
         chat: &mut chat::ChatState,
         now: Instant,
     ) -> bool {
-        let Some(server) = server.filter(|entry| entry.position == position) else {
+        let Some(server) = server.filter(|entry| same_xyz(entry.position, position)) else {
             self.result = None;
             return false;
         };
         let previous = self
             .result
-            .filter(|(placement, _)| *placement == server)
+            .filter(|(placement, _)| {
+                placement.admission_id == server.admission_id
+                    && same_xyz(placement.position, server.position)
+            })
             .map(|(_, assessment)| assessment);
         match previous {
             Some(Assessment::Clear) => return false,
@@ -65,12 +72,12 @@ impl Check {
             warn!(
                 admission = server.admission_id,
                 source = ?server.source,
-                received = ?position,
+                received = ?server.position,
                 installed_floor_z = floor,
                 "Movement held below the installed floor"
             );
             chat.history.push(chat::system_line(
-                "The server placed you below the installed floor. Movement is paused.",
+                "The server placed you below the installed floor. Travel is paused.",
             ));
         }
         let assessment = if floor.is_some() {

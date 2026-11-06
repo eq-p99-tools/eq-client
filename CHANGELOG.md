@@ -4,9 +4,9 @@
 
 - Retain an early pet buff snapshot until the owned pet resolves. Discard it
   when the spawn is replaced or its ownership conflicts.
-- Hold Titanium movement after a fresh placement below a nearby installed
-  floor with neither a lower surface nor mapped liquid below. Preserve the
-  received position and resume when a correction or collision change permits it.
+- Hold Titanium travel after a fresh placement below a nearby installed floor
+  with neither a lower surface nor mapped liquid below. Allow turning at the
+  received XYZ and warn once for the held location.
 - Include the admitted size, local body, floor support, and target sightline
   in script movement reports.
 - Refresh the player's held models and paperdoll after a submitted Titanium
