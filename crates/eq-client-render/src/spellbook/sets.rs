@@ -4,7 +4,10 @@ pub(crate) mod ui;
 
 use crate::profile_files::{self, CharacterProfile, Store};
 use bevy::prelude::*;
-use eq_client_core::{Capability, world::ClientWorld};
+use eq_client_core::{
+    Capability,
+    world::{ClientWorld, Reset},
+};
 use std::{collections::BTreeMap, fmt::Write as _, time::Instant};
 
 type Gems = [Option<u32>; 8];
@@ -24,19 +27,31 @@ pub(crate) struct Sets {
 impl Sets {
     /// Discard all unsent intent, including when resets and new admissions
     /// arrive in the same frame.
-    pub(crate) fn reset(&mut self, old_gems: Option<AdmissionGems>) {
+    pub(crate) fn reset(&mut self, reason: Reset, old_gems: Option<AdmissionGems>) {
+        let message = match reason {
+            Reset::Died => "The character died.",
+            Reset::Zoning { .. } => "Zone transfer started.",
+            Reset::Lost { ended: false, .. } => "The connection was interrupted.",
+            Reset::Entered | Reset::Camped | Reset::Lost { ended: true, .. } => {
+                self.panel = ui::Panel::default();
+                self.status.clear();
+                "The admission ended."
+            }
+        };
         if let Some(active) = self.active.as_mut() {
-            active.invalidate(old_gems);
+            active.invalidate(message, old_gems);
         }
-        self.panel = ui::Panel::default();
     }
 
-    fn follow(&mut self, profile: Option<CharacterProfile>) {
-        if self.store.profile == profile {
+    fn follow(&mut self, profile: Option<&CharacterProfile>) {
+        if self.store.profile.as_ref() == profile {
             return;
         }
-        self.reset(None);
-        self.store.profile = profile;
+        if let Some(active) = self.active.as_mut() {
+            active.invalidate("The character profile changed.", None);
+        }
+        self.panel = ui::Panel::default();
+        self.store.profile = profile.cloned();
         let result = self.file_name().map_or_else(
             || Ok(BTreeMap::new()),
             |name| {
@@ -147,7 +162,7 @@ pub(crate) fn follow(
         sets.store.open(settings.0.settings_directory.as_ref());
     }
     sets.store.retry(Instant::now());
-    sets.follow(profile.key());
+    sets.follow(profile.key_ref());
 }
 
 fn eligible(world: &ClientWorld, client: eq_client_assets::ui::InstalledClient) -> bool {

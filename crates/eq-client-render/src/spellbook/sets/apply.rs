@@ -21,6 +21,7 @@ pub(super) struct Apply {
     posture: Option<PostureState>,
     pending: Option<Pending>,
     stop: Option<String>,
+    reset: Option<&'static str>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,6 +104,7 @@ impl Apply {
             posture: posture(world),
             pending: None,
             stop: None,
+            reset: None,
         })
     }
 
@@ -112,13 +114,16 @@ impl Apply {
         }
     }
 
-    pub(super) fn invalidate(&mut self, old_gems: Option<AdmissionGems>) {
+    pub(super) fn invalidate(&mut self, reason: &'static str, old_gems: Option<AdmissionGems>) {
+        if self.reset.is_some() {
+            return;
+        }
         if let Some((session, gems)) = old_gems
             && self.session == Some(session)
         {
             self.seen = gems;
         }
-        self.session = None;
+        self.reset = Some(reason);
     }
 
     pub(super) fn stopping(&self) -> bool {
@@ -166,6 +171,9 @@ impl Apply {
         names: &super::super::SpellNames,
         now: Instant,
     ) -> Option<String> {
+        if let Some(reason) = self.reset {
+            return Some(self.stopped(reason, &self.seen));
+        }
         if self.session.is_none() || world.session_id() != self.session || !world.in_world() {
             return Some(self.stopped("The admission ended.", &self.seen));
         }
@@ -230,7 +238,9 @@ impl Apply {
             Some(Some(
                 BookActionStatus::Cancelled(reason) | BookActionStatus::Rejected(reason),
             )) => Some(reason.clone()),
-            _ if now.saturating_duration_since(pending.since) >= STEP_TIMEOUT => {
+            _ if reply == Some(Some(&BookActionStatus::Unconfirmed))
+                || now.saturating_duration_since(pending.since) >= STEP_TIMEOUT =>
+            {
                 Some(format!("No confirmation for gem {}.", slot + 1))
             }
             _ => None,

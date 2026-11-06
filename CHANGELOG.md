@@ -13,6 +13,15 @@
   hotbar binding, `/ranged`, or the script step `slash ranged`. The client
   rechecks the target and equipment before sending and shows server-reported
   combat and inventory updates.
+- Use `/stopsong` as a Bard on Titanium EQEmu. Gems keep their usual cast
+  controls, and song effects follow the server's updates.
+- Stop spell-set apply with the actual reset reason and keep the panel's
+  selection and draft through temporary interruptions. An unanswered book edit
+  remains unconfirmed after a same-admission link interruption.
+- Keep Titanium mana and endurance estimates available for confirmed effects
+  whose mechanics cannot alter those capacities, including instrument-scaled
+  effects in that category.
+
 - Report a local scripted `give` refusal through the script result once.
   Native click refusals still appear in chat.
 - Draw server-reported rain and snow in zones with a sky. See the World
@@ -21,9 +30,8 @@
 - Save, rename, delete and apply named spell gem layouts from the spellbook.
   Sets are stored per character and world. Spellbook changes wait for their
   individual results: a memorize, forget, delete or swap made while the
-  previous one is unanswered is refused with "Wait for the current spellbook
-  change", and a change unanswered for 40 s asks for a zone re-entry. An
-  interrupted set reports the last observed layout.
+  previous one is unanswered is refused. An interrupted set reports the last
+  observed layout.
 - Drag chat tabs to reorder them, open a separate chat window, or dock them into
   another tab strip. Closing a detached window returns its tabs to the main chat.
   Each character keeps the tab arrangement and window placements.

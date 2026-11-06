@@ -203,7 +203,7 @@ impl OnlineState {
     ) {
         self.loading.clear();
         if let Some(sets) = panels.spell_sets.as_mut() {
-            sets.reset(old_gems);
+            sets.reset(reason, old_gems);
         }
         panels.forget(reason, self);
         scene.forget(reason, commands);
@@ -794,11 +794,12 @@ fn apply(
     if let Some(outbox) = outbox
         && !changes.ignored
     {
-        if matches!(
-            changes.reset,
-            Some(Reset::Entered | Reset::Camped | Reset::Lost { ended: true, .. })
-        ) {
-            outbox.reset_book();
+        match changes.reset {
+            Some(Reset::Entered | Reset::Camped | Reset::Lost { ended: true, .. }) => {
+                outbox.reset_book();
+            }
+            Some(Reset::Lost { ended: false, .. }) => outbox.interrupt_book(world.session_id()),
+            _ => {}
         }
         if let WorldUpdate::Game(event) = update {
             outbox.book_news(event, world.session_id());
@@ -1243,6 +1244,66 @@ mod tests {
     use eq_client_core::PlayerState;
 
     mod spell_notices;
+
+    #[test]
+    fn a_resumed_admission_keeps_manual_book_ownership_until_the_matching_reply() {
+        use crate::outbox::{Outbox, Refusal};
+        use eq_client_core::{
+            BookActionStatus, ClientCommand, SpellBook, SpellUpdate, world::Link,
+        };
+        use std::sync::mpsc;
+
+        let mut state = OnlineState::new(true);
+        let mut player = testing::player(7);
+        player.memorized_spells[1] = Some(42);
+        testing::admit(&mut state, 5, player);
+        testing::book(&mut state, SpellBook::default());
+        let (sender, sent) = mpsc::sync_channel(4);
+        let outbox = Outbox::new(Some(sender));
+        let forget = |stamp: crate::outbox::Stamp| ClientCommand::ForgetSpell {
+            session_id: stamp.session_id,
+            gem: 1,
+            spell_id: 42,
+            created: stamp.created,
+        };
+        outbox.post(state.world(), forget).unwrap();
+        sent.try_recv().unwrap();
+        for update in [
+            WorldUpdate::Game(WorldEvent::BookAction(BookActionStatus::Submitted)),
+            WorldUpdate::Connection(Link::Zoning),
+            WorldUpdate::Connection(Link::Zoning),
+            WorldUpdate::Connection(Link::Connected),
+        ] {
+            apply(&mut state.world, &update, &NoSpells, Some(&outbox));
+        }
+        assert_eq!(state.world().session_id(), Some(5));
+        assert!(state.world().in_world());
+        assert!(state.world().spell_book().is_some());
+        assert_eq!(outbox.take_refused(), [Refusal::BookUnconfirmed]);
+
+        for (slot, spell_id) in [(0, 42), (1, 73), (1, 42)] {
+            assert_eq!(
+                outbox.post(state.world(), forget),
+                Err(Refusal::BookUnconfirmed)
+            );
+            assert!(matches!(sent.try_recv(), Err(mpsc::TryRecvError::Empty)));
+            let update = WorldUpdate::Game(WorldEvent::Spell(SpellUpdate::Slot {
+                slot,
+                spell_id,
+                mode: 2,
+            }));
+            apply(&mut state.world, &update, &NoSpells, Some(&outbox));
+            assert_eq!(
+                state.world().gem(1),
+                ((slot, spell_id) != (1, 42)).then_some(42)
+            );
+        }
+
+        assert_eq!(
+            outbox.begin_spell_set(state.world(), std::time::Instant::now()),
+            Ok(())
+        );
+    }
 
     #[test]
     fn a_camp_to_the_desktop_ends_the_program_once_camped_and_a_plain_one_does_not() {

@@ -1610,6 +1610,20 @@ fn game_commands(
         return Some(commands);
     }
     Some(match name.as_str() {
+        "stopsong" => (|| {
+            if !words.trim().is_empty() {
+                return Err("Use /stopsong without arguments".into());
+            }
+            let player = online.world().player().ok_or("Enter the world first")?;
+            if player.class != Some(8) {
+                return Err("Only Bards can stop a song".into());
+            }
+            let stamp = stamp()?;
+            Ok(vec![ClientCommand::StopSong {
+                session_id: stamp.session_id,
+                created: stamp.created,
+            }])
+        })(),
         "who" => eq_client_core::who::parse(words).and_then(|request| {
             if !request.everywhere {
                 return Err("The zone's /who is listed by chat, not sent".into());
@@ -2091,6 +2105,27 @@ mod tests {
             window: Entity::PLACEHOLDER,
         });
         app.update();
+    }
+
+    #[test]
+    fn stop_song_is_a_scoped_bard_action_through_the_game_command_path() {
+        let mut online = super::super::online::OnlineState::new(true);
+        let (queue, received) = std::sync::mpsc::sync_channel(2);
+        let outbox = crate::outbox::Outbox::new(Some(queue));
+        let qol = Settings::default();
+        let mut player = super::super::online::testing::player(7);
+        super::super::online::testing::admit(&mut online, 4, player.clone());
+        assert!(submit_game_command("/stopsong", &mut online, &outbox, &qol).is_err());
+
+        player.class = Some(8);
+        super::super::online::testing::admit(&mut online, 5, player);
+        assert!(submit_game_command("/stopsong now", &mut online, &outbox, &qol).is_err());
+        assert!(received.try_recv().is_err());
+        submit_game_command("/StopSong", &mut online, &outbox, &qol).unwrap();
+        assert!(matches!(
+            received.try_recv(),
+            Ok(ClientCommand::StopSong { session_id: 5, .. })
+        ));
     }
 
     #[test]

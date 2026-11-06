@@ -612,7 +612,7 @@ pub(super) fn parse_step(line: &str) -> Result<Step, String> {
 /// those that change nothing beyond the test characters.
 fn parse_slash(words: &[&str]) -> Result<Step, String> {
     Ok(match words {
-        [command] if matches!(*command, "camp" | "sit" | "stand" | "ranged") => {
+        [command] if matches!(*command, "camp" | "sit" | "stand" | "ranged" | "stopsong") => {
             Step::Slash(format!("/{command}"))
         }
         ["camp", "desktop"] => Step::Slash("/camp desktop".into()),

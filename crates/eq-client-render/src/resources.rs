@@ -341,6 +341,40 @@ mod tests {
     }
 
     #[test]
+    fn a_slotted_instrument_effect_preserves_capacity_only_when_classified_harmless() {
+        let mut inventory = eq_client_core::inventory::Inventory::default();
+        inventory.apply(InventoryUpdate::Snapshot(vec![]));
+        let mut world = admitted();
+        let mut fields = vec!["0"; 183];
+        fields[0] = "42";
+        fields[1] = "Synthetic song";
+        fields[16] = "3";
+        fields[20] = "10";
+        fields[70] = "100";
+        tell(
+            &mut world,
+            buff(
+                42,
+                Some(eq_client_core::Buff {
+                    spell_id: 42,
+                    caster_level: 0,
+                    effect_type: 2,
+                    bard_modifier: 22,
+                    duration_ticks: 3,
+                    counters: 0,
+                    caster_id: 7,
+                }),
+            ),
+            &NoSpells,
+        );
+        for (effect, expected) in [("0", Some((25, 20))), ("9", None), ("9999", None)] {
+            fields[86] = effect;
+            let names = SpellNames::parse(&fields.join("^"));
+            assert_eq!(estimate(&player(), &inventory, &world, &names), expected);
+        }
+    }
+
+    #[test]
     fn scheduled_estimate_clears_on_disconnect_and_when_rules_are_disabled() {
         let mut app = App::new();
         let mut online = OnlineState::new(true);

@@ -74,6 +74,7 @@ Approach, walk and chase hold the camera-relative forward command, independent o
   `slash ranged` requests one shot or throw against the current target on Titanium.
   Watch the server's combat and inventory updates for the result.
   `slash camp desktop` uses the ordinary camp destination and current QoL exit choice.
+  `slash stopsong` queues the Bard's stop request on Titanium EQEmu.
   The immediate disconnect aliases typed in chat are not script slash commands.
 - `gm command [arguments]`: an allowed GM command on a network-constrained local test session only.
   `gm stun 8000` requests an 8,000-millisecond server stun for a local fixture.

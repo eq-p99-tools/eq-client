@@ -332,11 +332,11 @@ fn typed_names_save_rename_and_delete_the_selected_layout() {
     );
     let mut reopened = Sets::default();
     reopened.store.open(Some(&folder.0));
-    reopened.follow(Some(profile("fixture")));
+    reopened.follow(Some(&profile("fixture")));
     assert_eq!(reopened.saved, saved.saved);
-    reopened.follow(Some(profile("otherworld")));
+    reopened.follow(Some(&profile("otherworld")));
     assert!(reopened.saved.is_empty());
-    reopened.follow(Some(profile("fixture")));
+    reopened.follow(Some(&profile("fixture")));
     assert_eq!(reopened.saved, saved.saved);
     click(&mut app, "SpellSets_Delete");
     assert_eq!(app.world().resource::<Sets>().saved.len(), 1);
@@ -364,7 +364,7 @@ fn malformed_data_stays_intact_and_name_collisions_are_rejected() {
     let folder = Folder::new();
     let mut sets = Sets::default();
     sets.store.open(Some(&folder.0));
-    sets.follow(Some(profile("fixture")));
+    sets.follow(Some(&profile("fixture")));
     sets.panel.draft = "Travel".into();
     sets.save_current([None; 8]).unwrap();
     assert!(sets.checked_name(" travel ", None).is_err());
@@ -374,8 +374,8 @@ fn malformed_data_stays_intact_and_name_collisions_are_rejected() {
     let path = folder.0.join(sets.file_name().unwrap());
     let broken = r#"{"short":[null,42]}"#;
     std::fs::write(&path, broken).unwrap();
-    sets.follow(Some(profile("otherworld")));
-    sets.follow(Some(profile("fixture")));
+    sets.follow(Some(&profile("otherworld")));
+    sets.follow(Some(&profile("fixture")));
     assert!(sets.load_error && !sets.writable() && sets.saved.is_empty());
     assert_eq!(std::fs::read_to_string(path).unwrap(), broken);
 }
@@ -388,7 +388,7 @@ fn exact_world_names_keep_their_own_deferred_writes() {
     let profiles = [("test+world", 42), ("test_world", 73), ("Test_World", 99)];
     let gems = |id| [Some(id), None, None, None, None, None, None, None];
     for (world, id) in profiles {
-        sets.follow(Some(profile(world)));
+        sets.follow(Some(&profile(world)));
         assert!(sets.saved.is_empty());
         let name = sets.file_name().unwrap();
         // Block the rename after loading, so this profile stays dirty.
@@ -398,7 +398,7 @@ fn exact_world_names_keep_their_own_deferred_writes() {
         assert!(sets.store.pending(&name));
     }
     for (world, id) in profiles {
-        sets.follow(Some(profile(world)));
+        sets.follow(Some(&profile(world)));
         assert_eq!(sets.saved["Travel"], gems(id));
         std::fs::remove_dir(folder.0.join(sets.file_name().unwrap())).unwrap();
     }
@@ -407,53 +407,108 @@ fn exact_world_names_keep_their_own_deferred_writes() {
     let mut reopened = Sets::default();
     reopened.store.open(Some(&folder.0));
     for (world, id) in profiles {
-        reopened.follow(Some(profile(world)));
+        reopened.follow(Some(&profile(world)));
         assert_eq!(reopened.saved["Travel"], gems(id));
     }
 }
 
 #[test]
-fn a_confirming_gem_and_link_loss_in_one_receive_batch_keep_the_old_count() {
+fn confirming_gems_in_a_reset_batch_keep_the_old_count_and_the_right_panel() {
     use crate::online::{Updates, receive};
     use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
-    let folder = Folder::new();
-    let (mut app, sent) = test_app(&folder, 2);
-    let (updates, incoming) = mpsc::channel();
-    app.insert_resource(Updates(std::sync::Mutex::new(Some(incoming))))
-        .init_resource::<Assets<Mesh>>()
-        .init_resource::<Assets<SkinnedMeshInverseBindposes>>()
-        .init_resource::<Assets<StandardMaterial>>()
-        .add_systems(Update, receive.before(profile_files::follow));
-    app.world_mut()
-        .resource_mut::<Sets>()
-        .saved
-        .insert("Travel".into(), [None; 8]);
-    click(&mut app, "SpellSets_Toggle");
-    click(&mut app, "SpellSets_Apply");
-    app.update();
-    assert!(matches!(
-        sent.try_recv(),
-        Ok(ClientCommand::ForgetSpell {
-            gem: 0,
-            spell_id: 42,
-            ..
-        })
-    ));
-    for update in [
-        WorldUpdate::Game(WorldEvent::BookAction(BookActionStatus::Submitted)),
-        WorldUpdate::Game(WorldEvent::Spell(SpellUpdate::Slot {
-            slot: 0,
-            spell_id: 42,
-            mode: 2,
-        })),
-        WorldUpdate::Connection(eq_client_core::world::Link::Ended),
+    use eq_client_core::world::Link;
+
+    for (reset, reason, retains_panel) in [
+        (
+            vec![WorldUpdate::Game(WorldEvent::Death(
+                eq_client_core::Death {
+                    spawn_id: 7,
+                    killer_id: 9,
+                    corpse_id: 8,
+                    bind_zone_id: 9,
+                    corpse_name: None,
+                },
+            ))],
+            "The character died.",
+            true,
+        ),
+        (
+            vec![WorldUpdate::Game(WorldEvent::ZoneTransfer(
+                eq_client_core::ZoneOffer {
+                    zone_id: 2,
+                    instance_id: 0,
+                    position: eq_client_core::WorldPosition::default(),
+                    reason: 0,
+                    to_bind: false,
+                    solicited: true,
+                },
+            ))],
+            "Zone transfer started.",
+            true,
+        ),
+        (
+            vec![
+                WorldUpdate::Connection(Link::Zoning),
+                WorldUpdate::Connection(Link::Connected),
+            ],
+            "The connection was interrupted.",
+            true,
+        ),
+        (
+            vec![WorldUpdate::Connection(Link::Ended)],
+            "The admission ended.",
+            false,
+        ),
     ] {
-        updates.send(update).unwrap();
+        let folder = Folder::new();
+        let (mut app, sent) = test_app(&folder, 2);
+        let (updates, incoming) = mpsc::channel();
+        app.insert_resource(Updates(std::sync::Mutex::new(Some(incoming))))
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<SkinnedMeshInverseBindposes>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .add_systems(Update, receive.before(profile_files::follow));
+        app.world_mut()
+            .resource_mut::<Sets>()
+            .saved
+            .insert("Travel".into(), [None; 8]);
+        click(&mut app, "SpellSets_Toggle");
+        click(&mut app, "SpellSets_Apply");
+        app.update();
+        assert!(matches!(
+            sent.try_recv(),
+            Ok(ClientCommand::ForgetSpell {
+                gem: 0,
+                spell_id: 42,
+                ..
+            })
+        ));
+        app.world_mut().resource_mut::<Sets>().panel.draft = "In progress".into();
+        for update in [
+            WorldUpdate::Game(WorldEvent::BookAction(BookActionStatus::Submitted)),
+            WorldUpdate::Game(WorldEvent::Spell(SpellUpdate::Slot {
+                slot: 0,
+                spell_id: 42,
+                mode: 2,
+            })),
+        ]
+        .into_iter()
+        .chain(reset)
+        {
+            updates.send(update).unwrap();
+        }
+        app.update();
+        let sets = app.world().resource::<Sets>();
+        assert_eq!(sets.status, format!("Travel stopped. 7/8 match. {reason}"));
+        assert_eq!(sets.panel.expanded, retains_panel);
+        assert_eq!(
+            sets.panel.selected.as_deref(),
+            retains_panel.then_some("Travel")
+        );
+        assert_eq!(
+            sets.panel.draft,
+            if retains_panel { "In progress" } else { "" }
+        );
+        assert!(matches!(sent.try_recv(), Err(mpsc::TryRecvError::Empty)));
     }
-    app.update();
-    assert_eq!(
-        app.world().resource::<Sets>().status,
-        "Travel stopped. 7/8 match. The admission ended."
-    );
-    assert!(matches!(sent.try_recv(), Err(mpsc::TryRecvError::Empty)));
 }

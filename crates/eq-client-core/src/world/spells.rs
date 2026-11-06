@@ -13,8 +13,12 @@ impl ClientWorld {
     pub(super) fn spell(&mut self, update: &SpellUpdate, now: Instant, changes: &mut Changes) {
         self.cast_news(update, now);
         // Forgetting a gem is answered only by the gem emptying.
-        if matches!(update, SpellUpdate::Slot { mode: 2, .. })
-            && matches!(self.book_action, Some(BookActionStatus::Submitted))
+        if matches!(self.book_action, Some(BookActionStatus::Submitted))
+            && let SpellUpdate::Slot { slot, mode: 2, .. } = *update
+            && usize::try_from(slot)
+                .ok()
+                .and_then(|index| self.gem(index))
+                .is_some_and(|spell| update.clears_gem(slot, spell))
         {
             self.book_action = None;
         }

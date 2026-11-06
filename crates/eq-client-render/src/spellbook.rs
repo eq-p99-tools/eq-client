@@ -832,6 +832,9 @@ fn book_label(
             BookActionStatus::AwaitingReply => {
                 label.push_str("Waiting for matching server reply...");
             }
+            BookActionStatus::Unconfirmed => {
+                label.push_str(crate::outbox::Refusal::BookUnconfirmed.text());
+            }
             BookActionStatus::Confirmed => label.push_str("Server confirmed spellbook action"),
             BookActionStatus::Cancelled(reason) => {
                 let _ = write!(label, "Cancelled: {reason}");

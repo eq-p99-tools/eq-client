@@ -217,7 +217,7 @@ fn refusal_timeout_and_resets_end_without_another_mutation() {
                 "No confirmation for gem 2."
             }
             "reset" => {
-                active.invalidate(None);
+                active.invalidate("The admission ended.", None);
                 "The admission ended."
             }
             _ => {

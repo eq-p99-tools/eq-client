@@ -16,7 +16,7 @@ pub(super) struct BookQueue {
 
 #[derive(Clone, Copy)]
 pub(super) enum Expected {
-    Forget(u8),
+    Forget(u8, u32),
     Slot { slot: u32, spell: u32, mode: u32 },
     Delete(u16),
     Swap(u16, u16),
@@ -25,7 +25,7 @@ pub(super) enum Expected {
 impl Expected {
     pub(super) fn from_command(command: &ClientCommand) -> Option<Self> {
         Some(match *command {
-            ClientCommand::ForgetSpell { gem, .. } => Self::Forget(gem),
+            ClientCommand::ForgetSpell { gem, spell_id, .. } => Self::Forget(gem, spell_id),
             ClientCommand::MemorizeSpell { gem, spell_id, .. } => Self::Slot {
                 slot: u32::from(gem),
                 spell: spell_id,
@@ -44,7 +44,7 @@ impl Expected {
 
     fn matches(self, update: &SpellUpdate) -> bool {
         match (self, update) {
-            (Self::Forget(gem), SpellUpdate::Slot { slot, mode: 2, .. }) => u32::from(gem) == *slot,
+            (Self::Forget(gem, spell), update) => update.clears_gem(u32::from(gem), spell),
             (
                 Self::Slot { slot, spell, mode },
                 SpellUpdate::Slot {
@@ -76,6 +76,7 @@ struct Pending {
     expected: Expected,
     session: Option<u64>,
     since: Instant,
+    unconfirmed: bool,
     acknowledged: bool,
     observed: bool,
 }
@@ -92,7 +93,10 @@ impl BookQueue {
         }
         self.pending.take_if(|pending| pending.session != session);
         match &self.pending {
-            Some(pending) if now.saturating_duration_since(pending.since) >= BOOK_TIMEOUT => {
+            Some(pending)
+                if pending.unconfirmed
+                    || now.saturating_duration_since(pending.since) >= BOOK_TIMEOUT =>
+            {
                 Err(Refusal::BookUnconfirmed)
             }
             Some(_) => Err(Refusal::BookPending),
@@ -105,6 +109,7 @@ impl BookQueue {
             expected,
             session,
             since: now,
+            unconfirmed: false,
             acknowledged: false,
             observed: false,
         });
@@ -115,17 +120,34 @@ impl BookQueue {
             .take_if(|pending| pending.session == session && pending.observe(event));
     }
 
+    /// Mark a possibly submitted request unknown without dropping its reply match.
+    /// Returns whether a manual edit has newly become unconfirmed.
+    pub(super) fn interrupt(&mut self, session: Option<u64>) -> bool {
+        let Some(pending) = self
+            .pending
+            .as_mut()
+            .filter(|pending| pending.session == session)
+        else {
+            return false;
+        };
+        let was_unconfirmed = std::mem::replace(&mut pending.unconfirmed, true);
+        !self.applying && !was_unconfirmed
+    }
+
     pub(super) fn reset(&mut self) {
         self.pending = None;
     }
 }
 
 impl Pending {
-    /// The worker's tracked confirmation can arrive before the corresponding
-    /// world update. A forget has only a submission and an exact gem clear.
+    /// The worker's tracked confirmation can arrive before the world update.
+    /// A forget requires its submission followed by an exact gem clear.
     fn observe(&mut self, event: &WorldEvent) -> bool {
-        let forgetting = matches!(self.expected, Expected::Forget(_));
+        let forgetting = matches!(self.expected, Expected::Forget(..));
         match event {
+            WorldEvent::BookAction(BookActionStatus::Unconfirmed) => {
+                self.unconfirmed = true;
+            }
             WorldEvent::BookAction(BookActionStatus::Submitted) if forgetting => {
                 self.acknowledged = true;
             }

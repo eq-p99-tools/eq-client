@@ -230,6 +230,9 @@ fn add_buffs<'a>(
     buffs: impl Iterator<Item = &'a crate::Buff>,
 ) -> Result<(), EstimateUnavailable> {
     for buff in buffs {
+        if names.preserves_capacities(buff.spell_id) {
+            continue;
+        }
         // Instrument modifiers require effect-specific handling; ten is unmodified.
         if buff.bard_modifier != 10 {
             return Err(EstimateUnavailable::Effect);

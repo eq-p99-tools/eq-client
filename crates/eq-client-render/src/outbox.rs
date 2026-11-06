@@ -172,6 +172,17 @@ impl Outbox {
         }
     }
 
+    /// An interrupted link can resume with the same worker and book request.
+    pub(crate) fn interrupt_book(&self, session: Option<u64>) {
+        let newly_unconfirmed = self
+            .book
+            .lock()
+            .is_ok_and(|mut book| book.interrupt(session));
+        if newly_unconfirmed {
+            self.refused(Refusal::BookUnconfirmed);
+        }
+    }
+
     pub(crate) fn applying_spell_set(&self) -> bool {
         self.book.lock().is_ok_and(|book| book.applying)
     }

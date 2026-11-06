@@ -119,9 +119,17 @@ spell actions are source-checked and tested offline; public validation is pendin
 Select a spell and destination gem to memorize; click a populated gem or use its
 binding to cast. Shift-click forgetting is separate from casting. Casts use the
 selected target or self when none is selected. Movement and posture changes can
-interrupt a cast; estimated completion time alone does not report success.
-Spellbook operations serialize outstanding edits and wait for matching answers.
-Deletion confirmation is invalidated when its selection or admission changes.
+interrupt a cast. The cast timer estimates progress while the server reports
+the result. On Titanium EQEmu, Bards can type `/stopsong` during a song cast
+or while a song is pulsing, then use the next gem when casting is available.
+Existing song buffs fade on their own server-reported schedule.
+
+Spellbook operations serialize edits and wait for matching answers. If the
+same zone connection resumes after an interruption, a pending edit is
+reported as unconfirmed. Wait for the matching reply or re-enter the zone
+before editing again. An unanswered scribe also holds inventory actions
+while the scroll's result is unknown. Deletion confirmation is invalidated
+when its selection or admission changes.
 
 Click **Search spells** in the book to filter learned spells by name. The
 search ignores case and fills each results page in original book-slot order.
@@ -141,9 +149,10 @@ learned before starting and follows the usual memorization rules, including
 your **Memorize While Standing** setting. Progress counts slots that match the
 saved layout. Moving, casting, changing posture, closing the book or clicking
 **Cancel apply** stops subsequent requests. The current request may still
-finish, and confirmed changes remain in your gems. Apply again to continue
-from your current layout. If a gem clear remains unconfirmed, wait for its
-reply or re-enter the zone before making another spellbook change.
+finish, and confirmed changes remain in your gems. Death, a transfer and a
+temporary link interruption stop apply and keep the panel's selection and
+draft until the admission changes. Apply again from your current layout
+once the outstanding edit settles.
 
 The 5-by-2 hotbar holds ten actions. Click or use the number bindings to activate
 them. Hold a gem, supported item or Actions button to pick up its hotkey, then
@@ -181,8 +190,9 @@ cancelled. A buff stays visible until received state removes it. If the selected
 slot changes while the button is held, release cancels the selection. The buff
 may expire on its own during a request. With no matching fade, the client
 reports the request as unconfirmed. Requests are never retried automatically.
-P99 cancellation remains gated while its exact emission contract is
-investigated; a compatible attended check is still pending.
+P99 cancellation remains gated pending evidence for the complete request and
+matching server fade. The enabled Titanium EQEmu path covers one initialized
+current-record request.
 
 ## Targeting and interaction
 

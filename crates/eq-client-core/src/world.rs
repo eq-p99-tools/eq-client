@@ -1422,10 +1422,10 @@ impl ClientWorld {
                 self.drop_actions();
                 if ended || !transferring {
                     self.casting.reset_cooldowns();
-                    self.spell_book = None;
                     self.buffs.clear();
                 }
                 if ended {
+                    self.spell_book = None;
                     self.servers = None;
                     self.characters = None;
                     self.pending_transfer = None;
