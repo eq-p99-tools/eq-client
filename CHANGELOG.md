@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Center the target name and draw it in bold where the face is available.
 - Keep detached chat windows in their previous stack order when the HUD is
   rebuilt. The skinned dock stays bare when empty, and chat links remain
   clickable when their lines are nested within the viewport.

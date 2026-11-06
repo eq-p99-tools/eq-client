@@ -44,12 +44,16 @@ pub(super) fn spawn(commands: &mut Commands) {
     super::windows::passive(commands, frame);
     super::windows::identify(commands, frame, super::windows::WindowId::Target);
     commands.entity(frame).with_children(|panel| {
-        panel.spawn((
-            TargetName,
-            Text::new("No target"),
-            theme::font(Size::Heading),
-            TextColor(theme::INK_WARM),
-        ));
+        centered_line(
+            panel,
+            Node::default(),
+            (
+                TargetName,
+                Text::new("No target"),
+                theme::bold_font(Size::Heading),
+                TextColor(theme::INK_WARM),
+            ),
+        );
         panel
             .spawn((
                 Node {
@@ -70,13 +74,35 @@ pub(super) fn spawn(commands: &mut Commands) {
                     BackgroundColor(theme::HP),
                 ));
             });
-        panel.spawn((
-            TargetDetails,
-            Text::new("Click or Tab to select"),
-            theme::font(Size::Small),
-            TextColor(theme::INK),
-        ));
+        centered_line(
+            panel,
+            Node::default(),
+            (
+                TargetDetails,
+                theme::text("Click or Tab to select", Size::Small, theme::INK),
+            ),
+        );
     });
+}
+
+/// Centers a line in its box. Auto margins absorb spare room and leave an
+/// oversized name at the left edge so clipping keeps the start readable.
+pub(super) fn centered_line(parent: &mut ChildSpawnerCommands, bounds: Node, text: impl Bundle) {
+    parent
+        .spawn(Node {
+            align_items: AlignItems::Center,
+            overflow: Overflow::clip(),
+            ..bounds
+        })
+        .with_child((
+            text,
+            Node {
+                flex_shrink: 0.0,
+                margin: UiRect::axes(Val::Auto, px(0)),
+                ..default()
+            },
+            TextLayout::new(Justify::Left, LineBreak::NoWrap),
+        ));
 }
 
 /// Picks visible model triangles or cycles the stable ID order of nearby rendered entities.

@@ -9,7 +9,11 @@
 //! Every text is in the face the official client writes in (Arial, for
 //! Titanium), read from Windows' own fonts at run time and never bundled;
 //! without it, Bevy's built-in face stays.
-use bevy::{asset::AssetId, ecs::system::EntityCommands, prelude::*};
+use bevy::{
+    asset::{AssetId, uuid_handle},
+    ecs::system::EntityCommands,
+    prelude::*,
+};
 use eq_client_core::combat::ConColor;
 use std::path::{Path, PathBuf};
 
@@ -194,33 +198,41 @@ fn font_path(system_root: Option<&Path>, file: &str) -> Option<PathBuf> {
     Some(system_root?.join("Fonts").join(file))
 }
 
-/// Makes the face the installed official client writes in the face of
-/// every text that names none of its own, where Windows has it. It replaces
-/// Bevy's built-in face, so it runs after the text plugin is added and
-/// before any text is laid out.
-pub(crate) fn install_font(app: &mut App, client: eq_client_assets::ui::InstalledClient) {
-    let Some(face) = client.font_file() else {
-        info!(
-            "The face the {client:?} client writes in is unchecked: text keeps the built-in face"
-        );
-        return;
-    };
-    let root = std::env::var_os("SystemRoot").or_else(|| std::env::var_os("windir"));
-    let Some(file) = font_path(root.as_deref().map(Path::new), face) else {
-        info!("Not on Windows: text keeps the built-in face");
-        return;
-    };
+/// The separate bold face, with the default face as its fallback.
+const BOLD_FONT: Handle<Font> = uuid_handle!("722a41d9-d60d-43e6-9e9a-da586c398213");
+
+fn windows_font(root: Option<&Path>, face: &str) -> Option<Font> {
+    let file = font_path(root, face)?;
     match std::fs::read(&file) {
-        Ok(bytes) => {
-            let mut fonts = app.world_mut().resource_mut::<Assets<Font>>();
-            if let Err(error) = fonts.insert(AssetId::default(), Font::from_bytes(bytes)) {
-                warn!("Could not use {}: {error}", file.display());
-            }
+        Ok(bytes) => Some(Font::from_bytes(bytes)),
+        Err(error) => {
+            info!("No {face} at {}: {error}", file.display());
+            None
         }
-        Err(error) => info!(
-            "No {face} at {}: {error}; text keeps the built-in face",
-            file.display()
-        ),
+    }
+}
+
+/// Makes the face the installed official client writes in the face of
+/// every text that names none of its own, where Windows has it. Load the
+/// companion bold face separately so a static regular font stays regular.
+pub(crate) fn install_font(app: &mut App, client: eq_client_assets::ui::InstalledClient) {
+    let root = std::env::var_os("SystemRoot").or_else(|| std::env::var_os("windir"));
+    let root = root.as_deref().map(Path::new);
+    let face = client.font_file();
+    let mut fonts = app.world_mut().resource_mut::<Assets<Font>>();
+    if let Some(font) = face.and_then(|face| windows_font(root, face))
+        && let Err(error) = fonts.insert(AssetId::default(), font)
+    {
+        warn!("Could not install the default font: {error}");
+    }
+    let bold = face
+        .filter(|face| *face == "arial.ttf")
+        .and_then(|_| windows_font(root, "arialbd.ttf"))
+        .or_else(|| fonts.get(AssetId::default()).cloned());
+    if let Some(font) = bold
+        && let Err(error) = fonts.insert(BOLD_FONT.id(), font)
+    {
+        warn!("Could not install the bold font: {error}");
     }
 }
 
@@ -230,6 +242,13 @@ pub(crate) fn font(size: Size) -> TextFont {
         font_size: FontSize::Px(size.px()),
         ..default()
     }
+}
+
+/// The client's bold face at this size.
+pub(crate) fn bold_font(size: Size) -> TextFont {
+    font(size)
+        .with_font(BOLD_FONT)
+        .with_font_weight(FontWeight::BOLD)
 }
 
 /// A text in this size and colour.
