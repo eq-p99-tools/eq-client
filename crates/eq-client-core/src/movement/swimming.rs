@@ -84,7 +84,17 @@ impl CollisionWorld {
         [wet, (wet + 0.000_02).min(1.0), 1.0]
             .into_iter()
             .map(|t| from.lerp(to, t))
-            .find(|&point| self.swim_depth(point, height).is_some())
+            .find(|&point| {
+                self.swim_depth(point, height).is_some()
+                    && !water.passes_through(
+                        from + Vec3::Y * SOLES,
+                        point + Vec3::Y * SOLES,
+                        Liquid::Lava,
+                    )
+                    && self
+                        .clearance(point, height, 0.0)
+                        .is_none_or(|distance| distance >= 0.0)
+            })
     }
 
     /// Sweeps a bounded stroke from water. A collision can spend the rest of
@@ -131,32 +141,87 @@ impl CollisionWorld {
         }
     }
 
-    /// Clips the stroke before lava or an unsupported exit. The bank must
-    /// support the capsule at its actual destination, not just be nearby.
+    /// Clips before the first break in water or lava, even if the stroke
+    /// would end in water. A bank hands off at the water boundary.
     fn limit_swim(&self, from: Vec3, to: Vec3, height: f32) -> Vec3 {
         let Some(liquids) = &self.liquids else {
             return from;
         };
         let soles = Vec3::Y * SOLES;
         let lava = |at| liquids.passes_through(from + soles, at + soles, Liquid::Lava);
-        if !lava(to)
-            && (self.swim_depth(to, height).is_some()
-                || (Vec3::new(to.x - from.x, 0.0, to.z - from.z).length_squared() > 1e-10
-                    && self.ground(to, 0.01, 0.15).is_some()))
+        let middle = Vec3::Y * (height * 0.5);
+        let to = if let Some(gap) = liquids.first_outside(from + middle, to + middle, Liquid::Water)
         {
+            if gap.is_empty() {
+                return from;
+            }
+            let at = |fraction| from.as_dvec3().lerp(to.as_dvec3(), fraction).as_vec3();
+            let edge = at(gap.start);
+            let horizontal = (to.x - from.x).hypot(to.z - from.z);
+            if horizontal > 1e-5
+                && self.ground(edge, 0.01, 0.15).is_some()
+                && let Some(shore) = self.shore_point(at, &gap, height)
+                && !lava(shore)
+            {
+                return shore;
+            }
+            edge
+        } else if self.swim_depth(to, height).is_some() && !lava(to) {
+            return to;
+        } else {
+            to
+        };
+        // Interpolation back to f32 can round the edge onto the far side
+        // of a very thin gap. Validate the actual proposed point as well.
+        let clear = |point| {
+            self.swim_depth(point, height).is_some()
+                && !lava(point)
+                && liquids
+                    .first_outside(from + middle, point + middle, Liquid::Water)
+                    .is_none()
+        };
+        if clear(to) {
             return to;
         }
         let (mut safe, mut blocked) = (0.0, 1.0);
         for _ in 0..16 {
             let t = f32::midpoint(safe, blocked);
             let point = from.lerp(to, t);
-            if self.swim_depth(point, height).is_some() && !lava(point) {
+            if clear(point) {
                 safe = t;
             } else {
                 blocked = t;
             }
         }
         from.lerp(to, safe)
+    }
+
+    /// Finds the nearest representable position on the bank's side of the
+    /// split. Leave the remainder of the dry path to ordinary movement.
+    fn shore_point(
+        &self,
+        at: impl Fn(f64) -> Vec3,
+        gap: &std::ops::Range<f64>,
+        height: f32,
+    ) -> Option<Vec3> {
+        let (mut wet, mut dry) = (gap.start, f64::midpoint(gap.start, gap.end));
+        let edge = at(wet);
+        if self.swim_depth(edge, height).is_none() {
+            return Some(edge);
+        }
+        if self.swim_depth(at(dry), height).is_some() {
+            return None;
+        }
+        for _ in 0..32 {
+            let middle = f64::midpoint(wet, dry);
+            if self.swim_depth(at(middle), height).is_some() {
+                wet = middle;
+            } else {
+                dry = middle;
+            }
+        }
+        let shore = at(dry);
+        self.ground(shore, 0.01, 0.15).is_some().then_some(shore)
     }
 }
 
@@ -257,6 +322,116 @@ mod tests {
         let held = bottom.swim_step(feet, Vec3::NEG_X, HEIGHT);
         assert!(held.x >= 0.0 && held.x < 0.01, "{held:?}");
         assert_eq!(bottom.swim_depth(held, HEIGHT), Some(SwimDepth::Surface));
+    }
+
+    #[test]
+    fn a_swim_stroke_cannot_cross_a_dry_gap_between_water_volumes() {
+        let (low, high, kind) = water();
+        let pools = Boxes(vec![
+            (low, Vec3::new(1.0, high.y, high.z), kind),
+            (Vec3::new(1.05, low.y, low.z), high, kind),
+        ]);
+        let world = CollisionWorld::new(flat(-12.0))
+            .unwrap()
+            .with_liquids(pools);
+        let feet = Vec3::new(0.9, -3.1, 0.0);
+        let delta = Vec3::X * 0.3;
+        assert_eq!(
+            world.swim_depth(feet + delta, HEIGHT),
+            Some(SwimDepth::Surface)
+        );
+        let edge = world.swim_step(feet, delta, HEIGHT);
+        assert!((0.99..=1.0).contains(&edge.x), "{edge:?}");
+        let next = world.swim_step(edge, delta, HEIGHT);
+        assert!(next.x <= 1.0, "{next:?}");
+    }
+
+    #[test]
+    fn a_supported_endpoint_does_not_allow_swimming_across_an_unsupported_exit() {
+        let bank = [
+            [
+                [1.05, -3.19, -20.0],
+                [20.0, -3.19, -20.0],
+                [20.0, -3.19, 20.0],
+            ],
+            [
+                [1.05, -3.19, -20.0],
+                [20.0, -3.19, 20.0],
+                [1.05, -3.19, 20.0],
+            ],
+        ];
+        let (low, high, kind) = water();
+        let pool = (low, Vec3::new(1.0, high.y, high.z), kind);
+        let world = CollisionWorld::new(flat(-12.0).into_iter().chain(bank))
+            .unwrap()
+            .with_liquids(Boxes(vec![pool]));
+        let feet = Vec3::new(0.9, -3.1, 0.0);
+        let delta = Vec3::X * 0.3;
+        assert!(world.ground(feet + delta, 0.01, 0.15).is_some());
+        assert!(
+            world
+                .ground(Vec3::new(1.0, -3.1, 0.0), 0.01, 0.15)
+                .is_none()
+        );
+        let edge = world.swim_step(feet, delta, HEIGHT);
+        assert!((0.99..=1.0).contains(&edge.x), "{edge:?}");
+    }
+
+    #[test]
+    fn stepping_down_checks_water_along_the_swept_legs() {
+        let upper = [
+            [[-20.0, 3.0, -20.0], [0.0, 3.0, -20.0], [0.0, 3.0, 20.0]],
+            [[-20.0, 3.0, -20.0], [0.0, 3.0, 20.0], [-20.0, 3.0, 20.0]],
+            [[0.0, 0.0, -20.0], [0.0, 3.0, -20.0], [0.0, 3.0, 20.0]],
+            [[0.0, 0.0, -20.0], [0.0, 3.0, 20.0], [0.0, 0.0, 20.0]],
+        ];
+        let world = CollisionWorld::new(flat(0.0).into_iter().chain(upper)).unwrap();
+        let feet = Vec3::new(-0.1, 3.0, 0.0);
+        let step = |world: &CollisionWorld| {
+            AirborneController::default().step_into_water(
+                world,
+                feet,
+                crate::movement::VerticalPhysics {
+                    ground_tolerance: 3.05,
+                    ..PROVISIONAL_PHYSICS
+                },
+                MotionStep {
+                    horizontal: Vec3::X * 0.7,
+                    height: HEIGHT,
+                    jump: false,
+                    seconds: 0.05,
+                },
+            )
+        };
+        // At waist height the chord cuts this pocket beside the riser.
+        // The walk crosses at deck height and settles further out.
+        let chord_water = (
+            Vec3::new(0.22, 4.35, -1.0),
+            Vec3::new(0.31, 4.65, 1.0),
+            Liquid::Water,
+        );
+        let world = world.with_liquids(Boxes(vec![chord_water]));
+        let landed = step(&world);
+        assert!(landed.x > 0.55 && landed.y.abs() < 0.01, "{landed:?}");
+        assert!(world.swim_depth(landed, HEIGHT).is_none());
+        assert!(
+            world
+                .sweep(feet, landed - feet, HEIGHT)
+                .is_ok_and(|hit| hit.is_some())
+        );
+
+        let below = (
+            Vec3::new(0.55, -2.0, -1.0),
+            Vec3::new(0.7, 4.0, 1.0),
+            Liquid::Water,
+        );
+        let world = world.with_liquids(Boxes(vec![chord_water, below]));
+        let entry = step(&world);
+        assert!(
+            entry.x > 0.55 && (0.99..=1.0).contains(&entry.y),
+            "{entry:?}"
+        );
+        assert_eq!(world.swim_depth(entry, HEIGHT), Some(SwimDepth::Surface));
     }
 
     #[test]

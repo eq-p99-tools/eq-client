@@ -14,8 +14,7 @@ pub(super) fn object_transform(object: &eq_client_assets::ZoneObject) -> Transfo
     }
 }
 
-/// The zone's water and lava as its regions mark them, which every walk keeps
-/// out of.
+/// The zone's water and lava as its regions mark them.
 pub(super) struct ZoneLiquids(pub(super) eq_client_assets::regions::ZoneRegions);
 
 impl eq_client_core::movement::Liquids for ZoneLiquids {
@@ -33,18 +32,31 @@ impl eq_client_core::movement::Liquids for ZoneLiquids {
         to: Vec3,
         liquid: eq_client_core::movement::Liquid,
     ) -> bool {
-        use eq_client_assets::regions::Liquid;
-        let liquid = match liquid {
-            eq_client_core::movement::Liquid::Water => Liquid::Water,
-            eq_client_core::movement::Liquid::Lava => Liquid::Lava,
-        };
         self.0
-            .passes_through(from.to_array(), to.to_array(), liquid)
+            .passes_through(from.to_array(), to.to_array(), asset_liquid(liquid))
+    }
+
+    fn first_outside(
+        &self,
+        from: Vec3,
+        to: Vec3,
+        liquid: eq_client_core::movement::Liquid,
+    ) -> Option<std::ops::Range<f64>> {
+        self.0
+            .first_outside(from.to_array(), to.to_array(), asset_liquid(liquid))
     }
 
     fn within(&self, low: Vec3, high: Vec3) -> Option<Box<dyn eq_client_core::movement::Liquids>> {
         let regions = self.0.within(low.to_array(), high.to_array())?;
         Some(Box::new(Self(regions)))
+    }
+}
+
+fn asset_liquid(liquid: eq_client_core::movement::Liquid) -> eq_client_assets::regions::Liquid {
+    use eq_client_assets::regions::Liquid;
+    match liquid {
+        eq_client_core::movement::Liquid::Water => Liquid::Water,
+        eq_client_core::movement::Liquid::Lava => Liquid::Lava,
     }
 }
 

@@ -293,11 +293,12 @@ impl AirborneController {
         } else {
             Support::Airborne
         };
+        if liquids == LiquidGuard::Lava && world.swim_depth(feet, input.height).is_some() {
+            return feet;
+        }
         let position = world.walk_with_guard(feet, horizontal, input.height, support, liquids);
-        if liquids == LiquidGuard::Lava
-            && let Some(entry) = world.water_entry(start, position, input.height)
-        {
-            return entry;
+        if liquids == LiquidGuard::Lava && world.swim_depth(position, input.height).is_some() {
+            return position;
         }
         if self.velocity <= 0.0
             && let Some(floor) = world.support(position)
@@ -368,24 +369,15 @@ impl AirborneController {
                 }
                 target
             }
-            Ok(Some(hit)) => {
-                let next = self.blocked(
-                    world,
-                    position,
-                    distance,
-                    &hit,
-                    speed,
-                    input.height,
-                    liquids,
-                );
-                if liquids == LiquidGuard::Lava {
-                    world
-                        .water_entry(position, next, input.height)
-                        .unwrap_or(next)
-                } else {
-                    next
-                }
-            }
+            Ok(Some(hit)) => self.blocked(
+                world,
+                position,
+                distance,
+                &hit,
+                speed,
+                input.height,
+                liquids,
+            ),
             Err(_) => position,
         }
     }
@@ -410,6 +402,11 @@ impl AirborneController {
     ) -> Vec3 {
         let fraction = (hit.time_of_impact - 0.005 / distance.abs()).clamp(0.0, 1.0);
         let contact = position + Vec3::Y * distance * fraction;
+        if liquids == LiquidGuard::Lava
+            && let Some(entry) = world.water_entry(position, contact, height)
+        {
+            return entry;
+        }
         self.peak = self.peak.map(|peak| peak.max(contact.y));
         // The obstacle's surface normal (the hit's is the capsule's own).
         let surface = -Vec3::new(hit.normal1.x, hit.normal1.y, hit.normal1.z);
@@ -435,12 +432,17 @@ impl AirborneController {
             return contact;
         }
         self.velocity = end;
-        match world.sweep(contact, slide, height) {
+        let end = match world.sweep(contact, slide, height) {
             Ok(None) => contact + slide,
             Ok(Some(block)) => {
                 contact + slide * (block.time_of_impact - 0.005 / slide.length()).clamp(0.0, 1.0)
             }
             Err(_) => contact,
+        };
+        if liquids == LiquidGuard::Lava {
+            world.water_entry(contact, end, height).unwrap_or(end)
+        } else {
+            end
         }
     }
 }

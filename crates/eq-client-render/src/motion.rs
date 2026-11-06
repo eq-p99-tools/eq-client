@@ -3278,6 +3278,18 @@ mod tests {
             fn passes_through(&self, from: Vec3, to: Vec3, liquid: Liquid) -> bool {
                 liquid == Liquid::Water && from.y.min(to.y) <= 0.0
             }
+            fn first_outside(
+                &self,
+                from: Vec3,
+                to: Vec3,
+                liquid: Liquid,
+            ) -> Option<std::ops::Range<f64>> {
+                if liquid != Liquid::Water || from.y > 0.0 {
+                    return Some(0.0..1.0);
+                }
+                let (from, to) = (f64::from(from.y), f64::from(to.y));
+                (to > 0.0).then_some((from / (from - to))..1.0)
+            }
             fn within(&self, _: Vec3, _: Vec3) -> Option<Box<dyn Liquids>> {
                 None
             }

@@ -421,7 +421,7 @@ impl CollisionWorld {
         // Feet in deep water or lava now may go anywhere, so they can leave.
         let guarded = !self.inside_guarded_liquid(feet, height, liquids);
         if matches!(support, Support::Airborne) {
-            let next = self.stride(feet, displacement, height, support);
+            let next = self.stride(feet, displacement, height, support, liquids);
             // In the air, a move whose fall would end in deep water or lava is not made.
             return if guarded && !self.clear_move(feet, next, height, liquids) {
                 feet
@@ -435,7 +435,7 @@ impl CollisionWorld {
         let part = horizontal / f32::from(count);
         let mut position = feet;
         for _ in 0..count {
-            let mut next = self.stride(position, part, height, support);
+            let mut next = self.stride(position, part, height, support, liquids);
             let wet = guarded && !self.clear_move(position, next, height, liquids);
             if wet {
                 next = self.dry_part(position, part, height, support, liquids);
@@ -454,7 +454,10 @@ impl CollisionWorld {
             }
             let moved = next.distance_squared(position) > 1e-10;
             position = next;
-            if !moved || wet {
+            if !moved
+                || wet
+                || liquids == LiquidGuard::Lava && self.swim_depth(position, height).is_some()
+            {
                 break;
             }
         }
@@ -463,7 +466,22 @@ impl CollisionWorld {
 
     /// One stride: to the ground under its end, sliding along walls, stepping up
     /// a riser the capsule can clear, and stepping down across then down.
-    fn stride(&self, feet: Vec3, displacement: Vec3, height: f32, support: Support) -> Vec3 {
+    #[allow(clippy::too_many_lines)]
+    fn stride(
+        &self,
+        feet: Vec3,
+        displacement: Vec3,
+        height: f32,
+        support: Support,
+        liquids: LiquidGuard,
+    ) -> Vec3 {
+        let entry = |from, to| {
+            if liquids == LiquidGuard::Lava {
+                self.water_entry(from, to, height)
+            } else {
+                None
+            }
+        };
         let mut position = feet;
         let mut remaining = Vec3::new(displacement.x, 0.0, displacement.z);
         for _ in 0..3 {
@@ -532,29 +550,39 @@ impl CollisionWorld {
             };
             if delta.length_squared() < 0.000_001 {
                 if descending {
-                    position = self.settle(position, target.y, height);
+                    let settled = self.settle(position, target.y, height);
+                    position = entry(position, settled).unwrap_or(settled);
                 }
                 break;
             }
             match self.sweep(position, delta, height) {
                 Ok(None) => {
-                    position = if descending {
-                        self.settle(position + delta, target.y, height)
-                    } else {
-                        target
-                    };
-                    break;
+                    let swept = position + delta;
+                    if let Some(water) = entry(position, swept) {
+                        return water;
+                    }
+                    if descending {
+                        let settled = self.settle(swept, target.y, height);
+                        return entry(swept, settled).unwrap_or(settled);
+                    }
+                    return target;
                 }
                 Ok(Some(hit)) => {
                     if !matches!(support, Support::Airborne)
                         && target.y > position.y
                         && self.can_step_up(position, target, height)
                     {
-                        position = target;
-                        break;
+                        let lifted = Vec3::new(position.x, target.y, position.z);
+                        return entry(position, lifted)
+                            .or_else(|| entry(lifted, target))
+                            .unwrap_or(target);
                     }
                     let fraction = (hit.time_of_impact - 0.005 / delta.length()).clamp(0.0, 1.0);
-                    position += delta * fraction;
+                    let reached = position + delta * fraction;
+                    if let Some(water) = entry(position, reached) {
+                        return water;
+                    }
+                    position = reached;
                     // A mostly vertical contact is a floor or ceiling edge, not a
                     // wall to slide along; normalizing its small horizontal part
                     // would cancel all forward motion.

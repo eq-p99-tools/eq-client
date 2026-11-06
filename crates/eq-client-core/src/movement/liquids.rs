@@ -12,6 +12,7 @@
 //! can leave.
 use super::{CollisionWorld, LIFT, Support};
 use glam::Vec3;
+use std::ops::Range;
 
 /// What fills a point of the zone, where it is not air.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -37,6 +38,13 @@ pub trait Liquids: Send + Sync {
     /// Whether a straight path from one point to another passes through
     /// this liquid anywhere, however thin.
     fn passes_through(&self, from: Vec3, to: Vec3, liquid: Liquid) -> bool;
+
+    /// The first positive-length span outside the liquid, as segment fractions.
+    /// None means continuous coverage. An empty span means the provider
+    /// cannot establish coverage, so a swimmer must hold its position.
+    fn first_outside(&self, _from: Vec3, _to: Vec3, _liquid: Liquid) -> Option<Range<f64>> {
+        Some(0.0..0.0)
+    }
 
     /// The liquids within the box from `low` to `high`, answering
     /// [`liquid_at`](Self::liquid_at) for points in it as these do, made to
@@ -247,7 +255,7 @@ impl CollisionWorld {
         let mut reached = feet;
         for _ in 0..12 {
             let fraction = f32::midpoint(dry, wet);
-            let next = self.stride(feet, displacement * fraction, height, support);
+            let next = self.stride(feet, displacement * fraction, height, support, guard);
             if self.clear_move(feet, next, height, guard) {
                 dry = fraction;
                 reached = next;
@@ -273,6 +281,27 @@ pub(super) fn submerged_in(liquids: &dyn Liquids, feet: Vec3, height: f32) -> bo
 pub(super) struct Boxes(pub(super) Vec<(Vec3, Vec3, Liquid)>);
 
 #[cfg(test)]
+fn box_span(from: Vec3, to: Vec3, low: Vec3, high: Vec3) -> Option<Range<f64>> {
+    let from = from.as_dvec3();
+    let path = to.as_dvec3() - from;
+    let (mut enter, mut leave) = (0.0_f64, 1.0_f64);
+    for axis in 0..3 {
+        let (low, high) = (f64::from(low[axis]), f64::from(high[axis]));
+        if path[axis] == 0.0 {
+            if !(low..=high).contains(&from[axis]) {
+                return None;
+            }
+            continue;
+        }
+        let a = (low - from[axis]) / path[axis];
+        let b = (high - from[axis]) / path[axis];
+        enter = enter.max(a.min(b));
+        leave = leave.min(a.max(b));
+    }
+    (enter <= leave).then_some(enter..leave)
+}
+
+#[cfg(test)]
 impl Liquids for Boxes {
     fn liquid_at(&self, point: Vec3) -> Option<Liquid> {
         self.0
@@ -282,28 +311,27 @@ impl Liquids for Boxes {
     }
 
     fn passes_through(&self, from: Vec3, to: Vec3, liquid: Liquid) -> bool {
-        // The slab test: the path meets a box where it is between every pair
-        // of the box's faces at once.
-        let path = to - from;
         self.0
             .iter()
-            .filter(|(_, _, filled)| *filled == liquid)
-            .any(|(low, high, _)| {
-                let (mut enter, mut leave) = (0.0_f32, 1.0_f32);
-                for axis in 0..3 {
-                    if path[axis] == 0.0 {
-                        if from[axis] < low[axis] || from[axis] > high[axis] {
-                            return false;
-                        }
-                        continue;
-                    }
-                    let a = (low[axis] - from[axis]) / path[axis];
-                    let b = (high[axis] - from[axis]) / path[axis];
-                    enter = enter.max(a.min(b));
-                    leave = leave.min(a.max(b));
-                }
-                enter <= leave
-            })
+            .any(|&(low, high, kind)| kind == liquid && box_span(from, to, low, high).is_some())
+    }
+
+    fn first_outside(&self, from: Vec3, to: Vec3, liquid: Liquid) -> Option<Range<f64>> {
+        let mut spans: Vec<_> = self
+            .0
+            .iter()
+            .filter(|(_, _, kind)| *kind == liquid)
+            .filter_map(|&(low, high, _)| box_span(from, to, low, high))
+            .collect();
+        spans.sort_by(|a, b| a.start.total_cmp(&b.start));
+        let mut reached: f64 = 0.0;
+        for span in spans {
+            if span.start > reached {
+                return Some(reached..span.start);
+            }
+            reached = reached.max(span.end);
+        }
+        (reached < 1.0).then_some(reached..1.0)
     }
 
     fn within(&self, low: Vec3, high: Vec3) -> Option<Box<dyn Liquids>> {

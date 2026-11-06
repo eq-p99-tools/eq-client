@@ -1,6 +1,6 @@
 //! Classic WLD boundary regions, independent of server destinations, and
 //! the regions the zone fills with water or lava.
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, ops::Range};
 
 use glam::Vec3;
 use libeq::wld::parser::{FragmentRef, Region, WldDoc, WorldTree, Zone};
@@ -195,48 +195,79 @@ impl ZoneRegions {
     /// crosses, so no region is skipped however narrow. Parts of it on a
     /// plane, in a broken tree, or in a cycle are in neither.
     pub fn passes_through(&self, start: [f32; 3], end: [f32; 3], liquid: Liquid) -> bool {
-        if self.liquids.is_empty() || !start.iter().chain(&end).all(|v| v.is_finite()) {
-            return false;
+        !self.liquids.is_empty()
+            && self
+                .first_liquid_span(start, end, |kind| kind == Some(liquid))
+                .is_some()
+    }
+
+    /// First positive-length span outside a liquid, measured in fractions of
+    /// the segment from start to end. An unknown span counts as outside.
+    /// Crossing a plane between two wet leaves leaves no dry span.
+    pub fn first_outside(
+        &self,
+        start: [f32; 3],
+        end: [f32; 3],
+        liquid: Liquid,
+    ) -> Option<Range<f64>> {
+        self.first_liquid_span(start, end, |kind| kind != Some(liquid))
+    }
+
+    fn first_liquid_span(
+        &self,
+        start: [f32; 3],
+        end: [f32; 3],
+        matches: impl Fn(Option<Liquid>) -> bool,
+    ) -> Option<Range<f64>> {
+        if !start.iter().chain(&end).all(|v| v.is_finite()) {
+            return matches(None).then_some(0.0..1.0);
         }
-        let (start, end) = (Vec3::from_array(start), Vec3::from_array(end));
-        // Parts of the segment, as fractions of it, with the node holding
-        // each and its depth there.
-        let mut parts = vec![(0, 0.0_f32, 1.0_f32, 0)];
-        while let Some((cursor, from, to, depth)) = parts.pop() {
-            let Some(node) = self.nodes.get(cursor).filter(|_| depth < self.nodes.len()) else {
+        // Push the far part first so the next pop follows the direction of travel.
+        let mut parts = vec![(Some(0), 0.0_f64..1.0, 0)];
+        while let Some((cursor, part, depth)) = parts.pop() {
+            let node = cursor
+                .and_then(|i| self.nodes.get(i))
+                .filter(|_| depth < self.nodes.len());
+            let Some(node) = node else {
+                if matches(None) {
+                    return Some(part);
+                }
                 continue;
             };
             if let Some(region) = node.region {
-                if self.liquids.get(&region) == Some(&liquid) {
-                    return true;
+                if matches(self.liquids.get(&region).copied()) {
+                    return Some(part);
                 }
                 continue;
             }
-            let normal = Vec3::from_array(node.normal);
-            let side = |fraction| node.distance + normal.dot(start.lerp(end, fraction));
-            let (near, far) = (side(from), side(to));
-            let child = |distance: f32| {
-                if distance > 0.0 {
-                    node.front
-                } else {
-                    node.back
-                }
+            let distance = |point: [f32; 3]| {
+                point
+                    .into_iter()
+                    .zip(node.normal)
+                    .fold(f64::from(node.distance), |sum, (p, n)| {
+                        sum + f64::from(p) * f64::from(n)
+                    })
             };
-            if !near.is_finite() || !far.is_finite() || (near == 0.0 && far == 0.0) {
+            let a = distance(start);
+            let b = distance(end);
+            if !a.is_finite() || !b.is_finite() || (a == 0.0 && b == 0.0) {
+                if matches(None) {
+                    return Some(part);
+                }
                 continue;
             }
-            if (near > 0.0 && far < 0.0) || (near < 0.0 && far > 0.0) {
-                let split = from + (to - from) * near / (near - far);
-                parts.extend(child(near).map(|next| (next, from, split, depth + 1)));
-                parts.extend(child(far).map(|next| (next, split, to, depth + 1)));
+            let cut = a / (a - b);
+            let child = |positive| if positive { node.front } else { node.back };
+            if part.start < cut && cut < part.end {
+                parts.push((child(b > a), cut..part.end, depth + 1));
+                parts.push((child(a > b), part.start..cut, depth + 1));
             } else {
-                // Both ends on one side, or one on the plane and the part on
-                // the other's side.
-                let distance = if near == 0.0 { far } else { near };
-                parts.extend(child(distance).map(|next| (next, from, to, depth + 1)));
+                let middle = f64::midpoint(part.start, part.end);
+                let positive = (b - a).mul_add(middle, a) > 0.0;
+                parts.push((child(positive), part, depth + 1));
             }
         }
-        false
+        None
     }
 
     /// The leaf region holding a position in the renderer's frame.
@@ -677,6 +708,40 @@ mod tests {
             assert!(!regions.passes_through([-5.0, 0.0, 0.0], [5.0, 0.0, 0.0], liquid));
             assert!(!regions.passes_through([f32::NAN, 0.0, 0.0], low, liquid));
         }
+    }
+
+    #[test]
+    fn first_liquid_gap_follows_the_segment_and_ignores_wet_seams() {
+        let split = |distance, front, back| Node {
+            normal: [1.0, 0.0, 0.0],
+            distance,
+            region: None,
+            front: Some(front),
+            back: Some(back),
+        };
+        let mut regions = ZoneRegions {
+            nodes: vec![
+                split(0.0, 2, 1),
+                leaf(0),
+                split(-0.0625, 4, 3),
+                leaf(1),
+                leaf(2),
+            ],
+            routes: BTreeMap::new(),
+            liquids: BTreeMap::from([(0, Liquid::Water), (2, Liquid::Water)]),
+        };
+        let (a, b) = ([-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
+        assert_eq!(
+            regions.first_outside(a, b, Liquid::Water),
+            Some(0.5..0.53125)
+        );
+        assert_eq!(
+            regions.first_outside(b, a, Liquid::Water),
+            Some(0.46875..0.5)
+        );
+
+        regions.liquids.insert(1, Liquid::Water);
+        assert!(regions.first_outside(a, b, Liquid::Water).is_none());
     }
 
     #[test]
