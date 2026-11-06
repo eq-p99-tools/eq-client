@@ -142,18 +142,23 @@ Select a spell and destination gem to memorize; click a populated gem or use its
 binding to cast. Shift-click forgetting is separate from casting. Casts use the
 selected target or self when none is selected. Movement and posture changes can
 interrupt a cast. The cast timer estimates progress while the server reports
-the result. On Titanium EQEmu, Bards can type `/stopsong` during a song cast
-or while a song is pulsing. If the server gives no matching cast update
-within one second, the client releases the casting hold and reports that
-the stop is unconfirmed. You can then use a gem to try another cast.
-Existing song buffs and gem timers follow the server's updates.
+the result. On Titanium EQEmu, Bards can type `/stopsong` during a tracked
+gem cast or while a song is pulsing. An item cast or a cast of unknown source
+blocks the request. If the server gives no matching cast update within one
+second, the client releases the tracked cast and reports that the stop is
+unconfirmed. When no cast is held, the client reports unconfirmed song state
+as soon as it submits the request. Song buffs and gem timers follow the
+server's updates.
 
-Spellbook operations serialize edits and wait for matching answers. If the
-same zone connection resumes after an interruption, a pending edit is
-reported as unconfirmed. Wait for the matching reply or re-enter the zone
-before editing again. An unanswered scribe also holds inventory actions
-while the scroll's result is unknown. Deletion confirmation is invalidated
-when its selection or admission changes.
+Spellbook operations wait for matching answers one at a time. After 30
+seconds without a matching reply, the session reports the edit as unconfirmed
+and allows edits whose replies it can tell apart. Re-enter the zone to retry
+an edit with an indistinguishable reply. An interruption can leave the
+client waiting for the session's result on the same admission. Late updates
+still change the affected slots as reported by the server. A timed-out scribe
+holds inventory actions until a received cursor update accounts for the
+scroll or you leave the zone. Deletion confirmation is invalidated when its
+selection or admission changes.
 
 Click **Search spells** in the book to filter learned spells by name. The
 search ignores case and fills each results page in original book-slot order.

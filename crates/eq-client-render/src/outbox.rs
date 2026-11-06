@@ -69,7 +69,7 @@ impl Refusal {
             Self::SpellSet => "Wait for the spell set to finish",
             Self::BookPending => "Wait for the current spellbook change",
             Self::BookUnconfirmed => {
-                "Spellbook change unconfirmed. Wait for the reply or re-enter the zone."
+                "Spellbook change unconfirmed. Wait for the session or re-enter the zone."
             }
             Self::Busy => "Too many requests at once; try again",
             Self::Ended => "The connection has ended",

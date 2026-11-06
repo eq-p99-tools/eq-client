@@ -394,7 +394,7 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         }
         Notice::SongStopUnconfirmed { released_cast } => chat(
             if *released_cast {
-                "Song stop unconfirmed. You can try casting again."
+                "Song stop unconfirmed. The previous casting hold was released."
             } else {
                 "Song stop requested. Song state is unconfirmed."
             }

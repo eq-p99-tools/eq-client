@@ -1290,7 +1290,7 @@ mod tests {
     mod spell_notices;
 
     #[test]
-    fn a_resumed_admission_keeps_manual_book_ownership_until_the_matching_reply() {
+    fn a_resumed_admission_keeps_manual_book_ownership_until_the_worker_result() {
         use crate::outbox::{Outbox, Refusal};
         use eq_client_core::{
             BookActionStatus, ClientCommand, SpellBook, SpellUpdate, world::Link,
@@ -1337,12 +1337,19 @@ mod tests {
                 mode: 2,
             }));
             apply(&mut state.world, &update, &NoSpells, Some(&outbox));
-            assert_eq!(
-                state.world().gem(1),
-                ((slot, spell_id) != (1, 42)).then_some(42)
-            );
+            assert_eq!(state.world().gem(1), (slot != 1).then_some(42));
         }
 
+        assert_eq!(
+            outbox.begin_spell_set(state.world(), std::time::Instant::now()),
+            Err(Refusal::BookUnconfirmed)
+        );
+        apply(
+            &mut state.world,
+            &WorldUpdate::Game(WorldEvent::BookAction(BookActionStatus::Confirmed)),
+            &NoSpells,
+            Some(&outbox),
+        );
         assert_eq!(
             outbox.begin_spell_set(state.world(), std::time::Instant::now()),
             Ok(())

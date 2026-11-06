@@ -577,7 +577,8 @@ fn answer(
         ) => {
             chat.refuse(Said::own(reason));
         }
-        (Edit::Moving, Some(BookActionStatus::Confirmed)) => (),
+        (Edit::Moving, Some(BookActionStatus::Confirmed))
+        | (_, Some(BookActionStatus::Unconfirmed)) => (),
         _ => return,
     }
     hand.editing = None;
@@ -955,7 +956,7 @@ mod tests {
     }
 
     #[test]
-    fn a_timed_out_skinned_delete_can_still_report_late_success() {
+    fn a_late_delete_updates_the_book_without_claiming_a_timed_out_result() {
         let mut online = online();
         let mut hand = BookHand {
             chosen: Some(Entry { slot: 1, spell: 42 }),
@@ -975,36 +976,35 @@ mod tests {
             }
         ));
 
-        for status in [
-            BookActionStatus::AwaitingReply,
-            BookActionStatus::Unconfirmed,
-        ] {
-            crate::online::testing::book_news(&mut online, &outbox, WorldEvent::BookAction(status));
-            answer(&mut hand, online.world(), &messages, &mut chat);
-            assert!(hand.editing.is_some());
-            assert_eq!(online.world().spell_book().unwrap().slots()[1], Some(42));
-            assert_eq!(chat.newest(), "");
-        }
+        crate::online::testing::book_news(
+            &mut online,
+            &outbox,
+            WorldEvent::BookAction(BookActionStatus::AwaitingReply),
+        );
+        answer(&mut hand, online.world(), &messages, &mut chat);
+        assert!(hand.editing.is_some());
+        crate::online::testing::book_news(
+            &mut online,
+            &outbox,
+            WorldEvent::BookAction(BookActionStatus::Unconfirmed),
+        );
+        answer(&mut hand, online.world(), &messages, &mut chat);
+        assert!(hand.editing.is_none());
+        assert_eq!(online.world().spell_book().unwrap().slots()[1], Some(42));
+        assert_eq!(chat.newest(), "");
 
-        for link in [Link::Zoning, Link::Connected] {
-            crate::online::testing::apply(&mut online, &WorldUpdate::Connection(link));
-            answer(&mut hand, online.world(), &messages, &mut chat);
-            assert!(hand.editing.is_some());
-            assert_eq!(chat.newest(), "");
-        }
-        for event in [
-            WorldEvent::BookAction(BookActionStatus::Confirmed),
+        crate::online::testing::book_news(
+            &mut online,
+            &outbox,
             WorldEvent::Spell(SpellUpdate::BookDeletion {
                 slot: 1,
                 success: true,
             }),
-        ] {
-            crate::online::testing::book_news(&mut online, &outbox, event);
-        }
+        );
         answer(&mut hand, online.world(), &messages, &mut chat);
         assert!(hand.editing.is_none());
         assert_eq!(online.world().spell_book().unwrap().slots()[1], None);
-        assert_eq!(chat.newest(), "The spell is gone from the book.");
+        assert_eq!(chat.newest(), "");
         assert!(sent.try_recv().is_err());
     }
 

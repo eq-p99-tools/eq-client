@@ -250,7 +250,6 @@ mod tests {
         ]);
         fixture.frame([
             WorldUpdate::Connection(Link::Connected),
-            status(BookActionStatus::Unconfirmed),
             status(BookActionStatus::Confirmed),
             spell(SpellUpdate::Slot {
                 slot: 1,

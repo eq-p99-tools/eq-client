@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- An unconfirmed spellbook edit releases the book for other edits when the
+  session reports its timeout. A retry with the same possible reply requires
+  a fresh admission. Received gem clears update the slot independently of
+  which request they answer.
+- Release a superseded cast while keeping a different pending spell.
 - Retain an early pet buff snapshot until the owned pet resolves. Discard it
   when the spawn is replaced or its ownership conflicts.
 - Hold Titanium travel after a fresh placement below a nearby installed floor
@@ -27,10 +32,10 @@
   hotbar binding, `/ranged`, or the script step `slash ranged`. The client
   rechecks the target and equipment before sending and shows server-reported
   combat and inventory updates.
-- Use `/stopsong` as a Bard on Titanium EQEmu. If a starting song has no
-  matching cast update within one second of the stop, the client marks the
-  stop unconfirmed and lets you try another gem. Song effects follow the
-  server's updates.
+- Use `/stopsong` as a Bard on Titanium EQEmu. A tracked gem cast has one
+  second for a matching update before the client releases its hold and
+  reports the stop as unconfirmed. If no cast is held, the client reports
+  unconfirmed song state on submission. Song effects follow server updates.
 - Stop spell-set apply with the actual reset reason and keep the panel's
   selection and draft through temporary interruptions. An unanswered book edit
   remains unconfirmed after a same-admission link interruption.
