@@ -4,10 +4,11 @@
 
 - The Quality of Life page's gameplay departures (Walk While Winded, Memorize
   Without Sitting, Run a Little Faster, Fly) are offered only where the session
-  lists `Capability::GameplayDepartures` (a stock EQEmu server). Elsewhere they
-  are greyed out and the session keeps the official client's movement and
-  memorization whatever the saved settings say; movement input is never held
-  waiting for a choice the server type refuses.
+  lists `Capability::GameplayDepartures`. Elsewhere they are greyed out and the
+  session keeps the official client's movement and memorization whatever the
+  saved settings say; movement input is never held waiting for a choice the
+  server type refuses. The pinned networking lists the capability on every
+  checked server type while the departures are under test (2026-11-06).
 - API: `movement::offered_options` is the movement choice a session takes;
   `qol::Fix::needs` names `Capability::GameplayDepartures` for the four
   departures.

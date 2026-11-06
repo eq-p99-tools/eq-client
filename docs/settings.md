@@ -82,9 +82,9 @@ These choices take effect in the current session. Controls are unavailable where
 their required session feature is absent. Walk While Winded, Memorize Without
 Sitting, Run a Little Faster and Fly depart from the official client's
 behaviour, so they are offered only where the server type lists gameplay
-departures (a stock EQEmu server); on P99, Quarm and TAKP they are greyed out
-and the session keeps the official client's movement and memorization whatever
-the saved settings say. Automatic looting requires supported
+departures; where it does not, they are greyed out and the session keeps the
+official client's movement and memorization whatever the saved settings say.
+Every checked server type lists them while they are under test (2026-11-06). Automatic looting requires supported
 item results; receipt-only echoes cannot advance it. It attempts each observed
 death once, retains corpse identity, and stops on refusal. Turning it off stops
 further automatic requests while leaving the ordinary loot window available.
