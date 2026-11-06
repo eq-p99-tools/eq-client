@@ -76,7 +76,7 @@ impl Expected {
 }
 
 /// Keeps one edit's progress and answer for its callers after the book is free.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct BookEditReceipt {
     session: u64,
     status: Arc<Mutex<Option<BookActionStatus>>>,
