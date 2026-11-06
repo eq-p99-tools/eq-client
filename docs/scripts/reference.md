@@ -70,6 +70,12 @@ Approach, walk and chase hold the camera-relative forward command, independent o
   `pet_ownership` reports the current pet and owner IDs, zone admission ID and
   pet identity revision as JSON. It is null when the session has no resolved
   pet identity.
+  The companion `Script economy report` event contains versioned JSON with the admission,
+  merchant identity and catalog revision, up to 80 stock rows, the current
+  selection and displayed single-unit quote, and up to 32 corpse rows.
+  Total row counts reveal truncation. The report also shows the coins offered
+  on each side of an open exchange. Check the ordinary report's item and
+  purse fields for delivery and final balances.
 - `trace milliseconds`: log movement and frame timing for a bounded duration.
 - `screenshot filename.png`: capture beside the script; the argument must be a filename.
 - `sound filename.wav`: play a sound from the installed game assets.

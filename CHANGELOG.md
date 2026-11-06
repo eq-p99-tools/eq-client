@@ -26,6 +26,9 @@
   Pet orders use the current pet identity, and attack uses the current
   target selection. Ownership loss, death and spawn replacement clear stale
   pet details. `/pet guard me` sends its own Titanium command.
+- Script reports include bounded merchant stock, selected quote, corpse listing
+  and exchange coin observations for local transaction checks.
+
 - Report a local scripted `give` refusal through the script result once.
   Native click refusals still appear in chat.
 - Draw server-reported rain and snow in zones with a sky. See the World

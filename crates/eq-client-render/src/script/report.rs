@@ -1,4 +1,5 @@
 //! State a script logs for later review.
+mod economy;
 mod lifecycle;
 
 use bevy::prelude::*;
@@ -31,6 +32,7 @@ pub(super) fn state(
     // Keep named views here: appending a resource to Observed must not change
     // which resource a report mistakes for its spell catalog.
     let hud = &observed.0;
+    let trade = &observed.2;
     let spells = observed.8.as_deref();
     let option_values = observed.9.as_ref().map(|state| {
         eq_client_core::options::Toggle::all()
@@ -96,6 +98,7 @@ pub(super) fn state(
                 .as_millis()
         })
     });
+    info!(label, state = %economy::state(online.world(), trade), "Script economy report");
     info!(
         label,
         zone = online.world().zone(),
