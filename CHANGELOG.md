@@ -56,6 +56,9 @@
   Window-layout v2 retains sizes and reads legacy position-only records.
 - API: `sidl::Screen::sizable` preserves `Sizable::{Omitted, Invalid, Fixed,
   Enabled}`. Screen struct literals must supply the authored declaration.
+- Return to login with a specific retry message when the server completes a
+  zone handshake but the client cannot read the character data. This also
+  applies when entering a transfer destination.
 - Distinguish a received camp logout reply from the normal local close deadline.
   Both preserve the requested selection or desktop destination. Retain the
   departing admission and evidence in lifecycle reports; a deadline alone does
