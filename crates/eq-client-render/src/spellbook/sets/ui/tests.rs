@@ -131,6 +131,161 @@ fn key(app: &mut App, key_code: KeyCode, logical_key: Key, text: Option<&str>) {
     });
 }
 
+fn install_background_book_script(app: &mut App) -> (Entity, Entity) {
+    use crate::script::{InputMode, Program};
+    use bevy::window::PrimaryWindow;
+
+    let program = Program::parse(
+        "click button spellbook SpellSets_Name\npress b\npress enter\n\
+         click button spellbook SpellSets_Save\nclick button spellbook TestSearch\n\
+         hold w 160\npress enter\nclick button spellbook TestSearch\nwait 2000",
+        std::path::Path::new("."),
+    )
+    .unwrap();
+    let world = app.world_mut();
+    world
+        .resource_mut::<crate::ViewerSettings>()
+        .0
+        .script_input_mode = InputMode::Background;
+    let window = world
+        .query_filtered::<Entity, With<PrimaryWindow>>()
+        .single(world)
+        .unwrap();
+    world.get_mut::<Window>(window).unwrap().focused = false;
+    let field = world
+        .query_filtered::<Entity, With<search::Field>>()
+        .single(world)
+        .unwrap();
+    world.entity_mut(field).insert(script_id("TestSearch"));
+    for (id, mut node) in world
+        .query_filtered::<(&WindowId, &mut Node), With<Frame>>()
+        .iter_mut(world)
+    {
+        if *id == WindowId::Spellbook {
+            node.display = Display::Flex;
+        }
+    }
+    for (index, id) in [
+        (1_u16, "SpellSets_Name"),
+        (2, "SpellSets_Save"),
+        (3, "TestSearch"),
+    ] {
+        let button = control(app, id);
+        app.world_mut().entity_mut(button).insert((
+            InheritedVisibility::VISIBLE,
+            ComputedNode {
+                size: Vec2::splat(32.0),
+                ..default()
+            },
+            bevy::ui::UiGlobalTransform::from_xy(f32::from(index) * 140.0, 180.0),
+            bevy::ui::ComputedStackIndex(u32::from(index)),
+        ));
+    }
+    app.init_resource::<Time<Real>>()
+        .init_resource::<crate::windows::Moves>()
+        .add_message::<bevy::input::keyboard::KeyboardFocusLost>()
+        .add_message::<bevy::input::mouse::MouseButtonInput>()
+        .add_message::<bevy::input::mouse::MouseWheel>()
+        .add_message::<bevy::window::WindowFocused>()
+        .add_systems(
+            PreUpdate,
+            (
+                bevy::input::keyboard::keyboard_input_system,
+                bevy::input::mouse::mouse_button_input_system,
+            )
+                .in_set(bevy::input::InputSystems),
+        )
+        .add_systems(Update, search::present.after(search::input));
+    crate::install_script(
+        app,
+        (Some(program), None),
+        true,
+        false,
+        InputMode::Background,
+    );
+    (window, field)
+}
+
+fn script_frame(app: &mut App, ms: u64) {
+    let mut time = app.world_mut().resource_mut::<Time<Real>>();
+    let startup = time.startup();
+    time.update_with_instant(startup + std::time::Duration::from_millis(ms));
+    app.update();
+}
+
+#[test]
+fn background_script_types_in_both_book_fields_until_native_input_reclaims_ownership() {
+    use crate::script::{Phase, RunStatus};
+    use bevy::input::keyboard::KeyboardFocusLost;
+
+    let folder = Folder::new();
+    let (mut app, sent) = test_app(&folder, 2);
+    click(&mut app, "SpellSets_Toggle");
+    let (window, search) = install_background_book_script(&mut app);
+    let mut passed_enter = false;
+    let mut saw_text = false;
+    let mut next_frame = 0;
+    for ms in (0..2_000).step_by(20) {
+        script_frame(&mut app, ms);
+        next_frame = ms + 20;
+        let world = app.world();
+        assert!(
+            !world
+                .resource::<ButtonInput<KeyCode>>()
+                .pressed(KeyCode::KeyW)
+        );
+        match world.get::<Text>(search).unwrap().0.as_str() {
+            "w|" if passed_enter => break,
+            "w|" if !saw_text => {
+                saw_text = true;
+                app.world_mut().write_message(KeyboardFocusLost);
+            }
+            "w" => passed_enter = true,
+            _ => (),
+        }
+    }
+    let world = app.world();
+    assert!(saw_text && passed_enter);
+    assert!(world.resource::<Typing>().spell_search);
+    assert_eq!(world.get::<Text>(search).unwrap().0, "w|");
+    assert_eq!(
+        world.resource::<Sets>().saved["b"],
+        world.resource::<OnlineState>().world().gems()
+    );
+
+    // Let the last click release before the script waits for its next action.
+    script_frame(&mut app, next_frame);
+    script_frame(&mut app, next_frame + 20);
+    // Native input takes ownership while the window is unfocused. Neither
+    // that first repeat nor the next one belongs to the editor or gameplay.
+    for ms in [next_frame + 40, next_frame + 60] {
+        app.world_mut().write_message(KeyboardInput {
+            key_code: KeyCode::KeyW,
+            logical_key: Key::Character("w".into()),
+            text: Some("w".into()),
+            repeat: true,
+            state: ButtonState::Pressed,
+            window,
+        });
+        script_frame(&mut app, ms);
+        let world = app.world();
+        assert_eq!(
+            world.resource::<RunStatus>().phase(),
+            Phase::WaitingForInput
+        );
+        let typing = world.resource::<Typing>();
+        assert!(!typing.spell_search && !typing.spell_set_name && !typing.composing);
+        assert!(
+            !world
+                .resource::<ButtonInput<KeyCode>>()
+                .pressed(KeyCode::KeyW)
+        );
+        assert_eq!(world.get::<Text>(search).unwrap().0, "w");
+        assert_eq!(world.resource::<ChatState>().draft(), "");
+    }
+    assert!(matches!(sent.try_recv(), Err(mpsc::TryRecvError::Empty)));
+}
+
 #[test]
 fn typed_names_save_rename_and_delete_the_selected_layout() {
     let folder = Folder::new();

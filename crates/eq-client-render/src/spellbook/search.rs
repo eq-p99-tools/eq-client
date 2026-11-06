@@ -106,6 +106,7 @@ pub(crate) fn focus(
     mouse: Res<ButtonInput<MouseButton>>,
     shown: Res<Shown>,
     windows: Query<&Window, With<PrimaryWindow>>,
+    script: Option<Res<crate::script::Script>>,
     frames: Query<(&WindowId, &Frame)>,
     fields: Query<&Interaction, With<Field>>,
     clears: Query<&Interaction, With<Clear>>,
@@ -117,8 +118,12 @@ pub(crate) fn focus(
     mut view: ResMut<BookView>,
 ) {
     let was_focused = typing.spell_search || typing.spell_set_name;
+    let owns_input = windows.single().is_ok_and(|window| window.focused)
+        || script
+            .as_deref()
+            .is_some_and(crate::script::Script::background_owns_input);
     let available = shown.displayed(WindowId::Spellbook)
-        && windows.single().is_ok_and(|window| window.focused)
+        && owns_input
         && frames
             .iter()
             .any(|(id, frame)| *id == WindowId::Spellbook && !frame.minimized())
