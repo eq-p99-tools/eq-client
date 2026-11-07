@@ -112,6 +112,12 @@ pub enum Fix {
     JesusMode,
     /// Requests logout without sitting or camp preparation, then waits for its outcome.
     ExitAtOnce,
+    /// Lets the player cross any zone line regardless of the level that
+    /// zone asks for. The official client reads a minimum level from each
+    /// zone and turns players away at the line below it; this client has
+    /// read no such table yet and the world sets no level of its own, so
+    /// the gate and its bypass land together with the reading.
+    ZoneAnywhere,
     /// Makes the local map and known entity positions available on every
     /// server, independently of the original client's map support.
     MapEverywhere,
@@ -150,7 +156,7 @@ pub enum Fix {
 impl Fix {
     /// Every fix: the settings in the order the quality-of-life page lists
     /// them, then the fixes that are always on.
-    pub const ALL: [Self; 31] = [
+    pub const ALL: [Self; 32] = [
         Self::SkipModifiedFood,
         Self::HiddenWindows,
         Self::AskBeforeDeletingSpells,
@@ -173,6 +179,7 @@ impl Fix {
         Self::Fly,
         Self::JesusMode,
         Self::ExitAtOnce,
+        Self::ZoneAnywhere,
         Self::MapEverywhere,
         Self::FrameCap,
         Self::GreyedControls,
@@ -213,6 +220,7 @@ impl Fix {
             Self::Fly => "fly",
             Self::JesusMode => "jesus_mode",
             Self::ExitAtOnce => "exit_at_once",
+            Self::ZoneAnywhere => "zone_anywhere",
             Self::FrameCap => "frame_cap",
             Self::GreyedControls => "greyed_controls",
             Self::CampCountdown => "camp_countdown",
@@ -257,6 +265,7 @@ impl Fix {
             Self::Fly => "Fly",
             Self::JesusMode => "Jesus Mode",
             Self::ExitAtOnce => "Exit at Once",
+            Self::ZoneAnywhere => "Zone Anywhere",
             Self::FrameCap => "Cap Frames at 60",
             Self::GreyedControls => "Grey Out What Is Unavailable",
             Self::CampCountdown => "Count Down Camping",
@@ -338,6 +347,9 @@ impl Fix {
             Self::ExitAtOnce => {
                 "Request logout without automatic sitting or the camp countdown. Wait for the server response before leaving the session."
             }
+            Self::ZoneAnywhere => {
+                "Cross any zone line whatever level it asks for, the way the official client turns players away below it. Nothing is blocked today and nothing is sent differently; the gate lands with the zone's own level table and this lets it pass."
+            }
             Self::AnswerListPolls => {
                 "Answer supported P99 list presence polls after a local delay. This does not join a list or answer numeric challenges."
             }
@@ -380,7 +392,8 @@ impl Fix {
             | Self::Fly
             | Self::JesusMode
             | Self::GillsForDays
-            | Self::ExitAtOnce => Kind::Acts,
+            | Self::ExitAtOnce
+            | Self::ZoneAnywhere => Kind::Acts,
             Self::HiddenWindows
             | Self::MapEverywhere
             | Self::ShowTimesInChat
@@ -421,7 +434,8 @@ impl Fix {
             | Self::Fly
             | Self::JesusMode
             | Self::GillsForDays
-            | Self::MemorizeWhileStanding => Some(Capability::GameplayDepartures),
+            | Self::MemorizeWhileStanding
+            | Self::ZoneAnywhere => Some(Capability::GameplayDepartures),
             // A server with no looting has no corpse to open by itself.
             Self::AutoLoot => Some(Capability::Looting),
             Self::AnswerListPolls => Some(Capability::AnsweringListPolls),
@@ -482,6 +496,7 @@ impl Fix {
             | Self::Fly
             | Self::JesusMode
             | Self::ExitAtOnce
+            | Self::ZoneAnywhere
             | Self::FloatingCombatText => Availability::Setting { default: false },
             Self::MapEverywhere
             | Self::FrameCap
@@ -515,6 +530,7 @@ impl Fix {
                 | Self::Fly
                 | Self::JesusMode
                 | Self::ExitAtOnce
+                | Self::ZoneAnywhere
         )
     }
 
@@ -627,6 +643,7 @@ mod tests {
                 Fix::Fly,
                 Fix::JesusMode,
                 Fix::ExitAtOnce,
+                Fix::ZoneAnywhere,
             ]
         );
         // A fix that is always on stays on whatever is asked.
@@ -653,6 +670,7 @@ mod tests {
             Fix::Fly,
             Fix::JesusMode,
             Fix::ExitAtOnce,
+            Fix::ZoneAnywhere,
         ] {
             assert!(!settings.on(fix), "{fix:?}");
         }
@@ -688,7 +706,8 @@ mod tests {
                 Fix::RunBoost,
                 Fix::Fly,
                 Fix::JesusMode,
-                Fix::ExitAtOnce
+                Fix::ExitAtOnce,
+                Fix::ZoneAnywhere
             ]
         );
         assert!(!Fix::ALL.iter().any(|fix| fix.label().contains("unsafe")));
