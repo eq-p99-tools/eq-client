@@ -259,7 +259,16 @@ mod tests {
     }
 
     #[test]
-    fn a_transfer_refused_in_one_receive_batch_retries_the_discarded_movement_choice() {
+    fn a_transfer_refused_in_one_receive_batch_retries_a_discarded_application() {
+        resync_after_refused_transfer(true);
+    }
+
+    #[test]
+    fn a_transfer_refused_in_one_receive_batch_retries_an_ignored_refusal() {
+        resync_after_refused_transfer(false);
+    }
+
+    fn resync_after_refused_transfer(applied_before_transfer: bool) {
         use crate::systems::{Stage, configure_stages, receive_world};
         use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
         use eq_client_core::{WorldEvent, WorldUpdate, ZoneOffer, ZoneRejection};
@@ -305,21 +314,35 @@ mod tests {
             request_id,
             options: wanted,
         };
-        for event in [
-            applied(original),
-            WorldEvent::ZoneTransfer(ZoneOffer {
-                zone_id: 2,
-                instance_id: 0,
-                position: Default::default(),
-                reason: 0,
-                to_bind: false,
-                solicited: true,
-            }),
-            WorldEvent::ZoneTransferRejected {
-                session_id: 1,
-                reason: ZoneRejection::Cancelled,
-            },
-        ] {
+        let original_reply = || {
+            if applied_before_transfer {
+                applied(original)
+            } else {
+                WorldEvent::MovementOptionsRefused {
+                    session_id: 1,
+                    request_id: original,
+                    reason: "Changing zones".into(),
+                }
+            }
+        };
+        let offer = WorldEvent::ZoneTransfer(ZoneOffer {
+            zone_id: 2,
+            instance_id: 0,
+            position: Default::default(),
+            reason: 0,
+            to_bind: false,
+            solicited: true,
+        });
+        let rejected = WorldEvent::ZoneTransferRejected {
+            session_id: 1,
+            reason: ZoneRejection::Cancelled,
+        };
+        let batch = if applied_before_transfer {
+            [original_reply(), offer, rejected]
+        } else {
+            [offer, original_reply(), rejected]
+        };
+        for event in batch {
             updates.send(WorldUpdate::Game(event)).unwrap();
         }
         app.update();
@@ -337,7 +360,7 @@ mod tests {
         };
         assert_eq!(usable(&app), None);
 
-        updates.send(WorldUpdate::Game(applied(original))).unwrap();
+        updates.send(WorldUpdate::Game(original_reply())).unwrap();
         app.update();
         assert_eq!(usable(&app), None);
         updates.send(WorldUpdate::Game(applied(retry))).unwrap();
