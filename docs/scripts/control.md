@@ -102,10 +102,10 @@ receipt or process exit never proves script completion or server acceptance.
 
 ## Runbook checklist
 
-Open **EQ → Runbook** while in the world to watch the harness's current
-checklist. The window starts closed. You can move, minimize or close it
-without losing the checklist. The local harness can submit new checklists
-and results while a gameplay script is running.
+When launched with `--script-control`, open **EQ → Runbook** while in the
+world to watch the harness's current checklist. The window starts closed.
+You can move, minimize or close it without losing the checklist. The local
+harness can submit new checklists and results while a gameplay script is running.
 
 Start a checklist through the same private request file and request ID
 sequence. Supply the title and ordered items inline.
@@ -134,10 +134,13 @@ report is final for that item in the current checklist. Sending an
 identical result again leaves it as-is. Changing its status or note gives
 `runbook_item_already_reported`.
 
+Omit `note` or send `"note": null` to report without a note. Both forms
+represent the same result. An existing terminal report keeps its original note.
+
 Check for `runbook_result_recorded` and read the item back in
 `status.json`. The `runbook` object includes `id`, `title` and ordered
 `items`. Each item includes `id`, `label`, `status` and `note` (null when
-omitted). The receipt's `run_id` is reserved for the gameplay executor.
+the item has no note). The receipt's `run_id` is reserved for the gameplay executor.
 
 Use 1–64 items with unique, case-sensitive IDs of 1–48 ASCII letters,
 digits, hyphens or underscores. Titles, labels and optional notes are

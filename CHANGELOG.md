@@ -34,6 +34,8 @@
 - Add a hidden, movable Runbook checklist for a local script harness. Rows
   show only results the harness reported, stale IDs and conflicting terminal
   results are rejected, and the state survives closing and reopening.
+- Offer **EQ → Runbook** only in launches with `--script-control`. Checklist
+  results accept an explicit null note as well as an omitted note.
 - Keep the next air and lava checks due while a movement result is pending.
   Hide the air gauge after 250 ms and evaluate one due check against the
   next usable worker position. A pending Move survives a same-admission

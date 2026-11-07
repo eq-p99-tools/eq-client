@@ -5,6 +5,7 @@ use bevy::prelude::*;
 use eq_client_assets::sidl::Element;
 
 use super::{Shown, Toggle, WindowId, pointer::TakesWheel, stack::SelectorLabel};
+use crate::script::control::Bridge;
 use crate::theme::{self, Size};
 
 #[derive(Resource, Default)]
@@ -26,7 +27,7 @@ struct Entry(WindowId);
 struct Mark(WindowId);
 
 /// Keep the launcher alive across HUD rebuilds, login and character selection.
-pub(super) fn install(app: &mut App) {
+pub(crate) fn install(app: &mut App) {
     app.add_systems(Startup, spawn)
         .add_systems(
             Update,
@@ -41,7 +42,9 @@ pub(super) fn install(app: &mut App) {
 }
 
 /// Build a corner button and a menu whose outside-click shield prevents fallthrough.
-fn spawn(mut commands: Commands) {
+#[allow(clippy::needless_pass_by_value)]
+fn spawn(mut commands: Commands, control: Option<Res<Bridge>>) {
+    let has_runbook = control.is_some();
     commands.spawn((
         Button,
         Dismiss,
@@ -81,7 +84,7 @@ fn spawn(mut commands: Commands) {
             BorderColor::all(theme::EDGE),
             GlobalZIndex(851),
         ))
-        .with_children(entries);
+        .with_children(|panel| entries(panel, has_runbook));
     commands
         .spawn((
             Button,
@@ -108,12 +111,13 @@ fn spawn(mut commands: Commands) {
         .with_child((Fallback, theme::text("EQ", Size::Label, theme::INK_BRIGHT)));
 }
 
-/// The window registry defines the menu; interaction-specific windows stay excluded.
-fn entries(panel: &mut ChildSpawnerCommands) {
+/// The registry defines the menu. Runbook is available only with the local receiver.
+fn entries(panel: &mut ChildSpawnerCommands, has_runbook: bool) {
     panel.spawn(theme::text("Windows", Size::Label, theme::INK_DIM));
     for id in WindowId::ALL
         .into_iter()
         .filter(|id| id.describe().toggle != Toggle::Never)
+        .filter(|id| *id != WindowId::Runbook || has_runbook)
     {
         panel
             .spawn((

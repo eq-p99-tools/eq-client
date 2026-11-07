@@ -98,8 +98,10 @@ impl ResultUpdate {
             Some("failed") => Outcome::Failed,
             _ => return Err("Runbook result status must be passed or failed"),
         };
+        // Status emits null for an absent note, including on terminal reports.
         let note = object
             .get("note")
+            .filter(|value| !value.is_null())
             .map(|value| {
                 plain_text(Some(value), MAX_NOTE_BYTES)
                     .ok_or("Runbook note must be 1–180 bytes of single-line text")

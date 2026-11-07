@@ -30,7 +30,7 @@ pub(in crate::script::control) fn install(app: &mut App) {
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn spawn(mut commands: Commands, bridge: Option<Res<Bridge>>) {
+fn spawn(mut commands: Commands) {
     let frame = windows::frame(
         &mut commands,
         WindowId::Runbook,
@@ -60,12 +60,14 @@ fn spawn(mut commands: Commands, bridge: Option<Res<Bridge>>) {
                     theme::text("No checklist loaded", Size::Heading, theme::INK_BRIGHT),
                     TextLayout::new(Justify::Left, LineBreak::WordOrCharacter),
                 ));
-                let hint = if bridge.is_some() {
-                    "Waiting for the local test harness."
-                } else {
-                    "Launch with --script-control to load a checklist."
-                };
-                body.spawn((Progress, theme::text(hint, Size::Small, theme::INK)));
+                body.spawn((
+                    Progress,
+                    theme::text(
+                        "Waiting for the local test harness.",
+                        Size::Small,
+                        theme::INK,
+                    ),
+                ));
                 body.spawn((
                     Rows,
                     TakesWheel,
@@ -109,7 +111,7 @@ type Headings<'w, 's> =
 #[allow(clippy::needless_pass_by_value)]
 fn refresh(
     mut commands: Commands,
-    bridge: Option<Res<Bridge>>,
+    bridge: Res<Bridge>,
     (front, online, shown): (Res<FrontEnd>, Res<OnlineState>, Res<Shown>),
     (wheel, mut previous): (Res<Wheel>, Local<Option<(u64, usize)>>),
     mut root: Query<&mut Node, With<Root>>,
@@ -133,7 +135,7 @@ fn refresh(
     if wheel.surface == Some(parent) {
         windows::scroll_by(&mut scroll, node, wheel.pixels);
     }
-    let Some(run) = bridge.as_ref().and_then(|bridge| bridge.runbook.as_ref()) else {
+    let Some(run) = &bridge.runbook else {
         return;
     };
     let (mut passed, mut failed) = (0, 0);

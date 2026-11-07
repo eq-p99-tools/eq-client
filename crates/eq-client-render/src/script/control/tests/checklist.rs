@@ -1,12 +1,16 @@
-use super::{app, frame, request, start, submit_request};
+use super::{app, clean, frame, request, start, submit_request, temporary};
 use crate::{
     online::{OnlineState, testing as session},
-    windows::{Shown, WindowId},
+    windows::{SelectorButton, Shown, WindowId, menu},
 };
 use bevy::prelude::*;
 use serde_json::{Value, json};
+use std::{fs, time::Instant};
 
-use super::super::{Bridge, HISTORY, Phase, Program, Receipt, Script, files, protocol, runbook};
+use super::super::{
+    Bridge, HISTORY, Phase, Program, Receipt, RunControl, RunStatus, Script, files, install,
+    protocol, runbook,
+};
 
 fn definition() -> Value {
     json!({"title":"Synthetic session check","items":[
@@ -222,6 +226,118 @@ fn repeated_results_and_malformed_replacements_preserve_the_checklist() {
         request(&mut app, 5, result(1, "second", "failed")).code,
         "runbook_result_recorded"
     );
+}
+
+#[test]
+fn emitted_null_note_roundtrips_without_rewriting_terminal_results() {
+    let mut app = app();
+    assert_eq!(request(&mut app, 1, begin()).code, "runbook_started");
+    let omitted = json!({"op":"runbook_result","result":{
+        "runbook_id":1,"item_id":"first","status":"passed"
+    }});
+    let pending = status(&app);
+    let row = &pending["runbook"]["items"][0];
+    assert_eq!(row.get("note"), Some(&Value::Null));
+    let mut explicit = omitted.clone();
+    explicit["result"]["note"] = row["note"].clone();
+    let report = request(&mut app, 2, explicit);
+    assert_eq!(report.code, "runbook_result_recorded");
+    let reported = status(&app);
+    let row = &reported["runbook"]["items"][0];
+    assert_eq!(row["status"], "passed");
+    assert_eq!(row.get("note"), Some(&Value::Null));
+    assert_eq!(request(&mut app, 2, omitted.clone()), report);
+    assert_eq!(
+        request(&mut app, 3, omitted).code,
+        "runbook_result_recorded"
+    );
+
+    let mut noted = result(1, "second", "failed");
+    assert_eq!(
+        request(&mut app, 4, noted.clone()).code,
+        "runbook_result_recorded"
+    );
+    let recorded = status(&app)["runbook"].clone();
+    noted["result"]["note"] = Value::Null;
+    assert_eq!(
+        request(&mut app, 5, noted).code,
+        "runbook_item_already_reported"
+    );
+    assert_eq!(status(&app)["runbook"], recorded);
+}
+
+#[test]
+fn no_runbook_is_installed_or_listed_without_a_control_receiver() {
+    let root = temporary();
+    fs::create_dir(&root).unwrap();
+    for (path, expected_error) in [
+        (None, None),
+        (Some(root.clone()), Some(std::io::ErrorKind::AlreadyExists)),
+    ] {
+        let mut app = crate::testing::app();
+        menu::install(&mut app);
+        app.world_mut()
+            .resource_mut::<crate::ViewerSettings>()
+            .0
+            .script_control = path;
+        assert_eq!(
+            install(&mut app).err().map(|err| err.kind()),
+            expected_error
+        );
+        app.update();
+        assert!(!app.world().contains_resource::<Bridge>());
+        assert_eq!(menu_entry(&mut app, WindowId::Runbook), None);
+        assert_eq!(menu_entry(&mut app, WindowId::Scripts), Some(Display::Flex));
+        let world = app.world_mut();
+        assert!(
+            !world
+                .query::<&WindowId>()
+                .iter(world)
+                .any(|id| *id == WindowId::Runbook)
+        );
+    }
+    assert!(!root.join("status.json").exists());
+    clean(&root);
+}
+
+#[test]
+fn a_control_receiver_installs_a_closed_runbook_and_lists_it_in_world() {
+    let root = temporary();
+    let mut app = crate::testing::app();
+    app.insert_resource(Time::<Real>::new(Instant::now()))
+        .init_resource::<RunStatus>()
+        .init_resource::<RunControl>();
+    menu::install(&mut app);
+    app.world_mut()
+        .resource_mut::<crate::ViewerSettings>()
+        .0
+        .script_control = Some(root.clone());
+    install(&mut app).unwrap();
+    assert!(app.world().contains_resource::<Bridge>());
+
+    app.world_mut().resource_mut::<OnlineState>().enabled = true;
+    app.update();
+    assert_eq!(menu_entry(&mut app, WindowId::Runbook), Some(Display::None));
+    assert_eq!(window_display(&mut app), Display::None);
+
+    session::admit(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        1,
+        session::player(7),
+    );
+    app.update();
+    assert_eq!(menu_entry(&mut app, WindowId::Runbook), Some(Display::Flex));
+    assert_eq!(window_display(&mut app), Display::None);
+    drop(app);
+    clean(&root);
+}
+
+fn menu_entry(app: &mut App, window: WindowId) -> Option<Display> {
+    let world = app.world_mut();
+    world
+        .query::<(&SelectorButton, &Node)>()
+        .iter(world)
+        .find_map(|(button, node)| (button.0 == window).then_some(node.display))
 }
 
 #[test]

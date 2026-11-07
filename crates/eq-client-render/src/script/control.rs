@@ -111,8 +111,9 @@ struct Tracked {
     archived: bool,
 }
 
+/// The active local control channel. Its presence enables the Runbook menu entry.
 #[derive(Resource)]
-struct Bridge {
+pub(crate) struct Bridge {
     root: PathBuf,
     instance: String,
     closed: bool,
@@ -282,9 +283,8 @@ impl Drop for Bridge {
     }
 }
 
-/// Install only for an explicit launch option, before the first rendered frame.
+/// Install the receiver and its checklist together after creating the inbox.
 pub(crate) fn install(app: &mut App) -> std::io::Result<()> {
-    runbook::view::install(app);
     let Some(root) = app
         .world()
         .resource::<crate::ViewerSettings>()
@@ -312,6 +312,7 @@ pub(crate) fn install(app: &mut App) -> std::io::Result<()> {
         )
         .add_systems(PreUpdate, observe.after(super::drive))
         .add_systems(Last, publish);
+    runbook::view::install(app);
     Ok(())
 }
 
