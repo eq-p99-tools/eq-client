@@ -131,17 +131,11 @@ fn key(app: &mut App, key_code: KeyCode, logical_key: Key, text: Option<&str>) {
     });
 }
 
-fn install_background_book_script(app: &mut App) -> (Entity, Entity) {
+fn install_background_book_script(app: &mut App, source: &str) -> (Entity, Entity) {
     use crate::script::{InputMode, Program};
     use bevy::window::PrimaryWindow;
 
-    let program = Program::parse(
-        "click button spellbook SpellSets_Name\npress b\npress enter\n\
-         click button spellbook SpellSets_Save\nclick button spellbook TestSearch\n\
-         hold w 160\npress enter\nclick button spellbook TestSearch\nwait 2000",
-        std::path::Path::new("."),
-    )
-    .unwrap();
+    let program = Program::parse(source, std::path::Path::new(".")).unwrap();
     let world = app.world_mut();
     world
         .resource_mut::<crate::ViewerSettings>()
@@ -156,7 +150,6 @@ fn install_background_book_script(app: &mut App) -> (Entity, Entity) {
         .query_filtered::<Entity, With<search::Field>>()
         .single(world)
         .unwrap();
-    world.entity_mut(field).insert(script_id("TestSearch"));
     for (id, mut node) in world
         .query_filtered::<(&WindowId, &mut Node), With<Frame>>()
         .iter_mut(world)
@@ -168,7 +161,8 @@ fn install_background_book_script(app: &mut App) -> (Entity, Entity) {
     for (index, id) in [
         (1_u16, "SpellSets_Name"),
         (2, "SpellSets_Save"),
-        (3, "TestSearch"),
+        (3, "Spellbook_Search"),
+        (4, "Spellbook_SearchClear"),
     ] {
         let button = control(app, id);
         app.world_mut().entity_mut(button).insert((
@@ -195,7 +189,12 @@ fn install_background_book_script(app: &mut App) -> (Entity, Entity) {
             )
                 .in_set(bevy::input::InputSystems),
         )
-        .add_systems(Update, search::present.after(search::input));
+        .add_systems(
+            Update,
+            (search::refresh, search::present)
+                .chain()
+                .after(search::input),
+        );
     crate::install_script(
         app,
         (Some(program), None),
@@ -221,7 +220,12 @@ fn background_script_types_in_both_book_fields_until_native_input_reclaims_owner
     let folder = Folder::new();
     let (mut app, sent) = test_app(&folder, 2);
     click(&mut app, "SpellSets_Toggle");
-    let (window, search) = install_background_book_script(&mut app);
+    let (window, search) = install_background_book_script(
+        &mut app,
+        "click button spellbook SpellSets_Name\npress b\npress enter\n\
+         click button spellbook SpellSets_Save\nclick button spellbook Spellbook_Search\n\
+         hold w 160\npress enter\nclick button spellbook Spellbook_Search\nwait 2000",
+    );
     let mut passed_enter = false;
     let mut saw_text = false;
     let mut next_frame = 0;
@@ -283,6 +287,58 @@ fn background_script_types_in_both_book_fields_until_native_input_reclaims_owner
         assert_eq!(world.get::<Text>(search).unwrap().0, "w");
         assert_eq!(world.resource::<ChatState>().draft(), "");
     }
+    assert!(matches!(sent.try_recv(), Err(mpsc::TryRecvError::Empty)));
+}
+
+#[test]
+fn scripted_search_and_clear_filter_the_received_book_in_place() {
+    use crate::script::{Phase, RunStatus};
+    use crate::spellbook::{BookView, SpellNames};
+
+    let folder = Folder::new();
+    let (mut app, sent) = test_app(&folder, 2);
+    let mut book = SpellBook::default();
+    for (slot, spell_id) in [(2, 43), (36, 42), (63, 42)] {
+        book.apply(&SpellUpdate::Slot {
+            slot,
+            spell_id,
+            mode: 0,
+        });
+    }
+    app.insert_resource(SpellNames::parse("42^Ward\n43^Peace"));
+    let world = app.world_mut();
+    session::book(&mut world.resource_mut::<OnlineState>(), book.clone());
+    world.resource_mut::<BookView>().spread = 2;
+    let (_, field) = install_background_book_script(
+        &mut app,
+        "click button spellbook Spellbook_Search\npress w\npress enter\nwait 400\n\
+         click button spellbook Spellbook_SearchClear",
+    );
+
+    let mut filtered = false;
+    for ms in (0..2_000).step_by(20) {
+        script_frame(&mut app, ms);
+        let world = app.world();
+        let view = world.resource::<BookView>();
+        if world.get::<Text>(field).unwrap().0 == "w" {
+            assert_eq!(view.search.entries, [(36, 42), (63, 42)]);
+            assert_eq!(view.displayed_spread(), 0);
+            filtered = true;
+        }
+        assert_eq!(world.resource::<ChatState>().draft(), "");
+        if world.resource::<RunStatus>().phase() == Phase::Completed {
+            break;
+        }
+    }
+    let world = app.world();
+    assert!(filtered);
+    assert_eq!(world.resource::<RunStatus>().phase(), Phase::Completed);
+    assert_eq!(world.get::<Text>(field).unwrap().0, "Search spells…");
+    assert_eq!(world.resource::<BookView>().displayed_spread(), 2);
+    assert_eq!(
+        world.resource::<OnlineState>().world().spell_book(),
+        Some(&book)
+    );
     assert!(matches!(sent.try_recv(), Err(mpsc::TryRecvError::Empty)));
 }
 

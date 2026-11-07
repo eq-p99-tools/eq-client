@@ -16,6 +16,10 @@ Use these targets after `click`, `right_click` or `hover`. For a held click, put
 - `book_page next` or `book_page back`: turn a spellbook page.
 - `memorize gem`: choose gem 1 to 8 when memorizing.
 - `spell_gem gem`: a gem from 1 to 8.
+- `button spellbook Spellbook_Search`: focus the Search field in either
+  spellbook. Use `press` to type and `press enter` to finish. Filtered entries
+  retain their received book slots. Use `button spellbook Spellbook_SearchClear`
+  to clear the query and restore the ordinary page.
 - `button spellbook SpellSets_Toggle`: open the saved layouts panel. While it is
   open, use the same prefix with `SpellSets_Name`, `SpellSets_Save`,
   `SpellSets_Previous`, `SpellSets_Next`, `SpellSets_Rename`,
