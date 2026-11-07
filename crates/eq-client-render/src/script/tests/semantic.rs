@@ -1,4 +1,4 @@
-use super::{frame_at, pointing};
+use super::{frame_at, pointing, set_focus};
 use crate::{
     chat::{ChatState, system_line},
     items::ItemState,
@@ -8,7 +8,7 @@ use crate::{
     trade::TradeState,
     windows::{Shown, WindowId},
 };
-use bevy::prelude::*;
+use bevy::{prelude::*, window::PrimaryWindow};
 use eq_client_assets::ui::InstalledClient;
 use eq_client_core::{ClientCommand, ItemLink, SpawnKind, WorldEvent, chat::Source};
 use std::{path::Path, sync::mpsc};
@@ -18,6 +18,12 @@ const TARGET: u16 = 42;
 
 fn app() -> (App, mpsc::Receiver<ClientCommand>) {
     let mut app = pointing(Vec::new());
+    let window = app
+        .world_mut()
+        .query_filtered::<Entity, With<PrimaryWindow>>()
+        .single(app.world())
+        .unwrap();
+    set_focus(&mut app, window, true);
     let mut online = OnlineState::new(true);
     session::admit(&mut online, ADMISSION, session::player(7));
     let (tx, rx) = mpsc::sync_channel(4);
