@@ -3107,9 +3107,9 @@ mod tests {
         use eq_client_core::{WorldEvent, WorldUpdate};
 
         let (mut app, tx) = received_chat_app();
-        let mut line = system_line("Synthetic blade");
-        line.source = Source::Server;
-        line.message.item_links.push(ItemLink {
+        let mut incoming = system_line("Synthetic blade");
+        incoming.source = Source::Server;
+        incoming.message.item_links.push(ItemLink {
             body: format!("00002A{}1234ABCD", "0".repeat(31)),
             text: "Synthetic blade".into(),
             item_id: 42,
@@ -3118,7 +3118,7 @@ mod tests {
             text_start: 0,
             text_end: 15,
         });
-        tx.send(WorldUpdate::Chat(line)).unwrap();
+        tx.send(WorldUpdate::Chat(incoming)).unwrap();
         app.update();
         let chat = app.world().resource::<ChatState>();
         let (message, ordinal, link) = chat.script_links(1).next().unwrap();
