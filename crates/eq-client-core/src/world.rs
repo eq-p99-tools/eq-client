@@ -709,6 +709,16 @@ impl ClientWorld {
                 position,
                 refused,
             } => self.motion_sent(*session_id, *position, refused.as_ref(), news),
+            WorldEvent::MotionRefused { session_id, created, reason } => {
+                if self.session_id == Some(*session_id) {
+                    news.replies.push(Reply::MotionRefused {
+                        created: *created,
+                        reason: reason.clone(),
+                    });
+                } else {
+                    news.ignored = true;
+                }
+            }
             WorldEvent::Death(death) => return self.died(death, now),
             WorldEvent::DeathBind { session_id } => {
                 if self.session_id != Some(*session_id) {

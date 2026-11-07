@@ -528,7 +528,11 @@ impl Panels<'_> {
                 Reply::LootTaken { place, accepted } => self.trade.taken(*place, *accepted),
                 Reply::LootReceived { place } => self.trade.received(*place),
                 // The refused crossing no longer holds the player's motion.
-                Reply::ZoneLineRefused => self.motion.accepted(),
+                Reply::ZoneLineRefused => self.motion.crossing_refused(),
+                Reply::MotionRefused { created, reason } => {
+                    self.motion
+                        .move_refused(state.world().session_id(), *created, reason);
+                }
             }
         }
     }
@@ -543,7 +547,7 @@ impl Panels<'_> {
             "Current-admission movement worker result; no server acknowledgment implied"
         );
 
-        self.motion.accepted();
+        self.motion.moved(admission_id);
         self.motion.resolve_water_entry(moved.refused.is_some());
         self.motion.refused.clone_from(&moved.refused);
         if let Some(transform) = drawn {

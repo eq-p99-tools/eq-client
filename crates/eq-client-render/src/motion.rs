@@ -44,9 +44,8 @@ pub(super) struct Controls {
     /// program sets it, such as following, are not in this client:
     /// recording checklist 6.359).
     autorun: bool,
-    waiting: bool,
+    pending: Option<Pending>,
     pub last_accepted: Instant,
-    queued_at: Instant,
     moving: bool,
     /// Seconds of play the latest sample sent covers: the model shows it
     /// over that long once the session accepts it.
@@ -102,6 +101,29 @@ pub(super) struct Controls {
     movement_options: eq_client_core::movement::MovementOptions,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum PendingKind {
+    Move,
+    Crossing,
+}
+
+#[derive(Clone, Copy)]
+struct Pending {
+    session_id: u64,
+    created: Instant,
+    kind: PendingKind,
+}
+
+/// Whether local liquid checks have a worker position on which to base a sample.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(super) enum LiquidBasis {
+    Observed,
+    Pending,
+    Unconfirmed,
+}
+
+const MOVE_RESULT_WAIT: Duration = Duration::from_millis(250);
+
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 enum SentYaw {
     #[default]
@@ -149,9 +171,8 @@ impl Default for Controls {
             diagonal_rates: DiagonalRates::default(),
             walking: false,
             autorun: false,
-            waiting: false,
+            pending: None,
             last_accepted: Instant::now(),
-            queued_at: Instant::now(),
             moving: false,
             sent_span: 0.1,
             sent_yaw: SentYaw::Ordinary,
@@ -479,6 +500,11 @@ impl Controls {
             placement: self.placement,
             stun_revision: self.stun_revision,
             movement_options: self.movement_options,
+            // A grant or correction resets prediction, but the same worker
+            // can still consume a move that was already queued.
+            pending: self
+                .pending
+                .filter(|pending| pending.kind == PendingKind::Move),
             ..Self::default()
         };
     }
@@ -535,7 +561,7 @@ impl Controls {
     }
 
     /// Stops prediction without revoking the session's calibration. A pending
-    /// proposal still owns the movement slot until its result or a reset arrives.
+    /// proposal still owns the movement slot until its result or its admission ends.
     fn pause_prediction(&mut self) {
         self.moving = false;
         self.visual = None;
@@ -588,11 +614,40 @@ impl Controls {
             .then(eq_client_core::movement::AirborneController::default);
     }
 
-    pub fn accepted(&mut self) {
+    fn finish(&mut self) {
         let now = Instant::now();
-        self.waiting = false;
+        self.pending = None;
         self.last_accepted = now;
         self.last_answer = Some(now);
+    }
+
+    pub(super) fn moved(&mut self, session_id: Option<u64>) {
+        if self.pending.is_some_and(|pending| {
+            pending.kind == PendingKind::Move && Some(pending.session_id) == session_id
+        }) {
+            self.finish();
+        }
+    }
+
+    pub(super) fn crossing_refused(&mut self) {
+        if self
+            .pending
+            .is_some_and(|pending| pending.kind == PendingKind::Crossing)
+        {
+            self.finish();
+        }
+    }
+
+    pub(super) fn move_refused(&mut self, session_id: Option<u64>, created: Instant, reason: &str) {
+        if self.pending.is_some_and(|pending| {
+            pending.kind == PendingKind::Move
+                && Some(pending.session_id) == session_id
+                && pending.created == created
+        }) {
+            self.finish();
+            self.resolve_water_entry(true);
+            self.refused = Some(reason.to_owned());
+        }
     }
 
     /// A local result either keeps the water entry or restores the dry-side motion.
@@ -604,9 +659,25 @@ impl Controls {
         }
     }
 
-    /// Whether a sample is out and its answer has not come back.
-    pub const fn waiting(&self) -> bool {
-        self.waiting
+    fn wait_for(&mut self, session_id: Option<u64>, created: Instant, kind: PendingKind) {
+        self.pending = session_id.map(|session_id| Pending {
+            session_id,
+            created,
+            kind,
+        });
+    }
+
+    pub(super) fn liquid_basis(&self, session_id: Option<u64>, now: Instant) -> LiquidBasis {
+        match self
+            .pending
+            .filter(|pending| Some(pending.session_id) == session_id)
+        {
+            None => LiquidBasis::Observed,
+            Some(pending) if now.saturating_duration_since(pending.created) >= MOVE_RESULT_WAIT => {
+                LiquidBasis::Unconfirmed
+            }
+            Some(_) => LiquidBasis::Pending,
+        }
     }
 }
 
@@ -703,6 +774,9 @@ pub(super) fn input(
     }
     let detached = cameras.single().is_ok_and(|(_, free)| free);
     let session_id = online.world().session_id();
+    controls.pending = controls
+        .pending
+        .filter(|pending| Some(pending.session_id) == session_id);
     let movement = eq_client_core::movement::offered_options(&options.options.qol, online.world());
     if movement_sync
         .as_ref()
@@ -850,8 +924,8 @@ pub(super) fn input(
     controls
         .taps
         .observe(&keyboard, &movement_keys, focused, now);
-    if controls.waiting {
-        if now.duration_since(controls.queued_at) > Duration::from_millis(250) {
+    if controls.pending.is_some() {
+        if controls.liquid_basis(session_id, now) == LiquidBasis::Unconfirmed {
             controls.pause_prediction();
         }
         controls.held = Some(Held::Waiting);
@@ -927,8 +1001,7 @@ pub(super) fn input(
                 controls.send_failed(reason);
                 controls.held = Some(Held::Refused);
             } else {
-                controls.waiting = true;
-                controls.queued_at = now;
+                controls.wait_for(session_id, now, PendingKind::Crossing);
                 controls.held = Some(Held::Gate);
             }
             return;
@@ -1350,8 +1423,7 @@ pub(super) fn input(
         || mouse_snapshot.is_none() && (heading - current_heading).abs() > f32::EPSILON;
     // Until the heading sent reaches the facing, the model shows the facing.
     controls.facing = (arc(heading, facing).abs() > 0.01).then_some(facing);
-    controls.waiting = true;
-    controls.queued_at = now;
+    controls.wait_for(session_id, created, PendingKind::Move);
 }
 
 /// Whether no ground is under the feet within the step the server's
@@ -3257,6 +3329,15 @@ pub(super) mod tests {
         (app, receiver)
     }
 
+    pub(crate) fn age_pending(app: &mut App) {
+        app.world_mut()
+            .resource_mut::<Controls>()
+            .pending
+            .as_mut()
+            .unwrap()
+            .created = Instant::now().checked_sub(MOVE_RESULT_WAIT).unwrap();
+    }
+
     pub(crate) fn fixture() -> (App, mpsc::Receiver<ClientCommand>) {
         let (sender, receiver) = mpsc::sync_channel(2);
         let mut app = App::new();
@@ -3684,6 +3765,7 @@ pub(super) mod tests {
         );
         assert!(swim.position.z - placed.z < 0.1);
         assert!(receiver.try_recv().is_err());
+        accept(&mut app, &swim);
 
         let bank = world_position([0.0, 3.0, 0.0], 0.0);
         online::testing::place(
@@ -3743,6 +3825,7 @@ pub(super) mod tests {
         let falling = next_move(&mut app, 11);
         assert_eq!(falling.mode, MovementMode::Fall);
         assert!(falling.position.z < walking.position.z);
+        accept(&mut app, &falling);
 
         movement_choice(&mut app, Fix::JesusMode, true);
         let submerged = world_position([0.0, -4.0, 0.0], 0.0);
@@ -3946,6 +4029,7 @@ pub(super) mod tests {
         };
         assert_eq!(request.mode, MovementMode::Walk);
         assert!((request.position.x.hypot(request.position.y) - 0.2).abs() < 0.001);
+        accept(&mut app, &request);
         // A server's correction, as after a gm goto, starts motion afresh
         // but leaves the toggle as the player left it (6.363), so the next
         // grant walks again.
@@ -4148,7 +4232,7 @@ pub(super) mod tests {
         let mut players = world.query_filtered::<&Transform, With<Player>>();
         let drawn = *players.single(world).unwrap();
         let mut controls = app.world_mut().resource_mut::<Controls>();
-        controls.accepted();
+        controls.moved(Some(request.session_id));
         controls.display_sample(drawn, request.position);
         controls.last_accepted = Instant::now()
             .checked_sub(Duration::from_millis(100))
@@ -5248,15 +5332,14 @@ pub(super) mod tests {
         );
         app.update();
         assert!(receiver.try_recv().is_err());
-        let mut controls = app.world_mut().resource_mut::<Controls>();
-        controls.queued_at = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
+        age_pending(&mut app);
         app.update();
         assert!(app.world().resource::<Controls>().speed.is_some());
-        assert!(app.world().resource::<Controls>().waiting);
+        assert!(app.world().resource::<Controls>().pending.is_some());
         assert!(receiver.try_recv().is_err());
         // A late answer releases only the proposal; the grant was never lost.
         let mut controls = app.world_mut().resource_mut::<Controls>();
-        controls.accepted();
+        controls.moved(Some(request.session_id));
         controls.last_accepted = Instant::now().checked_sub(Duration::from_secs(2)).unwrap();
         app.update();
         let ClientCommand::Move(resumed) = receiver.try_recv().unwrap() else {
@@ -5460,7 +5543,7 @@ pub(super) mod tests {
         app.insert_resource(crate::outbox::Outbox::new(Some(sender)));
         app.update();
         assert!(app.world().resource::<Controls>().speed.is_some());
-        assert!(!app.world().resource::<Controls>().waiting);
+        assert!(app.world().resource::<Controls>().pending.is_none());
         receiver.try_recv().unwrap();
         app.world_mut().resource_mut::<Controls>().last_accepted =
             Instant::now().checked_sub(Duration::from_secs(2)).unwrap();
@@ -5469,18 +5552,19 @@ pub(super) mod tests {
             panic!("expected retry")
         };
         assert!((request.position.x + 0.6).abs() < 0.0001);
-        assert!(app.world().resource::<Controls>().waiting);
+        assert!(app.world().resource::<Controls>().pending.is_some());
     }
 
     #[test]
-    fn admission_reset_cannot_be_undone_by_a_late_result() {
+    fn a_late_result_does_not_restore_withdrawn_movement() {
         let mut controls = Controls {
             speed: Some(6.0),
-            waiting: true,
             ..default()
         };
+        controls.wait_for(Some(11), Instant::now(), PendingKind::Move);
         controls.reset(None);
-        controls.accepted();
+        assert!(controls.pending.is_some());
+        controls.moved(Some(11));
         assert!(controls.speed.is_none());
         controls.send_failed(crate::outbox::Refusal::Ended);
         assert!(controls.speed.is_none());
@@ -5722,7 +5806,7 @@ pub(super) mod tests {
             );
             // The landing is reported once; the next sample only stops.
             let mut controls = app.world_mut().resource_mut::<Controls>();
-            controls.accepted();
+            controls.finish();
             controls.last_accepted = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
             app.update();
             assert!(matches!(receiver.try_recv(), Ok(ClientCommand::Move(_))));
@@ -5734,7 +5818,7 @@ pub(super) mod tests {
     fn a_landings_damage_the_full_queue_refused_goes_before_the_next_sample() {
         let ready = |app: &mut App| {
             let mut controls = app.world_mut().resource_mut::<Controls>();
-            controls.accepted();
+            controls.finish();
             controls.last_accepted = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
         };
         let (mut app, _) = landing(None, eq_client_core::Capability::ALL.to_vec());

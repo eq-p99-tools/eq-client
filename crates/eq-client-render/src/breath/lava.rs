@@ -1,6 +1,6 @@
 //! Ordinary type-250 heat from the character's actual body origin.
 use super::modifiers::{self, Need};
-use crate::{online::OnlineState, spellbook::SpellNames};
+use crate::{motion::LiquidBasis, online::OnlineState, spellbook::SpellNames};
 use eq_client_assets::regions::Medium;
 use eq_client_core::{
     Capability,
@@ -22,14 +22,14 @@ impl Heat {
         online: &OnlineState,
         qol: &Settings,
         spells: &SpellNames,
-        movement_pending: bool,
+        movement: LiquidBasis,
     ) -> Option<u32> {
         let world = online.world();
-        if movement_pending
-            && qol.on(Fix::TakeEnvironmentalDamage)
+        let eligible = qol.on(Fix::TakeEnvironmentalDamage)
+            && world.can(Capability::LavaHeat)
             && world.in_world()
-            && !online.scene_loading()
-        {
+            && !online.scene_loading();
+        if eligible && movement == LiquidBasis::Pending {
             // A worker result establishes the position for the next check.
             return None;
         }
@@ -38,9 +38,8 @@ impl Heat {
             .session_id()
             .zip(player)
             .filter(|(_, player)| {
-                world.in_world()
-                    && world.can(Capability::LavaHeat)
-                    && !online.scene_loading()
+                eligible
+                    && movement == LiquidBasis::Observed
                     // Virtual surface support never supplies a heat sample.
                     && online.regions.medium_at(eq_client_core::render_position(player.position))
                         == Some(Medium::Lava)
@@ -99,10 +98,34 @@ mod tests {
         let mut heat = Heat::default();
         let start = Instant::now();
         let at = |seconds| start + Duration::from_secs(seconds);
-        assert_eq!(heat.advance(at(0), &online, &qol, &spells, false), None);
-        assert_eq!(heat.advance(at(1), &online, &qol, &spells, true), None);
-        assert_eq!(heat.advance(at(1), &online, &qol, &spells, false), Some(42));
-        assert_eq!(heat.advance(at(2), &online, &qol, &spells, true), None);
+        assert_eq!(
+            heat.advance(at(0), &online, &qol, &spells, LiquidBasis::Observed),
+            None
+        );
+        assert_eq!(
+            heat.advance(at(1), &online, &qol, &spells, LiquidBasis::Pending),
+            None
+        );
+        assert_eq!(
+            heat.advance(at(1), &online, &qol, &spells, LiquidBasis::Observed),
+            Some(42)
+        );
+        assert_eq!(
+            heat.advance(at(2), &online, &qol, &spells, LiquidBasis::Pending),
+            None
+        );
+        assert_eq!(
+            heat.advance(at(2), &online, &qol, &spells, LiquidBasis::Unconfirmed),
+            None
+        );
+        assert_eq!(
+            heat.advance(at(2), &online, &qol, &spells, LiquidBasis::Observed),
+            None
+        );
+        assert_eq!(
+            heat.advance(at(3), &online, &qol, &spells, LiquidBasis::Observed),
+            Some(42)
+        );
         testing::news(
             &mut online,
             [WorldEvent::MotionSent {
@@ -114,7 +137,10 @@ mod tests {
                 refused: None,
             }],
         );
-        assert_eq!(heat.advance(at(2), &online, &qol, &spells, false), None);
+        assert_eq!(
+            heat.advance(at(4), &online, &qol, &spells, LiquidBasis::Observed),
+            None
+        );
     }
 
     #[test]

@@ -110,24 +110,13 @@ pub(super) fn schedule(app: &mut App) {
             .after(bevy::input::InputSystems)
             .after(crate::script::drive),
     );
-    app.configure_sets(
-        Update,
-        (
-            Stage::Receive,
-            Stage::Scene,
-            Stage::Typing,
-            Stage::Route,
-            Stage::Input,
-            Stage::Present,
-        )
-            .chain(),
-    )
-    .add_systems(
+    configure_stages(app);
+    app.add_systems(
         Update,
         (
             (
                 online::carry_as,
-                online::receive,
+                receive_world(),
                 online::leave,
                 online::report_bleed_out,
                 login::watch,
@@ -440,10 +429,32 @@ pub(crate) enum Stage {
     Present,
 }
 
+pub(super) fn configure_stages(app: &mut App) {
+    app.configure_sets(
+        Update,
+        (
+            Stage::Receive,
+            Stage::Scene,
+            Stage::Typing,
+            Stage::Route,
+            Stage::Input,
+            Stage::Present,
+        )
+            .chain(),
+    );
+}
+
+pub(super) fn receive_world()
+-> bevy::ecs::schedule::ScheduleConfigs<bevy::ecs::system::ScheduleSystem> {
+    online::receive.in_set(Stage::Receive)
+}
+
 /// Sample the worker's observed position before a new move can advance it.
 pub(super) fn liquid_and_movement()
 -> bevy::ecs::schedule::ScheduleConfigs<bevy::ecs::system::ScheduleSystem> {
-    (crate::breath::update, motion::input).chain()
+    (crate::breath::update, motion::input)
+        .chain()
+        .in_set(Stage::Input)
 }
 
 /// Registers the startup work of the overlays and the windows' shared systems.
