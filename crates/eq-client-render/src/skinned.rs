@@ -3456,6 +3456,20 @@ mod tests {
         assert_eq!(app.world().get::<ScrollPosition>(parent).unwrap().y, 0.0);
     }
 
+    fn qol_page_checkboxes(
+        page: &eq_client_assets::sidl::Page,
+    ) -> Vec<eq_client_assets::sidl::Button> {
+        use eq_client_assets::sidl::Element;
+        page.pieces
+            .iter()
+            .filter_map(|(_, piece)| match piece {
+                Element::Button(checkbox) => Some(checkbox),
+                _ => None,
+            })
+            .cloned()
+            .collect()
+    }
+
     #[test]
     fn the_options_window_checkboxes_turn_its_options_on_and_off() {
         use eq_client_assets::sidl::{Button, ButtonLook, Element, Page};
@@ -3519,17 +3533,7 @@ mod tests {
         );
         assert_eq!(pages.len(), 2);
         assert_eq!(pages[1].title.as_deref(), Some("QoL"));
-        let checkboxes = |page: &Page| {
-            page.pieces
-                .iter()
-                .filter_map(|(_, piece)| match piece {
-                    Element::Button(checkbox) => Some(checkbox),
-                    _ => None,
-                })
-                .cloned()
-                .collect::<Vec<_>>()
-        };
-        let buttons = checkboxes(&pages[1]);
+        let buttons = qol_page_checkboxes(&pages[1]);
         assert_eq!(buttons.len(), settings.len());
         let mut above: Option<Area> = None;
         for (checkbox, fix) in buttons.iter().zip(settings.iter().copied()) {
@@ -3553,7 +3557,7 @@ mod tests {
             Vec2::new(5000.0, 70.0),
             None,
         );
-        let buttons = checkboxes(&short[1]);
+        let buttons = qol_page_checkboxes(&short[1]);
         assert!(buttons[1].area.x >= buttons[0].area.x + buttons[0].area.width);
         assert!((buttons[1].area.y - buttons[0].area.y).abs() < f32::EPSILON);
         // Other windows keep the skin's pages as they are.
