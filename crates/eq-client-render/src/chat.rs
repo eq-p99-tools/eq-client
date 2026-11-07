@@ -874,21 +874,38 @@ pub(super) struct ChatLook {
 }
 
 impl ChatLook {
-    /// A line's colour: the player's for the message type the server gave
-    /// it, else the player's for its channel's kind of text, else the
-    /// client's. A type below the Colors page's kinds (a fixed colour in the
-    /// official client, not checked) takes its channel's.
+    /// A line's colour comes from its type or, where that has no colour,
+    /// from its channel. Fixed consider colours also work in bare chat.
     fn color(&self, line: &ChatLine) -> Color {
         let [red, green, blue] = line
             .message_type
             .and_then(|kind| u16::try_from(kind).ok())
-            .and_then(|kind| self.colors.get(&kind).copied())
+            .and_then(|kind| {
+                self.colors
+                    .get(&kind)
+                    .copied()
+                    .or_else(|| consider_rgb(kind))
+            })
             .or_else(|| {
                 eq_client_core::chat::color_kind(line.channel)
                     .and_then(|kind| self.colors.get(&kind).copied())
             })
             .unwrap_or_else(|| channel_rgb(line.channel));
         Color::srgb_u8(red, green, blue)
+    }
+}
+
+/// Titanium's fixed chat palette for the types used in consider lines.
+const fn consider_rgb(kind: u16) -> Option<[u8; 3]> {
+    match kind {
+        2 => Some([0, 128, 0]),
+        4 => Some([0, 64, 255]),
+        6 => Some([128, 128, 128]),
+        10 | 20 => Some([240, 240, 240]),
+        13 => Some([240, 0, 0]),
+        15 => Some([240, 240, 0]),
+        18 => Some([0, 240, 240]),
+        _ => None,
     }
 }
 
@@ -1156,13 +1173,7 @@ fn spawn_line(
     (look, times): (Option<&ChatLook>, bool),
     (player, messages): (&str, Option<&crate::hud::messages::Messages>),
 ) {
-    let color = look.map_or_else(
-        || {
-            let [r, g, b] = channel_rgb(line.channel);
-            Color::srgb_u8(r, g, b)
-        },
-        |look| look.color(line),
-    );
+    let color = look.map_or_else(|| ChatLook::default().color(line), |look| look.color(line));
     let size = look
         .and_then(|look| look.font)
         .map_or(Size::Label, |font| super::skinned::font(Some(font)));
@@ -2213,6 +2224,7 @@ mod tests {
                     heard: heard.clone(),
                 }),
                 Some(Session {
+                    classic_npc_consider: false,
                     inventory_move_rules: None,
                     spell_provider: eq_client_core::spell_tables::Binding::new(
                         eq_client_core::spell_tables::Policy::Installed,
@@ -2937,9 +2949,12 @@ mod tests {
             look.color(&line(ChannelName::System, Some(289))),
             Color::srgb_u8(4, 5, 6)
         );
-        // A type with no colour set, or below the Colors page's kinds, takes
-        // its channel's.
-        for message_type in [290, 15] {
+        assert_eq!(
+            look.color(&line(ChannelName::System, Some(15))),
+            Color::srgb_u8(240, 240, 0),
+        );
+        // A type without a configured or fixed colour takes its channel's.
+        for message_type in [290, 42] {
             assert_eq!(
                 look.color(&line(ChannelName::Say, Some(message_type))),
                 Color::srgb_u8(1, 2, 3)
@@ -3100,6 +3115,54 @@ mod tests {
             ..default()
         });
         (app, tx)
+    }
+
+    #[test]
+    fn classic_guard_consider_reaches_chat_with_the_level_color() {
+        use eq_client_core::{
+            WorldEvent, WorldUpdate,
+            combat::{ConColor, Consideration},
+        };
+        let (mut app, tx) = received_chat_app();
+        let guard = eq_client_core::SpawnState {
+            name: "a_guard".into(),
+            level: 20,
+            pet_owner: None,
+            ..crate::online::testing::pet(9, 7)
+        };
+        app.world_mut()
+            .resource_mut::<crate::online::OnlineState>()
+            .consider_npcs_by_level(true);
+        app.insert_resource(crate::hud::messages::Messages::parse(
+            "EQST0002\n0 1\n12239 %1 %2 %3\n12220 synthetic standing\n12225 synthetic red.\n",
+        ));
+        let _ = app.world_mut().remove_resource::<ChatLook>();
+        for event in [
+            WorldEvent::Spawns(vec![guard]),
+            WorldEvent::Consideration(Consideration {
+                target_id: 9,
+                faction: 9,
+                color: ConColor::Other(77),
+                hit_points: None,
+            }),
+        ] {
+            tx.send(WorldUpdate::Game(event)).unwrap();
+        }
+        app.update();
+        assert_eq!(
+            shown(&mut app),
+            ["A guard synthetic standing synthetic red."]
+        );
+        let line = column(&mut app)[0];
+        assert_eq!(
+            app.world().get::<TextColor>(line).unwrap().0,
+            Color::srgb_u8(240, 0, 0),
+        );
+        let chat = app.world().resource::<ChatState>();
+        assert_eq!(
+            chat.history.lines(ChatTab::System)[0].1.message_type,
+            Some(13),
+        );
     }
 
     #[test]

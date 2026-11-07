@@ -106,7 +106,7 @@ fn color(entity: Known<'_>, world: &ClientWorld, mac: bool) -> Color {
     }
     match entity.kind {
         SpawnKind::Player => PLAYER,
-        SpawnKind::Npc => theme::con(world.considered(entity.id).or_else(|| {
+        SpawnKind::Npc => theme::con(world.consider_color(entity.id).or_else(|| {
             eq_client_core::maps::level_con(
                 world.player().map_or(0, |player| player.level),
                 entity.level,

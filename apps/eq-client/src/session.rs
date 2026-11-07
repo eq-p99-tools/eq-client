@@ -218,6 +218,7 @@ impl SessionWorker {
             }
         });
         Ok(eq_client_render::Session {
+            classic_npc_consider: protocol == ServerProtocol::Project1999,
             inventory_move_rules,
             spell_provider,
             updates: receiver,

@@ -275,9 +275,15 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         Notice::Consideration {
             consideration,
             name,
+            color,
         } => messages.map_or_else(Vec::new, |messages| {
             let name = name.as_deref().map(display_name).unwrap_or_default();
-            chat(consideration_text(messages, &name, consideration))
+            chat(consideration_text(
+                messages,
+                &name,
+                consideration.faction,
+                *color,
+            ))
         }),
         Notice::Damage {
             damage,

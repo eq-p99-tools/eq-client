@@ -157,8 +157,9 @@ position and all local map geometry, including outliers.
 The map shows all server-reported entities with known positions, independently
 of 3D render distance. Purple arrows are players and point in their facing
 direction, including while stopped. NPCs are circles with level-relative con
-colors, with received consider results preferred over estimates. Corpses and
-unknown entities are gray. Small gold squares show ground items within 240
+colors. Project 1999 NPC colors use the classic level estimate. Other sessions
+prefer a recognized color from a consider response. Corpses and unknown entities
+are gray. Small gold squares show ground items within 240
 units of your reported position; hover to see
 their model and position. World fixtures such as forges are excluded, and map
 item markers do not pick up or target anything. The current TAKP and Quarm adapters

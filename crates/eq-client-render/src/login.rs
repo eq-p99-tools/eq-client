@@ -90,6 +90,8 @@ pub enum Connection {
 /// A session running on its own thread: its news, the queue for the
 /// player's requests, and the thread.
 pub struct Session {
+    /// Present NPC difficulty using the classic level scale for this session.
+    pub classic_npc_consider: bool,
     /// Placement policy supplied by this network producer for host projections.
     pub inventory_move_rules: Option<eq_client_core::inventory::MoveRules>,
     /// The immutable spell-provider binding allocated with this producer.
@@ -409,6 +411,7 @@ impl FrontEnd {
         link: &mut Link,
     ) {
         online.restart();
+        online.consider_npcs_by_level(session.classic_npc_consider);
         online.plan_inventory_as(session.inventory_move_rules);
         link.bind_spells(session.spell_provider);
         link.attach(Some(session.updates), Some(session.commands));
@@ -842,6 +845,7 @@ pub(crate) mod testing {
             let thread = Thread::default();
             heard.sessions.push((updates, queue, thread.clone()));
             Ok(Connection::Session(Session {
+                classic_npc_consider: false,
                 inventory_move_rules: Some(eq_client_core::inventory::MoveRules::EqEmu),
                 spell_provider: eq_client_core::spell_tables::Binding::new(
                     eq_client_core::spell_tables::Policy::Installed,
@@ -947,6 +951,7 @@ mod tests {
         let (mut front, updates, commands) = FrontEnd::launched(
             Box::new(fake),
             Some(Session {
+                classic_npc_consider: false,
                 inventory_move_rules: Some(eq_client_core::inventory::MoveRules::EqEmu),
                 spell_provider: eq_client_core::spell_tables::Binding::new(
                     eq_client_core::spell_tables::Policy::Installed,
@@ -996,6 +1001,7 @@ mod tests {
         let (mut front, updates, commands) = FrontEnd::launched(
             Box::new(fake),
             Some(Session {
+                classic_npc_consider: false,
                 inventory_move_rules: Some(eq_client_core::inventory::MoveRules::EqEmu),
                 spell_provider: eq_client_core::spell_tables::Binding::new(
                     eq_client_core::spell_tables::Policy::Installed,

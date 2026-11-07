@@ -552,6 +552,21 @@ impl ClientWorld {
         self.zone.considered.get(&id).copied()
     }
 
+    /// The display color of a considered spawn. The classic policy
+    /// estimates NPC difficulty from current levels on the classic scale.
+    /// The received code stays available through [Self::considered].
+    #[must_use]
+    pub fn consider_color(&self, id: u16) -> Option<ConColor> {
+        let reported = self.considered(id)?;
+        if self.classic_npc_consider {
+            let spawn = self.spawn(id)?;
+            if spawn.state.kind == crate::SpawnKind::Npc {
+                return crate::maps::level_con(self.player()?.level, spawn.state.level, false);
+            }
+        }
+        (!matches!(reported, ConColor::Other(_))).then_some(reported)
+    }
+
     /// Whether a spawn ID is the player's.
     #[must_use]
     pub fn is_player(&self, id: u16) -> bool {

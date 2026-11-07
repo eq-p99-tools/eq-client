@@ -262,6 +262,11 @@ impl OnlineState {
         scene.forget(reason, commands);
     }
 
+    /// Bind NPC consider presentation to the selected worker's policy.
+    pub(super) const fn consider_npcs_by_level(&mut self, enabled: bool) {
+        self.world.consider_npcs_by_level(enabled);
+    }
+
     /// Bind host planning to the selected worker's placement policy.
     pub(super) fn plan_inventory_as(
         &mut self,
@@ -1424,6 +1429,7 @@ mod tests {
                 heard: std::sync::Arc::default(),
             }),
             Some(Session {
+                classic_npc_consider: false,
                 inventory_move_rules: Some(eq_client_core::inventory::MoveRules::EqEmu),
                 spell_provider: eq_client_core::spell_tables::Binding::new(
                     eq_client_core::spell_tables::Policy::Installed,

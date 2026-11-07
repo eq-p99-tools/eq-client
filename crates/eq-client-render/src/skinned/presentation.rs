@@ -378,7 +378,7 @@ pub(super) fn gauge_text(
         ),
         6 => {
             let target = world.target().selected;
-            let color = theme::con(target.and_then(|id| world.considered(id)));
+            let color = theme::con(target.and_then(|id| world.consider_color(id)));
             (target_name(world), Some(color))
         }
         // A group member's name over their health (inferred).

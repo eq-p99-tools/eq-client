@@ -361,12 +361,16 @@ pub fn run(
         script_input_mode,
     );
     let mut app = App::new();
-    let (spell_binding, inventory_move_rules) = match &source {
+    let (spell_binding, inventory_move_rules, classic_npc_consider) = match &source {
         Source::Online {
             session: Some(session),
             ..
-        } => (Some(session.spell_provider), session.inventory_move_rules),
-        _ => (None, None),
+        } => (
+            Some(session.spell_provider),
+            session.inventory_move_rules,
+            session.classic_npc_consider,
+        ),
+        _ => (None, None, false),
     };
     let (front, updates, commands) = match source {
         Source::Online { logins, session } => login::FrontEnd::launched(logins, session),
@@ -384,6 +388,7 @@ pub fn run(
     }
     let outbox = outbox::Outbox::new(commands);
     let mut online_state = online::OnlineState::new(online);
+    online_state.consider_npcs_by_level(classic_npc_consider);
     online_state.plan_inventory_as(inventory_move_rules);
     outbox.set_spell_ready(spells.ready());
     app.insert_resource(spells);
@@ -1144,6 +1149,7 @@ mod tests {
                 heard: std::sync::Arc::default(),
             }),
             Some(login::Session {
+                classic_npc_consider: false,
                 inventory_move_rules: Some(eq_client_core::inventory::MoveRules::EqEmu),
                 spell_provider: eq_client_core::spell_tables::Binding::new(
                     eq_client_core::spell_tables::Policy::Installed,

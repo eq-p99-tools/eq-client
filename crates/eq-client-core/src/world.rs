@@ -209,6 +209,8 @@ pub struct ClientWorld {
     connected: bool,
     ended: bool,
     world_name: Option<String>,
+    /// Presentation policy selected by the current connection's worker.
+    classic_npc_consider: bool,
     /// The time in Norrath the server last gave, and when it came.
     time: Option<(crate::clock::GameTime, Instant)>,
     /// Guild names by number, from the world's guild list.
@@ -418,6 +420,12 @@ impl ClientWorld {
     #[must_use]
     pub const fn generation(&self) -> crate::GameDialect {
         self.generation
+    }
+
+    /// Selects the classic level scale for NPC consider presentation for
+    /// this connection. The received assessment remains available separately.
+    pub const fn consider_npcs_by_level(&mut self, enabled: bool) {
+        self.classic_npc_consider = enabled;
     }
 
     /// The player asked to play on a world of the login server's list, by
@@ -838,7 +846,13 @@ impl ClientWorld {
                 self.reconcile_pet_buffs();
             }
             WorldEvent::Consideration(consideration) => {
-                news.notices.push(self.zone.consider(consideration));
+                let id = consideration.target_id;
+                self.zone.considered.insert(id, consideration.color);
+                news.notices.push(Notice::Consideration {
+                    consideration: *consideration,
+                    name: self.zone.name(id),
+                    color: self.consider_color(id),
+                });
             }
             WorldEvent::LootRequest {
                 session_id,

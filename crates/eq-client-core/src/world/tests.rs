@@ -2060,6 +2060,67 @@ fn consider_colors_last_while_the_spawn_does() {
     assert_eq!(world.considered(5), None);
 }
 
+#[test]
+fn classic_npc_consider_uses_current_levels_without_overwriting_the_reply() {
+    let mut world = admitted();
+    world.consider_npcs_by_level(true);
+    let guard = SpawnState {
+        name: "a_guard".into(),
+        level: 20,
+        ..spawn(5)
+    };
+    game(&mut world, WorldEvent::Spawns(vec![guard.clone()]));
+    assert_eq!(world.consider_color(5), None);
+
+    let reply = crate::combat::Consideration {
+        target_id: 5,
+        faction: 9,
+        color: ConColor::Other(77),
+        hit_points: None,
+    };
+    assert_eq!(
+        game(&mut world, WorldEvent::Consideration(reply)).notices,
+        [Notice::Consideration {
+            consideration: reply,
+            name: Some("a_guard".into()),
+            color: Some(ConColor::Red),
+        }],
+    );
+    assert_eq!(world.considered(5), Some(ConColor::Other(77)));
+    assert_eq!(world.consider_color(5), Some(ConColor::Red));
+
+    game(
+        &mut world,
+        WorldEvent::Level {
+            current: 20,
+            previous: 1,
+            experience: 0,
+        },
+    );
+    assert_eq!(world.consider_color(5), Some(ConColor::White));
+    assert_eq!(world.considered(5), Some(ConColor::Other(77)));
+
+    // The same connection's next zone keeps the policy and clears the old reply.
+    game(&mut world, entered(2));
+    game(&mut world, WorldEvent::Spawns(vec![guard.clone()]));
+    assert_eq!(world.considered(5), None);
+    game(&mut world, WorldEvent::Consideration(reply));
+    assert_eq!(world.consider_color(5), Some(ConColor::Red));
+
+    // A new connection starts with the default policy.
+    world.restart();
+    game(&mut world, entered(3));
+    game(&mut world, WorldEvent::Spawns(vec![guard]));
+    game(&mut world, WorldEvent::Consideration(reply));
+    assert_eq!(world.consider_color(5), None);
+    let reply = crate::combat::Consideration {
+        color: ConColor::Blue,
+        ..reply
+    };
+    game(&mut world, WorldEvent::Consideration(reply));
+    assert_eq!(world.consider_color(5), Some(ConColor::Blue));
+}
+
 fn coins(platinum: u32, gold: u32, silver: u32, copper: u32) -> Coins {
     Coins {
         platinum,
@@ -3161,6 +3222,7 @@ fn news_for_the_player_comes_with_notices_and_others_news_without() {
         [Notice::Consideration {
             consideration: considered,
             name: Some("a_rat".into()),
+            color: Some(ConColor::Blue),
         }]
     );
     // Damage between two others is not the player's to read.

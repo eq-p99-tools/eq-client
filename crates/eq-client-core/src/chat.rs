@@ -32,10 +32,9 @@ pub struct ChatLine {
     pub message: Message,
     /// Whose words these are.
     pub source: Source,
-    /// The message type the server gave the line (`EQEmu`'s numbers, 256
-    /// and up for the kinds the official client's Colors page sets), by
-    /// which the official client colours it; None for a channel's line,
-    /// whose channel says it, and for this client's own lines.
+    /// The message type assigned by the server or by local presentation.
+    /// Types from 256 up can have player-configured colors. A line with no
+    /// type takes its channel's color.
     pub message_type: Option<u32>,
 }
 
