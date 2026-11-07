@@ -2,7 +2,7 @@
 use crate::{online::OnlineState, outbox::Outbox};
 use bevy::prelude::*;
 use eq_client_assets::spells::Effect;
-use eq_client_core::{ClientCommand, world::ClientWorld};
+use eq_client_core::{ClientCommand, GameDialect, world::ClientWorld};
 use eq_client_core::{
     EqMacFatigueInputs, SpeedInputState, SpeedInputUnavailable as Missing, SpeedInputs,
 };
@@ -37,17 +37,30 @@ impl Modifiers {
 /// Evaluate only effects that influence these inputs. Unread spell data and
 /// unsupported affecting formulas never silently become zero. Reuse the asset
 /// layer's level/cap evaluation instead of treating a scaling base as its value.
-fn project(effects: &[Effect], level: u16, instrument: u32) -> Result<Modifiers, Missing> {
+fn project(
+    effects: &[Effect],
+    level: u16,
+    instrument: u32,
+    dialect: GameDialect,
+) -> Result<Modifiers, Missing> {
     let mut modifiers = Modifiers::default();
     for effect in effects {
         match effect.id {
             99 => modifiers.rooted = true,
             3 | 4 | 7 | 159 => {
-                if level == 0 || !matches!(instrument, 0 | 10) || matches!(effect.formula, 60 | 70)
-                {
+                if level == 0 || matches!(effect.formula, 60 | 70) {
                     return Err(Missing::Effects);
                 }
                 let value = effect.base_magnitude(level).ok_or(Missing::Effects)?;
+                // Titanium stores the landing modifier on the buff (0x414913).
+                // Its cache scales the capped value in tenths and checks the
+                // upper bound of 45 (0x4102a6). Keep the existing neutral
+                // encodings and leave other values and dialects unresolved.
+                let value = match (dialect, instrument) {
+                    (_, 0 | 10) => value,
+                    (GameDialect::Titanium, 11..=45) => value * i64::from(instrument) / 10,
+                    _ => return Err(Missing::Effects),
+                };
                 if effect.id == 3 {
                     modifiers.add(Modifiers {
                         rate: value,
@@ -146,6 +159,7 @@ fn calculate(
     effects: impl Fn(u32) -> Option<Vec<Effect>>,
 ) -> Result<SpeedInputs, Missing> {
     let player = world.player().ok_or(Missing::Attributes)?;
+    let dialect = world.generation();
     let weight =
         u16::try_from((world.movement_weight()? / 10).min(32_766)).expect("bounded weight");
     let base = player.base_attributes.ok_or(Missing::Attributes)?;
@@ -179,6 +193,7 @@ fn calculate(
                 &effects(worn.spell_id).ok_or(Missing::Effects)?,
                 level,
                 10,
+                dialect,
             )?);
         }
     }
@@ -188,6 +203,7 @@ fn calculate(
             &effects(buff.spell_id).ok_or(Missing::Effects)?,
             u16::from(buff.caster_level),
             u32::from(buff.bard_modifier),
+            dialect,
         )?);
     }
     for effect in buffs.effects().values() {
@@ -195,6 +211,7 @@ fn calculate(
             &effects(u32::from(effect.spell_id)).ok_or(Missing::Effects)?,
             effect.caster_level,
             effect.instrument_modifier,
+            dialect,
         )?;
         // An unslotted STR effect could replace an existing contributor. Speed
         // extremum/root selection is safe across the union; additive STR isn't.
@@ -204,7 +221,7 @@ fn calculate(
         modifiers.add(projected);
     }
     let strength = i64::from(base.strength) + modifiers.strength;
-    let eqmac_fatigue = if world.generation().uses_fatigue_for_carry_capacity() {
+    let eqmac_fatigue = if dialect.uses_fatigue_for_carry_capacity() {
         Some(EqMacFatigueInputs {
             strength,
             stamina: Some(
