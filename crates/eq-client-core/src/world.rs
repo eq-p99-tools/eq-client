@@ -193,6 +193,13 @@ struct LiquidHazardInputs {
     own_model_changed: bool,
 }
 
+#[derive(Default)]
+enum NpcConsider {
+    #[default]
+    Reported,
+    ClassicLevel,
+}
+
 /// What the server has told the client, kept by one writer. Its fields go
 /// in order of how long they last: the connection's, the admission's, the
 /// character's, and the zone's, which leaving the zone forgets in one step.
@@ -210,7 +217,7 @@ pub struct ClientWorld {
     ended: bool,
     world_name: Option<String>,
     /// Presentation policy selected by the current connection's worker.
-    classic_npc_consider: bool,
+    npc_consider: NpcConsider,
     /// The time in Norrath the server last gave, and when it came.
     time: Option<(crate::clock::GameTime, Instant)>,
     /// Guild names by number, from the world's guild list.
@@ -425,7 +432,11 @@ impl ClientWorld {
     /// Selects the classic level scale for NPC consider presentation for
     /// this connection. The received assessment remains available separately.
     pub const fn consider_npcs_by_level(&mut self, enabled: bool) {
-        self.classic_npc_consider = enabled;
+        self.npc_consider = if enabled {
+            NpcConsider::ClassicLevel
+        } else {
+            NpcConsider::Reported
+        };
     }
 
     /// The player asked to play on a world of the login server's list, by

@@ -148,7 +148,7 @@ fn an_unanswered_request_does_not_alias_a_later_own_begin() {
     let timeout = game(&mut world, unconfirmed(1, 42));
     assert!(!timeout.ignored);
     assert_eq!(timeout.cast, None);
-    assert!(timeout.notices.is_empty());
+    assert_eq!(timeout.notices, []);
     assert_eq!(world.casting().pending, None);
     assert!(matches!(
         world.book_action(),

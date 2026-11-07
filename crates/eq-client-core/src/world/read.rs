@@ -2,7 +2,7 @@
 //! and the player's own choices change it.
 use super::{
     Camp, CastDone, Casting, CharacterList, ClientWorld, Exchange, Landing, Loot, Merchant, Motion,
-    MotionGrant, ServerList, Spawn, Target, Vitals,
+    MotionGrant, NpcConsider, ServerList, Spawn, Target, Vitals,
 };
 use crate::{
     BookActionStatus, Coins, Death, PlayerState, PostureState, SpellBook, ZoneOffer,
@@ -554,11 +554,11 @@ impl ClientWorld {
 
     /// The display color of a considered spawn. The classic policy
     /// estimates NPC difficulty from current levels on the classic scale.
-    /// The received code stays available through [Self::considered].
+    /// The received color stays available through [`Self::considered`].
     #[must_use]
     pub fn consider_color(&self, id: u16) -> Option<ConColor> {
         let reported = self.considered(id)?;
-        if self.classic_npc_consider {
+        if matches!(self.npc_consider, NpcConsider::ClassicLevel) {
             let spawn = self.spawn(id)?;
             if spawn.state.kind == crate::SpawnKind::Npc {
                 return crate::maps::level_con(self.player()?.level, spawn.state.level, false);
