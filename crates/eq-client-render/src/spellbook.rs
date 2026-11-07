@@ -1093,6 +1093,40 @@ mod tests {
     use bevy::window::PrimaryWindow;
 
     #[test]
+    fn an_aliased_cast_result_releases_only_the_cast_fence() {
+        use crate::online::{OnlineState, testing};
+        use eq_client_core::{BookActionStatus, SpellUpdate};
+
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 7, testing::player(1));
+        assert!(!action_pending(online.world()));
+        testing::pending_cast(&mut online, Some(42));
+        assert!(action_pending(online.world()));
+        testing::spell(
+            &mut online,
+            SpellUpdate::Began {
+                caster_id: 1,
+                spell_id: 2935,
+                duration_ms: 3000,
+            },
+        );
+        testing::pending_cast(&mut online, None);
+        assert!(action_pending(online.world()));
+
+        testing::book_action(&mut online, BookActionStatus::AwaitingReply);
+        testing::spell(
+            &mut online,
+            SpellUpdate::Mana {
+                spell_id: 42,
+                keep_casting: false,
+            },
+        );
+        assert!(action_pending(online.world()));
+        testing::book_action(&mut online, BookActionStatus::Confirmed);
+        assert!(!action_pending(online.world()));
+    }
+
+    #[test]
     fn gem_hints_show_current_occupant_replacement_and_busy_state() {
         let names = SpellNames::parse("42^Example spell\n43^Replacement spell");
         let mut spells = [None; 8];

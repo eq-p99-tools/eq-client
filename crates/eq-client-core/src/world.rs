@@ -1315,6 +1315,10 @@ impl ClientWorld {
                 session_id,
                 spell_id,
             } => self.cast_pending(*session_id, *spell_id, news),
+            WorldEvent::CastRequestUnconfirmed {
+                session_id,
+                spell_id,
+            } => self.cast_request_unconfirmed(*session_id, *spell_id, news),
             WorldEvent::CastSuperseded { session_id, spell_id } => {
                 news.ignored = !self.release_cast_hold(*session_id, *spell_id);
             }
@@ -1481,7 +1485,7 @@ impl ClientWorld {
                 self.spell_book = None;
                 self.book_action = None;
                 self.buffs.clear();
-                self.casting.interrupted = None;
+                self.casting.drop_actions();
             }
             Reset::Camped => {
                 // Local camp completion invalidates the character projection;

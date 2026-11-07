@@ -1,4 +1,5 @@
 mod buff_cancellation;
+mod casting;
 mod loot_requests;
 mod own_stun;
 mod pet_buffs;

@@ -147,7 +147,6 @@ impl ClientWorld {
             endurance: player.endurance,
             ..Vitals::default()
         };
-        self.casting.pending = None;
         self.casting
             .cooldowns
             .restore(&player.memorized_spells, player.spell_refresh_ms, now);
