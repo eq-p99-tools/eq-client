@@ -69,7 +69,7 @@ impl Refusal {
             Self::SpellSet => "Wait for the spell set to finish",
             Self::BookPending => "Wait for the current spellbook change",
             Self::BookUnconfirmed => {
-                "Spellbook change unconfirmed. Wait for the reply or re-enter the zone."
+                "Spellbook change unconfirmed. Wait for the session or re-enter the zone."
             }
             Self::Busy => "Too many requests at once; try again",
             Self::Ended => "The connection has ended",
@@ -428,6 +428,8 @@ pub(crate) enum Needs {
     Capability(Capability),
     /// Automatic looting requires item results, not receipt-only echoes.
     AutomaticLoot,
+    /// The local air simulation belongs to Titanium.
+    TitaniumBreath,
     /// An ability, which the server type must also list.
     Ability(eq_client_core::abilities::Ability),
     /// Nothing of the session, as an empty action bar slot needs: never
@@ -442,10 +444,12 @@ pub(crate) enum Needs {
 impl Needs {
     /// What an Options window checkbox needs of the session, if anything.
     pub(crate) fn of(toggle: eq_client_core::options::Toggle) -> Option<Self> {
-        if toggle == eq_client_core::options::Toggle::Qol(eq_client_core::qol::Fix::AutoLoot) {
-            return Some(Self::AutomaticLoot);
+        use eq_client_core::{options::Toggle, qol::Fix};
+        match toggle {
+            Toggle::Qol(Fix::AutoLoot) => Some(Self::AutomaticLoot),
+            Toggle::Qol(Fix::GillsForDays) => Some(Self::TitaniumBreath),
+            _ => toggle.needs().map(Self::Capability),
         }
-        toggle.needs().map(Self::Capability)
     }
 
     /// Whether the session offers what the control needs.
@@ -457,6 +461,10 @@ impl Needs {
             }
             Self::Ability(ability) => {
                 offered(world, Capability::Abilities) && world.ability_offered(ability)
+            }
+            Self::TitaniumBreath => {
+                world.generation() == eq_client_core::GameDialect::Titanium
+                    && offered(world, Capability::GameplayDepartures)
             }
             Self::Nothing => true,
             Self::Missing => false,
@@ -470,6 +478,7 @@ impl Needs {
             Self::AutomaticLoot => {
                 "Automatic looting needs supported item results on this session.".to_owned()
             }
+            Self::TitaniumBreath => "Local breath simulation uses the Titanium client.".to_owned(),
             Self::Capability(_) | Self::Ability(_) | Self::Nothing => UNAVAILABLE.to_owned(),
         }
     }

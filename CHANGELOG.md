@@ -2,9 +2,25 @@
 
 ## Unreleased
 
-- Hold Titanium movement after a fresh placement below a nearby installed
-  floor with neither a lower surface nor mapped liquid below. Preserve the
-  received position and resume when a correction or collision change permits it.
+- Show Air Remaining during ordinary mapped Titanium immersion, including
+  WLD lava that restricts breathing at the head. Local-only EQEmu sessions
+  report drowning after depletion and lava heat from mapped body contact.
+  Turning off Take Environmental Damage withholds the reports while air
+  still runs. **Gills for days** starts off, needs the session's gameplay
+  departures, and disables the local air counter and meter. Lava heat
+  continues to follow the damage setting. The air, head, region and lava
+  constants are not yet cited to the Titanium program and count as inferred
+  (recording checklist 6.393).
+- An unconfirmed spellbook edit releases the book for other edits when the
+  session reports its timeout. A retry with the same possible reply requires
+  a fresh admission. Received gem clears update the slot independently of
+  which request they answer.
+- Release a superseded cast while keeping a different pending spell.
+- Retain an early pet buff snapshot until the owned pet resolves. Discard it
+  when the spawn is replaced or its ownership conflicts.
+- Hold Titanium travel after a fresh placement below a nearby installed floor
+  with neither a lower surface nor mapped liquid below. Allow turning at the
+  received XYZ and warn once for the held location.
 - Include the admitted size, local body, floor support, and target sightline
   in script movement reports.
 - Refresh the player's held models and paperdoll after a submitted Titanium
@@ -25,10 +41,10 @@
   hotbar binding, `/ranged`, or the script step `slash ranged`. The client
   rechecks the target and equipment before sending and shows server-reported
   combat and inventory updates.
-- Use `/stopsong` as a Bard on Titanium EQEmu. If a starting song has no
-  matching cast update within one second of the stop, the client marks the
-  stop unconfirmed and lets you try another gem. Song effects follow the
-  server's updates.
+- Use `/stopsong` as a Bard on Titanium EQEmu. A tracked gem cast has one
+  second for a matching update before the client releases its hold and
+  reports the stop as unconfirmed. If no cast is held, the client reports
+  unconfirmed song state on submission. Song effects follow server updates.
 - Stop spell-set apply with the actual reset reason and keep the panel's
   selection and draft through temporary interruptions. An unanswered book edit
   remains unconfirmed after a same-admission link interruption.

@@ -6,6 +6,7 @@ use super::{Notice, Spawn, trade::Trade};
 use crate::{
     PostureState, SpawnKind, SpawnState, WorldPosition,
     combat::{ConColor, Consideration},
+    control::Charm,
     doors::DoorTable,
     ground::Objects,
     outfit::{Features, WearChange},
@@ -29,7 +30,7 @@ pub(super) struct Zone {
     /// The last weather report in this admission.
     pub(super) weather: Option<crate::clock::Weather>,
     /// The player's pet's buffs, as the server last said.
-    pub(super) pet_buffs: Option<crate::pets::PetBuffs>,
+    pub(super) pet_buffs: super::pet_buffs::PetWindow,
     /// The session's identity for this admission's currently owned pet.
     pub(super) own_pet: Option<crate::pets::PetIdentity>,
     /// The guildmaster the player is training with, and what they teach.
@@ -59,7 +60,14 @@ impl Zone {
             // A new incarnation cannot inherit the previous actor's motions,
             // casts, landings or assessment; an arriving corpse was not seen
             // dying either. The same cleanup applies without a Despawn first.
-            self.vanish(spawn.spawn_id);
+            if self.spawns.contains_key(&spawn.spawn_id)
+                || self
+                    .own_pet
+                    .is_some_and(|pet| pet.spawn_id == spawn.spawn_id)
+            {
+                self.forget_pet(spawn.spawn_id);
+            }
+            self.clear_spawn(spawn.spawn_id);
             *revision = revision.wrapping_add(1);
             self.spawns.insert(
                 spawn.spawn_id,
@@ -81,6 +89,10 @@ impl Zone {
     /// A spawn leaves the zone, and its motion and casts with it.
     pub(super) fn vanish(&mut self, id: u16) {
         self.forget_pet(id);
+        self.clear_spawn(id);
+    }
+
+    fn clear_spawn(&mut self, id: u16) {
         self.spawns.remove(&id);
         self.considered.remove(&id);
         self.motions.remove(&id);
@@ -90,14 +102,41 @@ impl Zone {
         self.deaths.remove(&id);
     }
 
-    /// Apply an owner change to the named spawn. Identical reports are
-    /// common on charm and preserve the already received pet buffs.
-    pub(super) fn pet_owner(&mut self, id: u16, owner: Option<u16>) {
-        if let Some(spawn) = self.spawns.get_mut(&id)
-            && spawn.state.pet_owner != owner
-        {
-            spawn.state.pet_owner = owner;
+    /// Apply an explicit owner report. Duplicate positive reports preserve
+    /// the already received pet buffs.
+    pub(super) fn pet_owner(&mut self, id: u16, owner: Option<u16>, player: Option<u16>) {
+        let Some(spawn) = self.spawns.get_mut(&id) else {
+            if owner.is_none() || owner != player {
+                self.forget_pet(id);
+            }
+            return;
+        };
+        if owner.is_some() && spawn.state.pet_owner == owner {
+            return;
+        }
+        let had_owner = spawn.state.pet_owner.is_some();
+        spawn.state.pet_owner = owner;
+        if had_owner || owner.is_none() || owner != player {
             self.forget_pet(id);
+        }
+    }
+
+    pub(super) fn pet_charm(&mut self, charm: Charm, player: Option<u16>) {
+        let previous = self
+            .spawns
+            .get(&charm.pet_id)
+            .and_then(|spawn| spawn.state.pet_owner);
+        let owner = charm.pet_owner(previous);
+        if owner != previous {
+            self.pet_owner(charm.pet_id, owner, player);
+        } else if previous.is_none()
+            && !charm.charmed
+            && player.is_some()
+            && charm.owner_id == player
+        {
+            // A named release can invalidate early data even if the owner
+            // never resolved. Ownerless control returns do not name a pet.
+            self.forget_pet(charm.pet_id);
         }
     }
 
@@ -105,9 +144,21 @@ impl Zone {
         if self.own_pet.is_some_and(|pet| pet.spawn_id == id) {
             self.own_pet = None;
         }
-        if self.pet_buffs.as_ref().is_some_and(|buffs| buffs.pet == id) {
-            self.pet_buffs = None;
+        self.pet_buffs.retire(id);
+    }
+
+    /// The worker's projection changes after the spawn or ownership record.
+    pub(super) fn set_own_pet(&mut self, pet: Option<crate::pets::PetIdentity>) {
+        if self.own_pet == pet {
+            return;
         }
+        if let Some(old) = self.own_pet {
+            self.pet_buffs.retire(old.spawn_id);
+        }
+        if let Some(pet) = pet {
+            self.pet_buffs.keep_only(pet.spawn_id);
+        }
+        self.own_pet = pet;
     }
 
     /// The server's word on a spawn the player considered.

@@ -23,6 +23,7 @@ pub(crate) enum WindowId {
     /// The bar that shows a cast or a request under way; with the skin, its
     /// casting window, open while the player casts.
     CastBar,
+    Breath,
     /// The player's lasting effects.
     Effects,
     /// The skin's short effects window: songs and other short effects, open
@@ -347,13 +348,14 @@ impl WindowId {
     /// Every singleton window, in the order the selector lists the toggled ones.
     /// Bags are left out: there is one for each slot that can hold a bag
     /// (see [`WindowId::bags`]), and none of them is toggled.
-    pub(crate) const ALL: [Self; 33] = [
+    pub(crate) const ALL: [Self; 34] = [
         Self::Status,
         Self::Target,
         Self::Player,
         Self::Spells,
         Self::Actions,
         Self::CastBar,
+        Self::Breath,
         Self::Effects,
         Self::ShortEffects,
         Self::Chat,
@@ -399,6 +401,7 @@ impl WindowId {
             Self::Spells => Some("CastSpellWnd"),
             Self::Actions => Some("HotButtonWnd"),
             Self::CastBar => Some("CastingWindow"),
+            Self::Breath => Some("BreathWindow"),
             Self::Effects => Some("BuffWindow"),
             Self::ShortEffects => Some("ShortDurationBuffWindow"),
             Self::Chat | Self::ChatGroup(_) => Some("ChatWindow"),
@@ -463,6 +466,7 @@ impl WindowId {
             Self::Spells => "spells",
             Self::Actions => "actions",
             Self::CastBar => "cast-bar",
+            Self::Breath => "breath",
             Self::Effects => "effects",
             Self::ShortEffects => "short-effects",
             Self::Chat => "chat",
@@ -552,6 +556,14 @@ impl WindowId {
                     &[],
                 )
             },
+            Self::Breath => hud(
+                "Air Remaining",
+                Placement::TopCentre {
+                    top: 70.0,
+                    width: 160.0,
+                },
+                &[],
+            ),
             Self::Chat => hud("CHAT", Placement::BottomLeft(20.0, 16.0), &["CHAT"]),
             Self::ChatGroup(slot) => Description {
                 opening: Opening::Own,

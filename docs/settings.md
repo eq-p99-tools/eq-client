@@ -95,7 +95,8 @@ Unsafe choices sit together at the page's end:
 
 | Setting | File key | Default | Effect |
 | --- | --- | --- | --- |
-| Take Environmental Damage | `take_environmental_damage` | On | Reports supported environmental damage; disabling it withholds reports |
+| Take Environmental Damage | `take_environmental_damage` | On | Reports supported falls, drowning and lava heat. Air continues running with reports off |
+| Gills for days | `gills_for_days` | Off | Disables the local air calculation and hides Air Remaining on Titanium sessions that offer gameplay departures |
 | Run a Little Faster | `run_boost` | Off | Increases verified forward running speed by 10 percent; walk, strafe and backward speed remain unchanged |
 | Fly | `fly` | Off | Bounded flight through Jump and Duck bindings for ascent/descent, retaining solid collision; disabling restores gravity |
 | Jesus Mode | `jesus_mode` | Off | Stand and move on mapped water or lava reached from above, using ordinary ground speed and collision |
@@ -113,13 +114,22 @@ chat and server outcomes unchanged. See the World Clearly controls weather
 visibility separately. The client retains the server's report while particles
 are hidden, so turning the setting off shows the current weather.
 
-Environmental damage is offered on P99, EQEmu and TAKP in the locked policy, with
-different supported hazards. The setting's unsafe label concerns withholding
-reports the server expects; it does not grant immunity or disable server damage.
-Water/lava movement guards remain in place either way.
-The renderer currently computes falling damage; it does not synthesize lava or
-drowning reports. Turning reports off also suppresses the local falling-damage
-line. Server health and combat updates remain authoritative.
+On Titanium, Air Remaining shows while a resolved head probe is submerged and
+the client knows the inputs to count air. The next one-second breath check
+refills the reserve if the character has surfaced or can breathe underwater.
+With **Gills for days** enabled, the client skips the air calculation. Turning
+it off starts with a fresh reserve. Because skipping the counter withholds the
+drowning reports a local EQEmu session takes, the setting needs the session's
+gameplay departures like Fly and Jesus Mode. The air, head, region and lava
+constants are not yet cited to the Titanium program in this repository and
+count as inferred (recording checklist 6.393).
+
+Local-only EQEmu sessions offer drowning and lava heat reports. Actual body
+contact with lava drives the heat check independently of the air counter.
+**Take Environmental Damage** controls all supported reports, including falls.
+Server health and combat updates remain authoritative. Project 1999 retains
+fall reporting and the local Titanium meter. Liquid reports await validation
+on the deployed server.
 
 The two spellbook choices are independent. Enable both to read and memorize
 through the book UI while remaining standing.

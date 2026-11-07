@@ -223,13 +223,11 @@ impl Casting {
     /// Releases the identified local hold and forgets its request alias.
     pub(super) fn release_hold(&mut self, spell_id: u32) -> bool {
         let active = self.cast.map(|(spell, ..)| u32::from(spell));
-        if active.or(self.pending) != Some(spell_id)
-            || self.pending.is_some_and(|pending| pending != spell_id)
-        {
+        if active.or(self.pending) != Some(spell_id) {
             return false;
         }
         self.cast = None;
-        self.pending = None;
+        self.pending = self.pending.filter(|&pending| pending != spell_id);
         self.requested = None;
         true
     }

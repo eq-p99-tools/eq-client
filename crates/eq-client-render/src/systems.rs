@@ -35,6 +35,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<combat::CombatState>()
         .init_resource::<combat_text::CombatText>()
         .init_resource::<weather::Field>()
+        .init_resource::<crate::breath::State>()
         .init_resource::<trade::TradeState>()
         .init_resource::<escape::Escape>()
         .init_resource::<windows::pointer::Wheel>()
@@ -327,7 +328,11 @@ pub(super) fn schedule(app: &mut App) {
                     (options::toggle, options::tell_session).chain(),
                 ),
                 (outbox::show, inventory::say_refusals),
-                (hud::action_bar::cast_window, hud::action_bar::update),
+                (
+                    hud::action_bar::cast_window,
+                    hud::action_bar::update,
+                    crate::breath::update,
+                ),
                 skinned::frames,
                 (
                     chat::reconcile,
@@ -339,7 +344,7 @@ pub(super) fn schedule(app: &mut App) {
                     skinned::looks::dress,
                 )
                     .chain(),
-                skinned::show,
+                (crate::breath::fallback, skinned::show).chain(),
                 skinned::buttons,
                 (
                     skinned::contents,

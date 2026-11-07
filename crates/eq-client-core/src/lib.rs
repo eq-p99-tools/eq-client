@@ -1,5 +1,6 @@
 #![doc = "Engine-independent state shared by EQ client front ends and network adapters."]
 
+pub mod breath;
 pub mod buffs;
 pub mod camp;
 pub mod chat;
@@ -7,6 +8,7 @@ pub mod classes;
 pub mod daylight;
 pub mod doors;
 pub mod entities;
+pub mod environment;
 pub mod ground;
 pub mod hotbar;
 pub mod logs;

@@ -621,6 +621,7 @@ type Observed<'w> = (
     Option<Res<'w, crate::spellbook::SpellNames>>,
     Option<Res<'w, crate::options::OptionsState>>,
     Option<Res<'w, crate::confirm::Asked>>,
+    Option<Res<'w, crate::breath::State>>,
 );
 
 type Input<'w, 's> = (Keyboard<'w, 's>, ResMut<'w, ButtonInput<MouseButton>>);

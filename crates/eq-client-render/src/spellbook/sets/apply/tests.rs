@@ -77,6 +77,7 @@ impl Harness {
 
     fn forget(&mut self, gem: u8, id: u32) {
         self.status(BookActionStatus::Submitted);
+        self.status(BookActionStatus::Confirmed);
         self.update(gem, id, 2);
     }
 
@@ -135,6 +136,9 @@ fn swaps_slots_and_deliberately_clears_empties_one_confirmed_step_at_a_time() {
     assert!(active.progress().starts_with("5/8 match"));
     h.quiet();
     h.update(1, 73, 2);
+    assert_eq!(h.tick(&mut active), None);
+    h.quiet();
+    h.status(BookActionStatus::Confirmed);
     assert_eq!(h.tick(&mut active), None);
     h.expect(Step::Forget(0, 42));
     h.forget(0, 42);
@@ -302,6 +306,8 @@ fn manual_forgets_serialize_and_apply_waits_for_the_exact_gem() {
     assert!(h.start(target).is_err());
     h.quiet();
     h.update(1, 73, 2);
+    assert!(h.start(target).is_err());
+    h.status(BookActionStatus::Confirmed);
     let mut active = h.start(target).unwrap();
     assert_eq!(h.tick(&mut active), None);
     h.expect(Step::Memorize(2, 42));
@@ -336,9 +342,43 @@ fn an_expired_forget_still_blocks_edits_until_the_late_reply_or_admission() {
             testing::book(&mut h.online, book);
         } else {
             h.update(0, 42, 2);
+            h.status(BookActionStatus::Confirmed);
         }
         assert!(h.start(target).is_ok());
     }
+}
+
+#[test]
+fn worker_timeout_ends_a_set_step_and_late_clears_do_not_own_the_next_edit() {
+    let mut h = Harness::new(layout(Some(42), None, None));
+    let mut active = h.start(layout(None, None, None)).unwrap();
+    assert_eq!(h.tick(&mut active), None);
+    h.expect(Step::Forget(0, 42));
+    h.status(BookActionStatus::Submitted);
+    h.status(BookActionStatus::Unconfirmed);
+    assert_eq!(
+        h.tick(&mut active).as_deref(),
+        Some("Travel stopped. 7/8 match. No confirmation for gem 1.")
+    );
+    h.quiet();
+
+    let receipt = h
+        .outbox
+        .post_book_edit(h.online.world(), |stamp| {
+            Step::Memorize(0, 73).command(stamp)
+        })
+        .unwrap();
+    h.expect(Step::Memorize(0, 73));
+    h.status(BookActionStatus::AwaitingReply);
+    for _ in 0..2 {
+        h.update(0, 42, 2);
+        assert_eq!(h.online.world().gem(0), None);
+        assert_eq!(receipt.status(), Some(BookActionStatus::AwaitingReply));
+    }
+    h.memorize(0, 73);
+    assert_eq!(h.online.world().gem(0), Some(73));
+    assert_eq!(receipt.status(), Some(BookActionStatus::Confirmed));
+    h.quiet();
 }
 
 #[test]

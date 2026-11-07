@@ -52,6 +52,19 @@ enum SpanKind {
     Unresolved,
 }
 
+/// The medium classified from a classic WLD region tag for Titanium hazards.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Medium {
+    /// No tag that restricts breathing.
+    Air,
+    /// Water that restricts breathing.
+    Water,
+    /// WLD lava that restricts breathing and causes heat on body contact.
+    Lava,
+    /// Another classified medium that restricts breathing.
+    OtherSubmerging,
+}
+
 /// The prefixes `EQEmu`'s water maps read a region's name by before its
 /// user data: water, lava, zone line, player-versus-player, slime, ice and
 /// `VWA` regions.
@@ -68,6 +81,7 @@ pub struct ZoneRegions {
     nodes: Vec<Node>,
     routes: BTreeMap<usize, ZoneLine>,
     liquids: BTreeMap<usize, Liquid>,
+    media: BTreeMap<usize, Medium>,
 }
 
 impl ZoneRegions {
@@ -136,12 +150,14 @@ impl ZoneRegions {
             .collect::<Result<Vec<_>, LoadError>>()?;
         let mut routes = BTreeMap::new();
         let mut liquids = BTreeMap::new();
+        let mut media = BTreeMap::new();
         for zone in doc.fragment_iter::<Zone>() {
             let name = doc.get_string(zone.name_reference).unwrap_or_default();
             // As the water maps mark them, the last list naming a region
             // decides what fills it. A region past the tree fills nothing,
             // and a list naming one does not cost the zone its other regions.
             let liquid = liquid_tag(name, &zone.user_data);
+            let medium = titanium_medium(name, &zone.user_data);
             let listed = zone
                 .regions
                 .iter()
@@ -152,6 +168,11 @@ impl ZoneRegions {
                     Some(liquid) => liquids.insert(region, liquid),
                     None => liquids.remove(&region),
                 };
+                if medium == Medium::Air {
+                    media.remove(&region);
+                } else {
+                    media.insert(region, medium);
+                }
             }
             let tag = if zone.user_data.is_empty() {
                 name
@@ -176,6 +197,7 @@ impl ZoneRegions {
             nodes,
             routes,
             liquids,
+            media,
         })
     }
 
@@ -193,6 +215,14 @@ impl ZoneRegions {
     /// neither.
     pub fn liquid_at(&self, position: [f32; 3]) -> Option<Liquid> {
         self.liquids.get(&self.region_at(position)?).copied()
+    }
+
+    /// Reads Titanium's classic WLD classification for a resolved leaf.
+    /// Missing geometry or an ambiguous split plane supplies no medium.
+    #[must_use]
+    pub fn medium_at(&self, position: [f32; 3]) -> Option<Medium> {
+        let region = self.region_at(position)?;
+        Some(self.media.get(&region).copied().unwrap_or(Medium::Air))
     }
 
     /// Whether a segment in the renderer's frame passes through this
@@ -503,6 +533,36 @@ fn liquid_tag(name: &str, user_data: &str) -> Option<Liquid> {
     }
 }
 
+/// What the Titanium program breathes in a region with this name and user
+/// data. The callback order, the four-byte minimum and the tag prefixes are
+/// not yet cited to a program address in this repository; treat them as
+/// inferred (recording checklist 6.393). Note that `liquid_tag`, which
+/// drives movement, prefers the name; this prefers the user data.
+fn titanium_medium(name: &str, user_data: &str) -> Medium {
+    // The region callback receives nonempty user data first and otherwise
+    // the fragment name. Its tag must have at least four bytes.
+    let tag = if user_data.is_empty() {
+        name
+    } else {
+        user_data
+    };
+    if tag.len() < 4 {
+        return Medium::Air;
+    }
+    if tag.starts_with("WT") || tag.starts_with("AWT") {
+        Medium::Water
+    } else if tag.starts_with("LA") || tag.starts_with("ALV") {
+        Medium::Lava
+    } else if ["SL", "VW", "AVW", "W2", "W3"]
+        .iter()
+        .any(|prefix| tag.starts_with(prefix))
+    {
+        Medium::OtherSubmerging
+    } else {
+        Medium::Air
+    }
+}
+
 /// The 255 destination marker means the next six digits name a server route.
 fn zone_line_tag(tag: &str) -> Option<ZoneLine> {
     let tag = tag.to_ascii_uppercase();
@@ -624,6 +684,7 @@ mod tests {
             ],
             routes: BTreeMap::from([(0, ZoneLine::Reference(7))]),
             liquids: BTreeMap::new(),
+            media: BTreeMap::new(),
         }
     }
 
@@ -650,6 +711,7 @@ mod tests {
             ],
             routes: BTreeMap::from([(0, ZoneLine::Reference(7))]),
             liquids: BTreeMap::new(),
+            media: BTreeMap::new(),
         };
         let start = [9.0, 0.0, 0.0];
         let end = [11.0, 0.0, 0.0];
@@ -721,6 +783,7 @@ mod tests {
             ],
             routes: BTreeMap::new(),
             liquids: BTreeMap::from([(1, Liquid::Lava), (2, Liquid::Water)]),
+            media: BTreeMap::from([(1, Medium::Lava), (2, Medium::Water)]),
         }
     }
 
@@ -777,6 +840,25 @@ mod tests {
     }
 
     #[test]
+    fn titanium_media_use_native_tags_and_keep_unresolved_positions_unknown() {
+        assert_eq!(titanium_medium("LA_ZONE", ""), Medium::Lava);
+        assert_eq!(titanium_medium("LA_ZONE", "WT_ZONE"), Medium::Water);
+        assert_eq!(titanium_medium("Z0001_ZONE", "ALV_"), Medium::Lava);
+        assert_eq!(
+            titanium_medium("Z0001_ZONE", "VWA_"),
+            Medium::OtherSubmerging
+        );
+        assert_eq!(titanium_medium("Z0001_ZONE", "LA"), Medium::Air);
+
+        let regions = layers();
+        assert_eq!(regions.medium_at([0.0, 1.0, 0.0]), Some(Medium::Air));
+        assert_eq!(regions.medium_at([0.0, -0.0625, 0.0]), Some(Medium::Lava));
+        assert_eq!(regions.medium_at([0.0, -1.0, 0.0]), Some(Medium::Water));
+        assert_eq!(regions.medium_at([0.0, 0.0, 0.0]), None);
+        assert_eq!(ZoneRegions::default().medium_at([0.0; 3]), None);
+    }
+
+    #[test]
     fn a_segment_passes_through_a_liquid_however_thin() {
         let regions = layers();
         let (high, low) = ([0.0, 10.0, 0.0], [0.0, -10.0, 0.0]);
@@ -819,6 +901,7 @@ mod tests {
             ],
             routes: BTreeMap::new(),
             liquids: BTreeMap::from([(0, Liquid::Water), (2, Liquid::Water)]),
+            media: BTreeMap::new(),
         };
         let (a, b) = ([-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
         assert_eq!(

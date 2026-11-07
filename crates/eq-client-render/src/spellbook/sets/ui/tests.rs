@@ -486,6 +486,7 @@ fn confirming_gems_in_a_reset_batch_keep_the_old_count_and_the_right_panel() {
         app.world_mut().resource_mut::<Sets>().panel.draft = "In progress".into();
         for update in [
             WorldUpdate::Game(WorldEvent::BookAction(BookActionStatus::Submitted)),
+            WorldUpdate::Game(WorldEvent::BookAction(BookActionStatus::Confirmed)),
             WorldUpdate::Game(WorldEvent::Spell(SpellUpdate::Slot {
                 slot: 0,
                 spell_id: 42,

@@ -12,16 +12,6 @@ impl ClientWorld {
     /// Whose cast it was goes by spawn ID; the name only fills the line.
     pub(super) fn spell(&mut self, update: &SpellUpdate, now: Instant, changes: &mut Changes) {
         self.cast_news(update, now);
-        // Forgetting a gem is answered only by the gem emptying.
-        if matches!(self.book_action, Some(BookActionStatus::Submitted))
-            && let SpellUpdate::Slot { slot, mode: 2, .. } = *update
-            && usize::try_from(slot)
-                .ok()
-                .and_then(|index| self.gem(index))
-                .is_some_and(|spell| update.clears_gem(slot, spell))
-        {
-            self.book_action = None;
-        }
         if let Some(book) = self.spell_book.as_mut() {
             book.apply(update);
         }

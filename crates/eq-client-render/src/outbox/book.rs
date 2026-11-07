@@ -6,8 +6,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// Covers normal preparation and the worker's reply window. A late result
-/// can still change the gems, so elapsed time does not release the book.
+/// Covers normal preparation and the worker's reply window. Only the
+/// worker's result can release an edit within the same admission.
 pub(crate) const BOOK_TIMEOUT: Duration = Duration::from_secs(40);
 
 #[derive(Default)]
@@ -208,30 +208,27 @@ impl Pending {
     }
 
     /// The worker's tracked confirmation can arrive before the world update.
-    /// A forget requires its submission followed by an exact gem clear.
+    /// Require both before releasing a confirmed edit for its caller.
     fn observe(&mut self, event: &WorldEvent) -> Option<BookActionStatus> {
-        let forgetting = matches!(self.expected, Expected::Forget(..));
         match event {
             WorldEvent::BookAction(
                 status @ (BookActionStatus::Preparing
                 | BookActionStatus::Submitted
-                | BookActionStatus::AwaitingReply
-                | BookActionStatus::Unconfirmed),
+                | BookActionStatus::AwaitingReply),
             ) => {
-                if forgetting && matches!(status, BookActionStatus::Submitted) {
-                    self.acknowledged = true;
-                }
                 self.progress(status);
             }
-            WorldEvent::BookAction(BookActionStatus::Confirmed) if !forgetting => {
+            WorldEvent::BookAction(BookActionStatus::Confirmed) => {
                 self.acknowledged = true;
             }
             WorldEvent::BookAction(
-                status @ (BookActionStatus::Rejected(_) | BookActionStatus::Cancelled(_)),
-            ) if !forgetting || !self.acknowledged => {
+                status @ (BookActionStatus::Rejected(_)
+                | BookActionStatus::Cancelled(_)
+                | BookActionStatus::Unconfirmed),
+            ) => {
                 return Some(status.clone());
             }
-            WorldEvent::Spell(update) if (!forgetting || self.acknowledged) => {
+            WorldEvent::Spell(update) => {
                 self.observed |= self.expected.matches(update);
             }
             _ => {}

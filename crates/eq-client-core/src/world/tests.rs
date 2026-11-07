@@ -1,6 +1,7 @@
 mod buff_cancellation;
 mod loot_requests;
 mod own_stun;
+mod pet_buffs;
 mod qol;
 mod wear;
 mod weather;
@@ -19,6 +20,7 @@ use crate::{
 fn player(spawn_id: u16) -> PlayerState {
     PlayerState {
         name: "Example".into(),
+        titanium_environment: None,
         base_attributes: None,
         deity: None,
         class: Some(1),
@@ -1012,6 +1014,47 @@ fn a_superseded_song_cannot_end_the_different_cast_that_started() {
 }
 
 #[test]
+fn superseding_an_old_cast_releases_it_before_the_new_pending_spell_begins() {
+    let mut world = admitted();
+    let pending = |spell_id| WorldEvent::CastPending {
+        session_id: 1,
+        spell_id,
+    };
+    let begin = |spell_id| {
+        WorldEvent::Spell(SpellUpdate::Began {
+            caster_id: 9,
+            spell_id,
+            duration_ms: 3000,
+        })
+    };
+    let supersede = |session_id| WorldEvent::CastSuperseded {
+        session_id,
+        spell_id: 42,
+    };
+    game(&mut world, pending(Some(42)));
+    game(&mut world, pending(None));
+    game(&mut world, begin(42));
+    game(&mut world, pending(Some(43)));
+    assert!(game(&mut world, supersede(2)).ignored);
+    assert_eq!(world.casting().cast.map(|(spell, ..)| spell), Some(42));
+
+    let released = game(&mut world, supersede(1));
+    assert!(!released.ignored);
+    assert_eq!(released.cast, None);
+    assert!(world.casting().cast.is_none());
+    assert_eq!(world.casting().pending, Some(43));
+    assert!(!world.zone.casts.contains_key(&9));
+    assert!(world.completed_cast_of(9).is_none());
+    assert!(game(&mut world, supersede(1)).ignored);
+    assert_eq!(world.casting().pending, Some(43));
+
+    game(&mut world, pending(None));
+    assert_eq!(game(&mut world, begin(43)).cast, Some(CastNews::Began));
+    assert!(game(&mut world, supersede(1)).ignored);
+    assert_eq!(world.casting().cast.map(|(spell, ..)| spell), Some(43));
+}
+
+#[test]
 fn an_interruption_is_the_players_own_and_mana_cannot_undo_it() {
     let mut world = admitted();
     let now = Instant::now();
@@ -1396,6 +1439,35 @@ fn a_book_change_holds_until_confirmed_and_every_reply_counts() {
         }),
     );
     assert!(world.book_action().is_none());
+}
+
+#[test]
+fn a_received_gem_clear_changes_the_slot_without_finishing_an_edit() {
+    use crate::BookActionStatus;
+
+    let mut world = admitted();
+    game(
+        &mut world,
+        WorldEvent::Spell(SpellUpdate::Slot {
+            slot: 0,
+            spell_id: 42,
+            mode: 1,
+        }),
+    );
+    game(
+        &mut world,
+        WorldEvent::BookAction(BookActionStatus::Submitted),
+    );
+    game(
+        &mut world,
+        WorldEvent::Spell(SpellUpdate::Slot {
+            slot: 0,
+            spell_id: 73,
+            mode: 2,
+        }),
+    );
+    assert_eq!(world.gem(0), None);
+    assert_eq!(world.book_action(), Some(&BookActionStatus::Submitted));
 }
 
 /// A worn chest that gives 100 HP.
@@ -3586,9 +3658,8 @@ fn pet_buffs_and_command_identity_follow_ownership_and_incarnation() {
     game(&mut world, buffs.clone());
     game(&mut world, charm(Some(9), true));
     assert_eq!(world.pet().map(|pet| pet.state.spawn_id), Some(5));
-    assert!(world.pet_buffs().is_none());
+    assert!(world.pet_buffs().is_some());
     game(&mut world, projection(1, 1));
-    game(&mut world, buffs.clone());
     game(&mut world, charm(None, false));
     game(&mut world, charm(Some(20), false));
     assert_eq!(world.pet_intent(), Some(identity(1)));

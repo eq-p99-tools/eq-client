@@ -48,8 +48,9 @@ Turning the setting off restores ordinary movement on the next sample.
 Scripted ground route finding uses solid terrain.
 
 The swim rate is a conservative bound based on the session's current movement
-grant. Skill-based speed, breath, water breathing, and drowning are not modeled
-by this path. A server placement replaces the local prediction; a movement
+grant. Skill-based speed is not modeled by this path; the air meter and
+drowning are a separate Titanium sample, see [settings](settings.md). A server
+placement replaces the local prediction; a movement
 proposal alone does not confirm server position, wet state, or any resource
 change.
 
@@ -64,13 +65,13 @@ the world/zone handoff, and install a new admission with its own placement and
 state. Same-zone server relocations and rejected-zone rewinds update the local
 controller without unnecessarily reconnecting. If a fresh Titanium placement
 is below a nearby installed floor with neither a lower landing surface nor
-mapped liquid below, movement pauses. The client reports the conflict, preserves
-the received position, and rechecks held placements as collision changes or the
-server corrects the position. A server using different zone geometry can cause
-this conflict. Client detection of same-zone
-teleport pads remains incomplete. Initial login, boundary crossing, teleport,
-death and respawn are separate validation scenarios; success in one does not
-establish the others.
+mapped liquid below, travel pauses. Turning still works at the received XYZ
+when the session grants movement input. The client warns once for the held
+location and rechecks as collision changes or the server corrects the position.
+A server using different zone geometry can cause this conflict. Client detection
+of same-zone teleport pads remains incomplete. Initial login, boundary crossing,
+teleport, death and respawn are separate validation scenarios; success in one
+does not establish the others.
 
 ## Inventory and banking
 
@@ -142,18 +143,23 @@ Select a spell and destination gem to memorize; click a populated gem or use its
 binding to cast. Shift-click forgetting is separate from casting. Casts use the
 selected target or self when none is selected. Movement and posture changes can
 interrupt a cast. The cast timer estimates progress while the server reports
-the result. On Titanium EQEmu, Bards can type `/stopsong` during a song cast
-or while a song is pulsing. If the server gives no matching cast update
-within one second, the client releases the casting hold and reports that
-the stop is unconfirmed. You can then use a gem to try another cast.
-Existing song buffs and gem timers follow the server's updates.
+the result. On Titanium EQEmu, Bards can type `/stopsong` during a tracked
+gem cast or while a song is pulsing. An item cast or a cast of unknown source
+blocks the request. If the server gives no matching cast update within one
+second, the client releases the tracked cast and reports that the stop is
+unconfirmed. When no cast is held, the client reports unconfirmed song state
+as soon as it submits the request. Song buffs and gem timers follow the
+server's updates.
 
-Spellbook operations serialize edits and wait for matching answers. If the
-same zone connection resumes after an interruption, a pending edit is
-reported as unconfirmed. Wait for the matching reply or re-enter the zone
-before editing again. An unanswered scribe also holds inventory actions
-while the scroll's result is unknown. Deletion confirmation is invalidated
-when its selection or admission changes.
+Spellbook operations wait for matching answers one at a time. After 30
+seconds without a matching reply, the session reports the edit as unconfirmed
+and allows edits whose replies it can tell apart. Re-enter the zone to retry
+an edit with an indistinguishable reply. An interruption can leave the
+client waiting for the session's result on the same admission. Late updates
+still change the affected slots as reported by the server. A timed-out scribe
+holds inventory actions until a received cursor update accounts for the
+scroll or you leave the zone. Deletion confirmation is invalidated when its
+selection or admission changes.
 
 Click **Search spells** in the book to filter learned spells by name. The
 search ignores case and fills each results page in original book-slot order.
@@ -256,6 +262,11 @@ unanswered past the session's deadline is declined for you. The server's
 movement and recovery messages determine what follows a Yes.
 
 Grouping, raids, pets, training, reading and consent dialogs have separate
-capabilities by server. Camp uses timed preparation and acknowledgement where
-offered. The local `--demo-trade` mode previews loot, merchant and trade UI.
+capabilities by server. Pet Info can hold an early buff snapshot while the
+spawn table identifies your pet. It shows buffs once there is one living
+owned pet with the matching spawn ID. A despawn, replacement, death or
+ownership conflict invalidates the old snapshot for that ID.
+
+Camp uses timed preparation and acknowledgement where offered. The local
+`--demo-trade` mode previews loot, merchant and trade UI.
 See the [policy matrix](../SUPPORT.md).

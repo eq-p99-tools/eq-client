@@ -101,6 +101,8 @@ pub enum Fix {
     /// Reports supported client-computed hazards. Disabling withholds reports;
     /// server-generated damage still applies.
     TakeEnvironmentalDamage,
+    /// Disables local air depletion and the Air Remaining window.
+    GillsForDays,
     /// Increases verified forward running speed by ten percent, as explicit
     /// client policy, without a guarantee of server acceptance.
     RunBoost,
@@ -148,7 +150,7 @@ pub enum Fix {
 impl Fix {
     /// Every fix: the settings in the order the quality-of-life page lists
     /// them, then the fixes that are always on.
-    pub const ALL: [Self; 30] = [
+    pub const ALL: [Self; 31] = [
         Self::SkipModifiedFood,
         Self::HiddenWindows,
         Self::AskBeforeDeletingSpells,
@@ -166,6 +168,7 @@ impl Fix {
         Self::ShowInvisible,
         Self::AnswerListPolls,
         Self::TakeEnvironmentalDamage,
+        Self::GillsForDays,
         Self::RunBoost,
         Self::Fly,
         Self::JesusMode,
@@ -194,6 +197,7 @@ impl Fix {
             Self::ShowTimesInChat => "chat_times",
             Self::FlashOnTells => "flash_on_tells",
             Self::TakeEnvironmentalDamage => "take_environmental_damage",
+            Self::GillsForDays => "gills_for_days",
             Self::CorpsesAlongGround => "corpses_along_ground",
             Self::LongChaseCamera => "long_chase_camera",
             Self::FreeCamera => "free_camera",
@@ -237,6 +241,7 @@ impl Fix {
             Self::ShowTimesInChat => "Show Times in Chat",
             Self::FlashOnTells => "Flash on Tells",
             Self::TakeEnvironmentalDamage => "Take Environmental Damage",
+            Self::GillsForDays => "Gills for days",
             Self::CorpsesAlongGround => "Corpses Lie Along the Ground",
             Self::LongChaseCamera => "Long Chase Camera",
             Self::FreeCamera => "Free Camera",
@@ -286,7 +291,10 @@ impl Fix {
                 "Flash the client's taskbar button when a tell arrives while another window is in front."
             }
             Self::TakeEnvironmentalDamage => {
-                "Report the damage the world does to you, such as a fall's, to the server, as the official client does. Turning this off is unsafe: a server may notice a character that never takes it."
+                "Report supported falls, drowning and lava heat. The air meter keeps running while damage reports are disabled."
+            }
+            Self::GillsForDays => {
+                "Skip the local breath calculation and hide Air Remaining, so the client sends no drowning reports."
             }
             Self::CorpsesAlongGround => {
                 "Lay each corpse along the slope of the ground under it, instead of level with its feet."
@@ -361,6 +369,7 @@ impl Fix {
             Self::SkipModifiedFood
             | Self::AskBeforeDeletingSpells
             | Self::TakeEnvironmentalDamage
+            | Self::GillsForDays
             | Self::HotbarItemGuard => Kind::Guards,
             // Sends the official client would not make on its own: departures
             // the session takes only where the server type offers them, and
@@ -412,6 +421,7 @@ impl Fix {
             | Self::RunBoost
             | Self::Fly
             | Self::JesusMode
+            | Self::GillsForDays
             | Self::MemorizeWhileStanding => Some(Capability::GameplayDepartures),
             // A server with no looting has no corpse to open by itself.
             Self::AutoLoot => Some(Capability::Looting),
@@ -469,6 +479,7 @@ impl Fix {
             | Self::MemorizeWhileStanding
             | Self::ShowInvisible
             | Self::AnswerListPolls
+            | Self::GillsForDays
             | Self::Fly
             | Self::JesusMode
             | Self::ExitAtOnce
@@ -500,6 +511,7 @@ impl Fix {
         matches!(
             self,
             Self::TakeEnvironmentalDamage
+                | Self::GillsForDays
                 | Self::RunBoost
                 | Self::Fly
                 | Self::JesusMode
@@ -611,6 +623,7 @@ mod tests {
                 Fix::ShowInvisible,
                 Fix::AnswerListPolls,
                 Fix::TakeEnvironmentalDamage,
+                Fix::GillsForDays,
                 Fix::RunBoost,
                 Fix::Fly,
                 Fix::JesusMode,
@@ -637,6 +650,7 @@ mod tests {
             Fix::MemorizeWhileStanding,
             Fix::ShowInvisible,
             Fix::AnswerListPolls,
+            Fix::GillsForDays,
             Fix::Fly,
             Fix::JesusMode,
             Fix::ExitAtOnce,
@@ -644,6 +658,12 @@ mod tests {
             assert!(!settings.on(fix), "{fix:?}");
         }
         assert_eq!(Fix::JesusMode.needs(), Some(Capability::GameplayDepartures));
+        // Skipping the air counter withholds drowning reports a session that
+        // takes them expects, so it is a departure like the others.
+        assert_eq!(
+            Fix::GillsForDays.needs(),
+            Some(Capability::GameplayDepartures)
+        );
         assert!(settings.on(Fix::TakeEnvironmentalDamage));
     }
 
@@ -665,6 +685,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             [
                 Fix::TakeEnvironmentalDamage,
+                Fix::GillsForDays,
                 Fix::RunBoost,
                 Fix::Fly,
                 Fix::JesusMode,

@@ -22,6 +22,8 @@ pub(super) struct Entry {
     /// Where the player stands, in render coordinates, and which way they face.
     pub placed: Transform,
     pub body: PlayerBody,
+    /// The checked Titanium head basis, when the admitted model supplies it.
+    pub native_head: Option<super::breath::head::Basis>,
     /// How many times its authored size the player's model is drawn.
     pub scale: f32,
 }
@@ -99,23 +101,29 @@ impl Entry {
     ) -> Result<Self, String> {
         let zone = eq_client_assets::load_zone(directory, zone_name)
             .map_err(|error| format!("Zone {zone_name} could not be loaded: {error}"))?;
-        let character =
-            eq_client_core::races::model(player.race, player.gender).and_then(|model| {
-                // The player's own model is a single load, so its donor
-                // archives need not outlive it.
-                match eq_client_assets::characters::load_installed_character(
-                    directory,
-                    zone_name,
-                    model,
-                    &eq_client_assets::characters::DonorArchives::default(),
-                ) {
-                    Ok(asset) => Some(asset),
-                    Err(error) => {
-                        warn!("Character model: {error}");
-                        None
-                    }
+        let model = eq_client_core::races::model(player.race, player.gender);
+        let character = model.and_then(|model| {
+            // The player's own model is a single load, so its donor
+            // archives need not outlive it.
+            match eq_client_assets::characters::load_installed_character(
+                directory,
+                zone_name,
+                model,
+                &eq_client_assets::characters::DonorArchives::default(),
+            ) {
+                Ok(asset) => Some(asset),
+                Err(error) => {
+                    warn!("Character model: {error}");
+                    None
                 }
-            });
+            }
+        });
+        let native_head =
+            if client == eq_client_assets::ui::InstalledClient::Titanium && character.is_some() {
+                super::breath::head::Basis::load(directory, player, model)
+            } else {
+                None
+            };
         let height = character.as_ref().map_or(6.0, CharacterAsset::height);
         // EQ's rule for the model keeps every later server-placed position
         // (zoning, teleports) at the same height above the feet.
@@ -134,6 +142,7 @@ impl Entry {
                 height,
                 size: eq_client_core::size_or_default(player.race, player.size),
             },
+            native_head,
             scale: super::entities::Drawn::by(
                 client,
                 flag,
@@ -175,6 +184,7 @@ impl Entry {
                 height,
                 size: eq_client_core::size_or_default(race, 0.0),
             },
+            native_head: None,
             // The preview stands the model at its mesh's own size.
             scale: 1.0,
         })
@@ -287,6 +297,7 @@ impl Scene<'_, '_> {
             character,
             placed,
             body,
+            native_head,
             scale,
         } = entry;
         // A clone shares the world's geometry.
@@ -339,6 +350,9 @@ impl Scene<'_, '_> {
         );
         if let Some(prepared) = character {
             character::spawn(commands, player, prepared, body.feet_offset, scale);
+            if let Some(basis) = native_head {
+                commands.entity(player).insert(basis);
+            }
         }
         commands.entity(player).insert(placed);
         self.focus(placed.translation);

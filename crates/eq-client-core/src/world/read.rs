@@ -17,6 +17,18 @@ use crate::{
 use std::collections::BTreeMap;
 
 impl ClientWorld {
+    /// Revision of the inputs delivered by the worker for liquid proposals.
+    #[must_use]
+    pub const fn liquid_hazard_revision(&self) -> Option<u64> {
+        self.liquid_hazards.revision
+    }
+
+    /// Whether an own size or illusion change invalidated the admitted model.
+    #[must_use]
+    pub const fn own_model_changed(&self) -> bool {
+        self.liquid_hazards.own_model_changed
+    }
+
     /// Latest session request for host-owned movement inputs; reset on admission.
     #[must_use]
     pub const fn speed_input_revision(&self) -> Option<u64> {
@@ -457,10 +469,7 @@ impl ClientWorld {
     #[must_use]
     pub fn pet_buffs(&self) -> Option<&crate::pets::PetBuffs> {
         let pet = self.pet()?.state.spawn_id;
-        self.zone
-            .pet_buffs
-            .as_ref()
-            .filter(|buffs| buffs.pet == pet)
+        self.zone.pet_buffs.for_pet(pet)
     }
 
     /// The zone's spawns, by spawn ID.

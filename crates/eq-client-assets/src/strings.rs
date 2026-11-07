@@ -213,6 +213,21 @@ mod tests {
     }
 
     #[test]
+    fn titanium_translocate_formats_named_and_bind_prompts_from_the_string_table() {
+        let question = crate::ui::InstalledClient::Titanium.translocate_offer();
+        let table = StringTable::parse("EQST0002\n0 2\n9062 Bind test\n9063 From %1 toward %2\n");
+        let arguments = ["Example", "Example Zone"].map(str::to_owned);
+        assert_eq!(
+            table.format(question.named, &arguments).as_deref(),
+            Some("From Example toward Example Zone"),
+        );
+        assert_eq!(
+            table.format(question.to_bind, &[]).as_deref(),
+            Some("Bind test")
+        );
+    }
+
+    #[test]
     fn spans_follow_unicode_repeated_and_nested_arguments() {
         let table = StringTable::parse("EQST0002\n0 2\n1 %2 / %B1(1) / %2 / %T3\n2 %1!\n");
         let args = ["Épée", "盾", "2"].map(str::to_owned);

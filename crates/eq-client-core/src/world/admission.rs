@@ -131,6 +131,7 @@ impl ClientWorld {
         self.choices = choices.to_vec();
         self.session_id = Some(session_id);
         self.target.accepts_updates = true;
+        self.zone.pet_buffs.entering = true;
         zone.clone_into(&mut self.zone_name);
         changes
             .notices

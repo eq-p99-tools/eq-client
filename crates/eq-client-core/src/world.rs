@@ -22,6 +22,7 @@ mod landings;
 mod link;
 mod motions;
 mod notice;
+mod pet_buffs;
 mod raid;
 mod read;
 mod spells;
@@ -185,6 +186,13 @@ pub struct MotionGrant {
     pub falls: bool,
 }
 
+#[derive(Default)]
+struct LiquidHazardInputs {
+    revision: Option<u64>,
+    /// A received own model change can invalidate the admitted head basis.
+    own_model_changed: bool,
+}
+
 /// What the server has told the client, kept by one writer. Its fields go
 /// in order of how long they last: the connection's, the admission's, the
 /// character's, and the zone's, which leaving the zone forgets in one step.
@@ -228,6 +236,7 @@ pub struct ClientWorld {
 
     // The admission: from entering a zone until the next admission.
     session_id: Option<u64>,
+    liquid_hazards: LiquidHazardInputs,
     /// The session's interpreted stun state and latest revision; None is
     /// unknown/unconfigured, not proof of clear control.
     own_stun: Option<(u64, crate::control::StunState)>,
@@ -590,6 +599,11 @@ impl ClientWorld {
         let mut changes = Changes::default();
         let news = &mut changes;
         match event {
+            WorldEvent::LiquidHazardRevision { session_id, revision } => {
+                if self.session_id == Some(*session_id) {
+                    self.liquid_hazards.revision = Some(*revision);
+                }
+            }
             // The connection, the characters on offer and the admission.
             WorldEvent::WorldName { short_name } => self.world_name = Some(short_name.clone()),
             // The time of day, and how the zone's sky looks.
@@ -802,8 +816,14 @@ impl ClientWorld {
             | WorldEvent::SystemInfoReported { .. } => (),
 
             // The zone and what is in it.
-            WorldEvent::Spawns(spawns) => self.zone.appear(spawns, &mut self.revision, now),
-            WorldEvent::Despawn(id) => self.zone.vanish(*id),
+            WorldEvent::Spawns(spawns) => {
+                self.zone.appear(spawns, &mut self.revision, now);
+                self.reconcile_pet_buffs();
+            }
+            WorldEvent::Despawn(id) => {
+                self.zone.vanish(*id);
+                self.reconcile_pet_buffs();
+            }
             WorldEvent::Consideration(consideration) => {
                 news.notices.push(self.zone.consider(consideration));
             }
@@ -855,6 +875,11 @@ impl ClientWorld {
                 if self.is_player(*spawn_id)
                     && let Some(player) = self.player.as_mut()
                 {
+                    use eq_network_game::appearance::AppearanceChange;
+                    self.liquid_hazards.own_model_changed |= matches!(
+                        change,
+                        AppearanceChange::Size(_) | AppearanceChange::Illusion(_)
+                    );
                     player.appearance.apply_update(change);
                 }
             }
@@ -1126,31 +1151,23 @@ impl ClientWorld {
             // The player's pet: whose pet a spawn is, its buffs, and the
             // commands the session would not send.
             WorldEvent::PetOwner { spawn_id, owner } => {
-                self.zone.pet_owner(*spawn_id, *owner);
+                let player = self.player.as_ref().map(|player| player.spawn_id);
+                self.zone.pet_owner(*spawn_id, *owner, player);
+                self.reconcile_pet_buffs();
             }
             WorldEvent::Charm(charm) => {
-                if let Some(spawn) = self.zone.spawns.get(&charm.pet_id) {
-                    self.zone.pet_owner(charm.pet_id, charm.pet_owner(spawn.state.pet_owner));
-                }
+                let player = self.player.as_ref().map(|player| player.spawn_id);
+                self.zone.pet_charm(*charm, player);
+                self.reconcile_pet_buffs();
             }
             WorldEvent::OwnPet { session_id, pet } => {
                 if self.session_id == Some(*session_id) {
-                    if pet.is_none() {
-                        self.zone.pet_buffs = None;
-                    }
-                    self.zone.own_pet = *pet;
+                    self.zone.set_own_pet(*pet);
                 } else {
                     news.ignored = true;
                 }
             }
-            WorldEvent::PetBuffs(buffs) => {
-                if self.death.is_none()
-                    && self.player().and_then(|player| self.pet_of(player.spawn_id))
-                        .is_some_and(|pet| pet.state.spawn_id == buffs.pet)
-                {
-                    self.zone.pet_buffs = Some(buffs.clone());
-                }
-            }
+            WorldEvent::PetBuffs(buffs) => self.receive_pet_buffs(buffs),
             WorldEvent::PetRefused {
                 session_id,
                 reason,
@@ -1360,6 +1377,7 @@ impl ClientWorld {
                 &mut self.revision,
             );
             self.zone.casts.remove(&id);
+            self.reconcile_pet_buffs();
         }
         let mut changes = if self
             .player
@@ -1408,6 +1426,7 @@ impl ClientWorld {
 
     /// Forgets what the reason makes stale, and says so.
     fn reset(&mut self, reason: Reset) -> Changes {
+        self.zone.pet_buffs.suspend();
         self.movement_options_result = None;
         self.held_models = held_models::HeldModels::default();
         if matches!(
@@ -1516,7 +1535,7 @@ impl ClientWorld {
     /// Clears the local pet and spell state that cannot survive death.
     fn reset_after_death(&mut self) {
         self.zone.own_pet = None;
-        self.zone.pet_buffs = None;
+        self.zone.pet_buffs.clear_current();
         self.buffs.clear_cancellation();
         self.casting.cast = None;
         self.casting.interrupted = None;
@@ -1534,6 +1553,7 @@ impl ClientWorld {
 
     /// Forgets the admission and its zone.
     fn forget_admission(&mut self) {
+        self.liquid_hazards = LiquidHazardInputs::default();
         self.characters = None;
         self.last_consent_refusal = None;
         self.items = ItemCache::default();

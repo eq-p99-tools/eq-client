@@ -111,6 +111,7 @@ mod tests {
     fn player() -> PlayerState {
         PlayerState {
             name: "Example".into(),
+            titanium_environment: None,
             base_attributes: Some(BaseAttributes {
                 strength: 75,
                 stamina: 75,

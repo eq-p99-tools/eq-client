@@ -93,6 +93,7 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::Raid => "EQUI_RaidWindow.xml",
         WindowId::Selector => "EQUI_SelectorWnd.xml",
         WindowId::CastBar => "EQUI_CastingWindow.xml",
+        WindowId::Breath => "EQUI_BreathWindow.xml",
         WindowId::Effects => "EQUI_BuffWindow.xml",
         WindowId::ShortEffects => "EQUI_ShortDurationBuffWindow.xml",
         WindowId::Options => "EQUI_OptionsWindow.xml",
@@ -2018,7 +2019,11 @@ fn gauge_layer(
             node.with_children(|fill| {
                 if let Some(mut image) = art.cut(piece) {
                     image.color = gauge.fill_tint.map_or(Color::WHITE, rgb);
-                    fill.spawn((image, natural(piece)));
+                    let mut image = fill.spawn((image, natural(piece)));
+                    if gauge.eq_type == Some(8) && gauge.area.width > 0.0 && gauge.area.height > 0.0
+                    {
+                        image.insert(crate::breath::NativeGauge);
+                    }
                 }
             });
         }

@@ -881,7 +881,7 @@ pub(super) fn input(
         controls.held = Some(Held::NoBody);
         return;
     };
-    if client == InstalledClient::Titanium
+    let placement_blocked = client == InstalledClient::Titanium
         && !flying
         && controls.airborne.is_some()
         && controls.placement.holds(
@@ -891,14 +891,16 @@ pub(super) fn input(
             body,
             &mut chat,
             now,
-        )
-    {
+        );
+    if placement_blocked && controls.speed.is_none() {
+        controls.jump = None;
         controls.held = Some(Held::PlacementBlocked);
         return;
     }
     let origin = Vec3::from_array(eq_client_core::render_position(accepted.position));
     let feet = origin - Vec3::Y * body.feet_offset;
-    let surface_world = if !flying
+    let surface_world = if !placement_blocked
+        && !flying
         && !swimming
         && options.options.qol.on(Fix::JesusMode)
         && online.world().can(Capability::GameplayDepartures)
@@ -908,7 +910,7 @@ pub(super) fn input(
         None
     };
     let world = surface_world.as_ref().unwrap_or(world);
-    if let Some(player) = online.world().player() {
+    if !placement_blocked && let Some(player) = online.world().player() {
         let position = player.position;
         let boundary = online
             .regions
@@ -980,7 +982,7 @@ pub(super) fn input(
         camera.yaw
     };
     let sampled = controls.taps.take(&keyboard);
-    let intent = controls.intent(
+    let mut intent = controls.intent(
         &sampled,
         map,
         scripted,
@@ -988,6 +990,13 @@ pub(super) fn input(
         (yaw, shown),
         look.as_deref(),
     );
+    if placement_blocked {
+        // Keep the turn inputs and ordinary sample timing. Translation,
+        // jumps and gravity cannot start from the suspect received XYZ.
+        intent.direction = Vec3::ZERO;
+        intent.diagonal = None;
+        controls.jump = None;
+    }
     let MotionInput {
         mode,
         mut speed,
@@ -1029,7 +1038,8 @@ pub(super) fn input(
     // The session's guard counts a grounded climb by the body's own reach a
     // step, where the program's is read; it hears it at each admission and
     // whenever it changes, before any sample that climbs by it.
-    if controls.airborne.is_some()
+    if !placement_blocked
+        && controls.airborne.is_some()
         && client.falls().is_some()
         && let Some(session) = online.world().session_id()
         && controls.climb_sent != Some((session, physics.climb))
@@ -1048,7 +1058,8 @@ pub(super) fn input(
     // A jump or fall keeps going after the keys are released, and a player
     // who may fall starts to where no ground is under them, as the server
     // can leave them after a move it makes (a `#goto` into the air).
-    let airborne = !flying
+    let airborne = !placement_blocked
+        && !flying
         && !swimming
         && controls
             .airborne
@@ -1065,7 +1076,11 @@ pub(super) fn input(
         && mouse_snapshot.is_none()
         && diagonal.is_none()
     {
-        controls.held = Some(Held::NoSpeed);
+        controls.held = Some(if placement_blocked {
+            Held::PlacementBlocked
+        } else {
+            Held::NoSpeed
+        });
         return;
     }
     let mut delta = direction * speed * span;
@@ -1163,7 +1178,9 @@ pub(super) fn input(
                 ))
             .then_some((landing, trial, intent.request, displacement))
         });
-    let (landing, mode, jumped) = if swimming {
+    let (landing, mode, jumped) = if placement_blocked {
+        (feet, MovementMode::Forward, false)
+    } else if swimming {
         (
             world.swim_step(feet, delta, body.height),
             MovementMode::Swim,
@@ -1217,9 +1234,17 @@ pub(super) fn input(
     if jumped {
         controls.last_jump = Some(now);
     }
-    let position = landing + Vec3::Y * body.feet_offset;
-    let position = stop_at_zone_line(&online.regions, origin, position);
-    let entering = water_enabled
+    let position = if placement_blocked {
+        origin
+    } else {
+        stop_at_zone_line(
+            &online.regions,
+            origin,
+            landing + Vec3::Y * body.feet_offset,
+        )
+    };
+    let entering = !placement_blocked
+        && water_enabled
         && !swimming
         && world
             .swim_depth(position - Vec3::Y * body.feet_offset, body.height)
@@ -1242,7 +1267,14 @@ pub(super) fn input(
         turn_toward(current_heading, facing, TURN_RATE * span)
     };
     trace_proposal(mode, delta, position - origin, heading, facing);
-    let position_sent = world_position(position.to_array(), heading);
+    let position_sent = if placement_blocked {
+        eq_client_core::WorldPosition {
+            heading,
+            ..accepted.position
+        }
+    } else {
+        world_position(position.to_array(), heading)
+    };
     let mut created = now;
     let sent = outbox.post(online.world(), |stamp| {
         created = stamp.created;
@@ -1263,7 +1295,8 @@ pub(super) fn input(
     if entering {
         controls.water_entry_rollback = previous_airborne;
     }
-    if (entering || swimming)
+    if !placement_blocked
+        && (entering || swimming)
         && let Some(airborne) = controls.airborne.as_mut()
     {
         airborne.reset();
@@ -1281,12 +1314,13 @@ pub(super) fn input(
         SentYaw::Ordinary
     };
     controls.mouse_turn -= mouse_step;
-    controls.held = None;
+    controls.held = placement_blocked.then_some(Held::PlacementBlocked);
     // A landing's damage follows the sample that lands.
-    if let Some(fall) = controls
-        .airborne
-        .as_mut()
-        .and_then(AirborneController::take_landing)
+    if !placement_blocked
+        && let Some(fall) = controls
+            .airborne
+            .as_mut()
+            .and_then(AirborneController::take_landing)
     {
         let cost = landing_cost(
             client,
@@ -3233,6 +3267,7 @@ mod tests {
             11,
             eq_client_core::PlayerState {
                 name: "Example".into(),
+                titanium_environment: None,
                 base_attributes: None,
                 deity: None,
                 class: Some(1),
@@ -3380,6 +3415,96 @@ mod tests {
                 .position,
             above
         );
+    }
+
+    #[test]
+    fn a_held_placement_turns_at_the_received_xyz_without_repeating_its_warning() {
+        let (mut app, receiver) = stationary_airborne_app();
+        let mut player = online::testing::player(7);
+        let initial_placement = world_position([2.375, -5.25, -3.625], 0.0);
+        player.position = initial_placement;
+        online::testing::generation(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            eq_client_core::GameDialect::Titanium,
+        );
+        online::testing::admit(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            12,
+            player,
+        );
+        let warning_count = |app: &App| {
+            app.world()
+                .resource::<crate::chat::ChatState>()
+                .history
+                .lines(eq_client_core::chat::ChatTab::System)
+                .into_iter()
+                .filter(|(_, line)| line.message.text.contains("below the installed floor"))
+                .count()
+        };
+        app.update();
+        assert_eq!(warning_count(&app), 1);
+        assert!(receiver.try_recv().is_err());
+
+        let correction = eq_client_core::WorldPosition {
+            heading: 128.0,
+            ..initial_placement
+        };
+        online::testing::place(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            correction,
+        );
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.press(KeyCode::KeyW);
+            keys.press(KeyCode::Space);
+        }
+        app.update();
+        assert_eq!(warning_count(&app), 1);
+        assert!(receiver.try_recv().is_err(), "travel and jump remain held");
+
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyE);
+        let mut heading = correction.heading;
+        for _ in 0..2 {
+            app.update();
+            let ClientCommand::Move(turn) = receiver.try_recv().unwrap() else {
+                panic!("expected the stationary turn");
+            };
+            assert_eq!(turn.mode, MovementMode::Forward);
+            assert_eq!(turn.heading, HeadingUpdate::Rate);
+            assert!(arc(heading, turn.position.heading) < 0.0);
+            assert_eq!(
+                turn.position,
+                eq_client_core::WorldPosition {
+                    heading: turn.position.heading,
+                    ..correction
+                }
+            );
+            assert!(receiver.try_recv().is_err());
+            heading = turn.position.heading;
+            accept(&mut app, &turn);
+        }
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        app.world_mut().resource_mut::<Controls>().mouse_heading = Some(256.0);
+        app.update();
+        let ClientCommand::Move(turn) = receiver.try_recv().unwrap() else {
+            panic!("expected the stationary mouse turn");
+        };
+        assert_eq!(turn.heading, HeadingUpdate::Snapshot);
+        assert_eq!(
+            turn.position,
+            eq_client_core::WorldPosition {
+                heading: 256.0,
+                ..correction
+            }
+        );
+        assert!(receiver.try_recv().is_err());
+        let online = app.world().resource::<online::OnlineState>();
+        assert_eq!(online.server_placement().unwrap().position, correction);
+        assert_eq!(warning_count(&app), 1);
     }
 
     #[test]
