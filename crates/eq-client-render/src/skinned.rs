@@ -105,7 +105,7 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::Map => "EQUI_MapViewWnd.xml",
         WindowId::Actions => "EQUI_HotButtonWnd.xml",
         WindowId::Chat | WindowId::ChatGroup(_) => "EQUI_ChatWindow.xml",
-        WindowId::Status | WindowId::Scripts => return None,
+        WindowId::Status | WindowId::Scripts | WindowId::Runbook => return None,
     };
     Some((file, id.official()?))
 }

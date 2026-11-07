@@ -1,4 +1,6 @@
 //! Synthetic control requests through the production receiver and driver.
+mod checklist;
+
 use super::*;
 use crate::online::testing as session;
 use std::{fs, time::Instant};
@@ -206,6 +208,19 @@ fn explicit_control_recovery_preserves_background_mode_without_replaying_failed_
 }
 
 fn request(app: &mut App, id: u64, fields: Value) -> Receipt {
+    submit_request(app, id, fields);
+    let bridge = app.world().resource::<Bridge>();
+    assert!(
+        bridge.protocol_error.is_none(),
+        "{:?}",
+        bridge.protocol_error
+    );
+    let receipt = bridge.receipt.clone().expect("valid request has a receipt");
+    assert_eq!(receipt.id, id);
+    receipt
+}
+
+fn submit_request(app: &mut App, id: u64, fields: Value) {
     let Value::Object(fields) = fields else {
         panic!("control request fields must be an object");
     };
@@ -215,15 +230,14 @@ fn request(app: &mut App, id: u64, fields: Value) -> Receipt {
     {
         let mut bridge = app.world_mut().resource_mut::<Bridge>();
         assert!(!bridge.job.pending(Some(0)));
-        bridge.receipt = None;
         bridge.job.start(0, move || Ok(Some(bytes)));
     }
     let ms = u64::try_from(app.world().resource::<Time<Real>>().elapsed().as_millis()).unwrap();
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         frame(app, ms);
-        if let Some(receipt) = &app.world().resource::<Bridge>().receipt {
-            return receipt.clone();
+        if !app.world().resource::<Bridge>().job.pending(Some(0)) {
+            return;
         }
         assert!(Instant::now() < deadline, "control request did not settle");
         std::thread::yield_now();

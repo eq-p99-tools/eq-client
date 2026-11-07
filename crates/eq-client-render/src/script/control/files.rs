@@ -11,7 +11,8 @@ use bevy::tasks::{AsyncComputeTaskPool, TaskPool};
 
 use super::protocol::MAX_REQUEST_BYTES;
 
-const MAX_STATUS_BYTES: usize = 128 * 1024;
+// Keep the original executor budget and allow a full checklist alongside it.
+pub(super) const MAX_STATUS_BYTES: usize = (128 + 48) * 1024;
 
 /// Serializes the last background exchange with final shutdown publication.
 #[derive(Clone)]
