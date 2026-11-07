@@ -2,6 +2,7 @@ use super::*;
 use eq_client_assets::sidl::{
     Anchor, Anchors, Button, ButtonLook, Element, FrameLook, Label, Page, Piece, Slider, SliderLook,
 };
+use eq_client_core::options::Level;
 
 fn area(x: f32, y: f32, width: f32, height: f32) -> Area {
     Area {
@@ -110,7 +111,7 @@ fn generated_columns_fit_the_page_frame_and_keep_the_skins_controls() {
         assert_eq!(made[0], skin, "the imported page stays intact");
         let page = made.last().unwrap();
         let width = size.x - 16.0;
-        let mut bottom = 0.0_f32;
+        let mut rects: Vec<Area> = Vec::new();
         for (_, element) in &page.pieces {
             let rect = match element {
                 Element::Button(button) => {
@@ -135,8 +136,21 @@ fn generated_columns_fit_the_page_frame_and_keep_the_skins_controls() {
                 rect.x + rect.width <= width + 0.01,
                 "{rect:?} inside {width}"
             );
-            bottom = bottom.max(rect.y + rect.height);
+            for other in &rects {
+                assert!(
+                    rect.x + rect.width <= other.x + 0.01
+                        || other.x + other.width <= rect.x + 0.01
+                        || rect.y + rect.height <= other.y + 0.01
+                        || other.y + other.height <= rect.y + 0.01,
+                    "{rect:?} overlaps {other:?}"
+                );
+            }
+            rects.push(rect);
         }
+        let bottom = rects
+            .into_iter()
+            .map(|rect| rect.y + rect.height)
+            .fold(0.0, f32::max);
         assert_eq!(content_height(page), Some(bottom + MARGIN));
         if size.x < 200.0 {
             assert!(
@@ -147,25 +161,168 @@ fn generated_columns_fit_the_page_frame_and_keep_the_skins_controls() {
     }
 }
 
+fn piece<'a>(page: &'a Page, id: &str) -> &'a Element {
+    &page.pieces.iter().find(|(name, _)| name == id).unwrap().1
+}
+
+fn label<'a>(page: &'a Page, id: &str) -> &'a Label {
+    let Element::Label(label) = piece(page, id) else {
+        panic!("{id} must be a label")
+    };
+    label
+}
+
+fn slider<'a>(page: &'a Page, id: &str) -> &'a Slider {
+    let Element::Slider(slider) = piece(page, id) else {
+        panic!("{id} must be a slider")
+    };
+    slider
+}
+
 #[test]
-fn tall_scale_controls_extend_the_complete_content_extent() {
+fn dangerous_section_groups_the_existing_choices_and_run_speed() {
+    let dangerous = [
+        Fix::TakeEnvironmentalDamage,
+        Fix::GillsForDays,
+        Fix::Fly,
+        Fix::JesusMode,
+        Fix::ExitAtOnce,
+    ];
+    for size in [Vec2::new(640.0, 220.0), Vec2::new(180.0, 100.0)] {
+        let skin = source();
+        let made = pages(std::slice::from_ref(&skin), WindowId::Options, size, None);
+        let page = made.last().unwrap();
+        let ordinary = label(page, "EQC_QoL_SettingsCaption");
+        let warning = label(page, "EQC_QoL_UnsafeCaption");
+        assert_eq!(ordinary.text, "Quality of Life");
+        assert_eq!(warning.text, "Dangerous");
+        assert!((ordinary.area.width - (size.x - 2.0 * MARGIN)).abs() < f32::EPSILON);
+        assert!((warning.area.width - ordinary.area.width).abs() < f32::EPSILON);
+
+        let mut rightmost_checkbox = ordinary.area.x;
+        for fix in Fix::settings() {
+            let id = qol_checkbox_id(fix);
+            let Element::Button(button) = piece(page, &id) else {
+                panic!("{id} must be a checkbox")
+            };
+            assert_eq!(button.id.as_deref(), Some(id.as_str()));
+            let area = button.area;
+            rightmost_checkbox = rightmost_checkbox.max(area.x);
+            if dangerous.contains(&fix) {
+                assert!(area.y >= warning.area.y + warning.area.height);
+            } else {
+                assert!(area.y >= ordinary.area.y + ordinary.area.height);
+                assert!(area.y + area.height < warning.area.y);
+            }
+        }
+        assert_eq!(rightmost_checkbox > ordinary.area.x, size.x > 200.0);
+
+        for (level, key, prefix, title) in [
+            (
+                Level::UiScale,
+                "ui_scale",
+                "EQC_QoL_UiScale",
+                "Interface scale",
+            ),
+            (
+                Level::RunSpeed,
+                "run_boost",
+                "EQC_QoL_RunSpeed",
+                "Run a Little Faster",
+            ),
+        ] {
+            let caption = label(page, &format!("{prefix}Label"));
+            let slider_id = format!("{prefix}Slider");
+            let slider = slider(page, &slider_id);
+            let value_id = format!("{prefix}ValueLabel");
+            let value = label(page, &value_id);
+            assert_eq!(caption.text, title);
+            assert_eq!(slider.id.as_deref(), Some(slider_id.as_str()));
+            assert_eq!(level.key(), key);
+            assert_eq!(
+                controls::slider_sets(slider.id.as_deref(), WindowId::Options),
+                Some(controls::Sets::Level(level))
+            );
+            assert!(matches!(
+                controls::value_label(&value_id, WindowId::Options),
+                Some(controls::ValueLabel::Shows(bound)) if bound == level
+            ));
+            assert!(slider.area.y >= caption.area.y + caption.area.height);
+            if level == Level::UiScale {
+                assert!(caption.area.y >= ordinary.area.y + ordinary.area.height);
+                assert!(slider.area.y + slider.area.height < warning.area.y);
+                assert!(value.area.y + value.area.height < warning.area.y);
+            } else {
+                assert!(caption.area.y >= warning.area.y + warning.area.height);
+                assert!(value.area.y >= warning.area.y + warning.area.height);
+            }
+        }
+    }
+}
+
+#[test]
+fn section_headings_use_checkbox_typography_if_the_skin_has_no_label() {
     let mut skin = source();
-    let Element::Slider(slider) = &mut skin.pieces[2].1 else {
+    skin.pieces
+        .retain(|(_, piece)| !matches!(piece, Element::Label(_)));
+    let Element::Button(checkbox) = &mut skin.pieces[0].1 else {
+        panic!("checkbox")
+    };
+    checkbox.text_color = Some([40, 150, 100]);
+
+    let made = pages(&[skin], WindowId::Options, Vec2::new(180.0, 100.0), None).into_owned();
+    let page = made.last().unwrap();
+    for (id, text) in [
+        ("EQC_QoL_SettingsCaption", "Quality of Life"),
+        ("EQC_QoL_UnsafeCaption", "Dangerous"),
+    ] {
+        let heading = label(page, id);
+        assert_eq!(heading.text, text);
+        assert_eq!(heading.font, Some(2));
+        assert_eq!(heading.color, Some([40, 150, 100]));
+        assert!((heading.area.height - 20.0).abs() < f32::EPSILON);
+        assert!(heading.eq_type.is_none() && heading.anchors.is_none());
+    }
+    assert_eq!(
+        page.pieces
+            .iter()
+            .filter(|(_, piece)| matches!(piece, Element::Button(_)))
+            .count(),
+        Fix::settings().count()
+    );
+    assert!(
+        page.pieces
+            .iter()
+            .all(|(_, piece)| !matches!(piece, Element::Slider(_)))
+    );
+}
+
+#[test]
+fn wrapped_slider_values_extend_the_sections_and_scroll_extent() {
+    let mut skin = source();
+    let Element::Slider(skin_slider) = &mut skin.pieces[2].1 else {
         panic!("slider")
     };
-    slider.area.height = 80.0;
+    skin_slider.area.height = 80.0;
     let made = pages(
         std::slice::from_ref(&skin),
         WindowId::Options,
-        Vec2::new(180.0, 100.0),
+        Vec2::new(76.0, 100.0),
         None,
     );
     let page = made.last().unwrap();
-    let (_, Element::Slider(slider)) = &page.pieces[page.pieces.len() - 2] else {
-        panic!("slider")
-    };
+    let warning = label(page, "EQC_QoL_UnsafeCaption");
+    let scale = slider(page, controls::UI_SCALE_SLIDER).area;
+    let scale_value = label(page, controls::UI_SCALE_VALUE).area;
+    let speed = slider(page, controls::RUN_SPEED_SLIDER).area;
+    let speed_value = label(page, controls::RUN_SPEED_VALUE).area;
+    assert!((scale.width - warning.area.width).abs() < f32::EPSILON);
+    assert!((speed.width - warning.area.width).abs() < f32::EPSILON);
+    assert!(scale_value.y > scale.y + scale.height);
+    assert!(warning.area.y > scale_value.y + scale_value.height);
+    assert!(speed_value.y > speed.y + speed.height);
     assert_eq!(
         content_height(page),
-        Some(slider.area.y + slider.area.height + MARGIN)
+        Some(speed_value.y + speed_value.height + MARGIN)
     );
 }

@@ -60,6 +60,7 @@ client reports that audio is disabled and continues.
 
 Options → QoL stores these choices per character. Availability can depend on the
 session; a setting does not manufacture an unoffered server capability.
+The Interface scale slider appears with the ordinary settings.
 
 | Setting | File key | Default | Effect |
 | --- | --- | --- | --- |
@@ -91,16 +92,17 @@ item results; receipt-only echoes cannot advance it. It attempts each observed
 death once, retains corpse identity, and stops on refusal. Turning it off stops
 further automatic requests while leaving the ordinary loot window available.
 
-Unsafe choices sit together at the page's end:
+The **Dangerous** section sits below the ordinary settings and includes the
+**Run a Little Faster** slider. Scroll down in the QoL page if needed.
 
 | Setting | File key | Default | Effect |
 | --- | --- | --- | --- |
 | Take Environmental Damage | `take_environmental_damage` | On | Reports supported falls, drowning and lava heat. Air continues running with reports off |
 | Gills for Days | `gills_for_days` | Off | Disables the local air calculation and hides Air Remaining on Titanium sessions that offer gameplay departures |
-| Run a Little Faster | `run_boost` | 1.00x | Slider from 1.00x to 1.40x in 0.01x steps. Scales calibrated forward running and the forward component of diagonals |
 | Fly | `fly` | Off | Bounded flight through Jump and Duck bindings for ascent/descent, retaining solid collision; disabling restores gravity |
 | Jesus Mode | `jesus_mode` | Off | Stand and move on mapped water or lava reached from above, using ordinary ground speed and collision |
 | Exit at Once | `exit_at_once` | Off | Requests logout without automatic sitting or camp preparation; waits for the server outcome |
+| Run a Little Faster | `run_boost` | 1.00x | Slider from 1.00x to 1.40x in 0.01x steps. Scales calibrated forward running and the forward component of diagonals |
 
 The run speed slider saves the multiplier in hundredths, such as
 `run_boost = 120` for 1.20x. A saved checkbox value of `true` loads as 1.10x,

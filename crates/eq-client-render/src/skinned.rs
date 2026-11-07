@@ -3507,12 +3507,10 @@ mod tests {
             tooltip: None,
         };
         let settings: Vec<_> = Fix::settings().collect();
-        // Tall enough, with room to spare, that a page this high holds every
-        // setting in one column whatever today's count is — the row pitch is
-        // the skin's checkbox height plus the gap, and the column wrap itself
-        // is what the short page below checks.
+        // A tall page holds every setting in one column, with room for both
+        // headings. The short page below checks the column wrap.
         let inside =
-            26.0 * (to_f32(u32::try_from(settings.len()).unwrap_or_default()) + 2.0) + 60.0;
+            26.0 * (to_f32(u32::try_from(settings.len()).unwrap_or_default()) + 2.0) + 100.0;
         let pages = with_qol_page(
             std::slice::from_ref(&general),
             WindowId::Options,
@@ -3521,12 +3519,20 @@ mod tests {
         );
         assert_eq!(pages.len(), 2);
         assert_eq!(pages[1].title.as_deref(), Some("QoL"));
-        assert_eq!(pages[1].pieces.len(), settings.len());
+        let checkboxes = |page: &Page| {
+            page.pieces
+                .iter()
+                .filter_map(|(_, piece)| match piece {
+                    Element::Button(checkbox) => Some(checkbox),
+                    _ => None,
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        let buttons = checkboxes(&pages[1]);
+        assert_eq!(buttons.len(), settings.len());
         let mut above: Option<Area> = None;
-        for ((_, piece), fix) in pages[1].pieces.iter().zip(settings.iter().copied()) {
-            let Element::Button(checkbox) = piece else {
-                panic!("a checkbox")
-            };
+        for (checkbox, fix) in buttons.iter().zip(settings.iter().copied()) {
             assert!(checkbox.checkbox);
             assert_eq!(checkbox.text.as_deref(), Some(fix.label()));
             assert_eq!(checkbox.tooltip.as_deref(), Some(fix.tooltip()));
@@ -3547,16 +3553,9 @@ mod tests {
             Vec2::new(5000.0, 70.0),
             None,
         );
-        let areas: Vec<Area> = short[1]
-            .pieces
-            .iter()
-            .map(|(_, piece)| match piece {
-                Element::Button(checkbox) => checkbox.area,
-                _ => panic!("a checkbox"),
-            })
-            .collect();
-        assert!(areas[1].x >= areas[0].x + areas[0].width);
-        assert!((areas[1].y - areas[0].y).abs() < f32::EPSILON);
+        let buttons = checkboxes(&short[1]);
+        assert!(buttons[1].area.x >= buttons[0].area.x + buttons[0].area.width);
+        assert!((buttons[1].area.y - buttons[0].area.y).abs() < f32::EPSILON);
         // Other windows keep the skin's pages as they are.
         assert_eq!(
             with_qol_page(
@@ -3568,125 +3567,6 @@ mod tests {
             .len(),
             1
         );
-    }
-
-    #[test]
-    fn the_qol_page_caps_its_unsafe_choices_with_a_caption() {
-        use eq_client_assets::sidl::{Align, Button, ButtonLook, Element, Label, Page};
-        let checkbox = Button {
-            id: Some("OGP_PetWindowPopupCheckbox".into()),
-            area: Area {
-                x: 10.0,
-                y: 175.0,
-                width: 150.0,
-                height: 20.0,
-            },
-            placed: true,
-            anchors: None,
-            look: ButtonLook::default(),
-            checkbox: true,
-            text: Some("Pet Window Popup".into()),
-            text_color: None,
-            font: None,
-            decal: None,
-            decal_area: None,
-            tooltip: None,
-        };
-        let line = Label {
-            area: Area {
-                x: 10.0,
-                y: 20.0,
-                width: 80.0,
-                height: 14.0,
-            },
-            anchors: None,
-            eq_type: Some(13322),
-            text: "General".into(),
-            color: None,
-            align: Align::Left,
-            font: None,
-            wraps: false,
-        };
-        let general = Page {
-            name: "OptionsGeneralPage".into(),
-            title: Some("General".into()),
-            area: None,
-            template: None,
-            pieces: vec![
-                ("checkbox".into(), Element::Button(checkbox)),
-                ("caption".into(), Element::Label(line)),
-            ],
-            icon: [None, None],
-            title_colors: [None, None],
-            tooltip: None,
-        };
-        let pages = with_qol_page(
-            std::slice::from_ref(&general),
-            WindowId::Options,
-            Vec2::new(400.0, 1200.0),
-            None,
-        );
-        let settings: Vec<_> = eq_client_core::qol::Fix::settings().collect();
-        let first_unsafe = settings.iter().position(|fix| fix.is_unsafe()).unwrap();
-        // The page holds every setting, and one caption line ahead of the
-        // unsafe run that closes it.
-        assert_eq!(pages[1].pieces.len(), settings.len() + 1);
-        let (id, piece) = &pages[1].pieces[first_unsafe];
-        let Element::Label(caption) = piece else {
-            panic!("a caption ahead of the unsafe settings")
-        };
-        assert_eq!(id, "EQC_QoL_UnsafeCaption");
-        assert_eq!(caption.text, "Unsafe");
-        assert!(caption.eq_type.is_none());
-        // It sits directly over the first of them.
-        let (_, Element::Button(boxed)) = &pages[1].pieces[first_unsafe + 1] else {
-            panic!("a checkbox")
-        };
-        assert_eq!(boxed.text.as_deref(), Some(settings[first_unsafe].label()));
-    }
-
-    #[test]
-    fn qol_sliders_use_the_skin_and_stack_below_the_checkboxes() {
-        use eq_client_assets::sidl::Element;
-        use eq_client_core::{options::Level, qol::Fix};
-
-        let skin = [qol::tests::source()];
-        let pages = with_qol_page(&skin, WindowId::Options, Vec2::new(400.0, 400.0), None);
-        let pieces = &pages[1].pieces;
-        // There is one caption before the unsafe choices, then two slider blocks.
-        let first = Fix::settings().count() + 1;
-        assert_eq!(pieces.len(), first + 6);
-        let Element::Button(last_checkbox) = &pieces[first - 1].1 else {
-            panic!("a checkbox")
-        };
-        let mut above = last_checkbox.area;
-        for (block, (name, level)) in pieces[first..].as_chunks::<3>().0.iter().zip([
-            ("Interface scale", Level::UiScale),
-            ("Run a Little Faster", Level::RunSpeed),
-        ]) {
-            let [
-                (_, Element::Label(caption)),
-                (slider_id, Element::Slider(slider)),
-                (value_id, Element::Label(value)),
-            ] = block
-            else {
-                panic!("a caption, slider and value label")
-            };
-            assert_eq!(caption.text, name);
-            assert_eq!(slider.id.as_deref(), Some(slider_id.as_str()));
-            assert_eq!(
-                controls::slider_sets(slider.id.as_deref(), WindowId::Options),
-                Some(controls::Sets::Level(level))
-            );
-            assert!(matches!(
-                controls::value_label(value_id, WindowId::Options),
-                Some(controls::ValueLabel::Shows(bound)) if bound == level
-            ));
-            assert!(caption.area.y >= above.y + above.height || caption.area.x > above.x);
-            assert!(slider.area.y >= caption.area.y + caption.area.height);
-            assert!(value.area.x >= slider.area.x + slider.area.width);
-            above = slider.area;
-        }
     }
 
     #[test]

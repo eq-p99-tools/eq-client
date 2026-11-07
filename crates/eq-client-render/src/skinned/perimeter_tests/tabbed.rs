@@ -220,16 +220,14 @@ fn qol_controls_fit_the_width_and_scroll_fully_below_wrapped_tabs() {
                 let control = bounds(app.world(), *entity);
                 assert!(control.min.x >= viewport.min.x && control.max.x <= viewport.max.x);
             }
-            let (bottom, _) = checkboxes
-                .iter()
-                .max_by(|(a, _), (b, _)| {
-                    bounds(app.world(), *a)
-                        .max
-                        .y
-                        .total_cmp(&bounds(app.world(), *b).max.y)
-                })
-                .unwrap();
-            assert!(bounds(app.world(), *bottom).max.y > viewport.max.y);
+            if size.x < 200.0 {
+                assert!(
+                    checkboxes
+                        .iter()
+                        .any(|(entity, _)| bounds(app.world(), *entity).max.y > viewport.max.y),
+                    "the compact viewport must scroll to reach every checkbox"
+                );
+            }
             let mut sliders = app.world_mut().query::<(Entity, &SkinSlider)>();
             let mut labels = app.world_mut().query::<(&ChildOf, &controls::LevelValue)>();
             let mut words = app.world_mut().query::<(&ChildOf, &Text)>();
@@ -260,12 +258,11 @@ fn qol_controls_fit_the_width_and_scroll_fully_below_wrapped_tabs() {
                     assert!(rect.min.x >= viewport.min.x && rect.max.x <= viewport.max.x);
                 }
 
-                // Scroll the first slider into view, then exercise the end
-                // of the production scroll extent for the run speed slider.
+                // Reach Interface scale within its section, then exercise
+                // the end of the page's scroll extent for the run speed slider.
                 let pixels = if level == Level::UiScale {
                     let bottom_edge = controls
                         .into_iter()
-                        .chain([*bottom])
                         .map(|control| bounds(app.world(), control).max.y)
                         .fold(viewport.max.y, f32::max);
                     (viewport.max.y - bottom_edge) / scale - 2.0

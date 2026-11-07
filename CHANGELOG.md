@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Group Interface scale with ordinary QoL settings and move **Run a Little
+  Faster** into a separate **Dangerous** section with the other flagged options.
 - Confirm an ordinary Titanium cursor item drop from Inventory on local-only
   EQEmu. Escape cancels the pending confirmation. Scripts can open it with
   `click drop` and use the ordinary Yes/No buttons. A fresh inventory snapshot

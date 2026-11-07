@@ -3,9 +3,10 @@ use super::{bindings::qol_checkbox_id, controls, frame, to_f32, tree::tab_strip}
 use crate::windows::WindowId;
 use bevy::prelude::Vec2;
 use eq_client_assets::{
-    sidl::{Align, Element, Label, Slider},
+    sidl::{Align, Button, Element, Label, Slider},
     ui::Area,
 };
+use eq_client_core::qol::Fix;
 
 #[cfg(test)]
 pub(super) mod tests;
@@ -48,7 +49,7 @@ pub(super) fn pages<'a>(
         (size.y - tab_strip(pages.iter().chain([&qol])) - insets.top - insets.bottom).max(0.0),
     );
     let caption = skin_pieces().find_map(|(_, element)| match element {
-        Element::Label(label) => Some(label),
+        Element::Label(label) if label.area.height > 0.0 => Some(label),
         _ => None,
     });
     let slider = skin_pieces().find_map(|(_, element)| match element {
@@ -59,44 +60,59 @@ pub(super) fn pages<'a>(
         Element::Label(label) if name.ends_with("ValueLabel") => Some(label),
         _ => None,
     });
-    let slider_style = slider.zip(value);
-    let first_slider =
-        eq_client_core::qol::Fix::settings().count() + usize::from(caption.is_some());
-    let layout = Layout::new(
-        checkbox,
-        caption,
-        room,
-        first_slider + usize::from(slider_style.is_some()),
-    );
-    let mut pieces = qol_checkboxes(checkbox, caption, &layout);
-    if let Some((slider, value)) = slider_style {
-        // Stack the sliders within a single column. Their actual heights
-        // contribute to the scroll extent, including a value wrapped below.
-        let (x, y, width) = layout.place(first_slider);
-        let (scale, bottom) = qol_slider(
-            slider,
-            value,
-            (x, y, width),
-            (
-                "EQC_QoL_UiScaleLabel",
-                controls::UI_SCALE_SLIDER,
-                controls::UI_SCALE_VALUE,
-            ),
-            "Interface scale",
-        );
-        pieces.extend(scale);
-        let (run_speed, _) = qol_slider(
-            slider,
-            value,
-            (x, bottom + GAP, width),
-            (
-                "EQC_QoL_RunSpeedLabel",
-                controls::RUN_SPEED_SLIDER,
-                controls::RUN_SPEED_VALUE,
-            ),
-            "Run a Little Faster",
-        );
-        pieces.extend(run_speed);
+    let mut choices: Vec<_> = Fix::settings().map(Control::Checkbox).collect();
+    if let Some((slider, value)) = slider.zip(value) {
+        choices.extend([
+            Control::Slider {
+                section: Section::Ordinary,
+                slider,
+                value,
+                ids: (
+                    "EQC_QoL_UiScaleLabel",
+                    controls::UI_SCALE_SLIDER,
+                    controls::UI_SCALE_VALUE,
+                ),
+                text: "Interface scale",
+            },
+            Control::Slider {
+                section: Section::Dangerous,
+                slider,
+                value,
+                ids: (
+                    "EQC_QoL_RunSpeedLabel",
+                    controls::RUN_SPEED_SLIDER,
+                    controls::RUN_SPEED_VALUE,
+                ),
+                text: "Run a Little Faster",
+            },
+        ]);
+    }
+    let heading_height = caption.map_or(checkbox.area.height, |label| label.area.height);
+    let layout = Layout::new(checkbox, heading_height, room, choices.len());
+    let mut pieces = Vec::new();
+    let mut y = MARGIN;
+    for section in [Section::Ordinary, Section::Dangerous] {
+        pieces.push(section.heading(
+            checkbox,
+            caption,
+            Area {
+                x: layout.margin,
+                y,
+                width: layout.available,
+                height: heading_height,
+            },
+        ));
+        let section_choices: Vec<_> = choices
+            .iter()
+            .copied()
+            .filter(|choice| choice.section() == section)
+            .collect();
+        y = layout.append_controls(
+            &mut pieces,
+            &section_choices,
+            checkbox,
+            y + heading_height + GAP,
+        ) + SECTION_GAP;
     }
     let mut all = pages.to_vec();
     all.push(eq_client_assets::sidl::Page { pieces, ..qol });
@@ -128,7 +144,8 @@ fn qol_slider(
     slider.area.x = x;
     slider.area.y = y + value.area.height + 2.0;
     value.area.width = value.area.width.min(width).max(0.0);
-    let beside = width > value.area.width + 4.0;
+    // Keep space for the track when the value can go below it instead.
+    let beside = width >= slider.area.width.min(width / 2.0) + value.area.width + 4.0;
     slider.area.width = slider
         .area
         .width
@@ -161,82 +178,67 @@ fn qol_slider(
     )
 }
 
-/// A checkbox cut from the skin's own for each quality-of-life setting, in
-/// their order, one under another down a page this tall and then on down
-/// the next column.
-fn qol_checkboxes(
-    checkbox: &eq_client_assets::sidl::Button,
-    caption: Option<&Label>,
-    layout: &Layout,
-) -> Vec<(String, eq_client_assets::sidl::Element)> {
-    let settings: Vec<_> = eq_client_core::qol::Fix::settings().collect();
-    // The rows of the page: every setting in order, with the caption ahead
-    // of the unsafe run that closes it.
-    let first_unsafe = settings.iter().position(|fix| fix.is_unsafe());
-    let mut rows: Vec<(String, Row)> = Vec::new();
-    for (position, fix) in settings.iter().copied().enumerate() {
-        if Some(position) == first_unsafe
-            && let Some(label) = caption
-        {
-            rows.push((
-                "EQC_QoL_UnsafeCaption".to_owned(),
-                Row::Caption(label.clone()),
-            ));
-        }
-        rows.push((qol_checkbox_id(fix), Row::Setting(fix)));
-    }
-    rows.into_iter()
-        .enumerate()
-        .map(|(index, (id, row))| match row {
-            Row::Setting(fix) => {
-                let mut checkbox = checkbox.clone();
-                let (x, y, width) = layout.place(index);
-                checkbox.id = Some(id.clone());
-                checkbox.anchors = None;
-                checkbox.placed = true;
-                checkbox.text = Some(fix.label().to_owned());
-                checkbox.tooltip = Some(fix.tooltip().to_owned());
-                checkbox.area.x = x;
-                checkbox.area.y = y;
-                checkbox.area.width = width;
-                (id, Element::Button(checkbox))
-            }
-            Row::Caption(label) => {
-                let mut line = label;
-                let (x, y, width) = layout.place(index);
-                line.eq_type = None;
-                line.anchors = None;
-                line.align = Align::Left;
-                "Unsafe".clone_into(&mut line.text);
-                line.area = Area {
-                    x,
-                    y,
-                    width,
-                    height: line.area.height,
-                };
-                (id, Element::Label(line))
-            }
-        })
-        .collect()
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Section {
+    Ordinary,
+    Dangerous,
 }
 
-/// One row of the quality-of-life page: a setting's checkbox, or the caption
-/// that opens the unsafe run.
-enum Row {
-    Setting(eq_client_core::qol::Fix),
-    Caption(eq_client_assets::sidl::Label),
+impl Section {
+    fn heading(self, checkbox: &Button, style: Option<&Label>, area: Area) -> (String, Element) {
+        let (id, text) = match self {
+            Self::Ordinary => ("EQC_QoL_SettingsCaption", "Quality of Life"),
+            Self::Dangerous => ("EQC_QoL_UnsafeCaption", "Dangerous"),
+        };
+        (
+            id.to_owned(),
+            Element::Label(Label {
+                area,
+                anchors: None,
+                eq_type: None,
+                text: text.to_owned(),
+                color: style.map_or(checkbox.text_color, |label| label.color),
+                align: Align::Left,
+                font: style.map_or(checkbox.font, |label| label.font),
+                wraps: false,
+            }),
+        )
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Control<'a> {
+    Checkbox(Fix),
+    Slider {
+        section: Section,
+        slider: &'a Slider,
+        value: &'a Label,
+        ids: (&'static str, &'static str, &'static str),
+        text: &'static str,
+    },
+}
+
+impl Control<'_> {
+    fn section(self) -> Section {
+        match self {
+            Self::Checkbox(fix) if fix.is_unsafe() => Section::Dangerous,
+            Self::Checkbox(_) => Section::Ordinary,
+            Self::Slider { section, .. } => section,
+        }
+    }
 }
 
 const MARGIN: f32 = 10.0;
 const GAP: f32 = 6.0;
+const SECTION_GAP: f32 = 16.0;
 
 /// Columns must fit the inner width. A short or narrow page grows downward,
 /// where its existing viewport can scroll, rather than adding hidden columns.
 struct Layout {
-    rows: usize,
-    pitch: f32,
+    columns: usize,
     width: f32,
     margin: f32,
+    available: f32,
 }
 
 impl Layout {
@@ -245,44 +247,81 @@ impl Layout {
         clippy::cast_sign_loss,
         reason = "a page holds few rows"
     )]
-    fn new(
-        checkbox: &eq_client_assets::sidl::Button,
-        caption: Option<&eq_client_assets::sidl::Label>,
-        room: Vec2,
-        count: usize,
-    ) -> Self {
+    fn new(checkbox: &Button, heading_height: f32, room: Vec2, count: usize) -> Self {
         let margin = MARGIN.min(room.x / 2.0);
         let available = (room.x - 2.0 * margin).max(0.0);
         let natural_width = checkbox.area.width.max(1.0);
-        let columns = (((available + margin) / (natural_width + margin)).floor() as usize).max(1);
-        let height = checkbox
-            .area
-            .height
-            .max(caption.map_or(0.0, |line| line.area.height));
-        let pitch = height.max(0.0) + GAP;
-        let preferred = (((room.y - 2.0 * MARGIN + GAP) / pitch).floor() as usize).max(1);
-        let rows = preferred.max(count.div_ceil(columns));
-        let columns = count.div_ceil(rows).max(1);
+        let capacity = (((available + margin) / (natural_width + margin)).floor() as usize).max(1);
+        // Choose columns using a checkbox-sized row estimate. The sections
+        // then measure actual controls and can extend into the scroll range.
+        let headings = 2.0 * (heading_height + GAP) + SECTION_GAP;
+        let pitch = checkbox.area.height.max(0.0) + GAP;
+        let rows = (((room.y - 2.0 * MARGIN - headings + GAP) / pitch).floor() as usize).max(1);
+        let columns = count.div_ceil(rows).clamp(1, capacity);
         Self {
-            rows,
-            pitch,
+            columns,
             width: checkbox.area.width.max(190.0).min(
                 ((available - margin * to_f32(u32::try_from(columns - 1).unwrap_or(u32::MAX)))
                     / to_f32(u32::try_from(columns).unwrap_or(u32::MAX)))
                 .max(0.0),
             ),
             margin,
+            available,
         }
     }
 
-    fn place(&self, index: usize) -> (f32, f32, f32) {
-        (
-            self.margin
-                + to_f32(u32::try_from(index / self.rows).unwrap_or(u32::MAX))
-                    * (self.width + self.margin),
-            MARGIN + to_f32(u32::try_from(index % self.rows).unwrap_or(u32::MAX)) * self.pitch,
-            self.width,
-        )
+    /// Measure each row's tallest control. The slider and value stay with
+    /// their caption and can make the row taller than a checkbox.
+    fn append_controls(
+        &self,
+        pieces: &mut Vec<(String, Element)>,
+        choices: &[Control<'_>],
+        checkbox: &Button,
+        mut y: f32,
+    ) -> f32 {
+        let mut bottom = y;
+        for row in choices.chunks(self.columns) {
+            bottom = y;
+            for (column, choice) in row.iter().copied().enumerate() {
+                let x = self.margin
+                    + to_f32(u32::try_from(column).unwrap_or(u32::MAX))
+                        * (self.width + self.margin);
+                let control_bottom = match choice {
+                    Control::Checkbox(fix) => {
+                        let mut button = checkbox.clone();
+                        let id = qol_checkbox_id(fix);
+                        button.id = Some(id.clone());
+                        button.anchors = None;
+                        button.placed = true;
+                        button.text = Some(fix.label().to_owned());
+                        button.tooltip = Some(fix.tooltip().to_owned());
+                        button.area = Area {
+                            x,
+                            y,
+                            width: self.width,
+                            height: checkbox.area.height,
+                        };
+                        pieces.push((id, Element::Button(button)));
+                        y + checkbox.area.height
+                    }
+                    Control::Slider {
+                        slider,
+                        value,
+                        ids,
+                        text,
+                        ..
+                    } => {
+                        let (parts, bottom) =
+                            qol_slider(slider, value, (x, y, self.width), ids, text);
+                        pieces.extend(parts);
+                        bottom
+                    }
+                };
+                bottom = bottom.max(control_bottom);
+            }
+            y = bottom + GAP;
+        }
+        bottom
     }
 }
 
