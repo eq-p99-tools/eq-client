@@ -195,12 +195,11 @@ fn observe_head(
 
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn update(
-    online: Res<OnlineState>,
+    (online, motion): (Res<OnlineState>, Res<crate::motion::Controls>),
     options: Res<OptionsState>,
     spells: Res<SpellNames>,
     body: Query<&head::Basis, With<Player>>,
     outbox: Res<Outbox>,
-    motion: Res<crate::motion::Controls>,
     mut state: ResMut<State>,
     mut shown: ResMut<Shown>,
 ) {

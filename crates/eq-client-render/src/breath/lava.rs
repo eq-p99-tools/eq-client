@@ -91,7 +91,7 @@ mod tests {
         });
         testing::admit(&mut online, 5, player);
         testing::inventory(&mut online, InventoryUpdate::Snapshot(Vec::new()));
-        testing::buffs(&mut online, Default::default());
+        testing::buffs(&mut online, std::collections::BTreeMap::new());
         online.regions = ZoneRegions::test_liquid_surface(0.0, Liquid::Lava);
         let spells = SpellNames::default();
         let mut qol = Settings::default();
