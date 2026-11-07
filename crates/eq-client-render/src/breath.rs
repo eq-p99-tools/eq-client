@@ -2,6 +2,8 @@
 pub(super) mod head;
 mod lava;
 mod modifiers;
+#[cfg(test)]
+mod motion_tests;
 
 use crate::{
     Player,
@@ -34,6 +36,7 @@ pub(super) enum Unavailable {
     OutsideAdmission,
     Gills,
     OutOfWorld,
+    MovementPending,
     SceneLoading,
     MissingHeadBasis,
     ModelChanged,
@@ -81,6 +84,7 @@ impl AirState {
         world: &eq_client_core::world::ClientWorld,
         qol: &eq_client_core::qol::Settings,
         placement: u64,
+        movement_pending: bool,
         sample: impl FnOnce(&PlayerState) -> Observation,
     ) -> Option<u32> {
         let scope = world.session_id().zip(world.player()).filter(|_| {
@@ -108,6 +112,16 @@ impl AirState {
             self.probe = Some((None, Err(Unavailable::OutOfWorld)));
             return None;
         }
+        let can_report = qol.on(Fix::TakeEnvironmentalDamage) && world.can(Capability::Drowning);
+        if movement_pending && can_report {
+            // The worker may already have moved while its result is in flight.
+            // Keep the tick due so it can use the next observed position.
+            if self.admission != Some((admission, player.spawn_id)) || self.placement != placement {
+                self.breath.interrupt();
+            }
+            self.probe = Some((None, Err(Unavailable::MovementPending)));
+            return None;
+        }
         let (medium, result) = sample(player);
         let (sample, maximum) = result.unwrap_or((Sample::Unknown, None));
         let amount = self.observe(
@@ -115,9 +129,7 @@ impl AirState {
             (admission, player.spawn_id),
             placement,
             sample,
-            maximum.filter(|_| {
-                qol.on(Fix::TakeEnvironmentalDamage) && world.can(Capability::Drowning)
-            }),
+            maximum.filter(|_| can_report),
         );
         self.probe = Some((medium, result.map(|(sample, _)| sample)));
         amount
@@ -188,12 +200,14 @@ pub(super) fn update(
     spells: Res<SpellNames>,
     body: Query<&head::Basis, With<Player>>,
     outbox: Res<Outbox>,
+    motion: Res<crate::motion::Controls>,
     mut state: ResMut<State>,
     mut shown: ResMut<Shown>,
 ) {
     let world = online.world();
     let now = Instant::now();
     let qol = &options.options.qol;
+    let movement_pending = motion.waiting();
     let report = |hazard, amount| {
         let Some((revision, player)) = world.liquid_hazard_revision().zip(world.player()) else {
             return;
@@ -209,22 +223,26 @@ pub(super) fn update(
             },
         });
     };
-    if let Some(amount) =
-        state
-            .air
-            .advance(now, world, qol, online.placement_revision(), |player| {
-                observe_head(&online, body.single().ok().copied(), &spells, player)
-            })
-    {
+    if let Some(amount) = state.air.advance(
+        now,
+        world,
+        qol,
+        online.placement_revision(),
+        movement_pending,
+        |player| observe_head(&online, body.single().ok().copied(), &spells, player),
+    ) {
         report(LiquidHazard::Drowning, amount);
     }
-    if let Some(amount) = state.heat.advance(now, &online, qol, &spells) {
+    if let Some(amount) = state
+        .heat
+        .advance(now, &online, qol, &spells, movement_pending)
+    {
         report(LiquidHazard::Lava, amount);
     }
-    if state.air().is_some() {
-        shown.open(WindowId::Breath);
-    } else {
-        shown.close(WindowId::Breath);
+    match (state.air().is_some(), shown.is_open(WindowId::Breath)) {
+        (true, false) => shown.open(WindowId::Breath),
+        (false, true) => shown.close(WindowId::Breath),
+        _ => (),
     }
 }
 
@@ -270,13 +288,8 @@ pub(super) fn fallback(
     panel: Query<Entity, With<Fallback>>,
 ) {
     let visible = state.air().is_some() && native.is_empty();
-    if let Ok(panel) = panel.single() {
-        if !visible {
-            commands.entity(panel).despawn();
-        }
-        return;
-    }
-    if visible {
+    let mut panels = panel.iter();
+    if visible && panels.next().is_none() {
         commands
             .spawn((
                 Node {
@@ -328,6 +341,11 @@ pub(super) fn fallback(
                 });
             });
     }
+    // Keep the first existing fallback when it is needed, and remove the
+    // rest even if a previous frame somehow supplied more than one.
+    for panel in panels {
+        commands.entity(panel).despawn();
+    }
 }
 
 #[cfg(test)]
@@ -357,6 +375,7 @@ mod tests {
             online.world(),
             &qol,
             1,
+            false,
             |player| observe_head(&online, None, &spells, player),
         );
         assert_eq!(amount, None);
@@ -398,8 +417,15 @@ mod tests {
                 Ok((Sample::Submerged(NonZeroU32::MIN), Some(80))),
             )
         };
-        state.advance(start, online.world(), &qol, 1, wet);
-        state.advance(start + Duration::from_secs(1), online.world(), &qol, 1, wet);
+        state.advance(start, online.world(), &qol, 1, false, wet);
+        state.advance(
+            start + Duration::from_secs(1),
+            online.world(),
+            &qol,
+            1,
+            false,
+            wet,
+        );
         // The counter ran: the setting changed nothing on this session.
         assert_eq!(state.breath.air().unwrap().remaining, 0);
     }
@@ -445,6 +471,7 @@ mod tests {
                     online.world(),
                     &qol,
                     1,
+                    false,
                     wet
                 ),
                 None
@@ -452,7 +479,7 @@ mod tests {
         }
         assert_eq!(state.breath.air().unwrap().remaining, 0);
         qol.set(Fix::GillsForDays, true);
-        state.advance(start, online.world(), &qol, 1, |_| {
+        state.advance(start, online.world(), &qol, 1, false, |_| {
             panic!("gills must skip sampling")
         });
         assert!(state.breath.air().is_none());
@@ -482,8 +509,13 @@ mod tests {
         let wet = Sample::Submerged(NonZeroU32::MIN);
         sample(&mut app, wet);
         assert_eq!(visible(&mut app), 1);
+        app.world_mut().spawn(Fallback);
+        app.world_mut().spawn(Fallback);
+        sample(&mut app, wet);
+        assert_eq!(visible(&mut app), 1);
 
         let native = app.world_mut().spawn(NativeGauge).id();
+        app.world_mut().spawn(Fallback);
         app.update();
         assert_eq!(visible(&mut app), 0);
         app.world_mut().entity_mut(native).despawn();
@@ -528,43 +560,55 @@ mod tests {
         qol.set(Fix::TakeEnvironmentalDamage, false);
         for seconds in [0, 1, 2] {
             assert_eq!(
-                state.advance(at(seconds), online.world(), &qol, 1, wet),
+                state.advance(at(seconds), online.world(), &qol, 1, false, wet),
                 None
             );
         }
         assert_eq!(state.breath.air().unwrap().remaining, 0);
         qol.set(Fix::TakeEnvironmentalDamage, true);
-        assert_eq!(state.advance(at(3), online.world(), &qol, 1, wet), Some(10));
+        assert_eq!(
+            state.advance(at(3), online.world(), &qol, 1, false, wet),
+            Some(10)
+        );
 
         testing::link(&mut online, eq_client_core::world::Link::Zoning);
         assert_eq!(
-            state.advance(at(4), online.world(), &qol, 2, |_| panic!(
+            state.advance(at(4), online.world(), &qol, 2, false, |_| panic!(
                 "zoning must skip sampling"
             )),
             None
         );
         assert!(state.breath.air().is_none());
         testing::connect(&mut online, true);
-        assert_eq!(state.advance(at(8), online.world(), &qol, 2, wet), None);
+        assert_eq!(
+            state.advance(at(8), online.world(), &qol, 2, false, wet),
+            None
+        );
         assert_eq!(state.breath.air().unwrap().remaining, 0);
 
         qol.set(Fix::GillsForDays, true);
         assert_eq!(
-            state.advance(at(9), online.world(), &qol, 2, |_| panic!(
+            state.advance(at(9), online.world(), &qol, 2, false, |_| panic!(
                 "gills must skip sampling"
             )),
             None
         );
         assert!(state.breath.air().is_none());
         qol.set(Fix::GillsForDays, false);
-        assert_eq!(state.advance(at(10), online.world(), &qol, 2, wet), None);
+        assert_eq!(
+            state.advance(at(10), online.world(), &qol, 2, false, wet),
+            None
+        );
         assert_eq!(state.breath.air().unwrap().remaining, 1);
 
         testing::news(
             &mut online,
             [eq_client_core::WorldEvent::DeathBind { session_id: 5 }],
         );
-        assert_eq!(state.advance(at(20), online.world(), &qol, 1, wet), None);
+        assert_eq!(
+            state.advance(at(20), online.world(), &qol, 1, false, wet),
+            None
+        );
         assert!(state.breath.air().is_none());
     }
 }

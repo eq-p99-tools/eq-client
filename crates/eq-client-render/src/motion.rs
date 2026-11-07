@@ -1895,7 +1895,7 @@ fn arc(from: f32, to: f32) -> f32 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use eq_client_core::movement::{Liquid, Liquids};
 
     fn movement_choice(app: &mut App, fix: Fix, on: bool) {
@@ -3247,6 +3247,12 @@ mod tests {
     }
 
     fn app() -> (App, mpsc::Receiver<ClientCommand>) {
+        let (mut app, receiver) = fixture();
+        app.add_systems(Update, input);
+        (app, receiver)
+    }
+
+    pub(crate) fn fixture() -> (App, mpsc::Receiver<ClientCommand>) {
         let (sender, receiver) = mpsc::sync_channel(2);
         let mut app = App::new();
         crate::keys::testing::install(&mut app);
@@ -3318,8 +3324,7 @@ mod tests {
                     eq_client_assets::falls::TITANIUM.climb_per_step(3.0, 6.0),
                 )),
                 ..Controls::default()
-            })
-            .add_systems(Update, input);
+            });
         app.world_mut().spawn((
             Player,
             Transform::from_xyz(0.0, 3.0, 0.0),

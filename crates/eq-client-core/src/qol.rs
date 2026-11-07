@@ -241,7 +241,7 @@ impl Fix {
             Self::ShowTimesInChat => "Show Times in Chat",
             Self::FlashOnTells => "Flash on Tells",
             Self::TakeEnvironmentalDamage => "Take Environmental Damage",
-            Self::GillsForDays => "Gills for days",
+            Self::GillsForDays => "Gills for Days",
             Self::CorpsesAlongGround => "Corpses Lie Along the Ground",
             Self::LongChaseCamera => "Long Chase Camera",
             Self::FreeCamera => "Free Camera",
@@ -291,7 +291,7 @@ impl Fix {
                 "Flash the client's taskbar button when a tell arrives while another window is in front."
             }
             Self::TakeEnvironmentalDamage => {
-                "Report supported falls, drowning and lava heat. The air meter keeps running while damage reports are disabled."
+                "Report supported falls, drowning and lava heat. Turning this off departs from the original client's reporting. The air meter keeps running."
             }
             Self::GillsForDays => {
                 "Skip the local breath calculation and hide Air Remaining, so the client sends no drowning reports."
@@ -369,11 +369,9 @@ impl Fix {
             Self::SkipModifiedFood
             | Self::AskBeforeDeletingSpells
             | Self::TakeEnvironmentalDamage
-            | Self::GillsForDays
             | Self::HotbarItemGuard => Kind::Guards,
-            // Sends the official client would not make on its own: departures
-            // the session takes only where the server type offers them, and
-            // looting, replies and a logout nobody asked for at that moment.
+            // Departures the session takes only where the server type offers
+            // them, plus looting, replies and a logout at a different time.
             Self::AnswerListPolls
             | Self::MemorizeWhileStanding
             | Self::WalkWhileWinded
@@ -381,6 +379,7 @@ impl Fix {
             | Self::AutoLoot
             | Self::Fly
             | Self::JesusMode
+            | Self::GillsForDays
             | Self::ExitAtOnce => Kind::Acts,
             Self::HiddenWindows
             | Self::MapEverywhere

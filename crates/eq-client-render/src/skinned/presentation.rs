@@ -187,6 +187,7 @@ fn fill_gauges(
 ) {
     for (shows, mut node, step) in fills {
         if let Shows::Fill(kind) = *shows {
+            // Titanium eqgame.exe 0x5598bc, EQType 8, current air over capacity.
             let fraction = if kind == 8 {
                 breath.air().map_or(0.0, eq_client_core::breath::Air::ratio)
             } else {

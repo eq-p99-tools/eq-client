@@ -1,9 +1,10 @@
 //! Locally sampled environmental hazards. These calculations never apply HP.
 //!
-//! Provenance: the one-second check without catch-up, the lava damage table
-//! by zone, the ordinary resistance range and the zone 200 exclusion are not
-//! yet cited to a Titanium program address in this repository; treat them as
-//! inferred (recording checklist 6.393).
+//! Titanium `eqgame.exe` at 0x422198 records the current time when the
+//! periodic check runs. The heat calculation at 0x41d4ba reads signed fire
+//! resistance and selects the amount by zone. Zone 200 uses a different
+//! resist and damage type. The host's supported resistance range is a
+//! conservative bound on its input model (recording checklist 6.393).
 use std::time::{Duration, Instant};
 
 /// Titanium checks the environment at roughly one-second intervals. A

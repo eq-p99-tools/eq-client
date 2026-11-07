@@ -65,9 +65,7 @@ pub enum Medium {
     OtherSubmerging,
 }
 
-/// The prefixes `EQEmu`'s water maps read a region's name by before its
-/// user data: water, lava, zone line, player-versus-player, slime, ice and
-/// `VWA` regions.
+/// Region prefixes checked by Awater's S3D converter.
 const REGION_KINDS: [&str; 7] = ["WT", "LA", "DRNTP", "DRP_", "SL", "DRN", "VWA"];
 
 /// Spatial lookup for zone-line references in classic WLD assets, and for
@@ -85,6 +83,39 @@ pub struct ZoneRegions {
 }
 
 impl ZoneRegions {
+    /// Constructs a horizontal liquid surface for other crates' synthetic tests.
+    #[cfg(feature = "testing")]
+    #[must_use]
+    pub fn test_liquid_surface(height: f32, liquid: Liquid) -> Self {
+        let leaf = |region| Node {
+            normal: [0.0; 3],
+            distance: 0.0,
+            region: Some(region),
+            front: None,
+            back: None,
+        };
+        let medium = match liquid {
+            Liquid::Water => Medium::Water,
+            Liquid::Lava => Medium::Lava,
+        };
+        Self {
+            nodes: vec![
+                Node {
+                    normal: [0.0, 1.0, 0.0],
+                    distance: -height,
+                    region: None,
+                    front: Some(1),
+                    back: Some(2),
+                },
+                leaf(0),
+                leaf(1),
+            ],
+            liquids: BTreeMap::from([(1, liquid)]),
+            media: BTreeMap::from([(1, medium)]),
+            routes: BTreeMap::new(),
+        }
+    }
+
     /// Stable identity of the spatial tree and liquid assignments for navigation
     /// caches. Zone destinations are excluded because they do not affect liquids.
     /// Change the policy tag when the interpretation of these inputs changes.
@@ -515,9 +546,11 @@ fn index<T>(reference: &FragmentRef<T>, len: usize) -> Result<Option<usize>, Loa
     }
 }
 
-/// What fills a region with this name and user data, as `EQEmu`'s water
-/// maps read them: by the name when it starts with any kind's prefix, else
-/// by the user data. Their comparison is exact, so case matters.
+/// Movement's region tag selection follows [Awater's S3D converter]. A
+/// recognized name prefix takes precedence over user data. The comparison
+/// is case-sensitive.
+///
+/// [Awater's S3D converter]: https://github.com/EQEmu/zone-utilities/blob/b361e63dd067e8959f5bf2341579f481d2374fd5/src/awater/water_map.cpp#L58-L102
 fn liquid_tag(name: &str, user_data: &str) -> Option<Liquid> {
     let tag = if REGION_KINDS.iter().any(|kind| name.starts_with(kind)) {
         name
@@ -533,11 +566,10 @@ fn liquid_tag(name: &str, user_data: &str) -> Option<Liquid> {
     }
 }
 
-/// What the Titanium program breathes in a region with this name and user
-/// data. The callback order, the four-byte minimum and the tag prefixes are
-/// not yet cited to a program address in this repository; treat them as
-/// inferred (recording checklist 6.393). Note that `liquid_tag`, which
-/// drives movement, prefers the name; this prefers the user data.
+/// Titanium `eqgame.exe`'s classic region tag callback at 0x435db5,
+/// registered at 0x443f8f. The classic lookup uses the last region-list
+/// assignment and prefers nonempty user data. Movement's `liquid_tag` uses
+/// Awater's name-first rule.
 fn titanium_medium(name: &str, user_data: &str) -> Medium {
     // The region callback receives nonempty user data first and otherwise
     // the fragment name. Its tag must have at least four bytes.

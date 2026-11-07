@@ -83,6 +83,10 @@ Approach, walk and chase hold the camera-relative forward command, independent o
   local breath sample or its first unavailable input. The companion model
   fields give race, gender and raw size, and `breath_zone_scale` gives the
   received classic model scale flag.
+  `MovementPending` defers the local report until the worker returns its
+  movement result. `Effects` means a relevant spell or worn input could
+  not be evaluated from the available mechanics. An affecting instrument
+  modifier or unsupported scaling formula can withhold the meter.
   `pet_ownership` reports the current pet and owner IDs, zone admission ID and
   pet identity revision as JSON. It is null when the session has no resolved
   pet identity.

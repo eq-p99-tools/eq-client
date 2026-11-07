@@ -1,12 +1,10 @@
 //! Local air for ordinary Titanium immersion. Health remains a server report.
 //!
-//! Provenance: the water-breathing effect and races, the breath-level
-//! effect, the capacity formula and the fixed racial reserves, the one
-//! drowning tick of an eighth of maximum health per second, and the refill
-//! on the next due tick come from the author's reading of the Titanium
-//! program, whose addresses are not yet cited in this repository. Until they
-//! are, treat every constant in this module as inferred (recording checklist
-//! 6.393).
+//! Titanium `eqgame.exe` checks the environment at 0x422198. The breathing
+//! predicate at 0x41a753 uses effect 14 and the listed water-breathing races.
+//! Capacity, effect 246 and the racial reserves are at 0x4bc3bf. The air
+//! check at 0x4bdb3c refills or consumes the reserve, then reports on an
+//! empty tick using maximum HP from 0x416963 and the 0.125 at 0x64b9a8.
 use crate::environment::Tick;
 use std::{num::NonZeroU32, time::Instant};
 
