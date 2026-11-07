@@ -1011,6 +1011,9 @@ fn prepare_scribe(
         .context("Put a scroll on the cursor first")?
         .scroll_spell
         .context("The cursor item is not a spell scroll")?;
+    // Whether the Titanium program refuses a scroll outside its class or
+    // level before asking the server is unread; this local check is inferred
+    // (recording checklist 6.394) and only refuses what the server would.
     if online.world().generation() == eq_client_core::GameDialect::Titanium
         && let Some(player) = online.world().player().filter(|player| player.level > 0)
         && let Some(level) = player

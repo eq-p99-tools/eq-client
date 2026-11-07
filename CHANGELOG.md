@@ -18,9 +18,17 @@
 - Keep a newer cast's request alias when an older cast is released. Preserve
   skinned spellbook edit receipts through a temporary link interruption and
   report worker timeouts. Check known installed Titanium class and level
-  requirements before sending a scribe request.
-- Retain an early pet buff snapshot until the owned pet resolves. Discard it
-  when the spawn is replaced or its ownership conflicts.
+  requirements before sending a scribe request; whether the official client
+  makes that check locally is unread (inferred, recording checklist 6.394).
+- Retain an early pet buff snapshot for up to one second until the owned pet
+  resolves. Discard it when the spawn is replaced or its ownership conflicts.
+- Scripts can `interact` with the exact selected merchant, banker or corpse
+  through the same path as the UI, `inspect_link` a received chat item link,
+  and drive the spellbook Search field and its Clear button. Reports carry
+  the interaction tuple, an unconfirmed merchant opening and received item
+  links. A merchant request the server never answers no longer pins the
+  interaction fence to that merchant: a later request or any opened shop
+  settles it.
 - Hold Titanium travel after a fresh placement below a nearby installed floor
   with neither a lower surface nor mapped liquid below. Allow turning at the
   received XYZ and warn once for the held location.

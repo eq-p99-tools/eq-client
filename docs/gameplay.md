@@ -142,7 +142,9 @@ Quarm offer casting and basic spellbook operations but not those edits. Quarm's
 spell actions are source-checked and tested offline; public validation is pending.
 When Titanium uses the installed spell table, a cursor scroll with a known
 class or level restriction is checked before sending a scribe request.
-Server rules and received book and inventory updates govern the result.
+Whether the official client makes that check locally is unread (inferred,
+recording checklist 6.394). Server rules and received book and inventory
+updates govern the result.
 
 Select a spell and destination gem to memorize; click a populated gem or use its
 binding to cast. Shift-click forgetting is separate from casting. Casts use the

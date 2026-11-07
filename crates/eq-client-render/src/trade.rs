@@ -127,9 +127,9 @@ impl TradeState {
                 },
             )
             .map_err(Refusal::text)?;
-        if self.opening_shop(world).is_none() {
-            self.opening_shop = Some((stamp.session_id, merchant_id));
-        }
+        // The latest request is the one awaiting an answer. A request the
+        // server never answers must not keep the fence on its merchant.
+        self.opening_shop = Some((stamp.session_id, merchant_id));
         Ok(())
     }
 
@@ -1663,6 +1663,43 @@ mod tests {
             .id();
         crate::clicks::testing::click(&mut app, end);
         assert!(app.world().resource::<TradeState>().loot.is_some());
+    }
+
+    #[test]
+    fn an_unanswered_shop_request_yields_to_the_latest_request_and_to_any_opened_shop() {
+        use eq_client_core::{WorldEvent, WorldUpdate};
+        let mut online = super::super::online::OnlineState::new(true);
+        crate::online::testing::admit(&mut online, 1, crate::online::testing::player(7));
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let outbox = crate::outbox::Outbox::new(Some(tx));
+        let mut trade = TradeState::default();
+        let stamp = outbox.stamp(online.world()).unwrap();
+        trade
+            .open_shop(online.world(), &outbox, stamp, 8, 7)
+            .unwrap();
+        assert_eq!(trade.opening_shop(online.world()), Some(8));
+        // A later request supersedes one the server never answered.
+        let stamp = outbox.stamp(online.world()).unwrap();
+        trade
+            .open_shop(online.world(), &outbox, stamp, 9, 7)
+            .unwrap();
+        assert_eq!(trade.opening_shop(online.world()), Some(9));
+        assert_eq!(rx.try_iter().count(), 2);
+        // Whichever shop the server opens settles the pending request.
+        shop_opened(&mut online, 8);
+        trade.merchant_news(
+            &WorldUpdate::Game(WorldEvent::Merchant(MerchantUpdate::Opened {
+                merchant_id: 8,
+                accepted: true,
+                rate: 1.0,
+            })),
+            online.world(),
+        );
+        assert!(trade.opening_shop(online.world()).is_none());
+        assert_eq!(
+            online.world().merchant().map(|shop| shop.merchant_id),
+            Some(8)
+        );
     }
 
     /// The server opening this merchant for the player at a neutral rate.
