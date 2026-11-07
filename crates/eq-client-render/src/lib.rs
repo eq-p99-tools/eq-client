@@ -588,6 +588,8 @@ fn install_script(
 }
 
 /// Configures the live or offline window, hiding one-shot screenshot previews.
+/// The window carries the program's name, so the title bar says what the
+/// player is running.
 fn primary_window(
     online: bool,
     visible: bool,
@@ -597,9 +599,9 @@ fn primary_window(
 ) -> Window {
     Window {
         title: if online {
-            "eq-client"
+            "Marginal Advantage"
         } else {
-            "eq-client offline viewer"
+            "Marginal Advantage offline viewer"
         }
         .to_owned(),
         visible,
