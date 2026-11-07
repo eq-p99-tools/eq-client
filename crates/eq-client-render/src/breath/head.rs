@@ -1,4 +1,5 @@
 //! Titanium's admitted head reference, separate from the movement capsule.
+use super::Unavailable;
 use bevy::prelude::Component;
 use eq_client_assets::scale::{TITANIUM, ZoneScale};
 use eq_client_core::{PlayerState, world::ClientWorld};
@@ -24,17 +25,26 @@ impl Basis {
         reference(&text, model)
     }
 
-    pub(super) fn for_player(self, world: &ClientWorld, player: &PlayerState) -> Option<f32> {
-        if world.own_model_changed()
-            || world.spawn(player.spawn_id).is_some_and(|spawn| {
-                let model = &spawn.state;
-                (model.race, model.gender, model.size.to_bits())
-                    != (player.race, player.gender, player.size.to_bits())
-            })
-        {
-            return None;
+    pub(super) fn for_player(
+        self,
+        world: &ClientWorld,
+        player: &PlayerState,
+    ) -> Result<f32, Unavailable> {
+        if world.own_model_changed() {
+            return Err(Unavailable::ModelChanged);
         }
-        self.offset(player, world.classic_model_scale_flag()?)
+        if world.spawn(player.spawn_id).is_some_and(|spawn| {
+            let model = &spawn.state;
+            (model.race, model.gender, model.size.to_bits())
+                != (player.race, player.gender, player.size.to_bits())
+        }) {
+            return Err(Unavailable::ModelMismatch);
+        }
+        let flag = world
+            .classic_model_scale_flag()
+            .ok_or(Unavailable::MissingZoneScale)?;
+        self.offset(player, flag)
+            .ok_or(Unavailable::InvalidHeadOffset)
     }
 
     fn offset(self, player: &PlayerState, zone_flag: u32) -> Option<f32> {
@@ -98,7 +108,39 @@ mod tests {
         );
         assert!(reference("[Example]\nROffset=invalid", "Example").is_none());
         assert!(Basis::load(Path::new("."), &player, None).is_none());
+        player.size = 0.0;
+        assert!((basis.offset(&player, 0).unwrap() - 3.6).abs() < 0.00001);
         player.size = f32::NAN;
         assert_eq!(basis.offset(&player, 0), None);
+    }
+
+    #[test]
+    fn head_probe_distinguishes_missing_scale_from_a_conflicting_spawn() {
+        use crate::online::OnlineState;
+
+        let mut online = OnlineState::new(true);
+        let player = testing::player(7);
+        testing::admit(&mut online, 5, player.clone());
+        let basis = Basis(3.125);
+        assert_eq!(
+            basis.for_player(online.world(), &player),
+            Err(Unavailable::MissingZoneScale)
+        );
+        let mut spawn = testing::pet(7, 9);
+        spawn.kind = eq_client_core::SpawnKind::Player;
+        spawn.pet_owner = None;
+        spawn.race = player.race;
+        spawn.gender = player.gender;
+        spawn.size = 8.0;
+        testing::spawns(&mut online, vec![spawn]);
+        assert_eq!(
+            basis.for_player(online.world(), &player),
+            Err(Unavailable::ModelMismatch)
+        );
+        testing::admit(&mut online, 6, player.clone());
+        assert_eq!(
+            basis.for_player(online.world(), &player),
+            Err(Unavailable::MissingZoneScale)
+        );
     }
 }

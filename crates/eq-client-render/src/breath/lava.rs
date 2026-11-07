@@ -42,7 +42,7 @@ impl Heat {
         }
         let player = player?;
         let profile = player.titanium_environment?;
-        let inputs = modifiers::read(world, spells, player, Need::Heat)?;
+        let inputs = modifiers::read(world, spells, player, Need::Heat).ok()?;
         if inputs.invulnerable {
             return None;
         }

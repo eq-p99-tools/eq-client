@@ -1,4 +1,5 @@
 //! Read breath modifiers from the current inventory and active effects.
+use super::Unavailable;
 use crate::spellbook::SpellNames;
 use eq_client_assets::spells::Effect;
 use eq_client_core::{
@@ -98,22 +99,29 @@ pub(super) fn read(
     spells: &SpellNames,
     player: &PlayerState,
     need: Need,
-) -> Option<Inputs> {
-    let profile = player.titanium_environment?;
+) -> Result<Inputs, Unavailable> {
+    let profile = player
+        .titanium_environment
+        .ok_or(Unavailable::MissingProfile)?;
     if profile.has_alternate_advancement {
-        return None;
+        return Err(Unavailable::AlternateAdvancement);
     }
     let inventory = world.worker_inventory();
     let level = u16::from(player.level);
-    let equipment = eqemu_equipped_modifiers(inventory, player.class?, player.race, level).ok()?;
+    let class = player.class.ok_or(Unavailable::Equipment)?;
+    let equipment = eqemu_equipped_modifiers(inventory, class, player.race, level)
+        .map_err(|_| Unavailable::Equipment)?;
     let item_hp = eqemu_item_hit_points(&equipment);
-    let (stamina, mut fire_resistance) = crate::speed::food_environment(inventory, level)?;
+    let (stamina, mut fire_resistance) =
+        crate::speed::food_environment(inventory, level).ok_or(Unavailable::Food)?;
     let mut combined = Effects {
         stamina,
         ..Effects::default()
     };
-    let evaluated =
-        |id, level, instrument| project(&spells.mechanics(id)?.effects, level, instrument, need);
+    let evaluated = |id, level, instrument| {
+        let mechanics = spells.mechanics(id).ok_or(Unavailable::Effects)?;
+        project(&mechanics.effects, level, instrument, need).ok_or(Unavailable::Effects)
+    };
     for (_, item) in equipment {
         combined.stamina += i64::from(item.bonuses.stamina);
         fire_resistance = fire_resistance
@@ -121,18 +129,18 @@ pub(super) fn read(
             .map(|(total, item)| total + i64::from(item));
         if let Some(worn) = item.worn {
             if worn.effect_type != 2 {
-                return None;
+                return Err(Unavailable::Effects);
             }
             let caster_level = if worn.level == 0 {
                 level
             } else {
-                u16::try_from(worn.level).ok()?
+                u16::try_from(worn.level).map_err(|_| Unavailable::Effects)?
             };
             combined.add(evaluated(worn.spell_id, caster_level, 10)?);
         }
     }
     let buffs = world.buffs();
-    let slots = buffs.slots()?;
+    let slots = buffs.slots().ok_or(Unavailable::BuffSlots)?;
     for buff in slots.values() {
         combined.add(evaluated(
             buff.spell_id,
@@ -149,7 +157,7 @@ pub(super) fn read(
         // A landing without a slot may replace a contributor. Additive
         // capacity cannot be established until the slot report settles.
         if effect.stamina != 0 || effect.breath_level != 0 {
-            return None;
+            return Err(Unavailable::UnslottedModifier);
         }
         if effect.fire_resistance != 0 {
             fire_resistance = None;
@@ -169,7 +177,7 @@ pub(super) fn read(
         Some(7) => 8 + i64::from(player.level.saturating_sub(49)),
         _ => 0,
     };
-    Some(Inputs {
+    Ok(Inputs {
         stamina: player
             .base_attributes
             .filter(|base| base.stamina > 0)
@@ -207,8 +215,15 @@ mod tests {
         });
         let mut online = OnlineState::new(true);
         testing::admit(&mut online, 5, player.clone());
-        assert!(read(online.world(), &spells, &player, Need::Heat).is_none());
+        assert!(matches!(
+            read(online.world(), &spells, &player, Need::Heat),
+            Err(Unavailable::Equipment)
+        ));
         testing::inventory(&mut online, InventoryUpdate::Snapshot(vec![]));
+        assert!(matches!(
+            read(online.world(), &spells, &player, Need::Air),
+            Err(Unavailable::BuffSlots)
+        ));
         testing::buffs(&mut online, std::collections::BTreeMap::default());
         let inputs = read(online.world(), &spells, &player, Need::Heat).unwrap();
         assert_eq!(inputs.fire_resistance, Some(25));
@@ -229,7 +244,10 @@ mod tests {
             .as_mut()
             .unwrap()
             .has_alternate_advancement = true;
-        assert!(read(online.world(), &spells, &player, Need::Heat).is_none());
+        assert!(matches!(
+            read(online.world(), &spells, &player, Need::Air),
+            Err(Unavailable::AlternateAdvancement)
+        ));
     }
 
     #[test]

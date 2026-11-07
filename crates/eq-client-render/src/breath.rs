@@ -28,9 +28,39 @@ pub(super) struct State {
     heat: lava::Heat,
 }
 
+/// Why the current frame could not supply an air observation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Unavailable {
+    OutsideAdmission,
+    Gills,
+    OutOfWorld,
+    SceneLoading,
+    MissingHeadBasis,
+    ModelChanged,
+    ModelMismatch,
+    MissingZoneScale,
+    InvalidHeadOffset,
+    UnresolvedMedium,
+    MissingProfile,
+    AlternateAdvancement,
+    Equipment,
+    Food,
+    BuffSlots,
+    Effects,
+    UnslottedModifier,
+    Capacity,
+}
+
+type Probe = (Option<Medium>, Result<Sample, Unavailable>);
+type Observation = (Option<Medium>, Result<(Sample, Option<u32>), Unavailable>);
+
 impl State {
     pub(super) const fn air(&self) -> Option<Air> {
         self.air.breath.air()
+    }
+
+    pub(super) const fn probe(&self) -> Option<Probe> {
+        self.air.probe
     }
 }
 
@@ -39,6 +69,7 @@ struct AirState {
     admission: Option<(u64, u16)>,
     placement: u64,
     breath: Breath,
+    probe: Option<Probe>,
 }
 
 impl AirState {
@@ -50,24 +81,34 @@ impl AirState {
         world: &eq_client_core::world::ClientWorld,
         qol: &eq_client_core::qol::Settings,
         placement: u64,
-        sample: impl FnOnce(&PlayerState) -> (Sample, Option<u32>),
+        sample: impl FnOnce(&PlayerState) -> Observation,
     ) -> Option<u32> {
         let scope = world.session_id().zip(world.player()).filter(|_| {
-            !world.ended()
-                && !world.is_dead()
-                && world.generation() == GameDialect::Titanium
-                && !qol.on(Fix::GillsForDays)
+            !world.ended() && !world.is_dead() && world.generation() == GameDialect::Titanium
         });
-        let Some((admission, player)) = scope else {
-            *self = Self::default();
+        let gills = qol.on(Fix::GillsForDays);
+        let Some((admission, player)) = scope.filter(|_| !gills) else {
+            *self = Self {
+                probe: Some((
+                    None,
+                    Err(if scope.is_some() {
+                        Unavailable::Gills
+                    } else {
+                        Unavailable::OutsideAdmission
+                    }),
+                )),
+                ..Self::default()
+            };
             return None;
         };
         if !world.in_world() {
             self.breath.interrupt();
+            self.probe = Some((None, Err(Unavailable::OutOfWorld)));
             return None;
         }
-        let (sample, maximum) = sample(player);
-        self.observe(
+        let (medium, result) = sample(player);
+        let (sample, maximum) = result.unwrap_or((Sample::Unknown, None));
+        let amount = self.observe(
             now,
             (admission, player.spawn_id),
             placement,
@@ -75,7 +116,9 @@ impl AirState {
             maximum.filter(|_| {
                 qol.on(Fix::TakeEnvironmentalDamage) && world.can(Capability::Drowning)
             }),
-        )
+        );
+        self.probe = Some((medium, result.map(|(sample, _)| sample)));
+        amount
     }
 
     fn observe(
@@ -100,13 +143,40 @@ impl AirState {
     }
 }
 
-fn head_medium(online: &OnlineState, basis: head::Basis, player: &PlayerState) -> Option<Medium> {
+fn head_medium(
+    online: &OnlineState,
+    basis: Option<head::Basis>,
+    player: &PlayerState,
+) -> Result<Medium, Unavailable> {
     if online.scene_loading() {
-        return None;
+        return Err(Unavailable::SceneLoading);
     }
+    let basis = basis.ok_or(Unavailable::MissingHeadBasis)?;
     let mut head = eq_client_core::render_position(player.position);
     head[1] += basis.for_player(online.world(), player)?;
-    online.regions.medium_at(head)
+    online
+        .regions
+        .medium_at(head)
+        .ok_or(Unavailable::UnresolvedMedium)
+}
+
+fn observe_head(
+    online: &OnlineState,
+    basis: Option<head::Basis>,
+    spells: &SpellNames,
+    player: &PlayerState,
+) -> Observation {
+    let medium = match head_medium(online, basis, player) {
+        Ok(medium) => medium,
+        Err(reason) => return (None, Err(reason)),
+    };
+    let sample = match medium {
+        Medium::Air => Ok((Sample::CanBreathe, None)),
+        Medium::Water | Medium::Lava | Medium::OtherSubmerging => {
+            submerged(online.world(), spells, player)
+        }
+    };
+    (Some(medium), sample)
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -137,23 +207,13 @@ pub(super) fn update(
             },
         });
     };
-    if let Some(amount) = state.air.advance(
-        now,
-        world,
-        qol,
-        online.placement_revision(),
-        |player| match body
-            .single()
-            .ok()
-            .and_then(|basis| head_medium(&online, *basis, player))
-        {
-            Some(Medium::Air) => (Sample::CanBreathe, None),
-            Some(Medium::Water | Medium::Lava | Medium::OtherSubmerging) => {
-                submerged(world, &spells, player)
-            }
-            None => (Sample::Unknown, None),
-        },
-    ) {
+    if let Some(amount) =
+        state
+            .air
+            .advance(now, world, qol, online.placement_revision(), |player| {
+                observe_head(&online, body.single().ok().copied(), &spells, player)
+            })
+    {
         report(LiquidHazard::Drowning, amount);
     }
     if let Some(amount) = state.heat.advance(now, &online, qol, &spells) {
@@ -171,29 +231,25 @@ fn submerged(
     world: &eq_client_core::world::ClientWorld,
     spells: &SpellNames,
     player: &PlayerState,
-) -> (Sample, Option<u32>) {
+) -> Result<(Sample, Option<u32>), Unavailable> {
     let race = world
         .spawn(player.spawn_id)
         .map_or(player.race, |spawn| spawn.state.race);
     if water_breathing_race(race) {
-        return (Sample::CanBreathe, None);
+        return Ok((Sample::CanBreathe, None));
     }
-    let Some(inputs) = modifiers::read(world, spells, player, modifiers::Need::Air) else {
-        return (Sample::Unknown, None);
-    };
+    let inputs = modifiers::read(world, spells, player, modifiers::Need::Air)?;
     if inputs.water_breathing {
-        return (Sample::CanBreathe, None);
+        return Ok((Sample::CanBreathe, None));
     }
-    let capacity = titanium_capacity(race, inputs.stamina, inputs.breath_level);
+    let capacity = titanium_capacity(race, inputs.stamina, inputs.breath_level)
+        .ok_or(Unavailable::Capacity)?;
     let maximum_hp = if inputs.invulnerable {
         None
     } else {
         inputs.maximum_hp(world)
     };
-    (
-        capacity.map_or(Sample::Unknown, Sample::Submerged),
-        maximum_hp,
-    )
+    Ok((Sample::Submerged(capacity), maximum_hp))
 }
 
 /// A small meter for skins without a usable `BreathWindow`.
@@ -278,6 +334,38 @@ mod tests {
     use std::{num::NonZeroU32, time::Duration};
 
     #[test]
+    fn missing_head_basis_is_reported_and_interrupts_air_without_damage() {
+        use crate::online::testing;
+        use eq_client_core::qol::Settings;
+
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 5, testing::player(7));
+        let mut state = AirState::default();
+        let now = Instant::now();
+        let wet = Sample::Submerged(NonZeroU32::MIN);
+        state.observe(now, (5, 7), 1, wet, Some(80));
+        state.observe(now + Duration::from_secs(1), (5, 7), 1, wet, Some(80));
+        assert_eq!(state.breath.air().unwrap().remaining, 0);
+
+        let mut qol = Settings::default();
+        qol.set(Fix::TakeEnvironmentalDamage, true);
+        let spells = SpellNames::default();
+        let amount = state.advance(
+            now + Duration::from_secs(2),
+            online.world(),
+            &qol,
+            1,
+            |player| observe_head(&online, None, &spells, player),
+        );
+        assert_eq!(amount, None);
+        assert!(state.breath.air().is_none());
+        assert_eq!(
+            state.probe,
+            Some((None, Err(Unavailable::MissingHeadBasis)))
+        );
+    }
+
+    #[test]
     fn titanium_air_and_gills_work_without_a_liquid_wire_capability() {
         use crate::{online::testing, outbox::Needs};
         use eq_client_core::{WorldEvent, options::Toggle, qol::Settings};
@@ -302,7 +390,12 @@ mod tests {
         let mut qol = Settings::default();
         let mut state = AirState::default();
         let start = Instant::now();
-        let wet = |_: &PlayerState| (Sample::Submerged(NonZeroU32::MIN), Some(80));
+        let wet = |_: &PlayerState| {
+            (
+                Some(Medium::Water),
+                Ok((Sample::Submerged(NonZeroU32::MIN), Some(80))),
+            )
+        };
         for seconds in [0, 1, 2] {
             assert_eq!(
                 state.advance(
@@ -321,6 +414,7 @@ mod tests {
             panic!("gills must skip sampling")
         });
         assert!(state.breath.air().is_none());
+        assert_eq!(state.probe, Some((None, Err(Unavailable::Gills))));
     }
 
     #[test]
@@ -383,7 +477,12 @@ mod tests {
         let mut state = AirState::default();
         let start = Instant::now();
         let at = |seconds| start + Duration::from_secs(seconds);
-        let wet = |_: &PlayerState| (Sample::Submerged(NonZeroU32::MIN), Some(80));
+        let wet = |_: &PlayerState| {
+            (
+                Some(Medium::Water),
+                Ok((Sample::Submerged(NonZeroU32::MIN), Some(80))),
+            )
+        };
         qol.set(Fix::TakeEnvironmentalDamage, false);
         for seconds in [0, 1, 2] {
             assert_eq!(

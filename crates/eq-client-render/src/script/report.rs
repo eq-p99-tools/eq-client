@@ -88,6 +88,12 @@ pub(super) fn state(
     let book = book(online);
     let pet = pet(online);
     let gems = online.world().gems();
+    let breath = observed.11.as_deref();
+    let breath_admitted_model = online.world().player().map(|p| (p.race, p.gender, p.size));
+    let breath_own_spawn_model = online.world().player().and_then(|player| {
+        let spawn = &online.world().spawn(player.spawn_id)?.state;
+        Some((spawn.race, spawn.gender, spawn.size))
+    });
     // Milliseconds until each memorized gem can be cast again.
     let now = std::time::Instant::now();
     let cooldowns = gems.map(|spell| {
@@ -118,8 +124,12 @@ pub(super) fn state(
         camera_yaw = ?camera.map(|camera| camera.yaw),
         camera_pitch = ?camera.map(crate::OrbitCamera::view_pitch),
         ?own_stun,
-        air_remaining = ?observed.11.as_deref().and_then(crate::breath::State::air)
+        air_remaining = ?breath.and_then(crate::breath::State::air)
             .map(|air| (air.remaining, air.capacity.get())),
+        breath_probe = ?breath.and_then(crate::breath::State::probe),
+        ?breath_admitted_model,
+        ?breath_own_spawn_model,
+        breath_zone_scale = ?online.world().classic_model_scale_flag(),
         local_movement_policy_feedback = ?online.world().movement_options_result(),
         ?option_values,
         ?known_invisible_count,
