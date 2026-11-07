@@ -25,6 +25,7 @@ fn worker_result_and_revision_are_visible_to_breath_in_the_same_frame() {
         &updates,
         WorldEvent::MotionSent {
             session_id: 11,
+            created: pending.created,
             position: pending.position,
             refused: None,
         },
@@ -168,7 +169,7 @@ fn an_overdue_move_withholds_the_stale_gauge_and_recovers_on_a_late_result() {
     app.update();
     let pending = next_move(&commands);
     due(&mut app, placement);
-    crate::motion::tests::age_pending(&mut app);
+    let aged = crate::motion::tests::age_pending(&mut app);
     app.update();
     assert!(commands.try_recv().is_err());
     let state = app.world().resource::<State>();
@@ -182,6 +183,7 @@ fn an_overdue_move_withholds_the_stale_gauge_and_recovers_on_a_late_result() {
         &updates,
         WorldEvent::MotionSent {
             session_id: 10,
+            created: aged,
             position: pending.position,
             refused: None,
         },
@@ -194,15 +196,36 @@ fn an_overdue_move_withholds_the_stale_gauge_and_recovers_on_a_late_result() {
         &updates,
         WorldEvent::MotionSent {
             session_id: 11,
+            created: pending.created,
             position: pending.position,
             refused: None,
         },
     );
     app.update();
     assert!(commands.try_recv().is_err());
-    // A fresh observation restores the view of the same reserve and starts
-    // a new interval. The unresolved gap neither refills nor replays ticks.
+    assert!(app.world().resource::<Controls>().waiting());
+    assert!(app.world().resource::<State>().air().is_none());
+
+    push(
+        &updates,
+        WorldEvent::MotionSent {
+            session_id: 11,
+            created: aged,
+            position: pending.position,
+            refused: None,
+        },
+    );
+    app.update();
+    assert_report(&commands, 9, pending.position);
+    assert!(commands.try_recv().is_err());
+    // A fresh observation takes the due check once, using the same reserve.
     assert_eq!(app.world().resource::<State>().air().unwrap().remaining, 0);
+    app.update();
+    assert!(
+        commands
+            .try_iter()
+            .all(|command| !matches!(command, ClientCommand::LiquidDamage { .. }))
+    );
 }
 
 fn scheduled() -> (

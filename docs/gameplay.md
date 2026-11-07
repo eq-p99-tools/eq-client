@@ -15,6 +15,13 @@ steps. The display interpolates accepted movement instead of waiting for each
 remote position update. Speed, elapsed time and admission checks constrain the
 outgoing requests; corrections replace the predicted position.
 
+A local movement proposal completes when the worker returns a result for
+its admission and request stamp. That result describes the worker's
+working position. A pending proposal can defer a due air or lava check
+until the worker position is usable. The Air Remaining gauge is hidden
+after 250 ms without a result, and a late result allows one due check
+against the current sample.
+
 Movement waits for usable inventory, coin, attribute and buff state. Unknown
 load or effects never become a zero-weight speed grant. Weight-preserving
 ordinary cursor moves can keep movement available; unresolved weight/equipment
@@ -109,15 +116,19 @@ session offers them. Click to choose an amount, or Shift-click to pick up all;
 click another box with coins on the cursor to place/convert them. Shared banking
 and destroying coins have no client action yet.
 
-On Titanium EQEmu, **Drop cursor item** in Inventory asks before dropping one
+On local-only Titanium EQEmu, **Drop cursor item** in Inventory asks before dropping one
 ordinary, verified droppable item or whole stack. The server chooses the
 location. An item moved onto the cursor only by local prediction needs a
 received cursor update before it can be dropped. The last received item stays
 visible while custody is unresolved. A nearby object appearing does not
 identify the item that left the cursor. Use ordinary ground pickup with a
 known empty cursor. After submitting a drop, re-enter the world for a fresh
-inventory snapshot. The hold pauses cursor actions and active movement and
-withholds fall-damage reports. Supported passive descent continues.
+inventory snapshot. A drop requires current item and carried coin information.
+The hold pauses conflicting inventory actions. Movement
+can continue after the worker accepts a conservative carried-weight report.
+Falls use the retained weight bound when available. If a landing needs
+weight and the bound becomes unknown, the client shows that in chat.
+Choose **No**, press Escape or close Inventory to cancel before submitting.
 
 Where the inventory policy supports it, **Destroy cursor item** asks before
 destroying the whole cursor item or stack. **No**, Escape, closing inventory,

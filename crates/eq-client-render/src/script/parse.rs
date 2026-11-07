@@ -282,6 +282,8 @@ pub enum ClickTarget {
     Store,
     /// Explicit cursor-item destroy selection, followed by ordinary Yes/No.
     Destroy,
+    /// Explicit cursor-item drop selection, followed by ordinary Yes/No.
+    Drop,
     /// A spellbook row on the open page, from zero.
     BookRow(usize),
     /// The spellbook's memorize button for a gem, from zero.
@@ -793,6 +795,7 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["scribe"] => ClickTarget::Scribe,
         ["store"] => ClickTarget::Store,
         ["destroy"] => ClickTarget::Destroy,
+        ["drop"] => ClickTarget::Drop,
         ["book", row] => ClickTarget::BookRow(value(row, "a book row number")?),
         ["loot", place] => {
             ClickTarget::Trade(TradeClick::Take(value(place, "a place on the corpse")?))
@@ -1942,28 +1945,34 @@ chat tell Friend inc now
     }
 
     #[test]
-    fn destruction_requires_separate_ordinary_confirmation_clicks() {
-        assert_eq!(
-            parse(
-                "click destroy\nclick answer no\nclick destroy\nclick answer yes\n",
-                Path::new("private")
-            )
-            .unwrap(),
-            [
-                Step::Click(ClickTarget::Destroy),
-                Step::Click(ClickTarget::Answer(false)),
-                Step::Click(ClickTarget::Destroy),
-                Step::Click(ClickTarget::Answer(true))
-            ]
-        );
-        for invalid in [
-            "destroy",
-            "destroy 30",
-            "click destroy 30",
-            "click destroy all",
-            "click destroy yes",
+    fn cursor_actions_require_separate_ordinary_confirmation_clicks() {
+        let base = Path::new("private");
+        for (name, target) in [
+            ("destroy", ClickTarget::Destroy),
+            ("drop", ClickTarget::Drop),
         ] {
-            assert!(parse(invalid, Path::new("private")).is_err());
+            assert_eq!(
+                parse(
+                    &format!("click {name}\nclick answer no\nclick {name}\nclick answer yes\n"),
+                    base,
+                )
+                .unwrap(),
+                [
+                    Step::Click(target),
+                    Step::Click(ClickTarget::Answer(false)),
+                    Step::Click(target),
+                    Step::Click(ClickTarget::Answer(true))
+                ]
+            );
+            for invalid in [
+                name.to_owned(),
+                format!("{name} 30"),
+                format!("click {name} 30"),
+                format!("click {name} all"),
+                format!("click {name} yes"),
+            ] {
+                assert!(parse(&invalid, base).is_err());
+            }
         }
     }
 

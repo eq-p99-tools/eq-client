@@ -132,7 +132,7 @@ pub struct Casting {
     /// The request associated with the active cast. TAKP can begin a Luclin
     /// port as spell 2935 and end it naming the requested port.
     requested: Option<u32>,
-    /// The released request's spell, available to the next cast notice.
+    /// Request context for the ordered cast notice that follows.
     next_requested: Option<u32>,
     /// The last interruption: when, and the server's message for it.
     pub interrupted: Option<(Instant, u32)>,
@@ -150,6 +150,10 @@ impl Casting {
             None => self.pending.or(self.next_requested),
         };
         self.pending = spell_id;
+    }
+
+    pub(super) fn late_begin(&mut self, requested_spell: u32) {
+        self.next_requested = Some(requested_spell);
     }
 
     /// Follows the player's own casts. Resource updates alone never claim

@@ -83,6 +83,11 @@ impl Breath {
     /// or while a required observation is missing.
     pub const fn interrupt(&mut self) {
         self.clock.interrupt();
+        self.hide_air();
+    }
+
+    /// Withholds a stale gauge while keeping the next check due.
+    pub const fn hide_air(&mut self) {
         self.air = None;
     }
 

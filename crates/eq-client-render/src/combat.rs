@@ -294,14 +294,13 @@ pub(super) fn consideration_text(
     let standing = (1..=9)
         .contains(&faction)
         .then(|| messages.format(12211 + faction, &[]));
-    // Assessment wording can vary with the player's level. These IDs give
-    // the existing level summaries, and the native chat types set the color.
-    // Which summary the Titanium program picks for each colour and level is
-    // unread; this choice is inferred (recording checklist 6.395).
+    // Titanium picks phrases by own level, level difference and a reply field
+    // (0x49bbe8–0x49be16). Here each color has one representative summary.
+    // Gray reuses green wording. See ARCHITECTURE.md for the native branches.
     let assessment = match color {
         Some(ConColor::Gray) => Some((12236, 6)),
         Some(ConColor::Green) => Some((12236, 2)),
-        Some(ConColor::LightBlue) => Some((12226, 18)),
+        Some(ConColor::LightBlue) => Some((12232, 18)),
         Some(ConColor::Blue) => Some((12227, 4)),
         Some(ConColor::White) => Some((12229, 10)),
         Some(ConColor::Yellow) => Some((12231, 15)),
@@ -506,6 +505,18 @@ mod tests {
             super::super::chat::Said::own(
                 "A rat — faction standing unknown (code 77) — level assessment unknown."
             )
+        );
+    }
+
+    #[test]
+    fn consider_text_uses_a_native_light_blue_summary() {
+        let table = Messages::parse(
+            "EQST0002\n0 1\n12239 %1 %2 %3\n12216 synthetic standing\n12232 synthetic light blue.\n",
+        );
+        assert_eq!(
+            consideration_text(&table, "a rat", 5, Some(ConColor::LightBlue)),
+            super::super::chat::Said::official("A rat synthetic standing synthetic light blue.")
+                .typed(18),
         );
     }
 

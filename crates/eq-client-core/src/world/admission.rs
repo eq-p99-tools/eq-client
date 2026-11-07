@@ -177,6 +177,7 @@ impl ClientWorld {
     pub(super) fn motion_sent(
         &mut self,
         session_id: u64,
+        created: Instant,
         position: WorldPosition,
         refused: Option<&String>,
         changes: &mut Changes,
@@ -189,6 +190,7 @@ impl ClientWorld {
             {
                 player.position = position;
                 changes.moved = Some(Moved {
+                    created,
                     position,
                     refused: refused.cloned(),
                 });

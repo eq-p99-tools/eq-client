@@ -80,6 +80,41 @@ submission sends `CreateCharacter` through `Outbox`. Refusals retain the draft,
 new lists invalidate it, and success selects the confirmed character without
 entering. Creation claims `keys::Typing` before chat, Escape and gameplay input.
 
+## Consider presentation
+
+`eq-network` selects the presentation policy. Every current server policy
+uses the received color. An optional classic NPC estimate falls back to that
+color if either level is unavailable. The world retains the received color,
+and the notice carries the reply. The chat line pairs the wire faction phrase
+with a representative assessment for the displayed color. Unknown faction
+and color keep their own fallbacks.
+
+Unpatched Titanium resolves the NPC at `eqgame.exe` 0x45ec2a and reads the
+wire faction at 0x49b9c0. It calculates its ordinary NPC category from
+local and target levels at 0x4bc20b and converts that category to a chat
+type at 0x491e30. The reply's color field does not enter that calculation.
+The chat type reaches the output at 0x49be6f. The fixed palette at 0x4f2bbe
+returns the following values. The renderer uses these as chat defaults.
+
+| Color | Chat type | RGB | Phrase IDs at player levels 1–14 | Levels 15–24 | Levels 25+ |
+| --- | --- | --- | --- | --- | --- |
+| Green | 2 | `#008000` | 12226 | 12226 for delta below −5, otherwise 12232 | 12236 for delta below −10, otherwise 12237 |
+| Blue | 4 | `#0040FF` | 12228 at level 7+ with delta at least −3, otherwise 12227 | 12233 for delta above −3, otherwise 12234 | 12235 |
+| White | 10 | `#E0E0E0` | 12229 below level 8, otherwise 12230 | 12235 | 12231 |
+| Red | 13 | `#F00000` | 12225 | 12225 | 12225 |
+| Yellow | 15 | `#F0F000` | 12231 | 12231 | 12238 |
+| Light blue | 18 | `#00F0F0` | 12227 | 12232 | 12232 |
+
+The phrase branches at 0x49bc39–0x49be16 use target level minus player level
+for delta. This table covers the zero dword at reply offset 24. The nonzero
+branch at 0x49bbe8 selects IDs 12223, 12224 and 12225 for green, white and
+red respectively. The renderer uses the fixed type 6 gray (`#808080`) for
+a reported gray, which is outside the native ordinary NPC category map.
+Wire white aliases normalize to the same displayed color and use chat
+type 10. These program reads establish the unpatched Titanium path only.
+Project 1999's patched thresholds and the renderer's representative phrases
+still need comparison in the official clients.
+
 ## Ordered work and asynchronous outcomes
 
 The renderer keeps its resource registration and frame graph in `systems`,

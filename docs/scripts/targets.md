@@ -10,6 +10,8 @@ Use these targets after `click`, `right_click` or `hover`. For a held click, put
 
 - `slot number`: an inventory slot; carried top-level slots start at 22.
 - `store`: auto-store the item on the cursor.
+- `drop`: open Inventory's ordinary ground-drop confirmation for the cursor
+  item on local-only Titanium EQEmu. Answer the drop question separately.
 - `scribe`: scribe the cursor scroll.
 - `book row`: a spellbook list row, counted from zero.
 - `book_place place`: a skin spellbook place, from 0 to 15.

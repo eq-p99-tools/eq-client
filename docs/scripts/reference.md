@@ -38,7 +38,14 @@ confirms that exact admission, inventory revision, item and quantity, while
 slice refuses populated containers, queued cursor items and unresolved inventory
 predictions. A sent destruction remains a local prediction until received
 inventory evidence arrives; scripts must not repeat it on an uncertain result.
-Coin destruction and ground dropping have no script action.
+Coin destruction has no script action.
+
+`click drop` selects an eligible whole cursor item or stack in Inventory
+on local-only Titanium EQEmu. It opens the ordinary drop confirmation.
+`click answer yes` on that question submits the exact selection, while
+`click answer no` cancels. The cursor stays held until a fresh received
+inventory snapshot. Treat submission and any ground-object appearance as
+separate from inventory confirmation.
 
 Key names are case-insensitive. Combine them with `+`, such as `alt+1`. Supported names include letters, digits, `f1` to `f12`, `space`, `escape`, `enter`, `backspace`, `delete`, `tab`, `slash`, `up`, `down`, `left`, `right`, `shift`, `ctrl`, `alt`, `numlock`, `insert`, `home`, `end`, `pageup`, `pagedown`, `numpad0` to `numpad9`, `numpad_add`, `numpad_subtract`, `numpad_multiply`, `numpad_divide`, `numpad_decimal` and `numpad_enter`.
 
@@ -74,6 +81,10 @@ Movement uses the client's ordinary movement and collision behavior. It is not a
 
 Approach, walk and chase hold the camera-relative forward command, independent of key bindings. Object commands choose the nearest matching tradeskill container when they start. Missing targets, unreachable routes and timeouts stop the run. `wait_dead` only recognizes NPC corpses or a target leaving the zone; a player's death does not satisfy it while their corpse remains.
 
+Walk stall logs use `waiting` for an outstanding Move or crossing. For a
+Move, the worker's local result releases that wait. Server placement is
+reported separately.
+
 ## Diagnostics and commands
 
 - `report [label]` logs a state summary with an optional label. Its `option_levels` field includes slider settings, with `run_boost` in hundredths of ordinary running speed. For a selected target, `considered` shows the decoded received color and `display_con_color` shows the presentation color. The report includes `selected_target_level` and `own_level` when known.
@@ -83,10 +94,12 @@ Approach, walk and chase hold the camera-relative forward command, independent o
   local breath sample or its first unavailable input. The companion model
   fields give race, gender and raw size, and `breath_zone_scale` gives the
   received classic model scale flag.
-  `MovementPending` defers the local report until the worker returns its
-  movement result. `Effects` means a relevant spell or worn input could
-  not be evaluated from the available mechanics. An affecting instrument
-  modifier or unsupported scaling formula can withhold the meter.
+  `MovementPending` and `MovementUnconfirmed` defer the due liquid check
+  until the worker returns a usable position. After 250 ms the air gauge
+  is hidden while the result is outstanding. `Effects` means a relevant spell
+  or worn input could not be evaluated from the available mechanics. An
+  affecting instrument modifier or unsupported scaling formula can withhold
+  the meter.
   `pet_ownership` reports the current pet and owner IDs, zone admission ID and
   pet identity revision as JSON. It is null when the session has no resolved
   pet identity.

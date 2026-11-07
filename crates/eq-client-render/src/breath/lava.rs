@@ -29,8 +29,9 @@ impl Heat {
             && world.can(Capability::LavaHeat)
             && world.in_world()
             && !online.scene_loading();
-        if eligible && movement == LiquidBasis::Pending {
-            // A worker result establishes the position for the next check.
+        if eligible && movement != LiquidBasis::Observed {
+            // The result establishes contact for the next check. Leave the
+            // clock due without evaluating heat at an unconfirmed position.
             return None;
         }
         let player = world.player();
@@ -39,7 +40,6 @@ impl Heat {
             .zip(player)
             .filter(|(_, player)| {
                 eligible
-                    && movement == LiquidBasis::Observed
                     // Virtual surface support never supplies a heat sample.
                     && online.regions.medium_at(eq_client_core::render_position(player.position))
                         == Some(Medium::Lava)
@@ -120,16 +120,17 @@ mod tests {
         );
         assert_eq!(
             heat.advance(at(2), &online, &qol, &spells, LiquidBasis::Observed),
-            None
+            Some(42)
         );
         assert_eq!(
-            heat.advance(at(3), &online, &qol, &spells, LiquidBasis::Observed),
-            Some(42)
+            heat.advance(at(2), &online, &qol, &spells, LiquidBasis::Observed),
+            None
         );
         testing::news(
             &mut online,
             [WorldEvent::MotionSent {
                 session_id: 5,
+                created: at(3),
                 position: WorldPosition {
                     z: 1.0,
                     ..Default::default()

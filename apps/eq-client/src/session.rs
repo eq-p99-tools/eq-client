@@ -131,6 +131,7 @@ impl SessionWorker {
     pub fn start(login: Login, options: &SessionOptions) -> Result<eq_client_render::Session> {
         let protocol = login.protocol;
         let client = client(login, options)?;
+        let classic_npc_consider = client.consider_npcs_by_level();
         let inventory_move_rules = client.inventory_move_rules();
         let spell_provider =
             eq_client_core::spell_tables::Binding::new(client.spell_table_policy());
@@ -213,11 +214,7 @@ impl SessionWorker {
             }
         });
         Ok(eq_client_render::Session {
-            // The received consider colour is shown on every server. Whether
-            // the Titanium program replaces it with a level estimate on any
-            // server is unread, and per-server presentation belongs behind an
-            // eq-network accessor, not a protocol comparison here.
-            classic_npc_consider: false,
+            classic_npc_consider,
             inventory_move_rules,
             spell_provider,
             updates: receiver,

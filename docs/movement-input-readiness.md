@@ -23,9 +23,13 @@ invalidation remains unavailable until authoritative recovery. This calculation
 does not turn a timeout into a confirmed inventory update.
 
 After a ground drop, the server may already hold a queued arrival as its
-current cursor item. A fresh inventory snapshot restores the carried weight
-input. While the drop is unresolved, the readiness notice asks the player
-to re-enter the world, and the client withholds weight-based fall reports.
+current cursor item. Take the heaviest possible current cursor group and
+count the rest of the carried inventory once. The worker requires a fresh
+input report meeting that bound. If a correction makes movement inputs
+unavailable, the readiness notice asks the player to re-enter for a fresh
+inventory snapshot. An ordinary cursor resync can leave the landing bound
+usable during that pause.
+Recalibration preserves an in-progress descent and pending fall report.
 
 The session owns HP/sneak speed adjustments, movement caps and permission. When
 it withdraws input, the renderer clears taps, autorun and queued jumps but still
@@ -72,8 +76,13 @@ server fade or new snapshot. The displayed duration is an estimate.
   transfers have no server acknowledgement. Cursor coin inclusion and P99 use of
   public Titanium/EQEmu rules remain inferences requiring compatibility checks.
 - `ClientWorld::carried_weight` estimates the displayed load.
-  `ClientWorld::fall_weight` leaves weight unavailable during a pending
-  ground drop, when the displayed estimate may omit the server's cursor item.
+  `ClientWorld::fall_weight` uses the retained cursor bound during a drop.
+  It returns `None` if an unbounded item change or unknown coins leave the
+  load uncertain. The renderer can still determine a weight-independent
+  landing. If the landing needs a load it cannot determine, the renderer
+  records that uncertainty in chat.
+  Safe Fall's skill notice requires that the fall would use the skill at
+  both zero weight and the upper bound.
 - Source evidence and decoder details are in the companion network document
   `docs/movement-input-readiness.md`. No live session was used for these changes.
 

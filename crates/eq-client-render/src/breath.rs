@@ -115,17 +115,17 @@ impl AirState {
             return None;
         }
         let can_report = qol.on(Fix::TakeEnvironmentalDamage) && world.can(Capability::Drowning);
+        let scope = (admission, player.spawn_id);
         if movement == LiquidBasis::Unconfirmed {
-            self.breath.interrupt();
+            self.set_scope(scope, placement);
+            self.breath.hide_air();
             self.probe = Some((None, Err(Unavailable::MovementUnconfirmed)));
             return None;
         }
-        if movement == LiquidBasis::Pending && can_report {
+        if movement == LiquidBasis::Pending {
             // The worker may already have moved while its result is in flight.
             // Keep the tick due so it can use the next observed position.
-            if self.admission != Some((admission, player.spawn_id)) || self.placement != placement {
-                self.breath.interrupt();
-            }
+            self.set_scope(scope, placement);
             self.probe = Some((None, Err(Unavailable::MovementPending)));
             return None;
         }
@@ -133,7 +133,7 @@ impl AirState {
         let (sample, maximum) = result.unwrap_or((Sample::Unknown, None));
         let amount = self.observe(
             now,
-            (admission, player.spawn_id),
+            scope,
             placement,
             sample,
             maximum.filter(|_| can_report),
@@ -150,6 +150,11 @@ impl AirState {
         sample: Sample,
         maximum_hp: Option<u32>,
     ) -> Option<u32> {
+        self.set_scope(admission, placement);
+        self.breath.sample(now, sample, maximum_hp)
+    }
+
+    fn set_scope(&mut self, admission: (u64, u16), placement: u64) {
         if self.admission != Some(admission) {
             *self = Self {
                 admission: Some(admission),
@@ -160,7 +165,6 @@ impl AirState {
             self.placement = placement;
             self.breath.interrupt();
         }
-        self.breath.sample(now, sample, maximum_hp)
     }
 }
 

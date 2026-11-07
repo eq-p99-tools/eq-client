@@ -181,12 +181,7 @@ pub(super) fn schedule(app: &mut App) {
         (
             options::tell_choices,
             (items::input, chat::links::input).chain(),
-            (
-                inventory::input,
-                inventory::destruction::input,
-                inventory::ground_drop::input,
-            )
-                .chain(),
+            (inventory::input, inventory::destruction::input).chain(),
             coins::input,
             inventory::colors::input,
             interact::input,
@@ -204,7 +199,9 @@ pub(super) fn schedule(app: &mut App) {
                 give::buttons,
                 give::inspect_theirs,
                 training::buttons,
-                confirm::buttons,
+                // Consume the drop answer in the click's frame, including
+                // the last input of an unfocused script.
+                (confirm::buttons, inventory::ground_drop::input).chain(),
                 reading::buttons,
                 tradeskills::buttons,
                 (

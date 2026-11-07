@@ -107,10 +107,12 @@ impl InventoryState {
         &self.banker
     }
 
-    /// Whether an action is under way that Escape cancels: a split, or
-    /// storing the cursor's item.
+    /// Whether Escape can cancel a pending cursor action or split.
     pub(super) const fn action_under_way(&self) -> bool {
-        self.actions.auto_store || self.actions.split.is_some() || self.destruction.selecting()
+        self.actions.auto_store
+            || self.actions.split.is_some()
+            || self.destruction.selecting()
+            || self.ground_drop.selecting()
     }
 
     /// Uses the same item controller for action-bar and inventory activation.

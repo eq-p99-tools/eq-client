@@ -1,4 +1,10 @@
 //! Recalculate authoritative movement prerequisites; absence is never a zero load.
+//!
+//! The received instrument modifier is applied after level and cap evaluation.
+//! Titanium's action handler (`eqgame.exe` 0x414913) stores the modifier on
+//! the buff, and its effect cache (0x4102a6) scales the signed magnitude in
+//! tenths for supported modifiers through 45, including snares. See
+//! [`eq_network_game::buffs::scale_instrument_effect`] for the host projection.
 use crate::{online::OnlineState, outbox::Outbox};
 use bevy::prelude::*;
 use eq_client_assets::spells::Effect;
@@ -52,15 +58,9 @@ fn project(
                     return Err(Missing::Effects);
                 }
                 let value = effect.base_magnitude(level).ok_or(Missing::Effects)?;
-                // Titanium stores the landing modifier on the buff (0x414913).
-                // Its cache scales the capped value in tenths and checks the
-                // upper bound of 45 (0x4102a6). Keep the existing neutral
-                // encodings and leave other values and dialects unresolved.
-                let value = match (dialect, instrument) {
-                    (_, 0 | 10) => value,
-                    (GameDialect::Titanium, 11..=45) => value * i64::from(instrument) / 10,
-                    _ => return Err(Missing::Effects),
-                };
+                let value =
+                    eq_network_game::buffs::scale_instrument_effect(dialect, value, instrument)
+                        .ok_or(Missing::Effects)?;
                 if effect.id == 3 {
                     modifiers.add(Modifiers {
                         rate: value,
@@ -160,8 +160,11 @@ fn calculate(
 ) -> Result<SpeedInputs, Missing> {
     let player = world.player().ok_or(Missing::Attributes)?;
     let dialect = world.generation();
-    let weight =
-        u16::try_from((world.movement_weight()? / 10).min(32_766)).expect("bounded weight");
+    let weight = u16::try_from(
+        (world.movement_weight()? / 10)
+            .min(u64::from(eq_network_game::inventory::MAX_CARRIED_WEIGHT)),
+    )
+    .expect("bounded weight");
     let base = player.base_attributes.ok_or(Missing::Attributes)?;
     let inventory = world.worker_inventory();
     let equipped = eq_client_core::resources::eqemu_equipped_modifiers(

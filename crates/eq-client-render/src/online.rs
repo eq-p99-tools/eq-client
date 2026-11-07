@@ -543,19 +543,20 @@ impl Panels<'_> {
         }
     }
 
-    /// The session sent the player's move, or refused it.
+    /// The worker's local result for the player's move.
     fn moved(&mut self, admission_id: Option<u64>, moved: &Moved, drawn: Option<Transform>) {
         debug!(
             admission_id = ?admission_id,
             position = ?moved.position,
-            outcome = if moved.refused.is_some() { "local_refused" } else { "transport_submitted" },
+            outcome = if moved.refused.is_some() { "local_refused" } else { "local_accepted" },
             refused = ?moved.refused,
             "Current-admission movement worker result; no server acknowledgment implied"
         );
 
-        self.motion.moved(admission_id);
-        self.motion.resolve_water_entry(moved.refused.is_some());
-        self.motion.refused.clone_from(&moved.refused);
+        if self.motion.moved(admission_id, moved.created) {
+            self.motion.resolve_water_entry(moved.refused.is_some());
+            self.motion.refused.clone_from(&moved.refused);
+        }
         if let Some(transform) = drawn {
             self.motion.display_sample(transform, moved.position);
         }
@@ -1059,6 +1060,22 @@ pub(crate) mod testing {
     /// Selects the native generation before synthetic admission/door news.
     pub(crate) fn generation(state: &mut OnlineState, generation: eq_client_core::GameDialect) {
         state.world.carry_as(generation);
+    }
+
+    pub(crate) fn empty_carried_coins(state: &mut OnlineState) {
+        use eq_client_core::Coins;
+        news(
+            state,
+            [
+                WorldEvent::Coins(Coins::default()),
+                WorldEvent::CoinsElsewhere {
+                    cursor: Coins::default(),
+                    bank: Coins::default(),
+                    given: Coins::default(),
+                    offered: Coins::default(),
+                },
+            ],
+        );
     }
 
     /// Applies one update as the session's receiver hands it over.
