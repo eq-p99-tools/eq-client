@@ -124,6 +124,7 @@ fn qol_slider(
     slider: &Slider,
     value: &Label,
     (x, y, width): (f32, f32, f32),
+    row_width: f32,
     (caption_id, slider_id, value_id): (&str, &str, &str),
     text: &str,
 ) -> ([(String, Element); 3], f32) {
@@ -141,32 +142,43 @@ fn qol_slider(
         height: value.area.height,
     };
     slider.id = Some(slider_id.to_owned());
-    slider.area.x = x;
-    slider.area.y = y + value.area.height + 2.0;
-    value.area.width = value.area.width.min(width).max(0.0);
-    // Keep space for the track when the value can go below it instead.
-    let beside = width >= slider.area.width.min(width / 2.0) + value.area.width + 4.0;
-    slider.area.width = slider
-        .area
-        .width
-        .min(if beside {
-            width - value.area.width - 4.0
-        } else {
-            width
-        })
-        .max(0.0);
     value.eq_type = None;
     value.anchors = None;
-    value.area.x = if beside {
-        slider.area.x + slider.area.width + 4.0
+    if width + slider.area.width + value.area.width + 2.0 * GAP <= row_width {
+        // The last control can use the empty space to its right while
+        // keeping its full caption, native track and value widths.
+        let height = slider.area.height.max(value.area.height);
+        caption.area.height = height;
+        slider.area.x = x + width + GAP;
+        slider.area.y = y + (height - slider.area.height) / 2.0;
+        value.area.x = slider.area.x + slider.area.width + GAP;
+        value.area.y = y + (height - value.area.height) / 2.0;
     } else {
-        x
-    };
-    value.area.y = if beside {
-        slider.area.y
-    } else {
-        slider.area.y + slider.area.height + 2.0
-    };
+        slider.area.x = x;
+        slider.area.y = y + value.area.height + 2.0;
+        value.area.width = value.area.width.min(width).max(0.0);
+        // Keep space for the track when the value can go below it instead.
+        let beside = width >= slider.area.width.min(width / 2.0) + value.area.width + 4.0;
+        slider.area.width = slider
+            .area
+            .width
+            .min(if beside {
+                width - value.area.width - 4.0
+            } else {
+                width
+            })
+            .max(0.0);
+        value.area.x = if beside {
+            slider.area.x + slider.area.width + 4.0
+        } else {
+            x
+        };
+        value.area.y = if beside {
+            slider.area.y
+        } else {
+            slider.area.y + slider.area.height + 2.0
+        };
+    }
     let bottom = (slider.area.y + slider.area.height).max(value.area.y + value.area.height);
     (
         [
@@ -311,8 +323,13 @@ impl Layout {
                         text,
                         ..
                     } => {
+                        let row_width = if column + 1 == row.len() {
+                            self.available + self.margin - x
+                        } else {
+                            self.width
+                        };
                         let (parts, bottom) =
-                            qol_slider(slider, value, (x, y, self.width), ids, text);
+                            qol_slider(slider, value, (x, y, self.width), row_width, ids, text);
                         pieces.extend(parts);
                         bottom
                     }

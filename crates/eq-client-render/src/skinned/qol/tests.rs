@@ -247,7 +247,10 @@ fn dangerous_section_groups_the_existing_choices_and_run_speed() {
                 controls::value_label(&value_id, WindowId::Options),
                 Some(controls::ValueLabel::Shows(bound)) if bound == level
             ));
-            assert!(slider.area.y >= caption.area.y + caption.area.height);
+            assert!(
+                slider.area.y >= caption.area.y + caption.area.height
+                    || slider.area.x >= caption.area.x + caption.area.width
+            );
             if level == Level::UiScale {
                 assert!(caption.area.y >= ordinary.area.y + ordinary.area.height);
                 assert!(slider.area.y + slider.area.height < warning.area.y);

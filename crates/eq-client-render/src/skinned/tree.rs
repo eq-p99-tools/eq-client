@@ -811,13 +811,14 @@ fn tabbed_page_contents(
     area: Area,
     context: &Context,
 ) {
-    let area = if let Some(content) = super::qol::content_height(page) {
+    let generated = super::qol::content_height(page);
+    let area = if let Some(content) = generated {
         let insets = tabs
             .page_frame
             .as_ref()
             .map_or_else(frame::Insets::default, frame::insets);
         Area {
-            height: area.height.max(insets.top + content + insets.bottom),
+            height: insets.top + content + insets.bottom,
             ..area
         }
     } else {
@@ -838,16 +839,26 @@ fn tabbed_page_contents(
         pieces(page_area, art, &page.pieces, &inside, context);
     };
     if context.id == WindowId::Options {
-        // Preserve authored page coordinates and the complete generated
-        // content extent. If extra tab rows reduce the viewport, the
-        // ordinary wheel owner can reach its bottom controls instead of
-        // clipping them permanently.
+        // A generated page fills the actual viewport and grows only when
+        // its controls need more height. The authored page height assumes
+        // one tab row and would add empty scroll range below a wrapped strip.
+        let vertical = if generated.is_some() {
+            Node {
+                min_height: px(area.height),
+                align_self: AlignSelf::Stretch,
+                ..default()
+            }
+        } else {
+            Node {
+                height: px(area.height),
+                ..default()
+            }
+        };
         viewport
             .spawn(Node {
                 width: px(area.width),
-                height: px(area.height),
                 flex_shrink: 0.0,
-                ..default()
+                ..vertical
             })
             .with_children(draw_page);
     } else {

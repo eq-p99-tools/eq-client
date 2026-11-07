@@ -153,6 +153,149 @@ fn actions_tabs_keep_their_single_row_and_authored_page_geometry() {
     assert!(app.world().get::<ScrolledView>(page).is_none());
 }
 
+/// Synthetic controls with the geometry that matters for the default
+/// Options client area. The fixture uses no installed text or artwork.
+fn two_row_options() -> eq_client_assets::sidl::TabBox {
+    use eq_client_assets::sidl::{Element, FrameLook, Page, Piece, TabBox};
+
+    let mut skin = qol::tests::source();
+    let Element::Label(value) = &mut skin.pieces[1].1 else {
+        panic!("value label")
+    };
+    value.area.width = 50.0;
+    value.area.height = 16.0;
+    let mut caption = value.clone();
+    caption.area.height = 14.0;
+    let Element::Slider(slider) = &mut skin.pieces[2].1 else {
+        panic!("slider")
+    };
+    slider.area.width = 100.0;
+    slider.area.height = 16.0;
+    skin.pieces
+        .insert(1, ("ExampleLabel".into(), Element::Label(caption)));
+
+    let piece = |width, height| {
+        Some(Piece {
+            texture: "synthetic-missing-frame.tga".into(),
+            x: 0,
+            y: 0,
+            width,
+            height,
+        })
+    };
+    let tab_frame = FrameLook {
+        left: piece(4, 2),
+        right: piece(4, 2),
+        top: piece(2, 4),
+        ..FrameLook::default()
+    };
+    let page_frame = FrameLook {
+        bottom: piece(2, 4),
+        ..tab_frame.clone()
+    };
+    let mut pages = vec![skin];
+    for index in 1..7 {
+        pages.push(Page {
+            name: format!("page{index}"),
+            title: Some(format!("Tab{index}")),
+            pieces: Vec::new(),
+            ..pages[0].clone()
+        });
+    }
+    TabBox {
+        name: "OptionsTabs".into(),
+        area: None,
+        pages,
+        tab_frame: Some(tab_frame),
+        page_frame: Some(page_frame),
+    }
+}
+
+#[test]
+fn default_size_wrapped_qol_keeps_the_heading_and_speed_control_in_view() {
+    use crate::windows::pointer::{LINE_PIXELS, Wheel};
+    use eq_client_core::options::Level;
+
+    // Two tab rows take 40 pixels. The generated canvas needs 394 pixels.
+    for (height, expected_scroll) in [(432.0, 2.0), (440.0, 0.0)] {
+        let (_, pixels) = fixture();
+        let mut app = app(1.0, pixels);
+        crate::clicks::testing::install(&mut app);
+        app.init_resource::<Tabs>()
+            .init_resource::<Wheel>()
+            .add_systems(Update, (tabs, controls::scroll_lists));
+        let (_, controls) = spawn_tab_box(
+            &mut app,
+            WindowId::Options,
+            two_row_options(),
+            Vec2::new(395.0, height),
+        );
+        // Stand in for measured tab text at a width where eight fit in the
+        // first row and only the new QoL tab wraps.
+        for (_, entity) in &controls {
+            app.world_mut().get_mut::<Node>(*entity).unwrap().width = px(46);
+        }
+        app.update();
+        app.update();
+        assert_eq!(controls.len(), 9);
+        let first_tab = bounds(app.world(), controls[0].1);
+        let particles_tab = bounds(app.world(), controls[7].1);
+        let qol_tab = bounds(app.world(), controls[8].1);
+        assert!((particles_tab.min.y - first_tab.min.y).abs() < f32::EPSILON);
+        assert!(qol_tab.min.y >= first_tab.max.y);
+        crate::clicks::testing::click(&mut app, controls[8].1);
+        let page = app
+            .world_mut()
+            .query::<(Entity, &SkinPage)>()
+            .iter(app.world())
+            .find(|(_, page)| page.0.index == 8)
+            .unwrap()
+            .0;
+        let view = bounds(app.world(), page);
+        assert!(view.min.y >= qol_tab.max.y);
+        let heading = app
+            .world_mut()
+            .query::<(&ChildOf, &Text)>()
+            .iter(app.world())
+            .find(|(_, text)| text.0 == "Quality of Life")
+            .unwrap()
+            .0
+            .parent();
+        let speed = app
+            .world_mut()
+            .query::<(Entity, &SkinSlider)>()
+            .iter(app.world())
+            .find(|(_, slider)| slider.sets == Sets::Level(Level::RunSpeed))
+            .unwrap()
+            .0;
+        let assert_visible = |world: &World| {
+            for entity in [heading, speed] {
+                let control = bounds(world, entity);
+                let clip = world.get::<CalculatedClip>(entity).unwrap().clip;
+                assert!(
+                    control.min.cmpge(clip.min).all() && control.max.cmple(clip.max).all(),
+                    "{control:?} must be visible inside {clip:?}"
+                );
+            }
+        };
+        // The slider is fully visible on opening, so a script does not need
+        // to wheel down to click it. A wheel notch still cannot hide the
+        // heading when only the last few pixels of the margin lie below.
+        assert_visible(app.world());
+        *app.world_mut().resource_mut::<Wheel>() = Wheel {
+            surface: Some(page),
+            pixels: -LINE_PIXELS,
+            lines: 0.0,
+        };
+        app.update();
+        app.world_mut().resource_mut::<Wheel>().pixels = 0.0;
+        app.update();
+        assert_visible(app.world());
+        let scroll = app.world().get::<ScrollPosition>(page).unwrap().y;
+        assert!((scroll - expected_scroll).abs() < 0.01);
+    }
+}
+
 /// Generated controls use real page-frame insets and the measured viewport
 /// below two tab rows. Their source anchors must not escape either boundary.
 #[test]
