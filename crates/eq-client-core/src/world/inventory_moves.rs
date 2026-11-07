@@ -43,6 +43,51 @@ impl Moves {
 }
 
 impl ClientWorld {
+    /// Binds a drop to the current actor and one received cursor instance.
+    ///
+    /// # Errors
+    /// Refuses unavailable providers, stale inventory and an unresolved drop.
+    pub fn prepare_cursor_drop(&self) -> Result<crate::inventory::InventoryDrop> {
+        let inventory = self.inventory();
+        let request = crate::inventory::InventoryDrop {
+            session_id: self.session_id().context("Enter the world first")?,
+            own_id: self.player().context("The player is unavailable")?.spawn_id,
+            revision: inventory.revision(),
+            item: inventory
+                .items()
+                .get(&crate::inventory::InventorySlot::CURSOR)
+                .context("The cursor is empty")?
+                .clone(),
+            created: std::time::Instant::now(),
+        };
+        self.check_cursor_drop(&request)?;
+        Ok(request)
+    }
+
+    /// Revalidates an exact drop selection before sending it.
+    ///
+    /// # Errors
+    /// Refuses a changed actor, admission, inventory or unsupported drop.
+    pub fn check_cursor_drop(&self, request: &crate::inventory::InventoryDrop) -> Result<()> {
+        ensure!(
+            self.in_world() && self.can(crate::Capability::GroundDropping),
+            "Ground dropping is unavailable"
+        );
+        ensure!(
+            self.accepts_reply(request.session_id)
+                && self
+                    .player()
+                    .is_some_and(|player| player.spawn_id == request.own_id),
+            "The drop belongs to another admission or actor"
+        );
+        ensure!(
+            !self.inventory_moves_pending(),
+            "Finish the pending inventory move first"
+        );
+        self.inventory().plan_ground_drop(request)?;
+        Ok(())
+    }
+
     /// Freezes one whole cursor instance for explicit destructive confirmation.
     ///
     /// # Errors
@@ -172,10 +217,11 @@ impl ClientWorld {
         error: Option<&String>,
         changes: &mut Changes,
     ) {
-        // A same-admission success can arrive after death/zoning/link reset.
-        // Retained request identity, rather than current ability to act, owns it.
+        // A sequenced move or drop submission can arrive while the same
+        // admission is suspended. Keep its revision-bound custody state.
+        let drop_submission = matches!(update, Some(InventoryUpdate::GroundDropPending(_)));
         if self.session_id != Some(session_id)
-            || (sequence.is_none() && !self.accepts_reply(session_id))
+            || (sequence.is_none() && !drop_submission && !self.accepts_reply(session_id))
             || error.is_some() == update.is_some()
         {
             changes.ignored = true;
@@ -183,8 +229,11 @@ impl ClientWorld {
         }
         let before = self.offering();
         let mut apply = error.is_none() && update.is_some();
-        if matches!(update, Some(InventoryUpdate::DestroyCursor)) {
-            // A late submission result cannot destroy a newer received cursor.
+        if matches!(
+            update,
+            Some(InventoryUpdate::DestroyCursor | InventoryUpdate::GroundDropPending(_))
+        ) {
+            // A late submission cannot change the custody of a newer cursor.
             apply &= self.inventory.revision() == revision;
         }
         if let Some(sequence) = sequence {

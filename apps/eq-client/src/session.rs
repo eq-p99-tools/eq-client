@@ -170,12 +170,7 @@ impl SessionWorker {
                     let update = match event {
                         ClientEvent::World(WorldEvent::SpellTable(_)) => None,
                         ClientEvent::World(event) => {
-                            // The machine's account went out: keep its
-                            // date in this client's own settings, so the
-                            // week's wait survives this run ending.
-                            if let WorldEvent::SystemInfoReported { at } = &event {
-                                keep_report_date(settings.as_deref(), *at);
-                            }
+                            observe_world(&event, settings.as_deref());
                             Some(WorldUpdate::Game(event))
                         }
                         ClientEvent::Status(status) => status_update(status.state),
@@ -218,6 +213,11 @@ impl SessionWorker {
             }
         });
         Ok(eq_client_render::Session {
+            // The received consider colour is shown on every server. Whether
+            // the Titanium program replaces it with a level estimate on any
+            // server is unread, and per-server presentation belongs behind an
+            // eq-network accessor, not a protocol comparison here.
+            classic_npc_consider: false,
             inventory_move_rules,
             spell_provider,
             updates: receiver,
@@ -409,6 +409,21 @@ fn client(login: Login, options: &SessionOptions) -> Result<Client> {
             identity_field(username.ok(), "PLAYER"),
         ),
     )
+}
+
+fn observe_world(event: &WorldEvent, settings: Option<&std::path::Path>) {
+    match event {
+        WorldEvent::SystemInfoReported { at } => keep_report_date(settings, *at),
+        WorldEvent::Consideration(receipt) => {
+            tracing::info!(
+                target_id = receipt.target_id,
+                raw_faction = receipt.faction,
+                decoded_received_color = ?receipt.color,
+                "Received consider reply"
+            );
+        }
+        _ => {}
+    }
 }
 
 /// Keeps the date a world heard this machine's account in this client's

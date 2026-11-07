@@ -98,7 +98,9 @@ impl ClientWorld {
     /// fizzle or an interruption; the landing, which the caster's own client
     /// always gets, comes before it for a cast that completes.
     pub(super) fn own_cast_news(&mut self, own_id: u16, news: Option<CastNews>) {
-        if matches!(news, Some(CastNews::Refreshed | CastNews::Ended)) {
+        if self.casting.cast.is_none()
+            && matches!(news, Some(CastNews::Refreshed | CastNews::Ended))
+        {
             self.zone.casts.remove(&own_id);
         }
     }

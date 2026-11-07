@@ -1,6 +1,8 @@
 //! Bounded local requests. Receipts describe the executor, never server acceptance.
 use serde_json::Value;
 
+use super::runbook::{Definition, ResultUpdate};
+
 pub(super) const VERSION: u64 = 1;
 pub(super) const MAX_REQUEST_BYTES: usize = 256 * 1024;
 pub(super) const MAX_MESSAGE_BYTES: usize = 1024;
@@ -17,6 +19,8 @@ pub(super) enum Operation {
     Start(String),
     Stop(u64),
     Status,
+    RunbookStart(Definition),
+    RunbookResult(ResultUpdate),
 }
 
 /// Only these fixed fields may enter the local execution boundary.
@@ -61,12 +65,24 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Envelope, &'static str> {
                 .ok_or("Stop requires a positive run_id from status")?,
         ),
         Some("status") => Operation::Status,
-        _ => return Err("Operation must be start, stop or status"),
+        Some("runbook_start") => Operation::RunbookStart(Definition::parse(
+            object
+                .get("runbook")
+                .ok_or("Runbook start requires a runbook")?,
+        )?),
+        Some("runbook_result") => Operation::RunbookResult(ResultUpdate::parse(
+            object
+                .get("result")
+                .ok_or("Runbook result requires a result")?,
+        )?),
+        _ => return Err("Operation must be start, stop, status, runbook_start or runbook_result"),
     };
     let extra = match &operation {
         Operation::Start(_) => Some("source"),
         Operation::Stop(_) => Some("run_id"),
         Operation::Status => None,
+        Operation::RunbookStart(_) => Some("runbook"),
+        Operation::RunbookResult(_) => Some("result"),
     };
     if object.keys().any(|key| {
         !matches!(key.as_str(), "version" | "instance" | "id" | "op") && Some(key.as_str()) != extra

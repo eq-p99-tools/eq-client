@@ -262,6 +262,11 @@ impl OnlineState {
         scene.forget(reason, commands);
     }
 
+    /// Bind NPC consider presentation to the selected worker's policy.
+    pub(super) const fn consider_npcs_by_level(&mut self, enabled: bool) {
+        self.world.consider_npcs_by_level(enabled);
+    }
+
     /// Bind host planning to the selected worker's placement policy.
     pub(super) fn plan_inventory_as(
         &mut self,
@@ -419,6 +424,7 @@ pub(super) fn tick(
 pub(super) struct Panels<'w> {
     lines: ResMut<'w, super::notices::Lines>,
     motion: ResMut<'w, super::motion::Controls>,
+    movement_sync: Option<ResMut<'w, super::options::MovementSync>>,
     inventory: ResMut<'w, super::inventory::InventoryState>,
     combat: ResMut<'w, super::combat::CombatState>,
     trade: ResMut<'w, super::trade::TradeState>,
@@ -528,7 +534,11 @@ impl Panels<'_> {
                 Reply::LootTaken { place, accepted } => self.trade.taken(*place, *accepted),
                 Reply::LootReceived { place } => self.trade.received(*place),
                 // The refused crossing no longer holds the player's motion.
-                Reply::ZoneLineRefused => self.motion.accepted(),
+                Reply::ZoneLineRefused => self.motion.crossing_refused(),
+                Reply::MotionRefused { created, reason } => {
+                    self.motion
+                        .move_refused(state.world().session_id(), *created, reason);
+                }
             }
         }
     }
@@ -543,7 +553,7 @@ impl Panels<'_> {
             "Current-admission movement worker result; no server acknowledgment implied"
         );
 
-        self.motion.accepted();
+        self.motion.moved(admission_id);
         self.motion.resolve_water_entry(moved.refused.is_some());
         self.motion.refused.clone_from(&moved.refused);
         if let Some(transform) = drawn {
@@ -575,6 +585,11 @@ impl Panels<'_> {
 
     /// Forgets what the world's reset made stale on screen and in the panels.
     fn forget(&mut self, reason: Reset, state: &mut OnlineState) {
+        if let Some(sync) = &mut self.movement_sync {
+            // The world clears the receipt here, even when a refused
+            // transfer reconnects the same admission in this receive batch.
+            sync.invalidate();
+        }
         if !matches!(reason, Reset::Died)
             && let Some(weather) = self.weather.as_mut()
         {
@@ -1420,6 +1435,7 @@ mod tests {
                 heard: std::sync::Arc::default(),
             }),
             Some(Session {
+                classic_npc_consider: false,
                 inventory_move_rules: Some(eq_client_core::inventory::MoveRules::EqEmu),
                 spell_provider: eq_client_core::spell_tables::Binding::new(
                     eq_client_core::spell_tables::Policy::Installed,

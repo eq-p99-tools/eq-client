@@ -16,8 +16,8 @@ Quarm/TAKP behavior. Frontends use runtime capabilities, not server-name flags.
 ## Server policy snapshot
 
 The following summarizes the networking revision pinned by this application's
-Cargo.lock: `d0a90efffcb07f7b0ca14718ddc04baf042b8f0a`. Its
-[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/d0a90efffcb07f7b0ca14718ddc04baf042b8f0a/crates/eq-network/src/client/session/servers.rs)
+Cargo.lock: `f20ba5cf79cd981faca44553a06be9c803260fef`. Its
+[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/f20ba5cf79cd981faca44553a06be9c803260fef/crates/eq-network/src/client/session/servers.rs)
 are the source for this table. **Yes means provided by that policy**, not a live
 certification, and individual operations still validate their prerequisites.
 
@@ -35,9 +35,10 @@ certification, and individual operations still validate their prerequisites.
 | Move / delete book entries | Yes / No | Yes / Yes | No / No | No / No |
 | Read the spellbook standing | Local preference, every server | Local preference, every server | Local preference, every server | Local preference, every server |
 | Memorize without sitting | Yes (opt-in) | Yes (opt-in) | Yes (opt-in) | Yes (opt-in) |
-| Run boost, flight and movement while stunned | Yes (opt-in) | Yes (opt-in) | Yes (opt-in) | Yes (opt-in) |
+| Run speed multiplier, flight and movement while stunned | Yes (opt-in) | Yes (opt-in) | Yes (opt-in) | Yes (opt-in) |
 | Item/coin moves and personal banking | Yes | Yes | Yes | Yes |
 | Cursor-item destruction (Titanium inventory policy) | Yes | Yes | No | No |
+| Cursor ground drop (Titanium inventory policy) | No (withheld pending attended validation) | Yes | No | No |
 | Merchants | Yes | Yes | Yes | Yes |
 | Merchant quantity picker | Yes | Yes | No | No |
 | Exchanges/giving | Yes | Yes | No | Yes |
@@ -111,11 +112,11 @@ affected mechanics unavailable while chat remains usable. See [installed spell
 providers](docs/spell-providers.md). These source and synthetic checks add no live
 compatibility certification.
 
-The pinned networking [combat](https://github.com/eq-p99-tools/eq-network/blob/d0a90efffcb07f7b0ca14718ddc04baf042b8f0a/docs/quarm-combat.md),
-[loot](https://github.com/eq-p99-tools/eq-network/blob/d0a90efffcb07f7b0ca14718ddc04baf042b8f0a/docs/eqmac-looting.md) and
-[world-object](https://github.com/eq-p99-tools/eq-network/blob/d0a90efffcb07f7b0ca14718ddc04baf042b8f0a/docs/eqmac-world-objects.md)
+The pinned networking [combat](https://github.com/eq-p99-tools/eq-network/blob/f20ba5cf79cd981faca44553a06be9c803260fef/docs/quarm-combat.md),
+[loot](https://github.com/eq-p99-tools/eq-network/blob/f20ba5cf79cd981faca44553a06be9c803260fef/docs/eqmac-looting.md) and
+[world-object](https://github.com/eq-p99-tools/eq-network/blob/f20ba5cf79cd981faca44553a06be9c803260fef/docs/eqmac-world-objects.md)
 contracts record their limits and controlled live checklists. The dated
-[P99/Quarm gap report](https://github.com/eq-p99-tools/eq-network/blob/d0a90efffcb07f7b0ca14718ddc04baf042b8f0a/docs/public-server-gaps.md)
+[P99/Quarm gap report](https://github.com/eq-p99-tools/eq-network/blob/f20ba5cf79cd981faca44553a06be9c803260fef/docs/public-server-gaps.md)
 retains the earlier inspection and its scenario-specific evidence.
 
 ### Public-parity checks, 2026-11-02

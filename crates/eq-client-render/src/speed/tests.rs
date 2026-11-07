@@ -550,6 +550,154 @@ fn buff(slot: u32, spell_id: u32) -> WorldEvent {
 }
 
 #[test]
+fn titanium_instrument_scales_capped_signed_effects_and_preserves_unknowns() {
+    let project = |spell, level, modifier, dialect| {
+        super::project(&effects(spell).unwrap(), level, modifier, dialect)
+    };
+    let titanium = GameDialect::Titanium;
+    assert_eq!(project(1, 60, 21, titanium).unwrap().rate, 105);
+    assert_eq!(project(2, 60, 21, titanium).unwrap().rate, -126);
+    assert_eq!(project(4, 20, 21, titanium).unwrap().strength, 52);
+    for neutral in [0, 10] {
+        assert_eq!(project(1, 20, neutral, titanium).unwrap().rate, 30);
+    }
+    for unresolved in [9, 46, 0x0100_0015] {
+        assert!(matches!(
+            project(1, 60, unresolved, titanium),
+            Err(Missing::Effects)
+        ));
+    }
+    assert!(matches!(project(1, 0, 21, titanium), Err(Missing::Effects)));
+    assert!(matches!(
+        project(6, 60, 21, titanium),
+        Err(Missing::Effects)
+    ));
+    assert!(matches!(
+        project(1, 60, 21, GameDialect::EqMac),
+        Err(Missing::Effects)
+    ));
+}
+
+fn synthetic_speed_song() -> crate::spellbook::SpellNames {
+    let mut fields = vec!["0"; 183];
+    fields[0] = "42";
+    fields[1] = "Synthetic speed song";
+    fields[16] = "5";
+    fields[17] = "3";
+    fields[20] = "15";
+    fields[44] = "65";
+    fields[70] = "102";
+    fields[86..98].fill("254");
+    fields[86] = "3";
+    crate::spellbook::SpellNames::parse(&fields.join("^"))
+}
+
+#[test]
+fn bard_speed_reports_follow_landing_refresh_and_fade_across_equipment_changes() {
+    let mut state = online();
+    let mut player = state.world().player().unwrap().clone();
+    player.class = Some(8);
+    player.level = 60;
+    testing::admit(&mut state, 2, player);
+    ready(&mut state);
+    let mut drum = item(14, 0, 0);
+    drum.rules.item_type = 26;
+    let drum_slot = drum.slot;
+
+    let spells = synthetic_speed_song();
+    let song = Buff {
+        spell_id: 42,
+        caster_level: 60,
+        bard_modifier: 21,
+        effect_type: 2,
+        duration_ticks: 0,
+        counters: 0,
+        caster_id: 7,
+    };
+    let landing = |instrument_modifier, target_id, effect_flag| {
+        WorldEvent::SpellEffect(eq_client_core::SpellEffect {
+            target_id,
+            caster_id: 7,
+            caster_level: 60,
+            instrument_modifier,
+            spell_id: 42,
+            spell_level: 60,
+            effect_flag,
+            push: None,
+        })
+    };
+    let slot = |buff, entity_id| {
+        WorldEvent::Buff(BuffUpdate {
+            entity_id,
+            slot: 24,
+            spell_id: 42,
+            buff,
+        })
+    };
+    let (tx, rx) = std::sync::mpsc::sync_channel(8);
+    let mut app = crate::testing::app();
+    app.insert_resource(state)
+        .insert_resource(spells)
+        .insert_resource(Outbox::new(Some(tx)))
+        .add_systems(Update, report);
+    let mut revision = 0;
+    let mut last_report_id = 0;
+    let mut check = |events: Vec<_>, rate, require_revision: bool| {
+        let required = require_revision.then(|| {
+            revision += 1;
+            WorldEvent::SpeedInputsRequired {
+                session_id: 2,
+                revision,
+            }
+        });
+        testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            events.into_iter().chain(required),
+        );
+        app.update();
+        let ClientCommand::SpeedInputs {
+            session_id,
+            revision: report_revision,
+            report_id,
+            state: SpeedInputState::Ready(inputs),
+        } = rx.try_recv().unwrap()
+        else {
+            panic!("expected a ready speed report");
+        };
+        assert_eq!(
+            (session_id, report_revision, inputs.rate),
+            (2, revision, rate)
+        );
+        assert!(report_id > last_report_id);
+        last_report_id = report_id;
+    };
+
+    check(
+        vec![
+            WorldEvent::BuffSnapshot(vec![]),
+            WorldEvent::Inventory(InventoryUpdate::Set(vec![drum])),
+            landing(21, 7, 0),
+            landing(21, 8, 4),
+        ],
+        0,
+        true,
+    );
+    // P99 does not use a spell action to advance the session's revision.
+    check(vec![landing(21, 7, 4)], 136, false);
+    check(
+        vec![WorldEvent::Inventory(InventoryUpdate::Remove(drum_slot))],
+        136,
+        true,
+    );
+    check(vec![landing(10, 7, 4)], 65, false);
+    check(vec![slot(Some(song), 7)], 136, true);
+    check(vec![slot(None, 7)], 0, true);
+    // The explicit fade also clears a landing that never received a slot.
+    check(vec![landing(21, 7, 4)], 136, false);
+    check(vec![slot(None, 7)], 0, true);
+}
+
+#[test]
 fn absent_empty_invalidated_and_recovered_state_are_distinct() {
     let mut state = online();
     assert_eq!(calculate(state.world(), effects), Err(Missing::Inventory));
@@ -922,6 +1070,88 @@ fn identical_value_recovery_uses_a_fresh_identity_and_rejects_the_old_receipt() 
         app.update();
         assert_eq!(movement_notice(&app).is_empty(), accepted == recovered);
     }
+}
+
+#[test]
+fn heavier_cursor_arrival_after_a_drop_withdraws_weight_until_snapshot() {
+    use std::num::NonZeroU32;
+
+    let (mut app, rx) = reporting_ready();
+    receipt(&rx.try_recv().unwrap(), true);
+    let serial = NonZeroU32::new(17).unwrap();
+    let mut original = item(InventorySlot::CURSOR.0, 50, 0);
+    original.rules.ground_drop_serial = Some(serial);
+    let heavier = item(InventorySlot::CURSOR.0, 1_500, 0);
+    testing::inventory(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        InventoryUpdate::Snapshot(vec![original.clone()]),
+    );
+    app.update();
+    let ready = receipt(&rx.try_recv().unwrap(), true);
+    assert_eq!(ready.inputs.weight, 5);
+
+    {
+        let mut online = app.world_mut().resource_mut::<OnlineState>();
+        let revision = online.world().worker_inventory().revision();
+        testing::news(
+            &mut online,
+            [
+                WorldEvent::InventoryAction {
+                    session_id: 1,
+                    revision,
+                    sequence: None,
+                    update: Some(InventoryUpdate::GroundDropPending(serial)),
+                    error: None,
+                },
+                WorldEvent::Inventory(InventoryUpdate::Cursor(vec![heavier.clone()])),
+            ],
+        );
+        let world = online.world();
+        assert!(!world.worker_inventory().stale());
+        assert!(world.worker_inventory().ground_drop_pending());
+        assert_eq!(world.worker_inventory().queued().count(), 1);
+        assert_eq!(
+            world.worker_inventory().items().get(&InventorySlot::CURSOR),
+            Some(&original)
+        );
+        assert_eq!(world.movement_weight(), Err(Missing::Inventory));
+        assert_eq!(world.fall_weight(), None);
+    }
+    app.update();
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(ClientCommand::SpeedInputs {
+            state: SpeedInputState::Unavailable(Missing::Inventory),
+            ..
+        })
+    ));
+    assert!(movement_notice(&app).contains("fresh inventory snapshot"));
+
+    testing::inventory(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        InventoryUpdate::Snapshot(vec![heavier]),
+    );
+    app.update();
+    let recovered = receipt(&rx.try_recv().unwrap(), true);
+    assert_eq!(recovered.inputs.weight, 150);
+    assert_ne!(ready.report_id, recovered.report_id);
+    assert!(
+        app.world()
+            .resource::<OnlineState>()
+            .world()
+            .fall_weight()
+            .is_some()
+    );
+    assert_ne!(movement_notice(&app), "");
+    testing::news(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        [
+            motion_state(Some(6.0)),
+            WorldEvent::SpeedInputsAccepted(recovered),
+        ],
+    );
+    app.update();
+    assert_eq!(movement_notice(&app), "");
 }
 
 #[test]

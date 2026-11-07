@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- Confirm an ordinary Titanium cursor item drop from Inventory on EQEmu.
+  A fresh inventory snapshot resolves the cursor hold and makes carried
+  weight usable for movement and landing costs again. Passive descent
+  remains available. `ClientWorld::fall_weight` returns an optional weight.
+  Ground objects follow their own received updates.
+
+- Set **Run a Little Faster** from 1.00x to 1.40x on the QoL page. Existing
+  enabled checkboxes load at 1.10x, and new profiles start at ordinary speed.
+- Keep moving while a speed change settles: new movement uses the lower of
+  the applied and requested speeds until the worker's receipt arrives, one
+  option request is in flight at a time, and a zone reset resyncs the
+  choices. Without gameplay departures the defaults are retained.
+- Consider replies map the received faction code to its standing phrase in
+  wire order; codes 6 to 9 were reversed. The consider line takes a chat
+  palette colour and the received level colour stays separate from any level
+  estimate; the palette values and the assessment phrase choice are not read
+  from the Titanium program (inferred, recording checklist 6.395). The
+  received colour is shown on every server.
+- Add a hidden, movable Runbook checklist for a local script harness. Rows
+  show only results the harness reported, stale IDs and conflicting terminal
+  results are rejected, and the state survives closing and reopening.
+- Hide the air gauge and restart its clocks while a movement result stays
+  unconfirmed for more than 250 ms; a pending move survives a same-admission
+  reset until the worker answers it. A cast request the worker never
+  acknowledges times out after five seconds through a typed event and frees
+  the request alias.
 - Show Air Remaining during ordinary mapped Titanium immersion, including
   WLD lava that restricts breathing at the head. Local-only EQEmu sessions
   report drowning after depletion and lava heat from mapped body contact.

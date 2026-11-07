@@ -62,6 +62,24 @@ impl ClientWorld {
         }
     }
 
+    /// Ends the worker's local wait. Only a pending request can be retired
+    /// here, and its spell is unavailable to later cast notices.
+    pub(super) fn cast_request_unconfirmed(
+        &mut self,
+        session_id: u64,
+        spell_id: u32,
+        changes: &mut Changes,
+    ) {
+        if self.accepts_reply(session_id)
+            && self.death.is_none()
+            && self.casting.pending == Some(spell_id)
+        {
+            self.casting.pending = None;
+        } else {
+            changes.ignored = true;
+        }
+    }
+
     /// Releases an identified local cast without inventing a spell result.
     pub(super) fn release_cast_hold(&mut self, session_id: u64, spell_id: u32) -> bool {
         let Some(own_id) = self.player.as_ref().map(|player| player.spawn_id) else {

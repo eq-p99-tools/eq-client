@@ -52,6 +52,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_delayed_environment_check_starts_a_full_new_interval() {
+        let mut clock = Tick::default();
+        let start = Instant::now();
+        let at = |millis| start + Duration::from_millis(millis);
+        assert!(!clock.due(at(0)));
+        assert!(clock.due(at(1_500)));
+        assert!(!clock.due(at(2_000)));
+        assert!(!clock.due(at(2_499)));
+        assert!(clock.due(at(2_500)));
+    }
+
+    #[test]
     fn titanium_lava_uses_effective_resist_and_its_zone_floor() {
         assert_eq!(lava_damage(27, 25), Some(42));
         assert_eq!(lava_damage(27, 240), Some(10));

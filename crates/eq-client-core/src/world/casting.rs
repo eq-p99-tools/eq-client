@@ -142,8 +142,8 @@ pub struct Casting {
 
 impl Casting {
     /// Tracks the worker's pending request separately from any active cast.
-    /// The worker releases a pending request before forwarding its begin or
-    /// result, so keep its spell for that notice.
+    /// When the worker releases a request before forwarding its answer,
+    /// keep the spell for the begin or result that follows.
     pub(super) fn pend(&mut self, spell_id: Option<u32>) {
         self.next_requested = match spell_id {
             Some(_) => None,
@@ -191,10 +191,12 @@ impl Casting {
                 duration_ms,
             } if caster_id == own_id => {
                 self.interrupted = None;
-                if self.next_requested.is_some()
-                    || self.cast.is_none_or(|(active, ..)| active != spell_id)
-                {
-                    self.requested = self.next_requested.take();
+                // An own begin answers the pending request even if its
+                // clear notice has not been applied yet. Keep the request
+                // as an alias of the spell the server actually named.
+                let requested = self.next_requested.take().or_else(|| self.pending.take());
+                if requested.is_some() || self.cast.is_none_or(|(active, ..)| active != spell_id) {
+                    self.requested = requested;
                 }
                 self.cast = Some((spell_id, now, Duration::from_millis(u64::from(duration_ms))));
                 Some(CastNews::Began)

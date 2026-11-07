@@ -2,7 +2,7 @@
 //! and the player's own choices change it.
 use super::{
     Camp, CastDone, Casting, CharacterList, ClientWorld, Exchange, Landing, Loot, Merchant, Motion,
-    MotionGrant, ServerList, Spawn, Target, Vitals,
+    MotionGrant, NpcConsider, ServerList, Spawn, Target, Vitals,
 };
 use crate::{
     BookActionStatus, Coins, Death, PlayerState, PostureState, SpellBook, ZoneOffer,
@@ -53,7 +53,10 @@ impl ClientWorld {
         use eq_network_game::{
             inventory::WeightUnavailable, movement::SpeedInputUnavailable as Missing,
         };
-        if !self.inventory.received() || self.inventory.stale() {
+        if !self.inventory.received()
+            || self.inventory.stale()
+            || self.inventory.ground_drop_pending()
+        {
             return Err(Missing::Inventory);
         }
         let purse = self.wallet.purse.ok_or(Missing::Coins)?;
@@ -82,14 +85,19 @@ impl ClientWorld {
     /// same weight as their speeds, Titanium's from the field the stat
     /// recompute 0x4212b3 fills with 0x41bb06 and `EQMac`'s fall 0x4bfe16
     /// calling 0x4bbb78) where it can be established, else this client's
-    /// own larger reading ([`Self::carried_weight`]), which overstates the
-    /// weight and so the damage: the safe side where the client reports
-    /// its falls.
+    /// own estimate ([`Self::carried_weight`]). A pending ground drop can
+    /// leave a heavier server cursor item hidden in the displayed queue,
+    /// so neither weight estimate is usable until a received snapshot.
     #[must_use]
-    pub fn fall_weight(&self) -> f32 {
+    pub fn fall_weight(&self) -> Option<f32> {
+        if self.inventory.ground_drop_pending() {
+            return None;
+        }
         #[allow(clippy::cast_precision_loss)]
-        self.movement_weight()
-            .map_or_else(|_| self.carried_weight(), |tenths| tenths as f32 / 10.0)
+        let weight = self
+            .movement_weight()
+            .map_or_else(|_| self.carried_weight(), |tenths| tenths as f32 / 10.0);
+        Some(weight)
     }
 
     /// Changes when the player's skills, languages, level or admission change.
@@ -544,6 +552,21 @@ impl ClientWorld {
         self.zone.considered.get(&id).copied()
     }
 
+    /// The display color of a considered spawn. The classic policy
+    /// estimates NPC difficulty from current levels on the classic scale.
+    /// The received color stays available through [`Self::considered`].
+    #[must_use]
+    pub fn consider_color(&self, id: u16) -> Option<ConColor> {
+        let reported = self.considered(id)?;
+        if matches!(self.npc_consider, NpcConsider::ClassicLevel) {
+            let spawn = self.spawn(id)?;
+            if spawn.state.kind == crate::SpawnKind::Npc {
+                return crate::maps::level_con(self.player()?.level, spawn.state.level, false);
+            }
+        }
+        (!matches!(reported, ConColor::Other(_))).then_some(reported)
+    }
+
     /// Whether a spawn ID is the player's.
     #[must_use]
     pub fn is_player(&self, id: u16) -> bool {
@@ -730,8 +753,8 @@ impl ClientWorld {
         self.wallet.purse.as_ref()
     }
 
-    /// What the player carries, in the weight units the programs count a
-    /// fall's cost in (TAKP Batch 1 R3, recording checklist item 6.161):
+    /// An estimate from the displayed inventory, in the weight units used for
+    /// landing costs (TAKP Batch 1 R3, recording checklist item 6.161):
     /// a tenth of each item's weight and a fortieth of each coin. The
     /// program lessens a bag's contents by the bag's reduction, which the
     /// item data the sessions decode lacks, so they count in full; a stack

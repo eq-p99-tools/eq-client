@@ -88,6 +88,13 @@ pub enum Reply {
         /// Whether the item was handed over.
         accepted: bool,
     },
+    /// The worker dropped a move before returning a movement position.
+    MotionRefused {
+        /// Original process-local request stamp.
+        created: std::time::Instant,
+        /// Why it was refused.
+        reason: String,
+    },
     /// A zone line could not be crossed; the move that asked is over.
     ZoneLineRefused,
 }

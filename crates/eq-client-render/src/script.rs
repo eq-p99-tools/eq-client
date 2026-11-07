@@ -2278,8 +2278,8 @@ fn done_button(
 }
 
 /// The control a click or a hold presses, or why the script stops: none is
-/// visible, or a skin's button named by its `ScreenID` is greyed out, as it
-/// is for a player, with the reason its hover gives.
+/// visible, or a named skin button or slider is greyed out, with the reason
+/// its hover gives.
 fn reach(
     target: ClickTarget,
     buttons: &Buttons,
@@ -2291,6 +2291,9 @@ fn reach(
     match (target, needs.get(entity)) {
         (ClickTarget::Button(..), Ok(needs)) if !needs.offered(world) => {
             Err(format!("that button is greyed out: {}", needs.reason()))
+        }
+        (ClickTarget::Slider(..), Ok(needs)) if !needs.offered(world) => {
+            Err(format!("that slider is greyed out: {}", needs.reason()))
         }
         _ => Ok(entity),
     }
@@ -5076,6 +5079,83 @@ mod tests {
 
     fn interaction(app: &App, entity: Entity) -> Interaction {
         *app.world().get::<Interaction>(entity).unwrap()
+    }
+
+    #[test]
+    fn a_script_stops_before_pressing_an_unavailable_run_speed_slider() {
+        use crate::{
+            online::{OnlineState, testing},
+            options::OptionsState,
+            outbox::{Needs, UNAVAILABLE},
+            skinned::{SkinSlider, slide},
+        };
+        use bevy::ui::RelativeCursorPosition;
+        use eq_client_core::{WorldEvent, options::Level};
+
+        let mut online = OnlineState::new(true);
+        testing::news(
+            &mut online,
+            [WorldEvent::Entered {
+                capabilities: Vec::new(),
+                choices: Vec::new(),
+                session_id: 9,
+                zone: "qeytoqrg".into(),
+                player: Box::new(testing::player(7)),
+                far_clip: None,
+                spell_landing_flag: None,
+            }],
+        );
+        testing::connect(&mut online, true);
+        let level = Level::RunSpeed;
+        let capability = level.needs().unwrap();
+        assert_eq!(online.world().session_id(), Some(9));
+        assert!(!online.world().can(capability));
+        let program = Program::parse(
+            "click slider run_boost 100\nreport after click\n",
+            Path::new("."),
+        )
+        .unwrap();
+        let mut app = pointing(Vec::new());
+        let window = app
+            .world_mut()
+            .query_filtered::<Entity, With<PrimaryWindow>>()
+            .single(app.world())
+            .unwrap();
+        set_focus(&mut app, window, true);
+        app.insert_resource(online)
+            .insert_resource(Script::from_program(program))
+            .add_systems(Update, slide.after(drive));
+        app.world_mut()
+            .resource_mut::<OptionsState>()
+            .options
+            .set_level(level, 120);
+        let slider = app
+            .world_mut()
+            .spawn((
+                Button,
+                SkinSlider::test_level(level),
+                Needs::Capability(capability),
+                RelativeCursorPosition::default(),
+                laid_out(Vec2::new(240.0, 360.0), 80.0, 1),
+            ))
+            .id();
+        for ms in [0, 10, 260, 270, 280, 290] {
+            frame_at(&mut app, ms);
+            assert_ne!(interaction(&app, slider), Interaction::Pressed);
+        }
+        assert!(!app.world().contains_resource::<Script>());
+        let status = app.world().resource::<RunStatus>();
+        assert_eq!(status.phase(), Phase::Failed);
+        assert_eq!(status.line(), Some(1));
+        assert_eq!(status.progress(), (0, 2));
+        assert_eq!(
+            status.events().back().unwrap().message,
+            format!("that slider is greyed out: {UNAVAILABLE}")
+        );
+        assert_eq!(
+            app.world().resource::<OptionsState>().options.level(level),
+            120
+        );
     }
 
     fn script_pointer(app: &App) -> Option<Vec2> {

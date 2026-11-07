@@ -193,6 +193,13 @@ struct LiquidHazardInputs {
     own_model_changed: bool,
 }
 
+#[derive(Default)]
+enum NpcConsider {
+    #[default]
+    Reported,
+    ClassicLevel,
+}
+
 /// What the server has told the client, kept by one writer. Its fields go
 /// in order of how long they last: the connection's, the admission's, the
 /// character's, and the zone's, which leaving the zone forgets in one step.
@@ -209,6 +216,8 @@ pub struct ClientWorld {
     connected: bool,
     ended: bool,
     world_name: Option<String>,
+    /// Presentation policy selected by the current connection's worker.
+    npc_consider: NpcConsider,
     /// The time in Norrath the server last gave, and when it came.
     time: Option<(crate::clock::GameTime, Instant)>,
     /// Guild names by number, from the world's guild list.
@@ -418,6 +427,16 @@ impl ClientWorld {
     #[must_use]
     pub const fn generation(&self) -> crate::GameDialect {
         self.generation
+    }
+
+    /// Selects the classic level scale for NPC consider presentation for
+    /// this connection. The received assessment remains available separately.
+    pub const fn consider_npcs_by_level(&mut self, enabled: bool) {
+        self.npc_consider = if enabled {
+            NpcConsider::ClassicLevel
+        } else {
+            NpcConsider::Reported
+        };
     }
 
     /// The player asked to play on a world of the login server's list, by
@@ -709,6 +728,16 @@ impl ClientWorld {
                 position,
                 refused,
             } => self.motion_sent(*session_id, *position, refused.as_ref(), news),
+            WorldEvent::MotionRefused { session_id, created, reason } => {
+                if self.session_id == Some(*session_id) {
+                    news.replies.push(Reply::MotionRefused {
+                        created: *created,
+                        reason: reason.clone(),
+                    });
+                } else {
+                    news.ignored = true;
+                }
+            }
             WorldEvent::Death(death) => return self.died(death, now),
             WorldEvent::DeathBind { session_id } => {
                 if self.session_id != Some(*session_id) {
@@ -828,7 +857,13 @@ impl ClientWorld {
                 self.reconcile_pet_buffs();
             }
             WorldEvent::Consideration(consideration) => {
-                news.notices.push(self.zone.consider(consideration));
+                let id = consideration.target_id;
+                self.zone.considered.insert(id, consideration.color);
+                news.notices.push(Notice::Consideration {
+                    consideration: *consideration,
+                    name: self.zone.name(id),
+                    color: self.consider_color(id),
+                });
             }
             WorldEvent::LootRequest {
                 session_id,
@@ -1315,6 +1350,10 @@ impl ClientWorld {
                 session_id,
                 spell_id,
             } => self.cast_pending(*session_id, *spell_id, news),
+            WorldEvent::CastRequestUnconfirmed {
+                session_id,
+                spell_id,
+            } => self.cast_request_unconfirmed(*session_id, *spell_id, news),
             WorldEvent::CastSuperseded { session_id, spell_id } => {
                 news.ignored = !self.release_cast_hold(*session_id, *spell_id);
             }
@@ -1481,7 +1520,7 @@ impl ClientWorld {
                 self.spell_book = None;
                 self.book_action = None;
                 self.buffs.clear();
-                self.casting.interrupted = None;
+                self.casting.drop_actions();
             }
             Reset::Camped => {
                 // Local camp completion invalidates the character projection;

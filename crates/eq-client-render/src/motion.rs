@@ -44,9 +44,8 @@ pub(super) struct Controls {
     /// program sets it, such as following, are not in this client:
     /// recording checklist 6.359).
     autorun: bool,
-    waiting: bool,
+    pending: Option<Pending>,
     pub last_accepted: Instant,
-    queued_at: Instant,
     moving: bool,
     /// Seconds of play the latest sample sent covers: the model shows it
     /// over that long once the session accepts it.
@@ -102,6 +101,29 @@ pub(super) struct Controls {
     movement_options: eq_client_core::movement::MovementOptions,
 }
 
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum PendingKind {
+    Move,
+    Crossing,
+}
+
+#[derive(Clone, Copy)]
+struct Pending {
+    session_id: u64,
+    created: Instant,
+    kind: PendingKind,
+}
+
+/// Whether local liquid checks have a worker position on which to base a sample.
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(super) enum LiquidBasis {
+    Observed,
+    Pending,
+    Unconfirmed,
+}
+
+const MOVE_RESULT_WAIT: Duration = Duration::from_millis(250);
+
 #[derive(Clone, Copy, Default, PartialEq, Eq)]
 enum SentYaw {
     #[default]
@@ -149,9 +171,8 @@ impl Default for Controls {
             diagonal_rates: DiagonalRates::default(),
             walking: false,
             autorun: false,
-            waiting: false,
+            pending: None,
             last_accepted: Instant::now(),
-            queued_at: Instant::now(),
             moving: false,
             sent_span: 0.1,
             sent_yaw: SentYaw::Ordinary,
@@ -399,10 +420,12 @@ impl Controls {
                 intent.direction = Vec3::ZERO;
             }
         }
-        let boosted = self.movement_options.run_boost && intent.mode == MovementMode::Forward;
-        if boosted {
-            intent.speed *= eq_client_core::movement::MovementOptions::RUN_BOOST;
-        }
+        let run_factor = if intent.mode == MovementMode::Forward {
+            self.movement_options.run_speed_multiplier.factor()
+        } else {
+            1.0
+        };
+        intent.speed *= run_factor;
         if self.movement_options.fly && focused {
             intent.direction.y = if self.stun_active {
                 0.0
@@ -411,9 +434,7 @@ impl Controls {
             };
             intent.direction = intent.direction.normalize_or_zero();
             // Run boost changes only horizontal speed, including during flight.
-            if boosted {
-                intent.direction.y /= eq_client_core::movement::MovementOptions::RUN_BOOST;
-            }
+            intent.direction.y /= run_factor;
         }
         intent
     }
@@ -452,8 +473,8 @@ impl Controls {
         };
         let request = GroundedDiagonal { along, side };
         let lateral = self.diagonal_rates.for_mode(request)?;
-        let longitudinal = if self.movement_options.run_boost && along == DiagonalAlong::Run {
-            intent.speed * eq_client_core::movement::MovementOptions::RUN_BOOST
+        let longitudinal = if along == DiagonalAlong::Run {
+            intent.speed * self.movement_options.run_speed_multiplier.factor()
         } else {
             intent.speed
         };
@@ -479,6 +500,11 @@ impl Controls {
             placement: self.placement,
             stun_revision: self.stun_revision,
             movement_options: self.movement_options,
+            // A grant or correction resets prediction, but the same worker
+            // can still consume a move that was already queued.
+            pending: self
+                .pending
+                .filter(|pending| pending.kind == PendingKind::Move),
             ..Self::default()
         };
     }
@@ -509,18 +535,18 @@ impl Controls {
         self.stunned
     }
 
-    /// A change cannot bank displacement or carry a jump/fall into flight.
+    /// A permission change cannot bank displacement or carry a jump/fall into flight.
     fn choose_movement(&mut self, options: eq_client_core::movement::MovementOptions) {
-        if self.movement_options == options {
+        let previous = std::mem::replace(&mut self.movement_options, options);
+        if previous.same_permissions(options) {
             return;
         }
-        if self.movement_options.fly != options.fly {
+        if previous.fly != options.fly {
             self.airborne = self
                 .airborne
                 .as_ref()
                 .map(|_| AirborneController::default());
         }
-        self.movement_options = options;
         self.taps = TapBuffer::default();
         self.jump = None;
         self.crouch = None;
@@ -528,14 +554,13 @@ impl Controls {
         self.mouse_turn = 0.0;
         self.mouse_heading = None;
         self.moving = false;
-        // The session starts a fresh budget and schedules its paced stop when
-        // its option command arrives. Do not immediately spend a full sample
-        // of displacement against the new budget.
+        // The session schedules its paced stop when the permission changes.
+        // Resume with a fresh local sample window.
         self.last_accepted = Instant::now();
     }
 
     /// Stops prediction without revoking the session's calibration. A pending
-    /// proposal still owns the movement slot until its result or a reset arrives.
+    /// proposal still owns the movement slot until its result or its admission ends.
     fn pause_prediction(&mut self) {
         self.moving = false;
         self.visual = None;
@@ -588,11 +613,40 @@ impl Controls {
             .then(eq_client_core::movement::AirborneController::default);
     }
 
-    pub fn accepted(&mut self) {
+    fn finish(&mut self) {
         let now = Instant::now();
-        self.waiting = false;
+        self.pending = None;
         self.last_accepted = now;
         self.last_answer = Some(now);
+    }
+
+    pub(super) fn moved(&mut self, session_id: Option<u64>) {
+        if self.pending.is_some_and(|pending| {
+            pending.kind == PendingKind::Move && Some(pending.session_id) == session_id
+        }) {
+            self.finish();
+        }
+    }
+
+    pub(super) fn crossing_refused(&mut self) {
+        if self
+            .pending
+            .is_some_and(|pending| pending.kind == PendingKind::Crossing)
+        {
+            self.finish();
+        }
+    }
+
+    pub(super) fn move_refused(&mut self, session_id: Option<u64>, created: Instant, reason: &str) {
+        if self.pending.is_some_and(|pending| {
+            pending.kind == PendingKind::Move
+                && Some(pending.session_id) == session_id
+                && pending.created == created
+        }) {
+            self.finish();
+            self.resolve_water_entry(true);
+            self.refused = Some(reason.to_owned());
+        }
     }
 
     /// A local result either keeps the water entry or restores the dry-side motion.
@@ -604,9 +658,30 @@ impl Controls {
         }
     }
 
-    /// Whether a sample is out and its answer has not come back.
+    fn wait_for(&mut self, session_id: Option<u64>, created: Instant, kind: PendingKind) {
+        self.pending = session_id.map(|session_id| Pending {
+            session_id,
+            created,
+            kind,
+        });
+    }
+
+    /// Whether a movement or crossing request still owns the slot.
     pub const fn waiting(&self) -> bool {
-        self.waiting
+        self.pending.is_some()
+    }
+
+    pub(super) fn liquid_basis(&self, session_id: Option<u64>, now: Instant) -> LiquidBasis {
+        match self
+            .pending
+            .filter(|pending| Some(pending.session_id) == session_id)
+        {
+            None => LiquidBasis::Observed,
+            Some(pending) if now.saturating_duration_since(pending.created) >= MOVE_RESULT_WAIT => {
+                LiquidBasis::Unconfirmed
+            }
+            Some(_) => LiquidBasis::Pending,
+        }
     }
 }
 
@@ -703,11 +778,14 @@ pub(super) fn input(
     }
     let detached = cameras.single().is_ok_and(|(_, free)| free);
     let session_id = online.world().session_id();
-    let movement = eq_client_core::movement::offered_options(&options.options.qol, online.world());
-    if movement_sync
+    controls.pending = controls
+        .pending
+        .filter(|pending| Some(pending.session_id) == session_id);
+    let wanted = eq_client_core::movement::offered_options(&options.options.qol, online.world());
+    let Some(movement) = movement_sync
         .as_ref()
-        .is_some_and(|sync| !sync.ready(session_id, movement))
-    {
+        .map_or(Some(wanted), |sync| sync.usable(session_id, wanted))
+    else {
         // Say why once for this wait, including when the queue keeps retrying.
         if *told_wait != session_id {
             chat.history.push(crate::chat::system_line(
@@ -719,7 +797,7 @@ pub(super) fn input(
         controls.mouse_heading = None;
         controls.held = Some(Held::Gate);
         return;
-    }
+    };
     *told_wait = None;
     controls.choose_movement(movement);
     let flying = controls.movement_options.fly;
@@ -850,8 +928,8 @@ pub(super) fn input(
     controls
         .taps
         .observe(&keyboard, &movement_keys, focused, now);
-    if controls.waiting {
-        if now.duration_since(controls.queued_at) > Duration::from_millis(250) {
+    if controls.pending.is_some() {
+        if controls.liquid_basis(session_id, now) == LiquidBasis::Unconfirmed {
             controls.pause_prediction();
         }
         controls.held = Some(Held::Waiting);
@@ -927,8 +1005,7 @@ pub(super) fn input(
                 controls.send_failed(reason);
                 controls.held = Some(Held::Refused);
             } else {
-                controls.waiting = true;
-                controls.queued_at = now;
+                controls.wait_for(session_id, now, PendingKind::Crossing);
                 controls.held = Some(Held::Gate);
             }
             return;
@@ -1154,12 +1231,8 @@ pub(super) fn input(
                 }
                 // Airborne combined momentum is outside this grounded
                 // budget. Keep any subsequent Fall inside its normal grant.
-                let fall_speed = controls.speed.unwrap_or(0.0);
-                let fall_speed = if controls.movement_options.run_boost {
-                    fall_speed * eq_client_core::movement::MovementOptions::RUN_BOOST
-                } else {
-                    fall_speed
-                };
+                let fall_speed = controls.speed.unwrap_or(0.0)
+                    * controls.movement_options.run_speed_multiplier.factor();
                 controller.limit_drift(fall_speed);
                 landed
             } else {
@@ -1323,18 +1396,18 @@ pub(super) fn input(
             .airborne
             .as_mut()
             .and_then(AirborneController::take_landing)
-    {
-        let cost = landing_cost(
+        && let Some(cost) = landing_cost(
             client,
             world,
             position - Vec3::Y * body.feet_offset,
             fall,
             online.world(),
-        );
+        )
+    {
         debug!(
             fall_distance = fall.fall_distance,
             impact_speed = fall.impact_speed,
-            carried_weight = online.world().fall_weight(),
+            carried_weight = ?online.world().fall_weight(),
             damage = cost.damage,
             safe_fall = cost.safe_fall,
             "Landing"
@@ -1350,8 +1423,7 @@ pub(super) fn input(
         || mouse_snapshot.is_none() && (heading - current_heading).abs() > f32::EPSILON;
     // Until the heading sent reaches the facing, the model shows the facing.
     controls.facing = (arc(heading, facing).abs() > 0.01).then_some(facing);
-    controls.waiting = true;
-    controls.queued_at = now;
+    controls.wait_for(session_id, created, PendingKind::Move);
 }
 
 /// Whether no ground is under the feet within the step the server's
@@ -1538,21 +1610,22 @@ fn jump_too_soon(client: InstalledClient, last: Option<Instant>, now: Instant) -
 /// fall did damage for it to lessen (Titanium: recording checklist item
 /// 6.148). The rank of the ability that raises Safe Fall is not in what the
 /// sessions decode, so it counts as none (unsure).
+/// Returns no cost when the rule needs weight and drop custody is unresolved.
 fn landing_cost(
     client: InstalledClient,
     collision: &CollisionWorld,
     feet: Vec3,
     landing: Landing,
     world: &ClientWorld,
-) -> FallCost {
+) -> Option<FallCost> {
     if collision.in_liquid(feet) {
-        return FallCost::default();
+        return Some(FallCost::default());
     }
     let skill = safe_fall(world);
-    match client.falls() {
+    let cost = match client.falls() {
         Some(falls) => falls.landing_cost(FallLanding {
             impact_speed: landing.impact_speed,
-            carried_weight: world.fall_weight(),
+            carried_weight: world.fall_weight()?,
             safe_fall: skill,
             safe_fall_ranks: 0,
             zone: eq_client_core::zones::number(world.zone()).unwrap_or(0),
@@ -1561,7 +1634,8 @@ fn landing_cost(
             damage: collision.landing_damage(feet, landing, skill),
             safe_fall: skill > 0 && collision.landing_damage(feet, landing, 0) > 0,
         },
-    }
+    };
+    Some(cost)
 }
 
 /// Says in the chat what a landing that hurt did, in the installed client's
@@ -1603,6 +1677,9 @@ fn report_fall(
     qol: &Settings,
     cost: FallCost,
 ) -> Option<FallCost> {
+    if world.worker_inventory().ground_drop_pending() {
+        return None;
+    }
     let stamp = outbox.peek(world)?;
     let wanted = (cost.damage > 0 || cost.safe_fall)
         && qol.on(Fix::TakeEnvironmentalDamage)
@@ -1896,7 +1973,10 @@ fn arc(from: f32, to: f32) -> f32 {
 
 #[cfg(test)]
 pub(super) mod tests {
-    use eq_client_core::movement::{Liquid, Liquids};
+    use eq_client_core::{
+        movement::{Liquid, Liquids, RunSpeedMultiplier},
+        options::Level,
+    };
 
     fn movement_choice(app: &mut App, fix: Fix, on: bool) {
         app.world_mut()
@@ -1920,48 +2000,77 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn changing_movement_options_restarts_the_local_time_gate() {
+    fn held_movement_and_prediction_continue_through_run_speed_changes() {
         let (mut app, receiver) = app();
-        app.world_mut().resource_mut::<Controls>().moving = true;
+        app.init_resource::<crate::options::MovementSync>()
+            .add_systems(Update, crate::options::tell_choices.before(input));
         app.world_mut()
-            .resource_mut::<crate::options::OptionsState>()
-            .options
-            .qol
-            .set(Fix::RunBoost, true);
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        // Establish this admission's default options before starting to run.
+        app.update();
+        while receiver.try_recv().is_ok() {}
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyW);
+        app.update();
+        let move_sample = || match receiver.try_recv().unwrap() {
+            ClientCommand::Move(sample) => sample,
+            command => panic!("expected movement, got {command:?}"),
+        };
+        let change_speed = |app: &mut App, percent| {
+            app.world_mut()
+                .resource_mut::<crate::options::OptionsState>()
+                .options
+                .set_level(Level::RunSpeed, percent);
+            app.update();
+            let ClientCommand::SetMovementOptions {
+                session_id: 11,
+                request_id,
+                options,
+                ..
+            } = receiver.try_recv().unwrap()
+            else {
+                panic!("expected speed change");
+            };
+            assert_eq!(options.run_speed_multiplier.percent(), percent);
+            (request_id, options)
+        };
+        let check_speed = |app: &App, from: &MovementRequest, to: &MovementRequest, speed: f32| {
+            let controls = app.world().resource::<Controls>();
+            assert!(controls.visual.is_some());
+            assert!((from.position.x - to.position.x - speed * controls.sent_span).abs() < 0.001);
+        };
+        let first = move_sample();
+        accept(&mut app, &first);
+        let (request_id, options) = change_speed(&mut app, 140);
+        let pending = move_sample();
+        check_speed(&app, &first, &pending, 6.0);
+
+        crate::online::testing::news(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            [eq_client_core::WorldEvent::MovementOptionsApplied {
+                session_id: 11,
+                request_id,
+                options,
+            }],
+        );
         app.update();
         assert!(receiver.try_recv().is_err());
-        assert_eq!(app.world().resource::<Controls>().held, Some(Held::Gate));
-        assert!(!app.world().resource::<Controls>().moving);
-        app.world_mut().resource_mut::<Controls>().last_accepted = Instant::now()
-            .checked_sub(Duration::from_millis(100))
-            .unwrap();
+        assert_eq!(app.world().resource::<Controls>().held, Some(Held::Waiting));
+        accept(&mut app, &pending);
         app.update();
-        let ClientCommand::Move(boosted) = receiver.try_recv().expect("fresh policy budget") else {
-            panic!("unexpected command");
-        };
-        assert!((boosted.position.x + 0.66).abs() < 0.001);
+        let boosted = move_sample();
+        check_speed(&app, &pending, &boosted, 8.4);
         accept(&mut app, &boosted);
-        app.world_mut()
-            .resource_mut::<crate::options::OptionsState>()
-            .options
-            .qol
-            .set(Fix::RunBoost, false);
-        app.update();
-        assert!(receiver.try_recv().is_err());
-        assert_eq!(app.world().resource::<Controls>().held, Some(Held::Gate));
-        app.world_mut().resource_mut::<Controls>().last_accepted = Instant::now()
-            .checked_sub(Duration::from_millis(100))
-            .unwrap();
-        app.update();
-        let ClientCommand::Move(normal) = receiver.try_recv().expect("ordinary policy budget")
-        else {
-            panic!("unexpected command");
-        };
-        assert!((normal.position.x - boosted.position.x + 0.6).abs() < 0.001);
+
+        change_speed(&mut app, 100);
+        let lowered = move_sample();
+        check_speed(&app, &boosted, &lowered, 6.0);
     }
 
     #[test]
-    fn run_boost_only_changes_the_granted_forward_speed() {
+    fn the_run_multiplier_only_changes_granted_forward_speed() {
         let mut controls = Controls {
             speed: Some(6.0),
             backward_speed: Some(2.0),
@@ -1973,21 +2082,16 @@ pub(super) mod tests {
         let keys = ButtonInput::<KeyCode>::default();
         let intent =
             |controls: &Controls, act| controls.intent(&keys, &map, &[act], true, (0.0, 0.0), None);
-        let normal = intent(&controls, Act::Forward);
-        controls.movement_options.run_boost = true;
-        let boosted = intent(&controls, Act::Forward);
-        assert!(
-            (boosted.speed - normal.speed * eq_client_core::movement::MovementOptions::RUN_BOOST)
-                .abs()
-                < 0.001
-        );
-        assert!((intent(&controls, Act::Back).speed - 2.0).abs() < 0.001);
-        assert!((intent(&controls, Act::StrafeLeft).speed - 3.0).abs() < 0.001);
-        controls.walking = true;
-        assert!((intent(&controls, Act::Forward).speed - 1.5).abs() < 0.001);
-        controls.movement_options.run_boost = false;
-        controls.walking = false;
-        assert!((intent(&controls, Act::Forward).speed - normal.speed).abs() < 0.001);
+        for (percent, speed) in [(100, 6.0), (110, 6.6), (120, 7.2), (140, 8.4)] {
+            controls.movement_options.run_speed_multiplier =
+                RunSpeedMultiplier::from_percent(percent).unwrap();
+            controls.walking = false;
+            assert!((intent(&controls, Act::Forward).speed - speed).abs() < 0.001);
+            assert!((intent(&controls, Act::Back).speed - 2.0).abs() < 0.001);
+            assert!((intent(&controls, Act::StrafeLeft).speed - 3.0).abs() < 0.001);
+            controls.walking = true;
+            assert!((intent(&controls, Act::Forward).speed - 1.5).abs() < 0.001);
+        }
     }
 
     #[test]
@@ -2062,7 +2166,7 @@ pub(super) mod tests {
             None,
         );
         assert!(opposite.direction.length() < f32::EPSILON);
-        controls.movement_options.run_boost = true;
+        controls.movement_options.run_speed_multiplier = RunSpeedMultiplier::MAX;
         let up = controls.intent(&keys, &map, &[Act::Jump], true, (0.0, 128.0), None);
         assert!((up.direction.y * up.speed - 6.0).abs() < 0.001);
         let boosted = controls.intent(
@@ -2199,12 +2303,11 @@ pub(super) mod tests {
     fn every_movement_opt_in_keeps_unknown_disconnected_and_dead_gates() {
         for state in 0..3 {
             let (mut app, receiver) = app();
-            for fix in [
-                Fix::WalkWhileWinded,
-                Fix::RunBoost,
-                Fix::Fly,
-                Fix::JesusMode,
-            ] {
+            app.world_mut()
+                .resource_mut::<crate::options::OptionsState>()
+                .options
+                .set_level(Level::RunSpeed, 140);
+            for fix in [Fix::WalkWhileWinded, Fix::Fly, Fix::JesusMode] {
                 movement_choice(&mut app, fix, true);
             }
             match state {
@@ -3097,7 +3200,7 @@ pub(super) mod tests {
             fall_distance: 100.0,
             impact_speed: 120.0,
         };
-        let cost = |client| landing_cost(client, &floor, Vec3::ZERO, landing, &world);
+        let cost = |client| landing_cost(client, &floor, Vec3::ZERO, landing, &world).unwrap();
         // Both programs': T = 6 - 2.5 - 1.5 = 2, so 40.
         assert_eq!(
             cost(InstalledClient::Titanium),
@@ -3250,6 +3353,15 @@ pub(super) mod tests {
         let (mut app, receiver) = fixture();
         app.add_systems(Update, input);
         (app, receiver)
+    }
+
+    pub(crate) fn age_pending(app: &mut App) {
+        app.world_mut()
+            .resource_mut::<Controls>()
+            .pending
+            .as_mut()
+            .unwrap()
+            .created = Instant::now().checked_sub(MOVE_RESULT_WAIT).unwrap();
     }
 
     pub(crate) fn fixture() -> (App, mpsc::Receiver<ClientCommand>) {
@@ -3679,6 +3791,7 @@ pub(super) mod tests {
         );
         assert!(swim.position.z - placed.z < 0.1);
         assert!(receiver.try_recv().is_err());
+        accept(&mut app, &swim);
 
         let bank = world_position([0.0, 3.0, 0.0], 0.0);
         online::testing::place(
@@ -3738,6 +3851,7 @@ pub(super) mod tests {
         let falling = next_move(&mut app, 11);
         assert_eq!(falling.mode, MovementMode::Fall);
         assert!(falling.position.z < walking.position.z);
+        accept(&mut app, &falling);
 
         movement_choice(&mut app, Fix::JesusMode, true);
         let submerged = world_position([0.0, -4.0, 0.0], 0.0);
@@ -3941,6 +4055,7 @@ pub(super) mod tests {
         };
         assert_eq!(request.mode, MovementMode::Walk);
         assert!((request.position.x.hypot(request.position.y) - 0.2).abs() < 0.001);
+        accept(&mut app, &request);
         // A server's correction, as after a gm goto, starts motion afresh
         // but leaves the toggle as the player left it (6.363), so the next
         // grant walks again.
@@ -4021,6 +4136,13 @@ pub(super) mod tests {
     #[test]
     fn departure_motion_waits_for_matching_local_policy_application() {
         let (mut app, receiver) = app();
+        let set_fix = |app: &mut App, fix, enabled| {
+            app.world_mut()
+                .resource_mut::<crate::options::OptionsState>()
+                .options
+                .qol
+                .set(fix, enabled);
+        };
         let wait_count = |app: &App| {
             app.world()
                 .resource::<crate::chat::ChatState>()
@@ -4034,11 +4156,7 @@ pub(super) mod tests {
         };
         app.init_resource::<crate::options::MovementSync>()
             .add_systems(Update, crate::options::tell_choices.before(input));
-        app.world_mut()
-            .resource_mut::<crate::options::OptionsState>()
-            .options
-            .qol
-            .set(Fix::RunBoost, true);
+        set_fix(&mut app, Fix::Fly, true);
         app.update();
         assert_eq!(wait_count(&app), 1);
         let commands: Vec<_> = receiver.try_iter().collect();
@@ -4053,6 +4171,7 @@ pub(super) mod tests {
                 _ => None,
             })
             .unwrap();
+        assert!(options.fly);
         assert!(
             !commands
                 .iter()
@@ -4092,16 +4211,15 @@ pub(super) mod tests {
             .checked_sub(Duration::from_millis(100))
             .unwrap();
         app.update();
-        assert!(
-            receiver
-                .try_iter()
-                .any(|command| matches!(command, ClientCommand::Move(_)))
-        );
-        app.world_mut()
-            .resource_mut::<crate::options::OptionsState>()
-            .options
-            .qol
-            .set(Fix::RunBoost, false);
+        let sample = receiver
+            .try_iter()
+            .find_map(|command| match command {
+                ClientCommand::Move(sample) => Some(sample),
+                _ => None,
+            })
+            .expect("movement with flight applied");
+        assert!((sample.position.x + 0.6).abs() < 0.001);
+        set_fix(&mut app, Fix::Fly, false);
         app.update();
         app.update();
         assert_eq!(wait_count(&app), 2);
@@ -4113,11 +4231,7 @@ pub(super) mod tests {
             12,
             crate::online::testing::player(7),
         );
-        app.world_mut()
-            .resource_mut::<crate::options::OptionsState>()
-            .options
-            .qol
-            .set(Fix::RunBoost, true);
+        set_fix(&mut app, Fix::WalkWhileWinded, true);
         app.update();
         app.update();
         assert_eq!(wait_count(&app), 3);
@@ -4143,7 +4257,7 @@ pub(super) mod tests {
         let mut players = world.query_filtered::<&Transform, With<Player>>();
         let drawn = *players.single(world).unwrap();
         let mut controls = app.world_mut().resource_mut::<Controls>();
-        controls.accepted();
+        controls.moved(Some(request.session_id));
         controls.display_sample(drawn, request.position);
         controls.last_accepted = Instant::now()
             .checked_sub(Duration::from_millis(100))
@@ -4515,8 +4629,12 @@ pub(super) mod tests {
         keys.reset_all();
         keys.press(KeyCode::KeyE);
         controls.autorun = true;
+        controls.movement_options.run_speed_multiplier =
+            RunSpeedMultiplier::from_percent(120).unwrap();
         let autorun = controls.intent(&keys, &map, &[], true, (0.0, 0.0), None);
-        assert!(autorun.diagonal.is_some());
+        let diagonal = autorun.diagonal.expect("forward and lateral movement");
+        assert!((diagonal.longitudinal - 7.2).abs() < 0.001);
+        assert!((diagonal.lateral - 3.0).abs() < 0.001);
         controls.autorun = false;
         let both = MouseLook {
             held: true,
@@ -5243,15 +5361,14 @@ pub(super) mod tests {
         );
         app.update();
         assert!(receiver.try_recv().is_err());
-        let mut controls = app.world_mut().resource_mut::<Controls>();
-        controls.queued_at = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
+        age_pending(&mut app);
         app.update();
         assert!(app.world().resource::<Controls>().speed.is_some());
-        assert!(app.world().resource::<Controls>().waiting);
+        assert!(app.world().resource::<Controls>().pending.is_some());
         assert!(receiver.try_recv().is_err());
         // A late answer releases only the proposal; the grant was never lost.
         let mut controls = app.world_mut().resource_mut::<Controls>();
-        controls.accepted();
+        controls.moved(Some(request.session_id));
         controls.last_accepted = Instant::now().checked_sub(Duration::from_secs(2)).unwrap();
         app.update();
         let ClientCommand::Move(resumed) = receiver.try_recv().unwrap() else {
@@ -5455,7 +5572,7 @@ pub(super) mod tests {
         app.insert_resource(crate::outbox::Outbox::new(Some(sender)));
         app.update();
         assert!(app.world().resource::<Controls>().speed.is_some());
-        assert!(!app.world().resource::<Controls>().waiting);
+        assert!(app.world().resource::<Controls>().pending.is_none());
         receiver.try_recv().unwrap();
         app.world_mut().resource_mut::<Controls>().last_accepted =
             Instant::now().checked_sub(Duration::from_secs(2)).unwrap();
@@ -5464,18 +5581,19 @@ pub(super) mod tests {
             panic!("expected retry")
         };
         assert!((request.position.x + 0.6).abs() < 0.0001);
-        assert!(app.world().resource::<Controls>().waiting);
+        assert!(app.world().resource::<Controls>().pending.is_some());
     }
 
     #[test]
-    fn admission_reset_cannot_be_undone_by_a_late_result() {
+    fn a_late_result_does_not_restore_withdrawn_movement() {
         let mut controls = Controls {
             speed: Some(6.0),
-            waiting: true,
             ..default()
         };
+        controls.wait_for(Some(11), Instant::now(), PendingKind::Move);
         controls.reset(None);
-        controls.accepted();
+        assert!(controls.pending.is_some());
+        controls.moved(Some(11));
         assert!(controls.speed.is_none());
         controls.send_failed(crate::outbox::Refusal::Ended);
         assert!(controls.speed.is_none());
@@ -5717,7 +5835,7 @@ pub(super) mod tests {
             );
             // The landing is reported once; the next sample only stops.
             let mut controls = app.world_mut().resource_mut::<Controls>();
-            controls.accepted();
+            controls.finish();
             controls.last_accepted = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
             app.update();
             assert!(matches!(receiver.try_recv(), Ok(ClientCommand::Move(_))));
@@ -5729,7 +5847,7 @@ pub(super) mod tests {
     fn a_landings_damage_the_full_queue_refused_goes_before_the_next_sample() {
         let ready = |app: &mut App| {
             let mut controls = app.world_mut().resource_mut::<Controls>();
-            controls.accepted();
+            controls.finish();
             controls.last_accepted = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
         };
         let (mut app, _) = landing(None, eq_client_core::Capability::ALL.to_vec());

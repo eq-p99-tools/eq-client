@@ -3,7 +3,7 @@
 //! installed client's strings where the server uses them.
 use crate::{
     CampStatus, Coins, ZoneRejection,
-    combat::{Consideration, Damage},
+    combat::{ConColor, Consideration, Damage},
     loot::LootResponse,
 };
 
@@ -71,6 +71,8 @@ pub enum Notice {
         consideration: Consideration,
         /// The spawn's server name, when it is known.
         name: Option<String>,
+        /// The level color available for presentation when this answer arrived.
+        color: Option<ConColor>,
     },
     /// Damage the player dealt or took, or anything else nearby.
     Damage {

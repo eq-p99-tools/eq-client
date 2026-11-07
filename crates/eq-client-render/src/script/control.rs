@@ -1,6 +1,7 @@
 //! Opt-in local control of the existing executor. No gameplay is implemented here.
 mod files;
 mod protocol;
+mod runbook;
 
 use std::{collections::VecDeque, path::PathBuf, sync::Arc, time::Duration};
 
@@ -122,6 +123,7 @@ struct Bridge {
     processed: Option<(Envelope, Receipt)>,
     receipt: Option<Receipt>,
     current: Option<Tracked>,
+    runbook: Option<runbook::Run>,
     history: VecDeque<Snapshot>,
     protocol_error: Option<String>,
     io_error: Option<String>,
@@ -142,6 +144,7 @@ impl Bridge {
             processed: None,
             receipt: None,
             current: None,
+            runbook: None,
             history: VecDeque::new(),
             protocol_error: None,
             io_error: None,
@@ -252,6 +255,7 @@ impl Bridge {
             "revision":self.revision,"last_processed_id":self.processed.as_ref().map_or(0, |(request, _)| request.id),
             "last_request":self.receipt.as_ref().map(Receipt::json),
             "run":self.current.as_ref().map(|run| run.snapshot.json()),
+            "runbook":self.runbook.as_ref().map(runbook::Run::json),
             "recent_runs":self.history.iter().map(Snapshot::json).collect::<Vec<_>>(),
             "protocol_error":self.protocol_error,"io_error":self.io_error})).expect("bounded control values serialize")
     }
@@ -280,6 +284,7 @@ impl Drop for Bridge {
 
 /// Install only for an explicit launch option, before the first rendered frame.
 pub(crate) fn install(app: &mut App) -> std::io::Result<()> {
+    runbook::view::install(app);
     let Some(root) = app
         .world()
         .resource::<crate::ViewerSettings>()
@@ -378,6 +383,19 @@ fn receive(
             "status",
             bridge.current.as_ref().map(|run| run.snapshot.id),
         ),
+        Operation::RunbookStart(definition) => {
+            bridge.runbook = Some(runbook::Run::new(request.id, definition.clone()));
+            Receipt::new(request.id, "accepted", "runbook_started", None)
+        }
+        Operation::RunbookResult(update) => match bridge
+            .runbook
+            .as_mut()
+            .ok_or("runbook_changed")
+            .and_then(|run| run.record(update))
+        {
+            Ok(()) => Receipt::new(request.id, "accepted", "runbook_result_recorded", None),
+            Err(code) => Receipt::rejected(request.id, code),
+        },
     };
     bridge.finish_request(request, receipt);
 }

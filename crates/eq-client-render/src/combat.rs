@@ -5,7 +5,7 @@
 use bevy::prelude::*;
 use eq_client_core::{
     ClientCommand, OutboundChat, PostureState,
-    combat::{ConColor, Consideration, Damage, DamageOutcome, SPELL_DAMAGE_KIND},
+    combat::{ConColor, Damage, DamageOutcome, SPELL_DAMAGE_KIND},
     entities::display_name,
 };
 
@@ -273,7 +273,7 @@ pub(super) fn target_color(
             .world()
             .target()
             .selected
-            .and_then(|id| online.world().considered(id)),
+            .and_then(|id| online.world().consider_color(id)),
     );
     for mut text in &mut names {
         if text.0 != color {
@@ -287,32 +287,44 @@ pub(super) fn target_color(
 pub(super) fn consideration_text(
     messages: &Messages,
     name: &str,
-    consideration: &Consideration,
+    faction: u32,
+    color: Option<ConColor>,
 ) -> super::chat::Said {
-    let standing = match consideration.faction {
-        1..=5 => 12211 + consideration.faction,
-        6 => 12220,
-        7 => 12219,
-        8 => 12218,
-        _ => 12217,
+    use super::chat::Said;
+    let standing = (1..=9)
+        .contains(&faction)
+        .then(|| messages.format(12211 + faction, &[]));
+    // Assessment wording can vary with the player's level. These IDs give
+    // the existing level summaries, and the native chat types set the color.
+    // Which summary the Titanium program picks for each colour and level is
+    // unread; this choice is inferred (recording checklist 6.395).
+    let assessment = match color {
+        Some(ConColor::Gray) => Some((12236, 6)),
+        Some(ConColor::Green) => Some((12236, 2)),
+        Some(ConColor::LightBlue) => Some((12226, 18)),
+        Some(ConColor::Blue) => Some((12227, 4)),
+        Some(ConColor::White) => Some((12229, 10)),
+        Some(ConColor::Yellow) => Some((12231, 15)),
+        Some(ConColor::Red) => Some((12225, 13)),
+        None | Some(ConColor::Other(_)) => None,
     };
-    // Best-effort mapping of level colors to the client's assessment strings.
-    let assessment = match consideration.color {
-        ConColor::Gray | ConColor::Green => 12236,
-        ConColor::LightBlue => 12226,
-        ConColor::Blue => 12227,
-        ConColor::White | ConColor::Other(_) => 12229,
-        ConColor::Yellow => 12231,
-        ConColor::Red => 12225,
-    };
-    messages.said(
-        12239,
-        &[
-            capitalized(name),
-            messages.format(standing, &[]),
-            messages.format(assessment, &[]),
-        ],
-    )
+    let name = capitalized(name);
+    match (standing, assessment) {
+        (Some(standing), Some((id, kind))) => messages
+            .said(12239, &[name, standing, messages.format(id, &[])])
+            .typed(kind),
+        (None, Some((id, kind))) => Said::own(format!(
+            "{name} — faction standing unknown (code {faction}) — {}",
+            messages.format(id, &[])
+        ))
+        .typed(kind),
+        (Some(standing), None) => {
+            Said::own(format!("{name} {standing} — level assessment unknown."))
+        }
+        (None, None) => Said::own(format!(
+            "{name} — faction standing unknown (code {faction}) — level assessment unknown."
+        )),
+    }
 }
 
 /// Titanium-style melee text for fights involving the player; None for other fights.
@@ -416,7 +428,9 @@ mod tests {
              12160 dealing %1 damage.\n12161 dealing just %1 damage point.\n\
              12162 %1 %2 %3, %4\n12150 %1 duck\n12151 %1 ducks\n12179 cut\n\
              12180 cuts\n12183 strike\n12184 strikes\n12185 Thou\n12187 THEE\n\
-             12217 glares, set to fight\n12231 seems a fair match.\n\
+             12212 standing 1\n12213 standing 2\n12214 standing 3\n12215 standing 4\n\
+             12216 standing 5\n12217 standing 6\n12218 standing 7\n12219 standing 8\n\
+             12220 standing 9\n12231 synthetic yellow.\n\
              12239 %1 %2; %3\n434 %1 took %2 damage from a spell.\n",
         )
     }
@@ -475,19 +489,23 @@ mod tests {
 
     #[test]
     fn consider_text_combines_standing_and_level_color() {
-        let text = consideration_text(
-            &table(),
-            "a rat",
-            &Consideration {
-                target_id: 9,
-                faction: 9,
-                color: ConColor::Yellow,
-                hit_points: None,
-            },
-        );
+        let table = table();
+        for faction in 1..=9 {
+            let text = consideration_text(&table, "a rat", faction, Some(ConColor::Yellow));
+            assert_eq!(
+                text,
+                super::super::chat::Said::official(format!(
+                    "A rat standing {faction}; synthetic yellow."
+                ))
+                .typed(15)
+            );
+        }
+        let unknown = consideration_text(&table, "a rat", 77, None);
         assert_eq!(
-            text,
-            super::super::chat::Said::official("A rat glares, set to fight; seems a fair match.")
+            unknown,
+            super::super::chat::Said::own(
+                "A rat — faction standing unknown (code 77) — level assessment unknown."
+            )
         );
     }
 

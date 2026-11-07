@@ -95,6 +95,8 @@ pub(crate) enum WindowId {
     CharacterSelect,
     /// The scenario editor and execution monitor, also available before login.
     Scripts,
+    /// A test harness's current checklist and reported results.
+    Runbook,
 }
 
 /// Where a window opens before the player moves it.
@@ -348,7 +350,7 @@ impl WindowId {
     /// Every singleton window, in the order the selector lists the toggled ones.
     /// Bags are left out: there is one for each slot that can hold a bag
     /// (see [`WindowId::bags`]), and none of them is toggled.
-    pub(crate) const ALL: [Self; 34] = [
+    pub(crate) const ALL: [Self; 35] = [
         Self::Status,
         Self::Target,
         Self::Player,
@@ -383,6 +385,7 @@ impl WindowId {
         Self::Selector,
         Self::CharacterSelect,
         Self::Scripts,
+        Self::Runbook,
     ];
 
     /// The windows of the bags in the slots that hold one: carried, then
@@ -428,7 +431,7 @@ impl WindowId {
             Self::Map => Some("MapViewWnd"),
             Self::Selector => Some("SelectorWindow"),
             Self::CharacterSelect => Some("CharacterSelectWindow"),
-            Self::Status | Self::Scripts => None,
+            Self::Status | Self::Scripts | Self::Runbook => None,
         }
     }
 
@@ -496,6 +499,7 @@ impl WindowId {
             Self::Selector => "selector",
             Self::CharacterSelect => "character-select",
             Self::Scripts => "scripts",
+            Self::Runbook => "runbook",
         })
     }
 
@@ -524,6 +528,10 @@ impl WindowId {
                 layer: Layer::Tool,
                 opening: Opening::Own,
                 ..floating("SCRIPTS", Placement::TopLeft(80.0, 48.0), true, &[])
+            },
+            Self::Runbook => Description {
+                opening: Opening::Own,
+                ..floating("RUNBOOK", Placement::TopRight(20.0, 120.0), true, &[])
             },
             Self::Status => hud("", Placement::TopLeft(56.0, 16.0), &["POSITION"]),
             Self::Target => hud(

@@ -81,6 +81,7 @@ requests an observation.
 | `last_request` | Last receipt: `id`, `outcome`, `code`, `run_id`, `line`, `message` |
 | `run` | Current/latest run: `id`, `origin`, `phase`, `line`, `completed_steps`, `total_steps`, `elapsed_ms`, `message` |
 | `recent_runs` | At most 16 terminal run snapshots, oldest first |
+| `runbook` | Current test checklist or null. See [Runbook checklist](#runbook-checklist) |
 | `protocol_error`, `io_error` | Malformed-request or file-channel failure, otherwise null |
 
 `last_request.outcome` is `accepted`, `rejected`, `stop_requested` or `observed`.
@@ -98,6 +99,59 @@ Normal client shutdown publishes `client_state: "closed"`; an unfinished run is
 reported as failed. This describes the client, not a clean logout. A crash or file
 failure can leave stale status. A stopped heartbeat, missing file, acceptance
 receipt or process exit never proves script completion or server acceptance.
+
+## Runbook checklist
+
+Open **EQ → Runbook** while in the world to watch the harness's current
+checklist. The window starts closed. You can move, minimize or close it
+without losing the checklist. The local harness can submit new checklists
+and results while a gameplay script is running.
+
+Start a checklist through the same private request file and request ID
+sequence. Supply the title and ordered items inline.
+
+```json
+{"version":1,"instance":"copy-from-status","id":4,"op":"runbook_start","runbook":{"title":"Spellbook search","items":[{"id":"search","label":"Search filters the spell list"},{"id":"clear","label":"Clear restores the full list"}]}}
+```
+
+The `runbook_started` receipt accompanies the new `runbook` snapshot. Its
+`id` is the start request ID in this client instance. Every item begins
+`pending`. To reset, send another `runbook_start` with a fresh request ID.
+The new checklist replaces the old one and clears all results and notes,
+even if you reuse the title and item IDs.
+
+After observing the required evidence, the harness submits an explicit
+result for one item.
+
+```json
+{"version":1,"instance":"copy-from-status","id":5,"op":"runbook_result","result":{"runbook_id":4,"item_id":"search","status":"passed","note":"Only the matching spells were visible."}}
+```
+
+The result must target the current `runbook.id` and an item in that
+checklist. The client rejects stale checklist IDs with `runbook_changed`
+and unknown items with `unknown_runbook_item`. A `passed` or `failed`
+report is final for that item in the current checklist. Sending an
+identical result again leaves it as-is. Changing its status or note gives
+`runbook_item_already_reported`.
+
+Check for `runbook_result_recorded` and read the item back in
+`status.json`. The `runbook` object includes `id`, `title` and ordered
+`items`. Each item includes `id`, `label`, `status` and `note` (null when
+omitted). The receipt's `run_id` is reserved for the gameplay executor.
+
+Use 1–64 items with unique, case-sensitive IDs of 1–48 ASCII letters,
+digits, hyphens or underscores. Titles, labels and optional notes are
+nonblank single-line UTF-8 text, limited to 96, 120 and 180 bytes
+respectively. Use brief evidence summaries and keep credentials and raw
+captures out of the request. The window renders the text literally.
+Malformed payloads appear in `protocol_error`.
+
+The checklist represents the harness's test run and can span login, zoning
+and logout within this client instance. The harness must correlate any
+packet or gameplay evidence with the correct admission itself. Script
+progress, server traffic and opening the window never change an item.
+Checklist receipts describe local display state. A passed row means the
+harness reported a pass.
 
 ## Explicit recovery
 

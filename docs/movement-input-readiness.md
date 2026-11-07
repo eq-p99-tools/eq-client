@@ -22,6 +22,11 @@ Pending equipment/stat-food changes or changes to carried weight cannot. An
 invalidation remains unavailable until authoritative recovery. This calculation
 does not turn a timeout into a confirmed inventory update.
 
+After a ground drop, the server may already hold a queued arrival as its
+current cursor item. A fresh inventory snapshot restores the carried weight
+input. While the drop is unresolved, the readiness notice asks the player
+to re-enter the world, and the client withholds weight-based fall reports.
+
 The session owns HP/sneak speed adjustments, movement caps and permission. When
 it withdraws input, the renderer clears taps, autorun and queued jumps but still
 simulates passive descent where supported. The session independently rejects
@@ -42,10 +47,22 @@ fields: missing, malformed or nonzero values do not establish an instant spell.
 Unknown mechanics stay unresolved. Explicit server buff slots remain
 authoritative regardless of local instant classification.
 
+On Titanium, movement and its strength and stamina inputs use the modifier
+carried by a landed effect or a received buff slot. The native action handler
+at 0x414913 stores the modifier on the buff, and the cache at 0x4102a6 scales
+the level-adjusted, capped magnitude in tenths. Supported boosts are 11 through
+45. EQEmu also captures the instrument modifier at application and sends it
+with the action and slot records. [Application and action](https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/zone/spells.cpp#L3486), [Effect evaluation](https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/zone/spell_effects.cpp#L3252)
+
+Equipment changes follow the existing inventory and movement revision path.
+A fresh landing can carry a different modifier after a gear change. The
+active effect keeps its received modifier until a refresh, replacement,
+server fade or new snapshot. The displayed duration is an estimate.
+
 ## Deliberate limits
 
 - Unknown affecting formulas, formulas 60/70 with differing semantics, missing
-  spell records, unsupported worn effects and non-default bard instrument scaling
+  spell records, unsupported worn effects and unresolved instrument modifiers
   withdraw input. Unslotted additive STR/STA effects withdraw until membership is
   known, because they might replace a slotted effect rather than add to it.
 - Positive AA/stat-cap, alcohol and berserk STR bonuses are not granted. The
@@ -54,8 +71,9 @@ authoritative regardless of local instant classification.
 - Coin transfers follow the existing validated protocol ledger; individual
   transfers have no server acknowledgement. Cursor coin inclusion and P99 use of
   public Titanium/EQEmu rules remain inferences requiring compatibility checks.
-- This work changes movement readiness and load display. The separate legacy
-  `ClientWorld::carried_weight` fall-damage estimate is unchanged.
+- `ClientWorld::carried_weight` estimates the displayed load.
+  `ClientWorld::fall_weight` leaves weight unavailable during a pending
+  ground drop, when the displayed estimate may omit the server's cursor item.
 - Source evidence and decoder details are in the companion network document
   `docs/movement-input-readiness.md`. No live session was used for these changes.
 

@@ -2,6 +2,7 @@
 pub(super) mod colors;
 pub(super) mod cursor;
 pub(crate) mod destruction;
+pub(super) mod ground_drop;
 mod interaction;
 mod layout;
 #[cfg(test)]
@@ -37,6 +38,7 @@ pub(super) struct InventoryState {
     banker: String,
     actions: interaction::Actions,
     destruction: destruction::Destruction,
+    ground_drop: ground_drop::State,
     /// Refusals of the player's actions, on their way to the chat.
     refused: Vec<String>,
     /// What the player's actions said besides, such as a buff's fade, on
@@ -160,6 +162,7 @@ impl InventoryState {
     pub fn forget(&mut self) {
         self.cancel_actions();
         self.destruction = destruction::Destruction::default();
+        self.ground_drop = ground_drop::State::default();
         self.demo_news.clear();
         self.demo = false;
         self.bank_open = false;
@@ -286,6 +289,7 @@ pub(super) fn spawn(commands: &mut Commands) {
             },
         ));
         destruction::spawn(panel);
+        ground_drop::spawn(panel);
         panel.spawn((
             Rows,
             Node {
@@ -596,6 +600,8 @@ pub(super) fn update(
     for mut status in &mut statuses {
         status.0 = if state.demo {
             "Offline demo: moves settle here, not on a server".into()
+        } else if inventory.ground_drop_pending() {
+            "Drop sent. Re-enter the world for a fresh inventory snapshot.".into()
         } else if inventory.awaiting_correction() {
             "Server corrected the inventory; waiting for the remaining slots".into()
         } else if inventory.stale() {
@@ -607,7 +613,11 @@ pub(super) fn update(
         };
     }
     for mut status in &mut statuses {
-        if inventory.received() && !inventory.stale() && !state.actions.message.is_empty() {
+        if inventory.received()
+            && !inventory.stale()
+            && !inventory.ground_drop_pending()
+            && !state.actions.message.is_empty()
+        {
             status.0.clone_from(&state.actions.message);
         } else if inventory.predicted() && !inventory.stale() && !state.demo {
             status.0 = "Move sent; contents include local prediction".into();

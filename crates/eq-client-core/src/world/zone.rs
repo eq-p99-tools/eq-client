@@ -5,7 +5,7 @@
 use super::{Notice, Spawn, trade::Trade};
 use crate::{
     PostureState, SpawnKind, SpawnState, WorldPosition,
-    combat::{ConColor, Consideration},
+    combat::ConColor,
     control::Charm,
     doors::DoorTable,
     ground::Objects,
@@ -165,16 +165,6 @@ impl Zone {
             self.pet_buffs.keep_only(pet.spawn_id);
         }
         self.own_pet = pet;
-    }
-
-    /// The server's word on a spawn the player considered.
-    pub(super) fn consider(&mut self, consideration: &Consideration) -> Notice {
-        self.considered
-            .insert(consideration.target_id, consideration.color);
-        Notice::Consideration {
-            consideration: *consideration,
-            name: self.name(consideration.target_id),
-        }
     }
 
     /// A spawn shows or hides.
