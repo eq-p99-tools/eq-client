@@ -35,9 +35,10 @@ certification, and individual operations still validate their prerequisites.
 | Move / delete book entries | Yes / No | Yes / Yes | No / No | No / No |
 | Read the spellbook standing | Local preference, every server | Local preference, every server | Local preference, every server | Local preference, every server |
 | Memorize without sitting | Yes (opt-in) | Yes (opt-in) | Yes (opt-in) | Yes (opt-in) |
-| Run boost, flight and movement while stunned | Yes (opt-in) | Yes (opt-in) | Yes (opt-in) | Yes (opt-in) |
+| Run speed multiplier, flight and movement while stunned | Yes (opt-in) | Yes (opt-in) | Yes (opt-in) | Yes (opt-in) |
 | Item/coin moves and personal banking | Yes | Yes | Yes | Yes |
 | Cursor-item destruction (Titanium inventory policy) | Yes | Yes | No | No |
+| Cursor ground drop (Titanium inventory policy) | No (withheld pending attended validation) | Yes | No | No |
 | Merchants | Yes | Yes | Yes | Yes |
 | Merchant quantity picker | Yes | Yes | No | No |
 | Exchanges/giving | Yes | Yes | No | Yes |

@@ -213,7 +213,11 @@ impl SessionWorker {
             }
         });
         Ok(eq_client_render::Session {
-            classic_npc_consider: protocol == ServerProtocol::Project1999,
+            // The received consider colour is shown on every server. Whether
+            // the Titanium program replaces it with a level estimate on any
+            // server is unread, and per-server presentation belongs behind an
+            // eq-network accessor, not a protocol comparison here.
+            classic_npc_consider: false,
             inventory_move_rules,
             spell_provider,
             updates: receiver,

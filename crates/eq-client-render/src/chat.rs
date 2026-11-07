@@ -895,7 +895,8 @@ impl ChatLook {
     }
 }
 
-/// Titanium's fixed chat palette for the types used in consider lines.
+/// Chat palette for the types used in consider lines. These values are not
+/// yet read from the Titanium program (inferred, recording checklist 6.395).
 const fn consider_rgb(kind: u16) -> Option<[u8; 3]> {
     match kind {
         2 => Some([0, 128, 0]),

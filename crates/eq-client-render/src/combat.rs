@@ -296,6 +296,8 @@ pub(super) fn consideration_text(
         .then(|| messages.format(12211 + faction, &[]));
     // Assessment wording can vary with the player's level. These IDs give
     // the existing level summaries, and the native chat types set the color.
+    // Which summary the Titanium program picks for each colour and level is
+    // unread; this choice is inferred (recording checklist 6.395).
     let assessment = match color {
         Some(ConColor::Gray) => Some((12236, 6)),
         Some(ConColor::Green) => Some((12236, 2)),
