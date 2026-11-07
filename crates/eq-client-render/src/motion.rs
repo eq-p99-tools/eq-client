@@ -2036,7 +2036,7 @@ pub(super) mod tests {
             assert_eq!(options.run_speed_multiplier.percent(), percent);
             (request_id, options)
         };
-        let check_speed = |app: &App, from: &MovementRequest, to: &MovementRequest, speed| {
+        let check_speed = |app: &App, from: &MovementRequest, to: &MovementRequest, speed: f32| {
             let controls = app.world().resource::<Controls>();
             assert!(controls.visual.is_some());
             assert!((from.position.x - to.position.x - speed * controls.sent_span).abs() < 0.001);

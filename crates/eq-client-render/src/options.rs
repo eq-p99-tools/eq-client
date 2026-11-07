@@ -250,7 +250,7 @@ mod tests {
             100
         );
         let mut restarted = self::app(&directory);
-        enter(&mut restarted, "Example");
+        enter(&mut restarted, 1, "Example");
         restarted.update();
         let restored = &restarted.world().resource::<OptionsState>().options;
         assert!(!restored.wheel_zoom);
