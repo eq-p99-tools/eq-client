@@ -274,6 +274,9 @@ pub(crate) fn inputs(
 fn readiness_reason(world: &ClientWorld, reason: Missing) -> &'static str {
     match reason {
         Missing::Attributes => "Movement paused: waiting for character information.",
+        Missing::Inventory if world.worker_inventory().ground_drop_pending() => {
+            "Movement paused: re-enter the world for a fresh inventory snapshot after the drop."
+        }
         Missing::Inventory
             if !world.worker_inventory().received() || world.worker_inventory().stale() =>
         {

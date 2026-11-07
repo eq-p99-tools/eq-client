@@ -34,6 +34,12 @@ pub(crate) enum Question {
         revision: u64,
         item_id: u32,
     },
+    /// The exact cursor item selected for ground drop.
+    DropItem {
+        session_id: u64,
+        revision: u64,
+        item_id: u32,
+    },
     /// Whether to delete this spell from this place in the book for good
     /// ([`eq_client_core::qol::Fix::AskBeforeDeletingSpells`]).
     DeleteSpell {
@@ -55,6 +61,14 @@ impl Question {
                     .filter(|item| online.world().session_id() == Some(session_id)
                         && inventory.revision() == revision && item.details.id == item_id)
                     .map_or_else(String::new, |item| format!("Destroy all {} of {}? This cannot be undone.",
+                        item.stack_count.unwrap_or(1), item.details.name))
+            }
+            Self::DropItem { session_id, revision, item_id } => {
+                let inventory = online.world().inventory();
+                inventory.items().get(&eq_client_core::inventory::InventorySlot::CURSOR)
+                    .filter(|item| online.world().session_id() == Some(session_id)
+                        && inventory.revision() == revision && item.details.id == item_id)
+                    .map_or_else(String::new, |item| format!("Drop all {} of {} on the ground? Other players can pick it up.",
                         item.stack_count.unwrap_or(1), item.details.name))
             }
             Self::DeleteSpell { spell, .. } => {

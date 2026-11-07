@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Confirm an ordinary Titanium cursor item drop from Inventory on EQEmu.
+  A fresh inventory snapshot resolves the cursor hold and makes carried
+  weight usable for movement and landing costs again. Passive descent
+  remains available. `ClientWorld::fall_weight` returns an optional weight.
+  Ground objects follow their own received updates.
+
 - Show Air Remaining during ordinary mapped Titanium immersion, including
   WLD lava that restricts breathing at the head. Local-only EQEmu sessions
   report drowning after depletion and lava heat from mapped body contact.

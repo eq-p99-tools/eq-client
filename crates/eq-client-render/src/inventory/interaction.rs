@@ -270,7 +270,9 @@ impl InventoryState {
         present_error: bool,
         inventory: &Inventory,
     ) {
-        if self.destruction_result(session_id, revision, error.as_deref()) {
+        if self.ground_drop_result(session_id, revision, error.as_deref())
+            || self.destruction_result(session_id, revision, error.as_deref())
+        {
             return;
         }
         let Some((pending_session, pending_revision, to_cursor)) = self.actions.pending else {

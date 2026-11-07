@@ -26,6 +26,10 @@ impl Destruction {
     pub(super) const fn selecting(&self) -> bool {
         self.selected.is_some()
     }
+
+    pub(super) const fn waiting(&self) -> bool {
+        self.pending.is_some()
+    }
 }
 
 fn question(request: &InventoryDestroy) -> Question {
@@ -102,6 +106,10 @@ impl InventoryState {
         ensure!(
             self.destruction.pending.is_none(),
             "Wait for the destroy submission result"
+        );
+        ensure!(
+            !self.ground_drop.waiting(),
+            "Wait for the drop submission result"
         );
         match action {
             Action::Select => {

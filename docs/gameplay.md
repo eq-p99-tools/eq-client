@@ -106,8 +106,18 @@ guard, not a claim about every server's maximum range.
 
 Coin boxes support purse, cursor, personal-bank and give-window moves where the
 session offers them. Click to choose an amount, or Shift-click to pick up all;
-click another box with coins on the cursor to place/convert them. Shared banking,
-dropping carried items and destroying coins have no client action yet.
+click another box with coins on the cursor to place/convert them. Shared banking
+and destroying coins have no client action yet.
+
+On Titanium EQEmu, **Drop cursor item** in Inventory asks before dropping one
+ordinary, verified droppable item or whole stack. The server chooses the
+location. An item moved onto the cursor only by local prediction needs a
+received cursor update before it can be dropped. The last received item stays
+visible while custody is unresolved. A nearby object appearing does not
+identify the item that left the cursor. Use ordinary ground pickup with a
+known empty cursor. After submitting a drop, re-enter the world for a fresh
+inventory snapshot. The hold pauses cursor actions and active movement and
+withholds fall-damage reports. Supported passive descent continues.
 
 Where the inventory policy supports it, **Destroy cursor item** asks before
 destroying the whole cursor item or stack. **No**, Escape, closing inventory,

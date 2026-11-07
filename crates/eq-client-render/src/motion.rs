@@ -1323,18 +1323,18 @@ pub(super) fn input(
             .airborne
             .as_mut()
             .and_then(AirborneController::take_landing)
-    {
-        let cost = landing_cost(
+        && let Some(cost) = landing_cost(
             client,
             world,
             position - Vec3::Y * body.feet_offset,
             fall,
             online.world(),
-        );
+        )
+    {
         debug!(
             fall_distance = fall.fall_distance,
             impact_speed = fall.impact_speed,
-            carried_weight = online.world().fall_weight(),
+            carried_weight = ?online.world().fall_weight(),
             damage = cost.damage,
             safe_fall = cost.safe_fall,
             "Landing"
@@ -1538,21 +1538,22 @@ fn jump_too_soon(client: InstalledClient, last: Option<Instant>, now: Instant) -
 /// fall did damage for it to lessen (Titanium: recording checklist item
 /// 6.148). The rank of the ability that raises Safe Fall is not in what the
 /// sessions decode, so it counts as none (unsure).
+/// Returns no cost when the rule needs weight and drop custody is unresolved.
 fn landing_cost(
     client: InstalledClient,
     collision: &CollisionWorld,
     feet: Vec3,
     landing: Landing,
     world: &ClientWorld,
-) -> FallCost {
+) -> Option<FallCost> {
     if collision.in_liquid(feet) {
-        return FallCost::default();
+        return Some(FallCost::default());
     }
     let skill = safe_fall(world);
-    match client.falls() {
+    let cost = match client.falls() {
         Some(falls) => falls.landing_cost(FallLanding {
             impact_speed: landing.impact_speed,
-            carried_weight: world.fall_weight(),
+            carried_weight: world.fall_weight()?,
             safe_fall: skill,
             safe_fall_ranks: 0,
             zone: eq_client_core::zones::number(world.zone()).unwrap_or(0),
@@ -1561,7 +1562,8 @@ fn landing_cost(
             damage: collision.landing_damage(feet, landing, skill),
             safe_fall: skill > 0 && collision.landing_damage(feet, landing, 0) > 0,
         },
-    }
+    };
+    Some(cost)
 }
 
 /// Says in the chat what a landing that hurt did, in the installed client's
@@ -1603,6 +1605,9 @@ fn report_fall(
     qol: &Settings,
     cost: FallCost,
 ) -> Option<FallCost> {
+    if world.worker_inventory().ground_drop_pending() {
+        return None;
+    }
     let stamp = outbox.peek(world)?;
     let wanted = (cost.damage > 0 || cost.safe_fall)
         && qol.on(Fix::TakeEnvironmentalDamage)
@@ -3097,7 +3102,7 @@ pub(super) mod tests {
             fall_distance: 100.0,
             impact_speed: 120.0,
         };
-        let cost = |client| landing_cost(client, &floor, Vec3::ZERO, landing, &world);
+        let cost = |client| landing_cost(client, &floor, Vec3::ZERO, landing, &world).unwrap();
         // Both programs': T = 6 - 2.5 - 1.5 = 2, so 40.
         assert_eq!(
             cost(InstalledClient::Titanium),

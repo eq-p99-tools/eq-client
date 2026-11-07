@@ -5427,7 +5427,7 @@ fn movement_weight_requires_cursor_receipt_but_never_a_bank_balance() {
         Err(crate::SpeedInputUnavailable::Coins)
     );
     // Until then a landing takes this client's own reading.
-    assert!((world.fall_weight() - world.carried_weight()).abs() < f32::EPSILON);
+    assert!((world.fall_weight().unwrap() - world.carried_weight()).abs() < f32::EPSILON);
     game(
         &mut world,
         WorldEvent::CoinsElsewhere {
@@ -5440,8 +5440,8 @@ fn movement_weight_requires_cursor_receipt_but_never_a_bank_balance() {
     assert_eq!(world.movement_weight(), Ok(2));
     // A landing takes the programs' sum once it is established.
     assert!(
-        (world.fall_weight() - 0.2).abs() < 0.001,
-        "{}",
+        (world.fall_weight().unwrap() - 0.2).abs() < 0.001,
+        "{:?}",
         world.fall_weight()
     );
     // Losing only the irrelevant bank balance must not withdraw a known cursor.

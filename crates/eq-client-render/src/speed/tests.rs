@@ -1069,6 +1069,88 @@ fn identical_value_recovery_uses_a_fresh_identity_and_rejects_the_old_receipt() 
 }
 
 #[test]
+fn heavier_cursor_arrival_after_a_drop_withdraws_weight_until_snapshot() {
+    use std::num::NonZeroU32;
+
+    let (mut app, rx) = reporting_ready();
+    receipt(&rx.try_recv().unwrap(), true);
+    let serial = NonZeroU32::new(17).unwrap();
+    let mut original = item(InventorySlot::CURSOR.0, 50, 0);
+    original.rules.ground_drop_serial = Some(serial);
+    let heavier = item(InventorySlot::CURSOR.0, 1_500, 0);
+    testing::inventory(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        InventoryUpdate::Snapshot(vec![original.clone()]),
+    );
+    app.update();
+    let ready = receipt(&rx.try_recv().unwrap(), true);
+    assert_eq!(ready.inputs.weight, 5);
+
+    {
+        let mut online = app.world_mut().resource_mut::<OnlineState>();
+        let revision = online.world().worker_inventory().revision();
+        testing::news(
+            &mut online,
+            [
+                WorldEvent::InventoryAction {
+                    session_id: 1,
+                    revision,
+                    sequence: None,
+                    update: Some(InventoryUpdate::GroundDropPending(serial)),
+                    error: None,
+                },
+                WorldEvent::Inventory(InventoryUpdate::Cursor(vec![heavier.clone()])),
+            ],
+        );
+        let world = online.world();
+        assert!(!world.worker_inventory().stale());
+        assert!(world.worker_inventory().ground_drop_pending());
+        assert_eq!(world.worker_inventory().queued().count(), 1);
+        assert_eq!(
+            world.worker_inventory().items().get(&InventorySlot::CURSOR),
+            Some(&original)
+        );
+        assert_eq!(world.movement_weight(), Err(Missing::Inventory));
+        assert_eq!(world.fall_weight(), None);
+    }
+    app.update();
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(ClientCommand::SpeedInputs {
+            state: SpeedInputState::Unavailable(Missing::Inventory),
+            ..
+        })
+    ));
+    assert!(movement_notice(&app).contains("fresh inventory snapshot"));
+
+    testing::inventory(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        InventoryUpdate::Snapshot(vec![heavier]),
+    );
+    app.update();
+    let recovered = receipt(&rx.try_recv().unwrap(), true);
+    assert_eq!(recovered.inputs.weight, 150);
+    assert_ne!(ready.report_id, recovered.report_id);
+    assert!(
+        app.world()
+            .resource::<OnlineState>()
+            .world()
+            .fall_weight()
+            .is_some()
+    );
+    assert!(!movement_notice(&app).is_empty());
+    testing::news(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        [
+            motion_state(Some(6.0)),
+            WorldEvent::SpeedInputsAccepted(recovered),
+        ],
+    );
+    app.update();
+    assert!(movement_notice(&app).is_empty());
+}
+
+#[test]
 fn withdrawal_and_new_input_requirements_invalidate_the_previous_acceptance() {
     let (mut app, rx) = reporting_ready();
     let original = receipt(&rx.try_recv().unwrap(), true);
