@@ -607,12 +607,14 @@ type Services<'w> = (
     ResMut<'w, super::login::FrontEnd>,
     ResMut<'w, super::sounds::Sounds>,
     Res<'w, super::windows::menu::Menu>,
+    ResMut<'w, super::windows::Shown>,
+    ResMut<'w, super::items::ItemState>,
 );
 
 type Observed<'w> = (
     Res<'w, super::hud::HudState>,
     Res<'w, crate::outbox::Outbox>,
-    Res<'w, super::trade::TradeState>,
+    ResMut<'w, super::trade::TradeState>,
     Res<'w, super::combat::CombatState>,
     Res<'w, super::motion::Controls>,
     Option<Res<'w, crate::loading::Loading>>,
@@ -721,8 +723,8 @@ pub(super) fn drive(
     script: Option<ResMut<Script>>,
     input: Input,
     mut online: ResMut<super::online::OnlineState>,
-    (mut chat, mut moves, mut front, mut sounds, menu): Services,
-    observed: Observed,
+    (mut chat, mut moves, mut front, mut sounds, menu, mut shown, mut item): Services,
+    mut observed: Observed,
     players: Query<&Transform, With<super::Player>>,
     bodies: Query<&super::PlayerBody, With<super::Player>>,
     collision: Option<Res<super::Collision>>,
@@ -1660,6 +1662,42 @@ pub(super) fn drive(
             }
             return;
         }
+        Step::Interact {
+            admission,
+            spawn,
+            revision,
+        } => {
+            if let Err(reason) = observed.2.script_interact(
+                &mut online,
+                &observed.1,
+                &mut shown,
+                client,
+                (*admission, *spawn, *revision),
+            ) {
+                script.stop(&mut keys, &mut mouse, reason);
+            }
+            return;
+        }
+        Step::InspectLink {
+            admission,
+            message,
+            ordinal,
+        } => {
+            let result = (|| {
+                if !online.in_world() || online.world().session_id() != Some(*admission) {
+                    return Err("Item inspection needs the current admission");
+                }
+                let (_, _, link) = chat
+                    .script_links(*admission)
+                    .find(|(id, index, _)| id == message && index == ordinal)
+                    .ok_or("Item link is unknown or no longer available")?;
+                item.inspect_link(link, &online, &observed.1)
+            })();
+            if let Err(reason) = result {
+                script.stop(&mut keys, &mut mouse, reason);
+            }
+            return;
+        }
         Step::Gm(_) | Step::Chat(_) => {
             let command = match &step {
                 Step::Gm(command) => gm_request(command, script.local, online.world()),
@@ -1819,6 +1857,7 @@ pub(super) fn drive(
             );
             report::surroundings(&online, &observed);
             report::game_messages(&mut script.chat_seen, &chat);
+            report::item_links(label, &online, &chat, &item);
             return;
         }
         Step::Sound(name) => {
@@ -3222,6 +3261,7 @@ fn runs(distance: Option<f32>, range: f32) -> bool {
 #[cfg(test)]
 mod tests {
     mod background_pointer;
+    mod semantic;
     use super::*;
     use eq_client_assets::ui::InstalledClient;
 

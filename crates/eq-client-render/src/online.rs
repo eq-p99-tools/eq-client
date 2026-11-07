@@ -589,6 +589,7 @@ impl Panels<'_> {
             // Requests and choices made in the old admission are void.
             *self.combat = super::combat::CombatState::default();
             *self.items = super::items::ItemState::default();
+            self.trade.reset_opening_shop();
             if let Some(book) = self.book.as_mut() {
                 **book = super::spellbook::BookSelection::default();
             }
@@ -765,6 +766,12 @@ pub(super) fn receive(
         trace(&update, &changes, &state.world);
         panels.merchant_news(&update, &changes, &state.world);
         if let Some(reason) = changes.reset {
+            if matches!(
+                reason,
+                Reset::Entered | Reset::Camped | Reset::Lost { ended: true, .. }
+            ) {
+                chat.reset_received_links();
+            }
             state.reset_presentation((reason, old_gems), &mut panels, &mut scene, &mut commands);
         }
         panels.show(&changes, &mut state, messages.as_deref(), &mut chat);
@@ -792,7 +799,10 @@ pub(super) fn receive(
             scene.place(&mut commands, super::zone::placement(position), None);
         }
         if let WorldUpdate::Chat(line) = update {
-            chat.history.push(line);
+            chat.receive(
+                line,
+                state.world.session_id().filter(|_| state.world.in_world()),
+            );
         }
     }
     let admission = state.world.session_id();

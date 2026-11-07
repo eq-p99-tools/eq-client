@@ -76,6 +76,7 @@ pub(super) fn state(world: &ClientWorld, trade: &TradeState) -> Value {
         "version": 1,
         "session_id": world.session_id(),
         "merchant": merchant,
+        "merchant_opening_unconfirmed": trade.opening_shop(world),
         "loot": loot,
         "given_coins": world.coins_in(CoinPlace::Trade),
         "offered_coins": world.offered_coins(),

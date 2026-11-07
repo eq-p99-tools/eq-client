@@ -9,11 +9,11 @@ use bevy::{
     window::PrimaryWindow,
 };
 use eq_client_core::{
-    ClientCommand, OutboundChat,
+    ClientCommand, ItemLink, OutboundChat,
     chat::{Arrival, ChannelName, ChatHistory, ChatLine, ChatTab, Message, Source, channel_rgb},
     qol::{Fix, Settings},
 };
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 
 mod drag;
 mod groups;
@@ -114,6 +114,8 @@ impl Default for TabView {
 #[derive(Resource, Default)]
 pub(super) struct ChatState {
     pub history: ChatHistory,
+    /// Admission and arrival IDs for recent server messages with item links.
+    received_links: VecDeque<(u64, u64)>,
     pub(crate) groups: Groups,
     views: BTreeMap<ChatTab, TabView>,
     pub hovered: bool,
@@ -153,8 +155,46 @@ struct Refusals {
 
 /// How soon the same refusal again goes unsaid.
 const REPEATED: std::time::Duration = std::time::Duration::from_secs(3);
+const SCRIPT_LINK_MESSAGES: usize = 16;
 
 impl ChatState {
+    pub(super) fn receive(&mut self, line: ChatLine, admission: Option<u64>) {
+        let linked = line.source == Source::Server
+            && !line.message.text.is_empty()
+            && !line.message.item_links.is_empty();
+        self.history.push(line);
+        if linked && let Some(admission) = admission {
+            if self.received_links.len() == SCRIPT_LINK_MESSAGES {
+                self.received_links.pop_front();
+            }
+            self.received_links
+                .push_back((admission, self.history.revision()));
+        }
+    }
+
+    pub(super) fn reset_received_links(&mut self) {
+        self.received_links.clear();
+    }
+
+    pub(super) fn script_links(
+        &self,
+        admission: u64,
+    ) -> impl Iterator<Item = (u64, usize, &ItemLink)> {
+        self.received_links
+            .iter()
+            .rev()
+            .filter(move |(scope, _)| *scope == admission)
+            .filter_map(move |&(_, id)| self.history.line(id).map(|line| (id, line)))
+            .flat_map(|(id, line)| {
+                line.message
+                    .item_links
+                    .iter()
+                    .enumerate()
+                    .map(move |(ordinal, link)| (id, ordinal, link))
+            })
+            .filter(|(_, _, link)| !link.body.is_empty() && !matches!(link.item_id, 0 | 0xfffff))
+    }
+
     /// The line being typed, for tests outside the chat.
     #[cfg(test)]
     pub(crate) fn draft(&self) -> &str {
@@ -3060,6 +3100,44 @@ mod tests {
             ..default()
         });
         (app, tx)
+    }
+
+    #[test]
+    fn received_item_link_identity_is_cleared_on_admission_change() {
+        use eq_client_core::{WorldEvent, WorldUpdate};
+
+        let (mut app, tx) = received_chat_app();
+        let mut line = system_line("Synthetic blade");
+        line.source = Source::Server;
+        line.message.item_links.push(ItemLink {
+            body: format!("00002A{}1234ABCD", "0".repeat(31)),
+            text: "Synthetic blade".into(),
+            item_id: 42,
+            start: 0,
+            end: 0,
+            text_start: 0,
+            text_end: 15,
+        });
+        tx.send(WorldUpdate::Chat(line)).unwrap();
+        app.update();
+        let chat = app.world().resource::<ChatState>();
+        let (message, ordinal, link) = chat.script_links(1).next().unwrap();
+        assert_eq!((ordinal, link.item_id), (0, 42));
+        tx.send(WorldUpdate::Game(WorldEvent::Entered {
+            capabilities: Vec::new(),
+            choices: Vec::new(),
+            session_id: 2,
+            zone: "test".into(),
+            player: Box::new(crate::online::testing::player(7)),
+            far_clip: None,
+            spell_landing_flag: None,
+        }))
+        .unwrap();
+        app.update();
+        let chat = app.world().resource::<ChatState>();
+        assert!(chat.history.line(message).is_some());
+        assert!(chat.script_links(1).next().is_none());
+        assert!(chat.script_links(2).next().is_none());
     }
 
     #[test]

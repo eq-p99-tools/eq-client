@@ -44,6 +44,37 @@ pub(super) struct ItemState {
 }
 
 impl ItemState {
+    /// Shares pointer activation's cached-definition and outbox paths.
+    pub(super) fn inspect_link(
+        &mut self,
+        link: &ItemLink,
+        online: &OnlineState,
+        outbox: &Outbox,
+    ) -> Result<(), &'static str> {
+        if self.pending.is_some() {
+            return Err("Wait for the current item inspection");
+        }
+        self.selected = Some((link.item_id, link.text.clone()));
+        if let Some(item) = online.world().item(link.item_id) {
+            self.open_received(item.clone());
+            return Ok(());
+        }
+        outbox
+            .post(online.world(), |stamp| ClientCommand::InspectItem {
+                session_id: stamp.session_id,
+                link_body: link.body.clone(),
+            })
+            .map_err(crate::outbox::Refusal::text)?;
+        debug!("Item inspection requested: ID {}", link.item_id);
+        self.pending = Some(Instant::now());
+        self.status = "Loading item from server...".into();
+        Ok(())
+    }
+
+    pub(super) fn inspection(&self) -> Option<(u32, bool)> {
+        Some((self.selected()?, self.definition().is_some()))
+    }
+
     /// Opens a received inventory definition without making an inspection request.
     pub(super) fn open_received(&mut self, item: ItemDetails) {
         self.selected = Some((item.id, item.name.clone()));
@@ -163,24 +194,7 @@ pub(super) fn input(
         .map(|button| &button.0)
         .chain(automatic.as_ref())
     {
-        if state.pending.is_some() {
-            continue;
-        }
-        state.selected = Some((link.item_id, link.text.clone()));
-        if let Some(item) = online.world().item(link.item_id) {
-            state.shown = Some(item.clone());
-            continue;
-        }
-        // The outbox says why a request did not leave.
-        let sent = sender.post(online.world(), |stamp| ClientCommand::InspectItem {
-            session_id: stamp.session_id,
-            link_body: link.body.clone(),
-        });
-        if sent.is_ok() {
-            debug!("Item inspection requested: ID {}", link.item_id);
-            state.pending = Some(Instant::now());
-            state.status = "Loading item from server...".into();
-        }
+        let _ = state.inspect_link(link, &online, &sender);
     }
 }
 

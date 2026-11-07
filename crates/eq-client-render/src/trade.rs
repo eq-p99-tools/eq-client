@@ -3,7 +3,11 @@
 //! L loots the targeted corpse, U trades with the targeted NPC, and Escape
 //! closes the window (see `escape`). A window closes only once the server has
 //! been told, so the server never keeps a session the player can no longer end.
-use crate::theme::{self, Size};
+use crate::{
+    online::OnlineState,
+    outbox::{Outbox, Refusal, Stamp},
+    theme::{self, Size},
+};
 use bevy::prelude::*;
 use eq_client_core::{ClientCommand, SpawnKind, inventory::InventoryItem, world::ClientWorld};
 
@@ -35,6 +39,9 @@ pub(super) struct TradeState {
     right_clicked: Option<(u64, u16)>,
     loot: Option<LootWindow>,
     merchant: Option<MerchantWindow>,
+    /// Shop open was queued. Only a matching received answer or a new
+    /// admission resolves it for scripted interaction.
+    opening_shop: Option<(u64, u16)>,
     merchant_pending: Option<merchant_quantity::Pending>,
     /// Revisions bound when the current item was selected.
     merchant_choice: Option<MerchantSelection>,
@@ -68,6 +75,77 @@ pub(crate) enum Chosen {
 }
 
 impl TradeState {
+    fn open_loot(
+        &mut self,
+        online: &mut OnlineState,
+        outbox: &Outbox,
+        stamp: Stamp,
+        corpse_id: u16,
+        name: String,
+    ) -> Result<(), &'static str> {
+        outbox
+            .send(
+                online.world(),
+                ClientCommand::Loot {
+                    session_id: stamp.session_id,
+                    corpse_id,
+                    created: stamp.created,
+                },
+            )
+            .map_err(Refusal::text)?;
+        online.open_loot(corpse_id);
+        self.loot = Some(LootWindow {
+            name,
+            opening: Some(PendingLoot::new(
+                stamp,
+                eq_client_core::loot::LootRequest::Open { corpse_id },
+            )),
+            pending: None,
+            loot_all: false,
+        });
+        self.changed();
+        Ok(())
+    }
+
+    fn open_shop(
+        &mut self,
+        world: &ClientWorld,
+        outbox: &Outbox,
+        stamp: Stamp,
+        merchant_id: u16,
+        own_id: u16,
+    ) -> Result<(), &'static str> {
+        outbox
+            .send(
+                world,
+                ClientCommand::Shop {
+                    session_id: stamp.session_id,
+                    merchant_id,
+                    own_id,
+                    open: true,
+                    created: stamp.created,
+                },
+            )
+            .map_err(Refusal::text)?;
+        if self.opening_shop(world).is_none() {
+            self.opening_shop = Some((stamp.session_id, merchant_id));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn opening_shop(&self, world: &ClientWorld) -> Option<u16> {
+        let (admission, merchant) = self.opening_shop?;
+        (world.session_id() == Some(admission)
+            && world
+                .merchant()
+                .is_none_or(|shop| shop.merchant_id != merchant))
+        .then_some(merchant)
+    }
+
+    pub(crate) fn reset_opening_shop(&mut self) {
+        self.opening_shop = None;
+    }
+
     /// The name of the corpse the loot window is open on.
     pub(crate) fn corpse(&self) -> Option<&str> {
         self.loot.as_ref().map(|window| window.name.as_str())
@@ -158,6 +236,9 @@ impl TradeState {
     /// merchant window once the server opens a merchant, named as the
     /// merchant is shown.
     pub(super) fn follow(&mut self, world: &ClientWorld) {
+        if self.opening_shop(world).is_none() {
+            self.opening_shop = None;
+        }
         if self
             .merchant_choice
             .is_some_and(|selection| !selection.same_shop(world))
@@ -401,26 +482,7 @@ pub(super) fn input(
             .clone()
             .filter(|(_, kind, ..)| matches!(kind, SpawnKind::NpcCorpse | SpawnKind::PlayerCorpse))
         {
-            if send(
-                online.world(),
-                ClientCommand::Loot {
-                    session_id,
-                    corpse_id,
-                    created: now,
-                },
-            ) {
-                online.open_loot(corpse_id);
-                trade.loot = Some(LootWindow {
-                    name,
-                    opening: Some(PendingLoot::new(
-                        stamp,
-                        eq_client_core::loot::LootRequest::Open { corpse_id },
-                    )),
-                    pending: None,
-                    loot_all: false,
-                });
-                trade.changed();
-            }
+            let _ = trade.open_loot(&mut online, &outbox, stamp, corpse_id, name);
         } else {
             chat.history
                 .push(super::chat::system_line("Target a corpse to loot it."));
@@ -471,16 +533,7 @@ pub(super) fn input(
                 // is unread, a merchant out of the server's range gets no
                 // answer and nothing opens; whether the official client says
                 // anything then is inferred (item 6.236).
-                send(
-                    online.world(),
-                    ClientCommand::Shop {
-                        session_id,
-                        merchant_id,
-                        own_id,
-                        open: true,
-                        created: now,
-                    },
-                );
+                let _ = trade.open_shop(online.world(), &outbox, stamp, merchant_id, own_id);
             }
         } else if let Some(trainer) = guildmaster {
             // A guildmaster's answer opens the Training window.

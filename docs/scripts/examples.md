@@ -37,6 +37,31 @@ report current character
 screenshot current-view.png
 ```
 
+## Search the open spellbook
+
+With the spellbook open, focus its Search field and type through the usual key
+input. This example filters for `ward`, then restores the ordinary page.
+
+```eqscript
+click button spellbook Spellbook_Search
+press W
+press A
+press R
+press D
+press Enter
+wait 1000
+click button spellbook Spellbook_SearchClear
+```
+
+## Open a service or inspect a received link
+
+Run `report before action` with the intended service selected or after the
+item link arrives. Copy that report's current identities into a short next
+run. For example, a `target_interaction` tuple of `(6, 42, 12)` supplies
+`interact 6 42 12`. A link reported under admission `6` with message `70`
+and ordinal `0` supplies `inspect_link 6 70 0`. Run another report after the
+action to see any received result.
+
 ## A camera and key sequence
 
 The camera heading uses EQ's 0 to 512 units. The next values are pitch in degrees and optional camera distance. Key chords use `+` with no spaces. This example does not move the character.

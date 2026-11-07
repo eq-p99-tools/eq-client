@@ -142,6 +142,11 @@ pub(super) fn state(
         pending = ?online.world().casting().pending,
         interrupted = ?online.world().casting().interrupted.map(|(_, id)| id),
         target = ?online.world().target().selected,
+        target_interaction = ?online.world().session_id().filter(|_| online.in_world()).and_then(|admission| {
+            let world = online.world();
+            let id = world.target().selected.filter(|_| !world.target_stale())?;
+            Some((admission, id, world.spawn(id)?.revision))
+        }),
         considered = ?online.world().target().selected.and_then(|id| online.world().considered(id)),
         camp = ?online.world().camp().map(|camp| camp.logging_out),
         ?gems,
@@ -613,5 +618,22 @@ pub(super) fn game_messages(seen: &mut u64, chat: &crate::chat::ChatState) {
             );
         }
         *seen = (*seen).max(id);
+    }
+}
+
+pub(super) fn item_links(
+    label: &str,
+    online: &crate::online::OnlineState,
+    chat: &crate::chat::ChatState,
+    item: &crate::items::ItemState,
+) {
+    if let Some(admission) = online.world().session_id().filter(|_| online.in_world()) {
+        let links: Vec<_> = chat
+            .script_links(admission)
+            .take(32)
+            .map(|(message, ordinal, link)| (message, ordinal, link.text.as_str()))
+            .collect();
+        let inspection = item.inspection();
+        info!(label, admission, ?links, ?inspection, "Script item links");
     }
 }

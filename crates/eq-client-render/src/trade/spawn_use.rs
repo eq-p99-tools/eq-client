@@ -1,7 +1,11 @@
 //! Scene right-clicks reuse the trade/loot paths and otherwise consider the
 //! clicked entity. Neither a click nor consideration changes the target.
 use super::{BANKER_CLASS, MERCHANT_CLASS, TradeState, merchant_reach};
-use crate::outbox::Outbox;
+use crate::{
+    online::OnlineState,
+    outbox::Outbox,
+    windows::{Shown, WindowId},
+};
 use eq_client_assets::ui::InstalledClient;
 use eq_client_core::{Capability, ClientCommand, SpawnKind, world::ClientWorld};
 
@@ -19,7 +23,96 @@ impl Use {
     }
 }
 
+fn eligible(world: &ClientWorld, client: InstalledClient, id: u16) -> Result<Use, &'static str> {
+    let spawn = world
+        .spawn(id)
+        .map(|spawn| &spawn.state)
+        .filter(|spawn| !spawn.invisible)
+        .ok_or("Interaction target is no longer available")?;
+    let player = world.player().ok_or("Enter the world first")?;
+    if matches!(spawn.kind, SpawnKind::NpcCorpse | SpawnKind::PlayerCorpse) {
+        // The session's loot guard owns corpse reach.
+        return world
+            .can(Capability::Looting)
+            .then_some(Use::Loot(id))
+            .ok_or(crate::outbox::UNAVAILABLE);
+    }
+    let capability = match (spawn.kind, spawn.class) {
+        (SpawnKind::Npc, Some(MERCHANT_CLASS)) => Capability::Trading,
+        (SpawnKind::Npc, Some(BANKER_CLASS)) => Capability::Inventory,
+        (SpawnKind::Npc, class) if crate::training::is_guildmaster(class) => Capability::Training,
+        _ => return Err("Target a merchant, banker, trainer or corpse"),
+    };
+    if !world.can(capability) {
+        return Err(crate::outbox::UNAVAILABLE);
+    }
+    if merchant_reach(client).is_some_and(|reach| !reach.admits(player.position, spawn.position)) {
+        return Err("Interaction target is out of reach");
+    }
+    Ok(Use::Trade(id))
+}
+
 impl TradeState {
+    /// Opens an ordinary service without retargeting, toggling another
+    /// service closed, or falling back to consideration.
+    pub(crate) fn script_interact(
+        &mut self,
+        online: &mut OnlineState,
+        outbox: &Outbox,
+        shown: &mut Shown,
+        client: InstalledClient,
+        (admission, id, revision): (u64, u16, u64),
+    ) -> Result<(), &'static str> {
+        let world = online.world();
+        if !world.in_world() || world.session_id() != Some(admission) {
+            return Err("Interaction needs the current admission");
+        }
+        let spawn = world
+            .spawn(id)
+            .filter(|spawn| {
+                world.target().selected == Some(id)
+                    && !world.target_stale()
+                    && spawn.revision == revision
+            })
+            .ok_or("Interaction target changed or is no longer available")?;
+        if self.loot.is_some()
+            || world.loot().is_some()
+            || self.merchant.is_some()
+            || world.merchant().is_some()
+            || self.merchant_pending.is_some()
+            || self.opening_shop(world).is_some()
+            || world.exchange().is_some()
+            || world.container().is_some()
+            || world.pending_container_open().is_some()
+            || world.combining().is_some()
+            || world.training().is_some()
+            || world.inventory_moves_pending()
+            || shown.is_open(WindowId::Bank)
+        {
+            return Err("Close or settle the current transaction before opening another");
+        }
+        let service = eligible(world, client, id)?;
+        let stamp = outbox.stamp(world).map_err(crate::outbox::Refusal::text)?;
+        match (service, spawn.state.class) {
+            (Use::Loot(id), _) => {
+                let name = eq_client_core::entities::display_name(&spawn.state.name);
+                self.open_loot(online, outbox, stamp, id, name)
+            }
+            (Use::Trade(id), Some(MERCHANT_CLASS)) => self.open_shop(
+                world,
+                outbox,
+                stamp,
+                id,
+                world.player().ok_or("Enter the world first")?.spawn_id,
+            ),
+            (Use::Trade(_), Some(BANKER_CLASS)) => {
+                shown.open(WindowId::Bank);
+                Ok(())
+            }
+            (Use::Trade(_), _) => Err("Scripted interaction opens a merchant, banker or corpse"),
+        }
+    }
+
     /// Queues an explicit scene click in the admission where it was made.
     pub(crate) fn right_click(&mut self, world: &ClientWorld, id: u16) {
         self.right_clicked = world.session_id().map(|session| (session, id));
@@ -34,32 +127,17 @@ impl TradeState {
         outbox: &Outbox,
     ) -> Option<Use> {
         let (session, id) = self.right_clicked.take()?;
-        if world.session_id() != Some(session) || !world.connected() || world.is_dead() {
+        if world.session_id() != Some(session) || !world.in_world() {
             return None;
+        }
+        if let Ok(service) = eligible(world, client, id) {
+            return Some(service);
         }
         let spawn = &world.spawn(id)?.state;
         if spawn.invisible {
             return None;
         }
-        if matches!(spawn.kind, SpawnKind::NpcCorpse | SpawnKind::PlayerCorpse) {
-            // No new corpse reach is guessed here; the existing session
-            // loot guard owns whether this corpse can be opened.
-            return world.can(Capability::Looting).then_some(Use::Loot(id));
-        }
-        let capability = match (spawn.kind, spawn.class) {
-            (SpawnKind::Npc, Some(MERCHANT_CLASS)) => Some(Capability::Trading),
-            (SpawnKind::Npc, Some(BANKER_CLASS)) => Some(Capability::Inventory),
-            (SpawnKind::Npc, class) if crate::training::is_guildmaster(class) => {
-                Some(Capability::Training)
-            }
-            _ => None,
-        };
         let player = world.player()?;
-        let in_reach = merchant_reach(client)
-            .is_none_or(|reach| reach.admits(player.position, spawn.position));
-        if capability.is_some_and(|capability| world.can(capability)) && in_reach {
-            return Some(Use::Trade(id));
-        }
         // Consider has no interaction-radius requirement. The normal
         // outbox/session path owns capability, admission and spawn checks.
         if matches!(spawn.kind, SpawnKind::Npc | SpawnKind::Player) {
