@@ -424,6 +424,7 @@ pub(super) fn tick(
 pub(super) struct Panels<'w> {
     lines: ResMut<'w, super::notices::Lines>,
     motion: ResMut<'w, super::motion::Controls>,
+    movement_sync: Option<ResMut<'w, super::options::MovementSync>>,
     inventory: ResMut<'w, super::inventory::InventoryState>,
     combat: ResMut<'w, super::combat::CombatState>,
     trade: ResMut<'w, super::trade::TradeState>,
@@ -584,6 +585,11 @@ impl Panels<'_> {
 
     /// Forgets what the world's reset made stale on screen and in the panels.
     fn forget(&mut self, reason: Reset, state: &mut OnlineState) {
+        if let Some(sync) = &mut self.movement_sync {
+            // The world clears the receipt here, even when a refused
+            // transfer reconnects the same admission in this receive batch.
+            sync.invalidate();
+        }
         if !matches!(reason, Reset::Died)
             && let Some(weather) = self.weather.as_mut()
         {

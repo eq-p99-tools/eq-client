@@ -47,9 +47,10 @@ impl MovementSync {
         })
     }
 
-    fn disconnected(&mut self) {
-        // A reply may have been lost while the world was suspended. A resumed
-        // admission must reestablish the actual local policy, even for defaults.
+    /// Forgets the policy when a world reset can discard the pending reply.
+    pub(crate) fn invalidate(&mut self) {
+        // A resumed admission may still have the worker's previous choices.
+        // Reestablish the actual policy even if the user wants the defaults.
         self.wanted = None;
         self.applied = None;
         self.pending = None;
@@ -138,7 +139,7 @@ pub(crate) fn tell(
 ) {
     let world = online.world();
     let Some(session_id) = world.session_id().filter(|_| world.connected()) else {
-        movement_sync.disconnected();
+        movement_sync.invalidate();
         *told = Told::default();
         return;
     };
@@ -255,6 +256,93 @@ mod tests {
         assert!(
             matches!(receiver.try_recv().unwrap(), ClientCommand::SetMovementOptions { session_id: 2, options, .. } if options.run_speed_multiplier.percent() == 140)
         );
+    }
+
+    #[test]
+    fn a_transfer_refused_in_one_receive_batch_retries_the_discarded_movement_choice() {
+        use crate::systems::{Stage, configure_stages, receive_world};
+        use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
+        use eq_client_core::{WorldEvent, WorldUpdate, ZoneOffer, ZoneRejection};
+        use std::sync::{Mutex, mpsc};
+
+        let (updates, incoming) = mpsc::channel();
+        let (sender, commands) = mpsc::sync_channel(8);
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        let mut app = crate::testing::app();
+        app.insert_resource(online)
+            .insert_resource(crate::online::Updates(Mutex::new(Some(incoming))))
+            .insert_resource(crate::outbox::Outbox::new(Some(sender)))
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .init_resource::<Assets<SkinnedMeshInverseBindposes>>();
+        configure_stages(&mut app);
+        app.add_systems(Update, (receive_world(), tell.in_set(Stage::Input)));
+        app.world_mut()
+            .resource_mut::<super::super::OptionsState>()
+            .options
+            .qol
+            .set(Fix::Fly, true);
+        let option_command = || {
+            commands
+                .try_iter()
+                .find_map(|command| match command {
+                    ClientCommand::SetMovementOptions {
+                        session_id: 1,
+                        request_id,
+                        options,
+                        ..
+                    } => Some((request_id, options)),
+                    _ => None,
+                })
+                .expect("movement choice for the current admission")
+        };
+        app.update();
+        let (original, wanted) = option_command();
+        assert!(wanted.fly);
+        let applied = |request_id| WorldEvent::MovementOptionsApplied {
+            session_id: 1,
+            request_id,
+            options: wanted,
+        };
+        for event in [
+            applied(original),
+            WorldEvent::ZoneTransfer(ZoneOffer {
+                zone_id: 2,
+                instance_id: 0,
+                position: Default::default(),
+                reason: 0,
+                to_bind: false,
+                solicited: true,
+            }),
+            WorldEvent::ZoneTransferRejected {
+                session_id: 1,
+                reason: ZoneRejection::Cancelled,
+            },
+        ] {
+            updates.send(WorldUpdate::Game(event)).unwrap();
+        }
+        app.update();
+        let world = app.world().resource::<OnlineState>().world();
+        assert_eq!(world.session_id(), Some(1));
+        assert!(world.in_world());
+        assert!(world.movement_options_result().is_none());
+        let (retry, options) = option_command();
+        assert_ne!(retry, original);
+        assert_eq!(options, wanted);
+        let usable = |app: &App| {
+            app.world()
+                .resource::<MovementSync>()
+                .usable(Some(1), wanted)
+        };
+        assert_eq!(usable(&app), None);
+
+        updates.send(WorldUpdate::Game(applied(original))).unwrap();
+        app.update();
+        assert_eq!(usable(&app), None);
+        updates.send(WorldUpdate::Game(applied(retry))).unwrap();
+        app.update();
+        assert_eq!(usable(&app), Some(wanted));
     }
 
     #[test]
