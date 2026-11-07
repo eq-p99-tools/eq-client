@@ -667,6 +667,11 @@ impl Controls {
         });
     }
 
+    /// Whether a movement or crossing request still owns the slot.
+    pub const fn waiting(&self) -> bool {
+        self.pending.is_some()
+    }
+
     pub(super) fn liquid_basis(&self, session_id: Option<u64>, now: Instant) -> LiquidBasis {
         match self
             .pending
