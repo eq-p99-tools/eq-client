@@ -40,11 +40,11 @@ fn status(app: &App) -> Value {
 }
 
 fn parse(fields: Value) -> Result<protocol::Envelope, &'static str> {
+    let Value::Object(fields) = fields else {
+        panic!("control request fields must be an object");
+    };
     let mut envelope = json!({"version":1,"id":1,"instance":"test-1"});
-    envelope
-        .as_object_mut()
-        .unwrap()
-        .extend(fields.as_object().unwrap().clone());
+    envelope.as_object_mut().unwrap().extend(fields);
     protocol::parse(&serde_json::to_vec(&envelope).unwrap())
 }
 

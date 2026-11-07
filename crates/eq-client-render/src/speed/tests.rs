@@ -578,6 +578,20 @@ fn titanium_instrument_scales_capped_signed_effects_and_preserves_unknowns() {
     ));
 }
 
+fn synthetic_speed_song() -> crate::spellbook::SpellNames {
+    let mut fields = vec!["0"; 183];
+    fields[0] = "42";
+    fields[1] = "Synthetic speed song";
+    fields[16] = "5";
+    fields[17] = "3";
+    fields[20] = "15";
+    fields[44] = "65";
+    fields[70] = "102";
+    fields[86..98].fill("254");
+    fields[86] = "3";
+    crate::spellbook::SpellNames::parse(&fields.join("^"))
+}
+
 #[test]
 fn bard_speed_reports_follow_landing_refresh_and_fade_across_equipment_changes() {
     let mut state = online();
@@ -590,17 +604,7 @@ fn bard_speed_reports_follow_landing_refresh_and_fade_across_equipment_changes()
     drum.rules.item_type = 26;
     let drum_slot = drum.slot;
 
-    let mut fields = vec!["0"; 183];
-    fields[0] = "42";
-    fields[1] = "Synthetic speed song";
-    fields[16] = "5";
-    fields[17] = "3";
-    fields[20] = "15";
-    fields[44] = "65";
-    fields[70] = "102";
-    fields[86..98].fill("254");
-    fields[86] = "3";
-    let spells = crate::spellbook::SpellNames::parse(&fields.join("^"));
+    let spells = synthetic_speed_song();
     let song = Buff {
         spell_id: 42,
         caster_level: 60,
@@ -1138,7 +1142,7 @@ fn heavier_cursor_arrival_after_a_drop_withdraws_weight_until_snapshot() {
             .fall_weight()
             .is_some()
     );
-    assert!(!movement_notice(&app).is_empty());
+    assert_ne!(movement_notice(&app), "");
     testing::news(
         &mut app.world_mut().resource_mut::<OnlineState>(),
         [
@@ -1147,7 +1151,7 @@ fn heavier_cursor_arrival_after_a_drop_withdraws_weight_until_snapshot() {
         ],
     );
     app.update();
-    assert!(movement_notice(&app).is_empty());
+    assert_eq!(movement_notice(&app), "");
 }
 
 #[test]

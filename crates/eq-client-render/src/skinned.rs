@@ -3660,7 +3660,7 @@ mod tests {
             panic!("a checkbox")
         };
         let mut above = last_checkbox.area;
-        for (block, (name, level)) in pieces[first..].chunks_exact(3).zip([
+        for (block, (name, level)) in pieces[first..].as_chunks::<3>().0.iter().zip([
             ("Interface scale", Level::UiScale),
             ("Run a Little Faster", Level::RunSpeed),
         ]) {
