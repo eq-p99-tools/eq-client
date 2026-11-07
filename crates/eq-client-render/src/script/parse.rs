@@ -2150,6 +2150,8 @@ click sell_chosen
             parse(
                 "click slider quantity 50
 click slider max_fps 10
+click slider run_boost 50
+click slider run_boost 100
 click pick amount
 press backspace
 ",
@@ -2161,6 +2163,14 @@ press backspace
                 Step::Click(ClickTarget::Slider(
                     SliderClick::Level(eq_client_core::options::Level::MaxFps),
                     10
+                )),
+                Step::Click(ClickTarget::Slider(
+                    SliderClick::Level(eq_client_core::options::Level::RunSpeed),
+                    50
+                )),
+                Step::Click(ClickTarget::Slider(
+                    SliderClick::Level(eq_client_core::options::Level::RunSpeed),
+                    100
                 )),
                 Step::Click(ClickTarget::Pick(PickButton::Amount)),
                 Step::Press(vec![KeyCode::Backspace]),

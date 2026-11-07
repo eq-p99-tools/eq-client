@@ -8,7 +8,7 @@
 //! for a fix that is always on, so a fix moves between always on and a
 //! setting by its definition alone.
 
-use crate::Capability;
+use crate::{Capability, movement::RunSpeedMultiplier};
 
 /// What a fix changes, which decides where it may run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,9 +103,6 @@ pub enum Fix {
     TakeEnvironmentalDamage,
     /// Disables local air depletion and the Air Remaining window.
     GillsForDays,
-    /// Increases verified forward running speed by ten percent, as explicit
-    /// client policy, without a guarantee of server acceptance.
-    RunBoost,
     /// Bounded flight using Jump to ascend and Duck to descend, retaining collision.
     Fly,
     /// Lets ordinary ground movement stand on mapped water and lava.
@@ -150,7 +147,7 @@ pub enum Fix {
 impl Fix {
     /// Every fix: the settings in the order the quality-of-life page lists
     /// them, then the fixes that are always on.
-    pub const ALL: [Self; 31] = [
+    pub const ALL: [Self; 30] = [
         Self::SkipModifiedFood,
         Self::HiddenWindows,
         Self::AskBeforeDeletingSpells,
@@ -169,7 +166,6 @@ impl Fix {
         Self::AnswerListPolls,
         Self::TakeEnvironmentalDamage,
         Self::GillsForDays,
-        Self::RunBoost,
         Self::Fly,
         Self::JesusMode,
         Self::ExitAtOnce,
@@ -203,7 +199,6 @@ impl Fix {
             Self::FreeCamera => "free_camera",
             Self::ClearView => "clear_view",
             Self::WalkWhileWinded => "walk_while_winded",
-            Self::RunBoost => "run_boost",
             Self::AutoLoot => "auto_loot",
             Self::FloatingCombatText => "floating_combat_text",
             Self::ReadWhileStanding => "read_while_standing",
@@ -247,7 +242,6 @@ impl Fix {
             Self::FreeCamera => "Free Camera",
             Self::ClearView => "See the World Clearly",
             Self::WalkWhileWinded => "Walk While Winded",
-            Self::RunBoost => "Run a Little Faster",
             Self::AutoLoot => "Loot Corpses Automatically",
             Self::FloatingCombatText => "Floating Combat Text",
             Self::ReadWhileStanding => "Read the Spellbook Standing",
@@ -311,9 +305,6 @@ impl Fix {
             Self::WalkWhileWinded => {
                 "Allow horizontal movement while stunned. Attacks, spells, items and jumping still obey stun restrictions."
             }
-            Self::RunBoost => {
-                "Increase forward running speed by 10 percent. Walking, strafing and backward movement are unchanged. Server acceptance is not guaranteed."
-            }
             Self::AutoLoot => {
                 "Open newly slain NPC corpses naming you as killer within 20 units and use Loot All. Leave NO DROP items for manual looting. Stop on refusal; supported item results are required."
             }
@@ -375,7 +366,6 @@ impl Fix {
             Self::AnswerListPolls
             | Self::MemorizeWhileStanding
             | Self::WalkWhileWinded
-            | Self::RunBoost
             | Self::AutoLoot
             | Self::Fly
             | Self::JesusMode
@@ -417,7 +407,6 @@ impl Fix {
             // All current server policies offer these opt-ins for testing.
             // The controls can still reflect a policy that withholds them.
             Self::WalkWhileWinded
-            | Self::RunBoost
             | Self::Fly
             | Self::JesusMode
             | Self::GillsForDays
@@ -472,7 +461,6 @@ impl Fix {
             | Self::ShowTimesInChat
             | Self::ClearView
             | Self::WalkWhileWinded
-            | Self::RunBoost
             | Self::AutoLoot
             | Self::ReadWhileStanding
             | Self::MemorizeWhileStanding
@@ -511,7 +499,6 @@ impl Fix {
             self,
             Self::TakeEnvironmentalDamage
                 | Self::GillsForDays
-                | Self::RunBoost
                 | Self::Fly
                 | Self::JesusMode
                 | Self::ExitAtOnce
@@ -525,17 +512,23 @@ impl Fix {
     }
 }
 
-/// Which fixes are on: every one that is always on, and each setting as the
-/// player chose it or else as it starts.
+/// Quality-of-life choices, including the player's selected run speed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Settings([bool; Fix::ALL.len()]);
+pub struct Settings {
+    fixes: [bool; Fix::ALL.len()],
+    /// The selected forward running multiplier.
+    pub run_speed_multiplier: RunSpeedMultiplier,
+}
 
 impl Default for Settings {
     fn default() -> Self {
-        Self(Fix::ALL.map(|fix| match fix.availability() {
-            Availability::AlwaysOn => true,
-            Availability::Setting { default } => default,
-        }))
+        Self {
+            fixes: Fix::ALL.map(|fix| match fix.availability() {
+                Availability::AlwaysOn => true,
+                Availability::Setting { default } => default,
+            }),
+            run_speed_multiplier: RunSpeedMultiplier::NORMAL,
+        }
     }
 }
 
@@ -545,14 +538,14 @@ impl Settings {
     pub const fn on(&self, fix: Fix) -> bool {
         match fix.availability() {
             Availability::AlwaysOn => true,
-            Availability::Setting { .. } => self.0[fix as usize],
+            Availability::Setting { .. } => self.fixes[fix as usize],
         }
     }
 
     /// Turns a setting on or off; one that is always on stays on.
     pub const fn set(&mut self, fix: Fix, on: bool) {
         if fix.is_setting() {
-            self.0[fix as usize] = on;
+            self.fixes[fix as usize] = on;
         }
     }
 }
@@ -623,7 +616,6 @@ mod tests {
                 Fix::AnswerListPolls,
                 Fix::TakeEnvironmentalDamage,
                 Fix::GillsForDays,
-                Fix::RunBoost,
                 Fix::Fly,
                 Fix::JesusMode,
                 Fix::ExitAtOnce,
@@ -642,7 +634,6 @@ mod tests {
         for fix in [
             Fix::ClearView,
             Fix::WalkWhileWinded,
-            Fix::RunBoost,
             Fix::AutoLoot,
             Fix::FloatingCombatText,
             Fix::ReadWhileStanding,
@@ -685,7 +676,6 @@ mod tests {
             [
                 Fix::TakeEnvironmentalDamage,
                 Fix::GillsForDays,
-                Fix::RunBoost,
                 Fix::Fly,
                 Fix::JesusMode,
                 Fix::ExitAtOnce

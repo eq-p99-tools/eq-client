@@ -153,6 +153,7 @@ pub(crate) fn tell(
 mod tests {
     use super::*;
     use crate::online::{OnlineState, testing};
+    use eq_client_core::options::Level;
 
     fn fixture(capacity: usize) -> (App, std::sync::mpsc::Receiver<ClientCommand>) {
         let mut online = OnlineState::new(true);
@@ -173,22 +174,20 @@ mod tests {
         app.world_mut()
             .resource_mut::<super::super::OptionsState>()
             .options
-            .qol
-            .set(Fix::RunBoost, true);
+            .set_level(Level::RunSpeed, 120);
         app.update();
         // Change the preference while an older choice occupies the queue.
         app.world_mut()
             .resource_mut::<super::super::OptionsState>()
             .options
-            .qol
-            .set(Fix::Fly, true);
+            .set_level(Level::RunSpeed, 140);
         app.update();
         assert!(
-            matches!(receiver.try_recv().unwrap(), ClientCommand::SetMovementOptions { options, .. } if options.run_boost && !options.fly)
+            matches!(receiver.try_recv().unwrap(), ClientCommand::SetMovementOptions { session_id: 1, options, .. } if options.run_speed_multiplier.percent() == 120)
         );
         app.update();
         assert!(
-            matches!(receiver.try_recv().unwrap(), ClientCommand::SetMovementOptions { options, .. } if options.run_boost && options.fly)
+            matches!(receiver.try_recv().unwrap(), ClientCommand::SetMovementOptions { session_id: 1, options, .. } if options.run_speed_multiplier.percent() == 140)
         );
         app.update();
         assert!(matches!(
@@ -212,7 +211,7 @@ mod tests {
         );
         app.update();
         assert!(
-            matches!(receiver.try_recv().unwrap(), ClientCommand::SetMovementOptions { session_id: 2, options, .. } if options.run_boost)
+            matches!(receiver.try_recv().unwrap(), ClientCommand::SetMovementOptions { session_id: 2, options, .. } if options.run_speed_multiplier.percent() == 140)
         );
     }
 
@@ -245,7 +244,8 @@ mod tests {
             .add_systems(Update, tell);
         {
             let mut state = app.world_mut().resource_mut::<super::super::OptionsState>();
-            for fix in [Fix::RunBoost, Fix::Fly, Fix::MemorizeWhileStanding] {
+            state.options.set_level(Level::RunSpeed, 140);
+            for fix in [Fix::Fly, Fix::MemorizeWhileStanding] {
                 state.options.qol.set(fix, true);
             }
         }
@@ -298,8 +298,7 @@ mod tests {
         app.world_mut()
             .resource_mut::<super::super::OptionsState>()
             .options
-            .qol
-            .set(Fix::RunBoost, true);
+            .set_level(Level::RunSpeed, 120);
         app.update();
         let ClientCommand::SetMovementOptions {
             request_id,
@@ -369,8 +368,7 @@ mod tests {
         app.world_mut()
             .resource_mut::<super::super::OptionsState>()
             .options
-            .qol
-            .set(Fix::RunBoost, false);
+            .set_level(Level::RunSpeed, 100);
         app.update();
         assert!(!ready(&app, normal));
         assert!(

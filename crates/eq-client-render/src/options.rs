@@ -208,6 +208,8 @@ mod tests {
 
     #[test]
     fn each_character_keeps_their_own_options() {
+        use eq_client_core::options::Level;
+
         let directory = std::env::temp_dir().join(format!(
             "eq-client-options-{}-{}",
             std::process::id(),
@@ -226,20 +228,33 @@ mod tests {
             .id();
         crate::clicks::testing::click(&mut app, checkbox);
         assert!(!app.world().resource::<OptionsState>().options.wheel_zoom);
+        app.world_mut()
+            .resource_mut::<OptionsState>()
+            .options
+            .set_level(Level::RunSpeed, 120);
+        app.update();
         let file = directory.join("options-ExampleWorld-Example.txt");
-        assert!(
-            std::fs::read_to_string(&file)
-                .unwrap()
-                .contains("wheel_zoom = false")
-        );
+        let saved = std::fs::read_to_string(&file).unwrap();
+        assert!(saved.contains("wheel_zoom = false"));
+        assert!(saved.contains("run_boost = 120"));
         // Another character starts from the defaults again.
         app.world_mut().despawn(checkbox);
         enter(&mut app, "Another");
         app.update();
         assert!(app.world().resource::<OptionsState>().options.wheel_zoom);
-        enter(&mut app, "Example");
-        app.update();
-        assert!(!app.world().resource::<OptionsState>().options.wheel_zoom);
+        assert_eq!(
+            app.world()
+                .resource::<OptionsState>()
+                .options
+                .level(Level::RunSpeed),
+            100
+        );
+        let mut restarted = self::app(&directory);
+        enter(&mut restarted, "Example");
+        restarted.update();
+        let restored = &restarted.world().resource::<OptionsState>().options;
+        assert!(!restored.wheel_zoom);
+        assert_eq!(restored.level(Level::RunSpeed), 120);
         let _ = std::fs::remove_dir_all(&directory);
     }
 

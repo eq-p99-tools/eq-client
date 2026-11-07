@@ -16,10 +16,12 @@ use eq_client_core::options::Level;
 /// value, cut from the skin's own.
 pub(super) const UI_SCALE_SLIDER: &str = "EQC_QoL_UiScaleSlider";
 pub(super) const UI_SCALE_VALUE: &str = "EQC_QoL_UiScaleValueLabel";
+pub(super) const RUN_SPEED_SLIDER: &str = "EQC_QoL_RunSpeedSlider";
+pub(super) const RUN_SPEED_VALUE: &str = "EQC_QoL_RunSpeedValueLabel";
 
 /// The Options window's sliders this client keeps settings for, with the
 /// labels that show their values, by screen ID.
-const LEVEL_SLIDERS: [(&str, &str, Level); 5] = [
+const LEVEL_SLIDERS: [(&str, &str, Level); 6] = [
     (
         "ODP_ClipPlaneSlider",
         "ODP_ClipPlaneValueLabel",
@@ -36,6 +38,7 @@ const LEVEL_SLIDERS: [(&str, &str, Level); 5] = [
         Level::MouseSensitivity,
     ),
     (UI_SCALE_SLIDER, UI_SCALE_VALUE, Level::UiScale),
+    (RUN_SPEED_SLIDER, RUN_SPEED_VALUE, Level::RunSpeed),
     (
         "OGP_SoundVolumeSlider",
         "OGP_SoundVolumeValueLabel",
@@ -111,6 +114,15 @@ pub(crate) struct SkinSlider {
 }
 
 impl SkinSlider {
+    #[cfg(test)]
+    pub(crate) const fn test_level(level: Level) -> Self {
+        Self {
+            sets: Sets::Level(level),
+            width: 150.0,
+            thumb: 15.0,
+        }
+    }
+
     /// The setting's place along the slider for the pointer at this point
     /// across it, from -0.5 at its left edge to 0.5 at its right: the
     /// thumb's middle follows the pointer.
@@ -179,6 +191,17 @@ pub(super) fn slider(
             },
             RelativeCursorPosition::default(),
         ));
+        if let Sets::Level(level) = sets
+            && let Some(capability) = level.needs()
+        {
+            node.insert(crate::outbox::Needs::Capability(capability));
+        }
+        if sets == Sets::Level(Level::RunSpeed) {
+            node.insert(crate::tooltip::Tooltip(
+                "Scale forward running from 1.00x to 1.40x. Use 1.00x for ordinary speed."
+                    .to_owned(),
+            ));
+        }
     } else {
         node.insert(super::missing());
     }
@@ -228,6 +251,7 @@ pub(super) fn slider(
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn slide(
     sliders: Query<(&Interaction, &SkinSlider, &RelativeCursorPosition)>,
+    online: Res<crate::online::OnlineState>,
     mut state: ResMut<OptionsState>,
     mut inventory: ResMut<InventoryState>,
 ) {
@@ -237,12 +261,17 @@ pub(crate) fn slide(
         };
         let along = slider.fraction(at.x);
         match slider.sets {
-            Sets::Level(level) => {
+            Sets::Level(level)
+                if level.needs().is_none_or(|capability| {
+                    crate::outbox::offered(online.world(), capability)
+                }) =>
+            {
                 let value = level.at(along);
                 if state.options.level(level) != value {
                     state.options.set_level(level, value);
                 }
             }
+            Sets::Level(_) => {}
             Sets::Quantity => inventory.slide_amount(along),
         }
     }
@@ -1038,6 +1067,47 @@ impl KeyGroup {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_run_speed_slider_updates_the_setting_and_value_label() {
+        let mut app = App::new();
+        app.init_resource::<OptionsState>()
+            .init_resource::<InventoryState>()
+            .insert_resource(crate::online::OnlineState::new(false))
+            .add_systems(Update, (slide, show_sliders).chain());
+        let slider = SkinSlider::test_level(Level::RunSpeed);
+        let input = app
+            .world_mut()
+            .spawn((
+                Interaction::Pressed,
+                slider,
+                RelativeCursorPosition::default(),
+            ))
+            .id();
+        let label = app
+            .world_mut()
+            .spawn((LevelValue(Level::RunSpeed), Text::default()))
+            .id();
+        for (along, percent, words) in [
+            (0.5, 120, "1.20x"),
+            (1.0, 140, "1.40x"),
+            (0.0, 100, "1.00x"),
+        ] {
+            app.world_mut()
+                .get_mut::<RelativeCursorPosition>(input)
+                .unwrap()
+                .normalized = Some(Vec2::new(slider.across(along), 0.0));
+            app.update();
+            assert_eq!(
+                app.world()
+                    .resource::<OptionsState>()
+                    .options
+                    .level(Level::RunSpeed),
+                percent
+            );
+            assert_eq!(app.world().get::<Text>(label).unwrap().0, words);
+        }
+    }
 
     #[test]
     fn camera_key_rows_offer_editable_bindings_and_show_the_captured_key() {

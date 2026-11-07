@@ -420,10 +420,12 @@ impl Controls {
                 intent.direction = Vec3::ZERO;
             }
         }
-        let boosted = self.movement_options.run_boost && intent.mode == MovementMode::Forward;
-        if boosted {
-            intent.speed *= eq_client_core::movement::MovementOptions::RUN_BOOST;
-        }
+        let run_factor = if intent.mode == MovementMode::Forward {
+            self.movement_options.run_speed_multiplier.factor()
+        } else {
+            1.0
+        };
+        intent.speed *= run_factor;
         if self.movement_options.fly && focused {
             intent.direction.y = if self.stun_active {
                 0.0
@@ -432,9 +434,7 @@ impl Controls {
             };
             intent.direction = intent.direction.normalize_or_zero();
             // Run boost changes only horizontal speed, including during flight.
-            if boosted {
-                intent.direction.y /= eq_client_core::movement::MovementOptions::RUN_BOOST;
-            }
+            intent.direction.y /= run_factor;
         }
         intent
     }
@@ -473,8 +473,8 @@ impl Controls {
         };
         let request = GroundedDiagonal { along, side };
         let lateral = self.diagonal_rates.for_mode(request)?;
-        let longitudinal = if self.movement_options.run_boost && along == DiagonalAlong::Run {
-            intent.speed * eq_client_core::movement::MovementOptions::RUN_BOOST
+        let longitudinal = if along == DiagonalAlong::Run {
+            intent.speed * self.movement_options.run_speed_multiplier.factor()
         } else {
             intent.speed
         };
@@ -1227,12 +1227,8 @@ pub(super) fn input(
                 }
                 // Airborne combined momentum is outside this grounded
                 // budget. Keep any subsequent Fall inside its normal grant.
-                let fall_speed = controls.speed.unwrap_or(0.0);
-                let fall_speed = if controls.movement_options.run_boost {
-                    fall_speed * eq_client_core::movement::MovementOptions::RUN_BOOST
-                } else {
-                    fall_speed
-                };
+                let fall_speed = controls.speed.unwrap_or(0.0)
+                    * controls.movement_options.run_speed_multiplier.factor();
                 controller.limit_drift(fall_speed);
                 landed
             } else {
@@ -1973,7 +1969,10 @@ fn arc(from: f32, to: f32) -> f32 {
 
 #[cfg(test)]
 pub(super) mod tests {
-    use eq_client_core::movement::{Liquid, Liquids};
+    use eq_client_core::{
+        movement::{Liquid, Liquids, RunSpeedMultiplier},
+        options::Level,
+    };
 
     fn movement_choice(app: &mut App, fix: Fix, on: bool) {
         app.world_mut()
@@ -2003,8 +2002,7 @@ pub(super) mod tests {
         app.world_mut()
             .resource_mut::<crate::options::OptionsState>()
             .options
-            .qol
-            .set(Fix::RunBoost, true);
+            .set_level(Level::RunSpeed, 120);
         app.update();
         assert!(receiver.try_recv().is_err());
         assert_eq!(app.world().resource::<Controls>().held, Some(Held::Gate));
@@ -2016,13 +2014,12 @@ pub(super) mod tests {
         let ClientCommand::Move(boosted) = receiver.try_recv().expect("fresh policy budget") else {
             panic!("unexpected command");
         };
-        assert!((boosted.position.x + 0.66).abs() < 0.001);
+        assert!((boosted.position.x + 0.72).abs() < 0.001);
         accept(&mut app, &boosted);
         app.world_mut()
             .resource_mut::<crate::options::OptionsState>()
             .options
-            .qol
-            .set(Fix::RunBoost, false);
+            .set_level(Level::RunSpeed, 100);
         app.update();
         assert!(receiver.try_recv().is_err());
         assert_eq!(app.world().resource::<Controls>().held, Some(Held::Gate));
@@ -2038,7 +2035,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn run_boost_only_changes_the_granted_forward_speed() {
+    fn the_run_multiplier_only_changes_granted_forward_speed() {
         let mut controls = Controls {
             speed: Some(6.0),
             backward_speed: Some(2.0),
@@ -2050,21 +2047,16 @@ pub(super) mod tests {
         let keys = ButtonInput::<KeyCode>::default();
         let intent =
             |controls: &Controls, act| controls.intent(&keys, &map, &[act], true, (0.0, 0.0), None);
-        let normal = intent(&controls, Act::Forward);
-        controls.movement_options.run_boost = true;
-        let boosted = intent(&controls, Act::Forward);
-        assert!(
-            (boosted.speed - normal.speed * eq_client_core::movement::MovementOptions::RUN_BOOST)
-                .abs()
-                < 0.001
-        );
-        assert!((intent(&controls, Act::Back).speed - 2.0).abs() < 0.001);
-        assert!((intent(&controls, Act::StrafeLeft).speed - 3.0).abs() < 0.001);
-        controls.walking = true;
-        assert!((intent(&controls, Act::Forward).speed - 1.5).abs() < 0.001);
-        controls.movement_options.run_boost = false;
-        controls.walking = false;
-        assert!((intent(&controls, Act::Forward).speed - normal.speed).abs() < 0.001);
+        for (percent, speed) in [(100, 6.0), (110, 6.6), (120, 7.2), (140, 8.4)] {
+            controls.movement_options.run_speed_multiplier =
+                RunSpeedMultiplier::from_percent(percent).unwrap();
+            controls.walking = false;
+            assert!((intent(&controls, Act::Forward).speed - speed).abs() < 0.001);
+            assert!((intent(&controls, Act::Back).speed - 2.0).abs() < 0.001);
+            assert!((intent(&controls, Act::StrafeLeft).speed - 3.0).abs() < 0.001);
+            controls.walking = true;
+            assert!((intent(&controls, Act::Forward).speed - 1.5).abs() < 0.001);
+        }
     }
 
     #[test]
@@ -2139,7 +2131,7 @@ pub(super) mod tests {
             None,
         );
         assert!(opposite.direction.length() < f32::EPSILON);
-        controls.movement_options.run_boost = true;
+        controls.movement_options.run_speed_multiplier = RunSpeedMultiplier::MAX;
         let up = controls.intent(&keys, &map, &[Act::Jump], true, (0.0, 128.0), None);
         assert!((up.direction.y * up.speed - 6.0).abs() < 0.001);
         let boosted = controls.intent(
@@ -2276,12 +2268,11 @@ pub(super) mod tests {
     fn every_movement_opt_in_keeps_unknown_disconnected_and_dead_gates() {
         for state in 0..3 {
             let (mut app, receiver) = app();
-            for fix in [
-                Fix::WalkWhileWinded,
-                Fix::RunBoost,
-                Fix::Fly,
-                Fix::JesusMode,
-            ] {
+            app.world_mut()
+                .resource_mut::<crate::options::OptionsState>()
+                .options
+                .set_level(Level::RunSpeed, 140);
+            for fix in [Fix::WalkWhileWinded, Fix::Fly, Fix::JesusMode] {
                 movement_choice(&mut app, fix, true);
             }
             match state {
@@ -4126,8 +4117,7 @@ pub(super) mod tests {
         app.world_mut()
             .resource_mut::<crate::options::OptionsState>()
             .options
-            .qol
-            .set(Fix::RunBoost, true);
+            .set_level(Level::RunSpeed, 140);
         app.update();
         assert_eq!(wait_count(&app), 1);
         let commands: Vec<_> = receiver.try_iter().collect();
@@ -4142,6 +4132,7 @@ pub(super) mod tests {
                 _ => None,
             })
             .unwrap();
+        assert_eq!(options.run_speed_multiplier, RunSpeedMultiplier::MAX);
         assert!(
             !commands
                 .iter()
@@ -4181,16 +4172,18 @@ pub(super) mod tests {
             .checked_sub(Duration::from_millis(100))
             .unwrap();
         app.update();
-        assert!(
-            receiver
-                .try_iter()
-                .any(|command| matches!(command, ClientCommand::Move(_)))
-        );
+        let sample = receiver
+            .try_iter()
+            .find_map(|command| match command {
+                ClientCommand::Move(sample) => Some(sample),
+                _ => None,
+            })
+            .expect("movement with the applied 1.40x budget");
+        assert!((sample.position.x + 0.84).abs() < 0.001);
         app.world_mut()
             .resource_mut::<crate::options::OptionsState>()
             .options
-            .qol
-            .set(Fix::RunBoost, false);
+            .set_level(Level::RunSpeed, 100);
         app.update();
         app.update();
         assert_eq!(wait_count(&app), 2);
@@ -4205,8 +4198,7 @@ pub(super) mod tests {
         app.world_mut()
             .resource_mut::<crate::options::OptionsState>()
             .options
-            .qol
-            .set(Fix::RunBoost, true);
+            .set_level(Level::RunSpeed, 120);
         app.update();
         app.update();
         assert_eq!(wait_count(&app), 3);
@@ -4604,8 +4596,12 @@ pub(super) mod tests {
         keys.reset_all();
         keys.press(KeyCode::KeyE);
         controls.autorun = true;
+        controls.movement_options.run_speed_multiplier =
+            RunSpeedMultiplier::from_percent(120).unwrap();
         let autorun = controls.intent(&keys, &map, &[], true, (0.0, 0.0), None);
-        assert!(autorun.diagonal.is_some());
+        let diagonal = autorun.diagonal.expect("forward and lateral movement");
+        assert!((diagonal.longitudinal - 7.2).abs() < 0.001);
+        assert!((diagonal.lateral - 3.0).abs() < 0.001);
         controls.autorun = false;
         let both = MouseLook {
             held: true,

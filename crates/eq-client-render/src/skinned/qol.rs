@@ -2,32 +2,31 @@
 use super::{bindings::qol_checkbox_id, controls, frame, to_f32, tree::tab_strip};
 use crate::windows::WindowId;
 use bevy::prelude::Vec2;
-use eq_client_assets::{sidl::Align, ui::Area};
+use eq_client_assets::{
+    sidl::{Align, Element, Label, Slider},
+    ui::Area,
+};
 
 #[cfg(test)]
 pub(super) mod tests;
 
 /// The skin's pages of a tab box, and for the Options window a last page,
-/// its quality-of-life page, with a checkbox for each setting, drawn with the
-/// skin's own checkbox, within the page frame's client width.
+/// its quality-of-life page, with checkboxes and sliders drawn from the skin,
+/// within the page frame's client width.
 pub(super) fn pages<'a>(
     pages: &'a [eq_client_assets::sidl::Page],
     owner: WindowId,
     size: Vec2,
     page_frame: Option<&eq_client_assets::sidl::FrameLook>,
 ) -> std::borrow::Cow<'a, [eq_client_assets::sidl::Page]> {
-    use eq_client_assets::sidl::Element;
     if owner != WindowId::Options {
         return std::borrow::Cow::Borrowed(pages);
     }
-    let checkbox =
-        pages
-            .iter()
-            .flat_map(|page| &page.pieces)
-            .find_map(|(_, element)| match element {
-                Element::Button(button) if button.checkbox => Some(button.clone()),
-                _ => None,
-            });
+    let skin_pieces = || pages.iter().flat_map(|page| &page.pieces);
+    let checkbox = skin_pieces().find_map(|(_, element)| match element {
+        Element::Button(button) if button.checkbox => Some(button),
+        _ => None,
+    });
     let (Some(checkbox), Some(first)) = (checkbox, pages.first()) else {
         return std::borrow::Cow::Borrowed(pages);
     };
@@ -48,77 +47,84 @@ pub(super) fn pages<'a>(
         (size.x - insets.left - insets.right).max(0.0),
         (size.y - tab_strip(pages.iter().chain([&qol])) - insets.top - insets.bottom).max(0.0),
     );
-    let caption = pages
-        .iter()
-        .flat_map(|page| &page.pieces)
-        .find_map(|(_, element)| {
-            if let Element::Label(label) = element {
-                Some(label)
-            } else {
-                None
-            }
-        });
-    let has_scale = pages
-        .iter()
-        .flat_map(|page| &page.pieces)
-        .any(|(_, element)| matches!(element, Element::Slider(_)))
-        && pages
-            .iter()
-            .flat_map(|page| &page.pieces)
-            .any(|(name, element)| {
-                name.ends_with("ValueLabel") && matches!(element, Element::Label(_))
-            });
-    let rows = eq_client_core::qol::Fix::settings().count()
-        + usize::from(caption.is_some())
-        + usize::from(has_scale);
-    let layout = Layout::new(&checkbox, caption, room, rows);
-    let mut pieces = qol_checkboxes(pages, &checkbox, &layout);
-    pieces.extend(qol_scale(pages, &layout));
+    let caption = skin_pieces().find_map(|(_, element)| match element {
+        Element::Label(label) => Some(label),
+        _ => None,
+    });
+    let slider = skin_pieces().find_map(|(_, element)| match element {
+        Element::Slider(slider) => Some(slider),
+        _ => None,
+    });
+    let value = skin_pieces().find_map(|(name, element)| match element {
+        Element::Label(label) if name.ends_with("ValueLabel") => Some(label),
+        _ => None,
+    });
+    let slider_style = slider.zip(value);
+    let first_slider =
+        eq_client_core::qol::Fix::settings().count() + usize::from(caption.is_some());
+    let layout = Layout::new(
+        checkbox,
+        caption,
+        room,
+        first_slider + usize::from(slider_style.is_some()),
+    );
+    let mut pieces = qol_checkboxes(checkbox, caption, &layout);
+    if let Some((slider, value)) = slider_style {
+        // Stack the sliders within a single column. Their actual heights
+        // contribute to the scroll extent, including a value wrapped below.
+        let (x, y, width) = layout.place(first_slider);
+        let (scale, bottom) = qol_slider(
+            slider,
+            value,
+            (x, y, width),
+            (
+                "EQC_QoL_UiScaleLabel",
+                controls::UI_SCALE_SLIDER,
+                controls::UI_SCALE_VALUE,
+            ),
+            "Interface scale",
+        );
+        pieces.extend(scale);
+        let (run_speed, _) = qol_slider(
+            slider,
+            value,
+            (x, bottom + GAP, width),
+            (
+                "EQC_QoL_RunSpeedLabel",
+                controls::RUN_SPEED_SLIDER,
+                controls::RUN_SPEED_VALUE,
+            ),
+            "Run a Little Faster",
+        );
+        pieces.extend(run_speed);
+    }
     let mut all = pages.to_vec();
     all.push(eq_client_assets::sidl::Page { pieces, ..qol });
     std::borrow::Cow::Owned(all)
 }
 
-/// The quality-of-life page's interface scale, in the next place after its checkboxes:
-/// a caption, a slider cut from the skin's first slider on the Options
-/// window's pages, and the label that shows its value, cut from that
-/// slider's own; none where the skin has no slider and value label.
-fn qol_scale(
-    pages: &[eq_client_assets::sidl::Page],
-    layout: &Layout,
-) -> Vec<(String, eq_client_assets::sidl::Element)> {
-    use eq_client_assets::sidl::Element;
-    let pieces = || pages.iter().flat_map(|page| &page.pieces);
-    let slider = pieces().find_map(|(_, element)| match element {
-        Element::Slider(slider) => Some(slider.clone()),
-        _ => None,
-    });
-    let label = pieces().find_map(|(name, element)| match element {
-        Element::Label(label) if name.ends_with("ValueLabel") => Some(label.clone()),
-        _ => None,
-    });
-    let (Some(mut slider), Some(mut value)) = (slider, label) else {
-        return Vec::new();
-    };
-    // The scale is the last block in its column. Its full height contributes
-    // to the content extent instead of consuming another hidden column.
-    // One row more when the page opens its unsafe run with a caption, as
-    // qol_checkboxes does whenever the skin lends a line of text for it.
-    let first = eq_client_core::qol::Fix::settings().count()
-        + usize::from(pieces().any(|(_, element)| matches!(element, Element::Label(_))));
-    let (x, y, width) = layout.place(first);
+/// Cuts a caption, slider and value label from the skin and returns their bottom edge.
+fn qol_slider(
+    slider: &Slider,
+    value: &Label,
+    (x, y, width): (f32, f32, f32),
+    (caption_id, slider_id, value_id): (&str, &str, &str),
+    text: &str,
+) -> ([(String, Element); 3], f32) {
+    let mut slider = slider.clone();
+    let mut value = value.clone();
     let mut caption = value.clone();
     caption.eq_type = None;
     caption.anchors = None;
     caption.align = Align::Left;
-    "Interface scale".clone_into(&mut caption.text);
+    text.clone_into(&mut caption.text);
     caption.area = Area {
         x,
         y,
         width,
         height: value.area.height,
     };
-    slider.id = Some(controls::UI_SCALE_SLIDER.to_owned());
+    slider.id = Some(slider_id.to_owned());
     slider.area.x = x;
     slider.area.y = y + value.area.height + 2.0;
     value.area.width = value.area.width.min(width).max(0.0);
@@ -144,42 +150,33 @@ fn qol_scale(
     } else {
         slider.area.y + slider.area.height + 2.0
     };
-    vec![
-        ("EQC_QoL_UiScaleLabel".to_owned(), Element::Label(caption)),
-        (
-            controls::UI_SCALE_SLIDER.to_owned(),
-            Element::Slider(slider),
-        ),
-        (controls::UI_SCALE_VALUE.to_owned(), Element::Label(value)),
-    ]
+    let bottom = (slider.area.y + slider.area.height).max(value.area.y + value.area.height);
+    (
+        [
+            (caption_id.to_owned(), Element::Label(caption)),
+            (slider_id.to_owned(), Element::Slider(slider)),
+            (value_id.to_owned(), Element::Label(value)),
+        ],
+        bottom,
+    )
 }
 
 /// A checkbox cut from the skin's own for each quality-of-life setting, in
 /// their order, one under another down a page this tall and then on down
 /// the next column.
 fn qol_checkboxes(
-    pages: &[eq_client_assets::sidl::Page],
     checkbox: &eq_client_assets::sidl::Button,
+    caption: Option<&Label>,
     layout: &Layout,
 ) -> Vec<(String, eq_client_assets::sidl::Element)> {
-    use eq_client_assets::sidl::Element;
     let settings: Vec<_> = eq_client_core::qol::Fix::settings().collect();
-    // The caption's line of text, cut from the skin's own, like the scale's.
-    let caption =
-        pages
-            .iter()
-            .flat_map(|page| &page.pieces)
-            .find_map(|(_, element)| match element {
-                Element::Label(label) => Some(label.clone()),
-                _ => None,
-            });
     // The rows of the page: every setting in order, with the caption ahead
     // of the unsafe run that closes it.
     let first_unsafe = settings.iter().position(|fix| fix.is_unsafe());
     let mut rows: Vec<(String, Row)> = Vec::new();
     for (position, fix) in settings.iter().copied().enumerate() {
         if Some(position) == first_unsafe
-            && let Some(label) = &caption
+            && let Some(label) = caption
         {
             rows.push((
                 "EQC_QoL_UnsafeCaption".to_owned(),

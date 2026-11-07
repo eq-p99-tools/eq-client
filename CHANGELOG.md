@@ -8,6 +8,8 @@
   remains available. `ClientWorld::fall_weight` returns an optional weight.
   Ground objects follow their own received updates.
 
+- Set **Run a Little Faster** from 1.00x to 1.40x on the QoL page. Existing
+  enabled checkboxes load at 1.10x, and new profiles start at ordinary speed.
 - Show Air Remaining during ordinary mapped Titanium immersion, including
   WLD lava that restricts breathing at the head. Local-only EQEmu sessions
   report drowning after depletion and lava heat from mapped body contact.

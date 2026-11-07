@@ -6,6 +6,7 @@
 use crate::{
     Capability,
     food::AutoEat,
+    movement::RunSpeedMultiplier,
     names::ShowNames,
     qol::{self, Fix},
 };
@@ -137,6 +138,8 @@ pub enum Level {
     /// desktop's scaling (the Interface scale on the quality-of-life page); the installation's
     /// own full-window screens keep the official client's size.
     UiScale,
+    /// Forward running speed in hundredths of the calibrated speed.
+    RunSpeed,
     /// How loud sounds play, as a percentage of their files' own loudness.
     /// The official client keeps a `SoundVolume` in `eqclient.ini` on a
     /// scale not yet known, so this client's own starts at 100 (inferred, item
@@ -156,14 +159,17 @@ const FPS_STEP: usize = 5;
 const MIN_UI_SCALE: u16 = 50;
 const MAX_UI_SCALE: u16 = 200;
 const UI_SCALE_STEP: usize = 5;
+const MIN_RUN_SPEED: u16 = RunSpeedMultiplier::NORMAL.percent();
+const MAX_RUN_SPEED: u16 = RunSpeedMultiplier::MAX.percent();
 
 impl Level {
     /// Every level, in the order a file lists them.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::ClipPlane,
         Self::MaxFps,
         Self::MouseSensitivity,
         Self::UiScale,
+        Self::RunSpeed,
         Self::SoundVolume,
     ];
 
@@ -175,7 +181,17 @@ impl Level {
             Self::MaxFps => "max_fps",
             Self::MouseSensitivity => "mouse_sensitivity",
             Self::UiScale => "ui_scale",
+            Self::RunSpeed => "run_boost",
             Self::SoundVolume => "sound_volume",
+        }
+    }
+
+    /// The session capability required to use the slider, if any.
+    #[must_use]
+    pub const fn needs(self) -> Option<Capability> {
+        match self {
+            Self::RunSpeed => Some(Capability::GameplayDepartures),
+            _ => None,
         }
     }
 
@@ -190,6 +206,7 @@ impl Level {
             Self::UiScale => (MIN_UI_SCALE..=MAX_UI_SCALE)
                 .step_by(UI_SCALE_STEP)
                 .collect(),
+            Self::RunSpeed => (MIN_RUN_SPEED..=MAX_RUN_SPEED).collect(),
         }
     }
 
@@ -211,6 +228,10 @@ impl Level {
             Self::UiScale => {
                 let span = f32::from(MAX_UI_SCALE - MIN_UI_SCALE);
                 f32::from(value.clamp(MIN_UI_SCALE, MAX_UI_SCALE) - MIN_UI_SCALE) / span
+            }
+            Self::RunSpeed => {
+                let span = f32::from(MAX_RUN_SPEED - MIN_RUN_SPEED);
+                f32::from(value.clamp(MIN_RUN_SPEED, MAX_RUN_SPEED) - MIN_RUN_SPEED) / span
             }
         }
     }
@@ -243,6 +264,7 @@ impl Level {
             }
             Self::MaxFps if value == 0 => "Display".to_owned(),
             Self::MaxFps => value.to_string(),
+            Self::RunSpeed => format!("{}.{:02}x", value / 100, value % 100),
         }
     }
 
@@ -252,6 +274,16 @@ impl Level {
             Self::ClipPlane | Self::MouseSensitivity | Self::SoundVolume => value <= 100,
             Self::MaxFps => value == 0 || (1..=1000).contains(&value),
             Self::UiScale => (MIN_UI_SCALE..=MAX_UI_SCALE).contains(&value),
+            Self::RunSpeed => RunSpeedMultiplier::from_percent(value).is_some(),
+        }
+    }
+
+    /// Reads the saved value, including the original run speed checkbox.
+    fn parse(self, value: &str) -> Option<u16> {
+        match (self, value.trim()) {
+            (Self::RunSpeed, "true") => Some(110),
+            (Self::RunSpeed, "false") => Some(MIN_RUN_SPEED),
+            (_, value) => value.parse().ok().filter(|n| self.takes(*n)),
         }
     }
 }
@@ -382,6 +414,7 @@ impl Options {
             Level::MaxFps => self.max_fps,
             Level::MouseSensitivity => self.mouse_sensitivity,
             Level::UiScale => self.ui_scale,
+            Level::RunSpeed => self.qol.run_speed_multiplier.percent(),
             Level::SoundVolume => self.sound_volume,
         }
     }
@@ -393,6 +426,12 @@ impl Options {
             Level::MaxFps => &mut self.max_fps,
             Level::MouseSensitivity => &mut self.mouse_sensitivity,
             Level::UiScale => &mut self.ui_scale,
+            Level::RunSpeed => {
+                if let Some(multiplier) = RunSpeedMultiplier::from_percent(value) {
+                    self.qol.run_speed_multiplier = multiplier;
+                }
+                return;
+            }
             Level::SoundVolume => &mut self.sound_volume,
         };
         *option = value;
@@ -459,7 +498,7 @@ impl Options {
                 .into_iter()
                 .find(|level| level.key() == key.trim())
             {
-                if let Some(number) = value.trim().parse().ok().filter(|n| level.takes(*n)) {
+                if let Some(number) = level.parse(value) {
                     options.set_level(level, number);
                 }
                 continue;
@@ -605,6 +644,37 @@ mod tests {
         options.set(Toggle::Qol(Fix::SkipModifiedFood), false);
         assert_eq!(options.auto_eat(), AutoEat::Anything);
         assert!(!options.get(Toggle::Qol(Fix::SkipModifiedFood)));
+    }
+
+    #[test]
+    fn run_speed_migrates_the_checkbox_and_round_trips_in_hundredths() {
+        let level = Level::RunSpeed;
+        let defaults = Options::default();
+        assert_eq!(defaults.level(level), 100);
+        assert_eq!(level.at(0.0), 100);
+        assert_eq!(level.at(0.5), 120);
+        assert_eq!(level.at(1.0), 140);
+        assert_eq!(level.at(f32::NAN), 100);
+        assert_eq!(level.at(f32::INFINITY), 100);
+        assert_eq!(level.at(level.fraction(121)), 121);
+        assert_eq!(level.words(100), "1.00x");
+        assert_eq!(level.words(121), "1.21x");
+        assert_eq!(level.words(140), "1.40x");
+        for (saved, percent) in [("false", 100), ("true", 110), ("120", 120), ("140", 140)] {
+            let read = Options::read(&format!("run_boost = {saved}\n"), defaults);
+            assert_eq!(read.level(level), percent);
+            assert!(read.text().contains(&format!("run_boost = {percent}\n")));
+            assert_eq!(Options::read(&read.text(), defaults), read);
+        }
+        let mut selected = defaults;
+        selected.set_level(level, 120);
+        for invalid in ["99", "141", "-100", "NaN", "inf", "1.40"] {
+            let text = format!("run_boost = {invalid}\n");
+            assert_eq!(Options::read(&text, defaults).level(level), 100);
+            assert_eq!(Options::read(&text, selected).level(level), 120);
+        }
+        selected.set_level(level, 141);
+        assert_eq!(selected.level(level), 120);
     }
 
     #[test]

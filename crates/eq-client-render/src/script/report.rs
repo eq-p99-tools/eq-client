@@ -41,6 +41,9 @@ pub(super) fn state(
             .map(|toggle| (toggle.key(), state.options.get(toggle)))
             .collect::<Vec<_>>()
     });
+    let option_levels = observed.9.as_ref().map(|state| {
+        eq_client_core::options::Level::ALL.map(|level| (level.key(), state.options.level(level)))
+    });
     let own_stun = online
         .world()
         .stun_revision()
@@ -132,6 +135,7 @@ pub(super) fn state(
         breath_zone_scale = ?online.world().classic_model_scale_flag(),
         local_movement_policy_feedback = ?online.world().movement_options_result(),
         ?option_values,
+        ?option_levels,
         ?known_invisible_count,
         ?known_invisible,
         hp = ?online.world().hit_points(),

@@ -3646,109 +3646,47 @@ mod tests {
     }
 
     #[test]
-    fn the_qol_page_ends_with_the_interface_scale_cut_from_the_skins_slider() {
-        use eq_client_assets::sidl::{Button, ButtonLook, Element, Page};
-        let area = |x, y, width, height| Area {
-            x,
-            y,
-            width,
-            height,
-        };
-        let checkbox = Button {
-            id: Some("OGP_PetWindowPopupCheckbox".into()),
-            area: area(10.0, 175.0, 150.0, 20.0),
-            placed: true,
-            anchors: None,
-            look: ButtonLook::default(),
-            checkbox: true,
-            text: Some("Pet Window Popup".into()),
-            text_color: None,
-            font: None,
-            decal: None,
-            decal_area: None,
-            tooltip: None,
-        };
-        let general = Page {
-            name: "OptionsGeneralPage".into(),
-            title: Some("General".into()),
-            area: None,
-            template: None,
-            pieces: vec![("checkbox".into(), Element::Button(checkbox))],
-            icon: [None, None],
-            title_colors: [None, None],
-            tooltip: None,
-        };
-        let settings: Vec<_> = eq_client_core::qol::Fix::settings().collect();
-        // With the skin's slider and its value label on a page, the QoL page
-        // ends with the interface scale: a caption over a slider cut from
-        // the skin's, its value beside it, all inside the page.
-        let display = Page {
-            name: "OptionsDisplayPage".into(),
-            title: Some("Display".into()),
-            pieces: vec![
-                (
-                    "ODP_ClipPlaneSlider".into(),
-                    Element::Slider(eq_client_assets::sidl::Slider {
-                        id: Some("ODP_ClipPlaneSlider".into()),
-                        area: area(20.0, 40.0, 150.0, 16.0),
-                        look: eq_client_assets::sidl::SliderLook::default(),
-                    }),
-                ),
-                (
-                    "ODP_ClipPlaneValueLabel".into(),
-                    Element::Label(eq_client_assets::sidl::Label {
-                        area: area(180.0, 40.0, 40.0, 14.0),
-                        anchors: None,
-                        eq_type: None,
-                        text: "100 %".into(),
-                        color: None,
-                        align: eq_client_assets::sidl::Align::Left,
-                        font: None,
-                        wraps: false,
-                    }),
-                ),
-            ],
-            ..general.clone()
-        };
-        let skin = [general.clone(), display];
+    fn qol_sliders_use_the_skin_and_stack_below_the_checkboxes() {
+        use eq_client_assets::sidl::Element;
+        use eq_client_core::{options::Level, qol::Fix};
+
+        let skin = [qol::tests::source()];
         let pages = with_qol_page(&skin, WindowId::Options, Vec2::new(400.0, 400.0), None);
-        let qol = &pages[2].pieces;
-        // One row for the unsafe caption ahead of the last settings, and the
-        // scale's own three below them all.
-        assert_eq!(qol.len(), settings.len() + 4);
-        let last_checkbox = match &qol[settings.len()].1 {
-            Element::Button(checkbox) => checkbox.area,
-            _ => panic!("a checkbox"),
+        let pieces = &pages[1].pieces;
+        // There is one caption before the unsafe choices, then two slider blocks.
+        let first = Fix::settings().count() + 1;
+        assert_eq!(pieces.len(), first + 6);
+        let Element::Button(last_checkbox) = &pieces[first - 1].1 else {
+            panic!("a checkbox")
         };
-        let [
-            (_, Element::Label(caption)),
-            (slider_id, Element::Slider(slider)),
-            (value_id, Element::Label(value)),
-        ] = &qol[settings.len() + 1..]
-        else {
-            panic!("a caption, a slider and its value")
-        };
-        assert_eq!(caption.text, "Interface scale");
-        assert_eq!(slider.id.as_deref(), Some(slider_id.as_str()));
-        assert_eq!(
-            controls::slider_sets(slider.id.as_deref(), WindowId::Options),
-            Some(controls::Sets::Level(
-                eq_client_core::options::Level::UiScale
-            ))
-        );
-        assert!(matches!(
-            controls::value_label(value_id, WindowId::Options),
-            Some(controls::ValueLabel::Shows(
-                eq_client_core::options::Level::UiScale
-            ))
-        ));
-        let below = |area: Area| {
-            area.y >= last_checkbox.y + last_checkbox.height || area.x > last_checkbox.x
-        };
-        assert!(below(caption.area) && below(slider.area));
-        assert!(slider.area.y >= caption.area.y + caption.area.height);
-        assert!(value.area.x >= slider.area.x + slider.area.width);
-        assert!(slider.area.y + slider.area.height <= 400.0);
+        let mut above = last_checkbox.area;
+        for (block, (name, level)) in pieces[first..].chunks_exact(3).zip([
+            ("Interface scale", Level::UiScale),
+            ("Run a Little Faster", Level::RunSpeed),
+        ]) {
+            let [
+                (_, Element::Label(caption)),
+                (slider_id, Element::Slider(slider)),
+                (value_id, Element::Label(value)),
+            ] = block
+            else {
+                panic!("a caption, slider and value label")
+            };
+            assert_eq!(caption.text, name);
+            assert_eq!(slider.id.as_deref(), Some(slider_id.as_str()));
+            assert_eq!(
+                controls::slider_sets(slider.id.as_deref(), WindowId::Options),
+                Some(controls::Sets::Level(level))
+            );
+            assert!(matches!(
+                controls::value_label(value_id, WindowId::Options),
+                Some(controls::ValueLabel::Shows(bound)) if bound == level
+            ));
+            assert!(caption.area.y >= above.y + above.height || caption.area.x > above.x);
+            assert!(slider.area.y >= caption.area.y + caption.area.height);
+            assert!(value.area.x >= slider.area.x + slider.area.width);
+            above = slider.area;
+        }
     }
 
     #[test]

@@ -163,7 +163,7 @@ fn actions_tabs_keep_their_single_row_and_authored_page_geometry() {
 fn qol_controls_fit_the_width_and_scroll_fully_below_wrapped_tabs() {
     use crate::options::OptionCheckbox;
     use crate::windows::pointer::{TakesWheel, Wheel};
-    use eq_client_core::options::Toggle;
+    use eq_client_core::options::{Level, Toggle};
     use eq_client_core::qol::Fix;
 
     for scale in [1.0, 1.5] {
@@ -231,51 +231,63 @@ fn qol_controls_fit_the_width_and_scroll_fully_below_wrapped_tabs() {
                 .unwrap();
             assert!(bounds(app.world(), *bottom).max.y > viewport.max.y);
             let mut sliders = app.world_mut().query::<(Entity, &SkinSlider)>();
-            let slider = sliders
-                .iter(app.world())
-                .find(|(_, slider)| {
-                    matches!(
-                        slider.sets,
-                        Sets::Level(eq_client_core::options::Level::UiScale)
-                    )
-                })
-                .unwrap()
-                .0;
             let mut labels = app.world_mut().query::<(&ChildOf, &controls::LevelValue)>();
-            let value = labels
-                .iter(app.world())
-                .find(|(_, label)| label.0 == eq_client_core::options::Level::UiScale)
-                .unwrap()
-                .0
-                .parent();
             let mut words = app.world_mut().query::<(&ChildOf, &Text)>();
-            let caption = words
-                .iter(app.world())
-                .find(|(_, text)| text.0 == "Interface scale")
-                .unwrap()
-                .0
-                .parent();
-            for control in [slider, value, caption] {
-                let rect = bounds(app.world(), control);
-                assert!(rect.min.x >= viewport.min.x && rect.max.x <= viewport.max.x);
-            }
+            for (level, text) in [
+                (Level::UiScale, "Interface scale"),
+                (Level::RunSpeed, "Run a Little Faster"),
+            ] {
+                let slider = sliders
+                    .iter(app.world())
+                    .find(|(_, slider)| slider.sets == Sets::Level(level))
+                    .unwrap()
+                    .0;
+                let value = labels
+                    .iter(app.world())
+                    .find(|(_, label)| label.0 == level)
+                    .unwrap()
+                    .0
+                    .parent();
+                let caption = words
+                    .iter(app.world())
+                    .find(|(_, label)| label.0 == text)
+                    .unwrap()
+                    .0
+                    .parent();
+                let controls = [slider, value, caption];
+                for control in controls {
+                    let rect = bounds(app.world(), control);
+                    assert!(rect.min.x >= viewport.min.x && rect.max.x <= viewport.max.x);
+                }
 
-            // Exercise the production wheel consumer against this viewport's
-            // computed content height, including the last checkbox's margin.
-            *app.world_mut().resource_mut::<Wheel>() = Wheel {
-                surface: Some(page),
-                pixels: -100_000.0,
-                lines: 0.0,
-            };
-            app.update();
-            app.update();
-            for control in [*bottom, slider, value, caption] {
-                let rect = bounds(app.world(), control);
-                let clip = app.world().get::<CalculatedClip>(control).unwrap().clip;
-                assert!(
-                    rect.min.cmpge(clip.min).all() && rect.max.cmple(clip.max).all(),
-                    "complete control {rect:?} inside {clip:?}"
-                );
+                // Scroll the first slider into view, then exercise the end
+                // of the production scroll extent for the run speed slider.
+                let pixels = if level == Level::UiScale {
+                    let bottom_edge = controls
+                        .into_iter()
+                        .chain([*bottom])
+                        .map(|control| bounds(app.world(), control).max.y)
+                        .fold(viewport.max.y, f32::max);
+                    (viewport.max.y - bottom_edge) / scale - 2.0
+                } else {
+                    -100_000.0
+                };
+                *app.world_mut().resource_mut::<Wheel>() = Wheel {
+                    surface: Some(page),
+                    pixels,
+                    lines: 0.0,
+                };
+                app.update();
+                app.world_mut().resource_mut::<Wheel>().pixels = 0.0;
+                app.update();
+                for control in controls {
+                    let rect = bounds(app.world(), control);
+                    let clip = app.world().get::<CalculatedClip>(control).unwrap().clip;
+                    assert!(
+                        rect.min.cmpge(clip.min).all() && rect.max.cmple(clip.max).all(),
+                        "complete control {rect:?} inside {clip:?}"
+                    );
+                }
             }
             let mut wheel_owners = app.world_mut().query_filtered::<Entity, With<TakesWheel>>();
             assert!(

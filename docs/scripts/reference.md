@@ -76,7 +76,7 @@ Approach, walk and chase hold the camera-relative forward command, independent o
 
 ## Diagnostics and commands
 
-- `report [label]`: log a state summary with an optional label.
+- `report [label]` logs a state summary with an optional label. Its `option_levels` field includes slider settings, with `run_boost` in hundredths of ordinary running speed.
   `air_remaining` gives the local air reserve and capacity in ticks while
   Air Remaining is active.
   `breath_probe` reports the last sampled head medium, when resolved, and the
