@@ -44,6 +44,7 @@ pub(super) fn state(
     let option_levels = observed.9.as_ref().map(|state| {
         eq_client_core::options::Level::ALL.map(|level| (level.key(), state.options.level(level)))
     });
+    let target = online.world().target().selected;
     let own_stun = online
         .world()
         .stun_revision()
@@ -145,13 +146,17 @@ pub(super) fn state(
         casting = ?online.world().casting().cast.map(|(spell, _, _)| spell),
         pending = ?online.world().casting().pending,
         interrupted = ?online.world().casting().interrupted.map(|(_, id)| id),
-        target = ?online.world().target().selected,
+        ?target,
         target_interaction = ?online.world().session_id().filter(|_| online.in_world()).and_then(|admission| {
             let world = online.world();
             let id = world.target().selected.filter(|_| !world.target_stale())?;
             Some((admission, id, world.spawn(id)?.revision))
         }),
-        considered = ?online.world().target().selected.and_then(|id| online.world().considered(id)),
+        considered = ?target.and_then(|id| online.world().considered(id)),
+        display_con_color = ?target.and_then(|id| online.world().consider_color(id)),
+        selected_target_level = ?target.and_then(|id| online.world().spawn(id))
+            .map(|spawn| spawn.state.level).filter(|&level| level != 0),
+        own_level = ?online.world().player().map(|player| player.level).filter(|&level| level != 0),
         camp = ?online.world().camp().map(|camp| camp.logging_out),
         ?gems,
         ?cooldowns,

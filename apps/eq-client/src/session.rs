@@ -170,11 +170,20 @@ impl SessionWorker {
                     let update = match event {
                         ClientEvent::World(WorldEvent::SpellTable(_)) => None,
                         ClientEvent::World(event) => {
-                            // The machine's account went out: keep its
-                            // date in this client's own settings, so the
-                            // week's wait survives this run ending.
-                            if let WorldEvent::SystemInfoReported { at } = &event {
-                                keep_report_date(settings.as_deref(), *at);
+                            match &event {
+                                // Keep the report date across runs.
+                                WorldEvent::SystemInfoReported { at } => {
+                                    keep_report_date(settings.as_deref(), *at);
+                                }
+                                WorldEvent::Consideration(receipt) => {
+                                    tracing::info!(
+                                        target_id = receipt.target_id,
+                                        raw_faction = receipt.faction,
+                                        decoded_received_color = ?receipt.color,
+                                        "Received consider reply"
+                                    );
+                                }
+                                _ => {}
                             }
                             Some(WorldUpdate::Game(event))
                         }
