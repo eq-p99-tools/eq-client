@@ -535,18 +535,18 @@ impl Controls {
         self.stunned
     }
 
-    /// A change cannot bank displacement or carry a jump/fall into flight.
+    /// A permission change cannot bank displacement or carry a jump/fall into flight.
     fn choose_movement(&mut self, options: eq_client_core::movement::MovementOptions) {
-        if self.movement_options == options {
+        let previous = std::mem::replace(&mut self.movement_options, options);
+        if previous.same_permissions(options) {
             return;
         }
-        if self.movement_options.fly != options.fly {
+        if previous.fly != options.fly {
             self.airborne = self
                 .airborne
                 .as_ref()
                 .map(|_| AirborneController::default());
         }
-        self.movement_options = options;
         self.taps = TapBuffer::default();
         self.jump = None;
         self.crouch = None;
@@ -554,9 +554,8 @@ impl Controls {
         self.mouse_turn = 0.0;
         self.mouse_heading = None;
         self.moving = false;
-        // The session starts a fresh budget and schedules its paced stop when
-        // its option command arrives. Do not immediately spend a full sample
-        // of displacement against the new budget.
+        // The session schedules its paced stop when the permission changes.
+        // Resume with a fresh local sample window.
         self.last_accepted = Instant::now();
     }
 
@@ -782,11 +781,11 @@ pub(super) fn input(
     controls.pending = controls
         .pending
         .filter(|pending| Some(pending.session_id) == session_id);
-    let movement = eq_client_core::movement::offered_options(&options.options.qol, online.world());
-    if movement_sync
+    let wanted = eq_client_core::movement::offered_options(&options.options.qol, online.world());
+    let Some(movement) = movement_sync
         .as_ref()
-        .is_some_and(|sync| !sync.ready(session_id, movement))
-    {
+        .map_or(Some(wanted), |sync| sync.usable(session_id, wanted))
+    else {
         // Say why once for this wait, including when the queue keeps retrying.
         if *told_wait != session_id {
             chat.history.push(crate::chat::system_line(
@@ -798,7 +797,7 @@ pub(super) fn input(
         controls.mouse_heading = None;
         controls.held = Some(Held::Gate);
         return;
-    }
+    };
     *told_wait = None;
     controls.choose_movement(movement);
     let flying = controls.movement_options.fly;
@@ -2001,42 +2000,73 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn changing_movement_options_restarts_the_local_time_gate() {
+    fn held_movement_and_prediction_continue_through_run_speed_changes() {
         let (mut app, receiver) = app();
-        app.world_mut().resource_mut::<Controls>().moving = true;
+        app.init_resource::<crate::options::MovementSync>()
+            .add_systems(Update, crate::options::tell_choices.before(input));
         app.world_mut()
-            .resource_mut::<crate::options::OptionsState>()
-            .options
-            .set_level(Level::RunSpeed, 120);
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        // Establish this admission's default options before starting to run.
+        app.update();
+        while receiver.try_recv().is_ok() {}
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyW);
+        app.update();
+        let move_sample = || match receiver.try_recv().unwrap() {
+            ClientCommand::Move(sample) => sample,
+            command => panic!("expected movement, got {command:?}"),
+        };
+        let change_speed = |app: &mut App, percent| {
+            app.world_mut()
+                .resource_mut::<crate::options::OptionsState>()
+                .options
+                .set_level(Level::RunSpeed, percent);
+            app.update();
+            let ClientCommand::SetMovementOptions {
+                session_id: 11,
+                request_id,
+                options,
+                ..
+            } = receiver.try_recv().unwrap()
+            else {
+                panic!("expected speed change");
+            };
+            assert_eq!(options.run_speed_multiplier.percent(), percent);
+            (request_id, options)
+        };
+        let check_speed = |app: &App, from: &MovementRequest, to: &MovementRequest, speed| {
+            let controls = app.world().resource::<Controls>();
+            assert!(controls.visual.is_some());
+            assert!((from.position.x - to.position.x - speed * controls.sent_span).abs() < 0.001);
+        };
+        let first = move_sample();
+        accept(&mut app, &first);
+        let (request_id, options) = change_speed(&mut app, 140);
+        let pending = move_sample();
+        check_speed(&app, &first, &pending, 6.0);
+
+        crate::online::testing::news(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            [eq_client_core::WorldEvent::MovementOptionsApplied {
+                session_id: 11,
+                request_id,
+                options,
+            }],
+        );
         app.update();
         assert!(receiver.try_recv().is_err());
-        assert_eq!(app.world().resource::<Controls>().held, Some(Held::Gate));
-        assert!(!app.world().resource::<Controls>().moving);
-        app.world_mut().resource_mut::<Controls>().last_accepted = Instant::now()
-            .checked_sub(Duration::from_millis(100))
-            .unwrap();
+        assert_eq!(app.world().resource::<Controls>().held, Some(Held::Waiting));
+        accept(&mut app, &pending);
         app.update();
-        let ClientCommand::Move(boosted) = receiver.try_recv().expect("fresh policy budget") else {
-            panic!("unexpected command");
-        };
-        assert!((boosted.position.x + 0.72).abs() < 0.001);
+        let boosted = move_sample();
+        check_speed(&app, &pending, &boosted, 8.4);
         accept(&mut app, &boosted);
-        app.world_mut()
-            .resource_mut::<crate::options::OptionsState>()
-            .options
-            .set_level(Level::RunSpeed, 100);
-        app.update();
-        assert!(receiver.try_recv().is_err());
-        assert_eq!(app.world().resource::<Controls>().held, Some(Held::Gate));
-        app.world_mut().resource_mut::<Controls>().last_accepted = Instant::now()
-            .checked_sub(Duration::from_millis(100))
-            .unwrap();
-        app.update();
-        let ClientCommand::Move(normal) = receiver.try_recv().expect("ordinary policy budget")
-        else {
-            panic!("unexpected command");
-        };
-        assert!((normal.position.x - boosted.position.x + 0.6).abs() < 0.001);
+
+        change_speed(&mut app, 100);
+        let lowered = move_sample();
+        check_speed(&app, &boosted, &lowered, 6.0);
     }
 
     #[test]
@@ -4122,7 +4152,8 @@ pub(super) mod tests {
         app.world_mut()
             .resource_mut::<crate::options::OptionsState>()
             .options
-            .set_level(Level::RunSpeed, 140);
+            .qol
+            .set(Fix::Fly, true);
         app.update();
         assert_eq!(wait_count(&app), 1);
         let commands: Vec<_> = receiver.try_iter().collect();
@@ -4137,7 +4168,7 @@ pub(super) mod tests {
                 _ => None,
             })
             .unwrap();
-        assert_eq!(options.run_speed_multiplier, RunSpeedMultiplier::MAX);
+        assert!(options.fly);
         assert!(
             !commands
                 .iter()
@@ -4183,12 +4214,13 @@ pub(super) mod tests {
                 ClientCommand::Move(sample) => Some(sample),
                 _ => None,
             })
-            .expect("movement with the applied 1.40x budget");
-        assert!((sample.position.x + 0.84).abs() < 0.001);
+            .expect("movement with flight applied");
+        assert!((sample.position.x + 0.6).abs() < 0.001);
         app.world_mut()
             .resource_mut::<crate::options::OptionsState>()
             .options
-            .set_level(Level::RunSpeed, 100);
+            .qol
+            .set(Fix::Fly, false);
         app.update();
         app.update();
         assert_eq!(wait_count(&app), 2);
@@ -4203,7 +4235,8 @@ pub(super) mod tests {
         app.world_mut()
             .resource_mut::<crate::options::OptionsState>()
             .options
-            .set_level(Level::RunSpeed, 120);
+            .qol
+            .set(Fix::WalkWhileWinded, true);
         app.update();
         app.update();
         assert_eq!(wait_count(&app), 3);

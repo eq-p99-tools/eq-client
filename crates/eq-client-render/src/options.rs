@@ -192,7 +192,7 @@ mod tests {
         app
     }
 
-    fn enter(app: &mut App, name: &str) {
+    fn enter(app: &mut App, session_id: u64, name: &str) {
         let mut online = OnlineState::new(true);
         testing::news(
             &mut online,
@@ -202,7 +202,7 @@ mod tests {
         );
         let mut player = testing::player(7);
         player.name = name.into();
-        testing::admit(&mut online, 1, player);
+        testing::admit(&mut online, session_id, player);
         app.insert_resource(online);
     }
 
@@ -217,7 +217,7 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&directory);
         let mut app = app(&directory);
-        enter(&mut app, "Example");
+        enter(&mut app, 1, "Example");
         app.update();
         assert!(app.world().resource::<OptionsState>().options.wheel_zoom);
         // Nothing is written until the player changes something.
@@ -239,7 +239,7 @@ mod tests {
         assert!(saved.contains("run_boost = 120"));
         // Another character starts from the defaults again.
         app.world_mut().despawn(checkbox);
-        enter(&mut app, "Another");
+        enter(&mut app, 2, "Another");
         app.update();
         assert!(app.world().resource::<OptionsState>().options.wheel_zoom);
         assert_eq!(
@@ -279,17 +279,21 @@ mod tests {
         let mut app = app(&directory);
         app.insert_resource(crate::outbox::Outbox::new(Some(sender)))
             .add_systems(Update, tell_choices.after(persist));
-        enter(&mut app, "Example");
+        enter(&mut app, 1, "Example");
         app.update();
         assert!(receiver.try_iter().any(|command| matches!(command, ClientCommand::SetMovementOptions { options, .. } if options.fly)));
-        enter(&mut app, "Another");
+        enter(&mut app, 2, "Another");
         app.update();
         let commands: Vec<_> = receiver.try_iter().collect();
-        assert!(commands.iter().any(|command| matches!(command, ClientCommand::SetMovementOptions { options, .. } if *options == eq_client_core::movement::MovementOptions::default())));
         let options = &app.world().resource::<OptionsState>().options;
         assert!(!options.qol.on(Fix::Fly));
         assert!(!options.qol.on(Fix::AutoLoot));
-        assert!(!commands.iter().any(|command| matches!(command, ClientCommand::SetMovementOptions { options, .. } if options.fly)));
+        // A new admission already starts with the defaults.
+        assert!(
+            !commands
+                .iter()
+                .any(|command| matches!(command, ClientCommand::SetMovementOptions { .. }))
+        );
         let _ = std::fs::remove_dir_all(directory);
     }
 

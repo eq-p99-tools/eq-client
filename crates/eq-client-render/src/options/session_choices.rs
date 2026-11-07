@@ -20,8 +20,31 @@ struct Pending {
 }
 
 impl MovementSync {
-    pub(crate) fn ready(&self, session: Option<u64>, wanted: MovementOptions) -> bool {
-        self.session == session && self.applied == Some(wanted) && self.pending.is_none()
+    /// A move after the pending option command can reach the worker before
+    /// its reply reaches us. Use a pace valid under either worker policy.
+    /// Permission changes still require confirmation before motion resumes.
+    pub(crate) fn usable(
+        &self,
+        session: Option<u64>,
+        wanted: MovementOptions,
+    ) -> Option<MovementOptions> {
+        let applied = self.applied?;
+        if self.session != session || !applied.same_permissions(wanted) {
+            return None;
+        }
+        let mut limit = applied
+            .run_speed_multiplier
+            .min(wanted.run_speed_multiplier);
+        if let Some(pending) = &self.pending {
+            if !applied.same_permissions(pending.options) {
+                return None;
+            }
+            limit = limit.min(pending.options.run_speed_multiplier);
+        }
+        Some(MovementOptions {
+            run_speed_multiplier: limit,
+            ..applied
+        })
     }
 
     fn disconnected(&mut self) {
@@ -50,12 +73,10 @@ impl MovementSync {
         }
         if self.wanted != Some(wanted) {
             self.wanted = Some(wanted);
-            if self.applied != Some(wanted) || self.pending.is_some() {
-                self.applied = None;
-            }
-            self.pending = None;
             self.retry_after = None;
         }
+        // Keep one choice in flight. If the slider moves again, the reply
+        // still establishes the worker's policy before we send the latest choice.
         if let Some((request_id, result)) = world.movement_options_result()
             && let Some(pending) = self
                 .pending
@@ -65,7 +86,12 @@ impl MovementSync {
             match result {
                 Ok(options) if *options == pending.options => self.applied = Some(*options),
                 _ => {
-                    self.retry_after = Some(Instant::now() + Duration::from_secs(1));
+                    if result.is_ok() {
+                        self.applied = None;
+                    }
+                    if pending.options == wanted {
+                        self.retry_after = Some(Instant::now() + Duration::from_secs(1));
+                    }
                 }
             }
             self.pending = None;
@@ -182,14 +208,18 @@ mod tests {
             .options
             .set_level(Level::RunSpeed, 140);
         app.update();
-        assert!(
-            matches!(receiver.try_recv().unwrap(), ClientCommand::SetMovementOptions { session_id: 1, options, .. } if options.run_speed_multiplier.percent() == 120)
-        );
+        let ClientCommand::SetMovementOptions {
+            session_id: 1,
+            request_id,
+            options,
+            ..
+        } = receiver.try_recv().unwrap()
+        else {
+            panic!("initial speed choice");
+        };
+        assert_eq!(options.run_speed_multiplier.percent(), 120);
         app.update();
-        assert!(
-            matches!(receiver.try_recv().unwrap(), ClientCommand::SetMovementOptions { session_id: 1, options, .. } if options.run_speed_multiplier.percent() == 140)
-        );
-        app.update();
+        // The queued speed choice must resolve before the next one is sent.
         assert!(matches!(
             receiver.try_recv().unwrap(),
             ClientCommand::SetBookOptions {
@@ -197,6 +227,18 @@ mod tests {
                 ..
             }
         ));
+        testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [eq_client_core::WorldEvent::MovementOptionsApplied {
+                session_id: 1,
+                request_id,
+                options,
+            }],
+        );
+        app.update();
+        assert!(
+            matches!(receiver.try_recv().unwrap(), ClientCommand::SetMovementOptions { session_id: 1, options, .. } if options.run_speed_multiplier.percent() == 140)
+        );
         app.update();
         assert!(matches!(
             receiver.try_recv().unwrap(),
@@ -262,10 +304,11 @@ mod tests {
             world.world(),
         );
         assert_eq!(wanted, MovementOptions::default());
-        assert!(
+        assert_eq!(
             app.world()
                 .resource::<MovementSync>()
-                .ready(Some(3), MovementOptions::default())
+                .usable(Some(3), wanted),
+            Some(wanted)
         );
         for command in receiver.try_iter() {
             assert!(
@@ -278,18 +321,18 @@ mod tests {
         }
     }
 
-    fn ready(app: &App, options: MovementOptions) -> bool {
-        app.world()
-            .resource::<MovementSync>()
-            .ready(Some(1), options)
-    }
-
     #[test]
-    fn only_matching_worker_feedback_releases_departures_and_refusals_retry_with_a_new_id() {
+    fn only_matching_worker_feedback_updates_speed_and_refusals_retry_with_a_new_id() {
         let (mut app, receiver) = fixture(8);
         app.update();
         let normal = MovementOptions::default();
-        assert!(ready(&app, normal));
+        let applied = |app: &App| app.world().resource::<MovementSync>().applied;
+        let usable = |app: &App, wanted| {
+            app.world()
+                .resource::<MovementSync>()
+                .usable(Some(1), wanted)
+        };
+        assert_eq!(applied(&app), Some(normal));
         assert!(
             !receiver
                 .try_iter()
@@ -308,7 +351,7 @@ mod tests {
         else {
             panic!("policy request")
         };
-        assert!(!ready(&app, options));
+        assert_eq!(usable(&app, options), Some(normal));
         testing::news(
             &mut app.world_mut().resource_mut::<OnlineState>(),
             [eq_client_core::WorldEvent::MovementOptionsApplied {
@@ -318,7 +361,7 @@ mod tests {
             }],
         );
         app.update();
-        assert!(!ready(&app, options));
+        assert_eq!(usable(&app, options), Some(normal));
         testing::news(
             &mut app.world_mut().resource_mut::<OnlineState>(),
             [eq_client_core::WorldEvent::MovementOptionsApplied {
@@ -328,7 +371,7 @@ mod tests {
             }],
         );
         app.update();
-        assert!(!ready(&app, options));
+        assert_eq!(usable(&app, options), Some(normal));
         testing::news(
             &mut app.world_mut().resource_mut::<OnlineState>(),
             [eq_client_core::WorldEvent::MovementOptionsRefused {
@@ -338,6 +381,8 @@ mod tests {
             }],
         );
         app.update();
+        assert_eq!(applied(&app), Some(normal));
+        assert_eq!(usable(&app, options), Some(normal));
         assert!(receiver.try_recv().is_err());
         app.world_mut().resource_mut::<MovementSync>().retry_after = None;
         app.update();
@@ -359,21 +404,34 @@ mod tests {
             }],
         );
         app.update();
-        assert!(ready(&app, options));
-        assert!(
-            !app.world()
+        assert_eq!(applied(&app), Some(options));
+        assert_eq!(usable(&app, options), Some(options));
+        assert_eq!(
+            app.world()
                 .resource::<MovementSync>()
-                .ready(Some(99), options)
+                .usable(Some(99), options),
+            None
         );
         app.world_mut()
             .resource_mut::<super::super::OptionsState>()
             .options
             .set_level(Level::RunSpeed, 100);
         app.update();
-        assert!(!ready(&app, normal));
+        assert_eq!(applied(&app), Some(options));
+        assert_eq!(usable(&app, normal), Some(normal));
         assert!(
             matches!(receiver.try_recv().unwrap(), ClientCommand::SetMovementOptions { options, .. } if options == normal)
         );
+        // Returning the slider upward while the lower choice is in flight
+        // cannot let a movement sample overtake the worker's lower budget.
+        app.world_mut()
+            .resource_mut::<super::super::OptionsState>()
+            .options
+            .set_level(Level::RunSpeed, 120);
+        app.update();
+        assert_eq!(applied(&app), Some(options));
+        assert_eq!(usable(&app, options), Some(normal));
+        assert!(receiver.try_recv().is_err());
     }
 
     #[test]
