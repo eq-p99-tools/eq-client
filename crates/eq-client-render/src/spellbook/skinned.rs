@@ -909,11 +909,8 @@ mod tests {
         assert!(hand.chosen.is_none());
         // The worker confirms the swap before forwarding the new slots.
         for event in [
-            eq_client_core::WorldEvent::BookAction(BookActionStatus::Confirmed),
-            eq_client_core::WorldEvent::Spell(eq_client_core::SpellUpdate::BookSwap {
-                from: 1,
-                to: 9,
-            }),
+            WorldEvent::BookAction(BookActionStatus::Confirmed),
+            WorldEvent::Spell(SpellUpdate::BookSwap { from: 1, to: 9 }),
         ] {
             crate::online::testing::book_news(&mut online, &outbox, event);
         }
