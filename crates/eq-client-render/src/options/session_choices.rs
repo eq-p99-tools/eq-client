@@ -185,6 +185,13 @@ mod tests {
     use eq_client_core::{WorldEvent, WorldUpdate, ZoneOffer, ZoneRejection, options::Level};
     use std::sync::{Mutex, mpsc};
 
+    fn set_run_speed(app: &mut App, percent: u16) {
+        app.world_mut()
+            .resource_mut::<super::super::OptionsState>()
+            .options
+            .set_level(Level::RunSpeed, percent);
+    }
+
     fn fixture(capacity: usize) -> (App, std::sync::mpsc::Receiver<ClientCommand>) {
         let mut online = OnlineState::new(true);
         testing::admit(&mut online, 1, testing::player(7));
@@ -201,16 +208,10 @@ mod tests {
     #[test]
     fn full_queues_retry_current_choices_and_each_admission_is_initialized() {
         let (mut app, receiver) = fixture(1);
-        app.world_mut()
-            .resource_mut::<super::super::OptionsState>()
-            .options
-            .set_level(Level::RunSpeed, 120);
+        set_run_speed(&mut app, 120);
         app.update();
         // Change the preference while an older choice occupies the queue.
-        app.world_mut()
-            .resource_mut::<super::super::OptionsState>()
-            .options
-            .set_level(Level::RunSpeed, 140);
+        set_run_speed(&mut app, 140);
         app.update();
         let ClientCommand::SetMovementOptions {
             session_id: 1,
@@ -300,7 +301,7 @@ mod tests {
             WorldEvent::ZoneTransfer(ZoneOffer {
                 zone_id: 2,
                 instance_id: 0,
-                position: Default::default(),
+                position: eq_client_core::WorldPosition::default(),
                 reason: 0,
                 to_bind: false,
                 solicited: true,
@@ -461,10 +462,7 @@ mod tests {
                 .try_iter()
                 .any(|command| matches!(command, ClientCommand::SetMovementOptions { .. }))
         );
-        app.world_mut()
-            .resource_mut::<super::super::OptionsState>()
-            .options
-            .set_level(Level::RunSpeed, 120);
+        set_run_speed(&mut app, 120);
         app.update();
         let ClientCommand::SetMovementOptions {
             request_id,
@@ -535,10 +533,7 @@ mod tests {
                 .usable(Some(99), options),
             None
         );
-        app.world_mut()
-            .resource_mut::<super::super::OptionsState>()
-            .options
-            .set_level(Level::RunSpeed, 100);
+        set_run_speed(&mut app, 100);
         app.update();
         assert_eq!(applied(&app), Some(options));
         assert_eq!(usable(&app, normal), Some(normal));
@@ -547,10 +542,7 @@ mod tests {
         );
         // Returning the slider upward while the lower choice is in flight
         // cannot let a movement sample overtake the worker's lower budget.
-        app.world_mut()
-            .resource_mut::<super::super::OptionsState>()
-            .options
-            .set_level(Level::RunSpeed, 120);
+        set_run_speed(&mut app, 120);
         app.update();
         assert_eq!(applied(&app), Some(options));
         assert_eq!(usable(&app, options), Some(normal));

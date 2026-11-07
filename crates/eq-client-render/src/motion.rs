@@ -4136,6 +4136,13 @@ pub(super) mod tests {
     #[test]
     fn departure_motion_waits_for_matching_local_policy_application() {
         let (mut app, receiver) = app();
+        let set_fix = |app: &mut App, fix, enabled| {
+            app.world_mut()
+                .resource_mut::<crate::options::OptionsState>()
+                .options
+                .qol
+                .set(fix, enabled);
+        };
         let wait_count = |app: &App| {
             app.world()
                 .resource::<crate::chat::ChatState>()
@@ -4149,11 +4156,7 @@ pub(super) mod tests {
         };
         app.init_resource::<crate::options::MovementSync>()
             .add_systems(Update, crate::options::tell_choices.before(input));
-        app.world_mut()
-            .resource_mut::<crate::options::OptionsState>()
-            .options
-            .qol
-            .set(Fix::Fly, true);
+        set_fix(&mut app, Fix::Fly, true);
         app.update();
         assert_eq!(wait_count(&app), 1);
         let commands: Vec<_> = receiver.try_iter().collect();
@@ -4216,11 +4219,7 @@ pub(super) mod tests {
             })
             .expect("movement with flight applied");
         assert!((sample.position.x + 0.6).abs() < 0.001);
-        app.world_mut()
-            .resource_mut::<crate::options::OptionsState>()
-            .options
-            .qol
-            .set(Fix::Fly, false);
+        set_fix(&mut app, Fix::Fly, false);
         app.update();
         app.update();
         assert_eq!(wait_count(&app), 2);
@@ -4232,11 +4231,7 @@ pub(super) mod tests {
             12,
             crate::online::testing::player(7),
         );
-        app.world_mut()
-            .resource_mut::<crate::options::OptionsState>()
-            .options
-            .qol
-            .set(Fix::WalkWhileWinded, true);
+        set_fix(&mut app, Fix::WalkWhileWinded, true);
         app.update();
         app.update();
         assert_eq!(wait_count(&app), 3);
