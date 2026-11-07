@@ -6,8 +6,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// Covers normal preparation and the worker's reply window. Only the
-/// worker's result can release an edit within the same admission.
+/// Local overdue threshold, including any preparation before submission.
+/// The worker releases its hold and reports Unconfirmed at its 30-second deadline.
 pub(crate) const BOOK_TIMEOUT: Duration = Duration::from_secs(40);
 
 #[derive(Default)]

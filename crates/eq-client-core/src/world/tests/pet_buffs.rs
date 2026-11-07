@@ -1,5 +1,10 @@
 use super::*;
 use crate::pets::{PetBuff, PetBuffs, PetIdentity};
+use std::time::Duration;
+
+fn at(world: &mut ClientWorld, event: WorldEvent, now: Instant) {
+    world.apply(&WorldUpdate::Game(event), now, &NoSpells);
+}
 
 fn snapshot(pet: u16, spell_id: u32) -> WorldEvent {
     WorldEvent::PetBuffs(PetBuffs {
@@ -80,6 +85,86 @@ fn early_snapshot_for_another_id_does_not_displace_the_current_pet_buffs() {
     );
     game(&mut world, WorldEvent::Despawn(6));
     assert_eq!(buff(&world), Some((7, 21)));
+}
+
+#[test]
+fn early_snapshot_has_a_bounded_window_without_expiring_displayed_buffs() {
+    for (millis, tick_first) in [(999, false), (1_000, false), (1_000, true)] {
+        let mut world = admitted();
+        let received = Instant::now();
+        at(&mut world, appears(6, Some(9)), received);
+        at(&mut world, snapshot(6, 20), received);
+        at(&mut world, snapshot(7, 21), received);
+
+        let later = received + Duration::from_millis(millis);
+        if tick_first {
+            world.tick(later, &NoSpells);
+        }
+        assert_eq!(buff(&world), Some((6, 20)));
+        at(&mut world, appears(7, Some(9)), later);
+        at(&mut world, WorldEvent::Despawn(6), later);
+        assert_eq!(buff(&world), (millis == 999).then_some((7, 21)));
+        at(&mut world, snapshot(7, 23), later);
+        assert_eq!(buff(&world), Some((7, 23)));
+    }
+}
+
+#[test]
+fn a_known_unowned_report_only_retires_an_id_with_snapshot_evidence() {
+    for has_early_snapshot in [false, true] {
+        let mut world = admitted();
+        let now = Instant::now();
+        at(&mut world, appears(6, None), now);
+        if has_early_snapshot {
+            at(&mut world, snapshot(6, 20), now);
+        }
+        at(
+            &mut world,
+            WorldEvent::PetOwner {
+                spawn_id: 6,
+                owner: None,
+            },
+            now,
+        );
+        at(&mut world, snapshot(6, 21), now);
+        assert_eq!(buff(&world), None);
+        at(
+            &mut world,
+            WorldEvent::PetOwner {
+                spawn_id: 6,
+                owner: Some(9),
+            },
+            now,
+        );
+        assert_eq!(buff(&world), (!has_early_snapshot).then_some((6, 21)));
+        at(&mut world, snapshot(6, 22), now);
+        assert_eq!(buff(&world), Some((6, 22)));
+    }
+}
+
+#[test]
+fn confirming_a_different_pet_discards_an_incompatible_early_snapshot() {
+    let mut world = admitted();
+    let now = Instant::now();
+    at(&mut world, appears(7, Some(9)), now);
+    at(&mut world, snapshot(7, 20), now);
+    at(&mut world, snapshot(6, 21), now);
+    at(
+        &mut world,
+        WorldEvent::OwnPet {
+            session_id: 1,
+            pet: Some(PetIdentity {
+                spawn_id: 7,
+                revision: 1,
+            }),
+        },
+        now,
+    );
+    assert_eq!(buff(&world), Some((7, 20)));
+    at(&mut world, appears(6, Some(9)), now);
+    at(&mut world, WorldEvent::Despawn(7), now);
+    assert_eq!(world.pet().unwrap().state.spawn_id, 6);
+    assert_eq!(buff(&world), None);
 }
 
 #[test]

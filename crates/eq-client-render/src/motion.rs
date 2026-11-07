@@ -893,8 +893,10 @@ pub(super) fn input(
             now,
         );
     if placement_blocked && controls.speed.is_none() {
+        // A fall grant still needs the geometry guard. Readiness reports
+        // the withdrawn movement grant before the placement hold.
         controls.jump = None;
-        controls.held = Some(Held::PlacementBlocked);
+        controls.held = Some(Held::Withdrawn);
         return;
     }
     let origin = Vec3::from_array(eq_client_core::render_position(accepted.position));
@@ -3525,13 +3527,15 @@ mod tests {
         // the next input frame can retry without a sleep in the fixture.
         let held_at = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
         world.resource_scope(|world, mut chat: Mut<crate::chat::ChatState>| {
+            let collision = world.resource::<Collision>().0.as_ref().unwrap();
+            assert!(check.holds(server, placed, collision, &body, &mut chat, held_at));
             assert!(check.holds(
                 server,
                 placed,
-                world.resource::<Collision>().0.as_ref().unwrap(),
+                collision,
                 &body,
                 &mut chat,
-                held_at,
+                held_at + Duration::from_millis(500),
             ));
         });
         world.resource_mut::<Controls>().placement = check;
@@ -3552,6 +3556,42 @@ mod tests {
         assert!(fall.position.z < placed.z);
         let online = app.world().resource::<online::OnlineState>();
         assert_eq!(online.server_placement().unwrap().position, placed);
+    }
+
+    #[test]
+    fn a_withdrawn_movement_grant_takes_precedence_over_a_placement_hold() {
+        let (mut app, receiver) = stationary_airborne_app();
+        let placed = world_position([0.0, -5.0, 0.0], 0.0);
+        online::testing::place(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            placed,
+        );
+        app.update();
+        assert_eq!(
+            app.world().resource::<Controls>().held,
+            Some(Held::PlacementBlocked)
+        );
+        {
+            let mut controls = app.world_mut().resource_mut::<Controls>();
+            let last_accepted = controls.last_accepted;
+            controls.grant(eq_client_core::world::MotionGrant {
+                units_per_second: None,
+                backward_units_per_second: None,
+                walk_units_per_second: None,
+                strafe_units_per_second: None,
+                diagonal: eq_client_core::DiagonalRates::default(),
+                falls: true,
+            });
+            controls.last_accepted = last_accepted;
+        }
+        app.update();
+        assert_eq!(
+            app.world().resource::<Controls>().held,
+            Some(Held::Withdrawn)
+        );
+        assert!(receiver.try_recv().is_err());
+        let online = app.world().resource::<online::OnlineState>();
+        assert_eq!(online.world().player().unwrap().position, placed);
     }
 
     struct Pool {

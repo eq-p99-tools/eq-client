@@ -67,7 +67,9 @@ controller without unnecessarily reconnecting. If a fresh Titanium placement
 is below a nearby installed floor with neither a lower landing surface nor
 mapped liquid below, travel pauses. Turning still works at the received XYZ
 when the session grants movement input. The client warns once for the held
-location and rechecks as collision changes or the server corrects the position.
+location. The local safety hold can persist for the admission while the
+installed geometry offers no way down. A different received location gets
+its own check. A later collision probe can release the hold when it finds a route.
 A server using different zone geometry can cause this conflict. Client detection
 of same-zone teleport pads remains incomplete. Initial login, boundary crossing,
 teleport, death and respawn are separate validation scenarios; success in one
@@ -263,7 +265,8 @@ movement and recovery messages determine what follows a Yes.
 
 Grouping, raids, pets, training, reading and consent dialogs have separate
 capabilities by server. Pet Info can hold an early buff snapshot while the
-spawn table identifies your pet. It shows buffs once there is one living
+spawn table identifies your pet. It keeps an unresolved snapshot for up to one
+second from local receipt. It shows buffs once there is one living
 owned pet with the matching spawn ID. A despawn, replacement, death or
 ownership conflict invalidates the old snapshot for that ID.
 
