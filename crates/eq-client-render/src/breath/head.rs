@@ -1,4 +1,9 @@
 //! Titanium's admitted head reference, separate from the movement capsule.
+//!
+//! Provenance: the head top at 6.2 model units times the drawn scale, the
+//! three-quarter Froglok factor, the `ROffset` key of `Resources/moddat.ini`
+//! and its 3.125 default are not yet cited to a Titanium program address in
+//! this repository; treat them as inferred (recording checklist 6.393).
 use super::Unavailable;
 use bevy::prelude::Component;
 use eq_client_assets::scale::{TITANIUM, ZoneScale};

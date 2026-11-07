@@ -421,6 +421,7 @@ impl Fix {
             | Self::RunBoost
             | Self::Fly
             | Self::JesusMode
+            | Self::GillsForDays
             | Self::MemorizeWhileStanding => Some(Capability::GameplayDepartures),
             // A server with no looting has no corpse to open by itself.
             Self::AutoLoot => Some(Capability::Looting),
@@ -428,7 +429,6 @@ impl Fix {
             Self::ExitAtOnce => Some(Capability::Camping),
             Self::ReadWhileStanding => Some(Capability::Spellbook),
             Self::HiddenWindows
-            | Self::GillsForDays
             | Self::MapEverywhere
             | Self::ShowTimesInChat
             | Self::CorpsesAlongGround
@@ -658,6 +658,12 @@ mod tests {
             assert!(!settings.on(fix), "{fix:?}");
         }
         assert_eq!(Fix::JesusMode.needs(), Some(Capability::GameplayDepartures));
+        // Skipping the air counter withholds drowning reports a session that
+        // takes them expects, so it is a departure like the others.
+        assert_eq!(
+            Fix::GillsForDays.needs(),
+            Some(Capability::GameplayDepartures)
+        );
         assert!(settings.on(Fix::TakeEnvironmentalDamage));
     }
 

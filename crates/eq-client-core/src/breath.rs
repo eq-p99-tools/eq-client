@@ -1,4 +1,12 @@
 //! Local air for ordinary Titanium immersion. Health remains a server report.
+//!
+//! Provenance: the water-breathing effect and races, the breath-level
+//! effect, the capacity formula and the fixed racial reserves, the one
+//! drowning tick of an eighth of maximum health per second, and the refill
+//! on the next due tick come from the author's reading of the Titanium
+//! program, whose addresses are not yet cited in this repository. Until they
+//! are, treat every constant in this module as inferred (recording checklist
+//! 6.393).
 use crate::environment::Tick;
 use std::{num::NonZeroU32, time::Instant};
 

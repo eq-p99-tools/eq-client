@@ -1,4 +1,9 @@
 //! Locally sampled environmental hazards. These calculations never apply HP.
+//!
+//! Provenance: the one-second check without catch-up, the lava damage table
+//! by zone, the ordinary resistance range and the zone 200 exclusion are not
+//! yet cited to a Titanium program address in this repository; treat them as
+//! inferred (recording checklist 6.393).
 use std::time::{Duration, Instant};
 
 /// Titanium checks the environment at roughly one-second intervals. A

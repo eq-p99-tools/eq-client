@@ -96,7 +96,7 @@ Unsafe choices sit together at the page's end:
 | Setting | File key | Default | Effect |
 | --- | --- | --- | --- |
 | Take Environmental Damage | `take_environmental_damage` | On | Reports supported falls, drowning and lava heat. Air continues running with reports off |
-| Gills for days | `gills_for_days` | Off | Disables the local air calculation and hides Air Remaining on supported Titanium sessions |
+| Gills for days | `gills_for_days` | Off | Disables the local air calculation and hides Air Remaining on Titanium sessions that offer gameplay departures |
 | Run a Little Faster | `run_boost` | Off | Increases verified forward running speed by 10 percent; walk, strafe and backward speed remain unchanged |
 | Fly | `fly` | Off | Bounded flight through Jump and Duck bindings for ascent/descent, retaining solid collision; disabling restores gravity |
 | Jesus Mode | `jesus_mode` | Off | Stand and move on mapped water or lava reached from above, using ordinary ground speed and collision |
@@ -118,7 +118,11 @@ On Titanium, Air Remaining shows while a resolved head probe is submerged and
 the client knows the inputs to count air. The next one-second breath check
 refills the reserve if the character has surfaced or can breathe underwater.
 With **Gills for days** enabled, the client skips the air calculation. Turning
-it off starts with a fresh reserve.
+it off starts with a fresh reserve. Because skipping the counter withholds the
+drowning reports a local EQEmu session takes, the setting needs the session's
+gameplay departures like Fly and Jesus Mode. The air, head, region and lava
+constants are not yet cited to the Titanium program in this repository and
+count as inferred (recording checklist 6.393).
 
 Local-only EQEmu sessions offer drowning and lava heat reports. Actual body
 contact with lava drives the heat check independently of the air counter.

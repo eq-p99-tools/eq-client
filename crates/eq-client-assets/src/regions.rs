@@ -533,7 +533,11 @@ fn liquid_tag(name: &str, user_data: &str) -> Option<Liquid> {
     }
 }
 
-/// The 255 destination marker means the next six digits name a server route.
+/// What the Titanium program breathes in a region with this name and user
+/// data. The callback order, the four-byte minimum and the tag prefixes are
+/// not yet cited to a program address in this repository; treat them as
+/// inferred (recording checklist 6.393). Note that `liquid_tag`, which
+/// drives movement, prefers the name; this prefers the user data.
 fn titanium_medium(name: &str, user_data: &str) -> Medium {
     // The region callback receives nonempty user data first and otherwise
     // the fragment name. Its tag must have at least four bytes.
@@ -559,6 +563,7 @@ fn titanium_medium(name: &str, user_data: &str) -> Medium {
     }
 }
 
+/// The 255 destination marker means the next six digits name a server route.
 fn zone_line_tag(tag: &str) -> Option<ZoneLine> {
     let tag = tag.to_ascii_uppercase();
     if !["DRNTP", "WTNTP", "LANTP"]

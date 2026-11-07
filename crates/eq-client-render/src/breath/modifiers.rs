@@ -1,4 +1,10 @@
 //! Read breath modifiers from the current inventory and active effects.
+//!
+//! Provenance: the projection rules (instrument modifiers, formulas 60 and
+//! 70, level-zero formulas, effect 40), the racial resistance bases and the
+//! Ranger and Monk class bonuses are not yet cited to a Titanium program
+//! address in this repository; treat them as inferred (recording checklist
+//! 6.393). The Troll base in particular awaits the cited read.
 use super::Unavailable;
 use crate::spellbook::SpellNames;
 use eq_client_assets::spells::Effect;

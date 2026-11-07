@@ -462,7 +462,10 @@ impl Needs {
             Self::Ability(ability) => {
                 offered(world, Capability::Abilities) && world.ability_offered(ability)
             }
-            Self::TitaniumBreath => world.generation() == eq_client_core::GameDialect::Titanium,
+            Self::TitaniumBreath => {
+                world.generation() == eq_client_core::GameDialect::Titanium
+                    && offered(world, Capability::GameplayDepartures)
+            }
             Self::Nothing => true,
             Self::Missing => false,
         }

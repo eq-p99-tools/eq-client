@@ -48,8 +48,9 @@ Turning the setting off restores ordinary movement on the next sample.
 Scripted ground route finding uses solid terrain.
 
 The swim rate is a conservative bound based on the session's current movement
-grant. Skill-based speed, breath, water breathing, and drowning are not modeled
-by this path. A server placement replaces the local prediction; a movement
+grant. Skill-based speed is not modeled by this path; the air meter and
+drowning are a separate Titanium sample, see [settings](settings.md). A server
+placement replaces the local prediction; a movement
 proposal alone does not confirm server position, wet state, or any resource
 change.
 

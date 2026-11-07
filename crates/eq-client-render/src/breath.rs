@@ -86,7 +86,9 @@ impl AirState {
         let scope = world.session_id().zip(world.player()).filter(|_| {
             !world.ended() && !world.is_dead() && world.generation() == GameDialect::Titanium
         });
-        let gills = qol.on(Fix::GillsForDays);
+        // Skipping the counter withholds the drowning reports a local EQEmu
+        // session takes, so the departure gate applies as it does elsewhere.
+        let gills = qol.on(Fix::GillsForDays) && world.can(Capability::GameplayDepartures);
         let Some((admission, player)) = scope.filter(|_| !gills) else {
             *self = Self {
                 probe: Some((
@@ -366,7 +368,7 @@ mod tests {
     }
 
     #[test]
-    fn titanium_air_and_gills_work_without_a_liquid_wire_capability() {
+    fn gills_is_inert_where_the_session_withholds_gameplay_departures() {
         use crate::{online::testing, outbox::Needs};
         use eq_client_core::{WorldEvent, options::Toggle, qol::Settings};
 
@@ -376,6 +378,46 @@ mod tests {
             [WorldEvent::Entered {
                 session_id: 5,
                 capabilities: vec![Capability::EnvironmentalDamage],
+                choices: Vec::new(),
+                zone: "Example".into(),
+                player: Box::new(testing::player(7)),
+                far_clip: None,
+                spell_landing_flag: None,
+            }],
+        );
+        testing::connect(&mut online, true);
+        let needs = Needs::of(Toggle::Qol(Fix::GillsForDays)).unwrap();
+        assert!(!needs.offered(online.world()));
+        let mut qol = Settings::default();
+        qol.set(Fix::GillsForDays, true);
+        let mut state = AirState::default();
+        let start = Instant::now();
+        let wet = |_: &PlayerState| {
+            (
+                Some(Medium::Water),
+                Ok((Sample::Submerged(NonZeroU32::MIN), Some(80))),
+            )
+        };
+        state.advance(start, online.world(), &qol, 1, wet);
+        state.advance(start + Duration::from_secs(1), online.world(), &qol, 1, wet);
+        // The counter ran: the setting changed nothing on this session.
+        assert_eq!(state.breath.air().unwrap().remaining, 0);
+    }
+
+    #[test]
+    fn titanium_air_and_gills_work_without_a_liquid_wire_capability() {
+        use crate::{online::testing, outbox::Needs};
+        use eq_client_core::{WorldEvent, options::Toggle, qol::Settings};
+
+        let mut online = OnlineState::new(true);
+        testing::news(
+            &mut online,
+            [WorldEvent::Entered {
+                session_id: 5,
+                capabilities: vec![
+                    Capability::EnvironmentalDamage,
+                    Capability::GameplayDepartures,
+                ],
                 choices: Vec::new(),
                 zone: "Example".into(),
                 player: Box::new(testing::player(7)),
