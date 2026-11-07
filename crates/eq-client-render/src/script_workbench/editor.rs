@@ -96,6 +96,8 @@ fn syntax() -> Syntax {
             "chase",
             "walk",
             "give",
+            "interact",
+            "inspect_link",
             "click",
             "right_click",
             "hover",

@@ -2,6 +2,7 @@
 use super::{BookView, SpellNames, known_entries, sets};
 use crate::{
     keys::{Typing, search, window_owns_input},
+    skinned::SkinId,
     theme::{self, Size},
     tooltip::Tooltip,
     windows::{self, Frame, Shown, WindowId},
@@ -81,6 +82,10 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands, node: Node) {
             row.spawn((
                 Button,
                 Field,
+                SkinId {
+                    window: WindowId::Spellbook,
+                    id: "Spellbook_Search".into(),
+                },
                 Node {
                     min_width: px(20),
                     flex_grow: 1.0,
@@ -95,7 +100,18 @@ pub(crate) fn spawn(parent: &mut ChildSpawnerCommands, node: Node) {
                 TextLayout::new(Justify::Left, LineBreak::NoWrap),
                 Tooltip("Find learned spells by name. Enter or Escape finishes. Delete or Clear restores the book.".into()),
             ));
-            theme::button_with(row, Clear, "Clear", Size::Small);
+            theme::button_with(
+                row,
+                (
+                    Clear,
+                    SkinId {
+                        window: WindowId::Spellbook,
+                        id: "Spellbook_SearchClear".into(),
+                    },
+                ),
+                "Clear",
+                Size::Small,
+            );
             sets::ui::toggle(row);
         });
 }

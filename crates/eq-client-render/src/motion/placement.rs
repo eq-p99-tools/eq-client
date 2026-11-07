@@ -1,4 +1,4 @@
-//! Diagnose a fresh placement that would send gravity into empty space.
+//! A local safety hold for a received placement with no supported path down.
 use crate::{PlayerBody, chat, online::ServerPlacement};
 use bevy::prelude::*;
 use eq_client_core::{
@@ -18,7 +18,7 @@ const RECHECK_INTERVAL: Duration = Duration::from_millis(500);
 #[derive(Clone, Copy)]
 enum Assessment {
     Clear,
-    HeldUntil(Instant),
+    Held { recheck_at: Instant },
 }
 
 /// Caches the geometry check for the current received placement.
@@ -34,8 +34,9 @@ fn same_xyz(first: WorldPosition, second: WorldPosition) -> bool {
 }
 
 impl Check {
-    /// Holds new motion only while its starting point is still the suspect
-    /// received placement and the installed geometry offers no way down.
+    /// Holds travel while its starting point is still the suspect received
+    /// placement and the installed geometry offers no way down. The retry
+    /// deadline schedules another collision probe.
     pub(super) fn holds(
         &mut self,
         server: Option<ServerPlacement>,
@@ -58,7 +59,7 @@ impl Check {
             .map(|(_, assessment)| assessment);
         match previous {
             Some(Assessment::Clear) => return false,
-            Some(Assessment::HeldUntil(recheck)) if now < recheck => return true,
+            Some(Assessment::Held { recheck_at }) if now < recheck_at => return true,
             _ => {}
         }
         let origin = Vec3::from_array(eq_client_core::render_position(position));
@@ -83,7 +84,9 @@ impl Check {
             ));
         }
         let assessment = if floor.is_some() {
-            Assessment::HeldUntil(now + RECHECK_INTERVAL)
+            Assessment::Held {
+                recheck_at: now + RECHECK_INTERVAL,
+            }
         } else {
             Assessment::Clear
         };

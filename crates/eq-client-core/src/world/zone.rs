@@ -102,8 +102,8 @@ impl Zone {
         self.deaths.remove(&id);
     }
 
-    /// Apply an explicit owner report. Duplicate positive reports preserve
-    /// the already received pet buffs.
+    /// Apply an explicit owner report. An unchanged unowned record only
+    /// retires an ID when the report invalidates local pet data.
     pub(super) fn pet_owner(&mut self, id: u16, owner: Option<u16>, player: Option<u16>) {
         let Some(spawn) = self.spawns.get_mut(&id) else {
             if owner.is_none() || owner != player {
@@ -111,7 +111,13 @@ impl Zone {
             }
             return;
         };
-        if owner.is_some() && spawn.state.pet_owner == owner {
+        if spawn.state.pet_owner == owner {
+            if owner.is_none()
+                && (self.own_pet.is_some_and(|pet| pet.spawn_id == id)
+                    || self.pet_buffs.has_snapshot(id))
+            {
+                self.forget_pet(id);
+            }
             return;
         }
         let had_owner = spawn.state.pet_owner.is_some();

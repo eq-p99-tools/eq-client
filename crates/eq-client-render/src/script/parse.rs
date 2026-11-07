@@ -201,6 +201,24 @@ pub enum Step {
     /// Asks the current target to take the item on the cursor, as clicking
     /// it with the item does.
     Give,
+    /// Opens an ordinary service on the exact selected spawn.
+    Interact {
+        /// Admission in which the spawn was observed.
+        admission: u64,
+        /// Current selected spawn ID.
+        spawn: u16,
+        /// Current selected spawn revision.
+        revision: u64,
+    },
+    /// Inspects a received item link from the current admission.
+    InspectLink {
+        /// Admission in which the message arrived.
+        admission: u64,
+        /// Arrival ID of the message.
+        message: u64,
+        /// Zero-based link ordinal in that message.
+        ordinal: usize,
+    },
     /// Left-clicks one UI control through Bevy's ordinary interaction state.
     Click(ClickTarget),
     /// Right-clicks one UI control the same way, as a bag is opened or an
@@ -591,6 +609,16 @@ pub(super) fn parse_step(line: &str) -> Result<Step, String> {
             Step::Walk(number(range, 1.0, 200.0)?, millis(duration, MAX_WALK)?)
         }
         ("give", []) => Step::Give,
+        ("interact", [admission, spawn, revision]) => Step::Interact {
+            admission: admission.parse().map_err(|_| "expected an admission ID")?,
+            spawn: spawn.parse().map_err(|_| "expected a spawn ID")?,
+            revision: revision.parse().map_err(|_| "expected a spawn revision")?,
+        },
+        ("inspect_link", [admission, message, ordinal]) => Step::InspectLink {
+            admission: admission.parse().map_err(|_| "expected an admission ID")?,
+            message: message.parse().map_err(|_| "expected a chat arrival ID")?,
+            ordinal: ordinal.parse().map_err(|_| "expected a link ordinal")?,
+        },
         ("click", target) => Step::Click(parse_click(target)?),
         ("right_click", target) => Step::RightClick(parse_click(target)?),
         ("hover", target) => Step::Hover(parse_click(target)?),
@@ -1371,6 +1399,36 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn semantic_actions_require_exact_reported_identities() {
+        let base = Path::new(".");
+        assert_eq!(
+            parse("interact 6 42 12\ninspect_link 6 70 0", base).unwrap(),
+            [
+                Step::Interact {
+                    admission: 6,
+                    spawn: 42,
+                    revision: 12
+                },
+                Step::InspectLink {
+                    admission: 6,
+                    message: 70,
+                    ordinal: 0
+                },
+            ],
+        );
+        for malformed in [
+            "interact 42",
+            "interact 6 65536 12",
+            "interact 6 42 -1",
+            "inspect_link 70 0",
+            "inspect_link 6 70 -1",
+            "inspect_link 6 70 0 raw",
+        ] {
+            assert!(parse(malformed, base).is_err(), "{malformed}");
+        }
+    }
 
     #[test]
     fn a_scrollbar_arrow_is_reached_by_its_windows_key() {

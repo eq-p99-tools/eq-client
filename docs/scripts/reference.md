@@ -63,6 +63,12 @@ Key names are case-insensitive. Combine them with `+`, such as `alt+1`. Supporte
   is already pending or open. The script result carries the local refusal.
   The step completes when the local queue accepts the offer. The server's
   answer separately determines whether an exchange opens.
+- `interact admission spawn revision` opens the service of the exact selected
+  merchant, banker or corpse. Copy the `target_interaction` tuple from a fresh
+  `report`. A stale target, a known reach or capability refusal, or another
+  open or pending transaction stops the run. The bank opens locally. For
+  merchants and corpses, check a subsequent economy report for the matching
+  received shop or loot listing before using its controls.
 
 Movement uses the client's ordinary movement and collision behavior. It is not a teleport. Walk uses a ready navigation mesh when `--navmesh` is enabled and falls back to grid search otherwise. A reachable destination and the session's movement grant are still required. Keep the camera attached when using movement scripts; free-camera mode consumes movement input for the camera.
 
@@ -77,12 +83,20 @@ Approach, walk and chase hold the camera-relative forward command, independent o
   local breath sample or its first unavailable input. The companion model
   fields give race, gender and raw size, and `breath_zone_scale` gives the
   received classic model scale flag.
+  `MovementPending` defers the local report until the worker returns its
+  movement result. `Effects` means a relevant spell or worn input could
+  not be evaluated from the available mechanics. An affecting instrument
+  modifier or unsupported scaling formula can withhold the meter.
   `pet_ownership` reports the current pet and owner IDs, zone admission ID and
   pet identity revision as JSON. It is null when the session has no resolved
   pet identity.
   The companion `Script economy report` event contains versioned JSON with
   the admission, merchant identity and catalog revision, up to 80 stock rows, the current
   selection and displayed single-unit quote, and up to 32 corpse rows.
+  `merchant_opening_unconfirmed` identifies a locally queued shop opening
+  still awaiting a matching answer. Wait for an answer or a new admission
+  before attempting another scripted interaction. Check `loot.listed` for a
+  received corpse listing.
   Total row counts reveal truncation. The report also shows the coins offered
   on each side of an open exchange. Check the ordinary report's item and
   purse fields for delivery and final balances.
@@ -111,6 +125,13 @@ Approach, walk and chase hold the camera-relative forward command, independent o
 - `trace milliseconds`: log movement and frame timing for a bounded duration.
 - `screenshot filename.png`: capture beside the script; the argument must be a filename.
 - `sound filename.wav`: play a sound from the installed game assets.
+- `inspect_link admission message ordinal` opens an item link using the
+  `admission` and `(message, ordinal, label)` from the current `Script item
+  links` report. Ordinals start at zero. The report lists up to 32 links
+  from 16 recent received messages in the admission. The run stops if the
+  link is unavailable or another inspection is pending. The `inspection`
+  tuple gives the selected item ID and whether a received definition is
+  available, including a definition already cached in the admission.
 - `slash command [arguments]`: run one of the supported game slash commands, without a leading slash.
   `slash ranged` requests one shot or throw against the current target on Titanium.
   Watch the server's combat and inventory updates for the result.

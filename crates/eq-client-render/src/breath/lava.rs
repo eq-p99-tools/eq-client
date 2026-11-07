@@ -22,8 +22,17 @@ impl Heat {
         online: &OnlineState,
         qol: &Settings,
         spells: &SpellNames,
+        movement_pending: bool,
     ) -> Option<u32> {
         let world = online.world();
+        if movement_pending
+            && qol.on(Fix::TakeEnvironmentalDamage)
+            && world.in_world()
+            && !online.scene_loading()
+        {
+            // A worker result establishes the position for the next check.
+            return None;
+        }
         let player = world.player();
         let contact = world
             .session_id()
@@ -63,6 +72,50 @@ impl Heat {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn actual_body_heat_waits_for_the_move_result_and_rechecks_contact() {
+        use crate::online::testing;
+        use eq_client_assets::regions::{Liquid, ZoneRegions};
+        use eq_client_core::{
+            WorldEvent, WorldPosition, hazards::TitaniumEnvironment, inventory::InventoryUpdate,
+        };
+
+        let mut online = OnlineState::new(true);
+        let mut player = testing::player(7);
+        player.position.z = -1.0;
+        player.titanium_environment = Some(TitaniumEnvironment {
+            zone_id: 27,
+            base_fire_resistance: 25,
+            has_alternate_advancement: false,
+        });
+        testing::admit(&mut online, 5, player);
+        testing::inventory(&mut online, InventoryUpdate::Snapshot(Vec::new()));
+        testing::buffs(&mut online, std::collections::BTreeMap::new());
+        online.regions = ZoneRegions::test_liquid_surface(0.0, Liquid::Lava);
+        let spells = SpellNames::default();
+        let mut qol = Settings::default();
+        qol.set(Fix::TakeEnvironmentalDamage, true);
+        let mut heat = Heat::default();
+        let start = Instant::now();
+        let at = |seconds| start + Duration::from_secs(seconds);
+        assert_eq!(heat.advance(at(0), &online, &qol, &spells, false), None);
+        assert_eq!(heat.advance(at(1), &online, &qol, &spells, true), None);
+        assert_eq!(heat.advance(at(1), &online, &qol, &spells, false), Some(42));
+        assert_eq!(heat.advance(at(2), &online, &qol, &spells, true), None);
+        testing::news(
+            &mut online,
+            [WorldEvent::MotionSent {
+                session_id: 5,
+                position: WorldPosition {
+                    z: 1.0,
+                    ..Default::default()
+                },
+                refused: None,
+            }],
+        );
+        assert_eq!(heat.advance(at(2), &online, &qol, &spells, false), None);
+    }
 
     #[test]
     fn gills_leave_heat_running_and_environment_prevention_stops_it() {

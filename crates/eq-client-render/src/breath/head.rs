@@ -1,9 +1,9 @@
 //! Titanium's admitted head reference, separate from the movement capsule.
 //!
-//! Provenance: the head top at 6.2 model units times the drawn scale, the
-//! three-quarter Froglok factor, the `ROffset` key of `Resources/moddat.ini`
-//! and its 3.125 default are not yet cited to a Titanium program address in
-//! this repository; treat them as inferred (recording checklist 6.393).
+//! Titanium `eqgame.exe` at 0x47fa9e initializes the 6.2 head reference and
+//! reads `ROffset` through 0x4b6d42 and 0x4b6c31, with 3.125 at 0x64b86c for
+//! an absent key. The scale comes from 0x47a0e9. The Froglok adjustment is
+//! at 0x47a239 and the head-region query uses the difference at 0x489b0a.
 use super::Unavailable;
 use bevy::prelude::Component;
 use eq_client_assets::scale::{TITANIUM, ZoneScale};
@@ -70,13 +70,17 @@ impl Basis {
     }
 }
 
-fn reference(text: &str, model: &str) -> Option<Basis> {
+pub(super) fn reference(text: &str, model: &str) -> Option<Basis> {
     let mut section = false;
     let mut offset = None;
     for line in text.trim_start_matches('\u{feff}').lines() {
         let line = line.split(';').next()?.trim();
         if let Some(name) = line.strip_prefix('[') {
-            section = name.strip_suffix(']')?.trim().eq_ignore_ascii_case(model);
+            section = match name.strip_suffix(']') {
+                Some(name) => name.trim().eq_ignore_ascii_case(model),
+                None if name.trim().eq_ignore_ascii_case(model) => return None,
+                None => false,
+            };
         } else if section
             && let Some((key, value)) = line.split_once('=')
             && key.trim().eq_ignore_ascii_case("roffset")
@@ -147,5 +151,13 @@ mod tests {
             basis.for_player(online.world(), &player),
             Err(Unavailable::MissingZoneScale)
         );
+    }
+
+    #[test]
+    fn an_unrelated_broken_header_does_not_lose_the_checked_model() {
+        let text = "[Example]\nROffset=3.2\n[Broken\nROffset=1";
+        assert_eq!(reference(text, "Example").map(|basis| basis.0), Some(3.2));
+        assert!(reference(text, "Broken").is_none());
+        assert!(reference("[Example\nROffset=3.2", "Example").is_none());
     }
 }

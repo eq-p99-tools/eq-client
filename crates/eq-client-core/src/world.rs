@@ -396,6 +396,7 @@ impl ClientWorld {
     /// and casts that nothing ended run out.
     pub fn tick(&mut self, now: Instant, spells: &dyn SpellCatalog) {
         self.zone.doors.close_due(now);
+        self.zone.pet_buffs.expire_early(now);
         self.casting.cooldowns.resolve(spells, now);
         self.expire_casts(now);
     }
@@ -581,6 +582,7 @@ impl ClientWorld {
         self.connected = connected;
         self.ended = ended;
         if connected {
+            self.zone.pet_buffs.accepts_staged_entry = false;
             return Changes::default();
         }
         self.reset(Reset::Lost {
@@ -596,6 +598,7 @@ impl ClientWorld {
         reason = "a dispatch table: one arm per kind of news, each a call"
     )]
     fn event(&mut self, event: &WorldEvent, now: Instant, spells: &dyn SpellCatalog) -> Changes {
+        self.zone.pet_buffs.expire_early(now);
         let mut changes = Changes::default();
         let news = &mut changes;
         match event {
@@ -1167,7 +1170,7 @@ impl ClientWorld {
                     news.ignored = true;
                 }
             }
-            WorldEvent::PetBuffs(buffs) => self.receive_pet_buffs(buffs),
+            WorldEvent::PetBuffs(buffs) => self.receive_pet_buffs(buffs, now),
             WorldEvent::PetRefused {
                 session_id,
                 reason,

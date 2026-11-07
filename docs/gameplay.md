@@ -67,7 +67,9 @@ controller without unnecessarily reconnecting. If a fresh Titanium placement
 is below a nearby installed floor with neither a lower landing surface nor
 mapped liquid below, travel pauses. Turning still works at the received XYZ
 when the session grants movement input. The client warns once for the held
-location and rechecks as collision changes or the server corrects the position.
+location. The local safety hold can persist for the admission while the
+installed geometry offers no way down. A different received location gets
+its own check. A later collision probe can release the hold when it finds a route.
 A server using different zone geometry can cause this conflict. Client detection
 of same-zone teleport pads remains incomplete. Initial login, boundary crossing,
 teleport, death and respawn are separate validation scenarios; success in one
@@ -138,6 +140,11 @@ and forgetting. Moving book entries and deleting spells are separate capabilitie
 P99 offers moving entries but not deleting them; EQEmu offers both. TAKP and
 Quarm offer casting and basic spellbook operations but not those edits. Quarm's
 spell actions are source-checked and tested offline; public validation is pending.
+When Titanium uses the installed spell table, a cursor scroll with a known
+class or level restriction is checked before sending a scribe request.
+Whether the official client makes that check locally is unread (inferred,
+recording checklist 6.394). Server rules and received book and inventory
+updates govern the result.
 
 Select a spell and destination gem to memorize; click a populated gem or use its
 binding to cast. Shift-click forgetting is separate from casting. Casts use the
@@ -156,7 +163,9 @@ seconds without a matching reply, the session reports the edit as unconfirmed
 and allows edits whose replies it can tell apart. Re-enter the zone to retry
 an edit with an indistinguishable reply. An interruption can leave the
 client waiting for the session's result on the same admission. Late updates
-still change the affected slots as reported by the server. A timed-out scribe
+still change the affected slots as reported by the server. The skinned
+spellbook reports a worker timeout as unconfirmed and keeps a pending receipt
+across a temporary link interruption in the same admission. A timed-out scribe
 holds inventory actions until a received cursor update accounts for the
 scroll or you leave the zone. Deletion confirmation is invalidated when its
 selection or admission changes.
@@ -263,7 +272,8 @@ movement and recovery messages determine what follows a Yes.
 
 Grouping, raids, pets, training, reading and consent dialogs have separate
 capabilities by server. Pet Info can hold an early buff snapshot while the
-spawn table identifies your pet. It shows buffs once there is one living
+spawn table identifies your pet. It keeps an unresolved snapshot for up to one
+second from local receipt. It shows buffs once there is one living
 owned pet with the matching spawn ID. A despawn, replacement, death or
 ownership conflict invalidates the old snapshot for that ID.
 

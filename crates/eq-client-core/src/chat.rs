@@ -218,6 +218,17 @@ pub struct Arrival<'a> {
 }
 
 impl ChatHistory {
+    /// The exact retained line, identified by its monotonic arrival ID.
+    #[must_use]
+    pub fn line(&self, id: u64) -> Option<&ChatLine> {
+        self.messages.values().find_map(|entries| {
+            let index = entries
+                .binary_search_by_key(&id, |(arrival, ..)| *arrival)
+                .ok()?;
+            entries.get(index).map(|(_, _, line)| line)
+        })
+    }
+
     /// Adds nonempty text without dropping its item links, as arriving now
     /// by the computer's clock.
     pub fn push(&mut self, line: ChatLine) {

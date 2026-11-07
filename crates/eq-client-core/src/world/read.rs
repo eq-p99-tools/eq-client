@@ -452,6 +452,12 @@ impl ClientWorld {
         self.zone.container.as_ref()
     }
 
+    /// The world container whose opening request awaits an answer.
+    #[must_use]
+    pub const fn pending_container_open(&self) -> Option<u32> {
+        self.zone.asked_container
+    }
+
     /// The tradeskill container whose combine waits for the server.
     #[must_use]
     pub const fn combining(&self) -> Option<crate::inventory::InventorySlot> {

@@ -1,10 +1,10 @@
 //! Read breath modifiers from the current inventory and active effects.
 //!
-//! Provenance: the projection rules (instrument modifiers, formulas 60 and
-//! 70, level-zero formulas, effect 40), the racial resistance bases and the
-//! Ranger and Monk class bonuses are not yet cited to a Titanium program
-//! address in this repository; treat them as inferred (recording checklist
-//! 6.393). The Troll base in particular awaits the cited read.
+//! Titanium `eqgame.exe` uses the profile and racial fire resistance at
+//! 0x418756, and adds the ordinary Ranger and Monk bonuses and effects 46
+//! and 111 at 0x4187e4. Effect 40 is checked at 0x41c905. Restrictions on
+//! instrument, level and formula inputs are conservative limits of this
+//! projection (recording checklist 6.393).
 use super::Unavailable;
 use crate::spellbook::SpellNames;
 use eq_client_assets::spells::Effect;
@@ -173,6 +173,8 @@ pub(super) fn read(
     let race = world
         .spawn(player.spawn_id)
         .map_or(player.race, |spawn| spawn.state.race);
+    // The ordinary Titanium branch uses the received profile field and
+    // these racial adjustments. The server's own resist calculation differs.
     let base = match race {
         9 => 5,
         128 => i64::from(profile.base_fire_resistance) + 5,
@@ -286,5 +288,78 @@ mod tests {
         .unwrap();
         assert_eq!(heat.fire_resistance, 35);
         assert!(!heat.water_breathing);
+    }
+
+    #[test]
+    fn worn_stamina_requires_mechanics_and_an_unslotted_change_stays_unresolved() {
+        use crate::online::{OnlineState, testing};
+        use eq_client_core::{
+            BaseAttributes, EquipmentRules, ItemBonuses, SpellEffect, WorldEvent,
+            hazards::TitaniumEnvironment,
+            inventory::{InventorySlot, InventoryUpdate},
+        };
+        use eq_network_game::items::WornEffect;
+
+        let mut player = testing::player(7);
+        player.base_attributes = Some(BaseAttributes {
+            stamina: 40,
+            ..BaseAttributes::default()
+        });
+        player.titanium_environment = Some(TitaniumEnvironment {
+            zone_id: 27,
+            base_fire_resistance: 0,
+            has_alternate_advancement: false,
+        });
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 5, player.clone());
+        testing::buffs(&mut online, std::collections::BTreeMap::new());
+        let mut item = crate::preview::items().remove(0);
+        item.slot = InventorySlot(13);
+        item.bag_slots = 0;
+        item.details.slots = u32::MAX;
+        item.details.races = u32::MAX;
+        item.details.classes = u32::MAX;
+        item.details.bonuses = Some(ItemBonuses::default());
+        item.details.equipment = Some(EquipmentRules {
+            worn: Some(WornEffect {
+                spell_id: 42,
+                effect_type: 2,
+                level: 0,
+                level2: 0,
+            }),
+            ..EquipmentRules::default()
+        });
+        testing::inventory(&mut online, InventoryUpdate::Snapshot(vec![item]));
+        assert!(matches!(
+            read(online.world(), &SpellNames::default(), &player, Need::Air),
+            Err(Unavailable::Effects)
+        ));
+        let mut fields = vec!["0"; 183];
+        fields[0] = "42";
+        fields[1] = "Synthetic stamina effect";
+        fields[20] = "5";
+        fields[70] = "100";
+        fields[86] = "7";
+        let spells = SpellNames::parse(&fields.join("^"));
+        let read_air = |online: &OnlineState| read(online.world(), &spells, &player, Need::Air);
+        assert_eq!(read_air(&online).unwrap().stamina, Some(45));
+
+        testing::news(
+            &mut online,
+            [WorldEvent::SpellEffect(SpellEffect {
+                spell_id: 42,
+                caster_level: 1,
+                effect_flag: 4,
+                instrument_modifier: 10,
+                target_id: 7,
+                caster_id: 7,
+                spell_level: 1,
+                push: None,
+            })],
+        );
+        assert!(matches!(
+            read_air(&online),
+            Err(Unavailable::UnslottedModifier)
+        ));
     }
 }

@@ -16,8 +16,8 @@ Quarm/TAKP behavior. Frontends use runtime capabilities, not server-name flags.
 ## Server policy snapshot
 
 The following summarizes the networking revision pinned by this application's
-Cargo.lock: `50fa72fa6f7a935aa2b2a4ec1f542fc4d38ce357`. Its
-[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/50fa72fa6f7a935aa2b2a4ec1f542fc4d38ce357/crates/eq-network/src/client/session/servers.rs)
+Cargo.lock: `d0a90efffcb07f7b0ca14718ddc04baf042b8f0a`. Its
+[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/d0a90efffcb07f7b0ca14718ddc04baf042b8f0a/crates/eq-network/src/client/session/servers.rs)
 are the source for this table. **Yes means provided by that policy**, not a live
 certification, and individual operations still validate their prerequisites.
 
@@ -27,6 +27,7 @@ certification, and individual operations still validate their prerequisites.
 | Login, character selection, world state and chat | Yes | Yes | Yes | Yes |
 | Character appearance preview at selection | Yes | Yes | Yes | Yes |
 | Movement and falling | Yes | Yes | Yes | Yes |
+| Drowning and lava heat reports | No | Local-only Titanium sessions | No | No |
 | Jumping | Yes | Yes | Yes | Yes |
 | Sitting, standing and ducking | Yes | Yes | Yes | Yes |
 | Casting and basic spellbook | Yes | Yes | Yes | Yes |
@@ -110,11 +111,11 @@ affected mechanics unavailable while chat remains usable. See [installed spell
 providers](docs/spell-providers.md). These source and synthetic checks add no live
 compatibility certification.
 
-The pinned networking [combat](https://github.com/eq-p99-tools/eq-network/blob/50fa72fa6f7a935aa2b2a4ec1f542fc4d38ce357/docs/quarm-combat.md),
-[loot](https://github.com/eq-p99-tools/eq-network/blob/50fa72fa6f7a935aa2b2a4ec1f542fc4d38ce357/docs/eqmac-looting.md) and
-[world-object](https://github.com/eq-p99-tools/eq-network/blob/50fa72fa6f7a935aa2b2a4ec1f542fc4d38ce357/docs/eqmac-world-objects.md)
+The pinned networking [combat](https://github.com/eq-p99-tools/eq-network/blob/d0a90efffcb07f7b0ca14718ddc04baf042b8f0a/docs/quarm-combat.md),
+[loot](https://github.com/eq-p99-tools/eq-network/blob/d0a90efffcb07f7b0ca14718ddc04baf042b8f0a/docs/eqmac-looting.md) and
+[world-object](https://github.com/eq-p99-tools/eq-network/blob/d0a90efffcb07f7b0ca14718ddc04baf042b8f0a/docs/eqmac-world-objects.md)
 contracts record their limits and controlled live checklists. The dated
-[P99/Quarm gap report](https://github.com/eq-p99-tools/eq-network/blob/50fa72fa6f7a935aa2b2a4ec1f542fc4d38ce357/docs/public-server-gaps.md)
+[P99/Quarm gap report](https://github.com/eq-p99-tools/eq-network/blob/d0a90efffcb07f7b0ca14718ddc04baf042b8f0a/docs/public-server-gaps.md)
 retains the earlier inspection and its scenario-specific evidence.
 
 ### Public-parity checks, 2026-11-02

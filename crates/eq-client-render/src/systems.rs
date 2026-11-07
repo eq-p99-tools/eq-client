@@ -260,7 +260,8 @@ pub(super) fn schedule(app: &mut App) {
                 crate::camera::toggle_free,
                 crate::camera::turn,
                 move_player,
-                motion::input,
+                options::toggle,
+                liquid_and_movement(),
                 spellbook::sets::ui::input,
             )
                 .chain(),
@@ -325,14 +326,10 @@ pub(super) fn schedule(app: &mut App) {
                 (
                     (spell_icons::update, skinned::gem::pieces),
                     logs::write,
-                    (options::toggle, options::tell_session).chain(),
+                    options::tell_session,
                 ),
                 (outbox::show, inventory::say_refusals),
-                (
-                    hud::action_bar::cast_window,
-                    hud::action_bar::update,
-                    crate::breath::update,
-                ),
+                (hud::action_bar::cast_window, hud::action_bar::update),
                 skinned::frames,
                 (
                     chat::reconcile,
@@ -436,6 +433,12 @@ pub(crate) enum Stage {
     /// Windows, the HUD, the camera and the models show the world; refusals
     /// show once every input has had its say.
     Present,
+}
+
+/// Sample the worker's observed position before a new move can advance it.
+pub(super) fn liquid_and_movement()
+-> bevy::ecs::schedule::ScheduleConfigs<bevy::ecs::system::ScheduleSystem> {
+    (crate::breath::update, motion::input).chain()
 }
 
 /// Registers the startup work of the overlays and the windows' shared systems.

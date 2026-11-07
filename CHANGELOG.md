@@ -6,18 +6,29 @@
   WLD lava that restricts breathing at the head. Local-only EQEmu sessions
   report drowning after depletion and lava heat from mapped body contact.
   Turning off Take Environmental Damage withholds the reports while air
-  still runs. **Gills for days** starts off, needs the session's gameplay
+  still runs. **Gills for Days** starts off, needs the session's gameplay
   departures, and disables the local air counter and meter. Lava heat
-  continues to follow the damage setting. The air, head, region and lava
-  constants are not yet cited to the Titanium program and count as inferred
-  (recording checklist 6.393).
+  continues to follow the damage setting. A due liquid report uses the
+  worker's last observed position before the next move is queued.
 - An unconfirmed spellbook edit releases the book for other edits when the
   session reports its timeout. A retry with the same possible reply requires
   a fresh admission. Received gem clears update the slot independently of
   which request they answer.
 - Release a superseded cast while keeping a different pending spell.
-- Retain an early pet buff snapshot until the owned pet resolves. Discard it
-  when the spawn is replaced or its ownership conflicts.
+- Keep a newer cast's request alias when an older cast is released. Preserve
+  skinned spellbook edit receipts through a temporary link interruption and
+  report worker timeouts. Check known installed Titanium class and level
+  requirements before sending a scribe request; whether the official client
+  makes that check locally is unread (inferred, recording checklist 6.394).
+- Retain an early pet buff snapshot for up to one second until the owned pet
+  resolves. Discard it when the spawn is replaced or its ownership conflicts.
+- Scripts can `interact` with the exact selected merchant, banker or corpse
+  through the same path as the UI, `inspect_link` a received chat item link,
+  and drive the spellbook Search field and its Clear button. Reports carry
+  the interaction tuple, an unconfirmed merchant opening and received item
+  links. A merchant request the server never answers no longer pins the
+  interaction fence to that merchant: a later request or any opened shop
+  settles it.
 - Hold Titanium travel after a fresh placement below a nearby installed floor
   with neither a lower surface nor mapped liquid below. Allow turning at the
   received XYZ and warn once for the held location.

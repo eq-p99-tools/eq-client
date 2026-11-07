@@ -227,6 +227,14 @@ impl TradeState {
     /// Called only for news accepted by the world. A stock refresh or unrelated
     /// reply cannot release a queued action. Uncertainty never retries it.
     pub(crate) fn merchant_news(&mut self, update: &WorldUpdate, world: &ClientWorld) {
+        // Whichever shop the server opens or refuses settles the pending
+        // request; the fence follows the open window from here.
+        if let WorldUpdate::Game(WorldEvent::Merchant(
+            eq_client_core::merchant::MerchantUpdate::Opened { .. },
+        )) = update
+        {
+            self.reset_opening_shop();
+        }
         let Some(pending) = self.merchant_pending else {
             return;
         };
