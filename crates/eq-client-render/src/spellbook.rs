@@ -209,6 +209,18 @@ impl SpellNames {
         self.0.get(id)
     }
 
+    /// Class requirements are known only for the installed spell table.
+    fn installed_scribe_level(&self, id: u32, class: u32) -> Option<u8> {
+        if !matches!(
+            self.0.readiness(),
+            crate::spell_provider::Readiness::Installed
+        ) {
+            return None;
+        }
+        let index = usize::try_from(class.checked_sub(1)?).ok()?;
+        self.spell(id)?.class_levels.get(index).copied().flatten()
+    }
+
     pub(super) fn timing(&self, id: u32) -> Option<SpellTiming> {
         self.spell(id)?.timing.map(|timing| SpellTiming {
             recovery_ms: timing.recovery_ms,
@@ -450,18 +462,22 @@ pub(super) fn update(
     }
     let pending = action_pending(world) || selection.deletion.queued;
     if !pending && accepts_input && scribe.any() {
-        selection.message =
-            match request_scribe(online.as_deref(), world.spell_book(), outbox.as_deref()) {
-                Ok((spell, receipt)) => {
-                    note(
-                        requests.as_deref_mut(),
-                        (BookChange::Scribe, spell, receipt),
-                        format!("Scribing {}", names.label(spell)),
-                    );
-                    String::new()
-                }
-                Err(error) => crate::outbox::window_line(&error),
-            };
+        selection.message = match request_scribe(
+            online.as_deref(),
+            world.spell_book(),
+            outbox.as_deref(),
+            &names,
+        ) {
+            Ok((spell, receipt)) => {
+                note(
+                    requests.as_deref_mut(),
+                    (BookChange::Scribe, spell, receipt),
+                    format!("Scribing {}", names.label(spell)),
+                );
+                String::new()
+            }
+            Err(error) => crate::outbox::window_line(&error),
+        };
     }
     let state = &mut *state;
     let searching = state.search.active();
@@ -953,11 +969,12 @@ fn request_scribe(
     online: Option<&super::online::OnlineState>,
     book: Option<&eq_client_core::SpellBook>,
     outbox: Option<&crate::outbox::Outbox>,
+    names: &SpellNames,
 ) -> anyhow::Result<(u32, crate::outbox::BookEditReceipt)> {
     use anyhow::Context;
     let (state, outbox) = online.zip(outbox).context("Connect to scribe a scroll")?;
     let stamp = outbox.stamp(state.world())?;
-    let command = prepare_scribe(online, book, Some(stamp), None)?;
+    let command = prepare_scribe(online, book, Some(stamp), None, names)?;
     let eq_client_core::ClientCommand::ScribeSpell { spell_id, .. } = command else {
         anyhow::bail!("Scribe request was not a scribe");
     };
@@ -973,6 +990,7 @@ fn prepare_scribe(
     book: Option<&eq_client_core::SpellBook>,
     stamp: Option<crate::outbox::Stamp>,
     place: Option<usize>,
+    names: &SpellNames,
 ) -> anyhow::Result<eq_client_core::ClientCommand> {
     use anyhow::{Context, ensure};
     let online = online.context("Connect to scribe a scroll")?;
@@ -993,6 +1011,18 @@ fn prepare_scribe(
         .context("Put a scroll on the cursor first")?
         .scroll_spell
         .context("The cursor item is not a spell scroll")?;
+    if online.world().generation() == eq_client_core::GameDialect::Titanium
+        && let Some(player) = online.world().player().filter(|player| player.level > 0)
+        && let Some(level) = player
+            .class
+            .and_then(|class| names.installed_scribe_level(spell_id, class))
+    {
+        ensure!(level != u8::MAX, "Installed spell data excludes your class");
+        ensure!(
+            player.level >= level,
+            "Installed spell data requires level {level} to scribe"
+        );
+    }
     let slot = u16::try_from(match place {
         Some(place) => place,
         None => book
@@ -1154,13 +1184,29 @@ mod tests {
         let before = online.world().inventory().clone();
         let (tx, rx) = std::sync::mpsc::sync_channel(1);
         let sender = crate::outbox::Outbox::new(Some(tx));
-        request_scribe(Some(&online), Some(&book), Some(&sender)).unwrap();
+        let mut fields = [""; 120];
+        fields[0] = "73";
+        for (level, reason) in [
+            ("2", "Installed spell data requires level 2 to scribe"),
+            ("255", "Installed spell data excludes your class"),
+        ] {
+            fields[104] = level;
+            let names = super::SpellNames::parse(&fields.join("^"));
+            let error =
+                request_scribe(Some(&online), Some(&book), Some(&sender), &names).unwrap_err();
+            assert_eq!(error.to_string(), reason);
+            assert!(rx.try_recv().is_err());
+            assert_eq!(online.world().inventory(), &before);
+        }
+        fields[104] = "1";
+        let names = super::SpellNames::parse(&fields.join("^"));
+        request_scribe(Some(&online), Some(&book), Some(&sender), &names).unwrap();
         assert!(
             matches!(rx.try_recv().unwrap(), eq_client_core::ClientCommand::ScribeSpell { session_id: 7, slot: 0, spell_id: 73, revision, .. } if revision == before.revision())
         );
         assert_eq!(online.world().inventory(), &before);
         crate::online::testing::connect(&mut online, false);
-        assert!(request_scribe(Some(&online), Some(&book), Some(&sender)).is_err());
+        assert!(request_scribe(Some(&online), Some(&book), Some(&sender), &names).is_err());
         assert!(rx.try_recv().is_err());
     }
 

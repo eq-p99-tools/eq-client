@@ -16,6 +16,10 @@
   a fresh admission. Received gem clears update the slot independently of
   which request they answer.
 - Release a superseded cast while keeping a different pending spell.
+- Keep a newer cast's request alias when an older cast is released. Preserve
+  skinned spellbook edit receipts through a temporary link interruption and
+  report worker timeouts. Check known installed Titanium class and level
+  requirements before sending a scribe request.
 - Retain an early pet buff snapshot until the owned pet resolves. Discard it
   when the spawn is replaced or its ownership conflicts.
 - Hold Titanium travel after a fresh placement below a nearby installed floor

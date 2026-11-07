@@ -39,6 +39,9 @@ pub struct Definition {
     pub range: Option<f32>,
     /// Fields 14 and 15: recovery and same-spell reuse, in milliseconds.
     pub timing: Option<Timing>,
+    /// Installed class requirements in class ID order, starting at class 1.
+    /// Raw values, including 255 for an excluded class, are preserved.
+    pub class_levels: [Option<u8>; 16],
     /// Field 120 (unread on the Mac-era client): the motion the caster plays while casting, as the
     /// servers' animation number, such as 42 to 44 for the three casting
     /// gestures.
@@ -150,6 +153,10 @@ impl Definitions {
                         recovery_ms,
                         recast_ms,
                     }),
+                class_levels: std::array::from_fn(|index| {
+                    let first = layout.class_levels?;
+                    fields.get(first + index)?.parse().ok()
+                }),
                 casting_animation: layout
                     .casting_animation
                     .and_then(|column| fields.get(column))
@@ -189,6 +196,10 @@ mod tests {
         fields[14] = "2250";
         fields[15] = "oops";
         fields[19] = "10";
+        fields[104] = "255";
+        fields[105] = "12";
+        fields[106] = "-1";
+        fields[119] = "7";
         fields[120] = "44";
         fields[144] = "7";
         fields[145] = "86";
@@ -206,6 +217,8 @@ mod tests {
         assert_eq!(spell.effect, Some(86));
         assert_eq!(spell.range, None);
         assert_eq!(spell.timing, None);
+        assert_eq!(spell.class_levels[..3], [Some(255), Some(12), None]);
+        assert_eq!(spell.class_levels[15], Some(7));
         assert!(spells.get(0).is_none());
     }
 

@@ -562,7 +562,7 @@ fn answer(
         hand.editing = None;
         return;
     }
-    match (edit.kind, edit.receipt.status()) {
+    match (edit.kind, edit.receipt.outcome()) {
         (Edit::Deleting, Some(BookActionStatus::Confirmed)) => chat.history.push(system_line(
             messages.said_text(4028, "The spell is gone from the book."),
         )),
@@ -577,8 +577,10 @@ fn answer(
         ) => {
             chat.refuse(Said::own(reason));
         }
-        (Edit::Moving, Some(BookActionStatus::Confirmed))
-        | (_, Some(BookActionStatus::Unconfirmed)) => (),
+        (Edit::Moving, Some(BookActionStatus::Confirmed)) => (),
+        (_, Some(BookActionStatus::Unconfirmed)) => {
+            chat.refuse("Spellbook change unconfirmed.");
+        }
         _ => return,
     }
     hand.editing = None;
@@ -609,7 +611,7 @@ fn scribe(
     }
     // The outbox says why a scribe it holds back did not go.
     let stamp = outbox.stamp(world).ok()?;
-    let command = match prepare_scribe(Some(online), book, Some(stamp), Some(slot)) {
+    let command = match prepare_scribe(Some(online), book, Some(stamp), Some(slot), names) {
         Ok(command) => command,
         Err(error) => return Some(Said::own(error.to_string())),
     };
@@ -940,6 +942,11 @@ mod tests {
             answer(&mut hand, online.world(), &messages, &mut chat);
             assert_eq!(chat.newest(), "");
         }
+        outbox.interrupt_book(online.world().session_id());
+        answer(&mut hand, online.world(), &messages, &mut chat);
+        assert!(hand.editing.is_some());
+        assert_eq!(chat.newest(), "");
+
         crate::online::testing::book_news(
             &mut online,
             &outbox,
@@ -991,7 +998,7 @@ mod tests {
         answer(&mut hand, online.world(), &messages, &mut chat);
         assert!(hand.editing.is_none());
         assert_eq!(online.world().spell_book().unwrap().slots()[1], Some(42));
-        assert_eq!(chat.newest(), "");
+        assert_eq!(chat.newest(), "Spellbook change unconfirmed.");
 
         crate::online::testing::book_news(
             &mut online,
@@ -1004,7 +1011,7 @@ mod tests {
         answer(&mut hand, online.world(), &messages, &mut chat);
         assert!(hand.editing.is_none());
         assert_eq!(online.world().spell_book().unwrap().slots()[1], None);
-        assert_eq!(chat.newest(), "");
+        assert_eq!(chat.newest(), "Spellbook change unconfirmed.");
         assert!(sent.try_recv().is_err());
     }
 

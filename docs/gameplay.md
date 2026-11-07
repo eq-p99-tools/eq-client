@@ -140,6 +140,9 @@ and forgetting. Moving book entries and deleting spells are separate capabilitie
 P99 offers moving entries but not deleting them; EQEmu offers both. TAKP and
 Quarm offer casting and basic spellbook operations but not those edits. Quarm's
 spell actions are source-checked and tested offline; public validation is pending.
+When Titanium uses the installed spell table, a cursor scroll with a known
+class or level restriction is checked before sending a scribe request.
+Server rules and received book and inventory updates govern the result.
 
 Select a spell and destination gem to memorize; click a populated gem or use its
 binding to cast. Shift-click forgetting is separate from casting. Casts use the
@@ -158,7 +161,9 @@ seconds without a matching reply, the session reports the edit as unconfirmed
 and allows edits whose replies it can tell apart. Re-enter the zone to retry
 an edit with an indistinguishable reply. An interruption can leave the
 client waiting for the session's result on the same admission. Late updates
-still change the affected slots as reported by the server. A timed-out scribe
+still change the affected slots as reported by the server. The skinned
+spellbook reports a worker timeout as unconfirmed and keeps a pending receipt
+across a temporary link interruption in the same admission. A timed-out scribe
 holds inventory actions until a received cursor update accounts for the
 scroll or you leave the zone. Deletion confirmation is invalidated when its
 selection or admission changes.

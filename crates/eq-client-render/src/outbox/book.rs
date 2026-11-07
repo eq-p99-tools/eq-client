@@ -79,14 +79,20 @@ impl Expected {
 #[derive(Clone, Debug)]
 pub(crate) struct BookEditReceipt {
     session: u64,
-    status: Arc<Mutex<Option<BookActionStatus>>>,
+    update: Arc<Mutex<Option<ReceiptUpdate>>>,
+}
+
+#[derive(Debug)]
+enum ReceiptUpdate {
+    Progress(BookActionStatus),
+    Finished(BookActionStatus),
 }
 
 impl BookEditReceipt {
     pub(super) fn new(session: u64) -> Self {
         Self {
             session,
-            status: Arc::default(),
+            update: Arc::default(),
         }
     }
 
@@ -95,12 +101,25 @@ impl BookEditReceipt {
     }
 
     pub(crate) fn status(&self) -> Option<BookActionStatus> {
-        self.status.lock().ok()?.clone()
+        match self.update.lock().ok()?.as_ref()? {
+            ReceiptUpdate::Progress(status) | ReceiptUpdate::Finished(status) => {
+                Some(status.clone())
+            }
+        }
     }
 
-    fn publish(&self, status: BookActionStatus) {
-        if let Ok(mut latest) = self.status.lock() {
-            *latest = Some(status);
+    /// The worker has released the edit. A link interruption alone only
+    /// changes its progress and can still be followed by a confirmed result.
+    pub(crate) fn outcome(&self) -> Option<BookActionStatus> {
+        match self.update.lock().ok()?.as_ref()? {
+            ReceiptUpdate::Finished(status) => Some(status.clone()),
+            ReceiptUpdate::Progress(_) => None,
+        }
+    }
+
+    fn publish(&self, update: ReceiptUpdate) {
+        if let Ok(mut latest) = self.update.lock() {
+            *latest = Some(update);
         }
     }
 }
@@ -166,7 +185,7 @@ impl BookQueue {
         };
         if let Some(outcome) = pending.observe(event) {
             if let Some(receipt) = pending.receipt.take() {
-                receipt.publish(outcome);
+                receipt.publish(ReceiptUpdate::Finished(outcome));
             }
             self.pending = None;
         }
@@ -203,7 +222,7 @@ impl Pending {
             } else {
                 status.clone()
             };
-            receipt.publish(status);
+            receipt.publish(ReceiptUpdate::Progress(status));
         }
     }
 
