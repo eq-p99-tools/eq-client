@@ -215,10 +215,19 @@ fn script_frame(app: &mut App, ms: u64) {
 #[test]
 fn background_script_types_in_both_book_fields_until_native_input_reclaims_ownership() {
     use crate::script::{Phase, RunStatus};
+    use crate::spellbook::SpellNames;
     use bevy::input::keyboard::KeyboardFocusLost;
 
     let folder = Folder::new();
     let (mut app, sent) = test_app(&folder, 2);
+    let mut book = SpellBook::default();
+    book.apply(&SpellUpdate::Slot {
+        slot: 0,
+        spell_id: 42,
+        mode: 0,
+    });
+    app.insert_resource(SpellNames::parse("42^Ward"));
+    session::book(&mut app.world_mut().resource_mut::<OnlineState>(), book);
     click(&mut app, "SpellSets_Toggle");
     let (window, search) = install_background_book_script(
         &mut app,
