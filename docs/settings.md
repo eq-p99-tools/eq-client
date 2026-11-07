@@ -101,6 +101,7 @@ Unsafe choices sit together at the page's end:
 | Fly | `fly` | Off | Bounded flight through Jump and Duck bindings for ascent/descent, retaining solid collision; disabling restores gravity |
 | Jesus Mode | `jesus_mode` | Off | Stand and move on mapped water or lava reached from above, using ordinary ground speed and collision |
 | Exit at Once | `exit_at_once` | Off | Requests logout without automatic sitting or camp preparation; waits for the server outcome |
+| Zone Anywhere | `zone_anywhere` | Off | Crosses any zone line whatever level it asks for; the client reads no such level table yet and the world sets none, so this stores the wish until the gate lands
 
 Gameplay departures are explicit client policies, taken only where the server
 type offers them. They do not establish server acceptance, permission, or
