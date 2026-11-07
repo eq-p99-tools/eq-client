@@ -64,13 +64,15 @@ impl MovementSync {
         wanted: MovementOptions,
     ) {
         let session = world.session_id();
-        if self.session != session {
+        // Each worker starts at the defaults. A departure policy is fixed
+        // for the admission, so a worker that withholds it stays at the
+        // defaults even when a refused transfer resumes the same admission.
+        if self.session != session
+            || (self.applied.is_none() && !world.can(Capability::GameplayDepartures))
+        {
+            self.invalidate();
             self.session = session;
-            self.wanted = None;
-            // A fresh admission starts with the worker's ordinary defaults.
             self.applied = Some(MovementOptions::default());
-            self.pending = None;
-            self.retry_after = None;
         }
         if self.wanted != Some(wanted) {
             self.wanted = Some(wanted);
@@ -180,7 +182,8 @@ pub(crate) fn tell(
 mod tests {
     use super::*;
     use crate::online::{OnlineState, testing};
-    use eq_client_core::options::Level;
+    use eq_client_core::{WorldEvent, WorldUpdate, ZoneOffer, ZoneRejection, options::Level};
+    use std::sync::{Mutex, mpsc};
 
     fn fixture(capacity: usize) -> (App, std::sync::mpsc::Receiver<ClientCommand>) {
         let mut online = OnlineState::new(true);
@@ -268,16 +271,18 @@ mod tests {
         resync_after_refused_transfer(false);
     }
 
-    fn resync_after_refused_transfer(applied_before_transfer: bool) {
+    fn receive_fixture(
+        online: OnlineState,
+    ) -> (
+        App,
+        mpsc::Sender<WorldUpdate>,
+        mpsc::Receiver<ClientCommand>,
+    ) {
         use crate::systems::{Stage, configure_stages, receive_world};
         use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
-        use eq_client_core::{WorldEvent, WorldUpdate, ZoneOffer, ZoneRejection};
-        use std::sync::{Mutex, mpsc};
 
         let (updates, incoming) = mpsc::channel();
         let (sender, commands) = mpsc::sync_channel(8);
-        let mut online = OnlineState::new(true);
-        testing::admit(&mut online, 1, testing::player(7));
         let mut app = crate::testing::app();
         app.insert_resource(online)
             .insert_resource(crate::online::Updates(Mutex::new(Some(incoming))))
@@ -287,6 +292,30 @@ mod tests {
             .init_resource::<Assets<SkinnedMeshInverseBindposes>>();
         configure_stages(&mut app);
         app.add_systems(Update, (receive_world(), tell.in_set(Stage::Input)));
+        (app, updates, commands)
+    }
+
+    fn refused_transfer(session_id: u64) -> [WorldEvent; 2] {
+        [
+            WorldEvent::ZoneTransfer(ZoneOffer {
+                zone_id: 2,
+                instance_id: 0,
+                position: Default::default(),
+                reason: 0,
+                to_bind: false,
+                solicited: true,
+            }),
+            WorldEvent::ZoneTransferRejected {
+                session_id,
+                reason: ZoneRejection::Cancelled,
+            },
+        ]
+    }
+
+    fn resync_after_refused_transfer(applied_before_transfer: bool) {
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        let (mut app, updates, commands) = receive_fixture(online);
         app.world_mut()
             .resource_mut::<super::super::OptionsState>()
             .options
@@ -325,18 +354,7 @@ mod tests {
                 }
             }
         };
-        let offer = WorldEvent::ZoneTransfer(ZoneOffer {
-            zone_id: 2,
-            instance_id: 0,
-            position: Default::default(),
-            reason: 0,
-            to_bind: false,
-            solicited: true,
-        });
-        let rejected = WorldEvent::ZoneTransferRejected {
-            session_id: 1,
-            reason: ZoneRejection::Cancelled,
-        };
+        let [offer, rejected] = refused_transfer(1);
         let batch = if applied_before_transfer {
             [original_reply(), offer, rejected]
         } else {
@@ -369,7 +387,7 @@ mod tests {
     }
 
     #[test]
-    fn a_session_without_departures_sends_no_options_and_holds_no_input() {
+    fn ordinary_movement_needs_no_option_receipt_after_a_refused_transfer() {
         let mut online = OnlineState::new(true);
         let capabilities: Vec<_> = Capability::ALL
             .into_iter()
@@ -377,7 +395,7 @@ mod tests {
             .collect();
         testing::news(
             &mut online,
-            [eq_client_core::WorldEvent::Entered {
+            [WorldEvent::Entered {
                 capabilities,
                 choices: Vec::new(),
                 session_id: 3,
@@ -388,13 +406,7 @@ mod tests {
             }],
         );
         testing::connect(&mut online, true);
-        let (sender, receiver) = std::sync::mpsc::sync_channel(8);
-        let mut app = App::new();
-        app.insert_resource(online)
-            .init_resource::<super::super::OptionsState>()
-            .init_resource::<MovementSync>()
-            .insert_resource(crate::outbox::Outbox::new(Some(sender)))
-            .add_systems(Update, tell);
+        let (mut app, updates, commands) = receive_fixture(online);
         {
             let mut state = app.world_mut().resource_mut::<super::super::OptionsState>();
             state.options.set_level(Level::RunSpeed, 140);
@@ -403,33 +415,33 @@ mod tests {
             }
         }
         app.update();
-        app.update();
-        // The official client's movement is what this session takes, and
-        // it is applied from admission, so input is never gated on it.
-        let world = app.world().resource::<OnlineState>();
-        let wanted = eq_client_core::movement::offered_options(
-            &app.world()
-                .resource::<super::super::OptionsState>()
-                .options
-                .qol,
-            world.world(),
-        );
-        assert_eq!(wanted, MovementOptions::default());
-        assert_eq!(
-            app.world()
-                .resource::<MovementSync>()
-                .usable(Some(3), wanted),
-            Some(wanted)
-        );
-        for command in receiver.try_iter() {
-            assert!(
-                !matches!(
-                    command,
-                    ClientCommand::SetMovementOptions { .. } | ClientCommand::SetBookOptions { .. }
-                ),
-                "{command:?} sent where departures are not offered"
+        let check_ordinary_policy = |app: &App| {
+            let world = app.world().resource::<OnlineState>().world();
+            assert!(world.in_world());
+            assert_eq!(world.session_id(), Some(3));
+            let wanted = eq_client_core::movement::offered_options(
+                &app.world()
+                    .resource::<super::super::OptionsState>()
+                    .options
+                    .qol,
+                world,
             );
+            assert_eq!(wanted, MovementOptions::default());
+            let sync = app.world().resource::<MovementSync>();
+            assert_eq!(sync.usable(Some(3), wanted), Some(wanted));
+            assert_eq!(sync.next_id, 0, "no movement option submission attempted");
+            assert!(!commands.try_iter().any(|command| matches!(
+                command,
+                ClientCommand::SetMovementOptions { .. } | ClientCommand::SetBookOptions { .. }
+            )));
+        };
+        check_ordinary_policy(&app);
+
+        for event in refused_transfer(3) {
+            updates.send(WorldUpdate::Game(event)).unwrap();
         }
+        app.update();
+        check_ordinary_policy(&app);
     }
 
     #[test]
