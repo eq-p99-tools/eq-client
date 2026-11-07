@@ -4,7 +4,7 @@
 //! Titanium's action handler (`eqgame.exe` 0x414913) stores the modifier on
 //! the buff, and its effect cache (0x4102a6) scales the signed magnitude in
 //! tenths for supported modifiers through 45, including snares. See
-//! [`eq_network_game::buffs::scale_instrument_effect`] for the host projection.
+//! [`eq_client_core::buffs::scale_instrument_effect`] for the host projection.
 use crate::{online::OnlineState, outbox::Outbox};
 use bevy::prelude::*;
 use eq_client_assets::spells::Effect;
@@ -59,7 +59,7 @@ fn project(
                 }
                 let value = effect.base_magnitude(level).ok_or(Missing::Effects)?;
                 let value =
-                    eq_network_game::buffs::scale_instrument_effect(dialect, value, instrument)
+                    eq_client_core::buffs::scale_instrument_effect(dialect, value, instrument)
                         .ok_or(Missing::Effects)?;
                 if effect.id == 3 {
                     modifiers.add(Modifiers {
@@ -162,7 +162,7 @@ fn calculate(
     let dialect = world.generation();
     let weight = u16::try_from(
         (world.movement_weight()? / 10)
-            .min(u64::from(eq_network_game::inventory::MAX_CARRIED_WEIGHT)),
+            .min(u64::from(eq_client_core::inventory::MAX_CARRIED_WEIGHT)),
     )
     .expect("bounded weight");
     let base = player.base_attributes.ok_or(Missing::Attributes)?;

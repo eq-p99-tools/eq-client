@@ -1,6 +1,6 @@
 //! Admission-scoped buff state, independent of rendering and local spell assets.
 use crate::{Buff, BuffUpdate, SpellEffect};
-pub use eq_network_game::buffs::cancel;
+pub use eq_network_game::buffs::{cancel, scale_instrument_effect};
 use std::{
     collections::BTreeMap,
     time::{Duration, Instant},

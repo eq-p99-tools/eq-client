@@ -2381,14 +2381,7 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
             ClickTarget::HotButton(number) => hot_button.is_some_and(|slot| slot.0 == number),
             ClickTarget::MemorizeGem(number) => gem.is_some_and(|gem| gem.0 == number),
             ClickTarget::Trade(click) => trade == Some(&trading(click)),
-            ClickTarget::Tint(number, color) => tint.is_some_and(|action| {
-                use super::inventory::colors::Action;
-                match (action, color) {
-                    (Action::Toggle(slot), None) => slot.0 == number,
-                    (Action::Set(slot, index), Some(color)) => slot.0 == number && *index == color,
-                    _ => false,
-                }
-            }),
+            ClickTarget::Tint(number, color) => tint_control(tint, number, color),
             ClickTarget::Give => give,
             ClickTarget::ChatTab(_) | ClickTarget::CharacterList(_) => {
                 listed_control(target, (character, chat_tab))
@@ -2407,6 +2400,19 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
         }
     }
     found.map(|(_, entity)| entity)
+}
+
+fn tint_control(
+    action: Option<&super::inventory::colors::Action>,
+    number: i32,
+    color: Option<usize>,
+) -> bool {
+    use super::inventory::colors::Action;
+    action.is_some_and(|action| match (action, color) {
+        (Action::Toggle(slot), None) => slot.0 == number,
+        (Action::Set(slot, index), Some(color)) => slot.0 == number && *index == color,
+        _ => false,
+    })
 }
 
 /// Whether a control is this button of the skin's effects windows: the
