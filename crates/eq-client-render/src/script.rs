@@ -1872,6 +1872,19 @@ pub(super) fn drive(
             }
             return;
         }
+        Step::ComposeOwnedLink { admission, slot } => {
+            let world = online.world();
+            if !online.in_world() || world.session_id() != Some(*admission) {
+                script.stop(
+                    &mut keys,
+                    &mut mouse,
+                    "Item link composition needs the current admission",
+                );
+            } else if let Err(reason) = chat.compose_owned_link(*slot, world) {
+                script.stop(&mut keys, &mut mouse, &reason);
+            }
+            return;
+        }
         Step::Gm(_) | Step::Chat(_) => {
             let command = match &step {
                 Step::Gm(command) => gm_request(command, script.local, online.world()),

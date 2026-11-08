@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use bevy::input::keyboard::{Key, NativeKey};
 use bevy::prelude::KeyCode;
+use eq_client_core::inventory::InventorySlot;
 
 /// Most steps one script may queue, counting steps appended while following.
 pub(super) const MAX_STEPS: usize = 500;
@@ -233,6 +234,13 @@ pub enum Step {
         message: u64,
         /// Zero-based link ordinal in that message.
         ordinal: usize,
+    },
+    /// Inserts a link for a worn or carried item into the editable chat draft.
+    ComposeOwnedLink {
+        /// Current admission in which the inventory was observed.
+        admission: u64,
+        /// Protocol slot of the owned item.
+        slot: InventorySlot,
     },
     /// Left-clicks one UI control through Bevy's ordinary interaction state.
     Click(ClickTarget),
@@ -647,6 +655,10 @@ pub(super) fn parse_step(line: &str) -> Result<Step, String> {
             admission: admission.parse().map_err(|_| "expected an admission ID")?,
             message: message.parse().map_err(|_| "expected a chat arrival ID")?,
             ordinal: ordinal.parse().map_err(|_| "expected a link ordinal")?,
+        },
+        ("compose_owned_link", [admission, slot]) => Step::ComposeOwnedLink {
+            admission: admission.parse().map_err(|_| "expected an admission ID")?,
+            slot: InventorySlot(slot.parse().map_err(|_| "expected an inventory slot")?),
         },
         ("click", target) => Step::Click(parse_click(target)?),
         ("right_click", target) => Step::RightClick(parse_click(target)?),
@@ -1459,7 +1471,11 @@ mod tests {
     fn semantic_actions_require_exact_reported_identities() {
         let base = Path::new(".");
         assert_eq!(
-            parse("interact 6 42 12\ninspect_link 6 70 0", base).unwrap(),
+            parse(
+                "interact 6 42 12\ninspect_link 6 70 0\ncompose_owned_link 6 23",
+                base
+            )
+            .unwrap(),
             [
                 Step::Interact {
                     admission: 6,
@@ -1471,6 +1487,10 @@ mod tests {
                     message: 70,
                     ordinal: 0
                 },
+                Step::ComposeOwnedLink {
+                    admission: 6,
+                    slot: InventorySlot(23),
+                },
             ],
         );
         for malformed in [
@@ -1480,6 +1500,10 @@ mod tests {
             "inspect_link 70 0",
             "inspect_link 6 70 -1",
             "inspect_link 6 70 0 raw",
+            "compose_owned_link 23",
+            "compose_owned_link -1 23",
+            "compose_owned_link 6 worn",
+            "compose_owned_link 6 23 raw",
         ] {
             assert!(parse(malformed, base).is_err(), "{malformed}");
         }

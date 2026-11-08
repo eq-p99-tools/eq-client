@@ -626,6 +626,87 @@ fn scripted_link_composition_edits_the_draft_and_sends_no_request() {
 }
 
 #[test]
+fn scripted_owned_link_uses_the_current_received_item_without_sending() {
+    use eq_client_core::{
+        GameDialect, ItemDetails,
+        inventory::{InventoryItem, InventorySlot, InventoryUpdate, ItemPlacement},
+    };
+
+    let (mut app, rx) = app();
+    let slot = InventorySlot(23);
+    let mut item = InventoryItem {
+        slot,
+        activation: default(),
+        scroll_spell: None,
+        book: None,
+        rules: ItemPlacement {
+            titanium_link_hash: Some(0x1234_abcd),
+            ..default()
+        },
+        details: ItemDetails {
+            id: 42,
+            name: "Synthetic blade".into(),
+            base_held_model: None,
+            equipment: None,
+            bonuses: None,
+            lore: String::new(),
+            weight_tenths: 0,
+            slots: 0,
+            classes: 0,
+            races: 0,
+            flags: Vec::new(),
+            stats: Vec::new(),
+            price: None,
+            icon: None,
+        },
+        stack_count: None,
+        charges: 0,
+        bag_slots: 0,
+    };
+    {
+        let mut online = app.world_mut().resource_mut::<OnlineState>();
+        session::generation(&mut online, GameDialect::Titanium);
+        session::inventory(&mut online, InventoryUpdate::Snapshot(vec![item.clone()]));
+    }
+
+    start(&mut app, "compose_owned_link 8 23");
+    frame_at(&mut app, 0);
+    refused(&app, 1, "Item link composition needs the current admission");
+    assert!(app.world().resource::<ChatState>().draft().is_empty());
+
+    let source = format!("compose_owned_link {ADMISSION} 23");
+    start(&mut app, &source);
+    frame_at(&mut app, 10);
+    frame_at(&mut app, 20);
+    assert_eq!(
+        app.world().resource::<RunStatus>().phase(),
+        Phase::Completed
+    );
+    assert_eq!(
+        app.world().resource::<ChatState>().draft(),
+        "Synthetic blade"
+    );
+
+    item.rules.titanium_link_hash = None;
+    session::inventory(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        InventoryUpdate::Set(vec![item]),
+    );
+    start(&mut app, &source);
+    frame_at(&mut app, 30);
+    refused(
+        &app,
+        1,
+        "This item lacks the metadata needed to make a link",
+    );
+    assert_eq!(
+        app.world().resource::<ChatState>().draft(),
+        "Synthetic blade"
+    );
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
 fn scripted_item_inspection_does_not_replace_a_pending_request() {
     let (mut app, rx) = app();
     let (message, _) = linked_message(&mut app.world_mut().resource_mut::<ChatState>());
