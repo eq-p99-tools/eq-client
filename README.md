@@ -101,4 +101,5 @@ on demand; a green Format check is not a full test run.
 Original code is available under the [MIT License](LICENSE). The asset loader
 uses a pinned [eq-p99-tools/libeq fork](https://github.com/eq-p99-tools/libeq) of
 [cjab/libeq](https://github.com/cjab/libeq). Dependency licenses and the rights
-to the user's installed game data remain separate.
+to the user's installed game data remain separate. Include the
+[third-party notices](THIRD-PARTY-NOTICES.md) with binary distributions.

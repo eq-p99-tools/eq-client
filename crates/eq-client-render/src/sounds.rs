@@ -27,6 +27,8 @@ const BUDGET: usize = 32 * 1024 * 1024;
 /// How long, in seconds, a sound may wait for its file before it is too late
 /// to play.
 const STALE: f32 = 0.5;
+/// Named MP3 cues may wait for the initial bank scan and decoder setup.
+const MP3_STALE: f32 = 8.0;
 /// The most sounds playing at once; past it a new one is not started
 /// (inferred, item 6.257).
 const VOICES: usize = 32;
@@ -130,12 +132,29 @@ struct Asked {
     when: Option<f32>,
 }
 
+impl Asked {
+    fn expired(&mut self, now: f32) -> bool {
+        let when = *self.when.get_or_insert(now);
+        let wait = if self.at.is_none() && self.name.ends_with(".mp3") {
+            MP3_STALE
+        } else {
+            STALE
+        };
+        now - when > wait
+    }
+}
+
 impl Sounds {
     /// Asks for a sound file to play once, by its name, at a place in the
     /// world or, with None, on the listener. It plays as soon as its file is
     /// read, or not at all if that takes too long.
     pub(super) fn play(&mut self, name: &str, at: Option<Vec3>) {
-        if self.bank.is_some()
+        let opening_mp3 = self.open.pending(Some(0))
+            && at.is_none()
+            && name
+                .rsplit_once('.')
+                .is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("mp3"));
+        if (self.bank.is_some() || opening_mp3)
             && self.volume > 0.0
             && !self.no_output
             && (1..=255).contains(&name.len())
@@ -312,7 +331,7 @@ pub(super) struct Playing {
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(super) fn update(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<bevy::time::Real>>,
     mut sounds: ResMut<Sounds>,
     options: Res<super::options::OptionsState>,
     mut sources: ResMut<Assets<AudioSource>>,
@@ -320,8 +339,13 @@ pub(super) fn update(
     listener: Query<&GlobalTransform, With<SpatialListener>>,
 ) {
     sounds.volume = options.options.sound_volume();
+    let now = time.elapsed_secs();
     let Some(bank) = sounds.bank.clone() else {
-        sounds.asked.clear();
+        if sounds.open.pending(Some(0)) {
+            sounds.asked.retain_mut(|asked| !asked.expired(now));
+        } else {
+            sounds.asked.clear();
+        }
         return;
     };
     let sounds = &mut *sounds;
@@ -352,7 +376,6 @@ pub(super) fn update(
         };
     }
     sounds.kept += ready;
-    let now = time.elapsed_secs();
     let ears = listener.iter().next().map(GlobalTransform::translation);
     let mut voices = 0;
     let mut mp3_voices = 0;
@@ -378,8 +401,7 @@ pub(super) fn update(
     }
     let asked = std::mem::take(&mut sounds.asked);
     for mut asked in asked {
-        let when = *asked.when.get_or_insert(now);
-        if now - when > STALE {
+        if asked.expired(now) {
             continue;
         }
         // A sound too far away, or with no listener to hear it, is not heard.
@@ -579,7 +601,7 @@ mod tests {
     #[test]
     fn reset_discards_requests_and_old_voices_even_without_an_audio_device() {
         let mut app = App::new();
-        app.init_resource::<Time>()
+        app.init_resource::<Time<bevy::time::Real>>()
             .init_resource::<Sounds>()
             .init_resource::<Assets<AudioSource>>()
             .init_resource::<super::super::options::OptionsState>()
@@ -612,6 +634,60 @@ mod tests {
         assert!(app.world().resource::<Sounds>().asked.is_empty());
         assert!(!app.world().resource::<Sounds>().no_output);
         assert!(app.world().get_entity(old).is_err());
+        std::fs::remove_dir_all(&folder).unwrap();
+    }
+
+    #[test]
+    fn a_cold_named_mp3_can_start_after_the_transient_wav_deadline() {
+        use bevy::time::Real;
+        use std::time::Duration;
+        let folder = install("delayed-cue");
+        let files = eq_client_assets::sounds::SoundFiles {
+            archive_stem: "snd",
+            folders: &[],
+            numbers: "SoundAssets.txt",
+        };
+        let mut app = App::new();
+        app.init_resource::<Time<Real>>()
+            .init_resource::<Assets<AudioSource>>()
+            .init_resource::<super::super::options::OptionsState>()
+            .add_systems(Update, update);
+        app.world_mut()
+            .resource_mut::<Time<Real>>()
+            .advance_by(Duration::from_secs(2));
+        let source = app
+            .world_mut()
+            .resource_mut::<Assets<AudioSource>>()
+            .add(AudioSource {
+                bytes: Vec::new().into(),
+            });
+        let mut sounds = Sounds {
+            bank: Some(Arc::new(Mutex::new(
+                SoundBank::open(&folder, files).unwrap(),
+            ))),
+            ..default()
+        };
+        for name in ["swing.wav", "first.mp3", "old.mp3"] {
+            sounds.clips.insert(
+                name.into(),
+                Clip::Ready {
+                    source: source.clone(),
+                    bytes: 0,
+                    seconds: 3.0,
+                    played: 0,
+                },
+            );
+            sounds.play(name, None);
+        }
+        sounds.asked[0].when = Some(0.0);
+        sounds.asked[1].when = Some(0.0);
+        sounds.asked[2].when = Some(-MP3_STALE);
+        app.insert_resource(sounds);
+        app.update();
+        let mut playing = app.world_mut().query::<&Playing>();
+        let active: Vec<_> = playing.iter(app.world()).collect();
+        assert_eq!(active.len(), 1);
+        assert!(active[0].mp3);
         std::fs::remove_dir_all(&folder).unwrap();
     }
 
