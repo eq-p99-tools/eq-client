@@ -238,6 +238,11 @@ enum Place {
 
 const MP3_BYTES: u64 = 16 * 1024 * 1024;
 
+fn is_mp3(name: &str) -> bool {
+    name.rsplit_once('.')
+        .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("mp3"))
+}
+
 impl SoundBank {
     /// Opens the sound archives a client generation keeps in `eq_directory`
     /// and lists their files. An installation without any has an empty bank.
@@ -257,7 +262,7 @@ impl SoundBank {
             if let Some(number) = name.to_str().and_then(|name| files.archive_number(name)) {
                 numbered.push((number, entry.path()));
             } else if let Some(name) = name.to_str().map(str::to_ascii_lowercase)
-                && name.ends_with(".mp3")
+                && is_mp3(&name)
                 && entry.file_type().map_err(io_error(eq_directory))?.is_file()
             {
                 root_mp3s.push((name, entry.path()));
@@ -298,9 +303,7 @@ impl SoundBank {
                 };
                 if Path::new(&name).extension().is_some_and(|ext| ext == "wav") {
                     bank.files.entry(name).or_insert(Place::Loose(entry.path()));
-                } else if name.ends_with(".mp3")
-                    && entry.file_type().map_err(io_error(&folder))?.is_file()
-                {
+                } else if is_mp3(&name) && entry.file_type().map_err(io_error(&folder))?.is_file() {
                     bank.files.entry(name).or_insert(Place::Mp3(entry.path()));
                 }
             }

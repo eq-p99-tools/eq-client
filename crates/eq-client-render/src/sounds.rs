@@ -135,7 +135,7 @@ struct Asked {
 impl Asked {
     fn expired(&mut self, now: f32) -> bool {
         let when = *self.when.get_or_insert(now);
-        let wait = if self.at.is_none() && self.name.ends_with(".mp3") {
+        let wait = if self.at.is_none() && is_mp3(&self.name) {
             MP3_STALE
         } else {
             STALE
@@ -144,16 +144,17 @@ impl Asked {
     }
 }
 
+fn is_mp3(name: &str) -> bool {
+    name.rsplit_once('.')
+        .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("mp3"))
+}
+
 impl Sounds {
     /// Asks for a sound file to play once, by its name, at a place in the
     /// world or, with None, on the listener. It plays as soon as its file is
     /// read, or not at all if that takes too long.
     pub(super) fn play(&mut self, name: &str, at: Option<Vec3>) {
-        let opening_mp3 = self.open.pending(Some(0))
-            && at.is_none()
-            && name
-                .rsplit_once('.')
-                .is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("mp3"));
+        let opening_mp3 = self.open.pending(Some(0)) && at.is_none() && is_mp3(name);
         if (self.bank.is_some() || opening_mp3)
             && self.volume > 0.0
             && !self.no_output
@@ -418,7 +419,7 @@ pub(super) fn update(
                 seconds,
                 ..
             }) => {
-                let mp3 = asked.name.ends_with(".mp3");
+                let mp3 = is_mp3(&asked.name);
                 if voices >= VOICES || (mp3 && mp3_voices >= MP3_VOICES) {
                     continue;
                 }
