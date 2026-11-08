@@ -483,8 +483,10 @@ impl Panels<'_> {
         for notice in &changes.notices {
             self.tell(notice, messages, chat);
         }
-        for cue in &changes.sounds {
-            self.sounds.play_cue(cue);
+        if state.world.in_world() {
+            for cue in &changes.sounds {
+                self.sounds.play_cue(cue);
+            }
         }
         if changes.characters {
             if let Some(list) = state.world.characters() {
@@ -602,6 +604,7 @@ impl Panels<'_> {
 
     /// Forgets what the world's reset made stale on screen and in the panels.
     fn forget(&mut self, reason: Reset, state: &mut OnlineState) {
+        self.sounds.reset();
         if let Some(sync) = &mut self.movement_sync {
             // The world clears the receipt here, even when a refused
             // transfer reconnects the same admission in this receive batch.

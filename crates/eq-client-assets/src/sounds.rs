@@ -1,12 +1,12 @@
 //! The sound files an installed client plays, found by name. Where a client
 //! generation keeps them is its [`SoundFiles`], from
 //! [`crate::ui::InstalledClient::sound_files`]; a [`SoundBank`] opened over
-//! them reads a file's bytes only when it is asked for, and says what kind of
-//! WAV they hold so the player can refuse a kind it cannot decode.
+//! them reads a file's bytes only when it is asked for. It also indexes
+//! loose MP3 cues in the installation root and its configured sound folders.
 
 use std::collections::HashMap;
 use std::fs::File;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use libeq::pfs::PfsReader;
@@ -21,7 +21,7 @@ pub struct SoundFiles {
     /// The archives' names: this, then a number, then `.pfs`, such as
     /// `snd1.pfs`.
     pub archive_stem: &'static str,
-    /// Folders under the installation holding loose WAV files.
+    /// Folders under the installation holding loose WAV and MP3 files.
     pub folders: &'static [&'static str],
     /// The text file naming each sound by its number, one `number^name`
     /// a line, such as `100^example.wav`.
@@ -60,6 +60,9 @@ pub enum SoundError {
     /// A file is not a WAV whose format can be named.
     #[error("{0} is not a readable WAV file")]
     NotWav(String),
+    /// A loose MP3 exceeded the per-cue read limit.
+    #[error("{0} exceeds the MP3 cue size limit")]
+    Mp3TooLarge(String),
 }
 
 /// What a WAV file's format chunk says it holds.
@@ -173,13 +176,22 @@ impl SoundNumbers {
     }
 }
 
+/// The format to check before playing a named sound.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SoundFormat {
+    /// A RIFF WAVE file and its format chunk.
+    Wav(WavFormat),
+    /// A file named as MP3. The audio decoder validates its bytes.
+    Mp3,
+}
+
 /// One sound file, read whole.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Sound {
     /// Its name, lower-cased, such as `swing.wav`.
     pub name: String,
-    /// What its format chunk says.
-    pub format: WavFormat,
+    /// The format of the installed file.
+    pub format: SoundFormat,
     /// The whole file.
     pub bytes: Vec<u8>,
 }
@@ -189,15 +201,14 @@ impl Sound {
     /// compressed format, or a file with no samples.
     #[must_use]
     pub fn seconds(&self) -> Option<f32> {
-        if self.format.code != WavFormat::PCM {
+        let SoundFormat::Wav(format) = self.format else {
+            return None;
+        };
+        if format.code != WavFormat::PCM {
             return None;
         }
-        let frame = u32::from(self.format.channels) * u32::from(self.format.bits.div_ceil(8));
-        let per_second = self
-            .format
-            .rate
-            .checked_mul(frame)
-            .filter(|rate| *rate > 0)?;
+        let frame = u32::from(format.channels) * u32::from(format.bits.div_ceil(8));
+        let per_second = format.rate.checked_mul(frame).filter(|rate| *rate > 0)?;
         let samples = u32::try_from(chunk(&self.bytes, *b"data")?.len()).ok()?;
         #[allow(
             clippy::cast_precision_loss,
@@ -221,7 +232,11 @@ enum Place {
     Archive(usize, String),
     /// Loose, at this path.
     Loose(PathBuf),
+    /// Loose MP3, read with a byte limit.
+    Mp3(PathBuf),
 }
+
+const MP3_BYTES: u64 = 16 * 1024 * 1024;
 
 impl SoundBank {
     /// Opens the sound archives a client generation keeps in `eq_directory`
@@ -235,11 +250,17 @@ impl SoundBank {
             move |source| SoundError::Io { path, source }
         };
         let mut numbered = Vec::new();
+        let mut root_mp3s = Vec::new();
         for entry in std::fs::read_dir(eq_directory).map_err(io_error(eq_directory))? {
             let entry = entry.map_err(io_error(eq_directory))?;
             let name = entry.file_name();
             if let Some(number) = name.to_str().and_then(|name| files.archive_number(name)) {
                 numbered.push((number, entry.path()));
+            } else if let Some(name) = name.to_str().map(str::to_ascii_lowercase)
+                && name.ends_with(".mp3")
+                && entry.file_type().map_err(io_error(eq_directory))?.is_file()
+            {
+                root_mp3s.push((name, entry.path()));
             }
         }
         numbered.sort();
@@ -275,13 +296,18 @@ impl SoundBank {
                 let Some(name) = entry.file_name().to_str().map(str::to_ascii_lowercase) else {
                     continue;
                 };
-                if Path::new(&name)
-                    .extension()
-                    .is_some_and(|extension| extension == "wav")
-                {
+                if Path::new(&name).extension().is_some_and(|ext| ext == "wav") {
                     bank.files.entry(name).or_insert(Place::Loose(entry.path()));
+                } else if name.ends_with(".mp3")
+                    && entry.file_type().map_err(io_error(&folder))?.is_file()
+                {
+                    bank.files.entry(name).or_insert(Place::Mp3(entry.path()));
                 }
             }
+        }
+        root_mp3s.sort();
+        for (name, path) in root_mp3s {
+            bank.files.entry(name).or_insert(Place::Mp3(path));
         }
         Ok(bank)
     }
@@ -313,7 +339,7 @@ impl SoundBank {
     /// that name.
     ///
     /// # Errors
-    /// Fails when its archive cannot be read or the file is not a WAV.
+    /// Fails when a file cannot be read, a WAV is malformed, or an MP3 is too large.
     pub fn read(&mut self, name: &str) -> Result<Option<Sound>, SoundError> {
         let name = name.to_ascii_lowercase();
         let bytes = match self.files.get(&name) {
@@ -328,11 +354,28 @@ impl SoundBank {
                 path: path.clone(),
                 source,
             })?,
+            Some(Place::Mp3(path)) => {
+                let mut bytes = Vec::new();
+                File::open(path)
+                    .and_then(|file| file.take(MP3_BYTES + 1).read_to_end(&mut bytes))
+                    .map_err(|source| SoundError::Io {
+                        path: path.clone(),
+                        source,
+                    })?;
+                if bytes.len() as u64 > MP3_BYTES {
+                    return Err(SoundError::Mp3TooLarge(name));
+                }
+                return Ok(Some(Sound {
+                    name,
+                    format: SoundFormat::Mp3,
+                    bytes,
+                }));
+            }
         };
-        let format = WavFormat::read(&bytes).ok_or_else(|| SoundError::NotWav(name.clone()))?;
+        let wav = WavFormat::read(&bytes).ok_or_else(|| SoundError::NotWav(name.clone()))?;
         Ok(Some(Sound {
             name,
-            format,
+            format: SoundFormat::Wav(wav),
             bytes,
         }))
     }
@@ -444,12 +487,23 @@ mod tests {
         std::fs::create_dir_all(&folder).unwrap();
         std::fs::write(folder.join("Loose.WAV"), &later).unwrap();
         std::fs::write(folder.join("other.wav"), &first).unwrap();
-        std::fs::write(folder.join("theme.mp3"), b"ID3").unwrap();
+        std::fs::write(folder.join("theme.mp3"), b"ID3 folder").unwrap();
+        std::fs::write(install.join("Theme.MP3"), b"ID3 root").unwrap();
+        std::fs::write(install.join("Other.MP3"), b"ID3 another").unwrap();
+        std::fs::create_dir(install.join("Directory.MP3")).unwrap();
 
         let mut bank = SoundBank::open(&install, FILES).unwrap();
-        assert_eq!(bank.len(), 4);
+        assert_eq!(bank.len(), 6);
         assert_eq!(bank.read("loose.wav").unwrap().unwrap().bytes, later);
-        assert!(!bank.contains("theme.mp3"));
+        let theme = bank.read("theme.MP3").unwrap().unwrap();
+        assert_eq!(theme.format, SoundFormat::Mp3);
+        assert_eq!(theme.bytes, b"ID3 folder");
+        assert_eq!(theme.seconds(), None);
+        assert_eq!(
+            bank.read("other.mp3").unwrap().unwrap().bytes,
+            b"ID3 another"
+        );
+        assert!(!bank.contains("Directory.MP3"));
         assert!(bank.contains("SWING.WAV"));
         assert!(!bank.contains("ignored.wav"));
         let swing = bank.read("SWING.wav").unwrap().unwrap();
