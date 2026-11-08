@@ -982,7 +982,10 @@ impl ChatLook {
     /// The local colour for a server-supplied message type, where known.
     pub(super) fn message_color(&self, message_type: u32) -> Option<[u8; 3]> {
         let kind = u16::try_from(message_type).ok()?;
-        self.colors.get(&kind).copied().or_else(|| consider_rgb(kind))
+        self.colors
+            .get(&kind)
+            .copied()
+            .or_else(|| consider_rgb(kind))
     }
 
     /// A line's colour comes from its type or, where that has no colour,

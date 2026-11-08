@@ -9,7 +9,8 @@ use std::{
 
 const WAITING: usize = 4;
 const MAX_WAIT: Duration = Duration::from_secs(10);
-const MAX_LIFE: Duration = Duration::from_secs(60);
+const MAX_HOLD: Duration = Duration::from_secs(60);
+const MAX_FADE: Duration = Duration::from_secs(10);
 const MAX_CHARS: usize = 512;
 
 /// At most one visible banner and a short queue behind it.
@@ -23,7 +24,7 @@ impl Banners {
     /// Keeps the newest waiting banners under load, without interrupting one
     /// already on screen.
     pub(super) fn receive(&mut self, banner: &Marquee, now: Instant) {
-        if banner.duration.is_zero() || banner.text.trim().is_empty() {
+        if banner.priority == 0 || banner.duration.is_zero() || banner.text.trim().is_empty() {
             return;
         }
         if self.waiting.len() == WAITING {
@@ -34,7 +35,9 @@ impl Banners {
             now,
             Marquee {
                 text,
-                duration: banner.duration.min(MAX_LIFE),
+                duration: banner.duration.min(MAX_HOLD),
+                fade_in: banner.fade_in.min(MAX_FADE),
+                fade_out: banner.fade_out.min(MAX_FADE),
                 ..*banner
             },
         ));
@@ -52,7 +55,7 @@ impl Banners {
         if self
             .active
             .as_ref()
-            .is_some_and(|(since, banner)| now.duration_since(*since) >= banner.duration)
+            .is_some_and(|(since, banner)| now.duration_since(*since) >= lifetime(banner))
         {
             self.active = None;
         }
@@ -84,18 +87,30 @@ mod tests {
     }
 
     #[test]
-    fn duration_contains_both_fades_and_expiry() {
+    fn hold_begins_after_fade_in_and_precedes_fade_out() {
         let mut queue = Banners::default();
         let now = Instant::now();
         queue.receive(&banner("Synthetic"), now);
-        for (millis, expected) in [(0, 0.0), (500, 0.5), (3000, 1.0), (4000, 0.5)] {
+        for (millis, expected) in [(0, 0.0), (500, 0.5), (1000, 1.0), (6000, 1.0), (7000, 0.5)] {
             let (shown, alpha) = queue
                 .advance(now + Duration::from_millis(millis), false)
                 .unwrap();
             assert_eq!(shown.text, "Synthetic");
             assert!((alpha - expected).abs() < f32::EPSILON);
         }
-        assert!(queue.advance(now + Duration::from_secs(5), false).is_none());
+        assert!(queue.advance(now + Duration::from_secs(8), false).is_none());
+    }
+
+    #[test]
+    fn packed_opacity_does_not_choose_queue_order() {
+        let mut faint = banner("Faint");
+        faint.priority = 128;
+        assert!((opacity(&faint, Duration::from_secs(2)) - 128.0 / 255.0).abs() < f32::EPSILON);
+        let mut queue = Banners::default();
+        let now = Instant::now();
+        queue.receive(&faint, now);
+        queue.receive(&banner("Bright"), now);
+        assert_eq!(queue.advance(now, false).unwrap().0.text, "Faint");
     }
 
     #[test]
@@ -111,14 +126,14 @@ mod tests {
         assert_eq!(queue.advance(now, false).unwrap().0.text, "First");
         assert_eq!(
             queue
-                .advance(now + Duration::from_secs(5), false)
+                .advance(now + Duration::from_secs(8), false)
                 .unwrap()
                 .0
                 .text,
             "1",
         );
         queue.clear();
-        assert!(queue.advance(now + Duration::from_secs(5), false).is_none());
+        assert!(queue.advance(now + Duration::from_secs(8), false).is_none());
     }
 
     #[test]
@@ -135,18 +150,29 @@ mod tests {
     }
 }
 
-/// Uses the received duration as the total lifetime, with both fades inside
-/// that window. When fades overlap, each still bounds the opacity.
+/// The native overlay API's hold argument follows two separate fades.
+/// Apply that timing to the wire fields as an inference.
+fn lifetime(banner: &Marquee) -> Duration {
+    banner.fade_in + banner.duration + banner.fade_out
+}
+
 fn opacity(banner: &Marquee, elapsed: Duration) -> f32 {
     let ramp = |time: Duration, fade: Duration| {
         if fade.is_zero() {
             1.0
         } else {
-            (time.as_secs_f32() / fade.min(banner.duration).as_secs_f32()).min(1.0)
+            (time.as_secs_f32() / fade.as_secs_f32()).min(1.0)
         }
     };
-    ramp(elapsed, banner.fade_in).min(ramp(
-        banner.duration.saturating_sub(elapsed),
+    // EQEmu documents this field as packed opacity and extra blinks.
+    // A positive multiple of 255 is fully opaque. Blink timing is unknown.
+    let packed = banner
+        .priority
+        .checked_sub(1)
+        .map_or(0, |bits| bits % 255 + 1);
+    let peak = f32::from(u8::try_from(packed).expect("packed alpha is at most 255")) / 255.0;
+    peak * ramp(elapsed, banner.fade_in).min(ramp(
+        lifetime(banner).saturating_sub(elapsed),
         banner.fade_out,
     ))
 }

@@ -7,6 +7,16 @@ on every server. Disabled controls explain whether the server policy lacks a
 feature or this client lacks the UI. The session validates actions again before
 sending them; queueing a request is not proof of a successful game action.
 
+## Server banners
+
+Received Titanium marquee notices appear above the scene and fade using the
+supplied times. The client interprets the duration as hold time between fades
+and applies the packed opacity. This timing is inferred from the native
+overlay API. The client uses a short arrival-order queue and a single fade
+cycle. Queued banners expire after ten seconds, and world resets clear them.
+[EQEmu marquee fields](https://raw.githubusercontent.com/EQEmu/EQEmu/master/common/eq_packet_structs.h#L5962-L5974)
+[Native overlay caller](https://raw.githubusercontent.com/macroquest/macroquest2/master/MQ2Main/MQ2Utilities.cpp#L4670-L4688)
+
 ## Movement, falling and zoning
 
 Movement is available when the admitted session grants it; there is no separate
