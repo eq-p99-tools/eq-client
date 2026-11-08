@@ -346,6 +346,8 @@ On Titanium EQEmu and Project 1999, received server popups show the supplied
 button layout and expiration. A supported response submits the selected reply.
 An expired or replaced dialog cannot be answered. Select a nearby player and
 choose **Inspect player** to see the received equipment names, icons and note.
+An unanswered inspection holds the next request to the same player for up
+to five seconds (inferred, recording checklist 6.400).
 Automatic inspection replies use the known inspect note from the installed
 character settings when available.
 
@@ -363,8 +365,9 @@ hotbar the same way as a skill, or use `/layonhands` or `/harmtouch`.
 Select the target first. Paladins can select themselves for Lay on Hands.
 Sending starts a local recovery estimate, which the hotbar labels separately
 from received profile recovery. The stock EQEmu estimate uses its 4,300-second
-constants. Project 1999 uses a 72-minute local estimate, informed by classic
-daily reuse and a P99 player's report of a Harm Touch wait over 70 minutes.
+constants. Project 1999 uses a 72-minute local estimate, inferred (recording
+checklist 6.399) from classic daily reuse and a P99 player's report of a Harm
+Touch wait over 70 minutes; it is not a cited P99 value.
 A valid ability-slot recovery from a profile replaces the estimate. The
 client also preserves Titanium's ten-second button hold (`eqgame.exe`
 0x411f3d). The server decides the cast result and actual reuse.

@@ -399,10 +399,9 @@ fn client(login: Login, options: &SessionOptions) -> Result<Client> {
     config.port = login.port;
     config.local_only = options.local_only;
     config.auto_eat = options.auto_eat;
-    if login.protocol == ServerProtocol::Project1999 {
-        config.installed_zone_boundaries =
-            Some(Arc::new(InstalledRegions(options.install.clone())));
-    }
+    // Which servers resolve same-zone pads from installed boundaries is the
+    // networking layer's decision; the client only offers the installed data.
+    config.installed_zone_boundaries = Some(Arc::new(InstalledRegions(options.install.clone())));
     // A Titanium client entering a watched world tells it what machine the
     // player entered it on, once a week: this machine's own account, made
     // when it is due and dated by the last one this client or the installed

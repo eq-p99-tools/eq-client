@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Pin networking 97212d8d (cycle 09 landing): Bind Wound's button time runs
+  out in full after every use, one bandage decrease settles every carried
+  stack, and an unanswered player inspection holds the next request to that
+  player for up to five seconds (inferred, recording checklist 6.400). The
+  installed zone boundaries are always offered to the networking layer, which
+  decides where same-zone pads use them. The P99 knight reuse estimate is
+  labelled inferred (recording checklist 6.399).
 - Resolve supported P99 same-zone pads from installed geometry and current
   zone points. Script reports distinguish the local landing from received
   server placement. Attended verification is pending.
