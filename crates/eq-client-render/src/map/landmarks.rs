@@ -39,6 +39,14 @@ pub(crate) struct Landmarks {
 }
 
 impl Landmarks {
+    #[cfg(test)]
+    pub(super) fn preview() -> Self {
+        Self {
+            places: BTreeMap::from([("Meeting spot".into(), [75.0, -75.0, 0.0])]),
+            ..default()
+        }
+    }
+
     pub(super) fn points(&self) -> impl Iterator<Item = Vec2> + '_ {
         self.places.values().copied().map(map_at)
     }

@@ -11,32 +11,17 @@ use eq_client_core::maps::Watches;
 #[ignore = "requires EQ_OUTLINE_PREVIEW_PNG and a graphics adapter; hidden offline window"]
 fn capture() {
     let path = std::path::PathBuf::from(std::env::var("EQ_OUTLINE_PREVIEW_PNG").unwrap());
-    let mut app = App::new();
-    app.add_plugins(
-        DefaultPlugins
-            .set(WindowPlugin {
-                primary_window: Some(Window {
-                    title: "Offline tracked outline probe".into(),
-                    resolution: (800, 500).into(),
-                    visible: false,
-                    focused: false,
-                    ..default()
-                }),
-                ..default()
-            })
-            .set(bevy::winit::WinitPlugin {
-                run_on_any_thread: true,
-            }),
-    )
-    .insert_resource(bevy::winit::WinitSettings::continuous())
-    .insert_resource(ClearColor(Color::srgb(0.055, 0.07, 0.085)))
-    .add_systems(Startup, scene)
-    .add_systems(Update, (sync_layers, composite).chain());
+    assert!(!path.exists(), "use a fresh screenshot path");
+    let mut app =
+        crate::testing::hidden_graphics_probe("Offline tracked outline probe", (800, 500));
+    app.insert_resource(ClearColor(Color::srgb(0.055, 0.07, 0.085)))
+        .add_systems(Startup, scene)
+        .add_systems(Update, (sync_layers, composite).chain());
     install_shader(&mut app);
     let output = path.clone();
     app.add_systems(
         Update,
-        move |mut frames: Local<u32>, mut commands: Commands, mut exit: MessageWriter<AppExit>| {
+        move |mut frames: Local<u32>, mut commands: Commands| {
             *frames += 1;
             if *frames == 90 {
                 commands
@@ -47,8 +32,6 @@ fn capture() {
                             exit.write(AppExit::Success);
                         },
                     );
-            } else if *frames == 360 {
-                exit.write(AppExit::error());
             }
         },
     );
