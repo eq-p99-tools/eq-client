@@ -279,7 +279,9 @@ pub(super) fn schedule(app: &mut App) {
     .add_systems(
         Update,
         (
+            items::raise,
             crate::dialogs::present,
+            crate::windows::restack_popups,
             crate::dialogs::inspect_button,
             crate::dialogs::scroll,
         )

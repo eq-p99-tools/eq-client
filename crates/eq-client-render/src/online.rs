@@ -2280,6 +2280,7 @@ mod tests {
         sender
             .send(WorldUpdate::Game(WorldEvent::Buff(
                 eq_client_core::BuffUpdate {
+                    replaces_slot: false,
                     spell_id: 42,
                     entity_id: 99,
                     slot: 1,
@@ -2292,6 +2293,7 @@ mod tests {
         sender
             .send(WorldUpdate::Game(WorldEvent::Buff(
                 eq_client_core::BuffUpdate {
+                    replaces_slot: false,
                     spell_id: 42,
                     entity_id: 7,
                     slot: 1,

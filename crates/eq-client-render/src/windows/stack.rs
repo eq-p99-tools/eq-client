@@ -52,8 +52,16 @@ impl Stack {
     /// Where a floating window draws: in front of every window below it in
     /// the stack.
     pub(crate) fn z(&self, id: WindowId) -> i32 {
-        let place = self.0.iter().position(|other| *other == id).unwrap_or(0);
-        Layer::Floating.base() + i32::try_from(place).unwrap_or(0)
+        let popup = id.describe().layer == Layer::Popup;
+        let place = self
+            .0
+            .iter()
+            .copied()
+            .filter(|other| (other.describe().layer == Layer::Popup) == popup)
+            .position(|other| other == id)
+            .unwrap_or(0);
+        let base = if popup { Layer::Popup } else { Layer::Floating };
+        base.base() + i32::try_from(place).unwrap_or(0)
     }
 }
 
@@ -219,7 +227,12 @@ pub(crate) fn raise_opened(
     open.retain(|id| id.describe().toggle != Toggle::Opens || shown.displayed(*id));
     for (id, node) in &frames {
         let description = id.describe();
-        if !description.layer.stacked() || matches!(id, WindowId::ChatGroup(_)) {
+        // Inspectors raise when their contents are presented, including
+        // updates to a panel that's already visible.
+        if !description.layer.stacked()
+            || description.layer == Layer::Popup
+            || matches!(id, WindowId::ChatGroup(_))
+        {
             continue;
         }
         let player_opened = description.toggle == Toggle::Opens;
@@ -253,6 +266,21 @@ pub(crate) fn restack(
             } else {
                 0
             };
+        if z.0 != wanted {
+            z.0 = wanted;
+        }
+    }
+}
+
+/// Applies the order of popups raised after pointer routing, including frames
+/// spawned during presentation.
+#[allow(clippy::needless_pass_by_value)]
+pub(crate) fn restack_popups(stack: Res<Stack>, mut frames: Query<(&WindowId, &mut GlobalZIndex)>) {
+    for (id, mut z) in &mut frames {
+        if id.describe().layer != Layer::Popup {
+            continue;
+        }
+        let wanted = stack.z(*id);
         if z.0 != wanted {
             z.0 = wanted;
         }
@@ -432,7 +460,7 @@ mod tests {
     #[test]
     fn tools_share_the_world_stack_but_stay_above_the_front_end() {
         let mut app = crate::testing::app();
-        app.add_systems(Update, (raise_opened, restack).chain());
+        app.add_systems(Update, (raise_opened, restack, restack_popups).chain());
         app.world_mut()
             .resource_mut::<Shown>()
             .open(WindowId::Scripts);

@@ -208,8 +208,10 @@ pub(crate) enum Layer {
     Hud,
     /// Windows the player opens and moves; the clicked one comes to the front.
     Floating,
-    /// Windows that sit above the rest while open, such as an inspected item.
+    /// Item and player inspectors, stacked above ordinary windows.
     Popup,
+    /// A server dialog, above the inspectors.
+    Dialog,
     /// Screens that replace the game, such as the character list.
     Screen,
     /// Floating tools raised above the login and character screens before play.
@@ -219,7 +221,7 @@ pub(crate) enum Layer {
 impl Layer {
     /// Windows whose order follows the player's clicks and opens.
     pub(crate) const fn stacked(self) -> bool {
-        matches!(self, Self::Floating | Self::Tool)
+        matches!(self, Self::Floating | Self::Popup | Self::Tool)
     }
 
     /// The first global z-index of the layer.
@@ -228,6 +230,7 @@ impl Layer {
             Self::Hud => 10,
             Self::Floating => 20,
             Self::Popup => 60,
+            Self::Dialog => 65,
             Self::Screen => 500,
             Self::Tool => 800,
         }
@@ -704,7 +707,7 @@ impl WindowId {
                 ..floating("", Placement::TopLeft(550.0, 350.0), false, &[])
             },
             Self::ServerDialog => Description {
-                layer: Layer::Popup,
+                layer: Layer::Dialog,
                 closes_on_escape: false,
                 persists: false,
                 ..floating(
@@ -718,6 +721,7 @@ impl WindowId {
                 )
             },
             Self::PlayerInspection => Description {
+                layer: Layer::Popup,
                 persists: false,
                 ..floating(
                     "PLAYER INSPECTION",

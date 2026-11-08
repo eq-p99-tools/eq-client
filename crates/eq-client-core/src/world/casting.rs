@@ -141,19 +141,25 @@ pub struct Casting {
     pub interrupted: Option<(Instant, u32)>,
     /// When each memorized spell can be cast again.
     pub cooldowns: Cooldowns,
-    /// When the admitted knight's last received recovery will elapse.
-    pub(super) knight_ready: Option<Instant>,
+    /// When the admitted knight's profile or locally estimated recovery elapses.
+    pub(super) knight_ready: Option<(Instant, crate::knights::ReuseSource)>,
     pub(super) discipline_timers: Timers,
     pub(super) linked_timers: Timers,
     pub(super) active_discipline: Active,
 }
 
 impl Casting {
-    /// Time left on the received knight recovery. A missing profile field
+    /// Time left on knight recovery. A missing profile field
     /// stays unknown. Zero means the last reported wait has elapsed.
     #[must_use]
     pub fn knight_wait(&self, now: Instant) -> Option<Duration> {
-        Some(self.knight_ready?.saturating_duration_since(now))
+        Some(self.knight_ready?.0.saturating_duration_since(now))
+    }
+
+    /// Whether the current knight timer was received or estimated locally.
+    #[must_use]
+    pub fn knight_reuse_source(&self) -> Option<crate::knights::ReuseSource> {
+        self.knight_ready.map(|(_, source)| source)
     }
 
     /// Last reported active discipline. Silence preserves unknown state.

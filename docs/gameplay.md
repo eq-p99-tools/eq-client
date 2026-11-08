@@ -361,15 +361,31 @@ Titanium Paladins and Shadow Knights can use Lay on Hands or Harm Touch
 from the first Combat ability button in Actions. Bind the button to the
 hotbar the same way as a skill, or use `/layonhands` or `/harmtouch`.
 Select the target first. Paladins can select themselves for Lay on Hands.
-The hotbar shows any recovery reported in the character profile, while
-the server reports the cast result and enforces reuse during play.
+Sending starts a local recovery estimate, which the hotbar labels separately
+from received profile recovery. The stock EQEmu estimate uses its 4,300-second
+constants. Project 1999 uses a 72-minute local estimate, informed by classic
+daily reuse and a P99 player's report of a Harm Touch wait over 70 minutes.
+A valid ability-slot recovery from a profile replaces the estimate. The
+client also preserves Titanium's ten-second button hold (`eqgame.exe`
+0x411f3d). The server decides the cast result and actual reuse.
+[Stock EQEmu timer constants](https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/common/features.h)
+[Classic Lay on Hands discussion](https://groups.google.com/g/alt.games.everquest/c/5NdS-bggNek)
+[P99 player timing report](https://www.project1999.com/forums/archive/index.php/t-221620.html)
 
 Titanium Warriors can use Evasive at level 52 and Defensive at level 55
 when the server lists the discipline as learned. Both act on yourself and
 share one reuse group. Use the Combat page buttons, bind them to the hotbar,
 or type `/discipline evasive` or `/discipline defensive`. The hotbar shows
 received recovery and active discipline slot changes. A named fade ends
-the matching observed discipline. An unreported timer remains unknown.
+the matching observed discipline. An explicit empty replacement of
+Titanium slot 37 also clears it (`eqgame.exe` 0x45f095). The one-second
+duplicate guard is local. An unreported timer remains unknown. EQEmu's
+positive-reuse activation sends a timer. Post-use timer delivery on Project
+1999 awaits wire verification. This client places these actions on its
+Combat page. Titanium dispatches the class ability at `eqgame.exe`
+0x41f4a0 and the named discipline through 0x46fc1b and 0x4bb39d.
+[EQEmu discipline timer](https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/zone/effects.cpp#L856-L885)
+[Titanium buff slot limits](https://github.com/EQEmu/EQEmu/blob/master/common/patches/titanium_limits.h)
 Spell gems also respect received linked spell reuse when the installed spell
 definition identifies the group.
 

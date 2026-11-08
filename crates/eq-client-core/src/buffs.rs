@@ -253,9 +253,10 @@ impl BuffTracker {
             if let Some(buff) = update.buff {
                 slots.insert(update.slot, buff);
                 self.given.insert(update.slot, now);
-            } else if slots
-                .get(&update.slot)
-                .is_some_and(|buff| buff.spell_id == update.spell_id)
+            } else if update.replaces_slot
+                || slots
+                    .get(&update.slot)
+                    .is_some_and(|buff| buff.spell_id == update.spell_id)
             {
                 slots.remove(&update.slot);
                 self.given.remove(&update.slot);
@@ -469,6 +470,7 @@ mod tests {
 
     fn update(slot: u32, spell_id: u32, present: bool) -> BuffUpdate {
         BuffUpdate {
+            replaces_slot: false,
             entity_id: 7,
             slot,
             spell_id,

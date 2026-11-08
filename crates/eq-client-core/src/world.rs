@@ -1215,9 +1215,11 @@ impl ClientWorld {
                 self.offered_abilities = Some(offered.clone());
             }
             WorldEvent::SkillReady(skill) => self.skill_ready(*skill),
-            WorldEvent::KnightReuse { session_id, remaining } => {
+            WorldEvent::KnightReuse { session_id, remaining, source } => {
                 if self.session_id == Some(*session_id) {
-                    self.casting.knight_ready = Some(now + *remaining);
+                    if let Some(ready) = now.checked_add(*remaining) {
+                        self.casting.knight_ready = Some((ready, *source));
+                    }
                 } else {
                     news.ignored = true;
                 }

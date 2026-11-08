@@ -111,8 +111,8 @@ fn frontmost(stack: &Stack, frames: &Frames) -> Option<WindowId> {
                 .iter()
                 .any(|(frame, node)| frame == id && node.display != Display::None)
     };
-    let popups = WindowId::ALL
-        .into_iter()
+    let popups = stack
+        .front_to_back()
         .filter(|id| id.describe().layer == super::windows::Layer::Popup);
     popups.chain(stack.front_to_back()).find(open)
 }
@@ -178,6 +178,18 @@ mod tests {
         // An inspected item sits above the rest and closes first.
         window(&mut app, WindowId::Item);
         assert_eq!(press(&mut app), Escape::Close(WindowId::Item));
+    }
+
+    #[test]
+    fn escape_uses_the_order_of_overlapping_inspectors() {
+        let mut app = app();
+        window(&mut app, WindowId::Item);
+        window(&mut app, WindowId::PlayerInspection);
+        window(&mut app, WindowId::ServerDialog);
+        for id in [WindowId::PlayerInspection, WindowId::Item] {
+            app.world_mut().resource_mut::<Stack>().raise(id);
+            assert_eq!(press(&mut app), Escape::Close(id));
+        }
     }
 
     #[test]

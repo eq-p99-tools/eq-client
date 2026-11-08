@@ -633,11 +633,20 @@ fn hovered_detail(
         Some(Action::Follow) => "Follow\nJoins the group you were invited to".into(),
         Some(Action::Disband) => "Disband\nLeaves your group, or declines an invitation".into(),
         Some(Action::KnightAbility(ability)) => match world.casting().knight_wait(now) {
-            Some(wait) if !wait.is_zero() => format!(
-                "{}\nRecovery {:.0}s",
-                ability.name(),
-                wait.as_secs_f32().ceil()
-            ),
+            Some(wait) if !wait.is_zero() => {
+                let source = match world.casting().knight_reuse_source() {
+                    Some(eq_client_core::knights::ReuseSource::LocalEstimate) => {
+                        "Estimated recovery"
+                    }
+                    Some(eq_client_core::knights::ReuseSource::Profile) => "Profile recovery",
+                    None => "Recovery",
+                };
+                format!(
+                    "{}\n{source} {:.0}s",
+                    ability.name(),
+                    wait.as_secs_f32().ceil()
+                )
+            }
             Some(_) => format!("{}\nUses the selected target", ability.name()),
             None => format!("{}\nRecovery unknown", ability.name()),
         },

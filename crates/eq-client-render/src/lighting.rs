@@ -510,6 +510,7 @@ mod tests {
         session::news(
             &mut online,
             [WorldEvent::Buff(eq_client_core::BuffUpdate {
+                replaces_slot: false,
                 entity_id: 7,
                 spell_id: 42,
                 slot: 1,

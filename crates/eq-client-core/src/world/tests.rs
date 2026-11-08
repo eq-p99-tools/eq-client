@@ -211,8 +211,10 @@ fn only_the_admitted_discipline_slot_can_report_an_active_effect() {
     use crate::disciplines::{Active, TITANIUM_BUFF_SLOT};
 
     let mut world = admitted();
+    game(&mut world, WorldEvent::BuffSnapshot(vec![Some(buff(42))]));
     let update = |entity_id, slot, spell_id, present: bool| {
         WorldEvent::Buff(crate::BuffUpdate {
+            replaces_slot: false,
             entity_id,
             slot,
             spell_id,
@@ -234,28 +236,58 @@ fn only_the_admitted_discipline_slot_can_report_an_active_effect() {
     assert_eq!(world.casting().active_discipline(), Active::Titanium(4499));
     game(&mut world, update(9, TITANIUM_BUFF_SLOT, 4499, false));
     assert_eq!(world.casting().active_discipline(), Active::Inactive);
+    game(&mut world, update(9, TITANIUM_BUFF_SLOT, 4503, true));
+    assert_eq!(
+        world.buffs().slots().unwrap()[&TITANIUM_BUFF_SLOT].spell_id,
+        4503
+    );
+    let WorldEvent::Buff(mut empty) = update(9, TITANIUM_BUFF_SLOT, u32::MAX, false) else {
+        unreachable!();
+    };
+    empty.replaces_slot = true;
+    game(&mut world, WorldEvent::Buff(empty));
+    assert_eq!(world.casting().active_discipline(), Active::Inactive);
+    assert!(
+        !world
+            .buffs()
+            .slots()
+            .unwrap()
+            .contains_key(&TITANIUM_BUFF_SLOT)
+    );
+    assert_eq!(world.buffs().slots().unwrap()[&0].spell_id, 42);
 }
 
 #[test]
 fn knight_reuse_belongs_to_the_current_admission() {
+    use crate::knights::ReuseSource::{LocalEstimate, Profile};
     use std::time::Duration;
 
     let mut world = admitted();
     let now = Instant::now();
-    let apply = |world: &mut ClientWorld, session_id, remaining| {
+    let apply = |world: &mut ClientWorld, session_id, remaining, source| {
         world.apply(
             &WorldUpdate::Game(WorldEvent::KnightReuse {
                 session_id,
                 remaining,
+                source,
             }),
             now,
             &NoSpells,
         )
     };
     assert_eq!(world.casting().knight_wait(now), None);
-    assert!(apply(&mut world, 2, Duration::from_secs(30)).ignored);
+    assert!(apply(&mut world, 2, Duration::from_secs(30), LocalEstimate).ignored);
     assert_eq!(world.casting().knight_wait(now), None);
-    apply(&mut world, 1, Duration::from_secs(30));
+    apply(&mut world, 1, Duration::from_mins(72), LocalEstimate);
+    assert_eq!(world.casting().knight_reuse_source(), Some(LocalEstimate));
+    apply(&mut world, 1, Duration::MAX, Profile);
+    assert_eq!(world.casting().knight_reuse_source(), Some(LocalEstimate));
+    assert_eq!(
+        world.casting().knight_wait(now),
+        Some(Duration::from_mins(72))
+    );
+    apply(&mut world, 1, Duration::from_secs(30), Profile);
+    assert_eq!(world.casting().knight_reuse_source(), Some(Profile));
     assert_eq!(
         world.casting().knight_wait(now),
         Some(Duration::from_secs(30))
@@ -1002,6 +1034,7 @@ fn an_instant_effect_never_removes_a_buff_the_server_slotted() {
     game(
         &mut world,
         WorldEvent::Buff(crate::BuffUpdate {
+            replaces_slot: false,
             entity_id: 9,
             slot: 2,
             spell_id: 42,
@@ -1032,6 +1065,7 @@ fn only_the_players_lasting_effects_wait_for_a_slot_and_a_fade_clears_them() {
     game(
         &mut world,
         WorldEvent::Buff(crate::BuffUpdate {
+            replaces_slot: false,
             entity_id: 9,
             slot: 3,
             spell_id: 42,

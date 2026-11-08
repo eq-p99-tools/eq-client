@@ -4,7 +4,7 @@ use crate::{
     online::OnlineState,
     outbox::Outbox,
     theme::{self, Size},
-    windows::{self, Shown, WindowId},
+    windows::{self, Shown, Stack, WindowId},
 };
 use bevy::prelude::*;
 use eq_client_core::{
@@ -206,7 +206,8 @@ pub(super) fn sync_note(
 pub(super) fn present(
     mut commands: Commands,
     mut online: ResMut<OnlineState>,
-    mut shown: ResMut<Shown>,
+    (mut shown, mut stack): (ResMut<Shown>, ResMut<Stack>),
+    escape: Res<crate::escape::Escape>,
     mut art: crate::sheets::Art,
     (mut popup, mut inspection): (Local<RenderedPopup>, Local<RenderedInspection>),
 ) {
@@ -225,7 +226,7 @@ pub(super) fn present(
         }
     }
     let id = WindowId::PlayerInspection;
-    if !shown.is_open(id)
+    if (!shown.is_open(id) || *escape == crate::escape::Escape::Close(id))
         && inspection
             .as_ref()
             .is_some_and(|(previous, _)| online.world().player_inspection() == Some(previous))
@@ -239,7 +240,9 @@ pub(super) fn present(
         }
         if let Some(report) = report {
             shown.open(id);
-            *inspection = Some((report.clone(), equipment(&mut commands, &mut art, report)));
+            stack.raise(id);
+            let panel = equipment(&mut commands, &mut art, report);
+            *inspection = Some((report.clone(), panel));
         } else {
             shown.close(id);
         }
@@ -480,6 +483,230 @@ fn entity_text(entity: &str) -> Option<char> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::system::RunSystemOnce;
+    use eq_client_core::inspection::{Equipment, Inspection};
+
+    fn receive_self_inspection(app: &mut App) {
+        let mut online = app.world_mut().resource_mut::<OnlineState>();
+        let player = crate::online::testing::player(7);
+        let name = player.name.clone();
+        crate::online::testing::admit(&mut online, 5, player);
+        crate::online::testing::news(
+            &mut online,
+            [eq_client_core::WorldEvent::PlayerInspection(
+                PlayerInspection {
+                    session_id: 5,
+                    name,
+                    report: Inspection {
+                        recipient_id: 7,
+                        player_id: 7,
+                        text: "Synthetic inspection note".into(),
+                        equipment: vec![
+                            Equipment {
+                                name: "Test charm".into(),
+                                icon: None,
+                            },
+                            Equipment {
+                                name: "Test earring".into(),
+                                icon: Some(500),
+                            },
+                        ],
+                    },
+                },
+            )],
+        );
+    }
+
+    #[test]
+    fn a_received_player_report_draws_its_contents_above_an_overlapping_item_window() {
+        let mut app = crate::testing::app();
+        app.world_mut()
+            .resource_mut::<crate::ViewerSettings>()
+            .0
+            .eq_directory = Some("synthetic-no-files".into());
+        let icon = crate::sheets::testing::sheet(
+            &mut app,
+            "dragitem1.tga",
+            image::RgbaImage::from_pixel(240, 240, image::Rgba([12, 34, 56, 255])),
+        );
+        // Match the production order. A report arriving in Present needs to
+        // raise above an item window already stacked by Route.
+        app.add_systems(
+            Update,
+            (windows::restack, present, windows::restack_popups).chain(),
+        );
+        let item = app
+            .world_mut()
+            .run_system_once(|mut commands: Commands| {
+                windows::frame(&mut commands, WindowId::Item, Node::default())
+            })
+            .unwrap();
+        let item_layout = app.world_mut().get_mut::<Node>(item).unwrap().into_inner();
+        item_layout.left = px(0);
+        item_layout.top = px(80);
+        item_layout.margin = UiRect::ZERO;
+        item_layout.width = px(397);
+        item_layout.height = px(190);
+        app.world_mut()
+            .resource_mut::<Stack>()
+            .raise(WindowId::Item);
+        app.update();
+        receive_self_inspection(&mut app);
+        app.update();
+
+        let world = app.world_mut();
+        let body = world
+            .query_filtered::<Entity, With<ScrollBody>>()
+            .single(world)
+            .unwrap();
+        let panel = world.get::<ChildOf>(body).unwrap().parent();
+        assert_eq!(
+            world.get::<WindowId>(panel),
+            Some(&WindowId::PlayerInspection)
+        );
+        let player = world.get::<Node>(panel).unwrap();
+        let item_node = world.get::<Node>(item).unwrap();
+        assert_eq!((player.left, player.top), (px(125), px(105)));
+        assert_eq!((item_node.width, item_node.height), (px(397), px(190)));
+        assert!(
+            world.get::<GlobalZIndex>(panel).unwrap().0
+                > world.get::<GlobalZIndex>(item).unwrap().0
+        );
+        assert!(
+            world.get::<GlobalZIndex>(panel).unwrap().0
+                < WindowId::ServerDialog.describe().layer.base()
+        );
+        let rows = world.get::<Children>(body).unwrap();
+        let [note, first, second] = &rows[..] else {
+            panic!("expected the note followed by two received rows");
+        };
+        assert_eq!(
+            world.get::<Text>(*note).unwrap().0,
+            "Synthetic inspection note"
+        );
+        let row_text = |row| {
+            let children = world.get::<Children>(row).unwrap();
+            children[..]
+                .iter()
+                .find_map(|child| world.get::<Text>(*child))
+                .unwrap()
+                .0
+                .as_str()
+        };
+        assert_eq!(row_text(*first), "Charm  ·  Test charm");
+        assert_eq!(row_text(*second), "Left ear  ·  Test earring");
+        let mut images = world.query::<&ImageNode>();
+        let images: Vec<_> = images.iter(world).collect();
+        let [image] = images.as_slice() else {
+            panic!("only the row with a received icon should draw one");
+        };
+        assert_eq!(image.image, icon);
+
+        // Escape dismisses the front inspector and leaves the item window open.
+        *world.resource_mut::<crate::escape::Escape>() =
+            crate::escape::Escape::Close(WindowId::PlayerInspection);
+        app.update();
+        assert!(app.world().get_entity(panel).is_err());
+        assert_ne!(
+            app.world().get::<Node>(item).unwrap().display,
+            Display::None
+        );
+    }
+
+    #[test]
+    fn a_new_item_selection_and_received_detail_each_raise_the_open_item_window() {
+        use crate::items;
+        let mut app = crate::testing::app();
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        app.insert_resource(Outbox::new(Some(sender))).add_systems(
+            Update,
+            (
+                windows::raise_opened,
+                windows::restack,
+                items::input,
+                items::raise,
+                present,
+                windows::restack_popups,
+                items::update,
+            )
+                .chain(),
+        );
+        app.world_mut()
+            .run_system_once(|mut commands: Commands| items::spawn(&mut commands))
+            .unwrap();
+        app.world_mut()
+            .resource_mut::<items::ItemState>()
+            .open_received(crate::preview::items()[0].details.clone());
+        app.update();
+        receive_self_inspection(&mut app);
+        app.update();
+
+        let world = app.world_mut();
+        let item = world
+            .query_filtered::<Entity, With<items::ItemPanel>>()
+            .single(world)
+            .unwrap();
+        let body = world
+            .query_filtered::<Entity, With<ScrollBody>>()
+            .single(world)
+            .unwrap();
+        let player = world.get::<ChildOf>(body).unwrap().parent();
+        let z = |app: &App, entity| app.world().get::<GlobalZIndex>(entity).unwrap().0;
+        assert!(z(&app, player) > z(&app, item));
+        assert_ne!(
+            app.world().get::<Node>(item).unwrap().display,
+            Display::None
+        );
+
+        app.world_mut()
+            .run_system_once(
+                |mut state: ResMut<items::ItemState>,
+                 online: Res<OnlineState>,
+                 outbox: Res<Outbox>| {
+                    let link = eq_client_core::ItemLink {
+                        body: format!("00002A{}1234ABCD", "0".repeat(31)),
+                        item_id: 42,
+                        text: "New linked item".into(),
+                        start: 0,
+                        end: 0,
+                        text_start: 0,
+                        text_end: 15,
+                    };
+                    state.inspect_link(&link, &online, &outbox).unwrap();
+                },
+            )
+            .unwrap();
+        assert!(matches!(
+            receiver.try_recv().unwrap(),
+            eq_client_core::ClientCommand::InspectItem { session_id: 5, .. }
+        ));
+        app.update();
+        assert!(z(&app, item) > z(&app, player));
+
+        app.world_mut()
+            .resource_mut::<Stack>()
+            .raise(WindowId::PlayerInspection);
+        app.update();
+        assert!(z(&app, player) > z(&app, item));
+        let mut details = crate::preview::items()[0].details.clone();
+        details.id = 42;
+        details.name = "Received linked item".into();
+        crate::online::testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [eq_client_core::WorldEvent::ItemDetails(details)],
+        );
+        app.update();
+        assert!(z(&app, item) > z(&app, player));
+        assert!(z(&app, item) < WindowId::ServerDialog.describe().layer.base());
+        let world = app.world_mut();
+        let mut text = world.query_filtered::<&Text, With<items::ItemText>>();
+        assert!(
+            text.single(world)
+                .unwrap()
+                .0
+                .starts_with("Received linked item")
+        );
+    }
 
     #[test]
     fn stml_layout_keeps_words_and_never_activates_markup() {

@@ -7,7 +7,8 @@
   server placement. Attended verification is pending.
 - Show received Titanium server dialogs and inspect a nearby selected player
   on EQEmu and Project 1999. The inspection panel displays received equipment
-  fields and note text.
+  fields and note text. Item selections, received inspection details, and
+  clicks bring the corresponding inspector to the front.
 - Render installed lights in supported Titanium interiors and apply supported
   low-light vision. Ordinary invisibility and target eligibility use the
   observer's current See Invisible effect when the inputs are known.
@@ -49,10 +50,9 @@
 - Offer the ordinary Project 1999 forge through the nearby object controls
   and show the container only after the server opens it. Keep local item
   move projections distinct from received station and inventory contents.
-- Show a self-targeted Bind Wound request separately from the server result
-  and the received bandage stock. Project 1999 withholds the path for now: an
-  unanswered or refused bandage would hold the whole inventory until the
-  next zone.
+- Show Project 1999 self-targeted Bind Wound requests separately from server
+  results. After the request ends, affected slots show unconfirmed stock
+  while unrelated inventory actions resume.
 
 - Allow `gm traindisc MAX [MIN]` on network-constrained local EQEmu sessions
   to prepare learned disciplines for test characters.
@@ -77,9 +77,6 @@
 - Draw received arrows and thrown items in flight using installed item models.
   The script report separates received flights from rendered models.
 
-- Keep staged discipline state separate from the buff-slot revision used by
-  cancellation. A matching instant class refresh consumes its cast request
-  even when the server sends no cast start.
 - Apply received same-zone moves at the absolute landing supplied by the server.
 
 - Follow local EQEmu server-owned same-zone pad handoffs through ordinary
@@ -88,13 +85,16 @@
 
 - Added Evasive and Defensive on Titanium through Actions, the hotbar and
   named commands. Received shared discipline reuse, linked spell timers and
-  active discipline slot updates are tracked per admission.
+  active discipline slot updates are tracked per admission. Exact empty
+  slot replacements clear the active state. Staged discipline state preserves
+  the cancellation revision.
 
 - Added the Titanium knight actions Lay on Hands and Harm Touch through
-  Actions, the hotbar, and ordinary slash and script commands. Reuse sent in
-  the admitted profile is displayed separately from the cast result.
-  A new admission clears the previous knight, discipline, and linked spell
-  reuse timers.
+  Actions, the hotbar, and ordinary slash and script commands. The hotbar
+  distinguishes the local recovery estimate from received profile recovery.
+  A matching instant class refresh consumes its cast request even when the
+  server sends no cast start. A new admission clears the previous knight,
+  discipline, and linked spell reuse timers.
 - Open the ordinary resurrection and translocate confirmation dialogs
   for supported P99 offers. Answers identify the displayed offer, and
   repeated wire-identical offers are withheld during that admission.

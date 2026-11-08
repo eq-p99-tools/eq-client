@@ -3131,6 +3131,42 @@ mod tests {
     }
 
     #[test]
+    fn a_link_stays_available_while_the_same_bandage_slot_is_uncertain() {
+        use crate::online::testing;
+        use eq_client_core::inventory::{InventorySlot, InventoryUpdate};
+
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(1));
+        let slot = InventorySlot(23);
+        let mut bandage = crate::preview::items()[0].clone();
+        bandage.slot = slot;
+        bandage.details.name = "Bandage".into();
+        bandage.rules.item_type = eq_client_core::bind_wound::BANDAGE;
+        bandage.rules.titanium_link_hash = Some(0x1234_abcd);
+        testing::inventory(&mut online, InventoryUpdate::Snapshot(vec![bandage]));
+        let mut chat = ChatState::default();
+        chat.compose_owned_link(slot, &online).unwrap();
+        let original = chat.draft.encoded();
+
+        testing::inventory(&mut online, InventoryUpdate::BandageStockPending(true));
+        assert!(online.world().inventory().predicted());
+        chat.draft.clear();
+        chat.compose_owned_link(slot, &online).unwrap();
+        assert_eq!(chat.draft.encoded(), original);
+
+        testing::inventory(
+            &mut online,
+            InventoryUpdate::BandageStockUncertain(vec![slot]),
+        );
+        let inventory = online.world().inventory();
+        assert!(!inventory.predicted());
+        assert!(!inventory.custody_known(slot));
+        chat.draft.clear();
+        chat.compose_owned_link(slot, &online).unwrap();
+        assert_eq!(chat.draft.encoded(), original);
+    }
+
+    #[test]
     fn eqemu_link_expansion_checks_the_routed_body_and_retains_an_oversized_draft() {
         let (tx, rx) = std::sync::mpsc::sync_channel(4);
         let outbox = crate::outbox::Outbox::new(Some(tx));

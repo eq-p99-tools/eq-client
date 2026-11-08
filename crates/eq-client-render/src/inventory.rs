@@ -710,7 +710,11 @@ pub(super) fn feedback(
                     format!("{}{count}{charges}", item.details.name)
                 },
             );
-            description = format!("{}: {value}", slot.0.label());
+            description = if inventory.bandage_stock_uncertain(slot.0) {
+                format!("{}: {value} (bandage stock unconfirmed)", slot.0.label())
+            } else {
+                format!("{}: {value}", slot.0.label())
+            };
             if let Some(effect) = item.and_then(|item| item.activation.effect.as_ref()) {
                 use std::fmt::Write;
                 let _ = write!(

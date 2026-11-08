@@ -53,6 +53,7 @@ pub(super) struct ItemState {
     pub hovered: bool,
     selected: Option<(u32, String)>,
     shown: Option<ItemDetails>,
+    raise_on_present: bool,
     pending: Option<PendingInspection>,
     /// The link body used to request a particular cached observation.
     inspected: BTreeMap<u32, (String, u64)>,
@@ -115,6 +116,7 @@ impl ItemState {
         debug!("Item inspection requested: ID {}", link.item_id);
         self.selected = Some((link.item_id, link.text.clone()));
         self.shown = None;
+        self.raise_on_present = true;
         if let Some(previous) = self.pending.take() {
             self.retire(previous.id, previous.body);
         }
@@ -136,6 +138,7 @@ impl ItemState {
     pub(super) fn open_received(&mut self, item: ItemDetails) {
         self.selected = Some((item.id, item.name.clone()));
         self.shown = Some(item);
+        self.raise_on_present = true;
         self.status = "";
     }
 
@@ -189,6 +192,7 @@ impl ItemState {
             self.inspected.insert(id, (body, revision));
             if waiting {
                 self.shown = Some(item.clone());
+                self.raise_on_present = true;
                 self.status = "";
             }
         } else if waiting && pending.expired() && self.status != VARIANT_UNCONFIRMED {
@@ -314,6 +318,17 @@ pub(super) fn input(
         && let Err(reason) = state.inspect_link(link, &online, &sender)
     {
         chat.refuse(reason);
+    }
+}
+
+/// Raises a new selection or its received details, even while the panel is open.
+pub(super) fn raise(mut state: ResMut<ItemState>, mut stack: ResMut<super::windows::Stack>) {
+    if !state.raise_on_present {
+        return;
+    }
+    state.raise_on_present = false;
+    if state.selected.is_some() {
+        stack.raise(super::windows::WindowId::Item);
     }
 }
 
