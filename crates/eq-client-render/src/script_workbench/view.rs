@@ -744,6 +744,10 @@ pub(super) fn source_line(
 
 /// Give the wheel to the editor or help pane without zooming the game camera.
 #[allow(clippy::needless_pass_by_value)]
+#[allow(
+    clippy::type_complexity,
+    reason = "the query shares scrolling across two Bevy panes"
+)]
 pub(super) fn scroll(
     wheel: Res<Wheel>,
     state: Res<Workbench>,

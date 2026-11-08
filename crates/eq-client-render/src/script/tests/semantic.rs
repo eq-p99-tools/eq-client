@@ -672,7 +672,7 @@ fn scripted_owned_link_uses_the_current_received_item_without_sending() {
     start(&mut app, "compose_owned_link 8 23");
     frame_at(&mut app, 0);
     refused(&app, 1, "Item link composition needs the current admission");
-    assert!(app.world().resource::<ChatState>().draft().is_empty());
+    assert_eq!(app.world().resource::<ChatState>().draft(), "");
 
     let source = format!("compose_owned_link {ADMISSION} 23");
     start(&mut app, &source);

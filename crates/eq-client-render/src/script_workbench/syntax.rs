@@ -16,12 +16,10 @@ impl Kind {
     pub(super) fn color(self) -> bevy::prelude::Color {
         use crate::theme;
         match self {
-            Self::Command => theme::FOCUS,
+            Self::Command | Self::Operator => theme::FOCUS,
             Self::Comment => theme::INK_DIM,
-            Self::Number => theme::INK_WARM,
+            Self::Number | Self::State => theme::INK_WARM,
             Self::Key | Self::String => theme::AGREED,
-            Self::Operator => theme::FOCUS,
-            Self::State => theme::INK_WARM,
             Self::Argument => theme::INK_BRIGHT,
         }
     }

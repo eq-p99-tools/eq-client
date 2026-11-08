@@ -6142,7 +6142,7 @@ mod tests {
         let flow = status.flow().unwrap();
         assert_eq!(flow.branch(), Some((4, false)));
         assert_eq!(flow.variables(), ["n: int = 2"]);
-        assert!(flow.loops().is_empty());
+        assert_eq!(flow.loops(), []);
     }
 
     #[test]

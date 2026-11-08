@@ -218,7 +218,10 @@ fn text_literal(source: &str) -> Result<(String, &str), String> {
 }
 
 fn operator(source: &str) -> Result<(Token<'_>, usize), String> {
-    use Binary::*;
+    use Binary::{
+        Add, And, Divide, Equal, Greater, GreaterEqual, Less, LessEqual, Multiply, NotEqual, Or,
+        Remainder, Subtract,
+    };
     for (symbol, op) in [
         ("||", Or),
         ("&&", And),
@@ -391,7 +394,7 @@ impl<Lookup: Fn(&str) -> Option<(usize, Kind)>> Parser<'_, '_, Lookup> {
 mod tests {
     use super::*;
 
-    fn eval(source: &str, value: Value) -> Result<Value, &'static str> {
+    fn eval(source: &str, value: &Value) -> Result<Value, &'static str> {
         parse(source, |_| None)
             .unwrap()
             .evaluate(&[], &|_| value.clone())
@@ -399,19 +402,19 @@ mod tests {
 
     #[test]
     fn precedence_and_integer_errors_are_checked() {
-        assert_eq!(eval("2 + 3 * (4 - 1)", Value::Unknown), Ok(Value::Int(11)));
-        assert_eq!(eval("-8 / 3", Value::Unknown), Ok(Value::Int(-2)));
+        assert_eq!(eval("2 + 3 * (4 - 1)", &Value::Unknown), Ok(Value::Int(11)));
+        assert_eq!(eval("-8 / 3", &Value::Unknown), Ok(Value::Int(-2)));
         assert_eq!(
-            eval("9223372036854775807 + 1", Value::Unknown),
+            eval("9223372036854775807 + 1", &Value::Unknown),
             Err("integer overflow")
         );
-        assert_eq!(eval("9 % 0", Value::Unknown), Err("division by zero"));
+        assert_eq!(eval("9 % 0", &Value::Unknown), Err("division by zero"));
         assert_eq!(
-            eval("-9223372036854775808", Value::Unknown),
+            eval("-9223372036854775808", &Value::Unknown),
             Ok(Value::Int(i64::MIN))
         );
         assert_eq!(
-            eval("-9223372036854775808 / -1", Value::Unknown),
+            eval("-9223372036854775808 / -1", &Value::Unknown),
             Err("integer overflow")
         );
         assert!(parse("9223372036854775808", |_| None).is_err());
@@ -422,26 +425,29 @@ mod tests {
 
     #[test]
     fn unavailable_observations_keep_their_distinctions_and_can_be_guarded() {
-        assert_eq!(eval("player.mana == 0", Value::Unknown), Ok(Value::Unknown));
-        assert_eq!(eval("player.mana == 0", Value::Stale), Ok(Value::Stale));
         assert_eq!(
-            eval("player.mana == 0", Value::Int(0)),
+            eval("player.mana == 0", &Value::Unknown),
+            Ok(Value::Unknown)
+        );
+        assert_eq!(eval("player.mana == 0", &Value::Stale), Ok(Value::Stale));
+        assert_eq!(
+            eval("player.mana == 0", &Value::Int(0)),
             Ok(Value::Bool(true))
         );
         assert_eq!(
-            eval("stale(player.mana)", Value::Stale),
+            eval("stale(player.mana)", &Value::Stale),
             Ok(Value::Bool(true))
         );
         assert_eq!(
-            eval("stale(player.mana)", Value::Unknown),
+            eval("stale(player.mana)", &Value::Unknown),
             Ok(Value::Bool(false))
         );
         assert_eq!(
-            eval("known(player.mana) && player.mana > 0", Value::Unknown),
+            eval("known(player.mana) && player.mana > 0", &Value::Unknown),
             Ok(Value::Bool(false))
         );
         assert_eq!(
-            eval("true || 1 / 0 > 0", Value::Unknown),
+            eval("true || 1 / 0 > 0", &Value::Unknown),
             Ok(Value::Bool(true))
         );
     }
