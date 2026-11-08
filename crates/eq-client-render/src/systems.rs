@@ -89,6 +89,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<map::Presentation>()
         .init_resource::<map::WatchState>()
         .init_resource::<map::MapMotion>()
+        .init_resource::<map::Landmarks>()
         .init_resource::<login::FrontEnd>()
         .init_resource::<login::LoginLook>();
 }
@@ -214,6 +215,7 @@ pub(super) fn schedule(app: &mut App) {
                     map::presentation_actions,
                     map::inspect,
                     map::control_actions,
+                    map::landmark_actions,
                     map::target_input,
                     map::scroll_watches,
                 )
@@ -377,12 +379,14 @@ pub(super) fn schedule(app: &mut App) {
                         tradeskills::show,
                         (
                             map::draw,
+                            map::draw_landmarks,
                             map::update_entities,
                             map::update_items,
                             map::draw_movement,
                             map::update_controls,
                             map::show_target,
                             map::present,
+                            map::present_landmarks,
                         )
                             .chain(),
                         skinned::scrollbar::place,
@@ -489,9 +493,11 @@ pub(super) fn install_overlays(app: &mut App) {
     windows::register_layout(app);
     paperdoll::register(app);
     crate::creation_preview::register(app);
+    entities::outline::register(app);
     app.add_systems(
         Update,
-        profile_files::follow
+        (profile_files::follow, map::follow_landmarks)
+            .chain()
             .after(Stage::Receive)
             .before(Stage::Scene),
     );

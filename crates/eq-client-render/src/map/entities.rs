@@ -143,7 +143,7 @@ fn look(
     let border = if pinned {
         theme::INK_BRIGHT
     } else if tracked {
-        Color::srgb(1.0, 0.7, 0.1)
+        super::TRACKED_INK
     } else if matched || hovered {
         theme::FOCUS
     } else if entity.own {

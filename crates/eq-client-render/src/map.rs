@@ -3,6 +3,7 @@
 mod controls;
 mod entities;
 mod items;
+mod landmarks;
 mod motion;
 mod navigation;
 mod presentation;
@@ -18,6 +19,10 @@ pub(crate) use controls::{
 pub(crate) use controls::{input as search_input, update as update_controls};
 pub(crate) use entities::{inspect, update as update_entities};
 pub(crate) use items::update as update_items;
+pub(crate) use landmarks::{
+    Landmarks, actions as landmark_actions, draw as draw_landmarks, follow as follow_landmarks,
+    present as present_landmarks,
+};
 pub(crate) use motion::{MapMotion, draw as draw_movement, sample as sample_movement};
 pub(crate) use navigation::input as navigate;
 pub(crate) use presentation::{
@@ -35,6 +40,9 @@ use bevy::{
     render::render_resource::{Extent3d, TextureDimension, TextureFormat},
 };
 use eq_client_assets::maps::ZoneMap;
+
+/// Shared accent for tracked names on the map and in the scene.
+pub(crate) const TRACKED_INK: Color = Color::srgb(1.0, 0.7, 0.1);
 
 /// The skin's area the map draws in.
 #[derive(Component)]
@@ -122,6 +130,8 @@ pub(crate) struct MapView {
     selected: Option<entities::Identity>,
     /// A name substring; unmatched markers stay on the map but become subdued.
     query: String,
+    /// Which of the map's text inputs last claimed keyboard focus.
+    field: controls::SearchBox,
     /// Zoom steps from the whole map.
     zoom: i32,
     /// Where the view's centre is moved to, in map units.
@@ -143,6 +153,7 @@ impl Default for MapView {
             projection: None,
             selected: None,
             query: String::new(),
+            field: controls::SearchBox::Names,
             zoom: 0,
             pan: Vec2::ZERO,
             labels: true,
@@ -301,7 +312,7 @@ fn expand(bounds: &mut Option<(Vec2, Vec2)>, point: Vec2) {
 pub(crate) fn buttons(
     mut view: ResMut<MapView>,
     online: Res<OnlineState>,
-    motion: Res<MapMotion>,
+    (motion, landmarks): (Res<MapMotion>, Res<Landmarks>),
     buttons: crate::clicks::Clicks<MapButton>,
     canvases: Query<&ComputedNode, With<MapCanvas>>,
 ) {
@@ -340,6 +351,9 @@ pub(crate) fn buttons(
                         .map(|spawn| spawn.state.position),
                 ) {
                     expand(&mut view.bounds, map_point(position));
+                }
+                for point in landmarks.points() {
+                    expand(&mut view.bounds, point);
                 }
             }
             MapButton::Nearby => {

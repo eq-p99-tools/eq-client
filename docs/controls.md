@@ -177,6 +177,18 @@ are per character and world. A newly reported match adds a System message, map
 banner and background attention request even with the map closed. Initial zone
 list matches also count as spotted; they cannot be distinguished from new spawns.
 
+**3D On** outlines the matching character models in amber in the main view,
+including through walls. The setting starts enabled and follows the saved
+watch list independently of map search. **3D Off** hides the outlines. Scene
+distance, model availability, and ordinary targeting checks still apply.
+
+Open **Landmarks** to save a named location. Enter a name to save your current
+position, or enter `Name | X Y Z` to supply coordinates in world units.
+**Save landmark** updates an existing landmark with the same name. Select
+a saved row to center the map and read the horizontal range and bearing from
+your character. **Remove selected** deletes that landmark. Landmarks are
+stored by world, character, and zone, and appear as teal diamonds on the map.
+
 Hover, pin, search and track are local. Only **Target** asks to change the gameplay
 target, through the same visibility, range and capability checks as scene
 targeting. It does not attack, cast or move. **Unpin** closes the inspector without
