@@ -4399,6 +4399,41 @@ fn a_world_container_opens_only_when_asked_and_closes_with_the_player() {
 }
 
 #[test]
+fn only_the_current_matching_station_refusal_clears_its_request() {
+    let mut world = admitted();
+    world.ask_container(40);
+    for (session_id, drop_id, error) in [
+        (0, 40, Some("stale refusal")),
+        (1, 41, Some("unrelated pickup refusal")),
+        (1, 40, None),
+    ] {
+        game(
+            &mut world,
+            WorldEvent::ObjectAction {
+                session_id,
+                drop_id,
+                error: error.map(str::to_owned),
+            },
+        );
+        assert_eq!(world.pending_container_open(), Some(40));
+    }
+    let changes = game(
+        &mut world,
+        WorldEvent::ObjectAction {
+            session_id: 1,
+            drop_id: 40,
+            error: Some("only an ordinary forge is available".into()),
+        },
+    );
+    assert!(world.pending_container_open().is_none());
+    assert!(world.container().is_none());
+    assert!(matches!(
+        changes.notices.as_slice(),
+        [Notice::GroundRefused(_)]
+    ));
+}
+
+#[test]
 fn abilities_the_server_does_not_offer_are_told_apart() {
     use crate::abilities::Ability;
     let mut world = admitted();

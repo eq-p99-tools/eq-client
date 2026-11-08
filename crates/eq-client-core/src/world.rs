@@ -1019,8 +1019,10 @@ impl ClientWorld {
             } => self.door_used((*session_id, *door_id), (error.as_ref(), *string_id), news),
             WorldEvent::Objects(update) => self.objects_news(update, news),
             WorldEvent::ObjectAction {
-                session_id, error, ..
-            } => self.object_refused(*session_id, error.as_ref(), news),
+                session_id,
+                drop_id,
+                error,
+            } => self.object_refused((*session_id, *drop_id), error.as_ref(), news),
 
             // The player character.
             WorldEvent::Level {

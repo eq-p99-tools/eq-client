@@ -146,6 +146,9 @@ pub(super) fn use_object(
         .entries()
         .get(&drop_id)
         .is_some_and(eq_client_core::ground::station_candidate);
+    if container && state.world().pending_container_open().is_some() {
+        return Some("Wait for the previous station open result.".into());
+    }
     // The outbox says a refusal itself.
     let posted = outbox.post(state.world(), |stamp| {
         if container {

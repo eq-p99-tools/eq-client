@@ -512,13 +512,16 @@ impl super::ClientWorld {
     /// The server refused to hand over a ground object; one handed over
     /// shows by leaving the ground.
     pub(super) fn object_refused(
-        &self,
-        session_id: u64,
+        &mut self,
+        (session_id, drop_id): (u64, u32),
         error: Option<&String>,
         changes: &mut super::Changes,
     ) {
         match error {
             Some(error) if self.accepts_reply(session_id) => {
+                if self.zone.asked_container == Some(drop_id) {
+                    self.zone.asked_container = None;
+                }
                 changes.notices.push(Notice::GroundRefused(error.clone()));
             }
             _ => changes.ignored = true,
