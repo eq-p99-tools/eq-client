@@ -26,6 +26,20 @@ pub enum InputMode {
     Background,
 }
 
+/// Origins for this frame's synthesized keyboard and pointer input.
+#[derive(Default, Resource)]
+pub(crate) struct AuthoredInput {
+    pub(super) typed: HashSet<MessageId<KeyboardInput>>,
+    pub(crate) keys: HashSet<KeyCode>,
+    pub(crate) left_button: bool,
+}
+
+impl AuthoredInput {
+    pub(crate) fn typed(&self, id: MessageId<KeyboardInput>) -> bool {
+        self.typed.contains(&id)
+    }
+}
+
 /// Native activity is observed separately from the script's typed messages.
 /// The authored IDs live for one frame, not for the lifetime of a followed run.
 #[derive(Default, Resource)]
@@ -48,7 +62,7 @@ impl BackgroundInput {
 
 /// Only an explicitly enabled process observes background input ownership.
 pub(crate) fn install(app: &mut App, mode: InputMode) {
-    app.insert_resource(mode);
+    app.insert_resource(mode).init_resource::<AuthoredInput>();
     if mode == InputMode::Background {
         app.init_resource::<BackgroundInput>()
             .configure_sets(PreUpdate, bevy::ui::UiSystems::Focus.run_if(native_focus))

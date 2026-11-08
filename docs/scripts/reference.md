@@ -4,10 +4,11 @@
 [Examples](examples.md)
 [Run controls](running.md)
 [UI target reference](targets.md)
+[Variables, conditions and loops](language.md)
 
 ## Language
 
-One action per line. Blank lines are ignored. `#` begins a comment, including after an action. Commands are lowercase. Arguments are separated by whitespace; there is no quoted-string or escape syntax. Multiword names are accepted only by the commands that explicitly take them. There are no variables, loops, branches or functions.
+One statement per line. Blank lines are ignored. `#` begins a comment, including after an action. Action commands are lowercase and their arguments use whitespace and command-specific names. Expressions in typed assignments and control flow accept quoted text. See [Variables, conditions and loops](language.md) for that syntax.
 
 Durations are milliseconds. Headings use EQ's 0 to 512 units; positions and distances use EQ world units unless described as screen pixels. The first invalid line prevents the entire buffer from running.
 
@@ -71,7 +72,7 @@ Key names are case-insensitive. Combine them with `+`, such as `alt+1`. Supporte
   The step completes when the local queue accepts the offer. The server's
   answer separately determines whether an exchange opens.
 - `interact admission spawn revision` opens the service of the exact selected
-  merchant, banker or corpse. Copy the `target_interaction` tuple from a fresh
+  merchant, banker, guildmaster or corpse. Copy the `target_interaction` tuple from a fresh
   `report`. A stale target, a known reach or capability refusal, or another
   open or pending transaction stops the run. The bank opens locally. For
   merchants and corpses, check a subsequent economy report for the matching
@@ -81,11 +82,24 @@ Movement uses the client's ordinary movement and collision behavior. It is not a
 
 Approach, walk and chase hold the camera-relative forward command, independent of key bindings. Object commands choose the nearest matching tradeskill container when they start. Missing targets, unreachable routes and timeouts stop the run. `wait_dead` only recognizes NPC corpses or a target leaving the zone; a player's death does not satisfy it while their corpse remains.
 
+After walking through a server-driven pad, `wait_relocation 1500` waits for
+a received same-zone movement instruction. Each observation is consumed once.
+It distinguishes this instruction from ordinary position samples, and
+the report labels its source `same_zone_relocation`. The instruction does not
+identify which server trigger produced it.
+
 Walk stall logs use `waiting` for an outstanding Move or crossing. For a
 Move, the worker's local result releases that wait. Server placement is
 reported separately.
 
 ## Diagnostics and commands
+
+The projectile line from `report [label]` includes the current admission, the
+number of received flight records since the last world reset, the flights still
+tracked, the number of scene spawns queued, and the scene instances from the
+latest completed projectile update, normally the preceding frame. Missing assets or unsupported flight
+types can produce a receipt without a model. Scene instances may be off-camera
+or occluded. The counters are independent of damage and inventory.
 
 - `report [label]` logs a state summary with an optional label. Its `option_levels` field includes slider settings, with `run_boost` in hundredths of ordinary running speed. For a selected target, `considered` shows the decoded received color and `display_con_color` shows the presentation color. The report includes `selected_target_level` and `own_level` when known.
   `air_remaining` gives the local air reserve and capacity in ticks while
@@ -137,7 +151,7 @@ reported separately.
   acceptance require separate evidence.
 - `trace milliseconds`: log movement and frame timing for a bounded duration.
 - `screenshot filename.png`: capture beside the script; the argument must be a filename.
-- `sound filename.wav`: play a sound from the installed game assets.
+- `sound filename.wav` or `sound filename.mp3` plays a named cue from the installed game assets. Use the basename with its extension.
 - `inspect_link admission message ordinal` opens an item link using the
   `admission` and `(message, ordinal, label)` from the current `Script item
   links` report. Ordinals start at zero. The report lists up to 32 links
@@ -147,6 +161,10 @@ reported separately.
   available, including a definition already cached in the admission.
 - `slash command [arguments]`: run one of the supported game slash commands, without a leading slash.
   `slash ranged` requests one shot or throw against the current target on Titanium.
+  `slash layonhands` and `slash harmtouch` request the class ability against the
+  settled selection. Select yourself before using Lay on Hands on yourself.
+  `slash discipline evasive` and `slash discipline defensive` use the learned
+  Warrior discipline on yourself, with the same reuse checks as its button.
   Watch the server's combat and inventory updates for the result.
   `slash pet target` selects your visible pet. Pet orders complete the script
   step when queued. Read subsequent server observations to check their effects.
@@ -154,6 +172,12 @@ reported separately.
   `slash stopsong` queues the Bard's stop request on Titanium EQEmu.
   The immediate disconnect aliases typed in chat are not script slash commands.
 - `gm command [arguments]`: an allowed GM command on a network-constrained local test session only.
+  On local EQEmu, `gm traindisc MAX [MIN]` requests all eligible disciplines
+  in that inclusive level range for a disposable fixture. Each level is a number
+  from 1 to 126 written with up to three decimal digits. Give MAX first. MIN
+  defaults to 1. For example, `gm traindisc 52 52` requests only level 52.
+  In GM mode, EQEmu can apply the command to the selected player. Check the
+  received learned disciplines before using them.
   `gm stun 8000` requests an 8,000-millisecond server stun for a local fixture.
   Check received `own_stun` state; command submission alone does not establish the effect.
   On local EQEmu, use
@@ -171,6 +195,31 @@ reported separately.
 - `quit`: close the client.
 
 The typed parser and normal client capability checks decide which commands and controls are available. A valid action can still fail at runtime when its target, session or expected result is unavailable.
+
+- `compose_link admission message ordinal` inserts a recent received item link
+  using the IDs from the item-link report. It edits the normal draft without
+  changing keyboard focus. Use the usual chat input to edit or send the
+  draft. An expired, mismatched or unknown link stops the script.
+- `compose_owned_link admission slot` inserts a link for the current worn or
+  carried Titanium item at the given protocol slot. Use the current admission
+  and slot from a report. The action edits the draft without changing focus
+  or sending chat. Stale admission, uncertain custody or incomplete item
+  metadata stops the script.
+
+- `social set Name | /command | /pause 10,/command`, `social bind 1 Name`,
+  `social play Name` and `social cancel` use the same social controls as
+  chat on a local session. `social list`, `social show Name` and
+  `social delete Name` also use the ordinary editor. Use the named step
+  for scripts. Synthetic chat submission and hotbar activation refuse socials.
+  A step queues the control request. Keep the script running with a wait if
+  the social has more lines to dispatch. Stop, failure, completion, pause,
+  or loss of script input ownership cancels its unsent lines. The controller's
+  single-step action applies a named social control once. A single-stepped play
+  processes its first line and retires the rest. A manually started social
+  has independent ownership. Use a later `report [label]`
+  to observe the social
+  runner's current admission, definition ID, progress and remaining delay.
+  The report describes dispatch and scheduling, independently of server results.
 
 ## Optional login automation
 
@@ -195,7 +244,8 @@ These commands support scripts that deliberately start before world entry. They 
 
 ## Recovery consent reports
 
-On a server that offers resurrection or translocate, wait for
+On a server that offers resurrection or translocate, including P99 for
+supported offers, wait for
 `consent_presented` to match the current offer before using
 `click answer yes` or `click answer no`. These actions use the ordinary
 confirmation buttons. `resurrection_consent` reports the offer token and

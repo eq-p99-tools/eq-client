@@ -1,5 +1,5 @@
 //! Map search and watch controls share normal keyboard, click and scrolling rules.
-use super::{MapView, entities, watch::WatchState};
+use super::{MapView, entities, landmarks, watch::WatchState};
 use crate::{
     keys::{Typing, search},
     online::OnlineState,
@@ -31,8 +31,11 @@ pub(crate) enum Label {
     SelectedWatch,
 }
 
-#[derive(Component)]
-pub(crate) struct SearchBox;
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SearchBox {
+    Names,
+    Landmark,
+}
 
 #[derive(Component)]
 pub(crate) struct WatchList;
@@ -44,7 +47,8 @@ pub(crate) fn focus(
     mouse: Res<ButtonInput<MouseButton>>,
     shown: Res<Shown>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    boxes: Query<&Interaction, With<SearchBox>>,
+    boxes: Query<(&Interaction, &SearchBox)>,
+    mut view: ResMut<MapView>,
     mut typing: ResMut<Typing>,
 ) {
     if !shown.displayed(WindowId::Map)
@@ -55,10 +59,12 @@ pub(crate) fn focus(
         return;
     }
     if mouse.any_just_pressed([MouseButton::Left, MouseButton::Right]) {
-        typing.map_search = boxes
-            .iter()
-            .any(|interaction| *interaction == Interaction::Pressed);
-        if typing.map_search {
+        let field = boxes.iter().find_map(|(interaction, field)| {
+            (*interaction == Interaction::Pressed).then_some(*field)
+        });
+        typing.map_search = field.is_some();
+        if let Some(field) = field {
+            view.field = field;
             typing.composing = false;
             typing.counting = false;
         }
@@ -71,26 +77,34 @@ pub(crate) fn input(
     mut keyboard: MessageReader<KeyboardInput>,
     mut typing: ResMut<Typing>,
     mut view: ResMut<MapView>,
+    mut landmarks: ResMut<landmarks::Landmarks>,
     keys: Res<ButtonInput<Key>>,
     mut clipboard: Option<ResMut<Clipboard>>,
-    mut pending: Local<Option<ClipboardRead>>,
+    mut pending: Local<(Option<SearchBox>, Option<ClipboardRead>)>,
 ) {
     if !typing.map_search || typing.spell_search_claimed {
         keyboard.clear();
-        *pending = None;
+        *pending = default();
         return;
+    }
+    if pending.0 != Some(view.field) {
+        *pending = (Some(view.field), None);
     }
     let events: Vec<_> = keyboard
         .read_with_id()
         .filter(|(_, id)| !typing.spell_search_captured(*id))
         .map(|(event, _)| event.clone())
         .collect();
+    let field = match view.field {
+        SearchBox::Names => &mut view.query,
+        SearchBox::Landmark => &mut landmarks.draft,
+    };
     if let Some(finish) = search::edit(
-        &mut view.query,
+        field,
         &events,
         &keys,
         clipboard.as_deref_mut(),
-        &mut pending,
+        &mut pending.1,
     ) {
         typing.map_search = false;
         typing.escape_consumed |= finish == search::Finish::Escape;
@@ -104,6 +118,7 @@ pub(crate) fn actions(
     mut view: ResMut<MapView>,
     online: Res<OnlineState>,
     mut watches: ResMut<WatchState>,
+    mut landmarks: ResMut<landmarks::Landmarks>,
 ) {
     for action in clicks.iter() {
         match action {
@@ -118,7 +133,12 @@ pub(crate) fn actions(
                     }
                 }
             }
-            Control::ToggleList => watches.list_open = !watches.list_open,
+            Control::ToggleList => {
+                watches.list_open = !watches.list_open;
+                if watches.list_open {
+                    landmarks.open = false;
+                }
+            }
             Control::Remove(name) => watches.remove(name),
         }
     }
@@ -143,10 +163,11 @@ pub(crate) fn update(
     for (kind, mut text, mut node) in &mut labels {
         let wanted = match kind {
             Label::Search => {
-                if view.query.is_empty() && !typing.map_search {
+                let active = typing.map_search && view.field == SearchBox::Names;
+                if view.query.is_empty() && !active {
                     "Search names...".to_owned()
                 } else {
-                    format!("{}{}", view.query, if typing.map_search { "|" } else { "" })
+                    format!("{}{}", view.query, if active { "|" } else { "" })
                 }
             }
             Label::Watches => format!("Tracked ({})", watches.names.names().count()),
@@ -214,11 +235,18 @@ pub(crate) fn update(
     *drawn = Some((list, watches.names.clone()));
 }
 
-/// The watch list consumes wheel input instead of zooming the world camera.
+/// Map lists consume wheel input instead of zooming the world camera.
 #[allow(clippy::needless_pass_by_value)]
+#[allow(
+    clippy::type_complexity,
+    reason = "the query shares scrolling across two Bevy lists"
+)]
 pub(crate) fn scroll(
     wheel: Res<windows::pointer::Wheel>,
-    mut lists: Query<(&ComputedNode, &mut ScrollPosition), With<WatchList>>,
+    mut lists: Query<
+        (&ComputedNode, &mut ScrollPosition),
+        Or<(With<WatchList>, With<landmarks::List>)>,
+    >,
 ) {
     if let Some(surface) = wheel.surface
         && let Ok((node, mut scroll)) = lists.get_mut(surface)
@@ -244,10 +272,11 @@ pub(super) fn button(label: &str) -> impl Bundle {
 
 pub(super) fn chrome(parent: &mut ChildSpawnerCommands) {
     super::presentation::chrome(parent);
+    landmarks::chrome(parent);
     parent.spawn((Node { position_type: PositionType::Absolute, left: px(6), right: px(6), top: px(6),
         column_gap: px(4), padding: UiRect::all(px(4)), ..default() },
         windows::KeepsPress, BackgroundColor(theme::SCRIM), ZIndex(10))).with_children(|row| {
-        row.spawn((SearchBox, Label::Search, button("Search names..."),
+        row.spawn((SearchBox::Names, Label::Search, button("Search names..."),
             Tooltip("Case-insensitive name search. Non-matches are dimmed. Enter finishes; Delete clears.".into())))
             .insert(Node { flex_grow: 1.0, min_width: px(40), padding: UiRect::all(px(4)), overflow: Overflow::clip(), ..default() });
         row.spawn((Control::ClearSearch, button("Clear")));

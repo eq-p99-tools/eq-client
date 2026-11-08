@@ -60,6 +60,34 @@ pub struct RunEvent {
     pub message: String,
 }
 
+/// Presentation snapshot for the structured interpreter's last branch, active
+/// loops, and initialized bindings. The driver remains the source of action progress.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct FlowStatus {
+    pub(super) statements: usize,
+    pub(super) branch: Option<(usize, bool)>,
+    pub(super) loops: Vec<(usize, u16, u16)>,
+    pub(super) variables: Vec<String>,
+}
+
+impl FlowStatus {
+    pub(crate) const fn statements(&self) -> usize {
+        self.statements
+    }
+
+    pub(crate) const fn branch(&self) -> Option<(usize, bool)> {
+        self.branch
+    }
+
+    pub(crate) fn loops(&self) -> &[(usize, u16, u16)] {
+        &self.loops
+    }
+
+    pub(crate) fn variables(&self) -> &[String] {
+        &self.variables
+    }
+}
+
 /// The latest run's source, progress and result, retained after execution ends.
 #[derive(Clone, Debug, Default, Resource)]
 pub struct RunStatus {
@@ -71,6 +99,7 @@ pub struct RunStatus {
     pub(super) started_steps: usize,
     pub(super) completed_steps: usize,
     pub(super) total: usize,
+    pub(super) flow: Option<FlowStatus>,
     pub(super) elapsed: Duration,
     pub(super) events: VecDeque<RunEvent>,
     pub(super) revision: u64,
@@ -100,16 +129,22 @@ impl RunStatus {
         self.phase
     }
 
-    /// The active or last executed action's one-based source line.
+    /// The active or last executed statement's one-based source line.
     #[must_use]
     pub const fn line(&self) -> Option<usize> {
         self.line
     }
 
-    /// Actions that finished, and the total accepted so far.
+    /// Actions that finished, and the number of accepted action lines.
+    ///
+    /// A structured run can skip or repeat a line. Use the phase to detect completion.
     #[must_use]
     pub const fn progress(&self) -> (usize, usize) {
         (self.completed_steps, self.total)
+    }
+
+    pub(crate) const fn flow(&self) -> Option<&FlowStatus> {
+        self.flow.as_ref()
     }
 
     /// Time spent in the run, excluding explicit pauses between actions.

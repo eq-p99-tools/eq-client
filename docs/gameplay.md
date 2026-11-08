@@ -7,6 +7,17 @@ on every server. Disabled controls explain whether the server policy lacks a
 feature or this client lacks the UI. The session validates actions again before
 sending them; queueing a request is not proof of a successful game action.
 
+## Server banners
+
+Received Titanium marquee notices appear above the scene and fade using the
+supplied times. The client interprets the duration as hold time between fades
+and applies the packed opacity. This timing is inferred from the native
+overlay API (recording checklist 6.397). The client uses a short arrival-order
+queue and a single fade cycle. Queued banners expire after ten seconds. World
+resets other than the player's death clear them.
+[EQEmu marquee fields](https://raw.githubusercontent.com/EQEmu/EQEmu/master/common/eq_packet_structs.h#L5962-L5974)
+[Native overlay caller](https://raw.githubusercontent.com/macroquest/macroquest2/master/MQ2Main/MQ2Utilities.cpp#L4670-L4688)
+
 ## Movement, falling and zoning
 
 Movement is available when the admitted session grants it; there is no separate
@@ -78,9 +89,12 @@ location. The local safety hold can persist for the admission while the
 installed geometry offers no way down. A different received location gets
 its own check. A later collision probe can release the hold when it finds a route.
 A server using different zone geometry can cause this conflict. Client detection
-of same-zone teleport pads remains incomplete. Initial login, boundary crossing,
-teleport, death and respawn are separate validation scenarios; success in one
-does not establish the others.
+of client-driven same-zone teleport pads remains incomplete. On local EQEmu,
+ordinary movement can enter a server-owned same-zone pad. A received
+reposition supplies the absolute landing within the admission and resets
+movement there. Zone-point routes handle their own preserve-position values.
+Initial login, boundary crossing, teleport, death, and respawn each need
+their own validation.
 
 ## Inventory and banking
 
@@ -250,9 +264,59 @@ cancelled. A buff stays visible until received state removes it. If the selected
 slot changes while the button is held, release cancels the selection. The buff
 may expire on its own during a request. With no matching fade, the client
 reports the request as unconfirmed. Requests are never retried automatically.
-P99 cancellation remains gated pending evidence for the complete request and
-matching server fade. The enabled Titanium EQEmu path covers one initialized
-current-record request.
+P99 uses the native two-record request for a known server slot. A clear
+record with only an empty-slot sentinel cannot identify which buff faded.
+The P99 exchange awaits an attended check. Titanium EQEmu uses its
+single current-record request.
+
+## Social hotbuttons
+
+Type `/social set Greet | /pause 10,/say Hello! | /stand` to save a social
+with two lines. `/social bind 1 Greet` puts it in slot 1 on the current
+hotbar page. Click the named button, press its hotbar key, or type
+`/social play Greet`. Use `/social list` to see your names and
+`/social show Greet` to see its lines. Set the same name again to edit it,
+or use `/social delete Greet`. Editing keeps the same hotbar bindings.
+Deleting leaves any existing bindings inactive.
+
+A social has one to five lines. Separate them with a pipe surrounded by
+spaces when you enter them in chat. A standalone `/pause 10` waits one second. On a combined line such
+as `/pause 10,/say Hello!`, the command runs first. The pause accepts
+1 to 600 tenths of a second. Every action uses the client's ordinary
+slash-command checks. For example, use `/sit`, `/stand` or
+`/say Hello`. Select the target before starting a social that needs one.
+The runner refuses `/target` and `/assist` because their results arrive
+after submission. The runner stops on a local
+refusal. A delay measures time after dispatch and carries no server result.
+
+One social runs at a time. Use `/social cancel` to stop its remaining
+lines. An admission reset or an edit to the running definition also stops
+it. The editor accepts ordinary slash actions and pauses. Nested socials,
+camp and exit commands are refused. Social definitions and bindings are
+saved per exact world and character in this client's settings files. Older
+hotbar files supply their ordinary bindings. Recreate and rebind socials
+from legacy files to establish the exact profile that owns them.
+
+The pause order follows the [EverQuest social hotbutton guide](https://www.everquest.com/news/imported-eq-enus-51004).
+
+## Item links in chat
+
+On Titanium, Ctrl+right-click a worn or carried item to insert a link into the
+chat draft. The current inventory must supply the item record and its
+placement. A pending move or an unsupported item record can leave the gesture
+unavailable. Received links still work with Shift-click.
+
+Shift-click a recent received item link to add it at the caret in the current
+chat draft. A regular click still opens item details. Left, Right, Home and
+End move the caret. Backspace or Delete removes the whole link when it meets
+one. Choose a chat tab or use a channel command such as `/auction` or
+`/tell Name` before sending. Item links belong in the message, after the
+channel and any recipient. The client keeps the draft if the routed
+message would exceed the chat limit, including EQEmu's link expansion.
+
+This uses the received item's original link body. A link copied as plain
+clipboard text remains plain text. An inventory item without a received
+link has no link to insert. A new admission clears link-bearing drafts.
 
 ## Targeting and interaction
 
@@ -269,11 +333,33 @@ because its window opened. Ground pickups and doors use reach checks. World
 tradeskill containers and combines exist where `Tradeskills` is offered, rather
 than being universally unsupported.
 
+Titanium Paladins and Shadow Knights can use Lay on Hands or Harm Touch
+from the first Combat ability button in Actions. Bind the button to the
+hotbar the same way as a skill, or use `/layonhands` or `/harmtouch`.
+Select the target first. Paladins can select themselves for Lay on Hands.
+The hotbar shows any recovery reported in the character profile, while
+the server reports the cast result and enforces reuse during play.
+
+Titanium Warriors can use Evasive at level 52 and Defensive at level 55
+when the server lists the discipline as learned. Both act on yourself and
+share one reuse group. Use the Combat page buttons, bind them to the hotbar,
+or type `/discipline evasive` or `/discipline defensive`. The hotbar shows
+received recovery and active discipline slot changes. A named fade ends
+the matching observed discipline. An unreported timer remains unknown.
+Spell gems also respect received linked spell reuse when the installed spell
+definition identifies the group.
+
 For a single Titanium ranged attack, equip a bow and arrows or a throwing
 weapon and select a target. Click Ranged Attack in Actions or type `/ranged`.
 The Actions control can be bound to the hotbar. The request checks the current
 target, loadout, reach and unmodified weapon delay. Damage and projectile
 consumption appear when reported by the server.
+
+Received arrows and thrown items can appear briefly in flight if both actors
+are known and the installed files contain the item model named by the server.
+The visual follows an estimated straight path, usually for 0.12 to 1.4 seconds.
+Native flight angles, arcs and timing remain unverified. This first set
+covers item flights. A despawn, replacement or zone transition ends the visual.
 
 With Titanium, Buy and Sell open the existing quantity picker when more than
 one unit is available; a single unit goes directly through the same checked
@@ -284,12 +370,26 @@ the selection. Only one merchant action can be pending. An unanswered action
 shows an unknown outcome and is never retried automatically; received items
 and coin updates remain the session's responsibility.
 
-On Titanium EQEmu, resurrection and translocate offers open a Yes or No dialog.
+On Titanium EQEmu and P99, supported resurrection and translocate offers open
+a Yes or No dialog.
 An answer applies to the displayed offer. If the question changes while a
 button is held, release and click again to answer the replacement. The dialog
 closes on death, a zone transfer or a lost connection, and an offer left
 unanswered past the session's deadline is declined for you. The server's
-movement and recovery messages determine what follows a Yes.
+movement and recovery messages determine what follows a Yes. On P99 a
+named translocate completion must match the accepted offer. A wire-identical
+prompt already issued during the same zone visit stays withheld. Bind
+translocates need an explicit server-directed destination. Attended P99
+verification is pending.
+
+On P99, interact with an in-reach guildmaster of your class, select a skill
+from the received Training list and press Train once. The listed price
+estimates the cost in copper denominations. The skill value follows server
+updates. The point count goes blank as soon as the request is sent. A skill
+increase leaves the practice outcome unknown. Paid practice leaves the
+purse unknown until a new balance arrives. Re-enter the zone before
+practicing again or asking the same guildmaster again. Done closes the
+trainer. This path covers skills and awaits an attended P99 check.
 
 Grouping, raids, pets, training, reading and consent dialogs have separate
 capabilities by server. Pet Info can hold an early buff snapshot while the

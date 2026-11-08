@@ -132,6 +132,7 @@ impl SessionWorker {
         let protocol = login.protocol;
         let client = client(login, options)?;
         let classic_npc_consider = client.consider_npcs_by_level();
+        let chat_link_expansion = client.titanium_chat_link_expansion();
         let inventory_move_rules = client.inventory_move_rules();
         let spell_provider =
             eq_client_core::spell_tables::Binding::new(client.spell_table_policy());
@@ -215,6 +216,7 @@ impl SessionWorker {
         });
         Ok(eq_client_render::Session {
             classic_npc_consider,
+            chat_link_expansion,
             inventory_move_rules,
             spell_provider,
             updates: receiver,

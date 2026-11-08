@@ -32,8 +32,7 @@ pub fn nearest_usable_for(
         .entries()
         .values()
         .filter(|object| {
-            object.kind() == ObjectKind::Item
-                || (world_containers && object.is_tradeskill_container())
+            object.kind() == ObjectKind::Item || (world_containers && station_candidate(object))
         })
         .filter_map(|object| {
             let distance = (object.position.x - player.x)
@@ -57,7 +56,10 @@ pub fn nearest_container(
     objects
         .entries()
         .values()
-        .filter(|object| object.is_tradeskill_container() && object.object_type == u32::from(kind))
+        .filter(|object| {
+            (object.is_tradeskill_container() && object.object_type == u32::from(kind))
+                || (kind == eq_network_game::tradeskills::FORGE && object.is_forge_candidate())
+        })
         .map(|object| {
             let distance = (object.position.x - player.x)
                 .hypot(object.position.y - player.y)
@@ -67,6 +69,13 @@ pub fn nearest_container(
         .filter(|(_, distance)| distance.is_finite())
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(object, _)| object)
+}
+
+/// Whether a received object can be chosen for an explicit station interaction.
+/// The network owner checks the server policy and requires an open reply.
+#[must_use]
+pub fn station_candidate(object: &GroundObject) -> bool {
+    object.is_tradeskill_container() || object.is_forge_candidate()
 }
 
 /// A model's bounds grown to at least [`MIN_PICK_SIZE`] on each axis, around
@@ -130,7 +139,7 @@ mod tests {
         for update in [
             object(1, "IT63_ACTORDEF", 12.0),
             object(2, "IT10_ACTORDEF", 5.0),
-            object(3, "FORGE", 1.0),
+            object(3, "STATUE", 1.0),
             object(4, "IT63_ACTORDEF", Objects::USE_DISTANCE + 1.0),
         ] {
             objects.apply(&ObjectUpdate::Spawn(update));
@@ -149,6 +158,8 @@ mod tests {
         forge.object_type = 17;
         objects.apply(&ObjectUpdate::Spawn(forge));
         assert_eq!(nearest_usable(&objects, player).map(|hit| hit.0), Some(5));
+        objects.apply(&ObjectUpdate::Spawn(object(6, "FORGE", 1.0)));
+        assert_eq!(nearest_usable(&objects, player).map(|hit| hit.0), Some(6));
         // A carried-combine offer does not let the nearer station hide the item.
         assert_eq!(
             nearest_usable_for(&objects, player, false).map(|hit| hit.0),

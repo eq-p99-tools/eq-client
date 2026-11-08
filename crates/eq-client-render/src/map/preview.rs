@@ -15,31 +15,15 @@ use eq_client_core::SpawnKind;
 #[ignore = "requires EQ_MAP_PREVIEW_PNG and a graphics adapter; opens only a hidden offline window"]
 fn capture() {
     let path = std::path::PathBuf::from(std::env::var("EQ_MAP_PREVIEW_PNG").unwrap());
-    let mut app = App::new();
-    app.add_plugins(
-        DefaultPlugins
-            .set(WindowPlugin {
-                primary_window: Some(Window {
-                    title: "Offline map probe".into(),
-                    resolution: (900, 700).into(),
-                    visible: false,
-                    focused: false,
-                    ..default()
-                }),
-                ..default()
-            })
-            .set(bevy::winit::WinitPlugin {
-                run_on_any_thread: true,
-            }),
-    )
-    .insert_resource(bevy::winit::WinitSettings::continuous())
-    .insert_resource(ClearColor(crate::theme::COVER))
-    .init_resource::<crate::ViewerSettings>()
-    .init_resource::<crate::keys::Typing>()
-    .init_resource::<WatchState>()
-    .init_resource::<MapMotion>()
-    .init_resource::<Presentation>()
-    .init_resource::<Shown>();
+    assert!(!path.exists(), "use a fresh screenshot path");
+    let mut app = crate::testing::hidden_graphics_probe("Offline map probe", (900, 700));
+    app.insert_resource(ClearColor(crate::theme::COVER))
+        .init_resource::<crate::ViewerSettings>()
+        .init_resource::<crate::keys::Typing>()
+        .init_resource::<MapMotion>()
+        .init_resource::<Presentation>()
+        .insert_resource(Landmarks::preview())
+        .init_resource::<Shown>();
     app.world_mut().resource_mut::<Shown>().open(WindowId::Map);
     install_scene(&mut app);
     let geometry = std::env::var("EQ_MAP_PREVIEW_MODE").unwrap_or_default() != "no-lines";
@@ -76,12 +60,14 @@ fn capture() {
             sample_movement,
             ensure_window,
             draw,
+            draw_landmarks,
             entities::update,
             update_items,
             draw_movement,
             controls::update,
             show_target,
             present,
+            present_landmarks,
         )
             .chain(),
     );

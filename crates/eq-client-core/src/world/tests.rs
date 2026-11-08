@@ -92,6 +92,152 @@ fn game(world: &mut ClientWorld, event: WorldEvent) -> Changes {
 }
 
 #[test]
+fn a_same_zone_relocation_requires_the_current_character_and_admission() {
+    let mut world = admitted();
+    let destination = WorldPosition {
+        x: 14.0,
+        y: -25.0,
+        z: 4.0,
+        heading: 90.0,
+    };
+    let relocation = |session_id, spawn_id| {
+        WorldEvent::SameZoneRelocated(crate::SameZoneRelocation {
+            session_id,
+            spawn_id,
+            position: destination,
+        })
+    };
+    let boundary = game(&mut world, WorldEvent::SameZoneBoundary { session_id: 1 });
+    assert_eq!(boundary.replies, [Reply::SameZoneBoundary]);
+    assert!(boundary.placed.is_none());
+    assert!(world.last_same_zone_relocation().is_none());
+    assert!(game(&mut world, relocation(2, 9)).ignored);
+    assert!(game(&mut world, relocation(1, 7)).ignored);
+
+    let moved = game(&mut world, relocation(1, 9));
+    assert_eq!(moved.placed, Some(destination));
+    assert!(moved.same_zone_relocation);
+    assert_eq!(world.player().unwrap().position, destination);
+    assert!(matches!(world.last_same_zone_relocation(), Some((1, _))));
+    game(&mut world, entered(2));
+    assert!(world.last_same_zone_relocation().is_none());
+}
+
+#[test]
+fn discipline_and_linked_reuse_are_separate_and_reset_on_admission() {
+    use crate::disciplines::{Active, Reuse};
+    use std::time::Duration;
+
+    let mut world = admitted();
+    let now = Instant::now();
+    let apply =
+        |world: &mut ClientWorld, event| world.apply(&WorldUpdate::Game(event), now, &NoSpells);
+    apply(
+        &mut world,
+        WorldEvent::DisciplineReuse(Reuse {
+            timer: 1,
+            remaining: Duration::from_secs(20),
+        }),
+    );
+    apply(
+        &mut world,
+        WorldEvent::LinkedReuse(Reuse {
+            timer: 1,
+            remaining: Duration::from_secs(42),
+        }),
+    );
+    assert_eq!(
+        world.casting().discipline_wait(1, now),
+        Some(Duration::from_secs(20))
+    );
+    assert_eq!(
+        world.casting().spell_wait(300, Some(1), now),
+        Duration::from_secs(42)
+    );
+    assert_eq!(
+        world.casting().spell_wait(300, Some(2), now),
+        Duration::ZERO
+    );
+    assert_eq!(world.casting().active_discipline(), Active::Unknown);
+    apply(
+        &mut world,
+        WorldEvent::DisciplineReuse(Reuse {
+            timer: 1,
+            remaining: Duration::ZERO,
+        }),
+    );
+    assert_eq!(
+        world.casting().discipline_wait(1, now),
+        Some(Duration::ZERO)
+    );
+    assert_eq!(
+        world.casting().linked_wait(1, now),
+        Some(Duration::from_secs(42))
+    );
+    apply(&mut world, entered(2));
+    assert_eq!(world.casting().discipline_wait(1, now), None);
+    assert_eq!(world.casting().linked_wait(1, now), None);
+}
+
+#[test]
+fn only_the_admitted_discipline_slot_can_report_an_active_effect() {
+    use crate::disciplines::{Active, TITANIUM_BUFF_SLOT};
+
+    let mut world = admitted();
+    let update = |entity_id, slot, spell_id, present: bool| {
+        WorldEvent::Buff(crate::BuffUpdate {
+            entity_id,
+            slot,
+            spell_id,
+            buff: present.then(|| crate::Buff {
+                spell_id,
+                ..buff(3)
+            }),
+        })
+    };
+    game(&mut world, update(8, TITANIUM_BUFF_SLOT, 4499, true));
+    game(&mut world, update(9, 3, 4499, true));
+    assert_eq!(world.casting().active_discipline(), Active::Unknown);
+
+    game(&mut world, update(9, TITANIUM_BUFF_SLOT, u32::MAX, false));
+    assert_eq!(world.casting().active_discipline(), Active::Unknown);
+    game(&mut world, update(9, TITANIUM_BUFF_SLOT, 4499, true));
+    game(&mut world, update(9, TITANIUM_BUFF_SLOT, 4503, false));
+    game(&mut world, update(9, TITANIUM_BUFF_SLOT, u32::MAX, false));
+    assert_eq!(world.casting().active_discipline(), Active::Titanium(4499));
+    game(&mut world, update(9, TITANIUM_BUFF_SLOT, 4499, false));
+    assert_eq!(world.casting().active_discipline(), Active::Inactive);
+}
+
+#[test]
+fn knight_reuse_belongs_to_the_current_admission() {
+    use std::time::Duration;
+
+    let mut world = admitted();
+    let now = Instant::now();
+    let apply = |world: &mut ClientWorld, session_id, remaining| {
+        world.apply(
+            &WorldUpdate::Game(WorldEvent::KnightReuse {
+                session_id,
+                remaining,
+            }),
+            now,
+            &NoSpells,
+        )
+    };
+    assert_eq!(world.casting().knight_wait(now), None);
+    assert!(apply(&mut world, 2, Duration::from_secs(30)).ignored);
+    assert_eq!(world.casting().knight_wait(now), None);
+    apply(&mut world, 1, Duration::from_secs(30));
+    assert_eq!(
+        world.casting().knight_wait(now),
+        Some(Duration::from_secs(30))
+    );
+    game(&mut world, entered(2));
+    assert_eq!(world.casting().knight_wait(now), None);
+}
+
+#[test]
 fn combat_submission_and_refusal_do_not_fabricate_server_results() {
     use crate::combat::{CombatRequest, CombatRequestStatus};
     let mut world = admitted();
@@ -191,7 +337,7 @@ fn admitted() -> ClientWorld {
 }
 
 #[test]
-fn a_sound_the_server_names_is_news_and_its_other_effects_are_not() {
+fn a_sound_the_server_names_is_sound_news() {
     use crate::effects::{Cue, Effect};
     let mut world = admitted();
     let file = Cue::File("quests/Plain.wav".into());
@@ -207,6 +353,37 @@ fn a_sound_the_server_names_is_news_and_its_other_effects_are_not() {
     });
     assert_eq!(game(&mut world, shake).sounds, Vec::<Cue>::new());
     assert_eq!(game(&mut world, WorldEvent::Ding).sounds, Vec::<Cue>::new());
+}
+
+#[test]
+fn projectile_news_requires_an_active_admission_and_changes_no_combat_state() {
+    let mut world = admitted();
+    connection(&mut world, true, false);
+    let projectile = crate::effects::Projectile {
+        source_id: 1,
+        target_id: Some(5),
+        start: [1.0, 2.0, 3.0],
+        velocity: 4.0,
+        launch_angle: 0.0,
+        tilt: 125.0,
+        arc: 50.0,
+        item_id: Some(123),
+        item_type: 27,
+        skill: 7,
+        model: "IT68".into(),
+        light: None,
+        behavior: None,
+    };
+    let event = WorldEvent::Effect(crate::effects::Effect::Projectile(projectile.clone()));
+    assert_eq!(
+        game(&mut world, event.clone()),
+        Changes {
+            projectile: Some(projectile),
+            ..Changes::default()
+        }
+    );
+    connection(&mut world, false, false);
+    assert!(game(&mut world, event).ignored);
 }
 
 fn zone_is_empty(world: &ClientWorld) -> bool {
@@ -4222,6 +4399,41 @@ fn a_world_container_opens_only_when_asked_and_closes_with_the_player() {
 }
 
 #[test]
+fn only_the_current_matching_station_refusal_clears_its_request() {
+    let mut world = admitted();
+    world.ask_container(40);
+    for (session_id, drop_id, error) in [
+        (0, 40, Some("stale refusal")),
+        (1, 41, Some("unrelated pickup refusal")),
+        (1, 40, None),
+    ] {
+        game(
+            &mut world,
+            WorldEvent::ObjectAction {
+                session_id,
+                drop_id,
+                error: error.map(str::to_owned),
+            },
+        );
+        assert_eq!(world.pending_container_open(), Some(40));
+    }
+    let changes = game(
+        &mut world,
+        WorldEvent::ObjectAction {
+            session_id: 1,
+            drop_id: 40,
+            error: Some("only an ordinary forge is available".into()),
+        },
+    );
+    assert!(world.pending_container_open().is_none());
+    assert!(world.container().is_none());
+    assert!(matches!(
+        changes.notices.as_slice(),
+        [Notice::GroundRefused(_)]
+    ));
+}
+
+#[test]
 fn abilities_the_server_does_not_offer_are_told_apart() {
     use crate::abilities::Ability;
     let mut world = admitted();
@@ -5103,9 +5315,8 @@ fn the_zone_keeps_how_spawns_show_their_names_and_where_corpses_lie() {
 
 #[test]
 fn what_other_players_ask_of_the_player_changes_nothing_yet() {
-    use eq_network_game::popups::{Marquee, Popup};
+    use eq_network_game::popups::Popup;
     use eq_network_game::socials::{DuelRefusal, DuelUpdate, VoiceKind, VoiceMacro};
-    use std::time::Duration;
     let mut world = admitted();
     let spawns = world.spawns().len();
     let events = [
@@ -5115,14 +5326,6 @@ fn what_other_players_ask_of_the_player_changes_nothing_yet() {
             buttons: 0,
             duration: None,
             popup_id: 1,
-        }),
-        WorldEvent::Marquee(Marquee {
-            message_type: 15,
-            priority: 1,
-            fade_in: Duration::from_millis(100),
-            fade_out: Duration::from_millis(100),
-            duration: Duration::from_secs(3),
-            text: "Text".into(),
         }),
         WorldEvent::YellForHelp { spawn_id: 5 },
         WorldEvent::VoiceMacro(VoiceMacro {
@@ -5147,6 +5350,27 @@ fn what_other_players_ask_of_the_player_changes_nothing_yet() {
     }
     assert_eq!(world.spawns().len(), spawns);
     assert!(world.player().is_some());
+}
+
+#[test]
+fn marquees_only_project_from_the_admitted_stream() {
+    use std::time::Duration;
+    let banner = crate::Marquee {
+        message_type: 15,
+        priority: 510,
+        fade_in: Duration::from_millis(100),
+        fade_out: Duration::from_millis(500),
+        duration: Duration::from_secs(3),
+        text: "Synthetic banner".into(),
+    };
+    let event = WorldEvent::Marquee(banner.clone());
+    assert!(game(&mut ClientWorld::default(), event.clone()).ignored);
+    let mut world = admitted();
+    let changes = game(&mut world, event.clone());
+    assert_eq!(changes.marquee, Some(banner));
+    assert_eq!(changes.notices, []);
+    connection(&mut world, false, false);
+    assert!(game(&mut world, event).ignored);
 }
 
 #[test]

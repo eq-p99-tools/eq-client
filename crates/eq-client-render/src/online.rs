@@ -29,6 +29,8 @@ pub(super) struct OnlineState {
     /// The current zone's regions, from its assets.
     pub regions: eq_client_assets::regions::ZoneRegions,
     pub enabled: bool,
+    /// Established backend policy for the currently attached producer.
+    pub(super) chat_link_expansion: Option<eq_client_core::chat::LinkExpansion>,
     server_placement: Option<ServerPlacement>,
     placement_revision: u64,
     loading: super::background::Background<Result<super::zone::PreparedEntry, String>>,
@@ -50,6 +52,7 @@ pub(super) struct ServerPlacement {
 pub(super) enum PlacementSource {
     Admission,
     PositionUpdate,
+    SameZoneRelocation,
 }
 
 impl OnlineState {
@@ -73,7 +76,12 @@ impl OnlineState {
             self.server_placement = None;
         }
         let received = if let Some(position) = changes.placed {
-            Some((position, PlacementSource::PositionUpdate))
+            let source = if changes.same_zone_relocation {
+                PlacementSource::SameZoneRelocation
+            } else {
+                PlacementSource::PositionUpdate
+            };
+            Some((position, source))
         } else if changes.entered {
             self.world
                 .player()
@@ -220,6 +228,7 @@ impl OnlineState {
     /// in progress.
     pub(super) fn restart(&mut self) {
         self.deletion.ended();
+        self.chat_link_expansion = None;
         self.world.restart();
         self.selection = None;
         self.loading.clear();
@@ -367,6 +376,7 @@ impl OnlineState {
             deletion: default(),
             regions: eq_client_assets::regions::ZoneRegions::default(),
             enabled,
+            chat_link_expansion: None,
             server_placement: None,
             placement_revision: 0,
             loading: default(),
@@ -433,8 +443,11 @@ pub(super) struct Panels<'w> {
     book_view: Option<ResMut<'w, super::spellbook::BookView>>,
     spell_sets: Option<ResMut<'w, super::spellbook::sets::Sets>>,
     sounds: ResMut<'w, super::sounds::Sounds>,
+    marquee: Option<ResMut<'w, super::marquee::Banners>>,
     combat_text: Option<ResMut<'w, super::combat_text::CombatText>>,
     weather: Option<ResMut<'w, super::weather::Field>>,
+    projectiles: Option<ResMut<'w, super::projectiles::Flights>>,
+    socials: Option<ResMut<'w, super::socials::State>>,
 }
 
 impl Panels<'_> {
@@ -461,14 +474,23 @@ impl Panels<'_> {
         if let Some(text) = self.combat_text.as_mut() {
             text.hear(state.world(), &changes.damage, true);
         }
+        if let Some((flights, flight)) = self.projectiles.as_mut().zip(changes.projectile.as_ref())
+        {
+            flights.receive(state.world(), flight, std::time::Instant::now());
+        }
         if changes.inventory {
             self.inventory.refresh(state.world.inventory().stale());
         }
         for notice in &changes.notices {
             self.tell(notice, messages, chat);
         }
-        for cue in &changes.sounds {
-            self.sounds.play_cue(cue);
+        if state.world.in_world() {
+            for cue in &changes.sounds {
+                self.sounds.play_cue(cue);
+            }
+        }
+        if let Some((banners, marquee)) = self.marquee.as_mut().zip(changes.marquee.as_ref()) {
+            banners.receive(marquee, std::time::Instant::now());
         }
         if changes.characters {
             if let Some(list) = state.world.characters() {
@@ -533,8 +555,8 @@ impl Panels<'_> {
                 }
                 Reply::LootTaken { place, accepted } => self.trade.taken(*place, *accepted),
                 Reply::LootReceived { place } => self.trade.received(*place),
-                // The refused crossing no longer holds the player's motion.
-                Reply::ZoneLineRefused => self.motion.crossing_refused(),
+                // A crossing without a transfer releases the movement hold.
+                Reply::ZoneLineRefused | Reply::SameZoneBoundary => self.motion.crossing_resolved(),
                 Reply::MotionRefused { created, reason } => {
                     self.motion
                         .move_refused(state.world().session_id(), *created, reason);
@@ -586,10 +608,24 @@ impl Panels<'_> {
 
     /// Forgets what the world's reset made stale on screen and in the panels.
     fn forget(&mut self, reason: Reset, state: &mut OnlineState) {
+        // A death keeps the zone, so the killing blow's sound and any banner
+        // already queued in this batch still play.
+        if !matches!(reason, Reset::Died) {
+            self.sounds.reset();
+            if let Some(banners) = self.marquee.as_mut() {
+                banners.clear();
+            }
+        }
         if let Some(sync) = &mut self.movement_sync {
             // The world clears the receipt here, even when a refused
             // transfer reconnects the same admission in this receive batch.
             sync.invalidate();
+        }
+        if let Some(flights) = self.projectiles.as_mut() {
+            flights.reset(reason);
+        }
+        if let Some(socials) = self.socials.as_mut() {
+            socials.reset();
         }
         if !matches!(reason, Reset::Died)
             && let Some(weather) = self.weather.as_mut()
@@ -782,6 +818,7 @@ pub(super) fn receive(
         trace(&update, &changes, &state.world);
         panels.merchant_news(&update, &changes, &state.world);
         if let Some(reason) = changes.reset {
+            chat.socials = super::socials::Inbox::default();
             if matches!(
                 reason,
                 Reset::Entered | Reset::Camped | Reset::Lost { ended: true, .. }
@@ -808,7 +845,11 @@ pub(super) fn receive(
         if let Some(position) = changes.placed {
             let at = |p: eq_client_core::WorldPosition| [p.x, p.y, p.z];
             info!(from = ?before.map(at), to = ?at(position), "Server corrected the player");
-            panels.motion.reset(None);
+            if changes.same_zone_relocation {
+                panels.motion.same_zone_landed();
+            } else {
+                panels.motion.reset(None);
+            }
             if let Some(sets) = panels.spell_sets.as_mut() {
                 sets.interrupt("The server moved the character.");
             }
@@ -1453,6 +1494,7 @@ mod tests {
             }),
             Some(Session {
                 classic_npc_consider: false,
+                chat_link_expansion: Some(eq_client_core::chat::LinkExpansion::EQEMU_TITANIUM),
                 inventory_move_rules: Some(eq_client_core::inventory::MoveRules::EqEmu),
                 spell_provider: eq_client_core::spell_tables::Binding::new(
                     eq_client_core::spell_tables::Policy::Installed,

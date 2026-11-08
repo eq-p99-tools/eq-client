@@ -39,6 +39,8 @@ pub struct Definition {
     pub range: Option<f32>,
     /// Fields 14 and 15: recovery and same-spell reuse, in milliseconds.
     pub timing: Option<Timing>,
+    /// Positive shared spell reuse group in the installed spell table.
+    pub linked_timer: Option<u32>,
     /// Installed class requirements in class ID order, starting at class 1.
     /// Raw values, including 255 for an excluded class, are preserved.
     pub class_levels: [Option<u8>; 16],
@@ -153,6 +155,10 @@ impl Definitions {
                         recovery_ms,
                         recast_ms,
                     }),
+                linked_timer: layout
+                    .linked_timer
+                    .and_then(number)
+                    .filter(|id| (1..=127).contains(id)),
                 class_levels: std::array::from_fn(|index| {
                     let first = layout.class_levels?;
                     fields.get(first + index)?.parse().ok()
@@ -203,6 +209,7 @@ mod tests {
         fields[120] = "44";
         fields[144] = "7";
         fields[145] = "86";
+        fields[167] = "4";
         let spells = Definitions::parse(
             &format!("{}\nnot a spell\n", fields.join("^")),
             &Layout::TITANIUM,
@@ -215,6 +222,7 @@ mod tests {
         assert_eq!(spell.cast_ms, Some(1500));
         assert_eq!(spell.casting_animation, Some(44));
         assert_eq!(spell.effect, Some(86));
+        assert_eq!(spell.linked_timer, Some(4));
         assert_eq!(spell.range, None);
         assert_eq!(spell.timing, None);
         assert_eq!(spell.class_levels[..3], [Some(255), Some(12), None]);

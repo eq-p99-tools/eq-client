@@ -247,6 +247,16 @@ fn bind_wound(update: &BindWoundUpdate, messages: Option<&Messages>) -> Option<S
             messages,
         ),
         BindWoundUpdate::Ended(end) => official(Some(end.string_id()), &[], end.text(), messages),
+        BindWoundUpdate::RequestedSelf => {
+            Said::own("Binding your wounds was requested. Stay still while waiting for the server.")
+        }
+        BindWoundUpdate::Bandaged => Said::own("The server reported bandaging."),
+        BindWoundUpdate::Released => {
+            Said::own("The server released your bandage attempt without a result.")
+        }
+        BindWoundUpdate::Unconfirmed => Said::own(
+            "Still waiting for the bandage result or stock update. Re-enter the zone if the wait persists.",
+        ),
         BindWoundUpdate::Unlocked => return None,
     })
 }
@@ -343,6 +353,23 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         | Notice::ResurrectionRefused(reason)
         | Notice::TranslocateRefused(reason)
         | Notice::ReadRefused(reason) => chat(reason.as_str().into()),
+        Notice::TrainingPractice(update) => {
+            use eq_client_core::training::PracticeUpdate;
+            chat(match update {
+                PracticeUpdate::Requested { estimated_cost, .. } => {
+                    format!("Practice requested (estimated price: {estimated_cost} copper). Practice points are unknown until a fresh admission.").into()
+                }
+                PracticeUpdate::SkillRaised { .. } => {
+                    "The skill increased. The practice outcome is still unknown.".into()
+                }
+                PracticeUpdate::Unanswered { .. } => {
+                    "The practice outcome is unknown. Re-enter the zone to refresh practice points.".into()
+                }
+                PracticeUpdate::PointsUncertain => {
+                    "Practice points are unknown after the level change. Re-enter the zone to refresh them.".into()
+                }
+            })
+        }
         Notice::ConsentExpired(kind) => {
             use eq_client_core::confirmations::ConsentKind;
             chat(match kind {
@@ -394,6 +421,9 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
                 }
                 Progress::Unresolved => chat(
                     "Buff cancellation is unconfirmed. No matching buff fade was received.".into(),
+                ),
+                Progress::PartiallySubmitted => chat(
+                    "The first buff cancellation packet was sent. The outcome is unknown.".into(),
                 ),
                 Progress::Submitted | Progress::FadeObserved | Progress::Changed => Vec::new(),
             }

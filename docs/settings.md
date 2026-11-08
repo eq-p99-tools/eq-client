@@ -56,6 +56,11 @@ slider uses this client's scale. Titanium sound assets are loaded on demand;
 Mac-era sound loading is not implemented. If no audio device is available the
 client reports that audio is disabled and continues.
 
+Named Titanium cues can play installed WAV and MP3 files. MP3 lookup uses the
+file name in the installation root or its `sounds` folder. Cues play once,
+with limits on pending requests, concurrent voices, and playback time. World
+resets clear pending cues and stop their playback.
+
 ## Quality of life
 
 Options → QoL stores these choices per character. Availability can depend on the

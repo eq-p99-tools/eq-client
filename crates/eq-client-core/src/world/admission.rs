@@ -225,6 +225,33 @@ impl ClientWorld {
         }
     }
 
+    /// Apply the received placement to the same admitted character only.
+    pub(super) fn same_zone_relocated(
+        &mut self,
+        relocation: crate::SameZoneRelocation,
+        now: Instant,
+        changes: &mut Changes,
+    ) {
+        if self.session_id != Some(relocation.session_id)
+            || !self.in_world()
+            || !self.is_player(relocation.spawn_id)
+        {
+            changes.ignored = true;
+            return;
+        }
+        self.position(
+            relocation.spawn_id,
+            (relocation.position, [0.0; 3], 0.0),
+            now,
+            changes,
+        );
+        changes.same_zone_relocation = true;
+        let revision = self
+            .same_zone_relocation
+            .map_or(1, |(revision, _)| revision.saturating_add(1));
+        self.same_zone_relocation = Some((revision, relocation));
+    }
+
     /// A zone line could not be crossed.
     pub(super) fn zone_line_refused(&self, session_id: u64, reason: &str, changes: &mut Changes) {
         if self.session_id == Some(session_id) {

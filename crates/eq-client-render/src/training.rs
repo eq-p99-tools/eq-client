@@ -13,7 +13,7 @@ use crate::{
 use bevy::prelude::*;
 use eq_client_core::{
     ClientCommand, Coins,
-    training::{TrainingRequest, practice_cost},
+    training::{PracticePoints, TrainingRequest, practice_cost},
     world::ClientWorld,
 };
 
@@ -76,8 +76,8 @@ impl SkillRows {
 struct Row {
     skill: u32,
     name: String,
-    value: u32,
-    cost: Coins,
+    value: Option<u32>,
+    cost: Option<Coins>,
     chosen: bool,
 }
 
@@ -97,13 +97,13 @@ fn rows(world: &ClientWorld, chosen: Option<u32>) -> Vec<Row> {
             if offer.cap(skill) == 0 {
                 return None;
             }
-            let value = skills.get(index).copied().unwrap_or(0);
+            let value = skills.get(index).copied();
             Some(Row {
                 skill,
                 name: eq_client_core::skills::name(skill)
                     .map_or_else(|| format!("Skill {skill}"), str::to_owned),
                 value,
-                cost: in_coins(practice_cost(value)),
+                cost: value.map(|value| in_coins(practice_cost(value))),
                 chosen: chosen == Some(skill),
             })
         })
@@ -198,10 +198,17 @@ pub(crate) fn buttons(
         }
     }
     if train.any()
-        && online.world().training().is_some()
+        && let Some(offer) = online.world().training()
         && let Some(skill) = chosen.0
     {
-        ask(TrainingRequest::Train { skill }, online.world(), &outbox);
+        ask(
+            TrainingRequest::TrainAt {
+                trainer: offer.trainer,
+                skill,
+            },
+            online.world(),
+            &outbox,
+        );
     }
 }
 
@@ -241,15 +248,20 @@ pub(crate) fn fill(
             }
         }
         for (index, row) in wanted.iter().enumerate() {
+            let coin = |count: fn(Coins) -> u32| {
+                row.cost
+                    .map_or_else(String::new, |cost| count(cost).to_string())
+            };
             let cells = [
                 row.name.clone(),
                 // The official client's rank for a value is not known yet.
                 String::new(),
-                row.value.to_string(),
-                row.cost.platinum.to_string(),
-                row.cost.gold.to_string(),
-                row.cost.silver.to_string(),
-                row.cost.copper.to_string(),
+                row.value
+                    .map_or_else(String::new, |value| value.to_string()),
+                coin(|cost| cost.platinum),
+                coin(|cost| cost.gold),
+                coin(|cost| cost.silver),
+                coin(|cost| cost.copper),
             ];
             let line = commands
                 .spawn((
@@ -279,10 +291,10 @@ pub(crate) fn fill(
 
 /// The player's practice points, as the Training window counts them.
 pub(crate) fn practice_points(world: &ClientWorld) -> String {
-    world
-        .player()
-        .and_then(|player| player.practice_points)
-        .map_or_else(String::new, |points| points.to_string())
+    match world.training_points() {
+        PracticePoints::Balance(points) => points.to_string(),
+        PracticePoints::Unknown => String::new(),
+    }
 }
 
 #[cfg(test)]
@@ -362,7 +374,7 @@ mod tests {
         let names: Vec<_> = rows.iter().map(|row| row.name.as_str()).collect();
         assert_eq!(names, ["Bash", "Kick"]);
         // Kick at 20: ten over ten, cubed, over a hundred is ten copper.
-        assert_eq!(rows[1].cost, in_coins(10));
+        assert_eq!(rows[1].cost, Some(in_coins(10)));
         assert_eq!(
             in_coins(12_345),
             Coins {
@@ -373,9 +385,47 @@ mod tests {
             }
         );
         assert!(rows[1].chosen && !rows[0].chosen);
-        assert_eq!(rows[0].cost, Coins::default());
+        assert_eq!(rows[0].cost, Some(Coins::default()));
         assert!(is_guildmaster(Some(20)) && !is_guildmaster(Some(41)));
         assert!(!is_guildmaster(None));
+    }
+
+    #[test]
+    fn p99_spend_withdraws_displayed_points_until_fresh_admission() {
+        use eq_client_core::training::PracticeUpdate;
+
+        let mut online = OnlineState::new(true);
+        let mut player = testing::player(7);
+        player.practice_points = Some(3);
+        testing::admit(&mut online, 1, player);
+        assert_eq!(practice_points(online.world()), "3");
+        let practice = |update| WorldEvent::Training(TrainingUpdate::Practice(update));
+        testing::news(
+            &mut online,
+            [practice(PracticeUpdate::Requested {
+                skill: 30,
+                estimated_cost: 0,
+            })],
+        );
+        assert_eq!(practice_points(online.world()), "");
+        testing::news(
+            &mut online,
+            [practice(PracticeUpdate::SkillRaised {
+                skill: 30,
+                value: 13,
+            })],
+        );
+        assert_eq!(practice_points(online.world()), "");
+        assert_eq!(online.world().player().unwrap().practice_points, Some(3));
+        testing::news(
+            &mut online,
+            [practice(PracticeUpdate::Unanswered { skill: 30 })],
+        );
+        assert_eq!(practice_points(online.world()), "");
+        let mut next = testing::player(7);
+        next.practice_points = Some(2);
+        testing::admit(&mut online, 2, next);
+        assert_eq!(practice_points(online.world()), "2");
     }
 
     #[test]
@@ -423,8 +473,8 @@ mod tests {
             .drawn
             .as_ref()
             .unwrap()[0];
-        assert_eq!(row.value, 3);
-        assert_eq!(row.cost, in_coins(practice_cost(3)));
+        assert_eq!(row.value, Some(3));
+        assert_eq!(row.cost, Some(in_coins(practice_cost(3))));
         assert!(row.chosen);
         testing::news(
             &mut app.world_mut().resource_mut::<OnlineState>(),

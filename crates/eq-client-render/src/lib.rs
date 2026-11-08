@@ -71,6 +71,7 @@ mod loading;
 mod login;
 mod logs;
 mod map;
+mod marquee;
 mod motion;
 mod names;
 mod navigation;
@@ -86,6 +87,7 @@ mod preview;
 #[cfg(test)]
 mod probes;
 mod profile_files;
+mod projectiles;
 mod raid;
 mod reading;
 mod resources;
@@ -97,6 +99,7 @@ mod sheets;
 mod skills;
 mod skin;
 mod skinned;
+mod socials;
 mod sounds;
 mod speed;
 mod spell_effects;
@@ -362,17 +365,19 @@ pub fn run(
         script_input_mode,
     );
     let mut app = App::new();
-    let (spell_binding, inventory_move_rules, classic_npc_consider) = match &source {
-        Source::Online {
-            session: Some(session),
-            ..
-        } => (
-            Some(session.spell_provider),
-            session.inventory_move_rules,
-            session.classic_npc_consider,
-        ),
-        _ => (None, None, false),
-    };
+    let (spell_binding, inventory_move_rules, classic_npc_consider, chat_link_expansion) =
+        match &source {
+            Source::Online {
+                session: Some(session),
+                ..
+            } => (
+                Some(session.spell_provider),
+                session.inventory_move_rules,
+                session.classic_npc_consider,
+                session.chat_link_expansion,
+            ),
+            _ => (None, None, false, None),
+        };
     let (front, updates, commands) = match source {
         Source::Online { logins, session } => login::FrontEnd::launched(logins, session),
         Source::Offline(preview) => (
@@ -390,6 +395,7 @@ pub fn run(
     let outbox = outbox::Outbox::new(commands);
     let mut online_state = online::OnlineState::new(online);
     online_state.consider_npcs_by_level(classic_npc_consider);
+    online_state.chat_link_expansion = chat_link_expansion;
     online_state.plan_inventory_as(inventory_move_rules);
     outbox.set_spell_ready(spells.ready());
     app.insert_resource(spells);
@@ -454,6 +460,37 @@ pub fn run(
 #[cfg(test)]
 pub(crate) mod testing {
     use super::*;
+
+    /// An adapter-backed probe without a visible window, input or audio output.
+    pub(crate) fn hidden_graphics_probe(title: &str, resolution: (u32, u32)) -> App {
+        let mut app = App::new();
+        app.add_plugins(
+            DefaultPlugins
+                .set(WindowPlugin {
+                    primary_window: Some(Window {
+                        title: title.into(),
+                        resolution: resolution.into(),
+                        visible: false,
+                        focused: false,
+                        ..default()
+                    }),
+                    ..default()
+                })
+                .set(bevy::winit::WinitPlugin {
+                    run_on_any_thread: true,
+                })
+                .disable::<bevy::audio::AudioPlugin>(),
+        )
+        .insert_resource(bevy::winit::WinitSettings::continuous());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        app.add_systems(Update, move |mut exit: MessageWriter<AppExit>| {
+            if std::time::Instant::now() >= deadline {
+                error!("Hidden graphics probe timed out");
+                exit.write(AppExit::error());
+            }
+        });
+        app
+    }
 
     /// An app with every presentation resource the viewer starts with, empty
     /// and offline, plus input, the click rule and a focused primary window:
@@ -1151,6 +1188,7 @@ mod tests {
             }),
             Some(login::Session {
                 classic_npc_consider: false,
+                chat_link_expansion: Some(eq_client_core::chat::LinkExpansion::EQEMU_TITANIUM),
                 inventory_move_rules: Some(eq_client_core::inventory::MoveRules::EqEmu),
                 spell_provider: eq_client_core::spell_tables::Binding::new(
                     eq_client_core::spell_tables::Policy::Installed,

@@ -5,10 +5,10 @@ use crate::{
     combat_text, confirm, daylight, doors, entities, escape, exit_after_screenshot, give, ground,
     group, hud, interact, inventory, item_models, items, keys, login, logs, map, motion,
     move_player, names, navigation, navmesh_prebuild, notices, online, options, orbit_camera,
-    outbox, outfit, paperdoll, pet, profile_files, raid, reading, resources, schedule_screenshot,
-    select_preview, sheets, skills, skin, skinned, sounds, speed, spell_effects, spell_icons,
-    spellbook, target, tooltip, trade, tradeskills, training, translocate, update_hud, weather,
-    whereabouts, who, windows,
+    outbox, outfit, paperdoll, pet, profile_files, projectiles, raid, reading, resources,
+    schedule_screenshot, select_preview, sheets, skills, skin, skinned, sounds, speed,
+    spell_effects, spell_icons, spellbook, target, tooltip, trade, tradeskills, training,
+    translocate, update_hud, weather, whereabouts, who, windows,
 };
 use bevy::prelude::*;
 /// Starts the presentation state (HUD, windows, chat, targeting, inventory,
@@ -26,6 +26,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .insert_resource(keys);
     app.init_resource::<spell_effects::SpellParticles>()
         .init_resource::<sounds::Sounds>()
+        .init_resource::<crate::marquee::Banners>()
         .init_resource::<doors::Hinges>()
         .init_resource::<options::OptionsState>()
         .init_resource::<options::MovementSync>()
@@ -42,6 +43,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<skin::UiSkin>()
         .init_resource::<hud::hotbar::Bindings>()
         .init_resource::<hud::hotbar::Files>()
+        .init_resource::<crate::socials::State>()
         .init_resource::<hud::hotbar::carry::Presses>()
         .init_resource::<clicks::LeftButton>()
         .init_resource::<hud::hotbar::carry::Carry>()
@@ -68,6 +70,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<entities::NearbyEntities>()
         .init_resource::<names::NameTags>()
         .init_resource::<item_models::ItemLibrary>()
+        .init_resource::<projectiles::Flights>()
         .init_resource::<outfit::Wardrobe>()
         .init_resource::<select_preview::Preview>()
         .init_resource::<windows::DragState>()
@@ -86,6 +89,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<map::Presentation>()
         .init_resource::<map::WatchState>()
         .init_resource::<map::MapMotion>()
+        .init_resource::<map::Landmarks>()
         .init_resource::<login::FrontEnd>()
         .init_resource::<login::LoginLook>();
 }
@@ -135,6 +139,7 @@ pub(super) fn schedule(app: &mut App) {
                 character::lie,
                 doors::reconcile,
                 ground::reconcile,
+                projectiles::update,
                 hud::spell_visibility,
                 select_preview::show,
                 select_preview::turn,
@@ -167,6 +172,7 @@ pub(super) fn schedule(app: &mut App) {
                 .in_set(Stage::Typing),
             (
                 hud::hotbar::prepare,
+                crate::socials::prepare,
                 hud::hotbar::page::input,
                 escape::route,
                 hud::hotbar::carry::route,
@@ -209,6 +215,7 @@ pub(super) fn schedule(app: &mut App) {
                     map::presentation_actions,
                     map::inspect,
                     map::control_actions,
+                    map::landmark_actions,
                     map::target_input,
                     map::scroll_watches,
                 )
@@ -217,7 +224,14 @@ pub(super) fn schedule(app: &mut App) {
             ),
             (abilities::input, skinned::slash),
             hud::actions,
-            (hud::hotbar::update, hud::hotbar::persist).chain(),
+            (
+                hud::hotbar::update,
+                crate::socials::update
+                    .after(hud::actions)
+                    .after(skinned::slash),
+                hud::hotbar::persist,
+            )
+                .chain(),
             hud::hotbar::item_actions,
             (
                 // A book the player stands up from closes before it draws.
@@ -365,12 +379,14 @@ pub(super) fn schedule(app: &mut App) {
                         tradeskills::show,
                         (
                             map::draw,
+                            map::draw_landmarks,
                             map::update_entities,
                             map::update_items,
                             map::draw_movement,
                             map::update_controls,
                             map::show_target,
                             map::present,
+                            map::present_landmarks,
                         )
                             .chain(),
                         skinned::scrollbar::place,
@@ -394,7 +410,7 @@ pub(super) fn schedule(app: &mut App) {
                 sounds::update,
                 target::marker::update,
                 (names::request, names::update).chain(),
-                combat_text::update,
+                (combat_text::update, crate::marquee::present),
                 (schedule_screenshot, select_preview::next_capture).chain(),
                 exit_after_screenshot,
             )
@@ -477,9 +493,11 @@ pub(super) fn install_overlays(app: &mut App) {
     windows::register_layout(app);
     paperdoll::register(app);
     crate::creation_preview::register(app);
+    entities::outline::register(app);
     app.add_systems(
         Update,
-        profile_files::follow
+        (profile_files::follow, map::follow_landmarks)
+            .chain()
             .after(Stage::Receive)
             .before(Stage::Scene),
     );

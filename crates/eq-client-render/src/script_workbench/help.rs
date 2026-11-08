@@ -13,7 +13,7 @@ struct Page {
     parent: Option<usize>,
 }
 
-const PAGES: [Page; 7] = [
+const PAGES: [Page; 8] = [
     Page {
         name: "README.md",
         source: include_str!("../../../../docs/scripts/README.md"),
@@ -48,6 +48,11 @@ const PAGES: [Page; 7] = [
         name: "control.md",
         source: include_str!("../../../../docs/scripts/control.md"),
         parent: Some(3),
+    },
+    Page {
+        name: "language.md",
+        source: include_str!("../../../../docs/scripts/language.md"),
+        parent: Some(0),
     },
 ];
 

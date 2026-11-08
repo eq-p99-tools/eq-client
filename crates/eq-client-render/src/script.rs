@@ -10,12 +10,14 @@
 //! `pointer` module), scrolling a list the control has scrolled out of view as
 //! the wheel does, and lands only on the control under it. A followed
 //! script keeps reading complete lines appended to its file, under the same limits.
-//! `gm` and `chat` steps require a network-constrained local EQEmu/TAKP session.
+//! `gm`, `chat` and `social` steps require a network-constrained local EQEmu/TAKP session.
 pub(crate) mod control;
 mod execution;
 mod input;
+pub(crate) use input::AuthoredInput;
 pub use input::InputMode;
 pub(super) use input::install as install_input;
+pub(crate) mod language;
 mod parse;
 pub(crate) mod pointer;
 mod program;
@@ -24,6 +26,7 @@ mod report;
 use execution::RunMode;
 pub use execution::{Phase, RunEvent, RunStatus};
 pub(crate) use execution::{Request, RunControl};
+use program::AppendError;
 pub use program::{Instruction, MAX_SOURCE_BYTES, ParseError, Program};
 mod source;
 pub use source::read_source;
@@ -74,9 +77,12 @@ const SLOW_ROUTE_CALL: Duration = Duration::from_millis(5);
 )]
 pub struct Script {
     steps: VecDeque<QueuedStep>,
+    language: Option<language::Run>,
     current: Option<(Step, Duration)>,
     progress: RunStatus,
     mode: RunMode,
+    /// This frame successfully queued a social using the single-step control.
+    stepped_social: bool,
     held: Vec<KeyCode>,
     /// The movement commands a moving step holds itself, as the key map
     /// resolves a held key to them, so the step moves under any key table.
@@ -94,6 +100,8 @@ pub struct Script {
     paused: bool,
     /// Newest chat line already included in a report.
     chat_seen: u64,
+    /// Most recent same-zone movement receipt before the run or already consumed.
+    relocation_seen: Option<(u64, u64)>,
     /// Script file still being appended to, with the bytes already read.
     follow: Option<Follow>,
     accepted: usize,
@@ -196,10 +204,12 @@ impl Script {
             accepted: steps.len(),
             progress: RunStatus::queued(steps.len(), std::sync::Arc::from("")),
             mode: RunMode::Continuous,
+            stepped_social: false,
             steps: steps
                 .into_iter()
                 .map(|step| QueuedStep { step, line: None })
                 .collect(),
+            language: None,
             current: None,
             held: Vec::new(),
             acts: Vec::new(),
@@ -210,6 +220,7 @@ impl Script {
             session: RunSession::BeforeAdmission,
             paused: false,
             chat_seen: 0,
+            relocation_seen: None,
             follow: None,
             local: false,
             offline: false,
@@ -238,20 +249,26 @@ impl Script {
     /// Queues a source snapshot, retaining line numbers for progress and errors.
     #[must_use]
     pub fn from_program(program: Program) -> Self {
-        let (source, instructions) = program.into_parts();
-        let total = instructions.len();
-        Self {
-            steps: instructions
+        let accepted = program.statement_count();
+        let (source, instructions, code) = program.into_parts();
+        let mut script = Self {
+            accepted,
+            progress: RunStatus::queued(instructions.len(), source),
+            ..Self::new(Vec::new())
+        };
+        if let Some(code) = code {
+            script.language = Some(language::Run::new(code, instructions));
+            script.progress.flow = Some(execution::FlowStatus::default());
+        } else {
+            script.steps = instructions
                 .into_iter()
                 .map(|instruction| QueuedStep {
                     step: instruction.step,
                     line: Some(instruction.line),
                 })
-                .collect(),
-            accepted: total,
-            progress: RunStatus::queued(total, source),
-            ..Self::new(Vec::new())
+                .collect();
         }
+        script
     }
 
     /// Builds a viewer run with the process's explicit input policy and the
@@ -322,6 +339,26 @@ impl Script {
         }
     }
 
+    /// Check the exact local executor and its authority for this frame.
+    pub(crate) fn social_dispatch(
+        &self,
+        owner: &std::sync::Arc<()>,
+    ) -> Option<crate::socials::ScriptDispatch> {
+        use crate::socials::ScriptDispatch;
+
+        if !self.local
+            || !std::sync::Arc::ptr_eq(&self.progress.identity, owner)
+            || !matches!(self.progress.phase, Phase::Running | Phase::Following)
+        {
+            return None;
+        }
+        match self.mode {
+            RunMode::Continuous => Some(ScriptDispatch::Continue),
+            RunMode::PauseRequested if self.stepped_social => Some(ScriptDispatch::OneLine),
+            _ => None,
+        }
+    }
+
     /// Whether native pointer hit testing yields to the explicit script owner.
     pub(crate) const fn background_owns_input(&self) -> bool {
         matches!(self.input_mode, InputMode::Background) && self.owns_input
@@ -387,28 +424,61 @@ impl Script {
         };
         follow.offset += end + 1;
         follow.idle = false;
-        let text = String::from_utf8_lossy(&fresh[..=end]).into_owned();
-        let base = follow
-            .path
-            .parent()
-            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-        match Program::parse(&text, &base) {
-            Ok(program) if self.accepted + program.instructions().len() <= MAX_STEPS => {
-                let (_, instructions) = program.into_parts();
+        let text = String::from_utf8_lossy(&fresh[..=end]);
+        let base = follow.path.parent().unwrap_or_else(|| Path::new("."));
+        let parsed = if self.language.is_some() {
+            // Appended actions would jump ahead of the running program's next
+            // statement, so a control-flow run takes no appended lines.
+            Err(AppendError::Structured(Some(1)))
+        } else {
+            Program::parse_append(&text, base)
+        };
+        match parsed {
+            Ok(instructions) if self.accepted + instructions.len() <= MAX_STEPS => {
                 self.accepted += instructions.len();
+                self.progress.total += instructions.len();
                 self.steps
                     .extend(instructions.into_iter().map(|instruction| QueuedStep {
                         step: instruction.step,
                         line: Some(first_line + instruction.line),
                     }));
-                self.progress.total = self.accepted;
                 let source = String::from_utf8_lossy(&bytes[..follow.offset]);
-                self.progress.source =
-                    std::sync::Arc::from(source.strip_prefix('\u{feff}').unwrap_or(&source));
+                self.progress.source = std::sync::Arc::from(source::without_bom(&source));
             }
             Ok(_) => warn!("Ignored appended steps beyond the {MAX_STEPS}-step limit"),
-            Err(error) => warn!("Ignored appended script lines: {error}"),
+            Err(AppendError::Invalid(mut error)) => {
+                error.line = error.line.map(|line| first_line + line);
+                warn!("Ignored appended script lines: {error}");
+            }
+            Err(AppendError::Structured(line)) => {
+                self.progress.line = line.map(|line| first_line + line);
+                let snapshot = String::from_utf8_lossy(&bytes[..follow.offset]);
+                self.progress.source = std::sync::Arc::from(source::without_bom(&snapshot));
+                let reason = "Follow appends accept ordinary action lines; run a complete control-flow file as a new snapshot";
+                self.progress.finish(Phase::Failed, reason);
+                warn!("Ignored appended script lines: {reason}");
+                self.follow = None;
+            }
         }
+    }
+
+    fn exhausted(&self) -> bool {
+        self.steps.is_empty() && self.language.as_ref().is_none_or(language::Run::done)
+    }
+
+    /// Keep the ordinary action queue authoritative, including menu-entry retries.
+    fn queue_statement(
+        &mut self,
+        world: &eq_client_core::world::ClientWorld,
+        now: Duration,
+    ) -> Result<(), String> {
+        if self.steps.is_empty()
+            && let Some(run) = &mut self.language
+            && let language::Tick::Action(step) = run.tick(world, &mut self.progress, now)?
+        {
+            self.steps.push_back(step);
+        }
+        Ok(())
     }
 
     fn release(&mut self, keys: &mut Keyboard, mouse: &mut ButtonInput<MouseButton>) {
@@ -420,6 +490,7 @@ impl Script {
         if let Some(button) = self.clicked.take() {
             // A genuine press of the same button belongs to the user now.
             if !keys.native_button(button) {
+                keys.mark_pointer(button);
                 mouse.release(button);
             }
         }
@@ -449,6 +520,7 @@ impl Script {
         self.release(keys, mouse);
         self.owns_input = false;
         self.steps.clear();
+        self.language = None;
         self.current = None;
         self.follow = None;
         self.route = None;
@@ -625,6 +697,8 @@ type Observed<'w> = (
     Option<Res<'w, crate::options::OptionsState>>,
     Option<Res<'w, crate::confirm::Asked>>,
     Option<Res<'w, crate::breath::State>>,
+    Option<Res<'w, crate::projectiles::Flights>>,
+    Option<Res<'w, crate::socials::State>>,
 );
 
 type Input<'w, 's> = (Keyboard<'w, 's>, ResMut<'w, ButtonInput<MouseButton>>);
@@ -645,6 +719,7 @@ pub(super) struct Keyboard<'w, 's> {
     typed: MessageWriter<'w, bevy::input::keyboard::KeyboardInput>,
     window: Query<'w, 's, Entity, With<PrimaryWindow>>,
     background: Option<ResMut<'w, input::BackgroundInput>>,
+    authored: Option<ResMut<'w, AuthoredInput>>,
 }
 
 impl Keyboard<'_, '_> {
@@ -691,6 +766,20 @@ impl Keyboard<'_, '_> {
         });
         if let Some(background) = &mut self.background {
             background.authored(id);
+        }
+        if let Some(authored) = &mut self.authored {
+            authored.typed.insert(id);
+            if state.is_pressed() {
+                authored.keys.insert(key_code);
+            }
+        }
+    }
+
+    fn mark_pointer(&mut self, button: MouseButton) {
+        if button == MouseButton::Left
+            && let Some(authored) = &mut self.authored
+        {
+            authored.left_button = true;
         }
     }
 
@@ -747,6 +836,10 @@ pub(super) fn drive(
     for event in focus.read().filter(|event| windows.contains(event.window)) {
         *reported_focus = Some((event.window, event.focused));
     }
+    let (mut keys, mut mouse) = input;
+    if let Some(authored) = &mut keys.authored {
+        **authored = AuthoredInput::default();
+    }
     let Some(mut script) = script else {
         return;
     };
@@ -754,7 +847,7 @@ pub(super) fn drive(
     // Plain borrows of the fields, so a walk can hold its route and note
     // where it heads at once.
     let script = &mut *script;
-    let (mut keys, mut mouse) = input;
+    script.stepped_social = false;
     let now = time.elapsed();
     if !script.progress.phase.active() {
         script.retire(&mut commands);
@@ -810,6 +903,12 @@ pub(super) fn drive(
         let search_frame = script.search_frames.map(|frames| frames.count);
         info!(ms, walking, searching, ?search_frame, "Script slow frame");
     }
+    if script.started.is_none() {
+        script.relocation_seen = online
+            .world()
+            .last_same_zone_relocation()
+            .map(|(revision, relocation)| (relocation.session_id, revision));
+    }
     let started = *script.started.get_or_insert(now);
     script.progress.elapsed = now.saturating_sub(started);
     if now.saturating_sub(started) > MAX_RUNTIME {
@@ -853,7 +952,7 @@ pub(super) fn drive(
     } else {
         Phase::Running
     };
-    if script.current.is_none() && script.steps.is_empty() {
+    if script.current.is_none() && script.exhausted() {
         if script.follow.is_none() {
             script.progress.finish(Phase::Completed, "Script finished");
             script.retire(&mut commands);
@@ -996,6 +1095,25 @@ pub(super) fn drive(
                         script.stop(&mut keys, &mut mouse, &reason);
                         return;
                     }
+                }
+            }
+            Step::WaitRelocation(limit) => {
+                let world = online.world();
+                let fresh = world
+                    .last_same_zone_relocation()
+                    .filter(|(revision, relocation)| {
+                        world.in_world()
+                            && Some((relocation.session_id, *revision)) != script.relocation_seen
+                    });
+                if let Some((revision, relocation)) = fresh {
+                    script.relocation_seen = Some((relocation.session_id, revision));
+                    info!(revision, position = ?relocation.position, "Script received same-zone relocation");
+                    true
+                } else if elapsed >= *limit {
+                    script.stop(&mut keys, &mut mouse, "No same-zone relocation received");
+                    return;
+                } else {
+                    false
                 }
             }
             Step::WaitDead(limit) => {
@@ -1414,6 +1532,7 @@ pub(super) fn drive(
                 } else {
                     MouseButton::Left
                 };
+                keys.mark_pointer(button);
                 mouse.press(button);
                 script.clicked = Some(button);
                 script.pressed = Some(entity);
@@ -1448,6 +1567,7 @@ pub(super) fn drive(
                         }
                     };
                     press(&mut commands, entity, *target, &mut buttons, &mut pointers);
+                    keys.mark_pointer(MouseButton::Left);
                     mouse.press(MouseButton::Left);
                     script.clicked = Some(MouseButton::Left);
                     script.pressed = Some(entity);
@@ -1539,7 +1659,19 @@ pub(super) fn drive(
         }
     }
     script.progress.complete_step();
+    let single_step = matches!(script.mode, RunMode::OneStep);
+    if script.mode != RunMode::PauseRequested
+        && script.steps.is_empty()
+        && script.language.as_ref().is_some_and(|run| run.paced(now))
+    {
+        return;
+    }
     if !script.advance(now) {
+        return;
+    }
+    if let Err(reason) = script.queue_statement(online.world(), now) {
+        script.stop(&mut keys, &mut mouse, &reason);
+        script.retire(&mut commands);
         return;
     }
     let Some(QueuedStep { step, line }) = script.steps.pop_front() else {
@@ -1547,11 +1679,14 @@ pub(super) fn drive(
     };
     // An entry of the closed EQ menu: the script opens the menu with its own
     // button first, as a player would, then comes back to the entry.
-    let step = match opens_menu_first(&step, menu.open, script.menu_opening, now) {
+    let (step, authored) = match opens_menu_first(&step, menu.open, script.menu_opening, now) {
         Ok(MenuWait::OpenFirst) => {
             script.menu_opening = entry_target(&step).map(MenuOpening::Clicking);
             script.steps.push_front(QueuedStep { step, line });
-            Step::Click(ClickTarget::Button("selector", "EQButton"))
+            (
+                Step::Click(ClickTarget::Button("selector", "EQButton")),
+                false,
+            )
         }
         Ok(MenuWait::Opening) => {
             // The menu opens a frame or more after the button's release.
@@ -1560,14 +1695,18 @@ pub(super) fn drive(
         }
         Ok(MenuWait::Go) => {
             script.menu_opening = None;
-            step
+            (step, true)
         }
         Err(reason) => {
             script.stop(&mut keys, &mut mouse, &reason);
             return;
         }
     };
-    script.progress.begin(line);
+    if authored || script.progress.flow.is_none() {
+        script.progress.begin(line);
+    } else {
+        script.progress.line = line;
+    }
     info!(?step, "Script step");
     match &step {
         Step::DeleteCharacter { name, confirmation } => {
@@ -1638,6 +1777,14 @@ pub(super) fn drive(
             return;
         }
         Step::Slash(command) => {
+            if super::socials::Request::parse(command).is_some() {
+                script.stop(
+                    &mut keys,
+                    &mut mouse,
+                    "Use a named social step in a local script.",
+                );
+                return;
+            }
             let qol = observed
                 .9
                 .as_ref()
@@ -1647,6 +1794,28 @@ pub(super) fn drive(
             });
             if let Err(error) = queued {
                 script.stop(&mut keys, &mut mouse, &error);
+            } else if command.split_ascii_whitespace().next() == Some("/camp") {
+                chat.socials.stop = true;
+            }
+            return;
+        }
+        Step::Social(command) => {
+            if !script.local || !online.in_world() {
+                script.stop(
+                    &mut keys,
+                    &mut mouse,
+                    "social script steps need a local character in the world",
+                );
+                return;
+            }
+            let request = super::socials::Request::parse(command)
+                .unwrap_or_else(|| Err("expected a social control request".into()))
+                .and_then(|request| {
+                    chat.queue_social(request, Some(script.progress.identity.clone()))
+                });
+            match request {
+                Ok(()) => script.stepped_social = single_step,
+                Err(error) => script.stop(&mut keys, &mut mouse, &error),
             }
             return;
         }
@@ -1696,6 +1865,30 @@ pub(super) fn drive(
             })();
             if let Err(reason) = result {
                 script.stop(&mut keys, &mut mouse, reason);
+            }
+            return;
+        }
+        Step::ComposeLink {
+            admission,
+            message,
+            ordinal,
+        } => {
+            if let Err(reason) = chat.compose_link((*admission, *message, *ordinal), online.world())
+            {
+                script.stop(&mut keys, &mut mouse, reason);
+            }
+            return;
+        }
+        Step::ComposeOwnedLink { admission, slot } => {
+            let world = online.world();
+            if !online.in_world() || world.session_id() != Some(*admission) {
+                script.stop(
+                    &mut keys,
+                    &mut mouse,
+                    "Item link composition needs the current admission",
+                );
+            } else if let Err(reason) = chat.compose_owned_link(*slot, world) {
+                script.stop(&mut keys, &mut mouse, &reason);
             }
             return;
         }
@@ -1859,6 +2052,12 @@ pub(super) fn drive(
             report::surroundings(&online, &observed);
             report::game_messages(&mut script.chat_seen, &chat);
             report::item_links(label, &online, &chat, &item);
+            if let Some(flights) = observed.12.as_ref() {
+                flights.report(label, online.world().session_id());
+            }
+            if let Some(socials) = observed.13.as_ref() {
+                socials.report(label);
+            }
             return;
         }
         Step::Sound(name) => {
@@ -1969,6 +2168,7 @@ pub(super) fn drive(
         | Step::WaitSelect
         | Step::WaitOnline
         | Step::WaitZone(_)
+        | Step::WaitRelocation(_)
         | Step::Wait(_)
         | Step::Trace(_) => (),
     }
@@ -2133,8 +2333,12 @@ fn gm_request(
     let command = parse::gm_command(&words)?;
     let depop = command == "depop";
     let full_spawn = words.first() == Some(&"spawn") && words.len() > 5;
-    if (depop || full_spawn) && world.generation() != eq_client_core::GameDialect::Titanium {
+    let titanium = world.generation() == eq_client_core::GameDialect::Titanium;
+    if (depop || full_spawn) && !titanium {
         return Err("Full fixture spawn and depop require local EQEmu".into());
+    }
+    if words.first() == Some(&"traindisc") && !titanium {
+        return Err("gm traindisc requires local EQEmu".into());
     }
     if depop {
         let Some((session_id, target)) =
@@ -4129,6 +4333,30 @@ mod tests {
     }
 
     #[test]
+    fn discipline_fixture_keeps_the_local_eqemu_policy() {
+        use crate::online::{OnlineState, testing as session};
+        use eq_client_core::{ClientCommand, GameDialect, OutboundChat};
+
+        let command = "traindisc 55 52";
+        let program = Program::parse(&format!("gm {command}"), std::path::Path::new(".")).unwrap();
+        assert!(program.check_local_commands(false).is_err());
+        assert!(program.check_local_commands(true).is_ok());
+
+        let mut online = OnlineState::new(true);
+        session::admit(&mut online, 1, session::player(7));
+        assert!(gm_request(command, false, online.world()).is_err());
+        assert!(gm_request("traindisc 52 55", true, online.world()).is_err());
+        assert_eq!(
+            gm_request(command, true, online.world()),
+            Ok(ClientCommand::SendChat(OutboundChat::Say(format!(
+                "#{command}"
+            ))))
+        );
+        session::generation(&mut online, GameDialect::EqMac);
+        assert!(gm_request(command, true, online.world()).is_err());
+    }
+
+    #[test]
     fn full_fixture_setup_requires_local_titanium_at_runtime() {
         use crate::online::{OnlineState, testing as session};
         use eq_client_core::{ClientCommand, GameDialect, OutboundChat};
@@ -5869,6 +6097,152 @@ mod tests {
             Some(&Step::Quit)
         );
         assert_eq!(script.steps.back().unwrap().line, Some(5));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    fn structured_preview(source: &str) -> App {
+        let program = Program::parse(source, std::path::Path::new(".")).unwrap();
+        let mut app = pointing(Vec::new());
+        app.insert_resource(Script::from_program(program).offline_preview(true))
+            .init_resource::<RunControl>()
+            .init_resource::<RunStatus>()
+            .add_systems(Update, observe.after(drive));
+        app
+    }
+
+    #[test]
+    fn structured_runs_dispatch_only_the_taken_branch_and_pace_repeated_actions() {
+        let mut app = structured_preview(
+            "let n: int = 0\nrepeat 2\n  set n = n + 1\n  if n == 1\n    press A\n  else\n    press B\n  end\nend\n",
+        );
+        for ms in [0, 10, 20, 30, 40] {
+            frame_at(&mut app, ms);
+        }
+        let status = app.world().resource::<RunStatus>();
+        let flow = status.flow().unwrap();
+        assert_eq!(flow.loops(), [(2, 1, 2)]);
+        assert_eq!(flow.branch(), Some((4, true)));
+        assert_eq!(flow.variables(), ["n: int = 1"]);
+        assert!(
+            app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .pressed(KeyCode::KeyA)
+        );
+
+        for ms in [50, 60, 70, 80, 139] {
+            frame_at(&mut app, ms);
+        }
+        let keys = app.world().resource::<ButtonInput<KeyCode>>();
+        assert!(!keys.pressed(KeyCode::KeyA));
+        assert!(!keys.pressed(KeyCode::KeyB));
+        frame_at(&mut app, 140);
+        assert!(
+            app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .pressed(KeyCode::KeyB)
+        );
+        frame_at(&mut app, 150);
+        frame_at(&mut app, 160);
+        let status = app.world().resource::<RunStatus>();
+        assert_eq!(status.phase(), Phase::Completed);
+        assert_eq!(status.progress(), (2, 2));
+        let flow = status.flow().unwrap();
+        assert_eq!(flow.branch(), Some((4, false)));
+        assert_eq!(flow.variables(), ["n: int = 2"]);
+        assert_eq!(flow.loops(), []);
+    }
+
+    #[test]
+    fn a_loop_without_actions_can_pause_step_and_stop() {
+        let mut app = structured_preview("while true limit 100\n  repeat 100\n  end\nend\n");
+        frame_at(&mut app, 0);
+        app.world_mut()
+            .resource_mut::<RunControl>()
+            .request(Request::Pause);
+        frame_at(&mut app, 1);
+        let status = app.world().resource::<RunStatus>();
+        assert_eq!(status.phase(), Phase::Paused);
+        assert_eq!(status.flow().unwrap().statements(), 1);
+
+        app.world_mut()
+            .resource_mut::<RunControl>()
+            .request(Request::Step);
+        frame_at(&mut app, 2);
+        frame_at(&mut app, 3);
+        let status = app.world().resource::<RunStatus>();
+        assert_eq!(status.phase(), Phase::Paused);
+        assert_eq!(status.flow().unwrap().loops(), [(1, 1, 100), (2, 1, 100)]);
+        assert_eq!(status.flow().unwrap().statements(), 2);
+
+        app.world_mut()
+            .resource_mut::<RunControl>()
+            .request(Request::Stop);
+        frame_at(&mut app, 4);
+        let status = app.world().resource::<RunStatus>();
+        assert_eq!(status.phase(), Phase::Stopped);
+        assert_eq!(status.flow().unwrap().statements(), 2);
+        assert!(!app.world().contains_resource::<Script>());
+    }
+
+    #[test]
+    fn a_condition_with_unknown_state_stops_on_its_line() {
+        let mut app = structured_preview(
+            "# offline\nif player.mana == 0\n  report empty\nelse\n  report present\nend",
+        );
+        frame_at(&mut app, 0);
+        let status = app.world().resource::<RunStatus>();
+        assert_eq!(status.phase(), Phase::Failed);
+        assert_eq!(status.line(), Some(2));
+        assert_eq!(status.progress().0, 0);
+        assert!(
+            status
+                .events()
+                .back()
+                .unwrap()
+                .message
+                .contains("condition is unknown")
+        );
+    }
+
+    #[test]
+    fn follow_rejects_a_structured_append_before_any_branch_action_can_escape() {
+        let path =
+            std::env::temp_dir().join(format!("eq-client-flow-follow-{}.txt", std::process::id()));
+        std::fs::write(&path, "wait 10\nif false\n").unwrap();
+        let mut script = Script::following(Vec::new(), path.clone(), 8);
+        script.poll(Duration::ZERO);
+        assert_eq!(script.status().phase(), Phase::Failed);
+        assert_eq!(script.status().line(), Some(2));
+        assert!(script.steps.is_empty());
+        std::fs::write(&path, "wait 10\nif false\nquit\nend\n").unwrap();
+        script.poll(Duration::from_secs(1));
+        assert!(script.steps.is_empty());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn follow_stops_on_a_bom_prefixed_header_before_the_next_batch() {
+        let path = std::env::temp_dir().join(format!(
+            "eq-client-bom-flow-follow-{}.txt",
+            std::process::id()
+        ));
+        let prefix = "wait 10\n";
+        let header = "\u{feff}\u{feff}if false";
+        std::fs::write(&path, format!("{prefix}{header}")).unwrap();
+        let mut script = Script::following(Vec::new(), path.clone(), prefix.len());
+        script.poll(Duration::ZERO);
+        assert!(script.steps.is_empty());
+        assert!(script.follow.is_some());
+
+        std::fs::write(&path, format!("{prefix}{header}\n")).unwrap();
+        script.poll(Duration::from_secs(1));
+        assert_eq!(script.status().phase(), Phase::Failed);
+        assert_eq!(script.status().line(), Some(2));
+        assert!(script.follow.is_none());
+
+        std::fs::write(&path, format!("{prefix}{header}\nquit\n")).unwrap();
+        script.poll(Duration::from_secs(2));
+        assert!(script.steps.is_empty());
         let _ = std::fs::remove_file(&path);
     }
 

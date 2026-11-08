@@ -1,7 +1,10 @@
 //! The player's own casting: the cast in progress, a request awaiting its
 //! answer, the last interruption, and when each memorized spell can be cast
 //! again.
-use crate::SpellUpdate;
+use crate::{
+    SpellUpdate,
+    disciplines::{Active, Timers},
+};
 use std::{
     collections::BTreeMap,
     time::{Duration, Instant},
@@ -118,7 +121,7 @@ pub enum CastNews {
     Refreshed,
     /// The cast was interrupted.
     Interrupted,
-    /// The cast's spell spent its mana and ended.
+    /// A received result ended the cast.
     Ended,
 }
 
@@ -138,9 +141,48 @@ pub struct Casting {
     pub interrupted: Option<(Instant, u32)>,
     /// When each memorized spell can be cast again.
     pub cooldowns: Cooldowns,
+    /// When the admitted knight's last received recovery will elapse.
+    pub(super) knight_ready: Option<Instant>,
+    pub(super) discipline_timers: Timers,
+    pub(super) linked_timers: Timers,
+    pub(super) active_discipline: Active,
 }
 
 impl Casting {
+    /// Time left on the received knight recovery. A missing profile field
+    /// stays unknown. Zero means the last reported wait has elapsed.
+    #[must_use]
+    pub fn knight_wait(&self, now: Instant) -> Option<Duration> {
+        Some(self.knight_ready?.saturating_duration_since(now))
+    }
+
+    /// Last reported active discipline. Silence preserves unknown state.
+    #[must_use]
+    pub const fn active_discipline(&self) -> Active {
+        self.active_discipline
+    }
+
+    /// Remaining received reuse in the discipline namespace.
+    #[must_use]
+    pub fn discipline_wait(&self, timer: u32, now: Instant) -> Option<Duration> {
+        self.discipline_timers.remaining(timer, now)
+    }
+
+    /// Remaining received reuse in the linked spell namespace.
+    #[must_use]
+    pub fn linked_wait(&self, timer: u32, now: Instant) -> Option<Duration> {
+        self.linked_timers.remaining(timer, now)
+    }
+
+    /// The longest known spell wait for its own reuse or linked spell group.
+    #[must_use]
+    pub fn spell_wait(&self, spell: u32, linked: Option<u32>, now: Instant) -> Duration {
+        let linked_wait = linked
+            .and_then(|group| self.linked_wait(group, now))
+            .unwrap_or_default();
+        self.cooldowns.remaining(spell, now).max(linked_wait)
+    }
+
     /// Tracks the worker's pending request separately from any active cast.
     /// When the worker releases a request before forwarding its answer,
     /// keep the spell for the begin or result that follows.
@@ -188,6 +230,26 @@ impl Casting {
                     self.next_requested = None;
                 }
                 Some(CastNews::Refreshed)
+            }
+            SpellUpdate::BarRefresh { slot, spell_id, .. } if class_refresh(slot, spell_id) => {
+                let active = casting(spell_id);
+                // The worker clears its pending marker before forwarding the
+                // refresh. An instant cast can answer without a Begin.
+                let harm_touch = crate::knights::KnightAbility::HarmTouch;
+                if self.next_requested.is_some_and(|requested| {
+                    requested == spell_id
+                        || (harm_touch.matches_spell(requested)
+                            && harm_touch.matches_spell(spell_id))
+                }) {
+                    self.next_requested = None;
+                }
+                if active {
+                    self.cast = None;
+                    self.requested = None;
+                    Some(CastNews::Ended)
+                } else {
+                    None
+                }
             }
             SpellUpdate::Began {
                 caster_id,
@@ -255,6 +317,7 @@ impl Casting {
         self.requested = None;
         self.next_requested = None;
         self.interrupted = None;
+        self.active_discipline = Active::Unknown;
     }
 
     /// Forgets the request in flight and every timer.
@@ -263,12 +326,128 @@ impl Casting {
         self.requested = None;
         self.next_requested = None;
         self.cooldowns = Cooldowns::default();
+        self.knight_ready = None;
+        self.discipline_timers = Timers::default();
+        self.linked_timers = Timers::default();
+        self.active_discipline = Active::Unknown;
     }
+}
+
+/// A class cast refresh is a cast result, with no gem or reuse update.
+fn class_refresh(slot: u32, spell_id: u32) -> bool {
+    use crate::{disciplines, knights};
+    use knights::KnightAbility::{HarmTouch, LayOnHands};
+    let knight = HarmTouch.matches_spell(spell_id) || LayOnHands.matches_spell(spell_id);
+    if slot == u32::from(knights::CAST_SLOT) {
+        return knight;
+    }
+    // EQEmu can translate its internal ability slot to slot 10.
+    slot == u32::from(disciplines::CAST_SLOT)
+        && (knight
+            || disciplines::Discipline::SUPPORTED
+                .iter()
+                .any(|action| action.spell() == spell_id))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exact_class_refresh_settles_the_cast_without_creating_reuse() {
+        let now = Instant::now();
+        let mut casting = Casting::default();
+        let gems = [None; 8];
+        casting.pend(Some(88));
+        casting.observe(
+            7,
+            &gems,
+            &SpellUpdate::Began {
+                caster_id: 7,
+                spell_id: 2821,
+                duration_ms: 10,
+            },
+            now,
+        );
+        let refresh = |slot, spell_id| SpellUpdate::BarRefresh {
+            slot,
+            spell_id,
+            reduction_ms: 0,
+        };
+        assert_eq!(casting.observe(7, &gems, &refresh(8, 2821), now), None);
+        assert_eq!(casting.observe(7, &gems, &refresh(9, 87), now), None);
+        assert_eq!(
+            casting.observe(7, &gems, &refresh(9, 88), now),
+            Some(CastNews::Ended)
+        );
+        assert_eq!(casting.knight_wait(now), None);
+        assert!(casting.cast.is_none());
+    }
+
+    #[test]
+    fn a_pre_begin_class_refresh_cannot_leak_its_alias_into_another_cast() {
+        let now = Instant::now();
+        let gems = [None; 8];
+        for (requested, slot, resolved) in [
+            (88, 9, 88),
+            (88, 9, 2821),
+            (88, 10, 88),
+            (88, 10, 2821),
+            (4499, 10, 4499),
+        ] {
+            let mut casting = Casting::default();
+            casting.pend(Some(requested));
+            casting.pend(None);
+            let refresh = SpellUpdate::BarRefresh {
+                slot,
+                spell_id: resolved,
+                reduction_ms: 0,
+            };
+            assert_eq!(casting.observe(7, &gems, &refresh, now), None);
+            assert_eq!(casting.next_requested, None);
+            let unrelated = SpellUpdate::Began {
+                caster_id: 7,
+                spell_id: 200,
+                duration_ms: 500,
+            };
+            assert_eq!(
+                casting.observe(7, &gems, &unrelated, now),
+                Some(CastNews::Began)
+            );
+            assert_eq!(casting.observe(7, &gems, &refresh, now), None);
+            let repeated_base = SpellUpdate::BarRefresh {
+                slot,
+                spell_id: requested,
+                reduction_ms: 0,
+            };
+            assert_eq!(casting.observe(7, &gems, &repeated_base, now), None);
+            assert!(matches!(casting.cast, Some((200, _, _))));
+        }
+    }
+
+    #[test]
+    fn only_the_exact_class_refresh_consumes_the_pre_begin_alias() {
+        let now = Instant::now();
+        let gems = [None; 8];
+        for (requested, wrong_slot, wrong_spell) in [
+            (88, 8, 88),
+            (88, 9, 87),
+            (4499, 9, 4499),
+            (4499, 10, 4503),
+            (200, 9, 88),
+        ] {
+            let mut casting = Casting::default();
+            casting.pend(Some(requested));
+            casting.pend(None);
+            let refresh = SpellUpdate::BarRefresh {
+                slot: wrong_slot,
+                spell_id: wrong_spell,
+                reduction_ms: 0,
+            };
+            assert_eq!(casting.observe(7, &gems, &refresh, now), None);
+            assert_eq!(casting.next_requested, Some(requested));
+        }
+    }
 
     #[test]
     fn releasing_an_old_cast_keeps_the_new_begin_alias() {

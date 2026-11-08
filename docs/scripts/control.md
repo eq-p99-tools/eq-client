@@ -84,6 +84,14 @@ requests an observation.
 | `runbook` | Current test checklist or null. See [Runbook checklist](#runbook-checklist) |
 | `protocol_error`, `io_error` | Malformed-request or file-channel failure, otherwise null |
 
+For a linear run, `total_steps` is the accepted action count. For a structured
+run, `total_steps` is null because branches and loops determine how many
+actions will run. Structured snapshots also report `authored_actions` for the
+accepted action lines and `executed_statements` for structured interpreter
+steps, including condition checks and repeated action lines. `completed_steps`
+counts actions that finished in the executor. Use `phase` to determine the
+run's outcome.
+
 `last_request.outcome` is `accepted`, `rejected`, `stop_requested` or `observed`.
 Start acceptance means only that a validated local run was queued. It does not
 mean an action ran or a server accepted it. A stop receipt also precedes the

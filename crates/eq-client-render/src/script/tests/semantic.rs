@@ -324,6 +324,391 @@ fn scripted_item_inspection_refuses_unknown_and_stale_links() {
 }
 
 #[test]
+fn named_social_script_control_requires_a_local_session() {
+    for local in [false, true] {
+        let (mut app, rx) = app();
+        let program = Program::parse("social play Test", Path::new(".")).unwrap();
+        app.insert_resource(Script::from_program(program).local_session(local));
+        frame_at(&mut app, 0);
+        frame_at(&mut app, 10);
+        if local {
+            assert!(matches!(
+                &app.world().resource::<ChatState>().socials.request,
+                Some(crate::socials::Queued { request: crate::socials::Request::Play(name), owner: Some(_) }) if name == "Test"
+            ));
+            assert_eq!(
+                app.world().resource::<RunStatus>().phase(),
+                Phase::Completed
+            );
+        } else {
+            refused(
+                &app,
+                1,
+                "social script steps need a local character in the world",
+            );
+            assert!(
+                app.world()
+                    .resource::<ChatState>()
+                    .socials
+                    .request
+                    .is_none()
+            );
+        }
+        assert!(rx.try_recv().is_err());
+    }
+}
+
+fn socials_app() -> (App, mpsc::Receiver<ClientCommand>) {
+    let (mut app, rx) = app();
+    install_socials(&mut app);
+    frame_at(&mut app, 0);
+    (app, rx)
+}
+
+fn install_socials(app: &mut App) {
+    session::news(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        [WorldEvent::WorldName {
+            short_name: "LocalFixture".into(),
+        }],
+    );
+    app.init_resource::<crate::script::AuthoredInput>()
+        .init_resource::<crate::script::RunControl>()
+        .add_systems(
+            Update,
+            (
+                crate::profile_files::follow,
+                crate::socials::prepare,
+                crate::socials::update,
+            )
+                .chain()
+                .after(crate::script::drive),
+        );
+    queue_social(app, "/social set Test | /say First | /say Later");
+}
+
+fn queue_social(app: &mut App, text: &str) {
+    let request = crate::socials::Request::parse(text).unwrap().unwrap();
+    app.world_mut()
+        .resource_mut::<ChatState>()
+        .queue_social(request, None)
+        .unwrap();
+}
+
+fn control_at(app: &mut App, request: crate::script::Request, ms: u64) {
+    app.world_mut()
+        .resource_mut::<crate::script::RunControl>()
+        .request(request);
+    frame_at(app, ms);
+}
+
+#[test]
+fn single_step_applies_social_edits_without_interrupting_a_manual_social() {
+    use crate::{
+        hud::hotbar::{Action, Bindings},
+        script::Request,
+        socials::State,
+    };
+
+    let (mut app, rx) = socials_app();
+    let program = Program::parse(
+        "social set Stepped | /say Synthetic\nsocial bind 1 Stepped\nsocial delete Stepped\nwait 1000",
+        Path::new("."),
+    ).unwrap();
+    app.insert_resource(Script::from_program(program).local_session(true));
+    queue_social(&mut app, "/social play Test");
+    control_at(&mut app, Request::Pause, 10);
+    assert_eq!(
+        app.world().resource::<Script>().status().phase(),
+        Phase::Paused
+    );
+    assert_eq!(
+        rx.try_recv().unwrap(),
+        ClientCommand::SendChat(eq_client_core::OutboundChat::Say("First".into()))
+    );
+
+    control_at(&mut app, Request::Step, 20);
+    assert_eq!(
+        app.world().resource::<ChatState>().newest(),
+        "Saved social Stepped."
+    );
+    assert_eq!(
+        rx.try_recv().unwrap(),
+        ClientCommand::SendChat(eq_client_core::OutboundChat::Say("Later".into()))
+    );
+    frame_at(&mut app, 30);
+    assert_eq!(
+        app.world().resource::<Script>().status().phase(),
+        Phase::Paused
+    );
+
+    control_at(&mut app, Request::Step, 40);
+    let Some(Action::Social(id)) = app.world().resource::<Bindings>().0[0] else {
+        panic!("the single-stepped bind did not run");
+    };
+    assert_eq!(app.world().resource::<State>().name(id), Some("Stepped"));
+    frame_at(&mut app, 50);
+    assert_eq!(
+        app.world().resource::<Script>().status().phase(),
+        Phase::Paused
+    );
+
+    control_at(&mut app, Request::Step, 60);
+    assert_eq!(app.world().resource::<State>().name(id), None);
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn single_step_plays_one_social_line_even_if_the_script_resumes_immediately() {
+    use crate::script::Request;
+
+    let (mut app, rx) = socials_app();
+    let program = Program::parse("social play Test\nwait 1000", Path::new(".")).unwrap();
+    app.insert_resource(Script::from_program(program).local_session(true));
+    control_at(&mut app, Request::Pause, 10);
+    assert_eq!(
+        app.world().resource::<Script>().status().phase(),
+        Phase::Paused
+    );
+    assert!(rx.try_recv().is_err());
+
+    control_at(&mut app, Request::Step, 20);
+    assert_eq!(
+        rx.try_recv().unwrap(),
+        ClientCommand::SendChat(eq_client_core::OutboundChat::Say("First".into()))
+    );
+
+    control_at(&mut app, Request::Resume, 30);
+    frame_at(&mut app, 40);
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn stopping_or_pausing_a_script_retires_its_social_before_the_next_line() {
+    use crate::script::{Request, RunControl};
+
+    for control in [Request::Stop, Request::Pause] {
+        let (mut app, rx) = socials_app();
+        let program = Program::parse("social play Test\nwait 1000", Path::new(".")).unwrap();
+        app.insert_resource(Script::from_program(program).local_session(true));
+        frame_at(&mut app, 10);
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            ClientCommand::SendChat(eq_client_core::OutboundChat::Say("First".into()))
+        );
+        app.world_mut()
+            .resource_mut::<RunControl>()
+            .request(control);
+        frame_at(&mut app, 20);
+        frame_at(&mut app, 30);
+        assert!(rx.try_recv().is_err());
+    }
+}
+
+#[test]
+fn native_takeover_cancels_a_background_scripts_social() {
+    use crate::script::InputMode;
+
+    let (mut app, window) = super::background(Vec::new());
+    let mut online = OnlineState::new(true);
+    session::admit(&mut online, ADMISSION, session::player(7));
+    let (tx, rx) = mpsc::sync_channel(4);
+    app.insert_resource(online)
+        .insert_resource(Outbox::new(Some(tx)));
+    install_socials(&mut app);
+    frame_at(&mut app, 0);
+    let program = Program::parse("social play Test\nwait 1000", Path::new(".")).unwrap();
+    app.insert_resource(
+        Script::from_program(program)
+            .local_session(true)
+            .input_mode(InputMode::Background),
+    );
+    frame_at(&mut app, 10);
+    assert_eq!(
+        rx.try_recv().unwrap(),
+        ClientCommand::SendChat(eq_client_core::OutboundChat::Say("First".into()))
+    );
+    super::native_key(&mut app, window, KeyCode::KeyW, true);
+    frame_at(&mut app, 20);
+    super::native_key(&mut app, window, KeyCode::KeyW, false);
+    frame_at(&mut app, 30);
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn an_unsafe_social_definition_never_queues_a_target_change_or_followup() {
+    let (mut app, rx) = socials_app();
+    let _ = select_service(&mut app, SpawnKind::Npc, 41, 10.0);
+    let result = crate::chat::client_request(
+        "/social set Unsafe | /target Missing | /ranged",
+        &mut app.world_mut().resource_mut::<ChatState>(),
+    )
+    .unwrap();
+    assert!(result.is_err());
+    frame_at(&mut app, 10);
+    frame_at(&mut app, 20);
+    assert!(rx.try_recv().is_err());
+    assert_eq!(
+        app.world()
+            .resource::<OnlineState>()
+            .world()
+            .target()
+            .selected,
+        Some(TARGET)
+    );
+}
+
+#[test]
+fn a_stopped_script_does_not_cancel_a_manually_owned_social() {
+    use crate::script::{Request, RunControl};
+
+    let (mut app, rx) = socials_app();
+    let program = Program::parse("wait 1000", Path::new(".")).unwrap();
+    app.insert_resource(Script::from_program(program));
+    queue_social(&mut app, "/social play Test");
+    frame_at(&mut app, 10);
+    assert_eq!(
+        rx.try_recv().unwrap(),
+        ClientCommand::SendChat(eq_client_core::OutboundChat::Say("First".into()))
+    );
+    app.world_mut()
+        .resource_mut::<RunControl>()
+        .request(Request::Stop);
+    frame_at(&mut app, 20);
+    assert_eq!(
+        rx.try_recv().unwrap(),
+        ClientCommand::SendChat(eq_client_core::OutboundChat::Say("Later".into()))
+    );
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn a_public_script_press_cannot_activate_a_social_but_a_native_press_can() {
+    let (mut app, rx) = socials_app();
+    queue_social(&mut app, "/social bind 1 Test");
+    frame_at(&mut app, 10);
+    start(&mut app, "press 1");
+    frame_at(&mut app, 20);
+    assert!(rx.try_recv().is_err());
+    assert!(
+        app.world()
+            .resource::<ChatState>()
+            .newest()
+            .contains("named social step")
+    );
+    frame_at(&mut app, 30);
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::Digit1);
+    frame_at(&mut app, 40);
+    assert_eq!(
+        rx.try_recv().unwrap(),
+        ClientCommand::SendChat(eq_client_core::OutboundChat::Say("First".into()))
+    );
+}
+
+#[test]
+fn scripted_link_composition_edits_the_draft_and_sends_no_request() {
+    let (mut app, rx) = app();
+    let (message, _) = linked_message(&mut app.world_mut().resource_mut::<ChatState>());
+    start(&mut app, &format!("compose_link {ADMISSION} {message} 0"));
+    frame_at(&mut app, 0);
+    frame_at(&mut app, 10);
+    assert_eq!(
+        app.world().resource::<RunStatus>().phase(),
+        Phase::Completed
+    );
+    assert_eq!(
+        app.world().resource::<ChatState>().draft(),
+        "Synthetic blade"
+    );
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn scripted_owned_link_uses_the_current_received_item_without_sending() {
+    use eq_client_core::{
+        GameDialect, ItemDetails,
+        inventory::{InventoryItem, InventorySlot, InventoryUpdate, ItemPlacement},
+    };
+
+    let (mut app, rx) = app();
+    let slot = InventorySlot(23);
+    let mut item = InventoryItem {
+        slot,
+        activation: default(),
+        scroll_spell: None,
+        book: None,
+        rules: ItemPlacement {
+            titanium_link_hash: Some(0x1234_abcd),
+            ..default()
+        },
+        details: ItemDetails {
+            id: 42,
+            name: "Synthetic blade".into(),
+            base_held_model: None,
+            equipment: None,
+            bonuses: None,
+            lore: String::new(),
+            weight_tenths: 0,
+            slots: 0,
+            classes: 0,
+            races: 0,
+            flags: Vec::new(),
+            stats: Vec::new(),
+            price: None,
+            icon: None,
+        },
+        stack_count: None,
+        charges: 0,
+        bag_slots: 0,
+    };
+    {
+        let mut online = app.world_mut().resource_mut::<OnlineState>();
+        session::generation(&mut online, GameDialect::Titanium);
+        session::inventory(&mut online, InventoryUpdate::Snapshot(vec![item.clone()]));
+    }
+
+    start(&mut app, "compose_owned_link 8 23");
+    frame_at(&mut app, 0);
+    frame_at(&mut app, 10);
+    refused(&app, 1, "Item link composition needs the current admission");
+    assert_eq!(app.world().resource::<ChatState>().draft(), "");
+
+    let source = format!("compose_owned_link {ADMISSION} 23");
+    start(&mut app, &source);
+    frame_at(&mut app, 20);
+    frame_at(&mut app, 30);
+    assert_eq!(
+        app.world().resource::<RunStatus>().phase(),
+        Phase::Completed
+    );
+    assert_eq!(
+        app.world().resource::<ChatState>().draft(),
+        "Synthetic blade"
+    );
+
+    item.rules.titanium_link_hash = None;
+    session::inventory(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        InventoryUpdate::Set(vec![item]),
+    );
+    start(&mut app, &source);
+    frame_at(&mut app, 40);
+    frame_at(&mut app, 50);
+    refused(
+        &app,
+        1,
+        "This item lacks the metadata needed to make a link",
+    );
+    assert_eq!(
+        app.world().resource::<ChatState>().draft(),
+        "Synthetic blade"
+    );
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
 fn scripted_item_inspection_does_not_replace_a_pending_request() {
     let (mut app, rx) = app();
     let (message, _) = linked_message(&mut app.world_mut().resource_mut::<ChatState>());

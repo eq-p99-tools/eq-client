@@ -92,6 +92,9 @@ pub enum Connection {
 pub struct Session {
     /// Present NPC difficulty using the classic level scale for this session.
     pub classic_npc_consider: bool,
+    /// How the server's chat handler grows Titanium item links before its own
+    /// buffer limit, from the network's server policy.
+    pub chat_link_expansion: Option<eq_client_core::chat::LinkExpansion>,
     /// Placement policy supplied by this network producer for host projections.
     pub inventory_move_rules: Option<eq_client_core::inventory::MoveRules>,
     /// The immutable spell-provider binding allocated with this producer.
@@ -412,6 +415,7 @@ impl FrontEnd {
     ) {
         online.restart();
         online.consider_npcs_by_level(session.classic_npc_consider);
+        online.chat_link_expansion = session.chat_link_expansion;
         online.plan_inventory_as(session.inventory_move_rules);
         link.bind_spells(session.spell_provider);
         link.attach(Some(session.updates), Some(session.commands));
@@ -846,6 +850,7 @@ pub(crate) mod testing {
             heard.sessions.push((updates, queue, thread.clone()));
             Ok(Connection::Session(Session {
                 classic_npc_consider: false,
+                chat_link_expansion: Some(eq_client_core::chat::LinkExpansion::EQEMU_TITANIUM),
                 inventory_move_rules: Some(eq_client_core::inventory::MoveRules::EqEmu),
                 spell_provider: eq_client_core::spell_tables::Binding::new(
                     eq_client_core::spell_tables::Policy::Installed,
@@ -952,6 +957,7 @@ mod tests {
             Box::new(fake),
             Some(Session {
                 classic_npc_consider: false,
+                chat_link_expansion: Some(eq_client_core::chat::LinkExpansion::EQEMU_TITANIUM),
                 inventory_move_rules: Some(eq_client_core::inventory::MoveRules::EqEmu),
                 spell_provider: eq_client_core::spell_tables::Binding::new(
                     eq_client_core::spell_tables::Policy::Installed,
@@ -1002,6 +1008,7 @@ mod tests {
             Box::new(fake),
             Some(Session {
                 classic_npc_consider: false,
+                chat_link_expansion: Some(eq_client_core::chat::LinkExpansion::EQEMU_TITANIUM),
                 inventory_move_rules: Some(eq_client_core::inventory::MoveRules::EqEmu),
                 spell_provider: eq_client_core::spell_tables::Binding::new(
                     eq_client_core::spell_tables::Policy::Installed,

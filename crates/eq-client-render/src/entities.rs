@@ -1,5 +1,7 @@
 //! Nearby spawn presentation. Distant entities retain state but own no render objects.
 
+pub(super) mod outline;
+
 use super::{ViewerSettings, character, online::OnlineState};
 use bevy::prelude::*;
 use eq_client_assets::characters::{DonorArchives, load_installed_character};

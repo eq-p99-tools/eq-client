@@ -4,7 +4,8 @@
 //! client still reads. A character with no file of their own starts from
 //! the official client's hotbuttons where this client knows their kinds, or
 //! else from the client's defaults.
-use crate::{abilities::Ability, inventory::InventorySlot};
+use crate::disciplines::Discipline;
+use crate::{abilities::Ability, inventory::InventorySlot, knights::KnightAbility};
 use std::fmt::Write as _;
 mod pages;
 pub use pages::{PAGES, Pages};
@@ -33,6 +34,10 @@ pub enum Binding {
     Stand,
     /// Uses this ability.
     Ability(Ability),
+    /// Uses the knight class ability.
+    KnightAbility(KnightAbility),
+    /// Uses a supported Titanium discipline.
+    Discipline(Discipline),
     /// Turns melee auto-attack on or off, as the Actions window's Melee
     /// Attack does.
     Attack,
@@ -47,6 +52,8 @@ pub enum Binding {
     /// Leaves the group, or disbands it as its leader, which with an
     /// invitation waiting declines it.
     Disband,
+    /// Runs the named social with this ID in the current character profile.
+    Social(u32),
 }
 
 impl Binding {
@@ -73,12 +80,15 @@ impl Binding {
             Self::Sit => "sit".to_owned(),
             Self::Stand => "stand".to_owned(),
             Self::Ability(ability) => format!("ability {}", ability.skill()),
+            Self::KnightAbility(ability) => format!("knight {}", ability.key()),
+            Self::Discipline(discipline) => format!("discipline {}", discipline.key()),
             Self::Attack => "attack".to_owned(),
             Self::RangedAttack => "ranged".to_owned(),
             Self::Camp => "camp".to_owned(),
             Self::Invite => "invite".to_owned(),
             Self::Follow => "follow".to_owned(),
             Self::Disband => "disband".to_owned(),
+            Self::Social(id) => format!("social {id}"),
         }
     }
 
@@ -96,12 +106,15 @@ impl Binding {
             ["sit"] => Self::Sit,
             ["stand"] => Self::Stand,
             ["ability", skill] => Self::Ability(Ability::from_skill(skill.parse().ok()?)?),
+            ["knight", name] => Self::KnightAbility(KnightAbility::named(name)?),
+            ["discipline", name] => Self::Discipline(Discipline::named(name)?),
             ["attack"] => Self::Attack,
             ["ranged"] => Self::RangedAttack,
             ["camp"] => Self::Camp,
             ["invite"] => Self::Invite,
             ["follow"] => Self::Follow,
             ["disband"] => Self::Disband,
+            ["social", id] => Self::Social(id.parse::<u32>().ok().filter(|id| *id != 0)?),
             _ => return None,
         })
     }
@@ -204,6 +217,9 @@ mod tests {
         hotbar.0[2] = None;
         hotbar.0[3] = Some(Binding::Ability(Ability::Kick));
         hotbar.0[5] = Some(Binding::RangedAttack);
+        hotbar.0[6] = Some(Binding::KnightAbility(KnightAbility::LayOnHands));
+        hotbar.0[7] = Some(Binding::Discipline(Discipline::Defensive));
+        hotbar.0[8] = Some(Binding::Social(42));
         hotbar.0[4] = Some(Binding::Item {
             slot: InventorySlot(23),
             id: 13027,
@@ -214,6 +230,9 @@ mod tests {
         assert!(text.contains("slot_4 = ability 30\n"));
         assert!(text.contains("slot_5 = item 23 13027\n"));
         assert!(text.contains("slot_6 = ranged\n"));
+        assert!(text.contains("slot_7 = knight layonhands\n"));
+        assert!(text.contains("slot_8 = discipline defensive\n"));
+        assert!(text.contains("slot_9 = social 42\n"));
         assert!(text.contains("slot_1 = gem 1\n") && text.contains("slot_10 = stand\n"));
         assert_eq!(Hotbar::read(&text, Hotbar::default()), hotbar);
         // Unknown slots, kinds and numbers keep the defaults.

@@ -169,6 +169,7 @@ fn snapshot(
                 "source": match entry.source {
                     PlacementSource::Admission => "admission",
                     PlacementSource::PositionUpdate => "position_update",
+                    PlacementSource::SameZoneRelocation => "same_zone_relocation",
                 },
                 "position": entry.position,
             })

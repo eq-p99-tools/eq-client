@@ -1,5 +1,5 @@
 //! The installed item models on the GPU, shared by everything that draws an
-//! item: items on the ground and items held in hand.
+//! item: items on the ground, items held in hand and projectile models.
 use crate::asset_loads::{Asset, Loads};
 use bevy::prelude::*;
 use std::collections::HashMap;

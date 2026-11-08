@@ -75,17 +75,26 @@ pub(crate) fn persist(
         store.loaded_text(String::new());
         return;
     };
-    let saved = store.read(&file_name(&world, &character));
-    let hotbar = saved.map_or_else(
-        || {
-            settings
-                .0
-                .official_settings()
-                .and_then(|official| Pages::official(&official.hotbutton_pages(&character, &world)))
-                .unwrap_or_default()
-        },
-        |text| Pages::read(&text, Pages::default()),
-    );
+    let profile = CharacterProfile { world, character };
+    let saved = match store.read_result(&crate::profile_files::exact_name("hotbar", &profile)) {
+        Ok(Some(text)) => Some(Pages::read(&text, Pages::default())),
+        Ok(None) => store
+            .read(&legacy_file_name(&profile))
+            .map(|text| legacy_pages(&text)),
+        Err(error) => {
+            warn!("Could not read the character's hotbar: {error}");
+            None
+        }
+    };
+    let hotbar = saved.unwrap_or_else(|| {
+        settings
+            .0
+            .official_settings()
+            .and_then(|official| {
+                Pages::official(&official.hotbutton_pages(&profile.character, &profile.world))
+            })
+            .unwrap_or_default()
+    });
     bindings.load(&hotbar);
     store.loaded_text(hotbar.text());
 }
@@ -95,17 +104,25 @@ fn save(store: &mut Store, bindings: &Bindings) {
     let Some(profile) = &store.profile else {
         return;
     };
-    let name = file_name(&profile.world, &profile.character);
+    let name = crate::profile_files::exact_name("hotbar", profile);
     store.save(name, bindings.snapshot().text(), Instant::now());
 }
 
-/// The character's own hotbar file.
-fn file_name(world: &str, character: &str) -> String {
-    let profile = CharacterProfile {
-        world: world.to_owned(),
-        character: character.to_owned(),
-    };
-    crate::profile_files::name("hotbar", "hotbar.txt", Some(&profile))
+fn legacy_file_name(profile: &CharacterProfile) -> String {
+    crate::profile_files::name("hotbar", "hotbar.txt", Some(profile))
+}
+
+/// Preserve older bindings, but a legacy file cannot prove a social's owner.
+fn legacy_pages(text: &str) -> Pages {
+    let mut pages = Pages::read(text, Pages::default());
+    for page in &mut pages.0 {
+        for slot in &mut page.0 {
+            if matches!(slot, Some(Action::Social(_))) {
+                *slot = None;
+            }
+        }
+    }
+    pages
 }
 
 impl Bindings {
@@ -117,12 +134,15 @@ impl Bindings {
             | Action::Stand
             | Action::Item { .. }
             | Action::Ability(_)
+            | Action::KnightAbility(_)
+            | Action::Discipline(_)
             | Action::Attack
             | Action::RangedAttack
             | Action::Camp
             | Action::Invite
             | Action::Follow
-            | Action::Disband => None,
+            | Action::Disband
+            | Action::Social(_) => None,
         }
     }
 }
@@ -260,12 +280,20 @@ pub(crate) fn requested(
     bindings: &Bindings,
     clicks: &crate::clicks::Clicks<Slot>,
 ) -> Option<Action> {
-    let slot = clicks
-        .iter()
-        .next()
-        .map(|slot| slot.0)
-        .or_else(|| slot_pressed(keys, crate::keys::Act::Slot))?;
+    let (slot, _) = requested_slot(keys, clicks)?;
     bindings.0.get(slot).copied().flatten()
+}
+
+/// The requested slot and its keyboard action, if it came from a key.
+pub(crate) fn requested_slot(
+    keys: &crate::keys::Keys,
+    clicks: &crate::clicks::Clicks<Slot>,
+) -> Option<(usize, Option<crate::keys::Act>)> {
+    clicks.iter().next().map(|slot| (slot.0, None)).or_else(|| {
+        let slot = slot_pressed(keys, crate::keys::Act::Slot)?;
+        let key = crate::keys::Act::Slot(u8::try_from(slot).ok()?);
+        Some((slot, Some(key)))
+    })
 }
 
 /// The slash command a binding runs, as its Actions window button runs it:
@@ -276,11 +304,27 @@ pub(crate) const fn command(action: Action) -> Option<&'static str> {
         Action::Sit => Some("/sit"),
         Action::Stand => Some("/stand"),
         Action::RangedAttack => Some("/ranged"),
+        Action::Discipline(eq_client_core::disciplines::Discipline::Evasive) => {
+            Some("/discipline evasive")
+        }
+        Action::Discipline(eq_client_core::disciplines::Discipline::Defensive) => {
+            Some("/discipline defensive")
+        }
+        Action::KnightAbility(eq_client_core::knights::KnightAbility::HarmTouch) => {
+            Some("/harmtouch")
+        }
+        Action::KnightAbility(eq_client_core::knights::KnightAbility::LayOnHands) => {
+            Some("/layonhands")
+        }
         Action::Camp => Some("/camp"),
         Action::Invite => Some("/invite"),
         Action::Follow => Some("/follow"),
         Action::Disband => Some("/disband"),
-        Action::Gem(_) | Action::Item { .. } | Action::Ability(_) | Action::Attack => None,
+        Action::Gem(_)
+        | Action::Item { .. }
+        | Action::Ability(_)
+        | Action::Attack
+        | Action::Social(_) => None,
     }
 }
 
@@ -346,6 +390,7 @@ pub(crate) fn presentation(
         Res<crate::options::OptionsState>,
     ),
     (names, map): (Res<crate::spellbook::SpellNames>, Res<crate::keys::KeyMap>),
+    socials: Option<Res<crate::socials::State>>,
     mut slots: SlotButtons,
     mut labels: Labels,
 ) {
@@ -362,11 +407,27 @@ pub(crate) fn presentation(
             Some(Action::Item { slot, id }) => bound_item(inventory, (slot, id), qol).is_none(),
             _ => false,
         };
+        let missing_social = match bindings.0[slot.0] {
+            Some(Action::Social(id)) => socials
+                .as_deref()
+                .and_then(|socials| socials.name(id))
+                .is_none(),
+            _ => false,
+        };
         let empty = missing_item
+            || missing_social
             || bindings.0[slot.0].is_none()
             || (bindings.gem(slot.0).is_some() && spell.is_none());
         let ability_waits = match bindings.0[slot.0] {
             Some(Action::Ability(ability)) => online.world().ability_wait(ability, now).is_some(),
+            Some(Action::KnightAbility(_)) => online
+                .world()
+                .casting()
+                .knight_wait(now)
+                .is_some_and(|wait| !wait.is_zero()),
+            Some(Action::Discipline(discipline)) => {
+                crate::abilities::discipline_waits(online.world(), discipline, now)
+            }
             _ => false,
         };
         let waiting = ability_waits
@@ -376,8 +437,7 @@ pub(crate) fn presentation(
                     || !online
                         .world()
                         .casting()
-                        .cooldowns
-                        .remaining(id, now)
+                        .spell_wait(id, names.linked_timer(id), now)
                         .is_zero()
             });
         if skinned {
@@ -396,7 +456,18 @@ pub(crate) fn presentation(
         // Written only when they change, so `fit_words` sees a change.
         let wanted = match (caption, words) {
             (Some(caption), _) => Some(faces(bindings.0[caption.0], online.world()).0),
-            (_, Some(words)) => Some(faces(bindings.0[words.0], online.world()).1),
+            (_, Some(words)) => {
+                let action = bindings.0[words.0];
+                Some(if let Some(Action::Social(id)) = action {
+                    socials
+                        .as_deref()
+                        .and_then(|socials| socials.name(id))
+                        .unwrap_or("Social")
+                        .to_owned()
+                } else {
+                    faces(action, online.world()).1
+                })
+            }
             _ => None,
         };
         if let Some(wanted) = wanted
@@ -432,12 +503,15 @@ fn faces(action: Option<Action>, world: &ClientWorld) -> (String, String) {
             Action::Sit
             | Action::Stand
             | Action::Ability(_)
+            | Action::KnightAbility(_)
+            | Action::Discipline(_)
             | Action::Attack
             | Action::RangedAttack
             | Action::Camp
             | Action::Invite
             | Action::Follow
-            | Action::Disband,
+            | Action::Disband
+            | Action::Social(_),
         ) => (String::new(), words),
     }
 }
@@ -504,12 +578,15 @@ pub(crate) fn caption_text(action: Option<Action>, world: &ClientWorld) -> Strin
         Some(Action::Stand) => "Stand".into(),
         Some(Action::Item { .. }) => "Item".into(),
         Some(Action::Ability(ability)) => ability.name().into(),
+        Some(Action::KnightAbility(ability)) => ability.name().into(),
+        Some(Action::Discipline(discipline)) => discipline.name().into(),
         Some(Action::Attack) => "Attack".into(),
         Some(Action::RangedAttack) => "Ranged".into(),
         Some(Action::Camp) => "Camp".into(),
         Some(Action::Invite) => "Invite".into(),
         Some(Action::Follow) => "Follow".into(),
         Some(Action::Disband) => "Disband".into(),
+        Some(Action::Social(_)) => "Social".into(),
         Some(Action::Gem(_)) | None => "-".into(),
     }
 }
@@ -531,7 +608,10 @@ fn hovered_detail(
                 } else if world.casting().cast.is_some() {
                     "Casting".into()
                 } else {
-                    let remaining = world.casting().cooldowns.remaining(spell, now);
+                    let remaining =
+                        world
+                            .casting()
+                            .spell_wait(spell, names.linked_timer(spell), now);
                     if remaining.is_zero() {
                         "Uses current target".into()
                     } else {
@@ -552,6 +632,32 @@ fn hovered_detail(
         Some(Action::Invite) => "Invite\nInvites the target into your group".into(),
         Some(Action::Follow) => "Follow\nJoins the group you were invited to".into(),
         Some(Action::Disband) => "Disband\nLeaves your group, or declines an invitation".into(),
+        Some(Action::KnightAbility(ability)) => match world.casting().knight_wait(now) {
+            Some(wait) if !wait.is_zero() => format!(
+                "{}\nRecovery {:.0}s",
+                ability.name(),
+                wait.as_secs_f32().ceil()
+            ),
+            Some(_) => format!("{}\nUses the selected target", ability.name()),
+            None => format!("{}\nRecovery unknown", ability.name()),
+        },
+        Some(Action::Discipline(discipline)) => {
+            use eq_client_core::disciplines::Active;
+            let casting = world.casting();
+            let status = match casting.active_discipline() {
+                Active::Titanium(spell) if spell == discipline.spell() => "Active".into(),
+                Active::Titanium(_) => "Another discipline is active".into(),
+                _ => match casting.discipline_wait(discipline.timer(), now) {
+                    Some(wait) if !wait.is_zero() => {
+                        format!("Shared recovery {:.0}s", wait.as_secs_f32().ceil())
+                    }
+                    Some(_) => "Shared recovery elapsed".into(),
+                    None => "Shared recovery unknown".into(),
+                },
+            };
+            format!("{}\n{status}", discipline.name())
+        }
+        Some(Action::Social(_)) => "Social\nRuns the saved command lines".into(),
         Some(Action::Ability(ability)) => match world.ability_wait(ability, now) {
             Some(wait) => format!(
                 "{}\nAvailable in {:.0}s",
@@ -605,9 +711,11 @@ pub(crate) fn need(action: Option<Action>) -> crate::outbox::Needs {
     use crate::outbox::Needs;
     use eq_client_core::Capability;
     match action {
-        None => Needs::Nothing,
+        None | Some(Action::Social(_)) => Needs::Nothing,
         Some(Action::Sit | Action::Stand) => Needs::Capability(Capability::Posture),
         Some(Action::Ability(ability)) => Needs::Ability(ability),
+        Some(Action::KnightAbility(ability)) => Needs::KnightAbility(ability),
+        Some(Action::Discipline(discipline)) => Needs::Discipline(discipline),
         Some(Action::Gem(_) | Action::Item { .. }) => Needs::Capability(Capability::Casting),
         Some(Action::Attack) => Needs::Capability(Capability::Combat),
         Some(Action::RangedAttack) => Needs::Capability(Capability::RangedCombat),
@@ -1114,10 +1222,16 @@ mod persist_tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&directory).unwrap();
-        let first = directory.join(file_name("ExampleWorld", "First"));
+        let first_profile = CharacterProfile {
+            world: "ExampleWorld".into(),
+            character: "First".into(),
+        };
+        let first_legacy = directory.join(legacy_file_name(&first_profile));
+        let first = directory.join(crate::profile_files::exact_name("hotbar", &first_profile));
         let mut old = Hotbar::default();
         old.0[0] = Some(Action::Camp);
-        std::fs::write(&first, old.text()).unwrap();
+        old.0[1] = Some(Action::Social(1));
+        std::fs::write(&first_legacy, old.text()).unwrap();
         let mut app = crate::testing::app();
         app.world_mut()
             .resource_mut::<crate::ViewerSettings>()
@@ -1137,6 +1251,7 @@ mod persist_tests {
         enter(&mut app, "First");
         app.update();
         assert_eq!(app.world().resource::<Bindings>().0[0], Some(Action::Camp));
+        assert_eq!(app.world().resource::<Bindings>().0[1], None);
         {
             let mut bindings = app.world_mut().resource_mut::<Bindings>();
             bindings.select(9);
@@ -1157,7 +1272,15 @@ mod persist_tests {
         app.update();
         assert_eq!(app.world().resource::<Bindings>().page(), 1);
         assert_eq!(app.world().resource::<Bindings>().0, [None; 10]);
-        assert!(!directory.join(file_name("ExampleWorld", "Second")).exists());
+        let second = CharacterProfile {
+            character: "Second".into(),
+            ..first_profile
+        };
+        assert!(
+            !directory
+                .join(crate::profile_files::exact_name("hotbar", &second))
+                .exists()
+        );
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .reset_all();
@@ -1177,6 +1300,32 @@ mod persist_tests {
         assert_eq!(saved.0[0].0[0], Some(Action::Camp));
         assert_eq!(saved.0[9].0[0], None);
         std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn aliased_legacy_hotbars_cannot_bind_another_profiles_first_social() {
+        let profiles = ["Local A", "Local_A", "local_a"].map(|world| CharacterProfile {
+            world: world.into(),
+            character: "Example".into(),
+        });
+        assert_eq!(
+            legacy_file_name(&profiles[0]),
+            legacy_file_name(&profiles[1])
+        );
+        for prefix in ["socials", "hotbar"] {
+            let names = profiles
+                .each_ref()
+                .map(|profile| crate::profile_files::exact_name(prefix, profile));
+            assert_ne!(names[0], names[1]);
+            assert!(!names[1].eq_ignore_ascii_case(&names[2]));
+        }
+        let mut foreign = Hotbar::default();
+        foreign.0[0] = Some(Action::Social(1));
+        foreign.0[1] = Some(Action::Camp);
+        assert_eq!(
+            legacy_pages(&foreign.text()).0[0].0[..2],
+            [None, Some(Action::Camp)]
+        );
     }
 
     #[test]
@@ -1200,7 +1349,11 @@ mod persist_tests {
         assert!(std::fs::read_dir(&directory).is_err());
         app.world_mut().resource_mut::<Bindings>().0[2] = None;
         app.update();
-        let file = directory.join("hotbar-ExampleWorld-Example.txt");
+        let profile = CharacterProfile {
+            world: "ExampleWorld".into(),
+            character: "Example".into(),
+        };
+        let file = directory.join(crate::profile_files::exact_name("hotbar", &profile));
         assert!(
             std::fs::read_to_string(&file)
                 .unwrap()

@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use bevy::input::keyboard::{Key, NativeKey};
 use bevy::prelude::KeyCode;
+use eq_client_core::inventory::InventorySlot;
 
 /// Most steps one script may queue, counting steps appended while following.
 pub(super) const MAX_STEPS: usize = 500;
@@ -13,7 +14,7 @@ pub(super) const MAX_WAIT: Duration = Duration::from_mins(2);
 const MAX_TRACE: Duration = Duration::from_secs(10);
 const MAX_WALK: Duration = Duration::from_mins(1);
 /// `EQEmu` GM commands a script may send, without the leading `#`.
-const GM_COMMANDS: [&str; 37] = [
+const GM_COMMANDS: [&str; 38] = [
     // The server's own view of the player's stats, weight and coins among
     // them, said back in chat; reads only.
     "showstats",
@@ -71,6 +72,8 @@ const GM_COMMANDS: [&str; 37] = [
     // level, and an item onto their cursor, as summonitem puts one on the
     // GM's.
     "scribespells",
+    // Readies the learned discipline list for a local EQEmu fixture.
+    "traindisc",
     "maxskills",
     "giveitem",
     // Another test character's standing with a faction: `faction view` and
@@ -115,12 +118,16 @@ pub enum Step {
     WaitOnline,
     /// Waits until the named zone is admitted with a player present.
     WaitZone(String),
+    /// Waits for a fresh, received movement instruction within this admission.
+    WaitRelocation(Duration),
     /// Waits, for a bounded duration, until the spawn targeted as the step
     /// starts is an NPC's corpse or has left the zone: a fight's end, however
     /// long it lasts.
     WaitDead(Duration),
     /// Runs a game slash command such as `/camp`; chat text is refused.
     Slash(String),
+    /// Edit or run a social via the ordinary chat controls in a local session.
+    Social(String),
     /// Sends an allowed `#` command, such as `summon`, to a local `EQEmu` server;
     /// the step stops the script on any other server.
     Gm(String),
@@ -218,6 +225,22 @@ pub enum Step {
         message: u64,
         /// Zero-based link ordinal in that message.
         ordinal: usize,
+    },
+    /// Inserts a received item link into the editable chat draft.
+    ComposeLink {
+        /// Admission in which the message arrived.
+        admission: u64,
+        /// Arrival ID of the message.
+        message: u64,
+        /// Zero-based link ordinal in that message.
+        ordinal: usize,
+    },
+    /// Inserts a link for a worn or carried item into the editable chat draft.
+    ComposeOwnedLink {
+        /// Current admission in which the inventory was observed.
+        admission: u64,
+        /// Protocol slot of the owned item.
+        slot: InventorySlot,
     },
     /// Left-clicks one UI control through Bevy's ordinary interaction state.
     Click(ClickTarget),
@@ -470,19 +493,22 @@ pub enum TradeClick {
     SellChosen,
 }
 
-/// Whether a name is a WAV file's, such as `levelup.wav`.
-fn wav_name(name: &str) -> bool {
-    name.rsplit_once('.')
-        .is_some_and(|(stem, extension)| !stem.is_empty() && extension.eq_ignore_ascii_case("wav"))
+/// Accept an installed cue basename regardless of the host's path separators.
+fn sound_name(name: &str) -> bool {
+    !name.contains(['/', '\\', ':'])
+        && name.rsplit_once('.').is_some_and(|(stem, extension)| {
+            !stem.is_empty()
+                && (extension.eq_ignore_ascii_case("wav") || extension.eq_ignore_ascii_case("mp3"))
+        })
 }
 
-/// Parses a script: one step per line, `#` starts a comment.
+/// Parses a linear action list. Use [`super::Program`] for scripts with control flow.
 ///
 /// # Errors
 /// Returns the first line that is unknown, malformed or outside the bounds.
 pub fn parse(text: &str, base: &Path) -> Result<Vec<Step>, String> {
     super::Program::parse(text, base)
-        .map(super::Program::into_steps)
+        .and_then(super::Program::into_steps)
         .map_err(|error| error.to_string())
 }
 
@@ -570,8 +596,12 @@ pub(super) fn parse_step(line: &str) -> Result<Step, String> {
         ("create_refused", arguments) => Step::CreateRefused(parse_create(arguments)?),
         ("wait_online", []) => Step::WaitOnline,
         ("wait_zone", [zone]) => Step::WaitZone(zone.to_ascii_lowercase()),
+        ("wait_relocation", [duration]) => Step::WaitRelocation(millis(duration, MAX_WAIT)?),
         ("wait_dead", [duration]) => Step::WaitDead(millis(duration, MAX_WAIT)?),
         ("slash", words) => parse_slash(words)?,
+        ("social", operation) if !operation.is_empty() => {
+            Step::Social(format!("/social {}", operation.join(" ")))
+        }
         ("gm", words) => parse_gm(words)?,
         ("chat", words) => parse_chat(words)?,
         ("drag", [window, x, y]) => Step::Drag(
@@ -621,6 +651,15 @@ pub(super) fn parse_step(line: &str) -> Result<Step, String> {
             message: message.parse().map_err(|_| "expected a chat arrival ID")?,
             ordinal: ordinal.parse().map_err(|_| "expected a link ordinal")?,
         },
+        ("compose_link", [admission, message, ordinal]) => Step::ComposeLink {
+            admission: admission.parse().map_err(|_| "expected an admission ID")?,
+            message: message.parse().map_err(|_| "expected a chat arrival ID")?,
+            ordinal: ordinal.parse().map_err(|_| "expected a link ordinal")?,
+        },
+        ("compose_owned_link", [admission, slot]) => Step::ComposeOwnedLink {
+            admission: admission.parse().map_err(|_| "expected an admission ID")?,
+            slot: InventorySlot(slot.parse().map_err(|_| "expected an inventory slot")?),
+        },
         ("click", target) => Step::Click(parse_click(target)?),
         ("right_click", target) => Step::RightClick(parse_click(target)?),
         ("hover", target) => Step::Hover(parse_click(target)?),
@@ -628,7 +667,7 @@ pub(super) fn parse_step(line: &str) -> Result<Step, String> {
             Step::HoldClick(parse_click(target)?, millis(duration, MAX_HOLD)?)
         }
         ("report", label) => Step::Report(label.join(" ")),
-        ("sound", [name]) if wav_name(name) => Step::Sound((*name).to_owned()),
+        ("sound", [name]) if sound_name(name) => Step::Sound((*name).to_owned()),
         ("screenshot", [name])
             if Path::new(name)
                 .file_name()
@@ -648,10 +687,18 @@ pub(super) fn parse_step(line: &str) -> Result<Step, String> {
 /// those that change nothing beyond the test characters.
 fn parse_slash(words: &[&str]) -> Result<Step, String> {
     Ok(match words {
-        [command] if matches!(*command, "camp" | "sit" | "stand" | "ranged" | "stopsong") => {
+        [command]
+            if matches!(
+                *command,
+                "camp" | "sit" | "stand" | "ranged" | "stopsong" | "harmtouch" | "layonhands"
+            ) =>
+        {
             Step::Slash(format!("/{command}"))
         }
         ["camp", "desktop"] => Step::Slash("/camp desktop".into()),
+        ["discipline", name] if eq_client_core::disciplines::Discipline::named(name).is_some() => {
+            Step::Slash(format!("/discipline {name}"))
+        }
         ["target", name @ ..] if !name.is_empty() => {
             Step::Slash(format!("/target {}", name.join(" ")))
         }
@@ -1036,6 +1083,23 @@ pub(super) fn gm_command(words: &[&str]) -> Result<String, String> {
             ).into()),
         },
         "depop" if !arguments.is_empty() => return Err("gm depop takes no arguments".into()),
+        "traindisc" => {
+            // EQEmu compares class levels against these bounds. Keep the
+            // range below unavailable class levels such as 127 and 255.
+            let level = |word: &str| {
+                word.parse::<u8>()
+                    .ok()
+                    .filter(|value| word.len() <= 3 && (1..=126).contains(value))
+            };
+            let valid = match arguments {
+                [max] => level(max).is_some(),
+                [max, min] => level(max).zip(level(min)).is_some_and(|(max, min)| min <= max),
+                _ => false,
+            };
+            if !valid {
+                return Err("gm traindisc takes MAX [MIN] with 1 <= MIN <= MAX <= 126".into());
+            }
+        }
         _ if arguments.len() > 4 => return Err("gm takes up to four plain arguments".into()),
         _ => (),
     }
@@ -1407,7 +1471,11 @@ mod tests {
     fn semantic_actions_require_exact_reported_identities() {
         let base = Path::new(".");
         assert_eq!(
-            parse("interact 6 42 12\ninspect_link 6 70 0", base).unwrap(),
+            parse(
+                "interact 6 42 12\ninspect_link 6 70 0\ncompose_owned_link 6 23",
+                base
+            )
+            .unwrap(),
             [
                 Step::Interact {
                     admission: 6,
@@ -1419,6 +1487,10 @@ mod tests {
                     message: 70,
                     ordinal: 0
                 },
+                Step::ComposeOwnedLink {
+                    admission: 6,
+                    slot: InventorySlot(23),
+                },
             ],
         );
         for malformed in [
@@ -1428,6 +1500,10 @@ mod tests {
             "inspect_link 70 0",
             "inspect_link 6 70 -1",
             "inspect_link 6 70 0 raw",
+            "compose_owned_link 23",
+            "compose_owned_link -1 23",
+            "compose_owned_link 6 worn",
+            "compose_owned_link 6 23 raw",
         ] {
             assert!(parse(malformed, base).is_err(), "{malformed}");
         }
@@ -1581,6 +1657,40 @@ mod tests {
         for bad in ["slash camp server", "slash camp desktop now"] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn wait_relocation_is_a_bounded_observation() {
+        let base = std::path::Path::new(".");
+        assert_eq!(
+            parse("wait_relocation 1500\n", base).unwrap(),
+            [Step::WaitRelocation(Duration::from_millis(1500))]
+        );
+        assert!(parse("wait_relocation\n", base).is_err());
+        assert!(parse("wait_relocation 12 34 56\n", base).is_err());
+    }
+
+    #[test]
+    fn discipline_slash_names_only_the_supported_set() {
+        let base = std::path::Path::new(".");
+        assert_eq!(
+            parse("slash discipline defensive\n", base).unwrap(),
+            [Step::Slash("/discipline defensive".into())]
+        );
+        assert!(parse("slash discipline 4499\n", base).is_err());
+    }
+
+    #[test]
+    fn knight_slash_actions_use_the_current_target() {
+        let base = std::path::Path::new(".");
+        assert_eq!(
+            parse("slash harmtouch\nslash layonhands\n", base).unwrap(),
+            [
+                Step::Slash("/harmtouch".into()),
+                Step::Slash("/layonhands".into())
+            ]
+        );
+        assert!(parse("slash harmtouch 12\n", base).is_err());
     }
 
     #[test]
@@ -1743,6 +1853,31 @@ mod tests {
                 Step::Gm("nukebuffs".into()),
             ]
         );
+    }
+
+    #[test]
+    fn gm_traindisc_requires_a_bounded_max_then_optional_min() {
+        let base = Path::new("private");
+        for command in [
+            "traindisc 1",
+            "traindisc 55 52",
+            "traindisc 52 52",
+            "traindisc 126 1",
+        ] {
+            assert_eq!(
+                parse(&format!("gm {command}"), base).unwrap(),
+                [Step::Gm(command.into())]
+            );
+        }
+        for arguments in [
+            "", "0", "-1", "127", "256", "00055", "55.5", "52 55", "55 0", "55 -1", "55 none",
+            "55 52 50",
+        ] {
+            assert!(
+                parse(&format!("gm traindisc {arguments}"), base).is_err(),
+                "{arguments}"
+            );
+        }
     }
 
     #[test]
@@ -1983,11 +2118,19 @@ chat tell Friend inc now
             parse("sound LevelUp.WAV\n", base).unwrap(),
             [Step::Sound("LevelUp.WAV".into())]
         );
+        assert_eq!(
+            parse("sound theme.MP3", base).unwrap(),
+            [Step::Sound("theme.MP3".into())]
+        );
         for bad in [
             "sound",
             "sound .wav",
-            "sound theme.mp3",
+            "sound theme.ogg",
             "sound a.wav b.wav",
+            "sound audio/theme.mp3",
+            r"sound audio\theme.mp3",
+            "sound C:theme.mp3",
+            "sound ../levelup.wav",
         ] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }

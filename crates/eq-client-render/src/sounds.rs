@@ -10,7 +10,8 @@ use bevy::{
     audio::{AudioSink, PlaybackMode, SpatialAudioSink, SpatialScale, Volume},
     prelude::*,
 };
-use eq_client_assets::sounds::{SoundBank, SoundError, SoundNumbers};
+use eq_client_assets::sounds::{SoundBank, SoundError, SoundFormat, SoundNumbers};
+use rodio::Source;
 use std::{
     collections::HashMap,
     io::Cursor,
@@ -26,9 +27,19 @@ const BUDGET: usize = 32 * 1024 * 1024;
 /// How long, in seconds, a sound may wait for its file before it is too late
 /// to play.
 const STALE: f32 = 0.5;
+/// Named MP3 cues may wait for the initial bank scan and decoder setup.
+/// This wait, the two MP3 voices and the 300 second cut-off are the client's
+/// own bounds (inferred, recording checklist 6.398).
+const MP3_STALE: f32 = 8.0;
 /// The most sounds playing at once; past it a new one is not started
 /// (inferred, item 6.257).
 const VOICES: usize = 32;
+const MP3_VOICES: usize = 2;
+const REQUESTS: usize = 64;
+const READS: usize = 2;
+const CACHE_ENTRIES: usize = 2048;
+/// Bound long or unmeasurable MP3 cues independently of decoder metadata.
+const MAX_MP3_SECONDS: f32 = 300.0;
 /// How far from the listener, in world units, a sound plays at its full
 /// volume; past it, it falls off with the square of the distance (inferred,
 /// item 6.257).
@@ -38,8 +49,7 @@ const FULL_VOLUME: f32 = 20.0;
 const FARTHEST: f32 = 200.0;
 /// The distance, in world units, between the listener's ears.
 const EAR_GAP: f32 = 4.0;
-/// How long, in seconds, a sound may go unstarted past its own length
-/// before the audio output is taken to be missing.
+/// How long a new sound may wait for Bevy to attach a playback sink.
 const SILENT: f32 = 1.0;
 /// How long, in seconds, a sound whose length its file does not say is
 /// taken to play.
@@ -66,6 +76,8 @@ pub(super) struct Sounds {
     plays: u64,
     /// The sounds asked for and not yet started.
     asked: Vec<Asked>,
+    /// Invalidates playing voices without flushing installation-wide assets.
+    generation: u64,
     /// How loud sounds play, from 0 for silent to 1 for as loud as the file.
     pub(super) volume: f32,
     /// Whether there is no audio output to play on, as found when a sound
@@ -84,6 +96,7 @@ impl Default for Sounds {
             kept: 0,
             plays: 0,
             asked: Vec::new(),
+            generation: 0,
             volume: 1.0,
             no_output: false,
         }
@@ -108,9 +121,9 @@ enum Clip {
     Missing,
 }
 
-/// A file's read: its bytes and how long it plays, None when the bank has
+/// A file's read: its source and how long it plays, None when the bank has
 /// no such file, or why it cannot be played.
-type Read = Result<Option<(Vec<u8>, f32)>, String>;
+type Read = Result<Option<(AudioSource, f32)>, String>;
 
 /// A sound asked for.
 struct Asked {
@@ -121,18 +134,47 @@ struct Asked {
     when: Option<f32>,
 }
 
+impl Asked {
+    fn expired(&mut self, now: f32) -> bool {
+        let when = *self.when.get_or_insert(now);
+        let wait = if self.at.is_none() && is_mp3(&self.name) {
+            MP3_STALE
+        } else {
+            STALE
+        };
+        now - when > wait
+    }
+}
+
+fn is_mp3(name: &str) -> bool {
+    name.rsplit_once('.')
+        .is_some_and(|(_, extension)| extension.eq_ignore_ascii_case("mp3"))
+}
+
 impl Sounds {
     /// Asks for a sound file to play once, by its name, at a place in the
     /// world or, with None, on the listener. It plays as soon as its file is
     /// read, or not at all if that takes too long.
     pub(super) fn play(&mut self, name: &str, at: Option<Vec3>) {
-        if self.bank.is_some() && self.volume > 0.0 && !self.no_output {
+        let opening_mp3 = self.open.pending(Some(0)) && at.is_none() && is_mp3(name);
+        if (self.bank.is_some() || opening_mp3)
+            && self.volume > 0.0
+            && !self.no_output
+            && (1..=255).contains(&name.len())
+            && self.asked.len() < REQUESTS
+        {
             self.asked.push(Asked {
                 name: name.to_ascii_lowercase(),
                 at,
                 when: None,
             });
         }
+    }
+
+    /// Drop queued cues and stop voices from the previous view.
+    pub(super) fn reset(&mut self) {
+        self.asked.clear();
+        self.generation = self.generation.wrapping_add(1);
     }
 
     /// Asks for a sound by its number in the installation's numbers file, as
@@ -160,19 +202,53 @@ impl Sounds {
         }
     }
 
+    /// Collect completed reads and count the jobs still using read slots.
+    fn poll_reads(&mut self, sources: &mut Assets<AudioSource>) -> usize {
+        let mut ready = 0;
+        let mut reading = 0;
+        for clip in self.clips.values_mut() {
+            let Clip::Reading(job) = clip else { continue };
+            let Some(result) = job.poll(Some(0)) else {
+                reading += 1;
+                continue;
+            };
+            *clip = match result {
+                Ok(Some((source, seconds))) => {
+                    let bytes = source.bytes.len();
+                    ready += bytes;
+                    Clip::Ready {
+                        bytes,
+                        seconds,
+                        source: sources.add(source),
+                        played: 0,
+                    }
+                }
+                Ok(None) => Clip::Missing,
+                Err(error) => {
+                    warn!("a sound will not play: {error}");
+                    Clip::Missing
+                }
+            };
+        }
+        self.kept += ready;
+        reading
+    }
+
     /// Lets go of the least recently played files until those kept fit the
     /// budget. A sound playing keeps its own hold on its file.
     fn trim(&mut self) {
-        while self.kept > BUDGET {
+        while self.kept > BUDGET || self.clips.len() >= CACHE_ENTRIES {
             let oldest = self
                 .clips
                 .iter()
                 .filter_map(|(name, clip)| match clip {
-                    Clip::Ready { played, .. } => Some((*played, name.clone())),
+                    Clip::Ready { played, .. } => Some((true, *played, name)),
+                    Clip::Missing if self.clips.len() >= CACHE_ENTRIES => Some((false, 0, name)),
                     Clip::Reading(_) | Clip::Missing => None,
                 })
                 .min();
-            let Some((_, name)) = oldest else { break };
+            let Some((_, _, name)) = oldest else { break };
+            let name = name.clone();
             if let Some(Clip::Ready { bytes, .. }) = self.clips.remove(&name) {
                 self.kept -= bytes;
             }
@@ -229,30 +305,59 @@ fn read(bank: &Mutex<SoundBank>, name: &str) -> Read {
     let Some(sound) = sound else {
         return Ok(None);
     };
-    decodes(&sound.bytes).map_err(|error| {
-        format!(
-            "{name} cannot be decoded (format {}, {} channels, {} Hz, {} bits): {error}",
-            sound.format.code, sound.format.channels, sound.format.rate, sound.format.bits
-        )
-    })?;
-    let seconds = sound.seconds().unwrap_or(UNKNOWN_LENGTH);
-    Ok(Some((sound.bytes, seconds)))
+    let wav_seconds = sound.seconds();
+    let source = AudioSource {
+        bytes: sound.bytes.into(),
+    };
+    let seconds = match sound.format {
+        SoundFormat::Wav(format) => {
+            decoder(&source).map_err(|error| {
+                format!(
+                    "{name} cannot be decoded (format {}, {} channels, {} Hz, {} bits): {error}",
+                    format.code, format.channels, format.rate, format.bits
+                )
+            })?;
+            wav_seconds.unwrap_or(UNKNOWN_LENGTH)
+        }
+        SoundFormat::Mp3 => mp3_seconds(&source)
+            .map_err(|error| format!("{name} cannot be decoded as MP3: {error}"))?,
+    };
+    Ok(Some((source, seconds)))
 }
 
 /// Whether the decoder Bevy's audio builds for a source can start on these
 /// bytes, built the same way; Bevy's audio ends the app on one it cannot.
-fn decodes(bytes: &[u8]) -> Result<(), rodio::decoder::DecoderError> {
+fn decoder(
+    source: &AudioSource,
+) -> Result<rodio::Decoder<Cursor<AudioSource>>, rodio::decoder::DecoderError> {
     rodio::Decoder::builder()
-        .with_byte_len(bytes.len() as u64)
-        .with_data(Cursor::new(bytes.to_vec()))
+        .with_byte_len(source.bytes.len() as u64)
+        .with_data(Cursor::new(source.clone()))
         .build()
-        .map(drop)
+}
+
+fn mp3_seconds(source: &AudioSource) -> Result<f32, rodio::decoder::DecoderError> {
+    use rodio::decoder::DecoderError::UnrecognizedFormat;
+    // With the enabled decoders, a RIFF WAVE would otherwise pass autodetection.
+    if source.bytes.starts_with(b"RIFF") {
+        return Err(UnrecognizedFormat);
+    }
+    let mut decoded = decoder(source)?;
+    decoded.next().ok_or(UnrecognizedFormat)?;
+    Ok(decoded
+        .total_duration()
+        .map_or(MAX_MP3_SECONDS, |duration| {
+            duration.as_secs_f32().min(MAX_MP3_SECONDS)
+        }))
 }
 
 /// Marks a sound this module started, with when it should have finished, in
 /// seconds since the app started.
 #[derive(Component)]
 pub(super) struct Playing {
+    generation: u64,
+    mp3: bool,
+    started_by: f32,
     until: f32,
 }
 
@@ -261,7 +366,7 @@ pub(super) struct Playing {
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(super) fn update(
     mut commands: Commands,
-    time: Res<Time>,
+    time: Res<Time<bevy::time::Real>>,
     mut sounds: ResMut<Sounds>,
     options: Res<super::options::OptionsState>,
     mut sources: ResMut<Assets<AudioSource>>,
@@ -269,51 +374,35 @@ pub(super) fn update(
     listener: Query<&GlobalTransform, With<SpatialListener>>,
 ) {
     sounds.volume = options.options.sound_volume();
+    let now = time.elapsed_secs();
     let Some(bank) = sounds.bank.clone() else {
-        sounds.asked.clear();
+        if sounds.open.pending(Some(0)) {
+            sounds.asked.retain_mut(|asked| !asked.expired(now));
+        } else {
+            sounds.asked.clear();
+        }
         return;
     };
     let sounds = &mut *sounds;
-    let mut ready = 0;
-    for clip in sounds.clips.values_mut() {
-        let Clip::Reading(job) = clip else { continue };
-        let Some(result) = job.poll(Some(0)) else {
-            continue;
-        };
-        *clip = match result {
-            Ok(Some((bytes, seconds))) => {
-                ready += bytes.len();
-                Clip::Ready {
-                    bytes: bytes.len(),
-                    seconds,
-                    source: sources.add(AudioSource {
-                        bytes: bytes.into(),
-                    }),
-                    played: 0,
-                }
-            }
-            Ok(None) => Clip::Missing,
-            Err(error) => {
-                warn!("a sound will not play: {error}");
-                Clip::Missing
-            }
-        };
-    }
-    sounds.kept += ready;
-    let now = time.elapsed_secs();
+    let mut reading = sounds.poll_reads(&mut sources);
     let ears = listener.iter().next().map(GlobalTransform::translation);
     let mut voices = 0;
+    let mut mp3_voices = 0;
     for (entity, sound, started, started_spatial) in &playing {
-        voices += 1;
-        // Bevy's audio despawns a sound when it ends; one still here long
-        // after was never started, so there is no output to play on.
-        if now > sound.until + SILENT {
+        let no_sink = !(started || started_spatial);
+        if sound.generation != sounds.generation {
             commands.entity(entity).try_despawn();
-            voices -= 1;
-            if !(started || started_spatial || sounds.no_output) {
+        } else if no_sink && now > sound.started_by {
+            commands.entity(entity).try_despawn();
+            if !sounds.no_output {
                 warn!("Sounds are off: there is no audio output to play them on.");
                 sounds.no_output = true;
             }
+        } else if now > sound.until {
+            commands.entity(entity).try_despawn();
+        } else {
+            voices += 1;
+            mp3_voices += usize::from(sound.mp3);
         }
     }
     if sounds.no_output {
@@ -321,13 +410,16 @@ pub(super) fn update(
     }
     let asked = std::mem::take(&mut sounds.asked);
     for mut asked in asked {
-        let when = *asked.when.get_or_insert(now);
+        if asked.expired(now) {
+            continue;
+        }
         // A sound too far away, or with no listener to hear it, is not heard.
         if let Some(at) = asked.at
             && ears.is_none_or(|ears| ears.distance(at) > FARTHEST)
         {
             continue;
         }
+        let can_read = reading < READS && sounds.clips.len() < CACHE_ENTRIES;
         match sounds.clips.get_mut(&asked.name) {
             Some(Clip::Ready {
                 source,
@@ -335,15 +427,20 @@ pub(super) fn update(
                 seconds,
                 ..
             }) => {
-                if voices >= VOICES {
+                let mp3 = is_mp3(&asked.name);
+                if voices >= VOICES || (mp3 && mp3_voices >= MP3_VOICES) {
                     continue;
                 }
                 sounds.plays += 1;
                 *played = sounds.plays;
                 voices += 1;
+                mp3_voices += usize::from(mp3);
                 commands.spawn((
                     Playing {
-                        until: now + *seconds,
+                        generation: sounds.generation,
+                        mp3,
+                        started_by: now + SILENT,
+                        until: now + *seconds + SILENT,
                     },
                     AudioPlayer::new(source.clone()),
                     settings(asked.at.is_some(), sounds.volume),
@@ -351,13 +448,16 @@ pub(super) fn update(
                 ));
             }
             Some(Clip::Missing) => {}
-            Some(Clip::Reading(_)) if now - when > STALE => {}
             Some(Clip::Reading(_)) => sounds.asked.push(asked),
+            None if !can_read => {
+                sounds.asked.push(asked);
+            }
             None => {
                 let mut job = Background::default();
                 let bank = Arc::clone(&bank);
                 let name = asked.name.clone();
                 job.start(0, move || read(&bank, &name));
+                reading += 1;
                 sounds.clips.insert(asked.name.clone(), Clip::Reading(job));
                 sounds.asked.push(asked);
             }
@@ -482,11 +582,128 @@ mod tests {
 
     #[test]
     fn only_what_the_decoder_starts_on_is_played() {
-        assert!(decodes(&wav(1)).is_ok());
+        let source = |bytes: Vec<u8>| AudioSource {
+            bytes: bytes.into(),
+        };
+        assert!(decoder(&source(wav(1))).is_ok());
         // A compressed WAV the decoder lacks, and something not a WAV, would
         // end the app inside Bevy's audio.
-        assert!(decodes(&wav(2)).is_err());
-        assert!(decodes(b"not a sound").is_err());
+        assert!(decoder(&source(wav(2))).is_err());
+        assert!(decoder(&source(b"not a sound".to_vec())).is_err());
+        assert!(mp3_seconds(&source(wav(1))).is_err());
+        assert!(mp3_seconds(&source(b"ID3".to_vec())).is_err());
+    }
+
+    #[test]
+    fn mp3_decoder_reads_synthetic_silence_frames() {
+        let source = AudioSource {
+            bytes: mp3_silence(12).into(),
+        };
+        let seconds = mp3_seconds(&source).unwrap();
+        assert!(seconds > 0.0 && seconds <= MAX_MP3_SECONDS);
+    }
+
+    fn mp3_silence(frames: usize) -> Vec<u8> {
+        // MPEG-1 Layer III, 128 kbps, 44.1 kHz, stereo. Zero side information
+        // gives empty granules, so these frames represent silence.
+        let mut frame = [0; 417];
+        frame[..4].copy_from_slice(&[0xff, 0xfb, 0x90, 0]);
+        frame.repeat(frames)
+    }
+
+    mod mp3_probe;
+
+    #[test]
+    fn reset_discards_requests_and_old_voices_even_without_an_audio_device() {
+        let mut app = App::new();
+        app.init_resource::<Time<bevy::time::Real>>()
+            .init_resource::<Sounds>()
+            .init_resource::<Assets<AudioSource>>()
+            .init_resource::<super::super::options::OptionsState>()
+            .add_systems(Update, update);
+        let folder = install("reset");
+        let files = eq_client_assets::sounds::SoundFiles {
+            archive_stem: "snd",
+            folders: &[],
+            numbers: "SoundAssets.txt",
+        };
+        let mut sounds = app.world_mut().resource_mut::<Sounds>();
+        sounds.bank = Some(Arc::new(Mutex::new(
+            SoundBank::open(&folder, files).unwrap(),
+        )));
+        for _ in 0..=REQUESTS {
+            sounds.play("swing.wav", None);
+        }
+        assert_eq!(sounds.asked.len(), REQUESTS);
+        sounds.reset();
+        let old = app
+            .world_mut()
+            .spawn(Playing {
+                generation: 0,
+                mp3: true,
+                started_by: 1.0,
+                until: 3.0,
+            })
+            .id();
+        app.update();
+        assert!(app.world().resource::<Sounds>().asked.is_empty());
+        assert!(!app.world().resource::<Sounds>().no_output);
+        assert!(app.world().get_entity(old).is_err());
+        std::fs::remove_dir_all(&folder).unwrap();
+    }
+
+    #[test]
+    fn a_cold_named_mp3_can_start_after_the_transient_wav_deadline() {
+        use bevy::time::Real;
+        use std::time::Duration;
+        let folder = install("delayed-cue");
+        let files = eq_client_assets::sounds::SoundFiles {
+            archive_stem: "snd",
+            folders: &[],
+            numbers: "SoundAssets.txt",
+        };
+        let mut app = App::new();
+        app.init_resource::<Time<Real>>()
+            .init_resource::<Assets<AudioSource>>()
+            .init_resource::<super::super::options::OptionsState>()
+            .add_systems(Update, update);
+        app.world_mut()
+            .resource_mut::<Time<Real>>()
+            .advance_by(Duration::from_secs(2));
+        let source = app
+            .world_mut()
+            .resource_mut::<Assets<AudioSource>>()
+            .add(AudioSource {
+                bytes: Vec::new().into(),
+            });
+        let mut sounds = Sounds {
+            bank: Some(Arc::new(Mutex::new(
+                SoundBank::open(&folder, files).unwrap(),
+            ))),
+            ..default()
+        };
+        for name in ["swing.wav", "first.mp3", "old.mp3"] {
+            sounds.clips.insert(
+                name.into(),
+                Clip::Ready {
+                    source: source.clone(),
+                    bytes: 0,
+                    seconds: 3.0,
+                    played: 0,
+                },
+            );
+            sounds.play(name, None);
+        }
+        sounds.asked[0].when = Some(0.0);
+        sounds.asked[1].when = Some(0.0);
+        sounds.asked[2].when = Some(-MP3_STALE);
+        app.insert_resource(sounds);
+        app.update();
+        let mut playing = app.world_mut().query::<&Playing>();
+        let active: Vec<_> = playing.iter(app.world()).collect();
+        assert_eq!(active.len(), 1);
+        assert!(active[0].mp3);
+        std::fs::remove_dir_all(&folder).unwrap();
     }
 
     #[test]

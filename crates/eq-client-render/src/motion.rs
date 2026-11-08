@@ -509,6 +509,13 @@ impl Controls {
         };
     }
 
+    /// A same-zone landing ends the old move and probes collision afresh.
+    pub(super) fn same_zone_landed(&mut self) {
+        self.reset(None);
+        self.pending = None;
+        self.placement = placement::Check::default();
+    }
+
     /// A control transition never revokes calibrated speed or existing
     /// vertical momentum. Remember revisions so start/expiry in one frame
     /// still discard pending taps, facing and a crouched jump. Native input
@@ -639,7 +646,7 @@ impl Controls {
         false
     }
 
-    pub(super) fn crossing_refused(&mut self) {
+    pub(super) fn crossing_resolved(&mut self) {
         if self
             .pending
             .is_some_and(|pending| pending.kind == PendingKind::Crossing)
@@ -3375,6 +3382,23 @@ pub(super) mod tests {
                 }
             })
         );
+    }
+
+    #[test]
+    fn landing_on_a_boundary_does_not_trigger_it_again() {
+        let mut controls = Controls::default();
+        let source = Some(ZoneLine::Reference(7));
+        let destination = Some(ZoneLine::Reference(8));
+        assert!(controls.boundary.observe(None).is_none());
+        assert!(controls.boundary.observe(source).is_some());
+
+        controls.wait_for(Some(5), Instant::now(), PendingKind::Move);
+        controls.same_zone_landed();
+        assert!(controls.pending.is_none());
+        assert!(controls.boundary.observe(destination).is_none());
+        assert!(controls.boundary.observe(destination).is_none());
+        assert!(controls.boundary.observe(None).is_none());
+        assert!(controls.boundary.observe(destination).is_some());
     }
 
     fn flat_surface(y: f32) -> [[[f32; 3]; 3]; 2] {

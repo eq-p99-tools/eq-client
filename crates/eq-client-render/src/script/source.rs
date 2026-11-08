@@ -15,6 +15,10 @@ pub fn read_source(path: &Path) -> io::Result<String> {
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Script must be UTF-8 text"))
 }
 
+pub(super) fn without_bom(text: &str) -> &str {
+    text.strip_prefix('\u{feff}').unwrap_or(text)
+}
+
 pub(super) fn read_bytes(path: &Path) -> io::Result<Vec<u8>> {
     let file = File::open(path)?;
     let mut bytes = Vec::new();

@@ -264,6 +264,7 @@ mod tests {
         let offer = |sequence, caster: &[u8]| {
             let mut body = vec![0; 92];
             body[..4].copy_from_slice(&4u32.to_le_bytes());
+            body[4..8].copy_from_slice(&2000u32.to_le_bytes());
             body[12..12 + caster.len()].copy_from_slice(caster);
             WorldEvent::TranslocateOffer(ConsentOffer {
                 id: ConsentId {

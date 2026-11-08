@@ -10,7 +10,8 @@ use clap::{CommandFactory, FromArgMatches, Parser, ValueEnum, parser::ValueSourc
 use eq_client_assets::{ZoneAsset, ui::InstalledClient};
 use eq_client_core::{WorldPosition, machine::DisplaySnapshot};
 use eq_client_render::{
-    Preview, ProjectionStyle, Source, ValidationAction, ViewerConfig, script::Step,
+    Preview, ProjectionStyle, Source, ValidationAction, ViewerConfig,
+    script::{Program, Step},
 };
 use eq_network::client::ServerProtocol;
 
@@ -305,8 +306,13 @@ enum Mode {
 /// screenshot that does not log in, as before the login screen; logged in
 /// at once with `--online`; at the login screen otherwise, a script's
 /// `login` step included.
-fn mode(arguments: &Arguments, script: Option<&[Step]>) -> Result<Mode, &'static str> {
-    let logs_in = script.is_some_and(|steps| steps.iter().any(|step| matches!(step, Step::Login)));
+fn mode(arguments: &Arguments, script: Option<&Program>) -> Result<Mode, &'static str> {
+    let logs_in = script.is_some_and(|program| {
+        program
+            .instructions()
+            .iter()
+            .any(|instruction| matches!(instruction.step(), Step::Login))
+    });
     let demo = arguments.demo_entities
         || arguments.demo_inventory
         || arguments.demo_spellbook
@@ -371,25 +377,6 @@ fn launch_preset(
         .unwrap_or(0))
 }
 
-/// Refuses a script with local-only steps, `gm` and `chat`, unless the
-/// session is local-only (see [`local_session`]), so `#` commands and a
-/// script's chat can never reach P99, Quarm or a public server. Such a script
-/// fails at launch rather than when it reaches the step.
-fn check_local_steps(steps: Option<&[Step]>, local: bool) -> Result<(), &'static str> {
-    let local_only = steps.is_some_and(|steps| {
-        steps
-            .iter()
-            .any(|step| matches!(step, Step::Gm(_) | Step::Chat(_)))
-    });
-    if local_only && !local {
-        return Err(concat!(
-            "gm and chat script steps need --online with EQ_PROTOCOL=eqemu or takp ",
-            "(a local EQEmu or TAKP server)"
-        ));
-    }
-    Ok(())
-}
-
 /// A script on a stock server (`EQEmu` or TAKP) is a local test run: its
 /// session refuses every server outside this machine's network, and only then
 /// may it send `gm` steps and run without anyone watching the window. P99 and
@@ -400,15 +387,19 @@ fn local_session(script: bool, protocol: Option<ServerProtocol>) -> bool {
 
 /// Establish the network constraint before either CLI or workbench actions run.
 fn script_session(
-    steps: Option<&[Step]>,
+    script: Option<&Program>,
     local_test: bool,
     protocol: Option<ServerProtocol>,
-) -> Result<bool, &'static str> {
-    let local = local_session(steps.is_some() || local_test, protocol);
+) -> Result<bool, String> {
+    let local = local_session(script.is_some() || local_test, protocol);
     if local_test && !local {
-        return Err("--local-test requires an EQEmu or TAKP server preset");
+        return Err("--local-test requires an EQEmu or TAKP server preset".into());
     }
-    check_local_steps(steps, local)?;
+    if let Some(program) = script {
+        program
+            .check_local_commands(local)
+            .map_err(|error| format!("{error} Select an EQEmu or TAKP server preset."))?;
+    }
     Ok(local)
 }
 
@@ -469,8 +460,7 @@ fn main() {
     let (mut arguments, typed_installation) = parse_arguments();
     // Validate every local input before the session logs in.
     let (script, script_follow) = script_input(&arguments);
-    let steps = script.as_ref().map(|program| program.clone().into_steps());
-    let mode = mode(&arguments, steps.as_deref()).unwrap_or_else(|error| {
+    let mode = mode(&arguments, script.as_ref()).unwrap_or_else(|error| {
         eprintln!("error: {error}");
         std::process::exit(2);
     });
@@ -494,7 +484,7 @@ fn main() {
         .as_ref()
         .map(|(presets, launch)| presets.list[launch.preset].protocol);
     let local =
-        script_session(steps.as_deref(), arguments.local_test, protocol).unwrap_or_else(|error| {
+        script_session(script.as_ref(), arguments.local_test, protocol).unwrap_or_else(|error| {
             eprintln!("error: {error}");
             std::process::exit(2);
         });
@@ -783,10 +773,7 @@ fn run_client(
 }
 
 /// The validated script and, when following, where to keep reading it.
-type ScriptInput = (
-    Option<eq_client_render::script::Program>,
-    Option<(PathBuf, usize)>,
-);
+type ScriptInput = (Option<Program>, Option<(PathBuf, usize)>);
 
 fn script_input(arguments: &Arguments) -> ScriptInput {
     let Some(path) = arguments.script.as_deref() else {
@@ -803,7 +790,7 @@ fn script_input(arguments: &Arguments) -> ScriptInput {
 /// also returns how many bytes were read, where following resumes. A followed
 /// script is read only through its last complete line, since its writer may be
 /// partway through the next.
-fn load_script(path: &std::path::Path, follow: bool) -> (eq_client_render::script::Program, usize) {
+fn load_script(path: &Path, follow: bool) -> (Program, usize) {
     eq_client_render::script::read_source(path)
         .map_err(|error| error.to_string())
         .and_then(|text| {
@@ -812,11 +799,9 @@ fn load_script(path: &std::path::Path, follow: bool) -> (eq_client_render::scrip
             } else {
                 text.len()
             };
-            // Windows editors may save UTF-8 with a byte-order mark.
-            let complete = &text[..read];
-            eq_client_render::script::Program::parse(
-                complete.strip_prefix('\u{feff}').unwrap_or(complete),
-                path.parent().unwrap_or_else(|| std::path::Path::new(".")),
+            Program::parse(
+                &text[..read],
+                path.parent().unwrap_or_else(|| Path::new(".")),
             )
             .map(|steps| (steps, read))
             .map_err(|error| error.to_string())
@@ -873,9 +858,9 @@ fn print_summary(zone: &ZoneAsset) {
 #[cfg(test)]
 mod tests {
     use super::{
-        Arguments, InstalledClient, Mode, Path, ServerProtocol, Step, check_local_steps, distance,
-        finite, launch_preset, load_script, local_session, mode, parse_window_position,
-        parse_window_size, presets, run_client, seconds,
+        Arguments, InstalledClient, Mode, Path, Program, ServerProtocol, distance, finite,
+        launch_preset, load_script, local_session, mode, parse_window_position, parse_window_size,
+        presets, run_client, script_session, seconds,
     };
     use clap::Parser;
 
@@ -901,12 +886,11 @@ mod tests {
         .unwrap();
         assert!(background.script_background);
         // Input ownership grants no local-server or command permission.
+        let allowed = Program::parse("face", Path::new(".")).unwrap();
+        let restricted = Program::parse("gm summon", Path::new(".")).unwrap();
         for provider in [ServerProtocol::Project1999, ServerProtocol::Quarm] {
-            assert!(!super::script_session(Some(&[Step::Face]), false, Some(provider)).unwrap());
-            assert!(
-                super::script_session(Some(&[Step::Gm("summon".into())]), false, Some(provider))
-                    .is_err()
-            );
+            assert!(!script_session(Some(&allowed), false, Some(provider)).unwrap());
+            assert!(script_session(Some(&restricted), false, Some(provider)).is_err());
         }
     }
 
@@ -1018,14 +1002,17 @@ mod tests {
 
     #[test]
     fn a_run_opens_the_login_screen_unless_it_is_offline_online_or_an_older_script() {
-        let run = |flags: &[&str], script: Option<&[Step]>| {
+        let run = |flags: &[&str], script: Option<&Program>| {
             let arguments = Arguments::try_parse_from(
                 std::iter::once("eq-client").chain(flags.iter().copied()),
             )
             .unwrap();
             mode(&arguments, script)
         };
-        let login = [Step::Login, Step::WaitServers];
+        let login = Program::parse("login\nwait_servers", Path::new(".")).unwrap();
+        let legacy = Program::parse("face", Path::new(".")).unwrap();
+        let structured =
+            Program::parse("if false\n  if true\n    login\n  end\nend", Path::new(".")).unwrap();
         assert_eq!(run(&[], None), Ok(Mode::Login));
         assert_eq!(run(&[], Some(&login)), Ok(Mode::Login));
         assert_eq!(run(&["--online"], None), Ok(Mode::Online));
@@ -1038,10 +1025,13 @@ mod tests {
             assert_eq!(run(offline, None), Ok(Mode::Offline), "{offline:?}");
         }
         // Scripts written before the login screen still open the viewer.
-        assert_eq!(run(&[], Some(&[Step::Face])), Ok(Mode::Offline));
+        assert_eq!(run(&[], Some(&legacy)), Ok(Mode::Offline));
         // A login step needs the screen it types into.
         assert!(run(&["--online"], Some(&login)).is_err());
         assert!(run(&["--offline"], Some(&login)).is_err());
+        assert_eq!(run(&[], Some(&structured)), Ok(Mode::Login));
+        assert!(run(&["--online"], Some(&structured)).is_err());
+        assert!(run(&["--offline"], Some(&structured)).is_err());
         assert!(Arguments::try_parse_from(["eq-client", "--online", "--offline"]).is_err());
     }
 
@@ -1099,23 +1089,34 @@ mod tests {
         let (followed, read) = load_script(&path, true);
         std::fs::write(&path, "\u{feff}wait 10\n").unwrap();
         let (whole, _) = load_script(&path, false);
+        let initial = "\u{feff}repeat 2\nreport sample\nend\n";
+        std::fs::write(&path, format!("{initial}quit")).unwrap();
+        let (structured, structured_read) = load_script(&path, true);
         std::fs::remove_file(&path).unwrap();
         assert_eq!(
             (followed.instructions().len(), read),
             (1, "\u{feff}wait 10\n".len())
         );
         assert_eq!(whole.instructions().len(), 1);
+        assert_eq!(structured_read, initial.len());
+        assert_eq!(structured.statement_count(), 3);
+        assert!(structured.into_steps().is_err());
     }
 
     #[test]
-    fn gm_and_chat_steps_are_refused_outside_a_local_session() {
-        let chat = Step::Chat(eq_client_core::OutboundChat::Say("Hail".into()));
-        for steps in [[Step::Gm("summon".into())], [chat]] {
-            assert!(check_local_steps(Some(&steps), false).is_err());
-            assert!(check_local_steps(Some(&steps), true).is_ok());
+    fn gm_chat_and_social_steps_are_refused_outside_a_local_session() {
+        for action in ["gm summon", "chat say Hail", "social play Example"] {
+            let source = format!("if false\n  repeat 1\n    {action}\n  end\nend");
+            let program = Program::parse(&source, Path::new(".")).unwrap();
+            let error = script_session(Some(&program), false, Some(ServerProtocol::Project1999))
+                .unwrap_err();
+            assert!(error.starts_with("script line 3:"), "{error}");
+            assert_eq!(
+                script_session(Some(&program), false, Some(ServerProtocol::EqEmu)),
+                Ok(true)
+            );
         }
-        assert!(check_local_steps(Some(&[Step::Face]), false).is_ok());
-        assert!(check_local_steps(None, false).is_ok());
+        assert_eq!(script_session(None, false, None), Ok(false));
     }
 
     #[test]

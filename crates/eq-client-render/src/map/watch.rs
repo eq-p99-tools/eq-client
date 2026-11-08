@@ -23,6 +23,16 @@ pub(crate) struct WatchState {
 }
 
 impl WatchState {
+    /// Whether the displayed name is tracked, independent of map search.
+    pub(crate) fn tracks(&self, name: &str) -> bool {
+        self.names.contains(name)
+    }
+
+    /// Whether any saved watch can match a scene entity.
+    pub(crate) fn has_names(&self) -> bool {
+        self.names.names().next().is_some()
+    }
+
     pub(super) fn add(&mut self, name: &str) {
         self.dirty |= self.names.add(name);
     }

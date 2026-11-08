@@ -304,7 +304,7 @@ pub(super) fn spawn(commands: &mut Commands) {
 }
 
 /// What the inventory's mouse does, shown until a slot is hovered.
-const SLOT_HELP: &str = "Click a stack: quantity | Shift-click: whole stack | Ctrl-click: one | Right-click: inspect | Alt+right-click: use";
+const SLOT_HELP: &str = "Click a stack: quantity | Shift-click: whole stack | Ctrl-click: one | Right-click: inspect | Alt+right-click: use | Ctrl+right-click: link to chat";
 
 /// Says the inventory's refusals in the chat, where the official client
 /// says them; a skinned window has no line of its own for them.
@@ -327,7 +327,7 @@ pub(super) fn say_refusals(
 /// Left-click chooses a stack quantity or moves through the cursor; right-click inspects.
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(super) fn input(
-    keys: crate::keys::Keys,
+    mut keys: ParamSet<(crate::keys::Keys, ResMut<super::keys::Typing>)>,
     mouse: Res<ButtonInput<MouseButton>>,
     mut online: ResMut<super::online::OnlineState>,
     sender: Res<crate::outbox::Outbox>,
@@ -353,12 +353,25 @@ pub(super) fn input(
     mut state: ResMut<InventoryState>,
     mut items: ResMut<super::items::ItemState>,
     escape: Res<super::escape::Escape>,
+    mut chat: Option<ResMut<super::chat::ChatState>>,
 ) {
     state.refresh_bank_access(&online);
-    if !keys.window_focused() {
-        state.actions.auto_store = false;
-        return;
-    }
+    let (alt, ctrl, shift, focused) = {
+        let keys = keys.p0();
+        if !keys.window_focused() {
+            state.actions.auto_store = false;
+            return;
+        }
+        (
+            keys.input
+                .any_pressed([KeyCode::AltLeft, KeyCode::AltRight]),
+            keys.input
+                .any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]),
+            keys.input
+                .any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]),
+            keys.focused(),
+        )
+    };
     if *escape == super::escape::Escape::Inventory {
         state.actions.auto_store = false;
         state.cancel_split();
@@ -408,13 +421,18 @@ pub(super) fn input(
             continue;
         }
         if mouse.just_pressed(MouseButton::Right) {
-            if keys
-                .input
-                .any_pressed([KeyCode::AltLeft, KeyCode::AltRight])
-            {
-                if keys.focused() {
+            if alt {
+                if focused {
                     use_clicked(&mut state, slot.0, (&online, &sender), &spells, &settings);
                 }
+            } else if ctrl {
+                if let Some(chat) = chat.as_deref_mut() {
+                    match chat.compose_owned_link(slot.0, online.world()) {
+                        Ok(()) => keys.p1().composing = true,
+                        Err(reason) => chat.refuse(reason),
+                    }
+                }
+                return;
             } else {
                 right_click(
                     slot.0, &online, &sender, &mut shown, &skinned, &mut items, &mut state,
@@ -425,14 +443,8 @@ pub(super) fn input(
     // A slot a hold picks up from is clicked when its quick press is let go
     // (`crate::clicks::Clicks`).
     if let Some(SlotButton(slot)) = clicks.iter().next() {
-        let whole = keys
-            .input
-            .any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
-        let one = keys
-            .input
-            .any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
-        if !whole
-            && !one
+        if !shift
+            && !ctrl
             && skinned.has(super::windows::WindowId::Merchant)
             && !online
                 .world()
@@ -446,7 +458,7 @@ pub(super) fn input(
             // and its Sell button suggest; the official client's click there
             // is not checked yet.
         } else {
-            state.left_click_slot(*slot, whole, one, &mut online, &sender);
+            state.left_click_slot(*slot, shift, ctrl, &mut online, &sender);
         }
     }
 }
@@ -615,7 +627,9 @@ pub(super) fn update(
         };
     }
     for mut status in &mut statuses {
-        if inventory.received()
+        if inventory.bandage_stock_pending() {
+            status.0 = "Bandage stock is awaiting a server update".into();
+        } else if inventory.received()
             && !inventory.stale()
             && !inventory.ground_drop_pending()
             && !state.actions.message.is_empty()

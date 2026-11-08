@@ -59,6 +59,10 @@ pub(super) struct SourceLines;
 #[derive(Component)]
 pub(super) struct History;
 #[derive(Component)]
+pub(super) struct FlowPane;
+#[derive(Component)]
+pub(super) struct FlowText;
+#[derive(Component)]
 pub(super) struct HelpBody;
 #[derive(Component)]
 pub(super) struct Breadcrumbs;
@@ -288,7 +292,8 @@ pub(super) fn spawn(
             SourceLines,
             Node {
                 height: px(280),
-                width: percent(100),
+                min_width: px(0),
+                flex_grow: 1.0,
                 padding: UiRect::all(px(8)),
                 flex_direction: FlexDirection::Column,
                 overflow: Overflow::clip(),
@@ -304,7 +309,45 @@ pub(super) fn spawn(
         theme::INK,
     );
     commands.entity(history).insert(History);
-    commands.entity(execution).add_children(&[lines, history]);
+    let flow = label(&mut commands, "", 12.0, theme::INK);
+    commands.entity(flow).insert((
+        FlowText,
+        font(&mono, 12.0),
+        Node {
+            flex_shrink: 0.0,
+            ..default()
+        },
+    ));
+    let flow_pane = commands
+        .spawn((
+            FlowPane,
+            TakesWheel,
+            ScrollPosition::default(),
+            Node {
+                display: Display::None,
+                height: px(280),
+                width: percent(32),
+                min_width: px(120),
+                padding: UiRect::all(px(8)),
+                flex_direction: FlexDirection::Column,
+                overflow: Overflow::scroll_y(),
+                ..default()
+            },
+            BackgroundColor(theme::WELL),
+        ))
+        .add_child(flow)
+        .id();
+    let source_row = commands
+        .spawn(Node {
+            width: percent(100),
+            column_gap: px(8),
+            ..default()
+        })
+        .add_children(&[lines, flow_pane])
+        .id();
+    commands
+        .entity(execution)
+        .add_children(&[source_row, history]);
     let help_page = commands
         .spawn((
             Page(Tab::Help),
@@ -416,12 +459,14 @@ pub(super) fn refresh(
             Has<Root>,
             Has<Confirmation>,
             Has<LibraryPane>,
+            Has<FlowPane>,
         ),
         Or<(
             With<Page>,
             With<Root>,
             With<Confirmation>,
             With<LibraryPane>,
+            With<FlowPane>,
         )>,
     >,
     mut texts: Query<
@@ -431,8 +476,15 @@ pub(super) fn refresh(
             Has<Message>,
             Has<History>,
             Has<Validation>,
+            Has<FlowText>,
         ),
-        Or<(With<Status>, With<Message>, With<History>, With<Validation>)>,
+        Or<(
+            With<Status>,
+            With<Message>,
+            With<History>,
+            With<Validation>,
+            With<FlowText>,
+        )>,
     >,
     mut fields: Query<(&Field, &mut EditableText, &mut BorderColor, &mut TextScroll)>,
     focus: Res<bevy::input_focus::InputFocus>,
@@ -443,13 +495,15 @@ pub(super) fn refresh(
     mut previous: Local<Cache>,
 ) {
     let active = status.phase().active();
-    for (mut node, page, root, confirmation, library) in &mut nodes {
+    for (mut node, page, root, confirmation, library, flow_pane) in &mut nodes {
         let visible = if root {
             shown.displayed(WindowId::Scripts)
         } else if confirmation {
             state.confirm.is_some()
         } else if library {
             !state.library_collapsed
+        } else if flow_pane {
+            status.flow().is_some()
         } else if let Some(Page(tab)) = page {
             *tab == state.tab && (*tab != Tab::Editor || !active)
         } else {
@@ -472,7 +526,8 @@ pub(super) fn refresh(
     {
         let result = match state.document.program() {
             Ok(program) => format!(
-                "{} actions  ·  {} lines  ·  UTF-8  ·  # comments",
+                "{} statements  ·  {} actions  ·  {} lines",
+                program.statement_count(),
                 program.instructions().len(),
                 state.document.text.lines().count()
             ),
@@ -491,10 +546,19 @@ pub(super) fn refresh(
             result,
         ));
     }
-    for (mut text, is_status, message, history, validation) in &mut texts {
+    for (mut text, is_status, message, history, validation, flow_text) in &mut texts {
         let value = if is_status {
+            let progress = status.flow().map_or_else(
+                || format!("{done}/{total} actions"),
+                |flow| {
+                    format!(
+                        "{} statements executed  ·  {done} actions finished",
+                        flow.statements()
+                    )
+                },
+            );
             format!(
-                "{}  ·  {done}/{total} actions  ·  {:.1}s{}",
+                "{}  ·  {progress}  ·  {:.1}s{}",
                 phase_text(status.phase()),
                 status.elapsed().as_secs_f32(),
                 if state.document.dirty() {
@@ -525,6 +589,8 @@ pub(super) fn refresh(
                 })
                 .collect::<Vec<_>>()
                 .join("\n")
+        } else if flow_text {
+            flow_summary(&status)
         } else if validation {
             previous
                 .validation
@@ -610,6 +676,27 @@ pub(super) fn refresh(
     }
 }
 
+fn flow_summary(status: &RunStatus) -> String {
+    let Some(flow) = status.flow() else {
+        return String::new();
+    };
+    let mut lines = vec!["Execution state".into()];
+    if let Some((line, taken)) = flow.branch() {
+        lines.push(format!("If L{line} · {taken}"));
+    }
+    for (line, iteration, limit) in flow.loops() {
+        lines.push(format!("Loop L{line} · {iteration}/{limit}"));
+    }
+    lines.push(String::new());
+    lines.push("Variables".into());
+    if flow.variables().is_empty() {
+        lines.push("None initialized".into());
+    } else {
+        lines.extend(flow.variables().iter().cloned());
+    }
+    lines.join("\n")
+}
+
 /// A read-only source line with stable syntax colors and an execution marker.
 pub(super) fn source_line(
     commands: &mut Commands,
@@ -657,11 +744,18 @@ pub(super) fn source_line(
 
 /// Give the wheel to the editor or help pane without zooming the game camera.
 #[allow(clippy::needless_pass_by_value)]
+#[allow(
+    clippy::type_complexity,
+    reason = "the query shares scrolling across two Bevy panes"
+)]
 pub(super) fn scroll(
     wheel: Res<Wheel>,
     state: Res<Workbench>,
     mut page: Local<Option<usize>>,
-    mut panels: Query<(Entity, &ComputedNode, &mut ScrollPosition), With<HelpScroll>>,
+    mut panels: Query<
+        (Entity, &ComputedNode, &mut ScrollPosition, Has<HelpScroll>),
+        Or<(With<HelpScroll>, With<FlowPane>)>,
+    >,
     mut editors: Query<
         (
             Entity,
@@ -672,8 +766,8 @@ pub(super) fn scroll(
         With<Field>,
     >,
 ) {
-    for (entity, node, mut scroll) in &mut panels {
-        if *page != Some(state.help_page) {
+    for (entity, node, mut scroll, help) in &mut panels {
+        if help && *page != Some(state.help_page) {
             scroll.0.y = 0.0;
         }
         if wheel.surface == Some(entity) {

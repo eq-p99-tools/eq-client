@@ -97,6 +97,8 @@ pub enum Reply {
     },
     /// A zone line could not be crossed; the move that asked is over.
     ZoneLineRefused,
+    /// A local boundary stayed in this admission. Normal movement can resume.
+    SameZoneBoundary,
 }
 
 /// What an update changed that a front end must redo.
@@ -112,6 +114,8 @@ pub struct Changes {
     pub entered: bool,
     /// The server put the player here.
     pub placed: Option<WorldPosition>,
+    /// This placement was a received same-zone move.
+    pub same_zone_relocation: bool,
     /// The login server listed its worlds, or refused the one chosen.
     pub servers: bool,
     /// The world server offered characters to play.
@@ -137,6 +141,10 @@ pub struct Changes {
     /// The sounds the server asks the player's client to play, in the order
     /// sent.
     pub sounds: Vec<crate::effects::Cue>,
+    /// A timed banner received from the current admission.
+    pub marquee: Option<crate::Marquee>,
+    /// Received flight record, independent of combat outcomes and inventory.
+    pub projectile: Option<crate::effects::Projectile>,
     /// Answers to the front end's own requests.
     pub replies: Vec<Reply>,
     /// The update was for an earlier admission, or came when the world takes

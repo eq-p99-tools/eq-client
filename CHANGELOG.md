@@ -2,6 +2,94 @@
 
 ## Unreleased
 
+- Play installed MP3 cues named by `sound name.mp3` script steps and received
+  sound requests. Only installed files are read; two MP3 voices play at once,
+  a cold cue may wait up to eight seconds and a cue stops after 300 seconds
+  (inferred, recording checklist 6.398).
+- Show received marquee banners above the scene with their hold time and
+  packed opacity (inferred, recording checklist 6.397). A death keeps queued
+  banners and sounds; other world resets clear them.
+- Save named map landmarks per world, character and zone, shown as teal
+  diamonds with range and bearing from the character.
+- Outline tracked names' models through scenery with the map's **3D**
+  toggle. It departs from the official client, so it starts off and needs
+  gameplay departures.
+- Compose owned item links from scripts with `compose_owned_link`. A
+  structured script run reports `total_steps` as null in `status.json`, and a
+  control-flow run takes no appended lines from `--script-follow`.
+- Hold the knight and discipline buttons back from the Combat page where
+  the session does not offer them, so the ordinary abilities keep their
+  places and script indices.
+- Take the chat-link length budget from the networking server policy rather
+  than a protocol comparison.
+
+- Add typed variables, read-only client observations, conditions and bounded
+  loops to eqscript. The workbench shows branch decisions, active loop counts
+  and variable values. Existing action scripts use the same controls.
+
+- Use Ctrl+right-click on a worn or carried Titanium item to add its item
+  link to a chat draft when the inventory record supports composition.
+- Offer the ordinary Project 1999 forge through the nearby object controls
+  and show the container only after the server opens it. Keep local item
+  move projections distinct from received station and inventory contents.
+- Show a self-targeted Bind Wound request separately from the server result
+  and the received bandage stock. Project 1999 withholds the path for now: an
+  unanswered or refused bandage would hold the whole inventory until the
+  next zone.
+
+- Allow `gm traindisc MAX [MIN]` on network-constrained local EQEmu sessions
+  to prepare learned disciplines for test characters.
+
+- Apply a single-stepped social control. A single-stepped play runs its first
+  line and retires its remaining lines at the step boundary.
+
+- Scope social definitions and bindings to exact character profiles. Keep
+  ordinary legacy hotbar bindings and require rebinding legacy socials.
+- Stop script-owned socials when their executor yields or ends. Use named
+  local script controls and keep deferred target changes out of socials.
+- Keep linked chat drafts when the routed text would exceed EQEmu's expanded
+  limit or the tell recipient exceeds its field size.
+
+- Save named socials per character and bind them to a hotbar page. A social
+  runs up to five ordinary slash commands with optional tenths-of-a-second
+  pauses and a cancel command.
+
+- Shift-click a recently received chat item link to insert it into a draft.
+  Edit around it and send it with the active tab or a chat channel command.
+
+- Draw received arrows and thrown items in flight using installed item models.
+  The script report separates received flights from rendered models.
+
+- Keep staged discipline state separate from the buff-slot revision used by
+  cancellation. A matching instant class refresh consumes its cast request
+  even when the server sends no cast start.
+- Apply received same-zone moves at the absolute landing supplied by the server.
+
+- Follow local EQEmu server-owned same-zone pad handoffs through ordinary
+  walking and received relocation. Reset movement and boundary detection at
+  landing, and expose a bounded script wait for the received instruction.
+
+- Added Evasive and Defensive on Titanium through Actions, the hotbar and
+  named commands. Received shared discipline reuse, linked spell timers and
+  active discipline slot updates are tracked per admission.
+
+- Added the Titanium knight actions Lay on Hands and Harm Touch through
+  Actions, the hotbar, and ordinary slash and script commands. Reuse sent in
+  the admitted profile is displayed separately from the cast result.
+  A new admission clears the previous knight, discipline, and linked spell
+  reuse timers.
+- Open the ordinary resurrection and translocate confirmation dialogs
+  for supported P99 offers. Answers identify the displayed offer, and
+  repeated wire-identical offers are withheld during that admission.
+  Movement and recovery follow received server updates.
+- Offer beneficial-buff cancellation on P99 through the same Buffs and Songs
+  controls. Keep received slot membership and show an unknown outcome when
+  the two-record request was only partly submitted.
+- Open P99 skill training through the ordinary trainer interaction and
+  Training window. Show received skill changes and estimated prices.
+  The practice point count becomes unknown after a request. Re-enter the
+  zone before practicing again or reopening the same guildmaster.
+
 - Group Interface scale with ordinary QoL settings and move **Run a Little
   Faster** into a separate **Dangerous** section with the other flagged options.
   When space allows, the Interface scale caption, slider and value share one

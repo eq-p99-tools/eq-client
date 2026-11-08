@@ -307,8 +307,8 @@ fn controls(
             }
             Action::Save => state.save(),
             Action::Run => match state.document.program() {
-                Ok(program) if program.instructions().is_empty() => {
-                    state.message = "Add an action before running.".into();
+                Ok(program) if program.statement_count() == 0 => {
+                    state.message = "Add a statement before running.".into();
                 }
                 Ok(program) => {
                     if let Err(error) = program.check_local_commands(settings.0.local_session) {

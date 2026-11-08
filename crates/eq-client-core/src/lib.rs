@@ -45,6 +45,7 @@ pub use eq_network_game::control;
 pub use eq_network_game::corpses;
 pub use eq_network_game::creation;
 pub use eq_network_game::deletion;
+pub use eq_network_game::disciplines;
 pub use eq_network_game::rules;
 pub mod character_creation;
 pub use eq_network_game::effects;
@@ -53,6 +54,7 @@ pub use eq_network_game::food;
 pub use eq_network_game::group;
 pub use eq_network_game::hazards;
 pub use eq_network_game::inventory;
+pub use eq_network_game::knights;
 pub use eq_network_game::listing;
 pub use eq_network_game::loot;
 pub use eq_network_game::merchant;
@@ -64,6 +66,7 @@ pub use eq_network_game::movement::{
     WalkCalibration,
 };
 pub use eq_network_game::pets;
+pub use eq_network_game::popups::Marquee;
 pub use eq_network_game::raid;
 pub use eq_network_game::reach;
 pub use eq_network_game::resurrection;
@@ -77,9 +80,9 @@ pub use eq_network_game::targets;
 pub use eq_network_game::tradeskills;
 pub use eq_network_game::training;
 pub use eq_network_game::zones;
-pub use eq_network_game::zoning::ZoneLineDestination;
 pub use eq_network_game::zoning::ZoneOffer;
 pub use eq_network_game::zoning::ZoneRejection;
+pub use eq_network_game::zoning::{SameZoneRelocation, ZoneLineDestination};
 
 pub use eq_network_game::buffs::{Buff, BuffUpdate, InvisibilityStep, SpellEffect};
 pub use eq_network_game::world::{

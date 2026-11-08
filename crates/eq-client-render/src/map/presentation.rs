@@ -25,6 +25,7 @@ struct Options {
     opacity: u8,
     plain: bool,
     locked: bool,
+    outlines: bool,
 }
 
 impl Default for Options {
@@ -33,6 +34,9 @@ impl Default for Options {
             opacity: 100,
             plain: false,
             locked: false,
+            // Drawing tracked models through scenery departs from the official
+            // client, so it is opt-in and gated on gameplay departures.
+            outlines: false,
         }
     }
 }
@@ -57,6 +61,11 @@ impl Options {
                         options.locked = value;
                     }
                 }
+                ("outlines", value) => {
+                    if let Ok(value) = value.parse() {
+                        options.outlines = value;
+                    }
+                }
                 _ => (),
             }
         }
@@ -65,8 +74,8 @@ impl Options {
 
     fn text(self) -> String {
         format!(
-            "opacity={}\nplain={}\nlocked={}\n",
-            self.opacity, self.plain, self.locked
+            "opacity={}\nplain={}\nlocked={}\noutlines={}\n",
+            self.opacity, self.plain, self.locked, self.outlines
         )
     }
 }
@@ -81,6 +90,12 @@ pub(crate) struct Presentation {
 impl Presentation {
     pub(super) fn plain(&self) -> bool {
         self.options.plain
+    }
+
+    /// Whether the player opted in to outlining tracked scene models through
+    /// scenery. The scene also requires gameplay departures.
+    pub(crate) fn outlines(&self) -> bool {
+        self.options.outlines
     }
 }
 
@@ -99,6 +114,7 @@ pub(crate) enum Action {
     More,
     Style,
     Lock,
+    Outlines,
 }
 
 #[derive(Component)]
@@ -106,6 +122,7 @@ pub(crate) enum Label {
     Opacity,
     Style,
     Lock,
+    Outlines,
 }
 
 /// Save map presentation beside the existing per-character window placements.
@@ -162,6 +179,7 @@ pub(crate) fn actions(clicks: crate::clicks::Clicks<Action>, mut state: ResMut<P
             }
             Action::Style => state.options.plain = !state.options.plain,
             Action::Lock => state.options.locked = !state.options.locked,
+            Action::Outlines => state.options.outlines = !state.options.outlines,
         }
         state.dirty = true;
     }
@@ -206,6 +224,12 @@ pub(crate) fn update(
                 "Unlock"
             } else {
                 "Lock"
+            }
+            .into(),
+            Label::Outlines => if state.options.outlines {
+                "3D On"
+            } else {
+                "3D Off"
             }
             .into(),
         };
@@ -279,6 +303,15 @@ pub(super) fn chrome(parent: &mut ChildSpawnerCommands) {
                     "Fit every known position, including distant invisible server helpers.".into(),
                 ),
             ));
+            row.spawn((super::landmarks::Action::Toggle, button("Landmarks")));
+            row.spawn((
+                Label::Outlines,
+                Action::Outlines,
+                button("3D On"),
+                Tooltip(
+                    "Show an outline of tracked names through scenery in the main view (a gameplay departure, off by default).".into(),
+                ),
+            ));
         });
 }
 
@@ -292,8 +325,10 @@ mod tests {
             opacity: 30,
             plain: true,
             locked: true,
+            outlines: true,
         };
         assert_eq!(Options::read(&options.text()), options);
+        assert!(!Options::default().outlines);
         assert_eq!(
             Options::read("opacity=-20\nplain=invalid"),
             Options::default()

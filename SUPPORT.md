@@ -16,8 +16,8 @@ Quarm/TAKP behavior. Frontends use runtime capabilities, not server-name flags.
 ## Server policy snapshot
 
 The following summarizes the networking revision pinned by this application's
-Cargo.lock: `7029a4cc388f31b7a6e14439735f3e4b806c1945`. Its
-[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/7029a4cc388f31b7a6e14439735f3e4b806c1945/crates/eq-network/src/client/session/servers.rs)
+Cargo.lock: `fe9706428ee690241f0e65c8e485e2d7b785f7b6`. Its
+[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/fe9706428ee690241f0e65c8e485e2d7b785f7b6/crates/eq-network/src/client/session/servers.rs)
 are the source for this table. **Yes means provided by that policy**, not a live
 certification, and individual operations still validate their prerequisites.
 
@@ -31,7 +31,7 @@ certification, and individual operations still validate their prerequisites.
 | Jumping | Yes | Yes | Yes | Yes |
 | Sitting, standing and ducking | Yes | Yes | Yes | Yes |
 | Casting and basic spellbook | Yes | Yes | Yes | Yes |
-| Beneficial-buff cancellation | No | Yes | No | No |
+| Beneficial-buff cancellation | Source-backed, public verification pending | Yes | No | No |
 | Move / delete book entries | Yes / No | Yes / Yes | No / No | No / No |
 | Read the spellbook standing | Local preference, every server | Local preference, every server | Local preference, every server | Local preference, every server |
 | Memorize without sitting | Yes (opt-in) | Yes (opt-in) | Yes (opt-in) | Yes (opt-in) |
@@ -50,12 +50,13 @@ certification, and individual operations still validate their prerequisites.
 | Ground-item state and pickup | Yes | Yes | Yes | Yes |
 | Camping and zone transfers | Yes | Yes | Yes | Yes |
 | Groups | Yes | Yes | No | Yes |
-| Raids and training | No | Yes | No | No |
+| Raids | No | Yes | No | No |
+| Skill training | Source-backed, public verification pending | Yes | No | No |
 | Read inventory books and notes | Yes | Yes | Yes | Yes |
-| Tradeskills | Yes (carried combines) | Yes | No | No |
+| Tradeskills | Carried combines and ordinary forge candidates. Live forge validation pending. | Yes | No | No |
 | Answer list presence polls | Yes (opt-in) | No | No | No |
 | Pets and corpse commands | Yes | Yes | No | No |
-| Resurrection / translocate answers | No / No | Yes / Yes | No / No | No / Yes |
+| Resurrection / translocate answers | Source-backed, public verification pending | Yes / Yes | No / No | No / Yes |
 | Character creation UI and script | Yes | Yes | Yes | Yes |
 
 Quarm additionally offers ground movement, jumps, falls, posture, camping and
@@ -112,11 +113,11 @@ affected mechanics unavailable while chat remains usable. See [installed spell
 providers](docs/spell-providers.md). These source and synthetic checks add no live
 compatibility certification.
 
-The pinned networking [combat](https://github.com/eq-p99-tools/eq-network/blob/7029a4cc388f31b7a6e14439735f3e4b806c1945/docs/quarm-combat.md),
-[loot](https://github.com/eq-p99-tools/eq-network/blob/7029a4cc388f31b7a6e14439735f3e4b806c1945/docs/eqmac-looting.md) and
-[world-object](https://github.com/eq-p99-tools/eq-network/blob/7029a4cc388f31b7a6e14439735f3e4b806c1945/docs/eqmac-world-objects.md)
+The pinned networking [combat](https://github.com/eq-p99-tools/eq-network/blob/fe9706428ee690241f0e65c8e485e2d7b785f7b6/docs/quarm-combat.md),
+[loot](https://github.com/eq-p99-tools/eq-network/blob/fe9706428ee690241f0e65c8e485e2d7b785f7b6/docs/eqmac-looting.md) and
+[world-object](https://github.com/eq-p99-tools/eq-network/blob/fe9706428ee690241f0e65c8e485e2d7b785f7b6/docs/eqmac-world-objects.md)
 contracts record their limits and controlled live checklists. The dated
-[P99/Quarm gap report](https://github.com/eq-p99-tools/eq-network/blob/7029a4cc388f31b7a6e14439735f3e4b806c1945/docs/public-server-gaps.md)
+[P99/Quarm gap report](https://github.com/eq-p99-tools/eq-network/blob/fe9706428ee690241f0e65c8e485e2d7b785f7b6/docs/public-server-gaps.md)
 retains the earlier inspection and its scenario-specific evidence.
 
 ### Public-parity checks, 2026-11-02

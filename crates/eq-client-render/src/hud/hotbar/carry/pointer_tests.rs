@@ -606,7 +606,16 @@ fn pickup_persists_only_the_source_profile_and_cannot_edit_the_next_profile() {
         assert_eq!(fixture.binding(4), Some(Action::Gem(4)));
         assert_eq!(fixture.carry(), None);
         assert_eq!(fixture.requests(), []);
-        let first = directory.join(super::super::file_name("Sample", "First"));
+        let profile_file = |character: &str| {
+            directory.join(crate::profile_files::exact_name(
+                "hotbar",
+                &crate::profile_files::CharacterProfile {
+                    world: "Sample".into(),
+                    character: character.into(),
+                },
+            ))
+        };
+        let first = profile_file("First");
         if picked {
             let saved = eq_client_core::hotbar::Hotbar::read(
                 &std::fs::read_to_string(first).unwrap(),
@@ -616,11 +625,7 @@ fn pickup_persists_only_the_source_profile_and_cannot_edit_the_next_profile() {
         } else {
             assert!(!first.exists());
         }
-        assert!(
-            !directory
-                .join(super::super::file_name("Sample", "Second"))
-                .exists()
-        );
+        assert!(!profile_file("Second").exists());
         if directory.exists() {
             std::fs::remove_dir_all(directory).unwrap();
         }
