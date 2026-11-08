@@ -42,6 +42,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<skin::UiSkin>()
         .init_resource::<hud::hotbar::Bindings>()
         .init_resource::<hud::hotbar::Files>()
+        .init_resource::<crate::socials::State>()
         .init_resource::<hud::hotbar::carry::Presses>()
         .init_resource::<clicks::LeftButton>()
         .init_resource::<hud::hotbar::carry::Carry>()
@@ -169,6 +170,7 @@ pub(super) fn schedule(app: &mut App) {
                 .in_set(Stage::Typing),
             (
                 hud::hotbar::prepare,
+                crate::socials::prepare,
                 hud::hotbar::page::input,
                 escape::route,
                 hud::hotbar::carry::route,
@@ -219,7 +221,14 @@ pub(super) fn schedule(app: &mut App) {
             ),
             (abilities::input, skinned::slash),
             hud::actions,
-            (hud::hotbar::update, hud::hotbar::persist).chain(),
+            (
+                hud::hotbar::update,
+                crate::socials::update
+                    .after(hud::actions)
+                    .after(skinned::slash),
+                hud::hotbar::persist,
+            )
+                .chain(),
             hud::hotbar::item_actions,
             (
                 // A book the player stands up from closes before it draws.

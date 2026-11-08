@@ -13,7 +13,7 @@ pub(super) const MAX_WAIT: Duration = Duration::from_mins(2);
 const MAX_TRACE: Duration = Duration::from_secs(10);
 const MAX_WALK: Duration = Duration::from_mins(1);
 /// `EQEmu` GM commands a script may send, without the leading `#`.
-const GM_COMMANDS: [&str; 37] = [
+const GM_COMMANDS: [&str; 38] = [
     // The server's own view of the player's stats, weight and coins among
     // them, said back in chat; reads only.
     "showstats",
@@ -71,6 +71,8 @@ const GM_COMMANDS: [&str; 37] = [
     // level, and an item onto their cursor, as summonitem puts one on the
     // GM's.
     "scribespells",
+    // Readies the learned discipline list for a local EQEmu fixture.
+    "traindisc",
     "maxskills",
     "giveitem",
     // Another test character's standing with a faction: `faction view` and
@@ -123,6 +125,8 @@ pub enum Step {
     WaitDead(Duration),
     /// Runs a game slash command such as `/camp`; chat text is refused.
     Slash(String),
+    /// Edit or run a social via the ordinary chat controls in a local session.
+    Social(String),
     /// Sends an allowed `#` command, such as `summon`, to a local `EQEmu` server;
     /// the step stops the script on any other server.
     Gm(String),
@@ -584,6 +588,9 @@ pub(super) fn parse_step(line: &str) -> Result<Step, String> {
         ("wait_relocation", [duration]) => Step::WaitRelocation(millis(duration, MAX_WAIT)?),
         ("wait_dead", [duration]) => Step::WaitDead(millis(duration, MAX_WAIT)?),
         ("slash", words) => parse_slash(words)?,
+        ("social", operation) if !operation.is_empty() => {
+            Step::Social(format!("/social {}", operation.join(" ")))
+        }
         ("gm", words) => parse_gm(words)?,
         ("chat", words) => parse_chat(words)?,
         ("drag", [window, x, y]) => Step::Drag(
@@ -1061,6 +1068,23 @@ pub(super) fn gm_command(words: &[&str]) -> Result<String, String> {
             ).into()),
         },
         "depop" if !arguments.is_empty() => return Err("gm depop takes no arguments".into()),
+        "traindisc" => {
+            // EQEmu compares class levels against these bounds. Keep the
+            // range below unavailable class levels such as 127 and 255.
+            let level = |word: &str| {
+                word.parse::<u8>()
+                    .ok()
+                    .filter(|value| word.len() <= 3 && (1..=126).contains(value))
+            };
+            let valid = match arguments {
+                [max] => level(max).is_some(),
+                [max, min] => level(max).zip(level(min)).is_some_and(|(max, min)| min <= max),
+                _ => false,
+            };
+            if !valid {
+                return Err("gm traindisc takes MAX [MIN] with 1 <= MIN <= MAX <= 126".into());
+            }
+        }
         _ if arguments.len() > 4 => return Err("gm takes up to four plain arguments".into()),
         _ => (),
     }
@@ -1802,6 +1826,31 @@ mod tests {
                 Step::Gm("nukebuffs".into()),
             ]
         );
+    }
+
+    #[test]
+    fn gm_traindisc_requires_a_bounded_max_then_optional_min() {
+        let base = Path::new("private");
+        for command in [
+            "traindisc 1",
+            "traindisc 55 52",
+            "traindisc 52 52",
+            "traindisc 126 1",
+        ] {
+            assert_eq!(
+                parse(&format!("gm {command}"), base).unwrap(),
+                [Step::Gm(command.into())]
+            );
+        }
+        for arguments in [
+            "", "0", "-1", "127", "256", "00055", "55.5", "52 55", "55 0", "55 -1", "55 none",
+            "55 52 50",
+        ] {
+            assert!(
+                parse(&format!("gm traindisc {arguments}"), base).is_err(),
+                "{arguments}"
+            );
+        }
     }
 
     #[test]

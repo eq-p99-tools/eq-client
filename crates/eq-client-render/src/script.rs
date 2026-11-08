@@ -10,10 +10,11 @@
 //! `pointer` module), scrolling a list the control has scrolled out of view as
 //! the wheel does, and lands only on the control under it. A followed
 //! script keeps reading complete lines appended to its file, under the same limits.
-//! `gm` and `chat` steps require a network-constrained local EQEmu/TAKP session.
+//! `gm`, `chat` and `social` steps require a network-constrained local EQEmu/TAKP session.
 pub(crate) mod control;
 mod execution;
 mod input;
+pub(crate) use input::AuthoredInput;
 pub use input::InputMode;
 pub(super) use input::install as install_input;
 mod parse;
@@ -77,6 +78,8 @@ pub struct Script {
     current: Option<(Step, Duration)>,
     progress: RunStatus,
     mode: RunMode,
+    /// This frame successfully queued a social using the single-step control.
+    stepped_social: bool,
     held: Vec<KeyCode>,
     /// The movement commands a moving step holds itself, as the key map
     /// resolves a held key to them, so the step moves under any key table.
@@ -198,6 +201,7 @@ impl Script {
             accepted: steps.len(),
             progress: RunStatus::queued(steps.len(), std::sync::Arc::from("")),
             mode: RunMode::Continuous,
+            stepped_social: false,
             steps: steps
                 .into_iter()
                 .map(|step| QueuedStep { step, line: None })
@@ -325,6 +329,26 @@ impl Script {
         }
     }
 
+    /// Check the exact local executor and its authority for this frame.
+    pub(crate) fn social_dispatch(
+        &self,
+        owner: &std::sync::Arc<()>,
+    ) -> Option<crate::socials::ScriptDispatch> {
+        use crate::socials::ScriptDispatch;
+
+        if !self.local
+            || !std::sync::Arc::ptr_eq(&self.progress.identity, owner)
+            || !matches!(self.progress.phase, Phase::Running | Phase::Following)
+        {
+            return None;
+        }
+        match self.mode {
+            RunMode::Continuous => Some(ScriptDispatch::Continue),
+            RunMode::PauseRequested if self.stepped_social => Some(ScriptDispatch::OneLine),
+            _ => None,
+        }
+    }
+
     /// Whether native pointer hit testing yields to the explicit script owner.
     pub(crate) const fn background_owns_input(&self) -> bool {
         matches!(self.input_mode, InputMode::Background) && self.owns_input
@@ -423,6 +447,7 @@ impl Script {
         if let Some(button) = self.clicked.take() {
             // A genuine press of the same button belongs to the user now.
             if !keys.native_button(button) {
+                keys.mark_pointer(button);
                 mouse.release(button);
             }
         }
@@ -629,6 +654,7 @@ type Observed<'w> = (
     Option<Res<'w, crate::confirm::Asked>>,
     Option<Res<'w, crate::breath::State>>,
     Option<Res<'w, crate::projectiles::Flights>>,
+    Option<Res<'w, crate::socials::State>>,
 );
 
 type Input<'w, 's> = (Keyboard<'w, 's>, ResMut<'w, ButtonInput<MouseButton>>);
@@ -649,6 +675,7 @@ pub(super) struct Keyboard<'w, 's> {
     typed: MessageWriter<'w, bevy::input::keyboard::KeyboardInput>,
     window: Query<'w, 's, Entity, With<PrimaryWindow>>,
     background: Option<ResMut<'w, input::BackgroundInput>>,
+    authored: Option<ResMut<'w, AuthoredInput>>,
 }
 
 impl Keyboard<'_, '_> {
@@ -695,6 +722,20 @@ impl Keyboard<'_, '_> {
         });
         if let Some(background) = &mut self.background {
             background.authored(id);
+        }
+        if let Some(authored) = &mut self.authored {
+            authored.typed.insert(id);
+            if state.is_pressed() {
+                authored.keys.insert(key_code);
+            }
+        }
+    }
+
+    fn mark_pointer(&mut self, button: MouseButton) {
+        if button == MouseButton::Left
+            && let Some(authored) = &mut self.authored
+        {
+            authored.left_button = true;
         }
     }
 
@@ -751,6 +792,10 @@ pub(super) fn drive(
     for event in focus.read().filter(|event| windows.contains(event.window)) {
         *reported_focus = Some((event.window, event.focused));
     }
+    let (mut keys, mut mouse) = input;
+    if let Some(authored) = &mut keys.authored {
+        **authored = AuthoredInput::default();
+    }
     let Some(mut script) = script else {
         return;
     };
@@ -758,7 +803,7 @@ pub(super) fn drive(
     // Plain borrows of the fields, so a walk can hold its route and note
     // where it heads at once.
     let script = &mut *script;
-    let (mut keys, mut mouse) = input;
+    script.stepped_social = false;
     let now = time.elapsed();
     if !script.progress.phase.active() {
         script.retire(&mut commands);
@@ -1443,6 +1488,7 @@ pub(super) fn drive(
                 } else {
                     MouseButton::Left
                 };
+                keys.mark_pointer(button);
                 mouse.press(button);
                 script.clicked = Some(button);
                 script.pressed = Some(entity);
@@ -1477,6 +1523,7 @@ pub(super) fn drive(
                         }
                     };
                     press(&mut commands, entity, *target, &mut buttons, &mut pointers);
+                    keys.mark_pointer(MouseButton::Left);
                     mouse.press(MouseButton::Left);
                     script.clicked = Some(MouseButton::Left);
                     script.pressed = Some(entity);
@@ -1568,6 +1615,7 @@ pub(super) fn drive(
         }
     }
     script.progress.complete_step();
+    let single_step = matches!(script.mode, RunMode::OneStep);
     if !script.advance(now) {
         return;
     }
@@ -1667,6 +1715,14 @@ pub(super) fn drive(
             return;
         }
         Step::Slash(command) => {
+            if super::socials::Request::parse(command).is_some() {
+                script.stop(
+                    &mut keys,
+                    &mut mouse,
+                    "Use a named social step in a local script.",
+                );
+                return;
+            }
             let qol = observed
                 .9
                 .as_ref()
@@ -1676,6 +1732,28 @@ pub(super) fn drive(
             });
             if let Err(error) = queued {
                 script.stop(&mut keys, &mut mouse, &error);
+            } else if command.split_ascii_whitespace().next() == Some("/camp") {
+                chat.socials.stop = true;
+            }
+            return;
+        }
+        Step::Social(command) => {
+            if !script.local || !online.in_world() {
+                script.stop(
+                    &mut keys,
+                    &mut mouse,
+                    "social script steps need a local character in the world",
+                );
+                return;
+            }
+            let request = super::socials::Request::parse(command)
+                .unwrap_or_else(|| Err("expected a social control request".into()))
+                .and_then(|request| {
+                    chat.queue_social(request, Some(script.progress.identity.clone()))
+                });
+            match request {
+                Ok(()) => script.stepped_social = single_step,
+                Err(error) => script.stop(&mut keys, &mut mouse, &error),
             }
             return;
         }
@@ -1901,6 +1979,9 @@ pub(super) fn drive(
             report::item_links(label, &online, &chat, &item);
             if let Some(flights) = observed.12.as_ref() {
                 flights.report(label, online.world().session_id());
+            }
+            if let Some(socials) = observed.13.as_ref() {
+                socials.report(label);
             }
             return;
         }
@@ -2177,8 +2258,12 @@ fn gm_request(
     let command = parse::gm_command(&words)?;
     let depop = command == "depop";
     let full_spawn = words.first() == Some(&"spawn") && words.len() > 5;
-    if (depop || full_spawn) && world.generation() != eq_client_core::GameDialect::Titanium {
+    let titanium = world.generation() == eq_client_core::GameDialect::Titanium;
+    if (depop || full_spawn) && !titanium {
         return Err("Full fixture spawn and depop require local EQEmu".into());
+    }
+    if words.first() == Some(&"traindisc") && !titanium {
+        return Err("gm traindisc requires local EQEmu".into());
     }
     if depop {
         let Some((session_id, target)) =
@@ -4170,6 +4255,30 @@ mod tests {
             gm_request("stun 8000", true, &world).unwrap(),
             ClientCommand::SendChat(OutboundChat::Say("#stun 8000".into()))
         );
+    }
+
+    #[test]
+    fn discipline_fixture_keeps_the_local_eqemu_policy() {
+        use crate::online::{OnlineState, testing as session};
+        use eq_client_core::{ClientCommand, GameDialect, OutboundChat};
+
+        let command = "traindisc 55 52";
+        let program = Program::parse(&format!("gm {command}"), std::path::Path::new(".")).unwrap();
+        assert!(program.check_local_commands(false).is_err());
+        assert!(program.check_local_commands(true).is_ok());
+
+        let mut online = OnlineState::new(true);
+        session::admit(&mut online, 1, session::player(7));
+        assert!(gm_request(command, false, online.world()).is_err());
+        assert!(gm_request("traindisc 52 55", true, online.world()).is_err());
+        assert_eq!(
+            gm_request(command, true, online.world()),
+            Ok(ClientCommand::SendChat(OutboundChat::Say(format!(
+                "#{command}"
+            ))))
+        );
+        session::generation(&mut online, GameDialect::EqMac);
+        assert!(gm_request(command, true, online.world()).is_err());
     }
 
     #[test]

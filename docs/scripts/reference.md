@@ -171,6 +171,12 @@ or occluded. The counters are independent of damage and inventory.
   `slash stopsong` queues the Bard's stop request on Titanium EQEmu.
   The immediate disconnect aliases typed in chat are not script slash commands.
 - `gm command [arguments]`: an allowed GM command on a network-constrained local test session only.
+  On local EQEmu, `gm traindisc MAX [MIN]` requests all eligible disciplines
+  in that inclusive level range for a disposable fixture. Each level is a number
+  from 1 to 126 written with up to three decimal digits. Give MAX first. MIN
+  defaults to 1. For example, `gm traindisc 52 52` requests only level 52.
+  In GM mode, EQEmu can apply the command to the selected player. Check the
+  received learned disciplines before using them.
   `gm stun 8000` requests an 8,000-millisecond server stun for a local fixture.
   Check received `own_stun` state; command submission alone does not establish the effect.
   On local EQEmu, use
@@ -193,6 +199,21 @@ The typed parser and normal client capability checks decide which commands and c
   using the IDs from the item-link report. It edits the normal draft without
   changing keyboard focus. Use the usual chat input to edit or send the
   draft. An expired, mismatched or unknown link stops the script.
+
+- `social set Name | /command | /pause 10,/command`, `social bind 1 Name`,
+  `social play Name` and `social cancel` use the same social controls as
+  chat on a local session. `social list`, `social show Name` and
+  `social delete Name` also use the ordinary editor. Use the named step
+  for scripts. Synthetic chat submission and hotbar activation refuse socials.
+  A step queues the control request. Keep the script running with a wait if
+  the social has more lines to dispatch. Stop, failure, completion, pause,
+  or loss of script input ownership cancels its unsent lines. The controller's
+  single-step action applies a named social control once. A single-stepped play
+  processes its first line and retires the rest. A manually started social
+  has independent ownership. Use a later `report [label]`
+  to observe the social
+  runner's current admission, definition ID, progress and remaining delay.
+  The report describes dispatch and scheduling, independently of server results.
 
 ## Optional login automation
 

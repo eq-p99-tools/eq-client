@@ -2,8 +2,22 @@
 
 ## Unreleased
 
+- Allow `gm traindisc MAX [MIN]` on network-constrained local EQEmu sessions
+  to prepare learned disciplines for test characters.
+
+- Apply a single-stepped social control. A single-stepped play runs its first
+  line and retires its remaining lines at the step boundary.
+
+- Scope social definitions and bindings to exact character profiles. Keep
+  ordinary legacy hotbar bindings and require rebinding legacy socials.
+- Stop script-owned socials when their executor yields or ends. Use named
+  local script controls and keep deferred target changes out of socials.
 - Keep linked chat drafts when the routed text would exceed EQEmu's expanded
   limit or the tell recipient exceeds its field size.
+
+- Save named socials per character and bind them to a hotbar page. A social
+  runs up to five ordinary slash commands with optional tenths-of-a-second
+  pauses and a cancel command.
 
 - Shift-click a recently received chat item link to insert it into a draft.
   Edit around it and send it with the active tab or a chat channel command.

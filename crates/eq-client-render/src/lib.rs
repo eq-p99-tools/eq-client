@@ -98,6 +98,7 @@ mod sheets;
 mod skills;
 mod skin;
 mod skinned;
+mod socials;
 mod sounds;
 mod speed;
 mod spell_effects;

@@ -446,6 +446,7 @@ pub(super) struct Panels<'w> {
     combat_text: Option<ResMut<'w, super::combat_text::CombatText>>,
     weather: Option<ResMut<'w, super::weather::Field>>,
     projectiles: Option<ResMut<'w, super::projectiles::Flights>>,
+    socials: Option<ResMut<'w, super::socials::State>>,
 }
 
 impl Panels<'_> {
@@ -608,6 +609,9 @@ impl Panels<'_> {
         }
         if let Some(flights) = self.projectiles.as_mut() {
             flights.reset(reason);
+        }
+        if let Some(socials) = self.socials.as_mut() {
+            socials.reset();
         }
         if !matches!(reason, Reset::Died)
             && let Some(weather) = self.weather.as_mut()
@@ -800,6 +804,7 @@ pub(super) fn receive(
         trace(&update, &changes, &state.world);
         panels.merchant_news(&update, &changes, &state.world);
         if let Some(reason) = changes.reset {
+            chat.socials = super::socials::Inbox::default();
             if matches!(
                 reason,
                 Reset::Entered | Reset::Camped | Reset::Lost { ended: true, .. }

@@ -99,6 +99,7 @@ fn syntax() -> Syntax {
             "interact",
             "inspect_link",
             "compose_link",
+            "social",
             "click",
             "right_click",
             "hover",

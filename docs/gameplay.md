@@ -258,6 +258,36 @@ record with only an empty-slot sentinel cannot identify which buff faded.
 The P99 exchange awaits an attended check. Titanium EQEmu uses its
 single current-record request.
 
+## Social hotbuttons
+
+Type `/social set Greet | /pause 10,/say Hello! | /stand` to save a social
+with two lines. `/social bind 1 Greet` puts it in slot 1 on the current
+hotbar page. Click the named button, press its hotbar key, or type
+`/social play Greet`. Use `/social list` to see your names and
+`/social show Greet` to see its lines. Set the same name again to edit it,
+or use `/social delete Greet`. Editing keeps the same hotbar bindings.
+Deleting leaves any existing bindings inactive.
+
+A social has one to five lines. Separate them with a pipe surrounded by
+spaces when you enter them in chat. A standalone `/pause 10` waits one second. On a combined line such
+as `/pause 10,/say Hello!`, the command runs first. The pause accepts
+1 to 600 tenths of a second. Every action uses the client's ordinary
+slash-command checks. For example, use `/sit`, `/stand` or
+`/say Hello`. Select the target before starting a social that needs one.
+The runner refuses `/target` and `/assist` because their results arrive
+after submission. The runner stops on a local
+refusal. A delay measures time after dispatch and carries no server result.
+
+One social runs at a time. Use `/social cancel` to stop its remaining
+lines. An admission reset or an edit to the running definition also stops
+it. The editor accepts ordinary slash actions and pauses. Nested socials,
+camp and exit commands are refused. Social definitions and bindings are
+saved per exact world and character in this client's settings files. Older
+hotbar files supply their ordinary bindings. Recreate and rebind socials
+from legacy files to establish the exact profile that owns them.
+
+The pause order follows the [EverQuest social hotbutton guide](https://www.everquest.com/news/imported-eq-enus-51004).
+
 ## Item links in chat
 
 Shift-click a recent received item link to add it at the caret in the current

@@ -117,14 +117,20 @@ impl Program {
     /// Match the workbench's local-only command gate before queuing a new run.
     pub(crate) fn check_local_commands(&self, local: bool) -> Result<(), ParseError> {
         if !local
-            && let Some(instruction) = self
-                .instructions
-                .iter()
-                .find(|instruction| matches!(instruction.step(), Step::Gm(_) | Step::Chat(_)))
+            && let Some(instruction) = self.instructions.iter().find(|instruction| {
+                matches!(
+                    instruction.step(),
+                    Step::Gm(_) | Step::Chat(_) | Step::Social(_)
+                )
+            })
         {
             return Err(ParseError {
                 line: Some(instruction.line()),
-                message: "gm and chat require a network-enforced local test session.".into(),
+                message: if matches!(instruction.step(), Step::Social(_)) {
+                    "social steps require a network-enforced local test session.".into()
+                } else {
+                    "gm and chat require a network-enforced local test session.".into()
+                },
             });
         }
         Ok(())

@@ -52,6 +52,8 @@ pub enum Binding {
     /// Leaves the group, or disbands it as its leader, which with an
     /// invitation waiting declines it.
     Disband,
+    /// Runs the named social with this ID in the current character profile.
+    Social(u32),
 }
 
 impl Binding {
@@ -86,6 +88,7 @@ impl Binding {
             Self::Invite => "invite".to_owned(),
             Self::Follow => "follow".to_owned(),
             Self::Disband => "disband".to_owned(),
+            Self::Social(id) => format!("social {id}"),
         }
     }
 
@@ -111,6 +114,7 @@ impl Binding {
             ["invite"] => Self::Invite,
             ["follow"] => Self::Follow,
             ["disband"] => Self::Disband,
+            ["social", id] => Self::Social(id.parse::<u32>().ok().filter(|id| *id != 0)?),
             _ => return None,
         })
     }
@@ -215,6 +219,7 @@ mod tests {
         hotbar.0[5] = Some(Binding::RangedAttack);
         hotbar.0[6] = Some(Binding::KnightAbility(KnightAbility::LayOnHands));
         hotbar.0[7] = Some(Binding::Discipline(Discipline::Defensive));
+        hotbar.0[8] = Some(Binding::Social(42));
         hotbar.0[4] = Some(Binding::Item {
             slot: InventorySlot(23),
             id: 13027,
@@ -227,6 +232,7 @@ mod tests {
         assert!(text.contains("slot_6 = ranged\n"));
         assert!(text.contains("slot_7 = knight layonhands\n"));
         assert!(text.contains("slot_8 = discipline defensive\n"));
+        assert!(text.contains("slot_9 = social 42\n"));
         assert!(text.contains("slot_1 = gem 1\n") && text.contains("slot_10 = stand\n"));
         assert_eq!(Hotbar::read(&text, Hotbar::default()), hotbar);
         // Unknown slots, kinds and numbers keep the defaults.

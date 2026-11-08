@@ -85,6 +85,25 @@ pub(crate) fn name(prefix: &str, shared: &str, profile: Option<&CharacterProfile
     )
 }
 
+/// Collision-free profile names for files containing profile-scoped identities.
+/// A dot separates this namespace from the older sanitizer's filenames.
+pub(crate) fn exact_name(prefix: &str, profile: &CharacterProfile) -> String {
+    use std::fmt::Write as _;
+
+    fn append_hex(out: &mut String, text: &str) {
+        for byte in text.bytes() {
+            let _ = write!(out, "{byte:02x}");
+        }
+    }
+
+    let mut name = format!("{prefix}.v2-");
+    append_hex(&mut name, &profile.world);
+    name.push('-');
+    append_hex(&mut name, &profile.character);
+    name.push_str(".txt");
+    name
+}
+
 /// Retains dirty writes across profile switches and retries transient failures.
 /// The observed text is only an input snapshot: pending entries remain dirty
 /// until their atomic write succeeds.

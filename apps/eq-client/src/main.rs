@@ -371,7 +371,7 @@ fn launch_preset(
         .unwrap_or(0))
 }
 
-/// Refuses a script with local-only steps, `gm` and `chat`, unless the
+/// Refuses local-only `gm`, `chat` and `social` steps unless the
 /// session is local-only (see [`local_session`]), so `#` commands and a
 /// script's chat can never reach P99, Quarm or a public server. Such a script
 /// fails at launch rather than when it reaches the step.
@@ -379,11 +379,11 @@ fn check_local_steps(steps: Option<&[Step]>, local: bool) -> Result<(), &'static
     let local_only = steps.is_some_and(|steps| {
         steps
             .iter()
-            .any(|step| matches!(step, Step::Gm(_) | Step::Chat(_)))
+            .any(|step| matches!(step, Step::Gm(_) | Step::Chat(_) | Step::Social(_)))
     });
     if local_only && !local {
         return Err(concat!(
-            "gm and chat script steps need --online with EQ_PROTOCOL=eqemu or takp ",
+            "gm, chat and social script steps need --online with EQ_PROTOCOL=eqemu or takp ",
             "(a local EQEmu or TAKP server)"
         ));
     }
@@ -1108,9 +1108,10 @@ mod tests {
     }
 
     #[test]
-    fn gm_and_chat_steps_are_refused_outside_a_local_session() {
+    fn gm_chat_and_social_steps_are_refused_outside_a_local_session() {
         let chat = Step::Chat(eq_client_core::OutboundChat::Say("Hail".into()));
-        for steps in [[Step::Gm("summon".into())], [chat]] {
+        let social = Step::Social("/social play Example".into());
+        for steps in [[Step::Gm("summon".into())], [chat], [social]] {
             assert!(check_local_steps(Some(&steps), false).is_err());
             assert!(check_local_steps(Some(&steps), true).is_ok());
         }

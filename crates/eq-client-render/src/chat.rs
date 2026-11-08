@@ -138,6 +138,7 @@ pub(super) struct ChatState {
     pub toggled: Option<super::windows::WindowId>,
     /// An explicit disconnect to handle before other gameplay input.
     pub departure: Option<super::login::Departure>,
+    pub(super) socials: super::socials::Inbox,
     draft: draft::Draft,
     refusals: Refusals,
 }
@@ -171,6 +172,20 @@ impl ChatState {
             self.received_links
                 .push_back((admission, self.history.revision()));
         }
+    }
+
+    /// Queue an editor or activation command for the current frame. A cancel
+    /// can supersede a pending activation, even before it starts.
+    pub(super) fn queue_social(
+        &mut self,
+        request: super::socials::Request,
+        owner: Option<std::sync::Arc<()>>,
+    ) -> Result<(), String> {
+        if self.socials.request.is_some() && !matches!(request, super::socials::Request::Cancel) {
+            return Err("A social request is already pending".into());
+        }
+        self.socials.request = Some(super::socials::Queued { request, owner });
+        Ok(())
     }
 
     pub(super) fn reset_received_links(&mut self) {
@@ -709,7 +724,10 @@ pub(super) fn input(
     ),
     mut typing: ResMut<crate::keys::Typing>,
     (mut keyboard, mouse): (MessageReader<KeyboardInput>, Res<ButtonInput<MouseButton>>),
-    keys: Option<Res<ButtonInput<Key>>>,
+    (keys, authored): (
+        Option<Res<ButtonInput<Key>>>,
+        Option<Res<crate::script::AuthoredInput>>,
+    ),
     mut clipboard: Option<ResMut<bevy::clipboard::Clipboard>>,
     mut paste: Local<paste::Paste>,
     (windows, pointer): (
@@ -784,13 +802,19 @@ pub(super) fn input(
         keyboard.clear();
         paste.clear();
     }
+    let mut scripted_enter = false;
     let events: Vec<_> = keyboard
         .read_with_id()
         .filter(|(event, id)| {
             !(typing.spell_search_captured(*id)
                 || typing.escape_consumed && event.logical_key == Key::Escape)
         })
-        .map(|(event, _)| event.clone())
+        .map(|(event, id)| {
+            scripted_enter |= event.state.is_pressed()
+                && event.logical_key == Key::Enter
+                && authored.as_ref().is_some_and(|authored| authored.typed(id));
+            event.clone()
+        })
         .collect();
     let empty = ButtonInput::default();
     let submit = compose(
@@ -811,7 +835,18 @@ pub(super) fn input(
             let qol = options
                 .as_ref()
                 .map_or_else(Settings::default, |options| options.options.qol);
-            submit_draft(&mut state, &mut typing, &mut online, &outbox, &qol);
+            let scripted_submit = scripted_enter
+                || (send
+                    && authored
+                        .as_ref()
+                        .is_some_and(|authored| authored.left_button));
+            if scripted_submit
+                && super::socials::Request::parse(state.draft.text().trim()).is_some()
+            {
+                state.refuse("Use a named social step in a local script.");
+            } else {
+                submit_draft(&mut state, &mut typing, &mut online, &outbox, &qol);
+            }
         }
     }
     for Latest(id) in latest.iter() {
@@ -1304,33 +1339,12 @@ fn submit_draft(
             outbox.send(world, ClientCommand::SendChat(message))?;
             return Ok(());
         }
-        let draft = typed_command(state.draft.text().trim()).into_owned();
-        if let Some(request) = departure_request(&draft) {
-            state.departure = Some(request?);
-            return Ok(());
-        }
-        if let Some(request) = client_request(&draft, state) {
-            return Ok(request?);
-        }
-        if let Some(result) = super::pet::target_command(&draft, online, outbox) {
-            return Ok(result?);
-        }
-        if let Some(commands) = game_commands(&draft, online, outbox, qol) {
-            for command in commands? {
-                outbox.send(online.world(), command)?;
-            }
-            if let Some(to) = camp_destination(&draft) {
-                online.camp_to(to);
-            }
-            return Ok(());
-        }
+        let line = state.draft.text().trim().to_owned();
         let active = state
             .groups
             .active(state.groups.owner())
             .unwrap_or_default();
-        let message = outbound(active, state.draft.text().trim())?;
-        outbox.send(online.world(), ClientCommand::SendChat(message))?;
-        Ok(())
+        submit_line(&line, active, state, online, outbox, qol)
     })();
     match result {
         Ok(()) => {
@@ -1348,6 +1362,56 @@ fn submit_draft(
         // The draft stays, to send again.
         Err(Unsent::Refused) => (),
     }
+}
+
+/// Apply an ordinary typed line without changing the chat editor or focus.
+fn submit_line(
+    line: &str,
+    active: ChatTab,
+    state: &mut ChatState,
+    online: &mut super::online::OnlineState,
+    outbox: &crate::outbox::Outbox,
+    qol: &Settings,
+) -> Result<(), Unsent> {
+    let command = typed_command(line);
+    if let Some(request) = departure_request(&command) {
+        state.departure = Some(request?);
+        state.socials.stop = true;
+        return Ok(());
+    }
+    if let Some(request) = client_request(&command, state) {
+        return Ok(request?);
+    }
+    if let Some(result) = super::pet::target_command(&command, online, outbox) {
+        return Ok(result?);
+    }
+    if let Some(commands) = game_commands(&command, online, outbox, qol) {
+        for command in commands? {
+            outbox.send(online.world(), command)?;
+        }
+        if let Some(to) = camp_destination(&command) {
+            online.camp_to(to);
+            state.socials.stop = true;
+        }
+        return Ok(());
+    }
+    let message = outbound(active, line)?;
+    outbox.send(online.world(), ClientCommand::SendChat(message))?;
+    Ok(())
+}
+
+/// Run one checked social line through ordinary local and game dispatch.
+pub(super) fn submit_social_line(
+    line: &str,
+    chat: &mut ChatState,
+    online: &mut super::online::OnlineState,
+    outbox: &crate::outbox::Outbox,
+    qol: &Settings,
+) -> Result<(), String> {
+    submit_line(line, ChatTab::All, chat, online, outbox, qol).map_err(|error| match error {
+        Unsent::Mistake(reason) => reason,
+        Unsent::Refused => "The session refused the command.".into(),
+    })
 }
 
 /// These local commands never go through chat, the game queue, or camp.
@@ -1403,8 +1467,10 @@ pub(super) fn run_game_command(
     chat: &mut ChatState,
     qol: &Settings,
 ) {
-    if let Err(reason) = submit_game_command(command, online, outbox, qol) {
-        chat.refuse(reason);
+    match submit_game_command(command, online, outbox, qol) {
+        Ok(()) if camp_destination(command).is_some() => chat.socials.stop = true,
+        Ok(()) => (),
+        Err(reason) => chat.refuse(reason),
     }
 }
 
@@ -1412,6 +1478,9 @@ pub(super) fn run_game_command(
 /// answers it: `/target Name`, a plain `/who`, `/loc`, `/time`, `/log`,
 /// `/shownames` or `/raidwindow`. None for any other line.
 pub(super) fn client_request(input: &str, state: &mut ChatState) -> Option<Result<(), String>> {
+    if let Some(request) = super::socials::Request::parse(input) {
+        return Some(request.and_then(|request| state.queue_social(request, None)));
+    }
     if let Some(request) = target_request(input) {
         return Some(request.map(|name| state.requested_target = Some(name)));
     }
