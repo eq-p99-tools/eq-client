@@ -5368,7 +5368,7 @@ fn marquees_only_project_from_the_admitted_stream() {
     let mut world = admitted();
     let changes = game(&mut world, event.clone());
     assert_eq!(changes.marquee, Some(banner));
-    assert!(changes.notices.is_empty());
+    assert_eq!(changes.notices, []);
     connection(&mut world, false, false);
     assert!(game(&mut world, event).ignored);
 }
