@@ -26,6 +26,7 @@ mod report;
 use execution::RunMode;
 pub use execution::{Phase, RunEvent, RunStatus};
 pub(crate) use execution::{Request, RunControl};
+use program::AppendError;
 pub use program::{Instruction, MAX_SOURCE_BYTES, ParseError, Program};
 mod source;
 pub use source::read_source;
@@ -424,28 +425,9 @@ impl Script {
         follow.offset += end + 1;
         follow.idle = false;
         let text = String::from_utf8_lossy(&fresh[..=end]);
-        let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
-        if let Some(index) = text.lines().position(|line| {
-            let first = line[..language::comment(line)].split_whitespace().next();
-            first.is_some_and(language::keyword)
-        }) {
-            self.progress.line = Some(first_line + index + 1);
-            let snapshot = String::from_utf8_lossy(&bytes[..follow.offset]);
-            self.progress.source =
-                std::sync::Arc::from(snapshot.strip_prefix('\u{feff}').unwrap_or(&snapshot));
-            let reason = "Follow appends accept ordinary action lines; run a complete control-flow file as a new snapshot";
-            self.progress.finish(Phase::Failed, reason);
-            warn!("Ignored appended script lines: {reason}");
-            self.follow = None;
-            return;
-        }
-        let base = follow
-            .path
-            .parent()
-            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-        match Program::parse(text, &base) {
-            Ok(program) if self.accepted + program.statement_count() <= MAX_STEPS => {
-                let (_, instructions, _) = program.into_parts();
+        let base = follow.path.parent().unwrap_or_else(|| Path::new("."));
+        match Program::parse_append(&text, base) {
+            Ok(instructions) if self.accepted + instructions.len() <= MAX_STEPS => {
                 self.accepted += instructions.len();
                 self.progress.total += instructions.len();
                 self.steps
@@ -454,11 +436,22 @@ impl Script {
                         line: Some(first_line + instruction.line),
                     }));
                 let source = String::from_utf8_lossy(&bytes[..follow.offset]);
-                self.progress.source =
-                    std::sync::Arc::from(source.strip_prefix('\u{feff}').unwrap_or(&source));
+                self.progress.source = std::sync::Arc::from(source::without_bom(&source));
             }
             Ok(_) => warn!("Ignored appended steps beyond the {MAX_STEPS}-step limit"),
-            Err(error) => warn!("Ignored appended script lines: {error}"),
+            Err(AppendError::Invalid(mut error)) => {
+                error.line = error.line.map(|line| first_line + line);
+                warn!("Ignored appended script lines: {error}");
+            }
+            Err(AppendError::Structured(line)) => {
+                self.progress.line = line.map(|line| first_line + line);
+                let snapshot = String::from_utf8_lossy(&bytes[..follow.offset]);
+                self.progress.source = std::sync::Arc::from(source::without_bom(&snapshot));
+                let reason = "Follow appends accept ordinary action lines; run a complete control-flow file as a new snapshot";
+                self.progress.finish(Phase::Failed, reason);
+                warn!("Ignored appended script lines: {reason}");
+                self.follow = None;
+            }
         }
     }
 
@@ -1679,11 +1672,14 @@ pub(super) fn drive(
     };
     // An entry of the closed EQ menu: the script opens the menu with its own
     // button first, as a player would, then comes back to the entry.
-    let step = match opens_menu_first(&step, menu.open, script.menu_opening, now) {
+    let (step, authored) = match opens_menu_first(&step, menu.open, script.menu_opening, now) {
         Ok(MenuWait::OpenFirst) => {
             script.menu_opening = entry_target(&step).map(MenuOpening::Clicking);
             script.steps.push_front(QueuedStep { step, line });
-            Step::Click(ClickTarget::Button("selector", "EQButton"))
+            (
+                Step::Click(ClickTarget::Button("selector", "EQButton")),
+                false,
+            )
         }
         Ok(MenuWait::Opening) => {
             // The menu opens a frame or more after the button's release.
@@ -1692,14 +1688,18 @@ pub(super) fn drive(
         }
         Ok(MenuWait::Go) => {
             script.menu_opening = None;
-            step
+            (step, true)
         }
         Err(reason) => {
             script.stop(&mut keys, &mut mouse, &reason);
             return;
         }
     };
-    script.progress.begin(line);
+    if authored || script.progress.flow.is_none() {
+        script.progress.begin(line);
+    } else {
+        script.progress.line = line;
+    }
     info!(?step, "Script step");
     match &step {
         Step::DeleteCharacter { name, confirmation } => {
@@ -6196,6 +6196,32 @@ mod tests {
         assert!(script.steps.is_empty());
         std::fs::write(&path, "wait 10\nif false\nquit\nend\n").unwrap();
         script.poll(Duration::from_secs(1));
+        assert!(script.steps.is_empty());
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn follow_stops_on_a_bom_prefixed_header_before_the_next_batch() {
+        let path = std::env::temp_dir().join(format!(
+            "eq-client-bom-flow-follow-{}.txt",
+            std::process::id()
+        ));
+        let prefix = "wait 10\n";
+        let header = "\u{feff}\u{feff}if false";
+        std::fs::write(&path, format!("{prefix}{header}")).unwrap();
+        let mut script = Script::following(Vec::new(), path.clone(), prefix.len());
+        script.poll(Duration::ZERO);
+        assert!(script.steps.is_empty());
+        assert!(script.follow.is_some());
+
+        std::fs::write(&path, format!("{prefix}{header}\n")).unwrap();
+        script.poll(Duration::from_secs(1));
+        assert_eq!(script.status().phase(), Phase::Failed);
+        assert_eq!(script.status().line(), Some(2));
+        assert!(script.follow.is_none());
+
+        std::fs::write(&path, format!("{prefix}{header}\nquit\n")).unwrap();
+        script.poll(Duration::from_secs(2));
         assert!(script.steps.is_empty());
         let _ = std::fs::remove_file(&path);
     }

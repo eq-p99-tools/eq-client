@@ -17,10 +17,24 @@ pub(crate) fn keyword(word: &str) -> bool {
     )
 }
 
+/// Recognize a structured line even if a malformed BOM would prevent parsing it.
+fn starts_statement(line: &str) -> bool {
+    line.trim_start_matches(|ch: char| ch.is_whitespace() || ch == '\u{feff}')
+        .split(|ch: char| ch.is_whitespace() || ch == '#')
+        .next()
+        .is_some_and(keyword)
+}
+
+pub(super) fn first_structured_line(source: &str) -> Option<usize> {
+    source
+        .lines()
+        .position(starts_statement)
+        .map(|index| index + 1)
+}
+
 /// The comment boundary, keeping legacy action arguments byte-for-byte compatible.
 pub(crate) fn comment(line: &str) -> usize {
-    let first = line.split_whitespace().next().unwrap_or_default();
-    if !keyword(first) {
+    if !starts_statement(line) {
         return line.find('#').unwrap_or(line.len());
     }
     let mut quoted = false;

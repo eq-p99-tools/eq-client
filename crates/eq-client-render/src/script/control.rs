@@ -8,6 +8,7 @@ use std::{collections::VecDeque, path::PathBuf, sync::Arc, time::Duration};
 use bevy::{input_focus::InputFocus, prelude::*};
 use serde_json::{Value, json};
 
+use super::execution::FlowStatus;
 use super::{Phase, Program, Request, RunControl, RunStatus, Script};
 use crate::background::Background;
 use protocol::{Envelope, Operation};
@@ -55,7 +56,8 @@ struct Snapshot {
     queued: bool,
     line: Option<usize>,
     completed: usize,
-    total: usize,
+    authored_actions: usize,
+    executed_statements: Option<usize>,
     elapsed_ms: u64,
     message: Option<String>,
 }
@@ -65,7 +67,8 @@ impl Snapshot {
         self.phase = status.phase();
         self.queued = queued && self.phase.active();
         self.line = status.line();
-        (self.completed, self.total) = status.progress();
+        (self.completed, self.authored_actions) = status.progress();
+        self.executed_statements = status.flow().map(FlowStatus::statements);
         self.elapsed_ms = u64::try_from(status.elapsed().as_millis()).unwrap_or(u64::MAX);
         self.message = status
             .events()
@@ -83,9 +86,18 @@ impl Snapshot {
         } else {
             phase_name(self.phase)
         };
-        json!({"id":self.id,"origin":self.origin,"phase":phase,"line":self.line,
-            "completed_steps":self.completed,"total_steps":self.total,
-            "elapsed_ms":self.elapsed_ms,"message":self.message})
+        let total = self
+            .executed_statements
+            .is_none()
+            .then_some(self.authored_actions);
+        let mut result = json!({"id":self.id,"origin":self.origin,"phase":phase,"line":self.line,
+            "completed_steps":self.completed,"total_steps":total,
+            "elapsed_ms":self.elapsed_ms,"message":self.message});
+        if let Some(statements) = self.executed_statements {
+            result["authored_actions"] = json!(self.authored_actions);
+            result["executed_statements"] = json!(statements);
+        }
+        result
     }
 }
 
@@ -186,7 +198,8 @@ impl Bridge {
             queued: false,
             line: None,
             completed: 0,
-            total: 0,
+            authored_actions: 0,
+            executed_statements: None,
             elapsed_ms: 0,
             message: None,
         };

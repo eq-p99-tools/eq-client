@@ -138,7 +138,7 @@ impl Expr {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Token<'a> {
     Word(&'a str),
-    Number(i64),
+    Number(u64),
     Text(Arc<str>),
     Open,
     Close,
@@ -266,7 +266,7 @@ pub(super) fn parse(
 pub(super) fn limited_condition(
     source: &str,
     lookup: impl Fn(&str) -> Option<(usize, Kind)>,
-) -> Result<(Expr, i64), String> {
+) -> Result<(Expr, u64), String> {
     let tokens = lex(source)?;
     let mut parser = Parser {
         remaining: &tokens,
@@ -316,7 +316,12 @@ impl<Lookup: Fn(&str) -> Option<(usize, Kind)>> Parser<'_, '_, Lookup> {
             .ok_or("expected an expression")?;
         self.remaining = rest;
         let (kind, node) = match token {
-            Token::Number(value) => (Kind::Int, Node::Literal(Value::Int(*value))),
+            Token::Number(value) => (
+                Kind::Int,
+                Node::Literal(Value::Int(
+                    i64::try_from(*value).map_err(|_| "integer literal is out of range")?,
+                )),
+            ),
             Token::Text(value) => (Kind::Text, Node::Literal(Value::Text(value.clone()))),
             Token::Word("true" | "false") => (
                 Kind::Bool,
@@ -346,6 +351,12 @@ impl<Lookup: Fn(&str) -> Option<(usize, Kind)>> Parser<'_, '_, Lookup> {
                 }
             }
             Token::Open => return self.group(),
+            Token::Operator(Binary::Subtract)
+                if self.remaining.first() == Some(&Token::Number(i64::MIN.unsigned_abs())) =>
+            {
+                self.take();
+                (Kind::Int, Node::Literal(Value::Int(i64::MIN)))
+            }
             Token::Bang | Token::Operator(Binary::Subtract) => {
                 let (kind, op) = if *token == Token::Bang {
                     (Kind::Bool, Unary::Not)
@@ -395,6 +406,16 @@ mod tests {
             Err("integer overflow")
         );
         assert_eq!(eval("9 % 0", Value::Unknown), Err("division by zero"));
+        assert_eq!(
+            eval("-9223372036854775808", Value::Unknown),
+            Ok(Value::Int(i64::MIN))
+        );
+        assert_eq!(
+            eval("-9223372036854775808 / -1", Value::Unknown),
+            Err("integer overflow")
+        );
+        assert!(parse("9223372036854775808", |_| None).is_err());
+        assert!(parse("-9223372036854775809", |_| None).is_err());
         assert!(parse("true + 1", |_| None).is_err());
         assert!(parse("1 == \"1\"", |_| None).is_err());
     }

@@ -6,6 +6,7 @@ use super::{
     Step,
     language::{self, Builder, Code},
     parse::{MAX_STEPS, parse_step},
+    source::without_bom,
 };
 
 /// Maximum UTF-8 source size accepted by the script loader and editor.
@@ -41,6 +42,12 @@ pub struct Program {
     statements: usize,
 }
 
+#[derive(Debug)]
+pub(super) enum AppendError {
+    Structured(Option<usize>),
+    Invalid(ParseError),
+}
+
 impl Program {
     /// Validates source using the same language as command-line scripts.
     /// Screenshot paths are relative to `base`, normally the source file's folder.
@@ -57,13 +64,25 @@ impl Program {
         Self::compile(text, base).err().unwrap_or_default()
     }
 
+    pub(super) fn parse_append(text: &str, base: &Path) -> Result<Vec<Instruction>, AppendError> {
+        // An incomplete or malformed header can be followed by action lines
+        // in another poll. Identify it before ordinary parse errors can skip it.
+        if let Some(line) = language::first_structured_line(text) {
+            return Err(AppendError::Structured(Some(line)));
+        }
+        Self::parse(text, base)
+            .map_err(AppendError::Invalid)?
+            .into_linear_instructions()
+            .map_err(|error| AppendError::Structured(error.line))
+    }
+
     fn compile(text: &str, base: &Path) -> Result<Self, Vec<ParseError>> {
         if text.len() > MAX_SOURCE_BYTES {
             return Err(vec![ParseError::document(format!(
                 "script exceeds the {MAX_SOURCE_BYTES}-byte source limit"
             ))]);
         }
-        let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+        let text = without_bom(text);
         let mut instructions = Vec::new();
         let mut errors = Vec::new();
         let mut flow = Builder::default();
@@ -144,8 +163,11 @@ impl Program {
         self.statements
     }
 
-    /// Match the workbench's local-only command gate before queuing a new run.
-    pub(crate) fn check_local_commands(&self, local: bool) -> Result<(), ParseError> {
+    /// Validate authored actions against the session's local-only command gate.
+    ///
+    /// # Errors
+    /// A restricted action anywhere in the source needs a local test session.
+    pub fn check_local_commands(&self, local: bool) -> Result<(), ParseError> {
         if !local
             && let Some(instruction) = self.instructions.iter().find(|instruction| {
                 matches!(
@@ -171,21 +193,21 @@ impl Program {
     /// # Errors
     /// Structured programs need the executor to evaluate their control flow.
     pub fn into_steps(self) -> Result<Vec<Step>, ParseError> {
-        if self.code.is_some() {
-            let line = self.source.lines().position(|raw| {
-                let first = raw[..language::comment(raw)].split_whitespace().next();
-                first.is_some_and(language::keyword)
-            });
-            return Err(ParseError {
-                line: line.map(|index| index + 1),
-                message: "use Program to run scripts with variables or control flow".into(),
-            });
-        }
         Ok(self
-            .instructions
+            .into_linear_instructions()?
             .into_iter()
             .map(|instruction| instruction.step)
             .collect())
+    }
+
+    fn into_linear_instructions(self) -> Result<Vec<Instruction>, ParseError> {
+        if self.code.is_some() {
+            return Err(ParseError {
+                line: language::first_structured_line(&self.source),
+                message: "use Program to run scripts with variables or control flow".into(),
+            });
+        }
+        Ok(self.instructions)
     }
 
     pub(super) fn into_parts(self) -> (Arc<str>, Vec<Instruction>, Option<Code>) {
@@ -311,6 +333,17 @@ report example # trailing"#;
             program.instructions()[0].step(),
             &Step::Report("example".into())
         );
+    }
+
+    #[test]
+    fn follow_append_keeps_linear_bom_support_and_rejects_structured_batches() {
+        let base = Path::new(".");
+        let instructions = Program::parse_append("\u{feff}report if # comment\n", base).unwrap();
+        assert_eq!(instructions[0].step(), &Step::Report("if".into()));
+        assert!(matches!(
+            Program::parse_append("\u{feff}\u{feff}let n: int = 0\nquit\n", base),
+            Err(AppendError::Structured(Some(1)))
+        ));
     }
 
     #[test]

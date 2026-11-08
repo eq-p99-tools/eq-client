@@ -135,7 +135,9 @@ impl RunStatus {
         self.line
     }
 
-    /// Actions that finished, and the total accepted so far.
+    /// Actions that finished, and the number of accepted action lines.
+    ///
+    /// A structured run can skip or repeat a line. Use the phase to detect completion.
     #[must_use]
     pub const fn progress(&self) -> (usize, usize) {
         (self.completed_steps, self.total)

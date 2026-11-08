@@ -620,11 +620,33 @@ fn status_history_is_bounded_and_does_not_serialize_script_source() {
     assert_eq!(value["recent_runs"][0]["id"], 5);
     assert_eq!(value["run"]["id"], 20);
     assert_eq!(value["run"]["phase"], "failed");
+    assert_eq!(value["run"]["total_steps"], 1);
+    assert!(value["run"].get("authored_actions").is_none());
+    assert!(value["run"].get("executed_statements").is_none());
     assert!(
         !String::from_utf8(bytes)
             .unwrap()
             .contains("private source marker")
     );
+}
+
+#[test]
+fn structured_status_separates_source_actions_from_executed_work() {
+    let mut app = app();
+    let program =
+        Program::parse("repeat 3\nreport sample\nend", std::path::Path::new(".")).unwrap();
+    app.insert_resource(Script::from_program(program).offline_preview(true));
+    for ms in (0..=700).step_by(100) {
+        frame(&mut app, ms);
+    }
+    let bytes = app.world().resource::<Bridge>().snapshot();
+    let value: Value = serde_json::from_slice(&bytes).unwrap();
+    let run = &value["run"];
+    assert_eq!(run["phase"], "completed");
+    assert_eq!(run["completed_steps"], 3);
+    assert_eq!(run["authored_actions"], 1);
+    assert_eq!(run["executed_statements"], 7);
+    assert_eq!(run["total_steps"], Value::Null);
 }
 
 #[test]
