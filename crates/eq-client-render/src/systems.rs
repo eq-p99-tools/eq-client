@@ -5,10 +5,10 @@ use crate::{
     combat_text, confirm, daylight, doors, entities, escape, exit_after_screenshot, give, ground,
     group, hud, interact, inventory, item_models, items, keys, login, logs, map, motion,
     move_player, names, navigation, navmesh_prebuild, notices, online, options, orbit_camera,
-    outbox, outfit, paperdoll, pet, profile_files, raid, reading, resources, schedule_screenshot,
-    select_preview, sheets, skills, skin, skinned, sounds, speed, spell_effects, spell_icons,
-    spellbook, target, tooltip, trade, tradeskills, training, translocate, update_hud, weather,
-    whereabouts, who, windows,
+    outbox, outfit, paperdoll, pet, profile_files, projectiles, raid, reading, resources,
+    schedule_screenshot, select_preview, sheets, skills, skin, skinned, sounds, speed,
+    spell_effects, spell_icons, spellbook, target, tooltip, trade, tradeskills, training,
+    translocate, update_hud, weather, whereabouts, who, windows,
 };
 use bevy::prelude::*;
 /// Starts the presentation state (HUD, windows, chat, targeting, inventory,
@@ -68,6 +68,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<entities::NearbyEntities>()
         .init_resource::<names::NameTags>()
         .init_resource::<item_models::ItemLibrary>()
+        .init_resource::<projectiles::Flights>()
         .init_resource::<outfit::Wardrobe>()
         .init_resource::<select_preview::Preview>()
         .init_resource::<windows::DragState>()
@@ -135,6 +136,7 @@ pub(super) fn schedule(app: &mut App) {
                 character::lie,
                 doors::reconcile,
                 ground::reconcile,
+                projectiles::update,
                 hud::spell_visibility,
                 select_preview::show,
                 select_preview::turn,

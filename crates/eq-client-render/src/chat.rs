@@ -15,6 +15,7 @@ use eq_client_core::{
 };
 use std::collections::{BTreeMap, HashSet, VecDeque};
 
+mod draft;
 mod drag;
 mod groups;
 pub(super) mod links;
@@ -137,7 +138,7 @@ pub(super) struct ChatState {
     pub toggled: Option<super::windows::WindowId>,
     /// An explicit disconnect to handle before other gameplay input.
     pub departure: Option<super::login::Departure>,
-    draft: String,
+    draft: draft::Draft,
     refusals: Refusals,
 }
 
@@ -174,6 +175,46 @@ impl ChatState {
 
     pub(super) fn reset_received_links(&mut self) {
         self.received_links.clear();
+        if self.draft.has_links() {
+            self.draft.clear();
+        }
+    }
+
+    /// Insert the exact received item body represented by a clicked label.
+    pub(super) fn compose_clicked_link(
+        &mut self,
+        link: &ItemLink,
+        world: &eq_client_core::world::ClientWorld,
+    ) -> Result<(), &'static str> {
+        let admission = active_link_admission(world)?;
+        let known = self.script_links(admission).any(|(_, _, current)| {
+            current.item_id == link.item_id
+                && current.body == link.body
+                && current.text == link.text
+        });
+        if !known {
+            return Err("This item link is no longer available in this admission");
+        }
+        self.draft
+            .insert_link(link, (admission, world.generation()))
+    }
+
+    /// Resolve the same bounded received-link identities shown by scripts' reports.
+    pub(super) fn compose_link(
+        &mut self,
+        (admission, message, ordinal): (u64, u64, usize),
+        world: &eq_client_core::world::ClientWorld,
+    ) -> Result<(), &'static str> {
+        if active_link_admission(world)? != admission {
+            return Err("Item link composition needs the current admission");
+        }
+        let (_, _, link) = self
+            .script_links(admission)
+            .find(|(id, index, _)| *id == message && *index == ordinal)
+            .ok_or("Item link is unknown or no longer available")?;
+        let link = link.clone();
+        self.draft
+            .insert_link(&link, (admission, world.generation()))
     }
 
     pub(super) fn script_links(
@@ -198,7 +239,7 @@ impl ChatState {
     /// The line being typed, for tests outside the chat.
     #[cfg(test)]
     pub(crate) fn draft(&self) -> &str {
-        &self.draft
+        self.draft.text()
     }
 
     /// Says a refusal in the chat as a system line, where the official client
@@ -223,6 +264,13 @@ impl ChatState {
         refusals.last = Some((said.words.text.clone(), now));
         self.history.push(system_line(said));
     }
+}
+
+fn active_link_admission(world: &eq_client_core::world::ClientWorld) -> Result<u64, &'static str> {
+    world
+        .session_id()
+        .filter(|_| world.in_world())
+        .ok_or("Item link composition needs the current admission")
 }
 
 #[cfg(test)]
@@ -756,7 +804,7 @@ pub(super) fn input(
     ) || send;
     if submit {
         paste.clear();
-        if state.draft.trim().is_empty() {
+        if state.draft.text().trim().is_empty() {
             // Enter on an empty line closes the input, as in the official client.
             typing.composing = false;
         } else {
@@ -814,7 +862,7 @@ fn compose(
                 && matches!(&event.logical_key, Key::Character(key) if key.eq_ignore_ascii_case("v"))
                 && let Some(clipboard) = clipboard.as_mut()
             {
-                paste.request(clipboard.fetch_text(), session, &state.draft);
+                paste.request(clipboard.fetch_text(), session, state.draft.revision());
             }
             continue;
         }
@@ -830,25 +878,27 @@ fn compose(
                 typing.composing = false;
                 typing.escape_consumed = true;
             }
-            Key::Backspace if typing.composing => {
-                state.draft.pop();
-            }
+            Key::Backspace if typing.composing => state.draft.backspace(),
+            Key::Delete if typing.composing => state.draft.delete(),
+            Key::ArrowLeft if typing.composing => state.draft.left(),
+            Key::ArrowRight if typing.composing => state.draft.right(),
+            Key::Home if typing.composing => state.draft.home(),
+            Key::End if typing.composing => state.draft.end(),
             // A slash opens the line with only itself typed, so a command is
             // one keystroke away, as in the official client (Titanium checked;
             // EQMac inferred, recording checklist 6.241). A line left with
             // Escape gives way to it, as Enter alone brings that line back.
             Key::Character(value) if !typing.composing && value.as_str() == "/" => {
                 typing.composing = true;
-                "/".clone_into(&mut state.draft);
+                state.draft.replace("/");
             }
             // The line types what the key types, as the window reports it:
             // the space bar is a named key, not a character. Chords are
             // handled above using their event-time modifiers.
-            _ if typing.composing && state.draft.len() < 512 => {
-                let text = event.text.as_deref().unwrap_or_default();
-                state.draft.extend(text.chars().filter(|c| !c.is_control()));
-                let boundary = state.draft.floor_char_boundary(512);
-                state.draft.truncate(boundary);
+            _ if typing.composing => {
+                state
+                    .draft
+                    .insert_text(event.text.as_deref().unwrap_or_default());
             }
             _ => (),
         }
@@ -1052,9 +1102,9 @@ pub(super) fn refresh(
         let id = group(marker);
         let owner = state.groups.owner() == id;
         let wanted = if owner && typing.composing {
-            format!("{}|", state.draft)
-        } else if owner && !state.draft.is_empty() {
-            state.draft.clone()
+            state.draft.marked()
+        } else if owner && !state.draft.text().is_empty() {
+            state.draft.text().to_owned()
         } else if bare || state.groups.active(id).is_none() {
             String::new()
         } else {
@@ -1240,7 +1290,21 @@ fn submit_draft(
     qol: &Settings,
 ) {
     let result = (|| -> Result<(), Unsent> {
-        let draft = typed_command(state.draft.trim()).into_owned();
+        if state.draft.has_links() {
+            let world = online.world();
+            let wire = state
+                .draft
+                .encoded(world.session_id(), world.generation())?;
+            let active = state
+                .groups
+                .active(state.groups.owner())
+                .unwrap_or_default();
+            let message =
+                linked_outbound(active, wire.trim(), world.generation(), online.eqemu_chat)?;
+            outbox.send(world, ClientCommand::SendChat(message))?;
+            return Ok(());
+        }
+        let draft = typed_command(state.draft.text().trim()).into_owned();
         if let Some(request) = departure_request(&draft) {
             state.departure = Some(request?);
             return Ok(());
@@ -1264,7 +1328,7 @@ fn submit_draft(
             .groups
             .active(state.groups.owner())
             .unwrap_or_default();
-        let message = outbound(active, state.draft.trim())?;
+        let message = outbound(active, state.draft.text().trim())?;
         outbox.send(online.world(), ClientCommand::SendChat(message))?;
         Ok(())
     })();
@@ -1818,18 +1882,60 @@ fn class_command(
     })
 }
 
+/// Validate the routed payload before the editor can relinquish its draft.
+fn linked_outbound(
+    tab: ChatTab,
+    input: &str,
+    dialect: eq_client_core::GameDialect,
+    eqemu_chat: bool,
+) -> Result<OutboundChat, String> {
+    let outbound = outbound(tab, input)?;
+    let body = match &outbound {
+        OutboundChat::Tell { recipient, message } => {
+            if recipient.len() >= 64 {
+                return Err("The tell recipient exceeds the server's name field".into());
+            }
+            message
+        }
+        OutboundChat::Guild(body)
+        | OutboundChat::Group(body)
+        | OutboundChat::Shout(body)
+        | OutboundChat::Auction(body)
+        | OutboundChat::Ooc(body)
+        | OutboundChat::Say(body)
+        | OutboundChat::Raid(body) => body,
+        _ => return Err("This chat channel cannot send item links".into()),
+    };
+    let wire_len = eq_client_core::chat::outbound_text_len(dialect, body);
+    if wire_len > eq_client_core::chat::outbound_text_limit(dialect) {
+        return Err("This draft exceeds the chat limit with its item links".into());
+    }
+    if eqemu_chat && dialect == eq_client_core::GameDialect::Titanium {
+        // EQEmu TitaniumToServerSayLink expands each 45-byte body to 56.
+        // ChannelMessageReceived then copies into char message[4096].
+        let links = body.matches('\x12').count() / 2;
+        if wire_len + 11 * links > 4095 {
+            return Err("This draft exceeds EQEmu's chat limit after item-link expansion".into());
+        }
+    }
+    Ok(outbound)
+}
+
 fn outbound(tab: ChatTab, input: &str) -> Result<OutboundChat, String> {
     if input.is_empty() {
         return Err("Type a message first".into());
     }
     if let Some(command) = input.strip_prefix('/') {
         let (name, rest) = command.split_once(' ').unwrap_or((command, ""));
+        if name.contains('\x12') {
+            return Err("Item links belong in the chat message".into());
+        }
         let rest = rest.trim();
         if matches!(name.to_ascii_lowercase().as_str(), "tell" | "t") {
             let (recipient, message) = rest
                 .split_once(' ')
                 .ok_or_else(|| "Use /tell Name message".to_owned())?;
-            if message.trim().is_empty() {
+            if message.trim().is_empty() || recipient.contains('\x12') {
                 return Err("Use /tell Name message".into());
             }
             return Ok(OutboundChat::Tell {
@@ -2118,7 +2224,7 @@ mod tests {
         // Typed, a bare `/` lists the zone as `/who` does, with no refusal.
         let mut state = ChatState::default();
         let mut typing = crate::keys::Typing::default();
-        "/".clone_into(&mut state.draft);
+        state.draft.replace("/");
         submit_draft(
             &mut state,
             &mut typing,
@@ -2131,7 +2237,7 @@ mod tests {
             Some(eq_client_core::who::WhoFilter::default())
         );
         assert!(state.history.lines(ChatTab::All).is_empty());
-        assert_eq!(state.draft, "");
+        assert_eq!(state.draft.text(), "");
         assert!(received.try_recv().is_err());
     }
 
@@ -2198,7 +2304,7 @@ mod tests {
 
     fn enter_draft(app: &mut App, draft: &str) {
         let world = app.world_mut();
-        draft.clone_into(&mut world.resource_mut::<ChatState>().draft);
+        world.resource_mut::<ChatState>().draft.replace(draft);
         world.resource_mut::<crate::keys::Typing>().composing = true;
         world
             .resource_mut::<ButtonInput<KeyCode>>()
@@ -2258,6 +2364,7 @@ mod tests {
                 }),
                 Some(Session {
                     classic_npc_consider: false,
+                    eqemu_chat: true,
                     inventory_move_rules: None,
                     spell_provider: eq_client_core::spell_tables::Binding::new(
                         eq_client_core::spell_tables::Policy::Installed,
@@ -2446,7 +2553,7 @@ mod tests {
         // says it began; nothing is sent for the refused word.
         let mut state = ChatState::default();
         let mut typing = crate::keys::Typing::default();
-        "/camp server".clone_into(&mut state.draft);
+        state.draft.replace("/camp server");
         submit_draft(
             &mut state,
             &mut typing,
@@ -2455,7 +2562,7 @@ mod tests {
             &Settings::default(),
         );
         assert!(received.try_recv().is_err());
-        "/camp desktop".clone_into(&mut state.draft);
+        state.draft.replace("/camp desktop");
         submit_draft(
             &mut state,
             &mut typing,
@@ -2671,7 +2778,7 @@ mod tests {
         };
         {
             let mut state = app.world_mut().resource_mut::<ChatState>();
-            state.draft = "hello".into();
+            state.draft.replace("hello");
             state.views.entry(ChatTab::All).or_default().follow = false;
         }
         app.world_mut()
@@ -2681,7 +2788,7 @@ mod tests {
         app.update();
         assert!(receiver.try_recv().is_ok());
         assert!(!app.world().resource::<crate::keys::Typing>().composing);
-        assert_eq!(app.world().resource::<ChatState>().draft, "");
+        assert_eq!(app.world().resource::<ChatState>().draft.text(), "");
         // A line sent brings the chat back to its newest line.
         assert!(app.world().resource::<ChatState>().views[&ChatTab::All].follow);
         app.world_mut()
@@ -2694,9 +2801,141 @@ mod tests {
     }
 
     #[test]
+    fn a_received_link_survives_prefix_edits_and_uses_the_normal_tell_path() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let outbox = crate::outbox::Outbox::new(Some(tx));
+        let mut online = crate::online::OnlineState::new(true);
+        crate::online::testing::admit(&mut online, 1, crate::online::testing::player(1));
+        let mut chat = ChatState::default();
+        let mut received = system_line("Synthetic blade");
+        received.source = Source::Server;
+        let body = format!("00002A{:031X}1234ABCD", 0);
+        let link = ItemLink {
+            body: body.clone(),
+            text: "Synthetic blade".into(),
+            item_id: 42,
+            start: 0,
+            end: 0,
+            text_start: 0,
+            text_end: "Synthetic blade".len(),
+        };
+        received.message.item_links.push(link.clone());
+        chat.receive(received, Some(1));
+        chat.compose_clicked_link(&link, online.world()).unwrap();
+        chat.draft.home();
+        chat.draft.insert_text("/tell Friend See ");
+        chat.draft.end();
+        chat.draft.insert_text(" please");
+        let mut typing = crate::keys::Typing {
+            composing: true,
+            ..Default::default()
+        };
+        submit_draft(
+            &mut chat,
+            &mut typing,
+            &mut online,
+            &outbox,
+            &Settings::default(),
+        );
+        assert_eq!(
+            rx.try_recv().unwrap(),
+            ClientCommand::SendChat(OutboundChat::Tell {
+                recipient: "Friend".into(),
+                message: format!("See \x12{body}Synthetic blade\x12 please"),
+            })
+        );
+        assert_eq!(chat.draft.text(), "");
+        assert!(!typing.composing);
+
+        chat.compose_clicked_link(&link, online.world()).unwrap();
+        chat.reset_received_links();
+        assert_eq!(chat.draft.text(), "");
+        assert!(chat.compose_clicked_link(&link, online.world()).is_err());
+    }
+
+    #[test]
+    fn eqemu_link_expansion_checks_the_routed_body_and_retains_an_oversized_draft() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let outbox = crate::outbox::Outbox::new(Some(tx));
+        let mut online = crate::online::OnlineState::new(true);
+        crate::online::testing::admit(&mut online, 1, crate::online::testing::player(1));
+        online.eqemu_chat = true;
+        let mut chat = ChatState::default();
+        let label = "Blade!";
+        let link = ItemLink {
+            body: format!("00002A{:031X}1234ABCD", 0),
+            text: label.into(),
+            item_id: 42,
+            start: 0,
+            end: 0,
+            text_start: 0,
+            text_end: label.len(),
+        };
+        let dialect = online.world().generation();
+        let mut typing = crate::keys::Typing::default();
+        for suffix in ["x", "xy"] {
+            chat.draft.replace("/tell Friend ");
+            for index in 0..63 {
+                if index != 0 {
+                    chat.draft.insert_text(" ");
+                }
+                chat.draft.insert_link(&link, (1, dialect)).unwrap();
+            }
+            chat.draft.insert_text(suffix);
+            let before = chat.draft.text().to_owned();
+            typing.composing = true;
+            submit_draft(
+                &mut chat,
+                &mut typing,
+                &mut online,
+                &outbox,
+                &Settings::default(),
+            );
+            if suffix == "x" {
+                let ClientCommand::SendChat(OutboundChat::Tell { recipient, message }) =
+                    rx.try_recv().unwrap()
+                else {
+                    panic!("expected a routed tell");
+                };
+                assert_eq!(recipient, "Friend");
+                assert_eq!(message.len() + 11 * 63, 4095);
+                assert_eq!(chat.draft.text(), "");
+            } else {
+                assert!(rx.try_recv().is_err());
+                assert_eq!(chat.draft.text(), before);
+                assert!(typing.composing);
+                online.eqemu_chat = false;
+                submit_draft(
+                    &mut chat,
+                    &mut typing,
+                    &mut online,
+                    &outbox,
+                    &Settings::default(),
+                );
+                assert!(rx.try_recv().is_ok());
+            }
+        }
+        chat.draft.replace(&format!("/tell {} ", "x".repeat(64)));
+        chat.draft.insert_link(&link, (1, dialect)).unwrap();
+        let before = chat.draft.text().to_owned();
+        submit_draft(
+            &mut chat,
+            &mut typing,
+            &mut online,
+            &outbox,
+            &Settings::default(),
+        );
+        assert!(rx.try_recv().is_err());
+        assert_eq!(chat.draft.text(), before);
+    }
+
+    #[test]
     fn a_complete_paste_chord_in_one_frame_never_types_v_or_submits() {
         let (mut app, receiver) = slash_app(true);
-        app.world_mut().resource_mut::<ChatState>().draft = "kept".into();
+        app.world_mut()
+            .resource_mut::<ChatState>()
+            .draft
+            .replace("kept");
         app.world_mut()
             .resource_mut::<crate::keys::Typing>()
             .composing = true;
@@ -2722,7 +2961,7 @@ mod tests {
             });
         }
         app.update();
-        assert_eq!(app.world().resource::<ChatState>().draft, "kept");
+        assert_eq!(app.world().resource::<ChatState>().draft.text(), "kept");
         assert!(receiver.try_recv().is_err());
     }
 
@@ -2740,7 +2979,10 @@ mod tests {
             .insert_resource(crate::outbox::Outbox::new(Some(sender)))
             .init_resource::<ButtonInput<MouseButton>>()
             .add_systems(Update, input);
-        app.world_mut().resource_mut::<ChatState>().draft = "/tell Friend".into();
+        app.world_mut()
+            .resource_mut::<ChatState>()
+            .draft
+            .replace("/tell Friend");
         app.world_mut()
             .resource_mut::<crate::keys::Typing>()
             .composing = true;
@@ -2755,7 +2997,7 @@ mod tests {
         app.update();
         assert!(receiver.try_recv().is_err());
         let state = app.world().resource::<ChatState>();
-        assert_eq!(state.draft, "/tell Friend");
+        assert_eq!(state.draft.text(), "/tell Friend");
         assert_eq!(
             state
                 .history
@@ -2807,14 +3049,17 @@ mod tests {
     fn a_slash_opens_the_line_with_itself_typed() {
         let (mut app, receiver) = slash_app(true);
         // A line left with Escape gives way to the slash.
-        app.world_mut().resource_mut::<ChatState>().draft = "hello".into();
+        app.world_mut()
+            .resource_mut::<ChatState>()
+            .draft
+            .replace("hello");
         press_slash(&mut app);
         assert!(app.world().resource::<crate::keys::Typing>().composing);
-        assert_eq!(app.world().resource::<ChatState>().draft, "/");
+        assert_eq!(app.world().resource::<ChatState>().draft.text(), "/");
         assert!(receiver.try_recv().is_err());
         // In the line, a slash types as any character does.
         press_slash(&mut app);
-        assert_eq!(app.world().resource::<ChatState>().draft, "//");
+        assert_eq!(app.world().resource::<ChatState>().draft.text(), "//");
     }
 
     #[test]
@@ -2822,7 +3067,7 @@ mod tests {
         let (mut app, _receiver) = slash_app(true);
         press_slash_on(&mut app, KeyCode::NumpadDivide);
         assert!(app.world().resource::<crate::keys::Typing>().composing);
-        assert_eq!(app.world().resource::<ChatState>().draft, "/");
+        assert_eq!(app.world().resource::<ChatState>().draft.text(), "/");
     }
 
     #[test]
@@ -2850,7 +3095,7 @@ mod tests {
             app.world_mut().write_message(event);
         }
         app.update();
-        assert_eq!(app.world().resource::<ChatState>().draft, "/t A/");
+        assert_eq!(app.world().resource::<ChatState>().draft.text(), "/t A/");
     }
 
     #[test]
@@ -2896,7 +3141,7 @@ mod tests {
         // A click on the game outside it closes the line, keeping its text.
         click(&mut app, (600.0, 500.0));
         assert!(!composing(&app));
-        assert_eq!(app.world().resource::<ChatState>().draft, "/");
+        assert_eq!(app.world().resource::<ChatState>().draft.text(), "/");
         assert!(receiver.try_recv().is_err());
     }
 
@@ -2909,12 +3154,12 @@ mod tests {
         press_slash(&mut app);
         let typing = app.world().resource::<crate::keys::Typing>();
         assert!(typing.counting && !typing.composing);
-        assert_eq!(app.world().resource::<ChatState>().draft, "");
+        assert_eq!(app.world().resource::<ChatState>().draft.text(), "");
 
         let (mut app, _receiver) = slash_app(false);
         press_slash(&mut app);
         assert!(!app.world().resource::<crate::keys::Typing>().composing);
-        assert_eq!(app.world().resource::<ChatState>().draft, "");
+        assert_eq!(app.world().resource::<ChatState>().draft.text(), "");
     }
 
     #[test]
@@ -2949,7 +3194,7 @@ mod tests {
         app.update();
         let typing = app.world().resource::<crate::keys::Typing>();
         assert!(typing.counting && !typing.composing);
-        assert_eq!(app.world().resource::<ChatState>().draft, "");
+        assert_eq!(app.world().resource::<ChatState>().draft.text(), "");
     }
 
     #[test]
@@ -3756,7 +4001,7 @@ mod tests {
                 seen: 0,
             },
         );
-        chat.draft = "synthetic auction".into();
+        chat.draft.replace("synthetic auction");
         let main_input = world.spawn((InputLabel, Bare, Text::default())).id();
         let float_input = world
             .spawn((InputLabel, Bare, InGroup(detached), Text::default()))

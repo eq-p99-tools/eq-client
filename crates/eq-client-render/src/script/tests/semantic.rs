@@ -324,6 +324,24 @@ fn scripted_item_inspection_refuses_unknown_and_stale_links() {
 }
 
 #[test]
+fn scripted_link_composition_edits_the_draft_and_sends_no_request() {
+    let (mut app, rx) = app();
+    let (message, _) = linked_message(&mut app.world_mut().resource_mut::<ChatState>());
+    start(&mut app, &format!("compose_link {ADMISSION} {message} 0"));
+    frame_at(&mut app, 0);
+    frame_at(&mut app, 10);
+    assert_eq!(
+        app.world().resource::<RunStatus>().phase(),
+        Phase::Completed
+    );
+    assert_eq!(
+        app.world().resource::<ChatState>().draft(),
+        "Synthetic blade"
+    );
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
 fn scripted_item_inspection_does_not_replace_a_pending_request() {
     let (mut app, rx) = app();
     let (message, _) = linked_message(&mut app.world_mut().resource_mut::<ChatState>());

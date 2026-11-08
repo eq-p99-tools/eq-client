@@ -258,6 +258,20 @@ record with only an empty-slot sentinel cannot identify which buff faded.
 The P99 exchange awaits an attended check. Titanium EQEmu uses its
 single current-record request.
 
+## Item links in chat
+
+Shift-click a recent received item link to add it at the caret in the current
+chat draft. A regular click still opens item details. Left, Right, Home and
+End move the caret. Backspace or Delete removes the whole link when it meets
+one. Choose a chat tab or use a channel command such as `/auction` or
+`/tell Name` before sending. Item links belong in the message, after the
+channel and any recipient. The client keeps the draft if the routed
+message would exceed the chat limit, including EQEmu's link expansion.
+
+This uses the received item's original link body. A link copied as plain
+clipboard text remains plain text. An inventory item without a received
+link has no link to insert. A new admission clears link-bearing drafts.
+
 ## Targeting and interaction
 
 Click a rendered entity, use Tab/Shift+Tab to cycle the nearby rendered set, or
@@ -294,6 +308,12 @@ weapon and select a target. Click Ranged Attack in Actions or type `/ranged`.
 The Actions control can be bound to the hotbar. The request checks the current
 target, loadout, reach and unmodified weapon delay. Damage and projectile
 consumption appear when reported by the server.
+
+Received arrows and thrown items can appear briefly in flight if both actors
+are known and the installed files contain the item model named by the server.
+The visual follows an estimated straight path, usually for 0.12 to 1.4 seconds.
+Native flight angles, arcs and timing remain unverified. This first set
+covers item flights. A despawn, replacement or zone transition ends the visual.
 
 With Titanium, Buy and Sell open the existing quantity picker when more than
 one unit is available; a single unit goes directly through the same checked

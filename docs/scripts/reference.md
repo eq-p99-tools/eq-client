@@ -93,6 +93,13 @@ reported separately.
 
 ## Diagnostics and commands
 
+The projectile line from `report [label]` includes the current admission, the
+number of received flight records since the last world reset, the flights still
+tracked, the number of scene spawns queued, and the scene instances from the
+latest completed projectile update, normally the preceding frame. Missing assets or unsupported flight
+types can produce a receipt without a model. Scene instances may be off-camera
+or occluded. The counters are independent of damage and inventory.
+
 - `report [label]` logs a state summary with an optional label. Its `option_levels` field includes slider settings, with `run_boost` in hundredths of ordinary running speed. For a selected target, `considered` shows the decoded received color and `display_con_color` shows the presentation color. The report includes `selected_target_level` and `own_level` when known.
   `air_remaining` gives the local air reserve and capacity in ticks while
   Air Remaining is active.
@@ -181,6 +188,11 @@ reported separately.
 - `quit`: close the client.
 
 The typed parser and normal client capability checks decide which commands and controls are available. A valid action can still fail at runtime when its target, session or expected result is unavailable.
+
+- `compose_link admission message ordinal` inserts a recent received item link
+  using the IDs from the item-link report. It edits the normal draft without
+  changing keyboard focus. Use the usual chat input to edit or send the
+  draft. An expired, mismatched or unknown link stops the script.
 
 ## Optional login automation
 

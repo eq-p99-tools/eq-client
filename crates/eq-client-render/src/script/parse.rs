@@ -221,6 +221,15 @@ pub enum Step {
         /// Zero-based link ordinal in that message.
         ordinal: usize,
     },
+    /// Inserts a received item link into the editable chat draft.
+    ComposeLink {
+        /// Admission in which the message arrived.
+        admission: u64,
+        /// Arrival ID of the message.
+        message: u64,
+        /// Zero-based link ordinal in that message.
+        ordinal: usize,
+    },
     /// Left-clicks one UI control through Bevy's ordinary interaction state.
     Click(ClickTarget),
     /// Right-clicks one UI control the same way, as a bag is opened or an
@@ -620,6 +629,11 @@ pub(super) fn parse_step(line: &str) -> Result<Step, String> {
             revision: revision.parse().map_err(|_| "expected a spawn revision")?,
         },
         ("inspect_link", [admission, message, ordinal]) => Step::InspectLink {
+            admission: admission.parse().map_err(|_| "expected an admission ID")?,
+            message: message.parse().map_err(|_| "expected a chat arrival ID")?,
+            ordinal: ordinal.parse().map_err(|_| "expected a link ordinal")?,
+        },
+        ("compose_link", [admission, message, ordinal]) => Step::ComposeLink {
             admission: admission.parse().map_err(|_| "expected an admission ID")?,
             message: message.parse().map_err(|_| "expected a chat arrival ID")?,
             ordinal: ordinal.parse().map_err(|_| "expected a link ordinal")?,

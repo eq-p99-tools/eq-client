@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Keep linked chat drafts when the routed text would exceed EQEmu's expanded
+  limit or the tell recipient exceeds its field size.
+
+- Shift-click a recently received chat item link to insert it into a draft.
+  Edit around it and send it with the active tab or a chat channel command.
+
+- Draw received arrows and thrown items in flight using installed item models.
+  The script report separates received flights from rendered models.
+
 - Keep staged discipline state separate from the buff-slot revision used by
   cancellation. A matching instant class refresh consumes its cast request
   even when the server sends no cast start.

@@ -215,6 +215,7 @@ impl SessionWorker {
         });
         Ok(eq_client_render::Session {
             classic_npc_consider,
+            eqemu_chat: protocol == ServerProtocol::EqEmu,
             inventory_move_rules,
             spell_provider,
             updates: receiver,

@@ -29,6 +29,8 @@ pub(super) struct OnlineState {
     /// The current zone's regions, from its assets.
     pub regions: eq_client_assets::regions::ZoneRegions,
     pub enabled: bool,
+    /// Established backend policy for the currently attached producer.
+    pub(super) eqemu_chat: bool,
     server_placement: Option<ServerPlacement>,
     placement_revision: u64,
     loading: super::background::Background<Result<super::zone::PreparedEntry, String>>,
@@ -226,6 +228,7 @@ impl OnlineState {
     /// in progress.
     pub(super) fn restart(&mut self) {
         self.deletion.ended();
+        self.eqemu_chat = false;
         self.world.restart();
         self.selection = None;
         self.loading.clear();
@@ -373,6 +376,7 @@ impl OnlineState {
             deletion: default(),
             regions: eq_client_assets::regions::ZoneRegions::default(),
             enabled,
+            eqemu_chat: false,
             server_placement: None,
             placement_revision: 0,
             loading: default(),
@@ -441,6 +445,7 @@ pub(super) struct Panels<'w> {
     sounds: ResMut<'w, super::sounds::Sounds>,
     combat_text: Option<ResMut<'w, super::combat_text::CombatText>>,
     weather: Option<ResMut<'w, super::weather::Field>>,
+    projectiles: Option<ResMut<'w, super::projectiles::Flights>>,
 }
 
 impl Panels<'_> {
@@ -466,6 +471,10 @@ impl Panels<'_> {
         self.trade.killed(state.world(), &changes.kills);
         if let Some(text) = self.combat_text.as_mut() {
             text.hear(state.world(), &changes.damage, true);
+        }
+        if let Some((flights, flight)) = self.projectiles.as_mut().zip(changes.projectile.as_ref())
+        {
+            flights.receive(state.world(), flight, std::time::Instant::now());
         }
         if changes.inventory {
             self.inventory.refresh(state.world.inventory().stale());
@@ -596,6 +605,9 @@ impl Panels<'_> {
             // The world clears the receipt here, even when a refused
             // transfer reconnects the same admission in this receive batch.
             sync.invalidate();
+        }
+        if let Some(flights) = self.projectiles.as_mut() {
+            flights.reset(reason);
         }
         if !matches!(reason, Reset::Died)
             && let Some(weather) = self.weather.as_mut()
@@ -1463,6 +1475,7 @@ mod tests {
             }),
             Some(Session {
                 classic_npc_consider: false,
+                eqemu_chat: true,
                 inventory_move_rules: Some(eq_client_core::inventory::MoveRules::EqEmu),
                 spell_provider: eq_client_core::spell_tables::Binding::new(
                     eq_client_core::spell_tables::Policy::Installed,

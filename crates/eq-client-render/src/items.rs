@@ -140,11 +140,14 @@ pub(super) fn spawn(commands: &mut Commands) {
     });
 }
 
-/// Queues one inspection at a time, tied to the active session, and uses cached replies.
+/// Shift-click inserts a received item link. A normal click inspects it
+/// through the cache or the ordinary request for the active session.
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(super) fn input(
     settings: Res<super::ViewerSettings>,
-    chat: Res<super::chat::ChatState>,
+    mut chat: ResMut<super::chat::ChatState>,
+    mut typing: Option<ResMut<super::keys::Typing>>,
+    keys: Option<Res<ButtonInput<KeyCode>>>,
     mut attempted: Local<bool>,
     (buttons, close): (
         crate::clicks::Clicks<ItemButton>,
@@ -189,11 +192,19 @@ pub(super) fn input(
     if automatic.is_some() {
         *attempted = true;
     }
-    for link in buttons
-        .iter()
-        .map(|button| &button.0)
-        .chain(automatic.as_ref())
-    {
+    let shift =
+        keys.is_some_and(|keys| keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]));
+    for button in buttons.iter() {
+        if shift && let Some(typing) = typing.as_mut() {
+            match chat.compose_clicked_link(&button.0, online.world()) {
+                Ok(()) => typing.composing = true,
+                Err(reason) => chat.refuse(reason),
+            }
+        } else {
+            let _ = state.inspect_link(&button.0, &online, &sender);
+        }
+    }
+    if let Some(link) = automatic.as_ref() {
         let _ = state.inspect_link(link, &online, &sender);
     }
 }

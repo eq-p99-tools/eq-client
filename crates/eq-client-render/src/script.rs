@@ -628,6 +628,7 @@ type Observed<'w> = (
     Option<Res<'w, crate::options::OptionsState>>,
     Option<Res<'w, crate::confirm::Asked>>,
     Option<Res<'w, crate::breath::State>>,
+    Option<Res<'w, crate::projectiles::Flights>>,
 );
 
 type Input<'w, 's> = (Keyboard<'w, 's>, ResMut<'w, ButtonInput<MouseButton>>);
@@ -1727,6 +1728,17 @@ pub(super) fn drive(
             }
             return;
         }
+        Step::ComposeLink {
+            admission,
+            message,
+            ordinal,
+        } => {
+            if let Err(reason) = chat.compose_link((*admission, *message, *ordinal), online.world())
+            {
+                script.stop(&mut keys, &mut mouse, reason);
+            }
+            return;
+        }
         Step::Gm(_) | Step::Chat(_) => {
             let command = match &step {
                 Step::Gm(command) => gm_request(command, script.local, online.world()),
@@ -1887,6 +1899,9 @@ pub(super) fn drive(
             report::surroundings(&online, &observed);
             report::game_messages(&mut script.chat_seen, &chat);
             report::item_links(label, &online, &chat, &item);
+            if let Some(flights) = observed.12.as_ref() {
+                flights.report(label, online.world().session_id());
+            }
             return;
         }
         Step::Sound(name) => {

@@ -776,6 +776,15 @@ impl ClientWorld {
             // A sound the server names, for the front end to play.
             WorldEvent::Effect(crate::effects::Effect::Sound(cue)) => news.sounds.push(cue.clone()),
 
+            // Like weather, this untagged update follows the admitted stream.
+            WorldEvent::Effect(crate::effects::Effect::Projectile(flight)) => {
+                if self.in_world() {
+                    news.projectile = Some(flight.clone());
+                } else {
+                    news.ignored = true;
+                }
+            }
+
             // The world's answer to a character the player asked for.
             WorldEvent::CharacterCreation { name, outcome } => {
                 self.created(name, *outcome, news);
@@ -808,9 +817,9 @@ impl ClientWorld {
             // too; until one answers, an offer goes unanswered, as it did
             // unread. A quest's change to the stats, a
             // skill's button ready again is not shown yet either, nor the
-            // effects the server plays
-            // besides a sound: a spell's nimbus, particles, a camera shake and
-            // a projectile. The official client's sound for a quest's ding is
+            // effects the server plays besides sound and flight: a spell's
+            // nimbus, particles and camera shake. The official client's
+            // sound for a quest's ding is
             // not known, so it stays silent (inferred, item 6.273). A popup or
             // marquee, a yell for help, a voice macro, a request to inspect the
             // player and a duel wait for their front ends too; until one

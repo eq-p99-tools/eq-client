@@ -337,7 +337,7 @@ fn admitted() -> ClientWorld {
 }
 
 #[test]
-fn a_sound_the_server_names_is_news_and_its_other_effects_are_not() {
+fn a_sound_the_server_names_is_sound_news() {
     use crate::effects::{Cue, Effect};
     let mut world = admitted();
     let file = Cue::File("quests/Plain.wav".into());
@@ -353,6 +353,37 @@ fn a_sound_the_server_names_is_news_and_its_other_effects_are_not() {
     });
     assert_eq!(game(&mut world, shake).sounds, Vec::<Cue>::new());
     assert_eq!(game(&mut world, WorldEvent::Ding).sounds, Vec::<Cue>::new());
+}
+
+#[test]
+fn projectile_news_requires_an_active_admission_and_changes_no_combat_state() {
+    let mut world = admitted();
+    connection(&mut world, true, false);
+    let projectile = crate::effects::Projectile {
+        source_id: 1,
+        target_id: Some(5),
+        start: [1.0, 2.0, 3.0],
+        velocity: 4.0,
+        launch_angle: 0.0,
+        tilt: 125.0,
+        arc: 50.0,
+        item_id: Some(123),
+        item_type: 27,
+        skill: 7,
+        model: "IT68".into(),
+        light: None,
+        behavior: None,
+    };
+    let event = WorldEvent::Effect(crate::effects::Effect::Projectile(projectile.clone()));
+    assert_eq!(
+        game(&mut world, event.clone()),
+        Changes {
+            projectile: Some(projectile),
+            ..Changes::default()
+        }
+    );
+    connection(&mut world, false, false);
+    assert!(game(&mut world, event).ignored);
 }
 
 fn zone_is_empty(world: &ClientWorld) -> bool {

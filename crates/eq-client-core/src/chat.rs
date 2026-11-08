@@ -2,6 +2,10 @@
 mod text;
 use chrono::NaiveDateTime;
 pub use eq_network_game::chat::{ChannelName, ItemLink, Message, SpeakMode};
+pub use eq_network_game::{
+    chat::{outbound_text_len, outbound_text_limit},
+    items::chat_link,
+};
 use std::collections::{BTreeMap, VecDeque};
 pub use text::RichText;
 
