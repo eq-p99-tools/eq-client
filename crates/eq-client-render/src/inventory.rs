@@ -327,7 +327,7 @@ pub(super) fn say_refusals(
 /// Left-click chooses a stack quantity or moves through the cursor; right-click inspects.
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(super) fn input(
-    keys: crate::keys::Keys,
+    mut keys: ParamSet<(crate::keys::Keys, ResMut<super::keys::Typing>)>,
     mouse: Res<ButtonInput<MouseButton>>,
     mut online: ResMut<super::online::OnlineState>,
     sender: Res<crate::outbox::Outbox>,
@@ -353,16 +353,25 @@ pub(super) fn input(
     mut state: ResMut<InventoryState>,
     mut items: ResMut<super::items::ItemState>,
     escape: Res<super::escape::Escape>,
-    (chat, typing): (
-        Option<ResMut<super::chat::ChatState>>,
-        Option<ResMut<super::keys::Typing>>,
-    ),
+    mut chat: Option<ResMut<super::chat::ChatState>>,
 ) {
     state.refresh_bank_access(&online);
-    if !keys.window_focused() {
-        state.actions.auto_store = false;
-        return;
-    }
+    let (alt, ctrl, shift, focused) = {
+        let keys = keys.p0();
+        if !keys.window_focused() {
+            state.actions.auto_store = false;
+            return;
+        }
+        (
+            keys.input
+                .any_pressed([KeyCode::AltLeft, KeyCode::AltRight]),
+            keys.input
+                .any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]),
+            keys.input
+                .any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]),
+            keys.focused(),
+        )
+    };
     if *escape == super::escape::Escape::Inventory {
         state.actions.auto_store = false;
         state.cancel_split();
@@ -407,26 +416,19 @@ pub(super) fn input(
             state.tab = tab.0;
         }
     }
-    let mut composer = chat.zip(typing);
     for (interaction, slot) in &slots {
         if *interaction == Interaction::None {
             continue;
         }
         if mouse.just_pressed(MouseButton::Right) {
-            if keys
-                .input
-                .any_pressed([KeyCode::AltLeft, KeyCode::AltRight])
-            {
-                if keys.focused() {
+            if alt {
+                if focused {
                     use_clicked(&mut state, slot.0, (&online, &sender), &spells, &settings);
                 }
-            } else if keys
-                .input
-                .any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight])
-            {
-                if let Some((chat, typing)) = composer.as_mut() {
+            } else if ctrl {
+                if let Some(chat) = chat.as_deref_mut() {
                     match chat.compose_owned_link(slot.0, online.world()) {
-                        Ok(()) => typing.composing = true,
+                        Ok(()) => keys.p1().composing = true,
                         Err(reason) => chat.refuse(reason),
                     }
                 }
@@ -441,14 +443,8 @@ pub(super) fn input(
     // A slot a hold picks up from is clicked when its quick press is let go
     // (`crate::clicks::Clicks`).
     if let Some(SlotButton(slot)) = clicks.iter().next() {
-        let whole = keys
-            .input
-            .any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
-        let one = keys
-            .input
-            .any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight]);
-        if !whole
-            && !one
+        if !shift
+            && !ctrl
             && skinned.has(super::windows::WindowId::Merchant)
             && !online
                 .world()
@@ -462,7 +458,7 @@ pub(super) fn input(
             // and its Sell button suggest; the official client's click there
             // is not checked yet.
         } else {
-            state.left_click_slot(*slot, whole, one, &mut online, &sender);
+            state.left_click_slot(*slot, shift, ctrl, &mut online, &sender);
         }
     }
 }

@@ -139,7 +139,7 @@ mod tests {
         for update in [
             object(1, "IT63_ACTORDEF", 12.0),
             object(2, "IT10_ACTORDEF", 5.0),
-            object(3, "FORGE", 1.0),
+            object(3, "STATUE", 1.0),
             object(4, "IT63_ACTORDEF", Objects::USE_DISTANCE + 1.0),
         ] {
             objects.apply(&ObjectUpdate::Spawn(update));
@@ -158,6 +158,8 @@ mod tests {
         forge.object_type = 17;
         objects.apply(&ObjectUpdate::Spawn(forge));
         assert_eq!(nearest_usable(&objects, player).map(|hit| hit.0), Some(5));
+        objects.apply(&ObjectUpdate::Spawn(object(6, "FORGE", 1.0)));
+        assert_eq!(nearest_usable(&objects, player).map(|hit| hit.0), Some(6));
         // A carried-combine offer does not let the nearer station hide the item.
         assert_eq!(
             nearest_usable_for(&objects, player, false).map(|hit| hit.0),
