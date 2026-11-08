@@ -4,6 +4,7 @@ use std::{fmt, path::Path, sync::Arc};
 
 use super::{
     Step,
+    language::{self, Builder, Code},
     parse::{MAX_STEPS, parse_step},
 };
 
@@ -36,6 +37,8 @@ impl Instruction {
 pub struct Program {
     source: Arc<str>,
     instructions: Vec<Instruction>,
+    code: Option<Code>,
+    statements: usize,
 }
 
 impl Program {
@@ -63,10 +66,29 @@ impl Program {
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
         let mut instructions = Vec::new();
         let mut errors = Vec::new();
+        let mut flow = Builder::default();
+        let mut statements = 0;
         for (index, raw) in text.lines().enumerate() {
-            let line = raw.split('#').next().unwrap_or_default().trim();
+            let line = raw[..language::comment(raw)].trim();
             if line.is_empty() {
                 continue;
+            }
+            statements += 1;
+            if statements > MAX_STEPS {
+                return Err(vec![ParseError::document(format!(
+                    "script has more than {MAX_STEPS} statements"
+                ))]);
+            }
+            match flow.statement(line, index + 1) {
+                Ok(false) => (),
+                Ok(true) => continue,
+                Err(message) => {
+                    errors.push(ParseError {
+                        line: Some(index + 1),
+                        message,
+                    });
+                    continue;
+                }
             }
             let step = match parse_step(line) {
                 Ok(step) => step,
@@ -82,23 +104,25 @@ impl Program {
                 Step::Screenshot(path) => Step::Screenshot(base.join(path)),
                 step => step,
             };
+            flow.action(instructions.len(), index + 1);
             instructions.push(Instruction {
                 line: index + 1,
                 step,
             });
-            if instructions.len() > MAX_STEPS {
-                errors.push(ParseError::document(format!(
-                    "script has more than {MAX_STEPS} steps"
-                )));
-                break;
-            }
         }
+        errors.extend(flow.unclosed().map(|line| ParseError {
+            line: Some(line),
+            message: "block needs a matching end".into(),
+        }));
         if !errors.is_empty() {
+            errors.sort_by_key(|error| error.line);
             return Err(errors);
         }
         Ok(Self {
             source: Arc::from(text),
             instructions,
+            code: flow.finish(),
+            statements,
         })
     }
 
@@ -108,10 +132,16 @@ impl Program {
         &self.source
     }
 
-    /// The steps in execution order, with their original line numbers.
+    /// Authored actions in source order, including actions inside blocks.
     #[must_use]
     pub fn instructions(&self) -> &[Instruction] {
         &self.instructions
+    }
+
+    /// Nonempty source statements, including block delimiters.
+    #[must_use]
+    pub const fn statement_count(&self) -> usize {
+        self.statements
     }
 
     /// Match the workbench's local-only command gate before queuing a new run.
@@ -136,17 +166,30 @@ impl Program {
         Ok(())
     }
 
-    /// Converts a program to the legacy action list used by existing callers.
-    #[must_use]
-    pub fn into_steps(self) -> Vec<Step> {
-        self.instructions
+    /// Converts a linear program to the legacy action list.
+    ///
+    /// # Errors
+    /// Structured programs need the executor to evaluate their control flow.
+    pub fn into_steps(self) -> Result<Vec<Step>, ParseError> {
+        if self.code.is_some() {
+            let line = self.source.lines().position(|raw| {
+                let first = raw[..language::comment(raw)].split_whitespace().next();
+                first.is_some_and(language::keyword)
+            });
+            return Err(ParseError {
+                line: line.map(|index| index + 1),
+                message: "use Program to run scripts with variables or control flow".into(),
+            });
+        }
+        Ok(self
+            .instructions
             .into_iter()
             .map(|instruction| instruction.step)
-            .collect()
+            .collect())
     }
 
-    pub(super) fn into_parts(self) -> (Arc<str>, Vec<Instruction>) {
-        (self.source, self.instructions)
+    pub(super) fn into_parts(self) -> (Arc<str>, Vec<Instruction>, Option<Code>) {
+        (self.source, self.instructions, self.code)
     }
 }
 
@@ -198,7 +241,7 @@ mod tests {
         );
         assert_eq!(program.source(), source.trim_start_matches('\u{feff}'));
         assert_eq!(
-            program.clone().into_steps(),
+            program.clone().into_steps().unwrap(),
             super::super::parse(source, Path::new("scripts")).unwrap()
         );
     }
@@ -223,6 +266,51 @@ mod tests {
             errors[0]
         );
         assert_eq!(Program::diagnostics("wait 1\n", Path::new(".")), []);
+    }
+
+    #[test]
+    fn declarations_conditions_and_blocks_have_source_diagnostics() {
+        let errors = Program::diagnostics(
+            "let n: int = 0\nset n = true\nif n == 0\n  let scoped: bool = false\n  report allowed\n",
+            Path::new("."),
+        );
+        assert_eq!(
+            errors.iter().map(|error| error.line).collect::<Vec<_>>(),
+            [Some(2), Some(3), Some(4)]
+        );
+        assert!(errors[0].message.contains("expected int"));
+        assert!(errors[1].message.contains("matching end"));
+        assert!(errors[2].message.contains("top level"));
+        assert_eq!(
+            Program::parse("while true limit 0\nend", Path::new("."))
+                .unwrap_err()
+                .line,
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn restricted_actions_in_skipped_branches_keep_their_gate() {
+        let source = "if false\n  gm heal\nelse\n  report safe\nend\n";
+        let program = Program::parse(source, Path::new(".")).unwrap();
+        assert_eq!(
+            program.check_local_commands(false).unwrap_err().line,
+            Some(2)
+        );
+        assert!(program.check_local_commands(true).is_ok());
+        assert_eq!(program.into_steps().unwrap_err().line, Some(1));
+    }
+
+    #[test]
+    fn quoted_hashes_only_change_comment_handling_in_expressions() {
+        let source = r#"let name: text = "example # one" # comment
+report example # trailing"#;
+        let program = Program::parse(source, Path::new(".")).unwrap();
+        assert_eq!(program.statement_count(), 2);
+        assert_eq!(
+            program.instructions()[0].step(),
+            &Step::Report("example".into())
+        );
     }
 
     #[test]

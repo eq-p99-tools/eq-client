@@ -17,6 +17,7 @@ mod input;
 pub(crate) use input::AuthoredInput;
 pub use input::InputMode;
 pub(super) use input::install as install_input;
+pub(crate) mod language;
 mod parse;
 pub(crate) mod pointer;
 mod program;
@@ -75,6 +76,7 @@ const SLOW_ROUTE_CALL: Duration = Duration::from_millis(5);
 )]
 pub struct Script {
     steps: VecDeque<QueuedStep>,
+    language: Option<language::Run>,
     current: Option<(Step, Duration)>,
     progress: RunStatus,
     mode: RunMode,
@@ -206,6 +208,7 @@ impl Script {
                 .into_iter()
                 .map(|step| QueuedStep { step, line: None })
                 .collect(),
+            language: None,
             current: None,
             held: Vec::new(),
             acts: Vec::new(),
@@ -245,20 +248,26 @@ impl Script {
     /// Queues a source snapshot, retaining line numbers for progress and errors.
     #[must_use]
     pub fn from_program(program: Program) -> Self {
-        let (source, instructions) = program.into_parts();
-        let total = instructions.len();
-        Self {
-            steps: instructions
+        let accepted = program.statement_count();
+        let (source, instructions, code) = program.into_parts();
+        let mut script = Self {
+            accepted,
+            progress: RunStatus::queued(instructions.len(), source),
+            ..Self::new(Vec::new())
+        };
+        if let Some(code) = code {
+            script.language = Some(language::Run::new(code, instructions));
+            script.progress.flow = Some(execution::FlowStatus::default());
+        } else {
+            script.steps = instructions
                 .into_iter()
                 .map(|instruction| QueuedStep {
                     step: instruction.step,
                     line: Some(instruction.line),
                 })
-                .collect(),
-            accepted: total,
-            progress: RunStatus::queued(total, source),
-            ..Self::new(Vec::new())
+                .collect();
         }
+        script
     }
 
     /// Builds a viewer run with the process's explicit input policy and the
@@ -414,21 +423,36 @@ impl Script {
         };
         follow.offset += end + 1;
         follow.idle = false;
-        let text = String::from_utf8_lossy(&fresh[..=end]).into_owned();
+        let text = String::from_utf8_lossy(&fresh[..=end]);
+        let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
+        if let Some(index) = text.lines().position(|line| {
+            let first = line[..language::comment(line)].split_whitespace().next();
+            first.is_some_and(language::keyword)
+        }) {
+            self.progress.line = Some(first_line + index + 1);
+            let snapshot = String::from_utf8_lossy(&bytes[..follow.offset]);
+            self.progress.source =
+                std::sync::Arc::from(snapshot.strip_prefix('\u{feff}').unwrap_or(&snapshot));
+            let reason = "Follow appends accept ordinary action lines; run a complete control-flow file as a new snapshot";
+            self.progress.finish(Phase::Failed, reason);
+            warn!("Ignored appended script lines: {reason}");
+            self.follow = None;
+            return;
+        }
         let base = follow
             .path
             .parent()
             .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
-        match Program::parse(&text, &base) {
-            Ok(program) if self.accepted + program.instructions().len() <= MAX_STEPS => {
-                let (_, instructions) = program.into_parts();
+        match Program::parse(text, &base) {
+            Ok(program) if self.accepted + program.statement_count() <= MAX_STEPS => {
+                let (_, instructions, _) = program.into_parts();
                 self.accepted += instructions.len();
+                self.progress.total += instructions.len();
                 self.steps
                     .extend(instructions.into_iter().map(|instruction| QueuedStep {
                         step: instruction.step,
                         line: Some(first_line + instruction.line),
                     }));
-                self.progress.total = self.accepted;
                 let source = String::from_utf8_lossy(&bytes[..follow.offset]);
                 self.progress.source =
                     std::sync::Arc::from(source.strip_prefix('\u{feff}').unwrap_or(&source));
@@ -436,6 +460,25 @@ impl Script {
             Ok(_) => warn!("Ignored appended steps beyond the {MAX_STEPS}-step limit"),
             Err(error) => warn!("Ignored appended script lines: {error}"),
         }
+    }
+
+    fn exhausted(&self) -> bool {
+        self.steps.is_empty() && self.language.as_ref().is_none_or(language::Run::done)
+    }
+
+    /// Keep the ordinary action queue authoritative, including menu-entry retries.
+    fn queue_statement(
+        &mut self,
+        world: &eq_client_core::world::ClientWorld,
+        now: Duration,
+    ) -> Result<(), String> {
+        if self.steps.is_empty()
+            && let Some(run) = &mut self.language
+            && let language::Tick::Action(step) = run.tick(world, &mut self.progress, now)?
+        {
+            self.steps.push_back(step);
+        }
+        Ok(())
     }
 
     fn release(&mut self, keys: &mut Keyboard, mouse: &mut ButtonInput<MouseButton>) {
@@ -477,6 +520,7 @@ impl Script {
         self.release(keys, mouse);
         self.owns_input = false;
         self.steps.clear();
+        self.language = None;
         self.current = None;
         self.follow = None;
         self.route = None;
@@ -908,7 +952,7 @@ pub(super) fn drive(
     } else {
         Phase::Running
     };
-    if script.current.is_none() && script.steps.is_empty() {
+    if script.current.is_none() && script.exhausted() {
         if script.follow.is_none() {
             script.progress.finish(Phase::Completed, "Script finished");
             script.retire(&mut commands);
@@ -1616,7 +1660,18 @@ pub(super) fn drive(
     }
     script.progress.complete_step();
     let single_step = matches!(script.mode, RunMode::OneStep);
+    if script.mode != RunMode::PauseRequested
+        && script.steps.is_empty()
+        && script.language.as_ref().is_some_and(|run| run.paced(now))
+    {
+        return;
+    }
     if !script.advance(now) {
+        return;
+    }
+    if let Err(reason) = script.queue_statement(online.world(), now) {
+        script.stop(&mut keys, &mut mouse, &reason);
+        script.retire(&mut commands);
         return;
     }
     let Some(QueuedStep { step, line }) = script.steps.pop_front() else {
@@ -6022,6 +6077,126 @@ mod tests {
             Some(&Step::Quit)
         );
         assert_eq!(script.steps.back().unwrap().line, Some(5));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    fn structured_preview(source: &str) -> App {
+        let program = Program::parse(source, std::path::Path::new(".")).unwrap();
+        let mut app = pointing(Vec::new());
+        app.insert_resource(Script::from_program(program).offline_preview(true))
+            .init_resource::<RunControl>()
+            .init_resource::<RunStatus>()
+            .add_systems(Update, observe.after(drive));
+        app
+    }
+
+    #[test]
+    fn structured_runs_dispatch_only_the_taken_branch_and_pace_repeated_actions() {
+        let mut app = structured_preview(
+            "let n: int = 0\nrepeat 2\n  set n = n + 1\n  if n == 1\n    press A\n  else\n    press B\n  end\nend\n",
+        );
+        for ms in [0, 10, 20, 30, 40] {
+            frame_at(&mut app, ms);
+        }
+        let status = app.world().resource::<RunStatus>();
+        let flow = status.flow().unwrap();
+        assert_eq!(flow.loops(), [(2, 1, 2)]);
+        assert_eq!(flow.branch(), Some((4, true)));
+        assert_eq!(flow.variables(), ["n: int = 1"]);
+        assert!(
+            app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .pressed(KeyCode::KeyA)
+        );
+
+        for ms in [50, 60, 70, 80, 139] {
+            frame_at(&mut app, ms);
+        }
+        let keys = app.world().resource::<ButtonInput<KeyCode>>();
+        assert!(!keys.pressed(KeyCode::KeyA));
+        assert!(!keys.pressed(KeyCode::KeyB));
+        frame_at(&mut app, 140);
+        assert!(
+            app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .pressed(KeyCode::KeyB)
+        );
+        frame_at(&mut app, 150);
+        frame_at(&mut app, 160);
+        let status = app.world().resource::<RunStatus>();
+        assert_eq!(status.phase(), Phase::Completed);
+        assert_eq!(status.progress(), (2, 2));
+        let flow = status.flow().unwrap();
+        assert_eq!(flow.branch(), Some((4, false)));
+        assert_eq!(flow.variables(), ["n: int = 2"]);
+        assert!(flow.loops().is_empty());
+    }
+
+    #[test]
+    fn a_loop_without_actions_can_pause_step_and_stop() {
+        let mut app = structured_preview("while true limit 100\n  repeat 100\n  end\nend\n");
+        frame_at(&mut app, 0);
+        app.world_mut()
+            .resource_mut::<RunControl>()
+            .request(Request::Pause);
+        frame_at(&mut app, 1);
+        let status = app.world().resource::<RunStatus>();
+        assert_eq!(status.phase(), Phase::Paused);
+        assert_eq!(status.flow().unwrap().statements(), 1);
+
+        app.world_mut()
+            .resource_mut::<RunControl>()
+            .request(Request::Step);
+        frame_at(&mut app, 2);
+        frame_at(&mut app, 3);
+        let status = app.world().resource::<RunStatus>();
+        assert_eq!(status.phase(), Phase::Paused);
+        assert_eq!(status.flow().unwrap().loops(), [(1, 1, 100), (2, 1, 100)]);
+        assert_eq!(status.flow().unwrap().statements(), 2);
+
+        app.world_mut()
+            .resource_mut::<RunControl>()
+            .request(Request::Stop);
+        frame_at(&mut app, 4);
+        let status = app.world().resource::<RunStatus>();
+        assert_eq!(status.phase(), Phase::Stopped);
+        assert_eq!(status.flow().unwrap().statements(), 2);
+        assert!(!app.world().contains_resource::<Script>());
+    }
+
+    #[test]
+    fn a_condition_with_unknown_state_stops_on_its_line() {
+        let mut app = structured_preview(
+            "# offline\nif player.mana == 0\n  report empty\nelse\n  report present\nend",
+        );
+        frame_at(&mut app, 0);
+        let status = app.world().resource::<RunStatus>();
+        assert_eq!(status.phase(), Phase::Failed);
+        assert_eq!(status.line(), Some(2));
+        assert_eq!(status.progress().0, 0);
+        assert!(
+            status
+                .events()
+                .back()
+                .unwrap()
+                .message
+                .contains("condition is unknown")
+        );
+    }
+
+    #[test]
+    fn follow_rejects_a_structured_append_before_any_branch_action_can_escape() {
+        let path =
+            std::env::temp_dir().join(format!("eq-client-flow-follow-{}.txt", std::process::id()));
+        std::fs::write(&path, "wait 10\nif false\n").unwrap();
+        let mut script = Script::following(Vec::new(), path.clone(), 8);
+        script.poll(Duration::ZERO);
+        assert_eq!(script.status().phase(), Phase::Failed);
+        assert_eq!(script.status().line(), Some(2));
+        assert!(script.steps.is_empty());
+        std::fs::write(&path, "wait 10\nif false\nquit\nend\n").unwrap();
+        script.poll(Duration::from_secs(1));
+        assert!(script.steps.is_empty());
         let _ = std::fs::remove_file(&path);
     }
 

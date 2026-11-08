@@ -4,10 +4,11 @@
 [Examples](examples.md)
 [Run controls](running.md)
 [UI target reference](targets.md)
+[Variables, conditions and loops](language.md)
 
 ## Language
 
-One action per line. Blank lines are ignored. `#` begins a comment, including after an action. Commands are lowercase. Arguments are separated by whitespace; there is no quoted-string or escape syntax. Multiword names are accepted only by the commands that explicitly take them. There are no variables, loops, branches or functions.
+One statement per line. Blank lines are ignored. `#` begins a comment, including after an action. Action commands are lowercase and their arguments use whitespace and command-specific names. Expressions in typed assignments and control flow accept quoted text. See [Variables, conditions and loops](language.md) for that syntax.
 
 Durations are milliseconds. Headings use EQ's 0 to 512 units; positions and distances use EQ world units unless described as screen pixels. The first invalid line prevents the entire buffer from running.
 
@@ -150,7 +151,7 @@ or occluded. The counters are independent of damage and inventory.
   acceptance require separate evidence.
 - `trace milliseconds`: log movement and frame timing for a bounded duration.
 - `screenshot filename.png`: capture beside the script; the argument must be a filename.
-- `sound filename.wav`: play a sound from the installed game assets.
+- `sound filename.wav` or `sound filename.mp3` plays a named cue from the installed game assets. Use the basename with its extension.
 - `inspect_link admission message ordinal` opens an item link using the
   `admission` and `(message, ordinal, label)` from the current `Script item
   links` report. Ordinals start at zero. The report lists up to 32 links

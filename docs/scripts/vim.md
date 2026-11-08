@@ -1,5 +1,7 @@
 # Vim and Neovim
 
+Highlighting covers action commands, keys, and expression syntax in typed assignments and control flow.
+
 [Help home](README.md)
 [Language reference](reference.md)
 

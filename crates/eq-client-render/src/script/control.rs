@@ -457,10 +457,10 @@ fn prepare(
     local: bool,
 ) -> Result<Program, super::ParseError> {
     let program = Program::parse(source, base)?;
-    if program.instructions().is_empty() {
+    if program.statement_count() == 0 {
         return Err(super::ParseError {
             line: None,
-            message: "Add an action before running".into(),
+            message: "Add a statement before running".into(),
         });
     }
     program.check_local_commands(local)?;

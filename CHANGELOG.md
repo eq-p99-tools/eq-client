@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add typed variables, read-only client observations, conditions and bounded
+  loops to eqscript. The workbench shows branch decisions, active loop counts
+  and variable values. Existing action scripts use the same controls.
+
 - Use Ctrl+right-click on a worn or carried Titanium item to add its item
   link to a chat draft when the inventory record supports composition.
 - Offer the ordinary Project 1999 forge through the nearby object controls

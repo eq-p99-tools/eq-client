@@ -4,11 +4,13 @@ The script workbench lets you edit and run sequences of actions while playing yo
 
 The movable window has Editor, Execution and Help tabs. Edit your script, choose Run, and watch the current line in Execution. Stop returns control so you can revise and run it again. Close the workbench with its titlebar × and reopen it from the EQ menu when needed; your document and run remain available.
 
-Scripts are small UTF-8 text files in the client's own language, with one action per line. They use the normal client controls. Loading a file never executes it. This help is also available on GitHub: both views use these Markdown files.
+Scripts are small UTF-8 text files with one statement per line. They use the normal client controls and can choose which actions to run using typed variables and current client observations. Loading a file never executes it. The in-game Help and GitHub use the same Markdown files.
 
 [Quick start and examples](examples.md)
 
 [Language and command reference](reference.md)
+
+[Variables, conditions and loops](language.md)
 
 [UI target reference](targets.md)
 
@@ -36,7 +38,7 @@ Run executes the current buffer without saving it. The Execution tab follows the
 
 Actions use the state that exists when they execute. Select a target yourself before a script that acts on that target, and have the relevant spell, item or window available. The script does not choose another character or log you in automatically.
 
-Pause finishes the current action, then pauses with held inputs released. Step executes one action from a pause. Resume continues; Stop immediately releases synthetic input and stops the scenario. Closing the window does not stop a run. Scripts has no minimized state.
+Pause finishes the current action, then pauses with held inputs released. Step executes one statement from a pause. Resume continues; Stop immediately releases synthetic input and stops the scenario. Closing the window does not stop a run. Scripts has no minimized state.
 
 Scripts on P99 and Quarm require focus by default. Explicit `--script-background` also runs while unfocused and permits passive observation of the focused window. Genuine keyboard, button or wheel input yields ownership and cancels held script input. The existing runtime bounds and local-only command restrictions still apply. See Run controls for input ownership and time limits.
 

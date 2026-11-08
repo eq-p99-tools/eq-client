@@ -485,19 +485,22 @@ pub enum TradeClick {
     SellChosen,
 }
 
-/// Whether a name is a WAV file's, such as `levelup.wav`.
-fn wav_name(name: &str) -> bool {
-    name.rsplit_once('.')
-        .is_some_and(|(stem, extension)| !stem.is_empty() && extension.eq_ignore_ascii_case("wav"))
+/// Accept an installed cue basename regardless of the host's path separators.
+fn sound_name(name: &str) -> bool {
+    !name.contains(['/', '\\', ':'])
+        && name.rsplit_once('.').is_some_and(|(stem, extension)| {
+            !stem.is_empty()
+                && (extension.eq_ignore_ascii_case("wav") || extension.eq_ignore_ascii_case("mp3"))
+        })
 }
 
-/// Parses a script: one step per line, `#` starts a comment.
+/// Parses a linear action list. Use [`super::Program`] for scripts with control flow.
 ///
 /// # Errors
 /// Returns the first line that is unknown, malformed or outside the bounds.
 pub fn parse(text: &str, base: &Path) -> Result<Vec<Step>, String> {
     super::Program::parse(text, base)
-        .map(super::Program::into_steps)
+        .and_then(super::Program::into_steps)
         .map_err(|error| error.to_string())
 }
 
@@ -652,7 +655,7 @@ pub(super) fn parse_step(line: &str) -> Result<Step, String> {
             Step::HoldClick(parse_click(target)?, millis(duration, MAX_HOLD)?)
         }
         ("report", label) => Step::Report(label.join(" ")),
-        ("sound", [name]) if wav_name(name) => Step::Sound((*name).to_owned()),
+        ("sound", [name]) if sound_name(name) => Step::Sound((*name).to_owned()),
         ("screenshot", [name])
             if Path::new(name)
                 .file_name()
@@ -2091,11 +2094,19 @@ chat tell Friend inc now
             parse("sound LevelUp.WAV\n", base).unwrap(),
             [Step::Sound("LevelUp.WAV".into())]
         );
+        assert_eq!(
+            parse("sound theme.MP3", base).unwrap(),
+            [Step::Sound("theme.MP3".into())]
+        );
         for bad in [
             "sound",
             "sound .wav",
-            "sound theme.mp3",
+            "sound theme.ogg",
             "sound a.wav b.wav",
+            "sound audio/theme.mp3",
+            r"sound audio\theme.mp3",
+            "sound C:theme.mp3",
+            "sound ../levelup.wav",
         ] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }

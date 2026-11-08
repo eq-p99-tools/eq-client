@@ -3,12 +3,13 @@
 [Help home](README.md)
 [Examples](examples.md)
 [Command reference](reference.md)
+[Variables, conditions and loops](language.md)
 
 ## Execution view
 
-The current line is highlighted in an immutable snapshot of the running script. Progress counts completed actions. Recent events and the final outcome remain after the executor finishes, including the source line that failed. The event list is bounded to the most recent 64 entries; the workbench displays the latest entries.
+The current line is highlighted in the running source snapshot. Linear scripts show completed and total actions. Structured scripts show how many statements ran and how many actions finished, since the path depends on observations and loop counts. The Execution state panel shows the last branch result, current loop iterations and initialized variables. Scroll that panel for more bindings. Recent events and the final outcome remain after execution, including the source line that failed. The event list retains the most recent 64 entries.
 
-Pause waits for an action boundary. A long wait, held key or navigation action finishes before the pause takes effect. Stop is immediate and releases synthetic input. Step is available while paused and executes one complete action before pausing again. Explicit pause time does not count toward the overall run limit.
+Pause waits for a statement boundary. A long wait, held key or navigation action finishes before the pause takes effect. Stop is immediate and releases synthetic input. Step runs one complete action, assignment, condition or loop header before pausing again. Explicit pause time does not count toward the overall run limit.
 
 If the connection ends after a run has entered the world, the run fails with `Session ended` and releases its synthetic input. A normal zone handoff does not end the run; use `wait_zone` before actions that require the destination zone.
 
@@ -33,11 +34,14 @@ Background mode does not enable `gm` or `chat`, change the selected server, or i
 ## Limits and errors
 
 - Source: at most 128 KiB of UTF-8 text.
-- Queue: at most 500 actions, including appended actions in follow mode.
+- Source statements may occupy up to 500 nonblank, noncomment lines, including block delimiters and accepted follow appends.
+- Structured snapshots can execute up to 5,000 statements and 500 actions. Structured actions start at least 100 ms apart when handed to the driver. Legacy linear scripts keep their usual cadence.
 - Run: at most 15 minutes, excluding explicit pauses.
 - Key holds and traces: at most 10 seconds each.
 - Ordinary waits and pointer waits: at most 2 minutes each.
 - World-entry waits: at most 3 minutes.
+
+Use `--script` with a complete UTF-8 file to run control flow from an external editor. `--script-follow` can load that initial snapshot and then accepts appended ordinary action lines. An appended control-flow or assignment line stops follow mode with a line error before any action from that append batch runs. Run a fresh snapshot to add more structured code.
 
 A parse error prevents a run from starting. Runtime failure retains its explanation and source line. A file error leaves the editor buffer intact. If Save reports an external change, save to a new path to preserve both versions, or explicitly reload the disk version.
 
