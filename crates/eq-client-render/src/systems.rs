@@ -26,6 +26,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .insert_resource(keys);
     app.init_resource::<spell_effects::SpellParticles>()
         .init_resource::<sounds::Sounds>()
+        .init_resource::<crate::marquee::Banners>()
         .init_resource::<doors::Hinges>()
         .init_resource::<options::OptionsState>()
         .init_resource::<options::MovementSync>()
@@ -405,7 +406,7 @@ pub(super) fn schedule(app: &mut App) {
                 sounds::update,
                 target::marker::update,
                 (names::request, names::update).chain(),
-                combat_text::update,
+                (combat_text::update, crate::marquee::present),
                 (schedule_screenshot, select_preview::next_capture).chain(),
                 exit_after_screenshot,
             )

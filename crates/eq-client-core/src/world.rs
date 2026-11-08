@@ -776,6 +776,15 @@ impl ClientWorld {
             // A sound the server names, for the front end to play.
             WorldEvent::Effect(crate::effects::Effect::Sound(cue)) => news.sounds.push(cue.clone()),
 
+            // The worker sends this untagged update on the ordered zone stream.
+            WorldEvent::Marquee(marquee) => {
+                if self.in_world() {
+                    news.marquee = Some(marquee.clone());
+                } else {
+                    news.ignored = true;
+                }
+            }
+
             // Like weather, this untagged update follows the admitted stream.
             WorldEvent::Effect(crate::effects::Effect::Projectile(flight)) => {
                 if self.in_world() {
@@ -820,8 +829,8 @@ impl ClientWorld {
             // effects the server plays besides sound and flight: a spell's
             // nimbus, particles and camera shake. The official client's
             // sound for a quest's ding is
-            // not known, so it stays silent (inferred, item 6.273). A popup or
-            // marquee, a yell for help, a voice macro, a request to inspect the
+            // not known, so it stays silent (inferred, item 6.273). A popup,
+            // a yell for help, a voice macro, a request to inspect the
             // player and a duel wait for their front ends too; until one
             // answers, a popup, an inspection and a challenge go unanswered, as
             // they did unread. The guild's members and their changes, and an
@@ -851,7 +860,6 @@ impl ClientWorld {
             | WorldEvent::SkillReset(_)
             | WorldEvent::Effect(_)
             | WorldEvent::Popup(_)
-            | WorldEvent::Marquee(_)
             | WorldEvent::YellForHelp { .. }
             | WorldEvent::VoiceMacro(_)
             | WorldEvent::InspectRequest { .. }

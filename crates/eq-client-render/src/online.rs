@@ -443,6 +443,7 @@ pub(super) struct Panels<'w> {
     book_view: Option<ResMut<'w, super::spellbook::BookView>>,
     spell_sets: Option<ResMut<'w, super::spellbook::sets::Sets>>,
     sounds: ResMut<'w, super::sounds::Sounds>,
+    marquee: Option<ResMut<'w, super::marquee::Banners>>,
     combat_text: Option<ResMut<'w, super::combat_text::CombatText>>,
     weather: Option<ResMut<'w, super::weather::Field>>,
     projectiles: Option<ResMut<'w, super::projectiles::Flights>>,
@@ -487,6 +488,9 @@ impl Panels<'_> {
             for cue in &changes.sounds {
                 self.sounds.play_cue(cue);
             }
+        }
+        if let Some((banners, marquee)) = self.marquee.as_mut().zip(changes.marquee.as_ref()) {
+            banners.receive(marquee, std::time::Instant::now());
         }
         if changes.characters {
             if let Some(list) = state.world.characters() {
@@ -605,6 +609,9 @@ impl Panels<'_> {
     /// Forgets what the world's reset made stale on screen and in the panels.
     fn forget(&mut self, reason: Reset, state: &mut OnlineState) {
         self.sounds.reset();
+        if let Some(banners) = self.marquee.as_mut() {
+            banners.clear();
+        }
         if let Some(sync) = &mut self.movement_sync {
             // The world clears the receipt here, even when a refused
             // transfer reconnects the same admission in this receive batch.

@@ -66,6 +66,7 @@ pub use eq_network_game::movement::{
     WalkCalibration,
 };
 pub use eq_network_game::pets;
+pub use eq_network_game::popups::Marquee;
 pub use eq_network_game::raid;
 pub use eq_network_game::reach;
 pub use eq_network_game::resurrection;

@@ -979,18 +979,18 @@ pub(super) struct ChatLook {
 }
 
 impl ChatLook {
+    /// The local colour for a server-supplied message type, where known.
+    pub(super) fn message_color(&self, message_type: u32) -> Option<[u8; 3]> {
+        let kind = u16::try_from(message_type).ok()?;
+        self.colors.get(&kind).copied().or_else(|| consider_rgb(kind))
+    }
+
     /// A line's colour comes from its type or, where that has no colour,
     /// from its channel. Fixed consider colours also work in bare chat.
     fn color(&self, line: &ChatLine) -> Color {
         let [red, green, blue] = line
             .message_type
-            .and_then(|kind| u16::try_from(kind).ok())
-            .and_then(|kind| {
-                self.colors
-                    .get(&kind)
-                    .copied()
-                    .or_else(|| consider_rgb(kind))
-            })
+            .and_then(|kind| self.message_color(kind))
             .or_else(|| {
                 eq_client_core::chat::color_kind(line.channel)
                     .and_then(|kind| self.colors.get(&kind).copied())

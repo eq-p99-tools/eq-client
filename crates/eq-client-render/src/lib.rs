@@ -71,6 +71,7 @@ mod loading;
 mod login;
 mod logs;
 mod map;
+mod marquee;
 mod motion;
 mod names;
 mod navigation;

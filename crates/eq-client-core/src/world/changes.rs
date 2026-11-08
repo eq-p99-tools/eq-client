@@ -141,6 +141,8 @@ pub struct Changes {
     /// The sounds the server asks the player's client to play, in the order
     /// sent.
     pub sounds: Vec<crate::effects::Cue>,
+    /// A timed banner received from the current admission.
+    pub marquee: Option<crate::Marquee>,
     /// Received flight record, independent of combat outcomes and inventory.
     pub projectile: Option<crate::effects::Projectile>,
     /// Answers to the front end's own requests.

@@ -5315,9 +5315,8 @@ fn the_zone_keeps_how_spawns_show_their_names_and_where_corpses_lie() {
 
 #[test]
 fn what_other_players_ask_of_the_player_changes_nothing_yet() {
-    use eq_network_game::popups::{Marquee, Popup};
+    use eq_network_game::popups::Popup;
     use eq_network_game::socials::{DuelRefusal, DuelUpdate, VoiceKind, VoiceMacro};
-    use std::time::Duration;
     let mut world = admitted();
     let spawns = world.spawns().len();
     let events = [
@@ -5327,14 +5326,6 @@ fn what_other_players_ask_of_the_player_changes_nothing_yet() {
             buttons: 0,
             duration: None,
             popup_id: 1,
-        }),
-        WorldEvent::Marquee(Marquee {
-            message_type: 15,
-            priority: 1,
-            fade_in: Duration::from_millis(100),
-            fade_out: Duration::from_millis(100),
-            duration: Duration::from_secs(3),
-            text: "Text".into(),
         }),
         WorldEvent::YellForHelp { spawn_id: 5 },
         WorldEvent::VoiceMacro(VoiceMacro {
@@ -5359,6 +5350,27 @@ fn what_other_players_ask_of_the_player_changes_nothing_yet() {
     }
     assert_eq!(world.spawns().len(), spawns);
     assert!(world.player().is_some());
+}
+
+#[test]
+fn marquees_only_project_from_the_admitted_stream() {
+    use std::time::Duration;
+    let banner = crate::Marquee {
+        message_type: 15,
+        priority: 510,
+        fade_in: Duration::from_millis(100),
+        fade_out: Duration::from_millis(500),
+        duration: Duration::from_secs(3),
+        text: "Synthetic banner".into(),
+    };
+    let event = WorldEvent::Marquee(banner.clone());
+    assert!(game(&mut ClientWorld::default(), event.clone()).ignored);
+    let mut world = admitted();
+    let changes = game(&mut world, event.clone());
+    assert_eq!(changes.marquee, Some(banner));
+    assert!(changes.notices.is_empty());
+    connection(&mut world, false, false);
+    assert!(game(&mut world, event).ignored);
 }
 
 #[test]
