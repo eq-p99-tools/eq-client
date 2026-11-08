@@ -671,13 +671,14 @@ fn scripted_owned_link_uses_the_current_received_item_without_sending() {
 
     start(&mut app, "compose_owned_link 8 23");
     frame_at(&mut app, 0);
+    frame_at(&mut app, 10);
     refused(&app, 1, "Item link composition needs the current admission");
     assert_eq!(app.world().resource::<ChatState>().draft(), "");
 
     let source = format!("compose_owned_link {ADMISSION} 23");
     start(&mut app, &source);
-    frame_at(&mut app, 10);
     frame_at(&mut app, 20);
+    frame_at(&mut app, 30);
     assert_eq!(
         app.world().resource::<RunStatus>().phase(),
         Phase::Completed
@@ -693,7 +694,8 @@ fn scripted_owned_link_uses_the_current_received_item_without_sending() {
         InventoryUpdate::Set(vec![item]),
     );
     start(&mut app, &source);
-    frame_at(&mut app, 30);
+    frame_at(&mut app, 40);
+    frame_at(&mut app, 50);
     refused(
         &app,
         1,
