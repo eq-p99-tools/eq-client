@@ -631,7 +631,9 @@ pub(super) fn update(
         };
     }
     for mut status in &mut statuses {
-        if inventory.received()
+        if inventory.bandage_stock_pending() {
+            status.0 = "Bandage stock is awaiting a server update".into();
+        } else if inventory.received()
             && !inventory.stale()
             && !inventory.ground_drop_pending()
             && !state.actions.message.is_empty()
