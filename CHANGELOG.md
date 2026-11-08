@@ -16,7 +16,9 @@
   carried weight. A speed recalibration preserves an ongoing descent and
   any landing report waiting for space in the session queue.
   A cursor resync can preserve the fall bound while movement is paused.
-  If the load and landing cost are unknown, the client says so in chat.
+  If the load and landing cost are unknown, the client sends no report and
+  says so in chat. Ground drops are local-only EQEmu, so this case does not
+  reach public servers.
   `ClientWorld::fall_weight` continues to return `Option<f32>`.
 
 - Set **Run a Little Faster** from 1.00x to 1.40x on the QoL page. Existing
