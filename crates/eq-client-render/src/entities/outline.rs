@@ -397,10 +397,10 @@ mod tests {
         session::spawns(&mut online, vec![session::pet(2, 1)]);
         assert_eq!(matches(&online, &watches), [nearby.rendered[&3]]);
         watches.remove("Gabober");
-        assert!(matches(&online, &watches).is_empty());
+        assert_eq!(matches(&online, &watches), []);
         watches.add("Gabober");
         session::admit(&mut online, 2, session::player(1));
-        assert!(matches(&online, &watches).is_empty());
+        assert_eq!(matches(&online, &watches), []);
     }
 
     #[test]

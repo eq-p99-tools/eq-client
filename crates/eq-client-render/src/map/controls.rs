@@ -235,8 +235,12 @@ pub(crate) fn update(
     *drawn = Some((list, watches.names.clone()));
 }
 
-/// The watch list consumes wheel input instead of zooming the world camera.
+/// Map lists consume wheel input instead of zooming the world camera.
 #[allow(clippy::needless_pass_by_value)]
+#[allow(
+    clippy::type_complexity,
+    reason = "the query shares scrolling across two Bevy lists"
+)]
 pub(crate) fn scroll(
     wheel: Res<windows::pointer::Wheel>,
     mut lists: Query<

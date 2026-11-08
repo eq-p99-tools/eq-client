@@ -372,7 +372,7 @@ mod tests {
         app.update();
         let state = app.world().resource::<Landmarks>();
         assert!(state.places.is_empty());
-        assert!(state.draft.is_empty());
+        assert_eq!(state.draft, "");
         assert!(!state.open);
         assert!(state.selected.is_none());
         session::news(
