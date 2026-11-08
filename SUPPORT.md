@@ -31,7 +31,7 @@ certification, and individual operations still validate their prerequisites.
 | Jumping | Yes | Yes | Yes | Yes |
 | Sitting, standing and ducking | Yes | Yes | Yes | Yes |
 | Casting and basic spellbook | Yes | Yes | Yes | Yes |
-| Beneficial-buff cancellation | No | Yes | No | No |
+| Beneficial-buff cancellation | Source-backed, public verification pending | Yes | No | No |
 | Move / delete book entries | Yes / No | Yes / Yes | No / No | No / No |
 | Read the spellbook standing | Local preference, every server | Local preference, every server | Local preference, every server | Local preference, every server |
 | Memorize without sitting | Yes (opt-in) | Yes (opt-in) | Yes (opt-in) | Yes (opt-in) |
@@ -52,7 +52,6 @@ certification, and individual operations still validate their prerequisites.
 | Groups | Yes | Yes | No | Yes |
 | Raids | No | Yes | No | No |
 | Skill training | Source-backed, public verification pending | Yes | No | No |
-| Beneficial-buff cancellation | Source-backed, public verification pending | Yes | No | No |
 | Read inventory books and notes | Yes | Yes | Yes | Yes |
 | Tradeskills | Carried combines and ordinary forge candidates. Live forge validation pending. | Yes | No | No |
 | Answer list presence polls | Yes (opt-in) | No | No | No |
