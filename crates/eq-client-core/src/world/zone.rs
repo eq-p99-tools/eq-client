@@ -17,6 +17,7 @@ use std::{collections::BTreeMap, time::Instant};
 #[derive(Default)]
 pub(super) struct Zone {
     pub(super) spawns: BTreeMap<u16, Spawn>,
+    pub(super) sees_invisible: bool,
     /// Level colors the server reported for spawns the player considered.
     pub(super) considered: BTreeMap<u16, ConColor>,
     /// The player's own posture, which the zone's spawns do not carry.
@@ -170,9 +171,9 @@ impl Zone {
     }
 
     /// A spawn shows or hides.
-    pub(super) fn visibility(&mut self, id: u16, invisible: bool) {
+    pub(super) fn visibility(&mut self, id: u16, state: crate::vision::Invisibility) {
         if let Some(spawn) = self.spawns.get_mut(&id) {
-            spawn.state.invisible = invisible;
+            state.apply(&mut spawn.state);
         }
     }
 

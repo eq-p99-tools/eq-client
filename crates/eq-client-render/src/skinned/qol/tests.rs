@@ -182,6 +182,8 @@ fn slider<'a>(page: &'a Page, id: &str) -> &'a Slider {
 #[test]
 fn dangerous_section_groups_the_existing_choices_and_run_speed() {
     let dangerous = [
+        Fix::WalkWhileWinded,
+        Fix::MemorizeWhileStanding,
         Fix::TakeEnvironmentalDamage,
         Fix::GillsForDays,
         Fix::Fly,

@@ -2,7 +2,8 @@
 use std::{collections::BTreeMap, fmt::Write as _, time::Duration};
 
 const HEADER: &str = "# eq-client socials v1";
-const MAX_SOCIALS: usize = 100;
+// Titanium's saved socials occupy ten pages of twelve records.
+const MAX_SOCIALS: usize = 120;
 const MAX_LINES: usize = 5;
 const MAX_LINE_BYTES: usize = 512;
 
@@ -324,5 +325,34 @@ mod tests {
         set(&mut read, "/social set Hello | /sit");
         assert_ne!(read.named("hello"), Some(first));
         assert!(Catalog::read(&format!("{HEADER}\nserial 0\n2\tHello\t/sit")).is_err());
+    }
+
+    #[test]
+    fn all_120_socials_survive_reload_and_edits_keep_their_hotbar_binding() {
+        use eq_client_core::hotbar::{Binding, Hotbar};
+
+        let mut catalog = Catalog::default();
+        for index in 1..=120 {
+            set(&mut catalog, &format!("/social set Macro{index} | /sit"));
+            if matches!(index, 100 | 101 | 120) {
+                assert_eq!(Catalog::read(&catalog.text()).unwrap().entries.len(), index);
+            }
+        }
+        let id = catalog.named("Macro101").unwrap();
+        let mut hotbar = Hotbar::default();
+        hotbar.0[0] = Some(Binding::Social(id));
+        set(&mut catalog, "/social set MACRO101 | /stand");
+        let saved = catalog.text();
+        let reloaded = Catalog::read(&saved).unwrap();
+        let reloaded_hotbar = Hotbar::read(&hotbar.text(), Hotbar::default());
+        assert_eq!(reloaded_hotbar.0[0], Some(Binding::Social(id)));
+        assert_eq!(reloaded.named("Macro101"), Some(id));
+        assert_eq!(reloaded.entries[&id].lines, ["/stand"]);
+
+        let overflow = Definition::new("Macro121", ["/sit".into()].into_iter()).unwrap();
+        assert!(catalog.set(overflow).is_err());
+        assert_eq!(catalog.text(), saved);
+        let oversized = saved.replacen("serial 120", "serial 121", 1) + "121\tMacro121\t/sit\n";
+        assert!(Catalog::read(&oversized).is_err());
     }
 }

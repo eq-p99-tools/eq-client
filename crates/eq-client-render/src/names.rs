@@ -113,7 +113,7 @@ pub(crate) fn update(
             .map(|spawn| &spawn.state)
             .filter(|spawn| shown(spawn.kind))
             .filter(|spawn| {
-                !spawn.invisible || options.qol.on(eq_client_core::qol::Fix::ShowInvisible)
+                world.can_see(spawn) || options.qol.on(eq_client_core::qol::Fix::ShowInvisible)
             })
         {
             let said = words(&spawn.name, spawn.kind, &spawn.name_parts, &spawn.listing);
@@ -413,7 +413,7 @@ mod tests {
             &mut app.world_mut().resource_mut::<OnlineState>(),
             [WorldEvent::Visibility {
                 spawn_id: 3,
-                invisible: true,
+                state: eq_client_core::vision::Invisibility::Titanium(1),
             }],
         );
         app.update();

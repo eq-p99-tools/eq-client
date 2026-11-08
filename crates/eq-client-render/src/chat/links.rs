@@ -204,7 +204,7 @@ mod tests {
                 .query::<(&crate::items::ItemButton, &TextSpan)>()
                 .single(world)
                 .unwrap();
-            assert_eq!(item.0.item_id, 42);
+            assert_eq!(item.item_id(), 42);
             assert_eq!(span.0, label);
         }
     }

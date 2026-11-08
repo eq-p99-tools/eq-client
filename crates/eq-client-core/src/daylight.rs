@@ -31,8 +31,8 @@ pub struct DayNight {
 /// to five in the morning, midnight two stops darker, bluer and greyer, and
 /// dawn and dusk warm. How dark the official client's night looks also
 /// depends on the character's race vision (infravision, ultravision) and on
-/// the light they carry, which this does not model. Replace these from noon
-/// and midnight captures of the official client taken from the same spot.
+/// the light they carry. Those inputs are separate from this baseline.
+/// Replace the baseline from noon and midnight captures of the official client taken from the same spot.
 pub const PROVISIONAL_DAY_NIGHT: DayNight = DayNight {
     dawn: (5 * 60, 7 * 60),
     dusk: (19 * 60, 21 * 60),

@@ -36,6 +36,11 @@ pub trait Liquids: Send + Sync {
     /// What fills the zone at a point, if anything.
     fn liquid_at(&self, point: Vec3) -> Option<Liquid>;
 
+    /// Whether the provider resolved the region at this point.
+    fn region_known(&self, point: Vec3) -> bool {
+        point.is_finite()
+    }
+
     /// Whether a straight path from one point to another passes through
     /// this liquid anywhere, however thin.
     fn passes_through(&self, from: Vec3, to: Vec3, liquid: Liquid) -> bool;

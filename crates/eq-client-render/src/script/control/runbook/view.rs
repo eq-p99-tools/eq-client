@@ -4,7 +4,7 @@ use bevy::{
     text::{Justify, LineBreak},
 };
 
-use super::{super::Bridge, Outcome, Row};
+use super::{super::Bridge, Row, State, admission_id};
 use crate::{
     login::{FrontEnd, Screen},
     online::OnlineState,
@@ -18,14 +18,20 @@ use crate::{
 #[derive(Component)]
 struct Root;
 #[derive(Component)]
-struct Title;
-#[derive(Component)]
-struct Progress;
+enum Heading {
+    Title,
+    Progress,
+    Health,
+    Export,
+}
 #[derive(Component)]
 struct Rows;
+#[derive(Component)]
+struct ExportButton;
 
 pub(in crate::script::control) fn install(app: &mut App) {
     app.add_systems(Startup, spawn)
+        .add_systems(Update, export.in_set(crate::Stage::Input))
         .add_systems(Update, refresh.in_set(crate::Stage::Present));
 }
 
@@ -56,17 +62,28 @@ fn spawn(mut commands: Commands) {
             })
             .with_children(|body| {
                 body.spawn((
-                    Title,
+                    Heading::Title,
                     theme::text("No checklist loaded", Size::Heading, theme::INK_BRIGHT),
                     TextLayout::new(Justify::Left, LineBreak::WordOrCharacter),
                 ));
                 body.spawn((
-                    Progress,
+                    Heading::Progress,
+                    theme::text("Harness reports appear here.", Size::Small, theme::INK),
+                    TextLayout::new(Justify::Left, LineBreak::WordOrCharacter),
+                ));
+                body.spawn((
+                    Heading::Health,
                     theme::text(
-                        "Waiting for the local test harness.",
+                        "Waiting for the control channel",
                         Size::Small,
-                        theme::INK,
+                        theme::INK_DIM,
                     ),
+                    TextLayout::new(Justify::Left, LineBreak::WordOrCharacter),
+                ));
+                body.spawn((
+                    Heading::Export,
+                    theme::text("", Size::Small, theme::INK_DIM),
+                    TextLayout::new(Justify::Left, LineBreak::WordOrCharacter),
                 ));
                 body.spawn((
                     Rows,
@@ -89,11 +106,7 @@ fn spawn(mut commands: Commands) {
                     ..default()
                 })
                 .with_children(|footer| {
-                    footer.spawn(theme::text(
-                        "A new harness run resets the checklist.",
-                        Size::Small,
-                        theme::INK_DIM,
-                    ));
+                    theme::button_with(footer, ExportButton, "Export JSON", Size::Small);
                     theme::button_with(
                         footer,
                         crate::skinned::Closes(WindowId::Runbook),
@@ -105,17 +118,36 @@ fn spawn(mut commands: Commands) {
     });
 }
 
-type Headings<'w, 's> =
-    Query<'w, 's, (&'static mut Text, Has<Title>), Or<(With<Title>, With<Progress>)>>;
+#[allow(clippy::needless_pass_by_value)]
+fn export(
+    clicks: crate::clicks::Clicks<ExportButton>,
+    mut bridge: ResMut<Bridge>,
+    (front, online, shown): (Res<FrontEnd>, Res<OnlineState>, Res<Shown>),
+    mut button: Query<(&Interaction, &mut BackgroundColor), With<ExportButton>>,
+) {
+    let runbook_id = bridge.runbook.as_ref().map(|run| run.id);
+    let usable = runbook_id.is_some() && !bridge.export.busy();
+    if let Ok((interaction, mut color)) = button.single_mut() {
+        color.0 = theme::button(usable, false, *interaction);
+    }
+    if usable
+        && shown.displayed(WindowId::Runbook)
+        && front.screen(&online) == Screen::World
+        && clicks.any()
+        && let Some(id) = runbook_id
+    {
+        let _ = bridge.export_runbook(id, None, admission_id(&online));
+    }
+}
 
 #[allow(clippy::needless_pass_by_value)]
 fn refresh(
     mut commands: Commands,
     bridge: Res<Bridge>,
     (front, online, shown): (Res<FrontEnd>, Res<OnlineState>, Res<Shown>),
-    (wheel, mut previous): (Res<Wheel>, Local<Option<(u64, usize)>>),
+    (wheel, mut previous): (Res<Wheel>, Local<Option<(u64, u64)>>),
     mut root: Query<&mut Node, With<Root>>,
-    mut headings: Headings,
+    mut headings: Query<(&Heading, &mut Text)>,
     mut list: Query<(Entity, &ComputedNode, &mut ScrollPosition), With<Rows>>,
 ) {
     let Ok(mut root) = root.single_mut() else {
@@ -135,20 +167,37 @@ fn refresh(
     if wheel.surface == Some(parent) {
         windows::scroll_by(&mut scroll, node, wheel.pixels);
     }
-    let Some(run) = &bridge.runbook else {
-        return;
-    };
-    let (mut passed, mut failed) = (0, 0);
-    for row in &run.rows {
-        match row.report.as_ref().map(|report| report.outcome) {
-            Some(Outcome::Passed) => passed += 1,
-            Some(Outcome::Failed) => failed += 1,
-            None => (),
+    let run = bridge.runbook.as_ref();
+    for (heading, mut text) in &mut headings {
+        match heading {
+            Heading::Health => {
+                let health = match bridge.channel_health() {
+                    "ready" => "Control channel ready",
+                    "io_error" => "Control file I/O failed",
+                    "request_error" => "Invalid control request",
+                    "stalled" => "Control exchange stalled",
+                    "closed" => "Control channel closed",
+                    _ => "Waiting for the control channel",
+                };
+                let value = admission_id(&online).map_or_else(
+                    || health.to_owned(),
+                    |id| format!("{health} · Admission #{id}"),
+                );
+                if text.0 != value {
+                    text.0 = value;
+                }
+            }
+            Heading::Export => {
+                let status = run.map_or("", |run| bridge.export.label(run));
+                if text.0 != status {
+                    status.clone_into(&mut text.0);
+                }
+            }
+            _ => (),
         }
     }
-    let reported = passed + failed;
-    // Reports are terminal within a run, so the count changes on every new row result.
-    let key = (run.id, reported);
+    let Some(run) = run else { return };
+    let key = (run.id, run.revision);
     if *previous == Some(key) {
         return;
     }
@@ -156,16 +205,24 @@ fn refresh(
         *scroll = ScrollPosition::default();
     }
     *previous = Some(key);
-    let total = run.rows.len();
-    for (mut text, title) in &mut headings {
-        text.0 = if title {
-            run.title.clone()
-        } else {
-            format!(
-                "Harness run #{} · {reported}/{total} reported · {passed} passed · {failed} failed",
-                run.id
-            )
-        };
+    let counts = run.counts();
+    for (heading, mut text) in &mut headings {
+        match heading {
+            Heading::Title => text.0.clone_from(&run.title),
+            Heading::Progress => {
+                text.0 = format!(
+                    "Harness run #{} · {} pending · {} running · {} blocked · {} skipped · {} passed · {} failed",
+                    run.id,
+                    counts.pending,
+                    counts.running,
+                    counts.blocked,
+                    counts.skipped,
+                    counts.passed,
+                    counts.failed,
+                );
+            }
+            _ => (),
+        }
     }
     commands
         .entity(parent)
@@ -178,9 +235,13 @@ fn refresh(
 }
 
 fn draw_row(list: &mut ChildSpawnerCommands, row: &Row) {
-    let (status, ink) = match row.report.as_ref().map(|report| report.outcome) {
-        Some(Outcome::Passed) => ("[x] Passed", theme::AGREED),
-        Some(Outcome::Failed) => ("[!] Failed", theme::INK_WARM),
+    let report = row.report();
+    let (status, ink) = match report.map(|report| report.state) {
+        Some(State::Running) => ("[…] Running", theme::INK_BRIGHT),
+        Some(State::Blocked) => ("[!] Blocked", theme::INK_WARM),
+        Some(State::Skipped) => ("[–] Skipped", theme::INK_DIM),
+        Some(State::Passed) => ("[x] Passed", theme::AGREED),
+        Some(State::Failed) => ("[!] Failed", theme::INK_WARM),
         None => ("[ ] Pending", theme::INK),
     };
     list.spawn((
@@ -198,10 +259,31 @@ fn draw_row(list: &mut ChildSpawnerCommands, row: &Row) {
             theme::text(format!("{status} · {}", row.item.label), Size::Body, ink),
             TextLayout::new(Justify::Left, LineBreak::WordOrCharacter),
         ));
-        if let Some(note) = row.report.as_ref().and_then(|report| report.note.as_ref()) {
+        if let Some(note) = report.and_then(|report| report.note.as_ref()) {
             entry.spawn((
                 theme::text(note.as_str(), Size::Small, theme::INK),
                 TextLayout::new(Justify::Left, LineBreak::WordOrCharacter),
+            ));
+        }
+        if let Some(evidence) = report.and_then(|report| report.evidence.as_ref()) {
+            entry.spawn((
+                theme::text(
+                    format!(
+                        "Reported evidence · {} · {}",
+                        evidence.kind.label(),
+                        evidence.reference
+                    ),
+                    Size::Small,
+                    theme::INK_DIM,
+                ),
+                TextLayout::new(Justify::Left, LineBreak::WordOrCharacter),
+            ));
+        }
+        if let Some(id) = report.and_then(|report| report.admission_id) {
+            entry.spawn(theme::text(
+                format!("Report scoped to admission #{id}"),
+                Size::Small,
+                theme::INK_DIM,
             ));
         }
     });

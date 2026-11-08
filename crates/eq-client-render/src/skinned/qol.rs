@@ -87,6 +87,8 @@ pub(super) fn pages<'a>(
             },
         ]);
     }
+    // Use the height authored for the chosen heading font. Skins without
+    // a usable label take both metrics and typography from the checkbox.
     let heading_height = caption.map_or(checkbox.area.height, |label| label.area.height);
     let layout = Layout::new(checkbox, heading_height, room, choices.len());
     let mut pieces = Vec::new();

@@ -381,7 +381,7 @@ impl Zones for Installed {
             Err(error) => return Built::Failed(error.to_string()),
         };
         let triangles = crate::collision_triangles(&asset);
-        let world = crate::collision_world(&asset, triangles.clone());
+        let world = crate::collision_world(&asset, triangles.clone(), None);
         let settings = Self::settings();
         let threads = navmesh::build_threads();
         let Some(loaded) = cache::load_or_build(

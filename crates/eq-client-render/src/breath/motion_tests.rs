@@ -1,10 +1,13 @@
 use super::*;
-use crate::{motion::Controls, online::testing, systems};
+use crate::{Collision, OrbitCamera, motion::Controls, online::testing, systems};
 use bevy::ecs::schedule::{LogLevel, ScheduleBuildSettings};
 use eq_client_assets::regions::{Liquid, ZoneRegions};
 use eq_client_core::{
-    BaseAttributes, ItemHitPoints, MovementRequest, WorldEvent, WorldUpdate,
-    hazards::TitaniumEnvironment, inventory::InventoryUpdate,
+    BaseAttributes, ItemHitPoints, MovementMode, MovementRequest, WorldEvent, WorldUpdate,
+    hazards::TitaniumEnvironment,
+    inventory::{InventoryUpdate, MoveRules},
+    movement::CollisionWorld,
+    world_position,
 };
 use std::{
     num::NonZeroU32,
@@ -39,6 +42,70 @@ fn worker_result_and_revision_are_visible_to_breath_in_the_same_frame() {
     );
     app.update();
     assert_report(&commands, 10, pending.position);
+}
+
+#[test]
+fn due_lava_heat_waits_for_the_matching_move_in_the_update_schedule() {
+    let (mut app, commands, updates) = scheduled();
+    prepare_submerged(&mut app);
+    app.world_mut().resource_mut::<OnlineState>().regions =
+        ZoneRegions::test_liquid_surface(4.0, Liquid::Lava);
+    app.update();
+    let pending = next_move(&commands);
+    let started = Instant::now().checked_sub(Duration::from_secs(2)).unwrap();
+    app.world_mut()
+        .resource_scope(|world, mut state: Mut<State>| {
+            state.heat = lava::Heat::default();
+            assert_eq!(
+                state.heat.advance(
+                    started,
+                    world.resource::<OnlineState>(),
+                    &world.resource::<OptionsState>().options.qol,
+                    world.resource::<SpellNames>(),
+                    LiquidBasis::Observed,
+                ),
+                None
+            );
+        });
+    let created = crate::motion::tests::age_pending(&mut app);
+    app.update();
+    assert!(commands.try_recv().is_err());
+
+    push(
+        &updates,
+        WorldEvent::MotionSent {
+            session_id: 11,
+            created,
+            position: pending.position,
+            refused: None,
+        },
+    );
+    push(
+        &updates,
+        WorldEvent::LiquidHazardRevision {
+            session_id: 11,
+            revision: 10,
+        },
+    );
+    app.update();
+    let ClientCommand::LiquidDamage {
+        session_id,
+        hazard,
+        amount,
+        observation,
+    } = commands.try_recv().unwrap()
+    else {
+        panic!("expected one lava report")
+    };
+    assert_eq!((session_id, hazard, amount), (11, LiquidHazard::Lava, 42));
+    assert_eq!(observation.revision, 10);
+    assert_eq!(observation.position, pending.position);
+    app.update();
+    assert!(
+        commands
+            .try_iter()
+            .all(|command| !matches!(command, ClientCommand::LiquidDamage { .. }))
+    );
 }
 
 #[test]
@@ -228,6 +295,84 @@ fn an_overdue_move_withholds_the_stale_gauge_and_recovers_on_a_late_result() {
     );
 }
 
+#[test]
+fn p99_swim_samples_the_native_head_after_the_worker_result() {
+    let (mut app, commands, updates) = scheduled();
+    let (surface, placement) = prepare_p99_surface(&mut app);
+
+    app.update();
+    let dive = next_move(&commands);
+    assert_eq!(dive.mode, MovementMode::Swim);
+    assert!(dive.position.z < surface.z - 0.025);
+    assert_eq!(
+        app.world().resource::<State>().probe(),
+        Some((Some(Medium::Air), Ok(Sample::CanBreathe))),
+    );
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .reset_all();
+    app.update();
+    assert!(app.world().resource::<State>().air().is_none());
+    assert_eq!(
+        app.world().resource::<State>().probe(),
+        Some((None, Err(Unavailable::MovementPending))),
+    );
+    // Subsequent sampling should not depend on how long it takes the test
+    // runner to deliver the result. A withdrawn stroke grant still allows air.
+    app.world_mut().resource_mut::<Controls>().speed = None;
+    push(
+        &updates,
+        WorldEvent::MotionSent {
+            session_id: 11,
+            created: dive.created,
+            position: dive.position,
+            refused: None,
+        },
+    );
+    app.update();
+    let state = app.world().resource::<State>();
+    assert!(matches!(
+        state.probe(),
+        Some((Some(Medium::Water), Ok(Sample::Submerged(_))))
+    ));
+    assert!(state.air().is_some());
+    due(&mut app, placement);
+    app.update();
+    assert_eq!(app.world().resource::<State>().air().unwrap().remaining, 0);
+    assert!(commands.try_recv().is_err());
+    let online = app.world().resource::<OnlineState>();
+    assert_eq!(online.server_placement().unwrap().position, surface);
+    assert_eq!(online.world().hit_points(), Some((80, 80)));
+
+    app.world_mut().resource_mut::<OnlineState>().regions = ZoneRegions::default();
+    app.update();
+    let state = app.world().resource::<State>();
+    assert_eq!(
+        state.probe(),
+        Some((None, Err(Unavailable::UnresolvedMedium)))
+    );
+    assert!(state.air().is_none());
+
+    app.world_mut().resource_mut::<OnlineState>().regions =
+        ZoneRegions::test_liquid_surface(0.0, Liquid::Water);
+    push(
+        &updates,
+        WorldEvent::Position {
+            spawn_id: 7,
+            position: surface,
+            velocity: [0.0; 3],
+            forward: 0.0,
+        },
+    );
+    app.update();
+    assert_eq!(
+        app.world().resource::<State>().probe(),
+        Some((Some(Medium::Air), Ok(Sample::CanBreathe))),
+    );
+    assert!(app.world().resource::<State>().air().is_none());
+    assert!(commands.try_recv().is_err());
+}
+
 fn scheduled() -> (
     App,
     mpsc::Receiver<ClientCommand>,
@@ -310,6 +455,51 @@ fn assert_report(
 }
 
 fn prepare_submerged(app: &mut App) -> u64 {
+    prepare_liquid(app, None)
+}
+
+fn prepare_p99_surface(app: &mut App) -> (eq_client_core::WorldPosition, u64) {
+    prepare_liquid(
+        app,
+        Some(vec![
+            Capability::Inventory,
+            Capability::Moving,
+            Capability::Swimming,
+            Capability::EnvironmentalDamage,
+            Capability::GameplayDepartures,
+        ]),
+    );
+    let regions = ZoneRegions::test_liquid_surface(0.0, Liquid::Water);
+    let pool = CollisionWorld::new([[
+        [-20.0, -20.0, -20.0],
+        [20.0, -20.0, -20.0],
+        [0.0, -20.0, 20.0],
+    ]])
+    .unwrap()
+    .with_liquids(crate::scene_collision::ZoneLiquids(
+        regions.clone().with_titanium_liquids(),
+    ))
+    .with_swim_origin(3.0);
+    app.insert_resource(Collision(Some(pool)));
+    let world = app.world_mut();
+    world
+        .query::<&mut OrbitCamera>()
+        .single_mut(world)
+        .unwrap()
+        .pitch = -1.0;
+
+    let basis = head::reference("[Example]", "Example").unwrap();
+    let mut online = world.resource_mut::<OnlineState>();
+    let player = online.world().player().unwrap();
+    let eye = basis.for_player(online.world(), player).unwrap();
+    let surface = world_position([0.0, 0.025 - eye, 0.0], 0.0);
+    online.regions = regions;
+    testing::place(&mut online, surface);
+    (surface, online.placement_revision())
+}
+
+fn prepare_liquid(app: &mut App, capabilities: Option<Vec<Capability>>) -> u64 {
+    let local_reports = capabilities.is_none();
     let mut online = app.world_mut().resource_mut::<OnlineState>();
     let mut player = online.world().player().unwrap().clone();
     player.base_attributes = Some(BaseAttributes {
@@ -321,7 +511,24 @@ fn prepare_submerged(app: &mut App) -> u64 {
         base_fire_resistance: 25,
         has_alternate_advancement: false,
     });
-    testing::admit(&mut online, 11, player);
+    if let Some(capabilities) = capabilities {
+        online.plan_inventory_as(Some(MoveRules::EqEmu));
+        testing::news(
+            &mut online,
+            [WorldEvent::Entered {
+                session_id: 11,
+                capabilities,
+                choices: Vec::new(),
+                zone: "example".to_owned(),
+                player: Box::new(player),
+                far_clip: None,
+                spell_landing_flag: None,
+            }],
+        );
+        testing::connect(&mut online, true);
+    } else {
+        testing::admit(&mut online, 11, player);
+    }
     testing::inventory(&mut online, InventoryUpdate::Snapshot(Vec::new()));
     testing::buffs(&mut online, default());
     let description = eq_client_core::zones::titanium_description(&[0; 700]).unwrap();
@@ -335,12 +542,17 @@ fn prepare_submerged(app: &mut App) -> u64 {
                 maximum: 80,
                 items: ItemHitPoints::LeftOutOfCurrent,
             },
-            WorldEvent::LiquidHazardRevision {
-                session_id: 11,
-                revision: 9,
-            },
         ],
     );
+    if local_reports {
+        testing::news(
+            &mut online,
+            [WorldEvent::LiquidHazardRevision {
+                session_id: 11,
+                revision: 9,
+            }],
+        );
+    }
     online.regions = ZoneRegions::test_liquid_surface(10.0, Liquid::Water);
     let placement = online.placement_revision();
     let world = app.world_mut();

@@ -609,10 +609,10 @@ impl Controls {
             && grant
                 .units_per_second
                 .is_some_and(|value| value.is_finite() && value > 0.0);
-        let descent = self
+        let in_flight = self
             .airborne
             .take()
-            .filter(|airborne| airborne.velocity() < 0.0);
+            .filter(|airborne| airborne.peak().is_some());
         let unreported = self.unreported;
         self.reset(grant.units_per_second);
         self.autorun = autorun;
@@ -621,10 +621,10 @@ impl Controls {
         self.strafe_speed = grant.strafe_units_per_second;
         self.diagonal_rates = grant.diagonal;
         if grant.falls {
-            // A speed recalibration may withdraw input mid-fall. Keep its
-            // vertical history and any unsent cost, but release lateral drift.
-            // A received placement or lifecycle reset calls reset separately.
-            let mut airborne = descent.unwrap_or_default();
+            // A speed recalibration may withdraw input anywhere in the jump
+            // or fall. Keep the vertical history and any unsent cost, and
+            // release lateral drift. Placement and lifecycle events reset it.
+            let mut airborne = in_flight.unwrap_or_default();
             airborne.limit_drift(0.0);
             self.airborne = Some(airborne);
             self.unreported = unreported;
@@ -892,9 +892,7 @@ pub(super) fn input(
             .zip(online.world().player())
             .is_some_and(|((world, (body, _)), player)| {
                 let origin = Vec3::from_array(eq_client_core::render_position(player.position));
-                world
-                    .swim_depth(origin - Vec3::Y * body.feet_offset, body.height)
-                    .is_some()
+                world.in_swimmable_water(origin - Vec3::Y * body.feet_offset, body.height)
             });
     if swimming {
         controls.jump = None;
@@ -1242,7 +1240,7 @@ pub(super) fn input(
                     false,
                     water_enabled,
                 );
-                if water_enabled && world.swim_depth(landed, body.height).is_some() {
+                if water_enabled && world.in_swimmable_water(landed, body.height) {
                     return None;
                 }
                 if controller.velocity() != 0.0
@@ -1343,9 +1341,7 @@ pub(super) fn input(
     let entering = !placement_blocked
         && water_enabled
         && !swimming
-        && world
-            .swim_depth(position - Vec3::Y * body.feet_offset, body.height)
-            .is_some();
+        && world.in_swimmable_water(position - Vec3::Y * body.feet_offset, body.height);
     // The turn keys turn at their own rate. Camera-relative movement faces
     // its direction unless mouse-look is steering the body. The sent heading
     // follows the facing within the same sample budget as the position.
@@ -1543,7 +1539,7 @@ fn fall_step_with_water(
         }
         *airborne = trial;
         position = next;
-        if water_enabled && world.swim_depth(position, height).is_some() {
+        if water_enabled && world.in_swimmable_water(position, height) {
             break;
         }
     }
@@ -5868,6 +5864,10 @@ pub(super) mod tests {
     /// The damage the landing sample reported, after the sample itself.
     fn reported(app: &mut App, receiver: &mpsc::Receiver<ClientCommand>) -> Option<ClientCommand> {
         app.update();
+        take_landing_report(receiver)
+    }
+
+    fn take_landing_report(receiver: &mpsc::Receiver<ClientCommand>) -> Option<ClientCommand> {
         let ClientCommand::Move(request) = receiver.try_recv().unwrap() else {
             panic!("expected the landing sample")
         };
@@ -5914,26 +5914,34 @@ pub(super) mod tests {
     fn landing_during_a_drop_reports_damage_and_keeps_custody_held() {
         use eq_client_core::inventory::{InventorySlot, InventoryUpdate};
 
-        for (updates, amount) in [
-            (vec![], Some(276)),
+        for (updates, uncertain_purse, amount) in [
+            (vec![], false, Some(276)),
+            (vec![], true, None),
             (
                 vec![
                     InventoryUpdate::Set(vec![drop_item(1, 19)]),
                     InventoryUpdate::Remove(InventorySlot::CURSOR),
                 ],
+                false,
                 Some(276),
             ),
-            (vec![InventoryUpdate::Invalidated], None),
+            (vec![InventoryUpdate::Invalidated], false, None),
         ] {
-            let (mut app, receiver) = landing(Some(10), eq_client_core::Capability::ALL.to_vec());
+            let (mut app, _) = landing(Some(10), eq_client_core::Capability::ALL.to_vec());
             let mut online = app.world_mut().resource_mut::<online::OnlineState>();
             hold_drop(
                 &mut online,
                 50,
                 std::iter::once(InventoryUpdate::Cursor(vec![drop_item(1_500, 18)])).chain(updates),
             );
+            if uncertain_purse {
+                online::testing::news(
+                    &mut online,
+                    [eq_client_core::WorldEvent::PurseUncertain { session_id: 11 }],
+                );
+                assert!(online.world().fall_weight().is_none());
+            }
             let mut controls = app.world_mut().resource_mut::<Controls>();
-            let (last_accepted, climb_sent) = (controls.last_accepted, controls.climb_sent);
             controls.grant(eq_client_core::world::MotionGrant {
                 units_per_second: None,
                 backward_units_per_second: None,
@@ -5942,10 +5950,20 @@ pub(super) mod tests {
                 diagonal: eq_client_core::DiagonalRates::default(),
                 falls: true,
             });
-            controls.last_accepted = last_accepted;
-            controls.climb_sent = climb_sent;
+            // Age the new sample window past its pacing gate and let the
+            // real update reannounce the climb before the landing sample.
+            controls.last_accepted = Instant::now()
+                .checked_sub(Duration::from_millis(100))
+                .unwrap();
+            let (sender, receiver) = mpsc::sync_channel(3);
+            app.insert_resource(crate::outbox::Outbox::new(Some(sender)));
+            app.update();
+            assert!(matches!(
+                receiver.try_recv(),
+                Ok(ClientCommand::ClimbReach { session_id: 11, .. })
+            ));
             assert_eq!(
-                reported(&mut app, &receiver),
+                take_landing_report(&receiver),
                 amount.map(|amount| ClientCommand::EnvironmentalDamage {
                     session_id: 11,
                     hazard: Hazard::Falling,
@@ -6054,6 +6072,51 @@ pub(super) mod tests {
                 safe_fall: false
             })
         );
+    }
+
+    #[test]
+    fn speed_recalibration_preserves_the_jump_at_rise_and_apex() {
+        use eq_client_core::movement::{MotionStep, PROGRAM_STEP_SECONDS};
+
+        let floor = CollisionWorld::new(flat_surface(0.0)).unwrap();
+        let vertical = VerticalPhysics {
+            gravity: 100.0,
+            jump_speed: 25.0,
+            air_factor: 1.0,
+            ground_tolerance: 0.0,
+            ..physics(InstalledClient::Titanium, None)
+        };
+        let step = |jump| MotionStep {
+            horizontal: Vec3::X,
+            jump,
+            seconds: PROGRAM_STEP_SECONDS,
+            height: 6.0,
+        };
+        let mut airborne = AirborneController::default();
+        let mut feet = airborne.step(&floor, Vec3::ZERO, vertical, step(true));
+        for expected_velocity in [20.0_f32, 15.0, 10.0, 5.0, 0.0] {
+            let velocity = airborne.velocity();
+            assert!((velocity - expected_velocity).abs() < f32::EPSILON);
+            let peak = airborne.peak();
+            assert!(peak.is_some());
+            let mut controls = Controls {
+                airborne: Some(airborne.clone()),
+                ..Controls::default()
+            };
+            controls.grant(eq_client_core::world::MotionGrant {
+                units_per_second: Some(4.0),
+                backward_units_per_second: None,
+                walk_units_per_second: None,
+                strafe_units_per_second: None,
+                diagonal: DiagonalRates::default(),
+                falls: true,
+            });
+            let preserved = controls.airborne.unwrap();
+            assert!((preserved.velocity() - velocity).abs() < f32::EPSILON);
+            assert_eq!(preserved.peak(), peak);
+            assert_eq!(preserved.drift(), Vec3::ZERO);
+            feet = airborne.step(&floor, feet, vertical, step(false));
+        }
     }
 
     #[test]

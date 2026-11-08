@@ -1,5 +1,7 @@
 //! Tabbed chat, with mobile palette colors and independent scroll positions.
 use crate::{
+    online::OnlineState,
+    profile_files::CharacterProfile,
     theme::{self, Size},
     windows::WindowId,
 };
@@ -9,11 +11,11 @@ use bevy::{
     window::PrimaryWindow,
 };
 use eq_client_core::{
-    ClientCommand, ItemLink, OutboundChat,
+    ClientCommand, GameDialect, ItemLink, OutboundChat,
     chat::{Arrival, ChannelName, ChatHistory, ChatLine, ChatTab, Message, Source, channel_rgb},
     qol::{Fix, Settings},
 };
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 
 mod draft;
 mod drag;
@@ -115,8 +117,11 @@ impl Default for TabView {
 #[derive(Resource, Default)]
 pub(super) struct ChatState {
     pub history: ChatHistory,
-    /// Admission and arrival IDs for recent server messages with item links.
-    received_links: VecDeque<(u64, u64)>,
+    link_scope: Option<LinkScope>,
+    /// Retained server arrivals whose links belong to this scope.
+    received_links: BTreeSet<u64>,
+    /// The smaller admission-scoped index exposed in script reports.
+    script_link_messages: VecDeque<(u64, u64)>,
     pub(crate) groups: Groups,
     views: BTreeMap<ChatTab, TabView>,
     pub hovered: bool,
@@ -143,6 +148,13 @@ pub(super) struct ChatState {
     refusals: Refusals,
 }
 
+struct LinkScope {
+    connection: u64,
+    dialect: GameDialect,
+    profile: Option<CharacterProfile>,
+    admission: u64,
+}
+
 /// The refusals said, so the same one again, as a held key repeats it each
 /// frame, is not said too soon.
 #[derive(Default)]
@@ -160,17 +172,21 @@ const REPEATED: std::time::Duration = std::time::Duration::from_secs(3);
 const SCRIPT_LINK_MESSAGES: usize = 16;
 
 impl ChatState {
-    pub(super) fn receive(&mut self, line: ChatLine, admission: Option<u64>) {
+    pub(super) fn receive(&mut self, line: ChatLine, online: &OnlineState) {
         let linked = line.source == Source::Server
             && !line.message.text.is_empty()
             && !line.message.item_links.is_empty();
         self.history.push(line);
-        if linked && let Some(admission) = admission {
-            if self.received_links.len() == SCRIPT_LINK_MESSAGES {
-                self.received_links.pop_front();
-            }
+        if linked && let Ok(admission) = active_link_admission(online.world()) {
+            self.admit_links(online);
+            let arrival = self.history.revision();
             self.received_links
-                .push_back((admission, self.history.revision()));
+                .retain(|id| self.history.line(*id).is_some());
+            self.received_links.insert(arrival);
+            if self.script_link_messages.len() == SCRIPT_LINK_MESSAGES {
+                self.script_link_messages.pop_front();
+            }
+            self.script_link_messages.push_back((admission, arrival));
         }
     }
 
@@ -188,49 +204,99 @@ impl ChatState {
         Ok(())
     }
 
-    pub(super) fn reset_received_links(&mut self) {
+    pub(super) fn clear_link_scope(&mut self) {
+        self.link_scope = None;
         self.received_links.clear();
-        if self.draft.has_links() {
-            self.draft.clear();
+        self.script_link_messages.clear();
+        self.draft.demote_links();
+    }
+
+    /// Links can follow a known profile through zoning on the same connection.
+    /// Without a known profile, keep them only within the observed admission.
+    pub(super) fn admit_links(&mut self, online: &OnlineState) {
+        let world = online.world();
+        let Some(admission) = world.session_id() else {
+            return;
+        };
+        let profile = world
+            .world_name()
+            .zip(world.player().map(|player| player.name.as_str()));
+        let dialect = world.generation();
+        let connection = online.connection_revision;
+        if let Some(scope) = &mut self.link_scope
+            && scope.connection == connection
+            && scope.dialect == dialect
+            && match (&scope.profile, profile) {
+                (Some(previous), Some((server, character))) => {
+                    previous.world == server && previous.character == character
+                }
+                (None, _) => scope.admission == admission,
+                (Some(_), None) => false,
+            }
+        {
+            if scope.admission != admission {
+                self.script_link_messages.clear();
+                scope.admission = admission;
+            }
+            if scope.profile.is_none() {
+                scope.profile = profile.map(|(server, character)| CharacterProfile {
+                    world: server.into(),
+                    character: character.into(),
+                });
+            }
+            return;
         }
+        self.clear_link_scope();
+        self.link_scope = Some(LinkScope {
+            connection,
+            dialect,
+            profile: profile.map(|(server, character)| CharacterProfile {
+                world: server.into(),
+                character: character.into(),
+            }),
+            admission,
+        });
     }
 
     /// Insert the exact received item body represented by a clicked label.
     pub(super) fn compose_clicked_link(
         &mut self,
-        link: &ItemLink,
-        world: &eq_client_core::world::ClientWorld,
+        (arrival, ordinal): (u64, usize),
+        online: &OnlineState,
     ) -> Result<(), &'static str> {
-        let admission = active_link_admission(world)?;
-        let known = self.script_links(admission).any(|(_, _, current)| {
-            current.item_id == link.item_id
-                && current.body == link.body
-                && current.text == link.text
-        });
-        if !known {
-            return Err("This item link is no longer available in this admission");
-        }
-        self.draft
-            .insert_link(link, (admission, world.generation()))
+        active_link_admission(online.world())?;
+        self.admit_links(online);
+        let link = self
+            .received_links
+            .contains(&arrival)
+            .then(|| self.history.line(arrival))
+            .flatten()
+            .and_then(|line| line.message.item_links.get(ordinal))
+            .ok_or("This item link is no longer available")?;
+        self.draft.insert_link(link, online.world().generation())
     }
 
-    /// Compose directly from this admission's worn or carried inventory.
+    /// Use the slot to select the displayed record. The record supplies the link.
     pub(super) fn compose_owned_link(
         &mut self,
         slot: eq_client_core::inventory::InventorySlot,
-        world: &eq_client_core::world::ClientWorld,
+        online: &OnlineState,
     ) -> Result<(), String> {
-        let admission = active_link_admission(world)?;
+        let world = online.world();
+        active_link_admission(world)?;
         let generation = world.generation();
         if generation != eq_client_core::GameDialect::Titanium {
             return Err("Inventory item links are unavailable on this server".into());
         }
-        let link = world
+        let item = world
             .inventory()
-            .owned_titanium_link(slot)
-            .map_err(|error| error.to_string())?;
+            .items()
+            .get(&slot)
+            .ok_or("That inventory slot is empty")?;
+        let link = item.titanium_link().map_err(|error| error.to_string())?;
+        self.admit_links(online);
         self.draft
-            .insert_link(&link, (admission, generation))
+            .insert_link(&link, generation)
             .map_err(str::to_owned)
     }
 
@@ -238,25 +304,26 @@ impl ChatState {
     pub(super) fn compose_link(
         &mut self,
         (admission, message, ordinal): (u64, u64, usize),
-        world: &eq_client_core::world::ClientWorld,
+        online: &OnlineState,
     ) -> Result<(), &'static str> {
+        let world = online.world();
         if active_link_admission(world)? != admission {
             return Err("Item link composition needs the current admission");
         }
+        self.admit_links(online);
         let (_, _, link) = self
             .script_links(admission)
             .find(|(id, index, _)| *id == message && *index == ordinal)
             .ok_or("Item link is unknown or no longer available")?;
         let link = link.clone();
-        self.draft
-            .insert_link(&link, (admission, world.generation()))
+        self.draft.insert_link(&link, world.generation())
     }
 
     pub(super) fn script_links(
         &self,
         admission: u64,
     ) -> impl Iterator<Item = (u64, usize, &ItemLink)> {
-        self.received_links
+        self.script_link_messages
             .iter()
             .rev()
             .filter(move |(scope, _)| *scope == admission)
@@ -1304,7 +1371,8 @@ fn spawn_line(
             },
         ));
     } else {
-        let message = super::items::spawn_message(parent, &message, color, size);
+        let arrival = (line.source == Source::Server).then_some(id);
+        let message = super::items::spawn_message(parent, &message, arrival, color, size);
         parent.commands().entity(message).insert(LineId(id));
     }
 }
@@ -1349,10 +1417,12 @@ fn submit_draft(
 ) {
     let result = (|| -> Result<(), Unsent> {
         if state.draft.has_links() {
+            active_link_admission(online.world()).map_err(str::to_owned)?;
+            state.admit_links(online);
+        }
+        if state.draft.has_links() {
             let world = online.world();
-            let wire = state
-                .draft
-                .encoded(world.session_id(), world.generation())?;
+            let wire = state.draft.encoded();
             let active = state
                 .groups
                 .active(state.groups.owner())
@@ -2255,7 +2325,7 @@ mod tests {
             .query::<(&TextSpan, &super::super::items::ItemButton)>();
         let spans: Vec<_> = links
             .iter(app.world())
-            .map(|(span, link)| (span.0.clone(), link.0.item_id))
+            .map(|(span, link)| (span.0.clone(), link.item_id()))
             .collect();
         assert_eq!(spans, [("Fine Steel Long Sword".to_owned(), 42)]);
         // Turned off, they read as the official client's do.
@@ -2917,8 +2987,9 @@ mod tests {
             text_end: "Synthetic blade".len(),
         };
         received.message.item_links.push(link.clone());
-        chat.receive(received, Some(1));
-        chat.compose_clicked_link(&link, online.world()).unwrap();
+        chat.receive(received, &online);
+        let arrival = chat.history.revision();
+        chat.compose_clicked_link((arrival, 0), &online).unwrap();
         chat.draft.home();
         chat.draft.insert_text("/tell Friend See ");
         chat.draft.end();
@@ -2944,10 +3015,155 @@ mod tests {
         assert_eq!(chat.draft.text(), "");
         assert!(!typing.composing);
 
-        chat.compose_clicked_link(&link, online.world()).unwrap();
-        chat.reset_received_links();
-        assert_eq!(chat.draft.text(), "");
-        assert!(chat.compose_clicked_link(&link, online.world()).is_err());
+        chat.compose_clicked_link((arrival, 0), &online).unwrap();
+        chat.clear_link_scope();
+        assert_eq!(chat.draft.text(), "Synthetic blade");
+        assert!(!chat.draft.has_links());
+        assert!(chat.compose_clicked_link((arrival, 0), &online).is_err());
+    }
+
+    #[test]
+    fn retained_links_outlive_the_script_index_and_follow_the_same_profile() {
+        use crate::online::testing;
+        let mut online = OnlineState::new(true);
+        let mut player = testing::player(1);
+        player.name = "Example".into();
+        testing::news(
+            &mut online,
+            [eq_client_core::WorldEvent::WorldName {
+                short_name: "synthetic".into(),
+            }],
+        );
+        testing::admit(&mut online, 1, player.clone());
+        let mut chat = ChatState::default();
+        let received = |id, channel| {
+            let mut line = system_line("Blade");
+            line.channel = channel;
+            line.source = Source::Server;
+            line.message.item_links.push(ItemLink {
+                body: format!("0{id:05X}{:031X}1234ABCD", 0),
+                text: "Blade".into(),
+                item_id: id,
+                start: 0,
+                end: 0,
+                text_start: 0,
+                text_end: 5,
+            });
+            line
+        };
+        chat.receive(received(42, ChannelName::Guild), &online);
+        let first = chat.history.revision();
+        for id in 43..59 {
+            chat.receive(received(id, ChannelName::Auction), &online);
+        }
+        assert_eq!(chat.script_links(1).count(), SCRIPT_LINK_MESSAGES);
+        assert!(chat.compose_link((1, first, 0), &online).is_err());
+        assert!(chat.compose_clicked_link((first, 1), &online).is_err());
+        chat.draft.insert_text("See ");
+        chat.compose_clicked_link((first, 0), &online).unwrap();
+        let wire = chat.draft.encoded();
+
+        let connection = online.connection_revision;
+        testing::admit(&mut online, 2, player.clone());
+        assert_eq!(online.connection_revision, connection);
+        chat.admit_links(&online);
+        assert_eq!(chat.draft.encoded(), wire);
+        assert_eq!(chat.script_links(2).count(), 0);
+        chat.compose_clicked_link((first, 0), &online).unwrap();
+        for _ in 0..200 {
+            chat.receive(received(42, ChannelName::Guild), &online);
+        }
+        assert!(chat.history.line(first).is_none());
+        assert!(chat.compose_clicked_link((first, 0), &online).is_err());
+        let duplicate = chat.history.revision();
+        assert!(chat.compose_clicked_link((duplicate, 0), &online).is_ok());
+
+        player.name = "Another".into();
+        testing::admit(&mut online, 3, player);
+        chat.admit_links(&online);
+        assert_eq!(chat.draft.encoded(), "See BladeBladeBlade");
+        assert!(chat.history.line(duplicate).is_some());
+        assert!(chat.compose_clicked_link((duplicate, 0), &online).is_err());
+    }
+
+    #[test]
+    fn inventory_link_composition_uses_the_displayed_metadata_during_moves() {
+        use crate::online::testing;
+        use eq_client_core::inventory::{InventorySlot, InventoryUpdate};
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(1));
+        let mut item = crate::preview::items()[0].clone();
+        item.slot = InventorySlot(23);
+        item.rules.titanium_link_hash = Some(0x1234_abcd);
+        let mut unrelated = item.clone();
+        unrelated.slot = InventorySlot(24);
+        let mut chat = ChatState::default();
+        testing::inventory(
+            &mut online,
+            InventoryUpdate::Snapshot(vec![item.clone(), unrelated.clone()]),
+        );
+        chat.compose_owned_link(item.slot, &online).unwrap();
+        let original = chat.draft.encoded();
+
+        unrelated.slot = InventorySlot(25);
+        testing::inventory(
+            &mut online,
+            InventoryUpdate::Prediction(vec![item.clone(), unrelated.clone()]),
+        );
+        let before = online.world().inventory().clone();
+        assert!(before.predicted());
+        chat.draft.clear();
+        chat.compose_owned_link(item.slot, &online).unwrap();
+        assert_eq!(chat.draft.encoded(), original);
+        assert_eq!(online.world().inventory(), &before);
+
+        item.slot = InventorySlot::CURSOR;
+        testing::inventory(
+            &mut online,
+            InventoryUpdate::Prediction(vec![item.clone(), unrelated]),
+        );
+        chat.draft.clear();
+        chat.compose_owned_link(item.slot, &online).unwrap();
+        assert_eq!(chat.draft.encoded(), original);
+        testing::inventory(&mut online, InventoryUpdate::Remove(item.slot));
+        assert!(chat.compose_owned_link(item.slot, &online).is_err());
+        assert_eq!(chat.draft.encoded(), original);
+    }
+
+    #[test]
+    fn a_link_stays_available_while_the_same_bandage_slot_is_uncertain() {
+        use crate::online::testing;
+        use eq_client_core::inventory::{InventorySlot, InventoryUpdate};
+
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(1));
+        let slot = InventorySlot(23);
+        let mut bandage = crate::preview::items()[0].clone();
+        bandage.slot = slot;
+        bandage.details.name = "Bandage".into();
+        bandage.rules.item_type = eq_client_core::bind_wound::BANDAGE;
+        bandage.rules.titanium_link_hash = Some(0x1234_abcd);
+        testing::inventory(&mut online, InventoryUpdate::Snapshot(vec![bandage]));
+        let mut chat = ChatState::default();
+        chat.compose_owned_link(slot, &online).unwrap();
+        let original = chat.draft.encoded();
+
+        testing::inventory(&mut online, InventoryUpdate::BandageStockPending(true));
+        assert!(online.world().inventory().predicted());
+        chat.draft.clear();
+        chat.compose_owned_link(slot, &online).unwrap();
+        assert_eq!(chat.draft.encoded(), original);
+
+        testing::inventory(
+            &mut online,
+            InventoryUpdate::BandageStockUncertain(vec![slot]),
+        );
+        let inventory = online.world().inventory();
+        assert!(!inventory.predicted());
+        assert!(!inventory.custody_known(slot));
+        chat.draft.clear();
+        chat.compose_owned_link(slot, &online).unwrap();
+        assert_eq!(chat.draft.encoded(), original);
     }
 
     #[test]
@@ -2958,6 +3174,7 @@ mod tests {
         crate::online::testing::admit(&mut online, 1, crate::online::testing::player(1));
         online.chat_link_expansion = Some(eq_client_core::chat::LinkExpansion::EQEMU_TITANIUM);
         let mut chat = ChatState::default();
+        chat.admit_links(&online);
         let label = "Blade!";
         let link = ItemLink {
             body: format!("00002A{:031X}1234ABCD", 0),
@@ -2976,7 +3193,7 @@ mod tests {
                 if index != 0 {
                     chat.draft.insert_text(" ");
                 }
-                chat.draft.insert_link(&link, (1, dialect)).unwrap();
+                chat.draft.insert_link(&link, dialect).unwrap();
             }
             chat.draft.insert_text(suffix);
             let before = chat.draft.text().to_owned();
@@ -3013,7 +3230,7 @@ mod tests {
             }
         }
         chat.draft.replace(&format!("/tell {} ", "x".repeat(64)));
-        chat.draft.insert_link(&link, (1, dialect)).unwrap();
+        chat.draft.insert_link(&link, dialect).unwrap();
         let before = chat.draft.text().to_owned();
         submit_draft(
             &mut chat,
@@ -3760,7 +3977,7 @@ mod tests {
             .query::<(&TextSpan, &super::super::items::ItemButton)>();
         let spans: Vec<_> = links
             .iter(app.world())
-            .map(|(span, link)| (span.0.clone(), link.0.item_id))
+            .map(|(span, link)| (span.0.clone(), link.item_id()))
             .collect();
         assert_eq!(spans, [("Fine Steel Long Sword".to_owned(), 42)]);
         assert_eq!(
@@ -4140,7 +4357,7 @@ mod tests {
         assert!(spans.iter().any(|span| {
             world
                 .get::<crate::items::ItemButton>(span)
-                .is_some_and(|link| link.0.item_id == 42)
+                .is_some_and(|link| link.item_id() == 42)
         }));
         assert_eq!(world.get::<Text>(main_input).unwrap().0, "");
         assert_eq!(

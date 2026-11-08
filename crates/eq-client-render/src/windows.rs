@@ -13,7 +13,7 @@ mod stack;
 mod store;
 pub(super) use layout::Layouts;
 pub(crate) use registry::{Layer, Opening, Placement, Toggle, WindowId};
-pub(crate) use stack::{SelectorButton, Shown, Stack};
+pub(crate) use stack::{SelectorButton, Shown, Stack, restack_popups};
 #[cfg(test)]
 pub(crate) use stack::{raise_opened, restack, toggle};
 

@@ -31,6 +31,8 @@ pub(super) struct OnlineState {
     pub enabled: bool,
     /// Established backend policy for the currently attached producer.
     pub(super) chat_link_expansion: Option<eq_client_core::chat::LinkExpansion>,
+    /// Changes when a new worker replaces the current connection.
+    pub(super) connection_revision: u64,
     server_placement: Option<ServerPlacement>,
     placement_revision: u64,
     loading: super::background::Background<Result<super::zone::PreparedEntry, String>>,
@@ -63,13 +65,17 @@ impl OnlineState {
         })
     }
 
-    /// A received placement or reset breaks continuity for local hazards.
+    /// A placement or reset breaks continuity for local hazards.
     pub(super) const fn placement_revision(&self) -> u64 {
         self.placement_revision
     }
 
     fn observe_server_placement(&mut self, changes: &Changes) {
-        if changes.reset.is_some() || changes.entered || changes.placed.is_some() {
+        if changes.reset.is_some()
+            || changes.entered
+            || changes.placed.is_some()
+            || changes.local_pad.is_some()
+        {
             self.placement_revision = self.placement_revision.wrapping_add(1);
         }
         if changes.reset.is_some() {
@@ -227,6 +233,7 @@ impl OnlineState {
     /// said, keeping the player's own choices, and no character choice is
     /// in progress.
     pub(super) fn restart(&mut self) {
+        self.connection_revision = self.connection_revision.wrapping_add(1);
         self.deletion.ended();
         self.chat_link_expansion = None;
         self.world.restart();
@@ -334,6 +341,10 @@ impl OnlineState {
         self.world.close_reading();
     }
 
+    pub(super) fn close_player_inspection(&mut self) {
+        self.world.close_player_inspection();
+    }
+
     /// The player asked to open a world container.
     pub(super) fn ask_container(&mut self, drop_id: u32) {
         self.world.ask_container(drop_id);
@@ -377,6 +388,7 @@ impl OnlineState {
             regions: eq_client_assets::regions::ZoneRegions::default(),
             enabled,
             chat_link_expansion: None,
+            connection_revision: 0,
             server_placement: None,
             placement_revision: 0,
             loading: default(),
@@ -819,11 +831,10 @@ pub(super) fn receive(
         panels.merchant_news(&update, &changes, &state.world);
         if let Some(reason) = changes.reset {
             chat.socials = super::socials::Inbox::default();
-            if matches!(
-                reason,
-                Reset::Entered | Reset::Camped | Reset::Lost { ended: true, .. }
-            ) {
-                chat.reset_received_links();
+            match reason {
+                Reset::Entered => chat.admit_links(&state),
+                Reset::Camped | Reset::Lost { ended: true, .. } => chat.clear_link_scope(),
+                _ => (),
             }
             state.reset_presentation((reason, old_gems), &mut panels, &mut scene, &mut commands);
         }
@@ -855,11 +866,16 @@ pub(super) fn receive(
             }
             scene.place(&mut commands, super::zone::placement(position), None);
         }
+        if let Some(pad) = changes.local_pad {
+            info!(entry = ?pad.entry, landing = ?pad.landing, "Crossed a local WLD pad");
+            panels.motion.same_zone_landed();
+            if let Some(sets) = panels.spell_sets.as_mut() {
+                sets.interrupt("The character crossed a pad.");
+            }
+            scene.place(&mut commands, super::zone::placement(pad.landing), None);
+        }
         if let WorldUpdate::Chat(line) = update {
-            chat.receive(
-                line,
-                state.world.session_id().filter(|_| state.world.in_world()),
-            );
+            chat.receive(line, &state);
         }
     }
     let admission = state.world.session_id();
@@ -974,10 +990,12 @@ fn start_entry(
             settings.installed_client,
             state.world.classic_model_scale_flag(),
         );
+        let titanium_swimming = drawn_by.0 == eq_client_assets::ui::InstalledClient::Titanium
+            && state.world.can(eq_client_core::Capability::Swimming);
         state.loading.start(id, move || {
             let loading = std::time::Instant::now();
             let entry = super::zone::Entry::admission(&zone, &player, drawn_by, &directory)
-                .map(|entry| entry.prepare(navmesh));
+                .map(|entry| entry.prepare(navmesh, titanium_swimming));
             if entry.is_ok() {
                 // Read and prepared off the frame thread, behind the
                 // loading screen.
@@ -2262,6 +2280,7 @@ mod tests {
         sender
             .send(WorldUpdate::Game(WorldEvent::Buff(
                 eq_client_core::BuffUpdate {
+                    replaces_slot: false,
                     spell_id: 42,
                     entity_id: 99,
                     slot: 1,
@@ -2274,6 +2293,7 @@ mod tests {
         sender
             .send(WorldUpdate::Game(WorldEvent::Buff(
                 eq_client_core::BuffUpdate {
+                    replaces_slot: false,
                     spell_id: 42,
                     entity_id: 7,
                     slot: 1,

@@ -872,6 +872,11 @@ pub trait OfficialSettings {
         None
     }
 
+    /// Known inspection note for this character. An absent key is unknown.
+    fn inspect_text(&self, _character: &str, _world: &str) -> Option<String> {
+        None
+    }
+
     /// The account and world the official login screen last used.
     fn login(&self) -> LoginMemory {
         LoginMemory::default()
@@ -992,6 +997,16 @@ impl OfficialSettings for Titanium<'_> {
         )?
         .parse()
         .ok()
+    }
+
+    fn inspect_text(&self, character: &str, world: &str) -> Option<String> {
+        if !plain_name(character) || !plain_name(world) {
+            return None;
+        }
+        let bytes = std::fs::read(self.0.join(format!("{character}_{world}.ini"))).ok()?;
+        let text = std::str::from_utf8(&bytes).ok()?;
+        ini_value(text, "InspectText", "Text")
+            .filter(|note| note.len() < 256 && !note.as_bytes().contains(&0))
     }
 
     /// `Username` in `[PLAYER]` and `LastServerName` in `[MISC]` of
@@ -2170,6 +2185,33 @@ MouseSensitivity=4
         std::fs::remove_dir_all(&install).unwrap();
         assert_eq!(chosen.as_deref(), Some("velious"));
         assert_eq!((unsafe_skin, missing, escaping), (None, None, None));
+    }
+
+    #[test]
+    fn inspect_text_keeps_profile_scope_and_distinguishes_empty_from_missing() {
+        let install =
+            std::env::temp_dir().join(format!("eq-inspect-profile-{}", std::process::id()));
+        std::fs::create_dir_all(&install).unwrap();
+        std::fs::write(
+            install.join("Example_One.ini"),
+            "[InspectText]\nText=Known note\n",
+        )
+        .unwrap();
+        std::fs::write(install.join("Example_Two.ini"), "[InspectText]\nText=\n").unwrap();
+        std::fs::write(
+            install.join("Other_One.ini"),
+            "[InspectText]\nOther=Unrelated\n",
+        )
+        .unwrap();
+        let settings = InstalledClient::Titanium.settings(&install);
+        assert_eq!(
+            settings.inspect_text("Example", "One").as_deref(),
+            Some("Known note")
+        );
+        assert_eq!(settings.inspect_text("Example", "Two").as_deref(), Some(""));
+        assert_eq!(settings.inspect_text("Other", "One"), None);
+        assert_eq!(settings.inspect_text("../Example", "One"), None);
+        std::fs::remove_dir_all(&install).unwrap();
     }
 
     /// A picture in a Windows icon file: its side, the two words of its

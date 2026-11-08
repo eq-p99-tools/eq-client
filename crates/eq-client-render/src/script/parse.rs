@@ -217,6 +217,24 @@ pub enum Step {
         /// Current selected spawn revision.
         revision: u64,
     },
+    /// Responds to an explicitly observed server dialog.
+    RespondToPopup {
+        /// Admission from the dialog report.
+        admission: u64,
+        /// Receipt serial from the dialog report.
+        serial: u64,
+        /// The displayed button to choose.
+        action: eq_client_core::popups::PopupAction,
+    },
+    /// Requests an inspection for a confirmed selection.
+    InspectPlayer {
+        /// Current admission.
+        admission: u64,
+        /// Selected player spawn.
+        spawn: u16,
+        /// The worker-confirmed target revision from a report.
+        revision: u64,
+    },
     /// Inspects a received item link from the current admission.
     InspectLink {
         /// Admission in which the message arrived.
@@ -645,6 +663,21 @@ pub(super) fn parse_step(line: &str) -> Result<Step, String> {
             admission: admission.parse().map_err(|_| "expected an admission ID")?,
             spawn: spawn.parse().map_err(|_| "expected a spawn ID")?,
             revision: revision.parse().map_err(|_| "expected a spawn revision")?,
+        },
+        ("popup", [admission, serial, button]) => Step::RespondToPopup {
+            admission: admission.parse().map_err(|_| "expected an admission ID")?,
+            serial: serial.parse().map_err(|_| "expected a dialog serial")?,
+            action: match *button {
+                "ok" | "yes" => eq_client_core::popups::PopupAction::Positive,
+                "no" => eq_client_core::popups::PopupAction::Negative,
+                "close" => eq_client_core::popups::PopupAction::Dismiss,
+                _ => return Err("popup button must be ok, yes, no or close".into()),
+            },
+        },
+        ("inspect_player", [admission, spawn, revision]) => Step::InspectPlayer {
+            admission: admission.parse().map_err(|_| "expected an admission ID")?,
+            spawn: spawn.parse().map_err(|_| "expected a spawn ID")?,
+            revision: revision.parse().map_err(|_| "expected a target revision")?,
         },
         ("inspect_link", [admission, message, ordinal]) => Step::InspectLink {
             admission: admission.parse().map_err(|_| "expected an admission ID")?,
@@ -1506,6 +1539,34 @@ mod tests {
             "compose_owned_link 6 23 raw",
         ] {
             assert!(parse(malformed, base).is_err(), "{malformed}");
+        }
+    }
+
+    #[test]
+    fn dialog_and_player_inspection_steps_require_scoped_choices() {
+        let base = Path::new(".");
+        assert_eq!(
+            parse("popup 6 14 no\ninspect_player 6 42 12", base).unwrap(),
+            [
+                Step::RespondToPopup {
+                    admission: 6,
+                    serial: 14,
+                    action: eq_client_core::popups::PopupAction::Negative
+                },
+                Step::InspectPlayer {
+                    admission: 6,
+                    spawn: 42,
+                    revision: 12
+                },
+            ],
+        );
+        for text in [
+            "popup yes",
+            "popup 6 14 auto",
+            "inspect_player 42",
+            "inspect_player 6 65536 12",
+        ] {
+            assert!(parse(text, base).is_err(), "{text}");
         }
     }
 

@@ -252,6 +252,31 @@ impl ClientWorld {
         self.same_zone_relocation = Some((revision, relocation));
     }
 
+    /// Apply a pad landing to the current motion owner without recording a
+    /// received server placement.
+    pub(super) fn local_pad_crossed(
+        &mut self,
+        crossing: crate::LocalPadCrossing,
+        now: Instant,
+        changes: &mut Changes,
+    ) {
+        if self.session_id != Some(crossing.session_id) || !self.in_world() {
+            changes.ignored = true;
+            return;
+        }
+        let Some(player) = self.player.as_mut().filter(|player| {
+            player.spawn_id == crossing.spawn_id && player.position == crossing.entry
+        }) else {
+            changes.ignored = true;
+            return;
+        };
+        player.position = crossing.landing;
+        self.zone
+            .moved(crossing.spawn_id, (crossing.landing, [0.0; 3], 0.0), now);
+        self.last_local_pad = Some(crossing);
+        changes.local_pad = Some(crossing);
+    }
+
     /// A zone line could not be crossed.
     pub(super) fn zone_line_refused(&self, session_id: u64, reason: &str, changes: &mut Changes) {
         if self.session_id == Some(session_id) {

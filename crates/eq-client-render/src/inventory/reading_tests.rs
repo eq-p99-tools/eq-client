@@ -61,10 +61,10 @@ fn reading_click_posts_the_current_slot_without_inventing_text_or_opening_a_wind
         rx.try_recv().unwrap(),
         ClientCommand::ReadItem {
             session_id: 7,
-            slot: InventorySlot(23),
+            selection,
             revision,
             ..
-        } if revision == before.revision()
+        } if revision == before.revision() && selection.slot() == InventorySlot(23)
     ));
     assert!(rx.try_recv().is_err());
     assert_eq!(sender.take_refused(), []);

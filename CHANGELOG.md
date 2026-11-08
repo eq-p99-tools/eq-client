@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- Pin networking 97212d8d (cycle 09 landing): Bind Wound's button time runs
+  out in full after every use, one bandage decrease settles every carried
+  stack, and an unanswered player inspection holds the next request to that
+  player for up to five seconds (inferred, recording checklist 6.400). The
+  installed zone boundaries are always offered to the networking layer, which
+  decides where same-zone pads use them. The P99 knight reuse estimate is
+  labelled inferred (recording checklist 6.399).
+- Resolve supported P99 same-zone pads from installed geometry and current
+  zone points. Script reports distinguish the local landing from received
+  server placement. Attended verification is pending.
+- Show received Titanium server dialogs and inspect a nearby selected player
+  on EQEmu and Project 1999. The inspection panel displays received equipment
+  fields and note text. Item selections, received inspection details, and
+  clicks bring the corresponding inspector to the front.
+- Render installed lights in supported Titanium interiors and apply supported
+  low-light vision. Ordinary invisibility and target eligibility use the
+  observer's current See Invisible effect when the inputs are known.
+- Offer bounded swimming in mapped classic water on Project 1999.
+  Titanium wet movement samples the actor origin, with the native head
+  probe used separately for the air meter. Live P99 wet movement and
+  liquid damage remain to be verified.
 - Play installed MP3 cues named by `sound name.mp3` script steps and received
   sound requests. Only installed files are read; two MP3 voices play at once,
   a cold cue may wait up to eight seconds and a cue stops after 300 seconds
@@ -27,15 +48,18 @@
   loops to eqscript. The workbench shows branch decisions, active loop counts
   and variable values. Existing action scripts use the same controls.
 
-- Use Ctrl+right-click on a worn or carried Titanium item to add its item
-  link to a chat draft when the inventory record supports composition.
+- Use Ctrl+right-click on a displayed Titanium inventory item to add its
+  link when the record includes the needed metadata, even during an item move.
+- Keep an unchanged book or note selection usable across unrelated inventory
+  updates while its text request is queued.
+- Open cached item details while a different inspection request is pending.
+  A late reply leaves the selected panel in place.
 - Offer the ordinary Project 1999 forge through the nearby object controls
   and show the container only after the server opens it. Keep local item
   move projections distinct from received station and inventory contents.
-- Show a self-targeted Bind Wound request separately from the server result
-  and the received bandage stock. Project 1999 withholds the path for now: an
-  unanswered or refused bandage would hold the whole inventory until the
-  next zone.
+- Show Project 1999 self-targeted Bind Wound requests separately from server
+  results. After the request ends, affected slots show unconfirmed stock
+  while unrelated inventory actions resume.
 
 - Allow `gm traindisc MAX [MIN]` on network-constrained local EQEmu sessions
   to prepare learned disciplines for test characters.
@@ -50,19 +74,16 @@
 - Keep linked chat drafts when the routed text would exceed EQEmu's expanded
   limit or the tell recipient exceeds its field size.
 
-- Save named socials per character and bind them to a hotbar page. A social
-  runs up to five ordinary slash commands with optional tenths-of-a-second
-  pauses and a cancel command.
+- Save up to 120 named socials per character and bind them to a hotbar page.
+  A social runs up to five ordinary slash commands with optional
+  tenths-of-a-second pauses and a cancel command.
 
-- Shift-click a recently received chat item link to insert it into a draft.
-  Edit around it and send it with the active tab or a chat channel command.
+- Shift-click a retained received chat item link to insert it into a draft.
+  Linked drafts survive zoning on the same connection and known profile.
 
 - Draw received arrows and thrown items in flight using installed item models.
   The script report separates received flights from rendered models.
 
-- Keep staged discipline state separate from the buff-slot revision used by
-  cancellation. A matching instant class refresh consumes its cast request
-  even when the server sends no cast start.
 - Apply received same-zone moves at the absolute landing supplied by the server.
 
 - Follow local EQEmu server-owned same-zone pad handoffs through ordinary
@@ -71,13 +92,16 @@
 
 - Added Evasive and Defensive on Titanium through Actions, the hotbar and
   named commands. Received shared discipline reuse, linked spell timers and
-  active discipline slot updates are tracked per admission.
+  active discipline slot updates are tracked per admission. Exact empty
+  slot replacements clear the active state. Staged discipline state preserves
+  the cancellation revision.
 
 - Added the Titanium knight actions Lay on Hands and Harm Touch through
-  Actions, the hotbar, and ordinary slash and script commands. Reuse sent in
-  the admitted profile is displayed separately from the cast result.
-  A new admission clears the previous knight, discipline, and linked spell
-  reuse timers.
+  Actions, the hotbar, and ordinary slash and script commands. The hotbar
+  distinguishes the local recovery estimate from received profile recovery.
+  A matching instant class refresh consumes its cast request even when the
+  server sends no cast start. A new admission clears the previous knight,
+  discipline, and linked spell reuse timers.
 - Open the ordinary resurrection and translocate confirmation dialogs
   for supported P99 offers. Answers identify the displayed offer, and
   repeated wire-identical offers are withheld during that admission.
@@ -90,9 +114,10 @@
   The practice point count becomes unknown after a request. Re-enter the
   zone before practicing again or reopening the same guildmaster.
 
-- Group Interface scale with ordinary QoL settings and move **Run a Little
-  Faster** into a separate **Dangerous** section with the other flagged options.
-  When space allows, the Interface scale caption, slider and value share one
+- Group Interface scale with ordinary QoL settings. Place **Run a Little
+  Faster**, **Walk While Winded** and **Memorize Without Sitting** in the
+  **Dangerous** section with the other flagged options.
+  When space allows, either slider's caption, track and value share one
   line.
 - Confirm an ordinary Titanium cursor item drop from Inventory on local-only
   EQEmu. Escape cancels the pending confirmation. Scripts can open it with
@@ -101,8 +126,8 @@
 - Report completed falls when their cost can be established while a drop
   awaits inventory evidence. Active
   movement can resume once the worker accepts a current upper bound on
-  carried weight. A speed recalibration preserves an ongoing descent and
-  any landing report waiting for space in the session queue.
+  carried weight. A speed recalibration preserves the vertical history of
+  an airborne jump or fall and any landing report waiting for queue space.
   A cursor resync can preserve the fall bound while movement is paused.
   If the load and landing cost are unknown, the client sends no report and
   says so in chat. Ground drops are local-only EQEmu, so this case does not

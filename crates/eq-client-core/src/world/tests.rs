@@ -124,6 +124,33 @@ fn a_same_zone_relocation_requires_the_current_character_and_admission() {
 }
 
 #[test]
+fn a_local_pad_does_not_settle_a_wait_for_received_relocation() {
+    let mut world = admitted();
+    let entry = world.player().unwrap().position;
+    let landing = WorldPosition { x: 30.0, ..entry };
+    let crossing = crate::LocalPadCrossing {
+        session_id: 1,
+        spawn_id: 9,
+        entry,
+        landing,
+    };
+    let stale = crate::LocalPadCrossing {
+        session_id: 2,
+        ..crossing
+    };
+    assert!(game(&mut world, WorldEvent::LocalPadCrossed(stale)).ignored);
+    let changes = game(&mut world, WorldEvent::LocalPadCrossed(crossing));
+    assert_eq!(changes.local_pad, Some(crossing));
+    assert!(changes.placed.is_none());
+    assert_eq!(world.player().unwrap().position, landing);
+    assert_eq!(world.last_local_pad(), Some(crossing));
+    assert!(world.last_same_zone_relocation().is_none());
+    assert!(game(&mut world, WorldEvent::LocalPadCrossed(crossing)).ignored);
+    game(&mut world, entered(2));
+    assert!(world.last_local_pad().is_none());
+}
+
+#[test]
 fn discipline_and_linked_reuse_are_separate_and_reset_on_admission() {
     use crate::disciplines::{Active, Reuse};
     use std::time::Duration;
@@ -184,8 +211,10 @@ fn only_the_admitted_discipline_slot_can_report_an_active_effect() {
     use crate::disciplines::{Active, TITANIUM_BUFF_SLOT};
 
     let mut world = admitted();
+    game(&mut world, WorldEvent::BuffSnapshot(vec![Some(buff(42))]));
     let update = |entity_id, slot, spell_id, present: bool| {
         WorldEvent::Buff(crate::BuffUpdate {
+            replaces_slot: false,
             entity_id,
             slot,
             spell_id,
@@ -207,28 +236,58 @@ fn only_the_admitted_discipline_slot_can_report_an_active_effect() {
     assert_eq!(world.casting().active_discipline(), Active::Titanium(4499));
     game(&mut world, update(9, TITANIUM_BUFF_SLOT, 4499, false));
     assert_eq!(world.casting().active_discipline(), Active::Inactive);
+    game(&mut world, update(9, TITANIUM_BUFF_SLOT, 4503, true));
+    assert_eq!(
+        world.buffs().slots().unwrap()[&TITANIUM_BUFF_SLOT].spell_id,
+        4503
+    );
+    let WorldEvent::Buff(mut empty) = update(9, TITANIUM_BUFF_SLOT, u32::MAX, false) else {
+        unreachable!();
+    };
+    empty.replaces_slot = true;
+    game(&mut world, WorldEvent::Buff(empty));
+    assert_eq!(world.casting().active_discipline(), Active::Inactive);
+    assert!(
+        !world
+            .buffs()
+            .slots()
+            .unwrap()
+            .contains_key(&TITANIUM_BUFF_SLOT)
+    );
+    assert_eq!(world.buffs().slots().unwrap()[&0].spell_id, 42);
 }
 
 #[test]
 fn knight_reuse_belongs_to_the_current_admission() {
+    use crate::knights::ReuseSource::{LocalEstimate, Profile};
     use std::time::Duration;
 
     let mut world = admitted();
     let now = Instant::now();
-    let apply = |world: &mut ClientWorld, session_id, remaining| {
+    let apply = |world: &mut ClientWorld, session_id, remaining, source| {
         world.apply(
             &WorldUpdate::Game(WorldEvent::KnightReuse {
                 session_id,
                 remaining,
+                source,
             }),
             now,
             &NoSpells,
         )
     };
     assert_eq!(world.casting().knight_wait(now), None);
-    assert!(apply(&mut world, 2, Duration::from_secs(30)).ignored);
+    assert!(apply(&mut world, 2, Duration::from_secs(30), LocalEstimate).ignored);
     assert_eq!(world.casting().knight_wait(now), None);
-    apply(&mut world, 1, Duration::from_secs(30));
+    apply(&mut world, 1, Duration::from_mins(72), LocalEstimate);
+    assert_eq!(world.casting().knight_reuse_source(), Some(LocalEstimate));
+    apply(&mut world, 1, Duration::MAX, Profile);
+    assert_eq!(world.casting().knight_reuse_source(), Some(LocalEstimate));
+    assert_eq!(
+        world.casting().knight_wait(now),
+        Some(Duration::from_mins(72))
+    );
+    apply(&mut world, 1, Duration::from_secs(30), Profile);
+    assert_eq!(world.casting().knight_reuse_source(), Some(Profile));
     assert_eq!(
         world.casting().knight_wait(now),
         Some(Duration::from_secs(30))
@@ -975,6 +1034,7 @@ fn an_instant_effect_never_removes_a_buff_the_server_slotted() {
     game(
         &mut world,
         WorldEvent::Buff(crate::BuffUpdate {
+            replaces_slot: false,
             entity_id: 9,
             slot: 2,
             spell_id: 42,
@@ -1005,6 +1065,7 @@ fn only_the_players_lasting_effects_wait_for_a_slot_and_a_fade_clears_them() {
     game(
         &mut world,
         WorldEvent::Buff(crate::BuffUpdate {
+            replaces_slot: false,
             entity_id: 9,
             slot: 3,
             spell_id: 42,
@@ -2180,7 +2241,7 @@ fn a_target_goes_stale_when_its_spawn_leaves_changes_or_hides() {
         &mut world,
         WorldEvent::Visibility {
             spawn_id: 5,
-            invisible: true,
+            state: crate::vision::Invisibility::Titanium(1),
         },
     );
     assert!(world.target_stale());
@@ -5326,6 +5387,7 @@ fn what_other_players_ask_of_the_player_changes_nothing_yet() {
             buttons: 0,
             duration: None,
             popup_id: 1,
+            negative_id: 0,
         }),
         WorldEvent::YellForHelp { spawn_id: 5 },
         WorldEvent::VoiceMacro(VoiceMacro {
@@ -5334,7 +5396,10 @@ fn what_other_players_ask_of_the_player_changes_nothing_yet() {
             voice: 1,
             number: 2,
         }),
-        WorldEvent::InspectRequest { inspector_id: 5 },
+        WorldEvent::InspectRequest {
+            target_id: 7,
+            inspector_id: 5,
+        },
         WorldEvent::Duel(DuelUpdate::Challenge { from: 5 }),
         WorldEvent::Duel(DuelUpdate::Accepted {
             challenger: 5,
@@ -5350,6 +5415,83 @@ fn what_other_players_ask_of_the_player_changes_nothing_yet() {
     }
     assert_eq!(world.spawns().len(), spawns);
     assert!(world.player().is_some());
+}
+
+#[test]
+fn dialogs_follow_the_current_receipt_and_disappear_on_disconnect() {
+    use crate::popups::{Popup, PopupOffer};
+    let mut world = admitted();
+    let admission = world.session_id().unwrap();
+    let now = Instant::now();
+    let offer = |session_id, serial| {
+        WorldEvent::PopupOpened(PopupOffer {
+            session_id,
+            serial,
+            expires_at: Some(now + std::time::Duration::from_secs(5)),
+            popup: Popup {
+                title: "Synthetic".into(),
+                text: "Test".into(),
+                buttons: 1,
+                duration: None,
+                popup_id: 10,
+                negative_id: 0,
+            },
+        })
+    };
+    assert!(game(&mut world, offer(admission + 1, 10)).ignored);
+    assert!(world.popup(now).is_none());
+    game(&mut world, offer(admission, 1));
+    game(&mut world, offer(admission, 2));
+    game(
+        &mut world,
+        WorldEvent::PopupClosed {
+            session_id: admission,
+            serial: 1,
+        },
+    );
+    assert_eq!(world.popup(now).unwrap().serial, 2);
+    assert!(game(&mut world, offer(admission, 1)).ignored);
+    assert!(
+        world
+            .popup(now + std::time::Duration::from_secs(5))
+            .is_none()
+    );
+    connection(&mut world, false, true);
+    assert!(world.popup(now).is_none());
+}
+
+#[test]
+fn inspecting_player_equipment_leaves_inventory_untouched() {
+    use crate::inspection::{Equipment, Inspection, PlayerInspection};
+    let mut world = admitted();
+    let session_id = world.session_id().unwrap();
+    let own = world.player().unwrap().spawn_id;
+    let mut other = spawn(27);
+    other.kind = SpawnKind::Player;
+    other.name = "Other".into();
+    game(&mut world, WorldEvent::Spawns(vec![other.clone()]));
+    let before = world.inventory().revision();
+    let view = PlayerInspection {
+        session_id,
+        name: "Other".into(),
+        report: Inspection {
+            recipient_id: own,
+            player_id: 27,
+            equipment: vec![Equipment {
+                name: "Synthetic".into(),
+                icon: Some(510),
+            }],
+            text: "Only display data".into(),
+        },
+    };
+    game(&mut world, WorldEvent::PlayerInspection(view.clone()));
+    assert_eq!(world.player_inspection(), Some(&view));
+    assert_eq!(world.inventory().revision(), before);
+    game(&mut world, WorldEvent::Spawns(vec![other]));
+    assert!(world.player_inspection().is_none());
+    world.restart();
+    assert!(game(&mut world, WorldEvent::PlayerInspection(view)).ignored);
+    assert!(world.player_inspection().is_none());
 }
 
 #[test]

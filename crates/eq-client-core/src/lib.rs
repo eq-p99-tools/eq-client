@@ -47,6 +47,7 @@ pub use eq_network_game::creation;
 pub use eq_network_game::deletion;
 pub use eq_network_game::disciplines;
 pub use eq_network_game::rules;
+pub use eq_network_game::vision;
 pub mod character_creation;
 pub use eq_network_game::effects;
 pub use eq_network_game::exchange;
@@ -82,7 +83,8 @@ pub use eq_network_game::training;
 pub use eq_network_game::zones;
 pub use eq_network_game::zoning::ZoneOffer;
 pub use eq_network_game::zoning::ZoneRejection;
-pub use eq_network_game::zoning::{SameZoneRelocation, ZoneLineDestination};
+pub use eq_network_game::zoning::{LocalPadCrossing, SameZoneRelocation, ZoneLineDestination};
+pub use eq_network_game::{inspection, popups};
 
 pub use eq_network_game::buffs::{Buff, BuffUpdate, InvisibilityStep, SpellEffect};
 pub use eq_network_game::world::{

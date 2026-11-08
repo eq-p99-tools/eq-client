@@ -160,12 +160,47 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // Exercise one cursor replacement and confirmed retry.
     fn confirmation_refuses_replaced_cursor_and_submits_a_fresh_selection_once() {
         let mut online = OnlineState::new(true);
         testing::admit(&mut online, 7, testing::player(9));
         testing::inventory(&mut online, InventoryUpdate::Snapshot(vec![cursor(17)]));
-        assert!(online.world().prepare_cursor_drop().is_err());
+        let coin_error = "A cursor drop needs current carried coin information";
+        assert_eq!(
+            online
+                .world()
+                .prepare_cursor_drop()
+                .unwrap_err()
+                .to_string(),
+            coin_error
+        );
+        testing::news(
+            &mut online,
+            [WorldEvent::Coins(eq_client_core::Coins::default())],
+        );
+        assert_eq!(
+            online
+                .world()
+                .prepare_cursor_drop()
+                .unwrap_err()
+                .to_string(),
+            coin_error
+        );
         testing::empty_carried_coins(&mut online);
+        let selected = online.world().prepare_cursor_drop().unwrap();
+        testing::news(&mut online, [WorldEvent::PurseUncertain { session_id: 7 }]);
+        assert_eq!(
+            online
+                .world()
+                .check_cursor_drop(&selected)
+                .unwrap_err()
+                .to_string(),
+            coin_error
+        );
+        testing::news(
+            &mut online,
+            [WorldEvent::Coins(eq_client_core::Coins::default())],
+        );
 
         let (tx, rx) = mpsc::sync_channel(4);
         let mut app = crate::testing::app();

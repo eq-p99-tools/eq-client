@@ -287,18 +287,26 @@ pub(super) fn reconcile(
             .entity_distance
             .map_or(reach, |distance| distance.min(reach))
     };
+    let world = state.world();
+    let reveal = options
+        .options
+        .qol
+        .on(eq_client_core::qol::Fix::ShowInvisible);
+    let candidates = world
+        .spawns()
+        .values()
+        .map(|spawn| &spawn.state)
+        .filter(|spawn| reveal || world.can_see(spawn));
     let selected = nearby_with_invisible(
-        state.world().spawns().values().map(|spawn| &spawn.state),
+        candidates,
         player.spawn_id,
         player.position,
         &present,
         reach,
         usize::MAX,
-        options
-            .options
-            .qol
-            .on(eq_client_core::qol::Fix::ShowInvisible),
+        true,
     );
+
     if nearby_state.chosen != selected.len() {
         nearby_state.chosen = selected.len();
         debug!(

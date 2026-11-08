@@ -352,6 +352,7 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         | Notice::TrainingRefused(reason)
         | Notice::ResurrectionRefused(reason)
         | Notice::TranslocateRefused(reason)
+        | Notice::PlayerInspectionRefused(reason)
         | Notice::ReadRefused(reason) => chat(reason.as_str().into()),
         Notice::TrainingPractice(update) => {
             use eq_client_core::training::PracticeUpdate;

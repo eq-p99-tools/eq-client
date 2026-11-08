@@ -3,10 +3,24 @@ use super::{online::OnlineState, outbox::Outbox};
 use crate::theme::{self, Size};
 use bevy::prelude::*;
 use eq_client_core::{ClientCommand, ItemDetails, ItemLink, qol::Fix};
-use std::time::{Duration, Instant};
+use std::{
+    collections::BTreeMap,
+    time::{Duration, Instant},
+};
 
 #[derive(Component)]
-pub(super) struct ItemButton(pub ItemLink);
+pub(super) struct ItemButton {
+    link: ItemLink,
+    arrival: Option<(u64, usize)>,
+}
+
+#[cfg(test)]
+impl ItemButton {
+    pub(super) const fn item_id(&self) -> u32 {
+        self.link.item_id
+    }
+}
+
 #[derive(Component)]
 pub(super) struct ItemPanel;
 #[derive(Component)]
@@ -39,8 +53,29 @@ pub(super) struct ItemState {
     pub hovered: bool,
     selected: Option<(u32, String)>,
     shown: Option<ItemDetails>,
-    pending: Option<Instant>,
-    status: String,
+    raise_on_present: bool,
+    pending: Option<PendingInspection>,
+    /// The link body used to request a particular cached observation.
+    inspected: BTreeMap<u32, (String, u64)>,
+    /// Unanswered requests replaced after timeout. None records mixed bodies
+    /// for an ID whose replies cannot distinguish them.
+    retired: BTreeMap<u32, Option<String>>,
+    status: &'static str,
+}
+
+struct PendingInspection {
+    id: u32,
+    body: String,
+    prior: Option<u64>,
+    since: Instant,
+}
+
+const VARIANT_UNCONFIRMED: &str = "Received item details with an unconfirmed link variant.";
+
+impl PendingInspection {
+    fn expired(&self) -> bool {
+        self.since.elapsed() > Duration::from_secs(8)
+    }
 }
 
 impl ItemState {
@@ -51,23 +86,47 @@ impl ItemState {
         online: &OnlineState,
         outbox: &Outbox,
     ) -> Result<(), &'static str> {
-        if self.pending.is_some() {
-            return Err("Wait for the current item inspection");
-        }
-        self.selected = Some((link.item_id, link.text.clone()));
-        if let Some(item) = online.world().item(link.item_id) {
+        let world = online.world();
+        self.observe(world);
+        let cached = world.item_observation(link.item_id);
+        if let Some((revision, item)) = cached
+            && self
+                .inspected
+                .get(&link.item_id)
+                .is_some_and(|(body, known)| {
+                    *known == revision && body.eq_ignore_ascii_case(&link.body)
+                })
+        {
             self.open_received(item.clone());
             return Ok(());
         }
+        if self
+            .pending
+            .as_ref()
+            .is_some_and(|pending| !pending.expired())
+        {
+            return Err("Wait for the current item inspection");
+        }
         outbox
-            .post(online.world(), |stamp| ClientCommand::InspectItem {
+            .try_post(world, |stamp| ClientCommand::InspectItem {
                 session_id: stamp.session_id,
                 link_body: link.body.clone(),
             })
             .map_err(crate::outbox::Refusal::text)?;
         debug!("Item inspection requested: ID {}", link.item_id);
-        self.pending = Some(Instant::now());
-        self.status = "Loading item from server...".into();
+        self.selected = Some((link.item_id, link.text.clone()));
+        self.shown = None;
+        self.raise_on_present = true;
+        if let Some(previous) = self.pending.take() {
+            self.retire(previous.id, previous.body);
+        }
+        self.pending = Some(PendingInspection {
+            id: link.item_id,
+            body: link.body.clone(),
+            prior: cached.map(|(revision, _)| revision),
+            since: Instant::now(),
+        });
+        self.status = "Loading item from server...";
         Ok(())
     }
 
@@ -79,8 +138,68 @@ impl ItemState {
     pub(super) fn open_received(&mut self, item: ItemDetails) {
         self.selected = Some((item.id, item.name.clone()));
         self.shown = Some(item);
-        self.pending = None;
-        self.status.clear();
+        self.raise_on_present = true;
+        self.status = "";
+    }
+
+    fn retire(&mut self, id: u32, body: String) {
+        self.retired
+            .entry(id)
+            .and_modify(|previous| {
+                if previous
+                    .as_ref()
+                    .is_some_and(|previous| !previous.eq_ignore_ascii_case(&body))
+                {
+                    *previous = None;
+                }
+            })
+            .or_insert(Some(body));
+    }
+
+    fn observe(&mut self, world: &eq_client_core::world::ClientWorld) {
+        let selected = self.selected();
+        let Some(pending) = &mut self.pending else {
+            return;
+        };
+        let waiting = selected == Some(pending.id) && self.shown.is_none();
+        if let Some((revision, item)) = world.item_observation(pending.id)
+            && Some(revision) != pending.prior
+        {
+            let id = pending.id;
+            let body = pending.body.clone();
+            // The packet identifies the item ID. A prior unanswered request
+            // with a different body makes this response's variant ambiguous.
+            if self.retired.get(&id).is_some_and(|previous| {
+                previous
+                    .as_ref()
+                    .is_none_or(|previous| !previous.eq_ignore_ascii_case(&body))
+            }) {
+                // The latest request may still be unanswered. Keep its
+                // original timeout and observe each received definition once.
+                pending.prior = Some(revision);
+                self.retire(id, body);
+                if waiting {
+                    self.status = VARIANT_UNCONFIRMED;
+                }
+                return;
+            }
+            self.pending = None;
+            self.inspected.retain(|id, (_, known)| {
+                world
+                    .item_observation(*id)
+                    .is_some_and(|(current, _)| current == *known)
+            });
+            self.inspected.insert(id, (body, revision));
+            if waiting {
+                self.shown = Some(item.clone());
+                self.raise_on_present = true;
+                self.status = "";
+            }
+        } else if waiting && pending.expired() && self.status != VARIANT_UNCONFIRMED {
+            // Another request can replace this one, but a late definition
+            // can still arrive while this is the most recent request.
+            self.status = "No item definition received. Click the link to retry.";
+        }
     }
 
     /// The shown item's picture, when its definition carries one.
@@ -162,20 +281,7 @@ pub(super) fn input(
         state.selected = None;
         state.shown = None;
     }
-    if state
-        .pending
-        .is_some_and(|t| t.elapsed() > Duration::from_secs(8))
-    {
-        state.pending = None;
-        state.status = "No item definition received. Click the link to retry.".into();
-    }
-    // A definition the server sent for the chosen item stays with the panel.
-    if state.definition().is_none()
-        && let Some(item) = state.selected().and_then(|id| online.world().item(id))
-    {
-        state.shown = Some(item.clone());
-        state.pending = None;
-    }
+    state.observe(online.world());
     let automatic = if !*attempted
         && settings.0.validation == Some(super::ValidationAction::InspectFirstItem)
         && online.world().connected()
@@ -196,16 +302,33 @@ pub(super) fn input(
         keys.is_some_and(|keys| keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]));
     for button in buttons.iter() {
         if shift && let Some(typing) = typing.as_mut() {
-            match chat.compose_clicked_link(&button.0, online.world()) {
+            let composed = button
+                .arrival
+                .ok_or("This item link is not a received chat link")
+                .and_then(|arrival| chat.compose_clicked_link(arrival, &online));
+            match composed {
                 Ok(()) => typing.composing = true,
                 Err(reason) => chat.refuse(reason),
             }
-        } else {
-            let _ = state.inspect_link(&button.0, &online, &sender);
+        } else if let Err(reason) = state.inspect_link(&button.link, &online, &sender) {
+            chat.refuse(reason);
         }
     }
-    if let Some(link) = automatic.as_ref() {
-        let _ = state.inspect_link(link, &online, &sender);
+    if let Some(link) = automatic.as_ref()
+        && let Err(reason) = state.inspect_link(link, &online, &sender)
+    {
+        chat.refuse(reason);
+    }
+}
+
+/// Raises a new selection or its received details, even while the panel is open.
+pub(super) fn raise(mut state: ResMut<ItemState>, mut stack: ResMut<super::windows::Stack>) {
+    if !state.raise_on_present {
+        return;
+    }
+    state.raise_on_present = false;
+    if state.selected.is_some() {
+        stack.raise(super::windows::WindowId::Item);
     }
 }
 
@@ -384,6 +507,7 @@ fn mask(bits: u32, labels: &[&str]) -> String {
 pub(super) fn spawn_message(
     parent: &mut ChildSpawnerCommands,
     message: &eq_client_core::chat::Message,
+    arrival: Option<u64>,
     color: Color,
     size: Size,
 ) -> Entity {
@@ -400,7 +524,7 @@ pub(super) fn spawn_message(
         ))
         .with_children(|text| {
             let mut end = 0;
-            for link in &message.item_links {
+            for (ordinal, link) in message.item_links.iter().enumerate() {
                 if link.text_start < end
                     || message.text.get(end..link.text_start).is_none()
                     || message.text.get(link.text_start..link.text_end).is_none()
@@ -417,7 +541,10 @@ pub(super) fn spawn_message(
                     TextSpan::new(&message.text[link.text_start..link.text_end]),
                     theme::font(size),
                     TextColor(theme::LINK),
-                    ItemButton(link.clone()),
+                    ItemButton {
+                        link: link.clone(),
+                        arrival: arrival.map(|id| (id, ordinal)),
+                    },
                     Interaction::None,
                 ));
                 end = link.text_end;
@@ -552,6 +679,106 @@ mod tests {
         item
     }
 
+    fn link(id: u32) -> ItemLink {
+        let text = format!("Item {id}");
+        ItemLink {
+            body: format!("0{id:05X}{:031X}1234ABCD", 0),
+            item_id: id,
+            start: 0,
+            end: 0,
+            text_start: 0,
+            text_end: text.len(),
+            text,
+        }
+    }
+
+    #[test]
+    fn a_cached_inspection_can_replace_the_panel_without_replacing_the_pending_request() {
+        use crate::online::testing;
+        let (sender, receiver) = std::sync::mpsc::sync_channel(2);
+        let sender = Outbox::new(Some(sender));
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 77, testing::player(1));
+        let mut state = ItemState::default();
+        let cached = link(42);
+        let waiting = link(43);
+        state.inspect_link(&cached, &online, &sender).unwrap();
+        receiver.try_recv().unwrap();
+        testing::news(
+            &mut online,
+            [eq_client_core::WorldEvent::ItemDetails(item(42))],
+        );
+        state.observe(online.world());
+        state.inspect_link(&waiting, &online, &sender).unwrap();
+        receiver.try_recv().unwrap();
+        // Closing the panel leaves its wire request outstanding.
+        state.selected = None;
+        state.shown = None;
+        state.inspect_link(&cached, &online, &sender).unwrap();
+        assert!(receiver.try_recv().is_err());
+        assert_eq!(state.inspection(), Some((42, true)));
+
+        let mut variant = cached.clone();
+        variant.body.replace_range(6..11, "00001");
+        assert_eq!(
+            state.inspect_link(&variant, &online, &sender),
+            Err("Wait for the current item inspection")
+        );
+        assert!(state.inspect_link(&link(44), &online, &sender).is_err());
+        assert!(receiver.try_recv().is_err());
+        state.pending.as_mut().unwrap().since -= Duration::from_secs(9);
+        state.observe(online.world());
+        assert_eq!(state.status, "");
+        testing::news(
+            &mut online,
+            [eq_client_core::WorldEvent::ItemDetails(item(43))],
+        );
+        state.observe(online.world());
+        assert_eq!(state.inspection(), Some((42, true)));
+        assert!(state.pending.is_none());
+
+        state.inspect_link(&variant, &online, &sender).unwrap();
+        receiver.try_recv().unwrap();
+        state.observe(online.world());
+        assert_eq!(state.inspection(), Some((42, false)));
+        assert!(state.pending.is_some());
+    }
+
+    #[test]
+    fn an_untagged_reply_cannot_choose_between_different_bodies_for_the_same_item() {
+        use crate::online::testing;
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let sender = Outbox::new(Some(sender));
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 77, testing::player(1));
+        let mut state = ItemState::default();
+        let first = link(42);
+        let mut other = first.clone();
+        other.body.replace_range(6..11, "00001");
+        state.inspect_link(&first, &online, &sender).unwrap();
+        receiver.try_recv().unwrap();
+        state.pending.as_mut().unwrap().since -= Duration::from_secs(9);
+        state.inspect_link(&other, &online, &sender).unwrap();
+        receiver.try_recv().unwrap();
+        testing::news(
+            &mut online,
+            [eq_client_core::WorldEvent::ItemDetails(item(42))],
+        );
+        state.observe(online.world());
+        assert!(online.world().item(42).is_some());
+        assert!(state.pending.is_some());
+        assert_eq!(state.inspection(), Some((42, false)));
+        assert_eq!(state.status, VARIANT_UNCONFIRMED);
+        assert!(!state.inspected.contains_key(&42));
+        assert!(state.inspect_link(&other, &online, &sender).is_err());
+        assert!(receiver.try_recv().is_err());
+        state.pending.as_mut().unwrap().since -= Duration::from_secs(9);
+        state.inspect_link(&other, &online, &sender).unwrap();
+        assert!(
+            matches!(receiver.try_recv(), Ok(ClientCommand::InspectItem { link_body, .. }) if link_body == other.body)
+        );
+    }
+
     #[test]
     fn a_weapon_shows_its_ratio_under_its_damage_and_delay() {
         let stat = |label: &str, value| eq_client_core::ItemStat {
@@ -650,6 +877,7 @@ mod tests {
                             text_end: 10,
                         }],
                     },
+                    Some(15),
                     Color::WHITE,
                     Size::Label,
                 );
@@ -666,7 +894,8 @@ mod tests {
         assert_eq!(combined, "WTS Épée now");
         let mut links = world.query::<(&ItemButton, &TextColor)>();
         let (link, color) = links.single(world).unwrap();
-        assert_eq!(link.0.item_id, 42);
+        assert_eq!(link.link.item_id, 42);
+        assert_eq!(link.arrival, Some((15, 0)));
         assert_eq!(color.0, crate::theme::LINK);
     }
 
@@ -684,15 +913,18 @@ mod tests {
             .world_mut()
             .spawn((
                 Interaction::None,
-                ItemButton(ItemLink {
-                    body: body.clone(),
-                    text: "Synthetic blade".into(),
-                    item_id: 42,
-                    start: 0,
-                    end: 0,
-                    text_start: 0,
-                    text_end: 0,
-                }),
+                ItemButton {
+                    link: ItemLink {
+                        body: body.clone(),
+                        text: "Synthetic blade".into(),
+                        item_id: 42,
+                        start: 0,
+                        end: 0,
+                        text_start: 0,
+                        text_end: 0,
+                    },
+                    arrival: None,
+                },
             ))
             .id();
         crate::clicks::testing::click(&mut app, link);

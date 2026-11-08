@@ -178,6 +178,8 @@ pub enum Notice {
     ResurrectionRefused(String),
     /// An answer to a translocate was not sent, and why.
     TranslocateRefused(String),
+    /// The worker could not send the inspection request.
+    PlayerInspectionRefused(String),
     /// A consent prompt reached its local deadline.
     ConsentExpired(crate::confirmations::ConsentKind),
     /// A request to read was not sent, and why.

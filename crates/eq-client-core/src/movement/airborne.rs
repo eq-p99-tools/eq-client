@@ -293,11 +293,11 @@ impl AirborneController {
         } else {
             Support::Airborne
         };
-        if liquids == LiquidGuard::Lava && world.swim_depth(feet, input.height).is_some() {
+        if liquids == LiquidGuard::Lava && world.in_swimmable_water(feet, input.height) {
             return feet;
         }
         let position = world.walk_with_guard(feet, horizontal, input.height, support, liquids);
-        if liquids == LiquidGuard::Lava && world.swim_depth(position, input.height).is_some() {
+        if liquids == LiquidGuard::Lava && world.in_swimmable_water(position, input.height) {
             return position;
         }
         if self.velocity <= 0.0

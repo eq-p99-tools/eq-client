@@ -300,7 +300,7 @@ impl Fix {
                 "Let the Toggle Free Camera key detach the camera from your character and fly it anywhere until the key returns it. Your character never moves. Turn it off to keep the camera on your character."
             }
             Self::ClearView => {
-                "Light the night as if it were noon and hide distance fog, rain and snow in your view."
+                "Light the night as if it were noon, brighten supported dark interiors, and hide distance fog, rain and snow in your view."
             }
             Self::WalkWhileWinded => {
                 "Allow horizontal movement while stunned. Attacks, spells, items and jumping still obey stun restrictions."
@@ -497,7 +497,9 @@ impl Fix {
     pub const fn is_unsafe(self) -> bool {
         matches!(
             self,
-            Self::TakeEnvironmentalDamage
+            Self::WalkWhileWinded
+                | Self::MemorizeWhileStanding
+                | Self::TakeEnvironmentalDamage
                 | Self::GillsForDays
                 | Self::Fly
                 | Self::JesusMode
@@ -674,6 +676,8 @@ mod tests {
                 .filter(|fix| fix.is_unsafe())
                 .collect::<Vec<_>>(),
             [
+                Fix::WalkWhileWinded,
+                Fix::MemorizeWhileStanding,
                 Fix::TakeEnvironmentalDamage,
                 Fix::GillsForDays,
                 Fix::Fly,

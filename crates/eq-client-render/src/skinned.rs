@@ -105,7 +105,11 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::Map => "EQUI_MapViewWnd.xml",
         WindowId::Actions => "EQUI_HotButtonWnd.xml",
         WindowId::Chat | WindowId::ChatGroup(_) => "EQUI_ChatWindow.xml",
-        WindowId::Status | WindowId::Scripts | WindowId::Runbook => return None,
+        WindowId::Status
+        | WindowId::Scripts
+        | WindowId::Runbook
+        | WindowId::ServerDialog
+        | WindowId::PlayerInspection => return None,
     };
     Some((file, id.official()?))
 }
@@ -3520,7 +3524,8 @@ mod tests {
             title_colors: [None, None],
             tooltip: None,
         };
-        let settings: Vec<_> = Fix::settings().collect();
+        let mut settings: Vec<_> = Fix::settings().collect();
+        settings.sort_by_key(|fix| fix.is_unsafe());
         // A tall page holds every setting in one column, with room for both
         // headings. The short page below checks the column wrap.
         let inside =

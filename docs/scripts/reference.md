@@ -94,6 +94,12 @@ reported separately.
 
 ## Diagnostics and commands
 
+Use `popup <admission> <serial> <ok|yes|no|close>` for the matching server
+dialog and `inspect_player <admission> <spawn> <target_revision>` to request
+the selected player's equipment report. Use the values from `report [label]`.
+A queued step records submission to the client queue. A later report
+includes the inspection spawn and slot count when received.
+
 The projectile line from `report [label]` includes the current admission, the
 number of received flight records since the last world reset, the flights still
 tracked, the number of scene spawns queued, and the scene instances from the
@@ -200,11 +206,11 @@ The typed parser and normal client capability checks decide which commands and c
   using the IDs from the item-link report. It edits the normal draft without
   changing keyboard focus. Use the usual chat input to edit or send the
   draft. An expired, mismatched or unknown link stops the script.
-- `compose_owned_link admission slot` inserts a link for the current worn or
-  carried Titanium item at the given protocol slot. Use the current admission
+- `compose_owned_link admission slot` inserts a link for the displayed Titanium
+  item at the given protocol slot. Use the current admission
   and slot from a report. The action edits the draft without changing focus
-  or sending chat. Stale admission, uncertain custody or incomplete item
-  metadata stops the script.
+  or sending chat. A stale admission, empty slot or incomplete item metadata
+  stops the script.
 
 - `social set Name | /command | /pause 10,/command`, `social bind 1 Name`,
   `social play Name` and `social cancel` use the same social controls as

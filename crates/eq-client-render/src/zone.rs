@@ -192,10 +192,11 @@ impl Entry {
 
     /// Builds collision and terrain indices alongside archive decoding, and
     /// with `navmesh`, gathers the triangles the zone's mesh is built over.
-    pub(super) fn prepare(self, navmesh: bool) -> PreparedEntry {
+    pub(super) fn prepare(self, navmesh: bool, titanium_swimming: bool) -> PreparedEntry {
         let triangles = collision_triangles(&self.zone);
         let navmesh = navmesh.then(|| triangles.clone());
-        let collision = Collision(collision_world(&self.zone, triangles));
+        let swim_origin = titanium_swimming.then_some(self.body.feet_offset);
+        let collision = Collision(collision_world(&self.zone, triangles, swim_origin));
         let terrain = TerrainSurface::from_primitives(&self.zone.primitives);
         PreparedEntry {
             entry: self,
@@ -267,6 +268,7 @@ impl Scene<'_, '_> {
         }
         commands.insert_resource(Collision(None));
         commands.insert_resource(TerrainSurface(Vec::new()));
+        commands.remove_resource::<super::lighting::SceneLights>();
         commands.insert_resource(doors::Models::default());
         commands.insert_resource(SceneInfo {
             zone_name: String::new(),

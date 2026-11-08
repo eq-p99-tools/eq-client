@@ -40,7 +40,7 @@ pub(crate) fn update(
                 .world()
                 .spawn(id)
                 .map(|spawn| &spawn.state)
-                .filter(|spawn| !spawn.invisible)?;
+                .filter(|spawn| online.world().can_see(spawn))?;
             (*nearby.rendered.get(&id)?, spawn.size)
         };
         let position = poses.get(entity).ok()?.translation;
@@ -171,7 +171,7 @@ mod tests {
             &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
             [eq_client_core::WorldEvent::Visibility {
                 spawn_id: 2,
-                invisible: true,
+                state: eq_client_core::vision::Invisibility::Titanium(1),
             }],
         );
         app.update();
@@ -180,7 +180,7 @@ mod tests {
             &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
             [eq_client_core::WorldEvent::Visibility {
                 spawn_id: 2,
-                invisible: false,
+                state: eq_client_core::vision::Invisibility::Titanium(0),
             }],
         );
         app.update();

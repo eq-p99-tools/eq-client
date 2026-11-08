@@ -244,6 +244,25 @@ fn a_late_takp_item_start_uses_its_request_until_received_mana() {
 }
 
 #[test]
+fn a_new_admission_retires_a_late_cast_alias_before_the_next_start() {
+    let mut world = admitted();
+    let late = WorldEvent::CastLateBegin {
+        session_id: 1,
+        requested_spell: 42,
+    };
+    game(&mut world, pending(1, Some(42)));
+    game(&mut world, unconfirmed(1, 42));
+    assert!(!game(&mut world, late.clone()).ignored);
+
+    game(&mut world, entered(2));
+    connection(&mut world, true, false);
+    assert!(game(&mut world, late).ignored);
+    assert_eq!(game(&mut world, begin(9, 2935)).cast, Some(CastNews::Began));
+    assert_eq!(game(&mut world, mana(42)).cast, None);
+    assert_eq!(game(&mut world, mana(2935)).cast, Some(CastNews::Ended));
+}
+
+#[test]
 fn an_unconfirmed_notice_cannot_release_a_begun_or_new_admission_cast() {
     let mut world = admitted();
     game(&mut world, pending(1, Some(42)));

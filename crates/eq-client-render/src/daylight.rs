@@ -1,9 +1,8 @@
 //! Day and night: where a zone has a sky, the scene's brightness, the sun,
-//! the sky's color and the fog follow the time in Norrath; below ground the
-//! light stays as it is. Every zone's fog closes in from its header's
-//! distances, in its color. Zones and models carry their own lighting and
-//! draw unlit, so the night darkens the whole picture, as a camera's
-//! exposure would. The hour the sky follows, when dawn and dusk come and
+//! the sky's color and the fog follow the time in Norrath. Supported
+//! Titanium interiors use placed lights and observer vision. The outdoor
+//! scene's unlit materials use camera exposure to darken at night. Fog
+//! follows the zone header's distances and color. The hour the sky follows, when dawn and dusk come and
 //! which zones keep one hour are the installed client's
 //! ([`eq_client_assets::clock::ClientClock`]).
 use super::OrbitCamera;
@@ -188,6 +187,8 @@ pub(super) fn update(
     mut cameras: Cameras,
     mut lit: Local<bool>,
     settings: Res<crate::ViewerSettings>,
+    scene_lights: Option<Res<super::lighting::SceneLights>>,
+    names: Option<Res<super::spellbook::SpellNames>>,
 ) {
     let world = online.world();
     // Offline, or before the zone has said, the scene stays as it was lit.
@@ -229,7 +230,16 @@ pub(super) fn update(
     // same either way; this is the drawn scene alone.
     let clearly = options.options.qol.on(eq_client_core::qol::Fix::ClearView);
     let lit_minute = if clearly { None } else { minute };
-    let mut lit = lighting(&sky, lit_minute, &day_night(clock));
+    let day_night = day_night(clock);
+    let mut lit = lighting(&sky, lit_minute, &day_night);
+    let interior = super::lighting::interior(scene_lights.as_deref(), world, &settings, clearly);
+    if !clearly && settings.0.installed_client == eq_client_assets::ui::InstalledClient::Titanium {
+        let vision = super::lighting::observer(world, names.as_deref());
+        let darkness = lit_minute
+            .filter(|_| sky.sky != 0)
+            .map_or(0.0, |minute| 1.0 - day_night.daylight(minute));
+        super::lighting::adjust(&mut lit, vision, interior, darkness);
+    }
     lit.fog = closed_in(
         lit.fog,
         crate::camera::clip_distance(settings.0.installed_client, &options.options, world),

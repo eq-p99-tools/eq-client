@@ -96,12 +96,38 @@ fn validates_inline_definitions_and_result_bounds() {
         ("status", json!("pending")),
         ("note", json!("é".repeat(91))),
         ("note", json!("two\u{2028}lines")),
+        ("note", json!("unsafe\u{200f}direction")),
         ("note", json!({"packet":[0, 1]})),
         ("packet", json!([0, 1])),
+        ("admission_id", json!(0)),
+        ("after_request_id", json!(-1)),
+        (
+            "evidence",
+            json!({"kind":"server_confirmed","reference":"obs-1"}),
+        ),
+        (
+            "evidence",
+            json!({"kind":"received_data","reference":"../capture"}),
+        ),
+        (
+            "evidence",
+            json!({"kind":"received_data","reference":"x".repeat(97)}),
+        ),
+        (
+            "evidence",
+            json!({"kind":"manual_witness","reference":"obs-1","verified":true}),
+        ),
     ] {
         let mut invalid = result(1, "first", "passed");
         invalid["result"][field] = value;
         assert!(parse(invalid.clone()).is_err(), "{invalid}");
+    }
+    assert!(parse(json!({"op":"runbook_export","runbook_id":1})).is_ok());
+    for fields in [
+        json!({"op":"runbook_export","runbook_id":0}),
+        json!({"op":"runbook_export","runbook_id":1,"path":"../escape.json"}),
+    ] {
+        assert!(parse(fields).is_err());
     }
 }
 
@@ -127,10 +153,13 @@ fn maximum_checklist_can_share_status_with_full_executor_history() {
     );
     for id in 0..64 {
         let update = runbook::ResultUpdate::parse(&json!({
-            "runbook_id":1,"item_id":format!("{id:048}"),"status":"failed","note":"\"".repeat(180)
+            "runbook_id":1,"item_id":format!("{id:048}"),"status":"failed","note":"\"".repeat(180),
+            "evidence":{"kind":"scripted_observation","reference":"x".repeat(96)},
+            "admission_id":u64::MAX
         }))
         .unwrap();
-        run.record(&update).unwrap();
+        run.record(u64::MAX - 64 + id, &update, Some(u64::MAX))
+            .unwrap();
     }
     bridge.runbook = Some(run);
     let snapshot = bridge.snapshot();
@@ -267,6 +296,188 @@ fn emitted_null_note_roundtrips_without_rewriting_terminal_results() {
 }
 
 #[test]
+fn progress_updates_compare_with_the_row_and_skips_are_final() {
+    let mut app = app();
+    request(&mut app, 1, begin());
+    let running = result(1, "first", "running");
+    request(&mut app, 2, running.clone());
+    assert_eq!(
+        request(&mut app, 3, running).code,
+        "runbook_result_recorded"
+    );
+    assert_eq!(status(&app)["runbook"]["items"][0]["report_request_id"], 2);
+    assert_eq!(status(&app)["runbook"]["health"]["state"], "running");
+
+    let mut blocked = result(1, "first", "blocked");
+    blocked["result"]["after_request_id"] = json!(2);
+    blocked["result"]["note"] = json!("Awaiting prerequisite");
+    assert_eq!(
+        request(&mut app, 4, blocked).code,
+        "runbook_result_recorded"
+    );
+    assert_eq!(status(&app)["runbook"]["health"]["state"], "blocked");
+
+    let mut resumed = result(1, "first", "running");
+    resumed["result"]["after_request_id"] = json!(4);
+    assert_eq!(
+        request(&mut app, 5, resumed).code,
+        "runbook_result_recorded"
+    );
+    let mut delayed = result(1, "first", "passed");
+    delayed["result"]["after_request_id"] = json!(2);
+    assert_eq!(request(&mut app, 6, delayed).code, "runbook_item_changed");
+    assert_eq!(status(&app)["runbook"]["items"][0]["status"], "running");
+
+    let mut skipped = result(1, "first", "skipped");
+    skipped["result"]["after_request_id"] = json!(5);
+    assert_eq!(
+        request(&mut app, 7, skipped).code,
+        "runbook_result_recorded"
+    );
+    assert_eq!(
+        request(&mut app, 8, result(1, "first", "passed")).code,
+        "runbook_item_already_reported"
+    );
+    assert_eq!(status(&app)["runbook"]["health"]["state"], "incomplete");
+    request(&mut app, 9, result(1, "second", "passed"));
+    assert_eq!(
+        status(&app)["runbook"]["health"],
+        json!({
+            "state":"complete","pending":0,"running":0,"blocked":0,"skipped":1,"passed":1,"failed":0
+        })
+    );
+}
+
+#[test]
+fn only_reports_that_name_an_admission_are_bound_to_it() {
+    let mut app = app();
+    {
+        let mut online = app.world_mut().resource_mut::<OnlineState>();
+        online.enabled = true;
+        session::admit(&mut online, 11, session::player(7));
+    }
+    request(&mut app, 1, begin());
+    assert_eq!(status(&app)["admission_id"], 11);
+
+    let mut observed = result(1, "first", "passed");
+    observed["result"]["admission_id"] = json!(11);
+    observed["result"]["evidence"] = json!({"kind":"received_data","reference":"item-list-1"});
+    session::admit(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        12,
+        session::player(7),
+    );
+    assert_eq!(
+        request(&mut app, 2, observed.clone()).code,
+        "runbook_admission_changed"
+    );
+    assert_eq!(status(&app)["runbook"]["items"][0]["status"], "pending");
+    observed["result"]["admission_id"] = json!(12);
+    assert_eq!(
+        request(&mut app, 3, observed).code,
+        "runbook_result_recorded"
+    );
+    assert_eq!(
+        request(&mut app, 4, result(1, "second", "passed")).code,
+        "runbook_result_recorded"
+    );
+    let state = status(&app);
+    assert_eq!(state["runbook"]["reported_by"], "producer");
+    assert_eq!(state["runbook"]["items"][0]["admission_id"], 12);
+    assert_eq!(
+        state["runbook"]["items"][0]["evidence"]["kind"],
+        "received_data"
+    );
+    assert!(state["runbook"]["items"][1]["admission_id"].is_null());
+    assert!(state["runbook"]["items"][1]["evidence"].is_null());
+}
+
+#[test]
+fn control_health_reports_local_exchange_errors_without_changing_checklist_rows() {
+    let mut app = app();
+    assert_eq!(status(&app)["control_health"], "waiting");
+    request(&mut app, 1, begin());
+    assert_eq!(status(&app)["control_health"], "ready");
+
+    submit_request(&mut app, 2, result(1, "first", "pending"));
+    assert_eq!(status(&app)["control_health"], "request_error");
+    {
+        let mut bridge = app.world_mut().resource_mut::<Bridge>();
+        bridge.last_exchange = Instant::now().checked_sub(super::super::EXCHANGE_STALL);
+        assert_eq!(bridge.channel_health(), "stalled");
+        bridge.job.start(0, || Err("Synthetic file error".into()));
+    }
+    let deadline = Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        frame(&mut app, 0);
+        if status(&app)["control_health"] == "io_error" {
+            break;
+        }
+        assert!(Instant::now() < deadline, "file error did not settle");
+        std::thread::yield_now();
+    }
+    request(&mut app, 2, json!({"op":"status"}));
+    assert_eq!(status(&app)["control_health"], "ready");
+    assert_eq!(status(&app)["runbook"]["health"]["state"], "pending");
+}
+
+#[test]
+fn export_captures_only_the_named_checklist_and_preserves_it_on_failure() {
+    let root = temporary();
+    files::prepare(&root).unwrap();
+    let mut app = app();
+    app.insert_resource(Bridge::new(root.clone(), "test-1".into()));
+    request(&mut app, 1, begin());
+    let mut witness = result(1, "first", "passed");
+    witness["result"]["note"] = json!("\"Visible\" \\");
+    witness["result"]["evidence"] = json!({"kind":"manual_witness","reference":"witness-1"});
+    request(&mut app, 2, witness);
+    let captured = status(&app)["runbook"].clone();
+    let export = json!({"op":"runbook_export","runbook_id":1});
+    let receipt = request(&mut app, 3, export.clone());
+    assert_eq!(receipt.code, "runbook_export_queued");
+    assert_eq!(request(&mut app, 3, export.clone()), receipt);
+    request(&mut app, 4, begin());
+    let exported = wait_for_export(&mut app);
+    assert_eq!(exported["state"], "written");
+    assert_eq!(exported["request_id"], 3);
+    let path = root.join(files::RUNBOOK_EXPORT);
+    let before = fs::read(&path).unwrap();
+    let document: Value = serde_json::from_slice(&before).unwrap();
+    assert_eq!(document["request_id"], 3);
+    assert_eq!(document["instance"], "test-1");
+    assert_eq!(document["runbook"], captured);
+    assert!(document.get("recent_runs").is_none());
+    assert_eq!(request(&mut app, 5, export).code, "runbook_changed");
+
+    // A foreign temporary entry cannot be truncated or moved by an export.
+    let occupied = root.join("runbook-export.json.tmp");
+    fs::write(&occupied, "preexisting").unwrap();
+    assert_eq!(
+        request(&mut app, 6, json!({"op":"runbook_export","runbook_id":4})).code,
+        "runbook_export_queued"
+    );
+    assert_eq!(wait_for_export(&mut app)["state"], "failed");
+    assert_eq!(fs::read(&path).unwrap(), before);
+    assert_eq!(fs::read(&occupied).unwrap(), b"preexisting");
+    drop(app);
+    clean(&root);
+}
+
+fn wait_for_export(app: &mut App) -> Value {
+    let deadline = Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        frame(app, 0);
+        let value = status(app)["runbook_export"].clone();
+        if value["state"] != "writing" {
+            return value;
+        }
+        assert!(Instant::now() < deadline, "runbook export did not settle");
+        std::thread::yield_now();
+    }
+}
+
+#[test]
 fn no_runbook_is_installed_or_listed_without_a_control_receiver() {
     let root = temporary();
     fs::create_dir(&root).unwrap();
@@ -355,12 +566,41 @@ fn shows_current_results_and_reset_in_the_normal_frame() {
     assert_text(&mut app, "Synthetic session check");
     assert_text(&mut app, "[ ] Pending · First observation");
 
+    let mut running = result(1, "first", "running");
+    running["result"]["evidence"] = json!({
+        "kind":"scripted_observation","reference":"attempt-1"
+    });
     assert_eq!(
-        request(&mut app, 2, result(1, "first", "passed")).code,
+        request(&mut app, 2, running).code,
         "runbook_result_recorded"
     );
+    assert_text(&mut app, "[…] Running · First observation");
+    assert_text(
+        &mut app,
+        "Reported evidence · Scripted observation · attempt-1",
+    );
+    let mut blocked = result(1, "first", "blocked");
+    blocked["result"]["after_request_id"] = json!(2);
+    request(&mut app, 3, blocked);
+    assert_text(&mut app, "[!] Blocked · First observation");
+    assert!(!has_text(
+        &mut app,
+        "Reported evidence · Scripted observation · attempt-1"
+    ));
+
+    app.world_mut()
+        .resource_mut::<Shown>()
+        .close(WindowId::Runbook);
+    let mut passed = result(1, "first", "passed");
+    passed["result"]["after_request_id"] = json!(3);
+    request(&mut app, 4, passed);
+    assert_eq!(window_display(&mut app), Display::None);
+    app.world_mut()
+        .resource_mut::<Shown>()
+        .open(WindowId::Runbook);
+    frame(&mut app, 0);
     assert_eq!(
-        request(&mut app, 3, result(1, "second", "failed")).code,
+        request(&mut app, 5, result(1, "second", "failed")).code,
         "runbook_result_recorded"
     );
     assert_text(&mut app, "[x] Passed · First observation");
@@ -368,7 +608,7 @@ fn shows_current_results_and_reset_in_the_normal_frame() {
     assert_text(&mut app, "Synthetic evidence summary");
     assert_text(
         &mut app,
-        "Harness run #1 · 2/2 reported · 1 passed · 1 failed",
+        "Harness run #1 · 0 pending · 0 running · 0 blocked · 0 skipped · 1 passed · 1 failed",
     );
 
     app.world_mut().resource_mut::<OnlineState>().enabled = true;
@@ -395,10 +635,10 @@ fn shows_current_results_and_reset_in_the_normal_frame() {
     frame(&mut app, 0);
     assert_text(&mut app, "[!] Failed · Second observation");
 
-    assert_eq!(request(&mut app, 4, begin()).code, "runbook_started");
+    assert_eq!(request(&mut app, 6, begin()).code, "runbook_started");
     assert_text(
         &mut app,
-        "Harness run #4 · 0/2 reported · 0 passed · 0 failed",
+        "Harness run #6 · 2 pending · 0 running · 0 blocked · 0 skipped · 0 passed · 0 failed",
     );
     assert_text(&mut app, "[ ] Pending · First observation");
     assert!(!has_text(&mut app, "Synthetic evidence summary"));

@@ -535,7 +535,7 @@ pub(crate) fn unavailable(online: &OnlineState, id: u16) -> Option<&'static str>
     let Some(spawn) = world.spawn(id) else {
         return Some("This entity is no longer present");
     };
-    if spawn.state.invisible {
+    if !world.can_see(&spawn.state) {
         return Some("This entity is invisible");
     }
     if matches!(spawn.state.kind, SpawnKind::Unknown(_)) {
@@ -1011,7 +1011,7 @@ mod tests {
             &mut app.world_mut().resource_mut::<OnlineState>(),
             [eq_client_core::WorldEvent::Visibility {
                 spawn_id: 2,
-                invisible: true,
+                state: eq_client_core::vision::Invisibility::Titanium(1),
             }],
         );
         app.update();
@@ -1028,7 +1028,7 @@ mod tests {
             &mut app.world_mut().resource_mut::<OnlineState>(),
             [eq_client_core::WorldEvent::Visibility {
                 spawn_id: 2,
-                invisible: false,
+                state: eq_client_core::vision::Invisibility::Titanium(0),
             }],
         );
         assert_eq!(press(&mut app, KeyCode::Tab, false), Some(2));

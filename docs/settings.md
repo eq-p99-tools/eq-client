@@ -69,6 +69,7 @@ The Interface scale slider appears with the ordinary settings.
 
 | Setting | File key | Default | Effect |
 | --- | --- | --- | --- |
+| Interface scale | `ui_scale` | 100% | Scales the interface from 50% to 200% in 5 percentage point steps |
 | Skip Food With Modifiers | `skip_modified_food` | On | Leaves stat-bearing food/drink for manual consumption |
 | Draw Windows the Skin Hides | `hidden_windows` | Off | Supplies a default layout for windows the skin sizes to nothing |
 | Ask Before Deleting Spells | `ask_before_deleting_spells` | On | Confirms deletion where the server offers it |
@@ -77,12 +78,10 @@ The Interface scale slider appears with the ordinary settings.
 | Corpses Lie Along the Ground | `corpses_along_ground` | On | Tilts bodies to the floor slope |
 | Long Chase Camera | `long_chase_camera` | On | Extends chase zoom beyond the classic 200-unit limit, up to 20,000 |
 | Free Camera | `free_camera` | On | Lets a user-assigned Toggle Free Camera key detach the camera and fly it; off, the key does nothing |
-| See the World Clearly | `clear_view` | Off | Lights outdoor night as noon and hides distance fog, rain and snow |
-| Walk While Winded | `walk_while_winded` | Off | Allows horizontal movement while stunned; other stun restrictions remain |
+| See the World Clearly | `clear_view` | Off | Lights outdoor night as noon, brightens supported Titanium interiors and hides distance fog, rain and snow |
 | Loot Corpses Automatically | `auto_loot` | Off | Opens newly slain NPC corpses naming the player as killer within 20 units, then uses reply-driven Loot All; leaves NO DROP items for manual looting |
 | Floating Combat Text | `floating_combat_text` | Off | Draws received positive damage above known targets, in addition to chat |
 | Read the Spellbook Standing | `read_while_standing` | Off | Reads the spellbook without automatic sitting |
-| Memorize Without Sitting | `memorize_while_standing` | Off | Memorizes without automatic sitting or the client preparation pause; scribing keeps its normal rules |
 | Show Invisible Entities | `show_invisible` | Off | Draws known invisible spawns with parenthesized names; targeting rules remain unchanged |
 | Answer List Presence Polls | `answer_list_polls` | Off | Answers supported P99 presence polls after a local delay; does not join a list or answer numeric challenges |
 
@@ -102,6 +101,8 @@ The **Dangerous** section sits below the ordinary settings and includes the
 
 | Setting | File key | Default | Effect |
 | --- | --- | --- | --- |
+| Walk While Winded | `walk_while_winded` | Off | Allows horizontal movement while stunned; other stun restrictions remain |
+| Memorize Without Sitting | `memorize_while_standing` | Off | Memorizes without automatic sitting or the client preparation pause; scribing keeps its normal rules |
 | Take Environmental Damage | `take_environmental_damage` | On | Reports supported falls, drowning and lava heat. Air continues running with reports off |
 | Gills for Days | `gills_for_days` | Off | Disables the local air calculation and hides Air Remaining on Titanium sessions that offer gameplay departures |
 | Fly | `fly` | Off | Bounded flight through Jump and Duck bindings for ascent/descent, retaining solid collision; disabling restores gravity |

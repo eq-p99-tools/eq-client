@@ -25,6 +25,7 @@ fn placed_object_sidedness_survives_filtering_batching_and_reflection() {
         short_name: "synthetic".to_owned(),
         primitives: Vec::new(),
         terrain_materials: Vec::new(),
+        point_lights: Vec::new(),
         textures: Vec::new(),
         models: Vec::new(),
         objects: Vec::new(),

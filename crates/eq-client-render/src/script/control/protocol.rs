@@ -21,6 +21,7 @@ pub(super) enum Operation {
     Status,
     RunbookStart(Definition),
     RunbookResult(ResultUpdate),
+    RunbookExport(u64),
 }
 
 /// Only these fixed fields may enter the local execution boundary.
@@ -75,7 +76,18 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Envelope, &'static str> {
                 .get("result")
                 .ok_or("Runbook result requires a result")?,
         )?),
-        _ => return Err("Operation must be start, stop, status, runbook_start or runbook_result"),
+        Some("runbook_export") => Operation::RunbookExport(
+            object
+                .get("runbook_id")
+                .and_then(Value::as_u64)
+                .filter(|id| *id != 0)
+                .ok_or("Runbook export requires a positive runbook_id from status")?,
+        ),
+        _ => {
+            return Err(
+                "Operation must be start, stop, status, runbook_start, runbook_result or runbook_export",
+            );
+        }
     };
     let extra = match &operation {
         Operation::Start(_) => Some("source"),
@@ -83,6 +95,7 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Envelope, &'static str> {
         Operation::Status => None,
         Operation::RunbookStart(_) => Some("runbook"),
         Operation::RunbookResult(_) => Some("result"),
+        Operation::RunbookExport(_) => Some("runbook_id"),
     };
     if object.keys().any(|key| {
         !matches!(key.as_str(), "version" | "instance" | "id" | "op") && Some(key.as_str()) != extra
