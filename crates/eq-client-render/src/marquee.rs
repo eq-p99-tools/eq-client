@@ -13,6 +13,9 @@ const MAX_HOLD: Duration = Duration::from_secs(60);
 const MAX_FADE: Duration = Duration::from_secs(10);
 const MAX_CHARS: usize = 512;
 
+#[cfg(test)]
+mod preview;
+
 /// At most one visible banner and a short queue behind it.
 #[derive(Default, Resource)]
 pub(super) struct Banners {

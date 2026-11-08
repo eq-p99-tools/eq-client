@@ -587,16 +587,22 @@ mod tests {
 
     #[test]
     fn mp3_decoder_reads_synthetic_silence_frames() {
-        // MPEG-1 Layer III, 128 kbps, 44.1 kHz, stereo. Zero side information
-        // gives empty granules, so these frames represent silence.
-        let mut frame = vec![0; 417];
-        frame[..4].copy_from_slice(&[0xff, 0xfb, 0x90, 0]);
         let source = AudioSource {
-            bytes: frame.repeat(12).into(),
+            bytes: mp3_silence(12).into(),
         };
         let seconds = mp3_seconds(&source).unwrap();
         assert!(seconds > 0.0 && seconds <= MAX_MP3_SECONDS);
     }
+
+    fn mp3_silence(frames: usize) -> Vec<u8> {
+        // MPEG-1 Layer III, 128 kbps, 44.1 kHz, stereo. Zero side information
+        // gives empty granules, so these frames represent silence.
+        let mut frame = [0; 417];
+        frame[..4].copy_from_slice(&[0xff, 0xfb, 0x90, 0]);
+        frame.repeat(frames)
+    }
+
+    mod mp3_probe;
 
     #[test]
     fn reset_discards_requests_and_old_voices_even_without_an_audio_device() {

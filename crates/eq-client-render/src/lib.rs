@@ -460,6 +460,37 @@ pub fn run(
 pub(crate) mod testing {
     use super::*;
 
+    /// An adapter-backed probe without a visible window, input or audio output.
+    pub(crate) fn hidden_graphics_probe(title: &str, resolution: (u32, u32)) -> App {
+        let mut app = App::new();
+        app.add_plugins(
+            DefaultPlugins
+                .set(WindowPlugin {
+                    primary_window: Some(Window {
+                        title: title.into(),
+                        resolution: resolution.into(),
+                        visible: false,
+                        focused: false,
+                        ..default()
+                    }),
+                    ..default()
+                })
+                .set(bevy::winit::WinitPlugin {
+                    run_on_any_thread: true,
+                })
+                .disable::<bevy::audio::AudioPlugin>(),
+        )
+        .insert_resource(bevy::winit::WinitSettings::continuous());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        app.add_systems(Update, move |mut exit: MessageWriter<AppExit>| {
+            if std::time::Instant::now() >= deadline {
+                error!("Hidden graphics probe timed out");
+                exit.write(AppExit::error());
+            }
+        });
+        app
+    }
+
     /// An app with every presentation resource the viewer starts with, empty
     /// and offline, plus input, the click rule and a focused primary window:
     /// a test adds the systems it exercises, and a system that comes to need
