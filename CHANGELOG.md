@@ -2,11 +2,24 @@
 
 ## Unreleased
 
-- Confirm an ordinary Titanium cursor item drop from Inventory on EQEmu.
-  A fresh inventory snapshot resolves the cursor hold and makes carried
-  weight usable for movement and landing costs again. Passive descent
-  remains available. `ClientWorld::fall_weight` returns an optional weight.
-  Ground objects follow their own received updates.
+- Group Interface scale with ordinary QoL settings and move **Run a Little
+  Faster** into a separate **Dangerous** section with the other flagged options.
+  When space allows, the Interface scale caption, slider and value share one
+  line.
+- Confirm an ordinary Titanium cursor item drop from Inventory on local-only
+  EQEmu. Escape cancels the pending confirmation. Scripts can open it with
+  `click drop` and use the ordinary Yes/No buttons. A fresh inventory snapshot
+  resolves the cursor hold. Ground objects follow their own received updates.
+- Report completed falls when their cost can be established while a drop
+  awaits inventory evidence. Active
+  movement can resume once the worker accepts a current upper bound on
+  carried weight. A speed recalibration preserves an ongoing descent and
+  any landing report waiting for space in the session queue.
+  A cursor resync can preserve the fall bound while movement is paused.
+  If the load and landing cost are unknown, the client sends no report and
+  says so in chat. Ground drops are local-only EQEmu, so this case does not
+  reach public servers.
+  `ClientWorld::fall_weight` continues to return `Option<f32>`.
 
 - Set **Run a Little Faster** from 1.00x to 1.40x on the QoL page. Existing
   enabled checkboxes load at 1.10x, and new profiles start at ordinary speed.
@@ -15,19 +28,29 @@
   option request is in flight at a time, and a zone reset resyncs the
   choices. Without gameplay departures the defaults are retained.
 - Consider replies map the received faction code to its standing phrase in
-  wire order; codes 6 to 9 were reversed. The consider line takes a chat
-  palette colour and the received level colour stays separate from any level
-  estimate; the palette values and the assessment phrase choice are not read
-  from the Titanium program (inferred, recording checklist 6.395). The
-  received colour is shown on every server.
+  wire order. Codes 6 to 9 were reversed.
+- Consider chat uses the fixed Titanium palette, including its even-level
+  white, and a native light blue summary. The renderer uses one representative
+  phrase per color. The network policy keeps the received color on every
+  server. An optional level estimate falls back to the received color when
+  either level is unavailable.
+- Use the networking game's instrument scaling for movement-related buff
+  effects. Signed snares and the existing bounds and unknowns keep their
+  behavior.
 - Add a hidden, movable Runbook checklist for a local script harness. Rows
   show only results the harness reported, stale IDs and conflicting terminal
   results are rejected, and the state survives closing and reopening.
-- Hide the air gauge and restart its clocks while a movement result stays
-  unconfirmed for more than 250 ms; a pending move survives a same-admission
-  reset until the worker answers it. A cast request the worker never
-  acknowledges times out after five seconds through a typed event and frees
-  the request alias.
+- Offer **EQ → Runbook** only in launches with `--script-control`. Checklist
+  results accept an explicit null note as well as an omitted note.
+- Keep the next air and lava checks due while a movement result is pending.
+  Hide the air gauge after 250 ms and evaluate one due check against the
+  next usable worker position. A pending Move survives a same-admission
+  reset and requires a result with its admission and request stamp.
+  **Breaking:** `Moved` and `WorldEvent::MotionSent` now include `created`.
+- A cast request times out after five seconds through a typed event. A
+  compatible delayed own start retains its request spell through
+  `CastLateBegin`. Ordinary item casts use the matching spell-bearing
+  Mana result. Exhaustive event matches now include `CastLateBegin`.
 - Show Air Remaining during ordinary mapped Titanium immersion, including
   WLD lava that restricts breathing at the head. Local-only EQEmu sessions
   report drowning after depletion and lava heat from mapped body contact.

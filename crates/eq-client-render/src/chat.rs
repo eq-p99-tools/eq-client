@@ -895,14 +895,15 @@ impl ChatLook {
     }
 }
 
-/// Chat palette for the types used in consider lines. These values are not
-/// yet read from the Titanium program (inferred, recording checklist 6.395).
+/// Titanium's fixed chat colors for the types used by consider summaries.
+/// `eqgame.exe` 0x491e30 converts native NPC categories to chat types.
+/// The fixed palette at 0x4f2bbe resolves those types and the gray extension.
 const fn consider_rgb(kind: u16) -> Option<[u8; 3]> {
     match kind {
         2 => Some([0, 128, 0]),
         4 => Some([0, 64, 255]),
         6 => Some([128, 128, 128]),
-        10 | 20 => Some([240, 240, 240]),
+        10 => Some([224, 224, 224]),
         13 => Some([240, 0, 0]),
         15 => Some([240, 240, 0]),
         18 => Some([0, 240, 240]),
@@ -3116,6 +3117,22 @@ mod tests {
             ..default()
         });
         (app, tx)
+    }
+
+    #[test]
+    fn consider_chat_uses_titaniums_fixed_palette() {
+        for (kind, rgb) in [
+            (2, [0, 128, 0]),
+            (4, [0, 64, 255]),
+            (6, [128, 128, 128]),
+            (10, [224, 224, 224]),
+            (13, [240, 0, 0]),
+            (15, [240, 240, 0]),
+            (18, [0, 240, 240]),
+        ] {
+            assert_eq!(consider_rgb(kind), Some(rgb));
+        }
+        assert_eq!(consider_rgb(20), None);
     }
 
     #[test]

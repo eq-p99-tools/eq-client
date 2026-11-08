@@ -215,6 +215,7 @@ mod tests {
             &mut online,
             [WorldEvent::MotionSent {
                 session_id: 7,
+                created: std::time::Instant::now(),
                 position: proposed,
                 refused: None,
             }],

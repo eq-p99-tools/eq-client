@@ -67,7 +67,7 @@ impl ClientWorld {
     /// Revalidates an exact drop selection before sending it.
     ///
     /// # Errors
-    /// Refuses a changed actor, admission, inventory or unsupported drop.
+    /// Refuses a changed actor, admission, inventory, unknown load or unsupported drop.
     pub fn check_cursor_drop(&self, request: &crate::inventory::InventoryDrop) -> Result<()> {
         ensure!(
             self.in_world() && self.can(crate::Capability::GroundDropping),
@@ -83,6 +83,10 @@ impl ClientWorld {
         ensure!(
             !self.inventory_moves_pending(),
             "Finish the pending inventory move first"
+        );
+        ensure!(
+            self.carried_coin_count().is_some(),
+            "A cursor drop needs current carried coin information"
         );
         self.inventory().plan_ground_drop(request)?;
         Ok(())

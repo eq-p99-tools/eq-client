@@ -528,6 +528,7 @@ type Buttons<'w, 's> = Query<
         (
             Has<super::inventory::StoreCursor>,
             Option<&'static super::inventory::destruction::Action>,
+            Has<super::inventory::ground_drop::DropButton>,
         ),
         (
             Option<&'static super::spellbook::BookEntry>,
@@ -2311,7 +2312,7 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
         visibility,
         slot,
         scribe,
-        (store, destroy),
+        (store, destroy, drop),
         (row, place, turns, spell_gem, hot_button),
         gem,
         trade,
@@ -2372,6 +2373,7 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
             ClickTarget::Scribe => scribe,
             ClickTarget::Store => store,
             ClickTarget::Destroy => destroy == Some(&super::inventory::destruction::Action::Select),
+            ClickTarget::Drop => drop,
             ClickTarget::BookRow(number) => row.is_some_and(|row| row.0 == number),
             ClickTarget::BookPlace(number) => place.is_some_and(|place| place.0 == number),
             ClickTarget::BookPage(forward) => turns.is_some_and(|turns| turns.0 == forward),
@@ -2379,14 +2381,7 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
             ClickTarget::HotButton(number) => hot_button.is_some_and(|slot| slot.0 == number),
             ClickTarget::MemorizeGem(number) => gem.is_some_and(|gem| gem.0 == number),
             ClickTarget::Trade(click) => trade == Some(&trading(click)),
-            ClickTarget::Tint(number, color) => tint.is_some_and(|action| {
-                use super::inventory::colors::Action;
-                match (action, color) {
-                    (Action::Toggle(slot), None) => slot.0 == number,
-                    (Action::Set(slot, index), Some(color)) => slot.0 == number && *index == color,
-                    _ => false,
-                }
-            }),
+            ClickTarget::Tint(number, color) => tint_control(tint, number, color),
             ClickTarget::Give => give,
             ClickTarget::ChatTab(_) | ClickTarget::CharacterList(_) => {
                 listed_control(target, (character, chat_tab))
@@ -2405,6 +2400,19 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
         }
     }
     found.map(|(_, entity)| entity)
+}
+
+fn tint_control(
+    action: Option<&super::inventory::colors::Action>,
+    number: i32,
+    color: Option<usize>,
+) -> bool {
+    use super::inventory::colors::Action;
+    action.is_some_and(|action| match (action, color) {
+        (Action::Toggle(slot), None) => slot.0 == number,
+        (Action::Set(slot, index), Some(color)) => slot.0 == number && *index == color,
+        _ => false,
+    })
 }
 
 /// Whether a control is this button of the skin's effects windows: the
@@ -4238,6 +4246,84 @@ mod tests {
                 .is_some()
         );
         assert_eq!(world.get::<Interaction>(closed), Some(&Interaction::None));
+    }
+
+    #[test]
+    fn scripted_drop_click_uses_the_inventory_button_and_ordinary_confirmation() {
+        use crate::{
+            confirm::{AnswerButton, Asked, Question},
+            inventory::ground_drop::{DropButton, input},
+            online::{OnlineState, testing},
+            windows::{Shown, WindowId},
+        };
+        use eq_client_core::inventory::{InventorySlot, InventoryUpdate};
+
+        let (mut app, _) = background(vec![
+            Step::Click(ClickTarget::Drop),
+            Step::Wait(Duration::from_millis(100)),
+            Step::Click(ClickTarget::Answer(true)),
+        ]);
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 7, testing::player(9));
+        testing::empty_carried_coins(&mut online);
+        let mut item = crate::preview::items().remove(0);
+        item.slot = InventorySlot::CURSOR;
+        item.bag_slots = 0;
+        item.stack_count = None;
+        item.rules.ground_drop_serial = std::num::NonZeroU32::new(17);
+        testing::inventory(&mut online, InventoryUpdate::Snapshot(vec![item.clone()]));
+        let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+        app.insert_resource(online)
+            .insert_resource(crate::outbox::Outbox::new(Some(sender)))
+            .init_resource::<Asked>()
+            .add_systems(
+                Update,
+                (crate::confirm::buttons, input, crate::confirm::window).chain(),
+            );
+        app.world_mut()
+            .resource_mut::<Shown>()
+            .open(WindowId::Inventory);
+        app.world_mut().spawn((
+            Button,
+            DropButton,
+            laid_out(Vec2::new(240.0, 360.0), 40.0, 1),
+        ));
+        let dialog = app.world_mut().spawn(Node::default()).id();
+        app.world_mut().spawn((
+            Button,
+            AnswerButton(true),
+            ChildOf(dialog),
+            laid_out(Vec2::new(600.0, 360.0), 40.0, 2),
+        ));
+        let mut asked = false;
+        for ms in (0..=1_500).step_by(10) {
+            let visible = app
+                .world()
+                .resource::<Shown>()
+                .is_open(WindowId::Confirmation);
+            app.world_mut().get_mut::<Node>(dialog).unwrap().display = if visible {
+                Display::Flex
+            } else {
+                Display::None
+            };
+            frame_at(&mut app, ms);
+            if matches!(
+                app.world().resource::<Asked>().question(),
+                Some(Question::DropItem { .. })
+            ) {
+                asked = true;
+                assert!(receiver.try_recv().is_err());
+            }
+        }
+        assert!(asked);
+        let eq_client_core::ClientCommand::DropItem(request) = receiver.try_recv().unwrap() else {
+            panic!("expected one confirmed drop");
+        };
+        assert_eq!(
+            (request.session_id, request.own_id, request.item),
+            (7, 9, item)
+        );
+        assert!(receiver.try_recv().is_err());
     }
 
     /// An offline app driving `steps`, with the real pointer outside its

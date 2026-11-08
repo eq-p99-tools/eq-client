@@ -53,25 +53,10 @@ impl ClientWorld {
         use eq_network_game::{
             inventory::WeightUnavailable, movement::SpeedInputUnavailable as Missing,
         };
-        if !self.inventory.received()
-            || self.inventory.stale()
-            || self.inventory.ground_drop_pending()
-        {
+        if !self.inventory.received() || self.inventory.stale() {
             return Err(Missing::Inventory);
         }
-        let purse = self.wallet.purse.ok_or(Missing::Coins)?;
-        // CoinsElsewhere establishes the cursor. Its bank balance is irrelevant
-        // to carried weight and can become unknown independently.
-        let cursor = self.known_cursor_coins.ok_or(Missing::Coins)?;
-        let coins: u64 = [purse, cursor]
-            .iter()
-            .map(|c| {
-                [c.platinum, c.gold, c.silver, c.copper]
-                    .into_iter()
-                    .map(u64::from)
-                    .sum::<u64>()
-            })
-            .sum();
+        let coins = self.carried_coin_count().ok_or(Missing::Coins)?;
         self.inventory
             .carried_weight_tenths(self.generation(), coins)
             .map_err(|reason| match reason {
@@ -80,24 +65,47 @@ impl ClientWorld {
             })
     }
 
+    pub(super) fn carried_coin_count(&self) -> Option<u64> {
+        let purse = self.wallet.purse?;
+        // CoinsElsewhere establishes the cursor. Its bank balance is irrelevant
+        // to carried weight and can become unknown independently.
+        let cursor = self.known_cursor_coins?;
+        Some(
+            [purse, cursor]
+                .iter()
+                .map(|c| {
+                    [c.platinum, c.gold, c.silver, c.copper]
+                        .into_iter()
+                        .map(u64::from)
+                        .sum::<u64>()
+                })
+                .sum(),
+        )
+    }
+
     /// The weight a landing's cost takes, in the program's units: the
     /// programs' sum ([`Self::movement_weight`]; their fall cost reads the
     /// same weight as their speeds, Titanium's from the field the stat
     /// recompute 0x4212b3 fills with 0x41bb06 and `EQMac`'s fall 0x4bfe16
     /// calling 0x4bbb78) where it can be established, else this client's
-    /// own estimate ([`Self::carried_weight`]). A pending ground drop can
-    /// leave a heavier server cursor item hidden in the displayed queue,
-    /// so neither weight estimate is usable until a received snapshot.
+    /// own estimate ([`Self::carried_weight`]). For a pending drop, use the
+    /// retained fall-only bound. An ambiguous cursor update can leave this
+    /// bound usable even while movement and inventory actions are held.
+    /// Returns `None` if a pending drop has no defensible bound.
     #[must_use]
     pub fn fall_weight(&self) -> Option<f32> {
-        if self.inventory.ground_drop_pending() {
-            return None;
-        }
         #[allow(clippy::cast_precision_loss)]
-        let weight = self
-            .movement_weight()
-            .map_or_else(|_| self.carried_weight(), |tenths| tenths as f32 / 10.0);
-        Some(weight)
+        let weight = |tenths: u64| tenths as f32 / 10.0;
+        if self.inventory.ground_drop_pending() {
+            return self
+                .inventory
+                .ground_drop_weight_tenths(self.carried_coin_count()?)
+                .map(weight);
+        }
+        Some(
+            self.movement_weight()
+                .map_or_else(|_| self.carried_weight(), weight),
+        )
     }
 
     /// Changes when the player's skills, languages, level or admission change.
@@ -553,16 +561,17 @@ impl ClientWorld {
     }
 
     /// The display color of a considered spawn. The classic policy
-    /// estimates NPC difficulty from current levels on the classic scale.
-    /// The received color stays available through [`Self::considered`].
+    /// estimates NPC difficulty when both levels are known. Otherwise use
+    /// the received color, which stays available through [`Self::considered`].
     #[must_use]
     pub fn consider_color(&self, id: u16) -> Option<ConColor> {
         let reported = self.considered(id)?;
-        if matches!(self.npc_consider, NpcConsider::ClassicLevel) {
-            let spawn = self.spawn(id)?;
-            if spawn.state.kind == crate::SpawnKind::Npc {
-                return crate::maps::level_con(self.player()?.level, spawn.state.level, false);
-            }
+        if matches!(self.npc_consider, NpcConsider::ClassicLevel)
+            && let Some((player, spawn)) = self.player().zip(self.spawn(id))
+            && spawn.state.kind == crate::SpawnKind::Npc
+            && let Some(estimate) = crate::maps::level_con(player.level, spawn.state.level, false)
+        {
+            return Some(estimate);
         }
         (!matches!(reported, ConColor::Other(_))).then_some(reported)
     }

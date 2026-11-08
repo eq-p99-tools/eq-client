@@ -48,7 +48,7 @@ impl ClientWorld {
         }
     }
 
-    /// The server took the player's cast request and has not begun it yet.
+    /// Local transport submission or the ordered clear before its answer.
     pub(super) fn cast_pending(
         &mut self,
         session_id: u64,
@@ -62,8 +62,7 @@ impl ClientWorld {
         }
     }
 
-    /// Ends the worker's local wait. Only a pending request can be retired
-    /// here, and its spell is unavailable to later cast notices.
+    /// Ends the worker's local wait for the matching pending request.
     pub(super) fn cast_request_unconfirmed(
         &mut self,
         session_id: u64,
@@ -75,6 +74,21 @@ impl ClientWorld {
             && self.casting.pending == Some(spell_id)
         {
             self.casting.pending = None;
+        } else {
+            changes.ignored = true;
+        }
+    }
+
+    /// Keeps the worker's request context for the following own start.
+    pub(super) fn cast_late_begin(
+        &mut self,
+        session_id: u64,
+        requested_spell: u32,
+        changes: &mut Changes,
+    ) {
+        if self.accepts_reply(session_id) && self.death.is_none() && self.casting.pending.is_none()
+        {
+            self.casting.late_begin(requested_spell);
         } else {
             changes.ignored = true;
         }

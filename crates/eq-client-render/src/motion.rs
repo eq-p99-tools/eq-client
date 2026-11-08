@@ -602,15 +602,26 @@ impl Controls {
             && grant
                 .units_per_second
                 .is_some_and(|value| value.is_finite() && value > 0.0);
+        let descent = self
+            .airborne
+            .take()
+            .filter(|airborne| airborne.velocity() < 0.0);
+        let unreported = self.unreported;
         self.reset(grant.units_per_second);
         self.autorun = autorun;
         self.backward_speed = grant.backward_units_per_second;
         self.walk_speed = grant.walk_units_per_second;
         self.strafe_speed = grant.strafe_units_per_second;
         self.diagonal_rates = grant.diagonal;
-        self.airborne = grant
-            .falls
-            .then(eq_client_core::movement::AirborneController::default);
+        if grant.falls {
+            // A speed recalibration may withdraw input mid-fall. Keep its
+            // vertical history and any unsent cost, but release lateral drift.
+            // A received placement or lifecycle reset calls reset separately.
+            let mut airborne = descent.unwrap_or_default();
+            airborne.limit_drift(0.0);
+            self.airborne = Some(airborne);
+            self.unreported = unreported;
+        }
     }
 
     fn finish(&mut self) {
@@ -620,12 +631,12 @@ impl Controls {
         self.last_answer = Some(now);
     }
 
-    pub(super) fn moved(&mut self, session_id: Option<u64>) {
-        if self.pending.is_some_and(|pending| {
-            pending.kind == PendingKind::Move && Some(pending.session_id) == session_id
-        }) {
+    pub(super) fn moved(&mut self, session_id: Option<u64>, created: Instant) -> bool {
+        if self.is_pending_move(session_id, created) {
             self.finish();
+            return true;
         }
+        false
     }
 
     pub(super) fn crossing_refused(&mut self) {
@@ -638,15 +649,19 @@ impl Controls {
     }
 
     pub(super) fn move_refused(&mut self, session_id: Option<u64>, created: Instant, reason: &str) {
-        if self.pending.is_some_and(|pending| {
-            pending.kind == PendingKind::Move
-                && Some(pending.session_id) == session_id
-                && pending.created == created
-        }) {
+        if self.is_pending_move(session_id, created) {
             self.finish();
             self.resolve_water_entry(true);
             self.refused = Some(reason.to_owned());
         }
+    }
+
+    fn is_pending_move(&self, session_id: Option<u64>, created: Instant) -> bool {
+        self.pending.is_some_and(|pending| {
+            pending.kind == PendingKind::Move
+                && Some(pending.session_id) == session_id
+                && pending.created == created
+        })
     }
 
     /// A local result either keeps the water entry or restores the dry-side motion.
@@ -1396,28 +1411,34 @@ pub(super) fn input(
             .airborne
             .as_mut()
             .and_then(AirborneController::take_landing)
-        && let Some(cost) = landing_cost(
+    {
+        let cost = landing_cost(
             client,
             world,
             position - Vec3::Y * body.feet_offset,
             fall,
             online.world(),
-        )
-    {
-        debug!(
-            fall_distance = fall.fall_distance,
-            impact_speed = fall.impact_speed,
-            carried_weight = ?online.world().fall_weight(),
-            damage = cost.damage,
-            safe_fall = cost.safe_fall,
-            "Landing"
         );
-        if options.options.qol.on(Fix::TakeEnvironmentalDamage)
-            && online.world().can(Capability::EnvironmentalDamage)
-        {
-            say_fall(client, cost, online.world(), &messages, &mut chat);
+        let reports_damage = options.options.qol.on(Fix::TakeEnvironmentalDamage)
+            && online.world().can(Capability::EnvironmentalDamage);
+        if let Some(cost) = cost {
+            debug!(
+                fall_distance = fall.fall_distance,
+                impact_speed = fall.impact_speed,
+                carried_weight = ?online.world().fall_weight(),
+                damage = cost.damage,
+                safe_fall = cost.safe_fall,
+                "Landing"
+            );
+            if reports_damage {
+                say_fall(client, cost, online.world(), &messages, &mut chat);
+            }
+            controls.unreported = report_fall(&outbox, online.world(), &options.options.qol, cost);
+        } else if reports_damage {
+            chat.history.push(crate::chat::system_line(
+                "Fall damage could not be reported because carried weight is unknown.",
+            ));
         }
-        controls.unreported = report_fall(&outbox, online.world(), &options.options.qol, cost);
     }
     controls.moving = position.distance_squared(origin) > 0.000_001
         || mouse_snapshot.is_none() && (heading - current_heading).abs() > f32::EPSILON;
@@ -1610,7 +1631,6 @@ fn jump_too_soon(client: InstalledClient, last: Option<Instant>, now: Instant) -
 /// fall did damage for it to lessen (Titanium: recording checklist item
 /// 6.148). The rank of the ability that raises Safe Fall is not in what the
 /// sessions decode, so it counts as none (unsure).
-/// Returns no cost when the rule needs weight and drop custody is unresolved.
 fn landing_cost(
     client: InstalledClient,
     collision: &CollisionWorld,
@@ -1622,20 +1642,38 @@ fn landing_cost(
         return Some(FallCost::default());
     }
     let skill = safe_fall(world);
-    let cost = match client.falls() {
-        Some(falls) => falls.landing_cost(FallLanding {
-            impact_speed: landing.impact_speed,
-            carried_weight: world.fall_weight()?,
-            safe_fall: skill,
-            safe_fall_ranks: 0,
-            zone: eq_client_core::zones::number(world.zone()).unwrap_or(0),
-        }),
+    Some(match client.falls() {
+        Some(falls) => {
+            let zone = eq_client_core::zones::number(world.zone()).unwrap_or(0);
+            let Some(carried_weight) = world.fall_weight() else {
+                return falls.landing_cost_without_weight(landing.impact_speed, zone);
+            };
+            let landing = FallLanding {
+                impact_speed: landing.impact_speed,
+                carried_weight,
+                safe_fall: skill,
+                safe_fall_ranks: 0,
+                zone,
+            };
+            let mut cost = falls.landing_cost(landing);
+            if cost.safe_fall && world.worker_inventory().ground_drop_pending() {
+                // Extra mass can make an otherwise harmless landing eligible
+                // for Safe Fall. Award the notice only when even zero weight
+                // would have used the skill and the upper bound still uses it.
+                cost.safe_fall = falls
+                    .landing_cost(FallLanding {
+                        carried_weight: 0.0,
+                        ..landing
+                    })
+                    .safe_fall;
+            }
+            cost
+        }
         None => FallCost {
             damage: collision.landing_damage(feet, landing, skill),
             safe_fall: skill > 0 && collision.landing_damage(feet, landing, 0) > 0,
         },
-    };
-    Some(cost)
+    })
 }
 
 /// Says in the chat what a landing that hurt did, in the installed client's
@@ -1677,9 +1715,6 @@ fn report_fall(
     qol: &Settings,
     cost: FallCost,
 ) -> Option<FallCost> {
-    if world.worker_inventory().ground_drop_pending() {
-        return None;
-    }
     let stamp = outbox.peek(world)?;
     let wanted = (cost.damage > 0 || cost.safe_fall)
         && qol.on(Fix::TakeEnvironmentalDamage)
@@ -3355,13 +3390,15 @@ pub(super) mod tests {
         (app, receiver)
     }
 
-    pub(crate) fn age_pending(app: &mut App) {
+    pub(crate) fn age_pending(app: &mut App) -> Instant {
+        let created = Instant::now().checked_sub(MOVE_RESULT_WAIT).unwrap();
         app.world_mut()
             .resource_mut::<Controls>()
             .pending
             .as_mut()
             .unwrap()
-            .created = Instant::now().checked_sub(MOVE_RESULT_WAIT).unwrap();
+            .created = created;
+        created
     }
 
     pub(crate) fn fixture() -> (App, mpsc::Receiver<ClientCommand>) {
@@ -4245,10 +4282,14 @@ pub(super) mod tests {
     /// Takes the sample as the session would and draws it, then lets the next
     /// sample go after a tenth of a second; returns when that wait began.
     fn accept(app: &mut App, request: &MovementRequest) -> Instant {
+        // Some guard fixtures replace the request's time with a simulated
+        // clock. The host still waits on the stamp that it put in the queue.
+        let created = app.world().resource::<Controls>().pending.unwrap().created;
         crate::online::testing::news(
             &mut app.world_mut().resource_mut::<online::OnlineState>(),
             [eq_client_core::WorldEvent::MotionSent {
                 session_id: request.session_id,
+                created,
                 position: request.position,
                 refused: None,
             }],
@@ -4257,7 +4298,7 @@ pub(super) mod tests {
         let mut players = world.query_filtered::<&Transform, With<Player>>();
         let drawn = *players.single(world).unwrap();
         let mut controls = app.world_mut().resource_mut::<Controls>();
-        controls.moved(Some(request.session_id));
+        assert!(controls.moved(Some(request.session_id), created));
         controls.display_sample(drawn, request.position);
         controls.last_accepted = Instant::now()
             .checked_sub(Duration::from_millis(100))
@@ -4556,6 +4597,7 @@ pub(super) mod tests {
             &mut app.world_mut().resource_mut::<online::OnlineState>(),
             [eq_client_core::WorldEvent::MotionSent {
                 session_id: 11,
+                created: Instant::now(),
                 position: world_position([-0.05, 3.0, 0.0], 0.0),
                 refused: None,
             }],
@@ -5361,14 +5403,14 @@ pub(super) mod tests {
         );
         app.update();
         assert!(receiver.try_recv().is_err());
-        age_pending(&mut app);
+        let aged = age_pending(&mut app);
         app.update();
         assert!(app.world().resource::<Controls>().speed.is_some());
         assert!(app.world().resource::<Controls>().pending.is_some());
         assert!(receiver.try_recv().is_err());
         // A late answer releases only the proposal; the grant was never lost.
         let mut controls = app.world_mut().resource_mut::<Controls>();
-        controls.moved(Some(request.session_id));
+        assert!(controls.moved(Some(request.session_id), aged));
         controls.last_accepted = Instant::now().checked_sub(Duration::from_secs(2)).unwrap();
         app.update();
         let ClientCommand::Move(resumed) = receiver.try_recv().unwrap() else {
@@ -5590,10 +5632,11 @@ pub(super) mod tests {
             speed: Some(6.0),
             ..default()
         };
-        controls.wait_for(Some(11), Instant::now(), PendingKind::Move);
+        let created = Instant::now();
+        controls.wait_for(Some(11), created, PendingKind::Move);
         controls.reset(None);
         assert!(controls.pending.is_some());
-        controls.moved(Some(11));
+        assert!(controls.moved(Some(11), created));
         assert!(controls.speed.is_none());
         controls.send_failed(crate::outbox::Refusal::Ended);
         assert!(controls.speed.is_none());
@@ -5840,6 +5883,229 @@ pub(super) mod tests {
             app.update();
             assert!(matches!(receiver.try_recv(), Ok(ClientCommand::Move(_))));
             assert!(receiver.try_recv().is_err());
+        }
+    }
+
+    #[test]
+    fn landing_during_a_drop_reports_damage_and_keeps_custody_held() {
+        use eq_client_core::inventory::{InventorySlot, InventoryUpdate};
+
+        for (updates, amount) in [
+            (vec![], Some(276)),
+            (
+                vec![
+                    InventoryUpdate::Set(vec![drop_item(1, 19)]),
+                    InventoryUpdate::Remove(InventorySlot::CURSOR),
+                ],
+                Some(276),
+            ),
+            (vec![InventoryUpdate::Invalidated], None),
+        ] {
+            let (mut app, receiver) = landing(Some(10), eq_client_core::Capability::ALL.to_vec());
+            let mut online = app.world_mut().resource_mut::<online::OnlineState>();
+            hold_drop(
+                &mut online,
+                50,
+                std::iter::once(InventoryUpdate::Cursor(vec![drop_item(1_500, 18)])).chain(updates),
+            );
+            let mut controls = app.world_mut().resource_mut::<Controls>();
+            let (last_accepted, climb_sent) = (controls.last_accepted, controls.climb_sent);
+            controls.grant(eq_client_core::world::MotionGrant {
+                units_per_second: None,
+                backward_units_per_second: None,
+                walk_units_per_second: None,
+                strafe_units_per_second: None,
+                diagonal: eq_client_core::DiagonalRates::default(),
+                falls: true,
+            });
+            controls.last_accepted = last_accepted;
+            controls.climb_sent = climb_sent;
+            assert_eq!(
+                reported(&mut app, &receiver),
+                amount.map(|amount| ClientCommand::EnvironmentalDamage {
+                    session_id: 11,
+                    hazard: Hazard::Falling,
+                    amount,
+                    safe_fall: true,
+                })
+            );
+            assert!(receiver.try_recv().is_err());
+            let chat = app.world().resource::<crate::chat::ChatState>();
+            assert_eq!(
+                chat.newest().contains("carried weight is unknown"),
+                amount.is_none()
+            );
+        }
+    }
+
+    fn drop_item(weight_tenths: u32, serial: u32) -> eq_client_core::inventory::InventoryItem {
+        let mut item = crate::preview::items().remove(0);
+        item.slot = eq_client_core::inventory::InventorySlot::CURSOR;
+        item.bag_slots = 0;
+        item.details.weight_tenths = weight_tenths;
+        item.rules.ground_drop_serial = std::num::NonZeroU32::new(serial);
+        item
+    }
+
+    fn hold_drop(
+        online: &mut online::OnlineState,
+        weight_tenths: u32,
+        updates: impl IntoIterator<Item = eq_client_core::inventory::InventoryUpdate>,
+    ) {
+        use eq_client_core::{WorldEvent, inventory::InventoryUpdate};
+        online::testing::generation(online, eq_client_core::GameDialect::Titanium);
+        online::testing::empty_carried_coins(online);
+        let item = drop_item(weight_tenths, 17);
+        let serial = item.rules.ground_drop_serial.unwrap();
+        online::testing::inventory(online, InventoryUpdate::Snapshot(vec![item]));
+        let revision = online.world().worker_inventory().revision();
+        online::testing::news(
+            online,
+            [WorldEvent::InventoryAction {
+                session_id: 11,
+                revision,
+                sequence: None,
+                update: Some(InventoryUpdate::GroundDropPending(serial)),
+                error: None,
+            }],
+        );
+        for update in updates {
+            online::testing::inventory(online, update);
+        }
+        assert!(online.world().worker_inventory().ground_drop_pending());
+    }
+
+    #[test]
+    fn a_cursor_resync_keeps_a_52_unit_impact_harmless_at_50_weight() {
+        use eq_client_core::inventory::{InventorySlot, InventoryUpdate};
+        let mut online = online::OnlineState::new(true);
+        online::testing::admit(&mut online, 11, online::testing::player(7));
+        hold_drop(
+            &mut online,
+            500,
+            [
+                InventoryUpdate::Set(vec![drop_item(1, 18)]),
+                InventoryUpdate::Remove(InventorySlot::CURSOR),
+            ],
+        );
+        assert!(online.world().movement_weight().is_err());
+        let floor = CollisionWorld::new(flat_surface(0.0)).unwrap();
+        let mut impact = Landing {
+            fall_distance: 10.0,
+            impact_speed: 52.0,
+        };
+        let cost = landing_cost(
+            InstalledClient::Titanium,
+            &floor,
+            Vec3::ZERO,
+            impact,
+            online.world(),
+        )
+        .expect("cursor resync retains a load bound");
+        assert_eq!(cost, FallCost::default());
+        let (sender, receiver) = mpsc::sync_channel(1);
+        let outbox = crate::outbox::Outbox::new(Some(sender));
+        assert!(report_fall(&outbox, online.world(), &Settings::default(), cost).is_none());
+        assert!(receiver.try_recv().is_err());
+
+        online::testing::inventory(&mut online, InventoryUpdate::Invalidated);
+        assert!(online.world().fall_weight().is_none());
+        let cost = |impact| {
+            landing_cost(
+                InstalledClient::Titanium,
+                &floor,
+                Vec3::ZERO,
+                impact,
+                online.world(),
+            )
+        };
+        assert_eq!(cost(impact), None);
+        impact.impact_speed = 50.0;
+        assert_eq!(cost(impact), Some(FallCost::default()));
+        impact.impact_speed = 260.0;
+        assert_eq!(
+            cost(impact),
+            Some(FallCost {
+                damage: 20_000,
+                safe_fall: false
+            })
+        );
+    }
+
+    #[test]
+    fn received_placement_and_death_clear_the_preserved_descent_and_cost() {
+        use eq_client_core::{WorldEvent, WorldUpdate, movement::MotionStep};
+
+        for update in [
+            WorldEvent::Position {
+                spawn_id: 7,
+                position: world_position([4.0, 3.0, 0.0], 0.0),
+                velocity: [0.0; 3],
+                forward: 0.0,
+            },
+            WorldEvent::Death(eq_client_core::Death {
+                spawn_id: 7,
+                killer_id: 7,
+                corpse_id: 7,
+                bind_zone_id: 9,
+                corpse_name: None,
+            }),
+        ] {
+            let mut app = crate::testing::app();
+            let mut online = online::OnlineState::new(true);
+            online::testing::admit(&mut online, 11, online::testing::player(7));
+            hold_drop(&mut online, 500, []);
+            let (sender, receiver) = mpsc::sync_channel(1);
+            app.insert_resource(online)
+                .insert_resource(online::Updates(std::sync::Mutex::new(Some(receiver))))
+                .init_resource::<Assets<Mesh>>()
+                .init_resource::<Assets<StandardMaterial>>()
+                .init_resource::<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>()
+                .add_systems(Update, online::receive);
+            let floor = CollisionWorld::new(flat_surface(0.0)).unwrap();
+            let mut airborne = AirborneController::default();
+            let _ = airborne.step(
+                &floor,
+                Vec3::Y * 100.0,
+                physics(InstalledClient::Titanium, None),
+                MotionStep {
+                    horizontal: Vec3::ZERO,
+                    jump: false,
+                    seconds: 0.1,
+                    height: 6.0,
+                },
+            );
+            assert!(airborne.velocity() < 0.0 && airborne.peak().is_some());
+            let peak = airborne.peak();
+            let cost = FallCost {
+                damage: 42,
+                safe_fall: true,
+            };
+            let mut controls = app.world_mut().resource_mut::<Controls>();
+            controls.airborne = Some(airborne);
+            controls.unreported = Some(cost);
+            sender
+                .send(WorldUpdate::Game(WorldEvent::MotionState {
+                    session_id: 11,
+                    units_per_second: None,
+                    backward_units_per_second: None,
+                    walk_units_per_second: None,
+                    strafe_units_per_second: None,
+                    diagonal: DiagonalRates::default(),
+                    falls: true,
+                }))
+                .unwrap();
+            app.update();
+            let controls = app.world().resource::<Controls>();
+            let fall = controls.airborne.as_ref().unwrap();
+            assert!(fall.velocity() < 0.0 && fall.peak() == peak);
+            assert_eq!(controls.unreported, Some(cost));
+
+            sender.send(WorldUpdate::Game(update)).unwrap();
+            app.update();
+            let controls = app.world().resource::<Controls>();
+            assert!(controls.airborne.is_none());
+            assert!(controls.unreported.is_none());
         }
     }
 

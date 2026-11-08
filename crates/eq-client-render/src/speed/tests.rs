@@ -1073,7 +1073,7 @@ fn identical_value_recovery_uses_a_fresh_identity_and_rejects_the_old_receipt() 
 }
 
 #[test]
-fn heavier_cursor_arrival_after_a_drop_withdraws_weight_until_snapshot() {
+fn pending_drop_keeps_movement_bounded_until_inventory_is_invalidated() {
     use std::num::NonZeroU32;
 
     let (mut app, rx) = reporting_ready();
@@ -1114,9 +1114,26 @@ fn heavier_cursor_arrival_after_a_drop_withdraws_weight_until_snapshot() {
             world.worker_inventory().items().get(&InventorySlot::CURSOR),
             Some(&original)
         );
-        assert_eq!(world.movement_weight(), Err(Missing::Inventory));
-        assert_eq!(world.fall_weight(), None);
+        assert_eq!(world.movement_weight(), Ok(1_500));
+        assert!((world.fall_weight().unwrap() - 150.0).abs() < f32::EPSILON);
     }
+    app.update();
+    let bounded = receipt(&rx.try_recv().unwrap(), true);
+    assert_eq!(bounded.inputs.weight, 150);
+    testing::news(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        [
+            motion_state(Some(6.0)),
+            WorldEvent::SpeedInputsAccepted(bounded),
+        ],
+    );
+    app.update();
+    assert_eq!(movement_notice(&app), "");
+
+    testing::inventory(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        InventoryUpdate::Remove(InventorySlot::CURSOR),
+    );
     app.update();
     assert!(matches!(
         rx.try_recv(),
@@ -1126,6 +1143,13 @@ fn heavier_cursor_arrival_after_a_drop_withdraws_weight_until_snapshot() {
         })
     ));
     assert!(movement_notice(&app).contains("fresh inventory snapshot"));
+    let retained = app
+        .world()
+        .resource::<OnlineState>()
+        .world()
+        .fall_weight()
+        .unwrap();
+    assert!((retained - 150.0).abs() < f32::EPSILON);
 
     testing::inventory(
         &mut app.world_mut().resource_mut::<OnlineState>(),
@@ -1135,13 +1159,13 @@ fn heavier_cursor_arrival_after_a_drop_withdraws_weight_until_snapshot() {
     let recovered = receipt(&rx.try_recv().unwrap(), true);
     assert_eq!(recovered.inputs.weight, 150);
     assert_ne!(ready.report_id, recovered.report_id);
-    assert!(
-        app.world()
-            .resource::<OnlineState>()
-            .world()
-            .fall_weight()
-            .is_some()
-    );
+    let restored = app
+        .world()
+        .resource::<OnlineState>()
+        .world()
+        .fall_weight()
+        .unwrap();
+    assert!((restored - 150.0).abs() < f32::EPSILON);
     assert_ne!(movement_notice(&app), "");
     testing::news(
         &mut app.world_mut().resource_mut::<OnlineState>(),

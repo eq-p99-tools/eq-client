@@ -677,6 +677,7 @@ fn replies_for_an_earlier_admission_change_nothing() {
     };
     let sent = |session_id| WorldEvent::MotionSent {
         session_id,
+        created: Instant::now(),
         position: moved,
         refused: None,
     };
@@ -2121,6 +2122,41 @@ fn classic_npc_consider_uses_current_levels_without_overwriting_the_reply() {
     assert_eq!(world.consider_color(5), Some(ConColor::Blue));
 }
 
+#[test]
+fn classic_consider_uses_the_reply_when_either_level_is_unavailable() {
+    for (own_level, target_level) in [(1, None), (1, Some(0)), (0, Some(20))] {
+        let mut world = admitted();
+        world.consider_npcs_by_level(true);
+        game(
+            &mut world,
+            WorldEvent::Level {
+                current: own_level,
+                previous: 1,
+                experience: 0,
+            },
+        );
+        if let Some(level) = target_level {
+            game(
+                &mut world,
+                WorldEvent::Spawns(vec![SpawnState { level, ..spawn(5) }]),
+            );
+        }
+        let mut reply = crate::combat::Consideration {
+            target_id: 5,
+            faction: 9,
+            color: ConColor::Blue,
+            hit_points: None,
+        };
+        game(&mut world, WorldEvent::Consideration(reply));
+        assert_eq!(world.consider_color(5), Some(ConColor::Blue));
+
+        reply.color = ConColor::Other(77);
+        game(&mut world, WorldEvent::Consideration(reply));
+        assert_eq!(world.consider_color(5), None);
+        assert_eq!(world.considered(5), Some(ConColor::Other(77)));
+    }
+}
+
 fn coins(platinum: u32, gold: u32, silver: u32, copper: u32) -> Coins {
     Coins {
         platinum,
@@ -3358,10 +3394,12 @@ fn the_session_grants_motion_until_any_reset() {
 #[test]
 fn moves_and_replies_reach_the_front_end_for_the_current_admission() {
     let mut world = admitted();
+    let created = Instant::now();
     let sent = game(
         &mut world,
         WorldEvent::MotionSent {
             session_id: 1,
+            created,
             position: WorldPosition::default(),
             refused: Some("Too fast".into()),
         },
@@ -5505,7 +5543,7 @@ fn movement_weight_requires_cursor_receipt_but_never_a_bank_balance() {
     assert!(
         (world.fall_weight().unwrap() - 0.2).abs() < 0.001,
         "{:?}",
-        world.fall_weight()
+        world.fall_weight().unwrap()
     );
     // Losing only the irrelevant bank balance must not withdraw a known cursor.
     world.wallet.bank = None;

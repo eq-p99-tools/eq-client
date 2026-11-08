@@ -26,14 +26,14 @@ pub enum Reset {
     },
 }
 
-/// The player's own move as the session sent it.
+/// The worker's local result for the player's movement proposal.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Moved {
-    /// Where the player is: the position sent, or after a refusal, the last
-    /// one the session accepted.
+    /// Original process-local stamp of the proposal.
+    pub created: std::time::Instant,
+    /// The position the worker accepts, which can stay unchanged.
     pub position: WorldPosition,
-    /// Why the session's movement guard refused the move; None when it was
-    /// sent.
+    /// Why the movement guard refused the proposal. None means locally accepted.
     pub refused: Option<String>,
 }
 

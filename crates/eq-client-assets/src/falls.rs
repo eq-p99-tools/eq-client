@@ -160,7 +160,7 @@ impl ClientFalls {
     #[must_use]
     pub fn landing_cost(&self, landing: FallLanding) -> FallCost {
         let speed = landing.impact_speed * STEP_SECONDS;
-        if !speed.is_finite() || speed <= self.gate || self.harmless_zones.contains(&landing.zone) {
+        if !self.can_hurt(speed, landing.zone) {
             return FallCost::default();
         }
         let weight = landing.carried_weight.max(0.0);
@@ -194,6 +194,25 @@ impl ClientFalls {
             damage: raw.saturating_sub(saved),
             safe_fall: landing.safe_fall > 0,
         }
+    }
+
+    /// Returns a landing cost only when it is independent of the carried
+    /// load. The impact gate and exempt zones are always harmless. An
+    /// impact already deadly at zero load is deadly at any greater load.
+    #[must_use]
+    pub fn landing_cost_without_weight(&self, impact_speed: f32, zone: u16) -> Option<FallCost> {
+        let speed = impact_speed * STEP_SECONDS;
+        if !self.can_hurt(speed, zone) {
+            return Some(FallCost::default());
+        }
+        ((speed - 2.5) - 1.5 >= DEADLY_T).then_some(FallCost {
+            damage: DEADLY_FALL,
+            safe_fall: false,
+        })
+    }
+
+    fn can_hurt(&self, speed: f32, zone: u16) -> bool {
+        speed.is_finite() && speed > self.gate && !self.harmless_zones.contains(&zone)
     }
 }
 

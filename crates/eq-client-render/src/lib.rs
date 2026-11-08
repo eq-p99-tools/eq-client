@@ -202,7 +202,8 @@ pub struct ViewerConfig {
     /// Explicit input ownership for CLI scripts and later opt-in recovery runs.
     /// Background mode requests an initially non-activating window.
     pub script_input_mode: script::InputMode,
-    /// Opt-in local script request/status bridge; must be a new directory.
+    /// Opt-in local script request/status bridge and Runbook checklist.
+    /// The path must be a new directory.
     pub script_control: Option<PathBuf>,
     /// Leave the script pointer's arrow undrawn while a script runs; it is
     /// drawn by default, so a recording shows where each click lands.

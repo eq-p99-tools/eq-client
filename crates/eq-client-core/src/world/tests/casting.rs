@@ -46,7 +46,7 @@ fn refresh(slot: u32, spell_id: u32) -> WorldEvent {
 }
 
 #[test]
-fn requested_spell_ends_its_aliased_cast_in_either_notice_order() {
+fn requested_spell_ends_its_aliased_cast_in_either_begin_notice_order() {
     for begin_first in [false, true] {
         for result in [mana(42), refresh(0, 42)] {
             let mut world = admitted();
@@ -135,7 +135,7 @@ fn a_new_admission_drops_active_and_released_aliases() {
 }
 
 #[test]
-fn an_unanswered_request_does_not_alias_a_later_own_begin() {
+fn timeout_alone_does_not_alias_a_later_own_begin() {
     let mut world = admitted();
     game(&mut world, pending(1, Some(42)));
     game(
@@ -160,6 +160,87 @@ fn an_unanswered_request_does_not_alias_a_later_own_begin() {
     assert_eq!(world.casting().cast.map(|(spell, ..)| spell), Some(2935));
     assert!(world.completed_cast_of(9).is_none());
     assert_eq!(game(&mut world, mana(2935)).cast, Some(CastNews::Ended));
+}
+
+#[test]
+fn a_late_takp_item_start_uses_its_request_until_received_mana() {
+    use eq_network_game::{message, spells::EQMAC_BEGIN_OPCODE};
+
+    const REQUESTED: u16 = 2706;
+    const BEGAN: u16 = 2935;
+    const UNRELATED: u16 = 73;
+
+    let receive = |world: &mut ClientWorld, opcode, body: &[u8]| -> Vec<Changes> {
+        message::eqmac(opcode, body)
+            .into_iter()
+            .map(|message| {
+                let message::Message::Event(event) = message else {
+                    panic!("expected a decoded world event");
+                };
+                game(world, event)
+            })
+            .collect()
+    };
+    let receive_begin = |world: &mut ClientWorld, caster: u16, spell: u16| {
+        let mut body = [0; 8];
+        body[..2].copy_from_slice(&caster.to_le_bytes());
+        body[2..4].copy_from_slice(&spell.to_le_bytes());
+        body[4..6].copy_from_slice(&3000u16.to_le_bytes());
+        receive(world, EQMAC_BEGIN_OPCODE, &body)[0].cast
+    };
+    let receive_mana = |world: &mut ClientWorld, spell: u16| {
+        let mut body = [0; 4];
+        body[2..].copy_from_slice(&spell.to_le_bytes());
+        receive(world, 0x7f41, &body)[0].cast
+    };
+
+    let mut world = admitted();
+    let late = |session_id| WorldEvent::CastLateBegin {
+        session_id,
+        requested_spell: u32::from(REQUESTED),
+    };
+    game(&mut world, pending(1, Some(u32::from(REQUESTED))));
+    game(
+        &mut world,
+        WorldEvent::ItemUseAction {
+            session_id: 1,
+            request_id: 1,
+            error: None,
+        },
+    );
+    game(&mut world, unconfirmed(1, u32::from(REQUESTED)));
+    assert!(game(&mut world, late(2)).ignored);
+    assert_eq!(receive_begin(&mut world, 8, BEGAN), None);
+    assert_eq!(
+        receive_begin(&mut world, 9, UNRELATED),
+        Some(CastNews::Began)
+    );
+    assert_eq!(receive_mana(&mut world, UNRELATED), Some(CastNews::Ended));
+
+    assert!(!game(&mut world, late(1)).ignored);
+    assert!(world.casting().pending.is_none());
+    assert!(world.casting().cast.is_none());
+    assert!(world.completed_cast_of(9).is_none());
+
+    for _ in 0..2 {
+        assert_eq!(receive_begin(&mut world, 9, BEGAN), Some(CastNews::Began));
+    }
+    assert_eq!(
+        world.zone.casts.get(&9).map(|cast| cast.spell_id),
+        Some(BEGAN)
+    );
+    assert_eq!(receive_mana(&mut world, UNRELATED), None);
+    assert_eq!(receive_mana(&mut world, REQUESTED), Some(CastNews::Ended));
+    assert!(world.casting().cast.is_none());
+    assert!(!world.zone.casts.contains_key(&9));
+    assert!(world.completed_cast_of(9).is_none());
+
+    game(&mut world, pending(1, Some(43)));
+    assert!(game(&mut world, late(1)).ignored);
+    game(&mut world, pending(1, None));
+    game(&mut world, begin(9, 2936));
+    assert_eq!(receive_mana(&mut world, REQUESTED), None);
+    assert_eq!(game(&mut world, mana(43)).cast, Some(CastNews::Ended));
 }
 
 #[test]

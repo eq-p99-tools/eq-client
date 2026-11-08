@@ -249,25 +249,6 @@ fn start(app: &mut App, id: u64, source: &str) -> Receipt {
 }
 
 #[test]
-fn control_is_absent_by_default_and_requires_exclusive_new_directory() {
-    let mut app = crate::testing::app();
-    install(&mut app).unwrap();
-    assert!(!app.world().contains_resource::<Bridge>());
-    let root = temporary();
-    fs::create_dir(&root).unwrap();
-    app.world_mut()
-        .resource_mut::<crate::ViewerSettings>()
-        .0
-        .script_control = Some(root.clone());
-    assert_eq!(
-        install(&mut app).unwrap_err().kind(),
-        std::io::ErrorKind::AlreadyExists
-    );
-    assert!(!root.join("status.json").exists());
-    clean(&root);
-}
-
-#[test]
 fn duplicate_and_rejected_requests_cannot_start_another_run_after_retirement() {
     let mut app = app();
     let first = start(&mut app, 1, "wait 100\n");

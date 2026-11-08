@@ -18,6 +18,10 @@ pub(super) struct State {
 }
 
 impl State {
+    pub(super) const fn selecting(&self) -> bool {
+        self.selected.is_some()
+    }
+
     pub(super) const fn waiting(&self) -> bool {
         self.queued.is_some()
     }
@@ -83,6 +87,7 @@ pub(crate) fn input(
     outbox: Res<Outbox>,
     mut asked: ResMut<Asked>,
     shown: Res<crate::windows::Shown>,
+    escape: Res<crate::escape::Escape>,
     keys: crate::keys::Keys,
     clicks: crate::clicks::Clicks<DropButton>,
     mut buttons: Query<&mut Node, With<DropButton>>,
@@ -100,7 +105,9 @@ pub(crate) fn input(
             Display::None
         };
     }
-    let open = shown.is_open(crate::windows::WindowId::Inventory) && keys.window_focused();
+    let open = shown.is_open(crate::windows::WindowId::Inventory)
+        && keys.window_focused()
+        && *escape != crate::escape::Escape::Inventory;
     if let Some(request) = state.ground_drop.selected.as_ref() {
         let prompt = question(request);
         if !open || online.world().check_cursor_drop(request).is_err() {
@@ -157,6 +164,8 @@ mod tests {
         let mut online = OnlineState::new(true);
         testing::admit(&mut online, 7, testing::player(9));
         testing::inventory(&mut online, InventoryUpdate::Snapshot(vec![cursor(17)]));
+        assert!(online.world().prepare_cursor_drop().is_err());
+        testing::empty_carried_coins(&mut online);
 
         let (tx, rx) = mpsc::sync_channel(4);
         let mut app = crate::testing::app();
@@ -187,6 +196,15 @@ mod tests {
             Some(Question::DropItem { .. })
         ));
         assert!(rx.try_recv().is_err());
+
+        assert!(app.world().resource::<InventoryState>().action_under_way());
+        *app.world_mut().resource_mut::<crate::escape::Escape>() = crate::escape::Escape::Inventory;
+        app.update();
+        assert!(app.world().resource::<Asked>().question().is_none());
+        assert!(!app.world().resource::<InventoryState>().action_under_way());
+        assert!(rx.try_recv().is_err());
+        *app.world_mut().resource_mut::<crate::escape::Escape>() = crate::escape::Escape::Unused;
+        crate::clicks::testing::click(&mut app, drop);
 
         let item = cursor(18);
         testing::inventory(
@@ -231,6 +249,7 @@ mod tests {
         ] {
             let mut online = OnlineState::new(true);
             testing::admit(&mut online, 7, testing::player(9));
+            testing::empty_carried_coins(&mut online);
             testing::inventory(
                 &mut online,
                 InventoryUpdate::Snapshot(vec![original.clone()]),

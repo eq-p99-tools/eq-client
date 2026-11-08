@@ -725,9 +725,10 @@ impl ClientWorld {
                 self.project_stun(*session_id, *revision, *state, news),
             WorldEvent::MotionSent {
                 session_id,
+                created,
                 position,
                 refused,
-            } => self.motion_sent(*session_id, *position, refused.as_ref(), news),
+            } => self.motion_sent(*session_id, *created, *position, refused.as_ref(), news),
             WorldEvent::MotionRefused { session_id, created, reason } => {
                 if self.session_id == Some(*session_id) {
                     news.replies.push(Reply::MotionRefused {
@@ -1354,6 +1355,9 @@ impl ClientWorld {
                 session_id,
                 spell_id,
             } => self.cast_request_unconfirmed(*session_id, *spell_id, news),
+            WorldEvent::CastLateBegin { session_id, requested_spell } => {
+                self.cast_late_begin(*session_id, *requested_spell, news);
+            }
             WorldEvent::CastSuperseded { session_id, spell_id } => {
                 news.ignored = !self.release_cast_hold(*session_id, *spell_id);
             }
