@@ -398,7 +398,11 @@ pub(super) fn spell_details(
         let spell = held.get(usize::from(*gem)).copied().flatten();
         let waiting = casting.cast.is_some()
             || casting.pending.is_some()
-            || spell.is_some_and(|id| !casting.cooldowns.remaining(id, now).is_zero());
+            || spell.is_some_and(|id| {
+                !casting
+                    .spell_wait(id, names.linked_timer(id), now)
+                    .is_zero()
+            });
         let pointed = *interaction != Interaction::None;
         if pointed {
             hovered = Some((*gem, spell));
@@ -423,7 +427,7 @@ pub(super) fn spell_details(
             } else {
                 text.push_str("\nLocal spell timing unavailable");
             }
-            let remaining = casting.cooldowns.remaining(spell, now);
+            let remaining = casting.spell_wait(spell, names.linked_timer(spell), now);
             if !remaining.is_zero() {
                 use std::fmt::Write;
                 let _ = write!(text, "\nAvailable in {:.1}s", remaining.as_secs_f32());
@@ -511,6 +515,10 @@ pub(super) fn actions(
                 target_id: online.world().target().selected.unwrap_or(player.spawn_id),
                 forgetting,
                 mana_cost,
+                linked_timer: online
+                    .world()
+                    .gem(usize::from(gem))
+                    .and_then(|spell| names.linked_timer(spell)),
             },
             (&messages, &keys.map),
             || {
@@ -535,28 +543,8 @@ pub(super) fn actions(
             .map_or_else(Default::default, |options| options.options.qol);
         super::chat::run_game_command(command, &mut online, &outbox, &mut chat, &qol);
     }
-    // The duck key toggles, as both programs' key dispatchers do (Titanium
-    // 0x4619cd case 0x4623b1, EQMac 0x54050c): standing ducks, ducking
-    // stands, and any other stance leaves the key alone.
     let flying = flight_uses_duck(options.as_deref(), online.world());
-    let posture = if keys.pressed(Act::Duck) && !flying {
-        match online.world().posture(player_id) {
-            Some(eq_client_core::PostureState::Ducking) => Some(eq_client_core::Posture::Standing),
-            None | Some(eq_client_core::PostureState::Standing) => {
-                Some(eq_client_core::Posture::Ducking)
-            }
-            Some(_) => None,
-        }
-    } else if keys.pressed(Act::SitStand) {
-        toggled_seat(online.world().posture(player_id))
-    } else if keys.pressed(Act::Sit) {
-        Some(eq_client_core::Posture::Sitting)
-    } else if keys.pressed(Act::Stand) {
-        Some(eq_client_core::Posture::Standing)
-    } else {
-        None
-    };
-    if let Some(posture) = posture {
+    if let Some(posture) = requested_posture(&keys, online.world(), player_id, flying) {
         // The outbox shows why a stance did not go.
         let _ = outbox.post(online.world(), |stamp| {
             eq_client_core::ClientCommand::SetPosture {
@@ -566,6 +554,35 @@ pub(super) fn actions(
                 created: stamp.created,
             }
         });
+    }
+}
+
+fn requested_posture(
+    keys: &super::keys::Keys,
+    world: &eq_client_core::world::ClientWorld,
+    player_id: u16,
+    flying: bool,
+) -> Option<eq_client_core::Posture> {
+    use super::keys::Act;
+    // The duck key toggles, as both programs' key dispatchers do (Titanium
+    // 0x4619cd case 0x4623b1, EQMac 0x54050c): standing ducks, ducking
+    // stands, and any other stance leaves the key alone.
+    if keys.pressed(Act::Duck) && !flying {
+        match world.posture(player_id) {
+            Some(eq_client_core::PostureState::Ducking) => Some(eq_client_core::Posture::Standing),
+            None | Some(eq_client_core::PostureState::Standing) => {
+                Some(eq_client_core::Posture::Ducking)
+            }
+            Some(_) => None,
+        }
+    } else if keys.pressed(Act::SitStand) {
+        toggled_seat(world.posture(player_id))
+    } else if keys.pressed(Act::Sit) {
+        Some(eq_client_core::Posture::Sitting)
+    } else if keys.pressed(Act::Stand) {
+        Some(eq_client_core::Posture::Standing)
+    } else {
+        None
     }
 }
 

@@ -487,6 +487,18 @@ impl ClientWorld {
         self.zone.training.as_ref()
     }
 
+    /// The point balance shown for training, with its source kept explicit.
+    #[must_use]
+    pub fn training_points(&self) -> crate::training::PracticePoints {
+        use crate::training::PracticePoints;
+        if self.zone.training_points_uncertain {
+            return PracticePoints::Unknown;
+        }
+        self.player()
+            .and_then(|player| player.practice_points)
+            .map_or(PracticePoints::Unknown, PracticePoints::Balance)
+    }
+
     /// The pet's buffs, in their slots, once the server has said.
     #[must_use]
     pub fn pet_buffs(&self) -> Option<&crate::pets::PetBuffs> {
@@ -800,6 +812,12 @@ impl ClientWorld {
         #[allow(clippy::cast_precision_loss)]
         let weight = items as f32 / 10.0 + coins as f32 * 0.025;
         weight
+    }
+
+    /// Last received same-zone repositioning with a revision within its admission.
+    #[must_use]
+    pub const fn last_same_zone_relocation(&self) -> Option<(u64, crate::SameZoneRelocation)> {
+        self.same_zone_relocation
     }
 
     /// The player's own casting and gem timers.

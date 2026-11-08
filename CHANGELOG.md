@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+- Keep staged discipline state separate from the buff-slot revision used by
+  cancellation. A matching instant class refresh consumes its cast request
+  even when the server sends no cast start.
+- Apply received same-zone moves at the absolute landing supplied by the server.
+
+- Follow local EQEmu server-owned same-zone pad handoffs through ordinary
+  walking and received relocation. Reset movement and boundary detection at
+  landing, and expose a bounded script wait for the received instruction.
+
+- Added Evasive and Defensive on Titanium through Actions, the hotbar and
+  named commands. Received shared discipline reuse, linked spell timers and
+  active discipline slot updates are tracked per admission.
+
+- Added the Titanium knight actions Lay on Hands and Harm Touch through
+  Actions, the hotbar, and ordinary slash and script commands. Reuse sent in
+  the admitted profile is displayed separately from the cast result.
+  A new admission clears the previous knight, discipline, and linked spell
+  reuse timers.
+- Open the ordinary resurrection and translocate confirmation dialogs
+  for supported P99 offers. Answers identify the displayed offer, and
+  repeated wire-identical offers are withheld during that admission.
+  Movement and recovery follow received server updates.
+- Offer beneficial-buff cancellation on P99 through the same Buffs and Songs
+  controls. Keep received slot membership and show an unknown outcome when
+  the two-record request was only partly submitted.
+- Open P99 skill training through the ordinary trainer interaction and
+  Training window. Show received skill changes and estimated prices.
+  The practice point count becomes unknown after a request. Re-enter the
+  zone before practicing again or reopening the same guildmaster.
+
 - Group Interface scale with ordinary QoL settings and move **Run a Little
   Faster** into a separate **Dangerous** section with the other flagged options.
   When space allows, the Interface scale caption, slider and value share one

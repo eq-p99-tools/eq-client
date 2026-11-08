@@ -877,6 +877,7 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
         target_id,
         forgetting: false,
         mana_cost: None,
+        linked_timer: None,
     };
     let messages = messages::Messages::default();
     requests::spell(
@@ -951,6 +952,7 @@ fn short_server_mana_refuses_casts_locally_but_never_blocks_forgetting() {
         target_id: 12,
         forgetting: false,
         mana_cost: Some(10),
+        linked_timer: None,
     };
     // The world as the server last reported the player's mana, if it has.
     let with_mana = |mana: Option<u32>| {

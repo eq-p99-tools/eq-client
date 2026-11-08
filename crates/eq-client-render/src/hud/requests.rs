@@ -11,6 +11,7 @@ pub(super) struct Request {
     pub forgetting: bool,
     /// Unmodified installation mana cost; None leaves the decision to the server.
     pub mana_cost: Option<u32>,
+    pub linked_timer: Option<u32>,
 }
 
 /// The gem's spell, if the request can go now; otherwise why not, in the
@@ -28,6 +29,7 @@ pub(super) fn check(
         gem,
         forgetting,
         mana_cost,
+        linked_timer,
         ..
     } = *request;
     let spell_id = player
@@ -55,7 +57,7 @@ pub(super) fn check(
     {
         return Err(messages.said_text(199, "Not enough mana for that spell"));
     }
-    let remaining = world.casting().cooldowns.remaining(spell_id, now);
+    let remaining = world.casting().spell_wait(spell_id, linked_timer, now);
     if !remaining.is_zero() {
         return Err(format!("Spell available in {:.1}s", remaining.as_secs_f32()).into());
     }

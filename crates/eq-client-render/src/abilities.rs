@@ -7,7 +7,14 @@
 //! says why an ability did not go.
 use crate::{online::OnlineState, outbox::Outbox, theme};
 use bevy::prelude::*;
-use eq_client_core::{ClientCommand, abilities::Ability, world::ClientWorld};
+use eq_client_core::{
+    ClientCommand,
+    abilities::Ability,
+    disciplines::{Active, Discipline},
+    hotbar::Binding,
+    knights::KnightAbility,
+    world::ClientWorld,
+};
 
 /// A page of the Actions window that holds ability buttons.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,20 +40,91 @@ pub(crate) struct AbilityLabel(pub(crate) AbilityButton);
 const COMBAT_BUTTONS: usize = 4;
 
 /// The ability a button holds, if the player has one for it.
-pub(crate) fn assigned(world: &ClientWorld, button: AbilityButton) -> Option<Ability> {
+pub(crate) fn assigned(world: &ClientWorld, button: AbilityButton) -> Option<Binding> {
     let (targeted, other): (Vec<Ability>, Vec<Ability>) = world
         .abilities()
         .into_iter()
         .partition(|ability| ability.at_target());
+    let targeted = knight(world)
+        .map(Binding::KnightAbility)
+        .into_iter()
+        .chain(
+            Discipline::SUPPORTED
+                .into_iter()
+                .filter(|&discipline| knows_discipline(world, discipline))
+                .map(Binding::Discipline),
+        )
+        .chain(targeted.into_iter().map(Binding::Ability));
     match button.page {
-        Page::Combat => targeted.get(button.index).copied(),
+        Page::Combat => targeted.take(COMBAT_BUTTONS).nth(button.index),
         Page::Abilities => targeted
-            .iter()
             .skip(COMBAT_BUTTONS)
-            .chain(&other)
-            .nth(button.index)
-            .copied(),
+            .chain(other.into_iter().map(Binding::Ability))
+            .nth(button.index),
     }
+}
+
+/// The class ability that belongs to the admitted player, if any.
+pub(crate) fn knight(world: &ClientWorld) -> Option<KnightAbility> {
+    let player = world.player()?;
+    KnightAbility::for_player(player.class, player.level)
+}
+
+/// Whether the character learned this exact discipline and can use its level.
+pub(crate) fn knows_discipline(world: &ClientWorld, discipline: Discipline) -> bool {
+    world.player().is_some_and(|player| {
+        discipline.learned(player.class, player.level, player.disciplines.as_deref())
+    })
+}
+
+/// The discipline button and ordinary command share the same request path.
+pub(super) fn discipline_command(
+    discipline: Discipline,
+    world: &ClientWorld,
+    stamp: crate::outbox::Stamp,
+) -> Result<ClientCommand, String> {
+    if !knows_discipline(world, discipline) {
+        return Err("The discipline is unavailable to your character".into());
+    }
+    Ok(ClientCommand::UseDiscipline {
+        session_id: stamp.session_id,
+        discipline,
+        created: stamp.created,
+    })
+}
+
+/// Whether the discipline buttons wait on received reuse or an active slot.
+pub(crate) fn discipline_waits(
+    world: &ClientWorld,
+    discipline: Discipline,
+    now: std::time::Instant,
+) -> bool {
+    matches!(world.casting().active_discipline(), Active::Titanium(_))
+        || world
+            .casting()
+            .discipline_wait(discipline.timer(), now)
+            .is_some_and(|wait| !wait.is_zero())
+}
+
+/// Build the same request from a button, hotbar or a named command.
+pub(super) fn knight_command(
+    ability: KnightAbility,
+    world: &ClientWorld,
+    stamp: crate::outbox::Stamp,
+) -> Result<ClientCommand, String> {
+    if knight(world) != Some(ability) {
+        return Err("Your class does not have that ability".into());
+    }
+    let target = world
+        .target_intent()
+        .filter(|target| target.spawn_id.is_some())
+        .ok_or("Select a target for that first")?;
+    Ok(ClientCommand::UseKnightAbility {
+        session_id: stamp.session_id,
+        ability,
+        target,
+        created: stamp.created,
+    })
 }
 
 /// Uses an ability; the session, or the outbox, says why one did not go.
@@ -70,7 +148,7 @@ pub(crate) fn needs(
     for (button, mut needs) in &mut buttons {
         let wanted = assigned(online.world(), *button).map_or(
             Needs::Capability(eq_client_core::Capability::Abilities),
-            Needs::Ability,
+            |binding| crate::hud::hotbar::need(Some(binding)),
         );
         if *needs != wanted {
             *needs = wanted;
@@ -83,11 +161,33 @@ pub(crate) fn needs(
 pub(crate) fn input(
     online: Res<OnlineState>,
     outbox: Res<Outbox>,
+    mut chat: ResMut<crate::chat::ChatState>,
     buttons: crate::clicks::Clicks<AbilityButton>,
 ) {
     for button in buttons.iter() {
-        if let Some(ability) = assigned(online.world(), *button) {
-            use_ability(ability, &online, &outbox);
+        match assigned(online.world(), *button) {
+            Some(Binding::Ability(ability)) => use_ability(ability, &online, &outbox),
+            Some(binding @ (Binding::KnightAbility(_) | Binding::Discipline(_))) => {
+                let Ok(stamp) = outbox.stamp(online.world()) else {
+                    continue;
+                };
+                let command = match binding {
+                    Binding::KnightAbility(ability) => {
+                        knight_command(ability, online.world(), stamp)
+                    }
+                    Binding::Discipline(discipline) => {
+                        discipline_command(discipline, online.world(), stamp)
+                    }
+                    _ => unreachable!("the action was matched above"),
+                };
+                match command {
+                    Ok(command) => {
+                        let _ = outbox.send(online.world(), command);
+                    }
+                    Err(reason) => chat.refuse(reason),
+                }
+            }
+            _ => (),
         }
     }
 }
@@ -100,15 +200,30 @@ pub(crate) fn present(
 ) {
     let now = std::time::Instant::now();
     for (AbilityLabel(button), mut text, mut color) in &mut labels {
-        let ability = assigned(online.world(), *button);
-        let wanted = ability.map_or("", Ability::name);
+        let binding = assigned(online.world(), *button);
+        let wanted = match binding {
+            Some(Binding::Ability(ability)) => ability.name(),
+            Some(Binding::KnightAbility(ability)) => ability.name(),
+            Some(Binding::Discipline(discipline)) => discipline.name(),
+            _ => "",
+        };
         if text.0 != wanted {
             wanted.clone_into(&mut text.0);
         }
         // Dim while its timer runs; one the server does not offer is veiled
         // instead (see `needs`).
-        let waiting =
-            ability.is_some_and(|ability| online.world().ability_wait(ability, now).is_some());
+        let waiting = match binding {
+            Some(Binding::Ability(ability)) => online.world().ability_wait(ability, now).is_some(),
+            Some(Binding::KnightAbility(_)) => online
+                .world()
+                .casting()
+                .knight_wait(now)
+                .is_some_and(|wait| !wait.is_zero()),
+            Some(Binding::Discipline(discipline)) => {
+                discipline_waits(online.world(), discipline, now)
+            }
+            _ => false,
+        };
         let ink = if waiting {
             theme::INK_DIM
         } else {
@@ -145,6 +260,23 @@ mod tests {
         player.skills = Some(skills);
         testing::admit(&mut online, 1, player);
         online
+    }
+
+    #[test]
+    fn a_knight_action_can_be_bound_from_the_combat_page() {
+        let mut online = OnlineState::new(true);
+        let mut player = testing::player(7);
+        player.class = Some(3);
+        player.level = 1;
+        testing::admit(&mut online, 1, player);
+        let button = AbilityButton {
+            page: Page::Combat,
+            index: 0,
+        };
+        assert_eq!(
+            assigned(online.world(), button),
+            Some(Binding::KnightAbility(KnightAbility::LayOnHands))
+        );
     }
 
     #[test]
@@ -187,7 +319,10 @@ mod tests {
     #[test]
     fn the_combat_page_takes_four_strikes_and_the_abilities_page_the_rest() {
         let online = monk();
-        let on = |page, index| assigned(online.world(), AbilityButton { page, index });
+        let on = |page, index| match assigned(online.world(), AbilityButton { page, index }) {
+            Some(Binding::Ability(ability)) => Some(ability),
+            _ => None,
+        };
         assert_eq!(
             (0..4)
                 .map(|index| on(Page::Combat, index))

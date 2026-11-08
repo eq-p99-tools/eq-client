@@ -117,6 +117,8 @@ impl Bindings {
             | Action::Stand
             | Action::Item { .. }
             | Action::Ability(_)
+            | Action::KnightAbility(_)
+            | Action::Discipline(_)
             | Action::Attack
             | Action::RangedAttack
             | Action::Camp
@@ -276,6 +278,18 @@ pub(crate) const fn command(action: Action) -> Option<&'static str> {
         Action::Sit => Some("/sit"),
         Action::Stand => Some("/stand"),
         Action::RangedAttack => Some("/ranged"),
+        Action::Discipline(eq_client_core::disciplines::Discipline::Evasive) => {
+            Some("/discipline evasive")
+        }
+        Action::Discipline(eq_client_core::disciplines::Discipline::Defensive) => {
+            Some("/discipline defensive")
+        }
+        Action::KnightAbility(eq_client_core::knights::KnightAbility::HarmTouch) => {
+            Some("/harmtouch")
+        }
+        Action::KnightAbility(eq_client_core::knights::KnightAbility::LayOnHands) => {
+            Some("/layonhands")
+        }
         Action::Camp => Some("/camp"),
         Action::Invite => Some("/invite"),
         Action::Follow => Some("/follow"),
@@ -367,6 +381,14 @@ pub(crate) fn presentation(
             || (bindings.gem(slot.0).is_some() && spell.is_none());
         let ability_waits = match bindings.0[slot.0] {
             Some(Action::Ability(ability)) => online.world().ability_wait(ability, now).is_some(),
+            Some(Action::KnightAbility(_)) => online
+                .world()
+                .casting()
+                .knight_wait(now)
+                .is_some_and(|wait| !wait.is_zero()),
+            Some(Action::Discipline(discipline)) => {
+                crate::abilities::discipline_waits(online.world(), discipline, now)
+            }
             _ => false,
         };
         let waiting = ability_waits
@@ -376,8 +398,7 @@ pub(crate) fn presentation(
                     || !online
                         .world()
                         .casting()
-                        .cooldowns
-                        .remaining(id, now)
+                        .spell_wait(id, names.linked_timer(id), now)
                         .is_zero()
             });
         if skinned {
@@ -432,6 +453,8 @@ fn faces(action: Option<Action>, world: &ClientWorld) -> (String, String) {
             Action::Sit
             | Action::Stand
             | Action::Ability(_)
+            | Action::KnightAbility(_)
+            | Action::Discipline(_)
             | Action::Attack
             | Action::RangedAttack
             | Action::Camp
@@ -504,6 +527,8 @@ pub(crate) fn caption_text(action: Option<Action>, world: &ClientWorld) -> Strin
         Some(Action::Stand) => "Stand".into(),
         Some(Action::Item { .. }) => "Item".into(),
         Some(Action::Ability(ability)) => ability.name().into(),
+        Some(Action::KnightAbility(ability)) => ability.name().into(),
+        Some(Action::Discipline(discipline)) => discipline.name().into(),
         Some(Action::Attack) => "Attack".into(),
         Some(Action::RangedAttack) => "Ranged".into(),
         Some(Action::Camp) => "Camp".into(),
@@ -531,7 +556,10 @@ fn hovered_detail(
                 } else if world.casting().cast.is_some() {
                     "Casting".into()
                 } else {
-                    let remaining = world.casting().cooldowns.remaining(spell, now);
+                    let remaining =
+                        world
+                            .casting()
+                            .spell_wait(spell, names.linked_timer(spell), now);
                     if remaining.is_zero() {
                         "Uses current target".into()
                     } else {
@@ -552,6 +580,31 @@ fn hovered_detail(
         Some(Action::Invite) => "Invite\nInvites the target into your group".into(),
         Some(Action::Follow) => "Follow\nJoins the group you were invited to".into(),
         Some(Action::Disband) => "Disband\nLeaves your group, or declines an invitation".into(),
+        Some(Action::KnightAbility(ability)) => match world.casting().knight_wait(now) {
+            Some(wait) if !wait.is_zero() => format!(
+                "{}\nRecovery {:.0}s",
+                ability.name(),
+                wait.as_secs_f32().ceil()
+            ),
+            Some(_) => format!("{}\nUses the selected target", ability.name()),
+            None => format!("{}\nRecovery unknown", ability.name()),
+        },
+        Some(Action::Discipline(discipline)) => {
+            use eq_client_core::disciplines::Active;
+            let casting = world.casting();
+            let status = match casting.active_discipline() {
+                Active::Titanium(spell) if spell == discipline.spell() => "Active".into(),
+                Active::Titanium(_) => "Another discipline is active".into(),
+                _ => match casting.discipline_wait(discipline.timer(), now) {
+                    Some(wait) if !wait.is_zero() => {
+                        format!("Shared recovery {:.0}s", wait.as_secs_f32().ceil())
+                    }
+                    Some(_) => "Shared recovery elapsed".into(),
+                    None => "Shared recovery unknown".into(),
+                },
+            };
+            format!("{}\n{status}", discipline.name())
+        }
         Some(Action::Ability(ability)) => match world.ability_wait(ability, now) {
             Some(wait) => format!(
                 "{}\nAvailable in {:.0}s",
@@ -608,6 +661,8 @@ pub(crate) fn need(action: Option<Action>) -> crate::outbox::Needs {
         None => Needs::Nothing,
         Some(Action::Sit | Action::Stand) => Needs::Capability(Capability::Posture),
         Some(Action::Ability(ability)) => Needs::Ability(ability),
+        Some(Action::KnightAbility(ability)) => Needs::KnightAbility(ability),
+        Some(Action::Discipline(discipline)) => Needs::Discipline(discipline),
         Some(Action::Gem(_) | Action::Item { .. }) => Needs::Capability(Capability::Casting),
         Some(Action::Attack) => Needs::Capability(Capability::Combat),
         Some(Action::RangedAttack) => Needs::Capability(Capability::RangedCombat),

@@ -97,6 +97,8 @@ pub enum Reply {
     },
     /// A zone line could not be crossed; the move that asked is over.
     ZoneLineRefused,
+    /// A local boundary stayed in this admission. Normal movement can resume.
+    SameZoneBoundary,
 }
 
 /// What an update changed that a front end must redo.
@@ -112,6 +114,8 @@ pub struct Changes {
     pub entered: bool,
     /// The server put the player here.
     pub placed: Option<WorldPosition>,
+    /// This placement was a received same-zone move.
+    pub same_zone_relocation: bool,
     /// The login server listed its worlds, or refused the one chosen.
     pub servers: bool,
     /// The world server offered characters to play.

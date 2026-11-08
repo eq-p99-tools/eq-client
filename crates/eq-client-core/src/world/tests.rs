@@ -92,6 +92,152 @@ fn game(world: &mut ClientWorld, event: WorldEvent) -> Changes {
 }
 
 #[test]
+fn a_same_zone_relocation_requires_the_current_character_and_admission() {
+    let mut world = admitted();
+    let destination = WorldPosition {
+        x: 14.0,
+        y: -25.0,
+        z: 4.0,
+        heading: 90.0,
+    };
+    let relocation = |session_id, spawn_id| {
+        WorldEvent::SameZoneRelocated(crate::SameZoneRelocation {
+            session_id,
+            spawn_id,
+            position: destination,
+        })
+    };
+    let boundary = game(&mut world, WorldEvent::SameZoneBoundary { session_id: 1 });
+    assert_eq!(boundary.replies, [Reply::SameZoneBoundary]);
+    assert!(boundary.placed.is_none());
+    assert!(world.last_same_zone_relocation().is_none());
+    assert!(game(&mut world, relocation(2, 9)).ignored);
+    assert!(game(&mut world, relocation(1, 7)).ignored);
+
+    let moved = game(&mut world, relocation(1, 9));
+    assert_eq!(moved.placed, Some(destination));
+    assert!(moved.same_zone_relocation);
+    assert_eq!(world.player().unwrap().position, destination);
+    assert!(matches!(world.last_same_zone_relocation(), Some((1, _))));
+    game(&mut world, entered(2));
+    assert!(world.last_same_zone_relocation().is_none());
+}
+
+#[test]
+fn discipline_and_linked_reuse_are_separate_and_reset_on_admission() {
+    use crate::disciplines::{Active, Reuse};
+    use std::time::Duration;
+
+    let mut world = admitted();
+    let now = Instant::now();
+    let apply =
+        |world: &mut ClientWorld, event| world.apply(&WorldUpdate::Game(event), now, &NoSpells);
+    apply(
+        &mut world,
+        WorldEvent::DisciplineReuse(Reuse {
+            timer: 1,
+            remaining: Duration::from_secs(20),
+        }),
+    );
+    apply(
+        &mut world,
+        WorldEvent::LinkedReuse(Reuse {
+            timer: 1,
+            remaining: Duration::from_secs(42),
+        }),
+    );
+    assert_eq!(
+        world.casting().discipline_wait(1, now),
+        Some(Duration::from_secs(20))
+    );
+    assert_eq!(
+        world.casting().spell_wait(300, Some(1), now),
+        Duration::from_secs(42)
+    );
+    assert_eq!(
+        world.casting().spell_wait(300, Some(2), now),
+        Duration::ZERO
+    );
+    assert_eq!(world.casting().active_discipline(), Active::Unknown);
+    apply(
+        &mut world,
+        WorldEvent::DisciplineReuse(Reuse {
+            timer: 1,
+            remaining: Duration::ZERO,
+        }),
+    );
+    assert_eq!(
+        world.casting().discipline_wait(1, now),
+        Some(Duration::ZERO)
+    );
+    assert_eq!(
+        world.casting().linked_wait(1, now),
+        Some(Duration::from_secs(42))
+    );
+    apply(&mut world, entered(2));
+    assert_eq!(world.casting().discipline_wait(1, now), None);
+    assert_eq!(world.casting().linked_wait(1, now), None);
+}
+
+#[test]
+fn only_the_admitted_discipline_slot_can_report_an_active_effect() {
+    use crate::disciplines::{Active, TITANIUM_BUFF_SLOT};
+
+    let mut world = admitted();
+    let update = |entity_id, slot, spell_id, present: bool| {
+        WorldEvent::Buff(crate::BuffUpdate {
+            entity_id,
+            slot,
+            spell_id,
+            buff: present.then(|| crate::Buff {
+                spell_id,
+                ..buff(3)
+            }),
+        })
+    };
+    game(&mut world, update(8, TITANIUM_BUFF_SLOT, 4499, true));
+    game(&mut world, update(9, 3, 4499, true));
+    assert_eq!(world.casting().active_discipline(), Active::Unknown);
+
+    game(&mut world, update(9, TITANIUM_BUFF_SLOT, u32::MAX, false));
+    assert_eq!(world.casting().active_discipline(), Active::Unknown);
+    game(&mut world, update(9, TITANIUM_BUFF_SLOT, 4499, true));
+    game(&mut world, update(9, TITANIUM_BUFF_SLOT, 4503, false));
+    game(&mut world, update(9, TITANIUM_BUFF_SLOT, u32::MAX, false));
+    assert_eq!(world.casting().active_discipline(), Active::Titanium(4499));
+    game(&mut world, update(9, TITANIUM_BUFF_SLOT, 4499, false));
+    assert_eq!(world.casting().active_discipline(), Active::Inactive);
+}
+
+#[test]
+fn knight_reuse_belongs_to_the_current_admission() {
+    use std::time::Duration;
+
+    let mut world = admitted();
+    let now = Instant::now();
+    let apply = |world: &mut ClientWorld, session_id, remaining| {
+        world.apply(
+            &WorldUpdate::Game(WorldEvent::KnightReuse {
+                session_id,
+                remaining,
+            }),
+            now,
+            &NoSpells,
+        )
+    };
+    assert_eq!(world.casting().knight_wait(now), None);
+    assert!(apply(&mut world, 2, Duration::from_secs(30)).ignored);
+    assert_eq!(world.casting().knight_wait(now), None);
+    apply(&mut world, 1, Duration::from_secs(30));
+    assert_eq!(
+        world.casting().knight_wait(now),
+        Some(Duration::from_secs(30))
+    );
+    game(&mut world, entered(2));
+    assert_eq!(world.casting().knight_wait(now), None);
+}
+
+#[test]
 fn combat_submission_and_refusal_do_not_fabricate_server_results() {
     use crate::combat::{CombatRequest, CombatRequestStatus};
     let mut world = admitted();

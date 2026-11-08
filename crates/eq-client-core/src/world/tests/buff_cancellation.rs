@@ -12,6 +12,41 @@ fn report(session_id: u64, progress: Progress) -> WorldEvent {
 }
 
 #[test]
+fn staged_discipline_state_leaves_a_profile_buff_cancellable() {
+    use crate::{buffs::cancel::Request, disciplines::Active};
+
+    for state in [Active::Titanium(4499), Active::Inactive] {
+        let mut world = admitted();
+        let staged = |session_id| WorldEvent::DisciplineAdmission { session_id, state };
+        assert!(game(&mut world, staged(2)).ignored);
+        assert_eq!(world.casting().active_discipline(), Active::Unknown);
+        game(&mut world, staged(1));
+        assert_eq!(world.casting().active_discipline(), state);
+        assert_eq!(world.buffs().revision(), 0);
+
+        let ordinary = crate::Buff {
+            spell_id: 42,
+            ..buff(30)
+        };
+        game(
+            &mut world,
+            WorldEvent::BuffSnapshot(vec![None, Some(ordinary)]),
+        );
+        assert_eq!(world.casting().active_discipline(), state);
+        let request = Request {
+            session_id: 1,
+            revision: world.buffs().revision(),
+            slot: 1,
+            spell_id: 42,
+            beneficial: Some(true),
+            cancellable: Some(true),
+            created: Instant::now(),
+        };
+        request.check(1, world.buffs().slots()).unwrap();
+    }
+}
+
+#[test]
 fn cancellation_reports_are_scoped_progress_and_never_membership_authority() {
     let mut world = admitted();
     let buff = crate::Buff {

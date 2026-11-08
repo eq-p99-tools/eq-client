@@ -94,6 +94,8 @@ pub struct Script {
     paused: bool,
     /// Newest chat line already included in a report.
     chat_seen: u64,
+    /// Most recent same-zone movement receipt before the run or already consumed.
+    relocation_seen: Option<(u64, u64)>,
     /// Script file still being appended to, with the bytes already read.
     follow: Option<Follow>,
     accepted: usize,
@@ -210,6 +212,7 @@ impl Script {
             session: RunSession::BeforeAdmission,
             paused: false,
             chat_seen: 0,
+            relocation_seen: None,
             follow: None,
             local: false,
             offline: false,
@@ -810,6 +813,12 @@ pub(super) fn drive(
         let search_frame = script.search_frames.map(|frames| frames.count);
         info!(ms, walking, searching, ?search_frame, "Script slow frame");
     }
+    if script.started.is_none() {
+        script.relocation_seen = online
+            .world()
+            .last_same_zone_relocation()
+            .map(|(revision, relocation)| (relocation.session_id, revision));
+    }
     let started = *script.started.get_or_insert(now);
     script.progress.elapsed = now.saturating_sub(started);
     if now.saturating_sub(started) > MAX_RUNTIME {
@@ -996,6 +1005,25 @@ pub(super) fn drive(
                         script.stop(&mut keys, &mut mouse, &reason);
                         return;
                     }
+                }
+            }
+            Step::WaitRelocation(limit) => {
+                let world = online.world();
+                let fresh = world
+                    .last_same_zone_relocation()
+                    .filter(|(revision, relocation)| {
+                        world.in_world()
+                            && Some((relocation.session_id, *revision)) != script.relocation_seen
+                    });
+                if let Some((revision, relocation)) = fresh {
+                    script.relocation_seen = Some((relocation.session_id, revision));
+                    info!(revision, position = ?relocation.position, "Script received same-zone relocation");
+                    true
+                } else if elapsed >= *limit {
+                    script.stop(&mut keys, &mut mouse, "No same-zone relocation received");
+                    return;
+                } else {
+                    false
                 }
             }
             Step::WaitDead(limit) => {
@@ -1969,6 +1997,7 @@ pub(super) fn drive(
         | Step::WaitSelect
         | Step::WaitOnline
         | Step::WaitZone(_)
+        | Step::WaitRelocation(_)
         | Step::Wait(_)
         | Step::Trace(_) => (),
     }

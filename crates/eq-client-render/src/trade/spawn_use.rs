@@ -109,7 +109,17 @@ impl TradeState {
                 shown.open(WindowId::Bank);
                 Ok(())
             }
-            (Use::Trade(_), _) => Err("Scripted interaction opens a merchant, banker or corpse"),
+            (Use::Trade(trainer), class) if crate::training::is_guildmaster(class) => outbox
+                .send(
+                    world,
+                    ClientCommand::Training {
+                        session_id: stamp.session_id,
+                        request: eq_client_core::training::TrainingRequest::Open { trainer },
+                        created: stamp.created,
+                    },
+                )
+                .map_err(crate::outbox::Refusal::text),
+            (Use::Trade(_), _) => Err("Target a merchant, banker, guildmaster or corpse"),
         }
     }
 
@@ -292,6 +302,50 @@ mod tests {
             assert!(!far.world().resource::<Shown>().is_open(WindowId::Bank));
             unchanged_target(&far);
         }
+    }
+
+    #[test]
+    fn script_interact_requests_training_for_the_selected_guildmaster_revision() {
+        let (mut app, rx) = app(actor(Some(20), 10.0), None);
+        let world = app.world_mut();
+        world.resource_scope(|world, mut online: Mut<OnlineState>| {
+            online.select_target(Some(8));
+            let revision = online.world().spawn(8).unwrap().revision;
+            let outbox = world.resource::<Outbox>();
+            let mut shown = Shown::default();
+            let mut trade = TradeState::default();
+            assert!(
+                trade
+                    .script_interact(
+                        &mut online,
+                        outbox,
+                        &mut shown,
+                        InstalledClient::Titanium,
+                        (1, 8, revision + 1),
+                    )
+                    .is_err()
+            );
+            assert!(rx.try_recv().is_err());
+            assert!(
+                trade
+                    .script_interact(
+                        &mut online,
+                        outbox,
+                        &mut shown,
+                        InstalledClient::Titanium,
+                        (1, 8, revision),
+                    )
+                    .is_ok()
+            );
+        });
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ClientCommand::Training {
+                session_id: 1,
+                request: eq_client_core::training::TrainingRequest::Open { trainer: 8 },
+                ..
+            })
+        ));
     }
 
     #[test]

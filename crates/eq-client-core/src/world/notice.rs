@@ -172,6 +172,8 @@ pub enum Notice {
     },
     /// A training request was not sent, and why.
     TrainingRefused(String),
+    /// A training request or projection from the current admission.
+    TrainingPractice(crate::training::PracticeUpdate),
     /// An answer to a resurrection was not sent, and why.
     ResurrectionRefused(String),
     /// An answer to a translocate was not sent, and why.

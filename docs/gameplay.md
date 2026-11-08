@@ -78,9 +78,12 @@ location. The local safety hold can persist for the admission while the
 installed geometry offers no way down. A different received location gets
 its own check. A later collision probe can release the hold when it finds a route.
 A server using different zone geometry can cause this conflict. Client detection
-of same-zone teleport pads remains incomplete. Initial login, boundary crossing,
-teleport, death and respawn are separate validation scenarios; success in one
-does not establish the others.
+of client-driven same-zone teleport pads remains incomplete. On local EQEmu,
+ordinary movement can enter a server-owned same-zone pad. A received
+reposition supplies the absolute landing within the admission and resets
+movement there. Zone-point routes handle their own preserve-position values.
+Initial login, boundary crossing, teleport, death, and respawn each need
+their own validation.
 
 ## Inventory and banking
 
@@ -250,9 +253,10 @@ cancelled. A buff stays visible until received state removes it. If the selected
 slot changes while the button is held, release cancels the selection. The buff
 may expire on its own during a request. With no matching fade, the client
 reports the request as unconfirmed. Requests are never retried automatically.
-P99 cancellation remains gated pending evidence for the complete request and
-matching server fade. The enabled Titanium EQEmu path covers one initialized
-current-record request.
+P99 uses the native two-record request for a known server slot. A clear
+record with only an empty-slot sentinel cannot identify which buff faded.
+The P99 exchange awaits an attended check. Titanium EQEmu uses its
+single current-record request.
 
 ## Targeting and interaction
 
@@ -269,6 +273,22 @@ because its window opened. Ground pickups and doors use reach checks. World
 tradeskill containers and combines exist where `Tradeskills` is offered, rather
 than being universally unsupported.
 
+Titanium Paladins and Shadow Knights can use Lay on Hands or Harm Touch
+from the first Combat ability button in Actions. Bind the button to the
+hotbar the same way as a skill, or use `/layonhands` or `/harmtouch`.
+Select the target first. Paladins can select themselves for Lay on Hands.
+The hotbar shows any recovery reported in the character profile, while
+the server reports the cast result and enforces reuse during play.
+
+Titanium Warriors can use Evasive at level 52 and Defensive at level 55
+when the server lists the discipline as learned. Both act on yourself and
+share one reuse group. Use the Combat page buttons, bind them to the hotbar,
+or type `/discipline evasive` or `/discipline defensive`. The hotbar shows
+received recovery and active discipline slot changes. A named fade ends
+the matching observed discipline. An unreported timer remains unknown.
+Spell gems also respect received linked spell reuse when the installed spell
+definition identifies the group.
+
 For a single Titanium ranged attack, equip a bow and arrows or a throwing
 weapon and select a target. Click Ranged Attack in Actions or type `/ranged`.
 The Actions control can be bound to the hotbar. The request checks the current
@@ -284,12 +304,26 @@ the selection. Only one merchant action can be pending. An unanswered action
 shows an unknown outcome and is never retried automatically; received items
 and coin updates remain the session's responsibility.
 
-On Titanium EQEmu, resurrection and translocate offers open a Yes or No dialog.
+On Titanium EQEmu and P99, supported resurrection and translocate offers open
+a Yes or No dialog.
 An answer applies to the displayed offer. If the question changes while a
 button is held, release and click again to answer the replacement. The dialog
 closes on death, a zone transfer or a lost connection, and an offer left
 unanswered past the session's deadline is declined for you. The server's
-movement and recovery messages determine what follows a Yes.
+movement and recovery messages determine what follows a Yes. On P99 a
+named translocate completion must match the accepted offer. A wire-identical
+prompt already issued during the same zone visit stays withheld. Bind
+translocates need an explicit server-directed destination. Attended P99
+verification is pending.
+
+On P99, interact with an in-reach guildmaster of your class, select a skill
+from the received Training list and press Train once. The listed price
+estimates the cost in copper denominations. The skill value follows server
+updates. The point count goes blank as soon as the request is sent. A skill
+increase leaves the practice outcome unknown. Paid practice leaves the
+purse unknown until a new balance arrives. Re-enter the zone before
+practicing again or asking the same guildmaster again. Done closes the
+trainer. This path covers skills and awaits an attended P99 check.
 
 Grouping, raids, pets, training, reading and consent dialogs have separate
 capabilities by server. Pet Info can hold an early buff snapshot while the

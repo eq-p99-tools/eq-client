@@ -35,6 +35,8 @@ pub(super) struct Zone {
     pub(super) own_pet: Option<crate::pets::PetIdentity>,
     /// The guildmaster the player is training with, and what they teach.
     pub(super) training: Option<crate::training::TrainingOffer>,
+    /// A submitted practice or level change invalidated the admitted point count.
+    pub(super) training_points_uncertain: bool,
     /// The world container the player asked to open, until the server
     /// answers.
     pub(super) asked_container: Option<u32>,

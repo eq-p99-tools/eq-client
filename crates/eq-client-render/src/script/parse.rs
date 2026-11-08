@@ -115,6 +115,8 @@ pub enum Step {
     WaitOnline,
     /// Waits until the named zone is admitted with a player present.
     WaitZone(String),
+    /// Waits for a fresh, received movement instruction within this admission.
+    WaitRelocation(Duration),
     /// Waits, for a bounded duration, until the spawn targeted as the step
     /// starts is an NPC's corpse or has left the zone: a fight's end, however
     /// long it lasts.
@@ -570,6 +572,7 @@ pub(super) fn parse_step(line: &str) -> Result<Step, String> {
         ("create_refused", arguments) => Step::CreateRefused(parse_create(arguments)?),
         ("wait_online", []) => Step::WaitOnline,
         ("wait_zone", [zone]) => Step::WaitZone(zone.to_ascii_lowercase()),
+        ("wait_relocation", [duration]) => Step::WaitRelocation(millis(duration, MAX_WAIT)?),
         ("wait_dead", [duration]) => Step::WaitDead(millis(duration, MAX_WAIT)?),
         ("slash", words) => parse_slash(words)?,
         ("gm", words) => parse_gm(words)?,
@@ -648,10 +651,18 @@ pub(super) fn parse_step(line: &str) -> Result<Step, String> {
 /// those that change nothing beyond the test characters.
 fn parse_slash(words: &[&str]) -> Result<Step, String> {
     Ok(match words {
-        [command] if matches!(*command, "camp" | "sit" | "stand" | "ranged" | "stopsong") => {
+        [command]
+            if matches!(
+                *command,
+                "camp" | "sit" | "stand" | "ranged" | "stopsong" | "harmtouch" | "layonhands"
+            ) =>
+        {
             Step::Slash(format!("/{command}"))
         }
         ["camp", "desktop"] => Step::Slash("/camp desktop".into()),
+        ["discipline", name] if eq_client_core::disciplines::Discipline::named(name).is_some() => {
+            Step::Slash(format!("/discipline {name}"))
+        }
         ["target", name @ ..] if !name.is_empty() => {
             Step::Slash(format!("/target {}", name.join(" ")))
         }
@@ -1581,6 +1592,40 @@ mod tests {
         for bad in ["slash camp server", "slash camp desktop now"] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn wait_relocation_is_a_bounded_observation() {
+        let base = std::path::Path::new(".");
+        assert_eq!(
+            parse("wait_relocation 1500\n", base).unwrap(),
+            [Step::WaitRelocation(Duration::from_millis(1500))]
+        );
+        assert!(parse("wait_relocation\n", base).is_err());
+        assert!(parse("wait_relocation 12 34 56\n", base).is_err());
+    }
+
+    #[test]
+    fn discipline_slash_names_only_the_supported_set() {
+        let base = std::path::Path::new(".");
+        assert_eq!(
+            parse("slash discipline defensive\n", base).unwrap(),
+            [Step::Slash("/discipline defensive".into())]
+        );
+        assert!(parse("slash discipline 4499\n", base).is_err());
+    }
+
+    #[test]
+    fn knight_slash_actions_use_the_current_target() {
+        let base = std::path::Path::new(".");
+        assert_eq!(
+            parse("slash harmtouch\nslash layonhands\n", base).unwrap(),
+            [
+                Step::Slash("/harmtouch".into()),
+                Step::Slash("/layonhands".into())
+            ]
+        );
+        assert!(parse("slash harmtouch 12\n", base).is_err());
     }
 
     #[test]

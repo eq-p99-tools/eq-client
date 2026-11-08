@@ -76,10 +76,14 @@ merchant action.
 - `attack`: the attack control.
 - `ability combat number` or `ability abilities number`: a button counted from 1 on an Actions page.
 - `training row`: a training row counted from 1.
-- `train` or `training_done`: the training window's buttons.
+- `train` or `training_done`: the training window's buttons. Use
+  `interact admission spawn revision` with the selected guildmaster's
+  current `target_interaction` tuple to open training. On P99, opening the
+  same trainer or submitting another practice requires a fresh admission.
 - `buff number` or `song number`: a buff button counted from 1. `right_click`
   uses ordinary beneficial-buff cancellation, including current slot, spell-data
   and admission checks. Unslotted inferred effects never supply a cancel slot.
+  P99 uses the two-record request and waits for received membership changes.
 - `answer yes` or `answer no`: the confirmation dialog.
 - `page next` or `page back`: the reading window's page controls.
 

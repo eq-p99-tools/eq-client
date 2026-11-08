@@ -32,6 +32,7 @@ pub struct Layout {
     casting_animation: Option<usize>,
     effect: Option<usize>,
     alternate_duration: Option<usize>,
+    linked_timer: Option<usize>,
 }
 
 impl Layout {
@@ -56,6 +57,8 @@ impl Layout {
         casting_animation: Some(120),
         effect: Some(145),
         alternate_duration: Some(181),
+        // EQEmu SPDat TIMER_INDEX for gem casts.
+        linked_timer: Some(167),
     };
 
     /// The Mac-era client's `spells_en.txt` (147 fields a row, a few rows
@@ -86,6 +89,7 @@ impl Layout {
         casting_animation: None,
         effect: None,
         alternate_duration: None,
+        linked_timer: None,
     };
 }
 

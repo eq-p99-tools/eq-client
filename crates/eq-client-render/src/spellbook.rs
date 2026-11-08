@@ -221,6 +221,18 @@ impl SpellNames {
         self.spell(id)?.class_levels.get(index).copied().flatten()
     }
 
+    /// Group from an installed definition. Replayed definitions have no
+    /// verified mapping for this field.
+    pub(super) fn linked_timer(&self, id: u32) -> Option<u32> {
+        if !matches!(
+            self.0.readiness(),
+            crate::spell_provider::Readiness::Installed
+        ) {
+            return None;
+        }
+        self.spell(id)?.linked_timer
+    }
+
     pub(super) fn timing(&self, id: u32) -> Option<SpellTiming> {
         self.spell(id)?.timing.map(|timing| SpellTiming {
             recovery_ms: timing.recovery_ms,

@@ -118,6 +118,8 @@ fn interrupts_apply(command: &ClientCommand) -> bool {
             | ClientCommand::Jump { .. }
             | ClientCommand::SetPosture { .. }
             | ClientCommand::CastSpell { .. }
+            | ClientCommand::UseKnightAbility { .. }
+            | ClientCommand::UseDiscipline { .. }
             | ClientCommand::UseItem(_)
             | ClientCommand::Camp { .. }
             | ClientCommand::ExitAtOnce { .. }
@@ -432,6 +434,10 @@ pub(crate) enum Needs {
     TitaniumBreath,
     /// An ability, which the server type must also list.
     Ability(eq_client_core::abilities::Ability),
+    /// The admitted player has this knight class action.
+    KnightAbility(eq_client_core::knights::KnightAbility),
+    /// The admitted player knows this supported discipline.
+    Discipline(eq_client_core::disciplines::Discipline),
     /// Nothing of the session, as an empty action bar slot needs: never
     /// veiled.
     Nothing,
@@ -462,6 +468,14 @@ impl Needs {
             Self::Ability(ability) => {
                 offered(world, Capability::Abilities) && world.ability_offered(ability)
             }
+            Self::KnightAbility(ability) => {
+                offered(world, Capability::KnightAbilities)
+                    && super::abilities::knight(world) == Some(ability)
+            }
+            Self::Discipline(discipline) => {
+                offered(world, Capability::UsingDisciplines)
+                    && super::abilities::knows_discipline(world, discipline)
+            }
             Self::TitaniumBreath => {
                 world.generation() == eq_client_core::GameDialect::Titanium
                     && offered(world, Capability::GameplayDepartures)
@@ -479,7 +493,11 @@ impl Needs {
                 "Automatic looting needs supported item results on this session.".to_owned()
             }
             Self::TitaniumBreath => "Local breath simulation uses the Titanium client.".to_owned(),
-            Self::Capability(_) | Self::Ability(_) | Self::Nothing => UNAVAILABLE.to_owned(),
+            Self::Capability(_)
+            | Self::Ability(_)
+            | Self::KnightAbility(_)
+            | Self::Discipline(_)
+            | Self::Nothing => UNAVAILABLE.to_owned(),
         }
     }
 }

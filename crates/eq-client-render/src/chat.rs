@@ -1706,6 +1706,9 @@ fn game_commands(
     if let Some(commands) = social_commands(&name, words, online, &stamp) {
         return Some(commands);
     }
+    if let Some(command) = class_command(&name, words, online.world(), &stamp) {
+        return Some(command.map(|command| vec![command]));
+    }
     Some(match name.as_str() {
         "stopsong" => stop_song_command(words, online.world(), stamp).map(|command| vec![command]),
         "who" => eq_client_core::who::parse(words).and_then(|request| {
@@ -1781,6 +1784,34 @@ fn game_commands(
                 })
             } else {
                 Err("Use /ranged without arguments".into())
+            }
+        }
+        _ => return None,
+    })
+}
+
+fn class_command(
+    name: &str,
+    words: &str,
+    world: &eq_client_core::world::ClientWorld,
+    stamp: &dyn Fn() -> Result<crate::outbox::Stamp, String>,
+) -> Option<Result<ClientCommand, String>> {
+    Some(match name {
+        "discipline" | "disc" => {
+            if let Some(discipline) = eq_client_core::disciplines::Discipline::named(words.trim()) {
+                stamp().and_then(|stamp| {
+                    super::abilities::discipline_command(discipline, world, stamp)
+                })
+            } else {
+                Err("Use /discipline evasive or /discipline defensive".into())
+            }
+        }
+        "harmtouch" | "layonhands" => {
+            let ability = eq_client_core::knights::KnightAbility::named(name)?;
+            if words.is_empty() {
+                stamp().and_then(|stamp| super::abilities::knight_command(ability, world, stamp))
+            } else {
+                Err(format!("Use /{name} without arguments"))
             }
         }
         _ => return None,

@@ -71,7 +71,7 @@ Key names are case-insensitive. Combine them with `+`, such as `alt+1`. Supporte
   The step completes when the local queue accepts the offer. The server's
   answer separately determines whether an exchange opens.
 - `interact admission spawn revision` opens the service of the exact selected
-  merchant, banker or corpse. Copy the `target_interaction` tuple from a fresh
+  merchant, banker, guildmaster or corpse. Copy the `target_interaction` tuple from a fresh
   `report`. A stale target, a known reach or capability refusal, or another
   open or pending transaction stops the run. The bank opens locally. For
   merchants and corpses, check a subsequent economy report for the matching
@@ -80,6 +80,12 @@ Key names are case-insensitive. Combine them with `+`, such as `alt+1`. Supporte
 Movement uses the client's ordinary movement and collision behavior. It is not a teleport. Walk uses a ready navigation mesh when `--navmesh` is enabled and falls back to grid search otherwise. A reachable destination and the session's movement grant are still required. Keep the camera attached when using movement scripts; free-camera mode consumes movement input for the camera.
 
 Approach, walk and chase hold the camera-relative forward command, independent of key bindings. Object commands choose the nearest matching tradeskill container when they start. Missing targets, unreachable routes and timeouts stop the run. `wait_dead` only recognizes NPC corpses or a target leaving the zone; a player's death does not satisfy it while their corpse remains.
+
+After walking through a server-driven pad, `wait_relocation 1500` waits for
+a received same-zone movement instruction. Each observation is consumed once.
+It distinguishes this instruction from ordinary position samples, and
+the report labels its source `same_zone_relocation`. The instruction does not
+identify which server trigger produced it.
 
 Walk stall logs use `waiting` for an outstanding Move or crossing. For a
 Move, the worker's local result releases that wait. Server placement is
@@ -147,6 +153,10 @@ reported separately.
   available, including a definition already cached in the admission.
 - `slash command [arguments]`: run one of the supported game slash commands, without a leading slash.
   `slash ranged` requests one shot or throw against the current target on Titanium.
+  `slash layonhands` and `slash harmtouch` request the class ability against the
+  settled selection. Select yourself before using Lay on Hands on yourself.
+  `slash discipline evasive` and `slash discipline defensive` use the learned
+  Warrior discipline on yourself, with the same reuse checks as its button.
   Watch the server's combat and inventory updates for the result.
   `slash pet target` selects your visible pet. Pet orders complete the script
   step when queued. Read subsequent server observations to check their effects.
@@ -195,7 +205,8 @@ These commands support scripts that deliberately start before world entry. They 
 
 ## Recovery consent reports
 
-On a server that offers resurrection or translocate, wait for
+On a server that offers resurrection or translocate, including P99 for
+supported offers, wait for
 `consent_presented` to match the current offer before using
 `click answer yes` or `click answer no`. These actions use the ordinary
 confirmation buttons. `resurrection_consent` reports the offer token and

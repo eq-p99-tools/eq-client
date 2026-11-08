@@ -75,7 +75,7 @@ impl ClientWorld {
         update: &crate::training::TrainingUpdate,
         changes: &mut Changes,
     ) {
-        use crate::training::TrainingUpdate;
+        use crate::training::{PracticeUpdate, TrainingUpdate};
         if !self.connected {
             changes.ignored = true;
             return;
@@ -89,6 +89,19 @@ impl ClientWorld {
             }
             TrainingUpdate::Trained { skill, value, .. } => {
                 self.skill_news(*skill, *value, changes);
+            }
+            TrainingUpdate::Practice(update) => {
+                if matches!(
+                    update,
+                    PracticeUpdate::Requested { .. }
+                        | PracticeUpdate::Unanswered { .. }
+                        | PracticeUpdate::PointsUncertain
+                ) {
+                    self.zone.training_points_uncertain = true;
+                }
+                changes
+                    .notices
+                    .push(super::Notice::TrainingPractice(*update));
             }
             TrainingUpdate::Ended => {
                 if self.zone.training.take().is_some() {

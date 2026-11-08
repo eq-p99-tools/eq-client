@@ -288,6 +288,7 @@ pub struct ClientWorld {
     /// report said they bled out, until a front end reports it.
     bled_out: Option<i64>,
     pending_transfer: Option<ZoneOffer>,
+    same_zone_relocation: Option<(u64, crate::SameZoneRelocation)>,
     /// The resurrection offered and not yet answered.
     resurrection: Option<ConsentOffer<ResurrectionOffer>>,
     /// The translocate offered and not yet answered.
@@ -761,6 +762,16 @@ impl ClientWorld {
             WorldEvent::ZoneLineRejected { session_id, reason } => {
                 self.zone_line_refused(*session_id, reason, news);
             }
+            WorldEvent::SameZoneBoundary { session_id } => {
+                if self.accepts_reply(*session_id) {
+                    news.replies.push(Reply::SameZoneBoundary);
+                } else {
+                    news.ignored = true;
+                }
+            }
+            WorldEvent::SameZoneRelocated(relocation) => {
+                self.same_zone_relocated(*relocation, now, news);
+            }
             WorldEvent::Camp(status) => return self.camp_news(status, now),
             // A sound the server names, for the front end to play.
             WorldEvent::Effect(crate::effects::Effect::Sound(cue)) => news.sounds.push(cue.clone()),
@@ -796,9 +807,8 @@ impl ClientWorld {
             // offer and a player becoming a corpse wait for their front ends
             // too; until one answers, an offer goes unanswered, as it did
             // unread. A quest's change to the stats, a
-            // skill's button ready again, the reuse timers of disciplines and
-            // of spells that share one, and the discipline begun or ended
-            // are not shown yet either, nor the effects the server plays
+            // skill's button ready again is not shown yet either, nor the
+            // effects the server plays
             // besides a sound: a spell's nimbus, particles, a camera shake and
             // a projectile. The official client's sound for a quest's ding is
             // not known, so it stays silent (inferred, item 6.273). A popup or
@@ -830,9 +840,6 @@ impl ClientWorld {
             | WorldEvent::BecameCorpse { .. }
             | WorldEvent::StatsChanged(_)
             | WorldEvent::SkillReset(_)
-            | WorldEvent::DisciplineReuse(_)
-            | WorldEvent::LinkedReuse(_)
-            | WorldEvent::Discipline(_)
             | WorldEvent::Effect(_)
             | WorldEvent::Popup(_)
             | WorldEvent::Marquee(_)
@@ -1014,6 +1021,19 @@ impl ClientWorld {
             } => self.level_news(*current, *experience, news),
             WorldEvent::Skill { skill_id, value } => self.skill_news(*skill_id, *value, news),
             WorldEvent::Disciplines(list) => self.disciplines_news(list, news),
+            WorldEvent::DisciplineReuse(reuse) => self.casting.discipline_timers.set(*reuse, now),
+            WorldEvent::LinkedReuse(reuse) => self.casting.linked_timers.set(*reuse, now),
+            WorldEvent::Discipline(discipline) => {
+                use crate::disciplines::Active;
+                self.casting.active_discipline = discipline.map_or(Active::Inactive, Active::EqMac);
+            }
+            WorldEvent::DisciplineAdmission { session_id, state } => {
+                if self.session_id == Some(*session_id) {
+                    self.casting.active_discipline = *state;
+                } else {
+                    news.ignored = true;
+                }
+            }
             WorldEvent::Mana(mana) => self.vitals.mana = Some(*mana),
             WorldEvent::Resources { mana, endurance } => {
                 self.vitals.mana = Some(*mana);
@@ -1105,6 +1125,13 @@ impl ClientWorld {
                 self.offered_abilities = Some(offered.clone());
             }
             WorldEvent::SkillReady(skill) => self.skill_ready(*skill),
+            WorldEvent::KnightReuse { session_id, remaining } => {
+                if self.session_id == Some(*session_id) {
+                    self.casting.knight_ready = Some(now + *remaining);
+                } else {
+                    news.ignored = true;
+                }
+            }
             WorldEvent::AbilityUsed {
                 session_id,
                 ability,
@@ -1341,6 +1368,7 @@ impl ClientWorld {
             WorldEvent::PracticePoints(points) => {
                 if let Some(player) = self.player.as_mut() {
                     player.practice_points = Some(*points);
+                    self.zone.training_points_uncertain = false;
                     news.trade = true;
                 }
             }
@@ -1370,7 +1398,14 @@ impl ClientWorld {
                 reason,
             } => self.cast_refused((*session_id, *spell_id), reason, news),
             WorldEvent::BuffSnapshot(buffs) => self.buff_snapshot(buffs, now),
-            WorldEvent::Buff(update) => self.buff(update, now, news),
+            WorldEvent::Buff(update) => {
+                if self.generation == crate::GameDialect::Titanium
+                    && let Some(player) = self.player.as_ref()
+                {
+                    self.casting.active_discipline.observe_titanium(player.spawn_id, update);
+                }
+                self.buff(update, now, news);
+            }
             WorldEvent::BuffCancellation(update) => {
                 if self.accepts_reply(update.session_id) && self.death.is_none() {
                     self.buffs.cancellation_news(update.clone());
@@ -1524,7 +1559,7 @@ impl ClientWorld {
                 self.spell_book = None;
                 self.book_action = None;
                 self.buffs.clear();
-                self.casting.drop_actions();
+                self.casting = Casting::default();
             }
             Reset::Camped => {
                 // Local camp completion invalidates the character projection;
@@ -1604,6 +1639,7 @@ impl ClientWorld {
         self.last_consent_refusal = None;
         self.items = ItemCache::default();
         self.pending_transfer = None;
+        self.same_zone_relocation = None;
         self.reading = None;
         self.combining = None;
         self.group = None;

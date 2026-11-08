@@ -194,6 +194,7 @@ pub(super) fn state(
         ?pet,
         pet_ownership = %pet_ownership(online.world()),
         training = ?training(online),
+        training_points = ?online.world().training_points(),
         practice_points = ?online.world().player().and_then(|player| player.practice_points),
         resurrection = ?resurrection(online),
         resurrection_consent = ?online.world().resurrection().map(|question| {

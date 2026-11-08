@@ -70,7 +70,7 @@ impl Source {
         match self {
             Self::Gem(gem) => world.gem(usize::from(gem)).map(|_| Action::Gem(gem)),
             Self::Slot(index) => bindings.0.get(index).copied().flatten(),
-            Self::Ability(button) => crate::abilities::assigned(world, button).map(Action::Ability),
+            Self::Ability(button) => crate::abilities::assigned(world, button),
             Self::Item(slot) => world
                 .inventory()
                 .items()

@@ -50,6 +50,7 @@ pub(super) struct ServerPlacement {
 pub(super) enum PlacementSource {
     Admission,
     PositionUpdate,
+    SameZoneRelocation,
 }
 
 impl OnlineState {
@@ -73,7 +74,12 @@ impl OnlineState {
             self.server_placement = None;
         }
         let received = if let Some(position) = changes.placed {
-            Some((position, PlacementSource::PositionUpdate))
+            let source = if changes.same_zone_relocation {
+                PlacementSource::SameZoneRelocation
+            } else {
+                PlacementSource::PositionUpdate
+            };
+            Some((position, source))
         } else if changes.entered {
             self.world
                 .player()
@@ -533,8 +539,8 @@ impl Panels<'_> {
                 }
                 Reply::LootTaken { place, accepted } => self.trade.taken(*place, *accepted),
                 Reply::LootReceived { place } => self.trade.received(*place),
-                // The refused crossing no longer holds the player's motion.
-                Reply::ZoneLineRefused => self.motion.crossing_refused(),
+                // A crossing without a transfer releases the movement hold.
+                Reply::ZoneLineRefused | Reply::SameZoneBoundary => self.motion.crossing_resolved(),
                 Reply::MotionRefused { created, reason } => {
                     self.motion
                         .move_refused(state.world().session_id(), *created, reason);
@@ -808,7 +814,11 @@ pub(super) fn receive(
         if let Some(position) = changes.placed {
             let at = |p: eq_client_core::WorldPosition| [p.x, p.y, p.z];
             info!(from = ?before.map(at), to = ?at(position), "Server corrected the player");
-            panels.motion.reset(None);
+            if changes.same_zone_relocation {
+                panels.motion.same_zone_landed();
+            } else {
+                panels.motion.reset(None);
+            }
             if let Some(sets) = panels.spell_sets.as_mut() {
                 sets.interrupt("The server moved the character.");
             }
