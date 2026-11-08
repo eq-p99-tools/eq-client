@@ -234,7 +234,7 @@ fn scripted_interaction_refuses_training_pending_container_and_combine() {
     }
 }
 
-fn linked_message(chat: &mut ChatState) -> (u64, String) {
+fn linked_message(app: &mut App) -> (u64, String) {
     let body = format!("00002A{}1234ABCD", "0".repeat(31));
     let mut line = system_line("Synthetic blade");
     line.source = Source::Server;
@@ -247,14 +247,17 @@ fn linked_message(chat: &mut ChatState) -> (u64, String) {
         text_start: 0,
         text_end: 15,
     });
-    chat.receive(line, Some(ADMISSION));
-    (chat.history.revision(), body)
+    app.world_mut()
+        .resource_scope(|world, mut chat: Mut<ChatState>| {
+            chat.receive(line, world.resource::<OnlineState>());
+            (chat.history.revision(), body)
+        })
 }
 
 #[test]
 fn scripted_item_inspection_reuses_the_exact_received_link_and_definition() {
     let (mut app, rx) = app();
-    let (message, body) = linked_message(&mut app.world_mut().resource_mut::<ChatState>());
+    let (message, body) = linked_message(&mut app);
     app.add_systems(Update, crate::items::input.after(crate::script::drive));
     let source = format!("inspect_link {ADMISSION} {message} 0");
     start(&mut app, &source);
@@ -292,8 +295,7 @@ fn scripted_item_inspection_reuses_the_exact_received_link_and_definition() {
 fn scripted_item_inspection_refuses_unknown_and_stale_links() {
     for case in ["ordinal", "admission", "evicted"] {
         let (mut app, rx) = app();
-        let mut chat = app.world_mut().resource_mut::<ChatState>();
-        let (message, _) = linked_message(&mut chat);
+        let (message, _) = linked_message(&mut app);
         let mut admission = ADMISSION;
         let mut ordinal = 0;
         match case {
@@ -301,8 +303,9 @@ fn scripted_item_inspection_refuses_unknown_and_stale_links() {
             "admission" => admission += 1,
             _ => {
                 for _ in 0..16 {
-                    linked_message(&mut chat);
+                    linked_message(&mut app);
                 }
+                let chat = app.world().resource::<ChatState>();
                 assert!(chat.history.line(message).is_some());
             }
         }
@@ -610,7 +613,7 @@ fn a_public_script_press_cannot_activate_a_social_but_a_native_press_can() {
 #[test]
 fn scripted_link_composition_edits_the_draft_and_sends_no_request() {
     let (mut app, rx) = app();
-    let (message, _) = linked_message(&mut app.world_mut().resource_mut::<ChatState>());
+    let (message, _) = linked_message(&mut app);
     start(&mut app, &format!("compose_link {ADMISSION} {message} 0"));
     frame_at(&mut app, 0);
     frame_at(&mut app, 10);
@@ -711,7 +714,7 @@ fn scripted_owned_link_uses_the_current_received_item_without_sending() {
 #[test]
 fn scripted_item_inspection_does_not_replace_a_pending_request() {
     let (mut app, rx) = app();
-    let (message, _) = linked_message(&mut app.world_mut().resource_mut::<ChatState>());
+    let (message, _) = linked_message(&mut app);
     let action = format!("inspect_link {ADMISSION} {message} 0");
     start(&mut app, &format!("{action}\n{action}"));
     for ms in [0, 10, 20] {

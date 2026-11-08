@@ -179,10 +179,12 @@ protocol/reducer tests, official-client observations, offline asset renders and
 live custom-client runs are different kinds of evidence. Do not label an entire
 server either fully tested or wholly untested based on one of them.
 
-The native client still has incomplete model/UI coverage, client-side same-zone
-teleporter detection and some cooldown/resource information. Bounded swimming
-in mapped water is available for Titanium EQEmu; breath, damage, and P99 and
-EQMac swimming are still pending. Character
+The native client still has incomplete model/UI coverage and some
+cooldown/resource information. Supported P99 same-zone pads use installed
+boundaries, with deployed crossings awaiting an attended check. Bounded swimming
+in mapped classic water is available on Project 1999 and Titanium EQEmu.
+The Titanium air meter requires resolved local inputs. Live P99 wet movement,
+P99 liquid damage reports and EQMac swimming remain open. Character
 creation has UI and scenario paths on all four policies; named deletion with an
 explicit confirmation is offered on all four, and an absence from a refreshed
 list never claims permanent deletion.

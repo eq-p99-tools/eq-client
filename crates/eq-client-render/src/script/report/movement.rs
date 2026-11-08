@@ -11,7 +11,8 @@ use eq_client_core::{
 use serde_json::{Value, json};
 
 /// A bounded observation. The session position is the basis for local physics
-/// and can include submitted proposals. The renderer interpolates separately.
+/// and can include locally accepted samples held for pacing. The renderer
+/// interpolates separately.
 pub(in crate::script) fn report(
     label: &str,
     online: &OnlineState,
@@ -47,7 +48,7 @@ pub(in crate::script) fn report(
             collision.filter(|_| scene_loaded),
         )
     });
-    let movement_state = snapshot(
+    let mut movement_state = snapshot(
         admission,
         session_position,
         rendered_position,
@@ -55,6 +56,11 @@ pub(in crate::script) fn report(
         &liquid,
         world.can(eq_client_core::Capability::Swimming),
         local_geometry,
+    );
+    movement_state["last_local_pad"] = json!(
+        world
+            .last_local_pad()
+            .filter(|pad| Some(pad.session_id) == admission)
     );
     info!(label, %movement_state, "Script movement report");
 }

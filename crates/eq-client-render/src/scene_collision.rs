@@ -26,6 +26,10 @@ impl eq_client_core::movement::Liquids for ZoneLiquids {
         self.0.liquid_at(point.to_array()).map(movement_liquid)
     }
 
+    fn region_known(&self, point: Vec3) -> bool {
+        self.0.medium_at(point.to_array()).is_some()
+    }
+
     fn passes_through(
         &self,
         from: Vec3,
@@ -154,7 +158,7 @@ mod selection_geometry_tests;
 pub(super) fn build_collision(
     zone: &ZoneAsset,
 ) -> Option<eq_client_core::movement::CollisionWorld> {
-    collision_world(zone, collision_triangles(zone))
+    collision_world(zone, collision_triangles(zone), None)
 }
 
 /// The zone's collision triangles with every placed object's: the solids the
@@ -176,8 +180,19 @@ pub(super) fn collision_triangles(zone: &ZoneAsset) -> Vec<[[f32; 3]; 3]> {
 pub(super) fn collision_world(
     zone: &ZoneAsset,
     triangles: Vec<[[f32; 3]; 3]>,
+    swim_origin: Option<f32>,
 ) -> Option<eq_client_core::movement::CollisionWorld> {
     match eq_client_core::movement::CollisionWorld::new(triangles) {
+        Ok(world) if let Some(origin) = swim_origin => {
+            let regions = zone.regions.clone().with_titanium_liquids();
+            Some(if regions.liquid_region_count() == 0 {
+                world
+            } else {
+                world
+                    .with_liquids(ZoneLiquids(regions))
+                    .with_swim_origin(origin)
+            })
+        }
         Ok(world) if zone.regions.liquid_region_count() == 0 => Some(world),
         Ok(world) => Some(world.with_liquids(ZoneLiquids(zone.regions.clone()))),
         Err(error) => {

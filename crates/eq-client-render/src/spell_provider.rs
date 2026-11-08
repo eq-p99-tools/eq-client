@@ -1,7 +1,64 @@
 //! Installed-provider lifetime and transactional P99 replay, independent of zones.
 use eq_client_assets::spells::{Definition, Definitions, ReplayProjection};
 use eq_client_core::spell_tables::{Binding, Envelope, Event, Fact, SpellId, Stage, Table, Update};
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+    sync::Mutex,
+};
+
+/// Worker-side view of the same spell-provider rules used by presentation.
+/// The session delivers each provider fact before the worker handles further
+/// zone input. The worker owns buff membership independently of these assets.
+pub struct SightProvider(Mutex<Provider>);
+
+impl SightProvider {
+    /// Read the installed Titanium spell file for this provider binding.
+    pub fn load(binding: Binding, directory: &Path) -> Self {
+        let definitions = Definitions::read(directory, &eq_client_assets::spells::Layout::TITANIUM)
+            .unwrap_or_default();
+        Self(Mutex::new(Provider::new(binding, definitions)))
+    }
+
+    /// Apply the same run, admission and table ordering as the renderer.
+    pub fn receive(&self, envelope: &Envelope) {
+        if let Ok(mut provider) = self.0.lock() {
+            provider.receive(envelope);
+        }
+    }
+}
+
+impl std::fmt::Debug for SightProvider {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SightProvider")
+            .finish_non_exhaustive()
+    }
+}
+
+impl eq_client_core::vision::SightCatalog for SightProvider {
+    fn sees_invisible(&self, spell_id: u32, caster_level: u16, landed: bool) -> bool {
+        let Ok(provider) = self.0.lock() else {
+            return false;
+        };
+        provider
+            .get(spell_id)
+            .and_then(|spell| spell.mechanics.as_ref())
+            .is_some_and(|mechanics| {
+                (!landed
+                    || !matches!(
+                        mechanics.base_duration(caster_level),
+                        None | Some(eq_client_assets::spells::BaseDuration::Ticks(0))
+                    ))
+                    && mechanics.effects.iter().any(|effect| {
+                        effect.id == 13
+                            && effect
+                                .base_magnitude(caster_level)
+                                .is_some_and(|value| value > 0)
+                    })
+            })
+    }
+}
 
 /// Mechanics availability for the current provider and zone.
 #[derive(Clone, Debug, Eq, PartialEq)]

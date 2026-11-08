@@ -17,6 +17,20 @@ use crate::{
 use std::collections::BTreeMap;
 
 impl ClientWorld {
+    /// The current received server dialog, if still open at this time.
+    #[must_use]
+    pub fn popup(&self, now: std::time::Instant) -> Option<&crate::popups::PopupOffer> {
+        self.popup.as_ref().filter(|offer| {
+            self.accepts_reply(offer.session_id) && offer.expires_at.is_none_or(|until| now < until)
+        })
+    }
+
+    /// The latest received player equipment view for this admission.
+    #[must_use]
+    pub const fn player_inspection(&self) -> Option<&crate::inspection::PlayerInspection> {
+        self.player_inspection.as_ref()
+    }
+
     /// Revision of the inputs delivered by the worker for liquid proposals.
     #[must_use]
     pub const fn liquid_hazard_revision(&self) -> Option<u64> {
@@ -518,6 +532,14 @@ impl ClientWorld {
         self.zone.spawns.get(&id)
     }
 
+    /// Whether the current observer can see a known actor through its
+    /// received invisibility appearance. Range, kind and line of sight are
+    /// checked separately by the consumer.
+    #[must_use]
+    pub fn can_see(&self, spawn: &crate::SpawnState) -> bool {
+        crate::vision::can_see(spawn, self.zone.sees_invisible && self.in_world())
+    }
+
     /// The player's target.
     #[must_use]
     pub const fn target(&self) -> &Target {
@@ -560,7 +582,7 @@ impl ClientWorld {
         self.target.selected.is_some_and(|id| {
             !self.is_player(id)
                 && self.zone.spawns.get(&id).is_none_or(|spawn| {
-                    spawn.state.invisible || Some(spawn.revision) != self.target.revision
+                    !self.can_see(&spawn.state) || Some(spawn.revision) != self.target.revision
                 })
         })
     }
@@ -756,6 +778,12 @@ impl ClientWorld {
         self.items.get(id)
     }
 
+    /// A received item definition and its observation revision in this admission.
+    #[must_use]
+    pub fn item_observation(&self, id: u32) -> Option<(u64, &crate::ItemDetails)> {
+        self.items.observation(id)
+    }
+
     /// How the session lets the player move, once it says.
     #[must_use]
     pub const fn motion(&self) -> Option<MotionGrant> {
@@ -818,6 +846,12 @@ impl ClientWorld {
     #[must_use]
     pub const fn last_same_zone_relocation(&self) -> Option<(u64, crate::SameZoneRelocation)> {
         self.same_zone_relocation
+    }
+
+    /// Last local WLD pad snap in the current admission.
+    #[must_use]
+    pub const fn last_local_pad(&self) -> Option<crate::LocalPadCrossing> {
+        self.last_local_pad
     }
 
     /// The player's own casting and gem timers.

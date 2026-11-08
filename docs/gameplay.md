@@ -50,13 +50,15 @@ policies. P99 jump notices are capture-backed; Quarm's movement and transfers
 reuse the source-checked EQMac path. New public-server scenarios still need live
 verification. Physics uses installed-client
 rules and zone gravity where available, with an explicit provisional fallback
-when those data cannot be read. Titanium EQEmu sessions can swim in water
-marked by the installed zone's regions. Wade or fall into water, move in any
+when those data cannot be read. Project 1999 and Titanium EQEmu sessions
+offer bounded swimming in classic water marked by the installed zone.
+Wet movement starts when the character's body origin enters that region.
+Wade or fall into water, move in any
 horizontal direction, and use first-person or mouse-look pitch to swim up or
 down with forward or backward input. The surface holds the swimmer in the water,
-and a supported bank returns them to ordinary movement. Automated ground routes,
-P99, and EQMac-era sessions retain the deep-water guard. Ordinary movement
-guards against entering lava.
+and a supported bank returns them to ordinary movement. Automated ground
+routes and EQMac-era sessions retain the deep-water guard. Ordinary
+movement guards against entering lava.
 
 **Jesus Mode** is an opt-in QoL setting where the session offers gameplay
 departures. Walk from shore or land on mapped water or lava to use the
@@ -65,12 +67,15 @@ rules apply. A placement inside lava uses ordinary movement and recovery.
 Turning the setting off restores ordinary movement on the next sample.
 Scripted ground route finding uses solid terrain.
 
-The swim rate is a conservative bound based on the session's current movement
-grant. Skill-based speed is not modeled by this path; the air meter and
-drowning are a separate Titanium sample, see [settings](settings.md). A server
-placement replaces the local prediction; a movement
-proposal alone does not confirm server position, wet state, or any resource
-change.
+The swim rate is a conservative bound based on the session's current
+movement grant. Exact native speed, skill scaling and live P99 wet movement
+remain to be verified. The Titanium air meter samples the character's
+model-dependent head reference separately. Drowning and lava reports are
+available on local-only EQEmu. See [settings](settings.md).
+
+A received placement replaces the local movement projection. A worker can
+accept a movement sample and hold it for pacing. Server position and health
+updates remain separate observations.
 
 Installed WLD boundary regions supply zone-line detection. Numbered boundaries
 resolve through the server's destination table; older absolute boundaries carry
@@ -88,11 +93,13 @@ when the session grants movement input. The client warns once for the held
 location. The local safety hold can persist for the admission while the
 installed geometry offers no way down. A different received location gets
 its own check. A later collision probe can release the hold when it finds a route.
-A server using different zone geometry can cause this conflict. Client detection
-of client-driven same-zone teleport pads remains incomplete. On local EQEmu,
-ordinary movement can enter a server-owned same-zone pad. A received
-reposition supplies the absolute landing within the admission and resets
-movement there. Zone-point routes handle their own preserve-position values.
+A server using different zone geometry can cause this conflict. On P99,
+supported same-zone pads use installed boundary geometry and the current
+zone-point table where required. `report [label]` exposes the local crossing
+as `last_local_pad`. On local EQEmu, ordinary movement can enter a server-owned
+same-zone pad. A received reposition supplies the absolute landing and resets
+movement there. The received relocation report is separate from the local
+pad crossing.
 Initial login, boundary crossing, teleport, death, and respawn each need
 their own validation.
 
@@ -279,7 +286,8 @@ hotbar page. Click the named button, press its hotbar key, or type
 or use `/social delete Greet`. Editing keeps the same hotbar bindings.
 Deleting leaves any existing bindings inactive.
 
-A social has one to five lines. Separate them with a pipe surrounded by
+Each character can save up to 120 socials. A social has one to five lines.
+Separate them with a pipe surrounded by
 spaces when you enter them in chat. A standalone `/pause 10` waits one second. On a combined line such
 as `/pause 10,/say Hello!`, the command runs first. The pause accepts
 1 to 600 tenths of a second. Every action uses the client's ordinary
@@ -301,22 +309,24 @@ The pause order follows the [EverQuest social hotbutton guide](https://www.everq
 
 ## Item links in chat
 
-On Titanium, Ctrl+right-click a worn or carried item to insert a link into the
-chat draft. The current inventory must supply the item record and its
-placement. A pending move or an unsupported item record can leave the gesture
-unavailable. Received links still work with Shift-click.
+On Titanium, Ctrl+right-click a displayed inventory item to insert a link into
+the chat draft. The selected item supplies the link metadata, including while
+an item move is pending. Items with incomplete or unsupported link metadata
+can still be linked by forwarding a received tag.
 
-Shift-click a recent received item link to add it at the caret in the current
-chat draft. A regular click still opens item details. Left, Right, Home and
+Shift-click a received item link retained in chat to add it at the caret in the
+current draft. A regular click opens item details. A cached definition for the
+same link can open while another inspection is waiting for a reply. Left, Right, Home and
 End move the caret. Backspace or Delete removes the whole link when it meets
 one. Choose a chat tab or use a channel command such as `/auction` or
 `/tell Name` before sending. Item links belong in the message, after the
 channel and any recipient. The client keeps the draft if the routed
 message would exceed the chat limit, including EQEmu's link expansion.
 
-This uses the received item's original link body. A link copied as plain
-clipboard text remains plain text. An inventory item without a received
-link has no link to insert. A new admission clears link-bearing drafts.
+Forwarding preserves the received link body. A link copied as plain clipboard
+text remains plain text. Retained links and drafts can follow a known world
+and character through zoning on the same connection and dialect. When that
+scope ends, the draft keeps its text and link labels as plain text.
 
 ## Targeting and interaction
 
@@ -324,6 +334,20 @@ Click a rendered entity, use Tab/Shift+Tab to cycle the nearby rendered set, or
 F1 for self. Escape clears the target after higher-priority UI actions. The target
 panel shows identity and known HP. The map's explicit Target button shares these
 checks; selecting alone does not attack or cast.
+
+Titanium See Invisible can reveal an ordinary invisible player or NPC when
+the worker knows the effect and the spawn's appearance. Unclassified
+invisibility values remain hidden. Installed lights illuminate supported
+Titanium interiors, and known race and buff effects can change low-light
+vision. **See the World Clearly** and **Show Invisible Entities** are local
+presentation settings.
+
+On Titanium EQEmu and Project 1999, received server popups show the supplied
+button layout and expiration. A supported response submits the selected reply.
+An expired or replaced dialog cannot be answered. Select a nearby player and
+choose **Inspect player** to see the received equipment names, icons and note.
+Automatic inspection replies use the known inspect note from the installed
+character settings when available.
 
 Considering, hailing, auto-attack and class abilities use the target and session
 rules. Loot lists received corpse contents; Loot all takes items sequentially.
@@ -352,7 +376,9 @@ definition identifies the group.
 For a single Titanium ranged attack, equip a bow and arrows or a throwing
 weapon and select a target. Click Ranged Attack in Actions or type `/ranged`.
 The Actions control can be bound to the hotbar. The request checks the current
-target, loadout, reach and unmodified weapon delay. Damage and projectile
+target, loadout, reach and local recovery. Recovery uses the current weapon's
+delay and the first confirmed eligible quiver in general inventory for a bow.
+Haste and slow are outside this local estimate. Damage and projectile
 consumption appear when reported by the server.
 
 Received arrows and thrown items can appear briefly in flight if both actors

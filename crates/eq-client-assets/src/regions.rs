@@ -83,6 +83,22 @@ pub struct ZoneRegions {
 }
 
 impl ZoneRegions {
+    /// Reuses the spatial tree with the native classic water and lava
+    /// assignments. The server water map uses a different tag precedence.
+    #[must_use]
+    pub fn with_titanium_liquids(mut self) -> Self {
+        self.liquids = self
+            .media
+            .iter()
+            .filter_map(|(&region, &medium)| match medium {
+                Medium::Water => Some((region, Liquid::Water)),
+                Medium::Lava => Some((region, Liquid::Lava)),
+                Medium::Air | Medium::OtherSubmerging => None,
+            })
+            .collect();
+        self
+    }
+
     /// Constructs a horizontal liquid surface for other crates' synthetic tests.
     #[cfg(feature = "testing")]
     #[must_use]
@@ -888,6 +904,22 @@ mod tests {
         assert_eq!(regions.medium_at([0.0, -1.0, 0.0]), Some(Medium::Water));
         assert_eq!(regions.medium_at([0.0, 0.0, 0.0]), None);
         assert_eq!(ZoneRegions::default().medium_at([0.0; 3]), None);
+    }
+
+    #[test]
+    fn titanium_collision_uses_native_assignments_for_point_and_segment_queries() {
+        let mut regions = layers();
+        let water = [0.0, -1.0, 0.0];
+        let air = [0.0, 1.0, 0.0];
+        // A native AWT assignment has no equivalent on the server-map side.
+        regions.liquids.remove(&2);
+        regions.media.insert(2, titanium_medium("OTHER", "AWT_"));
+        assert!(!regions.passes_through(air, water, Liquid::Water));
+        let regions = regions.with_titanium_liquids();
+        assert_eq!(regions.liquid_at(water), Some(Liquid::Water));
+        assert!(regions.passes_through(air, water, Liquid::Water));
+        assert!(regions.first_outside(water, air, Liquid::Water).is_some());
+        assert_eq!(regions.medium_at([0.0; 3]), None);
     }
 
     #[test]

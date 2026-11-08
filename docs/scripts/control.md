@@ -81,7 +81,10 @@ requests an observation.
 | `last_request` | Last receipt: `id`, `outcome`, `code`, `run_id`, `line`, `message` |
 | `run` | Current/latest run: `id`, `origin`, `phase`, `line`, `completed_steps`, `total_steps`, `elapsed_ms`, `message` |
 | `recent_runs` | At most 16 terminal run snapshots, oldest first |
+| `admission_id` | Current connected online admission outside a zone transfer, or null |
+| `control_health` | State of the local file exchange. See [Control health](#control-health) |
 | `runbook` | Current test checklist or null. See [Runbook checklist](#runbook-checklist) |
+| `runbook_export` | Latest checklist export attempt or null. See [Export a checklist](#export-a-checklist) |
 | `protocol_error`, `io_error` | Malformed-request or file-channel failure, otherwise null |
 
 For a linear run, `total_steps` is the accepted action count. For a structured
@@ -108,6 +111,17 @@ reported as failed. This describes the client, not a clean logout. A crash or fi
 failure can leave stale status. A stopped heartbeat, missing file, acceptance
 receipt or process exit never proves script completion or server acceptance.
 
+## Control health
+
+The Runbook window and `status.json` show the client's last observation of the
+local file channel. It is `waiting` before the first successful exchange,
+`ready` after an exchange, `request_error` for malformed input, or `io_error` for
+a file error. The client shows `stalled` when two seconds have elapsed since
+the last successful exchange without a newer one. Normal shutdown publishes
+`closed`. Monitor advancement of `revision` separately because a file error
+or a stalled exchange can prevent a new status from reaching disk. This health
+field describes the file channel. The script and checklist have their own states.
+
 ## Runbook checklist
 
 When launched with `--script-control`, open **EQ → Runbook** while in the
@@ -128,41 +142,96 @@ The `runbook_started` receipt accompanies the new `runbook` snapshot. Its
 The new checklist replaces the old one and clears all results and notes,
 even if you reuse the title and item IDs.
 
-After observing the required evidence, the harness submits an explicit
-result for one item.
+The harness can report progress or an outcome for each item independently.
 
 ```json
-{"version":1,"instance":"copy-from-status","id":5,"op":"runbook_result","result":{"runbook_id":4,"item_id":"search","status":"passed","note":"Only the matching spells were visible."}}
+{"version":1,"instance":"copy-from-status","id":5,"op":"runbook_result","result":{"runbook_id":4,"item_id":"search","status":"running"}}
+```
+
+```json
+{"version":1,"instance":"copy-from-status","id":6,"op":"runbook_result","result":{"runbook_id":4,"item_id":"search","status":"passed","after_request_id":5,"note":"Only matching spells were visible.","evidence":{"kind":"manual_witness","reference":"witness-search-1"}}}
 ```
 
 The result must target the current `runbook.id` and an item in that
 checklist. The client rejects stale checklist IDs with `runbook_changed`
-and unknown items with `unknown_runbook_item`. A `passed` or `failed`
-report is final for that item in the current checklist. Sending an
-identical result again leaves it as-is. Changing its status or note gives
-`runbook_item_already_reported`.
+and unknown items with `unknown_runbook_item`.
 
-Omit `note` or send `"note": null` to report without a note. Both forms
-represent the same result. An existing terminal report keeps its original note.
+- `pending` means the harness has submitted no report for the item. Submit the
+  first report without `after_request_id`. Existing direct `passed` and
+  `failed` reports are still supported.
+- `running` and `blocked` describe active work or a missing prerequisite.
+  To change either report, supply its `report_request_id` as
+  `after_request_id`. Capture that ID with the observation. A report based on
+  an older row gives `runbook_item_changed`.
+- `passed`, `failed` and `skipped` are final in the current checklist. A
+  conflicting report gives `runbook_item_already_reported`. An identical
+  report is idempotent and keeps the original row and checklist revision.
 
 Check for `runbook_result_recorded` and read the item back in
-`status.json`. The `runbook` object includes `id`, `title` and ordered
-`items`. Each item includes `id`, `label`, `status` and `note` (null when
-the item has no note). The receipt's `run_id` is reserved for the gameplay executor.
+`status.json`. The `runbook` object includes `id`, `title`, `revision`,
+`reported_by: "producer"`, `health` and ordered `items`. The revision is zero
+until the first report and then takes the ID of the last request that
+changed a row. Each item includes `id`, `label`, `status`, `note`, `evidence`,
+`admission_id` and `report_request_id`. Optional values and the request ID for
+a pending row are null. The receipt's `run_id` is reserved for the gameplay
+executor.
+
+`health` contains the count for each row state. The overall `state` is
+`complete` when every row is final, `running` when any row is running,
+`blocked` when work is blocked and no row is running, `pending` when all rows
+are pending, or `incomplete` when final and pending rows coexist. Read the
+individual counts to distinguish passes, failures and skips.
+
+The optional `evidence` object has a `kind` of `scripted_observation`,
+`manual_witness` or `received_data` and a `reference` of 1–96 ASCII letters,
+digits, hyphens or underscores. Use a private artifact ID. The client displays
+the producer's category and reference literally. It keeps them separate from
+the client-observed script phase and online admission. A category describes
+what the producer cites. A row pass means the harness reported a pass, and
+server confirmation needs its own evidence. The client treats the reference
+as opaque text. Omitted or null `note` and `evidence` represent absence.
 
 Use 1–64 items with unique, case-sensitive IDs of 1–48 ASCII letters,
 digits, hyphens or underscores. Titles, labels and optional notes are
 nonblank single-line UTF-8 text, limited to 96, 120 and 180 bytes
-respectively. Use brief evidence summaries and keep credentials and raw
-captures out of the request. The window renders the text literally.
-Malformed payloads appear in `protocol_error`.
+respectively. Control characters, line separators and bidirectional formatting
+controls are rejected. Use brief evidence summaries and keep credentials and
+raw captures out of the request. Malformed payloads appear in `protocol_error`.
 
 The checklist represents the harness's test run and can span login, zoning
-and logout within this client instance. The harness must correlate any
-packet or gameplay evidence with the correct admission itself. Script
-progress, server traffic and opening the window never change an item.
-Checklist receipts describe local display state. A passed row means the
-harness reported a pass.
+and logout within this client instance. For a zone-specific observation, copy
+the positive `admission_id` from status when collecting the evidence and
+include it in the report. The client rejects a different or no longer active
+admission with `runbook_admission_changed`. Leave it absent for checklist
+reports that intentionally span admissions or describe an offline case.
+Previously recorded rows retain their original scope across zoning and
+logout. Script progress, server traffic and window visibility leave row
+state to the harness.
+
+### Export a checklist
+
+Select **Export JSON** in the window, or submit a control request naming
+the current checklist.
+
+```json
+{"version":1,"instance":"copy-from-status","id":7,"op":"runbook_export","runbook_id":4}
+```
+
+Both entry points capture the checklist at its current revision and write
+`runbook-export.json` in the private control directory. The export contains
+the control version, instance, request ID (null for the UI), admission at
+export time and the captured `runbook`. Keep it private alongside any cited
+evidence. Each successful export replaces the previous file atomically.
+The client chooses the filename.
+
+A control receipt of `runbook_export_queued` records acceptance. Wait for
+`runbook_export.state` to become `written` with the matching `request_id`,
+`runbook_id` and `revision`, then read back the matching export before starting
+another export. The attempt can also be `writing`, `failed` with an error,
+or `unconfirmed` at shutdown. A failed attempt can leave an earlier file in
+place. A request for a replaced checklist gives `runbook_changed`, and an
+overlapping request gives `runbook_export_busy`. Changes to the checklist
+after capture appear in a subsequent export.
 
 ## Explicit recovery
 

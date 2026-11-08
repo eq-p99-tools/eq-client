@@ -1848,6 +1848,30 @@ pub(super) fn drive(
             }
             return;
         }
+        Step::RespondToPopup {
+            admission,
+            serial,
+            action,
+        } => {
+            if let Err(reason) =
+                super::dialogs::respond(online.world(), &observed.1, *admission, *serial, *action)
+            {
+                script.stop(&mut keys, &mut mouse, reason);
+            }
+            return;
+        }
+        Step::InspectPlayer {
+            admission,
+            spawn,
+            revision,
+        } => {
+            if let Err(reason) =
+                super::dialogs::inspect(online.world(), &observed.1, *admission, *spawn, *revision)
+            {
+                script.stop(&mut keys, &mut mouse, reason);
+            }
+            return;
+        }
         Step::InspectLink {
             admission,
             message,
@@ -1873,8 +1897,7 @@ pub(super) fn drive(
             message,
             ordinal,
         } => {
-            if let Err(reason) = chat.compose_link((*admission, *message, *ordinal), online.world())
-            {
+            if let Err(reason) = chat.compose_link((*admission, *message, *ordinal), &online) {
                 script.stop(&mut keys, &mut mouse, reason);
             }
             return;
@@ -1887,7 +1910,7 @@ pub(super) fn drive(
                     &mut mouse,
                     "Item link composition needs the current admission",
                 );
-            } else if let Err(reason) = chat.compose_owned_link(*slot, world) {
+            } else if let Err(reason) = chat.compose_owned_link(*slot, &online) {
                 script.stop(&mut keys, &mut mouse, &reason);
             }
             return;
@@ -2052,6 +2075,7 @@ pub(super) fn drive(
             report::surroundings(&online, &observed);
             report::game_messages(&mut script.chat_seen, &chat);
             report::item_links(label, &online, &chat, &item);
+            report::dialogs(label, online.world());
             if let Some(flights) = observed.12.as_ref() {
                 flights.report(label, online.world().session_id());
             }
@@ -4550,6 +4574,72 @@ mod tests {
         assert_eq!(
             (request.session_id, request.own_id, request.item),
             (7, 9, item)
+        );
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn scripted_drop_click_cannot_open_confirmation_when_capability_is_withheld() {
+        use crate::{
+            confirm::Asked,
+            inventory::ground_drop::{DropButton, input},
+            online::{OnlineState, testing},
+            windows::{Shown, WindowId},
+        };
+        use eq_client_core::{
+            Capability, WorldEvent,
+            inventory::{InventorySlot, InventoryUpdate},
+        };
+
+        let (mut app, _) = background(vec![Step::Click(ClickTarget::Drop)]);
+        let mut online = OnlineState::new(true);
+        testing::news(
+            &mut online,
+            [WorldEvent::Entered {
+                capabilities: Capability::ALL
+                    .into_iter()
+                    .filter(|capability| *capability != Capability::GroundDropping)
+                    .collect(),
+                choices: vec![],
+                session_id: 7,
+                zone: "fixture".into(),
+                player: Box::new(testing::player(9)),
+                far_clip: None,
+                spell_landing_flag: None,
+            }],
+        );
+        testing::connect(&mut online, true);
+        testing::empty_carried_coins(&mut online);
+        let mut item = crate::preview::items().remove(0);
+        item.slot = InventorySlot::CURSOR;
+        item.bag_slots = 0;
+        item.stack_count = None;
+        item.rules.ground_drop_serial = std::num::NonZeroU32::new(17);
+        testing::inventory(&mut online, InventoryUpdate::Snapshot(vec![item]));
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        app.insert_resource(online)
+            .insert_resource(crate::outbox::Outbox::new(Some(sender)))
+            .init_resource::<Asked>()
+            .add_systems(Update, input);
+        app.world_mut()
+            .resource_mut::<Shown>()
+            .open(WindowId::Inventory);
+        let button = app
+            .world_mut()
+            .spawn((
+                Button,
+                DropButton,
+                laid_out(Vec2::new(240.0, 360.0), 40.0, 1),
+            ))
+            .id();
+
+        for ms in (0..=1_500).step_by(10) {
+            frame_at(&mut app, ms);
+            assert!(app.world().resource::<Asked>().question().is_none());
+        }
+        assert_eq!(
+            app.world().get::<Node>(button).unwrap().display,
+            Display::None
         );
         assert!(receiver.try_recv().is_err());
     }

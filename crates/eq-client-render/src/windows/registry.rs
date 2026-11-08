@@ -80,6 +80,10 @@ pub(crate) enum WindowId {
     /// The skin's confirmation dialog: a question to answer Yes or No, such
     /// as a resurrection's.
     Confirmation,
+    /// A quest or other dialog received from the server.
+    ServerDialog,
+    /// The equipment report received for a player.
+    PlayerInspection,
     /// The skin's note window: a note or scroll being read.
     Note,
     /// The skin's book window: a book being read, two pages at a time.
@@ -350,7 +354,7 @@ impl WindowId {
     /// Every singleton window, in the order the selector lists the toggled ones.
     /// Bags are left out: there is one for each slot that can hold a bag
     /// (see [`WindowId::bags`]), and none of them is toggled.
-    pub(crate) const ALL: [Self; 35] = [
+    pub(crate) const ALL: [Self; 37] = [
         Self::Status,
         Self::Target,
         Self::Player,
@@ -378,6 +382,8 @@ impl WindowId {
         Self::Training,
         Self::Skills,
         Self::Confirmation,
+        Self::ServerDialog,
+        Self::PlayerInspection,
         Self::Note,
         Self::Book,
         Self::WorldContainer,
@@ -431,7 +437,11 @@ impl WindowId {
             Self::Map => Some("MapViewWnd"),
             Self::Selector => Some("SelectorWindow"),
             Self::CharacterSelect => Some("CharacterSelectWindow"),
-            Self::Status | Self::Scripts | Self::Runbook => None,
+            Self::Status
+            | Self::Scripts
+            | Self::Runbook
+            | Self::ServerDialog
+            | Self::PlayerInspection => None,
         }
     }
 
@@ -492,6 +502,8 @@ impl WindowId {
             Self::Training => "training",
             Self::Skills => "skills",
             Self::Confirmation => "confirmation",
+            Self::ServerDialog => "server-dialog",
+            Self::PlayerInspection => "player-inspection",
             Self::Note => "note",
             Self::Book => "book",
             Self::WorldContainer => "world-container",
@@ -690,6 +702,29 @@ impl WindowId {
                 closes_on_escape: false,
                 persists: false,
                 ..floating("", Placement::TopLeft(550.0, 350.0), false, &[])
+            },
+            Self::ServerDialog => Description {
+                layer: Layer::Popup,
+                closes_on_escape: false,
+                persists: false,
+                ..floating(
+                    "",
+                    Placement::TopCentre {
+                        top: 80.0,
+                        width: 460.0,
+                    },
+                    false,
+                    &[],
+                )
+            },
+            Self::PlayerInspection => Description {
+                persists: false,
+                ..floating(
+                    "PLAYER INSPECTION",
+                    Placement::TopLeft(125.0, 105.0),
+                    false,
+                    &[],
+                )
             },
             // Where the skin places them; they open with a text to read.
             Self::Note => floating("", Placement::TopLeft(100.0, 80.0), false, &[]),

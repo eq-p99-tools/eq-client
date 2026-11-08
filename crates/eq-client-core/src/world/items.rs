@@ -6,7 +6,8 @@ use std::collections::{BTreeMap, VecDeque};
 /// forgotten first, never the newest.
 #[derive(Clone, Debug, Default)]
 pub struct ItemCache {
-    items: BTreeMap<u32, ItemDetails>,
+    items: BTreeMap<u32, (u64, ItemDetails)>,
+    revision: u64,
     /// Item IDs, the one kept longest first.
     order: VecDeque<u32>,
 }
@@ -18,7 +19,15 @@ impl ItemCache {
     /// The definition of an item, if the server sent it.
     #[must_use]
     pub fn get(&self, id: u32) -> Option<&ItemDetails> {
-        self.items.get(&id)
+        self.observation(id).map(|(_, item)| item)
+    }
+
+    /// Distinguishes a new response from the cached definition for the same ID.
+    #[must_use]
+    pub fn observation(&self, id: u32) -> Option<(u64, &ItemDetails)> {
+        self.items
+            .get(&id)
+            .map(|(revision, item)| (*revision, item))
     }
 
     /// How many definitions are kept now.
@@ -36,9 +45,10 @@ impl ItemCache {
     /// Keeps a definition; when full, forgets the one kept longest.
     pub(super) fn insert(&mut self, item: ItemDetails) {
         let id = item.id;
+        self.revision = self.revision.wrapping_add(1);
         self.order.retain(|kept| *kept != id);
         self.order.push_back(id);
-        self.items.insert(id, item);
+        self.items.insert(id, (self.revision, item));
         while self.items.len() > Self::CAPACITY {
             let Some(oldest) = self.order.pop_front() else {
                 break;

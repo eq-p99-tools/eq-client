@@ -427,7 +427,7 @@ pub(super) fn input(
                 }
             } else if ctrl {
                 if let Some(chat) = chat.as_deref_mut() {
-                    match chat.compose_owned_link(slot.0, online.world()) {
+                    match chat.compose_owned_link(slot.0, &online) {
                         Ok(()) => keys.p1().composing = true,
                         Err(reason) => chat.refuse(reason),
                     }

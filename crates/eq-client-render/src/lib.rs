@@ -18,6 +18,7 @@ use camera::{
 use gpu_assets::{create_material, create_render_primitives, create_texture_images};
 use scene_collision::{TerrainSurface, collision_triangles, collision_world, object_transform};
 pub use scene_collision::{propose_select_spot, zone_collision};
+pub use spell_provider::SightProvider;
 pub(crate) use systems::Stage;
 use systems::{init_presentation, install_overlays, schedule};
 
@@ -50,6 +51,7 @@ mod confirm;
 mod creation_preview;
 mod daylight;
 mod device_pixels;
+mod dialogs;
 mod display_report;
 mod doors;
 mod entities;
@@ -66,6 +68,7 @@ mod invisibility;
 mod item_models;
 mod items;
 mod keys;
+mod lighting;
 mod list_cells;
 mod loading;
 mod login;
@@ -718,7 +721,7 @@ fn setup_scene(
             // with no spawn to size it by.
             scale: 1.0,
         }
-        .prepare(settings.0.navmesh),
+        .prepare(settings.0.navmesh, false),
         settings.0.terrain_only,
         &mut online.regions,
     );
@@ -726,6 +729,7 @@ fn setup_scene(
     spawn_camera(&mut commands, placed, radius, settings.0.projection);
 }
 
+#[allow(clippy::too_many_lines)] // Keep the terrain and object material registration together.
 fn spawn_static_zone(
     commands: &mut Commands,
     zone: ZoneAsset,
@@ -735,6 +739,7 @@ fn spawn_static_zone(
     materials: &mut Assets<StandardMaterial>,
 ) {
     let texture_images = create_texture_images(zone.textures, images);
+    let mut lights = lighting::SceneLights::new(zone.short_name, zone.point_lights);
     let terrain = gpu_assets::create_terrain_primitives(
         zone.primitives,
         &zone.terrain_materials,
@@ -743,6 +748,7 @@ fn spawn_static_zone(
         materials,
     );
     for draw in terrain {
+        lights.surfaces.push(draw.material.clone());
         let mut entity = commands.spawn((
             SceneEntity,
             Mesh3d(draw.mesh),
@@ -754,6 +760,7 @@ fn spawn_static_zone(
     }
 
     if terrain_only {
+        commands.insert_resource(lights);
         commands.insert_resource(doors::Models::default());
         return;
     }
@@ -788,6 +795,9 @@ fn spawn_static_zone(
                     pick,
                 },
             );
+            lights
+                .surfaces
+                .extend(primitives.iter().map(|(_, material)| material.clone()));
             drawn_models.push(drawn);
             primitives
         })
@@ -831,6 +841,8 @@ fn spawn_static_zone(
             })
             .collect::<Vec<_>>(),
     );
+    lights.surfaces.extend(mirrored_materials.into_values());
+    commands.insert_resource(lights);
 }
 
 fn spawn_player_and_hud(
@@ -1559,6 +1571,7 @@ mod tests {
                     short_name: "test".to_owned(),
                     primitives: Vec::new(),
                     terrain_materials: Vec::new(),
+                    point_lights: Vec::new(),
                     textures: Vec::new(),
                     models: Vec::new(),
                     objects: Vec::new(),
@@ -1580,7 +1593,7 @@ mod tests {
                         native_head: None,
                         scale: 1.0,
                     }
-                    .prepare(false),
+                    .prepare(false, false),
                     true,
                     &mut eq_client_assets::regions::ZoneRegions::default(),
                 );

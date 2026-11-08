@@ -143,10 +143,11 @@ impl InventoryState {
                 inventory.received() && !inventory.stale(),
                 "Wait for current inventory before reading"
             );
+            let selection = eq_client_core::books::ReadSelection::capture(inventory, slot)?;
             sender.post(online.world(), |stamp| ClientCommand::ReadItem {
                 session_id: stamp.session_id,
                 revision: inventory.revision(),
-                slot,
+                selection: Box::new(selection),
                 created: stamp.created,
             })?;
             Ok(())
@@ -217,7 +218,7 @@ impl InventoryState {
                     .world()
                     .spawn(target_id)
                     .map(|spawn| &spawn.state)
-                    .is_some_and(|spawn| !spawn.invisible);
+                    .is_some_and(|spawn| online.world().can_see(spawn));
             // The Mac-era program drops invisibility before the item's own
             // checks, as for a gem's cast.
             self.said.extend(before());

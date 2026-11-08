@@ -228,3 +228,66 @@ fn full_outbox_keeps_the_old_target_and_self_target_needs_no_spawn_entry() {
     app.update();
     assert!(receive.try_recv().is_err());
 }
+
+#[test]
+fn map_target_uses_current_observer_sight_and_keeps_the_clip_limit() {
+    use eq_client_core::vision::Invisibility;
+    let (mut app, receive) = app();
+    let mut spawn = session::pet(2, 1);
+    spawn.position.x = 20.0;
+    spawn.appearance.titanium_gm = Some(0);
+    Invisibility::Titanium(1).apply(&mut spawn);
+    session::spawns(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        vec![spawn],
+    );
+    app.update();
+    pin(&mut app, 2);
+    let target = button(&mut app);
+    let sight = |session_id, sees_invisible| WorldEvent::ObserverSight {
+        session_id,
+        sees_invisible,
+    };
+    session::news(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        [sight(99, true)],
+    );
+    clicks::click(&mut app, target);
+    assert!(receive.try_recv().is_err());
+
+    let position = |x| WorldEvent::Position {
+        spawn_id: 2,
+        position: WorldPosition { x, ..default() },
+        velocity: [0.0; 3],
+        forward: 0.0,
+    };
+    session::news(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        [sight(1, true), position(200.0)],
+    );
+    clicks::click(&mut app, target);
+    assert!(receive.try_recv().is_err());
+
+    session::news(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        [position(20.0)],
+    );
+    clicks::click(&mut app, target);
+    assert!(matches!(
+        receive.try_recv().unwrap(),
+        ClientCommand::SelectTarget {
+            session_id: 1,
+            spawn_id: Some(2),
+            ..
+        }
+    ));
+    session::news(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        [sight(1, false)],
+    );
+    let world = app.world();
+    assert_eq!(
+        choice(world.resource::<OnlineState>(), world.resource::<MapView>()),
+        Err("This entity is invisible")
+    );
+}

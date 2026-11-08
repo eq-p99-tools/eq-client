@@ -10,7 +10,8 @@ use eq_network::{
     assets::Assets,
     client::{
         CancellationToken, Client, ClientConfig, ClientEvent, ClientIdentity, ConnectionState,
-        LoginError, PlayerAdmissionError, RecordEvent, RunOptions, ServerProtocol,
+        InstalledZoneBoundaries, LoginError, PlayerAdmissionError, RecordEvent, RunOptions,
+        ServerProtocol,
     },
 };
 use std::{
@@ -128,6 +129,7 @@ impl SessionWorker {
     /// # Errors
     /// Fails when the login's details cannot make a session, such as an
     /// account too long for the server type.
+    #[allow(clippy::too_many_lines)] // Keep startup, event forwarding and shutdown together.
     pub fn start(login: Login, options: &SessionOptions) -> Result<eq_client_render::Session> {
         let protocol = login.protocol;
         let client = client(login, options)?;
@@ -160,13 +162,24 @@ impl SessionWorker {
             options.reconnect = false;
             let result = (|| {
                 // A Titanium login sends what the installation's files hold.
-                let client = if protocol.is_titanium() {
-                    client.with_assets(Assets::scan_all(&install)?)?
+                let sight = protocol.is_titanium().then(|| {
+                    Arc::new(eq_client_render::SightProvider::load(
+                        spell_provider,
+                        &install,
+                    ))
+                });
+                let client = if let Some(sight) = &sight {
+                    client
+                        .with_assets(Assets::scan_all(&install)?)?
+                        .with_sight_catalog(sight.clone())
                 } else {
                     client
                 };
                 client.run_with_commands(&worker_cancel, options, &command_queue, |event| {
                     if let Some(fact) = spell_bridge.capture(&event)? {
+                        if let Some(sight) = &sight {
+                            sight.receive(&fact);
+                        }
                         enqueue(&sender, &worker_cancel, WorldUpdate::SpellTable(fact))?;
                     }
                     let update = match event {
@@ -386,6 +399,10 @@ fn client(login: Login, options: &SessionOptions) -> Result<Client> {
     config.port = login.port;
     config.local_only = options.local_only;
     config.auto_eat = options.auto_eat;
+    if login.protocol == ServerProtocol::Project1999 {
+        config.installed_zone_boundaries =
+            Some(Arc::new(InstalledRegions(options.install.clone())));
+    }
     // A Titanium client entering a watched world tells it what machine the
     // player entered it on, once a week: this machine's own account, made
     // when it is due and dated by the last one this client or the installed
@@ -408,6 +425,40 @@ fn client(login: Login, options: &SessionOptions) -> Result<Client> {
             identity_field(username.ok(), "PLAYER"),
         ),
     )
+}
+
+/// Uses the same installed terrain archive as the scene for the admitted
+/// zone. The session asks only when a boundary resolved within that zone.
+#[derive(Debug)]
+struct InstalledRegions(PathBuf);
+
+impl InstalledZoneBoundaries for InstalledRegions {
+    fn entered(
+        &self,
+        zone: &str,
+        from: eq_client_core::WorldPosition,
+        to: eq_client_core::WorldPosition,
+    ) -> Option<eq_client_core::ZoneLineDestination> {
+        use eq_client_assets::regions::ZoneLine;
+        use eq_client_core::{WorldPosition, ZoneLineDestination, render_position};
+
+        let regions = eq_client_assets::load_zone_regions(&self.0, zone).ok()?;
+        let entry = regions.zone_line_at(render_position(to))?;
+        if regions.zone_line_at(render_position(from)) == Some(entry) {
+            return None;
+        }
+        Some(match entry {
+            ZoneLine::Reference(number) => ZoneLineDestination::Reference(number),
+            ZoneLine::Absolute {
+                zone_id,
+                position: [x, y, z],
+                heading,
+            } => ZoneLineDestination::Absolute {
+                zone_id,
+                position: WorldPosition { x, y, z, heading },
+            },
+        })
+    }
 }
 
 fn observe_world(event: &WorldEvent, settings: Option<&std::path::Path>) {

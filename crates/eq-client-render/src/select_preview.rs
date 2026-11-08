@@ -151,7 +151,7 @@ pub(super) fn show(
                             race: look.race,
                             appearance: look.appearance,
                         };
-                        (entry.prepare(false), appearance, zone)
+                        (entry.prepare(false, false), appearance, zone)
                     },
                 )
             });

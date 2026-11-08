@@ -136,6 +136,7 @@ pub(super) fn schedule(app: &mut App) {
                 outfit::poll_materials,
                 entities::reconcile,
                 entities::interpolate,
+                crate::lighting::update,
                 character::lie,
                 doors::reconcile,
                 ground::reconcile,
@@ -273,6 +274,17 @@ pub(super) fn schedule(app: &mut App) {
         )
             .chain()
             .in_set(Stage::Input),
+    )
+    .add_systems(Update, crate::dialogs::buttons.in_set(Stage::Input))
+    .add_systems(
+        Update,
+        (
+            crate::dialogs::present,
+            crate::dialogs::inspect_button,
+            crate::dialogs::scroll,
+        )
+            .chain()
+            .in_set(Stage::Present),
     )
     .add_systems(
         Update,
@@ -504,6 +516,12 @@ pub(super) fn install_overlays(app: &mut App) {
     app.add_systems(
         Update,
         options::persist
+            .after(profile_files::follow)
+            .before(Stage::Scene),
+    );
+    app.add_systems(
+        Update,
+        crate::dialogs::sync_note
             .after(profile_files::follow)
             .before(Stage::Scene),
     );

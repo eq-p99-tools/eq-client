@@ -3,7 +3,12 @@ mod files;
 mod protocol;
 mod runbook;
 
-use std::{collections::VecDeque, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    collections::VecDeque,
+    path::PathBuf,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use bevy::{input_focus::InputFocus, prelude::*};
 use serde_json::{Value, json};
@@ -14,6 +19,7 @@ use crate::background::Background;
 use protocol::{Envelope, Operation};
 
 const POLL: Duration = Duration::from_millis(250);
+const EXCHANGE_STALL: Duration = Duration::from_secs(2);
 const HISTORY: usize = 16;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -137,9 +143,12 @@ pub(crate) struct Bridge {
     receipt: Option<Receipt>,
     current: Option<Tracked>,
     runbook: Option<runbook::Run>,
+    admission_id: Option<u64>,
+    export: runbook::export::Export,
     history: VecDeque<Snapshot>,
     protocol_error: Option<String>,
     io_error: Option<String>,
+    last_exchange: Option<Instant>,
     job: Background<Result<Option<Vec<u8>>, String>>,
 }
 
@@ -158,9 +167,12 @@ impl Bridge {
             receipt: None,
             current: None,
             runbook: None,
+            admission_id: None,
+            export: runbook::export::Export::default(),
             history: VecDeque::new(),
             protocol_error: None,
             io_error: None,
+            last_exchange: None,
             job: Background::default(),
         }
     }
@@ -263,13 +275,54 @@ impl Bridge {
         self.processed = Some((request, receipt));
     }
 
+    fn export_runbook(
+        &mut self,
+        runbook_id: u64,
+        request_id: Option<u64>,
+        admission_id: Option<u64>,
+    ) -> Result<(), &'static str> {
+        let run = self
+            .runbook
+            .as_ref()
+            .filter(|run| run.id == runbook_id)
+            .ok_or("runbook_changed")?;
+        self.export.queue(
+            self.writer.clone(),
+            run,
+            request_id,
+            &self.instance,
+            admission_id,
+        )
+    }
+
+    fn channel_health(&self) -> &'static str {
+        if self.closed {
+            "closed"
+        } else if self.io_error.is_some() {
+            "io_error"
+        } else if self
+            .last_exchange
+            .is_some_and(|last| last.elapsed() >= EXCHANGE_STALL)
+        {
+            "stalled"
+        } else if self.protocol_error.is_some() {
+            "request_error"
+        } else if self.last_exchange.is_some() {
+            "ready"
+        } else {
+            "waiting"
+        }
+    }
+
     fn snapshot(&self) -> Vec<u8> {
         serde_json::to_vec(&json!({"version":protocol::VERSION,"instance":self.instance,
             "client_state":if self.closed { "closed" } else { "open" },
             "revision":self.revision,"last_processed_id":self.processed.as_ref().map_or(0, |(request, _)| request.id),
             "last_request":self.receipt.as_ref().map(Receipt::json),
             "run":self.current.as_ref().map(|run| run.snapshot.json()),
+            "admission_id":self.admission_id,"control_health":self.channel_health(),
             "runbook":self.runbook.as_ref().map(runbook::Run::json),
+            "runbook_export":self.export.json(self.closed),
             "recent_runs":self.history.iter().map(Snapshot::json).collect::<Vec<_>>(),
             "protocol_error":self.protocol_error,"io_error":self.io_error})).expect("bounded control values serialize")
     }
@@ -281,6 +334,8 @@ impl Drop for Bridge {
             return;
         }
         self.closed = true;
+        self.admission_id = None;
+        self.export.poll();
         self.revision = self.revision.saturating_add(1);
         if let Some(current) = &mut self.current
             && !current.snapshot.terminal()
@@ -352,12 +407,16 @@ fn receive(
     mut focus: Option<ResMut<InputFocus>>,
 ) {
     observe_run(&mut bridge, script.as_deref(), &status);
+    let admission_id = runbook::admission_id(&online);
+    bridge.admission_id = admission_id;
+    bridge.export.poll();
     let Some(result) = bridge.job.poll(Some(0)) else {
         return;
     };
     let bytes = match result {
         Ok(bytes) => {
             bridge.io_error = None;
+            bridge.last_exchange = Some(Instant::now());
             bytes
         }
         Err(error) => {
@@ -405,11 +464,17 @@ fn receive(
             .runbook
             .as_mut()
             .ok_or("runbook_changed")
-            .and_then(|run| run.record(update))
+            .and_then(|run| run.record(request.id, update, admission_id))
         {
             Ok(()) => Receipt::new(request.id, "accepted", "runbook_result_recorded", None),
             Err(code) => Receipt::rejected(request.id, code),
         },
+        Operation::RunbookExport(id) => {
+            match bridge.export_runbook(*id, Some(request.id), admission_id) {
+                Ok(()) => Receipt::new(request.id, "accepted", "runbook_export_queued", None),
+                Err(code) => Receipt::rejected(request.id, code),
+            }
+        }
     };
     bridge.finish_request(request, receipt);
 }
@@ -485,9 +550,11 @@ fn publish(
     time: Res<Time<Real>>,
     script: Option<Res<Script>>,
     status: Res<RunStatus>,
+    online: Res<crate::online::OnlineState>,
     mut bridge: ResMut<Bridge>,
 ) {
     observe_run(&mut bridge, script.as_deref(), &status);
+    bridge.admission_id = runbook::admission_id(&online);
     if bridge.job.pending(Some(0)) || time.elapsed() < bridge.next_poll {
         return;
     }

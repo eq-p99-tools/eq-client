@@ -23,7 +23,7 @@ pub(super) fn target_command(
         let world = online.world();
         let pet = world
             .pet()
-            .filter(|pet| !pet.state.invisible)
+            .filter(|pet| world.can_see(&pet.state))
             .and(world.pet_intent())
             .ok_or("No visible pet to target")?;
         super::target::try_select(online, outbox, Some(pet.spawn_id), Some(pet))
@@ -105,7 +105,7 @@ mod tests {
             &mut online,
             [WorldEvent::Visibility {
                 spawn_id: 8,
-                invisible: true,
+                state: eq_client_core::vision::Invisibility::Titanium(1),
             }],
         );
         assert!(target_pet(&mut online).is_err());

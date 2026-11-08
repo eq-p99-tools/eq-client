@@ -1,10 +1,8 @@
-//! Text editing with atomic, admission-scoped item spans.
+//! Text editing with atomic item spans. Chat owns their scope.
 use eq_client_core::{GameDialect, ItemLink, chat::chat_link};
 use std::ops::Range;
 
 const MAX_TEXT: usize = 512;
-
-type Scope = (u64, GameDialect);
 
 #[derive(Default)]
 pub(super) struct Draft {
@@ -16,7 +14,6 @@ pub(super) struct Draft {
 
 struct Link {
     range: Range<usize>,
-    scope: Scope,
     wire: String,
 }
 
@@ -31,6 +28,14 @@ impl Draft {
 
     pub(super) fn has_links(&self) -> bool {
         !self.links.is_empty()
+    }
+
+    /// Preserve the visible draft and caret when its links lose their scope.
+    pub(super) fn demote_links(&mut self) {
+        if self.has_links() {
+            self.links.clear();
+            self.changed();
+        }
     }
 
     pub(super) fn clear(&mut self) {
@@ -74,12 +79,12 @@ impl Draft {
     pub(super) fn insert_link(
         &mut self,
         link: &ItemLink,
-        scope: Scope,
+        dialect: GameDialect,
     ) -> Result<(), &'static str> {
         if self.text.len() + link.text.len() > MAX_TEXT {
             return Err("This item link does not fit in the chat draft");
         }
-        let wire = chat_link(scope.1, link).map_err(|_| "This item link cannot be sent")?;
+        let wire = chat_link(dialect, link).map_err(|_| "This item link cannot be sent")?;
         let start = self.caret;
         self.insert(&link.text);
         let index = self
@@ -89,7 +94,6 @@ impl Draft {
             index,
             Link {
                 range: start..self.caret,
-                scope,
                 wire,
             },
         );
@@ -109,24 +113,17 @@ impl Draft {
     }
 
     /// Build the message input only at submission, keeping wire markup out of
-    /// the editor and checking that every token belongs to the current session.
-    pub(super) fn encoded(
-        &self,
-        admission: Option<u64>,
-        dialect: GameDialect,
-    ) -> Result<String, String> {
+    /// the editor. The caller checks the scope before encoding.
+    pub(super) fn encoded(&self) -> String {
         let mut wire = String::new();
         let mut end = 0;
         for link in &self.links {
-            if Some(link.scope.0) != admission || link.scope.1 != dialect {
-                return Err("This draft has an item link from a different admission".into());
-            }
             wire.push_str(&self.text[end..link.range.start]);
             wire.push_str(&link.wire);
             end = link.range.end;
         }
         wire.push_str(&self.text[end..]);
-        Ok(wire)
+        wire
     }
 
     pub(super) fn home(&mut self) {
@@ -223,12 +220,12 @@ mod tests {
 
     #[test]
     fn unicode_text_edits_and_atomic_deletion_keep_other_links_intact() {
-        let scope = (10, GameDialect::Titanium);
+        let dialect = GameDialect::Titanium;
         let mut draft = Draft::default();
         draft.insert_text("É");
-        draft.insert_link(&item(1, "First link"), scope).unwrap();
+        draft.insert_link(&item(1, "First link"), dialect).unwrap();
         draft.insert_text(" ");
-        draft.insert_link(&item(2, "Other link"), scope).unwrap();
+        draft.insert_link(&item(2, "Other link"), dialect).unwrap();
         draft.left();
         assert_eq!(draft.marked(), "ÉFirst link |Other link");
         draft.left();
@@ -238,20 +235,22 @@ mod tests {
         draft.delete();
         draft.insert_text("/auc ");
         assert_eq!(draft.text(), "/auc sword Other link");
-        let wire = draft.encoded(Some(10), scope.1).unwrap();
+        let wire = draft.encoded();
         assert!(wire.starts_with("/auc sword \x12000002"));
         assert!(wire.ends_with("abcd1234Other link\x12"));
         assert_eq!(wire.matches('\x12').count(), 2);
-        assert!(draft.encoded(Some(11), scope.1).is_err());
-        assert!(draft.encoded(Some(10), GameDialect::EqMac).is_err());
+        let marked = draft.marked();
+        draft.demote_links();
+        assert_eq!(draft.encoded(), "/auc sword Other link");
+        assert_eq!(draft.marked(), marked);
     }
 
     #[test]
     fn rejected_links_and_plain_controls_never_make_partial_markup() {
-        let scope = (10, GameDialect::Titanium);
+        let dialect = GameDialect::Titanium;
         let mut draft = Draft::default();
         draft.insert_text(&"x".repeat(MAX_TEXT - 1));
-        assert!(draft.insert_link(&item(1, "Too long"), scope).is_err());
+        assert!(draft.insert_link(&item(1, "Too long"), dialect).is_err());
         draft.insert_text("\x12🙂");
         assert_eq!(draft.text().len(), MAX_TEXT - 1);
         assert!(!draft.has_links());

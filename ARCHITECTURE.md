@@ -112,6 +112,11 @@ red respectively. The renderer uses the fixed type 6 gray (`#808080`) for
 a reported gray, which is outside the native ordinary NPC category map.
 Wire white aliases normalize to the same displayed color and use chat
 type 10. These program reads establish the unpatched Titanium path only.
+
+The received-color policy and representative phrases can differ from that
+path. The NPC consider recording case compares received color and faction,
+available player and target levels, and the official chat color and assessment
+for the same reply on Project 1999, including level deltas within a color.
 Project 1999's patched thresholds and the renderer's representative phrases
 still need comparison in the official clients.
 

@@ -647,3 +647,32 @@ pub(super) fn item_links(
         info!(label, admission, ?links, ?inspection, "Script item links");
     }
 }
+
+pub(super) fn dialogs(label: &str, world: &eq_client_core::world::ClientWorld) {
+    let Some(admission) = world.session_id().filter(|_| world.in_world()) else {
+        return;
+    };
+    let popup = world
+        .popup(std::time::Instant::now())
+        .map(|offer| (offer.serial, offer.popup.buttons));
+    let target = world
+        .target_intent()
+        .and_then(|state| Some((state.spawn_id?, state.revision)));
+    let inspection = world.player_inspection().map(|view| {
+        let equipment = view
+            .report
+            .equipment
+            .iter()
+            .filter(|slot| !slot.name.is_empty() || slot.icon.is_some())
+            .count();
+        (view.report.player_id, equipment)
+    });
+    info!(
+        label,
+        admission,
+        ?popup,
+        ?target,
+        ?inspection,
+        "Script dialog and inspection state"
+    );
+}

@@ -289,6 +289,7 @@ pub struct ClientWorld {
     bled_out: Option<i64>,
     pending_transfer: Option<ZoneOffer>,
     same_zone_relocation: Option<(u64, crate::SameZoneRelocation)>,
+    last_local_pad: Option<crate::LocalPadCrossing>,
     /// The resurrection offered and not yet answered.
     resurrection: Option<ConsentOffer<ResurrectionOffer>>,
     /// The translocate offered and not yet answered.
@@ -296,6 +297,9 @@ pub struct ClientWorld {
     /// The session's last reported disposition of a consent prompt.
     last_consent_close: Option<(ConsentId, ConsentClosure)>,
     last_consent_refusal: Option<ConsentId>,
+    popup: Option<crate::popups::PopupOffer>,
+    popup_serial: u64,
+    player_inspection: Option<crate::inspection::PlayerInspection>,
     /// The book or note open to read.
     reading: Option<crate::books::BookText>,
     /// The tradeskill container whose combine waits for the server.
@@ -555,6 +559,21 @@ impl ClientWorld {
         self.reading = None;
     }
 
+    /// Puts away the received equipment report.
+    pub fn close_player_inspection(&mut self) {
+        self.player_inspection = None;
+    }
+
+    fn clear_inspected_spawn(&mut self, id: u16) {
+        if self
+            .player_inspection
+            .as_ref()
+            .is_some_and(|view| view.report.player_id == id)
+        {
+            self.close_player_inspection();
+        }
+    }
+
     /// The player asked to open a world container; the server's answer opens
     /// it.
     pub fn ask_container(&mut self, drop_id: u32) {
@@ -740,7 +759,12 @@ impl ClientWorld {
                     news.ignored = true;
                 }
             }
-            WorldEvent::Death(death) => return self.died(death, now),
+            WorldEvent::Death(death) => {
+                if let Ok(id) = u16::try_from(death.spawn_id) {
+                    self.clear_inspected_spawn(id);
+                }
+                return self.died(death, now);
+            }
             WorldEvent::DeathBind { session_id } => {
                 if self.session_id != Some(*session_id) {
                     return Changes { ignored: true, ..Changes::default() };
@@ -772,6 +796,9 @@ impl ClientWorld {
             WorldEvent::SameZoneRelocated(relocation) => {
                 self.same_zone_relocated(*relocation, now, news);
             }
+            WorldEvent::LocalPadCrossed(crossing) => {
+                self.local_pad_crossed(*crossing, now, news);
+            }
             WorldEvent::Camp(status) => return self.camp_news(status, now),
             // A sound the server names, for the front end to play.
             WorldEvent::Effect(crate::effects::Effect::Sound(cue)) => news.sounds.push(cue.clone()),
@@ -782,6 +809,41 @@ impl ClientWorld {
                     news.marquee = Some(marquee.clone());
                 } else {
                     news.ignored = true;
+                }
+            }
+            WorldEvent::PopupOpened(offer) => {
+                if self.in_world() && self.accepts_reply(offer.session_id) && offer.serial > self.popup_serial {
+                    self.popup_serial = offer.serial;
+                    self.popup = Some(offer.clone());
+                } else {
+                    news.ignored = true;
+                }
+            }
+            WorldEvent::PopupClosed { session_id, serial } => {
+                if self.accepts_reply(*session_id)
+                    && self.popup.as_ref().is_some_and(|offer| offer.serial == *serial)
+                {
+                    self.popup = None;
+                }
+            }
+            WorldEvent::PlayerInspection(view) => {
+                let id = view.report.player_id;
+                let target_matches = if self.is_player(id) {
+                    self.player().is_some_and(|player| player.name == view.name)
+                } else {
+                    self.spawn(id).is_some_and(|spawn| {
+                        spawn.state.kind == crate::SpawnKind::Player && spawn.state.name == view.name
+                    })
+                };
+                if self.in_world() && self.accepts_reply(view.session_id) && self.is_player(view.report.recipient_id) && target_matches {
+                    self.player_inspection = Some(view.clone());
+                } else {
+                    news.ignored = true;
+                }
+            }
+            WorldEvent::PlayerInspectionRefused { session_id, reason } => {
+                if self.accepts_reply(*session_id) {
+                    news.notices.push(Notice::PlayerInspectionRefused(reason.clone()));
                 }
             }
 
@@ -829,11 +891,10 @@ impl ClientWorld {
             // effects the server plays besides sound and flight: a spell's
             // nimbus, particles and camera shake. The official client's
             // sound for a quest's ding is
-            // not known, so it stays silent (inferred, item 6.273). A popup,
-            // a yell for help, a voice macro, a request to inspect the
-            // player and a duel wait for their front ends too; until one
-            // answers, a popup, an inspection and a challenge go unanswered, as
-            // they did unread. The guild's members and their changes, and an
+            // not known, so it stays silent (inferred, item 6.273). A yell
+            // for help, voice macro and duel wait for their front ends.
+            // Popups and inspections use the worker's scoped events.
+            // The guild's members and their changes, and an
             // invitation to join or rise in it, wait for a guild window; until
             // one answers, an invitation goes unanswered. Newly earned titles
             // wait for a window to choose one from, and what a game master did
@@ -863,6 +924,7 @@ impl ClientWorld {
             | WorldEvent::YellForHelp { .. }
             | WorldEvent::VoiceMacro(_)
             | WorldEvent::InspectRequest { .. }
+            | WorldEvent::InspectAnswer(_)
             | WorldEvent::Duel(_)
             | WorldEvent::Guild(_)
             | WorldEvent::NewTitles
@@ -874,10 +936,14 @@ impl ClientWorld {
 
             // The zone and what is in it.
             WorldEvent::Spawns(spawns) => {
+                for spawn in spawns {
+                    self.clear_inspected_spawn(spawn.spawn_id);
+                }
                 self.zone.appear(spawns, &mut self.revision, now);
                 self.reconcile_pet_buffs();
             }
             WorldEvent::Despawn(id) => {
+                self.clear_inspected_spawn(*id);
                 self.zone.vanish(*id);
                 self.reconcile_pet_buffs();
             }
@@ -925,8 +991,13 @@ impl ClientWorld {
             } => self.target_refused((*session_id, *request_id, *spawn_id), *state, reason, news),
             WorldEvent::Visibility {
                 spawn_id,
-                invisible,
-            } => self.zone.visibility(*spawn_id, *invisible),
+                state,
+            } => self.zone.visibility(*spawn_id, *state),
+            WorldEvent::ObserverSight { session_id, sees_invisible } => {
+                if self.session_id == Some(*session_id) {
+                    self.zone.sees_invisible = *sees_invisible;
+                }
+            }
             // How a spawn shows, its name and where a corpse lies are kept
             // in the zone's table, as the session keeps them; a spawn already
             // drawn shows an illusion or a new size when it is drawn anew. A
@@ -1562,6 +1633,8 @@ impl ClientWorld {
         self.reading = None;
         self.resurrection = None;
         self.translocate = None;
+        self.popup = None;
+        self.player_inspection = None;
         if reason != Reset::Died {
             self.camp = None;
             self.camp_to = crate::camp::CampTo::default();
@@ -1659,7 +1732,9 @@ impl ClientWorld {
         self.items = ItemCache::default();
         self.pending_transfer = None;
         self.same_zone_relocation = None;
+        self.last_local_pad = None;
         self.reading = None;
+        self.popup_serial = 0;
         self.combining = None;
         self.group = None;
         self.group_invitation = None;

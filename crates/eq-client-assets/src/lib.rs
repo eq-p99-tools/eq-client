@@ -6,6 +6,7 @@ pub mod clock;
 pub mod falls;
 pub mod items;
 pub mod keys;
+pub mod lighting;
 pub mod maps;
 pub mod merchants;
 pub mod names;
@@ -134,6 +135,8 @@ pub struct ZoneAsset {
     pub primitives: Vec<ZonePrimitive>,
     /// Authored terrain material properties, in the order of `primitives`.
     pub terrain_materials: Vec<TerrainMaterial>,
+    /// Installed WLD point lights in the zone's renderer frame.
+    pub point_lights: Vec<lighting::PlacedLight>,
     /// Deduplicated diffuse textures used by `primitives`.
     pub textures: Vec<ZoneTexture>,
     /// Reusable static models referenced by placed objects.
@@ -283,6 +286,23 @@ pub fn load_zone_collision(eq_directory: &Path, short_name: &str) -> Result<Zone
     })
 }
 
+/// Loads just the spatial regions from the classic zone archive used by the
+/// scene. A boundary lookup needs neither textures nor placed objects.
+///
+/// # Errors
+/// As [`load_zone`], for the terrain archive and WLD regions.
+pub fn load_zone_regions(
+    eq_directory: &Path,
+    short_name: &str,
+) -> Result<regions::ZoneRegions, LoadError> {
+    let short_name = zone_name(short_name)?;
+    guarded(short_name, || {
+        let (_, name, bytes) = zone_world(eq_directory, short_name)?;
+        let doc = wld_document(&bytes, &name)?;
+        regions::ZoneRegions::from_doc(&doc)
+    })
+}
+
 /// Whether a zone's read decodes its drawn geometry and textures.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Textures {
@@ -312,11 +332,10 @@ fn guarded<T>(
     })
 }
 
-fn read_zone(
+fn zone_world(
     eq_directory: &Path,
     short_name: &str,
-    textures_read: Textures,
-) -> Result<ZoneAsset, LoadError> {
+) -> Result<(PfsReader<File>, String, Vec<u8>), LoadError> {
     let archive_path = eq_directory.join(format!("{short_name}.s3d"));
     let file = File::open(&archive_path).map_err(|source| LoadError::OpenArchive {
         path: archive_path,
@@ -327,8 +346,34 @@ fn read_zone(
     let world_bytes = archive
         .get(&world_name)?
         .ok_or_else(|| LoadError::MissingWorld(world_name.clone()))?;
+    Ok((archive, world_name, world_bytes))
+}
+
+fn read_zone(
+    eq_directory: &Path,
+    short_name: &str,
+    textures_read: Textures,
+) -> Result<ZoneAsset, LoadError> {
+    let (mut archive, world_name, world_bytes) = zone_world(eq_directory, short_name)?;
     let (doc, world) = parse_wld(&world_bytes, &world_name)?;
     let regions = regions::ZoneRegions::from_doc(&doc)?;
+    let point_lights = if textures_read == Textures::Realize {
+        let supplemental = archive
+            .get("lights.wld")
+            .ok()
+            .flatten()
+            .and_then(|bytes| libeq::wld::parser::WldDoc::parse(&bytes).ok());
+        let supplemental_lights = supplemental
+            .as_ref()
+            .map_or_else(Vec::new, lighting::placed);
+        if supplemental_lights.is_empty() {
+            lighting::placed(&doc)
+        } else {
+            supplemental_lights
+        }
+    } else {
+        Vec::new()
+    };
 
     let mut textures = Vec::new();
     let mut texture_indices = HashMap::<String, usize>::new();
@@ -372,6 +417,7 @@ fn read_zone(
         short_name: short_name.to_owned(),
         primitives,
         terrain_materials,
+        point_lights,
         textures,
         models,
         objects,
@@ -516,11 +562,15 @@ fn parse_wld(
     bytes: &[u8],
     name: &str,
 ) -> Result<(libeq::wld::parser::WldDoc, libeq::wld::Wld), LoadError> {
-    let doc = libeq::wld::parser::WldDoc::parse(bytes)
-        .map_err(|_| LoadError::ParseWorld(format!("{name} could not be parsed")))?;
+    let doc = wld_document(bytes, name)?;
     let world =
         libeq::wld::load(bytes).map_err(|error| LoadError::ParseWorld(error.to_string()))?;
     Ok((doc, world))
+}
+
+fn wld_document(bytes: &[u8], name: &str) -> Result<libeq::wld::parser::WldDoc, LoadError> {
+    libeq::wld::parser::WldDoc::parse(bytes)
+        .map_err(|_| LoadError::ParseWorld(format!("{name} could not be parsed")))
 }
 
 fn load_object_placements(

@@ -26,31 +26,49 @@ pub enum LiquidContact {
 }
 
 impl CollisionWorld {
-    /// Classifies the body from local region data. The midpoint is the
-    /// movement threshold; head contact does not establish breath state.
+    /// Uses the admitted Titanium actor origin for wet movement. The
+    /// program probes the transmitted origin at 0x489b0a and stores the
+    /// body region through 0x47cae6. The offset is measured from our soles.
+    #[must_use]
+    pub fn with_swim_origin(mut self, offset: f32) -> Self {
+        self.swim_origin = Some(offset);
+        self
+    }
+
+    fn swim_probe(&self, height: f32) -> Vec3 {
+        Vec3::Y * self.swim_origin.unwrap_or(height * 0.5)
+    }
+
+    /// Classifies the local collision body's sampled points. The
+    /// separately resolved native head reference determines breath state.
     #[must_use]
     pub fn liquid_contact(&self, feet: Vec3, height: f32) -> LiquidContact {
-        if self.liquids.is_none() || !feet.is_finite() || !height.is_finite() || height < 1.0 {
+        let Some(liquids) = &self.liquids else {
+            return LiquidContact::Unknown;
+        };
+        if !feet.is_finite() || !height.is_finite() || height < 1.0 {
             return LiquidContact::Unknown;
         }
-        let soles = self.liquid_at(feet + Vec3::Y * SOLES);
-        if soles == Some(Liquid::Lava) {
-            LiquidContact::Lava
-        } else if self.liquid_at(feet + Vec3::Y * (height * 0.5)) == Some(Liquid::Water) {
-            let depth = if self.liquid_at(feet + Vec3::Y * height) == Some(Liquid::Water) {
-                SwimDepth::Submerged
-            } else {
-                SwimDepth::Surface
-            };
-            LiquidContact::Swimming(depth)
-        } else if soles == Some(Liquid::Water) {
-            LiquidContact::Wading
-        } else {
-            LiquidContact::Unmarked
+        let soles = feet + Vec3::Y * SOLES;
+        let origin = feet + self.swim_probe(height);
+        let head = feet + Vec3::Y * height;
+        match (liquids.liquid_at(soles), liquids.liquid_at(origin)) {
+            (Some(Liquid::Lava), _) => LiquidContact::Lava,
+            (_, Some(Liquid::Water)) => match liquids.liquid_at(head) {
+                Some(Liquid::Water) => LiquidContact::Swimming(SwimDepth::Submerged),
+                _ if liquids.region_known(head) => LiquidContact::Swimming(SwimDepth::Surface),
+                _ => LiquidContact::Unknown,
+            },
+            _ if !liquids.region_known(soles) || !liquids.region_known(origin) => {
+                LiquidContact::Unknown
+            }
+            (Some(Liquid::Water), _) => LiquidContact::Wading,
+            _ => LiquidContact::Unmarked,
         }
     }
 
-    /// Whether a local position can use swim strokes, including after a correction.
+    /// The collision body's water depth when both wet origin and head
+    /// region resolve. This is independent of the native breath probe.
     #[must_use]
     pub fn swim_depth(&self, feet: Vec3, height: f32) -> Option<SwimDepth> {
         match self.liquid_contact(feet, height) {
@@ -59,15 +77,26 @@ impl CollisionWorld {
         }
     }
 
+    /// Whether a local position can use swim strokes, including after a
+    /// correction. A missing head sample does not change a known wet origin.
+    #[must_use]
+    pub fn in_swimmable_water(&self, feet: Vec3, height: f32) -> bool {
+        feet.is_finite()
+            && height.is_finite()
+            && height >= 1.0
+            && self.liquid_at(feet + self.swim_probe(height)) == Some(Liquid::Water)
+            && self.liquid_at(feet + Vec3::Y * SOLES) != Some(Liquid::Lava)
+    }
+
     /// Shortens an ordinary move to the first swimmable part of its path.
     /// The prefix test sees BSP leaves that an endpoint-only test could skip.
     pub(super) fn water_entry(&self, from: Vec3, to: Vec3, height: f32) -> Option<Vec3> {
         let water = self.liquids.as_ref()?;
-        if self.swim_depth(from, height).is_some() {
+        if self.in_swimmable_water(from, height) {
             return Some(from);
         }
-        let middle = Vec3::Y * (height * 0.5);
-        let crosses = |at| water.passes_through(from + middle, at + middle, Liquid::Water);
+        let probe = self.swim_probe(height);
+        let crosses = |at| water.passes_through(from + probe, at + probe, Liquid::Water);
         if !crosses(to) {
             return None;
         }
@@ -85,7 +114,7 @@ impl CollisionWorld {
             .into_iter()
             .map(|t| from.lerp(to, t))
             .find(|&point| {
-                self.swim_depth(point, height).is_some()
+                self.in_swimmable_water(point, height)
                     && !water.passes_through(
                         from + Vec3::Y * SOLES,
                         point + Vec3::Y * SOLES,
@@ -102,7 +131,7 @@ impl CollisionWorld {
     /// The result stays in water or reaches a supported bank under its feet.
     #[must_use]
     pub fn swim_step(&self, feet: Vec3, delta: Vec3, height: f32) -> Vec3 {
-        if self.swim_depth(feet, height).is_none()
+        if !self.in_swimmable_water(feet, height)
             || !delta.is_finite()
             || delta.length_squared() <= 1e-10
         {
@@ -112,7 +141,7 @@ impl CollisionWorld {
             return feet;
         };
         let position = self.limit_swim(feet, contact, height);
-        if self.swim_depth(position, height).is_none() {
+        if !self.in_swimmable_water(position, height) {
             return position;
         }
         let remaining = delta - (position - feet);
@@ -149,9 +178,8 @@ impl CollisionWorld {
         };
         let soles = Vec3::Y * SOLES;
         let lava = |at| liquids.passes_through(from + soles, at + soles, Liquid::Lava);
-        let middle = Vec3::Y * (height * 0.5);
-        let to = if let Some(gap) = liquids.first_outside(from + middle, to + middle, Liquid::Water)
-        {
+        let probe = self.swim_probe(height);
+        let to = if let Some(gap) = liquids.first_outside(from + probe, to + probe, Liquid::Water) {
             if gap.is_empty() {
                 return from;
             }
@@ -166,7 +194,7 @@ impl CollisionWorld {
                 return shore;
             }
             edge
-        } else if self.swim_depth(to, height).is_some() && !lava(to) {
+        } else if self.in_swimmable_water(to, height) && !lava(to) {
             return to;
         } else {
             to
@@ -174,10 +202,10 @@ impl CollisionWorld {
         // Interpolation back to f32 can round the edge onto the far side
         // of a very thin gap. Validate the actual proposed point as well.
         let clear = |point| {
-            self.swim_depth(point, height).is_some()
+            self.in_swimmable_water(point, height)
                 && !lava(point)
                 && liquids
-                    .first_outside(from + middle, point + middle, Liquid::Water)
+                    .first_outside(from + probe, point + probe, Liquid::Water)
                     .is_none()
         };
         if clear(to) {
@@ -206,18 +234,24 @@ impl CollisionWorld {
     ) -> Option<Vec3> {
         let (mut wet, mut dry) = (gap.start, f64::midpoint(gap.start, gap.end));
         let edge = at(wet);
-        if self.swim_depth(edge, height).is_none() {
+        let wade_or_walk = |point| {
+            matches!(
+                self.liquid_contact(point, height),
+                LiquidContact::Wading | LiquidContact::Unmarked
+            )
+        };
+        if wade_or_walk(edge) {
             return Some(edge);
         }
-        if self.swim_depth(at(dry), height).is_some() {
+        if !wade_or_walk(at(dry)) {
             return None;
         }
         for _ in 0..32 {
             let middle = f64::midpoint(wet, dry);
-            if self.swim_depth(at(middle), height).is_some() {
-                wet = middle;
-            } else {
+            if wade_or_walk(at(middle)) {
                 dry = middle;
+            } else {
+                wet = middle;
             }
         }
         let shore = at(dry);
@@ -245,6 +279,32 @@ mod tests {
             Vec3::new(20.0, 0.0, 20.0),
             Liquid::Water,
         )
+    }
+
+    #[test]
+    fn titanium_water_entry_and_surfacing_use_the_origin_above_the_soles() {
+        let world = CollisionWorld::new(flat(-12.0))
+            .unwrap()
+            .with_liquids(Boxes(vec![water()]));
+        let start = Vec3::new(5.0, -3.5, 0.0);
+        let admitted = world.clone().with_swim_origin(4.0);
+        assert!(world.in_swimmable_water(start, HEIGHT));
+        assert_eq!(
+            admitted.liquid_contact(start, HEIGHT),
+            LiquidContact::Wading
+        );
+        let entry = admitted
+            .water_entry(start, start + Vec3::NEG_Y, HEIGHT)
+            .unwrap();
+        assert!((-4.001..=-4.0).contains(&entry.y));
+        assert_eq!(admitted.swim_depth(entry, HEIGHT), Some(SwimDepth::Surface));
+        let below = entry + Vec3::NEG_Y * 3.0;
+        assert_eq!(
+            admitted.swim_depth(below, HEIGHT),
+            Some(SwimDepth::Submerged)
+        );
+        let surface = admitted.swim_step(below, Vec3::Y * 4.0, HEIGHT);
+        assert!((-4.001..=-4.0).contains(&surface.y));
     }
 
     #[test]

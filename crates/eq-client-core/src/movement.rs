@@ -143,6 +143,7 @@ pub struct CollisionWorld {
     obstacles: Vec<(Option<u8>, Arc<CollisionMesh>)>,
     liquids: Option<Arc<dyn Liquids>>,
     liquid_support: bool,
+    swim_origin: Option<f32>,
 }
 
 impl CollisionWorld {
@@ -156,6 +157,7 @@ impl CollisionWorld {
             obstacles: Vec::new(),
             liquids: None,
             liquid_support: false,
+            swim_origin: None,
         })
     }
 
@@ -187,6 +189,7 @@ impl CollisionWorld {
                 .collect(),
             liquids: self.liquids.clone(),
             liquid_support: self.liquid_support,
+            swim_origin: self.swim_origin,
         }
     }
 
@@ -212,6 +215,7 @@ impl CollisionWorld {
                 .collect(),
             liquids: self.liquids.clone(),
             liquid_support: self.liquid_support,
+            swim_origin: self.swim_origin,
         }
     }
 
@@ -507,7 +511,7 @@ impl CollisionWorld {
             position = next;
             if !moved
                 || wet
-                || liquids == LiquidGuard::Lava && self.swim_depth(position, height).is_some()
+                || liquids == LiquidGuard::Lava && self.in_swimmable_water(position, height)
             {
                 break;
             }

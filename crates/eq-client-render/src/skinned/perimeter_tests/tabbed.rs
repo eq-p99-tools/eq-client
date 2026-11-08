@@ -216,20 +216,22 @@ fn default_size_wrapped_qol_keeps_the_heading_and_speed_control_in_view() {
     use crate::windows::pointer::{LINE_PIXELS, Wheel};
     use eq_client_core::options::Level;
 
-    // Two tab rows take 40 pixels. The generated canvas needs 394 pixels.
-    for (height, expected_scroll) in [(432.0, 2.0), (440.0, 0.0)] {
+    // Exercise the default-sized window and a slightly taller variant.
+    for height in [432.0, 440.0] {
+        let size = Vec2::new(395.0, height);
+        let tab_box = two_row_options();
+        let page_frame = tab_box.page_frame.as_ref();
+        let particles = super::super::particles::pages(&tab_box.pages, WindowId::Options);
+        let pages = super::super::qol::pages(&particles, WindowId::Options, size, page_frame);
+        let content = super::super::qol::content_height(pages.last().unwrap()).unwrap();
+        let insets = frame::insets(page_frame.unwrap());
         let (_, pixels) = fixture();
         let mut app = app(1.0, pixels);
         crate::clicks::testing::install(&mut app);
         app.init_resource::<Tabs>()
             .init_resource::<Wheel>()
             .add_systems(Update, (tabs, controls::scroll_lists));
-        let (_, controls) = spawn_tab_box(
-            &mut app,
-            WindowId::Options,
-            two_row_options(),
-            Vec2::new(395.0, height),
-        );
+        let (_, controls) = spawn_tab_box(&mut app, WindowId::Options, tab_box, size);
         // Stand in for measured tab text at a width where eight fit in the
         // first row and only the new QoL tab wraps.
         for (_, entity) in &controls {
@@ -278,9 +280,8 @@ fn default_size_wrapped_qol_keeps_the_heading_and_speed_control_in_view() {
                 );
             }
         };
-        // The slider is fully visible on opening, so a script does not need
-        // to wheel down to click it. A wheel notch still cannot hide the
-        // heading when only the last few pixels of the margin lie below.
+        let max_scroll = (content + insets.top + insets.bottom - view.height()).max(0.0);
+        // At the default size the opening view includes both controls.
         assert_visible(app.world());
         *app.world_mut().resource_mut::<Wheel>() = Wheel {
             surface: Some(page),
@@ -292,7 +293,7 @@ fn default_size_wrapped_qol_keeps_the_heading_and_speed_control_in_view() {
         app.update();
         assert_visible(app.world());
         let scroll = app.world().get::<ScrollPosition>(page).unwrap().y;
-        assert!((scroll - expected_scroll).abs() < 0.01);
+        assert!((scroll - max_scroll.min(LINE_PIXELS)).abs() < 0.01);
     }
 }
 

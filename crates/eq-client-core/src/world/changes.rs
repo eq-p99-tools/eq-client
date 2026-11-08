@@ -116,6 +116,8 @@ pub struct Changes {
     pub placed: Option<WorldPosition>,
     /// This placement was a received same-zone move.
     pub same_zone_relocation: bool,
+    /// A local WLD pad moved the player inside this admission.
+    pub local_pad: Option<crate::LocalPadCrossing>,
     /// The login server listed its worlds, or refused the one chosen.
     pub servers: bool,
     /// The world server offered characters to play.

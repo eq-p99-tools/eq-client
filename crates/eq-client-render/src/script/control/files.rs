@@ -12,7 +12,9 @@ use bevy::tasks::{AsyncComputeTaskPool, TaskPool};
 use super::protocol::MAX_REQUEST_BYTES;
 
 // Keep the original executor budget and allow a full checklist alongside it.
-pub(super) const MAX_STATUS_BYTES: usize = (128 + 48) * 1024;
+const MAX_EXPORT_BYTES: usize = 64 * 1024;
+pub(super) const MAX_STATUS_BYTES: usize = 128 * 1024 + MAX_EXPORT_BYTES;
+pub(super) const RUNBOOK_EXPORT: &str = "runbook-export.json";
 
 /// Serializes the last background exchange with final shutdown publication.
 #[derive(Clone)]
@@ -35,6 +37,21 @@ impl Writer {
             return Err("Control writer is closed".into());
         }
         exchange(&self.root, status)
+    }
+
+    pub(super) fn export_runbook(&self, bytes: &[u8]) -> Result<(), String> {
+        let closed = self.closed.lock().map_err(|_| "Control writer failed")?;
+        if *closed {
+            return Err("Control writer is closed".into());
+        }
+        publish_file(
+            &self.root,
+            RUNBOOK_EXPORT,
+            "runbook-export.json.tmp",
+            bytes,
+            MAX_EXPORT_BYTES,
+        )
+        .map_err(|error| format!("Cannot export runbook: {error}"))
     }
 
     /// Called as the app is destroyed, after frame execution has stopped.
@@ -106,22 +123,38 @@ fn read(root: &Path) -> io::Result<Option<Vec<u8>>> {
 }
 
 fn publish(root: &Path, status: &[u8]) -> io::Result<()> {
-    if status.len() > MAX_STATUS_BYTES {
+    publish_file(
+        root,
+        "status.json",
+        "status.json.tmp",
+        status,
+        MAX_STATUS_BYTES,
+    )
+}
+
+fn publish_file(
+    root: &Path,
+    name: &str,
+    temporary_name: &str,
+    bytes: &[u8],
+    limit: usize,
+) -> io::Result<()> {
+    if bytes.len() > limit {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "Status exceeds its size limit",
+            "Control output exceeds its size limit",
         ));
     }
-    let temporary = root.join("status.json.tmp");
+    let temporary = root.join(temporary_name);
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&temporary)?;
     let result = (|| {
-        file.write_all(status)?;
+        file.write_all(bytes)?;
         file.sync_all()?;
         drop(file);
-        fs::rename(&temporary, root.join("status.json"))
+        fs::rename(&temporary, root.join(name))
     })();
     if result.is_err() {
         let _ = fs::remove_file(temporary);
