@@ -76,7 +76,9 @@ fn capture() {
 
 fn set_age(banners: &mut Banners, seconds: u64) {
     // Vary elapsed time without waiting for the GPU or changing the product clock.
-    banners.active.as_mut().unwrap().0 = Instant::now() - Duration::from_secs(seconds);
+    banners.active.as_mut().unwrap().0 = Instant::now()
+        .checked_sub(Duration::from_secs(seconds))
+        .expect("fixture age is representable");
 }
 
 #[allow(clippy::needless_pass_by_value)]

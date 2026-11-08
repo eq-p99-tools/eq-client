@@ -200,6 +200,38 @@ impl Sounds {
         }
     }
 
+    /// Collect completed reads and count the jobs still using read slots.
+    fn poll_reads(&mut self, sources: &mut Assets<AudioSource>) -> usize {
+        let mut ready = 0;
+        let mut reading = 0;
+        for clip in self.clips.values_mut() {
+            let Clip::Reading(job) = clip else { continue };
+            let Some(result) = job.poll(Some(0)) else {
+                reading += 1;
+                continue;
+            };
+            *clip = match result {
+                Ok(Some((source, seconds))) => {
+                    let bytes = source.bytes.len();
+                    ready += bytes;
+                    Clip::Ready {
+                        bytes,
+                        seconds,
+                        source: sources.add(source),
+                        played: 0,
+                    }
+                }
+                Ok(None) => Clip::Missing,
+                Err(error) => {
+                    warn!("a sound will not play: {error}");
+                    Clip::Missing
+                }
+            };
+        }
+        self.kept += ready;
+        reading
+    }
+
     /// Lets go of the least recently played files until those kept fit the
     /// budget. A sound playing keeps its own hold on its file.
     fn trim(&mut self) {
@@ -350,33 +382,7 @@ pub(super) fn update(
         return;
     };
     let sounds = &mut *sounds;
-    let mut ready = 0;
-    let mut reading = 0;
-    for clip in sounds.clips.values_mut() {
-        let Clip::Reading(job) = clip else { continue };
-        let Some(result) = job.poll(Some(0)) else {
-            reading += 1;
-            continue;
-        };
-        *clip = match result {
-            Ok(Some((source, seconds))) => {
-                let bytes = source.bytes.len();
-                ready += bytes;
-                Clip::Ready {
-                    bytes,
-                    seconds,
-                    source: sources.add(source),
-                    played: 0,
-                }
-            }
-            Ok(None) => Clip::Missing,
-            Err(error) => {
-                warn!("a sound will not play: {error}");
-                Clip::Missing
-            }
-        };
-    }
-    sounds.kept += ready;
+    let mut reading = sounds.poll_reads(&mut sources);
     let ears = listener.iter().next().map(GlobalTransform::translation);
     let mut voices = 0;
     let mut mp3_voices = 0;
