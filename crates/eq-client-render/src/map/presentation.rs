@@ -34,7 +34,9 @@ impl Default for Options {
             opacity: 100,
             plain: false,
             locked: false,
-            outlines: true,
+            // Drawing tracked models through scenery departs from the official
+            // client, so it is opt-in and gated on gameplay departures.
+            outlines: false,
         }
     }
 }
@@ -90,8 +92,8 @@ impl Presentation {
         self.options.plain
     }
 
-    /// Tracking normally outlines matching scene models. This option only
-    /// controls the scene presentation.
+    /// Whether the player opted in to outlining tracked scene models through
+    /// scenery. The scene also requires gameplay departures.
     pub(crate) fn outlines(&self) -> bool {
         self.options.outlines
     }
@@ -307,7 +309,7 @@ pub(super) fn chrome(parent: &mut ChildSpawnerCommands) {
                 Action::Outlines,
                 button("3D On"),
                 Tooltip(
-                    "Show an outline of tracked names through scenery in the main view.".into(),
+                    "Show an outline of tracked names through scenery in the main view (a gameplay departure, off by default).".into(),
                 ),
             ));
         });
@@ -323,9 +325,10 @@ mod tests {
             opacity: 30,
             plain: true,
             locked: true,
-            outlines: false,
+            outlines: true,
         };
         assert_eq!(Options::read(&options.text()), options);
+        assert!(!Options::default().outlines);
         assert_eq!(
             Options::read("opacity=-20\nplain=invalid"),
             Options::default()

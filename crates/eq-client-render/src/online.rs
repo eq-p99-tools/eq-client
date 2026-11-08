@@ -30,7 +30,7 @@ pub(super) struct OnlineState {
     pub regions: eq_client_assets::regions::ZoneRegions,
     pub enabled: bool,
     /// Established backend policy for the currently attached producer.
-    pub(super) eqemu_chat: bool,
+    pub(super) chat_link_expansion: Option<eq_client_core::chat::LinkExpansion>,
     server_placement: Option<ServerPlacement>,
     placement_revision: u64,
     loading: super::background::Background<Result<super::zone::PreparedEntry, String>>,
@@ -228,7 +228,7 @@ impl OnlineState {
     /// in progress.
     pub(super) fn restart(&mut self) {
         self.deletion.ended();
-        self.eqemu_chat = false;
+        self.chat_link_expansion = None;
         self.world.restart();
         self.selection = None;
         self.loading.clear();
@@ -376,7 +376,7 @@ impl OnlineState {
             deletion: default(),
             regions: eq_client_assets::regions::ZoneRegions::default(),
             enabled,
-            eqemu_chat: false,
+            chat_link_expansion: None,
             server_placement: None,
             placement_revision: 0,
             loading: default(),
@@ -608,9 +608,13 @@ impl Panels<'_> {
 
     /// Forgets what the world's reset made stale on screen and in the panels.
     fn forget(&mut self, reason: Reset, state: &mut OnlineState) {
-        self.sounds.reset();
-        if let Some(banners) = self.marquee.as_mut() {
-            banners.clear();
+        // A death keeps the zone, so the killing blow's sound and any banner
+        // already queued in this batch still play.
+        if !matches!(reason, Reset::Died) {
+            self.sounds.reset();
+            if let Some(banners) = self.marquee.as_mut() {
+                banners.clear();
+            }
         }
         if let Some(sync) = &mut self.movement_sync {
             // The world clears the receipt here, even when a refused
@@ -1490,7 +1494,7 @@ mod tests {
             }),
             Some(Session {
                 classic_npc_consider: false,
-                eqemu_chat: true,
+                chat_link_expansion: Some(eq_client_core::chat::LinkExpansion::EQEMU_TITANIUM),
                 inventory_move_rules: Some(eq_client_core::inventory::MoveRules::EqEmu),
                 spell_provider: eq_client_core::spell_tables::Binding::new(
                     eq_client_core::spell_tables::Policy::Installed,

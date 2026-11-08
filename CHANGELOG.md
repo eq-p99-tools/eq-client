@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- Play installed MP3 cues named by `sound name.mp3` script steps and received
+  sound requests. Only installed files are read; two MP3 voices play at once,
+  a cold cue may wait up to eight seconds and a cue stops after 300 seconds
+  (inferred, recording checklist 6.398).
+- Show received marquee banners above the scene with their hold time and
+  packed opacity (inferred, recording checklist 6.397). A death keeps queued
+  banners and sounds; other world resets clear them.
+- Save named map landmarks per world, character and zone, shown as teal
+  diamonds with range and bearing from the character.
+- Outline tracked names' models through scenery with the map's **3D**
+  toggle. It departs from the official client, so it starts off and needs
+  gameplay departures.
+- Compose owned item links from scripts with `compose_owned_link`. A
+  structured script run reports `total_steps` as null in `status.json`, and a
+  control-flow run takes no appended lines from `--script-follow`.
+- Hold the knight and discipline buttons back from the Combat page where
+  the session does not offer them, so the ordinary abilities keep their
+  places and script indices.
+- Take the chat-link length budget from the networking server policy rather
+  than a protocol comparison.
+
 - Add typed variables, read-only client observations, conditions and bounded
   loops to eqscript. The workbench shows branch decisions, active loop counts
   and variable values. Existing action scripts use the same controls.
@@ -11,8 +32,10 @@
 - Offer the ordinary Project 1999 forge through the nearby object controls
   and show the container only after the server opens it. Keep local item
   move projections distinct from received station and inventory contents.
-- Offer self-targeted Bind Wound on Project 1999. Show the request separately
-  from the server result and the received bandage stock.
+- Show a self-targeted Bind Wound request separately from the server result
+  and the received bandage stock. Project 1999 withholds the path for now: an
+  unanswered or refused bandage would hold the whole inventory until the
+  next zone.
 
 - Allow `gm traindisc MAX [MIN]` on network-constrained local EQEmu sessions
   to prepare learned disciplines for test characters.

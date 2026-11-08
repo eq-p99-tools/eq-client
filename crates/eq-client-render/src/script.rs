@@ -426,7 +426,14 @@ impl Script {
         follow.idle = false;
         let text = String::from_utf8_lossy(&fresh[..=end]);
         let base = follow.path.parent().unwrap_or_else(|| Path::new("."));
-        match Program::parse_append(&text, base) {
+        let parsed = if self.language.is_some() {
+            // Appended actions would jump ahead of the running program's next
+            // statement, so a control-flow run takes no appended lines.
+            Err(AppendError::Structured(Some(1)))
+        } else {
+            Program::parse_append(&text, base)
+        };
+        match parsed {
             Ok(instructions) if self.accepted + instructions.len() <= MAX_STEPS => {
                 self.accepted += instructions.len();
                 self.progress.total += instructions.len();

@@ -12,8 +12,9 @@ sending them; queueing a request is not proof of a successful game action.
 Received Titanium marquee notices appear above the scene and fade using the
 supplied times. The client interprets the duration as hold time between fades
 and applies the packed opacity. This timing is inferred from the native
-overlay API. The client uses a short arrival-order queue and a single fade
-cycle. Queued banners expire after ten seconds, and world resets clear them.
+overlay API (recording checklist 6.397). The client uses a short arrival-order
+queue and a single fade cycle. Queued banners expire after ten seconds. World
+resets other than the player's death clear them.
 [EQEmu marquee fields](https://raw.githubusercontent.com/EQEmu/EQEmu/master/common/eq_packet_structs.h#L5962-L5974)
 [Native overlay caller](https://raw.githubusercontent.com/macroquest/macroquest2/master/MQ2Main/MQ2Utilities.cpp#L4670-L4688)
 

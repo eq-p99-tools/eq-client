@@ -114,6 +114,7 @@ fn select(
     wanted.clear();
     let world = online.world();
     if !options.outlines()
+        || !world.can(eq_client_core::Capability::GameplayDepartures)
         || !watches.has_names()
         || !world.in_world()
         || online.scene_loading()

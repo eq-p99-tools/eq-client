@@ -365,18 +365,19 @@ pub fn run(
         script_input_mode,
     );
     let mut app = App::new();
-    let (spell_binding, inventory_move_rules, classic_npc_consider, eqemu_chat) = match &source {
-        Source::Online {
-            session: Some(session),
-            ..
-        } => (
-            Some(session.spell_provider),
-            session.inventory_move_rules,
-            session.classic_npc_consider,
-            session.eqemu_chat,
-        ),
-        _ => (None, None, false, false),
-    };
+    let (spell_binding, inventory_move_rules, classic_npc_consider, chat_link_expansion) =
+        match &source {
+            Source::Online {
+                session: Some(session),
+                ..
+            } => (
+                Some(session.spell_provider),
+                session.inventory_move_rules,
+                session.classic_npc_consider,
+                session.chat_link_expansion,
+            ),
+            _ => (None, None, false, None),
+        };
     let (front, updates, commands) = match source {
         Source::Online { logins, session } => login::FrontEnd::launched(logins, session),
         Source::Offline(preview) => (
@@ -394,7 +395,7 @@ pub fn run(
     let outbox = outbox::Outbox::new(commands);
     let mut online_state = online::OnlineState::new(online);
     online_state.consider_npcs_by_level(classic_npc_consider);
-    online_state.eqemu_chat = eqemu_chat;
+    online_state.chat_link_expansion = chat_link_expansion;
     online_state.plan_inventory_as(inventory_move_rules);
     outbox.set_spell_ready(spells.ready());
     app.insert_resource(spells);
@@ -1187,7 +1188,7 @@ mod tests {
             }),
             Some(login::Session {
                 classic_npc_consider: false,
-                eqemu_chat: true,
+                chat_link_expansion: Some(eq_client_core::chat::LinkExpansion::EQEMU_TITANIUM),
                 inventory_move_rules: Some(eq_client_core::inventory::MoveRules::EqEmu),
                 spell_provider: eq_client_core::spell_tables::Binding::new(
                     eq_client_core::spell_tables::Policy::Installed,

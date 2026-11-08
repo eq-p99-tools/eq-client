@@ -28,6 +28,8 @@ const BUDGET: usize = 32 * 1024 * 1024;
 /// to play.
 const STALE: f32 = 0.5;
 /// Named MP3 cues may wait for the initial bank scan and decoder setup.
+/// This wait, the two MP3 voices and the 300 second cut-off are the client's
+/// own bounds (inferred, recording checklist 6.398).
 const MP3_STALE: f32 = 8.0;
 /// The most sounds playing at once; past it a new one is not started
 /// (inferred, item 6.257).

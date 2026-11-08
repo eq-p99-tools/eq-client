@@ -1357,8 +1357,12 @@ fn submit_draft(
                 .groups
                 .active(state.groups.owner())
                 .unwrap_or_default();
-            let message =
-                linked_outbound(active, wire.trim(), world.generation(), online.eqemu_chat)?;
+            let message = linked_outbound(
+                active,
+                wire.trim(),
+                world.generation(),
+                online.chat_link_expansion,
+            )?;
             outbox.send(world, ClientCommand::SendChat(message))?;
             return Ok(());
         }
@@ -1979,7 +1983,7 @@ fn linked_outbound(
     tab: ChatTab,
     input: &str,
     dialect: eq_client_core::GameDialect,
-    eqemu_chat: bool,
+    expansion: Option<eq_client_core::chat::LinkExpansion>,
 ) -> Result<OutboundChat, String> {
     let outbound = outbound(tab, input)?;
     let body = match &outbound {
@@ -2002,12 +2006,13 @@ fn linked_outbound(
     if wire_len > eq_client_core::chat::outbound_text_limit(dialect) {
         return Err("This draft exceeds the chat limit with its item links".into());
     }
-    if eqemu_chat && dialect == eq_client_core::GameDialect::Titanium {
-        // EQEmu TitaniumToServerSayLink expands each 45-byte body to 56.
-        // ChannelMessageReceived then copies into char message[4096].
+    if let Some(expansion) = expansion {
+        // The server policy says how its chat handler grows each link.
         let links = body.matches('\x12').count() / 2;
-        if wire_len + 11 * links > 4095 {
-            return Err("This draft exceeds EQEmu's chat limit after item-link expansion".into());
+        if !expansion.fits(wire_len, links) {
+            return Err(
+                "This draft exceeds the server's chat limit after item-link expansion".into(),
+            );
         }
     }
     Ok(outbound)
@@ -2456,7 +2461,7 @@ mod tests {
                 }),
                 Some(Session {
                     classic_npc_consider: false,
-                    eqemu_chat: true,
+                    chat_link_expansion: Some(eq_client_core::chat::LinkExpansion::EQEMU_TITANIUM),
                     inventory_move_rules: None,
                     spell_provider: eq_client_core::spell_tables::Binding::new(
                         eq_client_core::spell_tables::Policy::Installed,
@@ -2951,7 +2956,7 @@ mod tests {
         let outbox = crate::outbox::Outbox::new(Some(tx));
         let mut online = crate::online::OnlineState::new(true);
         crate::online::testing::admit(&mut online, 1, crate::online::testing::player(1));
-        online.eqemu_chat = true;
+        online.chat_link_expansion = Some(eq_client_core::chat::LinkExpansion::EQEMU_TITANIUM);
         let mut chat = ChatState::default();
         let label = "Blade!";
         let link = ItemLink {
@@ -2996,7 +3001,7 @@ mod tests {
                 assert!(rx.try_recv().is_err());
                 assert_eq!(chat.draft.text(), before);
                 assert!(typing.composing);
-                online.eqemu_chat = false;
+                online.chat_link_expansion = None;
                 submit_draft(
                     &mut chat,
                     &mut typing,

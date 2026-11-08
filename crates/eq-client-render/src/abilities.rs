@@ -45,12 +45,16 @@ pub(crate) fn assigned(world: &ClientWorld, button: AbilityButton) -> Option<Bin
         .abilities()
         .into_iter()
         .partition(|ability| ability.at_target());
+    // Only a session that offers them gives these their own buttons, so the
+    // ordinary abilities keep their places everywhere else.
     let targeted = knight(world)
+        .filter(|_| world.can(eq_client_core::Capability::KnightAbilities))
         .map(Binding::KnightAbility)
         .into_iter()
         .chain(
             Discipline::SUPPORTED
                 .into_iter()
+                .filter(|_| world.can(eq_client_core::Capability::UsingDisciplines))
                 .filter(|&discipline| knows_discipline(world, discipline))
                 .map(Binding::Discipline),
         )
@@ -274,6 +278,43 @@ mod tests {
             index: 0,
         };
         assert_eq!(
+            assigned(online.world(), button),
+            Some(Binding::KnightAbility(KnightAbility::LayOnHands))
+        );
+    }
+
+    #[test]
+    fn a_session_without_knight_abilities_keeps_the_combat_page_unchanged() {
+        use eq_client_core::{Capability, WorldEvent};
+        let mut online = OnlineState::new(true);
+        let mut player = testing::player(7);
+        player.class = Some(3);
+        player.level = 1;
+        testing::news(
+            &mut online,
+            [WorldEvent::Entered {
+                capabilities: Capability::ALL
+                    .into_iter()
+                    .filter(|capability| {
+                        !matches!(
+                            capability,
+                            Capability::KnightAbilities | Capability::UsingDisciplines
+                        )
+                    })
+                    .collect(),
+                choices: Vec::new(),
+                session_id: 1,
+                zone: "qeytoqrg".into(),
+                player: Box::new(player),
+                far_clip: None,
+                spell_landing_flag: None,
+            }],
+        );
+        let button = AbilityButton {
+            page: Page::Combat,
+            index: 0,
+        };
+        assert_ne!(
             assigned(online.world(), button),
             Some(Binding::KnightAbility(KnightAbility::LayOnHands))
         );

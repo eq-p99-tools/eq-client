@@ -41,7 +41,7 @@ Background mode does not enable `gm` or `chat`, change the selected server, or i
 - Ordinary waits and pointer waits: at most 2 minutes each.
 - World-entry waits: at most 3 minutes.
 
-Use `--script` with a complete UTF-8 file to run control flow from an external editor. `--script-follow` can load that initial snapshot and then accepts appended ordinary action lines. An appended control-flow or assignment line stops follow mode with a line error before any action from that append batch runs. Run a fresh snapshot to add more structured code.
+Use `--script` with a complete UTF-8 file to run control flow from an external editor. `--script-follow` can load that initial snapshot. A snapshot without control flow then accepts appended ordinary action lines. A snapshot with control flow takes no appended lines, because they would run ahead of the program's next statement: any append stops follow mode with a line error before it runs, as an appended control-flow or assignment line does. Run a fresh snapshot to add more structured code.
 
 A parse error prevents a run from starting. Runtime failure retains its explanation and source line. A file error leaves the editor buffer intact. If Save reports an external change, save to a new path to preserve both versions, or explicitly reload the disk version.
 
