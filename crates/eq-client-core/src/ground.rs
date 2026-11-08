@@ -32,8 +32,7 @@ pub fn nearest_usable_for(
         .entries()
         .values()
         .filter(|object| {
-            object.kind() == ObjectKind::Item
-                || (world_containers && object.is_tradeskill_container())
+            object.kind() == ObjectKind::Item || (world_containers && station_candidate(object))
         })
         .filter_map(|object| {
             let distance = (object.position.x - player.x)
@@ -57,7 +56,10 @@ pub fn nearest_container(
     objects
         .entries()
         .values()
-        .filter(|object| object.is_tradeskill_container() && object.object_type == u32::from(kind))
+        .filter(|object| {
+            (object.is_tradeskill_container() && object.object_type == u32::from(kind))
+                || (kind == eq_network_game::tradeskills::FORGE && object.is_forge_candidate())
+        })
         .map(|object| {
             let distance = (object.position.x - player.x)
                 .hypot(object.position.y - player.y)
@@ -67,6 +69,13 @@ pub fn nearest_container(
         .filter(|(_, distance)| distance.is_finite())
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(object, _)| object)
+}
+
+/// Whether a received object can be chosen for an explicit station interaction.
+/// The network owner checks the server policy and requires an open reply.
+#[must_use]
+pub fn station_candidate(object: &GroundObject) -> bool {
+    object.is_tradeskill_container() || object.is_forge_candidate()
 }
 
 /// A model's bounds grown to at least [`MIN_PICK_SIZE`] on each axis, around

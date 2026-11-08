@@ -54,7 +54,7 @@ certification, and individual operations still validate their prerequisites.
 | Skill training | Source-backed, public verification pending | Yes | No | No |
 | Beneficial-buff cancellation | Source-backed, public verification pending | Yes | No | No |
 | Read inventory books and notes | Yes | Yes | Yes | Yes |
-| Tradeskills | Yes (carried combines) | Yes | No | No |
+| Tradeskills | Carried combines and ordinary forge candidates. Live forge validation pending. | Yes | No | No |
 | Answer list presence polls | Yes (opt-in) | No | No | No |
 | Pets and corpse commands | Yes | Yes | No | No |
 | Resurrection / translocate answers | Source-backed, public verification pending | Yes / Yes | No / No | No / Yes |

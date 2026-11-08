@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Use Ctrl+right-click on a worn or carried Titanium item to add its item
+  link to a chat draft when the inventory record supports composition.
+- Offer the ordinary Project 1999 forge through the nearby object controls
+  and show the container only after the server opens it. Keep local item
+  move projections distinct from received station and inventory contents.
+- Offer self-targeted Bind Wound on Project 1999. Show the request separately
+  from the server result and the received bandage stock.
+
 - Allow `gm traindisc MAX [MIN]` on network-constrained local EQEmu sessions
   to prepare learned disciplines for test characters.
 

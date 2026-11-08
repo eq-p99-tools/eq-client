@@ -247,6 +247,16 @@ fn bind_wound(update: &BindWoundUpdate, messages: Option<&Messages>) -> Option<S
             messages,
         ),
         BindWoundUpdate::Ended(end) => official(Some(end.string_id()), &[], end.text(), messages),
+        BindWoundUpdate::RequestedSelf => {
+            Said::own("Binding your wounds was requested. Stay still while waiting for the server.")
+        }
+        BindWoundUpdate::Bandaged => Said::own("The server reported bandaging."),
+        BindWoundUpdate::Released => {
+            Said::own("The server released your bandage attempt without a result.")
+        }
+        BindWoundUpdate::Unconfirmed => Said::own(
+            "Still waiting for the bandage result or stock update. Re-enter the zone if the wait persists.",
+        ),
         BindWoundUpdate::Unlocked => return None,
     })
 }

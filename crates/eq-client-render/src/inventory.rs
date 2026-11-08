@@ -304,7 +304,7 @@ pub(super) fn spawn(commands: &mut Commands) {
 }
 
 /// What the inventory's mouse does, shown until a slot is hovered.
-const SLOT_HELP: &str = "Click a stack: quantity | Shift-click: whole stack | Ctrl-click: one | Right-click: inspect | Alt+right-click: use";
+const SLOT_HELP: &str = "Click a stack: quantity | Shift-click: whole stack | Ctrl-click: one | Right-click: inspect | Alt+right-click: use | Ctrl+right-click: link to chat";
 
 /// Says the inventory's refusals in the chat, where the official client
 /// says them; a skinned window has no line of its own for them.
@@ -353,6 +353,10 @@ pub(super) fn input(
     mut state: ResMut<InventoryState>,
     mut items: ResMut<super::items::ItemState>,
     escape: Res<super::escape::Escape>,
+    (chat, typing): (
+        Option<ResMut<super::chat::ChatState>>,
+        Option<ResMut<super::keys::Typing>>,
+    ),
 ) {
     state.refresh_bank_access(&online);
     if !keys.window_focused() {
@@ -403,6 +407,7 @@ pub(super) fn input(
             state.tab = tab.0;
         }
     }
+    let mut composer = chat.zip(typing);
     for (interaction, slot) in &slots {
         if *interaction == Interaction::None {
             continue;
@@ -415,6 +420,17 @@ pub(super) fn input(
                 if keys.focused() {
                     use_clicked(&mut state, slot.0, (&online, &sender), &spells, &settings);
                 }
+            } else if keys
+                .input
+                .any_pressed([KeyCode::ControlLeft, KeyCode::ControlRight])
+            {
+                if let Some((chat, typing)) = composer.as_mut() {
+                    match chat.compose_owned_link(slot.0, online.world()) {
+                        Ok(()) => typing.composing = true,
+                        Err(reason) => chat.refuse(reason),
+                    }
+                }
+                return;
             } else {
                 right_click(
                     slot.0, &online, &sender, &mut shown, &skinned, &mut items, &mut state,

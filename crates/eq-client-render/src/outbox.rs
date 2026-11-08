@@ -632,7 +632,11 @@ mod tests {
                 drop_id: 71,
                 created: Instant::now(),
             },
-            ClientCommand::CloseContainer { session_id: 4 },
+            ClientCommand::CloseContainer {
+                session_id: 4,
+                drop_id: 5,
+                created: Instant::now(),
+            },
         ] {
             assert_eq!(
                 outbox.send(&world, command),

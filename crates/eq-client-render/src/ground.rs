@@ -82,7 +82,7 @@ pub(super) fn reconcile(
             };
             (shape.primitives.clone(), shape.bounds)
         };
-        let pick = if item || object.is_tradeskill_container() {
+        let pick = if item || eq_client_core::ground::station_candidate(object) {
             let (min, max) = bounds.unwrap_or((Vec3::ZERO, Vec3::ZERO));
             let (min, max) = eq_client_core::ground::pick_box(min, max);
             Some((min, max))
@@ -115,7 +115,7 @@ pub(super) fn hit<'a>(
 ) -> Option<(u32, f32)> {
     drawn
         .filter_map(|(entity, transform)| {
-            if !world_containers && entity.object.is_tradeskill_container() {
+            if !world_containers && eq_client_core::ground::station_candidate(&entity.object) {
                 return None;
             }
             let (min, max) = entity.pick?;
@@ -145,7 +145,7 @@ pub(super) fn use_object(
         .objects()
         .entries()
         .get(&drop_id)
-        .is_some_and(GroundObject::is_tradeskill_container);
+        .is_some_and(eq_client_core::ground::station_candidate);
     // The outbox says a refusal itself.
     let posted = outbox.post(state.world(), |stamp| {
         if container {

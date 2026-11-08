@@ -214,6 +214,26 @@ impl ChatState {
             .insert_link(link, (admission, world.generation()))
     }
 
+    /// Compose directly from this admission's worn or carried inventory.
+    pub(super) fn compose_owned_link(
+        &mut self,
+        slot: eq_client_core::inventory::InventorySlot,
+        world: &eq_client_core::world::ClientWorld,
+    ) -> Result<(), String> {
+        let admission = active_link_admission(world)?;
+        let generation = world.generation();
+        if generation != eq_client_core::GameDialect::Titanium {
+            return Err("Inventory item links are unavailable on this server".into());
+        }
+        let link = world
+            .inventory()
+            .owned_titanium_link(slot)
+            .map_err(|error| error.to_string())?;
+        self.draft
+            .insert_link(&link, (admission, generation))
+            .map_err(str::to_owned)
+    }
+
     /// Resolve the same bounded received-link identities shown by scripts' reports.
     pub(super) fn compose_link(
         &mut self,

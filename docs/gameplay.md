@@ -290,6 +290,11 @@ The pause order follows the [EverQuest social hotbutton guide](https://www.everq
 
 ## Item links in chat
 
+On Titanium, Ctrl+right-click a worn or carried item to insert a link into the
+chat draft. The current inventory must supply the item record and its
+placement. A pending move or an unsupported item record can leave the gesture
+unavailable. Received links still work with Shift-click.
+
 Shift-click a recent received item link to add it at the caret in the current
 chat draft. A regular click still opens item details. Left, Right, Home and
 End move the caret. Backspace or Delete removes the whole link when it meets

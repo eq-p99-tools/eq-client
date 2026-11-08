@@ -45,19 +45,21 @@ pub(crate) fn world_window(
     mut opened: Local<bool>,
 ) {
     let id = WindowId::WorldContainer;
-    let open = online.world().container().is_some();
-    if *opened && open && !shown.is_open(id) {
+    let drop_id = online.world().container().map(|view| view.drop_id);
+    if let Some(drop_id) = drop_id.filter(|_| *opened && !shown.is_open(id)) {
         let _ = outbox.post(online.world(), |stamp| {
             eq_client_core::ClientCommand::CloseContainer {
                 session_id: stamp.session_id,
+                drop_id,
+                created: stamp.created,
             }
         });
         online.close_container();
         *opened = false;
-    } else if open && !*opened {
+    } else if drop_id.is_some() && !*opened {
         shown.open(id);
         *opened = true;
-    } else if !open && *opened {
+    } else if drop_id.is_none() && *opened {
         shown.close(id);
         *opened = false;
     }
@@ -294,7 +296,7 @@ mod tests {
         app.update();
         assert!(matches!(
             receiver.try_recv().unwrap(),
-            eq_client_core::ClientCommand::CloseContainer { session_id: 1 }
+            eq_client_core::ClientCommand::CloseContainer { session_id: 1, .. }
         ));
         assert!(
             app.world()

@@ -116,10 +116,14 @@ impl ClientWorld {
     pub(super) fn bind_wound(&mut self, update: &BindWoundUpdate, changes: &mut Changes) {
         match update {
             BindWoundUpdate::Unlocked => return,
-            BindWoundUpdate::Ended(_) => {
+            BindWoundUpdate::Ended(_)
+            | BindWoundUpdate::Released
+            | BindWoundUpdate::Unconfirmed => {
                 self.ability_timers.remove(&Recovery::BindWound);
             }
-            BindWoundUpdate::Started { .. } => (),
+            BindWoundUpdate::Started { .. }
+            | BindWoundUpdate::RequestedSelf
+            | BindWoundUpdate::Bandaged => (),
         }
         changes.notices.push(Notice::BindWound(update.clone()));
     }

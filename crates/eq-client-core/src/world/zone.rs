@@ -482,6 +482,9 @@ impl super::ClientWorld {
     ) {
         self.zone.objects.apply(update);
         if let crate::ground::ObjectUpdate::Closed { drop_id } = update {
+            if self.zone.asked_container == Some(*drop_id) {
+                self.zone.asked_container = None;
+            }
             if self
                 .zone
                 .container
