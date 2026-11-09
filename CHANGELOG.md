@@ -24,6 +24,9 @@
 - Keys typed into the chat line no longer reach the game when Enter closes
   the line in the same frame, so a digit at the end of a line no longer
   presses a hotbar button.
+- Build zone navigation meshes by default. Script walks plan over the mesh and
+  warn in the log and the Execution tab when they fall back to grid search.
+  `--no-navmesh` turns meshes off; the old `--navmesh` flag is still accepted.
 
 - Look up and swim forward to use Titanium's shoreline boost near a
   reachable supported bank. The renderer sweeps the capsule and the worker
