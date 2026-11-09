@@ -92,10 +92,16 @@ struct Arguments {
     #[arg(long)]
     debug_overlay: bool,
 
-    /// Build and cache each zone's navigation mesh in background work. Script
-    /// walks use a ready mesh for the character's size, otherwise grid search.
-    #[arg(long, env = "EQ_CLIENT_NAVMESH")]
-    navmesh: bool,
+    /// Turn off zone navigation meshes. They are built and cached in
+    /// background work by default, and script walks plan over a ready mesh
+    /// for the character's size. Without one, walks fall back to grid search
+    /// and say so in the log and the script's events.
+    #[arg(long, env = "EQ_CLIENT_NO_NAVMESH")]
+    no_navmesh: bool,
+
+    /// Accepted for older launch lines; navigation meshes are on by default.
+    #[arg(long = "navmesh", hide = true, conflicts_with = "no_navmesh")]
+    _navmesh: bool,
 
     /// Show synthetic moving entities offline, without connecting to a server.
     #[arg(long, conflicts_with = "online")]
@@ -745,7 +751,7 @@ fn viewer_config(
         window_position: arguments.window_position,
         window_size: arguments.window_size,
         debug_overlay: arguments.debug_overlay,
-        navmesh: arguments.navmesh,
+        navmesh: !arguments.no_navmesh,
         display,
     }
 }

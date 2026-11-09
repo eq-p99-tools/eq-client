@@ -235,8 +235,9 @@ pub struct ViewerConfig {
     /// name, coordinates, the movement mode with its keys, and the count of
     /// nearby entities.
     pub debug_overlay: bool,
-    /// Build each zone's navigation mesh at entry, for probes, scripts and
-    /// looks; never a player setting. Nothing plans over it yet.
+    /// Read or build each zone's navigation mesh at entry, for script walks
+    /// and probes. The launcher turns it on unless `--no-navmesh` is given;
+    /// walks fall back to grid search, with a warning, without a ready mesh.
     pub navmesh: bool,
     /// Where the window keeps what it knows of the display and adapter,
     /// for the sessions' machine report.
@@ -352,6 +353,7 @@ pub fn run(
     let follow = config.script_follow.clone();
     let script_input_mode = config.script_input_mode;
     let installed_client = config.installed_client;
+    let navmesh = config.navmesh;
     let mut option_defaults = config.option_defaults;
     seed_official_options(&config, &mut option_defaults);
     if let Some(cap) = config.max_fps {
@@ -441,7 +443,7 @@ pub fn run(
         .add_systems(Update, exit_log::close_requests);
     schedule(&mut app);
     navigation::install(&mut app);
-    zone_navmesh::install(&mut app);
+    zone_navmesh::install(&mut app, navmesh);
     frame_limit::install(&mut app);
     app.add_systems(Last, display_report::update);
     attention::install(&mut app);

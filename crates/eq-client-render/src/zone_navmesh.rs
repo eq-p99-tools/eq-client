@@ -1,6 +1,7 @@
 //! The shown zone's navigation mesh, read from the cache or built off the
-//! frame at zone entry while the `navmesh` switch is on. A scripted walk
-//! plans over it once it is ready.
+//! frame at zone entry while the `navmesh` switch is on (the default). A
+//! scripted walk plans over it once it is ready, and says why when it plans
+//! on the grid instead.
 use bevy::prelude::*;
 use bevy::tasks::{AsyncComputeTaskPool, Task, TaskPool, block_on, poll_once};
 use eq_client_core::movement::CollisionWorld;
@@ -13,17 +14,57 @@ use std::time::Instant;
 /// More refused tiles than this are summed up by reason, not listed.
 const LISTED_REFUSALS: usize = 10;
 
-/// Starts the shown zone's mesh, empty; its poll runs each frame.
-pub(super) fn install(app: &mut App) {
-    app.init_resource::<ZoneNavMesh>().add_systems(Update, poll);
+/// Starts the shown zone's mesh, empty; its poll runs each frame. With the
+/// switch off, startup says so, since every scripted walk then plans on the
+/// grid.
+pub(super) fn install(app: &mut App, enabled: bool) {
+    app.insert_resource(ZoneNavMesh {
+        enabled,
+        ..ZoneNavMesh::default()
+    })
+    .add_systems(Update, poll);
+    if !enabled {
+        app.add_systems(Startup, || {
+            warn!(
+                "Navigation meshes are off (--no-navmesh): scripted walks plan with grid search only"
+            );
+        });
+    }
 }
 
 /// The shown zone's mesh once it is ready, and the build or read making it.
 #[derive(Resource, Default)]
 pub(super) struct ZoneNavMesh {
+    /// Whether zone entry reads or builds a mesh at all.
+    enabled: bool,
     /// The mesh, split for its walker sizes.
     mesh: Option<SizedMeshes>,
     making: Option<Making>,
+}
+
+/// Why a walk plans on the grid rather than the zone's mesh.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum GridReason {
+    /// The client was started with `--no-navmesh`.
+    Disabled,
+    /// The zone's mesh is still being read or built.
+    Building,
+    /// No mesh was started for this zone, or its build was stopped.
+    Missing,
+    /// The walker is taller than the tallest mesh size.
+    TooTall,
+}
+
+impl GridReason {
+    /// The reason as the log and the script's events name it.
+    pub(super) const fn describe(self) -> &'static str {
+        match self {
+            Self::Disabled => "navigation meshes are off (--no-navmesh)",
+            Self::Building => "the zone's navigation mesh is still being built",
+            Self::Missing => "this zone has no navigation mesh",
+            Self::TooTall => "the character is taller than the tallest navigation mesh size",
+        }
+    }
 }
 
 struct Making {
@@ -86,10 +127,16 @@ impl ZoneNavMesh {
     }
 
     /// The shown zone's mesh for a walker drawn `size` tall, once it is
-    /// ready: the smallest of its sizes that fits the walker. None for a
-    /// walker taller than its tallest size, which stays on the grid.
-    pub(super) fn mesh_for(&self, size: f32) -> Option<Arc<navmesh::NavMesh>> {
-        self.mesh.as_ref()?.for_height(size)
+    /// ready: the smallest of its sizes that fits the walker. Otherwise why
+    /// the walker plans on the grid, including a walker taller than the
+    /// tallest size.
+    pub(super) fn for_walker(&self, size: f32) -> Result<Arc<navmesh::NavMesh>, GridReason> {
+        match &self.mesh {
+            Some(mesh) => mesh.for_height(size).ok_or(GridReason::TooTall),
+            None if !self.enabled => Err(GridReason::Disabled),
+            None if self.making.is_some() => Err(GridReason::Building),
+            None => Err(GridReason::Missing),
+        }
     }
 }
 
@@ -218,7 +265,7 @@ mod tests {
 
     fn app() -> App {
         let mut app = App::new();
-        install(&mut app);
+        install(&mut app, true);
         app
     }
 
@@ -232,7 +279,8 @@ mod tests {
         while app
             .world()
             .resource::<ZoneNavMesh>()
-            .mesh_for(6.0)
+            .for_walker(6.0)
+            .ok()
             .is_none()
         {
             assert!(started.elapsed().as_secs() < 60, "never ready");
@@ -240,16 +288,17 @@ mod tests {
         }
         let navmesh = app.world().resource::<ZoneNavMesh>();
         assert!(navmesh.making.is_none());
-        assert_eq!(navmesh.mesh_for(6.0).unwrap().island_count(), 1);
+        assert_eq!(navmesh.for_walker(6.0).ok().unwrap().island_count(), 1);
         // It plans for walkers up to the tallest size, an ogre's 9, and no
         // taller.
-        assert!(navmesh.mesh_for(3.0).is_some() && navmesh.mesh_for(9.0).is_some());
-        assert!(navmesh.mesh_for(9.5).is_none());
+        assert!(navmesh.for_walker(3.0).ok().is_some() && navmesh.for_walker(9.0).ok().is_some());
+        assert!(navmesh.for_walker(9.5).ok().is_none());
         app.world_mut().resource_mut::<ZoneNavMesh>().leave();
         assert!(
             app.world()
                 .resource::<ZoneNavMesh>()
-                .mesh_for(6.0)
+                .for_walker(6.0)
+                .ok()
                 .is_none()
         );
     }
@@ -262,13 +311,43 @@ mod tests {
         let cancel = Arc::clone(&navmesh.making.as_ref().unwrap().cancel);
         navmesh.leave();
         assert!(cancel.load(Ordering::Relaxed));
-        assert!(navmesh.making.is_none() && navmesh.mesh_for(6.0).is_none());
+        assert!(navmesh.making.is_none() && navmesh.for_walker(6.0).ok().is_none());
         app.update();
         assert!(
             app.world()
                 .resource::<ZoneNavMesh>()
-                .mesh_for(6.0)
+                .for_walker(6.0)
+                .ok()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn a_walk_without_a_mesh_names_why() {
+        let mut off = App::new();
+        install(&mut off, false);
+        let navmesh = off.world().resource::<ZoneNavMesh>();
+        assert_eq!(navmesh.for_walker(6.0).err(), Some(GridReason::Disabled));
+
+        let mut app = app();
+        assert_eq!(
+            app.world().resource::<ZoneNavMesh>().for_walker(6.0).err(),
+            Some(GridReason::Missing)
+        );
+        app.world_mut()
+            .resource_mut::<ZoneNavMesh>()
+            .start("floor", floor(), None, None);
+        assert_eq!(
+            app.world().resource::<ZoneNavMesh>().for_walker(6.0).err(),
+            Some(GridReason::Building)
+        );
+        let started = Instant::now();
+        while app.world().resource::<ZoneNavMesh>().mesh.is_none() {
+            assert!(started.elapsed().as_secs() < 60, "never ready");
+            app.update();
+        }
+        let navmesh = app.world().resource::<ZoneNavMesh>();
+        assert!(navmesh.for_walker(6.0).is_ok());
+        assert_eq!(navmesh.for_walker(9.5).err(), Some(GridReason::TooTall));
     }
 }

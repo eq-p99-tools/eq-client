@@ -1327,7 +1327,10 @@ pub(super) fn drive(
                         ..
                     }) = route.planned()
                     {
-                        info!(?why, ?feet, ?goal, "Script route fell back to the grid");
+                        warn!(?why, ?feet, ?goal, "Script route fell back to the grid");
+                        script
+                            .progress
+                            .event(format!("Walk fell back to grid search: {why:?}"));
                     }
                     if partial && let Some(end) = route.end() {
                         log_partial_route(&online, end);
@@ -2179,17 +2182,22 @@ pub(super) fn drive(
                     .with_drops(observed.4.airborne.is_some())
                     .with_doors(openable_doors(&online))
                     .with_background(std::sync::Arc::new(super::background::ComputePool));
-                // With the navmesh switch on and the zone's mesh ready for
-                // this body's size, the mesh plans; else the grid, as before.
+                // With the zone's mesh ready for this body's size, the mesh
+                // plans; else the grid, and the walk says why.
                 let mesh = observed
                     .7
                     .as_ref()
-                    .and_then(|meshes| meshes.mesh_for(body.mesh_size()));
+                    .map_or(Err(super::zone_navmesh::GridReason::Missing), |meshes| {
+                        meshes.for_walker(body.mesh_size())
+                    });
                 Some(match mesh {
-                    Some(mesh) => route.with_navigator(Box::new(
-                        eq_client_core::movement::navmesh::MeshNavigator::new(mesh),
-                    )),
-                    None => route,
+                    Ok(mesh) => (
+                        route.with_navigator(Box::new(
+                            eq_client_core::movement::navmesh::MeshNavigator::new(mesh),
+                        )),
+                        None,
+                    ),
+                    Err(reason) => (route, Some(reason)),
                 })
             });
             let creating = creating.elapsed();
@@ -2199,10 +2207,20 @@ pub(super) fn drive(
                     "Script walk route made slowly"
                 );
             }
-            let Some(route) = route else {
+            let Some((route, grid)) = route else {
                 script.stop(&mut keys, &mut mouse, "walk needs a visible target");
                 return;
             };
+            if let Some(reason) = grid {
+                let reason = reason.describe();
+                warn!(
+                    reason,
+                    "Script walk planning with grid search, not the navigation mesh"
+                );
+                script
+                    .progress
+                    .event(format!("Walk uses grid search: {reason}"));
+            }
             script.route = Some(route);
             script.door_wait = None;
             script.following = None;

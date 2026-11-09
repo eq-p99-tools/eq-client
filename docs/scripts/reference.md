@@ -78,7 +78,7 @@ Key names are case-insensitive. Combine them with `+`, such as `alt+1`. Supporte
   merchants and corpses, check a subsequent economy report for the matching
   received shop or loot listing before using its controls.
 
-Movement uses the client's ordinary movement and collision behavior. It is not a teleport. Walk uses a ready navigation mesh when `--navmesh` is enabled and falls back to grid search otherwise. A reachable destination and the session's movement grant are still required. Keep the camera attached when using movement scripts; free-camera mode consumes movement input for the camera.
+Movement uses the client's ordinary movement and collision behavior. It is not a teleport. Walk uses the zone's navigation mesh once it is ready, which is the default. Without one, or with `--no-navmesh`, it falls back to grid search and the Execution tab and log say why. A reachable destination and the session's movement grant are still required. Keep the camera attached when using movement scripts; free-camera mode consumes movement input for the camera.
 
 Approach, walk and chase hold the camera-relative forward command, independent of key bindings. Object commands choose the nearest matching tradeskill container when they start. Missing targets, unreachable routes and timeouts stop the run. `wait_dead` only recognizes NPC corpses or a target leaving the zone; a player's death does not satisfy it while their corpse remains.
 

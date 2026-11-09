@@ -119,10 +119,15 @@ not publish or alter server placement.
 
 ## Navigation and remaining limits
 
-`--navmesh` (or `EQ_CLIENT_NAVMESH`) builds zone navigation meshes in background
-work and caches them under the settings directory. Script `walk` uses a ready
-mesh for the character's body size; otherwise it uses the existing grid search.
-This is route planning, not server permission to move or teleport.
+The client builds zone navigation meshes in background work by default and
+caches them under the settings directory. Script `walk` uses a ready mesh for
+the character's body size. Without one it falls back to grid search and says
+why in the log and the script's events: the mesh is still building, the zone
+has none, or the character is taller than the largest mesh size. A mesh route
+that can't reach the goal also falls back, with a warning. `--no-navmesh` (or
+`EQ_CLIENT_NO_NAVMESH`) turns meshes off; startup then warns that every walk
+uses grid search. The older `--navmesh` flag is still accepted and changes
+nothing. This is route planning, not server permission to move or teleport.
 
 Models, UI layouts and movement rules remain incomplete across client versions.
 Sound loading currently handles Titanium WAV assets, not the Mac-era sound
