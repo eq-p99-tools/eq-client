@@ -98,6 +98,11 @@
   landmark files from replacement, and share immutable installed spell
   definitions across sessions.
 
+- Pin networking 4ef182e4 (kept-grant landing): a change in the player's belongings (an item
+  eaten, drunk, looted or moved, or coins) keeps the movement grant until
+  the new speed inputs land, so a jump, a crouch or autorun under way is no
+  longer dropped.
+
 - Pin networking 51c94173 (Batch M slice 1 landing): a jump starts at the
   health and weight factor that slows running, and the movement guard bounds
   its rise by the factor it launched with.
