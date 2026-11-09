@@ -247,6 +247,8 @@ pub enum Notice {
     Group(super::GroupNotice),
     /// The player's own listing changed, as they asked.
     Listing(ListingNotice),
+    /// A listing request went out. Received listing state is separate.
+    ListingRequested(crate::listing::ListingChange),
     /// A die the server rolled for a player nearby, the player among them;
     /// the server sends no line with it, so the official client words it
     /// itself (inferred from its strings).

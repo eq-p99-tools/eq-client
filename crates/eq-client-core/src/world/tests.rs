@@ -4762,6 +4762,30 @@ fn the_players_own_listing_changes_and_says_which() {
 }
 
 #[test]
+fn a_listing_request_keeps_the_received_state_until_an_update_arrives() {
+    use crate::listing::ListingChange;
+    let mut world = admitted();
+    let player = world.player().unwrap().spawn_id;
+    let change = ListingChange::Away(true);
+    let initial = world.player().unwrap().listing;
+    let requested = |session_id| WorldEvent::ListingRequested { session_id, change };
+    assert_eq!(
+        game(&mut world, requested(1)).notices,
+        [Notice::ListingRequested(change)]
+    );
+    assert_eq!(world.player().unwrap().listing, initial);
+    assert!(game(&mut world, requested(9)).ignored);
+    game(
+        &mut world,
+        WorldEvent::Listing {
+            spawn_id: player,
+            change,
+        },
+    );
+    assert!(world.player().unwrap().listing.away);
+}
+
+#[test]
 fn a_roll_is_said_and_an_assist_answer_is_taken_once() {
     use crate::socials::{Assisted, Roll};
     let mut world = admitted();

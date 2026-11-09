@@ -285,6 +285,31 @@ record with only an empty-slot sentinel cannot identify which buff faded.
 The P99 exchange awaits an attended check. Titanium EQEmu uses its
 single current-record request.
 
+## Ordinary social commands
+
+The Project 1999 and EQEmu sessions offer `/assist`, `/random`, `/emote`,
+`/afk`, `/anon` and `/roleplay`. These commands use the capabilities
+reported by the current admission.
+
+- Use `/assist` with a selected entity or `/assist Player` with an exact
+  player name. Wait for the returned selection before using an action that
+  depends on it. On P99 an unresolved request holds the next assist until
+  its reply or zone entry. A reply that arrives after the five-second local
+  selection window can release the hold.
+- `/random` rolls from 0 to 100 by default. `/random high` rolls from 0 to
+  that endpoint, and `/random low high` uses both. P99 orders the endpoints
+  and accepts values from 0 through 32,000. Chat shows received rolls.
+- `/emote words` displays a local line after submission. Plain emote text
+  must fit in the P99 wire field after escaping. Received emotes arrive in
+  chat independently.
+- `/afk`, `/anonymous` (also `/anon`) and `/roleplay` toggle presence
+  and listing. On P99 the client shows the requested value and updates the
+  received listing on an appearance or admission update. Turn off
+  anonymity before enabling roleplay. Custom away messages and automatic
+  tell replies remain outside this feature.
+
+The P99 paths follow Titanium source and await attended checks.
+
 ## Social hotbuttons
 
 Type `/social set Greet | /pause 10,/say Hello! | /stand` to save a social

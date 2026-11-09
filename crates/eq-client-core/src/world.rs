@@ -1042,6 +1042,13 @@ impl ClientWorld {
             WorldEvent::ListingSet { session_id, change } => {
                 self.listing_set(*session_id, *change, news);
             }
+            WorldEvent::ListingRequested { session_id, change } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices.push(Notice::ListingRequested(*change));
+                } else {
+                    news.ignored = true;
+                }
+            }
             WorldEvent::ListingRefused {
                 session_id,
                 reason,

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Expose the Project 1999 session's ordinary assist, dice, emote and
+  listing commands through existing chat and script dispatch. Presence
+  requests and received listing changes are shown separately.
+
 - Keep identical scoped Runbook retries idempotent after an admission
   change. Track harness and window exports with separate files and status.
 - Keep the full Bind Wound recovery visible. Distinguish an unanswered
