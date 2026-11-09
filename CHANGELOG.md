@@ -73,6 +73,11 @@
   landmark files from replacement, and share immutable installed spell
   definitions across sessions.
 
+- Pin networking 462baf69 (Batch A landing): friends who, guild requests,
+  splitting and a banker's change on the Titanium wire, offered on `EQEmu`
+  and Project 1999; a waiting guild invitation and the member list do not
+  outlive the zone connection.
+
 - Pin networking 0d93a466 (P99 repairs landing): the bounded Titanium
   shoreline impulse, with each replayed frame counting for at most 50 ms.
 
