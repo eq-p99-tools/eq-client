@@ -47,6 +47,7 @@ mod clicks;
 mod coins;
 mod combat;
 mod combat_text;
+mod commands;
 mod confirm;
 mod contacts;
 mod creation_preview;

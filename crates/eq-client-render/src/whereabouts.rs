@@ -1,4 +1,4 @@
-//! `/loc` and `/time`, which the client answers itself, as the official
+//! `/location` (`/loc`) and `/time`, which the client answers itself, as the official
 //! client does: where the player stands, in the installed string 13177, and
 //! the time in Norrath and on Earth, in 6706 and 12389, or a zone's line in
 //! place of the time where the installed client gives one. The Titanium
@@ -23,10 +23,10 @@ pub(crate) enum Asked {
 }
 
 impl Asked {
-    /// What a typed line asks, if it is `/loc` or `/time`.
+    /// What a typed line asks, if it is `/location` or `/time`, spelled out.
     pub(crate) fn typed(input: &str) -> Option<Self> {
         let name = input.strip_prefix('/')?.trim();
-        if name.eq_ignore_ascii_case("loc") {
+        if name.eq_ignore_ascii_case("location") {
             Some(Self::Location)
         } else if name.eq_ignore_ascii_case("time") {
             Some(Self::Time)
@@ -175,7 +175,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(lines, [Said::own("You stand at 1.00, 2.00, 3.00.")]);
-        assert_eq!(Asked::typed("/LOC"), Some(Asked::Location));
+        assert_eq!(Asked::typed("/LOCATION"), Some(Asked::Location));
         assert_eq!(Asked::typed("/time "), Some(Asked::Time));
         assert_eq!(Asked::typed("/timer"), None);
     }
