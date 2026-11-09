@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- Expose the Project 1999 session's ordinary assist, dice, emote and
+  listing commands through chat and script dispatch. Presence requests and
+  received listing changes are shown separately. Script `slash emote` and
+  `slash random` steps, which reach everyone nearby, are refused outside a
+  network-constrained local test session, as `chat` steps are.
+
+- Keep identical scoped Runbook retries idempotent after an admission
+  change. Track harness and window exports with separate files and status.
+- Keep the full Bind Wound recovery visible. Distinguish an unanswered
+  bandaging result from uncertain bandage stock.
+- Bound inspection note and landmark file reads, protect oversized
+  landmark files from replacement, and share immutable installed spell
+  definitions across sessions.
+
+- Pin networking ec34373e (cycle 10 landing): ordinary P99 assist, dice,
+  emote and presence commands; an accepted assist also moves the server's
+  stored target. Station placements, combines and NPC gives no longer leave
+  carried weight unknown, which paused movement until zoning.
+- A landmark file reached through a link is treated as unreadable, as its
+  save already refused it, instead of loading as editable and failing every
+  save.
+
 - Pin networking 97212d8d (cycle 09 landing): Bind Wound's button time runs
   out in full after every use, one bandage decrease settles every carried
   stack, and an unanswered player inspection holds the next request to that

@@ -177,6 +177,8 @@ or occluded. The counters are independent of damage and inventory.
   `slash camp desktop` uses the ordinary camp destination and current QoL exit choice.
   `slash stopsong` queues the Bard's stop request on Titanium EQEmu.
   The immediate disconnect aliases typed in chat are not script slash commands.
+  `slash emote` and `slash random` reach everyone nearby, so like `chat` they
+  run only in a network-constrained local test session.
 - `gm command [arguments]`: an allowed GM command on a network-constrained local test session only.
   On local EQEmu, `gm traindisc MAX [MIN]` requests all eligible disciplines
   in that inclusive level range for a disposable fixture. Each level is a number

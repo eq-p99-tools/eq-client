@@ -1777,6 +1777,14 @@ pub(super) fn drive(
             return;
         }
         Step::Slash(command) => {
+            if !script.local && super::chat::broadcasts_to_others(command) {
+                script.stop(
+                    &mut keys,
+                    &mut mouse,
+                    "emote and random steps require a network-enforced local test session.",
+                );
+                return;
+            }
             if super::socials::Request::parse(command).is_some() {
                 script.stop(
                     &mut keys,

@@ -669,7 +669,7 @@ fn launch_session(launcher: &logins::Launcher, preset: usize) -> eq_client_rende
             eprintln!("error: {reason}");
             std::process::exit(2);
         });
-    session::SessionWorker::start(login, launcher.options()).unwrap_or_else(|error| {
+    launcher.start(login).unwrap_or_else(|error| {
         eprintln!("Cannot start session: {error:#}");
         std::process::exit(1);
     })

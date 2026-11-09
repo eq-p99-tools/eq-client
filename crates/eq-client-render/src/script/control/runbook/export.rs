@@ -14,7 +14,7 @@ pub(in crate::script::control) struct Export {
 }
 
 struct Snapshot {
-    request_id: Option<u64>,
+    target: files::RunbookExport,
     runbook_id: u64,
     revision: u64,
     result: Option<Result<(), String>>,
@@ -29,7 +29,7 @@ impl Export {
         &mut self,
         writer: files::Writer,
         run: &Run,
-        request_id: Option<u64>,
+        target: files::RunbookExport,
         instance: &str,
         admission_id: Option<u64>,
     ) -> Result<(), &'static str> {
@@ -38,17 +38,18 @@ impl Export {
             return Err("runbook_export_busy");
         }
         let bytes = serde_json::to_vec(&json!({
-            "version":protocol::VERSION,"instance":instance,"request_id":request_id,
+            "version":protocol::VERSION,"instance":instance,"request_id":target.request_id(),
             "admission_id":admission_id,"runbook":run.json(),
         }))
         .expect("bounded runbook export serializes");
         self.last = Some(Snapshot {
-            request_id,
+            target,
             runbook_id: run.id,
             revision: run.revision,
             result: None,
         });
-        self.job.start(0, move || writer.export_runbook(&bytes));
+        self.job
+            .start(0, move || writer.export_runbook(target, &bytes));
         Ok(())
     }
 
@@ -69,8 +70,8 @@ impl Export {
             Some(Err(error)) => ("failed", Some(error)),
         };
         Some(json!({
-            "request_id":last.request_id,"runbook_id":last.runbook_id,"revision":last.revision,
-            "state":state,"path":files::RUNBOOK_EXPORT,"error":error,
+            "request_id":last.target.request_id(),"runbook_id":last.runbook_id,"revision":last.revision,
+            "state":state,"path":last.target.path(),"error":error,
         }))
     }
 
@@ -80,9 +81,15 @@ impl Export {
         };
         match last.result {
             None => "Writing export…",
-            Some(Ok(())) if last.revision == run.revision => "Saved runbook-export.json",
+            Some(Ok(())) if last.revision == run.revision => "Saved runbook-ui-export.json",
             Some(Ok(())) => "Export contains an earlier checklist revision",
             Some(Err(_)) => "Export failed",
         }
+    }
+
+    #[cfg(test)]
+    pub(in crate::script::control) fn hold_completion(&mut self) {
+        assert!(self.last.is_some());
+        self.job.keep_pending(0);
     }
 }

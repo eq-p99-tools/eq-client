@@ -103,6 +103,15 @@ pad crossing.
 Initial login, boundary crossing, teleport, death, and respawn each need
 their own validation.
 
+## Bind Wound
+
+On Project 1999, select your own character to use Bind Wound. The current
+policy covers self-bandaging, with an eleven-second button wait. If an
+attempt expires, the notice distinguishes missing stock evidence from a
+missing bandaging result after stock was received.
+A missing result holds the next P99 bandage request until the reply arrives
+or you re-enter the zone. Unrelated inventory actions can continue.
+
 ## Inventory and banking
 
 Inventory shows equipment, carried slots and bags together. A bag and its
@@ -276,6 +285,31 @@ record with only an empty-slot sentinel cannot identify which buff faded.
 The P99 exchange awaits an attended check. Titanium EQEmu uses its
 single current-record request.
 
+## Ordinary social commands
+
+The Project 1999 and EQEmu sessions offer `/assist`, `/random`, `/emote`,
+`/afk`, `/anon` and `/roleplay`. These commands use the capabilities
+reported by the current admission.
+
+- Use `/assist` with a selected entity or `/assist Player` with an exact
+  player name. Wait for the returned selection before using an action that
+  depends on it. On P99 an unresolved request holds the next assist until
+  its reply or zone entry. A reply that arrives after the five-second local
+  selection window can release the hold.
+- `/random` rolls from 0 to 100 by default. `/random high` rolls from 0 to
+  that endpoint, and `/random low high` uses both. P99 orders the endpoints
+  and accepts values from 0 through 32,000. Chat shows received rolls.
+- `/emote words` displays a local line after submission. Plain emote text
+  must fit in the P99 wire field after escaping. Received emotes arrive in
+  chat independently.
+- `/afk`, `/anonymous` (also `/anon`) and `/roleplay` toggle presence
+  and listing. On P99 the client shows the requested value and updates the
+  received listing on an appearance or admission update. Turn off
+  anonymity before enabling roleplay. Custom away messages and automatic
+  tell replies remain outside this feature.
+
+The P99 paths follow Titanium source and await attended checks.
+
 ## Social hotbuttons
 
 Type `/social set Greet | /pause 10,/say Hello! | /stand` to save a social
@@ -349,7 +383,7 @@ choose **Inspect player** to see the received equipment names, icons and note.
 An unanswered inspection holds the next request to the same player for up
 to five seconds (inferred, recording checklist 6.400).
 Automatic inspection replies use the known inspect note from the installed
-character settings when available.
+character settings when available. Note import reads profiles up to 256 KiB.
 
 Considering, hailing, auto-attack and class abilities use the target and session
 rules. Loot lists received corpse contents; Loot all takes items sequentially.

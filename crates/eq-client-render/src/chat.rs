@@ -1758,6 +1758,22 @@ pub(super) fn zone_who_request(
     }
 }
 
+/// Whether a slash command broadcasts text or a roll to the players around
+/// the character (`/emote`, `/em`, `/random`): chat-like, so a script may send
+/// it only in a network-enforced local test session.
+pub(super) fn broadcasts_to_others(input: &str) -> bool {
+    let Some(command) = input.trim_start().strip_prefix('/') else {
+        return false;
+    };
+    let name = command
+        .split(char::is_whitespace)
+        .next()
+        .unwrap_or_default();
+    ["emote", "em", "random"]
+        .iter()
+        .any(|word| name.eq_ignore_ascii_case(word))
+}
+
 /// Slash commands about the player and those around them: how `/who`
 /// lists the player, dice, emotes, assisting and groups. None for any other
 /// line.
@@ -1768,8 +1784,7 @@ fn social_commands(
     stamp: &dyn Fn() -> Result<crate::outbox::Stamp, String>,
 ) -> Option<Result<Vec<ClientCommand>, String>> {
     Some(match name {
-        // How `/who` lists the player: away, which takes a message the client
-        // does not keep yet, anonymous or roleplaying.
+        // How `/who` lists the player: away, anonymous or roleplaying.
         "afk" => stamp().map(|stamp| {
             vec![ClientCommand::ToggleAway {
                 session_id: stamp.session_id,
@@ -2506,6 +2521,80 @@ mod tests {
             received.try_recv(),
             Ok(ClientCommand::StopSong { session_id: 5, .. })
         ));
+    }
+
+    #[test]
+    fn ordinary_social_slash_commands_use_the_admissions_capabilities() {
+        use super::super::online::{OnlineState, testing};
+        use eq_client_core::Capability;
+
+        let mut online = OnlineState::new(true);
+        let (queue, received) = std::sync::mpsc::sync_channel(1);
+        let outbox = crate::outbox::Outbox::new(Some(queue));
+        let qol = Settings::default();
+        let lines = [
+            "/assist",
+            "/random 20 10",
+            "/emote waves.",
+            "/afk",
+            "/anon",
+            "/roleplay",
+        ];
+        let admit = |online: &mut OnlineState, session_id, capabilities| {
+            testing::news(
+                online,
+                [eq_client_core::WorldEvent::Entered {
+                    capabilities,
+                    choices: Vec::new(),
+                    session_id,
+                    zone: "qeytoqrg".into(),
+                    player: Box::new(testing::player(7)),
+                    far_clip: None,
+                    spell_landing_flag: None,
+                }],
+            );
+            testing::connect(online, true);
+            online.select_target(Some(8));
+        };
+        admit(&mut online, 4, Vec::new());
+        for line in lines {
+            assert!(submit_game_command(line, &mut online, &outbox, &qol).is_err());
+            assert!(received.try_recv().is_err());
+        }
+
+        admit(
+            &mut online,
+            5,
+            vec![
+                Capability::Assisting,
+                Capability::Rolling,
+                Capability::Emoting,
+                Capability::Listing,
+            ],
+        );
+        let expected = [
+            ClientCommand::Assist {
+                session_id: 5,
+                spawn_id: 8,
+            },
+            ClientCommand::Random {
+                session_id: 5,
+                low: 20,
+                high: 10,
+            },
+            ClientCommand::Emote {
+                session_id: 5,
+                text: "waves.".into(),
+            },
+            ClientCommand::ToggleAway { session_id: 5 },
+            ClientCommand::ToggleAnonymous { session_id: 5 },
+            ClientCommand::ToggleRoleplay { session_id: 5 },
+        ];
+        for (line, expected) in lines.into_iter().zip(expected) {
+            submit_game_command(line, &mut online, &outbox, &qol).unwrap();
+            let actual = received.try_recv().unwrap();
+            assert_eq!(actual, expected);
+        }
     }
 
     #[test]

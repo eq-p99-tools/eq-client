@@ -169,17 +169,21 @@ impl Program {
     /// A restricted action anywhere in the source needs a local test session.
     pub fn check_local_commands(&self, local: bool) -> Result<(), ParseError> {
         if !local
-            && let Some(instruction) = self.instructions.iter().find(|instruction| {
-                matches!(
-                    instruction.step(),
-                    Step::Gm(_) | Step::Chat(_) | Step::Social(_)
-                )
-            })
+            && let Some(instruction) =
+                self.instructions
+                    .iter()
+                    .find(|instruction| match instruction.step() {
+                        Step::Gm(_) | Step::Chat(_) | Step::Social(_) => true,
+                        Step::Slash(command) => crate::chat::broadcasts_to_others(command),
+                        _ => false,
+                    })
         {
             return Err(ParseError {
                 line: Some(instruction.line()),
                 message: if matches!(instruction.step(), Step::Social(_)) {
                     "social steps require a network-enforced local test session.".into()
+                } else if matches!(instruction.step(), Step::Slash(_)) {
+                    "emote and random steps require a network-enforced local test session.".into()
                 } else {
                     "gm and chat require a network-enforced local test session.".into()
                 },
@@ -321,6 +325,26 @@ mod tests {
         );
         assert!(program.check_local_commands(true).is_ok());
         assert_eq!(program.into_steps().unwrap_err().line, Some(1));
+    }
+
+    #[test]
+    fn emote_and_random_steps_need_a_local_session_but_listing_steps_do_not() {
+        for (source, line) in [
+            ("slash afk\nslash emote waves\n", Some(2)),
+            ("slash assist\nslash random 1 6\n", Some(2)),
+        ] {
+            let program = Program::parse(source, Path::new(".")).unwrap();
+            assert_eq!(program.check_local_commands(false).unwrap_err().line, line);
+            assert!(program.check_local_commands(true).is_ok());
+        }
+        let program = Program::parse("slash afk\nslash assist\n", Path::new(".")).unwrap();
+        assert!(program.check_local_commands(false).is_ok());
+        for command in ["/emote waves", "/EM waves", " /random 1 6", "/Random"] {
+            assert!(crate::chat::broadcasts_to_others(command), "{command}");
+        }
+        for command in ["/emoted", "/afk", "/assist", "emote waves", "/randomize"] {
+            assert!(!crate::chat::broadcasts_to_others(command), "{command}");
+        }
     }
 
     #[test]

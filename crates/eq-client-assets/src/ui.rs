@@ -2,7 +2,7 @@
 //! the skin's data is copied into this project and a custom skin carries over.
 use std::{
     collections::{BTreeSet, HashMap},
-    io,
+    io::{self, Read as _},
     path::{Path, PathBuf},
 };
 
@@ -14,6 +14,7 @@ pub const DEFAULT_SKIN: &str = "default";
 
 /// Titanium equipment slots, from charm to ammo.
 const EQUIPMENT: std::ops::RangeInclusive<u16> = 0..=21;
+const MAX_INSPECT_PROFILE_BYTES: usize = 256 * 1024;
 
 /// Where a skin's inventory window puts the equipment and the character, in that
 /// window's pixels, relative to the top-left of the two together.
@@ -1003,7 +1004,19 @@ impl OfficialSettings for Titanium<'_> {
         if !plain_name(character) || !plain_name(world) {
             return None;
         }
-        let bytes = std::fs::read(self.0.join(format!("{character}_{world}.ini"))).ok()?;
+        let path = self.0.join(format!("{character}_{world}.ini"));
+        if !path.metadata().ok()?.is_file() {
+            return None;
+        }
+        let mut bytes = Vec::new();
+        std::fs::File::open(path)
+            .ok()?
+            .take(MAX_INSPECT_PROFILE_BYTES as u64 + 1)
+            .read_to_end(&mut bytes)
+            .ok()?;
+        if bytes.len() > MAX_INSPECT_PROFILE_BYTES {
+            return None;
+        }
         let text = std::str::from_utf8(&bytes).ok()?;
         ini_value(text, "InspectText", "Text")
             .filter(|note| note.len() < 256 && !note.as_bytes().contains(&0))
@@ -2211,6 +2224,17 @@ MouseSensitivity=4
         assert_eq!(settings.inspect_text("Example", "Two").as_deref(), Some(""));
         assert_eq!(settings.inspect_text("Other", "One"), None);
         assert_eq!(settings.inspect_text("../Example", "One"), None);
+
+        let mut profile = b"[InspectText]\nText=Known note\n;".to_vec();
+        profile.resize(MAX_INSPECT_PROFILE_BYTES, b' ');
+        std::fs::write(install.join("Example_One.ini"), &profile).unwrap();
+        assert_eq!(
+            settings.inspect_text("Example", "One").as_deref(),
+            Some("Known note")
+        );
+        profile.push(b' ');
+        std::fs::write(install.join("Example_One.ini"), &profile).unwrap();
+        assert_eq!(settings.inspect_text("Example", "One"), None);
         std::fs::remove_dir_all(&install).unwrap();
     }
 

@@ -348,21 +348,19 @@ impl Run {
         if self.id != update.runbook_id {
             return Err("runbook_changed");
         }
-        if update.report.admission_id.is_some() && update.report.admission_id != admission_id {
-            return Err("runbook_admission_changed");
-        }
         let row = self
             .rows
             .iter_mut()
             .find(|row| row.item.id == update.item_id)
             .ok_or("unknown_runbook_item")?;
-        if let Some((_, report)) = &row.recorded {
-            if *report == update.report {
-                return Ok(());
-            }
-            if report.state.terminal() {
-                return Err("runbook_item_already_reported");
-            }
+        if row.report() == Some(&update.report) {
+            return Ok(());
+        }
+        if update.report.admission_id.is_some() && update.report.admission_id != admission_id {
+            return Err("runbook_admission_changed");
+        }
+        if row.report().is_some_and(|report| report.state.terminal()) {
+            return Err("runbook_item_already_reported");
         }
         if update.after_request_id != row.recorded.as_ref().map(|(id, _)| *id) {
             return Err("runbook_item_changed");

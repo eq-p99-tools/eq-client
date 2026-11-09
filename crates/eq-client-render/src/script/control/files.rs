@@ -15,6 +15,29 @@ use super::protocol::MAX_REQUEST_BYTES;
 const MAX_EXPORT_BYTES: usize = 64 * 1024;
 pub(super) const MAX_STATUS_BYTES: usize = 128 * 1024 + MAX_EXPORT_BYTES;
 pub(super) const RUNBOOK_EXPORT: &str = "runbook-export.json";
+pub(super) const RUNBOOK_UI_EXPORT: &str = "runbook-ui-export.json";
+
+#[derive(Clone, Copy)]
+pub(super) enum RunbookExport {
+    Harness(u64),
+    Window,
+}
+
+impl RunbookExport {
+    pub(super) const fn request_id(self) -> Option<u64> {
+        match self {
+            Self::Harness(id) => Some(id),
+            Self::Window => None,
+        }
+    }
+
+    pub(super) const fn path(self) -> &'static str {
+        match self {
+            Self::Harness(_) => RUNBOOK_EXPORT,
+            Self::Window => RUNBOOK_UI_EXPORT,
+        }
+    }
+}
 
 /// Serializes the last background exchange with final shutdown publication.
 #[derive(Clone)]
@@ -39,15 +62,16 @@ impl Writer {
         exchange(&self.root, status)
     }
 
-    pub(super) fn export_runbook(&self, bytes: &[u8]) -> Result<(), String> {
+    pub(super) fn export_runbook(&self, target: RunbookExport, bytes: &[u8]) -> Result<(), String> {
         let closed = self.closed.lock().map_err(|_| "Control writer failed")?;
         if *closed {
             return Err("Control writer is closed".into());
         }
+        let path = target.path();
         publish_file(
             &self.root,
-            RUNBOOK_EXPORT,
-            "runbook-export.json.tmp",
+            path,
+            &format!("{path}.tmp"),
             bytes,
             MAX_EXPORT_BYTES,
         )

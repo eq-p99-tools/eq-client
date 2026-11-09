@@ -3036,7 +3036,7 @@ fn eqmac_ability_list_uses_profile_sentinels_and_class_without_changing_titanium
 }
 
 #[test]
-fn a_bandaging_that_ends_frees_bind_wound_and_the_player_hears_how_it_went() {
+fn bandaging_outcomes_keep_bind_wounds_full_button_recovery() {
     use crate::{
         abilities::Ability,
         bind_wound::{BindWoundEnd, BindWoundUpdate},
@@ -3044,25 +3044,38 @@ fn a_bandaging_that_ends_frees_bind_wound_and_the_player_hears_how_it_went() {
     use std::time::Duration;
     let mut world = admitted();
     let now = Instant::now();
-    game(
-        &mut world,
-        WorldEvent::AbilityUsed {
+    let reuse = Duration::from_secs(11);
+    world.apply(
+        &WorldUpdate::Game(WorldEvent::AbilityUsed {
             session_id: 1,
             ability: Ability::BindWound,
-            ready_in: Duration::from_secs(10),
-        },
+            ready_in: reuse,
+        }),
+        now,
+        &NoSpells,
     );
-    assert!(world.ability_wait(Ability::BindWound, now).is_some());
+    assert_eq!(world.ability_wait(Ability::BindWound, now), Some(reuse));
     let started = BindWoundUpdate::Started { target: None };
     let changes = game(&mut world, WorldEvent::BindWound(started.clone()));
     assert_eq!(changes.notices, [Notice::BindWound(started)]);
     // The server's unlock as it starts says nothing.
     let changes = game(&mut world, WorldEvent::BindWound(BindWoundUpdate::Unlocked));
     assert_eq!(changes.notices, []);
-    let ended = BindWoundUpdate::Ended(BindWoundEnd::Complete);
-    let changes = game(&mut world, WorldEvent::BindWound(ended.clone()));
-    assert_eq!(changes.notices, [Notice::BindWound(ended)]);
-    assert_eq!(world.ability_wait(Ability::BindWound, now), None);
+    for result in [
+        BindWoundUpdate::Ended(BindWoundEnd::Complete),
+        BindWoundUpdate::Released,
+        BindWoundUpdate::Unconfirmed {
+            stock_uncertain: true,
+        },
+    ] {
+        let changes = game(&mut world, WorldEvent::BindWound(result.clone()));
+        assert_eq!(changes.notices, [Notice::BindWound(result)]);
+        assert_eq!(
+            world.ability_wait(Ability::BindWound, now + Duration::from_millis(10_999)),
+            Some(Duration::from_millis(1))
+        );
+    }
+    assert_eq!(world.ability_wait(Ability::BindWound, now + reuse), None);
 }
 
 #[test]
@@ -4745,6 +4758,30 @@ fn the_players_own_listing_changes_and_says_which() {
     }
     // A change made for an earlier admission says nothing.
     assert!(set(&mut world, 9, ListingChange::Away(false)).ignored);
+    assert!(world.player().unwrap().listing.away);
+}
+
+#[test]
+fn a_listing_request_keeps_the_received_state_until_an_update_arrives() {
+    use crate::listing::ListingChange;
+    let mut world = admitted();
+    let player = world.player().unwrap().spawn_id;
+    let change = ListingChange::Away(true);
+    let initial = world.player().unwrap().listing;
+    let requested = |session_id| WorldEvent::ListingRequested { session_id, change };
+    assert_eq!(
+        game(&mut world, requested(1)).notices,
+        [Notice::ListingRequested(change)]
+    );
+    assert_eq!(world.player().unwrap().listing, initial);
+    assert!(game(&mut world, requested(9)).ignored);
+    game(
+        &mut world,
+        WorldEvent::Listing {
+            spawn_id: player,
+            change,
+        },
+    );
     assert!(world.player().unwrap().listing.away);
 }
 

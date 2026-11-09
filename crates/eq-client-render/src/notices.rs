@@ -254,8 +254,15 @@ fn bind_wound(update: &BindWoundUpdate, messages: Option<&Messages>) -> Option<S
         BindWoundUpdate::Released => {
             Said::own("The server released your bandage attempt without a result.")
         }
-        BindWoundUpdate::Unconfirmed => Said::own(
-            "Still waiting for the bandage result or stock update. Re-enter the zone if the wait persists.",
+        BindWoundUpdate::Unconfirmed {
+            stock_uncertain: true,
+        } => Said::own(
+            "The bandage result is unconfirmed. Wait for an inventory update before using the affected bandages.",
+        ),
+        BindWoundUpdate::Unconfirmed {
+            stock_uncertain: false,
+        } => Said::own(
+            "Bandage stock updated. The server did not report a bandaging result in time.",
         ),
         BindWoundUpdate::Unlocked => return None,
     })
@@ -449,6 +456,21 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         }
         Notice::Group(notice) => in_chat(group_lines(notice, messages)),
         Notice::Listing(notice) => chat(listing_line(*notice, messages)),
+        Notice::ListingRequested(change) => {
+            use eq_client_core::listing::{Anonymity, ListingChange};
+            let status = match change {
+                ListingChange::Away(true) => "AFK on",
+                ListingChange::Away(false) => "AFK off",
+                ListingChange::Anonymity(Anonymity::Open) => "Open listing",
+                ListingChange::Anonymity(Anonymity::Anonymous) => "Anonymous listing",
+                ListingChange::Anonymity(Anonymity::Roleplaying) => "Roleplaying listing",
+                ListingChange::Anonymity(Anonymity::AnonymousRoleplaying) => {
+                    "Anonymous roleplaying listing"
+                }
+                _ => return Vec::new(),
+            };
+            chat(format!("{status} requested.").into())
+        }
         Notice::Roll(roll) => in_chat(roll_lines(roll, messages)),
         Notice::Raid(notice) => in_chat(raid_lines(notice, messages)),
     }
@@ -925,6 +947,28 @@ mod tests {
             wording(&far, Some(&messages)),
             [(Place::Chat, Said::official("Closer to Firiona, please."))]
         );
+    }
+
+    #[test]
+    fn expired_bandaging_distinguishes_the_received_stock_from_an_unknown_result() {
+        for (stock_uncertain, expected) in [
+            (
+                true,
+                "The bandage result is unconfirmed. Wait for an inventory update before using the affected bandages.",
+            ),
+            (
+                false,
+                "Bandage stock updated. The server did not report a bandaging result in time.",
+            ),
+        ] {
+            assert_eq!(
+                wording(
+                    &Notice::BindWound(BindWoundUpdate::Unconfirmed { stock_uncertain }),
+                    None,
+                ),
+                [(Place::Chat, Said::own(expected))]
+            );
+        }
     }
 
     #[test]

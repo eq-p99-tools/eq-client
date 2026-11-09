@@ -145,6 +145,7 @@ pub(crate) struct Bridge {
     runbook: Option<runbook::Run>,
     admission_id: Option<u64>,
     export: runbook::export::Export,
+    ui_export: runbook::export::Export,
     history: VecDeque<Snapshot>,
     protocol_error: Option<String>,
     io_error: Option<String>,
@@ -169,6 +170,7 @@ impl Bridge {
             runbook: None,
             admission_id: None,
             export: runbook::export::Export::default(),
+            ui_export: runbook::export::Export::default(),
             history: VecDeque::new(),
             protocol_error: None,
             io_error: None,
@@ -278,7 +280,7 @@ impl Bridge {
     fn export_runbook(
         &mut self,
         runbook_id: u64,
-        request_id: Option<u64>,
+        target: files::RunbookExport,
         admission_id: Option<u64>,
     ) -> Result<(), &'static str> {
         let run = self
@@ -286,10 +288,14 @@ impl Bridge {
             .as_ref()
             .filter(|run| run.id == runbook_id)
             .ok_or("runbook_changed")?;
-        self.export.queue(
+        let export = match target {
+            files::RunbookExport::Harness(_) => &mut self.export,
+            files::RunbookExport::Window => &mut self.ui_export,
+        };
+        export.queue(
             self.writer.clone(),
             run,
-            request_id,
+            target,
             &self.instance,
             admission_id,
         )
@@ -323,6 +329,7 @@ impl Bridge {
             "admission_id":self.admission_id,"control_health":self.channel_health(),
             "runbook":self.runbook.as_ref().map(runbook::Run::json),
             "runbook_export":self.export.json(self.closed),
+            "runbook_ui_export":self.ui_export.json(self.closed),
             "recent_runs":self.history.iter().map(Snapshot::json).collect::<Vec<_>>(),
             "protocol_error":self.protocol_error,"io_error":self.io_error})).expect("bounded control values serialize")
     }
@@ -336,6 +343,7 @@ impl Drop for Bridge {
         self.closed = true;
         self.admission_id = None;
         self.export.poll();
+        self.ui_export.poll();
         self.revision = self.revision.saturating_add(1);
         if let Some(current) = &mut self.current
             && !current.snapshot.terminal()
@@ -410,6 +418,7 @@ fn receive(
     let admission_id = runbook::admission_id(&online);
     bridge.admission_id = admission_id;
     bridge.export.poll();
+    bridge.ui_export.poll();
     let Some(result) = bridge.job.poll(Some(0)) else {
         return;
     };
@@ -470,7 +479,11 @@ fn receive(
             Err(code) => Receipt::rejected(request.id, code),
         },
         Operation::RunbookExport(id) => {
-            match bridge.export_runbook(*id, Some(request.id), admission_id) {
+            match bridge.export_runbook(
+                *id,
+                files::RunbookExport::Harness(request.id),
+                admission_id,
+            ) {
                 Ok(()) => Receipt::new(request.id, "accepted", "runbook_export_queued", None),
                 Err(code) => Receipt::rejected(request.id, code),
             }

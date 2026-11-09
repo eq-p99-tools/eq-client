@@ -153,12 +153,14 @@ pub(super) struct SpellNames(super::spell_provider::Provider);
 
 impl Default for SpellNames {
     fn default() -> Self {
-        Self::from_definitions(eq_client_assets::spells::Definitions::default())
+        Self::from_definitions(std::sync::Arc::default())
     }
 }
 
 impl SpellNames {
-    fn from_definitions(definitions: eq_client_assets::spells::Definitions) -> Self {
+    pub(super) fn from_definitions(
+        definitions: std::sync::Arc<eq_client_assets::spells::Definitions>,
+    ) -> Self {
         use eq_client_core::spell_tables::{Binding, Policy};
         Self(super::spell_provider::Provider::new(
             Binding::new(Policy::Installed),
@@ -186,7 +188,8 @@ impl SpellNames {
                 .eq_directory
                 .as_deref()
                 .and_then(|path| eq_client_assets::spells::Definitions::read(path, &layout).ok())
-                .unwrap_or_default(),
+                .unwrap_or_default()
+                .into(),
         )
     }
 
@@ -199,10 +202,9 @@ impl SpellNames {
     /// Synthetic spell data through the same generation layout as loading.
     #[cfg(test)]
     pub(super) fn parse_for(text: &str, client: eq_client_assets::ui::InstalledClient) -> Self {
-        Self::from_definitions(eq_client_assets::spells::Definitions::parse(
-            text,
-            &client.spell_file(),
-        ))
+        Self::from_definitions(
+            eq_client_assets::spells::Definitions::parse(text, &client.spell_file()).into(),
+        )
     }
 
     fn spell(&self, id: u32) -> Option<&eq_client_assets::spells::Definition> {

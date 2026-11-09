@@ -17,13 +17,23 @@ pub(super) use worlds::{LoginStrings, scroll, worlds};
 
 use super::{online::OnlineState, online::Updates, outbox::Outbox, theme};
 use bevy::prelude::*;
+use eq_client_assets::spells::Definitions;
 use eq_client_core::{ClientCommand, WorldUpdate};
-use std::sync::mpsc::{Receiver, SyncSender};
+use std::sync::{
+    Arc,
+    mpsc::{Receiver, SyncSender},
+};
 use zeroize::{Zeroize, Zeroizing};
 
 /// The app's side of the login front end: the login servers it offers, and
 /// how it logs in on one.
 pub trait Logins: Send + Sync {
+    /// Immutable installed spells shared by the renderer and sessions from
+    /// this launch. With no supplied table the renderer reads its installation.
+    fn installed_spell_definitions(&self) -> Option<Arc<Definitions>> {
+        None
+    }
+
     /// The login servers the login screen offers, in order.
     fn servers(&self) -> Vec<LoginServer>;
 
