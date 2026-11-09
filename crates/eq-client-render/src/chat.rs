@@ -1776,7 +1776,13 @@ pub(super) fn client_request(input: &str, state: &mut ChatState) -> Option<Resul
         state.log_toggle = true;
         return Some(Ok(()));
     }
-    if input.eq_ignore_ascii_case("/raidwindow") {
+    // The Raid window opens or closes whatever words follow; what the
+    // official client does with them is unread (checklist 6.413).
+    if input
+        .split_whitespace()
+        .next()
+        .is_some_and(|name| name.eq_ignore_ascii_case("/raidwindow"))
+    {
         state.toggled = Some(super::windows::WindowId::Raid);
         return Some(Ok(()));
     }
@@ -3738,10 +3744,12 @@ mod tests {
             assert_eq!(chat.history.revision(), said, "{line}");
             assert!(chat.draft.text().is_empty(), "{line}");
         }
-        // `/raid` is the Raid window's, which takes no words.
+        // `/raid` is the Raid window's, which leaves the words aside.
         send_typed(&mut app, "/raid hi");
         assert!(receiver.try_recv().is_err());
-        assert_eq!(app.world().resource::<ChatState>().draft.text(), "/raid hi");
+        let chat = app.world().resource::<ChatState>();
+        assert_eq!(chat.draft.text(), "");
+        assert_eq!(chat.toggled, Some(super::super::windows::WindowId::Raid));
     }
 
     fn press_slash(app: &mut App) {

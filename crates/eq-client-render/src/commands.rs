@@ -1,9 +1,13 @@
 //! The Titanium client's slash command names, in the order its parser
-//! tries them (eqgame.exe command table), and how a typed word resolves
-//! among them: the word is compared, letter case aside, as the start of
-//! each name in turn, and the first name it starts wins. A first match on a
-//! game master's command does nothing for a player, and the parser does not
-//! go on to a later name. Names and flags only; no help text.
+//! tries them, and how a typed word resolves among them (eqgame.exe: the
+//! command table at 0x78a0cc, 336 entries of 28 bytes; the parser at
+//! 0x498b78). The word is compared, letter case aside, as the start of each
+//! name in turn, and the first name it starts wins, so an empty word, a bare
+//! `/`, is the first entry's, `/who`. A first match on a game master's
+//! command does nothing for a player, and the parser does not go on to a
+//! later name (0x498eda-0x498ef0). Names and flags only; no help text. The
+//! table's second `/quit`, which nothing reaches, and its empty terminator
+//! are left out.
 //!
 //! A word that starts no name is not the official client's. Only such a
 //! word reaches this client's own commands (`/social`, `/pause` inside a
@@ -480,6 +484,32 @@ mod tests {
         assert_eq!(spelled("hello").as_deref(), Some("hello"));
         assert_eq!(spelled("/zone qeynos"), None);
         assert_eq!(spelled("/group hi"), None);
+    }
+
+    #[test]
+    fn a_spelled_line_spells_the_same_again() {
+        // A typed line is spelled out, and a game command spells what it is
+        // handed again, so each name must resolve to itself.
+        for (name, kind) in NAMES {
+            let line = format!("/{name} words");
+            let once = spelled(&line).map(std::borrow::Cow::into_owned);
+            match kind {
+                Gm => assert_eq!(once, None, "{name}"),
+                Own | Same(_) => {
+                    let once = once.unwrap();
+                    let target = match kind {
+                        Same(target) => target,
+                        _ => name,
+                    };
+                    assert_eq!(once, format!("/{target} words"), "{name}");
+                    assert_eq!(spelled(&once).as_deref(), Some(once.as_str()), "{name}");
+                }
+            }
+        }
+        for name in OURS {
+            let line = format!("/{name}");
+            assert_eq!(spelled(&line).as_deref(), Some(line.as_str()));
+        }
     }
 
     #[test]
