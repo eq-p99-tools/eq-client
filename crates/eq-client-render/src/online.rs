@@ -213,6 +213,12 @@ impl OnlineState {
             })
     }
 
+    /// The player took off in a jump that costs this much endurance, shown
+    /// at once ([`eq_client_core::world::ClientWorld::spend_endurance`]).
+    pub(super) fn spend_endurance(&mut self, cost: u32) {
+        self.world.spend_endurance(cost);
+    }
+
     /// The player asked to camp, ending there.
     pub(super) fn camp_to(&mut self, to: eq_client_core::camp::CampTo) {
         self.world.camp_to(to);

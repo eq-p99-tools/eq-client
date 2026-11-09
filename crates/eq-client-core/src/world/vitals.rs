@@ -24,7 +24,8 @@ pub struct ReportedHp {
 pub struct Vitals {
     /// Current mana.
     pub mana: Option<u32>,
-    /// Current endurance.
+    /// Current endurance, as last reported less a jump's cost the client
+    /// took off since ([`crate::world::ClientWorld::spend_endurance`]).
     pub endurance: Option<u32>,
     /// Experience on the Titanium 0..330 scale.
     pub experience: Option<u32>,

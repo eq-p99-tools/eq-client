@@ -488,6 +488,17 @@ impl ClientWorld {
         self.camp_to = to;
     }
 
+    /// The player took off in a jump that costs `cost` endurance. The
+    /// program takes the cost off the endurance it shows at take-off
+    /// (Titanium 0x4acb38), ahead of the server; the server's next report
+    /// replaces what is left. Without a report there is nothing to take it
+    /// from.
+    pub fn spend_endurance(&mut self, cost: u32) {
+        if let Some(endurance) = self.vitals.endurance.as_mut() {
+            *endurance = endurance.saturating_sub(cost);
+        }
+    }
+
     /// Whether the player camped to the desktop, once: a front end ends the
     /// program when it is.
     pub fn take_leaving(&mut self) -> bool {

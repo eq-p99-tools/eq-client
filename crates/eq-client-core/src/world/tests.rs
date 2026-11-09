@@ -6358,3 +6358,33 @@ fn initial_group_leadership_keeps_members_received_before_formation() {
     assert_eq!(world.group().unwrap().leader.as_deref(), Some("Other"));
     assert!(!world.leads_group());
 }
+
+#[test]
+fn a_jump_takes_its_cost_off_the_shown_endurance_until_the_next_report() {
+    let mut world = admitted();
+    world.spend_endurance(20);
+    assert_eq!(
+        world.vitals().endurance,
+        None,
+        "nothing reported to take from"
+    );
+    game(
+        &mut world,
+        WorldEvent::Resources {
+            mana: 0,
+            endurance: 30,
+        },
+    );
+    world.spend_endurance(20);
+    assert_eq!(world.vitals().endurance, Some(10));
+    world.spend_endurance(20);
+    assert_eq!(world.vitals().endurance, Some(0));
+    game(
+        &mut world,
+        WorldEvent::Resources {
+            mana: 0,
+            endurance: 25,
+        },
+    );
+    assert_eq!(world.vitals().endurance, Some(25));
+}

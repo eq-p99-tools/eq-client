@@ -486,7 +486,11 @@ pub(super) fn receive_world()
 /// Sample the worker's observed position before a new move can advance it.
 pub(super) fn liquid_and_movement()
 -> bevy::ecs::schedule::ScheduleConfigs<bevy::ecs::system::ScheduleSystem> {
-    (crate::breath::update, motion::input)
+    (
+        crate::breath::update,
+        motion::input,
+        motion::spend_endurance,
+    )
         .chain()
         .in_set(Stage::Input)
 }

@@ -88,6 +88,9 @@ pub(super) struct Controls {
     /// When the latest jump started; it outlasts a reset, so a new
     /// admission cannot hurry the next.
     last_jump: Option<Instant>,
+    /// What the jump that just took off costs in endurance, for
+    /// [`spend_endurance`] to show.
+    endurance_spent: Option<u32>,
     /// A jump from standing still crouching first, as both installed
     /// clients do.
     crouch: Option<Crouch>,
@@ -215,6 +218,7 @@ impl Default for Controls {
             refused: None,
             jump: None,
             last_jump: None,
+            endurance_spent: None,
             crouch: None,
             unreported: None,
             facing: None,
@@ -1647,7 +1651,8 @@ pub(super) fn input(
             None => (world.step(feet, delta, body.height), mode, false),
         }
     };
-    // The server charges the jump's endurance; the arc travels in position updates.
+    // The server charges the jump's endurance; the arc travels in position
+    // updates.
     if jumped
         && let Err(reason) = outbox.post(online.world(), |stamp| ClientCommand::Jump {
             session_id: stamp.session_id,
@@ -1661,6 +1666,12 @@ pub(super) fn input(
     }
     if jumped {
         controls.last_jump = Some(now);
+        // The program takes the jump's endurance off at take-off; the
+        // server's next report replaces it.
+        controls.endurance_spent = hud
+            .as_ref()
+            .and_then(|hud| hud.resource_estimate)
+            .map(|(_, endurance)| jump_endurance(endurance));
     }
     let position = if placement_blocked {
         origin
@@ -1983,6 +1994,26 @@ fn too_tired_to_jump(endurance: Option<u32>, maximum: Option<u32>) -> bool {
     endurance
         .zip(maximum)
         .is_some_and(|(now, maximum)| now <= 50 && now <= maximum / 10)
+}
+
+/// What a jump costs in endurance at take-off: a tenth of the maximum, at
+/// most 50 (Titanium 0x4acb38). The maximum is the client's own estimate, as
+/// for [`too_tired_to_jump`] (inferred, recording checklist 6.415); without
+/// one, nothing is taken off and the server's report shows the cost.
+fn jump_endurance(maximum: u32) -> u32 {
+    (maximum / 10).min(50)
+}
+
+/// Shows the endurance a jump that just took off costs, as [`input`] left it
+/// (see [`jump_endurance`]).
+pub(super) fn spend_endurance(
+    mut controls: ResMut<Controls>,
+    mut online: ResMut<online::OnlineState>,
+) {
+    if let Some(cost) = controls.endurance_spent {
+        controls.endurance_spent = None;
+        online.spend_endurance(cost);
+    }
 }
 
 fn jump_too_soon(client: InstalledClient, last: Option<Instant>, now: Instant) -> bool {
@@ -3504,6 +3535,48 @@ pub(super) mod tests {
         assert!(said);
     }
 
+    #[test]
+    fn a_jump_takes_a_tenth_of_the_maximum_endurance_at_most_50_at_take_off() {
+        assert_eq!(jump_endurance(300), 30);
+        assert_eq!(jump_endurance(500), 50);
+        assert_eq!(jump_endurance(2_000), 50);
+        assert_eq!(jump_endurance(9), 0);
+        let (mut app, receiver) = standing_jump(InstalledClient::Titanium);
+        app.insert_resource(crate::hud::HudState {
+            resource_estimate: Some((0, 300)),
+        });
+        crate::online::testing::resources(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            0,
+            200,
+        );
+        app.update();
+        let earlier = Instant::now()
+            .checked_sub(Duration::from_millis(1))
+            .unwrap();
+        app.world_mut().resource_mut::<Controls>().crouch = Some(Crouch::Until(earlier));
+        app.update();
+        assert_eq!(
+            stances_and_jump(&receiver),
+            (vec![Posture::Ducking, Posture::Standing], true)
+        );
+        let shown = |app: &App| {
+            app.world()
+                .resource::<online::OnlineState>()
+                .world()
+                .vitals()
+                .endurance
+        };
+        assert_eq!(shown(&app), Some(170));
+        // The server's next report replaces it.
+        crate::online::testing::resources(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            0,
+            175,
+        );
+        assert_eq!(shown(&app), Some(175));
+    }
+
     /// The app of [`app`] for this installed client, the player standing
     /// still on its floor where the session takes jumps, holding Jump.
     fn standing_jump(client: InstalledClient) -> (App, mpsc::Receiver<ClientCommand>) {
@@ -3832,7 +3905,7 @@ pub(super) mod tests {
 
     fn app() -> (App, mpsc::Receiver<ClientCommand>) {
         let (mut app, receiver) = fixture();
-        app.add_systems(Update, input);
+        app.add_systems(Update, (input, spend_endurance).chain());
         (app, receiver)
     }
 
