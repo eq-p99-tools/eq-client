@@ -1758,6 +1758,22 @@ pub(super) fn zone_who_request(
     }
 }
 
+/// Whether a slash command broadcasts text or a roll to the players around
+/// the character (`/emote`, `/em`, `/random`): chat-like, so a script may send
+/// it only in a network-enforced local test session.
+pub(super) fn broadcasts_to_others(input: &str) -> bool {
+    let Some(command) = input.trim_start().strip_prefix('/') else {
+        return false;
+    };
+    let name = command
+        .split(char::is_whitespace)
+        .next()
+        .unwrap_or_default();
+    ["emote", "em", "random"]
+        .iter()
+        .any(|word| name.eq_ignore_ascii_case(word))
+}
+
 /// Slash commands about the player and those around them: how `/who`
 /// lists the player, dice, emotes, assisting and groups. None for any other
 /// line.

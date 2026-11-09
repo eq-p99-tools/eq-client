@@ -3,8 +3,10 @@
 ## Unreleased
 
 - Expose the Project 1999 session's ordinary assist, dice, emote and
-  listing commands through existing chat and script dispatch. Presence
-  requests and received listing changes are shown separately.
+  listing commands through chat and script dispatch. Presence requests and
+  received listing changes are shown separately. Script `slash emote` and
+  `slash random` steps, which reach everyone nearby, are refused outside a
+  network-constrained local test session, as `chat` steps are.
 
 - Keep identical scoped Runbook retries idempotent after an admission
   change. Track harness and window exports with separate files and status.
