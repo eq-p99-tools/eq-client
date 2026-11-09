@@ -264,19 +264,6 @@ mod tests {
                 "Guild MOTD (Leader): Raid at 8"
             )
         );
-        // The one `/getguildmotd` asked for reads the same.
-        assert_eq!(
-            words(
-                &spoken(ChannelName::GuildMotdReply, Some("Leader"), "Raid at 8"),
-                "Examplar"
-            )
-            .unwrap(),
-            heard(
-                0x1d4,
-                &["Leader", "Raid at 8"],
-                "Guild MOTD (Leader): Raid at 8"
-            )
-        );
         // A tell the player sent themselves is heard as any tell is.
         let to_self = ChatLine {
             target: Some("Examplar".into()),
@@ -310,5 +297,21 @@ mod tests {
             ..system
         };
         assert_eq!(words(&own, "Other"), None);
+    }
+
+    #[test]
+    fn the_asked_for_guild_motd_is_heard_as_the_guild_motd() {
+        assert_eq!(
+            words(
+                &spoken(ChannelName::GuildMotdReply, Some("Leader"), "Raid at 8"),
+                "Examplar"
+            )
+            .unwrap(),
+            heard(
+                0x1d4,
+                &["Leader", "Raid at 8"],
+                "Guild MOTD (Leader): Raid at 8"
+            )
+        );
     }
 }
