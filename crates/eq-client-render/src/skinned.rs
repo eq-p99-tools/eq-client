@@ -1096,6 +1096,7 @@ fn behave(
         }
         Does::Closes => drawn.insert((Button, items::Closes(owner), skin())),
         Does::Gives => drawn.insert((Button, super::give::GiveButton)),
+        Does::ChangesCoins => drawn.insert((Button, super::coins::ChangeButton, skin())),
         Does::Coins(place, coin) => drawn.insert((Button, super::coins::CoinBox { place, coin })),
         Does::Bound(binding) => {
             drawn.insert((
@@ -1119,6 +1120,12 @@ fn behave(
             crate::outbox::Needs::Capability(Capability::Abilities),
         )),
         Does::Slash(command) => drawn.insert((Button, SlashButton(command), skin())),
+        Does::Group(bindings::GroupButton::Follow) => drawn.insert((
+            Button,
+            super::group::JoinButton,
+            skin(),
+            crate::outbox::Needs::Capability(Capability::Grouping),
+        )),
         Does::Group(group) => drawn.insert((
             Button,
             SlashButton(group.command()),
@@ -1398,6 +1405,7 @@ fn caption(
         Does::Toggles(_)
         | Does::Closes
         | Does::Gives
+        | Does::ChangesCoins
         | Does::Bound(_)
         | Does::Slash(_)
         | Does::Group(_)

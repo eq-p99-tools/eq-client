@@ -826,6 +826,24 @@ pub trait OfficialSettings {
         OfficialOptions::default()
     }
 
+    /// The friends and ignore lists the official client gives a character
+    /// it has no settings file for yet, in that order, as typed in the
+    /// file.
+    fn default_contacts(&self) -> (Vec<String>, Vec<String>) {
+        (Vec::new(), Vec::new())
+    }
+
+    /// A character's friends and ignore lists on a world, in that order, as
+    /// the official client saved them; None when it has no settings file
+    /// for the character, as before their first entry.
+    fn character_contacts(
+        &self,
+        _character: &str,
+        _world: &str,
+    ) -> Option<(Vec<String>, Vec<String>)> {
+        None
+    }
+
     /// The skin a character last chose, by its name. None when the client
     /// says nothing usable.
     fn chosen_skin(&self, _character: &str, _world: &str) -> Option<String> {
@@ -906,6 +924,32 @@ impl OfficialSettings for Titanium<'_> {
         std::fs::read(self.0.join("eqclient.ini"))
             .map(|bytes| options_from_ini(&String::from_utf8_lossy(&bytes)))
             .unwrap_or_default()
+    }
+
+    /// `Friend00` to `Friend19` and `Ignore00` to `Ignore19` in `[Options]`
+    /// of `eqclient.ini`, up to 63 characters each, skipping empty ones
+    /// (program read R8, 0x4af32c).
+    fn default_contacts(&self) -> (Vec<String>, Vec<String>) {
+        std::fs::read(self.0.join("eqclient.ini"))
+            .map(|bytes| default_contacts_from_ini(&String::from_utf8_lossy(&bytes)))
+            .unwrap_or_default()
+    }
+
+    /// `Friend0` to `Friend99` in `[Friends]` and `Ignored0` to
+    /// `Ignored99` in `[Ignored]` of `<character>_<world>.ini` (program
+    /// read R9, 0x4ab7f1).
+    fn character_contacts(
+        &self,
+        character: &str,
+        world: &str,
+    ) -> Option<(Vec<String>, Vec<String>)> {
+        if !plain_name(character) || !plain_name(world) {
+            return None;
+        }
+        let bytes = std::fs::read(self.0.join(format!("{character}_{world}.ini"))).ok()?;
+        Some(character_contacts_from_ini(&String::from_utf8_lossy(
+            &bytes,
+        )))
     }
 
     /// `LastSysInfoDate` in `[Defaults]` of `eqclient.ini`, else of
@@ -1101,6 +1145,46 @@ fn options_from_ini(text: &str) -> OfficialOptions {
         mouse_sensitivity: ini_value(text, "Options", "MouseSensitivity")
             .and_then(|v| v.trim().parse().ok()),
     }
+}
+
+/// The longest name a default friends or ignore entry keeps.
+const DEFAULT_CONTACT_LIMIT: usize = 63;
+/// The longest name the official client reads from a character's lists:
+/// its buffer holds 32 bytes with the ending.
+const CHARACTER_CONTACT_LIMIT: usize = 31;
+
+/// A listed name as the official client reads it, cut to `limit` bytes;
+/// None for an empty slot.
+fn contact_entry(name: &str, limit: usize) -> Option<String> {
+    let name = name.trim();
+    let mut end = name.len().min(limit);
+    while !name.is_char_boundary(end) {
+        end -= 1;
+    }
+    Some(name[..end].to_owned()).filter(|name| !name.is_empty())
+}
+
+fn default_contacts_from_ini(text: &str) -> (Vec<String>, Vec<String>) {
+    let list = |prefix: &str| {
+        (0..20)
+            .filter_map(|slot| ini_value(text, "Options", &format!("{prefix}{slot:02}")))
+            .filter_map(|name| contact_entry(&name, DEFAULT_CONTACT_LIMIT))
+            .collect()
+    };
+    (list("Friend"), list("Ignore"))
+}
+
+/// A character file's lists: any value starting with `*`, as the client's
+/// `*NULL*` for an empty slot, counts as empty.
+fn character_contacts_from_ini(text: &str) -> (Vec<String>, Vec<String>) {
+    let list = |section: &str, prefix: &str| {
+        (0..100)
+            .filter_map(|slot| ini_value(text, section, &format!("{prefix}{slot}")))
+            .filter(|name| !name.trim_start().starts_with('*'))
+            .filter_map(|name| contact_entry(&name, CHARACTER_CONTACT_LIMIT))
+            .collect()
+    };
+    (list("Friends", "Friend"), list("Ignored", "Ignored"))
 }
 
 fn hotbuttons_from_ini(text: &str) -> Vec<(u8, String)> {
@@ -1818,6 +1902,30 @@ Log=maybe
             official
         );
         std::fs::remove_dir_all(&root).expect("cleaned");
+    }
+
+    #[test]
+    fn a_character_file_keeps_its_friends_and_ignores_with_empty_slots_starred() {
+        let (friends, ignored) = character_contacts_from_ini(&format!(
+            "[Friends]\nFriend0=Alpha\nFriend1=*NULL*\nFriend2=*anything\nFriend99=beta\nFriend100=Late\n[Ignored]\nIgnored0={}\n",
+            "y".repeat(40)
+        ));
+        assert_eq!(friends, ["Alpha", "beta"]);
+        assert_eq!(ignored, ["y".repeat(31)]);
+    }
+
+    #[test]
+    fn eqclient_ini_gives_new_characters_their_default_friends_and_ignores() {
+        let (friends, ignored) = default_contacts_from_ini(&format!(
+            "[Options]\nFriend00=Alpha\nFriend01=\nFriend19=beta\nFriend20=Late\nIgnore05= Pest \nIgnore07={}\n",
+            "x".repeat(70)
+        ));
+        assert_eq!(friends, ["Alpha", "beta"]);
+        assert_eq!(ignored, ["Pest".to_owned(), "x".repeat(63)]);
+        assert_eq!(
+            default_contacts_from_ini("[Defaults]\nFriend00=Alpha\n"),
+            (vec![], vec![])
+        );
     }
 
     #[test]

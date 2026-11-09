@@ -290,6 +290,24 @@ pub enum Notice {
         /// The official client's string for it, in `eqstr_us.txt`.
         string_id: Option<u32>,
     },
+    /// Looted coins are now shared with the group (true) or kept.
+    AutoSplit(bool),
+    /// A guild request was not sent, and why, worded as
+    /// [`Notice::ConsumeRefused`].
+    GuildRefused {
+        /// Why, in the session's words.
+        reason: String,
+        /// The official client's string for it, in `eqstr_us.txt`.
+        string_id: Option<u32>,
+    },
+    /// Coins were not moved, split or changed, and why, worded as
+    /// [`Notice::ConsumeRefused`].
+    CoinsRefused {
+        /// Why, in the session's words.
+        reason: String,
+        /// The official client's string for it, in `eqstr_us.txt`.
+        string_id: Option<u32>,
+    },
     /// Another caster nearby had a cast interrupted. The server names it by
     /// a string that takes the caster's name, which it sends with it.
     OtherCastInterrupted {

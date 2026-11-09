@@ -1,4 +1,5 @@
 //! Calibrated P99 input; no movement is generated without a session grant.
+mod follow;
 mod placement;
 mod shoreline;
 
@@ -28,6 +29,21 @@ use eq_client_core::{
     world_position,
 };
 use std::time::{Duration, Instant};
+
+/// `/follow` asked, for [`input`] to start following the target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FollowAsked;
+
+impl FollowAsked {
+    /// Whether a typed line is `/follow`, by the official parser's prefix
+    /// rule (program read R6: `/fo` and longer).
+    pub(crate) fn typed(input: &str) -> bool {
+        input
+            .strip_prefix('/')
+            .and_then(|command| command.split_whitespace().next())
+            .is_some_and(|name| crate::contacts::abbreviates(name, "follow", 2))
+    }
+}
 
 #[derive(Resource)]
 #[allow(clippy::struct_excessive_bools)] // Independent movement states.
@@ -101,6 +117,10 @@ pub(super) struct Controls {
     stun_active: bool,
     /// Explicit departures; the session checks the same choices independently.
     movement_options: eq_client_core::movement::MovementOptions,
+    /// The group member the player follows on foot (`/follow`).
+    following: Option<follow::Following>,
+    /// Following that ended where no line could be said, to say next frame.
+    follow_ended: Option<(follow::End, String)>,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -202,6 +222,8 @@ impl Default for Controls {
             stunned: false,
             stun_active: false,
             movement_options: eq_client_core::movement::MovementOptions::default(),
+            following: None,
+            follow_ended: None,
         }
     }
 }
@@ -622,7 +644,21 @@ impl Controls {
             .take()
             .filter(|airborne| airborne.peak().is_some());
         let unreported = self.unreported;
+        // Following outlasts a change of speed; one that stops the player
+        // ends it, and says so (R6, 0x411076).
+        let moves = grant
+            .units_per_second
+            .is_some_and(|value| value.is_finite() && value > 0.0);
+        let following = self.following.take();
+        let follow_ended = self.follow_ended.take().or_else(|| {
+            following
+                .as_ref()
+                .filter(|_| !moves)
+                .map(|following| (follow::End::Stopped, following.name().to_owned()))
+        });
         self.reset(grant.units_per_second);
+        self.following = following.filter(|_| moves);
+        self.follow_ended = follow_ended;
         self.autorun = autorun;
         self.backward_speed = grant.backward_units_per_second;
         self.walk_speed = grant.walk_units_per_second;
@@ -835,6 +871,23 @@ pub(super) fn input(
     (look, aim): (Option<Res<MouseLook>>, Option<Res<MouseAim>>),
 ) {
     let client = settings.0.installed_client;
+    if let Some((end, name)) = controls.follow_ended.take() {
+        chat.history.push(crate::chat::system_line(follow::ended(
+            end, &name, &messages,
+        )));
+    }
+    if chat.follow_asked.take().is_some() {
+        let can_move = controls.speed.is_some_and(|speed| speed > 0.0);
+        match follow::start(online.world(), can_move, &messages) {
+            Ok(following) => {
+                follow::started(&following, &messages, &mut chat);
+                controls.autorun = false;
+                controls.following = Some(following);
+            }
+            Err(Some(said)) => chat.history.push(crate::chat::system_line(said)),
+            Err(None) => (),
+        }
+    }
     if !online.enabled || !online.world().connected() || online.world().is_dead() {
         *told_wait = None;
         controls.reset(None);
@@ -1131,7 +1184,7 @@ pub(super) fn input(
     // active yaw. A completed turn may still await its position sample.
     let active_mouse_yaw =
         mouse_step != 0.0 || heading_snapshots && mouse_aim.is_some_and(|yaw| yaw != 0.0);
-    let heading_update = if mouse_snapshot.is_some() {
+    let mut heading_update = if mouse_snapshot.is_some() {
         HeadingUpdate::Snapshot
     } else {
         HeadingUpdate::Rate
@@ -1169,6 +1222,68 @@ pub(super) fn input(
         (yaw, shown),
         look.as_deref(),
     );
+    // Following turns and goes by itself until a movement key moves the
+    // player; it then ends, and the keys move them this sample.
+    let follow_heading = if controls.following.is_some() {
+        let speeds = (
+            controls.speed.unwrap_or(0.0),
+            controls.walk_speed.or(controls.speed).unwrap_or(0.0),
+        );
+        let bodies = follow::Bodies {
+            own: accepted.position,
+            own_height: body.feet_offset,
+            speeds,
+        };
+        // Only an absolute heading on the wire takes the program's turn; a
+        // paced one turns no faster than the turn keys.
+        let turn_limit = (!heading_snapshots).then_some(TURN_RATE * span);
+        let result = if focused && follow::moves(map, &sampled, scripted) {
+            Err(follow::End::Stopped)
+        } else {
+            controls
+                .following
+                .as_mut()
+                .map_or(Err(follow::End::Stopped), |following| {
+                    following.step(online.world(), &bodies, (span, turn_limit, now))
+                })
+        };
+        match result {
+            Ok(step) => {
+                let radians = eq_client_core::render_heading(step.heading);
+                let ahead = Vec3::new(radians.sin(), 0.0, radians.cos());
+                let (mode, speed) = match (step.run, controls.walk_speed) {
+                    (false, Some(walk)) => (MovementMode::Walk, walk),
+                    _ => (MovementMode::Forward, controls.speed.unwrap_or(0.0)),
+                };
+                intent = MotionInput {
+                    mode,
+                    speed,
+                    direction: if step.forward { ahead } else { Vec3::ZERO },
+                    turn: 0.0,
+                    preserve_facing: true,
+                    diagonal: None,
+                };
+                if heading_snapshots {
+                    heading_update = HeadingUpdate::Snapshot;
+                }
+                Some(step.heading)
+            }
+            Err(end) => {
+                if let Some(following) = controls.following.take() {
+                    chat.history.push(crate::chat::system_line(follow::ended(
+                        end,
+                        following.name(),
+                        &messages,
+                    )));
+                }
+                // The program's end leaves the player running.
+                controls.walking = false;
+                None
+            }
+        }
+    } else {
+        None
+    };
     if placement_blocked {
         // Keep the turn inputs and ordinary sample timing. Translation,
         // jumps and gravity cannot start from the suspect received XYZ.
@@ -1242,6 +1357,7 @@ pub(super) fn input(
         && mouse_step == 0.0
         && mouse_snapshot.is_none()
         && diagonal.is_none()
+        && follow_heading.is_none_or(|heading| arc(current_heading, heading) == 0.0)
     {
         controls.held = Some(if placement_blocked {
             Held::PlacementBlocked
@@ -1448,7 +1564,9 @@ pub(super) fn input(
     // The turn keys turn at their own rate. Camera-relative movement faces
     // its direction unless mouse-look is steering the body. The sent heading
     // follows the facing within the same sample budget as the position.
-    let facing = if matches!(mode, MovementMode::GroundedDiagonal(_)) {
+    let facing = if let Some(heading) = follow_heading {
+        heading
+    } else if matches!(mode, MovementMode::GroundedDiagonal(_)) {
         diagonal_heading
     } else if mouse_steering {
         steered_heading
@@ -1457,7 +1575,7 @@ pub(super) fn input(
     } else {
         eq_client_core::world_heading(direction.x.atan2(direction.z))
     };
-    let heading = if mouse_steering {
+    let heading = if mouse_steering || follow_heading.is_some() {
         facing
     } else {
         turn_toward(current_heading, facing, TURN_RATE * span)
@@ -1507,7 +1625,7 @@ pub(super) fn input(
     controls.sent_span = span;
     controls.sent_yaw = if mouse_snapshot.is_some() {
         SentYaw::MouseSnapshot
-    } else if mouse_aim.is_some() {
+    } else if mouse_aim.is_some() || follow_heading.is_some() && heading_snapshots {
         SentYaw::MouseRate
     } else {
         SentYaw::Ordinary

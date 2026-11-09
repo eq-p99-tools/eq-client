@@ -630,7 +630,7 @@ fn hovered_detail(
         }
         Some(Action::Camp) => "Camp\nSits down and leaves the world".into(),
         Some(Action::Invite) => "Invite\nInvites the target into your group".into(),
-        Some(Action::Follow) => "Follow\nJoins the group you were invited to".into(),
+        Some(Action::Follow) => "Follow\nFollows your target, a member of your group".into(),
         Some(Action::Disband) => "Disband\nLeaves your group, or declines an invitation".into(),
         Some(Action::KnightAbility(ability)) => match world.casting().knight_wait(now) {
             Some(wait) if !wait.is_zero() => {
@@ -852,14 +852,6 @@ mod tests {
                     name: "Example".into(),
                 },
             ),
-            (
-                Action::Follow,
-                ClientCommand::FollowGroup {
-                    session_id: 1,
-                    inviter: "Leader".into(),
-                    invitation_id: eq_client_core::group::InvitationId::new(1),
-                },
-            ),
             (Action::Disband, ClientCommand::Disband { session_id: 1 }),
         ];
         for (action, command) in sent {
@@ -870,6 +862,11 @@ mod tests {
                 "{action:?}"
             );
         }
+        // Following a player sends no request of its own; it needs a group.
+        assert_eq!(
+            need(Some(Action::Follow)),
+            Needs::Capability(eq_client_core::Capability::Grouping)
+        );
     }
 
     /// The viewer's app with a player in the world whose first gem holds a

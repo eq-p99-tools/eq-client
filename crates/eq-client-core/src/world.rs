@@ -15,6 +15,7 @@ mod changes;
 mod character;
 mod control;
 mod group;
+mod guild;
 mod held_models;
 mod inventory_moves;
 mod items;
@@ -35,6 +36,7 @@ mod zone;
 pub use casting::{CastNews, Casting, Cooldowns, NoSpells, SpellCatalog, SpellTiming};
 pub use changes::{Changes, Moved, Reply, Reset};
 pub use group::{Group, GroupNotice};
+pub use guild::GuildInvitation;
 pub use held_models::HeldModelEstimate;
 pub use items::ItemCache;
 pub use landings::Landing;
@@ -222,6 +224,12 @@ pub struct ClientWorld {
     time: Option<(crate::clock::GameTime, Instant)>,
     /// Guild names by number, from the world's guild list.
     guild_names: BTreeMap<u32, String>,
+    /// The guild's members, from the list sent this admission.
+    guild_members: Option<Vec<crate::guild::GuildMember>>,
+    /// Guild invitations waiting for the player's answer, oldest first.
+    guild_invitations: std::collections::VecDeque<guild::GuildInvitation>,
+    /// Whether looted coins are shared with the group, once known.
+    auto_split: Option<bool>,
     /// The login server's worlds, until the chosen world lists characters.
     servers: Option<ServerList>,
     characters: Option<CharacterList>,
@@ -926,7 +934,6 @@ impl ClientWorld {
             | WorldEvent::InspectRequest { .. }
             | WorldEvent::InspectAnswer(_)
             | WorldEvent::Duel(_)
-            | WorldEvent::Guild(_)
             | WorldEvent::NewTitles
             | WorldEvent::Gm(_)
             // The machine's weekly account left for the world; the session
@@ -1081,6 +1088,7 @@ impl ClientWorld {
                 }
             }
             WorldEvent::GuildNames(names) => self.guild_names = names.iter().cloned().collect(),
+            WorldEvent::Guild(update) => self.guild_news(update),
             WorldEvent::LastName { name, last_name } => self.last_name(name, last_name),
             WorldEvent::Posture { spawn_id, posture } => {
                 let player = self.is_player(*spawn_id);
@@ -1201,8 +1209,28 @@ impl ClientWorld {
                 self.reconsider(&before);
                 news.trade = true;
             }
-            WorldEvent::CoinsRefused { session_id, reason } => {
-                self.coins_refused(*session_id, reason, news);
+            WorldEvent::CoinsRefused {
+                session_id,
+                reason,
+                string_id,
+            } => self.coins_refused(*session_id, reason, *string_id, news),
+            // Whether looted coins are shared: the profile's, and the player's
+            // change of it, which the official client always answers with a
+            // line (R8).
+            WorldEvent::AutoSplit(on) => self.auto_split = Some(*on),
+            WorldEvent::AutoSplitSet { session_id, on } => {
+                if self.session_id == Some(*session_id) {
+                    self.auto_split = Some(*on);
+                    news.notices.push(Notice::AutoSplit(*on));
+                } else {
+                    news.ignored = true;
+                }
+            }
+            // A banker's change: the purse and the bank as they now stand.
+            WorldEvent::CoinsChanged(banker) => {
+                self.wallet.purse = Some(banker.purse);
+                self.wallet.bank = Some(banker.bank);
+                news.trade = true;
             }
             WorldEvent::Loot(update) => self.loot_news(update, news),
             WorldEvent::Merchant(update) => self.merchant_news(update, news),
@@ -1406,6 +1434,20 @@ impl ClientWorld {
             } => {
                 if self.session_id == Some(*session_id) {
                     news.notices.push(Notice::GroupRefused {
+                        reason: reason.clone(),
+                        string_id: *string_id,
+                    });
+                } else {
+                    news.ignored = true;
+                }
+            }
+            WorldEvent::GuildRefused {
+                session_id,
+                reason,
+                string_id,
+            } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices.push(Notice::GuildRefused {
                         reason: reason.clone(),
                         string_id: *string_id,
                     });
@@ -1747,6 +1789,9 @@ impl ClientWorld {
         self.combining = None;
         self.group = None;
         self.group_invitation = None;
+        self.guild_members = None;
+        self.guild_invitations.clear();
+        self.auto_split = None;
         self.joining_group = false;
         self.assisted = None;
         self.raid = None;

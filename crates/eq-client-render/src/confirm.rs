@@ -48,6 +48,9 @@ pub(crate) enum Question {
         /// The spell.
         spell: u32,
     },
+    /// Whether to join a guild, or take a higher rank in it, as the player
+    /// was invited ([`crate::guild::Invitations`] holds the words).
+    GuildInvite,
 }
 
 impl Question {
@@ -77,6 +80,8 @@ impl Question {
                     names.label(spell)
                 )
             }
+            // The invitation's own words; see [`show`].
+            Self::GuildInvite => String::new(),
         }
     }
 }
@@ -192,9 +197,10 @@ pub(crate) fn buttons(
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn show(
     (online, mut asked, settings): (Res<OnlineState>, ResMut<Asked>, Res<crate::ViewerSettings>),
-    (messages, names): (
+    (messages, names, invitations): (
         Option<Res<crate::hud::messages::Messages>>,
         Res<crate::spellbook::SpellNames>,
+        Option<Res<crate::guild::Invitations>>,
     ),
     mut texts: Query<&mut Text, With<QuestionText>>,
     controls: Query<Entity, With<AnswerButton>>,
@@ -226,10 +232,14 @@ pub(crate) fn show(
             settings.0.installed_client.translocate_offer(),
             messages.as_deref(),
         ),
-        None => asked
-            .question
-            .map(|question| question.text(&names, &online))
-            .unwrap_or_default(),
+        None => match asked.question {
+            Some(Question::GuildInvite) => invitations
+                .map(|invitations| invitations.question())
+                .unwrap_or_default(),
+            question => question
+                .map(|question| question.text(&names, &online))
+                .unwrap_or_default(),
+        },
     };
     for mut text in &mut texts {
         if text.0 != wanted {

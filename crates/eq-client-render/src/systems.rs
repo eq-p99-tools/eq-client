@@ -2,12 +2,12 @@
 //! Keep shared-input and deferred-entity ordering visible at this composition boundary.
 use crate::{
     abilities, buffs, character, character_create, character_select, chat, clicks, coins, combat,
-    combat_text, confirm, daylight, doors, entities, escape, exit_after_screenshot, give, ground,
-    group, hud, interact, inventory, item_models, items, keys, login, logs, map, motion,
-    move_player, names, navigation, navmesh_prebuild, notices, online, options, orbit_camera,
-    outbox, outfit, paperdoll, pet, profile_files, projectiles, raid, reading, resources,
-    schedule_screenshot, select_preview, sheets, skills, skin, skinned, sounds, speed,
-    spell_effects, spell_icons, spellbook, target, tooltip, trade, tradeskills, training,
+    combat_text, confirm, contacts, daylight, doors, entities, escape, exit_after_screenshot, give,
+    ground, group, guild, hud, interact, inventory, item_models, items, keys, login, logs, map,
+    motion, move_player, names, navigation, navmesh_prebuild, notices, online, options,
+    orbit_camera, outbox, outfit, paperdoll, pet, profile_files, projectiles, raid, reading,
+    resources, schedule_screenshot, select_preview, sharing, sheets, skills, skin, skinned, sounds,
+    speed, spell_effects, spell_icons, spellbook, target, tooltip, trade, tradeskills, training,
     translocate, update_hud, weather, whereabouts, who, windows,
 };
 use bevy::prelude::*;
@@ -45,6 +45,8 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<skin::UiSkin>()
         .init_resource::<hud::hotbar::Bindings>()
         .init_resource::<hud::hotbar::Files>()
+        .init_resource::<contacts::Files>()
+        .init_resource::<guild::Invitations>()
         .init_resource::<crate::socials::State>()
         .init_resource::<hud::hotbar::carry::Presses>()
         .init_resource::<clicks::LeftButton>()
@@ -191,15 +193,17 @@ pub(super) fn schedule(app: &mut App) {
             options::tell_choices,
             (items::input, chat::links::input).chain(),
             (inventory::input, inventory::destruction::input).chain(),
-            coins::input,
+            (coins::input, coins::change),
             inventory::colors::input,
             interact::input,
             target::input,
             (
                 who::zone_list,
                 whereabouts::answers,
+                (contacts::answers, contacts::persist).chain(),
+                (guild::invitations, guild::commands, sharing::commands),
                 pet::window,
-                group::window,
+                (group::window, group::join),
                 raid::window,
             ),
             (combat::input, combat::idle_swings).chain(),

@@ -13,6 +13,28 @@ use eq_client_core::{
     world::ClientWorld,
 };
 
+/// The bank window's Change button: asks the banker to change the purse's
+/// and the bank's coins into the fewest of the largest kinds. The official
+/// client checks nothing before it asks (program read R6, 0x4dd386); the
+/// session waits for the banker's answer.
+#[derive(Component)]
+pub(crate) struct ChangeButton;
+
+/// Asks for a banker's change when Change is pressed.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(crate) fn change(
+    online: Res<OnlineState>,
+    outbox: Res<Outbox>,
+    buttons: crate::clicks::Clicks<ChangeButton>,
+) {
+    if buttons.any() {
+        // The outbox says a refusal itself.
+        let _ = outbox.post(online.world(), |stamp| ClientCommand::ChangeCoins {
+            session_id: stamp.session_id,
+        });
+    }
+}
+
 /// A box that holds coins of one kind in a place.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct CoinBox {

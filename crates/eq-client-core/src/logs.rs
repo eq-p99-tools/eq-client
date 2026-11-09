@@ -59,6 +59,9 @@ const fn own_speech(channel: ChannelName) -> Option<(u32, &'static str)> {
     })
 }
 
+/// The installed client's line for the guild's message of the day.
+const GUILD_MOTD: u32 = 0x1d4;
+
 /// The installed client's string for another player's speech in a channel,
 /// which names the speaker, then the tongue where it has a place for one
 /// (true; empty for the common tongue), then the text; and the channel in
@@ -95,6 +98,15 @@ pub fn words(line: &ChatLine, player: &str) -> Option<Words> {
         .as_deref()
         .filter(|sender| !sender.is_empty())
         .and_then(|sender| {
+            // The guild's message of the day names its author, then its text
+            // (program read R11, 0x40a7fd: line 0x1d4).
+            if line.channel == ChannelName::GuildMotd {
+                return Some((
+                    GUILD_MOTD,
+                    vec![sender.to_owned(), text.clone()],
+                    format!("Guild MOTD ({sender})"),
+                ));
+            }
             if line.channel == ChannelName::TellEcho {
                 let target = line.target.as_deref()?;
                 return Some((
@@ -235,6 +247,19 @@ mod tests {
         assert_eq!(
             words(&told, "Examplar").unwrap(),
             heard(1400, &["Friend", "inc"], "You (tell Friend): inc")
+        );
+        // The guild's message of the day names its author.
+        assert_eq!(
+            words(
+                &spoken(ChannelName::GuildMotd, Some("Leader"), "Raid at 8"),
+                "Examplar"
+            )
+            .unwrap(),
+            heard(
+                0x1d4,
+                &["Leader", "Raid at 8"],
+                "Guild MOTD (Leader): Raid at 8"
+            )
         );
         // A tell the player sent themselves is heard as any tell is.
         let to_self = ChatLine {

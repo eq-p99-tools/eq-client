@@ -144,6 +144,16 @@ pub(super) struct ChatState {
     /// An explicit disconnect to handle before other gameplay input.
     pub departure: Option<super::login::Departure>,
     pub(super) socials: super::socials::Inbox,
+    /// The friends, ignore and reply lists, and what was asked of them.
+    pub(crate) contacts: super::contacts::Book,
+    /// The guild's message of the day as last received, shown or not.
+    guild_motd: Option<String>,
+    /// A guild command typed, for [`super::guild::commands`] to run.
+    pub(crate) guild_asked: Option<super::guild::Command>,
+    /// A sharing command typed, for [`super::sharing::commands`] to run.
+    pub(crate) sharing_asked: Option<super::sharing::Command>,
+    /// `/follow` typed or pressed, for [`super::motion::input`] to start.
+    pub(crate) follow_asked: Option<super::motion::FollowAsked>,
     draft: draft::Draft,
     refusals: Refusals,
 }
@@ -173,6 +183,40 @@ const SCRIPT_LINK_MESSAGES: usize = 16;
 
 impl ChatState {
     pub(super) fn receive(&mut self, line: ChatLine, online: &OnlineState) {
+        // The guild's message of the day shows only when its text is new
+        // and not empty; the copy kept changes either way (R11, 0x40a7fd).
+        if line.channel == ChannelName::GuildMotd {
+            let text = &line.message.text;
+            let repeated = self.guild_motd.as_deref() == Some(text.as_str());
+            self.guild_motd = Some(text.clone());
+            if repeated || text.is_empty() {
+                return;
+            }
+        }
+        if line.source == Source::Server
+            && let Some(sender) = line.sender.as_deref().filter(|sender| !sender.is_empty())
+        {
+            let world = online.world();
+            let ignoring = self.contacts.lists.ignored.names().len();
+            let silenced = self.contacts.lists.silences(
+                line.channel,
+                sender,
+                world.game_master_in_zone(sender),
+            );
+            self.contacts.changed |= self.contacts.lists.ignored.names().len() != ignoring;
+            if silenced {
+                return;
+            }
+            // A tell names the one to reply to as its sender (R6, R8). The
+            // program stores channel 14's sender the same way, but what a
+            // server puts there for the echo of the player's own tell is not
+            // captured yet; this client's echoes name the player, who is no
+            // one to reply to, so channel 14 adds nothing until a capture
+            // shows otherwise (recording checklist 6.412).
+            if line.channel == ChannelName::Tell {
+                self.contacts.lists.replies.heard(sender);
+            }
+        }
         let linked = line.source == Source::Server
             && !line.message.text.is_empty()
             && !line.message.item_links.is_empty();
@@ -1471,6 +1515,21 @@ fn submit_line(
     qol: &Settings,
 ) -> Result<(), Unsent> {
     let command = typed_command(line);
+    if let Some(contacts) = super::contacts::Command::typed(&command) {
+        return contacts_command(contacts, active, state, online, outbox, qol);
+    }
+    if let Some(guild) = super::guild::Command::typed(&command) {
+        state.guild_asked = Some(guild);
+        return Ok(());
+    }
+    if let Some(sharing) = super::sharing::Command::typed(&command) {
+        state.sharing_asked = Some(sharing);
+        return Ok(());
+    }
+    if super::motion::FollowAsked::typed(&command) {
+        state.follow_asked = Some(super::motion::FollowAsked);
+        return Ok(());
+    }
     if let Some(request) = departure_request(&command) {
         state.departure = Some(request?);
         state.socials.stop = true;
@@ -1494,6 +1553,53 @@ fn submit_line(
     }
     let message = outbound(active, line)?;
     outbox.send(online.world(), ClientCommand::SendChat(message))?;
+    Ok(())
+}
+
+/// Runs a contacts command: `/reply` as a tell to the latest teller,
+/// `/rtarget` as a `/target` of them, the lists' toggles and listings for
+/// their answer, and `/who all friends` to the world.
+fn contacts_command(
+    command: super::contacts::Command,
+    active: ChatTab,
+    state: &mut ChatState,
+    online: &mut super::online::OnlineState,
+    outbox: &crate::outbox::Outbox,
+    qol: &Settings,
+) -> Result<(), Unsent> {
+    use super::contacts::{Asked, Command};
+    let latest = state.contacts.lists.replies.latest().map(str::to_owned);
+    match command {
+        Command::Reply(words) => match latest {
+            Some(name) => {
+                return submit_line(
+                    &format!("/tell {name} {words}"),
+                    active,
+                    state,
+                    online,
+                    outbox,
+                    qol,
+                );
+            }
+            None => state.contacts.asked = Some(Asked::NoReply),
+        },
+        Command::ReplyTarget => match latest {
+            Some(name) => state.requested_target = Some(name),
+            None => state.contacts.asked = Some(Asked::NoReplyTarget),
+        },
+        Command::Friends(name) => state.contacts.asked = Some(Asked::Friends(name)),
+        Command::Ignore(name) => state.contacts.asked = Some(Asked::Ignore(name)),
+        Command::WhoFriends => {
+            let session_id = outbox.stamp(online.world())?.session_id;
+            outbox.send(
+                online.world(),
+                ClientCommand::WhoFriends {
+                    session_id,
+                    names: state.contacts.lists.friends.names().to_vec(),
+                },
+            )?;
+        }
+    }
     Ok(())
 }
 
@@ -1564,6 +1670,10 @@ pub(super) fn run_game_command(
     chat: &mut ChatState,
     qol: &Settings,
 ) {
+    if super::motion::FollowAsked::typed(command) {
+        chat.follow_asked = Some(super::motion::FollowAsked);
+        return;
+    }
     match submit_game_command(command, online, outbox, qol) {
         Ok(()) if camp_destination(command).is_some() => chat.socials.stop = true,
         Ok(()) => (),
@@ -1645,8 +1755,7 @@ fn targeted_player(online: &super::online::OnlineState) -> String {
 
 /// A group command by its name: an invitation for the player named, or else
 /// the targeted player, which the session refuses when it names no one;
-/// joining the group of whoever invited the player last; or leaving the
-/// group, or as its leader removing the target or disbanding it, as the
+/// or leaving the group, or as its leader removing the target or disbanding it, as the
 /// server decides, which with an invitation waiting declines it.
 fn group_command(
     name: &str,
@@ -1661,15 +1770,6 @@ fn group_command(
                 .split_whitespace()
                 .next()
                 .map_or_else(|| targeted_player(online), str::to_owned),
-        },
-        "follow" => ClientCommand::FollowGroup {
-            session_id,
-            inviter: online
-                .world()
-                .group_invitation()
-                .unwrap_or_default()
-                .to_owned(),
-            invitation_id: online.world().group_invitation_id(),
         },
         _ => match online.world().group_invitation() {
             Some(inviter) => ClientCommand::DeclineGroup {
@@ -1851,7 +1951,7 @@ fn social_commands(
                 _ => ClientCommand::RaidLeave { session_id },
             }]
         }),
-        "invite" | "follow" | "disband" if name == "invite" || words.is_empty() => {
+        "invite" | "disband" if name == "invite" || words.is_empty() => {
             stamp().map(|stamp| vec![group_command(name, words, online, stamp.session_id)])
         }
         _ => return None,
@@ -4527,7 +4627,7 @@ mod tests {
             })
         };
         testing::news(&mut online, [offer(1)]);
-        let accept = group_command("follow", "", &online, 7);
+        let accept = crate::group::joining(online.world(), 7);
         let decline = group_command("disband", "", &online, 7);
         assert!(
             matches!(&accept, ClientCommand::FollowGroup { session_id: 7, inviter, invitation_id }
@@ -4546,7 +4646,7 @@ mod tests {
                 offer(2),
             ],
         );
-        assert_ne!(group_command("follow", "", &online, 7), accept);
+        assert_ne!(crate::group::joining(online.world(), 7), accept);
         assert_ne!(group_command("disband", "", &online, 7), decline);
     }
 }
