@@ -3005,9 +3005,8 @@ pub(super) mod tests {
         );
         // The program's own 44.55: the movement guard takes a jump's rise.
         assert!((titanium.jump_speed - 44.55).abs() < 0.001);
-        // The same but for the climb: the floor sweep starts at the origin
-        // on Titanium, 0.5 over it on the Mac-era client, radius size × 0.1
-        // against size / 4 (read 6.344).
+        // Titanium sweeps from the origin with radius 0.1 times the scaled
+        // model reference. EQMac starts 0.5 above it with radius size / 4.
         let (ti, eqmac) = (
             climbing(
                 physics(InstalledClient::Titanium, Some(0.4)),
@@ -3027,7 +3026,7 @@ pub(super) mod tests {
                 ..eqmac
             }
         );
-        assert!((ti.climb - 3.15).abs() < 0.001, "{}", ti.climb);
+        assert!((ti.climb - 3.375).abs() < 0.001, "{}", ti.climb);
         assert!((eqmac.climb - 2.75).abs() < 0.001, "{}", eqmac.climb);
         assert!(!ti.steers_in_air && !eqmac.steers_in_air);
         let mac = climbing(
@@ -3485,7 +3484,7 @@ pub(super) mod tests {
             .insert_resource(Controls {
                 speed: Some(6.0),
                 last_accepted: Instant::now().checked_sub(Duration::from_secs(2)).unwrap(),
-                // The session has heard this body's Titanium climb, 3 − 0.6
+                // The session has heard this body's Titanium climb, 3 − 0.3
                 // a step, so the samples are the only commands these tests
                 // see ([`the_session_hears_the_bodys_climb_at_each_admission_and_change`]).
                 climb_sent: Some((
@@ -3529,6 +3528,118 @@ pub(super) mod tests {
             .resource_mut::<ButtonInput<KeyCode>>()
             .reset_all();
         (app, receiver)
+    }
+
+    #[test]
+    #[allow(
+        clippy::float_cmp,
+        reason = "The move keeps the received horizontal coordinates"
+    )]
+    fn titanium_recovers_a_floor_the_size_based_probe_missed_within_one_step() {
+        use eq_client_core::movement::CollisionWorld;
+        use eq_network_game::movement::MovementGuard;
+
+        // Synthetic planes with the measured height differences. The lower
+        // surface is far below the feet and the upper one leaves standing room.
+        const FLOOR: f32 = 20.406_25;
+        let body = PlayerBody {
+            height: 6.506_872,
+            ..HUMAN
+        };
+        let admitted_position = world_position([0.0, 21.0, 0.0], 0.0);
+        let feet = Vec3::Y * (admitted_position.z - body.feet_offset);
+        let terrain = CollisionWorld::new(
+            flat_surface(FLOOR)
+                .into_iter()
+                .chain(flat_surface(-98.531_25))
+                .chain(flat_surface(48.375)),
+        )
+        .unwrap();
+        let corrected = climbing(
+            physics(InstalledClient::Titanium, None),
+            InstalledClient::Titanium,
+            &body,
+        );
+        let step = |physics: VerticalPhysics| {
+            fall_step(
+                &mut AirborneController::default(),
+                &terrain,
+                physics,
+                Some(physics.climb),
+                feet,
+                Vec3::ZERO,
+                0.05,
+                body.height,
+                false,
+            )
+        };
+        assert!(terrain.support(feet).is_none());
+        assert!(
+            step(VerticalPhysics {
+                climb: 3.15,
+                ..corrected
+            })
+            .y < FLOOR
+        );
+        let stood = step(corrected);
+        assert!((stood.y - FLOOR).abs() < 0.001, "{stood:?}");
+        assert!(terrain.support(stood).is_some());
+        assert!(terrain.clearance(stood, body.height, 0.03).is_none());
+
+        let (mut app, receiver) = stationary_airborne_app();
+        app.world_mut().insert_resource(Collision(Some(terrain)));
+        let mut bodies = app.world_mut().query::<&mut PlayerBody>();
+        *bodies.single_mut(app.world_mut()).unwrap() = body;
+        let mut player = online::testing::player(7);
+        player.position = admitted_position;
+        online::testing::admit(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            12,
+            player,
+        );
+        app.update();
+        let ClientCommand::ClimbReach {
+            session_id: 12,
+            per_step,
+        } = receiver.try_recv().unwrap()
+        else {
+            panic!("expected reach for the new admission");
+        };
+        assert!((per_step - 3.375).abs() < 0.001);
+        let ClientCommand::Move(request) = receiver.try_recv().unwrap() else {
+            panic!("expected an ordinary grounded move");
+        };
+        assert_eq!(request.mode, MovementMode::Forward);
+        assert_eq!(
+            (
+                request.position.x,
+                request.position.y,
+                request.position.heading
+            ),
+            (
+                admitted_position.x,
+                admitted_position.y,
+                admitted_position.heading
+            )
+        );
+        assert!((request.position.z - (FLOOR + body.feet_offset)).abs() < 0.001);
+        let start = request
+            .created
+            .checked_sub(Duration::from_millis(50))
+            .unwrap();
+        let mut guard = MovementGuard::new(12, admitted_position, start);
+        guard.set_speed(Some(6.0), start);
+        guard.set_climb(3.15);
+        assert!(guard.accept(&request, request.created).is_err());
+        guard.set_climb(per_step);
+        assert!(guard.accept(&request, request.created).is_ok());
+
+        let online = app.world().resource::<online::OnlineState>();
+        assert_eq!(online.world().player().unwrap().position, admitted_position);
+        assert_eq!(
+            online.server_placement().unwrap().position,
+            admitted_position
+        );
     }
 
     #[test]
@@ -3804,6 +3915,74 @@ pub(super) mod tests {
         CollisionWorld::new(flat_surface(-12.0))
             .unwrap()
             .with_liquids(Pool { top: 0.0, liquid })
+    }
+
+    #[test]
+    fn fly_switch_ascends_from_unsupported_surface_water_after_worker_acceptance() {
+        let (mut app, receiver) = stationary_airborne_app();
+        let water = liquid_pool(Liquid::Water).with_swim_origin(3.0);
+        let feet = Vec3::new(0.0, -3.5, 0.0);
+        assert!(water.support(feet).is_none());
+        assert_eq!(
+            water.swim_depth(feet, 6.0),
+            Some(eq_client_core::movement::SwimDepth::Surface)
+        );
+        app.insert_resource(Collision(Some(water)))
+            .init_resource::<crate::options::MovementSync>()
+            .add_systems(Update, crate::options::tell_choices.before(input));
+        let surface = world_position([0.0, -0.5, 0.0], 0.0);
+        online::testing::place(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            surface,
+        );
+        app.world_mut()
+            .resource_mut::<crate::options::OptionsState>()
+            .options
+            .qol
+            .set(Fix::Fly, true);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Space);
+        app.update();
+        let ClientCommand::SetMovementOptions {
+            request_id,
+            options,
+            ..
+        } = receiver.try_recv().unwrap()
+        else {
+            panic!("flight policy request");
+        };
+        assert!(options.fly);
+        let only_settings =
+            |command| !matches!(command, ClientCommand::Move(_) | ClientCommand::Jump { .. });
+        assert!(receiver.try_iter().all(only_settings));
+        online::testing::news(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            [eq_client_core::WorldEvent::MovementOptionsApplied {
+                session_id: 11,
+                request_id,
+                options,
+            }],
+        );
+        app.update();
+        assert!(receiver.try_iter().all(only_settings));
+        app.world_mut().resource_mut::<Controls>().last_accepted = Instant::now()
+            .checked_sub(Duration::from_millis(100))
+            .unwrap();
+
+        let mut previous = surface.z;
+        for _ in 0..2 {
+            app.update();
+            let ClientCommand::Move(up) = receiver.try_recv().expect("ascending flight sample")
+            else {
+                panic!("expected flight without a jump command");
+            };
+            assert_eq!(up.mode, MovementMode::Forward);
+            assert!(up.position.z > previous + 0.5);
+            assert!(receiver.try_recv().is_err());
+            accept(&mut app, &up);
+            previous = up.position.z;
+        }
     }
 
     #[test]

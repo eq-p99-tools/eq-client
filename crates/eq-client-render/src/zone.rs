@@ -125,8 +125,8 @@ impl Entry {
                 None
             };
         let height = character.as_ref().map_or(6.0, CharacterAsset::height);
-        // EQ's rule for the model keeps every later server-placed position
-        // (zoning, teleports) at the same height above the feet.
+        // Use the model's estimated standing offset to project feet.
+        // A fresh server placement can still need a collision step to stand.
         let feet_offset = eq_client_core::z_offset(player.race, player.size);
         // Lets a logged session be replayed offline with the same feet height.
         debug!(

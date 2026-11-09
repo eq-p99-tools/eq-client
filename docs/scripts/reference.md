@@ -138,7 +138,11 @@ or occluded. The counters are independent of damage and inventory.
   local proposals); `rendered_position` is the drawn avatar;
   `last_server_placement` is the last admission or received placement in
   the current admission. None of these identifies a server acknowledgement
-  for a particular proposal. `liquid_contact_at_session_position` is local
+  for a particular proposal. `settings` reports the requested, applied and
+  usable movement policy, along with any pending request and last settlement.
+  Its ages describe renderer observations. `camera_detached` reports whether
+  the orbit camera is detached when the renderer can identify it.
+  `liquid_contact_at_session_position` is local
   geometry: `unknown`, `unmarked`, `wading`, `surface`, `submerged` or
   `lava`. `unmarked` means no liquid at the sampled points, and
   `submerged` is not a breath report.

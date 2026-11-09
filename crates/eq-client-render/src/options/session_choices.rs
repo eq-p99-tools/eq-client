@@ -1,7 +1,14 @@
-//! Runtime option synchronization, retried until queued for the current admission.
+//! Runtime option synchronization with the current admission's worker.
 use bevy::prelude::*;
-use eq_client_core::{Capability, ClientCommand, movement::MovementOptions, qol::Fix};
+use eq_client_core::{
+    Capability, ClientCommand, movement::MovementOptions, qol::Fix, world::ClientWorld,
+};
+use serde_json::{Value, json};
 use std::time::{Duration, Instant};
+
+// The worker refuses a queued setting after one second. Leave time to hear
+// that result before resubmitting an absolute policy on the same command queue.
+const REPLY_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Tracks local worker application separately from successful queue admission.
 #[derive(Resource, Default)]
@@ -9,17 +16,51 @@ pub(crate) struct MovementSync {
     session: Option<u64>,
     wanted: Option<MovementOptions>,
     applied: Option<MovementOptions>,
+    conservative: Option<MovementOptions>,
     pending: Option<Pending>,
     next_id: u64,
     retry_after: Option<Instant>,
+    last_settlement: Option<Settlement>,
 }
 
 struct Pending {
     request_id: u64,
     options: MovementOptions,
+    submitted: Instant,
+}
+
+struct Settlement {
+    request_id: u64,
+    observed: Instant,
+    status: SettlementStatus,
+}
+
+enum SettlementStatus {
+    Applied,
+    WorkerRefused,
+    UnexpectedPolicy,
+    ReplyTimeout,
+}
+
+impl SettlementStatus {
+    const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Applied => "applied",
+            Self::WorkerRefused => "worker_refused",
+            Self::UnexpectedPolicy => "unexpected_policy",
+            Self::ReplyTimeout => "reply_timeout",
+        }
+    }
 }
 
 impl MovementSync {
+    fn common_policy(a: MovementOptions, b: MovementOptions) -> Option<MovementOptions> {
+        a.same_permissions(b).then_some(MovementOptions {
+            run_speed_multiplier: a.run_speed_multiplier.min(b.run_speed_multiplier),
+            ..a
+        })
+    }
+
     /// A move after the pending option command can reach the worker before
     /// its reply reaches us. Use a pace valid under either worker policy.
     /// Permission changes still require confirmation before motion resumes.
@@ -28,23 +69,14 @@ impl MovementSync {
         session: Option<u64>,
         wanted: MovementOptions,
     ) -> Option<MovementOptions> {
-        let applied = self.applied?;
-        if self.session != session || !applied.same_permissions(wanted) {
+        if self.session != session {
             return None;
         }
-        let mut limit = applied
-            .run_speed_multiplier
-            .min(wanted.run_speed_multiplier);
-        if let Some(pending) = &self.pending {
-            if !applied.same_permissions(pending.options) {
-                return None;
-            }
-            limit = limit.min(pending.options.run_speed_multiplier);
+        let policy = Self::common_policy(self.applied.or(self.conservative)?, wanted)?;
+        match &self.pending {
+            Some(pending) => Self::common_policy(policy, pending.options),
+            None => Some(policy),
         }
-        Some(MovementOptions {
-            run_speed_multiplier: limit,
-            ..applied
-        })
     }
 
     /// Forgets the policy when a world reset can discard the pending reply.
@@ -53,15 +85,18 @@ impl MovementSync {
         // Reestablish the actual policy even if the user wants the defaults.
         self.wanted = None;
         self.applied = None;
+        self.conservative = None;
         self.pending = None;
         self.retry_after = None;
+        self.last_settlement = None;
     }
 
     fn tell(
         &mut self,
-        world: &eq_client_core::world::ClientWorld,
+        world: &ClientWorld,
         outbox: &crate::outbox::Outbox,
         wanted: MovementOptions,
+        now: Instant,
     ) {
         let session = world.session_id();
         // Each worker starts at the defaults. A departure policy is fixed
@@ -78,30 +113,10 @@ impl MovementSync {
             self.wanted = Some(wanted);
             self.retry_after = None;
         }
-        // Keep one choice in flight. If the slider moves again, the reply
-        // still establishes the worker's policy before we send the latest choice.
-        if let Some((request_id, result)) = world.movement_options_result()
-            && let Some(pending) = self
-                .pending
-                .as_ref()
-                .filter(|pending| pending.request_id == *request_id)
-        {
-            match result {
-                Ok(options) if *options == pending.options => self.applied = Some(*options),
-                _ => {
-                    if result.is_ok() {
-                        self.applied = None;
-                    }
-                    if pending.options == wanted {
-                        self.retry_after = Some(Instant::now() + Duration::from_secs(1));
-                    }
-                }
-            }
-            self.pending = None;
-        }
+        self.settle(world, wanted, now);
         if self.pending.is_some()
             || self.applied == Some(wanted)
-            || self.retry_after.is_some_and(|due| Instant::now() < due)
+            || self.retry_after.is_some_and(|due| now < due)
         {
             return;
         }
@@ -114,14 +129,97 @@ impl MovementSync {
                 session_id,
                 request_id,
                 options: wanted,
-                created: Instant::now(),
+                created: now,
             },
         ) {
             self.pending = Some(Pending {
                 request_id,
                 options: wanted,
+                submitted: now,
             });
+            self.retry_after = None;
         }
+    }
+
+    fn settle(&mut self, world: &ClientWorld, wanted: MovementOptions, now: Instant) {
+        let Some(pending) = &self.pending else {
+            return;
+        };
+        let status = if let Some((_, result)) = world
+            .movement_options_result()
+            .filter(|(id, _)| *id == pending.request_id)
+        {
+            match result {
+                Ok(options) if *options == pending.options => {
+                    self.applied = Some(*options);
+                    self.conservative = None;
+                    SettlementStatus::Applied
+                }
+                _ => {
+                    if pending.options == wanted {
+                        self.retry_after = Some(now + Duration::from_secs(1));
+                    }
+                    if result.is_ok() {
+                        self.applied = None;
+                        self.conservative = None;
+                        SettlementStatus::UnexpectedPolicy
+                    } else {
+                        SettlementStatus::WorkerRefused
+                    }
+                }
+            }
+        } else if now.saturating_duration_since(pending.submitted) >= REPLY_TIMEOUT {
+            // The worker may already be using the unanswered choice. Keep
+            // only the pace known safe under every possible policy. A
+            // permission difference has no common policy and holds motion.
+            self.conservative = self
+                .applied
+                .or(self.conservative)
+                .and_then(|previous| Self::common_policy(previous, pending.options));
+            self.applied = None;
+            SettlementStatus::ReplyTimeout
+        } else {
+            return;
+        };
+        self.last_settlement = Some(Settlement {
+            request_id: pending.request_id,
+            observed: now,
+            status,
+        });
+        self.pending = None;
+    }
+
+    /// Bounded renderer observations. A settlement age measures when the
+    /// renderer consumed a reply or expired a request, without guessing when
+    /// the worker acted. Worker feedback is reported separately.
+    pub(crate) fn report(
+        &self,
+        session: Option<u64>,
+        wanted: MovementOptions,
+        now: Instant,
+    ) -> Value {
+        let age_ms = |instant| now.saturating_duration_since(instant).as_millis();
+        let usable = self.usable(session, wanted);
+        json!({
+            "admission_id": session,
+            "sync_admission_id": self.session,
+            "wanted": wanted,
+            "applied": self.applied,
+            "conservative": self.conservative,
+            "usable": usable,
+            "waiting_for_policy": session.is_some() && usable.is_none(),
+            "pending": self.pending.as_ref().map(|pending| json!({
+                "request_id": pending.request_id,
+                "options": pending.options,
+                "age_ms": age_ms(pending.submitted),
+            })),
+            "last_settlement": self.last_settlement.as_ref().map(|settlement| json!({
+                "request_id": settlement.request_id,
+                "status": settlement.status.as_str(),
+                "age_ms": age_ms(settlement.observed),
+            })),
+            "retry_in_ms": self.retry_after.map(|due| due.saturating_duration_since(now).as_millis()),
+        })
     }
 }
 
@@ -149,7 +247,7 @@ pub(crate) fn tell(
     // which every admission starts with, so nothing is sent and input is
     // never held waiting for a choice the server type refuses.
     let movement = eq_client_core::movement::offered_options(&state.options.qol, world);
-    movement_sync.tell(world, &outbox, movement);
+    movement_sync.tell(world, &outbox, movement, Instant::now());
     let memorize_without_sitting = state.options.qol.on(Fix::MemorizeWhileStanding);
     if world.can(Capability::GameplayDepartures)
         && told.book != Some((session_id, memorize_without_sitting))
@@ -443,6 +541,160 @@ mod tests {
         }
         app.update();
         check_ordinary_policy(&app);
+    }
+
+    #[test]
+    fn unanswered_fly_choice_resubmits_latest_policy_and_waits_for_its_reply() {
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        let (sender, commands) = mpsc::sync_channel(8);
+        let outbox = crate::outbox::Outbox::new(Some(sender));
+        let mut sync = MovementSync::default();
+        let normal = MovementOptions::default();
+        let fly = MovementOptions {
+            fly: true,
+            ..normal
+        };
+        let start = Instant::now();
+        let deadline = start + REPLY_TIMEOUT;
+        let queued = |wanted, now| {
+            let ClientCommand::SetMovementOptions {
+                session_id: 1,
+                request_id,
+                options,
+                created,
+            } = commands.try_recv().unwrap()
+            else {
+                panic!("movement choice for the current admission");
+            };
+            assert_eq!(options, wanted);
+            assert_eq!(created, now);
+            request_id
+        };
+
+        sync.tell(online.world(), &outbox, fly, start);
+        let original = queued(fly, start);
+        assert_eq!(sync.usable(Some(1), fly), None);
+        sync.tell(
+            online.world(),
+            &outbox,
+            normal,
+            deadline.checked_sub(Duration::from_millis(1)).unwrap(),
+        );
+        assert!(commands.try_recv().is_err());
+        assert_eq!(sync.usable(Some(1), normal), None);
+
+        // The first choice could have enabled flight already. Returning to
+        // the last acknowledged setting still requires a worker reply.
+        sync.tell(online.world(), &outbox, normal, deadline);
+        let replacement = queued(normal, deadline);
+        assert_ne!(replacement, original);
+        let report = sync.report(Some(1), normal, deadline + Duration::from_millis(10));
+        assert_eq!(report["pending"]["request_id"], json!(replacement));
+        assert_eq!(report["pending"]["age_ms"], json!(10));
+        assert_eq!(report["last_settlement"]["request_id"], json!(original));
+        assert_eq!(report["last_settlement"]["status"], "reply_timeout");
+        assert_eq!(report["waiting_for_policy"], true);
+        assert!(report["applied"].is_null());
+
+        let applied = |session_id, request_id, options| WorldEvent::MovementOptionsApplied {
+            session_id,
+            request_id,
+            options,
+        };
+        for feedback in [applied(1, original, fly), applied(2, replacement, normal)] {
+            testing::news(&mut online, [feedback]);
+            sync.tell(online.world(), &outbox, normal, deadline);
+            assert_eq!(sync.usable(Some(1), normal), None);
+            assert!(commands.try_recv().is_err());
+        }
+        testing::news(
+            &mut online,
+            [WorldEvent::MovementOptionsRefused {
+                session_id: 1,
+                request_id: replacement,
+                reason: "Expired".into(),
+            }],
+        );
+        sync.tell(online.world(), &outbox, normal, deadline);
+        assert_eq!(sync.usable(Some(1), normal), None);
+        assert!(commands.try_recv().is_err());
+        let retry_at = deadline + Duration::from_secs(1);
+        sync.tell(online.world(), &outbox, normal, retry_at);
+        let retry = queued(normal, retry_at);
+        testing::news(&mut online, [applied(1, retry, normal)]);
+        sync.tell(online.world(), &outbox, normal, retry_at);
+        assert_eq!(sync.usable(Some(1), normal), Some(normal));
+        assert!(commands.try_recv().is_err());
+
+        let fresh_start = retry_at + Duration::from_millis(1);
+        sync.tell(online.world(), &outbox, fly, fresh_start);
+        let fresh = queued(fly, fresh_start);
+        testing::news(&mut online, [applied(1, fresh, fly)]);
+        // A matching result already in the world wins over the deadline.
+        sync.tell(online.world(), &outbox, fly, fresh_start + REPLY_TIMEOUT);
+        assert_eq!(sync.usable(Some(1), fly), Some(fly));
+        assert!(commands.try_recv().is_err());
+    }
+
+    #[test]
+    fn unanswered_speed_choices_keep_motion_at_the_lowest_possible_pace() {
+        use eq_client_core::movement::RunSpeedMultiplier;
+
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        let (sender, commands) = mpsc::sync_channel(8);
+        let outbox = crate::outbox::Outbox::new(Some(sender));
+        let mut sync = MovementSync::default();
+        let options = |percent| MovementOptions {
+            run_speed_multiplier: RunSpeedMultiplier::from_percent(percent).unwrap(),
+            ..MovementOptions::default()
+        };
+        let (low, middle, high) = (options(100), options(120), options(140));
+        let submit = |sync: &mut MovementSync, online: &OnlineState, wanted, now| {
+            sync.tell(online.world(), &outbox, wanted, now);
+            let ClientCommand::SetMovementOptions {
+                request_id,
+                options,
+                ..
+            } = commands.try_recv().unwrap()
+            else {
+                panic!("movement choice");
+            };
+            assert_eq!(options, wanted);
+            request_id
+        };
+        let acknowledge = |online: &mut OnlineState, request_id, options| {
+            testing::news(
+                online,
+                [WorldEvent::MovementOptionsApplied {
+                    session_id: 1,
+                    request_id,
+                    options,
+                }],
+            );
+        };
+        let start = Instant::now();
+        let first = submit(&mut sync, &online, high, start);
+        acknowledge(&mut online, first, high);
+        let expired = submit(&mut sync, &online, low, start);
+        assert_eq!(sync.usable(Some(1), low), Some(low));
+
+        submit(&mut sync, &online, middle, start + REPLY_TIMEOUT);
+        assert_eq!(sync.applied, None);
+        assert_eq!(sync.usable(Some(1), middle), Some(low));
+        let final_at = start + REPLY_TIMEOUT * 2;
+        let replacement = submit(&mut sync, &online, high, final_at);
+        assert_eq!(sync.usable(Some(1), high), Some(low));
+
+        acknowledge(&mut online, expired, low);
+        sync.tell(online.world(), &outbox, high, final_at);
+        assert_eq!(sync.usable(Some(1), high), Some(low));
+        assert!(commands.try_recv().is_err());
+        acknowledge(&mut online, replacement, high);
+        sync.tell(online.world(), &outbox, high, final_at);
+        assert_eq!(sync.usable(Some(1), high), Some(high));
+        assert_eq!(sync.conservative, None);
     }
 
     #[test]

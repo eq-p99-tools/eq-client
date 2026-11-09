@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Size the Titanium floor sweep from the model's scaled standing reference
+  so a local collision step can find nearby support after a received placement.
+- Let opt-in Fly pass through mapped liquid while retaining solid collision.
+  Settle permission changes with the session worker and report the result in
+  script movement diagnostics.
+
 - Resize the Runbook from an edge or corner. Wrap checklist rows to fit
   and remember the size with the character's window layout.
 

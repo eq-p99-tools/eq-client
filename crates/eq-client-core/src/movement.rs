@@ -1003,7 +1003,7 @@ mod tests {
     }
 
     /// The walk a step on the ground makes, as the airborne controller
-    /// calls it: a Titanium human's 3.15 climb a step (6.344) and the
+    /// calls it: a fixed 3.15-unit climb for these fixtures and the
     /// on-ground tolerance.
     const STANDING: Support = Support::Optional {
         drop: 0.501,

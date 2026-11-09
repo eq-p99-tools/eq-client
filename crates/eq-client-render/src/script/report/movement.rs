@@ -9,6 +9,9 @@ use eq_client_core::{
     world::ClientWorld,
 };
 use serde_json::{Value, json};
+use std::time::Instant;
+
+use super::Observed;
 
 /// A bounded observation. The session position is the basis for local physics
 /// and can include locally accepted samples held for pacing. The renderer
@@ -19,6 +22,8 @@ pub(in crate::script) fn report(
     transform: Option<&Transform>,
     body: Option<&PlayerBody>,
     collision: Option<&CollisionWorld>,
+    observed: &Observed,
+    camera_detached: Option<bool>,
 ) {
     let world = online.world();
     let admission = world
@@ -62,6 +67,13 @@ pub(in crate::script) fn report(
             .last_local_pad()
             .filter(|pad| Some(pad.session_id) == admission)
     );
+    movement_state["settings"] = json!(observed.14.as_ref().zip(observed.9.as_ref()).map(
+        |(sync, state)| {
+            let wanted = eq_client_core::movement::offered_options(&state.options.qol, world);
+            sync.report(admission, wanted, Instant::now())
+        },
+    ));
+    movement_state["camera_detached"] = json!(camera_detached);
     info!(label, %movement_state, "Script movement report");
 }
 

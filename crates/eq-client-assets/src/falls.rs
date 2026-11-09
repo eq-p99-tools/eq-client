@@ -51,14 +51,23 @@ pub struct ClientFalls {
     /// units. Each step it sweeps a sphere straight down from there and
     /// stands the feet on the first surface it meets ([`Self::climb_per_step`]).
     pub sweep_start: f32,
-    /// The floor sweep's sphere radius, as a share of the spawn's size.
-    pub sweep_radius: f32,
+    /// The floor sweep's sphere radius and the measurement it scales.
+    pub sweep_radius: FloorSweepRadius,
     /// The landing rule counts the carried weight in whole units, cut
     /// toward zero, as an integer field holds it; else as the weight is.
     pub whole_weight: bool,
     /// Where a spawn other than the player's that falls under the zone with
     /// no floor beneath it is put back.
     pub underworld_return: UnderworldReturn,
+}
+
+/// The body measurement a client's floor sweep uses to size its sphere.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum FloorSweepRadius {
+    /// A fraction of the spawn's size.
+    SpawnSize(f32),
+    /// A fraction of the scaled model's `ROffset`.
+    ModelOffset(f32),
 }
 
 /// How the program puts back a spawn other than the player's that falls with
@@ -141,9 +150,15 @@ impl ClientFalls {
     /// stood on in one step (read 6.344). What blocks a move short of it is
     /// the horizontal collision's, which this client still makes with its own
     /// capsule (6.344 remainder).
+    /// Titanium uses this client's standing-height estimate for the scaled
+    /// model reference. This does not determine the origin of a received placement.
     #[must_use]
     pub fn climb_per_step(&self, stand_height: f32, size: f32) -> f32 {
-        let climb = stand_height + self.sweep_start - self.sweep_radius * size;
+        let radius = match self.sweep_radius {
+            FloorSweepRadius::SpawnSize(factor) => factor * size,
+            FloorSweepRadius::ModelOffset(factor) => factor * stand_height,
+        };
+        let climb = stand_height + self.sweep_start - radius;
         if climb.is_finite() {
             climb.max(0.0)
         } else {
@@ -236,7 +251,7 @@ pub const EQMAC: ClientFalls = ClientFalls {
     // size / 4; the origin stands +0x90 above the feet, 3.125 × the drawn
     // scale (0x51f79b; read 6.344).
     sweep_start: 0.5,
-    sweep_radius: 0.25,
+    sweep_radius: FloorSweepRadius::SpawnSize(0.25),
     // W is the weight routine's float (R3, 0x4bbb78).
     whole_weight: false,
     // Titanium's (below), taken as the Mac-era program's until read (6.362).
@@ -259,9 +274,11 @@ const TITANIUM_UNDERWORLD_RETURN: UnderworldReturn = UnderworldReturn {
 /// trunc(10·T²), less Safe Fall's S + trunc(S × P / 100), S the raw skill
 /// word (R-s Safe Fall follow-up). The same on-ground tolerance too (R-s,
 /// 0x48a2f4). Its floor sweep starts at the origin itself (0x48a6f2 feeds
-/// 0x48a0fc the origin), radius size × 0.1 (read 6.344); that the origin
-/// stands this client's `z_offset` above the feet, the model height
-/// (0x4b6d42) × scale, is inferred until 0x4b6d42 is read (6.347). Read but not yet known,
+/// 0x48a0fc the origin). The radius is 0.1 times the scaled `ROffset`
+/// at actor +0x238. Initialization at 0x47fa9e reads the model's reference
+/// through 0x4b6d42 and applies its scale. The link between a received
+/// position and this client's standing-height estimate remains inferred
+/// (6.347). Read but not yet known,
 /// so left out, each costing the player more than the program would, never
 /// less: which zones zero the damage (its table was not read, 6.304), P
 /// (spell effect 228's total; not decoded, so it counts as 0, 6.305 and
@@ -276,7 +293,7 @@ pub const TITANIUM: ClientFalls = ClientFalls {
     damage_line: None,
     survived_line: None,
     sweep_start: 0.0,
-    sweep_radius: 0.1,
+    sweep_radius: FloorSweepRadius::ModelOffset(0.1),
     // The rule loads +0x48 as an integer (int(+0x48) × 0.01, R-s Safe Fall
     // read); that it holds the carried weight cut toward zero is inferred
     // with the field itself (6.303).
@@ -357,13 +374,18 @@ mod tests {
 
     #[test]
     fn a_step_climbs_to_the_floor_sweeps_start_less_its_radius() {
-        // A size 6 human stands 3.75 above its feet in both programs.
-        assert!((TITANIUM.climb_per_step(3.75, 6.0) - 3.15).abs() < 1e-5);
+        // At a standing height of 3.75, Titanium's radius is 0.375
+        // regardless of the separate spawn size.
+        assert!((TITANIUM.climb_per_step(3.75, 6.0) - 3.375).abs() < 1e-5);
+        assert!((TITANIUM.climb_per_step(3.75, 8.0) - 3.375).abs() < 1e-5);
+        assert!((TITANIUM.climb_per_step(2.5, 6.0) - 2.25).abs() < 1e-5);
+        // EQMac retains its size-based radius.
         assert!((EQMAC.climb_per_step(3.75, 6.0) - 2.75).abs() < 1e-5);
+        assert!((EQMAC.climb_per_step(3.75, 8.0) - 2.25).abs() < 1e-5);
         // A size 3 gnome: under a two-unit riser.
-        assert!((TITANIUM.climb_per_step(1.875, 3.0) - 1.575).abs() < 1e-5);
+        assert!((TITANIUM.climb_per_step(1.875, 3.0) - 1.6875).abs() < 1e-5);
         assert!(TITANIUM.climb_per_step(f32::NAN, 6.0).abs() < f32::EPSILON);
-        assert!(TITANIUM.climb_per_step(0.1, 6.0).abs() < f32::EPSILON);
+        assert!(TITANIUM.climb_per_step(-0.1, 6.0).abs() < f32::EPSILON);
     }
 
     #[test]
