@@ -88,7 +88,8 @@ pub(super) struct Controls {
     /// When the latest jump started; it outlasts a reset, so a new
     /// admission cannot hurry the next.
     last_jump: Option<Instant>,
-    /// A jump from standing still crouching first, on a client that does.
+    /// A jump from standing still crouching first, as both installed
+    /// clients' do.
     crouch: Option<Crouch>,
     /// The cost of a landing the session's queue had no room to tell; it
     /// goes before the next sample.
@@ -159,8 +160,8 @@ enum SentYaw {
     MouseSnapshot,
 }
 
-/// How far a jump from standing still has come on a client that crouches
-/// before it.
+/// How far a jump from standing still has come: with no forward input,
+/// Titanium (0x4acb42-0x4acb50) and the Mac-era client both crouch before it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Crouch {
     /// Crouched; it stands up and jumps at this time.
@@ -784,7 +785,9 @@ fn turn_cap(walking: bool, race: u32) -> f32 {
 
 /// How far the turn keys turn between `from` and `to` seconds after one was
 /// first held, in heading units: the ramp's first step turns at 20 units a
-/// second, each later step 20 more, up to the cap.
+/// second, each later step 20 more, up to the cap. It applies standing and
+/// going forward or back, which keep the facing; camera-relative movement
+/// faces its own direction and takes no ramp.
 fn ramped_turn(from: f32, to: f32, cap: f32) -> f32 {
     let turned = |seconds: f32| {
         let seconds = seconds.max(0.0);
@@ -1489,7 +1492,9 @@ pub(super) fn input(
     }
     // Where the installed client crouches before a jump from standing still,
     // that jump ducks now and goes once the crouch is over; backing up
-    // cancels it. The jump a finished crouch hands on goes as it is.
+    // cancels it. The jump a finished crouch hands on goes as it is. A
+    // strafe-only jump counts as moving and goes at once: the read covered
+    // the forward input only (inferred, recording checklist 6.417).
     let jump = match client.standing_jump_crouch().filter(|_| !crouched) {
         Some(_) if jump && mode == MovementMode::Backward => {
             debug!("Jump cancelled: backing up");

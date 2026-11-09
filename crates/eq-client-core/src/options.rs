@@ -67,7 +67,8 @@ pub enum Toggle {
 }
 
 impl Toggle {
-    /// The official client's own toggles, in the order a file lists them.
+    /// The official client's own toggles, in the order a file lists them; a
+    /// file is read back by name, so the order is only how it is written.
     pub const OFFICIAL: [Self; 11] = [
         Self::PetWindowPopup,
         Self::AutoStand,

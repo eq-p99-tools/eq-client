@@ -6,7 +6,7 @@
   player's jump starts at the same health and weight share that slows
   running. A jump from standing still with no forward input crouches for
   half a second first, and backing up drops it, on Titanium as on the
-  Mac-era client. A jump is refused with the official line when endurance
+  Mac-era client; a strafe-only jump still goes at once (checklist 6.417). A jump is refused with the official line when endurance
   is at or under 50 and at or under a tenth of the maximum (the client's
   estimate; with no estimate the jump goes as before, checklist 6.415). The
   turn keys ramp up from 20 to 240 heading units a second over a fifth of a
