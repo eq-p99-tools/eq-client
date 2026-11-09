@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Build zone navigation meshes by default. Script walks plan over the mesh and
+  warn in the log and the Execution tab when they fall back to grid search.
+  `--no-navmesh` turns meshes off; the old `--navmesh` flag is still accepted.
+
 - Look up and swim forward to use Titanium's shoreline boost near a
   reachable supported bank. The renderer sweeps the capsule and the worker
   replays the bounded frame trace through ordinary position updates. Frames
