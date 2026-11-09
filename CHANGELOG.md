@@ -98,6 +98,10 @@
   landmark files from replacement, and share immutable installed spell
   definitions across sessions.
 
+- Pin networking 51c94173 (Batch M slice 1 landing): a jump starts at the
+  health and weight factor that slows running, and the movement guard bounds
+  its rise by the factor it launched with.
+
 - Pin networking 462baf69 (Batch A landing): friends who, guild requests,
   splitting and a banker's change on the Titanium wire, offered on `EQEmu`
   and Project 1999; a waiting guild invitation and the member list do not

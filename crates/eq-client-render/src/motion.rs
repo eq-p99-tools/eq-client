@@ -89,7 +89,7 @@ pub(super) struct Controls {
     /// admission cannot hurry the next.
     last_jump: Option<Instant>,
     /// A jump from standing still crouching first, as both installed
-    /// clients' do.
+    /// clients do.
     crouch: Option<Crouch>,
     /// The cost of a landing the session's queue had no room to tell; it
     /// goes before the next sample.
