@@ -4,8 +4,8 @@ use bevy::prelude::Vec3;
 use eq_client_core::{
     MovementMode,
     movement::{
-        CollisionWorld, SHORELINE_COOLDOWN, SHORELINE_FRAMES, ShorelineFrame, ShorelineStroke,
-        ShorelineTrace, ShorelineVelocity, SwimDepth,
+        CollisionWorld, SHORELINE_COOLDOWN, SHORELINE_FRAME_MILLIS, SHORELINE_FRAMES,
+        ShorelineFrame, ShorelineStroke, ShorelineTrace, ShorelineVelocity, SwimDepth,
     },
 };
 use std::{
@@ -157,7 +157,10 @@ impl Control {
             self.frames.pop_front();
         }
         self.frames.push_back(ObservedFrame {
-            millis: u8::try_from(millis.min(150)).unwrap_or(150),
+            // A longer frame counts as the bound: the per-frame damping would
+            // otherwise lift a slow frame's arc higher (inferred, 6.407).
+            millis: u8::try_from(millis.min(u128::from(SHORELINE_FRAME_MILLIS)))
+                .unwrap_or(SHORELINE_FRAME_MILLIS),
             stroke: ShorelineStroke::new([-direction.z, direction.x, direction.y]),
             forward_up,
         });
@@ -657,10 +660,11 @@ mod tests {
                 controls.resolved(false);
                 assert!(controls.active());
             }
+            // Three 60 ms frames count 50 ms each, still more than the window.
             let frames = if overflow {
                 SHORELINE_FRAMES as u64 + 1
             } else {
-                2
+                3
             };
             for index in 1..=frames {
                 let step_ms = if overflow { 3 } else { 60 };

@@ -151,7 +151,8 @@ impl ClientFalls {
     /// the horizontal collision's, which this client still makes with its own
     /// capsule (6.344 remainder).
     /// Titanium uses this client's standing-height estimate for the scaled
-    /// model reference. This does not determine the origin of a received placement.
+    /// model reference (inferred, recording checklist 6.347). This does not
+    /// determine the origin of a received placement.
     #[must_use]
     pub fn climb_per_step(&self, stand_height: f32, size: f32) -> f32 {
         let radius = match self.sweep_radius {

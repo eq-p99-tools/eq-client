@@ -585,6 +585,8 @@ fn drawn_size(
 
 /// Leave room for a skin's fixed buff columns inside the clipped client area.
 /// Hidden windows and buttons whose position follows the frame keep their sizing.
+/// Whether the official client widens or clips these windows is unread
+/// (inferred, recording checklist 6.406).
 fn effects_width(id: WindowId, screen: &Screen) -> f32 {
     let width = screen.area.width;
     if !matches!(id, WindowId::Effects | WindowId::ShortEffects)

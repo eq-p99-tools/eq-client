@@ -16,8 +16,8 @@ pub use airborne::{AirborneController, Landing, MotionStep, PROVISIONAL_PHYSICS,
 pub use choices::{offered_options, options};
 pub use eq_network_game::movement::{MovementOptions, RunSpeedMultiplier};
 pub use eq_network_game::movement::{
-    SHORELINE_COOLDOWN, SHORELINE_FRAMES, ShorelineFrame, ShorelineStroke, ShorelineTrace,
-    ShorelineVelocity,
+    SHORELINE_COOLDOWN, SHORELINE_FRAME_MILLIS, SHORELINE_FRAMES, ShorelineFrame, ShorelineStroke,
+    ShorelineTrace, ShorelineVelocity,
 };
 pub use falls::{HARMLESS_DROP, fall_damage};
 use liquids::LiquidGuard;

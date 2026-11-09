@@ -477,6 +477,9 @@ pub(super) struct GemRightClick<'w, 's> {
 }
 
 impl GemRightClick<'_, '_> {
+    /// A right press and release over the same populated gem forgets it.
+    /// The official client's handler is unread (inferred, recording checklist
+    /// 6.405).
     fn clicked(&mut self, world: &eq_client_core::world::ClientWorld) -> Option<u8> {
         let press = self.mouse.just_pressed(MouseButton::Right);
         let release = self.mouse.just_released(MouseButton::Right);

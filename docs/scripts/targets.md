@@ -19,7 +19,8 @@ Use these targets after `click`, `right_click` or `hover`. For a held click, put
 - `book_place place`: a skin spellbook place, from 0 to 15.
 - `book_page next` or `book_page back`: turn a spellbook page.
 - `memorize gem`: choose gem 1 to 8 when memorizing.
-- `spell_gem gem`: a gem from 1 to 8.
+- `spell_gem gem`: a gem from 1 to 8. `click` casts its spell and
+  `right_click` forgets it.
 - `button spellbook Spellbook_Search`: focus the Search field in either
   spellbook. Use `press` to type and `press enter` to finish. Filtered entries
   retain their received book slots. Use `button spellbook Spellbook_SearchClear`

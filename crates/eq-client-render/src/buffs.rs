@@ -146,7 +146,12 @@ pub(super) fn cancel(
                 spell,
                 landed,
             } => {
+                // Only a buff the player could otherwise cancel is refused
+                // for its unknown slot; others stay silent, as a slotted
+                // harmful or protected effect would be refused for its kind.
                 if world.session_id() == Some(session_id)
+                    && names.beneficial(u32::from(spell)) == Some(true)
+                    && cancellable(&names, u32::from(spell)) == Some(true)
                     && world.buffs().landed(spell) == Some(landed)
                     && matches!(
                         shown_buff(world.buffs(), entry, unplaced, shows),
@@ -796,8 +801,8 @@ mod tests {
 
     #[test]
     fn right_click_an_unslotted_effect_explains_why_without_submitting() {
-        for skinned in [false, true] {
-            let (mut app, button, receiver) = cancellation_fixture(skinned, Some(true));
+        for (skinned, beneficial) in [(false, true), (true, true), (false, false), (true, false)] {
+            let (mut app, button, receiver) = cancellation_fixture(skinned, Some(beneficial));
             let mut button = app.world_mut().entity_mut(button);
             if skinned {
                 // The first empty long-window button shows the received effect,
@@ -827,9 +832,15 @@ mod tests {
                 ""
             );
             right_release(&mut app);
+            // A harmful effect could not be cancelled anyway, so its slot is
+            // not offered as the reason.
             assert_eq!(
                 app.world().resource::<crate::chat::ChatState>().newest(),
-                "Cannot cancel Constructed buff: its current buff slot is unknown."
+                if beneficial {
+                    "Cannot cancel Constructed buff: its current buff slot is unknown."
+                } else {
+                    ""
+                }
             );
             assert!(receiver.try_recv().is_err());
         }

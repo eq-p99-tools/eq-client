@@ -50,8 +50,8 @@ fn spawn(mut commands: Commands) {
             // Keep room for wrapped headings, a scrollable list and the footer.
             min_width: px(240),
             min_height: px(260),
-            max_width: percent(90),
-            max_height: percent(70),
+            // No maximum: the frame's resize drag and saved size are the
+            // drawn size, so dragging an edge never moves the window instead.
             flex_direction: FlexDirection::Column,
             ..default()
         },
