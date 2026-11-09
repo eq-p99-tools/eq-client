@@ -1523,9 +1523,12 @@ fn submit_draft(
                 .groups
                 .active(state.groups.owner())
                 .unwrap_or_default();
+            let Some(wire) = crate::commands::spelled(wire.trim()) else {
+                return Ok(());
+            };
             let message = linked_outbound(
                 active,
-                wire.trim(),
+                &wire,
                 world.generation(),
                 online.chat_link_expansion,
             )?;
@@ -1566,7 +1569,10 @@ fn submit_line(
     outbox: &crate::outbox::Outbox,
     qol: &Settings,
 ) -> Result<(), Unsent> {
-    let command = typed_command(line);
+    // A word that resolves to nothing is passed over without a line.
+    let Some(command) = crate::commands::spelled(line) else {
+        return Ok(());
+    };
     if let Some(contacts) = super::contacts::Command::typed(&command) {
         return contacts_command(contacts, active, state, online, outbox, qol);
     }
@@ -1603,7 +1609,7 @@ fn submit_line(
         }
         return Ok(());
     }
-    let message = outbound(active, line)?;
+    let message = outbound(active, &command)?;
     outbox.send(online.world(), ClientCommand::SendChat(message))?;
     Ok(())
 }
@@ -1704,6 +1710,10 @@ pub(super) fn submit_game_command(
     outbox: &crate::outbox::Outbox,
     qol: &Settings,
 ) -> Result<(), String> {
+    let Some(input) = crate::commands::spelled(input) else {
+        return Ok(());
+    };
+    let input = input.as_ref();
     if let Some(result) = super::pet::target_command(input, online, outbox) {
         return result;
     }
@@ -1730,6 +1740,10 @@ pub(super) fn run_game_command(
     chat: &mut ChatState,
     qol: &Settings,
 ) {
+    let Some(command) = crate::commands::spelled(command) else {
+        return;
+    };
+    let command = command.as_ref();
     if super::motion::FollowAsked::typed(command) {
         chat.follow_asked = Some(super::motion::FollowAsked);
         return;
@@ -1919,7 +1933,7 @@ pub(super) fn zone_who_request(
 }
 
 /// Whether a slash command broadcasts text or a roll to the players around
-/// the character (`/emote`, `/em`, `/random`): chat-like, so a script may send
+/// the character (`/emote` and the words that resolve to it, `/random`): chat-like, so a script may send
 /// it only in a network-enforced local test session.
 pub(super) fn broadcasts_to_others(input: &str) -> bool {
     let Some(command) = input.trim_start().strip_prefix('/') else {
@@ -1929,9 +1943,10 @@ pub(super) fn broadcasts_to_others(input: &str) -> bool {
         .split(char::is_whitespace)
         .next()
         .unwrap_or_default();
-    ["emote", "em", "random"]
-        .iter()
-        .any(|word| name.eq_ignore_ascii_case(word))
+    matches!(
+        crate::commands::resolve(name),
+        crate::commands::Resolved::Official("emote" | "random")
+    )
 }
 
 /// Slash commands about the player and those around them: how `/who`
@@ -1950,7 +1965,7 @@ fn social_commands(
                 session_id: stamp.session_id,
             }]
         }),
-        "anonymous" | "anon" | "roleplay" if words.is_empty() => stamp().map(|stamp| {
+        "anonymous" | "roleplay" if words.is_empty() => stamp().map(|stamp| {
             let session_id = stamp.session_id;
             vec![if name == "roleplay" {
                 ClientCommand::ToggleRoleplay { session_id }
@@ -1968,7 +1983,7 @@ fn social_commands(
             }])
         }),
         // An emote, in the player's words after their name.
-        "emote" | "em" if !words.is_empty() => stamp().map(|stamp| {
+        "emote" if !words.is_empty() => stamp().map(|stamp| {
             vec![ClientCommand::Emote {
                 session_id: stamp.session_id,
                 text: words.to_owned(),
@@ -2016,19 +2031,6 @@ fn social_commands(
         }
         _ => return None,
     })
-}
-
-/// A typed line as the commands read it: a bare `/`, alone or with words,
-/// is `/who` with the same words, as in the official client (the project
-/// owner's report, 11-01). That the words after it are `/who`'s is
-/// inferred (checklist 6.328). Every other line is unchanged.
-fn typed_command(input: &str) -> std::borrow::Cow<'_, str> {
-    match input.strip_prefix('/') {
-        Some(rest) if rest.is_empty() || rest.starts_with(char::is_whitespace) => {
-            format!("/who{rest}").into()
-        }
-        _ => input.into(),
-    }
 }
 
 /// Where a typed `/camp` ends, for a line that is one and whose words
@@ -2202,7 +2204,7 @@ fn class_command(
     stamp: &dyn Fn() -> Result<crate::outbox::Stamp, String>,
 ) -> Option<Result<ClientCommand, String>> {
     Some(match name {
-        "discipline" | "disc" => {
+        "discipline" => {
             if let Some(discipline) = eq_client_core::disciplines::Discipline::named(words.trim()) {
                 stamp().and_then(|stamp| {
                     super::abilities::discipline_command(discipline, world, stamp)
@@ -2273,7 +2275,7 @@ fn outbound(tab: ChatTab, input: &str) -> Result<OutboundChat, String> {
             return Err("Item links belong in the chat message".into());
         }
         let rest = rest.trim();
-        if matches!(name.to_ascii_lowercase().as_str(), "tell" | "t") {
+        if name.eq_ignore_ascii_case("tell") {
             let (recipient, message) = rest
                 .split_once(' ')
                 .ok_or_else(|| "Use /tell Name message".to_owned())?;
@@ -2289,14 +2291,14 @@ fn outbound(tab: ChatTab, input: &str) -> Result<OutboundChat, String> {
             return Err("Type a message after the channel command".into());
         }
         return match name.to_ascii_lowercase().as_str() {
-            "say" | "s" => Ok(OutboundChat::Say(rest.into())),
-            "auction" | "auc" => Ok(OutboundChat::Auction(rest.into())),
+            "say" => Ok(OutboundChat::Say(rest.into())),
+            "auction" => Ok(OutboundChat::Auction(rest.into())),
             "ooc" => Ok(OutboundChat::Ooc(rest.into())),
-            "guild" | "gu" => Ok(OutboundChat::Guild(rest.into())),
-            "group" | "g" => Ok(OutboundChat::Group(rest.into())),
+            "guildsay" => Ok(OutboundChat::Guild(rest.into())),
+            "gsay" => Ok(OutboundChat::Group(rest.into())),
             "shout" => Ok(OutboundChat::Shout(rest.into())),
-            "raid" => Ok(OutboundChat::Raid(rest.into())),
-            _ => Err(format!("Unknown chat command /{name}")),
+            "rsay" => Ok(OutboundChat::Raid(rest.into())),
+            _ => Err(format!("This client does not take /{name} that way yet.")),
         };
     }
     match tab {
@@ -2521,10 +2523,11 @@ mod tests {
 
     #[test]
     fn a_bare_slash_is_who_with_the_same_words() {
+        let typed_command = |line| crate::commands::spelled(line).unwrap();
         assert_eq!(typed_command("/"), "/who");
         assert_eq!(typed_command("/ wiz"), "/who wiz");
         assert_eq!(typed_command("/ all wiz 50 60"), "/who all wiz 50 60");
-        for unchanged in ["//", "/say hi", "/who", "hello", "/camp desktop"] {
+        for unchanged in ["/say hi", "/who", "hello", "/camp desktop"] {
             assert_eq!(typed_command(unchanged), unchanged);
         }
         assert_eq!(
@@ -3673,6 +3676,72 @@ mod tests {
             .init_resource::<ButtonInput<MouseButton>>()
             .add_systems(Update, input);
         (app, receiver)
+    }
+
+    /// Sends a typed line with Enter, as the player does.
+    fn send_typed(app: &mut App, line: &str) {
+        app.world_mut()
+            .resource_mut::<ChatState>()
+            .draft
+            .replace(line);
+        app.world_mut()
+            .resource_mut::<crate::keys::Typing>()
+            .composing = true;
+        app.world_mut().write_message(KeyboardInput {
+            key_code: KeyCode::Enter,
+            logical_key: Key::Enter,
+            state: bevy::input::ButtonState::Pressed,
+            text: None,
+            repeat: false,
+            window: Entity::PLACEHOLDER,
+        });
+        app.update();
+    }
+
+    #[test]
+    fn typed_words_resolve_as_the_official_parser_resolves_them() {
+        let (mut app, receiver) = slash_app(true);
+        let sent = |receiver: &std::sync::mpsc::Receiver<ClientCommand>| {
+            receiver.try_recv().ok().and_then(|command| match command {
+                ClientCommand::SendChat(chat) => Some(chat),
+                _ => None,
+            })
+        };
+        send_typed(&mut app, "/m Friend hello");
+        assert_eq!(
+            sent(&receiver),
+            Some(OutboundChat::Tell {
+                recipient: "Friend".into(),
+                message: "hello".into()
+            })
+        );
+        send_typed(&mut app, "/rs ready");
+        assert_eq!(sent(&receiver), Some(OutboundChat::Raid("ready".into())));
+        send_typed(&mut app, "/guild hello");
+        assert_eq!(sent(&receiver), Some(OutboundChat::Guild("hello".into())));
+        send_typed(&mut app, "/g hi");
+        assert_eq!(sent(&receiver), Some(OutboundChat::Group("hi".into())));
+        // `/s` is `/split`, not `/say`.
+        send_typed(&mut app, "/s 1");
+        assert!(sent(&receiver).is_none());
+        assert!(matches!(
+            app.world_mut().resource_mut::<ChatState>().sharing_asked.take(),
+            Some(super::super::sharing::Command::Split(coins)) if coins.platinum == 1
+        ));
+        // A game master's command and a word that is no command are passed
+        // over: nothing is sent or said, and the line is spent.
+        let said = app.world().resource::<ChatState>().history.revision();
+        for line in ["/zone qeynos", "/group hi", "/b"] {
+            send_typed(&mut app, line);
+            assert!(receiver.try_recv().is_err(), "{line}");
+            let chat = app.world().resource::<ChatState>();
+            assert_eq!(chat.history.revision(), said, "{line}");
+            assert!(chat.draft.text().is_empty(), "{line}");
+        }
+        // `/raid` is the Raid window's, which takes no words.
+        send_typed(&mut app, "/raid hi");
+        assert!(receiver.try_recv().is_err());
+        assert_eq!(app.world().resource::<ChatState>().draft.text(), "/raid hi");
     }
 
     fn press_slash(app: &mut App) {

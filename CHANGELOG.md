@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Typed slash commands now resolve as the Titanium client resolves them.
+  The word is matched against the start of each official command name, in
+  the official order, and the first match wins. So `/s` is `/split`, `/l` is
+  `/location`, `/m` and `/se` are `/tell`, `/me` is `/emote` and `/raid` is
+  the Raid window. A game master's command does nothing for a player. Only
+  a word that matches no official name reaches this client's own commands
+  (`/social`, `/ranged`, `/harmtouch`, `/layonhands`). Any other word is
+  passed over without a line (recording checklist 6.413). `/rsay` sends
+  raid chat, and `/group` and `/raid` no longer send chat.
 - Add the Titanium client's contacts and guild commands. `/reply` and
   `/rtarget` use the last 50 players who sent a tell. `/friends` and
   `/ignore` keep 100 names each per character. The first lists come from

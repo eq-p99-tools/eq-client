@@ -90,22 +90,13 @@ fn command(text: &str) -> Result<(&str, &str), String> {
 }
 
 fn action(text: &str) -> Result<String, String> {
+    use crate::commands::{Resolved, resolve};
     let (name, _) = command(text)?;
+    // Both resolve asynchronously and may leave the old target selected.
     if matches!(
-        name.to_ascii_lowercase().as_str(),
-        // Both resolve asynchronously and may leave the old target selected.
-        "target"
-            | "assist"
-            | "pause"
-            | "social"
-            | "camp"
-            | "ex"
-            | "exi"
-            | "exit"
-            | "q"
-            | "qu"
-            | "qui"
-            | "quit"
+        resolve(name),
+        Resolved::Official("target" | "assist" | "camp" | "exit" | "quit")
+            | Resolved::Ours("pause" | "social")
     ) {
         return Err(format!("/{name} cannot be run inside a social"));
     }
