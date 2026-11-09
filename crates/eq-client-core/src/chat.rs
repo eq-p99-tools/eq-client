@@ -106,7 +106,9 @@ impl ChatTab {
             ChannelName::Say => Self::Say,
             ChannelName::Auction => Self::Auction,
             ChannelName::Ooc => Self::Ooc,
-            ChannelName::Guild | ChannelName::GuildMotd => Self::Guild,
+            ChannelName::Guild | ChannelName::GuildMotd | ChannelName::GuildMotdReply => {
+                Self::Guild
+            }
             ChannelName::Group => Self::Group,
             ChannelName::Tell | ChannelName::TellEcho => Self::Tell,
             ChannelName::Raid => Self::Raid,
@@ -174,7 +176,7 @@ pub const fn color_kind(channel: ChannelName) -> Option<u16> {
         ChannelName::Say => 256,
         ChannelName::Tell => 257,
         ChannelName::Group => 258,
-        ChannelName::Guild | ChannelName::GuildMotd => 259,
+        ChannelName::Guild | ChannelName::GuildMotd | ChannelName::GuildMotdReply => 259,
         ChannelName::Ooc => 260,
         ChannelName::Auction => 261,
         ChannelName::Shout => 262,
@@ -191,7 +193,9 @@ pub fn channel_rgb(channel: ChannelName) -> [u8; 3] {
     match channel {
         ChannelName::Auction => [0x00, 0x80, 0x00],
         ChannelName::Ooc => [0xff, 0xcc, 0x66],
-        ChannelName::Guild | ChannelName::GuildMotd => [0x28, 0xf0, 0x28],
+        ChannelName::Guild | ChannelName::GuildMotd | ChannelName::GuildMotdReply => {
+            [0x28, 0xf0, 0x28]
+        }
         ChannelName::Group => [0x00, 0xff, 0xff],
         ChannelName::Tell | ChannelName::TellEcho => [0xbe, 0x28, 0xbe],
         ChannelName::Raid => [0x00, 0xc8, 0xc8],
@@ -364,6 +368,10 @@ mod tests {
             channel_rgb(ChannelName::Tell)
         );
         assert_eq!(ChatTab::for_channel(ChannelName::GuildMotd), ChatTab::Guild);
+        assert_eq!(
+            ChatTab::for_channel(ChannelName::GuildMotdReply),
+            ChatTab::Guild
+        );
     }
     #[test]
     fn a_line_keeps_when_it_arrived() {
@@ -396,6 +404,8 @@ mod tests {
         assert_eq!(channel_rgb(ChannelName::Auction), [0, 128, 0]);
         assert_eq!(channel_rgb(ChannelName::Ooc), [255, 204, 102]);
         assert_eq!(channel_rgb(ChannelName::GuildMotd), [40, 240, 40]);
+        assert_eq!(channel_rgb(ChannelName::GuildMotdReply), [40, 240, 40]);
+        assert_eq!(color_kind(ChannelName::GuildMotdReply), Some(259));
         assert_eq!(channel_rgb(ChannelName::Tell), [190, 40, 190]);
         assert_eq!(channel_rgb(ChannelName::Unknown), [255, 255, 255]);
     }

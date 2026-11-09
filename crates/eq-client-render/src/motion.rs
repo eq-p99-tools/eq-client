@@ -951,9 +951,12 @@ pub(super) fn input(
     let scripted = keys.scripted();
     let scripted_turn = scripted.contains(&Act::TurnLeft) || scripted.contains(&Act::TurnRight);
     let heading_snapshots = online.world().generation().supports_heading_snapshots();
+    // Following owns the heading, so a mouse turn meanwhile is not kept for
+    // the sample after it ends.
     let mouse_allowed = focused
         && scripted_facing.is_none()
         && !scripted_turn
+        && controls.following.is_none()
         && !aim.as_ref().is_some_and(|aim| aim.interrupted);
     let mouse_aim = aim
         .as_ref()
@@ -1238,8 +1241,9 @@ pub(super) fn input(
         look.as_deref(),
     );
     // Following turns and goes by itself until a movement key moves the
-    // player; it then ends, and the keys move them this sample.
-    let follow_heading = if controls.following.is_some() {
+    // player; it then ends, and the keys move them this sample. A stun
+    // holds the player where they are, and following goes on after it.
+    let follow_heading = if controls.following.is_some() && !stunned {
         let speeds = (
             controls.speed.unwrap_or(0.0),
             controls.walk_speed.or(controls.speed).unwrap_or(0.0),

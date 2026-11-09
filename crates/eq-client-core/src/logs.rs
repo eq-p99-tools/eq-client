@@ -99,8 +99,11 @@ pub fn words(line: &ChatLine, player: &str) -> Option<Words> {
         .filter(|sender| !sender.is_empty())
         .and_then(|sender| {
             // The guild's message of the day names its author, then its text
-            // (program read R11, 0x40a7fd: line 0x1d4).
-            if line.channel == ChannelName::GuildMotd {
+            // (program read R11, 0x40a7fd: line 0x1d4), asked for or not.
+            if matches!(
+                line.channel,
+                ChannelName::GuildMotd | ChannelName::GuildMotdReply
+            ) {
                 return Some((
                     GUILD_MOTD,
                     vec![sender.to_owned(), text.clone()],
@@ -252,6 +255,19 @@ mod tests {
         assert_eq!(
             words(
                 &spoken(ChannelName::GuildMotd, Some("Leader"), "Raid at 8"),
+                "Examplar"
+            )
+            .unwrap(),
+            heard(
+                0x1d4,
+                &["Leader", "Raid at 8"],
+                "Guild MOTD (Leader): Raid at 8"
+            )
+        );
+        // The one `/getguildmotd` asked for reads the same.
+        assert_eq!(
+            words(
+                &spoken(ChannelName::GuildMotdReply, Some("Leader"), "Raid at 8"),
                 "Examplar"
             )
             .unwrap(),

@@ -11,7 +11,13 @@
 //! rank to one above it with a line. The official client's dialog closes by
 //! itself after ten seconds; what it answers then is not read, so this one
 //! withdraws the question and sends nothing (recording checklist 6.412).
-//! Its option to refuse every guild invitation is not offered yet.
+//! Its option to refuse every guild invitation is not offered yet. An
+//! invitation that arrives while the dialog asks something of this
+//! client's own is answered as busy, the answer the official client gives
+//! while its own invitation dialog is open; what it does then is not read
+//! (6.412). `/guildremove` and `/guildleader` name a member of the list
+//! the server sent, spelled as the list spells them, before they say their
+//! line, the rule the session applies before it sends (6.411).
 use crate::chat::{ChatState, Said, system_line};
 use crate::confirm::{Asked as Dialog, Question};
 use crate::contacts::abbreviates;
@@ -207,7 +213,8 @@ pub(crate) fn invitations(
                 if dialog.ask(Question::GuildInvite) {
                     pending.asking = Some((invitation, Instant::now(), said));
                 } else {
-                    // The dialog asks something of the client's own.
+                    // The dialog asks something of the client's own: busy,
+                    // as while another invitation is asked about (6.412).
                     chat.history.push(system_line(said));
                     send(&online, &outbox, &invitation.inviter, InviteAnswer::Busy);
                 }
@@ -275,6 +282,20 @@ fn targeted_other(world: &ClientWorld) -> Option<String> {
         .map(|spawn| spawn.state.name.clone())
 }
 
+/// The guild member a command names, spelled as the server's list spells
+/// them: the rule the session applies before it sends (recording checklist
+/// 6.411), so the line said on sending never contradicts its refusal.
+fn listed_member(world: &ClientWorld, name: &str) -> Result<String, Said> {
+    let Some(members) = world.guild_members() else {
+        return Err(Said::own("Wait for your guild's member list."));
+    };
+    members
+        .iter()
+        .find(|member| member.name.eq_ignore_ascii_case(name))
+        .map(|member| member.name.clone())
+        .ok_or_else(|| Said::own("No member of your guild has that name."))
+}
+
 /// What a guild command sends, and the line said when it goes; or the line
 /// that refuses it. None in the second place says nothing.
 fn command(
@@ -323,6 +344,11 @@ fn command(
             if !leaving && rank == 0 {
                 return refused(lines::MEMBER_REMOVES, "Members cannot remove others.");
             }
+            let name = if leaving {
+                name
+            } else {
+                listed_member(world, &name).map_err(Some)?
+            };
             let said = messages.said_or(
                 lines::REMOVED[usize::from(!leaving)],
                 std::slice::from_ref(&name),
@@ -343,7 +369,8 @@ fn command(
                 .next()
                 .map(str::to_owned)
                 .or_else(|| targeted_other(world))
-                .unwrap_or_default();
+                .ok_or_else(|| Some(Said::own("Name or target a member.")))?;
+            let name = listed_member(world, &name).map_err(Some)?;
             let said = messages.said_or(
                 lines::LEADER_SENT,
                 std::slice::from_ref(&name),
@@ -440,7 +467,7 @@ pub(crate) fn commands(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{command as command_for, *};
 
     #[test]
     fn guild_commands_follow_the_official_prefix_rule() {
@@ -493,5 +520,71 @@ mod tests {
         ));
         assert_eq!(rank_number(GuildRank::Leader), 2);
         assert_eq!(InviteAnswer::AlreadyHeld.wire(GuildRank::Officer), 11);
+    }
+
+    #[test]
+    fn removal_and_the_lead_name_members_as_the_list_spells_them() {
+        use crate::online::testing;
+        use eq_client_core::WorldEvent;
+        use eq_client_core::guild::{GuildMember, GuildTribute, GuildUpdate};
+        let messages = Messages::default();
+        let mut online = OnlineState::new(true);
+        let mut player = testing::player(7);
+        player.listing.guild = Some(3);
+        player.listing.guild_rank = Some(GuildRank::Leader);
+        testing::admit(&mut online, 1, player);
+        let refusal = |command: &Command, online: &OnlineState| {
+            command_for(command, online.world(), &messages)
+                .unwrap_err()
+                .expect("a line refuses it")
+        };
+        let remove = Command::Remove("member".into());
+        // Before the list came, the name cannot be checked.
+        assert_eq!(
+            refusal(&remove, &online),
+            Said::own("Wait for your guild's member list.")
+        );
+        let member = GuildMember {
+            name: "Member".into(),
+            level: 5,
+            class: 1,
+            rank: GuildRank::Member,
+            banker: false,
+            alt: false,
+            last_on: 0,
+            tribute: GuildTribute {
+                on: false,
+                total: 0,
+                last: 0,
+            },
+            note: String::new(),
+            zone_id: None,
+        };
+        testing::news(
+            &mut online,
+            [WorldEvent::Guild(GuildUpdate::Members(vec![member]))],
+        );
+        // Named as typed, sent as the list spells it, with its line.
+        let (sent, said) = command_for(&remove, online.world(), &messages).unwrap();
+        assert!(
+            matches!(&sent, ClientCommand::GuildRemove { name, .. } if name == "Member"),
+            "{sent:?}"
+        );
+        assert!(said.is_some());
+        assert_eq!(
+            refusal(&Command::Remove("Nobody".into()), &online),
+            Said::own("No member of your guild has that name.")
+        );
+        // The lead needs a name or a target, and then a listed member.
+        assert_eq!(
+            refusal(&Command::Leader(String::new()), &online),
+            Said::own("Name or target a member.")
+        );
+        let (sent, _) =
+            command_for(&Command::Leader("MEMBER".into()), online.world(), &messages).unwrap();
+        assert!(
+            matches!(&sent, ClientCommand::GuildMakeLeader { name, .. } if name == "Member"),
+            "{sent:?}"
+        );
     }
 }

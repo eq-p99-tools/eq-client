@@ -1096,7 +1096,12 @@ fn behave(
         }
         Does::Closes => drawn.insert((Button, items::Closes(owner), skin())),
         Does::Gives => drawn.insert((Button, super::give::GiveButton)),
-        Does::ChangesCoins => drawn.insert((Button, super::coins::ChangeButton, skin())),
+        Does::ChangesCoins => drawn.insert((
+            Button,
+            super::coins::ChangeButton,
+            skin(),
+            crate::outbox::Needs::Capability(Capability::BankerChange),
+        )),
         Does::Coins(place, coin) => drawn.insert((Button, super::coins::CoinBox { place, coin })),
         Does::Bound(binding) => {
             drawn.insert((

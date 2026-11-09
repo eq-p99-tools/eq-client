@@ -185,6 +185,8 @@ impl ChatState {
     pub(super) fn receive(&mut self, line: ChatLine, online: &OnlineState) {
         // The guild's message of the day shows only when its text is new
         // and not empty; the copy kept changes either way (R11, 0x40a7fd).
+        // The one `/getguildmotd` asked for always shows, and is then the
+        // one shown last.
         if line.channel == ChannelName::GuildMotd {
             let text = &line.message.text;
             let repeated = self.guild_motd.as_deref() == Some(text.as_str());
@@ -192,6 +194,8 @@ impl ChatState {
             if repeated || text.is_empty() {
                 return;
             }
+        } else if line.channel == ChannelName::GuildMotdReply {
+            self.guild_motd = Some(line.message.text.clone());
         }
         if line.source == Source::Server
             && let Some(sender) = line.sender.as_deref().filter(|sender| !sender.is_empty())
@@ -1639,6 +1643,14 @@ fn contacts_command(
         Command::Ignore(name) => state.contacts.asked = Some(Asked::Ignore(name)),
         Command::WhoFriends => {
             let session_id = outbox.stamp(online.world())?.session_id;
+            // The request cannot carry an empty list, and what the official
+            // client says then is not read (recording checklist 6.412).
+            if state.contacts.lists.friends.names().is_empty() {
+                state
+                    .history
+                    .push(system_line(Said::own("Your friends list is empty.")));
+                return Ok(());
+            }
             outbox.send(
                 online.world(),
                 ClientCommand::WhoFriends {

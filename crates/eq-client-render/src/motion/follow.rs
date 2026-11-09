@@ -12,8 +12,11 @@
 //! before it turns (0x476167) is not read, so this one always turns; the
 //! distance is measured in three dimensions; the start's posture test other
 //! than standing (0x33ac) is not made; every key that moves the player ends
-//! it, as the five the program tests are not told apart; and a client
-//! whose wire carries no absolute heading turns no faster than its turn keys.
+//! it, autorun among them, as the five the program tests are not told
+//! apart; a client whose wire carries no absolute heading turns no faster
+//! than its turn keys; the program's frame is taken as 60 a second; and a
+//! stun holds the player, following again once it lifts, while a mouse turn
+//! is not taken until following ends.
 use crate::chat::{ChatState, Said, system_line};
 use crate::hud::messages::Messages;
 use bevy::prelude::*;
@@ -47,7 +50,8 @@ const SNAP_DISTANCE: f32 = 20.0;
 const CLOSE: f32 = 15.0;
 /// Beyond both stand heights and this, the player runs.
 const RUN: f32 = 30.0;
-/// The program steps its turn once a frame, at this rate.
+/// The program steps its turn once a frame, taken as this rate (inferred,
+/// recording checklist 6.412).
 const FRAMES_PER_SECOND: f32 = 60.0;
 
 /// Who the player follows.
@@ -116,6 +120,7 @@ pub(super) fn moves(
         Act::CameraRight,
         Act::TurnLeft,
         Act::TurnRight,
+        Act::Autorun,
     ]
     .into_iter()
     .any(|act| held.held(act) || map.held(keys, act) || scripted.contains(&act))
