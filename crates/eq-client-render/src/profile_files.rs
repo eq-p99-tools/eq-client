@@ -164,7 +164,9 @@ impl Store {
     /// from replacement. In-memory pending edits still take precedence.
     pub(crate) fn read_bounded(&self, name: &str, max_bytes: usize) -> io::Result<Option<String>> {
         self.read_with(name, |path| {
-            if !path.metadata()?.is_file() {
+            // Match the replacement check: a link is never followed, so a file
+            // the store would refuse to replace is not loaded as editable.
+            if !path.symlink_metadata()?.is_file() {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     "Profile settings must be a regular file",
@@ -540,6 +542,27 @@ mod tests {
             }
         });
         assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_bounded_read_refuses_a_link_the_bounded_write_would_refuse() {
+        let directory = folder();
+        std::fs::write(directory.join("target.txt"), "kept").unwrap();
+        std::os::unix::fs::symlink(directory.join("target.txt"), directory.join("linked.txt"))
+            .unwrap();
+        let mut store = Store {
+            directory: Some(directory.clone()),
+            ..Default::default()
+        };
+        store.protect_existing_size(64);
+        let error = store.read_bounded("linked.txt", 64).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(
+            store.read_bounded("target.txt", 64).unwrap().as_deref(),
+            Some("kept")
+        );
         std::fs::remove_dir_all(directory).unwrap();
     }
 

@@ -16,6 +16,14 @@
   landmark files from replacement, and share immutable installed spell
   definitions across sessions.
 
+- Pin networking ec34373e (cycle 10 landing): ordinary P99 assist, dice,
+  emote and presence commands; an accepted assist also moves the server's
+  stored target. Station placements, combines and NPC gives no longer leave
+  carried weight unknown, which paused movement until zoning.
+- A landmark file reached through a link is treated as unreadable, as its
+  save already refused it, instead of loading as editable and failing every
+  save.
+
 - Pin networking 97212d8d (cycle 09 landing): Bind Wound's button time runs
   out in full after every use, one bandage decrease settles every carried
   stack, and an unanswered player inspection holds the next request to that
