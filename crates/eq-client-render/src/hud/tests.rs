@@ -77,6 +77,7 @@ fn a_gem_clicked_with_a_spell_from_the_book_memorizes_it_instead_of_casting() {
         .insert_resource(crate::outbox::Outbox::new(Some(tx)))
         .init_resource::<ButtonInput<KeyCode>>()
         .init_resource::<ChatState>()
+        .init_resource::<GemPress>()
         .init_resource::<HudState>()
         .init_resource::<hotbar::Bindings>()
         .init_resource::<crate::spellbook::SpellNames>()
@@ -113,8 +114,8 @@ fn a_gem_clicked_with_a_spell_from_the_book_memorizes_it_instead_of_casting() {
     );
 }
 
-/// Synthetic pointer for the legacy action-dispatch fixture.
-fn hotbar_pointer(app: &mut App, on: Option<Entity>, down: bool) {
+/// Synthetic pointer and mouse edges as Bevy presents them to the HUD.
+fn hud_pointer(app: &mut App, on: Option<Entity>, button: MouseButton, down: bool) {
     let world = app.world_mut();
     let mut interactions = world.query::<&mut Interaction>();
     for mut interaction in interactions.iter_mut(world) {
@@ -127,17 +128,18 @@ fn hotbar_pointer(app: &mut App, on: Option<Entity>, down: bool) {
                 normalized: Some(Vec2::ZERO),
             };
         }
-        *app.world_mut().get_mut::<Interaction>(on).unwrap() = if down {
-            Interaction::Pressed
-        } else {
-            Interaction::Hovered
-        };
+        *app.world_mut().get_mut::<Interaction>(on).unwrap() =
+            if down && button == MouseButton::Left {
+                Interaction::Pressed
+            } else {
+                Interaction::Hovered
+            };
     }
     let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
     if down {
-        mouse.press(MouseButton::Left);
+        mouse.press(button);
     } else {
-        mouse.release(MouseButton::Left);
+        mouse.release(button);
     }
     app.update();
     let world = app.world_mut();
@@ -169,7 +171,7 @@ fn a_gem_casts_as_its_click_is_let_go_and_a_hold_puts_it_on_a_hotbutton_instead(
         .id();
     // Bevy marks the control pressed, or the one the button is let go over
     // hovered.
-    let button = hotbar_pointer;
+    let button = |app: &mut App, on, down| hud_pointer(app, on, MouseButton::Left, down);
     button(&mut app, Some(gem), true);
     assert!(rx.try_recv().is_err());
     button(&mut app, Some(gem), false);
@@ -241,7 +243,9 @@ fn bar_app(tx: std::sync::mpsc::SyncSender<ClientCommand>) -> App {
     app.insert_resource(admitted())
         .insert_resource(Outbox::new(Some(tx)))
         .init_resource::<ButtonInput<KeyCode>>()
+        .init_resource::<ButtonInput<MouseButton>>()
         .init_resource::<ChatState>()
+        .init_resource::<GemPress>()
         .init_resource::<hotbar::Bindings>()
         .init_resource::<crate::spellbook::SpellNames>()
         .init_resource::<crate::ViewerSettings>()
@@ -676,17 +680,62 @@ fn gems_and_action_slots_name_their_keys_from_the_key_map() {
             .0
             .clone()
     };
-    assert_eq!(tooltip(gem), "Alt+1: cast | Shift-click: forget");
+    assert_eq!(tooltip(gem), "Alt+1: cast");
     // A gem with a spell names it first, and a hold picks it up.
     assert_eq!(
         tooltip(memorized),
         "Synthetic spell
-Alt+2: cast | Shift-click: forget | Hold: pick up"
+Alt+2: cast | Right-click: forget | Hold: pick up"
     );
     // A stored shortcut can be picked up even if its gem is currently empty.
     assert_eq!(tooltip(slot), "2: use | Hold: pick up");
     assert_eq!(tooltip(spellless), "3: use | Hold: pick up");
     assert_eq!(tooltip(empty), "4: use");
+}
+
+#[test]
+fn right_click_does_not_forget_an_empty_or_replaced_gem() {
+    let (tx, rx) = std::sync::mpsc::sync_channel(4);
+    let mut app = bar_app(tx);
+    let gem = app.world_mut().spawn((SpellGem(0), Interaction::None)).id();
+    let empty = app.world_mut().spawn((SpellGem(1), Interaction::None)).id();
+    let right = |app: &mut App, on, down| hud_pointer(app, on, MouseButton::Right, down);
+
+    right(&mut app, Some(empty), true);
+    right(&mut app, Some(empty), false);
+    right(&mut app, None, true);
+    right(&mut app, Some(gem), false);
+    right(&mut app, Some(gem), true);
+    right(&mut app, None, false);
+    assert!(rx.try_recv().is_err());
+
+    right(&mut app, Some(gem), true);
+    testing::spell(
+        &mut online(&mut app),
+        SpellUpdate::Slot {
+            slot: 0,
+            spell_id: 74,
+            mode: 1,
+        },
+    );
+    right(&mut app, Some(gem), false);
+    assert!(rx.try_recv().is_err());
+
+    right(&mut app, Some(gem), true);
+    assert!(rx.try_recv().is_err());
+    right(&mut app, Some(gem), false);
+    assert!(matches!(
+        rx.try_recv().unwrap(),
+        ClientCommand::ForgetSpell {
+            gem: 0,
+            spell_id: 74,
+            ..
+        }
+    ));
+    right(&mut app, Some(gem), true);
+    right(&mut app, Some(gem), false);
+    assert!(rx.try_recv().is_err());
+    assert_eq!(world(&app).gem(0), Some(74));
 }
 
 #[test]
@@ -702,6 +751,7 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
         .insert_resource(crate::outbox::Outbox::new(Some(tx)))
         .init_resource::<ButtonInput<KeyCode>>()
         .init_resource::<ChatState>()
+        .init_resource::<GemPress>()
         .init_resource::<HudState>()
         .init_resource::<hotbar::Bindings>()
         .init_resource::<crate::spellbook::SpellNames>()
@@ -758,10 +808,14 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
         .resource_mut::<ButtonInput<KeyCode>>()
         .reset_all();
     let press = |app: &mut App| crate::clicks::testing::click(app, gem);
+    let forget = |app: &mut App| {
+        hud_pointer(app, Some(gem), MouseButton::Right, true);
+        hud_pointer(app, Some(gem), MouseButton::Right, false);
+    };
     let feedback = |app: &App| app.world().resource::<ChatState>().newest();
     // A submitted request blocks another click even before a server Begin notification.
     testing::pending_cast(&mut online(&mut app), Some(73));
-    press(&mut app);
+    forget(&mut app);
     assert!(rx.try_recv().is_err());
     testing::pending_cast(&mut online(&mut app), None);
     assert!(feedback(&app).contains("acknowledge"));
@@ -774,7 +828,7 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
             duration_ms: 2000,
         },
     );
-    press(&mut app);
+    forget(&mut app);
     assert!(rx.try_recv().is_err());
     assert!(feedback(&app).contains("Already casting"));
     testing::news(
@@ -785,6 +839,9 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
         }],
     );
     assert!(rx.try_recv().is_err());
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .press(KeyCode::ShiftLeft);
     press(&mut app);
     assert!(matches!(
         rx.try_recv().unwrap(),
@@ -794,6 +851,9 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
             ..
         }
     ));
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .reset_all();
     testing::spell(
         &mut online(&mut app),
         SpellUpdate::Began {
@@ -838,10 +898,7 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
     }
     press(&mut app);
     assert!(rx.try_recv().is_err());
-    app.world_mut()
-        .resource_mut::<ButtonInput<KeyCode>>()
-        .press(KeyCode::ShiftLeft);
-    press(&mut app);
+    forget(&mut app);
     assert!(matches!(
         rx.try_recv().unwrap(),
         ClientCommand::ForgetSpell {
@@ -855,7 +912,7 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
     app.world_mut()
         .resource_mut::<crate::keys::Typing>()
         .composing = true;
-    press(&mut app);
+    forget(&mut app);
     assert!(rx.try_recv().is_err());
     // A dropped connection forgets the gem timers.
     testing::connect(&mut online(&mut app), false);

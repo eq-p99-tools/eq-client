@@ -508,12 +508,16 @@ pub(crate) fn apply(
         }
         let fitted = places.and_then(|places| fit::fitted(screen, places));
         let screen = fitted.as_ref().unwrap_or(screen);
+        let mut effective = screen.clone();
+        effective.area.width = effects_width(*id, screen);
         // This first retained reflow contract belongs to chat. Other authored
         // sizable screens are preserved by the parser without assuming that
         // their widgets share chat's sizing policy.
         let sizing = reflow::eligible_scope(&from, *id, screen);
-        state.sizing(sizing, Vec2::new(screen.area.width, screen.area.height));
-        let mut effective = screen.clone();
+        state.sizing(
+            sizing,
+            Vec2::new(effective.area.width, effective.area.height),
+        );
         if let Some(size) = state.preferred_size() {
             effective.area.width = size.x;
             effective.area.height = size.y;
@@ -575,8 +579,44 @@ fn drawn_size(
     screens
         .get(directory, &from, id)
         .map_or(Vec2::ZERO, |screen| {
-            Vec2::new(screen.area.width, screen.area.height).max(Vec2::ZERO)
+            Vec2::new(effects_width(id, screen), screen.area.height).max(Vec2::ZERO)
         })
+}
+
+/// Leave room for a skin's fixed buff columns inside the clipped client area.
+/// Hidden windows and buttons whose position follows the frame keep their sizing.
+fn effects_width(id: WindowId, screen: &Screen) -> f32 {
+    let width = screen.area.width;
+    if !matches!(id, WindowId::Effects | WindowId::ShortEffects)
+        || width <= 0.0
+        || screen.area.height <= 0.0
+    {
+        return width;
+    }
+    let inset = screen
+        .template
+        .as_ref()
+        .filter(|_| screen.border)
+        .map_or(0.0, |template| {
+            let border = border_insets(&template.border);
+            border.left + border.right
+        });
+    screen.pieces.iter().fold(width, |width, (_, element)| {
+        let Element::Button(button) = element else {
+            return width;
+        };
+        if button.placed
+            && button.anchors.is_none()
+            && matches!(
+                does(button.id.as_deref().unwrap_or_default(), id),
+                Some(Does::Buff(..))
+            )
+        {
+            width.max(button.area.x + button.area.width + inset)
+        } else {
+            width
+        }
+    })
 }
 
 /// Where the client's arrangement opens a window drawn from the skin
@@ -807,9 +847,8 @@ pub(crate) fn tabs(
     }
 }
 
-/// A gem: the spell's icon in the skin's holder. It behaves as the client's
-/// own gems do: a click casts, a shifted click forgets, and it greys out
-/// where the server takes no casts.
+/// A gem in the skin's holder uses the same cast and right-click forget
+/// gestures as the fallback gems. It greys out where the server takes no casts.
 fn spell_gem(
     window: &mut ChildSpawnerCommands,
     art: &mut crate::sheets::Art,
@@ -3739,6 +3778,76 @@ mod tests {
         button.placed = true;
         button.area.x = 30.0;
         assert_eq!(place(&button), (30.0, 0.0, 24.0, 24.0));
+    }
+
+    #[test]
+    #[allow(
+        clippy::float_cmp,
+        reason = "These exact authored pixel widths must fit"
+    )]
+    fn a_fixed_buff_column_fits_the_effects_window_client_area() {
+        use eq_client_assets::sidl::{Anchor, Anchors, WindowTemplate};
+
+        let mut third = buff_button(34.0);
+        third.id = Some("Buff2".into());
+        third.area.x = 93.0;
+        third.placed = true;
+        let mut parked = buff_button(34.0);
+        parked.id = Some("Buff3".into());
+        parked.area.x = 200.0;
+        let mut anchored = parked.clone();
+        anchored.id = Some("Buff4".into());
+        anchored.placed = true;
+        anchored.anchors = Some(Anchors {
+            left: Anchor::End(34.0),
+            top: Anchor::Start(0.0),
+            right: Anchor::End(0.0),
+            bottom: Anchor::Start(24.0),
+        });
+        let mut screen = Screen {
+            sizable: eq_client_assets::sidl::Sizable::Omitted,
+            name: "BuffWindow".into(),
+            title: None,
+            title_color: None,
+            font: None,
+            area: Area {
+                x: 0.0,
+                y: 0.0,
+                width: 104.0,
+                height: 395.0,
+            },
+            template: None,
+            title_bar: None,
+            border: false,
+            tooltip: None,
+            pieces: vec![
+                ("Third".into(), Element::Button(third)),
+                ("Unplaced".into(), Element::Button(parked)),
+                ("Anchored".into(), Element::Button(anchored)),
+            ],
+            tab_frame: None,
+            transparent: false,
+        };
+        assert_eq!(effects_width(WindowId::Effects, &screen), 127.0);
+        assert_eq!(effects_width(WindowId::PetInfo, &screen), 104.0);
+        let edge = |width| Piece {
+            texture: "synthetic".into(),
+            x: 0,
+            y: 0,
+            width,
+            height: 1,
+        };
+        let mut template = WindowTemplate::default();
+        template.border.left = Some(edge(2));
+        template.border.right = Some(edge(3));
+        screen.template = Some(template);
+        screen.border = true;
+        assert_eq!(effects_width(WindowId::Effects, &screen), 132.0);
+        // Even a skin declaring this frame sizable cannot apply a chat preference.
+        screen.sizable = eq_client_assets::sidl::Sizable::Enabled;
+        assert!(reflow::eligible_scope("synthetic", WindowId::Effects, &screen).is_none());
+        screen.area.width = 0.0;
+        assert_eq!(effects_width(WindowId::Effects, &screen), 0.0);
     }
 
     #[test]

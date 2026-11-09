@@ -336,20 +336,16 @@ pub(super) fn key_help(
         }
     };
     for (entity, SpellGem(gem), tooltip) in &gems {
-        let keys = format!(
-            "{} | Shift-click: forget",
-            map.help(&[(Act::Gem(*gem), "cast")])
-        );
-        let help = online
-            .world()
-            .gem(usize::from(*gem))
-            .map_or(keys.clone(), |spell| {
-                format!(
-                    "{}
-{keys} | Hold: pick up",
-                    names.label(spell)
-                )
-            });
+        let keys = map.help(&[(Act::Gem(*gem), "cast")]);
+        let help = if let Some(spell) = online.world().gem(usize::from(*gem)) {
+            format!(
+                "{}
+{keys} | Right-click: forget | Hold: pick up",
+                names.label(spell)
+            )
+        } else {
+            keys
+        };
         write(entity, tooltip, help);
     }
     for (entity, hotbar::Slot(index), tooltip) in &slots {
@@ -442,6 +438,84 @@ pub(super) fn spell_details(
     }
 }
 
+/// The gem and spell under a right press. Release must still point at this
+/// control and spell in the same admission.
+#[derive(PartialEq, Eq)]
+struct GemTarget {
+    entity: Entity,
+    gem: u8,
+    spell: u32,
+    session: u64,
+}
+
+/// The right-button gesture, which script cancellation can discard.
+#[derive(Resource, Default)]
+pub(crate) struct GemPress(Option<GemTarget>);
+
+impl GemPress {
+    /// Discards the press so a later button release cannot forget a spell.
+    pub(crate) fn cancel(&mut self) {
+        self.0 = None;
+    }
+}
+
+/// Right-button edges and Bevy's focus-filtered gem hit targets.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(super) struct GemRightClick<'w, 's> {
+    mouse: Res<'w, ButtonInput<MouseButton>>,
+    gems: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static SpellGem,
+            &'static Interaction,
+            Has<crate::tooltip::ScriptPressed>,
+        ),
+    >,
+    pressed: ResMut<'w, GemPress>,
+}
+
+impl GemRightClick<'_, '_> {
+    fn clicked(&mut self, world: &eq_client_core::world::ClientWorld) -> Option<u8> {
+        let press = self.mouse.just_pressed(MouseButton::Right);
+        let release = self.mouse.just_released(MouseButton::Right);
+        if self.mouse.pressed(MouseButton::Left) || self.mouse.just_released(MouseButton::Left) {
+            self.pressed.cancel();
+            return None;
+        }
+        let under_pointer = || {
+            let session = world.session_id()?;
+            let (entity, SpellGem(gem), ..) =
+                self.gems.iter().find(|(_, _, interaction, scripted)| {
+                    **interaction == Interaction::Hovered
+                        || (press && *scripted && **interaction == Interaction::Pressed)
+                })?;
+            Some(GemTarget {
+                entity,
+                gem: *gem,
+                spell: world.gem(usize::from(*gem))?,
+                session,
+            })
+        };
+        if press {
+            self.pressed.0 = under_pointer();
+        }
+        if release {
+            return self
+                .pressed
+                .0
+                .take()
+                .filter(|start| under_pointer().as_ref() == Some(start))
+                .map(|start| start.gem);
+        }
+        if !self.mouse.pressed(MouseButton::Right) {
+            self.pressed.cancel();
+        }
+        None
+    }
+}
+
 /// Sends fresh admitted spell/posture requests; server events determine results.
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(super) fn actions(
@@ -450,6 +524,7 @@ pub(super) fn actions(
     mut online: ResMut<super::online::OnlineState>,
     outbox: Res<crate::outbox::Outbox>,
     clicks: crate::clicks::Clicks<SpellGem>,
+    mut right_click: GemRightClick,
     bar_clicks: crate::clicks::Clicks<hotbar::Slot>,
     bindings: Res<hotbar::Bindings>,
     options: Option<Res<crate::options::OptionsState>>,
@@ -465,11 +540,14 @@ pub(super) fn actions(
 ) {
     use super::keys::Act;
     if !online.world().connected() || online.world().is_dead() || !keys.focused() {
+        right_click.pressed.cancel();
         return;
     }
     let Some(player) = online.world().player() else {
+        right_click.pressed.cancel();
         return;
     };
+    let forget = right_click.clicked(online.world());
     let clicked = clicks.iter().next().map(|gem| gem.0);
     // A spell picked up from the skin's book goes into the gem clicked.
     if let Some(gem) = clicked
@@ -488,12 +566,9 @@ pub(super) fn actions(
         }
         return;
     }
-    // Shift-click forgets the gem; its key only casts.
-    let forgetting = clicked.is_some()
-        && keys
-            .input
-            .any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
-    let gem = clicked.or_else(|| (0..8).find(|gem| keys.pressed(Act::Gem(*gem))));
+    let gem = forget
+        .or(clicked)
+        .or_else(|| (0..8).find(|gem| keys.pressed(Act::Gem(*gem))));
     let bar_action = hotbar::requested(&keys, &bindings, &bar_clicks);
     let gem = gem.or(match bar_action {
         Some(hotbar::Action::Gem(gem)) => Some(gem),
@@ -513,7 +588,7 @@ pub(super) fn actions(
             &requests::Request {
                 gem,
                 target_id: online.world().target().selected.unwrap_or(player.spawn_id),
-                forgetting,
+                forgetting: forget.is_some(),
                 mana_cost,
                 linked_timer: online
                     .world()

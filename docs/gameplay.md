@@ -197,8 +197,8 @@ Whether the official client makes that check locally is unread (inferred,
 recording checklist 6.394). Server rules and received book and inventory
 updates govern the result.
 
-Select a spell and destination gem to memorize; click a populated gem or use its
-binding to cast. Shift-click forgetting is separate from casting. Casts use the
+Select a spell and destination gem to memorize. Left-click a populated gem or
+use its binding to cast, and right-click the gem to forget it. Casts use the
 selected target or self when none is selected. Movement and posture changes can
 interrupt a cast. The cast timer estimates progress while the server reports
 the result. On Titanium EQEmu, Bards can type `/stopsong` during a tracked
@@ -276,7 +276,8 @@ On Titanium servers offering buff cancellation, right-click a known beneficial
 buff in the Effects or Songs window to request removal (the right button is
 inferred, recording checklist 6.387). Harmful effects, effects
 with unavailable spell data and effects whose server slot is unknown cannot be
-cancelled. A buff stays visible until received state removes it. If the selected
+cancelled. Right-clicking an effect with no known slot explains this in chat.
+A buff stays visible until received state removes it. If the selected
 slot changes while the button is held, release cancels the selection. The buff
 may expire on its own during a request. With no matching fade, the client
 reports the request as unconfirmed. Requests are never retried automatically.

@@ -504,7 +504,8 @@ impl Script {
         {
             *interaction = Interaction::None;
         }
-        commands.queue(|world: &mut World| {
+        let cancel_right = self.clicked == Some(MouseButton::Right);
+        commands.queue(move |world: &mut World| {
             if let Some(mut button) = world.get_resource_mut::<crate::clicks::LeftButton>() {
                 button.cancel();
             }
@@ -512,6 +513,14 @@ impl Script {
                 world.get_resource_mut::<crate::hud::hotbar::carry::Presses>()
             {
                 *presses = crate::hud::hotbar::carry::Presses::default();
+            }
+            if cancel_right {
+                if let Some(mut press) = world.get_resource_mut::<crate::hud::GemPress>() {
+                    press.cancel();
+                }
+                if let Some(mut press) = world.get_resource_mut::<crate::buffs::BuffPress>() {
+                    press.cancel();
+                }
             }
         });
     }
