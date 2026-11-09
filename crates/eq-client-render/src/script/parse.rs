@@ -374,6 +374,9 @@ pub enum ClickTarget {
     /// A button by the slash command it runs: a Pet Info window button, by
     /// the `/pet` line it gives, or a group window button.
     Slash(&'static str),
+    /// The group window's Follow button, which joins the group the player
+    /// was invited to.
+    GroupJoin,
     /// An Options window checkbox, by the option's name in a file.
     Option(eq_client_core::options::Toggle),
     /// A slider, pressed this far along it, in percent.
@@ -856,12 +859,12 @@ fn slash_click(window: &str, words: &[&str]) -> Result<ClickTarget, String> {
             .map(ClickTarget::Slash)
             .ok_or_else(|| "expected a Pet Info window button, by its /pet words".into());
     }
-    Ok(ClickTarget::Slash(match words {
-        ["invite"] => "/invite",
-        ["follow"] => "/follow",
-        ["disband" | "decline"] => "/disband",
+    Ok(match words {
+        ["invite"] => ClickTarget::Slash("/invite"),
+        ["follow"] => ClickTarget::GroupJoin,
+        ["disband" | "decline"] => ClickTarget::Slash("/disband"),
         _ => return Err("expected invite, follow, disband or decline".into()),
-    }))
+    })
 }
 
 /// `click <target>` or `right_click <target>`: a slot, spellbook, trade or

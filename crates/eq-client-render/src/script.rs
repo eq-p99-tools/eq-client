@@ -639,6 +639,7 @@ type Buttons<'w, 's> = Query<
             Has<super::skinned::AttackButton>,
             Option<&'static super::skinned::SlashButton>,
             Option<&'static super::options::OptionCheckbox>,
+            Has<super::group::JoinButton>,
         ),
         (
             Option<&'static super::skinned::SkinSlider>,
@@ -2568,7 +2569,7 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
         tint,
         (give, character, chat_tab),
         (coins, pick, arrow, amount),
-        (selector, tab, ability, attack, slash, checkbox),
+        (selector, tab, ability, attack, slash, checkbox, join),
         (
             slider,
             drop_down,
@@ -2594,6 +2595,7 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
             }),
             ClickTarget::Attack => attack,
             ClickTarget::Slash(command) => slash.is_some_and(|button| button.0 == command),
+            ClickTarget::GroupJoin => join,
             ClickTarget::Option(toggle) => checkbox.is_some_and(|checkbox| checkbox.0 == toggle),
             ClickTarget::Slider(name, _) => slider.is_some_and(|slider| slider.sets == sets(name)),
             ClickTarget::KeyFilter => drop_down.is_some_and(|drop_down| {

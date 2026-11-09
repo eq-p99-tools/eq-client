@@ -526,6 +526,10 @@ impl Controls {
             walking: self.walking,
             placement: self.placement,
             stun_revision: self.stun_revision,
+            // A correction or a server's move keeps following, which then
+            // ends by its own rules; a new admission ends it in `input`.
+            following: self.following.take(),
+            follow_ended: self.follow_ended.take(),
             movement_options: self.movement_options,
             // A grant or correction resets prediction, but the same worker
             // can still consume a move that was already queued.
@@ -888,7 +892,15 @@ pub(super) fn input(
             Err(None) => (),
         }
     }
+    if controls
+        .following
+        .as_ref()
+        .is_some_and(|following| !following.here(online.world()))
+    {
+        controls.following = None;
+    }
     if !online.enabled || !online.world().connected() || online.world().is_dead() {
+        controls.following = None;
         *told_wait = None;
         controls.reset(None);
         controls.held = Some(Held::Withdrawn);

@@ -53,6 +53,9 @@ const FRAMES_PER_SECOND: f32 = 60.0;
 /// Who the player follows.
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct Following {
+    /// The admission it began in; another zone's spawn of the same ID is
+    /// someone else.
+    session_id: Option<u64>,
     spawn_id: u16,
     name: String,
     /// How fast the player went at the last step, in units a second.
@@ -171,6 +174,7 @@ pub(super) fn start(
         ));
     }
     Ok(Following {
+        session_id: world.session_id(),
         spawn_id: id,
         name,
         speed: 0.0,
@@ -219,6 +223,11 @@ pub(super) fn turned(current: f32, desired: f32, distance: f32, frames: u32) -> 
 }
 
 impl Following {
+    /// Whether it began in this admission.
+    pub(super) fn here(&self, world: &ClientWorld) -> bool {
+        self.session_id == world.session_id()
+    }
+
     /// The name of the one followed.
     pub(super) fn name(&self) -> &str {
         &self.name
@@ -265,7 +274,7 @@ impl Following {
         let forward = distance >= height + CLOSE;
         // The program also runs while the player already moves no faster
         // than the one followed.
-        let theirs = their_speed(spawn, generation, now);
+        let theirs = their_speed(spawn, generation);
         let run = distance >= height + RUN || (self.speed > 0.0 && self.speed <= theirs);
         self.speed = match (forward, run) {
             (false, _) => 0.0,
@@ -282,17 +291,16 @@ impl Following {
 
 /// How fast a spawn goes over the ground, in units a second, as the client
 /// carries it on from its latest report.
+///
+/// Measured over a quarter second from the report, by the motion the
+/// report carries, so a report just received counts as much as an old one.
 fn their_speed(
     spawn: &eq_client_core::world::Spawn,
     generation: eq_client_core::GameDialect,
-    now: std::time::Instant,
 ) -> f32 {
     const OVER: std::time::Duration = std::time::Duration::from_millis(250);
-    let at = |when| spawn.carried(generation, when);
-    let Some(before) = now.checked_sub(OVER) else {
-        return 0.0;
-    };
-    let (a, b) = (at(before), at(now));
+    let at = |elapsed| eq_client_core::entities::carried(generation, &spawn.state, elapsed);
+    let (a, b) = (at(std::time::Duration::ZERO), at(OVER));
     Vec2::new(b.x - a.x, b.y - a.y).length() / OVER.as_secs_f32()
 }
 
@@ -368,6 +376,52 @@ mod tests {
         // No target says nothing.
         alone.select_target(None);
         assert_eq!(start(alone.world(), true, &messages).err(), Some(None));
+    }
+
+    #[test]
+    fn a_correction_or_a_servers_move_keeps_following() {
+        let online = world(50.0, true);
+        let mut controls = super::super::Controls {
+            following: start(online.world(), true, &Messages::default()).ok(),
+            ..super::super::Controls::default()
+        };
+        controls.reset(None);
+        assert!(
+            controls
+                .following
+                .as_ref()
+                .is_some_and(|following| following.here(online.world()))
+        );
+    }
+
+    #[test]
+    fn a_follower_already_walking_runs_while_the_one_followed_goes_faster() {
+        let now = std::time::Instant::now();
+        let bodies = Bodies {
+            own: WorldPosition::default(),
+            own_height: 3.75,
+            speeds: (30.0, 10.0),
+        };
+        let mut online = world(25.0, true);
+        let mut following = start(online.world(), true, &Messages::default()).unwrap();
+        // Standing still, they are walked to.
+        let first = following.step(online.world(), &bodies, (0.1, None, now));
+        assert!(first.is_ok_and(|step| step.forward && !step.run));
+        // Running away, faster than the player walks: the player runs.
+        testing::spawn_entry(
+            &mut online,
+            5,
+            SpawnState {
+                velocity: [0.0, 40.0, 0.0],
+                forward: 40.0,
+                ..friend(5, 25.0)
+            },
+        );
+        let spawn = online.world().spawn(5).unwrap();
+        let theirs = their_speed(spawn, online.world().generation());
+        assert!(theirs > 10.0, "{theirs}");
+        let next = following.step(online.world(), &bodies, (0.1, None, now));
+        assert!(next.is_ok_and(|step| step.forward && step.run));
     }
 
     #[test]

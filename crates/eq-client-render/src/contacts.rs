@@ -189,7 +189,8 @@ fn answer(
 }
 
 /// `/friends` alone: a header, the names and their count, or two lines for
-/// an empty list.
+/// an empty list. The official client writes the names itself, so they are
+/// its lines and its log keeps them.
 fn friends_listing(list: &NameList, messages: &Messages) -> Vec<Said> {
     if list.names().is_empty() {
         let [first, second] = strings::FRIENDS_EMPTY;
@@ -200,7 +201,11 @@ fn friends_listing(list: &NameList, messages: &Messages) -> Vec<Said> {
     }
     let count = list.names().len().to_string();
     std::iter::once(messages.said_text(strings::FRIENDS_HEADER, "Your friends:"))
-        .chain(list.names().iter().map(|name| Said::own(name.as_str())))
+        .chain(
+            list.names()
+                .iter()
+                .map(|name| Said::official(name.as_str())),
+        )
         .chain(std::iter::once(messages.said_or(
             strings::FRIENDS_COUNT,
             std::slice::from_ref(&count),
@@ -212,7 +217,11 @@ fn friends_listing(list: &NameList, messages: &Messages) -> Vec<Said> {
 /// `/ignore` alone: a header and the names.
 fn ignore_listing(list: &NameList, messages: &Messages) -> Vec<Said> {
     std::iter::once(messages.said_text(strings::IGNORE_HEADER, "You are ignoring:"))
-        .chain(list.names().iter().map(|name| Said::own(name.as_str())))
+        .chain(
+            list.names()
+                .iter()
+                .map(|name| Said::official(name.as_str())),
+        )
         .collect()
 }
 
