@@ -46,8 +46,8 @@ eq-client-axes = { path = "crates/eq-client-axes" }
 eq-client-core = { path = "crates/eq-client-core" }
 eq-client-render = { path = "crates/eq-client-render" }
 anyhow = "1"
-eq-network = { git = "https://github.com/eq-p99-tools/eq-network", rev = "51c94173a15470ce1a9f93b9f0d96ff36d723dcf" }
-eq-network-game = { git = "https://github.com/eq-p99-tools/eq-network", rev = "51c94173a15470ce1a9f93b9f0d96ff36d723dcf" }
+eq-network = { git = "https://github.com/eq-p99-tools/eq-network", rev = "f1956e0867c9730731a62591983e67423eec5b82" }
+eq-network-game = { git = "https://github.com/eq-p99-tools/eq-network", rev = "f1956e0867c9730731a62591983e67423eec5b82" }
 glam = "0.32.1"
 parry3d = "0.30.2"
 rerecast = { version = "=0.4.0", default-features = false, features = ["std"] }
