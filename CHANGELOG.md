@@ -98,7 +98,7 @@
   landmark files from replacement, and share immutable installed spell
   definitions across sessions.
 
-- Pin networking f1956e08: a change in the player's belongings (an item
+- Pin networking 4ef182e4 (kept-grant landing): a change in the player's belongings (an item
   eaten, drunk, looted or moved, or coins) keeps the movement grant until
   the new speed inputs land, so a jump, a crouch or autorun under way is no
   longer dropped.
