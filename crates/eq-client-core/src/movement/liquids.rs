@@ -41,6 +41,12 @@ pub trait Liquids: Send + Sync {
         point.is_finite()
     }
 
+    /// Whether a swept segment has no unknown region spans. A provider
+    /// without continuous queries cannot establish a shoreline arc.
+    fn segment_known(&self, _from: Vec3, _to: Vec3) -> bool {
+        false
+    }
+
     /// Whether a straight path from one point to another passes through
     /// this liquid anywhere, however thin.
     fn passes_through(&self, from: Vec3, to: Vec3, liquid: Liquid) -> bool;

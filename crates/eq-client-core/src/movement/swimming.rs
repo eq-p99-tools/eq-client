@@ -25,7 +25,71 @@ pub enum LiquidContact {
     Lava,
 }
 
+/// What the ordinary collision capsule could do on one shoreline frame.
+pub struct ShorelineStep {
+    /// Swept feet position.
+    pub feet: Vec3,
+    /// The rise or descent struck a solid face.
+    pub stop_vertical: bool,
+    /// The feet reached ground while outside swimming water.
+    pub supported: bool,
+}
+
 impl CollisionWorld {
+    /// The native shoreline probe, with the dry region required to resolve.
+    #[must_use]
+    pub fn shoreline_ahead(&self, feet: Vec3, heading: Vec3, feet_offset: f32) -> bool {
+        self.liquids.as_ref().is_some_and(|liquids| {
+            let origin = feet + Vec3::Y * feet_offset;
+            let ahead = origin + heading * feet_offset - Vec3::Y;
+            liquids.region_known(ahead) && liquids.liquid_at(ahead).is_none()
+        })
+    }
+
+    /// Sweep one frame of an already bounded shoreline impulse. Use separate
+    /// axes so a wall can consume forward motion while a clear ascent continues.
+    #[must_use]
+    pub fn shoreline_step(
+        &self,
+        feet: Vec3,
+        horizontal: Vec3,
+        vertical: f32,
+        height: f32,
+    ) -> Option<ShorelineStep> {
+        let liquids = self.liquids.as_ref()?;
+        let sweep = |from: Vec3, delta: Vec3| -> Option<(Vec3, bool)> {
+            if delta.length_squared() <= 1e-10 {
+                return Some((from, false));
+            }
+            let (to, hit) = self.swim_sweep(from, delta, height)?;
+            let soles = Vec3::Y * SOLES;
+            let origin = self.swim_probe(height);
+            (liquids.segment_known(from + origin, to + origin)
+                && liquids.segment_known(from + soles, to + soles)
+                && !liquids.passes_through(from + soles, to + soles, Liquid::Lava)
+                && !liquids.passes_through(from + origin, to + origin, Liquid::Lava))
+            .then_some((to, hit.is_some()))
+        };
+        let rise = Vec3::Y * vertical;
+        let (feet, stop_vertical) = if vertical > 0.0 {
+            let (raised, stop_vertical) = sweep(feet, rise)?;
+            let (moved, _) = sweep(raised, horizontal)?;
+            (moved, stop_vertical)
+        } else {
+            let (moved, _) = sweep(feet, horizontal)?;
+            let (lowered, stop_vertical) = sweep(moved, rise)?;
+            (lowered, stop_vertical)
+        };
+        let supported = vertical <= 0.0
+            && !self.in_swimmable_water(feet, height)
+            && self.ground(feet, 0.01, 0.15).is_some();
+        Some(ShorelineStep {
+            feet,
+            stop_vertical,
+            supported,
+        })
+    }
+
     /// Uses the admitted Titanium actor origin for wet movement. The
     /// program probes the transmitted origin at 0x489b0a and stores the
     /// body region through 0x47cae6. The offset is measured from our soles.

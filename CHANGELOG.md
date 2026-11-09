@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Look up and swim forward to use Titanium's shoreline boost near a
+  reachable supported bank. The renderer sweeps the capsule and the worker
+  checks the bounded frame trace through ordinary position updates.
+
 - Size the Titanium floor sweep from the model's scaled standing reference
   so a local collision step can find nearby support after a received placement.
 - Let opt-in Fly pass through mapped liquid while retaining solid collision.

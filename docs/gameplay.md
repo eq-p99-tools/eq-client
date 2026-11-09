@@ -56,9 +56,15 @@ Wet movement starts when the character's body origin enters that region.
 Wade or fall into water, move in any
 horizontal direction, and use first-person or mouse-look pitch to swim up or
 down with forward or backward input. The surface holds the swimmer in the water,
-and a supported bank returns them to ordinary movement. Automated ground
-routes and EQMac-era sessions retain the deep-water guard. Ordinary
+and a supported bank returns them to ordinary movement. At the surface, look up
+and swim forward toward a nearby bank to use Titanium's shoreline boost.
+The client checks that the capsule can reach a supported landing. Automated
+ground routes and EQMac-era sessions retain the deep-water guard. Ordinary
 movement guards against entering lava.
+
+The shoreline profile is derived from Titanium movement code and checked with
+synthetic traces. Attended P99 shoreline traversal is still pending; it does not
+claim identical trajectories across frame rates or water depths.
 
 **Jesus Mode** is an opt-in QoL setting where the session offers gameplay
 departures. Walk from shore or land on mapped water or lava to use the
