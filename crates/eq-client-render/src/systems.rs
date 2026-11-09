@@ -166,6 +166,7 @@ pub(super) fn schedule(app: &mut App) {
                 spellbook::search::capture,
                 chat::drag_tabs,
                 chat::input,
+                chat::capture,
                 spellbook::search::input,
                 spellbook::search::refresh,
                 navigation::update,

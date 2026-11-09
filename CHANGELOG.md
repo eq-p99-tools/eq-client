@@ -21,6 +21,9 @@
   invited to. Inferences (the dialog's timeout, the clear-path test,
   letter case in `/autosplit`, and others) are recorded as checklist items
   6.410 to 6.412.
+- Keys typed into the chat line no longer reach the game when Enter closes
+  the line in the same frame, so a digit at the end of a line no longer
+  presses a hotbar button.
 
 - Look up and swim forward to use Titanium's shoreline boost near a
   reachable supported bank. The renderer sweeps the capsule and the worker

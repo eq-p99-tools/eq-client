@@ -71,6 +71,9 @@ pub(super) struct Step {
     pub forward: bool,
     /// Whether the player runs rather than walks.
     pub run: bool,
+    /// How far the player is beyond where they stop, so that a sample
+    /// stops there as the program's frames do rather than going past.
+    pub beyond: f32,
 }
 
 /// What the player and the one followed are now.
@@ -285,6 +288,7 @@ impl Following {
             heading,
             forward,
             run,
+            beyond: (distance - height - CLOSE).max(0.0),
         })
     }
 }

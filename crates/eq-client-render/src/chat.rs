@@ -877,6 +877,7 @@ pub(super) fn input(
     drag: Option<Res<TabDrag>>,
 ) {
     typing.escape_consumed = drag.as_ref().is_some_and(|drag| drag.escaped);
+    typing.chat_events.clear();
     if typing.editing_script {
         paste.clear();
         keyboard.clear();
@@ -934,7 +935,7 @@ pub(super) fn input(
         paste.clear();
     }
     let mut scripted_enter = false;
-    let events: Vec<_> = keyboard
+    let (events, ids): (Vec<_>, Vec<_>) = keyboard
         .read_with_id()
         .filter(|(event, id)| {
             !(typing.spell_search_captured(*id)
@@ -944,19 +945,23 @@ pub(super) fn input(
             scripted_enter |= event.state.is_pressed()
                 && event.logical_key == Key::Enter
                 && authored.as_ref().is_some_and(|authored| authored.typed(id));
-            event.clone()
+            (event.clone(), id)
         })
-        .collect();
+        .unzip();
     let empty = ButtonInput::default();
+    let mut claimed = Vec::new();
     let submit = compose(
         &mut state,
-        &mut typing,
+        (&mut typing, &mut claimed),
         &events,
         keys.as_deref().unwrap_or(&empty),
         clipboard.as_deref_mut(),
         &mut paste,
         online.world().session_id(),
     ) || send;
+    typing
+        .chat_events
+        .extend(claimed.into_iter().map(|index| ids[index]));
     if submit {
         paste.clear();
         if state.draft.text().trim().is_empty() {
@@ -1004,10 +1009,42 @@ pub(super) fn input(
     }
 }
 
-/// Edit one chat draft with ordered modifier snapshots; clipboard input never submits.
+/// Keeps the keys typed into the chat line out of the game: a press the
+/// line took is no fresh press for the bindings, even when Enter closes the
+/// line in the same frame, and the key's repeats stay the line's until it is
+/// let go or pressed afresh (seen as a digit typed in a /say reaching the
+/// hotbar on a local run, 11-09).
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(super) fn capture(
+    mut keyboard: MessageReader<KeyboardInput>,
+    typing: Res<crate::keys::Typing>,
+    mut physical: ResMut<ButtonInput<KeyCode>>,
+    mut held: Local<HashSet<KeyCode>>,
+) {
+    let mut reset = HashSet::new();
+    for (event, id) in keyboard.read_with_id() {
+        let key = event.key_code;
+        if typing.chat_events.contains(&id) {
+            held.insert(key);
+            reset.insert(key);
+        } else if !event.state.is_pressed() {
+            held.remove(&key);
+        } else if !event.repeat {
+            // A fresh press the line did not take is the game's.
+            held.remove(&key);
+            reset.remove(&key);
+        }
+    }
+    for key in reset.iter().chain(held.iter()) {
+        physical.reset(*key);
+    }
+}
+
+/// Edit one chat draft with ordered modifier snapshots; clipboard input never
+/// submits. Notes, by their place in `events`, each press the line took.
 fn compose(
     state: &mut ChatState,
-    typing: &mut crate::keys::Typing,
+    (typing, claimed): (&mut crate::keys::Typing, &mut Vec<usize>),
     events: &[KeyboardInput],
     keys: &ButtonInput<Key>,
     mut clipboard: Option<&mut bevy::clipboard::Clipboard>,
@@ -1016,11 +1053,22 @@ fn compose(
 ) -> bool {
     let mut submit = false;
     let modifiers = crate::keys::modifiers::snapshots(events, keys);
-    for (event, held) in events.iter().zip(modifiers) {
+    for (index, (event, held)) in events.iter().zip(modifiers).enumerate() {
         if !event.state.is_pressed() {
             continue;
         }
-        if crate::keys::modifiers::chorded(held) {
+        let chorded = crate::keys::modifiers::chorded(held);
+        let opens = matches!(&event.logical_key, Key::Enter)
+            || matches!(&event.logical_key, Key::Character(value) if value.as_str() == "/");
+        // A held Shift, Ctrl or Alt stays the game's as well.
+        let modifier = matches!(
+            event.logical_key,
+            Key::Shift | Key::Control | Key::Alt | Key::Super | Key::Meta
+        );
+        if !modifier && (typing.composing || (opens && !chorded)) {
+            claimed.push(index);
+        }
+        if chorded {
             if typing.composing
                 && held[0]
                 && !held[2]
@@ -3466,6 +3514,89 @@ mod tests {
         app.update();
         assert_eq!(app.world().resource::<ChatState>().draft.text(), "kept");
         assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn keys_typed_into_the_line_do_not_reach_the_game_as_it_closes() {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+        let mut online = super::super::online::OnlineState::new(true);
+        crate::online::testing::admit(&mut online, 1, crate::online::testing::player(1));
+        let mut app = App::new();
+        crate::keys::testing::install(&mut app);
+        app.init_resource::<ChatState>()
+            .init_resource::<super::super::windows::pointer::Wheel>()
+            .add_message::<KeyboardInput>()
+            .insert_resource(online)
+            .insert_resource(crate::outbox::Outbox::new(Some(sender)))
+            .init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .add_systems(Update, (input, capture).chain());
+        app.world_mut()
+            .resource_mut::<ChatState>()
+            .draft
+            .replace("/say ");
+        app.world_mut()
+            .resource_mut::<crate::keys::Typing>()
+            .composing = true;
+        let key = |key_code, logical_key, text: Option<&str>, pressed, repeat| KeyboardInput {
+            key_code,
+            logical_key,
+            state: if pressed {
+                bevy::input::ButtonState::Pressed
+            } else {
+                bevy::input::ButtonState::Released
+            },
+            text: text.map(Into::into),
+            repeat,
+            window: Entity::PLACEHOLDER,
+        };
+        let nine = |pressed, repeat| {
+            key(
+                KeyCode::Digit9,
+                Key::Character("9".into()),
+                Some("9"),
+                pressed,
+                repeat,
+            )
+        };
+        // The digit and Enter in one frame: the line takes both and closes.
+        app.world_mut().write_message(nine(true, false));
+        app.world_mut()
+            .write_message(key(KeyCode::Enter, Key::Enter, None, true, false));
+        {
+            let mut physical = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            physical.press(KeyCode::Digit9);
+            physical.press(KeyCode::Enter);
+        }
+        app.update();
+        assert!(receiver.try_recv().is_ok());
+        assert!(!app.world().resource::<crate::keys::Typing>().composing);
+        let physical = app.world().resource::<ButtonInput<KeyCode>>();
+        assert!(!physical.just_pressed(KeyCode::Digit9));
+        assert!(!physical.just_pressed(KeyCode::Enter));
+        // Its repeats stay the line's while it is held.
+        app.world_mut().write_message(nine(true, true));
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Digit9);
+        app.update();
+        assert!(
+            !app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .just_pressed(KeyCode::Digit9)
+        );
+        // Let go and pressed afresh, the key is the game's.
+        app.world_mut().write_message(nine(false, false));
+        app.world_mut().write_message(nine(true, false));
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Digit9);
+        app.update();
+        assert!(
+            app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .just_pressed(KeyCode::Digit9)
+        );
     }
 
     #[test]

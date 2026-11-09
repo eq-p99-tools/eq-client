@@ -119,8 +119,6 @@ pub(super) struct Controls {
     movement_options: eq_client_core::movement::MovementOptions,
     /// The group member the player follows on foot (`/follow`).
     following: Option<follow::Following>,
-    /// Following that ended where no line could be said, to say next frame.
-    follow_ended: Option<(follow::End, String)>,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -223,7 +221,6 @@ impl Default for Controls {
             stun_active: false,
             movement_options: eq_client_core::movement::MovementOptions::default(),
             following: None,
-            follow_ended: None,
         }
     }
 }
@@ -529,7 +526,6 @@ impl Controls {
             // A correction or a server's move keeps following, which then
             // ends by its own rules; a new admission ends it in `input`.
             following: self.following.take(),
-            follow_ended: self.follow_ended.take(),
             movement_options: self.movement_options,
             // A grant or correction resets prediction, but the same worker
             // can still consume a move that was already queued.
@@ -648,21 +644,9 @@ impl Controls {
             .take()
             .filter(|airborne| airborne.peak().is_some());
         let unreported = self.unreported;
-        // Following outlasts a change of speed; one that stops the player
-        // ends it, and says so (R6, 0x411076).
-        let moves = grant
-            .units_per_second
-            .is_some_and(|value| value.is_finite() && value > 0.0);
-        let following = self.following.take();
-        let follow_ended = self.follow_ended.take().or_else(|| {
-            following
-                .as_ref()
-                .filter(|_| !moves)
-                .map(|following| (follow::End::Stopped, following.name().to_owned()))
-        });
+        // Following outlasts a change of speed, and a withdrawal while the
+        // session places the player; a root ends it in `input`.
         self.reset(grant.units_per_second);
-        self.following = following.filter(|_| moves);
-        self.follow_ended = follow_ended;
         self.autorun = autorun;
         self.backward_speed = grant.backward_units_per_second;
         self.walk_speed = grant.walk_units_per_second;
@@ -847,6 +831,13 @@ fn swim_stroke(
     )
 }
 
+/// The mouse's look and aim, and the spell names a root is read by.
+type Pointing<'w> = (
+    Option<Res<'w, MouseLook>>,
+    Option<Res<'w, MouseAim>>,
+    Option<Res<'w, crate::spellbook::SpellNames>>,
+);
+
 /// Produces at most one in-flight proposal; renderer stalls never accumulate distance.
 #[allow(
     clippy::needless_pass_by_value,
@@ -872,13 +863,25 @@ pub(super) fn input(
         Res<crate::hud::messages::Messages>,
         ResMut<crate::chat::ChatState>,
     ),
-    (look, aim): (Option<Res<MouseLook>>, Option<Res<MouseAim>>),
+    (look, aim, spells): Pointing,
 ) {
     let client = settings.0.installed_client;
-    if let Some((end, name)) = controls.follow_ended.take() {
+    // The program's speed-modifier routine ends following once a root
+    // stops the player (R6, 0x411076); a server's move does not.
+    if let Some(following) = controls.following.as_ref()
+        && spells.as_deref().is_some_and(|spells| {
+            matches!(
+                crate::speed::inputs(online.world(), spells),
+                eq_client_core::SpeedInputState::Ready(inputs) if inputs.rate <= -1000
+            )
+        })
+    {
         chat.history.push(crate::chat::system_line(follow::ended(
-            end, &name, &messages,
+            follow::End::Stopped,
+            following.name(),
+            &messages,
         )));
+        controls.following = None;
     }
     if chat.follow_asked.take().is_some() {
         let can_move = controls.speed.is_some_and(|speed| speed > 0.0);
@@ -1267,6 +1270,10 @@ pub(super) fn input(
                     (false, Some(walk)) => (MovementMode::Walk, walk),
                     _ => (MovementMode::Forward, controls.speed.unwrap_or(0.0)),
                 };
+                // The program stops in the frame it comes within reach; a
+                // sample covers many frames, so it goes no further than
+                // that frame would.
+                let speed = speed.min((step.beyond + speed / 60.0) / span.max(f32::EPSILON));
                 intent = MotionInput {
                     mode,
                     speed,

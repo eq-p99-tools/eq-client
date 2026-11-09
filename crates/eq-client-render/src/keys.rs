@@ -632,6 +632,9 @@ pub(crate) struct Typing {
     pub spell_search_held: HashSet<KeyCode>,
     /// Ordered input claimed by the spell search during this frame.
     pub spell_search_events: HashSet<MessageId<KeyboardInput>>,
+    /// Presses the chat line took this frame, so the game does not take
+    /// them too when the line closes in the same frame.
+    pub chat_events: HashSet<MessageId<KeyboardInput>>,
     /// A key assignment is being edited, including its finishing frame.
     pub rebinding: bool,
     /// A script document or path field owns the keyboard.
