@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Jump and turn as the Titanium program does. A hurt or overloaded
+  player's jump starts at the same health and weight share that slows
+  running. A jump from standing still with no forward input crouches for
+  half a second first, and backing up drops it, on Titanium as on the
+  Mac-era client; a strafe-only jump still goes at once (checklist 6.417). A jump is refused with the official line when endurance
+  is at or under 50 and at or under a tenth of the maximum (the client's
+  estimate; with no estimate the jump goes as before, checklist 6.415). The
+  turn keys ramp up from 20 to 240 heading units a second over a fifth of a
+  second, and to 160 while walking (the ramp steps at 60 a second,
+  checklist 6.416).
+- Add the General page's Allow Auto-Stand option, on by default as in the
+  official client. Off, a sitting player stays put when they move forward
+  until they stand.
 - Typed slash commands now resolve as the Titanium client resolves them.
   The word is matched against the start of each official command name, in
   the official order, and the first match wins. So `/s` is `/split`, `/l` is
@@ -84,6 +97,10 @@
 - Bound inspection note and landmark file reads, protect oversized
   landmark files from replacement, and share immutable installed spell
   definitions across sessions.
+
+- Pin networking 51c94173 (Batch M slice 1 landing): a jump starts at the
+  health and weight factor that slows running, and the movement guard bounds
+  its rise by the factor it launched with.
 
 - Pin networking 462baf69 (Batch A landing): friends who, guild requests,
   splitting and a banker's change on the Titanium wire, offered on `EQEmu`

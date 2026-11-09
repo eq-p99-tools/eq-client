@@ -853,6 +853,7 @@ fn input_acceptance_is_current_and_never_supplies_movement_permission() {
             walk_units_per_second: None,
             strafe_units_per_second: None,
             falls: true,
+            jump_factor: 1.0,
         },
     );
     assert_eq!(world.accepted_speed_inputs(), None);
@@ -3634,6 +3635,7 @@ fn the_session_grants_motion_until_any_reset() {
         walk_units_per_second: None,
         strafe_units_per_second: None,
         falls: true,
+        jump_factor: 1.0,
     };
     let mut world = admitted();
     assert!(game(&mut world, grant(2)).ignored);

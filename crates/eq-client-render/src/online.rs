@@ -960,6 +960,7 @@ fn log_grant(grant: eq_client_core::world::MotionGrant) {
         strafe_units_per_second,
         diagonal,
         falls,
+        jump_factor,
     } = grant;
     if units_per_second.is_none() {
         info!(falls, "Movement withdrawn");
@@ -971,6 +972,7 @@ fn log_grant(grant: eq_client_core::world::MotionGrant) {
             ?strafe_units_per_second,
             ?diagonal,
             falls,
+            jump_factor,
             "Movement granted"
         );
     }
