@@ -32,6 +32,8 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<options::MovementSync>()
         .init_resource::<logs::ChatLog>()
         .init_resource::<hud::HudState>()
+        .init_resource::<hud::GemPress>()
+        .init_resource::<buffs::BuffPress>()
         .init_resource::<hud::action_bar::ActionRequests>()
         .init_resource::<combat::CombatState>()
         .init_resource::<combat_text::CombatText>()

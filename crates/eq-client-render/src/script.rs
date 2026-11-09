@@ -504,7 +504,8 @@ impl Script {
         {
             *interaction = Interaction::None;
         }
-        commands.queue(|world: &mut World| {
+        let cancel_right = self.clicked == Some(MouseButton::Right);
+        commands.queue(move |world: &mut World| {
             if let Some(mut button) = world.get_resource_mut::<crate::clicks::LeftButton>() {
                 button.cancel();
             }
@@ -512,6 +513,14 @@ impl Script {
                 world.get_resource_mut::<crate::hud::hotbar::carry::Presses>()
             {
                 *presses = crate::hud::hotbar::carry::Presses::default();
+            }
+            if cancel_right {
+                if let Some(mut press) = world.get_resource_mut::<crate::hud::GemPress>() {
+                    press.cancel();
+                }
+                if let Some(mut press) = world.get_resource_mut::<crate::buffs::BuffPress>() {
+                    press.cancel();
+                }
             }
         });
     }
@@ -699,6 +708,7 @@ type Observed<'w> = (
     Option<Res<'w, crate::breath::State>>,
     Option<Res<'w, crate::projectiles::Flights>>,
     Option<Res<'w, crate::socials::State>>,
+    Option<Res<'w, crate::options::MovementSync>>,
 );
 
 type Input<'w, 's> = (Keyboard<'w, 's>, ResMut<'w, ButtonInput<MouseButton>>);
@@ -707,6 +717,7 @@ type DriverContext<'w, 's> = (
     Query<'w, 's, &'static Window, With<PrimaryWindow>>,
     Option<Res<'w, super::ViewerSettings>>,
     Option<ResMut<'w, RunControl>>,
+    Query<'w, 's, Has<super::camera::FreeCamera>, With<super::OrbitCamera>>,
 );
 
 /// The keyboard as a script presses it: each press and release sets the
@@ -826,7 +837,7 @@ pub(super) fn drive(
         Query<&crate::outbox::Needs>,
         pointer::Aim,
     ),
-    (windows, settings, mut control): DriverContext,
+    (windows, settings, mut control, detached_camera): DriverContext,
     mut focus: MessageReader<bevy::window::WindowFocused>,
     mut reported_focus: Local<Option<(Entity, bool)>>,
     mut exit: MessageWriter<AppExit>,
@@ -2079,6 +2090,8 @@ pub(super) fn drive(
                 players.single().ok(),
                 bodies.single().ok(),
                 collision.as_deref().and_then(|world| world.0.as_ref()),
+                &observed,
+                detached_camera.single().ok(),
             );
             report::surroundings(&online, &observed);
             report::game_messages(&mut script.chat_seen, &chat);

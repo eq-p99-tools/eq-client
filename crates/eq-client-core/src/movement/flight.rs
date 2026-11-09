@@ -12,31 +12,26 @@ use std::cell::RefCell;
 
 impl CollisionWorld {
     /// Sweeps a flying character through solid geometry without requiring ground
-    /// support. Floors, ceilings and walls still stop the body; this grants no
-    /// speed or session permission. The caller bounds the displacement.
+    /// support. Floors, ceilings and walls still stop the body. Liquids are
+    /// observed separately at accepted positions. The caller grants and
+    /// bounds the displacement.
     #[must_use]
     pub fn fly_step(&self, feet: Vec3, displacement: Vec3, height: f32) -> Vec3 {
         if !feet.is_finite() || !displacement.is_finite() || !height.is_finite() || height < 1.0 {
             return feet;
         }
-        let guarded = !self.submerged(feet, height);
         if displacement.length_squared() < 0.000_001 {
             return feet;
         }
         // Stop on contact: projecting onto a slope could otherwise invent a
         // height change when the player only asked to move horizontally.
-        let position = match self.flight_sweep(feet, displacement, height) {
+        match self.flight_sweep(feet, displacement, height) {
             Ok(None) => feet + displacement,
             Ok(Some(hit)) => {
                 let fraction = (hit.time_of_impact - 0.005 / displacement.length()).clamp(0.0, 1.0);
                 feet + displacement * fraction
             }
             Err(_) => feet,
-        };
-        if guarded && !self.dry(position, height) {
-            feet
-        } else {
-            position
         }
     }
 
@@ -204,6 +199,51 @@ mod tests {
             wall.x > 4.0 && wall.x < 5.0,
             "the floor must not hide the wall: {wall:?}"
         );
+    }
+
+    #[test]
+    fn flight_crosses_liquids_without_floor_support_or_liquid_walls() {
+        use super::super::{Liquid, SwimDepth, liquids::Boxes};
+
+        let world = CollisionWorld::new([
+            [
+                [-10.0, -12.0, -10.0],
+                [10.0, -12.0, -10.0],
+                [10.0, -12.0, 10.0],
+            ],
+            [
+                [-10.0, -12.0, -10.0],
+                [10.0, -12.0, 10.0],
+                [-10.0, -12.0, 10.0],
+            ],
+        ])
+        .unwrap()
+        .with_liquids(Boxes(vec![
+            (
+                Vec3::splat(-10.0),
+                Vec3::new(10.0, 1.0, 10.0),
+                Liquid::Water,
+            ),
+            (
+                Vec3::new(0.4, -3.0, -1.0),
+                Vec3::new(0.6, -2.0, 1.0),
+                Liquid::Lava,
+            ),
+        ]));
+        let feet = Vec3::new(0.0, -2.5, 0.0);
+        let height = 6.0;
+        assert_eq!(world.swim_depth(feet, height), Some(SwimDepth::Surface));
+        assert!(world.support(feet).is_none());
+        let above = feet + Vec3::Y * 5.0;
+        assert!(!world.dry(above, height));
+        assert_eq!(world.fly_step(feet, Vec3::Y * 5.0, height), above);
+        assert_eq!(world.fly_step(above, Vec3::X, height), above + Vec3::X);
+
+        let below = feet - Vec3::Y * 3.0;
+        assert_eq!(world.fly_step(feet, Vec3::NEG_Y * 3.0, height), below);
+        assert_eq!(world.swim_depth(below, height), Some(SwimDepth::Submerged));
+        assert_eq!(world.fly_step(below, Vec3::Y * 3.0, height), feet);
+        assert_eq!(world.fly_step(feet, Vec3::X, height), feet + Vec3::X);
     }
 
     #[test]

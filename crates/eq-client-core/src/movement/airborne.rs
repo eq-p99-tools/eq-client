@@ -578,8 +578,8 @@ mod tests {
     }
 
     /// The Titanium program's falls (sittings 8g-8i; R-s): gravity 0.4 a
-    /// 50 ms step, the air's 0.99, and the on-ground tolerance 0.5 + 0.001;
-    /// a size 6 human's climb, 3.75 − 0.6 a step (6.344).
+    /// 50 ms step, the air's 0.99, and the on-ground tolerance 0.5 + 0.001.
+    /// The collision fixtures exercise a fixed 3.15-unit climb budget.
     const PROGRAM: VerticalPhysics = VerticalPhysics {
         gravity: 160.0,
         terminal_speed: 792.0,

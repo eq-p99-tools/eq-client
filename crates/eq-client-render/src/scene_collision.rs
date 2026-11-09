@@ -30,6 +30,10 @@ impl eq_client_core::movement::Liquids for ZoneLiquids {
         self.0.medium_at(point.to_array()).is_some()
     }
 
+    fn segment_known(&self, from: Vec3, to: Vec3) -> bool {
+        self.0.segment_known(from.to_array(), to.to_array())
+    }
+
     fn passes_through(
         &self,
         from: Vec3,

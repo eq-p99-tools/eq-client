@@ -70,6 +70,63 @@ fn fixture(steps: Vec<Step>) -> (App, Entity, Entity, Entity) {
 }
 
 #[test]
+fn background_clicks_minimize_and_restore_a_skinned_map_without_focus() {
+    use crate::windows::{self, Frame, Minimize, WindowId};
+
+    let minimize = Step::Click(ClickTarget::TitleBox("map", false));
+    let (mut app, window, box_entity, _) = fixture(vec![
+        minimize.clone(),
+        Step::Wait(Duration::from_millis(100)),
+        minimize,
+    ]);
+    app.add_systems(Update, windows::input);
+    let mut node = Node {
+        height: px(380),
+        ..default()
+    };
+    let mut frame = Frame::default();
+    frame.drawn_from_skin(&mut node, Some(20.0));
+    let map = app.world_mut().spawn((WindowId::Map, node, frame)).id();
+    app.world_mut()
+        .entity_mut(box_entity)
+        .remove::<crate::give::GiveButton>()
+        .insert((
+            crate::skinned::TitleBox {
+                window: WindowId::Map,
+                close: false,
+            },
+            Minimize(map),
+        ));
+
+    let mut layouts = Vec::new();
+    for ms in (0..=1_200).step_by(10) {
+        frame_at(&mut app, ms);
+        assert!(!app.world().get::<Window>(window).unwrap().focused);
+        let node = app.world().get::<Node>(map).unwrap();
+        let geometry = (node.height, node.overflow);
+        if layouts.last() != Some(&geometry) {
+            layouts.push(geometry);
+        }
+    }
+    assert_eq!(
+        layouts,
+        [
+            (px(380), Overflow::visible()),
+            (px(20), Overflow::clip()),
+            (px(380), Overflow::visible()),
+        ]
+    );
+    assert_eq!(
+        app.world().resource::<Recorded>().left_clicks,
+        [box_entity, box_entity]
+    );
+    assert_eq!(
+        app.world().resource::<RunStatus>().phase(),
+        Phase::Completed
+    );
+}
+
+#[test]
 fn owned_background_clicks_and_holds_isolate_the_passive_physical_pointer() {
     for kind in 0..3 {
         for physical in [Vec2::new(440.0, 360.0), Vec2::splat(20.0)] {
@@ -181,6 +238,150 @@ fn native_takeover_cancels_without_redirecting_the_script_release() {
     let seen = app.world().resource::<Recorded>();
     assert_eq!(seen.presses, [give, other]);
     assert_eq!(seen.left_clicks, [other]);
+}
+
+#[test]
+fn a_native_right_release_cannot_complete_a_cancelled_script_gem_click() {
+    use crate::{hud, online::testing, outbox::Outbox};
+    use eq_client_core::ClientCommand;
+
+    for takeover in [false, true] {
+        let (mut app, window, gem, _) = fixture(vec![Step::RightClick(ClickTarget::SpellGem(0))]);
+        app.world_mut()
+            .entity_mut(gem)
+            .remove::<crate::give::GiveButton>()
+            .insert(hud::SpellGem(0));
+        let mut player = testing::player(7);
+        player.memorized_spells[0] = Some(73);
+        testing::admit(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            7,
+            player,
+        );
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        app.insert_resource(Outbox::new(Some(tx)))
+            .add_systems(Update, hud::actions);
+        set_focus(&mut app, window, true);
+        app.world_mut()
+            .get_mut::<Window>(window)
+            .unwrap()
+            .set_cursor_position(Some(Vec2::new(240.0, 360.0)));
+        for ms in [0, 10, 260] {
+            frame_at(&mut app, ms);
+        }
+        assert_eq!(interaction(&app, gem), Interaction::Pressed);
+        assert!(rx.try_recv().is_err());
+
+        let native = |app: &mut App, state, ms| {
+            app.world_mut().write_message(MouseButtonInput {
+                button: MouseButton::Right,
+                state,
+                window,
+            });
+            frame_at(app, ms);
+        };
+        if takeover {
+            native(&mut app, ButtonState::Pressed, 270);
+            assert_eq!(app.world().resource::<RunStatus>().phase(), Phase::Failed);
+            assert_eq!(interaction(&app, gem), Interaction::None);
+            // Native input now owns the held button without a new press edge.
+            native(&mut app, ButtonState::Released, 280);
+            assert_eq!(interaction(&app, gem), Interaction::Hovered);
+            assert!(rx.try_recv().is_err());
+
+            native(&mut app, ButtonState::Pressed, 290);
+            assert!(rx.try_recv().is_err());
+            native(&mut app, ButtonState::Released, 300);
+        } else {
+            frame_at(&mut app, 270);
+        }
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            ClientCommand::ForgetSpell {
+                gem: 0,
+                spell_id: 73,
+                ..
+            }
+        ));
+        assert!(rx.try_recv().is_err());
+    }
+}
+
+#[test]
+fn a_native_right_release_cannot_complete_a_cancelled_script_buff_click() {
+    use crate::{buffs, online::testing, outbox::Outbox, skinned::Shows, spellbook::SpellNames};
+    use eq_client_core::{Buff, ClientCommand, buffs::EffectWindow};
+    use std::collections::BTreeMap;
+
+    let (mut app, window, button, _) = fixture(vec![Step::RightClick(ClickTarget::Buff(true, 3))]);
+    app.world_mut()
+        .entity_mut(button)
+        .remove::<crate::give::GiveButton>()
+        .insert(Shows::Buff(EffectWindow::Long, 3));
+    {
+        let mut online = app.world_mut().resource_mut::<crate::online::OnlineState>();
+        testing::admit(&mut online, 7, testing::player(7));
+        testing::buffs(
+            &mut online,
+            BTreeMap::from([(
+                3,
+                Buff {
+                    spell_id: 42,
+                    caster_level: 12,
+                    effect_type: 2,
+                    bard_modifier: 10,
+                    duration_ticks: 30,
+                    counters: 0,
+                    caster_id: 7,
+                },
+            )]),
+        );
+    }
+    let mut fields = vec!["0"; 203];
+    fields[0] = "42";
+    fields[1] = "Constructed buff";
+    fields[83] = "1";
+    let (tx, rx) = std::sync::mpsc::sync_channel(4);
+    app.insert_resource(SpellNames::parse(&fields.join("^")))
+        .insert_resource(Outbox::new(Some(tx)))
+        .add_systems(Update, buffs::cancel);
+    set_focus(&mut app, window, true);
+    app.world_mut()
+        .get_mut::<Window>(window)
+        .unwrap()
+        .set_cursor_position(Some(Vec2::new(240.0, 360.0)));
+    for ms in [0, 10, 260] {
+        frame_at(&mut app, ms);
+    }
+    assert_eq!(interaction(&app, button), Interaction::Pressed);
+    assert!(rx.try_recv().is_err());
+
+    let native = |app: &mut App, state, ms| {
+        app.world_mut().write_message(MouseButtonInput {
+            button: MouseButton::Right,
+            state,
+            window,
+        });
+        frame_at(app, ms);
+    };
+    native(&mut app, ButtonState::Pressed, 270);
+    assert_eq!(app.world().resource::<RunStatus>().phase(), Phase::Failed);
+    assert_eq!(interaction(&app, button), Interaction::None);
+    native(&mut app, ButtonState::Released, 280);
+    assert_eq!(interaction(&app, button), Interaction::Hovered);
+    assert!(rx.try_recv().is_err());
+
+    native(&mut app, ButtonState::Pressed, 290);
+    assert!(rx.try_recv().is_err());
+    native(&mut app, ButtonState::Released, 300);
+    let ClientCommand::CancelBuff(request) = rx.try_recv().unwrap() else {
+        panic!("wrong command")
+    };
+    assert_eq!(
+        (request.session_id, request.slot, request.spell_id),
+        (7, 3, 42)
+    );
+    assert!(rx.try_recv().is_err());
 }
 
 #[test]

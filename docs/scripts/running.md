@@ -29,6 +29,8 @@ Use `--script scenario.eqscript --script-background` to run through the same in-
 
 You may focus the client and hover the physical pointer to watch a background run, including waits, reports, clicks, right-clicks and holds. While the script owns input, its own pointer routes UI actions and the physical pointer cannot create a second target. Named-control visibility, clipping and coverage checks still apply. The physical pointer is never moved. Genuine native keyboard, button or wheel input hands native hit testing back before that input is processed and makes an idle runner wait. If the runner is holding a key, movement action or mouse press, that activity cancels the press, releases only the script's input and ends the run instead of resuming a partial action. A new run is required after cancellation. Genuine input remains available to the client.
 
+A background run can minimize and restore the Runbook through its ordinary window controls; dragging and resizing still need real window focus.
+
 Background mode does not enable `gm` or `chat`, change the selected server, or imply an online launch. Network restrictions, gameplay validation, named-control visibility and geometry checks, source and runtime limits, and Stop remain in effect. The default workbench run remains attended on public servers. The background policy is explicit for each run, including any replacement created by an opt-in controller.
 
 ## Limits and errors

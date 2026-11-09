@@ -33,8 +33,7 @@ use std::time::{Duration, Instant};
 /// onto the cursor. Titanium dispatches strictly after 750ms (0x4a9741).
 pub(crate) const HOLD: Duration = Duration::from_millis(750);
 
-/// The keys that make a press act at once, as Shift-click forgets a gem or
-/// splits a stack.
+/// The keys that bypass hotkey pickup, such as Shift-click on a stack.
 const MODIFIERS: [KeyCode; 6] = [
     KeyCode::ShiftLeft,
     KeyCode::ShiftRight,
@@ -644,7 +643,7 @@ mod tests {
         press(&mut app, Some(empty));
         release(&mut app, None);
         assert_eq!(clicked(&app), [1]);
-        // Shift-click forgets the gem's spell as it is let go.
+        // A modifier bypasses the hold rule and leaves the ordinary click.
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .press(KeyCode::ShiftLeft);

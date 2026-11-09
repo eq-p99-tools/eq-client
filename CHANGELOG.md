@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- Look up and swim forward to use Titanium's shoreline boost near a
+  reachable supported bank. The renderer sweeps the capsule and the worker
+  replays the bounded frame trace through ordinary position updates. Frames
+  longer than 50 ms count as 50 ms, which only lowers an arc; the profile's
+  frame bound, lifetime and damping are inferred (recording checklist 6.407).
+
+- Correct the Titanium floor-sweep radius to 0.1 times the model's scaled
+  standing reference (this client's standing-height estimate, inferred,
+  6.347), which slightly raises how high one step can reach.
+- Let opt-in Fly pass through mapped liquid while retaining solid collision.
+  Settle permission changes with the session worker and report the result in
+  script movement diagnostics.
+
+- Resize the Runbook from an edge or corner. Wrap checklist rows to fit
+  and remember the size with the character's window layout.
+
+- Keep Titanium sliding door pose, picking and collision together. A script's
+  right-click press on a spell gem or buff is dropped when native input takes
+  over, so a native release cannot complete it. Background scripts can
+  minimize and restore the Runbook through the ordinary window controls.
+- Right-click a spell gem to forget its current spell (inferred, recording
+  checklist 6.405). Fit Effects and Songs icons to their skinned layout
+  (inferred, 6.406) and explain when a cancellable buff's server slot is
+  unknown.
+
 - Expose the Project 1999 session's ordinary assist, dice, emote and
   listing commands through chat and script dispatch. Presence requests and
   received listing changes are shown separately. Script `slash emote` and
@@ -15,6 +40,9 @@
 - Bound inspection note and landmark file reads, protect oversized
   landmark files from replacement, and share immutable installed spell
   definitions across sessions.
+
+- Pin networking 0d93a466 (P99 repairs landing): the bounded Titanium
+  shoreline impulse, with each replayed frame counting for at most 50 ms.
 
 - Pin networking ec34373e (cycle 10 landing): ordinary P99 assist, dice,
   emote and presence commands; an accepted assist also moves the server's

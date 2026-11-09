@@ -356,7 +356,8 @@ pub struct DrawnSoles {
 /// both programs sweep for the floor from the spawn's origin, its stand
 /// height above its feet (6.344): `stand`, its [`drawn_feet_offset`]
 /// (Titanium's height inferred, 6.347), the `EQMac` sweep starting a further 0.5 up, which
-/// is left out here, as is the sweep's radius (6.336). Neither `EQEmu` nor P99 sends vertical motion while
+/// is left out here; the sweep's radius is applied as `falls::TITANIUM` reads it
+/// for Titanium and is otherwise left out (6.336). Neither `EQEmu` nor P99 sends vertical motion while
 /// its own z follows the floor, so a model drawn at its reported height
 /// would float down a slope and sink into one going up until the next
 /// report.

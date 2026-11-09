@@ -15,6 +15,10 @@ mod swimming;
 pub use airborne::{AirborneController, Landing, MotionStep, PROVISIONAL_PHYSICS, VerticalPhysics};
 pub use choices::{offered_options, options};
 pub use eq_network_game::movement::{MovementOptions, RunSpeedMultiplier};
+pub use eq_network_game::movement::{
+    SHORELINE_COOLDOWN, SHORELINE_FRAME_MILLIS, SHORELINE_FRAMES, ShorelineFrame, ShorelineStroke,
+    ShorelineTrace, ShorelineVelocity,
+};
 pub use falls::{HARMLESS_DROP, fall_damage};
 use liquids::LiquidGuard;
 pub use liquids::{GuardView, Liquid, Liquids};
@@ -24,7 +28,7 @@ pub use navigator::{
 pub use pace::{ANIMATION_UNITS_PER_SECOND, record_speed, runs};
 pub use path::{PathProgress, PathSearch};
 pub use route::{Background, Route, RouteStep, SearchTiming};
-pub use swimming::{LiquidContact, SwimDepth};
+pub use swimming::{LiquidContact, ShorelineStep, SwimDepth};
 
 #[derive(Clone, Copy)]
 enum Support {
@@ -1003,7 +1007,7 @@ mod tests {
     }
 
     /// The walk a step on the ground makes, as the airborne controller
-    /// calls it: a Titanium human's 3.15 climb a step (6.344) and the
+    /// calls it: a fixed 3.15-unit climb for these fixtures and the
     /// on-ground tolerance.
     const STANDING: Support = Support::Optional {
         drop: 0.501,

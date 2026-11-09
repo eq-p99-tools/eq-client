@@ -285,6 +285,16 @@ impl ZoneRegions {
                 .is_some()
     }
 
+    /// Whether every positive-length part of the segment resolves to a region.
+    #[must_use]
+    pub fn segment_known(&self, start: [f32; 3], end: [f32; 3]) -> bool {
+        self.region_at(start).is_some()
+            && self.region_at(end).is_some()
+            && self
+                .first_matching_span(start, end, |kind| kind == SpanKind::Unresolved)
+                .is_none()
+    }
+
     /// Highest mapped water or lava entry along a downward ray from above.
     /// The entry must follow resolved dry space along the ray.
     #[must_use]

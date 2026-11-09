@@ -1,5 +1,6 @@
 //! Calibrated P99 input; no movement is generated without a session grant.
 mod placement;
+mod shoreline;
 
 use super::{
     Collision, OrbitCamera, Player, PlayerBody,
@@ -60,6 +61,7 @@ pub(super) struct Controls {
     pub airborne: Option<eq_client_core::movement::AirborneController>,
     /// Dry-side momentum to keep if the session refuses a proposed water entry.
     water_entry_rollback: Option<AirborneController>,
+    shoreline: shoreline::Control,
     /// Why the movement guard refused the latest sample, until one is sent.
     pub refused: Option<String>,
     /// When a jump was pressed since the last sample; only where falls are simulated.
@@ -182,6 +184,7 @@ impl Default for Controls {
             visual: None,
             airborne: None,
             water_entry_rollback: None,
+            shoreline: shoreline::Control::default(),
             refused: None,
             jump: None,
             last_jump: None,
@@ -491,11 +494,13 @@ impl Controls {
     /// left it, as walking is never faster than running (whether the
     /// program keeps it is unread, recording checklist 6.363).
     pub fn reset(&mut self, speed: Option<f32>) {
+        self.shoreline.reset();
         *self = Self {
             speed,
             last_sent: self.last_sent,
             last_answer: self.last_answer,
             last_jump: self.last_jump,
+            shoreline: std::mem::take(&mut self.shoreline),
             walking: self.walking,
             placement: self.placement,
             stun_revision: self.stun_revision,
@@ -529,6 +534,7 @@ impl Controls {
         self.stun_active = stunned;
         self.stunned = stunned && !self.movement_options.walk_while_stunned;
         if stunned || (changed && revision.is_some()) {
+            self.shoreline.reset();
             self.taps = TapBuffer::default();
             self.jump = None;
             self.crouch = None;
@@ -548,6 +554,7 @@ impl Controls {
         if previous.same_permissions(options) {
             return;
         }
+        self.shoreline.reset();
         if previous.fly != options.fly {
             self.airborne = self
                 .airborne
@@ -569,6 +576,7 @@ impl Controls {
     /// Stops prediction without revoking the session's calibration. A pending
     /// proposal still owns the movement slot until its result or its admission ends.
     fn pause_prediction(&mut self) {
+        self.shoreline.reset();
         self.moving = false;
         self.visual = None;
         self.taps = TapBuffer::default();
@@ -673,6 +681,7 @@ impl Controls {
 
     /// A local result either keeps the water entry or restores the dry-side motion.
     pub(super) fn resolve_water_entry(&mut self, refused: bool) {
+        self.shoreline.resolved(refused);
         if let Some(previous) = self.water_entry_rollback.take()
             && refused
         {
@@ -762,6 +771,40 @@ fn sample_keys(keys: &ButtonInput<KeyCode>, map: &KeyMap) -> ButtonInput<KeyCode
         }
     }
     sampled
+}
+
+fn swim_stroke(
+    direction: Vec3,
+    mode: MovementMode,
+    (map, keys, scripted): (&KeyMap, &ButtonInput<KeyCode>, &[Act]),
+    (camera, look): (&OrbitCamera, Option<&MouseLook>),
+    autorun: bool,
+) -> (Vec3, bool) {
+    let keys = sample_keys(keys, map);
+    let held = map.holding(&keys, scripted);
+    let camera_forward = held.held(Act::CameraForward);
+    let camera_back = held.held(Act::CameraBack);
+    let pitched = camera.is_first_person()
+        || look.is_some_and(|look| look.held)
+        || camera_forward != camera_back;
+    let longitudinal = mode == MovementMode::Backward
+        || held.held(Act::Forward) != held.held(Act::Back)
+        || autorun
+        || camera_forward != camera_back
+        || look.is_some_and(|look| look.held && look.left);
+    if !pitched || !longitudinal || mode == MovementMode::Strafe || direction == Vec3::ZERO {
+        return (direction, false);
+    }
+    let backing = mode == MovementMode::Backward || camera_back && !camera_forward;
+    let pitch = if backing {
+        -camera.view_pitch()
+    } else {
+        camera.view_pitch()
+    };
+    (
+        (direction * pitch.cos() + Vec3::Y * pitch.sin()).normalize_or_zero(),
+        !backing && pitch > 0.0,
+    )
 }
 
 /// Produces at most one in-flight proposal; renderer stalls never accumulate distance.
@@ -884,6 +927,9 @@ pub(super) fn input(
     let now = Instant::now();
     let water_enabled =
         client == InstalledClient::Titanium && !flying && online.world().can(Capability::Swimming);
+    if !water_enabled || !focused || controls.stun_active {
+        controls.shoreline.reset();
+    }
     let swimming = water_enabled
         && collision
             .0
@@ -894,7 +940,8 @@ pub(super) fn input(
                 let origin = Vec3::from_array(eq_client_core::render_position(player.position));
                 world.in_swimmable_water(origin - Vec3::Y * body.feet_offset, body.height)
             });
-    if swimming {
+    let shoreline_active = controls.shoreline.active();
+    if swimming || shoreline_active {
         controls.jump = None;
         controls.crouch = None;
     }
@@ -904,6 +951,7 @@ pub(super) fn input(
     if focused
         && !flying
         && !swimming
+        && !shoreline_active
         && !online.world().is_stunned()
         && keys.pressed(Act::Jump)
         && controls.airborne.is_some()
@@ -937,6 +985,38 @@ pub(super) fn input(
     }
     let map = &*keys.map;
     let keyboard = navigation.sample(&keys.input);
+    if focused
+        && !controls.stun_active
+        && (swimming || shoreline_active)
+        && let (Some(player), Ok((camera, _))) = (online.world().player(), cameras.single())
+    {
+        let heading = controls
+            .mouse_heading
+            .or(scripted_facing)
+            .or(controls.facing)
+            .unwrap_or(player.position.heading);
+        let yaw = if controls.mouse_heading.is_some() {
+            crate::camera::behind(eq_client_core::render_heading(heading))
+        } else {
+            camera.yaw
+        };
+        let intent = controls.intent(
+            &keyboard,
+            map,
+            scripted,
+            focused,
+            (yaw, heading),
+            look.as_deref(),
+        );
+        let (stroke, forward_up) = swim_stroke(
+            intent.direction,
+            intent.mode,
+            (map, &keyboard, scripted),
+            (camera, look.as_deref()),
+            controls.autorun,
+        );
+        controls.shoreline.observe(now, stroke, forward_up);
+    }
     let mut movement_keys = map.movement_keys();
     if flying {
         movement_keys.extend(
@@ -1110,27 +1190,14 @@ pub(super) fn input(
             direction = Vec3::ZERO;
             turn = 0.0;
         } else {
-            let sampled = sample_keys(&sampled, map);
-            let held = map.holding(&sampled, scripted);
-            let camera_forward = held.held(Act::CameraForward);
-            let camera_back = held.held(Act::CameraBack);
-            let pitched = camera.is_first_person()
-                || look.as_ref().is_some_and(|look| look.held)
-                || camera_forward != camera_back;
-            let longitudinal = mode == MovementMode::Backward
-                || held.held(Act::Forward) != held.held(Act::Back)
-                || controls.autorun
-                || camera_forward != camera_back
-                || look.as_ref().is_some_and(|look| look.held && look.left);
-            if pitched && longitudinal && mode != MovementMode::Strafe && direction != Vec3::ZERO {
-                let backing = mode == MovementMode::Backward || camera_back && !camera_forward;
-                let pitch = if backing {
-                    -camera.view_pitch()
-                } else {
-                    camera.view_pitch()
-                };
-                direction = (direction * pitch.cos() + Vec3::Y * pitch.sin()).normalize_or_zero();
-            }
+            direction = swim_stroke(
+                direction,
+                mode,
+                (map, &sampled, scripted),
+                (camera, look.as_deref()),
+                controls.autorun,
+            )
+            .0;
         }
     }
     let physics = climbing(physics(client, online.world().zone_gravity()), client, body);
@@ -1169,6 +1236,7 @@ pub(super) fn input(
         && turn == 0.0
         && !controls.moving
         && !airborne
+        && !shoreline_active
         && controls.jump.is_none()
         && controls.facing.is_none()
         && mouse_step == 0.0
@@ -1209,6 +1277,32 @@ pub(super) fn input(
         _ => jump,
     };
     let previous_airborne = controls.airborne.clone();
+    let mut shore = if !placement_blocked
+        && water_enabled
+        && focused
+        && let Some((grant, sampled)) = controls.speed.zip(controls.last_sent)
+    {
+        let limit = if controls.moving {
+            Duration::from_secs_f32(MAX_CYCLE)
+        } else {
+            Duration::from_millis(100)
+        };
+        controls.shoreline.plan(
+            shoreline::Body {
+                world,
+                feet,
+                height: body.height,
+                feet_offset: body.feet_offset,
+                heading: current_heading,
+                gravity: physics.gravity,
+                grant,
+            },
+            sampled,
+            limit,
+        )
+    } else {
+        None
+    };
     let diagonal_heading = mouse_snapshot.unwrap_or(current_heading);
     // A combined input keeps one body heading and both signed component
     // budgets. Run the usual sweep on a copy before selecting that sample.
@@ -1220,6 +1314,7 @@ pub(super) fn input(
                 && !jump
                 && !airborne
                 && !swimming
+                && shore.is_none()
                 && controls.facing.is_none()
                 && !active_mouse_yaw
                 && world.support(feet).is_some()
@@ -1273,8 +1368,10 @@ pub(super) fn input(
                 ))
             .then_some((landing, trial, intent.request, displacement))
         });
-    let (landing, mode, jumped) = if placement_blocked {
+    let (landing, mut mode, jumped) = if placement_blocked {
         (feet, MovementMode::Forward, false)
+    } else if let Some(plan) = &shore {
+        (plan.feet, MovementMode::Shoreline(plan.trace), false)
     } else if swimming {
         (
             world.swim_step(feet, delta, body.height),
@@ -1338,6 +1435,12 @@ pub(super) fn input(
             landing + Vec3::Y * body.feet_offset,
         )
     };
+    if let Some(plan) = shore.as_mut()
+        && position.distance_squared(landing + Vec3::Y * body.feet_offset) > 1e-8
+    {
+        plan.finish();
+        mode = MovementMode::Shoreline(plan.trace);
+    }
     let entering = !placement_blocked
         && water_enabled
         && !swimming
@@ -1370,13 +1473,15 @@ pub(super) fn input(
     };
     let mut created = now;
     let sent = outbox.post(online.world(), |stamp| {
-        created = stamp.created;
+        // Shoreline physics already ended at the observed frame. Its next
+        // request must budget from that same tick, even if planning was slow.
+        created = shore.as_ref().map_or(stamp.created, |plan| plan.created);
         ClientCommand::Move(MovementRequest {
             mode,
             session_id: stamp.session_id,
             position: position_sent,
             heading: heading_update,
-            created: stamp.created,
+            created,
         })
     });
     if let Err(reason) = sent {
@@ -1385,11 +1490,12 @@ pub(super) fn input(
         controls.held = Some(Held::Refused);
         return;
     }
+    controls.shoreline.sent(mode, shore, created);
     if entering {
         controls.water_entry_rollback = previous_airborne;
     }
     if !placement_blocked
-        && (entering || swimming)
+        && (entering || swimming || matches!(mode, MovementMode::Shoreline(_)))
         && let Some(airborne) = controls.airborne.as_mut()
     {
         airborne.reset();
@@ -3005,9 +3111,8 @@ pub(super) mod tests {
         );
         // The program's own 44.55: the movement guard takes a jump's rise.
         assert!((titanium.jump_speed - 44.55).abs() < 0.001);
-        // The same but for the climb: the floor sweep starts at the origin
-        // on Titanium, 0.5 over it on the Mac-era client, radius size × 0.1
-        // against size / 4 (read 6.344).
+        // Titanium sweeps from the origin with radius 0.1 times the scaled
+        // model reference. EQMac starts 0.5 above it with radius size / 4.
         let (ti, eqmac) = (
             climbing(
                 physics(InstalledClient::Titanium, Some(0.4)),
@@ -3027,7 +3132,7 @@ pub(super) mod tests {
                 ..eqmac
             }
         );
-        assert!((ti.climb - 3.15).abs() < 0.001, "{}", ti.climb);
+        assert!((ti.climb - 3.375).abs() < 0.001, "{}", ti.climb);
         assert!((eqmac.climb - 2.75).abs() < 0.001, "{}", eqmac.climb);
         assert!(!ti.steers_in_air && !eqmac.steers_in_air);
         let mac = climbing(
@@ -3485,7 +3590,7 @@ pub(super) mod tests {
             .insert_resource(Controls {
                 speed: Some(6.0),
                 last_accepted: Instant::now().checked_sub(Duration::from_secs(2)).unwrap(),
-                // The session has heard this body's Titanium climb, 3 − 0.6
+                // The session has heard this body's Titanium climb, 3 − 0.3
                 // a step, so the samples are the only commands these tests
                 // see ([`the_session_hears_the_bodys_climb_at_each_admission_and_change`]).
                 climb_sent: Some((
@@ -3529,6 +3634,118 @@ pub(super) mod tests {
             .resource_mut::<ButtonInput<KeyCode>>()
             .reset_all();
         (app, receiver)
+    }
+
+    #[test]
+    #[allow(
+        clippy::float_cmp,
+        reason = "The move keeps the received horizontal coordinates"
+    )]
+    fn titanium_recovers_a_floor_the_size_based_probe_missed_within_one_step() {
+        use eq_client_core::movement::CollisionWorld;
+        use eq_network_game::movement::MovementGuard;
+
+        // Synthetic planes with the measured height differences. The lower
+        // surface is far below the feet and the upper one leaves standing room.
+        const FLOOR: f32 = 20.406_25;
+        let body = PlayerBody {
+            height: 6.506_872,
+            ..HUMAN
+        };
+        let admitted_position = world_position([0.0, 21.0, 0.0], 0.0);
+        let feet = Vec3::Y * (admitted_position.z - body.feet_offset);
+        let terrain = CollisionWorld::new(
+            flat_surface(FLOOR)
+                .into_iter()
+                .chain(flat_surface(-98.531_25))
+                .chain(flat_surface(48.375)),
+        )
+        .unwrap();
+        let corrected = climbing(
+            physics(InstalledClient::Titanium, None),
+            InstalledClient::Titanium,
+            &body,
+        );
+        let step = |physics: VerticalPhysics| {
+            fall_step(
+                &mut AirborneController::default(),
+                &terrain,
+                physics,
+                Some(physics.climb),
+                feet,
+                Vec3::ZERO,
+                0.05,
+                body.height,
+                false,
+            )
+        };
+        assert!(terrain.support(feet).is_none());
+        assert!(
+            step(VerticalPhysics {
+                climb: 3.15,
+                ..corrected
+            })
+            .y < FLOOR
+        );
+        let stood = step(corrected);
+        assert!((stood.y - FLOOR).abs() < 0.001, "{stood:?}");
+        assert!(terrain.support(stood).is_some());
+        assert!(terrain.clearance(stood, body.height, 0.03).is_none());
+
+        let (mut app, receiver) = stationary_airborne_app();
+        app.world_mut().insert_resource(Collision(Some(terrain)));
+        let mut bodies = app.world_mut().query::<&mut PlayerBody>();
+        *bodies.single_mut(app.world_mut()).unwrap() = body;
+        let mut player = online::testing::player(7);
+        player.position = admitted_position;
+        online::testing::admit(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            12,
+            player,
+        );
+        app.update();
+        let ClientCommand::ClimbReach {
+            session_id: 12,
+            per_step,
+        } = receiver.try_recv().unwrap()
+        else {
+            panic!("expected reach for the new admission");
+        };
+        assert!((per_step - 3.375).abs() < 0.001);
+        let ClientCommand::Move(request) = receiver.try_recv().unwrap() else {
+            panic!("expected an ordinary grounded move");
+        };
+        assert_eq!(request.mode, MovementMode::Forward);
+        assert_eq!(
+            (
+                request.position.x,
+                request.position.y,
+                request.position.heading
+            ),
+            (
+                admitted_position.x,
+                admitted_position.y,
+                admitted_position.heading
+            )
+        );
+        assert!((request.position.z - (FLOOR + body.feet_offset)).abs() < 0.001);
+        let start = request
+            .created
+            .checked_sub(Duration::from_millis(50))
+            .unwrap();
+        let mut guard = MovementGuard::new(12, admitted_position, start);
+        guard.set_speed(Some(6.0), start);
+        guard.set_climb(3.15);
+        assert!(guard.accept(&request, request.created).is_err());
+        guard.set_climb(per_step);
+        assert!(guard.accept(&request, request.created).is_ok());
+
+        let online = app.world().resource::<online::OnlineState>();
+        assert_eq!(online.world().player().unwrap().position, admitted_position);
+        assert_eq!(
+            online.server_placement().unwrap().position,
+            admitted_position
+        );
     }
 
     #[test]
@@ -3804,6 +4021,74 @@ pub(super) mod tests {
         CollisionWorld::new(flat_surface(-12.0))
             .unwrap()
             .with_liquids(Pool { top: 0.0, liquid })
+    }
+
+    #[test]
+    fn fly_switch_ascends_from_unsupported_surface_water_after_worker_acceptance() {
+        let (mut app, receiver) = stationary_airborne_app();
+        let water = liquid_pool(Liquid::Water).with_swim_origin(3.0);
+        let feet = Vec3::new(0.0, -3.5, 0.0);
+        assert!(water.support(feet).is_none());
+        assert_eq!(
+            water.swim_depth(feet, 6.0),
+            Some(eq_client_core::movement::SwimDepth::Surface)
+        );
+        app.insert_resource(Collision(Some(water)))
+            .init_resource::<crate::options::MovementSync>()
+            .add_systems(Update, crate::options::tell_choices.before(input));
+        let surface = world_position([0.0, -0.5, 0.0], 0.0);
+        online::testing::place(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            surface,
+        );
+        app.world_mut()
+            .resource_mut::<crate::options::OptionsState>()
+            .options
+            .qol
+            .set(Fix::Fly, true);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Space);
+        app.update();
+        let ClientCommand::SetMovementOptions {
+            request_id,
+            options,
+            ..
+        } = receiver.try_recv().unwrap()
+        else {
+            panic!("flight policy request");
+        };
+        assert!(options.fly);
+        let only_settings =
+            |command| !matches!(command, ClientCommand::Move(_) | ClientCommand::Jump { .. });
+        assert!(receiver.try_iter().all(only_settings));
+        online::testing::news(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            [eq_client_core::WorldEvent::MovementOptionsApplied {
+                session_id: 11,
+                request_id,
+                options,
+            }],
+        );
+        app.update();
+        assert!(receiver.try_iter().all(only_settings));
+        app.world_mut().resource_mut::<Controls>().last_accepted = Instant::now()
+            .checked_sub(Duration::from_millis(100))
+            .unwrap();
+
+        let mut previous = surface.z;
+        for _ in 0..2 {
+            app.update();
+            let ClientCommand::Move(up) = receiver.try_recv().expect("ascending flight sample")
+            else {
+                panic!("expected flight without a jump command");
+            };
+            assert_eq!(up.mode, MovementMode::Forward);
+            assert!(up.position.z > previous + 0.5);
+            assert!(receiver.try_recv().is_err());
+            accept(&mut app, &up);
+            previous = up.position.z;
+        }
     }
 
     #[test]

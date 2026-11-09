@@ -666,7 +666,7 @@ pub(crate) fn window_owns_input(
 /// this.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(crate) struct Keys<'w, 's> {
-    /// The raw keyboard, for keys outside the map such as Escape and Shift-click.
+    /// The raw keyboard, for keys outside the map such as Escape and stack modifiers.
     pub(crate) input: Res<'w, ButtonInput<KeyCode>>,
     pub(crate) map: Res<'w, KeyMap>,
     presses: Res<'w, presses::Presses>,
