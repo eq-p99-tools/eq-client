@@ -186,6 +186,9 @@ pub struct MotionGrant {
     pub diagonal: crate::DiagonalRates,
     /// Whether the session sends falling samples.
     pub falls: bool,
+    /// The share of the jump speed a jump starts with: the health and
+    /// weight factor that also slows running, 1 when nothing takes from it.
+    pub jump_factor: f32,
 }
 
 #[derive(Default)]
@@ -737,6 +740,7 @@ impl ClientWorld {
                 strafe_units_per_second,
                 diagonal,
                 falls,
+                jump_factor,
             } => self.grant_motion(
                 *session_id,
                 MotionGrant {
@@ -746,6 +750,7 @@ impl ClientWorld {
                     strafe_units_per_second: *strafe_units_per_second,
                     diagonal: *diagonal,
                     falls: *falls,
+                    jump_factor: *jump_factor,
                 },
                 news,
             ),

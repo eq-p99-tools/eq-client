@@ -534,15 +534,14 @@ impl InstalledClient {
     }
 
     /// How long a jump from standing still crouches first, from the program:
-    /// the Mac-era client ducks, then after 500 ms stands and jumps if still
-    /// on the ground, and cancels a jump while backing up (TAKP sitting 2,
-    /// read). None where a standing jump goes at once (Titanium: unread, so
-    /// as today).
+    /// with no forward input the client ducks, then after 500 ms stands and
+    /// jumps if still on the ground; with forward input it jumps at once, and
+    /// while backing up it drops the request (Titanium 0x4acb42-0x4acb50;
+    /// `EQMac` TAKP sitting 2, read). None where a standing jump goes at once.
     #[must_use]
     pub const fn standing_jump_crouch(self) -> Option<std::time::Duration> {
         match self {
-            Self::Titanium => None,
-            Self::EqMac => Some(std::time::Duration::from_millis(500)),
+            Self::Titanium | Self::EqMac => Some(std::time::Duration::from_millis(500)),
         }
     }
 

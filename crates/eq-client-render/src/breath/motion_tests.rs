@@ -184,6 +184,7 @@ fn only_the_matching_worker_refusal_releases_a_move_after_a_grant_reset() {
             strafe_units_per_second: None,
             diagonal: default(),
             falls: false,
+            jump_factor: 1.0,
         },
     );
     for (session_id, created) in [

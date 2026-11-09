@@ -53,6 +53,9 @@ pub(super) struct Controls {
     pub walk_speed: Option<f32>,
     pub strafe_speed: Option<f32>,
     diagonal_rates: DiagonalRates,
+    /// The share of the jump speed a jump starts with, as the session
+    /// grants it: the health and weight factor.
+    jump_factor: f32,
     pub walking: bool,
     /// Running forward by itself: on and off by the autorun key; a forward
     /// or back key or a posture change turns it off, while turning,
@@ -95,6 +98,10 @@ pub(super) struct Controls {
     facing: Option<f32>,
     /// Owned horizontal mouse input waiting for a movement sample, in heading units.
     mouse_turn: f32,
+    /// Whether a turn key turns left (else right) and when it was first
+    /// held, which the turn ramp counts from; None while neither or both
+    /// are held.
+    turn_held: Option<(bool, Instant)>,
     /// Latest immediately displayed Titanium mouse heading awaiting a sample.
     mouse_heading: Option<f32>,
     /// What the samples sent lately asked of the controller and moved.
@@ -189,6 +196,7 @@ impl Default for Controls {
             walk_speed: None,
             strafe_speed: None,
             diagonal_rates: DiagonalRates::default(),
+            jump_factor: 1.0,
             walking: false,
             autorun: false,
             pending: None,
@@ -210,6 +218,7 @@ impl Default for Controls {
             unreported: None,
             facing: None,
             mouse_turn: 0.0,
+            turn_held: None,
             mouse_heading: None,
             recent: RecentMotion::default(),
             last_sent: None,
@@ -652,6 +661,11 @@ impl Controls {
         self.walk_speed = grant.walk_units_per_second;
         self.strafe_speed = grant.strafe_units_per_second;
         self.diagonal_rates = grant.diagonal;
+        self.jump_factor = if grant.jump_factor.is_finite() {
+            grant.jump_factor.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
         if grant.falls {
             // A speed recalibration may withdraw input anywhere in the jump
             // or fall. Keep the vertical history and any unsent cost, and
@@ -743,9 +757,46 @@ impl Controls {
 /// Longest span one proposal may cover; the session admits up to 0.25 s per sample.
 const MAX_CYCLE: f32 = 0.25;
 
-/// How fast the turn keys turn the player, and the heading sent follows the
-/// way the player faces, in heading units a second.
+/// How fast the heading sent follows the way the player faces, in heading
+/// units a second: the turn keys' fastest rate.
 const TURN_RATE: f32 = 240.0;
+
+/// What one step of the turn ramp adds to the turn keys' rate, in heading
+/// units a second (0x4a1d74).
+const TURN_STEP: f32 = 20.0;
+
+/// How often the turn ramp steps. The program steps it once a frame, so
+/// this is taken as 60 a second, which never ramps faster than the program
+/// at 60 frames a second (inferred, recording checklist 6.416).
+const TURN_STEPS_PER_SECOND: f32 = 60.0;
+
+/// The most steps the turn ramp takes (0x4a1d74): 12 (240 units a second),
+/// 8 while walking, and 3 for race 141.
+fn turn_cap(walking: bool, race: u32) -> f32 {
+    if race == 141 {
+        3.0
+    } else if walking {
+        8.0
+    } else {
+        12.0
+    }
+}
+
+/// How far the turn keys turn between `from` and `to` seconds after one was
+/// first held, in heading units: the ramp's first step turns at 20 units a
+/// second, each later step 20 more, up to the cap.
+fn ramped_turn(from: f32, to: f32, cap: f32) -> f32 {
+    let turned = |seconds: f32| {
+        let seconds = seconds.max(0.0);
+        let full = (cap - 1.0) / TURN_STEPS_PER_SECOND;
+        let rising = seconds.min(full);
+        let steps = (rising * TURN_STEPS_PER_SECOND).floor();
+        let ramp = TURN_STEP * steps * (steps + 1.0) / (2.0 * TURN_STEPS_PER_SECOND)
+            + TURN_STEP * (steps + 1.0) * (rising - steps / TURN_STEPS_PER_SECOND);
+        ramp + TURN_STEP * cap * (seconds - full).max(0.0)
+    };
+    (turned(to) - turned(from)).max(0.0)
+}
 
 /// Where the wire has no heading snapshot intent, keep mouse turning inside
 /// the existing rate representation.
@@ -858,10 +909,11 @@ pub(super) fn input(
     mut controls: ResMut<Controls>,
     players: Query<(&PlayerBody, &Transform), With<Player>>,
     cameras: Query<(&OrbitCamera, Has<crate::camera::FreeCamera>)>,
-    (settings, messages, mut chat): (
+    (settings, messages, mut chat, hud): (
         Res<crate::ViewerSettings>,
         Res<crate::hud::messages::Messages>,
         ResMut<crate::chat::ChatState>,
+        Option<Res<crate::hud::HudState>>,
     ),
     (look, aim, spells): Pointing,
 ) {
@@ -1031,6 +1083,15 @@ pub(super) fn input(
     {
         if jump_too_soon(client, controls.last_jump, now) {
             debug!("Jump refused: too soon after the last");
+        } else if too_tired_to_jump(
+            online.world().vitals().endurance,
+            hud.as_ref()
+                .and_then(|hud| hud.resource_estimate)
+                .map(|(_, endurance)| endurance),
+        ) {
+            chat.history.push(crate::chat::system_line(
+                messages.said_text(TOO_TIRED_TO_JUMP, "You are too tired to jump."),
+            ));
         } else {
             controls.jump = Some(now);
         }
@@ -1056,6 +1117,19 @@ pub(super) fn input(
     }
     let map = &*keys.map;
     let keyboard = navigation.sample(&keys.input);
+    // The turn keys ramp up from the frame one is first held, and start
+    // over when the way changes or both are let go.
+    let turning = if focused && look.as_deref().is_none_or(|look| !look.held) {
+        let held = |act| scripted.contains(&act) || map.held(&keyboard, act);
+        f32::from(held(Act::TurnLeft)) - f32::from(held(Act::TurnRight))
+    } else {
+        0.0
+    };
+    controls.turn_held = match (turning, controls.turn_held) {
+        (0.0, _) => None,
+        (turning, Some((left, since))) if left == (turning > 0.0) => Some((left, since)),
+        (turning, _) => Some((turning > 0.0, now)),
+    };
     if focused
         && !controls.stun_active
         && (swimming || shoreline_active)
@@ -1314,6 +1388,18 @@ pub(super) fn input(
         intent.diagonal = None;
         controls.jump = None;
     }
+    // A sitting player stands to move only where Allow Auto-Stand is on; off,
+    // the program does not move them (0x4a1d74), so they stay put.
+    if !options.options.allow_auto_stand
+        && online
+            .world()
+            .player()
+            .and_then(|player| online.world().posture(player.spawn_id))
+            == Some(eq_client_core::PostureState::Sitting)
+    {
+        intent.direction = Vec3::ZERO;
+        intent.diagonal = None;
+    }
     let MotionInput {
         mode,
         mut speed,
@@ -1339,6 +1425,12 @@ pub(super) fn input(
         }
     }
     let physics = climbing(physics(client, online.world().zone_gravity()), client, body);
+    // A hurt or burdened player jumps at the share of the speed the session
+    // grants, as the program launches its jumps (0x4193c5).
+    let physics = VerticalPhysics {
+        jump_speed: physics.jump_speed * controls.jump_factor,
+        ..physics
+    };
     // The session's guard counts a grounded climb by the body's own reach a
     // step, where the program's is read; it hears it at each admission and
     // whenever it changes, before any sample that climbs by it.
@@ -1594,7 +1686,15 @@ pub(super) fn input(
     } else if mouse_steering {
         steered_heading
     } else if Vec2::new(direction.x, direction.z) == Vec2::ZERO || preserve_facing {
-        (shown + turn * TURN_RATE * span).rem_euclid(512.0)
+        let cap = turn_cap(
+            controls.walking,
+            online.world().player().map_or(0, |player| player.race),
+        );
+        // The frame a key goes down already turns at the first step.
+        let held = controls.turn_held.map_or(0.0, |(_, since)| {
+            now.saturating_duration_since(since).as_secs_f32() + 1.0 / TURN_STEPS_PER_SECOND
+        });
+        (shown + turn * ramped_turn(held - span, held, cap)).rem_euclid(512.0)
     } else {
         eq_client_core::world_heading(direction.x.atan2(direction.z))
     };
@@ -1865,6 +1965,21 @@ fn post_posture(
 /// Whether a jump now comes no later after the last take-off than the
 /// installed client's spacing, which the programs refuse (they take a jump
 /// only when more than the spacing has passed).
+/// The official line for a jump refused as too tired, by `eqstr_us.txt`
+/// number.
+const TOO_TIRED_TO_JUMP: u32 = 12362;
+
+/// Whether the program refuses a jump as too tired: endurance at or under 50
+/// and at or under a tenth of the maximum (Titanium 0x4a2796-0x4a27f4, after
+/// the spacing check). The maximum is the client's own estimate; without one
+/// the rule can't be worked out, so the jump goes as before (inferred,
+/// recording checklist 6.415).
+fn too_tired_to_jump(endurance: Option<u32>, maximum: Option<u32>) -> bool {
+    endurance
+        .zip(maximum)
+        .is_some_and(|(now, maximum)| now <= 50 && now <= maximum / 10)
+}
+
 fn jump_too_soon(client: InstalledClient, last: Option<Instant>, now: Instant) -> bool {
     client
         .jump_spacing()
@@ -3326,6 +3441,64 @@ pub(super) mod tests {
         assert!(!jump_too_soon(InstalledClient::EqMac, ago(1501), now));
     }
 
+    #[test]
+    fn the_turn_keys_ramp_up_to_their_cap() {
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-3;
+        // The first step turns at 20 a second, the second at 40.
+        assert!(close(ramped_turn(0.0, 1.0 / 60.0, 12.0), 20.0 / 60.0));
+        assert!(close(
+            ramped_turn(1.0 / 60.0, 2.0 / 60.0, 12.0),
+            40.0 / 60.0
+        ));
+        // Running reaches 240 a second after 11 steps, walking 160 after 7.
+        assert!(close(ramped_turn(1.0, 2.0, 12.0), 240.0));
+        assert!(close(ramped_turn(1.0, 2.0, turn_cap(true, 1)), 160.0));
+        assert!(close(ramped_turn(1.0, 2.0, turn_cap(false, 141)), 60.0));
+        // The whole ramp to full speed turns 20 x (1 + ... + 11) / 60.
+        assert!(close(ramped_turn(0.0, 11.0 / 60.0, 12.0), 22.0));
+        // A span that starts before the key was held counts from the press.
+        assert!(close(
+            ramped_turn(-0.5, 0.1, 12.0),
+            ramped_turn(0.0, 0.1, 12.0)
+        ));
+        // Never faster than the cap over any span.
+        for start in [0.0, 0.05, 0.13, 0.4] {
+            assert!(ramped_turn(start, start + 0.25, 12.0) <= TURN_RATE * 0.25 + 1e-3);
+        }
+    }
+
+    #[test]
+    fn a_tired_jump_is_refused_only_under_50_and_a_tenth_of_the_maximum() {
+        assert!(too_tired_to_jump(Some(50), Some(500)));
+        assert!(!too_tired_to_jump(Some(51), Some(1000)));
+        assert!(!too_tired_to_jump(Some(31), Some(300)));
+        assert!(too_tired_to_jump(Some(30), Some(300)));
+        assert!(too_tired_to_jump(Some(0), Some(20)));
+        assert!(!too_tired_to_jump(Some(3), Some(20)));
+        // Without a maximum (or a reported endurance) the jump goes.
+        assert!(!too_tired_to_jump(Some(0), None));
+        assert!(!too_tired_to_jump(None, Some(500)));
+    }
+
+    #[test]
+    fn a_tired_jump_says_so_and_does_not_crouch() {
+        let (mut app, receiver) = standing_jump(InstalledClient::Titanium);
+        app.insert_resource(crate::hud::HudState {
+            resource_estimate: Some((0, 500)),
+        });
+        app.update();
+        assert_eq!(stances_and_jump(&receiver), (Vec::new(), false));
+        assert_eq!(app.world().resource::<Controls>().crouch, None);
+        let said = app
+            .world()
+            .resource::<crate::chat::ChatState>()
+            .history
+            .lines(eq_client_core::chat::ChatTab::System)
+            .into_iter()
+            .any(|(_, line)| line.message.text.contains("too tired to jump"));
+        assert!(said);
+    }
+
     /// The app of [`app`] for this installed client, the player standing
     /// still on its floor where the session takes jumps, holding Jump.
     fn standing_jump(client: InstalledClient) -> (App, mpsc::Receiver<ClientCommand>) {
@@ -3395,13 +3568,15 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_titanium_jump_from_standing_still_goes_at_once() {
+    fn a_titanium_jump_from_standing_still_crouches_first_too() {
+        // Titanium crouches with no forward input as well (0x4acb42-0x4acb50).
         let (mut app, receiver) = standing_jump(InstalledClient::Titanium);
         app.update();
-        assert_eq!(stances_and_jump(&receiver), (Vec::new(), true));
-        let controls = app.world().resource::<Controls>();
-        assert!(controls.airborne.as_ref().unwrap().velocity() > 0.0);
-        assert_eq!(controls.crouch, None);
+        assert_eq!(stances_and_jump(&receiver), (vec![Posture::Ducking], false));
+        assert!(matches!(
+            app.world().resource::<Controls>().crouch,
+            Some(Crouch::Until(_))
+        ));
     }
 
     #[test]
@@ -4113,6 +4288,7 @@ pub(super) mod tests {
                 strafe_units_per_second: None,
                 diagonal: eq_client_core::DiagonalRates::default(),
                 falls: true,
+                jump_factor: 1.0,
             });
             controls.last_accepted = last_accepted;
         }
@@ -4553,6 +4729,7 @@ pub(super) mod tests {
             walk_units_per_second: Some(2.0),
             strafe_units_per_second: None,
             falls: false,
+            jump_factor: 1.0,
         });
         controls.last_accepted = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
         app.world_mut()
@@ -4600,6 +4777,38 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_sitting_player_stays_put_with_auto_stand_off() {
+        let (mut app, receiver) = app();
+        crate::online::testing::news(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            [eq_client_core::WorldEvent::Posture {
+                spawn_id: 7,
+                posture: eq_client_core::PostureState::Sitting,
+            }],
+        );
+        app.world_mut()
+            .resource_mut::<crate::options::OptionsState>()
+            .options
+            .allow_auto_stand = false;
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.reset_all();
+        keys.press(KeyCode::ArrowUp);
+        app.update();
+        assert!(receiver.try_recv().is_err());
+        // On, as by default, the same press moves them (and the session
+        // stands them first).
+        app.world_mut()
+            .resource_mut::<crate::options::OptionsState>()
+            .options
+            .allow_auto_stand = true;
+        app.update();
+        let ClientCommand::Move(request) = receiver.try_recv().unwrap() else {
+            panic!("expected movement")
+        };
+        assert_eq!(request.mode, MovementMode::Forward);
+    }
+
+    #[test]
     fn turning_in_place_changes_heading_without_displacing_the_player() {
         let (mut app, receiver) = app();
         let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
@@ -4610,7 +4819,8 @@ pub(super) mod tests {
             panic!("expected turn")
         };
         assert_eq!(request.heading, HeadingUpdate::Rate);
-        assert!((request.position.heading - 488.0).abs() < 0.001);
+        // The turn ramp's first step: 20 units a second for a frame.
+        assert!((request.position.heading - (512.0 - 20.0 / 60.0)).abs() < 0.001);
         assert!(request.position.x.abs() < 0.001 && request.position.y.abs() < 0.001);
         assert!((turn_toward(508.0, 4.0, 3.0) - 511.0).abs() < 0.001);
         assert!((turn_toward(4.0, 508.0, 3.0) - 1.0).abs() < 0.001);
@@ -5959,6 +6169,7 @@ pub(super) mod tests {
             walk_units_per_second: None,
             strafe_units_per_second: None,
             falls: true,
+            jump_factor: 1.0,
         });
         assert!(!controls.autorun && controls.jump.is_none());
         controls.last_accepted = Instant::now()
@@ -5992,6 +6203,7 @@ pub(super) mod tests {
             walk_units_per_second: None,
             strafe_units_per_second: None,
             falls: true,
+            jump_factor: 1.0,
         };
         controls.grant(grant(Some(9.0)));
         assert!(controls.autorun);
@@ -6375,6 +6587,7 @@ pub(super) mod tests {
                 strafe_units_per_second: None,
                 diagonal: eq_client_core::DiagonalRates::default(),
                 falls: true,
+                jump_factor: 1.0,
             });
             // Age the new sample window past its pacing gate and let the
             // real update reannounce the climb before the landing sample.
@@ -6536,6 +6749,7 @@ pub(super) mod tests {
                 strafe_units_per_second: None,
                 diagonal: DiagonalRates::default(),
                 falls: true,
+                jump_factor: 1.0,
             });
             let preserved = controls.airborne.unwrap();
             assert!((preserved.velocity() - velocity).abs() < f32::EPSILON);
@@ -6606,6 +6820,7 @@ pub(super) mod tests {
                     strafe_units_per_second: None,
                     diagonal: DiagonalRates::default(),
                     falls: true,
+                    jump_factor: 1.0,
                 }))
                 .unwrap();
             app.update();
