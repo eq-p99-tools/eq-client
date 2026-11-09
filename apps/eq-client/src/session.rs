@@ -3,6 +3,7 @@
 mod machine;
 
 use anyhow::Result;
+use eq_client_assets::spells::Definitions;
 use eq_client_core::{
     WorldEvent, WorldUpdate, food::AutoEat, machine::DisplaySnapshot, world::Link,
 };
@@ -123,14 +124,18 @@ pub struct SessionWorker {
 
 impl SessionWorker {
     /// Starts a session on its own thread. The configuration is checked
-    /// here; the installation's files are read, and the login made, on the
-    /// thread, so starting never holds up the window.
+    /// here; the login assets are scanned, and the login made, on the thread,
+    /// so starting never holds up the window.
     ///
     /// # Errors
     /// Fails when the login's details cannot make a session, such as an
     /// account too long for the server type.
     #[allow(clippy::too_many_lines)] // Keep startup, event forwarding and shutdown together.
-    pub fn start(login: Login, options: &SessionOptions) -> Result<eq_client_render::Session> {
+    pub fn start(
+        login: Login,
+        options: &SessionOptions,
+        spell_definitions: Arc<Definitions>,
+    ) -> Result<eq_client_render::Session> {
         let protocol = login.protocol;
         let client = client(login, options)?;
         let classic_npc_consider = client.consider_npcs_by_level();
@@ -163,9 +168,9 @@ impl SessionWorker {
             let result = (|| {
                 // A Titanium login sends what the installation's files hold.
                 let sight = protocol.is_titanium().then(|| {
-                    Arc::new(eq_client_render::SightProvider::load(
+                    Arc::new(eq_client_render::SightProvider::from_definitions(
                         spell_provider,
-                        &install,
+                        spell_definitions,
                     ))
                 });
                 let client = if let Some(sight) = &sight {

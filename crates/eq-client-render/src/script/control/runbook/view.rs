@@ -4,7 +4,10 @@ use bevy::{
     text::{Justify, LineBreak},
 };
 
-use super::{super::Bridge, Row, State, admission_id};
+use super::{
+    super::{Bridge, files::RunbookExport},
+    Row, State, admission_id,
+};
 use crate::{
     login::{FrontEnd, Screen},
     online::OnlineState,
@@ -27,7 +30,9 @@ enum Heading {
 #[derive(Component)]
 struct Rows;
 #[derive(Component)]
-struct ExportButton;
+struct ExportButton {
+    displayed_run: Option<u64>,
+}
 
 pub(in crate::script::control) fn install(app: &mut App) {
     app.add_systems(Startup, spawn)
@@ -106,7 +111,14 @@ fn spawn(mut commands: Commands) {
                     ..default()
                 })
                 .with_children(|footer| {
-                    theme::button_with(footer, ExportButton, "Export JSON", Size::Small);
+                    theme::button_with(
+                        footer,
+                        ExportButton {
+                            displayed_run: None,
+                        },
+                        "Export JSON",
+                        Size::Small,
+                    );
                     theme::button_with(
                         footer,
                         crate::skinned::Closes(WindowId::Runbook),
@@ -123,20 +135,35 @@ fn export(
     clicks: crate::clicks::Clicks<ExportButton>,
     mut bridge: ResMut<Bridge>,
     (front, online, shown): (Res<FrontEnd>, Res<OnlineState>, Res<Shown>),
-    mut button: Query<(&Interaction, &mut BackgroundColor), With<ExportButton>>,
+    (mouse, mut pressed_run): (Res<ButtonInput<MouseButton>>, Local<Option<u64>>),
+    mut button: Query<(&ExportButton, Ref<Interaction>, &mut BackgroundColor)>,
 ) {
     let runbook_id = bridge.runbook.as_ref().map(|run| run.id);
-    let usable = runbook_id.is_some() && !bridge.export.busy();
-    if let Ok((interaction, mut color)) = button.single_mut() {
-        color.0 = theme::button(usable, false, *interaction);
+    let Ok((button, interaction, mut color)) = button.single_mut() else {
+        return;
+    };
+    let usable =
+        runbook_id.is_some() && button.displayed_run == runbook_id && !bridge.ui_export.busy();
+    color.0 = theme::button(usable, false, *interaction);
+    let open = shown.displayed(WindowId::Runbook) && front.screen(&online) == Screen::World;
+    if mouse.just_pressed(MouseButton::Left) {
+        *pressed_run =
+            if open && usable && interaction.is_changed() && *interaction == Interaction::Pressed {
+                button.displayed_run
+            } else {
+                None
+            };
     }
-    if usable
-        && shown.displayed(WindowId::Runbook)
-        && front.screen(&online) == Screen::World
-        && clicks.any()
-        && let Some(id) = runbook_id
-    {
-        let _ = bridge.export_runbook(id, None, admission_id(&online));
+    if mouse.just_released(MouseButton::Left) {
+        let pressed = pressed_run.take();
+        if open
+            && usable
+            && pressed == runbook_id
+            && clicks.any()
+            && let Some(id) = pressed
+        {
+            let _ = bridge.export_runbook(id, RunbookExport::Window, admission_id(&online));
+        }
     }
 }
 
@@ -144,7 +171,12 @@ fn export(
 fn refresh(
     mut commands: Commands,
     bridge: Res<Bridge>,
-    (front, online, shown): (Res<FrontEnd>, Res<OnlineState>, Res<Shown>),
+    (front, online, shown, mut export_button): (
+        Res<FrontEnd>,
+        Res<OnlineState>,
+        Res<Shown>,
+        Query<&mut ExportButton>,
+    ),
     (wheel, mut previous): (Res<Wheel>, Local<Option<(u64, u64)>>),
     mut root: Query<&mut Node, With<Root>>,
     mut headings: Query<(&Heading, &mut Text)>,
@@ -168,11 +200,14 @@ fn refresh(
         windows::scroll_by(&mut scroll, node, wheel.pixels);
     }
     let run = bridge.runbook.as_ref();
+    if let Ok(mut button) = export_button.single_mut() {
+        button.displayed_run = run.map(|run| run.id);
+    }
     for (heading, mut text) in &mut headings {
         match heading {
             Heading::Health => {
                 let health = match bridge.channel_health() {
-                    "ready" => "Control channel ready",
+                    "ready" => "Control files exchanged",
                     "io_error" => "Control file I/O failed",
                     "request_error" => "Invalid control request",
                     "stalled" => "Control exchange stalled",
@@ -188,7 +223,7 @@ fn refresh(
                 }
             }
             Heading::Export => {
-                let status = run.map_or("", |run| bridge.export.label(run));
+                let status = run.map_or("", |run| bridge.ui_export.label(run));
                 if text.0 != status {
                     status.clone_into(&mut text.0);
                 }
@@ -211,7 +246,7 @@ fn refresh(
             Heading::Title => text.0.clone_from(&run.title),
             Heading::Progress => {
                 text.0 = format!(
-                    "Harness run #{} · {} pending · {} running · {} blocked · {} skipped · {} passed · {} failed",
+                    "Harness run #{} · {} pending · {} running · {} blocked · {} skipped · {} passed · {} failed{}",
                     run.id,
                     counts.pending,
                     counts.running,
@@ -219,6 +254,11 @@ fn refresh(
                     counts.skipped,
                     counts.passed,
                     counts.failed,
+                    if counts.health() == "complete" {
+                        " · All rows reported"
+                    } else {
+                        ""
+                    },
                 );
             }
             _ => (),

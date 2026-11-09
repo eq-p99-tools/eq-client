@@ -16,6 +16,7 @@ pub(crate) use ui::{List, draw, present};
 
 const LIMIT: usize = 64;
 const LABEL_BYTES: usize = 72;
+const FILE_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, PartialEq, Eq)]
 struct Scope {
@@ -150,11 +151,12 @@ pub(crate) fn follow(
     state.revision = state.revision.wrapping_add(1);
     if !state.store.loaded {
         state.store.open(settings.0.settings_directory.as_ref());
+        state.store.protect_existing_size(FILE_BYTES);
     }
     let loaded = state
         .scope
         .as_ref()
-        .map(|scope| state.store.read_result(&scope.file));
+        .map(|scope| state.store.read_bounded(&scope.file, FILE_BYTES));
     state.writable = state.store.directory.is_some() && loaded.as_ref().is_some_and(Result::is_ok);
     state.places = match loaded {
         Some(Ok(Some(text))) => decode(&text),
@@ -354,7 +356,7 @@ mod tests {
         session::admit(&mut online, 1, player);
         let places = BTreeMap::from([("Inn".to_owned(), [1.0, 2.0, 3.0])]);
         let path = directory.join(file_name(&profile, online.world().zone()));
-        std::fs::write(path, encode(&places)).unwrap();
+        std::fs::write(&path, encode(&places)).unwrap();
         app.insert_resource(online);
         app.update();
         {
@@ -381,6 +383,40 @@ mod tests {
         );
         app.update();
         assert_eq!(app.world().resource::<Landmarks>().places, places);
+
+        let mut oversized = encode(&places);
+        oversized.push_str(&" ".repeat(FILE_BYTES));
+        std::fs::write(&path, &oversized).unwrap();
+        for name in ["Second", "First"] {
+            session::news(
+                &mut app.world_mut().resource_mut::<OnlineState>(),
+                [server(name)],
+            );
+            app.update();
+        }
+        let state = app.world().resource::<Landmarks>();
+        assert!(state.places.is_empty());
+        assert!(!state.writable);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), oversized);
+
+        std::fs::write(&path, encode(&places)).unwrap();
+        for name in ["Second", "First"] {
+            session::news(
+                &mut app.world_mut().resource_mut::<OnlineState>(),
+                [server(name)],
+            );
+            app.update();
+        }
+        std::fs::write(&path, &oversized).unwrap();
+        let mut state = app.world_mut().resource_mut::<Landmarks>();
+        assert!(state.writable);
+        state.places.insert("New landmark".into(), [0.0; 3]);
+        state.save();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), oversized);
+        state
+            .store
+            .retry(Instant::now() + std::time::Duration::from_secs(2));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), oversized);
         std::fs::remove_dir_all(directory).unwrap();
     }
 }

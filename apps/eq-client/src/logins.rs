@@ -6,11 +6,15 @@ use crate::{
     presets::{Endpoint, Preset, Presets},
     session::{Login, SessionOptions, SessionWorker},
 };
-use eq_client_assets::ui::{Detected, InstalledClient};
-use eq_client_render::{Availability, Connection, LoginServer, Logins};
+use eq_client_assets::{
+    spells::Definitions,
+    ui::{Detected, InstalledClient},
+};
+use eq_client_render::{Availability, Connection, LoginServer, Logins, Session};
 use std::{
     ffi::OsString,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 use zeroize::Zeroizing;
 
@@ -119,6 +123,7 @@ pub struct Launcher {
     directory: Option<PathBuf>,
     installation: Installation,
     options: SessionOptions,
+    spell_definitions: Arc<Definitions>,
     launch: Launch,
     /// The arguments the client was started with, which it opens again
     /// with on another installation.
@@ -134,19 +139,27 @@ impl Launcher {
         options: SessionOptions,
         (launch, arguments): (Launch, Vec<OsString>),
     ) -> Self {
+        let spell_definitions =
+            Definitions::read(&installation.directory, &installation.client.spell_file())
+                .unwrap_or_default()
+                .into();
         Self {
             presets,
             directory,
             installation,
             options,
+            spell_definitions,
             launch,
             arguments,
         }
     }
 
-    /// What every session of the run shares.
-    pub const fn options(&self) -> &SessionOptions {
-        &self.options
+    /// Starts a fresh session on this launch's installation and base spells.
+    ///
+    /// # Errors
+    /// Returns a session configuration error if the login cannot start.
+    pub fn start(&self, login: Login) -> anyhow::Result<Session> {
+        SessionWorker::start(login, &self.options, self.spell_definitions.clone())
     }
 
     /// The login a session on a preset makes: the launch's own login server,
@@ -320,6 +333,10 @@ fn reopen_arguments(arguments: &[OsString], preset: &str, installation: &Path) -
 }
 
 impl Logins for Launcher {
+    fn installed_spell_definitions(&self) -> Option<Arc<Definitions>> {
+        Some(self.spell_definitions.clone())
+    }
+
     fn servers(&self) -> Vec<LoginServer> {
         // The official client remembers its own last account and world at
         // its login server; a preset there that remembers neither yet starts
@@ -376,7 +393,7 @@ impl Logins for Launcher {
             Availability::Unavailable(reason) => return Err(reason),
         }
         let login = self.login(server, account, password)?;
-        SessionWorker::start(login, &self.options)
+        self.start(login)
             .map(Connection::Session)
             .map_err(|error| format!("Cannot log in: {error}"))
     }

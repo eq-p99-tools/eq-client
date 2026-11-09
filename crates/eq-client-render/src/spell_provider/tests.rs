@@ -5,7 +5,7 @@ fn id(value: u16) -> SpellId {
     SpellId::new(value).unwrap()
 }
 
-fn definitions() -> Definitions {
+fn definitions() -> Arc<Definitions> {
     let text = (1..=4)
         .map(|id| {
             let mut fields = vec!["0".to_owned(); 183];
@@ -19,7 +19,7 @@ fn definitions() -> Definitions {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    Definitions::parse(&text, &eq_client_assets::spells::Layout::TITANIUM)
+    Definitions::parse(&text, &eq_client_assets::spells::Layout::TITANIUM).into()
 }
 
 fn provider() -> Provider {
@@ -286,12 +286,17 @@ fn same_provider_reconnect_preserves_cache_but_requires_a_real_successor_start()
 #[test]
 fn provider_replacement_rejects_stale_connecting_and_table_envelopes() {
     let mut provider = provider();
+    let base = provider.base.clone();
     let old = provider.binding;
     register(&mut provider, &[1]);
     pending(&mut provider);
     replay(&mut provider, 11, &[(2, 1)]);
+    assert_eq!(provider.get(2).unwrap().mana, Some(10));
+    let sight = SightProvider::from_definitions(Binding::new(Policy::Installed), base.clone());
+    assert_eq!(sight.0.lock().unwrap().get(2).unwrap().mana, Some(20));
     let replacement = Binding::new(Policy::Project1999);
     provider.bind(replacement);
+    assert!(Arc::ptr_eq(&provider.base, &base));
     provider.receive(&old.envelope(Fact::RunStarted {
         run_id: 99,
         attempt: 99,

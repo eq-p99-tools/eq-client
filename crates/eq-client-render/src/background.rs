@@ -57,6 +57,14 @@ impl<T: Send + 'static> Background<T> {
     pub(crate) fn clear(&mut self) {
         self.task = None;
     }
+
+    #[cfg(test)]
+    pub(crate) fn keep_pending(&mut self, admission: u64) {
+        self.task = Some((
+            admission,
+            AsyncComputeTaskPool::get_or_init(TaskPool::new).spawn(std::future::pending()),
+        ));
+    }
 }
 
 #[cfg(test)]

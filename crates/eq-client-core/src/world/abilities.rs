@@ -1,10 +1,7 @@
 //! The player's abilities: which they have, by the skills the server counts,
 //! and the recovery timers the session started for them.
 use super::{Changes, ClientWorld, Notice};
-use crate::{
-    abilities::{Ability, Recovery},
-    bind_wound::BindWoundUpdate,
-};
+use crate::{abilities::Ability, bind_wound::BindWoundUpdate};
 use std::time::{Duration, Instant};
 
 /// The compass point a heading faces, clockwise from north (0) to
@@ -111,20 +108,10 @@ impl ClientWorld {
         }
     }
 
-    /// A bandaging started or ended: the player hears which, and one that
-    /// ended frees Bind Wound at once, as the session does.
-    pub(super) fn bind_wound(&mut self, update: &BindWoundUpdate, changes: &mut Changes) {
-        match update {
-            BindWoundUpdate::Unlocked => return,
-            BindWoundUpdate::Ended(_)
-            | BindWoundUpdate::Released
-            | BindWoundUpdate::Unconfirmed => {
-                self.ability_timers.remove(&Recovery::BindWound);
-            }
-            BindWoundUpdate::Started { .. }
-            | BindWoundUpdate::RequestedSelf
-            | BindWoundUpdate::Bandaged => (),
+    /// Bandaging outcomes leave the session's button recovery running.
+    pub(super) fn bind_wound(update: &BindWoundUpdate, changes: &mut Changes) {
+        if !matches!(update, BindWoundUpdate::Unlocked) {
+            changes.notices.push(Notice::BindWound(update.clone()));
         }
-        changes.notices.push(Notice::BindWound(update.clone()));
     }
 }

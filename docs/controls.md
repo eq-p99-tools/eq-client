@@ -186,10 +186,12 @@ distance, model availability, and ordinary targeting checks still apply.
 
 Open **Landmarks** to save a named location. Enter a name to save your current
 position, or enter `Name | X Y Z` to supply coordinates in world units.
+`/loc` displays Y first, so swap its first two numbers when entering them.
 **Save landmark** updates an existing landmark with the same name. Select
 a saved row to center the map and read the horizontal range and bearing from
 your character. **Remove selected** deletes that landmark. Landmarks are
 stored by world, character, and zone, and appear as teal diamonds on the map.
+The map refuses to load or replace landmark files found above 64 KiB.
 
 Hover, pin, search and track are local. Only **Target** asks to change the gameplay
 target, through the same visibility, range and capability checks as scene

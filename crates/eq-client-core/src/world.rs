@@ -1235,7 +1235,7 @@ impl ClientWorld {
                 string_id,
                 arguments,
             } => self.ability_refused(*session_id, (reason, *string_id, arguments), news),
-            WorldEvent::BindWound(update) => self.bind_wound(update, news),
+            WorldEvent::BindWound(update) => Self::bind_wound(update, news),
             WorldEvent::WhoList(list) => news.notices.push(Notice::WhoList(list.clone())),
             // News of raids, and a raid request the session would not send.
             WorldEvent::Raid(update) => self.raid_news(update, news),

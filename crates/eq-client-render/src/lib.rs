@@ -368,6 +368,10 @@ pub fn run(
         script_input_mode,
     );
     let mut app = App::new();
+    let spell_definitions = match &source {
+        Source::Online { logins, .. } => logins.installed_spell_definitions(),
+        Source::Offline(_) => None,
+    };
     let (spell_binding, inventory_move_rules, classic_npc_consider, chat_link_expansion) =
         match &source {
             Source::Online {
@@ -391,7 +395,10 @@ pub fn run(
     };
     app.insert_resource(front);
     app.insert_resource(login::LoginStrings::load(config.eq_directory.as_deref()));
-    let mut spells = spellbook::SpellNames::load(&config);
+    let mut spells = spell_definitions.map_or_else(
+        || spellbook::SpellNames::load(&config),
+        spellbook::SpellNames::from_definitions,
+    );
     if let Some(binding) = spell_binding {
         spells.bind(binding);
     }

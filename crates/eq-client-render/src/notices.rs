@@ -254,8 +254,15 @@ fn bind_wound(update: &BindWoundUpdate, messages: Option<&Messages>) -> Option<S
         BindWoundUpdate::Released => {
             Said::own("The server released your bandage attempt without a result.")
         }
-        BindWoundUpdate::Unconfirmed => Said::own(
-            "Still waiting for the bandage result or stock update. Re-enter the zone if the wait persists.",
+        BindWoundUpdate::Unconfirmed {
+            stock_uncertain: true,
+        } => Said::own(
+            "The bandage result is unconfirmed. Wait for an inventory update before using the affected bandages.",
+        ),
+        BindWoundUpdate::Unconfirmed {
+            stock_uncertain: false,
+        } => Said::own(
+            "Bandage stock updated. The server did not report a bandaging result in time.",
         ),
         BindWoundUpdate::Unlocked => return None,
     })
@@ -925,6 +932,28 @@ mod tests {
             wording(&far, Some(&messages)),
             [(Place::Chat, Said::official("Closer to Firiona, please."))]
         );
+    }
+
+    #[test]
+    fn expired_bandaging_distinguishes_the_received_stock_from_an_unknown_result() {
+        for (stock_uncertain, expected) in [
+            (
+                true,
+                "The bandage result is unconfirmed. Wait for an inventory update before using the affected bandages.",
+            ),
+            (
+                false,
+                "Bandage stock updated. The server did not report a bandaging result in time.",
+            ),
+        ] {
+            assert_eq!(
+                wording(
+                    &Notice::BindWound(BindWoundUpdate::Unconfirmed { stock_uncertain }),
+                    None,
+                ),
+                [(Place::Chat, Said::own(expected))]
+            );
+        }
     }
 
     #[test]

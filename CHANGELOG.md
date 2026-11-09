@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Keep identical scoped Runbook retries idempotent after an admission
+  change. Track harness and window exports with separate files and status.
+- Keep the full Bind Wound recovery visible. Distinguish an unanswered
+  bandaging result from uncertain bandage stock.
+- Bound inspection note and landmark file reads, protect oversized
+  landmark files from replacement, and share immutable installed spell
+  definitions across sessions.
+
 - Pin networking 97212d8d (cycle 09 landing): Bind Wound's button time runs
   out in full after every use, one bandage decrease settles every carried
   stack, and an unanswered player inspection holds the next request to that

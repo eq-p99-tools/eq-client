@@ -5,6 +5,7 @@
 use bevy::prelude::*;
 use std::{
     collections::BTreeMap,
+    io::{self, Read as _},
     path::{Path, PathBuf},
     time::{Duration, Instant},
 };
@@ -114,6 +115,7 @@ pub(crate) struct Store {
     pub(crate) profile: Option<CharacterProfile>,
     observed: String,
     pending: BTreeMap<String, Pending>,
+    existing_file_limit: Option<u64>,
 }
 
 struct Pending {
@@ -143,22 +145,59 @@ impl Store {
         }
     }
 
+    /// Refuse to replace an oversized destination on any write attempt.
+    pub(crate) fn protect_existing_size(&mut self, max_bytes: usize) {
+        self.existing_file_limit = Some(max_bytes as u64);
+    }
+
     /// Reads unsaved state before disk, including after returning to a profile.
     pub(crate) fn read(&self, name: &str) -> Option<String> {
         self.read_result(name).ok().flatten()
     }
 
     /// Distinguishes a missing profile file from one that could not be read.
-    pub(crate) fn read_result(&self, name: &str) -> std::io::Result<Option<String>> {
+    pub(crate) fn read_result(&self, name: &str) -> io::Result<Option<String>> {
+        self.read_with(name, std::fs::read_to_string)
+    }
+
+    /// Treat an oversized disk file as unreadable so callers can protect it
+    /// from replacement. In-memory pending edits still take precedence.
+    pub(crate) fn read_bounded(&self, name: &str, max_bytes: usize) -> io::Result<Option<String>> {
+        self.read_with(name, |path| {
+            if !path.metadata()?.is_file() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "Profile settings must be a regular file",
+                ));
+            }
+            let mut text = String::new();
+            std::fs::File::open(path)?
+                .take((max_bytes as u64).saturating_add(1))
+                .read_to_string(&mut text)?;
+            if text.len() > max_bytes {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Profile settings exceed the size limit",
+                ));
+            }
+            Ok(text)
+        })
+    }
+
+    fn read_with(
+        &self,
+        name: &str,
+        read: impl FnOnce(PathBuf) -> io::Result<String>,
+    ) -> io::Result<Option<String>> {
         if let Some(pending) = self.pending.get(name) {
             return Ok(Some(pending.text.clone()));
         }
         let Some(directory) = &self.directory else {
             return Ok(None);
         };
-        match std::fs::read_to_string(directory.join(name)) {
+        match read(directory.join(name)) {
             Ok(text) => Ok(Some(text)),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(error),
         }
     }
@@ -200,7 +239,7 @@ impl Store {
                 return true;
             }
             let path = directory.join(name);
-            match write(directory, &path, &pending.text) {
+            match write(directory, &path, &pending.text, self.existing_file_limit) {
                 Ok(()) => {
                     if pending.delay.is_some() {
                         info!("Saved settings to {} after failing", path.display());
@@ -269,7 +308,12 @@ fn is_staging(name: &str) -> bool {
 
 /// Atomically replaces a file using an exclusively created staging file, so
 /// simultaneous client instances never share a temporary file.
-pub(crate) fn write(directory: &Path, path: &Path, text: &str) -> std::io::Result<()> {
+fn write(
+    directory: &Path,
+    path: &Path,
+    text: &str,
+    existing_file_limit: Option<u64>,
+) -> io::Result<()> {
     use std::{
         fs::OpenOptions,
         io::Write,
@@ -294,6 +338,18 @@ pub(crate) fn write(directory: &Path, path: &Path, text: &str) -> std::io::Resul
         file.write_all(text.as_bytes())?;
         file.sync_all()?;
         drop(file);
+        if let Some(limit) = existing_file_limit {
+            match path.symlink_metadata() {
+                Ok(metadata) if !metadata.is_file() || metadata.len() > limit => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "Existing profile settings exceed the size limit or are not a regular file",
+                    ));
+                }
+                Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(error),
+                _ => (),
+            }
+        }
         std::fs::rename(&partial, path)
     })();
     if result.is_err() {
@@ -460,7 +516,7 @@ mod tests {
     fn concurrent_writers_publish_only_complete_files() {
         let directory = folder();
         let path = directory.join("options.txt");
-        write(&directory, &path, &"0".repeat(32_768)).unwrap();
+        write(&directory, &path, &"0".repeat(32_768), None).unwrap();
         std::thread::scope(|scope| {
             let handles: Vec<_> = (b'1'..=b'4')
                 .map(|byte| {
@@ -468,7 +524,7 @@ mod tests {
                     scope.spawn(move || {
                         let text = char::from(byte).to_string().repeat(32_768);
                         for _ in 0..8 {
-                            write(directory, path, &text).unwrap();
+                            write(directory, path, &text, None).unwrap();
                         }
                     })
                 })

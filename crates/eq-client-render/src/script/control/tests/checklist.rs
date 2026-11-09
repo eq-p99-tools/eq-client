@@ -374,11 +374,35 @@ fn only_reports_that_name_an_admission_are_bound_to_it() {
     assert_eq!(status(&app)["runbook"]["items"][0]["status"], "pending");
     observed["result"]["admission_id"] = json!(12);
     assert_eq!(
-        request(&mut app, 3, observed).code,
+        request(&mut app, 3, observed.clone()).code,
         "runbook_result_recorded"
     );
+    let recorded = status(&app)["runbook"].clone();
+    session::admit(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        13,
+        session::player(7),
+    );
     assert_eq!(
-        request(&mut app, 4, result(1, "second", "passed")).code,
+        request(&mut app, 4, observed.clone()).code,
+        "runbook_result_recorded"
+    );
+    assert_eq!(status(&app)["admission_id"], 13);
+    assert_eq!(status(&app)["runbook"], recorded);
+    observed["result"]["note"] = json!("Changed after zoning");
+    assert_eq!(
+        request(&mut app, 5, observed).code,
+        "runbook_admission_changed"
+    );
+    app.world_mut().resource_mut::<OnlineState>().enabled = false;
+    let mut retry = result(1, "first", "passed");
+    retry["result"]["admission_id"] = json!(12);
+    retry["result"]["evidence"] = json!({"kind":"received_data","reference":"item-list-1"});
+    assert_eq!(request(&mut app, 6, retry).code, "runbook_result_recorded");
+    assert!(status(&app)["admission_id"].is_null());
+    assert_eq!(status(&app)["runbook"], recorded);
+    assert_eq!(
+        request(&mut app, 7, result(1, "second", "passed")).code,
         "runbook_result_recorded"
     );
     let state = status(&app);
@@ -438,7 +462,7 @@ fn export_captures_only_the_named_checklist_and_preserves_it_on_failure() {
     assert_eq!(receipt.code, "runbook_export_queued");
     assert_eq!(request(&mut app, 3, export.clone()), receipt);
     request(&mut app, 4, begin());
-    let exported = wait_for_export(&mut app);
+    let exported = wait_for_export(&mut app, "runbook_export");
     assert_eq!(exported["state"], "written");
     assert_eq!(exported["request_id"], 3);
     let path = root.join(files::RUNBOOK_EXPORT);
@@ -457,24 +481,168 @@ fn export_captures_only_the_named_checklist_and_preserves_it_on_failure() {
         request(&mut app, 6, json!({"op":"runbook_export","runbook_id":4})).code,
         "runbook_export_queued"
     );
-    assert_eq!(wait_for_export(&mut app)["state"], "failed");
+    assert_eq!(
+        wait_for_export(&mut app, "runbook_export")["state"],
+        "failed"
+    );
     assert_eq!(fs::read(&path).unwrap(), before);
     assert_eq!(fs::read(&occupied).unwrap(), b"preexisting");
     drop(app);
     clean(&root);
 }
 
-fn wait_for_export(app: &mut App) -> Value {
+fn wait_for_export(app: &mut App, field: &str) -> Value {
     let deadline = Instant::now() + std::time::Duration::from_secs(5);
     loop {
         frame(app, 0);
-        let value = status(app)["runbook_export"].clone();
+        let value = status(app)[field].clone();
         if value["state"] != "writing" {
             return value;
         }
         assert!(Instant::now() < deadline, "runbook export did not settle");
         std::thread::yield_now();
     }
+}
+
+#[test]
+fn export_button_writes_its_own_snapshot_and_shows_the_actual_outcome() {
+    use crate::clicks::testing::{click, press, release};
+
+    let root = temporary();
+    files::prepare(&root).unwrap();
+    let mut app = app();
+    crate::systems::configure_stages(&mut app);
+    app.insert_resource(Bridge::new(root.clone(), "test-1".into()));
+    runbook::view::install(&mut app);
+    app.world_mut()
+        .resource_mut::<Shown>()
+        .open(WindowId::Runbook);
+    frame(&mut app, 0);
+    let button = export_button(&mut app);
+    click(&mut app, button);
+    assert!(status(&app)["runbook_ui_export"].is_null());
+
+    request(&mut app, 1, begin());
+    request(&mut app, 2, json!({"op":"runbook_export","runbook_id":1}));
+    let harness = wait_for_export(&mut app, "runbook_export");
+    assert_eq!(harness["state"], "written");
+    assert_eq!(harness["request_id"], 2);
+    let harness_path = root.join(files::RUNBOOK_EXPORT);
+    let harness_bytes = fs::read(&harness_path).unwrap();
+    request(&mut app, 3, result(1, "first", "passed"));
+    let captured = status(&app)["runbook"].clone();
+    press(&mut app, Some(button));
+    assert!(status(&app)["runbook_ui_export"].is_null());
+    release(&mut app, Some(button));
+    assert_text(&mut app, "Writing export…");
+    let ui = wait_for_export(&mut app, "runbook_ui_export");
+    assert_eq!(ui["state"], "written");
+    assert!(ui["request_id"].is_null());
+    assert_eq!(ui["revision"], 3);
+    assert_eq!(ui["path"], files::RUNBOOK_UI_EXPORT);
+    assert_text(&mut app, "Saved runbook-ui-export.json");
+    let path = root.join(files::RUNBOOK_UI_EXPORT);
+    let window_bytes = fs::read(&path).unwrap();
+    let document: Value = serde_json::from_slice(&window_bytes).unwrap();
+    assert_eq!(document["instance"], "test-1");
+    assert!(document["request_id"].is_null());
+    assert_eq!(document["runbook"], captured);
+
+    request(&mut app, 4, result(1, "second", "failed"));
+    assert_text(&mut app, "Export contains an earlier checklist revision");
+    fs::write(root.join("runbook-ui-export.json.tmp"), "occupied").unwrap();
+    click(&mut app, button);
+    assert_eq!(
+        wait_for_export(&mut app, "runbook_ui_export")["state"],
+        "failed"
+    );
+    assert_text(&mut app, "Export failed");
+    assert_eq!(fs::read(&path).unwrap(), window_bytes);
+    assert_eq!(fs::read(&harness_path).unwrap(), harness_bytes);
+    assert_eq!(status(&app)["runbook_export"], harness);
+    drop(app);
+    clean(&root);
+}
+
+#[test]
+fn a_window_export_can_finish_while_a_harness_export_is_unconfirmed_at_shutdown() {
+    let root = temporary();
+    files::prepare(&root).unwrap();
+    let mut app = app();
+    app.insert_resource(Bridge::new(root.clone(), "test-1".into()));
+    runbook::view::install(&mut app);
+    app.world_mut()
+        .resource_mut::<Shown>()
+        .open(WindowId::Runbook);
+    request(&mut app, 1, begin());
+    let export = json!({"op":"runbook_export","runbook_id":1});
+    assert_eq!(
+        request(&mut app, 2, export.clone()).code,
+        "runbook_export_queued"
+    );
+    // Simulate a worker whose completion remains unavailable through shutdown.
+    app.world_mut()
+        .resource_mut::<Bridge>()
+        .export
+        .hold_completion();
+    assert_eq!(request(&mut app, 3, export).code, "runbook_export_busy");
+    let button = export_button(&mut app);
+    crate::clicks::testing::click(&mut app, button);
+    let ui = wait_for_export(&mut app, "runbook_ui_export");
+    assert_eq!(ui["state"], "written");
+    let harness = status(&app)["runbook_export"].clone();
+    assert_eq!(harness["state"], "writing");
+    assert_eq!(harness["request_id"], 2);
+
+    app.add_systems(Last, super::super::publish);
+    frame(&mut app, 0);
+    drop(app);
+    let closed: Value =
+        serde_json::from_slice(&fs::read(root.join("status.json")).unwrap()).unwrap();
+    assert_eq!(closed["client_state"], "closed");
+    assert_eq!(closed["runbook_export"]["state"], "unconfirmed");
+    assert_eq!(closed["runbook_export"]["request_id"], 2);
+    assert_eq!(closed["runbook_export"]["path"], files::RUNBOOK_EXPORT);
+    assert_eq!(closed["runbook_ui_export"], ui);
+    clean(&root);
+}
+
+#[test]
+fn an_export_press_cannot_apply_to_a_replacement_checklist() {
+    use crate::clicks::testing::{click, press, release};
+
+    let root = temporary();
+    files::prepare(&root).unwrap();
+    let mut app = app();
+    crate::systems::configure_stages(&mut app);
+    app.insert_resource(Bridge::new(root.clone(), "test-1".into()));
+    runbook::view::install(&mut app);
+    app.world_mut()
+        .resource_mut::<Shown>()
+        .open(WindowId::Runbook);
+    request(&mut app, 1, begin());
+    let button = export_button(&mut app);
+    press(&mut app, Some(button));
+    assert_eq!(request(&mut app, 2, begin()).code, "runbook_started");
+    release(&mut app, Some(button));
+    assert!(status(&app)["runbook_ui_export"].is_null());
+    assert!(!root.join(files::RUNBOOK_UI_EXPORT).exists());
+
+    click(&mut app, button);
+    let outcome = wait_for_export(&mut app, "runbook_ui_export");
+    assert_eq!(outcome["state"], "written");
+    assert_eq!(outcome["runbook_id"], 2);
+    drop(app);
+    clean(&root);
+}
+
+fn export_button(app: &mut App) -> Entity {
+    let world = app.world_mut();
+    world
+        .query::<(&Text, &ChildOf)>()
+        .iter(world)
+        .find_map(|(text, parent)| (text.0 == "Export JSON").then_some(parent.parent()))
+        .unwrap()
 }
 
 #[test]
@@ -564,6 +732,7 @@ fn shows_current_results_and_reset_in_the_normal_frame() {
     frame(&mut app, 0);
     assert_eq!(window_display(&mut app), Display::Flex);
     assert_text(&mut app, "Synthetic session check");
+    assert_text(&mut app, "Control files exchanged");
     assert_text(&mut app, "[ ] Pending · First observation");
 
     let mut running = result(1, "first", "running");
@@ -608,7 +777,7 @@ fn shows_current_results_and_reset_in_the_normal_frame() {
     assert_text(&mut app, "Synthetic evidence summary");
     assert_text(
         &mut app,
-        "Harness run #1 · 0 pending · 0 running · 0 blocked · 0 skipped · 1 passed · 1 failed",
+        "Harness run #1 · 0 pending · 0 running · 0 blocked · 0 skipped · 1 passed · 1 failed · All rows reported",
     );
 
     app.world_mut().resource_mut::<OnlineState>().enabled = true;

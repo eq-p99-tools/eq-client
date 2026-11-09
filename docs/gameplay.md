@@ -103,6 +103,15 @@ pad crossing.
 Initial login, boundary crossing, teleport, death, and respawn each need
 their own validation.
 
+## Bind Wound
+
+On Project 1999, select your own character to use Bind Wound. The current
+policy covers self-bandaging, with an eleven-second button wait. If an
+attempt expires, the notice distinguishes missing stock evidence from a
+missing bandaging result after stock was received.
+A missing result holds the next P99 bandage request until the reply arrives
+or you re-enter the zone. Unrelated inventory actions can continue.
+
 ## Inventory and banking
 
 Inventory shows equipment, carried slots and bags together. A bag and its
@@ -349,7 +358,7 @@ choose **Inspect player** to see the received equipment names, icons and note.
 An unanswered inspection holds the next request to the same player for up
 to five seconds (inferred, recording checklist 6.400).
 Automatic inspection replies use the known inspect note from the installed
-character settings when available.
+character settings when available. Note import reads profiles up to 256 KiB.
 
 Considering, hailing, auto-attack and class abilities use the target and session
 rules. Loot lists received corpse contents; Loot all takes items sequentially.

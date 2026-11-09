@@ -4,7 +4,7 @@ use eq_client_core::spell_tables::{Binding, Envelope, Event, Fact, SpellId, Stag
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::Path,
-    sync::Mutex,
+    sync::{Arc, Mutex},
 };
 
 /// Worker-side view of the same spell-provider rules used by presentation.
@@ -17,6 +17,11 @@ impl SightProvider {
     pub fn load(binding: Binding, directory: &Path) -> Self {
         let definitions = Definitions::read(directory, &eq_client_assets::spells::Layout::TITANIUM)
             .unwrap_or_default();
+        Self::from_definitions(binding, definitions.into())
+    }
+
+    /// Start an independent session provider over the launch's installed spells.
+    pub fn from_definitions(binding: Binding, definitions: Arc<Definitions>) -> Self {
         Self(Mutex::new(Provider::new(binding, definitions)))
     }
 
@@ -85,7 +90,7 @@ pub(super) enum Failure {
 
 pub(super) struct Provider {
     binding: Binding,
-    base: Definitions,
+    base: Arc<Definitions>,
     effective: BTreeMap<u32, Definition>,
     snapshots: BTreeMap<SpellId, ReplayProjection>,
     registered: bool,
@@ -99,7 +104,7 @@ pub(super) struct Provider {
 }
 
 impl Provider {
-    pub(super) fn new(binding: Binding, base: Definitions) -> Self {
+    pub(super) fn new(binding: Binding, base: Arc<Definitions>) -> Self {
         let readiness = if binding.policy().requires_server_tables() {
             Readiness::AwaitingRegistration
         } else {
@@ -123,7 +128,7 @@ impl Provider {
 
     pub(super) fn bind(&mut self, binding: Binding) {
         if self.binding != binding {
-            *self = Self::new(binding, std::mem::take(&mut self.base));
+            *self = Self::new(binding, self.base.clone());
         }
     }
 

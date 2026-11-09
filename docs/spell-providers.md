@@ -1,8 +1,11 @@
 # Installed spell providers
 
-The installation selects the generation's spell file and layout. Its base
-definitions remain immutable. P99's separate provider caches explicit numeric
-source projections and applies complete destination/source replay batches;
+The installation selects the generation's spell file and layout. An online
+launch reads its base definitions once and shares the immutable data with the
+renderer and each session. A preset that opens another installation starts
+a new client with that installation's definitions. P99's separate provider
+caches explicit numeric source projections and applies complete
+destination/source replay batches;
 other server policies continue to use their own installed definitions.
 
 A first registration snapshots the source's **current effective** values.
