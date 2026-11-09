@@ -781,6 +781,7 @@ impl Keyboard<'_, '_> {
         }
         if let Some(authored) = &mut self.authored {
             authored.typed.insert(id);
+            authored.sent.insert(key_code);
             if state.is_pressed() {
                 authored.keys.insert(key_code);
             }
