@@ -112,6 +112,26 @@ pub(crate) fn frame(commands: &mut Commands, id: WindowId, mut node: Node) -> En
     frame
 }
 
+/// Gives a native frame the shared resize behavior and a stable layout scope.
+/// The title bar still owns the frame's placement key.
+pub(crate) fn resizable_frame(
+    commands: &mut Commands,
+    id: WindowId,
+    mut node: Node,
+    authored: Vec2,
+    scope: u64,
+) -> Entity {
+    node.width = px(authored.x);
+    node.height = px(authored.y);
+    let entity = frame(commands, id, node);
+    let mut state = Frame::default();
+    state.sizing(Some(scope), authored);
+    commands
+        .entity(entity)
+        .insert((state, Button, DragHandle(entity)));
+    entity
+}
+
 /// Visible windows and standalone controls consume pointer input before the world.
 pub(super) type PointerSurface = Or<(With<Frame>, With<Button>)>;
 
@@ -170,7 +190,10 @@ impl Frame {
         if let Some(size) = self.authored_size {
             node.width = px(size.x);
             if self.minimized {
-                self.restored_height = Some((px(size.y), Val::Auto));
+                let minimum = self
+                    .restored_height
+                    .map_or(Val::Auto, |(_, minimum)| minimum);
+                self.restored_height = Some((px(size.y), minimum));
             } else {
                 node.height = px(size.y);
             }
@@ -390,6 +413,7 @@ pub(super) fn title_bar(parent: &mut ChildSpawnerCommands, frame: Entity, id: Wi
 pub(super) fn input(
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<PrimaryWindow>>,
+    script: Option<Res<crate::script::Script>>,
     handles: Query<(&Interaction, &DragHandle)>,
     minimizes: crate::clicks::Clicks<Minimize>,
     children: Query<&Children>,
@@ -415,7 +439,7 @@ pub(super) fn input(
         drag.active = None;
         return;
     };
-    if !window.focused {
+    if !crate::keys::window_owns_input(&windows, script.as_deref()) {
         drag.active = None;
         return;
     }
@@ -439,6 +463,12 @@ pub(super) fn input(
         }
     }
 
+    // Scripted clicks can collapse a window. Dragging and resizing still use
+    // the physical cursor and require native focus.
+    if !window.focused {
+        drag.active = None;
+        return;
+    }
     let cursor = window.physical_cursor_position();
     if mouse.just_released(MouseButton::Left) || !mouse.pressed(MouseButton::Left) {
         drag.active = None;
@@ -524,9 +554,14 @@ pub(super) fn input(
         // The feedback comes from this same owner, even off the frame.
         // Set it after using `active`, to keep the state borrow disjoint.
         if let Some(edges) = edges {
+            let pixels = |value| match value {
+                Val::Px(value) if value.is_finite() => value,
+                _ => 0.0,
+            };
             let resized = edges.dragged(
                 Rect::from_corners(active.origin, active.origin + active.size),
                 delta,
+                Vec2::new(pixels(node.min_width), pixels(node.min_height)),
             );
             // The UI transform acts about the frame's center. Compensate that
             // center's size change so the opposite rendered edges stay put.

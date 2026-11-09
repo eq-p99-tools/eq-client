@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Resize the Runbook from an edge or corner. Wrap checklist rows to fit
+  and remember the size with the character's window layout.
+
 - Keep Titanium sliding door pose, picking and collision together. Preserve
   door input ownership when scripts and native input hand control back.
 - Right-click a spell gem to forget its current spell. Fit Effects and Songs

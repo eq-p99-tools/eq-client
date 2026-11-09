@@ -42,23 +42,27 @@ pub(in crate::script::control) fn install(app: &mut App) {
 
 #[allow(clippy::needless_pass_by_value)]
 fn spawn(mut commands: Commands) {
-    let frame = windows::frame(
+    let frame = windows::resizable_frame(
         &mut commands,
         WindowId::Runbook,
         Node {
             display: Display::None,
-            width: px(380),
-            height: px(360),
+            // Keep room for wrapped headings, a scrollable list and the footer.
+            min_width: px(240),
+            min_height: px(260),
             max_width: percent(90),
             max_height: percent(70),
             flex_direction: FlexDirection::Column,
             ..default()
         },
+        Vec2::new(380.0, 360.0),
+        u64::from_be_bytes(*b"runbook1"),
     );
     commands.entity(frame).insert(Root).with_children(|frame| {
         frame
             .spawn(Node {
                 flex_grow: 1.0,
+                min_width: px(0),
                 min_height: px(0),
                 padding: UiRect::all(px(8)),
                 row_gap: px(6),
@@ -97,6 +101,7 @@ fn spawn(mut commands: Commands) {
                     ScrollPosition::default(),
                     Node {
                         flex_grow: 1.0,
+                        min_width: px(0),
                         min_height: px(0),
                         flex_direction: FlexDirection::Column,
                         row_gap: px(4),
@@ -108,6 +113,7 @@ fn spawn(mut commands: Commands) {
                     align_items: AlignItems::Center,
                     justify_content: JustifyContent::SpaceBetween,
                     column_gap: px(6),
+                    flex_wrap: FlexWrap::Wrap,
                     ..default()
                 })
                 .with_children(|footer| {
@@ -287,6 +293,7 @@ fn draw_row(list: &mut ChildSpawnerCommands, row: &Row) {
     list.spawn((
         Node {
             width: percent(100),
+            min_width: px(0),
             flex_shrink: 0.0,
             flex_direction: FlexDirection::Column,
             padding: UiRect::axes(px(6), px(4)),
@@ -320,10 +327,13 @@ fn draw_row(list: &mut ChildSpawnerCommands, row: &Row) {
             ));
         }
         if let Some(id) = report.and_then(|report| report.admission_id) {
-            entry.spawn(theme::text(
-                format!("Report scoped to admission #{id}"),
-                Size::Small,
-                theme::INK_DIM,
+            entry.spawn((
+                theme::text(
+                    format!("Report scoped to admission #{id}"),
+                    Size::Small,
+                    theme::INK_DIM,
+                ),
+                TextLayout::new(Justify::Left, LineBreak::WordOrCharacter),
             ));
         }
     });

@@ -1,4 +1,4 @@
-//! Sizing policy for the authored chat screen, separate from its default size.
+//! Shared window resize geometry and saved dimensions.
 use bevy::prelude::*;
 
 /// Client usability minimum, not native constants or decoration measurements.
@@ -53,15 +53,16 @@ impl Edges {
 
     /// Changes selected edges only, including when the pointer crosses its
     /// opposite edge. Keep the selected top/left reachable on screen.
-    pub(super) fn dragged(self, start: Rect, delta: Vec2) -> Rect {
+    pub(super) fn dragged(self, start: Rect, delta: Vec2, minimum: Vec2) -> Rect {
+        let minimum = minimum.max(MINIMUM);
         let mut result = start;
         for (axis, side) in [(0, self.x), (1, self.y)] {
             if side < 0 {
                 result.min[axis] = (start.min[axis] + delta[axis])
-                    .clamp(0.0, (start.max[axis] - MINIMUM[axis]).max(0.0));
+                    .clamp(0.0, (start.max[axis] - minimum[axis]).max(0.0));
             } else if side > 0 {
                 result.max[axis] =
-                    (start.max[axis] + delta[axis]).max(start.min[axis] + MINIMUM[axis]);
+                    (start.max[axis] + delta[axis]).max(start.min[axis] + minimum[axis]);
             }
         }
         result
@@ -135,6 +136,61 @@ mod tests {
     }
 
     #[test]
+    fn a_native_runbook_resize_respects_its_minimum_and_survives_recreation() {
+        use super::super::{Layouts, WindowId, layout, resizable_frame};
+
+        let mut app = crate::testing::app();
+        app.init_resource::<Layouts>()
+            .add_systems(Update, (input, layout::remember).chain());
+        let spawn = |app: &mut App| {
+            resizable_frame(
+                &mut app.world_mut().commands(),
+                WindowId::Runbook,
+                Node {
+                    min_width: px(240),
+                    min_height: px(260),
+                    ..default()
+                },
+                Vec2::new(380.0, 360.0),
+                u64::from_be_bytes(*b"runbook1"),
+            )
+        };
+        let frame = spawn(&mut app);
+        app.update();
+        app.world_mut().entity_mut(frame).insert((
+            ComputedNode {
+                size: Vec2::new(380.0, 360.0),
+                inverse_scale_factor: 1.0,
+                ..default()
+            },
+            UiGlobalTransform::from_translation(Vec2::new(290.0, 260.0)),
+        ));
+        press(&mut app, frame, Vec2::new(478.0, 438.0), 1.0);
+        point(&mut app, Vec2::new(150.0, 120.0), 1.0);
+        app.update();
+        let size = |app: &App, entity| {
+            let node = app.world().get::<Node>(entity).unwrap();
+            (node.width, node.height)
+        };
+        assert_eq!(size(&app, frame), (px(240), px(260)));
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .release(MouseButton::Left);
+        app.update();
+        app.world_mut().despawn(frame);
+        let recreated = spawn(&mut app);
+        app.update();
+        assert_eq!(size(&app, recreated), (px(240), px(260)));
+        assert_eq!(
+            app.world()
+                .get::<Frame>(recreated)
+                .unwrap()
+                .preferred_size(),
+            Some(Vec2::new(240.0, 260.0))
+        );
+    }
+
+    #[test]
     fn resize_gestures_keep_opposite_edges_at_small_and_large_scales() {
         for scale in [0.75, 1.0, 1.5, 2.25] {
             for x in -1..=1 {
@@ -162,8 +218,11 @@ mod tests {
                     point(&mut app, start + Vec2::new(25.0, 15.0), scale);
                     app.update();
                     let node = app.world().get::<Node>(entity).unwrap();
-                    let expected = Edges { x, y }
-                        .dragged(Rect::new(100.0, 80.0, 500.0, 330.0), Vec2::new(25.0, 15.0));
+                    let expected = Edges { x, y }.dragged(
+                        Rect::new(100.0, 80.0, 500.0, 330.0),
+                        Vec2::new(25.0, 15.0),
+                        MINIMUM,
+                    );
                     assert_eq!(
                         (node.left, node.top, node.width, node.height),
                         (
@@ -507,7 +566,7 @@ mod tests {
         for x in -1..=1 {
             for y in -1..=1 {
                 let edges = Edges { x, y };
-                let result = edges.dragged(start, Vec2::new(900.0, 900.0));
+                let result = edges.dragged(start, Vec2::new(900.0, 900.0), MINIMUM);
                 assert!(result.size().cmpge(MINIMUM).all());
                 for (axis, side) in [(0, x), (1, y)] {
                     if side <= 0 {

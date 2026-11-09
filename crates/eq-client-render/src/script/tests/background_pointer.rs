@@ -70,6 +70,63 @@ fn fixture(steps: Vec<Step>) -> (App, Entity, Entity, Entity) {
 }
 
 #[test]
+fn background_clicks_minimize_and_restore_a_skinned_map_without_focus() {
+    use crate::windows::{self, Frame, Minimize, WindowId};
+
+    let minimize = Step::Click(ClickTarget::TitleBox("map", false));
+    let (mut app, window, box_entity, _) = fixture(vec![
+        minimize.clone(),
+        Step::Wait(Duration::from_millis(100)),
+        minimize,
+    ]);
+    app.add_systems(Update, windows::input);
+    let mut node = Node {
+        height: px(380),
+        ..default()
+    };
+    let mut frame = Frame::default();
+    frame.drawn_from_skin(&mut node, Some(20.0));
+    let map = app.world_mut().spawn((WindowId::Map, node, frame)).id();
+    app.world_mut()
+        .entity_mut(box_entity)
+        .remove::<crate::give::GiveButton>()
+        .insert((
+            crate::skinned::TitleBox {
+                window: WindowId::Map,
+                close: false,
+            },
+            Minimize(map),
+        ));
+
+    let mut layouts = Vec::new();
+    for ms in (0..=1_200).step_by(10) {
+        frame_at(&mut app, ms);
+        assert!(!app.world().get::<Window>(window).unwrap().focused);
+        let node = app.world().get::<Node>(map).unwrap();
+        let geometry = (node.height, node.overflow);
+        if layouts.last() != Some(&geometry) {
+            layouts.push(geometry);
+        }
+    }
+    assert_eq!(
+        layouts,
+        [
+            (px(380), Overflow::visible()),
+            (px(20), Overflow::clip()),
+            (px(380), Overflow::visible()),
+        ]
+    );
+    assert_eq!(
+        app.world().resource::<Recorded>().left_clicks,
+        [box_entity, box_entity]
+    );
+    assert_eq!(
+        app.world().resource::<RunStatus>().phase(),
+        Phase::Completed
+    );
+}
+
+#[test]
 fn owned_background_clicks_and_holds_isolate_the_passive_physical_pointer() {
     for kind in 0..3 {
         for physical in [Vec2::new(440.0, 360.0), Vec2::splat(20.0)] {

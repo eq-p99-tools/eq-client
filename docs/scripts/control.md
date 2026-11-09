@@ -127,8 +127,10 @@ field describes the file channel. The script and checklist have their own states
 
 When launched with `--script-control`, open **EQ → Runbook** while in the
 world to watch the harness's current checklist. The window starts closed.
-You can move, minimize or close it without losing the checklist. The local
-harness can submit new checklists and results while a gameplay script is running.
+You can move, resize, minimize or close it without losing the checklist.
+Drag an edge or corner to resize it. The rows wrap to fit, and the client
+remembers the size with the character's window layout. The local harness
+can submit new checklists and results while a gameplay script is running.
 
 Start a checklist through the same private request file and request ID
 sequence. Supply the title and ordered items inline.
