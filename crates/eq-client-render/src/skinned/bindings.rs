@@ -76,6 +76,8 @@ pub(super) enum Does {
     Closes,
     /// Hands what the give window holds over.
     Gives,
+    /// Asks the banker to change the coins: the bank window's Change.
+    ChangesCoins,
     /// Holds coins of one kind in a place, which a click picks up or puts
     /// down.
     Coins(CoinPlace, Coin),
@@ -228,6 +230,8 @@ pub(super) fn does(id: &str, owner: WindowId) -> Option<Does> {
     match (owner, id) {
         (WindowId::Book, "LeftButton") => return Some(Does::TurnsPage(false)),
         (WindowId::Book, "RightButton") => return Some(Does::TurnsPage(true)),
+        // Both bank windows name it so (skin reads R10, R10b).
+        (WindowId::Bank, "ChangeButton") => return Some(Does::ChangesCoins),
         _ => (),
     }
     if owner == WindowId::Quantity {

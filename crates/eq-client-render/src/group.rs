@@ -4,6 +4,41 @@
 //! buttons (inferred).
 use super::windows::{Shown, WindowId};
 use bevy::prelude::*;
+use eq_client_core::ClientCommand;
+
+/// The group window's Follow button, shown while an invitation waits: it
+/// joins that group, as the official client's group-window buttons accept
+/// directly (program read R6), while `/follow` follows a player.
+#[derive(Component)]
+pub(crate) struct JoinButton;
+
+/// Joins the group the player was invited to when Follow is pressed.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(super) fn join(
+    online: Res<super::online::OnlineState>,
+    outbox: Res<crate::outbox::Outbox>,
+    buttons: crate::clicks::Clicks<JoinButton>,
+) {
+    if !buttons.any() {
+        return;
+    }
+    let world = online.world();
+    // The outbox and the session say a refusal themselves.
+    let _ = outbox.post(world, |stamp| joining(world, stamp.session_id));
+}
+
+/// Joining the group of whoever invited the player last, bound to the
+/// invitation shown.
+pub(crate) fn joining(
+    world: &eq_client_core::world::ClientWorld,
+    session_id: u64,
+) -> ClientCommand {
+    ClientCommand::FollowGroup {
+        session_id,
+        inviter: world.group_invitation().unwrap_or_default().to_owned(),
+        invitation_id: world.group_invitation_id(),
+    }
+}
 
 /// Opens the group window while the player is in a group or invited to one,
 /// and closes it otherwise.

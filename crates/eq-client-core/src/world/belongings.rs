@@ -161,11 +161,18 @@ impl ClientWorld {
     }
 
     /// A coin move was not sent; the coins stayed where they were.
-    pub(super) fn coins_refused(&self, session_id: u64, reason: &str, changes: &mut Changes) {
+    pub(super) fn coins_refused(
+        &self,
+        session_id: u64,
+        reason: &str,
+        string_id: Option<u32>,
+        changes: &mut Changes,
+    ) {
         if self.session_id == Some(session_id) {
-            changes
-                .notices
-                .push(Notice::TradeRefused(reason.to_owned()));
+            changes.notices.push(Notice::CoinsRefused {
+                reason: reason.to_owned(),
+                string_id,
+            });
         } else {
             changes.ignored = true;
         }

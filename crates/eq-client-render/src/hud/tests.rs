@@ -406,15 +406,17 @@ fn a_hotbuttons_camp_and_group_kinds_send_what_their_buttons_send() {
         rx.try_recv().unwrap(),
         ClientCommand::Camp { session_id: 7, .. }
     ));
+    // Follow follows the target on foot, which movement starts; it sends
+    // nothing of its own.
     tap(&mut app, KeyCode::Digit2);
-    assert!(matches!(
-        rx.try_recv().unwrap(),
-        ClientCommand::FollowGroup {
-            session_id: 7,
-            invitation_id: None,
-            ..
-        }
-    ));
+    assert!(rx.try_recv().is_err());
+    assert!(
+        app.world_mut()
+            .resource_mut::<crate::chat::ChatState>()
+            .follow_asked
+            .take()
+            .is_some()
+    );
     tap(&mut app, KeyCode::Digit3);
     assert!(matches!(
         rx.try_recv().unwrap(),

@@ -348,10 +348,23 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         | Notice::PetRefused { reason, string_id }
         | Notice::CombineRefused { reason, string_id }
         | Notice::GroupRefused { reason, string_id }
+        | Notice::GuildRefused { reason, string_id }
+        | Notice::CoinsRefused { reason, string_id }
         | Notice::ListingRefused { reason, string_id }
         | Notice::SocialRefused { reason, string_id } => {
             chat(official(*string_id, &[], reason, messages))
         }
+        // The official client always says where `/autosplit` left it (R8).
+        Notice::AutoSplit(on) => chat(official(
+            Some(if *on { 0x338d } else { 0x338e }),
+            &[],
+            if *on {
+                "You will now share looted coins with your group."
+            } else {
+                "You will no longer share looted coins with your group."
+            },
+            messages,
+        )),
         Notice::BindWound(update) => bind_wound(update, messages).map_or_else(Vec::new, chat),
         Notice::TradeRefused(reason)
         | Notice::MerchantUnanswered(reason)
@@ -664,7 +677,11 @@ fn group_lines(notice: &GroupNotice, messages: Option<&Messages>) -> Vec<Said> {
                 Some(name),
                 &format!("{name} asks you to join a group."),
             ),
-            line(12281, None, "Type /follow to join, or /disband to say no."),
+            line(
+                12281,
+                None,
+                "Press Follow in the group window to join, or Decline to say no.",
+            ),
         ],
         GroupNotice::Following(name) => {
             vec![line(

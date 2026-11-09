@@ -144,6 +144,16 @@ pub(super) struct ChatState {
     /// An explicit disconnect to handle before other gameplay input.
     pub departure: Option<super::login::Departure>,
     pub(super) socials: super::socials::Inbox,
+    /// The friends, ignore and reply lists, and what was asked of them.
+    pub(crate) contacts: super::contacts::Book,
+    /// The guild's message of the day as last received, shown or not.
+    guild_motd: Option<String>,
+    /// A guild command typed, for [`super::guild::commands`] to run.
+    pub(crate) guild_asked: Option<super::guild::Command>,
+    /// A sharing command typed, for [`super::sharing::commands`] to run.
+    pub(crate) sharing_asked: Option<super::sharing::Command>,
+    /// `/follow` typed or pressed, for [`super::motion::input`] to start.
+    pub(crate) follow_asked: Option<super::motion::FollowAsked>,
     draft: draft::Draft,
     refusals: Refusals,
 }
@@ -173,6 +183,44 @@ const SCRIPT_LINK_MESSAGES: usize = 16;
 
 impl ChatState {
     pub(super) fn receive(&mut self, line: ChatLine, online: &OnlineState) {
+        // The guild's message of the day shows only when its text is new
+        // and not empty; the copy kept changes either way (R11, 0x40a7fd).
+        // The one `/getguildmotd` asked for always shows, and is then the
+        // one shown last.
+        if line.channel == ChannelName::GuildMotd {
+            let text = &line.message.text;
+            let repeated = self.guild_motd.as_deref() == Some(text.as_str());
+            self.guild_motd = Some(text.clone());
+            if repeated || text.is_empty() {
+                return;
+            }
+        } else if line.channel == ChannelName::GuildMotdReply {
+            self.guild_motd = Some(line.message.text.clone());
+        }
+        if line.source == Source::Server
+            && let Some(sender) = line.sender.as_deref().filter(|sender| !sender.is_empty())
+        {
+            let world = online.world();
+            let ignoring = self.contacts.lists.ignored.names().len();
+            let silenced = self.contacts.lists.silences(
+                line.channel,
+                sender,
+                world.game_master_in_zone(sender),
+            );
+            self.contacts.changed |= self.contacts.lists.ignored.names().len() != ignoring;
+            if silenced {
+                return;
+            }
+            // A tell names the one to reply to as its sender (R6, R8). The
+            // program stores channel 14's sender the same way, but what a
+            // server puts there for the echo of the player's own tell is not
+            // captured yet; this client's echoes name the player, who is no
+            // one to reply to, so channel 14 adds nothing until a capture
+            // shows otherwise (recording checklist 6.412).
+            if line.channel == ChannelName::Tell {
+                self.contacts.lists.replies.heard(sender);
+            }
+        }
         let linked = line.source == Source::Server
             && !line.message.text.is_empty()
             && !line.message.item_links.is_empty();
@@ -833,6 +881,7 @@ pub(super) fn input(
     drag: Option<Res<TabDrag>>,
 ) {
     typing.escape_consumed = drag.as_ref().is_some_and(|drag| drag.escaped);
+    typing.chat_events.clear();
     if typing.editing_script {
         paste.clear();
         keyboard.clear();
@@ -890,7 +939,7 @@ pub(super) fn input(
         paste.clear();
     }
     let mut scripted_enter = false;
-    let events: Vec<_> = keyboard
+    let (events, ids): (Vec<_>, Vec<_>) = keyboard
         .read_with_id()
         .filter(|(event, id)| {
             !(typing.spell_search_captured(*id)
@@ -900,19 +949,23 @@ pub(super) fn input(
             scripted_enter |= event.state.is_pressed()
                 && event.logical_key == Key::Enter
                 && authored.as_ref().is_some_and(|authored| authored.typed(id));
-            event.clone()
+            (event.clone(), id)
         })
-        .collect();
+        .unzip();
     let empty = ButtonInput::default();
+    let mut claimed = Vec::new();
     let submit = compose(
         &mut state,
-        &mut typing,
+        (&mut typing, &mut claimed),
         &events,
         keys.as_deref().unwrap_or(&empty),
         clipboard.as_deref_mut(),
         &mut paste,
         online.world().session_id(),
     ) || send;
+    typing
+        .chat_events
+        .extend(claimed.into_iter().map(|index| ids[index]));
     if submit {
         paste.clear();
         if state.draft.text().trim().is_empty() {
@@ -960,10 +1013,42 @@ pub(super) fn input(
     }
 }
 
-/// Edit one chat draft with ordered modifier snapshots; clipboard input never submits.
+/// Keeps the keys typed into the chat line out of the game: a press the
+/// line took is no fresh press for the bindings, even when Enter closes the
+/// line in the same frame, and the key's repeats stay the line's until it is
+/// let go or pressed afresh (seen as a digit typed in a /say reaching the
+/// hotbar on a local run, 11-09).
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(super) fn capture(
+    mut keyboard: MessageReader<KeyboardInput>,
+    typing: Res<crate::keys::Typing>,
+    mut physical: ResMut<ButtonInput<KeyCode>>,
+    mut held: Local<HashSet<KeyCode>>,
+) {
+    let mut reset = HashSet::new();
+    for (event, id) in keyboard.read_with_id() {
+        let key = event.key_code;
+        if typing.chat_events.contains(&id) {
+            held.insert(key);
+            reset.insert(key);
+        } else if !event.state.is_pressed() {
+            held.remove(&key);
+        } else if !event.repeat {
+            // A fresh press the line did not take is the game's.
+            held.remove(&key);
+            reset.remove(&key);
+        }
+    }
+    for key in reset.iter().chain(held.iter()) {
+        physical.reset(*key);
+    }
+}
+
+/// Edit one chat draft with ordered modifier snapshots; clipboard input never
+/// submits. Notes, by their place in `events`, each press the line took.
 fn compose(
     state: &mut ChatState,
-    typing: &mut crate::keys::Typing,
+    (typing, claimed): (&mut crate::keys::Typing, &mut Vec<usize>),
     events: &[KeyboardInput],
     keys: &ButtonInput<Key>,
     mut clipboard: Option<&mut bevy::clipboard::Clipboard>,
@@ -972,11 +1057,22 @@ fn compose(
 ) -> bool {
     let mut submit = false;
     let modifiers = crate::keys::modifiers::snapshots(events, keys);
-    for (event, held) in events.iter().zip(modifiers) {
+    for (index, (event, held)) in events.iter().zip(modifiers).enumerate() {
         if !event.state.is_pressed() {
             continue;
         }
-        if crate::keys::modifiers::chorded(held) {
+        let chorded = crate::keys::modifiers::chorded(held);
+        let opens = matches!(&event.logical_key, Key::Enter)
+            || matches!(&event.logical_key, Key::Character(value) if value.as_str() == "/");
+        // A held Shift, Ctrl or Alt stays the game's as well.
+        let modifier = matches!(
+            event.logical_key,
+            Key::Shift | Key::Control | Key::Alt | Key::Super | Key::Meta
+        );
+        if !modifier && (typing.composing || (opens && !chorded)) {
+            claimed.push(index);
+        }
+        if chorded {
             if typing.composing
                 && held[0]
                 && !held[2]
@@ -1471,6 +1567,21 @@ fn submit_line(
     qol: &Settings,
 ) -> Result<(), Unsent> {
     let command = typed_command(line);
+    if let Some(contacts) = super::contacts::Command::typed(&command) {
+        return contacts_command(contacts, active, state, online, outbox, qol);
+    }
+    if let Some(guild) = super::guild::Command::typed(&command) {
+        state.guild_asked = Some(guild);
+        return Ok(());
+    }
+    if let Some(sharing) = super::sharing::Command::typed(&command) {
+        state.sharing_asked = Some(sharing);
+        return Ok(());
+    }
+    if super::motion::FollowAsked::typed(&command) {
+        state.follow_asked = Some(super::motion::FollowAsked);
+        return Ok(());
+    }
     if let Some(request) = departure_request(&command) {
         state.departure = Some(request?);
         state.socials.stop = true;
@@ -1494,6 +1605,61 @@ fn submit_line(
     }
     let message = outbound(active, line)?;
     outbox.send(online.world(), ClientCommand::SendChat(message))?;
+    Ok(())
+}
+
+/// Runs a contacts command: `/reply` as a tell to the latest teller,
+/// `/rtarget` as a `/target` of them, the lists' toggles and listings for
+/// their answer, and `/who all friends` to the world.
+fn contacts_command(
+    command: super::contacts::Command,
+    active: ChatTab,
+    state: &mut ChatState,
+    online: &mut super::online::OnlineState,
+    outbox: &crate::outbox::Outbox,
+    qol: &Settings,
+) -> Result<(), Unsent> {
+    use super::contacts::{Asked, Command};
+    let latest = state.contacts.lists.replies.latest().map(str::to_owned);
+    match command {
+        Command::Reply(words) => match latest {
+            Some(name) => {
+                return submit_line(
+                    &format!("/tell {name} {words}"),
+                    active,
+                    state,
+                    online,
+                    outbox,
+                    qol,
+                );
+            }
+            None => state.contacts.asked = Some(Asked::NoReply),
+        },
+        Command::ReplyTarget => match latest {
+            Some(name) => state.requested_target = Some(name),
+            None => state.contacts.asked = Some(Asked::NoReplyTarget),
+        },
+        Command::Friends(name) => state.contacts.asked = Some(Asked::Friends(name)),
+        Command::Ignore(name) => state.contacts.asked = Some(Asked::Ignore(name)),
+        Command::WhoFriends => {
+            let session_id = outbox.stamp(online.world())?.session_id;
+            // The request cannot carry an empty list, and what the official
+            // client says then is not read (recording checklist 6.412).
+            if state.contacts.lists.friends.names().is_empty() {
+                state
+                    .history
+                    .push(system_line(Said::own("Your friends list is empty.")));
+                return Ok(());
+            }
+            outbox.send(
+                online.world(),
+                ClientCommand::WhoFriends {
+                    session_id,
+                    names: state.contacts.lists.friends.names().to_vec(),
+                },
+            )?;
+        }
+    }
     Ok(())
 }
 
@@ -1564,6 +1730,10 @@ pub(super) fn run_game_command(
     chat: &mut ChatState,
     qol: &Settings,
 ) {
+    if super::motion::FollowAsked::typed(command) {
+        chat.follow_asked = Some(super::motion::FollowAsked);
+        return;
+    }
     match submit_game_command(command, online, outbox, qol) {
         Ok(()) if camp_destination(command).is_some() => chat.socials.stop = true,
         Ok(()) => (),
@@ -1645,8 +1815,7 @@ fn targeted_player(online: &super::online::OnlineState) -> String {
 
 /// A group command by its name: an invitation for the player named, or else
 /// the targeted player, which the session refuses when it names no one;
-/// joining the group of whoever invited the player last; or leaving the
-/// group, or as its leader removing the target or disbanding it, as the
+/// or leaving the group, or as its leader removing the target or disbanding it, as the
 /// server decides, which with an invitation waiting declines it.
 fn group_command(
     name: &str,
@@ -1661,15 +1830,6 @@ fn group_command(
                 .split_whitespace()
                 .next()
                 .map_or_else(|| targeted_player(online), str::to_owned),
-        },
-        "follow" => ClientCommand::FollowGroup {
-            session_id,
-            inviter: online
-                .world()
-                .group_invitation()
-                .unwrap_or_default()
-                .to_owned(),
-            invitation_id: online.world().group_invitation_id(),
         },
         _ => match online.world().group_invitation() {
             Some(inviter) => ClientCommand::DeclineGroup {
@@ -1851,7 +2011,7 @@ fn social_commands(
                 _ => ClientCommand::RaidLeave { session_id },
             }]
         }),
-        "invite" | "follow" | "disband" if name == "invite" || words.is_empty() => {
+        "invite" | "disband" if name == "invite" || words.is_empty() => {
             stamp().map(|stamp| vec![group_command(name, words, online, stamp.session_id)])
         }
         _ => return None,
@@ -3369,6 +3529,89 @@ mod tests {
     }
 
     #[test]
+    fn keys_typed_into_the_line_do_not_reach_the_game_as_it_closes() {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+        let mut online = super::super::online::OnlineState::new(true);
+        crate::online::testing::admit(&mut online, 1, crate::online::testing::player(1));
+        let mut app = App::new();
+        crate::keys::testing::install(&mut app);
+        app.init_resource::<ChatState>()
+            .init_resource::<super::super::windows::pointer::Wheel>()
+            .add_message::<KeyboardInput>()
+            .insert_resource(online)
+            .insert_resource(crate::outbox::Outbox::new(Some(sender)))
+            .init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .add_systems(Update, (input, capture).chain());
+        app.world_mut()
+            .resource_mut::<ChatState>()
+            .draft
+            .replace("/say ");
+        app.world_mut()
+            .resource_mut::<crate::keys::Typing>()
+            .composing = true;
+        let key = |key_code, logical_key, text: Option<&str>, pressed, repeat| KeyboardInput {
+            key_code,
+            logical_key,
+            state: if pressed {
+                bevy::input::ButtonState::Pressed
+            } else {
+                bevy::input::ButtonState::Released
+            },
+            text: text.map(Into::into),
+            repeat,
+            window: Entity::PLACEHOLDER,
+        };
+        let nine = |pressed, repeat| {
+            key(
+                KeyCode::Digit9,
+                Key::Character("9".into()),
+                Some("9"),
+                pressed,
+                repeat,
+            )
+        };
+        // The digit and Enter in one frame: the line takes both and closes.
+        app.world_mut().write_message(nine(true, false));
+        app.world_mut()
+            .write_message(key(KeyCode::Enter, Key::Enter, None, true, false));
+        {
+            let mut physical = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            physical.press(KeyCode::Digit9);
+            physical.press(KeyCode::Enter);
+        }
+        app.update();
+        assert!(receiver.try_recv().is_ok());
+        assert!(!app.world().resource::<crate::keys::Typing>().composing);
+        let physical = app.world().resource::<ButtonInput<KeyCode>>();
+        assert!(!physical.just_pressed(KeyCode::Digit9));
+        assert!(!physical.just_pressed(KeyCode::Enter));
+        // Its repeats stay the line's while it is held.
+        app.world_mut().write_message(nine(true, true));
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Digit9);
+        app.update();
+        assert!(
+            !app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .just_pressed(KeyCode::Digit9)
+        );
+        // Let go and pressed afresh, the key is the game's.
+        app.world_mut().write_message(nine(false, false));
+        app.world_mut().write_message(nine(true, false));
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Digit9);
+        app.update();
+        assert!(
+            app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .just_pressed(KeyCode::Digit9)
+        );
+    }
+
+    #[test]
     fn a_mistake_is_said_in_the_chat_and_the_draft_stays() {
         let (sender, receiver) = std::sync::mpsc::sync_channel(4);
         let mut online = super::super::online::OnlineState::new(true);
@@ -4527,7 +4770,7 @@ mod tests {
             })
         };
         testing::news(&mut online, [offer(1)]);
-        let accept = group_command("follow", "", &online, 7);
+        let accept = crate::group::joining(online.world(), 7);
         let decline = group_command("disband", "", &online, 7);
         assert!(
             matches!(&accept, ClientCommand::FollowGroup { session_id: 7, inviter, invitation_id }
@@ -4546,7 +4789,7 @@ mod tests {
                 offer(2),
             ],
         );
-        assert_ne!(group_command("follow", "", &online, 7), accept);
+        assert_ne!(crate::group::joining(online.world(), 7), accept);
         assert_ne!(group_command("disband", "", &online, 7), decline);
     }
 }

@@ -331,6 +331,13 @@ impl OnlineState {
         self.world.close_loot();
     }
 
+    /// Takes the oldest guild invitation not yet answered or asked about.
+    pub(super) fn take_guild_invitation(
+        &mut self,
+    ) -> Option<eq_client_core::world::GuildInvitation> {
+        self.world.take_guild_invitation()
+    }
+
     /// The front end queued an answer to this exact offer.
     pub(super) fn dismiss_consent(&mut self, id: eq_client_core::confirmations::ConsentId) {
         self.world.dismiss_consent(id);

@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+- Add the Titanium client's contacts and guild commands. `/reply` and
+  `/rtarget` use the last 50 players who sent a tell. `/friends` and
+  `/ignore` keep 100 names each per character. The first lists come from
+  the installed client's character file, or its defaults. Ignored players'
+  chat is hidden, except from a game master. `/who all friends` lists the
+  friends online, and says when the list is empty. A guild message of the
+  day is shown only when it is new and not empty; the one `/getguildmotd`
+  asks for always shows, in the guild colour and log line.
+- Answer guild invitations as the official client does. The confirmation
+  dialog asks about joining or a higher rank. Every other case is answered
+  at once, in the official lines. Add `/guildinvite` (with officer offers),
+  `/guildremove`, `/guildmotd`, `/guildleader` and `/getguildmotd`, each with
+  the official checks. A guild's roster is kept as the server sends it, and
+  `/guildremove` and `/guildleader` name a member of it before they say
+  their line.
+- Add `/split` and `/autosplit`, and the bank window's Change button, which
+  is offered only where the server takes a banker's change.
+- `/follow` now follows the targeted group member on foot, with the
+  official client's turn steps, walk and run distances, and stopping rules.
+  The group window's Follow button still joins the group the player was
+  invited to. A stun holds the follower until it lifts, autorun ends
+  following like the other movement keys, and a mouse turn made meanwhile
+  is not kept. Inferences (the dialog's timeout, the clear-path test,
+  letter case in `/autosplit`, and others) are recorded as checklist items
+  6.410 to 6.412.
+- Keys typed into the chat line no longer reach the game when Enter closes
+  the line in the same frame, so a digit at the end of a line no longer
+  presses a hotbar button.
 - Build zone navigation meshes by default. Script walks plan over the mesh and
   warn in the log and the Execution tab when they fall back to grid search.
   `--no-navmesh` turns meshes off; the old `--navmesh` flag is still accepted.
@@ -44,6 +72,11 @@
 - Bound inspection note and landmark file reads, protect oversized
   landmark files from replacement, and share immutable installed spell
   definitions across sessions.
+
+- Pin networking 462baf69 (Batch A landing): friends who, guild requests,
+  splitting and a banker's change on the Titanium wire, offered on `EQEmu`
+  and Project 1999; a waiting guild invitation and the member list do not
+  outlive the zone connection.
 
 - Pin networking 0d93a466 (P99 repairs landing): the bounded Titanium
   shoreline impulse, with each replayed frame counting for at most 50 ms.

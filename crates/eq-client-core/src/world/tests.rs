@@ -3216,13 +3216,15 @@ fn coins_outside_the_purse_are_where_the_session_says() {
         WorldEvent::CoinsRefused {
             session_id: 1,
             reason: "You do not have that many coins there".into(),
+            string_id: None,
         },
     );
     assert_eq!(
         changes.notices,
-        [Notice::TradeRefused(
-            "You do not have that many coins there".into()
-        )]
+        [Notice::CoinsRefused {
+            reason: "You do not have that many coins there".into(),
+            string_id: None,
+        }]
     );
     assert_eq!(world.coins_in(CoinPlace::Trade), Some(coins(0, 1, 0, 0)));
     // Camping forgets the coins.
@@ -5638,23 +5640,44 @@ fn a_spawn_that_dies_moving_lies_where_it_was_carried_and_moves_no_more() {
     assert_eq!((still.velocity, still.forward), ([0.0; 3], 0.0));
 }
 
+/// A guild member of level 5 with nothing else set.
+fn guild_member(name: &str) -> eq_network_game::guild::GuildMember {
+    eq_network_game::guild::GuildMember {
+        name: name.into(),
+        level: 5,
+        class: 1,
+        rank: eq_network_game::listing::GuildRank::Member,
+        banker: false,
+        alt: false,
+        last_on: 0,
+        tribute: eq_network_game::guild::GuildTribute {
+            on: false,
+            total: 0,
+            last: 0,
+        },
+        note: String::new(),
+        zone_id: None,
+    }
+}
+
 #[test]
-fn guild_news_changes_nothing_yet() {
+fn guild_news_keeps_the_roster() {
     use eq_network_game::guild::GuildUpdate;
     use eq_network_game::listing::GuildRank;
     let mut world = admitted();
     let spawns = world.spawns().len();
-    let events = [
-        GuildUpdate::Members(Vec::new()),
+    assert_eq!(world.guild_members(), None);
+    let quiet = [
+        GuildUpdate::Members(vec![guild_member("Example")]),
         GuildUpdate::MemberLocation {
             guild_id: 1,
             name: "Example".into(),
             zone_id: Some(29),
-            last_on: 0,
+            last_on: 7,
         },
         GuildUpdate::MemberAdded {
             guild_id: 1,
-            name: "Example".into(),
+            name: "Second".into(),
             level: 10,
             class: 1,
             rank: GuildRank::Member,
@@ -5664,11 +5687,7 @@ fn guild_news_changes_nothing_yet() {
         GuildUpdate::MemberLevel {
             guild_id: 1,
             name: "Example".into(),
-            level: 10,
-        },
-        GuildUpdate::MemberRemoved {
-            guild_id: 1,
-            name: "Example".into(),
+            level: 11,
         },
         GuildUpdate::MemberNote {
             guild_id: 1,
@@ -5680,32 +5699,91 @@ fn guild_news_changes_nothing_yet() {
             name: "Example".into(),
             rank: GuildRank::Officer,
             banker: true,
-            alt: false,
+            alt: true,
         },
         GuildUpdate::MemberRenamed {
             guild_id: 1,
-            old_name: "Example".into(),
+            old_name: "Second".into(),
             new_name: "Renamed".into(),
         },
         GuildUpdate::Renamed {
             guild_id: 1,
             name: "Guild".into(),
         },
-        GuildUpdate::Disbanded { guild_id: 1 },
-        GuildUpdate::Invite {
-            inviter: "Example".into(),
-            guild_id: 1,
-            rank: GuildRank::Member,
-        },
     ];
-    for event in events {
+    for event in quiet {
         assert_eq!(
             game(&mut world, WorldEvent::Guild(event)),
             Changes::default()
         );
     }
+    let members = world.guild_members().unwrap();
+    assert_eq!(members.len(), 2);
+    let example = &members[0];
+    assert_eq!(
+        (
+            example.zone_id,
+            example.last_on,
+            example.level,
+            example.note.as_str()
+        ),
+        (Some(29), 7, 11, "Note")
+    );
+    assert_eq!(
+        (example.rank, example.banker, example.alt),
+        (GuildRank::Officer, true, true)
+    );
+    assert_eq!(members[1].name, "Renamed");
+    game(
+        &mut world,
+        WorldEvent::Guild(GuildUpdate::MemberRemoved {
+            guild_id: 1,
+            name: "Renamed".into(),
+        }),
+    );
+    assert_eq!(world.guild_members().map(<[_]>::len), Some(1));
+    game(
+        &mut world,
+        WorldEvent::Guild(GuildUpdate::Disbanded { guild_id: 1 }),
+    );
+    assert_eq!(world.guild_members(), None);
     assert_eq!(world.spawns().len(), spawns);
     assert!(world.player().is_some());
+}
+
+#[test]
+fn guild_invitations_queue_and_auto_split_follows_the_session() {
+    use eq_network_game::guild::GuildUpdate;
+    use eq_network_game::listing::GuildRank;
+    let mut world = admitted();
+    for inviter in ["Example", "Second"] {
+        game(
+            &mut world,
+            WorldEvent::Guild(GuildUpdate::Invite {
+                inviter: inviter.into(),
+                guild_id: 1,
+                rank: GuildRank::Member,
+            }),
+        );
+    }
+    let taken = |world: &mut ClientWorld| world.take_guild_invitation().map(|it| it.inviter);
+    assert_eq!(taken(&mut world).as_deref(), Some("Example"));
+    assert_eq!(taken(&mut world).as_deref(), Some("Second"));
+    assert_eq!(taken(&mut world), None);
+    // Automatic splitting: the profile's, then the player's change of it.
+    game(&mut world, WorldEvent::AutoSplit(false));
+    assert_eq!(world.auto_split(), Some(false));
+    let set = game(
+        &mut world,
+        WorldEvent::AutoSplitSet {
+            session_id: 1,
+            on: true,
+        },
+    );
+    assert_eq!(
+        (world.auto_split(), set.notices),
+        (Some(true), vec![Notice::AutoSplit(true)])
+    );
 }
 
 #[test]

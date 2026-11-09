@@ -32,6 +32,44 @@ pub(crate) struct AuthoredInput {
     pub(super) typed: HashSet<MessageId<KeyboardInput>>,
     pub(crate) keys: HashSet<KeyCode>,
     pub(crate) left_button: bool,
+    /// Every key the script sent a press or a release of this frame.
+    pub(super) sent: HashSet<KeyCode>,
+}
+
+/// The script sets its keys' state itself and sends the typed keys after
+/// Bevy has read the frame's keyboard messages, so Bevy reads them again a
+/// frame later. Each key the script sent keeps the state it had before that
+/// second reading, so a key a text field took back, such as a digit typed
+/// in the chat line, is not pressed afresh for the game.
+#[derive(Default, Resource)]
+struct Replayed {
+    /// The keys sent last frame, and whether each was down before Bevy read them.
+    keys: Vec<(KeyCode, bool)>,
+}
+
+/// Notes the state of last frame's sent keys before Bevy reads them again.
+#[allow(clippy::needless_pass_by_value)]
+fn before_replay(
+    authored: Res<AuthoredInput>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut replayed: ResMut<Replayed>,
+) {
+    replayed.keys = authored
+        .sent
+        .iter()
+        .map(|key| (*key, keys.pressed(*key)))
+        .collect();
+}
+
+/// Sets last frame's sent keys back as they were before Bevy read them again.
+fn after_replay(mut replayed: ResMut<Replayed>, mut keys: ResMut<ButtonInput<KeyCode>>) {
+    for (key, down) in replayed.keys.drain(..) {
+        keys.reset(key);
+        if down {
+            keys.press(key);
+            keys.clear_just_pressed(key);
+        }
+    }
 }
 
 impl AuthoredInput {
@@ -62,7 +100,18 @@ impl BackgroundInput {
 
 /// Only an explicitly enabled process observes background input ownership.
 pub(crate) fn install(app: &mut App, mode: InputMode) {
-    app.insert_resource(mode).init_resource::<AuthoredInput>();
+    app.insert_resource(mode)
+        .init_resource::<AuthoredInput>()
+        .init_resource::<Replayed>()
+        .add_systems(
+            PreUpdate,
+            (
+                before_replay.before(bevy::input::InputSystems),
+                after_replay
+                    .after(bevy::input::InputSystems)
+                    .before(super::drive),
+            ),
+        );
     if mode == InputMode::Background {
         app.init_resource::<BackgroundInput>()
             .configure_sets(PreUpdate, bevy::ui::UiSystems::Focus.run_if(native_focus))
@@ -167,5 +216,69 @@ pub(super) fn observe(
             && script.progress.phase.active()
             && !matches!(script.mode, super::RunMode::Paused(_))
             && !state.busy();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::input::{ButtonState, InputSystems, keyboard::Key};
+
+    /// A key the script typed, and a text field then took back, stays let
+    /// go when Bevy reads the script's message again a frame later.
+    #[test]
+    fn a_key_the_script_sent_is_not_pressed_again_when_bevy_reads_it() {
+        #[derive(Resource)]
+        struct Typing(bool);
+        fn drive(
+            mut typing: ResMut<Typing>,
+            mut authored: ResMut<AuthoredInput>,
+            mut keys: ResMut<ButtonInput<KeyCode>>,
+            mut sent: MessageWriter<KeyboardInput>,
+        ) {
+            *authored = AuthoredInput::default();
+            if std::mem::take(&mut typing.0) {
+                keys.press(KeyCode::Digit9);
+                let id = sent.write(KeyboardInput {
+                    key_code: KeyCode::Digit9,
+                    logical_key: Key::Character("9".into()),
+                    state: ButtonState::Pressed,
+                    text: Some("9".into()),
+                    repeat: false,
+                    window: Entity::PLACEHOLDER,
+                });
+                authored.typed.insert(id);
+                authored.sent.insert(KeyCode::Digit9);
+            }
+        }
+        let mut app = App::new();
+        app.add_message::<KeyboardInput>()
+            .add_message::<KeyboardFocusLost>()
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<ButtonInput<Key>>()
+            .insert_resource(Typing(true))
+            .add_systems(
+                PreUpdate,
+                (
+                    bevy::input::keyboard::keyboard_input_system.in_set(InputSystems),
+                    drive.after(after_replay),
+                ),
+            )
+            // The chat line takes the key back on the frame it is typed, as
+            // `chat::capture` does, and only then.
+            .add_systems(
+                Update,
+                |mut keys: ResMut<ButtonInput<KeyCode>>, mut taken: Local<bool>| {
+                    if !std::mem::replace(&mut *taken, true) {
+                        keys.reset(KeyCode::Digit9);
+                    }
+                },
+            );
+        install(&mut app, InputMode::Attended);
+        app.update();
+        app.update();
+        let keys = app.world().resource::<ButtonInput<KeyCode>>();
+        assert!(!keys.just_pressed(KeyCode::Digit9));
+        assert!(!keys.pressed(KeyCode::Digit9));
     }
 }

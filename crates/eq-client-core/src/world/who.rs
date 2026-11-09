@@ -137,6 +137,39 @@ impl ClientWorld {
         self.guild_names.get(&number).map(String::as_str)
     }
 
+    /// Whether a living player of this name, in any case, is in the zone:
+    /// whom the official client lets `/guildinvite` name (R11, 0x49bf15).
+    #[must_use]
+    pub fn player_in_zone(&self, name: &str) -> bool {
+        self.player
+            .as_ref()
+            .is_some_and(|player| player.name.eq_ignore_ascii_case(name))
+            || self
+                .zone
+                .spawns
+                .values()
+                .map(|spawn| &spawn.state)
+                .any(|spawn| {
+                    spawn.kind == SpawnKind::Player && spawn.name.eq_ignore_ascii_case(name)
+                })
+    }
+
+    /// Whether a player of this name, in any case, is in the zone as a game
+    /// master: the test the official client's ignore list makes of a sender
+    /// (program read R6, 0x459b94 and 0x472739).
+    #[must_use]
+    pub fn game_master_in_zone(&self, name: &str) -> bool {
+        self.zone
+            .spawns
+            .values()
+            .map(|spawn| &spawn.state)
+            .any(|spawn| {
+                spawn.kind == SpawnKind::Player
+                    && spawn.listing.game_master
+                    && spawn.name.eq_ignore_ascii_case(name)
+            })
+    }
+
     /// The players the zone's own `/who` lists, by name: the player and every
     /// other player the zone told the client of, as the filter takes them.
     #[must_use]
