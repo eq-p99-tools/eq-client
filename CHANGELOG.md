@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- Stop needless movement blocking. A Bard's song pulse, any buff or spell
+  landing on the player, a level, eating, looting or moving items, and a
+  server's move no longer stop the player, cancel autorun or drop a jump:
+  the original client stops input only for a stun, a freeze or not standing
+  (reads R7, R18). Run 1d's Bard, frozen for the whole song, moves freely. A
+  speed change for a player already moving replaces only the speeds, so held
+  keys, taps, a queued or crouched jump and autorun go on, and the sideways
+  carry of a jump under way is limited to the new speed. A server's move
+  starts prediction afresh with the speeds kept, and autorun, held keys, a
+  jump request and a crouch go on from the new place, as the original
+  client's own-spawn update and warp touch no input (read R18). A root
+  anywhere among a buff's effects roots and the strongest snare the client
+  can evaluate applies, even where another effect cannot be evaluated. Where
+  the client cannot prove every term, it reports the terms it can prove as a
+  bound. A term it can evaluate now is taken as it is now, slower or faster,
+  and one it cannot evaluate is left out; a term comes from its last report
+  only where the client no longer knows it (buff membership or belongings
+  not known), never with a root or snare in it, so a speed buff that ends,
+  ends at once. The session takes the bound as reported and starts a grant
+  from it where none is in force, so a zone-in, or a root or snare fading
+  under a song, moves at once. With no earlier report and nothing provable,
+  input waits; there is no "Movement paused" line while the player can move.
+  By Adam's decision of 11-10 this can be faster than the original client
+  would allow until the inputs are proven (recording checklist 6.451).
+  Networking pinned to a1296f6 (eq-network #292).
+
 - Open the Runbook window, in front, whenever the local harness starts a
   Runbook, so whoever watches can see a run is in use. Only a start opens
   it: once closed, it stays closed until the next start. It takes no

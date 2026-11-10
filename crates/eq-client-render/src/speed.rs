@@ -17,6 +17,9 @@ use eq_client_core::{
 #[derive(Clone, Copy, Default)]
 struct Modifiers {
     rate: i64,
+    /// The fastest positive movement modifier, apart from any snare: the
+    /// rate an unproven term goes back to must never carry a snare.
+    gain: i64,
     strength: i64,
     stamina: i64,
     rooted: bool,
@@ -34,36 +37,34 @@ impl Modifiers {
         } else {
             self.rate.max(other.rate)
         };
+        self.gain = self.gain.max(other.gain);
         self.strength += other.strength;
         self.stamina += other.stamina;
         self.rooted |= other.rooted;
     }
 }
 
-/// Evaluate only effects that influence these inputs. Unread spell data and
-/// unsupported affecting formulas never silently become zero. Reuse the asset
-/// layer's level/cap evaluation instead of treating a scaling base as its value.
-fn project(
-    effects: &[Effect],
-    level: u16,
-    instrument: u32,
-    dialect: GameDialect,
-) -> Result<Modifiers, Missing> {
+/// Evaluate only effects that influence these inputs, every one of them, so
+/// an effect the client cannot evaluate never hides a root or a snare after
+/// it. A term it cannot evaluate adds nothing here and marks the projection
+/// inexact, as does an effect id it does not know; the caller decides what an
+/// inexact projection proves. Reuse the asset layer's level/cap evaluation
+/// instead of treating a scaling base as its value.
+fn project(effects: &[Effect], level: u16, instrument: u32, dialect: GameDialect) -> Projection {
     let mut modifiers = Modifiers::default();
+    let mut exact = true;
     for effect in effects {
         match effect.id {
             99 => modifiers.rooted = true,
             3 | 4 | 7 | 159 => {
-                if level == 0 || matches!(effect.formula, 60 | 70) {
-                    return Err(Missing::Effects);
-                }
-                let value = effect.base_magnitude(level).ok_or(Missing::Effects)?;
-                let value =
-                    eq_client_core::buffs::scale_instrument_effect(dialect, value, instrument)
-                        .ok_or(Missing::Effects)?;
+                let Some(value) = evaluate(effect, level, instrument, dialect) else {
+                    exact = false;
+                    continue;
+                };
                 if effect.id == 3 {
                     modifiers.add(Modifiers {
                         rate: value,
+                        gain: value.max(0),
                         ..Modifiers::default()
                     });
                 } else {
@@ -77,18 +78,38 @@ fn project(
             }
             // Classic effects that do not directly change strength or ground speed.
             0..=158 | 160..=254 => (),
-            _ => return Err(Missing::Effects),
+            _ => exact = false,
         }
     }
-    Ok(modifiers)
+    Projection { modifiers, exact }
+}
+
+/// What the evaluable terms of a set of effects add, and whether every term
+/// was evaluable.
+#[derive(Clone, Copy)]
+struct Projection {
+    modifiers: Modifiers,
+    exact: bool,
+}
+
+/// The exact value of a movement or stat term, where the client can work it
+/// out.
+fn evaluate(effect: &Effect, level: u16, instrument: u32, dialect: GameDialect) -> Option<i64> {
+    if level == 0 || matches!(effect.formula, 60 | 70) {
+        return None;
+    }
+    let value = effect.base_magnitude(level)?;
+    eq_client_core::buffs::scale_instrument_effect(dialect, value, instrument)
 }
 
 /// First food and drink in general-slot order, including each bag's contents.
-/// Pending changes to stat food cannot be mistaken for confirmed removal.
+/// Pending changes to stat food cannot be mistaken for confirmed removal. The
+/// flag is false where a food's worn effect is unevaluated.
 fn food(
     inventory: &eq_client_core::inventory::Inventory,
     level: u16,
-) -> Result<(Modifiers, Option<i64>), Missing> {
+) -> Result<(Modifiers, Option<i64>, bool), Missing> {
+    let mut exact = true;
     let mut modifiers = Modifiers::default();
     let mut meals = [false; 2];
     let mut fire_resistance = Some(0);
@@ -115,7 +136,7 @@ fn food(
             .zip(bonus.bonuses.fire_resistance)
             .map(|(total, resistance)| total + i64::from(resistance));
         if bonus.worn.is_some() {
-            return Err(Missing::Effects);
+            exact = false;
         }
     }
     if inventory.prediction_origins().any(|(_, item)| {
@@ -137,7 +158,7 @@ fn food(
     }) {
         fire_resistance = None;
     }
-    Ok((modifiers, fire_resistance))
+    Ok((modifiers, fire_resistance, exact))
 }
 
 /// Stamina and known fire resistance from the same stat food used for movement.
@@ -147,17 +168,23 @@ pub(super) fn food_environment(
 ) -> Option<(i64, Option<i64>)> {
     food(inventory, level)
         .ok()
-        .map(|(modifiers, fire)| (modifiers.stamina, fire))
+        .filter(|(_, _, exact)| *exact)
+        .map(|(modifiers, fire, _)| (modifiers.stamina, fire))
 }
 
 /// Effective inputs from complete inventory, purse and buff membership.
 /// Equipment uses the decoded eligibility/required/recommended-level rules.
-/// Unsupported worn effects remain explicit; the base stat cap is 255
-/// (higher-level/AA increases are deliberately not granted).
+/// The base stat cap is 255 (higher-level/AA increases are deliberately not
+/// granted). Every effect is scanned; one the client cannot evaluate (an
+/// unsupported worn or food worn effect, a missing spell record, an unread
+/// formula or instrument term, an unslotted STR/STA term) is left out and
+/// marks the result inexact, so it never hides a root or a snare. Only state
+/// with nothing provable fails.
 fn calculate(
     world: &ClientWorld,
     effects: impl Fn(u32) -> Option<Vec<Effect>>,
-) -> Result<SpeedInputs, Missing> {
+) -> Result<Projected, Missing> {
+    let mut exact = true;
     let player = world.player().ok_or(Missing::Attributes)?;
     let dialect = world.generation();
     let weight = u16::try_from(
@@ -179,50 +206,31 @@ fn calculate(
         }
         _ => Missing::Inventory,
     })?;
-    let (mut modifiers, _) = food(inventory, u16::from(player.level))?;
+    let (mut modifiers, _, fed) = food(inventory, u16::from(player.level))?;
+    exact &= fed;
     for (_, item) in equipped {
         modifiers.strength += i64::from(item.bonuses.strength);
         modifiers.stamina += i64::from(item.bonuses.stamina);
         if let Some(worn) = item.worn {
-            if worn.effect_type != 2 {
-                return Err(Missing::Effects);
-            }
             let level = if worn.level == 0 {
-                u16::from(player.level)
+                Some(u16::from(player.level))
             } else {
-                u16::try_from(worn.level).map_err(|_| Missing::Effects)?
+                u16::try_from(worn.level).ok()
             };
-            modifiers.add(project(
-                &effects(worn.spell_id).ok_or(Missing::Effects)?,
-                level,
-                10,
-                dialect,
-            )?);
+            match (worn.effect_type == 2, level, effects(worn.spell_id)) {
+                (true, Some(level), Some(list)) => {
+                    let projected = project(&list, level, 10, dialect);
+                    exact &= projected.exact;
+                    modifiers.add(projected.modifiers);
+                }
+                _ => exact = false,
+            }
         }
     }
-    let buffs = world.buffs();
-    for buff in buffs.slots().ok_or(Missing::Effects)?.values() {
-        modifiers.add(project(
-            &effects(buff.spell_id).ok_or(Missing::Effects)?,
-            u16::from(buff.caster_level),
-            u32::from(buff.bard_modifier),
-            dialect,
-        )?);
-    }
-    for effect in buffs.effects().values() {
-        let projected = project(
-            &effects(u32::from(effect.spell_id)).ok_or(Missing::Effects)?,
-            effect.caster_level,
-            effect.instrument_modifier,
-            dialect,
-        )?;
-        // An unslotted STR effect could replace an existing contributor. Speed
-        // extremum/root selection is safe across the union; additive STR isn't.
-        if projected.strength != 0 || projected.stamina != 0 {
-            return Err(Missing::Effects);
-        }
-        modifiers.add(projected);
-    }
+    let worn = Terms::of(modifiers);
+    let (buffed, proven) = buff_terms(world, &effects)?;
+    modifiers.add(buffed);
+    exact &= proven;
     let strength = i64::from(base.strength) + modifiers.strength;
     let eqmac_fatigue = if dialect.uses_fatigue_for_carry_capacity() {
         Some(EqMacFatigueInputs {
@@ -241,7 +249,7 @@ fn calculate(
         || u32::try_from(strength.clamp(1, 255)).expect("bounded strength"),
         |inputs| inputs.capacity(None),
     );
-    Ok(SpeedInputs {
+    let inputs = SpeedInputs {
         rate: if modifiers.rooted {
             -1000
         } else {
@@ -256,7 +264,145 @@ fn calculate(
         weight,
         capacity,
         eqmac_fatigue,
+    };
+    // Every effect was scanned, so a root is never hidden by one the client
+    // cannot evaluate; anything else unevaluated leaves the inputs unproven.
+    Ok(Projected {
+        inputs,
+        exact: exact || modifiers.rooted,
+        worn_gain: worn.gain,
+        buff_gain: Terms::of(buffed).gain,
     })
+}
+
+/// What the player's buffs and unslotted effects add, and whether every
+/// term was evaluable. Missing buff membership fails.
+fn buff_terms(
+    world: &ClientWorld,
+    effects: &impl Fn(u32) -> Option<Vec<Effect>>,
+) -> Result<(Modifiers, bool), Missing> {
+    let dialect = world.generation();
+    let buffs = world.buffs();
+    let mut modifiers = Modifiers::default();
+    let mut exact = true;
+    for buff in buffs.slots().ok_or(Missing::Effects)?.values() {
+        let Some(list) = effects(buff.spell_id) else {
+            exact = false;
+            continue;
+        };
+        let projected = project(
+            &list,
+            u16::from(buff.caster_level),
+            u32::from(buff.bard_modifier),
+            dialect,
+        );
+        exact &= projected.exact;
+        modifiers.add(projected.modifiers);
+    }
+    for effect in buffs.effects().values() {
+        let Some(list) = effects(u32::from(effect.spell_id)) else {
+            exact = false;
+            continue;
+        };
+        let mut projected = project(
+            &list,
+            effect.caster_level,
+            effect.instrument_modifier,
+            dialect,
+        );
+        // An unslotted STR effect could replace an existing contributor, so
+        // its STR/STA is left out. Speed extremum/root selection is safe
+        // across the union; additive STR isn't.
+        if projected.modifiers.strength != 0 || projected.modifiers.stamina != 0 {
+            projected.modifiers.strength = 0;
+            projected.modifiers.stamina = 0;
+            projected.exact = false;
+        }
+        exact &= projected.exact;
+        modifiers.add(projected.modifiers);
+    }
+    Ok((modifiers, exact))
+}
+
+/// Inputs from every term the client can prove, and whether that was all of
+/// them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Projected {
+    inputs: SpeedInputs,
+    exact: bool,
+    /// The fastest evaluable gain of equipment and food, and of buffs and
+    /// effects, each apart from any snare.
+    worn_gain: i16,
+    buff_gain: i16,
+}
+
+/// The movement terms the client can evaluate: the fastest gain apart from
+/// any snare, and a root or the strongest snare.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Terms {
+    gain: i16,
+    slowing: Option<i16>,
+}
+
+impl Terms {
+    fn of(modifiers: Modifiers) -> Self {
+        Self {
+            gain: i16::try_from(modifiers.gain.min(i64::from(i16::MAX))).expect("bounded gain"),
+            slowing: if modifiers.rooted {
+                Some(-1000)
+            } else if modifiers.rate < 0 {
+                Some(i16::try_from(modifiers.rate.max(-999)).expect("bounded rate"))
+            } else {
+                None
+            },
+        }
+    }
+
+    /// The rate: the gain, lowered by a root or a snare.
+    fn rate(self) -> i16 {
+        self.slowing
+            .map_or(self.gain, |slowing| slowing.min(self.gain))
+    }
+}
+
+/// The movement terms among the player's buffs and effects that the client
+/// can evaluate, when it cannot work the rest out: the fastest gain, and the
+/// root or the strongest snare. By the programs' rule an actual root
+/// dominates and the strongest snare wins over every positive modifier, so
+/// either proves the rate is at most its own; neither may be masked by what
+/// the client cannot evaluate.
+fn known_terms(world: &ClientWorld, effects: impl Fn(u32) -> Option<Vec<Effect>>) -> Terms {
+    let dialect = world.generation();
+    let buffs = world.buffs();
+    let slotted = buffs.slots().into_iter().flat_map(|slots| {
+        slots.values().map(|buff| {
+            (
+                buff.spell_id,
+                u16::from(buff.caster_level),
+                u32::from(buff.bard_modifier),
+            )
+        })
+    });
+    let unslotted = buffs.effects().values().map(|effect| {
+        (
+            u32::from(effect.spell_id),
+            effect.caster_level,
+            effect.instrument_modifier,
+        )
+    });
+    let mut known = Modifiers::default();
+    for (spell, level, instrument) in slotted.chain(unslotted) {
+        if let Some(list) = effects(spell) {
+            known.add(project(&list, level, instrument, dialect).modifiers);
+        }
+    }
+    Terms::of(known)
+}
+
+/// The root or the strongest snare among the effects the client can
+/// evaluate on the player.
+fn known_slowing(world: &ClientWorld, effects: impl Fn(u32) -> Option<Vec<Effect>>) -> Option<i16> {
+    known_terms(world, effects).slowing
 }
 
 /// The same typed readiness result for movement reporting and script diagnostics.
@@ -265,8 +411,122 @@ pub(crate) fn inputs(
     spells: &crate::spellbook::SpellNames,
 ) -> SpeedInputState {
     match calculate(world, |id| spells.mechanics(id).map(|m| m.effects.to_vec())) {
-        Ok(inputs) => SpeedInputState::Ready(inputs),
+        Ok(Projected {
+            inputs,
+            exact: true,
+            ..
+        }) => SpeedInputState::Ready(inputs),
+        Ok(_) => SpeedInputState::Unavailable(Missing::Effects),
         Err(reason) => SpeedInputState::Unavailable(reason),
+    }
+}
+
+/// What the host reports: the exact inputs where it can work them out.
+/// Otherwise the inputs from every term it can prove
+/// ([`SpeedInputState::Bounded`]; Adam's decision of 11-10, recording
+/// checklist 6.451). A term it can evaluate now is taken as it is now,
+/// slower or faster; one it cannot evaluate is left out. A term comes from
+/// the last report only where the client no longer knows it: the gain of
+/// equipment and food while belongings are unknown, and of buffs while buff
+/// membership is unknown, with any root or snare it can evaluate now
+/// applied. The session takes a bound as reported. With no earlier report
+/// and nothing provable it says what is missing, and the session keeps the
+/// grant in force, or waits where there is none.
+fn reported(
+    world: &ClientWorld,
+    effects: impl Fn(u32) -> Option<Vec<Effect>> + Copy,
+    last: Option<Remembered>,
+) -> Reported {
+    match calculate(world, effects) {
+        // Membership, equipment and load are known: the proven terms now,
+        // with nothing from the last report.
+        Ok(projected) => {
+            let state = if projected.exact {
+                SpeedInputState::Ready(projected.inputs)
+            } else {
+                SpeedInputState::Bounded {
+                    inputs: projected.inputs,
+                    missing: Missing::Effects,
+                }
+            };
+            Reported {
+                state,
+                remember: Some(Remembered {
+                    inputs: projected.inputs,
+                    worn_gain: projected.worn_gain,
+                    buff_gain: projected.buff_gain,
+                }),
+            }
+        }
+        Err(missing) => {
+            let Some(last) = last else {
+                return Reported {
+                    state: SpeedInputState::Unavailable(missing),
+                    remember: None,
+                };
+            };
+            let known = known_terms(world, effects);
+            // Buffs are evaluated as they are now wherever membership is
+            // known; equipment and food come from the last report.
+            let buff_gain = if world.buffs().slots().is_some() {
+                known.gain
+            } else {
+                last.buff_gain
+            };
+            let rate = Terms {
+                gain: last.worn_gain.max(buff_gain),
+                slowing: known.slowing,
+            }
+            .rate();
+            let mut bounded = SpeedInputs {
+                rate,
+                ..last.inputs
+            };
+            if let Ok(tenths) = world.movement_weight() {
+                bounded.weight = u16::try_from(
+                    (tenths / 10).min(u64::from(eq_client_core::inventory::MAX_CARRIED_WEIGHT)),
+                )
+                .expect("bounded weight");
+            }
+            Reported {
+                state: SpeedInputState::Bounded {
+                    inputs: bounded,
+                    missing,
+                },
+                remember: Some(Remembered {
+                    inputs: bounded,
+                    buff_gain,
+                    ..last
+                }),
+            }
+        }
+    }
+}
+
+/// What a later report takes a term from where the client no longer knows
+/// it: the last inputs, and the gains apart from any root or snare.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Remembered {
+    inputs: SpeedInputs,
+    worn_gain: i16,
+    buff_gain: i16,
+}
+
+/// A report, and what a later report takes an unknown term from; None
+/// keeps the earlier one.
+#[derive(Debug, PartialEq)]
+struct Reported {
+    state: SpeedInputState,
+    remember: Option<Remembered>,
+}
+
+/// Whether the player is rooted, as far as the client can prove: the exact
+/// inputs say so, or a root among the effects it can evaluate.
+pub(crate) fn rooted(world: &ClientWorld, spells: &crate::spellbook::SpellNames) -> bool {
+    match inputs(world, spells) {
+        SpeedInputState::Ready(inputs) => inputs.rate <= -1000,
+        _ => known_slowing(world, |id| spells.mechanics(id).map(|m| m.effects.to_vec()))
+            .is_some_and(|rate| rate <= -1000),
     }
 }
 
@@ -318,8 +578,18 @@ pub(crate) fn load(
         SpeedInputState::Ready(inputs) => {
             Some((inputs.weight, Some(effective_capacity(world, inputs))))
         }
-        SpeedInputState::Unavailable(_) => None,
+        SpeedInputState::Bounded { .. } | SpeedInputState::Unavailable(_) => None,
     }
+}
+
+/// Whether the session grants the player positive movement now, kept or
+/// exact.
+fn moving_granted(world: &ClientWorld) -> bool {
+    world.motion().is_some_and(|motion| {
+        motion
+            .units_per_second
+            .is_some_and(|speed| speed.is_finite() && speed > 0.0)
+    })
 }
 
 /// Display current capacity through the network-owned fatigue formula without
@@ -337,6 +607,9 @@ fn effective_capacity(world: &ClientWorld, inputs: SpeedInputs) -> u32 {
 pub(crate) struct Reports {
     next_id: u64,
     current: Option<Report>,
+    /// The inputs last reported in this admission, exact or bounded: what the
+    /// session keeps in force while new ones are unproven.
+    proven: Option<(u64, Remembered)>,
 }
 
 /// One logical report, retained across queue retries. Its id also distinguishes
@@ -431,12 +704,29 @@ pub(crate) fn report(
         notices.movement.set("");
         return;
     }
-    let state = inputs(world, &spells);
+    let last = reports
+        .proven
+        .filter(|(admission, _)| *admission == session_id)
+        .map(|(_, inputs)| inputs);
+    let Reported { state, remember } = reported(
+        world,
+        |id| spells.mechanics(id).map(|m| m.effects.to_vec()),
+        last,
+    );
+    if let Some(inputs) = remember {
+        reports.proven = Some((session_id, inputs));
+    }
     let report = reports.prepare(session_id, revision, state);
     // The reason can change within one unavailable category (for example,
     // purse receipt leaves only cursor coins missing), even with no new report.
+    // With a grant in force the session keeps it while it takes a new
+    // report, or while the inputs are unproven, so there is nothing to say.
+    let granted = moving_granted(world);
     notices.movement.set(match state {
-        SpeedInputState::Unavailable(reason) => readiness_reason(world, reason),
+        _ if granted => "",
+        SpeedInputState::Unavailable(missing) | SpeedInputState::Bounded { missing, .. } => {
+            readiness_reason(world, missing)
+        }
         SpeedInputState::Ready(_) if report.granted(world) => "",
         // Say which step is outstanding: the session's acceptance of this
         // exact report, or a positive movement grant after it.

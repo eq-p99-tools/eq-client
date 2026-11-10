@@ -1,10 +1,24 @@
 # Movement inputs and deferred compatibility checks
 
-The renderer reports explicit ready/unavailable movement inputs for the current
-session revision. Missing inventory, attributes, coin state, buff membership or
-affecting spell data withdraws player input. A confirmed empty inventory is a
-valid zero load. Corrections and new admissions cannot reuse an earlier report.
-Queue saturation retries rather than leaving an old grant indefinitely.
+The renderer reports explicit ready, bounded or unavailable movement inputs for
+the current session revision. Before the first grant of an admission, missing
+inventory, attributes, coin state, buff membership or affecting spell data holds
+input back. After it, nothing but a root, a stun, a freeze, death, zoning or not
+standing stops the player, as in the original client (reads R7, R18): a recheck
+keeps the speeds in force while the new report is worked out, and an unproven
+report carries every term the client can prove (`Bounded`). A term it can
+evaluate now is taken as it is now, slower or faster, and one it cannot evaluate
+is left out. A term comes from the last report only where the client no longer
+knows it: the gain of equipment and food while belongings are not known, and of
+buffs while buff membership is not known, never with a root or a snare in it,
+and with any root or snare it can evaluate now applied. A speed buff the client
+knows has ended ends at once. The session takes a bound as reported and starts a
+grant from it where none is in force, so a zone-in, or a root or snare fading
+under a song, moves at once. By Adam's decision of 11-10 this can be faster than
+the original client would allow until the inputs are proven (recording checklist
+6.451). A confirmed empty inventory is a valid zero load. Corrections and new
+admissions cannot reuse an earlier report. Queue saturation retries rather than
+leaving an old grant indefinitely.
 Purse and cursor coins require receipt in this admission. Bank balances do not
 contribute to carried weight, and an unknown bank balance alone does not block it.
 
@@ -31,11 +45,16 @@ inventory snapshot. An ordinary cursor resync can leave the landing bound
 usable during that pause.
 Recalibration preserves an in-progress descent and pending fall report.
 
-The session owns HP/sneak speed adjustments, movement caps and permission. When
-it withdraws input, the renderer clears taps, autorun and queued jumps but still
-simulates passive descent where supported. The session independently rejects
-horizontal drift, turns and ascent during withdrawal. Death and transfer still
-suspend all movement.
+The session owns HP/sneak speed adjustments, movement caps and permission. A new
+positive speed for a player already moving replaces only the speeds; held keys,
+taps, a queued or crouched jump, autorun and a jump under way go on, the jump's
+sideways carry limited to the new speed. A server's move or a same-zone landing
+starts prediction afresh with the speeds kept; autorun, held keys, a jump
+request and a crouch go on from the new place (read R18). When the session
+withdraws input (a root, death, zoning), the renderer clears taps, autorun and
+queued jumps but still simulates passive descent where supported. The session
+independently rejects horizontal drift, turns and ascent during withdrawal.
+Death and transfer still suspend all movement.
 
 ## Buff membership and diagnostic reports
 
@@ -65,10 +84,14 @@ server fade or new snapshot. The displayed duration is an estimate.
 
 ## Deliberate limits
 
-- Unknown affecting formulas, formulas 60/70 with differing semantics, missing
-  spell records, unsupported worn effects and unresolved instrument modifiers
-  withdraw input. Unslotted additive STR/STA effects withdraw until membership is
-  known, because they might replace a slotted effect rather than add to it.
+- Unknown affecting formulas, formulas 60/70 with differing semantics, effect
+  ids above 254, missing spell records, unsupported worn and food worn effects,
+  unresolved instrument modifiers (a Bard song's STR term, run 1d), unslotted
+  additive STR/STA effects (they might replace a slotted effect rather than add
+  to it) and the inventory states that end only with a full refresh leave the
+  inputs unproven: before the first grant they hold input back, after it the
+  last inputs stay in force (6.451). Each is closed as its rule is read. Every
+  effect is still scanned, so none of them hides a root or a snare.
 - Positive AA/stat-cap, alcohol and berserk STR bonuses are not granted. The
   255 cap and omitted positive bonuses produce a conservative capacity. This is
   not a complete replacement for all server stat calculations.
@@ -102,9 +125,9 @@ no active combat. Keep account/character identifiers, captures and assets privat
 | Admission and recovery | Quarm first; TAKP, EQEmu, P99 separately | Enter zone, wait for profile/inventory/buffs, walk; zone again | Input starts only after complete state; no old grant crosses admission | Use safe zone; stop autorun before zoning |
 | Weight and STR | Same server matrix | Walk a fixed safe distance; equip/remove known STR gear; compare load with coins, a stack and a reduction bag | Reported weight/STR change by supported rules; speed responds at encumbrance boundary | Use disposable gear; restore original layout |
 | Ordinary cursor round trip | Quarm first | Move an ordinary non-stat item to cursor and back without changing total load | No invented authority; unchanged load remains usable while prediction origins persist | Do not use consumable/valuable items |
-| Uncertain weight/equipment | Isolated Quarm first | Change bag reduction/carried load or worn STR; exercise a server-controlled refused move/resync on disposable state | Input withdraws while uncertain; only covering updates/snapshot recover; no timer grant | No deliberate public-server refusal; obtain authoritative resync before proceeding |
+| Uncertain weight/equipment | Isolated Quarm first | Change bag reduction/carried load or worn STR; exercise a server-controlled refused move/resync on disposable state | Movement goes on at the last inputs (a known heavier load slows it); only covering updates/snapshot prove new inputs (6.451) | No deliberate public-server refusal; obtain authoritative resync before proceeding |
 | Buff values and fade | Quarm; others independently | Apply known level-scaled speed buff, snare, root and STR buff/debuff; let each fade | Correct supported magnitude; strongest snare wins; root blocks input; fade recomputes | Safe consenting setup; remove all effects afterward |
-| Correction and passive fall | Quarm/EQEmu controlled test server first | Cause a supported safe correction; repeat above a harmless ledge while inputs unavailable | Old queued input rejected; bounded descent/landing persists; no horizontal/turn/jump input | Fall damage possible; avoid dangerous drops |
+| Correction and passive fall | Quarm/EQEmu controlled test server first | Cause a supported safe correction; repeat above a harmless ledge | Old queued input rejected; the player stops at the new place and moves on at the speeds in force; bounded descent/landing persists | Fall damage possible; avoid dangerous drops |
 | Fatigue | Quarm/TAKP | Compare known fatigue/STA state and its subsequent stamina updates | At most 10 STR penalty, recomputed on changed fatigue | Avoid exhaustion/combat; recover before leaving |
 
 Record each server, exact source heads, steps, expected versus observed behavior
