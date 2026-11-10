@@ -1678,6 +1678,7 @@ fn eqmac_fatigue_changes_effective_capacity_without_changing_the_posted_basis() 
             player: Box::new(player),
             far_clip: None,
             spell_landing_flag: None,
+            zone_id: 0,
         },
         WorldEvent::BuffSnapshot(vec![]),
         WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![])),

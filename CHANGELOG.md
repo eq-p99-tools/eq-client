@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+- Ride lifts as the Titanium program does (Batch B1). On EQEmu and P99,
+  vertical doors (lifts, sinking floors and platforms) rise and sink at
+  their type's travel and speed, counted from the server's action, and
+  slides go their type's distance and direction. Each door returns on its
+  own after its type's delay from its arrival: 10 s for ordinary doors, 20 s
+  for most others, never for a lift whose field is over 170; types 40 and 45
+  go back by the click the networking sends. A door holds the player up or
+  stops them only as the program's rule says, so a hinged door is no floor,
+  and route searches use the same rule. A player on a rising lift, still or
+  walking, stunned or not, is carried up by the lift's own rise since the
+  last sample, however long the frame took, and each move on a lift names
+  it so the movement guard allows its rise. Nothing above the rider stops
+  the carry, as the program tests nothing overhead while a lift carries
+  (read R1d; checklist 6.427). A player who steps off a rising lift is
+  carried no further,
+  and the step still names the lift that raised it. Between samples the
+  model is drawn on the rising floor. A door is in click reach, in 3-D within 20,
+  of its origin where it stands now, so a lift resting raised is used from
+  its top; the program measures from the clicked point on the door as drawn,
+  within the player's size and 20, so ours is short of it (read R16b, R16e;
+  checklist 6.436). A door that moves into the
+  player, such as a lift landing around someone beside it, no longer holds
+  them in place: its walls let them walk out, and its floor still holds them
+  up (checklist 6.439). The movement report names the door whose floor is
+  under the feet, if any. A lift that sinks drops its
+  rider at once, as the program's floor sweep does, rather than leaving
+  them standing on air until the gap passes a step. The script report lists nearby
+  doors with their mechanism, field, offset and solidity. EQMac servers keep
+  their doors solid both ways (checklist 6.425). At a lift whose rest floor
+  lies inside zone geometry, the rider is carried up and rests on the lift's
+  floor under the deck; the ordinary floor sweep stands them on the deck with
+  their first step, and the lift does not carry them down from there: when it
+  leaves, they stand on the deck. A rider at such a lift's origin rides into
+  the zone's own column. What the program does at the top, and how its rider
+  goes down, is unread (checklist 6.440).
 - Look and swim as the Titanium program does (Batch M slice 3). Look Up
   and Look Down (keypad 9 and Page Up, keypad 3 and Page Down) tilt the
   first-person view while held, ramping as the turn keys do up to straight
@@ -120,6 +155,14 @@
 - Bound inspection note and landmark file reads, protect oversized
   landmark files from replacement, and share immutable installed spell
   definitions across sessions.
+
+- Pin networking 0e45bfcc (Batch B1 landing): Titanium lifts and doors as
+  the program moves them (vertical travel and speeds by open type, slides,
+  floor and wall solidity, the client's own returns, and the return click
+  for types 40 and 45), the movement guard's allowance for a lift's rise
+  while a sample names it, and a door's click reach to where it stands now.
+  It also brings the zone-in admission of a player with an empty inventory,
+  such as after a death (checklist 6.437).
 
 - Pin networking 9d9d0ee1 (Batch M slice 3 landing): Titanium's own position
   update carries the program's movement-history entry counter, goes out by

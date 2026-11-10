@@ -368,6 +368,7 @@ fn entered(session_id: u64) -> WorldEvent {
         player: Box::new(player(9)),
         far_clip: None,
         spell_landing_flag: Some(4),
+        zone_id: 0,
     }
 }
 
@@ -635,7 +636,7 @@ fn death_bind_has_no_packet_or_corpse_details_and_clears_on_admission() {
         let player = world.player().unwrap().clone();
         world.entered(
             (&[], &[], session_id + 1),
-            ("synthetic", None, None),
+            ("synthetic", 0, None, None),
             &player,
             Instant::now(),
         );
@@ -1574,6 +1575,7 @@ fn the_players_own_cast_ends_where_their_cast_bar_does() {
             player: Box::new(caster),
             far_clip: None,
             spell_landing_flag: None,
+            zone_id: 0,
         },
     );
     connection(&mut world, true, false);
@@ -1632,6 +1634,7 @@ fn the_profile_restores_gem_timers_and_vitals_at_admission() {
             player: Box::new(caster),
             far_clip: None,
             spell_landing_flag: None,
+            zone_id: 0,
         }),
         now,
         &NoSpells,
@@ -1852,6 +1855,7 @@ fn bleeding(capabilities: Vec<crate::Capability>) -> ClientWorld {
             player: Box::new(player(9)),
             far_clip: None,
             spell_landing_flag: None,
+            zone_id: 0,
         },
     );
     connection(&mut world, true, false);
@@ -1933,6 +1937,7 @@ fn the_dead_bleed_out_no_more_and_an_admission_forgets_the_threshold() {
             player: Box::new(player(9)),
             far_clip: None,
             spell_landing_flag: None,
+            zone_id: 0,
         },
     );
     game(&mut world, inventory(Vec::new()));
@@ -2806,6 +2811,7 @@ fn abilities_are_the_skills_the_player_has_and_wait_on_the_sessions_timers() {
             player: Box::new(warrior),
             far_clip: None,
             spell_landing_flag: None,
+            zone_id: 0,
         }),
         Instant::now(),
         &NoSpells,
@@ -2910,6 +2916,7 @@ fn eqmac_profile_skills_reach_admission_and_follow_wire_updates() {
         player: Box::new(profile),
         far_clip: None,
         spell_landing_flag: None,
+        zone_id: 0,
     };
     let mut world = ClientWorld::default();
     world.carry_as(crate::GameDialect::EqMac);
@@ -3723,6 +3730,7 @@ fn gems_read_the_admitted_players_memorized_spells() {
             player: Box::new(caster),
             far_clip: None,
             spell_landing_flag: None,
+            zone_id: 0,
         },
     );
     assert_eq!(world.gem(2), Some(73));
@@ -4120,6 +4128,7 @@ fn training_opens_raises_skills_with_a_line_and_closes() {
             player: Box::new(trainee),
             far_clip: None,
             spell_landing_flag: None,
+            zone_id: 0,
         },
     );
     connection(&mut world, true, false);

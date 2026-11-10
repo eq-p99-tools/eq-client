@@ -121,7 +121,7 @@ impl ClientWorld {
     pub(super) fn entered(
         &mut self,
         (capabilities, choices, session_id): (&[Capability], &[Capability], u64),
-        (zone, far_clip, spell_landing_flag): (&str, Option<f32>, Option<u8>),
+        (zone, zone_id, far_clip, spell_landing_flag): (&str, u16, Option<f32>, Option<u8>),
         player: &PlayerState,
         now: Instant,
     ) -> Changes {
@@ -133,6 +133,7 @@ impl ClientWorld {
         self.target.accepts_updates = true;
         self.zone.pet_buffs.accepts_staged_entry = true;
         zone.clone_into(&mut self.zone_name);
+        self.zone.doors.set_zone(zone_id);
         changes
             .notices
             .push(Notice::Arrived(self.zone_long_name().to_owned()));

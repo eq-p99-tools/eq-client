@@ -601,6 +601,7 @@ mod tests {
                 )),
                 far_clip: None,
                 spell_landing_flag: None,
+                zone_id: 0,
             }),
             WorldUpdate::Connection(eq_client_core::world::Link::Connected),
         ] {
@@ -895,6 +896,7 @@ mod hud_tests {
                 )),
                 far_clip: None,
                 spell_landing_flag: None,
+                zone_id: 0,
             }),
             eq_client_core::WorldUpdate::Connection(eq_client_core::world::Link::Connected),
         ] {

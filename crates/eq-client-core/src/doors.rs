@@ -1,29 +1,25 @@
 //! Doors as the client shows them: the server's definitions and actions, plus
-//! the closing that clients do on their own.
+//! the motion and returns that clients do on their own.
 use crate::{GameDialect, WorldPosition};
-pub use eq_network_game::doors::{Door, DoorUpdate, Doors, decode, eqmac};
+pub use eq_network_game::doors::titanium::{Slide, Solidity, Vertical};
+pub use eq_network_game::doors::{Door, DoorUpdate, Doors, decode, eqmac, titanium};
 use std::collections::BTreeMap;
-use std::time::{Duration, Instant};
-
-/// How long an opened Titanium door stays open before the client closes it. Servers
-/// close ordinary doors on their own timers without telling clients (`EQEmu`
-/// sends a close only for a few special kinds), so clients close them locally.
-/// Provisional: `EQEmu`'s default server timer, not measured on the official
-/// client.
-pub const CLOSE_DELAY: Duration = Duration::from_secs(5);
+use std::time::Instant;
 
 /// Server door actions; inverted doors swap them.
 const OPEN: u8 = 2;
 const CLOSE: u8 = 3;
 
-/// Server door definitions/actions with generation-selected local hinge motion
-/// and return timing. Titanium retains its provisional [`CLOSE_DELAY`].
+/// Server door definitions/actions with generation-selected local motion and
+/// return timing: Titanium's own door rules ([`titanium`]), `EQMac`'s hinge.
 #[derive(Clone, Debug)]
 pub struct DoorTable {
     doors: Doors,
     closing: BTreeMap<u8, Instant>,
     generation: GameDialect,
     hinges: BTreeMap<u8, eqmac::Hinge>,
+    lifts: titanium::Lifts,
+    zone_id: u16,
 }
 
 impl Default for DoorTable {
@@ -33,6 +29,8 @@ impl Default for DoorTable {
             closing: BTreeMap::new(),
             generation: GameDialect::Titanium,
             hinges: BTreeMap::new(),
+            lifts: titanium::Lifts::default(),
+            zone_id: 0,
         }
     }
 }
@@ -44,7 +42,12 @@ impl DoorTable {
         self.doors.entries()
     }
 
-    /// Applies a Titanium server update with its provisional local close delay.
+    /// The zone's number, which a few of Titanium's door rules name.
+    pub const fn set_zone(&mut self, zone_id: u16) {
+        self.zone_id = zone_id;
+    }
+
+    /// Applies a Titanium server update with its own motion and returns.
     pub fn apply(&mut self, update: &DoorUpdate, now: Instant) {
         self.apply_for(update, now, GameDialect::Titanium);
     }
@@ -55,6 +58,7 @@ impl DoorTable {
         if self.generation != generation {
             self.closing.clear();
             self.hinges.clear();
+            self.lifts.clear();
             self.generation = generation;
         }
         self.doors.apply(update);
@@ -66,13 +70,22 @@ impl DoorTable {
             return;
         }
         match update {
-            DoorUpdate::RemoveAll => self.closing.clear(),
+            DoorUpdate::RemoveAll => {
+                self.closing.clear();
+                self.lifts.clear();
+            }
             DoorUpdate::Spawn(doors) => {
                 for door in doors {
+                    self.lifts.spawned(door, now);
                     self.schedule(door.id, now);
                 }
             }
-            DoorUpdate::Move { id, .. } => self.schedule(*id, now),
+            DoorUpdate::Move { id, .. } => {
+                if let Some(door) = self.doors.entries().get(id) {
+                    self.lifts.moved(door, now);
+                }
+                self.schedule(*id, now);
+            }
         }
     }
 
@@ -141,15 +154,46 @@ impl DoorTable {
             _ => return None,
         };
         let door = self.doors.entries().get(&id)?;
-        if !reach.admits(position, door.position) {
+        // A door is reached at its origin where it stands now, within 20, as
+        // the session checks: short of the program, which measures from the
+        // clicked point on the door as drawn, within the player's size and
+        // 20 (read R16b, R16e; recording checklist 6.436).
+        let at = WorldPosition {
+            z: door.position.z + self.lifts.offset(id, now).unwrap_or(0.0),
+            ..door.position
+        };
+        if !reach.admits(position, at) {
             return None;
         }
-        let flat = (door.position.x - position.x).hypot(door.position.y - position.y);
+        let flat = (at.x - position.x).hypot(at.y - position.y);
         Some(if reach.flat {
             flat
         } else {
-            flat.hypot(door.position.z - position.z)
+            flat.hypot(at.z - position.z)
         })
+    }
+
+    /// How far a Titanium vertical door stands from its placed height at `now`.
+    #[must_use]
+    pub fn lift_offset(&self, id: u8, now: Instant) -> Option<f32> {
+        self.lifts.offset(id, now)
+    }
+
+    /// Titanium's vertical doors as this table steps them.
+    #[must_use]
+    pub const fn lifts(&self) -> &titanium::Lifts {
+        &self.lifts
+    }
+
+    /// Whether door `id` holds the player up and stops them walking: the
+    /// program's rule on Titanium, and both on a generation whose rule is not
+    /// read (recording checklist 6.425).
+    #[must_use]
+    pub fn solidity(&self, id: u8) -> Solidity {
+        match (self.generation, self.doors.entries().get(&id)) {
+            (GameDialect::Titanium, Some(door)) => Solidity::of(door.open_type, self.zone_id),
+            _ => Solidity::BOTH,
+        }
     }
 
     /// The ordinary `EQMac` hinge's local pose; unsupported mechanisms have none.
@@ -187,34 +231,49 @@ impl DoorTable {
         for id in due {
             self.closing.remove(&id);
             if let Some(door) = self.doors.entries().get(&id) {
-                let action = if door.invert_state == 0 { CLOSE } else { OPEN };
+                // Local presentation of the program's own return, not a
+                // received server action. The vertical motion already turns
+                // back at this time inside the lift's own steps.
+                let action = titanium::return_action(door);
                 self.doors.apply(&DoorUpdate::Move { id, action });
+                if let Some(door) = self.doors.entries().get(&id) {
+                    self.lifts.moved(door, now);
+                }
             }
         }
     }
 
+    /// Times Titanium's own return of a door away from its rest (0x48faa5).
+    /// Types 40 and 45 return by a click the session sends, and wait for the
+    /// server's action (read R1c).
     fn schedule(&mut self, id: u8, now: Instant) {
-        if self.doors.entries().get(&id).is_some_and(is_open) {
-            self.closing.insert(id, now + CLOSE_DELAY);
-        } else {
-            self.closing.remove(&id);
-        }
-    }
-}
-
-/// Whether the server has a door open: its latest action opened it, or it
-/// spawned open. The server applies a door's inversion to both.
-fn is_open(door: &Door) -> bool {
-    let inverted = door.invert_state != 0;
-    match door.action {
-        Some(action) => action == if inverted { CLOSE } else { OPEN },
-        None => (door.state_at_spawn != 0) != inverted,
+        match self
+            .doors
+            .entries()
+            .get(&id)
+            .filter(|door| !titanium::returns_by_click(door))
+            .and_then(|door| {
+                // A vertical door's own return runs from where it stood
+                // ([`titanium::Lifts::returns_at`]); the others' from rest.
+                if self.lifts.motion(id).is_some() {
+                    self.lifts.returns_at(id)
+                } else {
+                    titanium::returns_at(door, now)
+                }
+            }) {
+            Some(at) => self.closing.insert(id, at),
+            None => self.closing.remove(&id),
+        };
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
+
+    /// A type 0 door's own return (0x48faa5, read R1b).
+    const CLOSE_DELAY: Duration = Duration::from_secs(10);
 
     fn ordinary() -> Door {
         Door {
@@ -469,5 +528,128 @@ mod tests {
         assert!(!table.closes_due(start + CLOSE_DELAY));
         table.apply(&DoorUpdate::Spawn(vec![door(4, 0, 0)]), start);
         assert!(!table.closes_due(start + CLOSE_DELAY));
+    }
+
+    fn lift(id: u8, parameter: u32) -> Door {
+        Door {
+            open_type: 59,
+            parameter,
+            ..door(id, 0, 0)
+        }
+    }
+
+    #[test]
+    fn a_titanium_lift_rises_waits_from_arrival_and_comes_back_down_on_its_own() {
+        let start = Instant::now();
+        let mut table = DoorTable::default();
+        table.apply(&DoorUpdate::Spawn(vec![lift(4, 90)]), start);
+        assert_eq!(table.lift_offset(4, start), Some(0.0));
+        table.apply(
+            &DoorUpdate::Move {
+                id: 4,
+                action: OPEN,
+            },
+            start,
+        );
+        // 90 units at 0.45 x 20 u/s is 9 a second (eqgame.exe, read R1).
+        let offset = |table: &DoorTable, at: Duration| table.lift_offset(4, start + at).unwrap();
+        assert!((offset(&table, Duration::from_secs(5)) - 45.0).abs() < 0.01);
+        assert!((offset(&table, Duration::from_secs(10)) - 90.0).abs() < 0.01);
+        // Type 59 at 170 or less waits 20 s from its arrival at 10 s.
+        assert!(!table.closes_due(start + Duration::from_secs(29)));
+        assert!(table.closes_due(start + Duration::from_secs(30)));
+        table.close_due(start + Duration::from_secs(30));
+        assert_eq!(action(&table, 4), Some(CLOSE));
+        assert!((offset(&table, Duration::from_secs(35)) - 45.0).abs() < 0.01);
+        assert!(offset(&table, Duration::from_secs(40)).abs() < 0.01);
+        // Over 170, it never goes back on its own.
+        table.apply(&DoorUpdate::Spawn(vec![lift(4, 300)]), start);
+        table.apply(
+            &DoorUpdate::Move {
+                id: 4,
+                action: OPEN,
+            },
+            start,
+        );
+        assert!(!table.closes_due(start + Duration::from_secs(3600)));
+    }
+
+    #[test]
+    fn a_lift_opened_again_mid_return_shows_open_until_its_own_return() {
+        let start = Instant::now();
+        let mut table = DoorTable::default();
+        table.apply(&DoorUpdate::Spawn(vec![lift(4, 90)]), start);
+        let open = DoorUpdate::Move {
+            id: 4,
+            action: OPEN,
+        };
+        table.apply(&open, start);
+        table.close_due(start + Duration::from_secs(30));
+        // Halfway down, it is opened again: 5 s back up, then 20 s.
+        let again = start + Duration::from_secs(35);
+        table.apply(&open, again);
+        assert!(!table.closes_due(again + Duration::from_secs(24)));
+        assert!(table.closes_due(again + Duration::from_secs(25)));
+        assert_eq!(action(&table, 4), Some(OPEN));
+    }
+
+    #[test]
+    fn a_raised_lift_is_in_reach_from_its_top_not_its_base() {
+        let start = Instant::now();
+        let mut table = DoorTable::default();
+        let raised = Door {
+            state_at_spawn: 1,
+            ..lift(4, 69)
+        };
+        table.apply(&DoorUpdate::Spawn(vec![raised]), start);
+        let at = |z: f32| WorldPosition {
+            z,
+            ..WorldPosition::default()
+        };
+        for z in [0.0, 34.5] {
+            assert_eq!(table.use_distance(4, at(z), start), None, "from {z}");
+        }
+        assert!(
+            table
+                .use_distance(4, at(69.0), start)
+                .is_some_and(|d| d < 0.01)
+        );
+    }
+
+    #[test]
+    fn titanium_names_each_doors_solidity_and_eqmac_keeps_both() {
+        let start = Instant::now();
+        let mut table = DoorTable::default();
+        let mut sinking = lift(6, 10);
+        sinking.open_type = 120;
+        table.apply(
+            &DoorUpdate::Spawn(vec![lift(4, 90), door(5, 0, 0), sinking]),
+            start,
+        );
+        // A type 59 lift is both; a hinged door and a type 120 platform are
+        // walls nobody stands on; types 60-77 are neither (eqgame.exe
+        // 0x490370 and the wall contact).
+        assert_eq!(table.solidity(4), Solidity::BOTH);
+        assert!(!table.solidity(5).floor && table.solidity(5).wall);
+        assert!(!table.solidity(6).floor && table.solidity(6).wall);
+        let mut passage = lift(8, 0);
+        passage.open_type = 60;
+        table.apply(&DoorUpdate::Spawn(vec![passage]), start);
+        assert!(!table.solidity(8).floor && !table.solidity(8).wall);
+        // Type 27 is a floor only in zone 154 (eqgame.exe 0x490370).
+        let mut floor = door(7, 0, 0);
+        floor.open_type = 27;
+        table.apply(&DoorUpdate::Spawn(vec![floor.clone()]), start);
+        assert!(!table.solidity(7).floor);
+        table.set_zone(154);
+        assert!(table.solidity(7).floor);
+        // EQMac's rule is not read: every door stays both (checklist 6.425).
+        table.apply_for(
+            &DoorUpdate::Spawn(vec![lift(4, 90)]),
+            start,
+            GameDialect::EqMac,
+        );
+        assert_eq!(table.solidity(4), Solidity::BOTH);
+        assert_eq!(table.lift_offset(4, start), None);
     }
 }

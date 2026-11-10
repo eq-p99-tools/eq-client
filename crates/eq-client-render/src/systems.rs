@@ -28,6 +28,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<sounds::Sounds>()
         .init_resource::<crate::marquee::Banners>()
         .init_resource::<doors::Hinges>()
+        .init_resource::<doors::LiftReach>()
         .init_resource::<options::OptionsState>()
         .init_resource::<options::MovementSync>()
         .init_resource::<logs::ChatLog>()

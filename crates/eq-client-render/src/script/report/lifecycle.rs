@@ -264,6 +264,7 @@ mod tests {
                 player: Box::new(player),
                 far_clip: None,
                 spell_landing_flag: None,
+                zone_id: 0,
             }),
         );
         apply(world, &WorldUpdate::Connection(Link::Connected));

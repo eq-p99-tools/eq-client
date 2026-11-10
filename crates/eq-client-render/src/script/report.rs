@@ -432,6 +432,24 @@ type NearbyModel = (u16, u32, u32, Option<&'static str>);
 /// Spawn id, shown name, kind, class, distance and rounded EQ x, y, z.
 /// Door id, open type, latest action, distance and EQ position.
 type NearbyDoor = (u8, u8, Option<u8>, i32, [i32; 3]);
+/// A door within [`DOOR_DETAIL_REACH`]: id, model, open type, incline,
+/// parameter, the program's field (+0x66), its mechanism, the lift's offset
+/// now, (floor, wall) solidity, latest action and distance.
+type DoorDetail = (
+    u8,
+    String,
+    u8,
+    u32,
+    u32,
+    i16,
+    String,
+    Option<f32>,
+    (bool, bool),
+    Option<u8>,
+    i32,
+);
+/// How near a door must stand for the report to give its mechanism.
+const DOOR_DETAIL_REACH: f32 = 60.0;
 type NearbySpawn = (u16, String, String, Option<u8>, i32, [i32; 3]);
 
 /// A guildmaster in view: spawn, name, class, distance and position.
@@ -557,6 +575,7 @@ pub(super) fn surroundings(online: &crate::online::OnlineState, (_, _, _, combat
         .collect();
     doors.sort_by_key(|door| door.3);
     doors.truncate(3);
+    let doors_near = door_details(online, origin);
     let (ground, stations) = objects(online, origin);
     let (models, gear) = looks(online, &nearby);
     info!(
@@ -564,6 +583,7 @@ pub(super) fn surroundings(online: &crate::online::OnlineState, (_, _, _, combat
         ?creatures,
         ?guildmasters,
         ?doors,
+        ?doors_near,
         ?ground,
         ?stations,
         container = ?online
@@ -577,6 +597,66 @@ pub(super) fn surroundings(online: &crate::online::OnlineState, (_, _, _, combat
         auto_attack = combat.auto_attack,
         "Script surroundings"
     );
+}
+
+/// The doors near the player with how they move and hold the player, for
+/// checking each lift and door against the program's rules on a live run.
+fn door_details(online: &crate::online::OnlineState, origin: Option<Vec3>) -> Vec<DoorDetail> {
+    use eq_client_core::doors::{Slide, Vertical, titanium};
+    let Some(origin) = origin else {
+        return Vec::new();
+    };
+    let table = online.world().doors();
+    let now = std::time::Instant::now();
+    let mut doors: Vec<DoorDetail> = table
+        .entries()
+        .values()
+        .filter_map(|door| {
+            // Measured to where the door stands now, so a raised lift stays
+            // listed for its own rider.
+            let at = eq_client_core::WorldPosition {
+                z: door.position.z + table.lift_offset(door.id, now).unwrap_or(0.0),
+                ..door.position
+            };
+            let position = Vec3::from_array(eq_client_core::render_position(at));
+            let distance = position.distance(origin);
+            if distance > DOOR_DETAIL_REACH {
+                return None;
+            }
+            let mechanism = if let Some(lift) = Vertical::of(door) {
+                format!(
+                    "vertical {:.1} at {:.2}/{:.2}",
+                    lift.travel, lift.open_speed, lift.close_speed
+                )
+            } else if let Some(slide) = Slide::of(door) {
+                format!(
+                    "slide {:.1} at {:.1} toward {:?}",
+                    slide.distance, slide.speed, slide.direction
+                )
+            } else {
+                "other".to_owned()
+            };
+            let solidity = table.solidity(door.id);
+            #[allow(clippy::cast_possible_truncation)] // A rounded report distance.
+            let distance = distance.round() as i32;
+            Some((
+                door.id,
+                door.model.clone(),
+                door.open_type,
+                door.incline,
+                door.parameter,
+                titanium::field(door),
+                mechanism,
+                table.lift_offset(door.id, now),
+                (solidity.floor, solidity.wall),
+                door.action,
+                distance,
+            ))
+        })
+        .collect();
+    doors.sort_by_key(|door| door.10);
+    doors.truncate(8);
+    doors
 }
 
 /// How the nearest spawns look: each one's model by race and gender, and the

@@ -103,6 +103,14 @@ struct LocalGeometry {
     body: Option<PlayerBody>,
     collision_ready: bool,
     support_z_at_session_feet: Option<f32>,
+    /// The door whose floor is under the centre of the feet, if a door's,
+    /// so a report tells a lift's floor from the zone's own.
+    support_door_at_session_feet: Option<u8>,
+    /// The floor a still rider's lift test looks for, up to the grounded
+    /// step above the feet (`MAX_GROUNDED_STEP`) and 0.05 below: its EQ z,
+    /// the door it belongs to if a door's, and the body's clearance stood
+    /// on it (negative: overlapping).
+    floor_within_step: Option<(f32, Option<u8>, Option<f32>)>,
     selected_target_los: Option<LocalTargetLos>,
 }
 
@@ -123,6 +131,20 @@ impl LocalGeometry {
             support_z_at_session_feet: collision.zip(body).and_then(|(collision, body)| {
                 collision.support(origin - Vec3::Y * body.feet_offset)
             }),
+            support_door_at_session_feet: collision.zip(body).and_then(|(collision, body)| {
+                collision.ground_door(origin - Vec3::Y * body.feet_offset, 0.01, 0.05)
+            }),
+            floor_within_step: collision.zip(body).and_then(|(collision, body)| {
+                let feet = origin - Vec3::Y * body.feet_offset;
+                let step = eq_client_core::movement::MAX_GROUNDED_STEP;
+                let floor = collision.ground(feet, step, 0.05)?;
+                let stood = Vec3::new(feet.x, floor, feet.z);
+                Some((
+                    eq_client_core::world_position(stood.to_array(), 0.0).z,
+                    collision.ground_door(feet, step, 0.05),
+                    collision.clearance(stood, body.height, 0.0),
+                ))
+            }),
             selected_target_los: collision
                 .and_then(|collision| LocalTargetLos::read(world, collision, origin)),
         }
@@ -137,6 +159,12 @@ impl LocalGeometry {
             })),
             "collision_ready": self.collision_ready,
             "support_z_at_session_feet": self.support_z_at_session_feet,
+            "support_door_at_session_feet": self.support_door_at_session_feet,
+            "floor_within_step": self.floor_within_step.map(|(z, door, clearance)| json!({
+                "z": z,
+                "door": door,
+                "clearance": clearance,
+            })),
             "selected_target_los": self.selected_target_los.map(|line| json!({
                 "spawn_id": line.spawn_id,
                 "spawn_revision": line.spawn_revision,
@@ -391,6 +419,8 @@ mod tests {
         assert_eq!(missing["collision_ready"], false);
         assert_eq!(missing["body"]["size"], 7.0);
         assert!(missing["support_z_at_session_feet"].is_null());
+        assert!(missing["support_door_at_session_feet"].is_null());
+        assert!(missing["floor_within_step"].is_null());
         assert!(missing["selected_target_los"].is_null());
 
         let world = online.world();

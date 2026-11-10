@@ -698,6 +698,7 @@ mod tests {
                 player: Box::new(testing::player(7)),
                 far_clip: None,
                 spell_landing_flag: Some(4),
+                zone_id: 0,
             }],
         );
         let mut running = Running::default();

@@ -502,6 +502,7 @@ mod tests {
                 player: Box::new(testing::player(7)),
                 far_clip: None,
                 spell_landing_flag: None,
+                zone_id: 0,
             }],
         );
         testing::connect(&mut online, true);

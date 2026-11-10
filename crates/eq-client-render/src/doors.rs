@@ -124,7 +124,7 @@ impl DoorEntity {
         &mut self,
         definition: &Door,
         generation: GameDialect,
-        hinge: Option<f32>,
+        (hinge, lift): (Option<f32>, Option<f32>),
         seconds: f32,
     ) -> Transform {
         // A changed definition may reuse an ID for a different mechanism.
@@ -146,8 +146,41 @@ impl DoorEntity {
         );
         self.slide = distance;
         self.definition = definition.clone();
-        posed(definition, self.swing, slide)
+        posed(definition, self.swing, slide + rise(lift))
     }
+}
+
+/// A vertical door's offset from its placed height, in renderer axes.
+fn rise(lift: Option<f32>) -> Vec3 {
+    Vec3::from_array(eq_client_core::render_vector([
+        0.0,
+        0.0,
+        lift.unwrap_or(0.0),
+    ]))
+}
+
+/// Where each Titanium lift the player may ride stands and how near the
+/// player must be for its motion to sweep them onto its floor: the door
+/// model's radius, scaled, plus the player's 10 and 200 (0x4368b3; the
+/// model's radius is inferred from its geometry, recording checklist 6.426).
+#[derive(Resource, Default)]
+pub(crate) struct LiftReach(pub BTreeMap<u8, (Vec3, f32)>);
+
+/// The radius of a door model at its size: the farthest point of its solid
+/// geometry from its origin; the program's 100 where it has none.
+fn reach_of(model: Option<&Model>, size: u16) -> f32 {
+    let radius = model
+        .map(|model| {
+            model
+                .collision
+                .iter()
+                .flatten()
+                .map(|point| Vec3::from_array(*point).length())
+                .fold(0.0, f32::max)
+        })
+        .filter(|radius| *radius > 0.0)
+        .map_or(100.0, |radius| radius * f32::from(size) / 100.0);
+    10.0 + radius + 200.0
 }
 
 /// How far each drawn hinged door has swung toward its open pose, from 0
@@ -188,39 +221,33 @@ pub(super) fn swings(door: &Door) -> bool {
     hinge_target(door).is_some()
 }
 
-const SLIDE_DISTANCE: f32 = 10.0;
-const SLIDE_SPEED: f32 = 7.0;
-
-/// Titanium's type 15 slide uses one horizontal axis, selected by raw heading.
-/// The native slide routine at 0x4366E8 in the Oct 31, 2005 client applies a
-/// fixed 10-unit translation and advances 0.35 × 0.02 units per millisecond.
-/// Like the hinge, the renderer caps each frame's step at 100 ms.
+/// Titanium's slides (type 15, and 78-81, which also rise or sink) move along
+/// one horizontal axis chosen by the heading, at 0.35 a 50 ms step
+/// (0x4366e8; [`eq_client_core::doors::Slide`]). Like the hinge, the renderer
+/// caps each frame's step at 100 ms.
 fn slide_pose(
     door: &Door,
     generation: GameDialect,
     previous: Option<f32>,
     seconds: f32,
 ) -> (f32, Vec3) {
-    if generation != GameDialect::Titanium || door.open_type != 15 {
+    let Some(slide) = (generation == GameDialect::Titanium)
+        .then(|| eq_client_core::doors::Slide::of(door))
+        .flatten()
+    else {
         return (0.0, Vec3::ZERO);
-    }
-    let direction = match door.position.heading {
-        128.0 => [0.0, 1.0, 0.0],
-        256.0 => [1.0, 0.0, 0.0],
-        384.0 => [0.0, -1.0, 0.0],
-        _ => [-1.0, 0.0, 0.0],
     };
     let target = door
         .active_endpoint()
-        .map(|active| if active { SLIDE_DISTANCE } else { 0.0 });
+        .map(|active| if active { slide.distance } else { 0.0 });
     let distance = match (previous, target) {
-        (Some(current), Some(target)) => advance_toward(current, target, seconds, SLIDE_SPEED),
+        (Some(current), Some(target)) => advance_toward(current, target, seconds, slide.speed),
         (Some(current), None) => current,
         (None, target) => target.unwrap_or(0.0),
     };
     (
         distance,
-        Vec3::from_array(eq_client_core::render_vector(direction)) * distance,
+        Vec3::from_array(eq_client_core::render_vector(slide.direction)) * distance,
     )
 }
 
@@ -350,7 +377,7 @@ fn placement(door: &eq_client_core::doors::Door) -> Transform {
 }
 
 /// Reuses zone meshes and limits presentation to nearby server definitions.
-#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::needless_pass_by_value, clippy::too_many_lines)]
 pub(super) fn reconcile(
     mut commands: Commands,
     time: Res<Time>,
@@ -358,10 +385,14 @@ pub(super) fn reconcile(
     models: Option<Res<Models>>,
     mut collision: Option<ResMut<super::Collision>>,
     mut rendered: Query<(Entity, &mut DoorEntity, &mut Transform)>,
-    mut hinges: ResMut<Hinges>,
+    (mut hinges, mut reach): (ResMut<Hinges>, ResMut<LiftReach>),
 ) {
     hinges.0.clear();
+    reach.0.clear();
+    let now = std::time::Instant::now();
     let generation = state.world().generation();
+    let doors = state.world().doors();
+    let rideable = |id: u8| doors.solidity(id).floor && doors.lifts().motion(id).is_some();
     let mut obstacles = Vec::new();
     let mut remaining = BTreeSet::new();
     if state.world().connected()
@@ -384,7 +415,8 @@ pub(super) fn reconcile(
         } else if let Some(definition) = definition {
             remaining.remove(&door.id);
             let hinge = state.world().doors().hinge_fraction(door.id);
-            let next = door.update_pose(definition, generation, hinge, time.delta_secs());
+            let lift = doors.lift_offset(door.id, now);
+            let next = door.update_pose(definition, generation, (hinge, lift), time.delta_secs());
             if let Some(open) = open_swing(definition) {
                 hinges.0.insert(door.id, hinge_fraction(door.swing, open));
             }
@@ -395,7 +427,18 @@ pub(super) fn reconcile(
                     .and_then(|model| collider(model, &next));
                 *transform = next;
             }
-            obstacles.extend(door.collider.iter().map(|mesh| (door.id, Arc::clone(mesh))));
+            obstacles.extend(
+                door.collider
+                    .iter()
+                    .map(|mesh| (door.id, Arc::clone(mesh), doors.solidity(door.id))),
+            );
+            if rideable(door.id) {
+                let model = models.as_ref().and_then(|models| models.0.get(&door.model));
+                reach.0.insert(
+                    door.id,
+                    (next.translation, reach_of(model, definition.size)),
+                );
+            }
         }
     }
     let Some(models) = models else {
@@ -422,9 +465,19 @@ pub(super) fn reconcile(
             hinges.0.insert(id, hinge_fraction(swing, open));
         }
         let (slide, offset) = slide_pose(door, generation, None, 0.0);
-        let transform = posed(door, swing, offset);
+        let transform = posed(door, swing, offset + rise(doors.lift_offset(id, now)));
         let collider = collider(model, &transform);
-        obstacles.extend(collider.iter().map(|mesh| (id, Arc::clone(mesh))));
+        obstacles.extend(
+            collider
+                .iter()
+                .map(|mesh| (id, Arc::clone(mesh), doors.solidity(id))),
+        );
+        if rideable(id) {
+            reach.0.insert(
+                id,
+                (transform.translation, reach_of(Some(model), door.size)),
+            );
+        }
         commands
             .spawn((
                 super::SceneEntity,
@@ -449,7 +502,7 @@ pub(super) fn reconcile(
         .as_mut()
         .and_then(|collision| collision.0.as_mut())
     {
-        world.set_door_obstacles(obstacles);
+        world.set_door_obstacles_with(obstacles);
     }
 }
 
@@ -567,6 +620,7 @@ mod tests {
             .insert_resource(super::super::Collision(Some(terrain)))
             .init_resource::<Time>()
             .init_resource::<Hinges>()
+            .init_resource::<LiftReach>()
             .add_systems(Update, reconcile);
         app.update();
         let mut query = app.world_mut().query::<(&DoorEntity, &Transform)>();
@@ -797,6 +851,7 @@ mod tests {
         app.insert_resource(state)
             .insert_resource(models)
             .init_resource::<Hinges>()
+            .init_resource::<LiftReach>()
             .add_systems(Update, reconcile);
         app.update();
         let mut roots = app.world_mut().query::<(&DoorEntity, &Children)>();
@@ -818,7 +873,18 @@ mod tests {
                 .ground(Vec3::ZERO, 0.8, 1.5)
                 .unwrap()
         };
-        assert!((ground(&app) - 0.5).abs() < 0.001);
+        let obstacles = |app: &App| {
+            app.world()
+                .resource::<super::super::Collision>()
+                .0
+                .as_ref()
+                .unwrap()
+                .obstacle_count()
+        };
+        // A hinged door (type 0) is a wall, never a floor (eqgame.exe
+        // 0x490370), so its collider is in but nobody stands on it.
+        assert_eq!(obstacles(&app), 1);
+        assert!(ground(&app).abs() < 0.001);
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .press(KeyCode::KeyU);
@@ -869,6 +935,7 @@ mod tests {
         );
         app.update();
         assert_eq!(roots.iter(app.world()).count(), 0);
+        assert_eq!(obstacles(&app), 0);
         assert!(ground(&app).abs() < 0.001);
         crate::online::testing::doors(
             &mut app
@@ -921,14 +988,16 @@ mod tests {
         app.update();
         assert_eq!(roots.iter(app.world()).count(), 0);
         assert!(nearest(app.world().resource::<super::super::online::OnlineState>()).is_none());
+        assert_eq!(obstacles(&app), 0);
         assert!(ground(&app).abs() < 0.001);
     }
 
     #[test]
     fn an_opened_door_swings_shut_on_the_clients_own_timer() {
-        use eq_client_core::doors::{CLOSE_DELAY, DoorUpdate};
+        use eq_client_core::doors::DoorUpdate;
+        // Type 0 returns 10 s after the action (eqgame.exe 0x48faa5).
         let opened = std::time::Instant::now()
-            .checked_sub(CLOSE_DELAY)
+            .checked_sub(std::time::Duration::from_secs(10))
             .expect("the clock has run longer than the delay");
         let mut state = super::super::online::OnlineState::new(true);
         let spawn = eq_client_core::doors::decode(0x4c24, &[0u8; 80])

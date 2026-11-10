@@ -526,6 +526,7 @@ fn prepare_liquid(app: &mut App, capabilities: Option<Vec<Capability>>) -> u64 {
                 player: Box::new(player),
                 far_clip: None,
                 spell_landing_flag: None,
+                zone_id: 0,
             }],
         );
         testing::connect(&mut online, true);

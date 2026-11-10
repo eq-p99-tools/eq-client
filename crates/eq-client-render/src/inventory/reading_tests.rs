@@ -23,6 +23,7 @@ fn online(reading: bool) -> OnlineState {
             player: Box::new(testing::player(9)),
             far_clip: None,
             spell_landing_flag: None,
+            zone_id: 0,
         }],
     );
     testing::connect(&mut online, true);

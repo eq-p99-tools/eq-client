@@ -16,8 +16,8 @@ Quarm/TAKP behavior. Frontends use runtime capabilities, not server-name flags.
 ## Server policy snapshot
 
 The following summarizes the networking revision pinned by this application's
-Cargo.lock: `9d9d0ee115fb9906ac1d349134aaa1efda5207cf`. Its
-[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/9d9d0ee115fb9906ac1d349134aaa1efda5207cf/crates/eq-network/src/client/session/servers.rs)
+Cargo.lock: `0e45bfcc3a50956d41fb8697babb5b84d239a382`. Its
+[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/0e45bfcc3a50956d41fb8697babb5b84d239a382/crates/eq-network/src/client/session/servers.rs)
 are the source for this table. **Yes means provided by that policy**, not a live
 certification, and individual operations still validate their prerequisites.
 
@@ -99,6 +99,24 @@ offer ordinary door use with an empty cursor, within the generation's reach and
 with a settled hinge; specialized, static and unknown mechanisms stay visible
 without use, and sending a click does not open the door.
 
+On EQEmu and P99, doors move and return by the Titanium program's own rules:
+lifts and sinking floors step by their type's travel and speed, slides go
+their type's distance, and each door returns after its type's delay counted
+from its arrival. A door is a floor or a wall only where the program says, so
+a hinged door holds no one up. A rider standing on a rising lift is carried,
+even stunned, and the movement guard allows that rise only for the floor-solid
+lift the client names, within its reach, by what it rose. At a lift whose rest
+floor lies inside zone geometry, the rider is carried up and rests on the
+lift's floor under the deck until their first step, when the ordinary floor
+sweep stands them on the deck; the lift does not carry them down from there,
+and a rider at its origin rides into the zone's own column. What the program
+does at the top and how its rider goes down are unread (checklist 6.440).
+Zone-in states 2 and 3, the rider radius, a changed door field, door reach
+measured to the door's origin rather than the clicked point on it (a
+shortfall of the read rule), and walking out of a door that moved into the
+player stay labelled (checklist 6.423-6.426, 6.428, 6.436, 6.439); Quarm and
+TAKP keep their own doors as before.
+
 Current movement requires complete load/STR/buff inputs. Unknown state withdraws
 player input without inventing a zero load or a root, and bounded passive falls
 remain available. Supported spell values scale by caster level. Equipment, food,
@@ -116,11 +134,11 @@ affected mechanics unavailable while chat remains usable. See [installed spell
 providers](docs/spell-providers.md). These source and synthetic checks add no live
 compatibility certification.
 
-The pinned networking [combat](https://github.com/eq-p99-tools/eq-network/blob/9d9d0ee115fb9906ac1d349134aaa1efda5207cf/docs/quarm-combat.md),
-[loot](https://github.com/eq-p99-tools/eq-network/blob/9d9d0ee115fb9906ac1d349134aaa1efda5207cf/docs/eqmac-looting.md) and
-[world-object](https://github.com/eq-p99-tools/eq-network/blob/9d9d0ee115fb9906ac1d349134aaa1efda5207cf/docs/eqmac-world-objects.md)
+The pinned networking [combat](https://github.com/eq-p99-tools/eq-network/blob/0e45bfcc3a50956d41fb8697babb5b84d239a382/docs/quarm-combat.md),
+[loot](https://github.com/eq-p99-tools/eq-network/blob/0e45bfcc3a50956d41fb8697babb5b84d239a382/docs/eqmac-looting.md) and
+[world-object](https://github.com/eq-p99-tools/eq-network/blob/0e45bfcc3a50956d41fb8697babb5b84d239a382/docs/eqmac-world-objects.md)
 contracts record their limits and controlled live checklists. The dated
-[P99/Quarm gap report](https://github.com/eq-p99-tools/eq-network/blob/9d9d0ee115fb9906ac1d349134aaa1efda5207cf/docs/public-server-gaps.md)
+[P99/Quarm gap report](https://github.com/eq-p99-tools/eq-network/blob/0e45bfcc3a50956d41fb8697babb5b84d239a382/docs/public-server-gaps.md)
 retains the earlier inspection and its scenario-specific evidence.
 
 ### Public-parity checks, 2026-11-02

@@ -712,13 +712,14 @@ impl ClientWorld {
                 choices,
                 session_id,
                 zone,
+                zone_id,
                 player,
                 far_clip,
                 spell_landing_flag,
             } => {
                 return self.entered(
                     (capabilities, choices, *session_id),
-                    (zone, *far_clip, *spell_landing_flag),
+                    (zone, *zone_id, *far_clip, *spell_landing_flag),
                     player,
                     now,
                 );

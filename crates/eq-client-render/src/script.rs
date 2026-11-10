@@ -3565,6 +3565,7 @@ mod tests {
                 player: Box::new(player),
                 far_clip: None,
                 spell_landing_flag: None,
+                zone_id: 0,
             }],
         );
         crate::online::testing::objects(
@@ -4648,6 +4649,7 @@ mod tests {
                 player: Box::new(testing::player(9)),
                 far_clip: None,
                 spell_landing_flag: None,
+                zone_id: 0,
             }],
         );
         testing::connect(&mut online, true);
@@ -5549,6 +5551,7 @@ mod tests {
                 player: Box::new(testing::player(7)),
                 far_clip: None,
                 spell_landing_flag: None,
+                zone_id: 0,
             }],
         );
         testing::connect(&mut online, true);
