@@ -4,9 +4,13 @@
 
 - Use the class tools as the Titanium program does (Batch B2). On EQEmu and
   P99, Fishing, Pick Pockets, Begging, Sense Traps, Disarm Traps, Pick Lock
-  and Tracking are on the Actions window's ability pages wherever the
-  player has the skill, and the client tells the session whether the player
-  stands in liquid, which Fishing refuses on. Fishing's cast line, and the
+  and Tracking are abilities the player can use where they have the skill.
+  The Actions window's ability page shows its six slots in the client's
+  fixed order, so some may not be on it yet; choosing which abilities fill
+  the slots follows as its own change. The client tells the session whether
+  the player stands in liquid, which Fishing refuses on. A press while an
+  ability's wait runs sends nothing and says the client's own line, where
+  the program says nothing (a chat-only departure, checklist 6.447). Fishing's cast line, and the
   answer to a beg or a pick (nothing, coins of one kind, or an item by
   name), are the installed string table's lines by id. Tracking opens the
   track window, the skin's `TrackingWnd` where the skin has one and the

@@ -122,7 +122,11 @@ checks and cast line, Pick Pockets and Begging with their answers, the trap
 skills at a treasure, and Tracking with its window, which the skin draws
 where it has one. The track list keeps the server's order and colours each
 name by the track window's rule; Cancel stops tracking as `/stoptracking`
-does. Labelled: the song state's item-flag test (checklist 6.429),
+does. The Actions window's ability page shows its six slots in the client's
+fixed order; choosing which abilities fill them follows as its own change.
+A press while a class tool's wait runs sends nothing and says the client's
+own line, where the program says nothing (a chat-only departure,
+checklist 6.447). Labelled: the song state's item-flag test (checklist 6.429),
 Begging's unseen check (6.430) and reach (6.431), the trap skills'
 treasure match (6.432), Pick Pockets' PvP level range
 (6.438), the bearing's side word (6.441), the Bard's song state without a
