@@ -29,14 +29,14 @@
 - Use the class tools as the Titanium program does (Batch B2). On EQEmu and
   P99, Fishing, Pick Pockets, Begging, Sense Traps, Disarm Traps, Pick Lock
   and Tracking are abilities the player can use where they have the skill,
-  on the Actions window's buttons the player chooses (below). The client tells the session whether
-  the player stands in liquid, which Fishing refuses on. A press while an
-  ability's wait runs sends nothing and says the client's own line, where
-  the program says nothing (a chat-only departure, checklist 6.447). Between a
-  beg or a pick and its answer the program holds casting and some window
-  actions until the server replies, and the client does not yet (checklist
-  6.452). Fishing's cast line, and the
-  answer to a beg or a pick (nothing, coins of one kind, or an item by
+  on the Actions window's buttons the player chooses (above). The client
+  tells the session whether the player stands in liquid, which Fishing
+  refuses on. A press while an ability's wait runs sends nothing and says
+  the client's own line, where the program says nothing (a chat-only
+  departure, checklist 6.447). Between a beg or a pick and its answer the
+  program holds casting and some window actions until the server replies,
+  and the client does not yet (checklist 6.452). Fishing's cast line, and
+  the answer to a beg or a pick (nothing, coins of one kind, or an item by
   name), are the installed string table's lines by id. Tracking opens the
   track window, the skin's `TrackingWnd` where the skin has one and the
   client's own panel otherwise, emptied until the server's list comes. The
@@ -49,14 +49,14 @@
   closes the window. Cancel stops tracking and closes the window, as
   `/stoptracking` does, since the program binds the two to one routine;
   the close box only closes it (inferred, checklist 6.446), as Escape does.
-  A bearing's side word is put in by its words from the string table. While following, the
-  session's bearing lines say where the spawn lies, and its end lines say
-  when the spawn is gone or the six minutes pass (checklist 6.441). The
-  Ranger's colour filters are drawn greyed and the sort and players
-  comboboxes are not drawn, and
-  another class's `/tracksort` or `/trackfilter` gets the program's
-  Rangers-only line; a Ranger's own, and `/trackplayers`, are answered as
-  before (checklist 6.446). The host's auto-attack follows the session's at
+  A bearing's side word is put in by its words from the string table.
+  While following, the session's bearing lines say where the spawn lies,
+  and its end lines say when the spawn is gone or the six minutes pass
+  (checklist 6.441). The Ranger's colour filters are drawn greyed and the
+  sort and players comboboxes are not drawn, and another class's
+  `/tracksort` or `/trackfilter` gets the program's Rangers-only line; a
+  Ranger's own, and `/trackplayers`, are answered as before (checklist
+  6.446). The host's auto-attack follows the session's at
   every zone change, so a new zone starts with it off on both sides
   (checklist 6.445), and an off the client sends on its own, when the
   player stops standing or dies, goes again until it leaves a full queue.

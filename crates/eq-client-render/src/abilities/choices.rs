@@ -16,8 +16,7 @@
 //! R17b), 105 for Harm Touch and 107 for Lay on Hands, named from the spells
 //! they cast (88 and 87), since the program has only the numbers. A
 //! discipline, which has none (6.450), is saved under `[ClientAbilities]`
-//! with its button's own key at -1; an earlier file's knight ability there
-//! is read back as its special number.
+//! with its button's own key at -1.
 use super::{AbilityButton, Page, knight, knows_discipline};
 use bevy::prelude::*;
 use eq_client_core::{
@@ -101,8 +100,6 @@ impl Slot {
     fn read_own(value: &str) -> Option<Self> {
         let (kind, key) = value.trim().split_once(':')?;
         match kind {
-            // An earlier file kept a knight's ability here, before R17b.
-            "knight" => KnightAbility::named(key).map(|ability| Self::Skill(special(ability))),
             "discipline" => Discipline::named(key).map(Self::Discipline),
             _ => None,
         }

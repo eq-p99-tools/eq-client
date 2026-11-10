@@ -146,16 +146,15 @@ fn the_program_keys_carry_only_skill_numbers_and_the_rest_goes_in_the_clients_ow
 #[test]
 fn a_file_read_back_keeps_empty_unknown_and_own_buttons() {
     let read = Choices::read(
-        "[Abilities]\nAbility1=55\nAbility2=-1\nAbility3=72\nAbility9=8\n[CombatSkills]\nCombatSkill1=-1\n[ClientAbilities]\nCombatSkill1=knight:harmtouch\nAbility1=knight:layonhands\nAbility4=discipline:unknown\n",
+        "[Abilities]\nAbility1=55\nAbility2=-1\nAbility3=72\nAbility9=8\n[CombatSkills]\nCombatSkill1=105\n[ClientAbilities]\nAbility4=discipline:unknown\n",
     );
     assert!(read.kept());
     assert_eq!(read.slot(button(Page::Abilities, 0)), Slot::Skill(55));
     assert_eq!(read.slot(button(Page::Abilities, 1)), Slot::Empty);
     assert_eq!(read.slot(button(Page::Abilities, 2)), Slot::Skill(72));
     assert_eq!(read.slot(button(Page::Abilities, 3)), Slot::Empty);
-    // An earlier file's knight ability comes back as its special number.
+    // A special number reads back as itself.
     assert_eq!(read.slot(button(Page::Combat, 0)), Slot::Skill(105));
-    assert_eq!(read.slot(button(Page::Abilities, 0)), Slot::Skill(55));
     // A missing key is empty once the file is the player's own.
     assert_eq!(read.slot(button(Page::Combat, 3)), Slot::Empty);
 }
@@ -196,27 +195,25 @@ fn a_choice_the_client_cannot_use_is_not_empty_and_says_so() {
 }
 
 #[test]
-fn an_earlier_files_knight_ability_migrates_to_its_special_number_and_back() {
+fn a_special_number_survives_a_save_and_another_classs_is_kept_unusable() {
     let online = character(PALADIN, 1, &[9]);
-    let old = Choices::read(
-        "[Abilities]\nAbility1=-1\nAbility2=-1\nAbility3=-1\nAbility4=-1\nAbility5=-1\nAbility6=-1\n[CombatSkills]\nCombatSkill1=-1\nCombatSkill2=-1\nCombatSkill3=-1\nCombatSkill4=-1\n[ClientAbilities]\nCombatSkill1=knight:layonhands\n",
-    );
     let place = button(Page::Combat, 0);
-    assert_eq!(old.slot(place), Slot::Skill(107));
+    let mut choices = Choices::default();
+    choices.choose(online.world(), place, Slot::Skill(107));
     assert_eq!(
-        assigned(online.world(), &old, place),
+        assigned(online.world(), &choices, place),
         Some(Binding::KnightAbility(KnightAbility::LayOnHands))
     );
-    let text = old.text();
-    assert!(text.contains("CombatSkill1=107\n") && !text.contains("knight:"));
-    assert_eq!(Choices::read(&text), old);
+    let text = choices.text();
+    assert!(text.contains("CombatSkill1=107\n"));
+    assert_eq!(Choices::read(&text), choices);
     // Another class's special, or one the client has no use for, is kept
     // and unusable.
     let rogue = character(ROGUE, 21, &ROGUE_SKILLS);
-    assert_eq!(assigned(rogue.world(), &old, place), None);
-    assert_eq!(caption(rogue.world(), &old, place), UNUSABLE);
+    assert_eq!(assigned(rogue.world(), &choices, place), None);
+    assert_eq!(caption(rogue.world(), &choices, place), UNUSABLE);
     for special in [111, 114, 115] {
-        let mut kept = old;
+        let mut kept = choices;
         kept.choose(rogue.world(), place, Slot::Skill(special));
         assert_eq!(
             Choices::read(&kept.text()).slot(place),
