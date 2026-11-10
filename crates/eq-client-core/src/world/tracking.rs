@@ -117,6 +117,7 @@ impl ClientWorld {
                 changes.notices.push(Notice::ProgramLine {
                     string_id: *string_id,
                     arguments,
+                    lines: Vec::new(),
                     said,
                 });
             }
@@ -137,9 +138,13 @@ impl ClientWorld {
                     "straight behind",
                 ][band];
                 let said = format!("Tracking: {} {lies}", arguments[0]);
+                // The side word, where the band has one, is a line of its
+                // own that the bearing names by its words.
+                let words = (arguments.len() > 1).then_some(1).into_iter().collect();
                 changes.notices.push(Notice::ProgramLine {
                     string_id: *string_id,
                     arguments,
+                    lines: words,
                     said,
                 });
             }
@@ -154,6 +159,7 @@ impl ClientWorld {
                     changes.notices.push(Notice::ProgramLine {
                         string_id: *string_id,
                         arguments: Vec::new(),
+                        lines: Vec::new(),
                         said: said.to_owned(),
                     });
                 }

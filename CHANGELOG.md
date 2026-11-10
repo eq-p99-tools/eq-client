@@ -19,10 +19,12 @@
   entry, kept across a new list while it is listed; Track follows it and
   closes the window. Cancel stops tracking and closes the window, as
   `/stoptracking` does, since the program binds the two to one routine;
-  the close box only closes it (inferred, checklist 6.446). While following, the
+  the close box only closes it (inferred, checklist 6.446), as Escape does.
+  A bearing's side word is put in by its words from the string table. While following, the
   session's bearing lines say where the spawn lies, and its end lines say
   when the spawn is gone or the six minutes pass (checklist 6.441). The
-  Ranger's sort, colour filters and players choice are drawn greyed, and
+  Ranger's colour filters are drawn greyed and the sort and players
+  comboboxes are not drawn, and
   another class's `/tracksort` or `/trackfilter` gets the program's
   Rangers-only line; a Ranger's own, and `/trackplayers`, are answered as
   before (checklist 6.446). The host's auto-attack follows the session's at

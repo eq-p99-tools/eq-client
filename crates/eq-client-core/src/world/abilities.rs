@@ -98,6 +98,7 @@ impl ClientWorld {
             changes.notices.push(Notice::ProgramLine {
                 string_id,
                 arguments: Vec::new(),
+                lines: Vec::new(),
                 said: format!("{}: used", ability.name()),
             });
         }
@@ -129,6 +130,7 @@ impl ClientWorld {
         changes.notices.push(Notice::ProgramLine {
             string_id,
             arguments,
+            lines: Vec::new(),
             said,
         });
     }

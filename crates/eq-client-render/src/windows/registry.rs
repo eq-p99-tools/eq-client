@@ -348,8 +348,10 @@ const fn floating(
 
 impl WindowId {
     /// Scripts has open/close states only; other titled windows may collapse.
+    /// The track window's one box is its close box: the program's closes
+    /// it, and drawing only one, the client keeps that one.
     pub(crate) const fn can_minimize(self) -> bool {
-        !matches!(self, Self::Scripts | Self::ChatGroup(_))
+        !matches!(self, Self::Scripts | Self::ChatGroup(_) | Self::Tracking)
     }
 
     /// The primary chat and its detached instances use the same authored widgets.

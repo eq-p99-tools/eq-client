@@ -142,6 +142,9 @@ pub enum Notice {
         string_id: u32,
         /// What it names, in order.
         arguments: Vec<String>,
+        /// Which arguments are lines themselves, by `eqstr_us.txt` string
+        /// ID, that the line names by their words: a bearing's side word.
+        lines: Vec<usize>,
         /// The client's own words for it.
         said: String,
     },

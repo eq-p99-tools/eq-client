@@ -286,7 +286,7 @@ const OWN_WIDTH: f32 = 180.0;
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn frame(
     mut commands: Commands,
-    shown: Res<Shown>,
+    (shown, mut stack): (Res<Shown>, ResMut<windows::Stack>),
     frames: Query<(Entity, &WindowId), With<windows::Frame>>,
 ) {
     let displayed = shown.displayed(WindowId::Tracking);
@@ -304,6 +304,8 @@ pub(crate) fn frame(
     if !displayed || exists {
         return;
     }
+    // Each opening comes to the front, so Escape closes it first.
+    stack.raise(WindowId::Tracking);
     let frame = windows::frame(
         &mut commands,
         WindowId::Tracking,
@@ -474,6 +476,25 @@ mod tests {
         );
         app.update();
         assert!(!app.world().resource::<Shown>().is_open(WindowId::Tracking));
+    }
+
+    #[test]
+    fn the_one_title_box_closes_and_an_opening_comes_to_the_front() {
+        // The close box only closes: it is the one box drawn.
+        assert!(!WindowId::Tracking.can_minimize());
+        let mut app = crate::testing::app();
+        app.add_systems(Update, frame);
+        app.world_mut()
+            .resource_mut::<Shown>()
+            .open(WindowId::Tracking);
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<windows::Stack>()
+                .front_to_back()
+                .next(),
+            Some(WindowId::Tracking)
+        );
     }
 
     #[test]
