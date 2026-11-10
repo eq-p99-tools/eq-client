@@ -13,9 +13,10 @@
   and route searches use the same rule. A player on a rising lift, still or
   walking, stunned or not, is carried up by the lift's own rise since the
   last sample, however long the frame took, and each move on a lift names
-  it so the movement guard allows its rise; a lift rising into a ceiling
-  leaves the player put (checklist 6.427), and the model is not drawn
-  rising there. A player who steps off a rising lift is carried no further,
+  it so the movement guard allows its rise. Nothing above the rider stops
+  the carry, as the program tests nothing overhead while a lift carries
+  (read R1d; checklist 6.427). A player who steps off a rising lift is
+  carried no further,
   and the step still names the lift that raised it. Between samples the
   model is drawn on the rising floor. A door is in click reach, in 3-D within 20,
   of its origin where it stands now, so a lift resting raised is used from

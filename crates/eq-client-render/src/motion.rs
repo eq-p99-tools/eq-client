@@ -80,9 +80,6 @@ pub(super) struct Controls {
     /// height it put the model at: the next pass carries the feet by the
     /// lift's own rise since then, and the model is drawn on the floor.
     riding: Option<(u8, Instant, f32)>,
-    /// Whether the last pass found no room for the lift to carry the body
-    /// (recording checklist 6.427), so the model is not drawn rising.
-    ride_blocked: bool,
     sent_yaw: SentYaw,
     boundary: BoundaryTracker,
     placement: placement::Check,
@@ -223,7 +220,6 @@ impl Default for Controls {
             moving: false,
             sent_span: 0.1,
             riding: None,
-            ride_blocked: false,
             sent_yaw: SentYaw::Ordinary,
             boundary: BoundaryTracker::default(),
             placement: placement::Check::default(),
@@ -1269,15 +1265,12 @@ pub(super) fn input(
         Ride::default()
     } else {
         ride(
-            world,
             lifts.as_deref(),
             online.world().doors(),
             controls.riding.map(|(door, at, _)| (door, at)),
-            (feet, body.height),
             now,
         )
     };
-    controls.ride_blocked = ride.blocked;
     let (origin, feet) = (origin + Vec3::Y * ride.rise, feet + Vec3::Y * ride.rise);
     let surface_world = if !placement_blocked
         && !flying
@@ -1564,7 +1557,7 @@ pub(super) fn input(
             && let Some((door, raised)) = ride.carried.map(|door| (door, feet)).or_else(|| {
                 lifts
                     .as_deref()
-                    .and_then(|lifts| lift_under(world, lifts, feet, body.height))
+                    .and_then(|lifts| lift_under(world, lifts, feet))
             })
         {
             let position = world_position(
@@ -1942,20 +1935,18 @@ struct Ride {
     rise: f32,
     /// Whether it sank away from under them, so they fall at once.
     sinking: bool,
-    /// Whether it rose but the body had no room to be carried.
-    blocked: bool,
 }
 
 /// How far the lift a rider stood on at `riding`'s stamp has carried their
 /// `feet` by `now`: its own rise over the gap, exact however long the gap
-/// ([`eq_client_core::doors::titanium::Lifts::rise`]), when the body fits
-/// there (recording checklist 6.427); or that it sank.
+/// ([`eq_client_core::doors::titanium::Lifts::rise`]); or that it sank. The
+/// program tests nothing above the rider as it carries them: the lift only
+/// resets their floor, and their own downward floor sweep stands them on it
+/// (read R1d, 0x4368b3 and 0x48a0fc).
 fn ride(
-    world: &eq_client_core::movement::CollisionWorld,
     reach: Option<&crate::doors::LiftReach>,
     doors: &eq_client_core::doors::DoorTable,
     riding: Option<(u8, Instant)>,
-    (feet, height): (Vec3, f32),
     now: Instant,
 ) -> Ride {
     let Some((door, since)) =
@@ -1965,22 +1956,15 @@ fn ride(
     };
     let lifts = doors.lifts();
     let rise = lifts.rise(door, since, now);
-    let raised = feet + Vec3::Y * rise;
-    if rise > 0.0
-        && world
-            .clearance(raised, height, 0.0)
-            .is_none_or(|clearance| clearance > 0.0)
-    {
+    if rise > 0.0 {
         Ride {
             carried: Some(door),
             rise,
             sinking: false,
-            blocked: false,
         }
     } else {
         Ride {
             sinking: lifts.sinks(door, since, now),
-            blocked: rise > 0.0,
             ..Ride::default()
         }
     }
@@ -2014,15 +1998,12 @@ fn lift_support(
 }
 
 /// A rideable lift that rose into the still feet: the door, and the feet
-/// stood on its new floor. The program's forced floor sweep stands a rider
-/// on the risen floor; where the body would not fit there, what it does is
-/// unread, and this leaves the player to the ordinary support and fall test
-/// (recording checklist 6.427).
+/// stood on its new floor, as the program's own floor sweep stands a rider
+/// on the risen floor with nothing tested above them (read R1d).
 fn lift_under(
     world: &eq_client_core::movement::CollisionWorld,
     lifts: &crate::doors::LiftReach,
     feet: Vec3,
-    height: f32,
 ) -> Option<(u8, Vec3)> {
     let rise = eq_client_core::movement::MAX_GROUNDED_STEP;
     let door = world.ground_door(feet, rise, 0.05)?;
@@ -2034,13 +2015,7 @@ fn lift_under(
     if floor <= feet.y + 0.001 {
         return None;
     }
-    let raised = Vec3::new(feet.x, floor, feet.z);
-    world
-        .clearance(raised, height, 0.0)
-        // A capsule crossing a mesh seam can report touching (0) rather than
-        // its depth, so touching counts as not fitting.
-        .is_none_or(|clearance| clearance > 0.0)
-        .then_some((door, raised))
+    Some((door, Vec3::new(feet.x, floor, feet.z)))
 }
 
 /// Whether no ground is under the feet within the step the server's
@@ -2510,7 +2485,7 @@ pub(super) fn interpolate(
     }
     // A rising lift carries the drawn model on its floor between samples,
     // as the program draws its rider; the samples sent are unchanged.
-    if let Some((door, at, sent)) = controls.riding.filter(|_| !controls.ride_blocked) {
+    if let Some((door, at, sent)) = controls.riding {
         let floor = sent
             + online
                 .world()
@@ -2666,7 +2641,7 @@ pub(super) mod tests {
     )]
     fn a_ride_carries_the_feet_by_the_lifts_own_rise_across_any_frame_gap() {
         use eq_client_core::doors::{Door, DoorTable, DoorUpdate};
-        use eq_client_core::movement::{CollisionMesh, CollisionWorld};
+        use eq_client_core::movement::CollisionWorld;
         use std::time::{Duration, Instant};
         let start = Instant::now();
         let mut doors = DoorTable::default();
@@ -2695,16 +2670,8 @@ pub(super) mod tests {
         // 1 s, at 9 up; the next pass comes 600 ms later, the lift 5.4
         // higher, well past any step the sweep would take.
         let since = start + Duration::from_secs(1);
-        let feet = Vec3::new(2.0, 9.0, -1.0);
         let now = since + Duration::from_millis(600);
-        let carried = super::ride(
-            &world,
-            Some(&reach),
-            &doors,
-            Some((4, since)),
-            (feet, 6.0),
-            now,
-        );
+        let carried = super::ride(Some(&reach), &doors, Some((4, since)), now);
         assert_eq!(carried.carried, Some(4));
         assert!((carried.rise - 5.4).abs() < 0.01, "{carried:?}");
         assert!(!carried.sinking);
@@ -2724,60 +2691,30 @@ pub(super) mod tests {
         // standing on the platform beside it is not falling.
         let next = now + Duration::from_millis(500);
         let riding = under.map(|door| (door, now));
-        let stepped_off = super::ride(&world, Some(&reach), &doors, riding, (off, 6.0), next);
+        let stepped_off = super::ride(Some(&reach), &doors, riding, next);
         assert_eq!(stepped_off, super::Ride::default());
         assert_eq!(
             super::request_support(stepped_off, &world, Some(&reach), off),
             (None, None)
         );
         let down = start + Duration::from_secs(31);
-        assert!(!super::ride(&world, Some(&reach), &doors, riding, (off, 6.0), down).sinking);
+        assert!(!super::ride(Some(&reach), &doors, riding, down).sinking);
         // Nothing rides a door that is not a listed lift, or nothing named.
         let unlisted = crate::doors::LiftReach::default();
         assert_eq!(
-            super::ride(
-                &world,
-                Some(&unlisted),
-                &doors,
-                Some((4, since)),
-                (feet, 6.0),
-                now
-            ),
+            super::ride(Some(&unlisted), &doors, Some((4, since)), now),
             super::Ride::default()
         );
         assert_eq!(
-            super::ride(&world, Some(&reach), &doors, None, (feet, 6.0), now),
+            super::ride(Some(&reach), &doors, None, now),
             super::Ride::default()
         );
-        // A ceiling in the way stops the carry (checklist 6.427).
-        let mut capped = world.clone();
-        capped.set_obstacles(vec![std::sync::Arc::new(
-            CollisionMesh::new([
-                [[-5.0, 18.0, -5.0], [5.0, 18.0, -5.0], [5.0, 18.0, 5.0]],
-                [[-5.0, 18.0, -5.0], [5.0, 18.0, 5.0], [-5.0, 18.0, 5.0]],
-            ])
-            .unwrap(),
-        )]);
-        let blocked = super::ride(
-            &capped,
-            Some(&reach),
-            &doors,
-            Some((4, since)),
-            (feet, 6.0),
-            now,
-        );
-        assert_eq!(blocked.carried, None);
-        assert!(!blocked.sinking);
-        // Nor is the model drawn rising there.
-        assert!(blocked.blocked && !carried.blocked);
         // On its way back down (from 30 s), the rider falls at once.
         let down = start + Duration::from_secs(31);
         let sinking = super::ride(
-            &world,
             Some(&reach),
             &doors,
             Some((4, down)),
-            (Vec3::new(2.0, 81.0, -1.0), 6.0),
             down + Duration::from_millis(100),
         );
         assert_eq!(sinking.carried, None);
@@ -2785,7 +2722,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_still_rider_stands_on_a_risen_lift_only_inside_its_reach_and_with_room() {
+    fn a_still_rider_stands_on_a_risen_lift_only_inside_its_reach() {
         use eq_client_core::movement::{CollisionMesh, CollisionWorld};
         use std::sync::Arc;
         let deck = |y: f32| {
@@ -2808,26 +2745,109 @@ pub(super) mod tests {
         lifts.0.insert(4, (Vec3::ZERO, 310.0));
         // Off the decks' diagonal seam.
         let feet = Vec3::new(2.0, 0.3, -1.0);
-        let (door, raised) = super::lift_under(&world, &lifts, feet, 6.0).unwrap();
+        let (door, raised) = super::lift_under(&world, &lifts, feet).unwrap();
         assert_eq!(door, 4);
         assert!(raised.distance(Vec3::new(feet.x, 0.5, feet.z)) < 0.001);
         assert_eq!(super::lift_support(&world, &lifts, raised), Some(4));
         // Standing level with the floor already, nothing new is sent.
-        assert!(super::lift_under(&world, &lifts, raised, 6.0).is_none());
+        assert!(super::lift_under(&world, &lifts, raised).is_none());
         // Past the door's reach it carries no one.
         lifts.0.insert(4, (Vec3::new(400.0, 0.0, 0.0), 310.0));
-        assert!(super::lift_under(&world, &lifts, feet, 6.0).is_none());
+        assert!(super::lift_under(&world, &lifts, feet).is_none());
         assert_eq!(super::lift_support(&world, &lifts, raised), None);
         // A door that is not a listed lift carries no one either.
         lifts.0.clear();
-        assert!(super::lift_under(&world, &lifts, feet, 6.0).is_none());
-        // With a ceiling in the way the body would not fit; it stays put
-        // (recording checklist 6.427).
+        assert!(super::lift_under(&world, &lifts, feet).is_none());
+        // A surface inside the body's height does not keep it off the
+        // floor: the program tests nothing above the rider (read R1d).
         lifts.0.insert(4, (Vec3::ZERO, 310.0));
-        world.set_door_obstacles_with(vec![(4, deck(0.5), solid), (5, deck(4.0), solid)]);
-        assert!(super::lift_under(&world, &lifts, feet, 6.0).is_none());
-        let seam = Vec3::new(1.0, 0.3, 1.0);
-        assert!(super::lift_under(&world, &lifts, seam, 6.0).is_none());
+        let mut capped = CollisionWorld::new([
+            [[-50.0, 0.0, -50.0], [50.0, 0.0, -50.0], [50.0, 0.0, 50.0]],
+            [[-50.0, 0.0, -50.0], [50.0, 0.0, 50.0], [-50.0, 0.0, 50.0]],
+            [[-5.0, 4.0, -5.0], [5.0, 4.0, -5.0], [5.0, 4.0, 5.0]],
+            [[-5.0, 4.0, -5.0], [5.0, 4.0, 5.0], [-5.0, 4.0, 5.0]],
+        ])
+        .unwrap();
+        capped.set_door_obstacles_with(vec![(4, deck(0.5), solid)]);
+        assert!(
+            capped
+                .clearance(Vec3::new(2.0, 0.5, -1.0), 6.0, 0.0)
+                .is_some_and(|c| c <= 0.0)
+        );
+        let (door, raised) = super::lift_under(&capped, &lifts, feet).unwrap();
+        assert_eq!(door, 4);
+        assert!((raised.y - 0.5).abs() < 0.001, "{raised:?}");
+    }
+
+    #[test]
+    fn a_rider_is_carried_up_through_an_overhead_surface_and_sinks_with_the_lift() {
+        use eq_client_core::doors::{Door, DoorTable, DoorUpdate};
+        use eq_client_core::movement::{CollisionMesh, CollisionWorld};
+        use std::{
+            sync::Arc,
+            time::{Duration, Instant},
+        };
+        let deck = |y: f32| {
+            Arc::new(
+                CollisionMesh::new([
+                    [[-5.0, y, -5.0], [5.0, y, -5.0], [5.0, y, 5.0]],
+                    [[-5.0, y, -5.0], [5.0, y, 5.0], [-5.0, y, 5.0]],
+                ])
+                .unwrap(),
+            )
+        };
+        let start = Instant::now();
+        let mut doors = DoorTable::default();
+        doors.apply(
+            &DoorUpdate::Spawn(vec![Door {
+                id: 4,
+                model: "LIFT".into(),
+                position: eq_client_core::WorldPosition::default(),
+                incline: 0,
+                size: 100,
+                open_type: 59,
+                state_at_spawn: 0,
+                invert_state: 0,
+                parameter: 90,
+                action: None,
+            }]),
+            start,
+        );
+        doors.apply(&DoorUpdate::Move { id: 4, action: 2 }, start);
+        let mut reach = crate::doors::LiftReach::default();
+        reach.0.insert(4, (Vec3::ZERO, 310.0));
+        // The zone has a surface over the shaft that the risen lift's floor
+        // ends 2.5 below, inside a standing body, as at the Kelethin lift.
+        let mut world = CollisionWorld::new([
+            [[-50.0, 0.0, -50.0], [50.0, 0.0, -50.0], [50.0, 0.0, 50.0]],
+            [[-50.0, 0.0, -50.0], [50.0, 0.0, 50.0], [-50.0, 0.0, 50.0]],
+            [[-5.0, 92.5, -5.0], [5.0, 92.5, -5.0], [5.0, 92.5, 5.0]],
+            [[-5.0, 92.5, -5.0], [5.0, 92.5, 5.0], [-5.0, 92.5, 5.0]],
+        ])
+        .unwrap();
+        let solid = eq_client_core::doors::Solidity::BOTH;
+        // Riding from the bottom, the last sample at 8 s with the floor at
+        // 72 and the body's top under the surface; the lift arrives at 10 s.
+        let since = start + Duration::from_secs(8);
+        let top = start + Duration::from_secs(11);
+        let ride = super::ride(Some(&reach), &doors, Some((4, since)), top);
+        assert_eq!(ride.carried, Some(4));
+        assert!((ride.rise - 18.0).abs() < 0.01, "{ride:?}");
+        let feet = Vec3::new(2.0, 72.0 + ride.rise, -1.0);
+        world.set_door_obstacles_with(vec![(4, deck(90.0), solid)]);
+        // Stood on the lift's floor at rest, with the surface in the body.
+        assert!(world.clearance(feet, 6.0, 0.0).is_some_and(|c| c <= 0.0));
+        assert_eq!(super::lift_support(&world, &reach, feet), Some(4));
+        assert!(!super::unsupported(&world, feet));
+        // When it returns the rider falls with it, past nothing of the
+        // zone's, onto its floor below.
+        let down = start + Duration::from_secs(31);
+        let sinking = super::ride(Some(&reach), &doors, Some((4, top)), down);
+        assert!(sinking.sinking);
+        world.set_door_obstacles_with(vec![(4, deck(80.0), solid)]);
+        assert!(super::unsupported(&world, feet));
+        let landing = Vec3::new(feet.x, 80.0, feet.z);
+        assert_eq!(super::lift_support(&world, &reach, landing), Some(4));
     }
 
     fn movement_choice(app: &mut App, fix: Fix, on: bool) {
