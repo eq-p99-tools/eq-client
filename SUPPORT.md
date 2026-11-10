@@ -121,10 +121,14 @@ On EQEmu and P99, the class tools are the Titanium program's: Fishing's
 checks and cast line, Pick Pockets and Begging with their answers, the trap
 skills at a treasure, and Tracking with its window, which the skin draws
 where it has one. The track list keeps the server's order and colours each
-name by the track window's rule; light blue is drawn blue (checklist
-6.444). The bearing's side word, the Ranger's sort, filters and players
-choice, the mount gate, and the Bard's song state without a spell table
-stay labelled (checklist 6.441, 6.446, 6.443, 6.442).
+name by the track window's rule; Cancel stops tracking as `/stoptracking`
+does. Labelled: the song state's item-flag test (checklist 6.429),
+Begging's unseen check (6.430) and reach (6.431), the trap skills'
+treasure match (6.432), Pick Pockets' PvP level range
+(6.438), the bearing's side word (6.441), the Bard's song state without a
+spell table (6.442), the mount gate (6.443), light blue and the green
+threshold's rounding (6.444), auto attack at a zone change (6.445), and the
+Ranger's sort, filters and players choice and the close box (6.446).
 
 Current movement requires complete load/STR/buff inputs. Unknown state withdraws
 player input without inventing a zero load or a root, and bounded passive falls

@@ -31,8 +31,10 @@ pub struct TrackWindow {
 /// less 15 above it) when d is under -3, blue for any other d under 0, white
 /// at 0, yellow under 3, and red beyond. The program's light blue near the
 /// green edge for levels above 7 is not read closely enough to draw, so
-/// those entries are blue (recording checklist 6.444). Consider's colours
-/// follow their own rule; the two are not one rule.
+/// those entries are blue (recording checklist 6.444). The threshold's
+/// rounding (three quarters taken in whole levels, rounded down) and its
+/// edge (green only strictly below it) are inferred, under the same label.
+/// Consider's colours follow their own rule; the two are not one rule.
 #[must_use]
 pub fn track_color(yours: u8, theirs: u8) -> ConColor {
     let difference = i16::from(theirs) - i16::from(yours);

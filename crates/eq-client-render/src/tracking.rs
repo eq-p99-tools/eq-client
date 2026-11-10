@@ -1,8 +1,9 @@
 //! The track window, as the Titanium program keeps it (read R14 section 2,
 //! R15a): the Tracking press opens it, the server's list fills it in its
 //! own order, each name in the colour of its level against the player's,
-//! a click chooses an entry, Track follows it and closes the window, and
-//! Cancel or the close box closes it. The skin's `TrackingWnd` draws it
+//! a click chooses an entry, Track follows it and closes the window,
+//! Cancel stops tracking and closes it as `/stoptracking` does, and the
+//! close box only closes it. The skin's `TrackingWnd` draws it
 //! where the skin has one; elsewhere the client's own panel shows the same
 //! list and Track button. The Ranger's sort, colour filters and players
 //! choice are not read closely enough to act on, so their controls are
@@ -72,6 +73,12 @@ pub(crate) fn say_rangers_only(
 /// The track window's Track button.
 #[derive(Component)]
 pub(crate) struct TrackButton;
+
+/// The track window's Cancel, which stops tracking as `/stoptracking` does
+/// and closes the window (read C1: the constructor 0x5663a4 binds
+/// `DoneButton` to 0x566312). The close box only closes it [I].
+#[derive(Component)]
+pub(crate) struct StopButton;
 
 /// A row of the track window's list: the spawn it names, and its place
 /// from the top.
@@ -160,15 +167,27 @@ pub(crate) fn window(
     *was = online.world().track_window().open;
 }
 
-/// Chooses the clicked row's spawn, and follows the chosen one when Track
-/// is pressed.
+/// Chooses the clicked row's spawn, follows the chosen one when Track is
+/// pressed, and stops tracking when Cancel is.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn buttons(
     mut online: ResMut<OnlineState>,
     outbox: Res<Outbox>,
     rows: Query<(&Interaction, &TrackRow), Changed<Interaction>>,
-    track: crate::clicks::Clicks<TrackButton>,
+    (track, stop): (
+        crate::clicks::Clicks<TrackButton>,
+        crate::clicks::Clicks<StopButton>,
+    ),
 ) {
+    // The session sends the stop only while following, as the program
+    // stops only an active tracking.
+    if stop.any() {
+        let _ = outbox.post(online.world(), |stamp| ClientCommand::Track {
+            session_id: stamp.session_id,
+            action: TrackAction::Stop,
+        });
+        online.close_track_window();
+    }
     for (interaction, row) in &rows {
         if *interaction == Interaction::Pressed
             && online.world().track_window().selected != Some(row.spawn_id)
@@ -262,7 +281,7 @@ pub(crate) fn fill(
 const OWN_WIDTH: f32 = 180.0;
 
 /// Gives the open track window its frame. The client's own panel goes in
-/// it, the list with Track under it; where the skin has a track window, the
+/// it, the list with Track and Cancel under it; where the skin has a track window, the
 /// skin draws over that panel ([`crate::skinned::apply`]).
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn frame(
@@ -309,20 +328,37 @@ pub(crate) fn frame(
             },
         ));
         panel
-            .spawn((
-                Button,
-                TrackButton,
-                crate::outbox::Needs::Capability(eq_client_core::Capability::Tracking),
-                Node {
+            .spawn(Node {
+                column_gap: px(6),
+                justify_content: JustifyContent::Center,
+                ..default()
+            })
+            .with_children(|row| {
+                let button = Node {
                     padding: UiRect::axes(px(8), px(2)),
-                    align_self: AlignSelf::Center,
                     ..default()
-                },
-                BackgroundColor(theme::BUTTON),
-            ))
-            .with_children(|button| {
-                // The client's own word for the skin's Track button.
-                button.spawn(theme::text("Track", Size::Body, theme::INK));
+                };
+                row.spawn((
+                    Button,
+                    TrackButton,
+                    crate::outbox::Needs::Capability(eq_client_core::Capability::Tracking),
+                    button.clone(),
+                    BackgroundColor(theme::BUTTON),
+                ))
+                .with_children(|button| {
+                    // The client's own words for the skin's two buttons.
+                    button.spawn(theme::text("Track", Size::Body, theme::INK));
+                });
+                row.spawn((
+                    Button,
+                    StopButton,
+                    crate::skinned::Closes(WindowId::Tracking),
+                    button,
+                    BackgroundColor(theme::BUTTON),
+                ))
+                .with_children(|button| {
+                    button.spawn(theme::text("Cancel", Size::Body, theme::INK));
+                });
             });
     });
 }
@@ -438,6 +474,36 @@ mod tests {
         );
         app.update();
         assert!(!app.world().resource::<Shown>().is_open(WindowId::Tracking));
+    }
+
+    #[test]
+    fn cancel_stops_tracking_and_closes_the_window() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let mut app = crate::testing::app();
+        app.insert_resource(Outbox::new(Some(tx)))
+            .add_systems(Update, buttons);
+        let mut online = admitted();
+        testing::news(&mut online, [pressed()]);
+        app.insert_resource(online);
+        let cancel = app
+            .world_mut()
+            .spawn((Button, StopButton, Interaction::None))
+            .id();
+        crate::clicks::testing::click(&mut app, cancel);
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ClientCommand::Track {
+                action: TrackAction::Stop,
+                ..
+            })
+        ));
+        assert!(
+            !app.world()
+                .resource::<OnlineState>()
+                .world()
+                .track_window()
+                .open
+        );
     }
 
     #[test]

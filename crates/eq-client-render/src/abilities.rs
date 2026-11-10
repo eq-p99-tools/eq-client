@@ -174,17 +174,12 @@ pub(crate) fn input(
     outbox: Res<Outbox>,
     mut chat: ResMut<crate::chat::ChatState>,
     buttons: crate::clicks::Clicks<AbilityButton>,
-    controls: Option<Res<crate::motion::Controls>>,
+    liquid: crate::motion::Liquid,
 ) {
     for button in buttons.iter() {
         match assigned(online.world(), *button) {
             Some(Binding::Ability(ability)) => {
-                use_ability(
-                    ability,
-                    &online,
-                    &outbox,
-                    controls.as_ref().is_some_and(|controls| controls.in_liquid),
-                );
+                use_ability(ability, &online, &outbox, liquid.feet_in(online.world()));
             }
             Some(binding @ (Binding::KnightAbility(_) | Binding::Discipline(_))) => {
                 let Ok(stamp) = outbox.stamp(online.world()) else {

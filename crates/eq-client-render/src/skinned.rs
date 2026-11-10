@@ -1181,6 +1181,13 @@ fn behave(
             skin(),
             crate::outbox::Needs::Capability(Capability::Tracking),
         )),
+        // It closes the window as any Done does, and stops tracking too.
+        Does::StopsTracking => drawn.insert((
+            Button,
+            super::tracking::StopButton,
+            items::Closes(owner),
+            skin(),
+        )),
         // A question shows only where the session offers what it is about.
         Does::Answers(accept) => {
             drawn.insert((Button, super::confirm::AnswerButton(accept), skin()))
@@ -1427,6 +1434,7 @@ fn caption(
         | Does::Option(_)
         | Does::Trains
         | Does::Tracks
+        | Does::StopsTracking
         | Does::Answers(_)
         | Does::TurnsPage(_)
         | Does::Combines(_)
@@ -3226,6 +3234,20 @@ mod tests {
         assert!(matches!(
             does("DoneButton", WindowId::Training),
             Some(Does::Closes)
+        ));
+        // The track window's Cancel also stops tracking, as the program's
+        // window binds it (read C1).
+        assert!(matches!(
+            does("DoneButton", WindowId::Tracking),
+            Some(Does::StopsTracking)
+        ));
+        assert!(matches!(
+            does("TRW_TrackButton", WindowId::Tracking),
+            Some(Does::Tracks)
+        ));
+        assert!(matches!(
+            does("TRW_FilterRedButton", WindowId::Tracking),
+            Some(Does::Nothing)
         ));
     }
 

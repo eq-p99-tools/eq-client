@@ -113,6 +113,8 @@ pub(super) enum Does {
     Trains,
     /// Follows the spawn chosen in the track window.
     Tracks,
+    /// Stops tracking and closes the track window: its Cancel.
+    StopsTracking,
     /// Answers the confirmation dialog's question: Yes (true) or No.
     Answers(bool),
     /// Turns a book's pages forward (true) or back.
@@ -172,6 +174,19 @@ pub(super) fn trading_button(id: &str, owner: WindowId) -> Option<Does> {
     })
 }
 
+/// What a window's Done button, or the give or trade window's Cancel, does:
+/// it closes the window, even one whose other buttons do nothing yet. The
+/// track window's Cancel also stops tracking, as `/stoptracking` does: the
+/// window's constructor (0x5663a4) binds `DoneButton` to that routine
+/// (0x566312).
+fn closing_button(id: &str, owner: WindowId) -> Option<Does> {
+    match id {
+        "DoneButton" if owner == WindowId::Tracking => Some(Does::StopsTracking),
+        "DoneButton" | "GVW_Cancel_Button" | "TRDW_Cancel_Button" => Some(Does::Closes),
+        _ => None,
+    }
+}
+
 /// What the client does with a skin's button; None for one it leaves out.
 pub(super) fn does(id: &str, owner: WindowId) -> Option<Does> {
     if let Some((place, coin)) = coin_box(id) {
@@ -196,13 +211,8 @@ pub(super) fn does(id: &str, owner: WindowId) -> Option<Does> {
             Does::Nothing
         });
     }
-    // A window's Done button, or the give or trade window's Cancel, closes
-    // it; even in a window whose other buttons do nothing yet.
-    if matches!(
-        id,
-        "DoneButton" | "GVW_Cancel_Button" | "TRDW_Cancel_Button"
-    ) {
-        return Some(Does::Closes);
+    if let Some(does) = closing_button(id, owner) {
+        return Some(does);
     }
     if has_own_buttons(owner) {
         return own_button(id, owner);

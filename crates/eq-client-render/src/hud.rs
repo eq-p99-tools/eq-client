@@ -536,10 +536,10 @@ pub(super) fn actions(
         Res<messages::Messages>,
         Res<crate::ViewerSettings>,
     ),
-    (mut hand, mut requests, controls): (
+    (mut hand, mut requests, liquid): (
         ResMut<super::spellbook::BookHand>,
         Option<ResMut<action_bar::ActionRequests>>,
-        Option<Res<crate::motion::Controls>>,
+        crate::motion::Liquid,
     ),
 ) {
     use super::keys::Act;
@@ -611,12 +611,7 @@ pub(super) fn actions(
         );
     }
     if let Some(hotbar::Action::Ability(ability)) = bar_action {
-        super::abilities::use_ability(
-            ability,
-            &online,
-            &outbox,
-            controls.is_some_and(|controls| controls.in_liquid),
-        );
+        super::abilities::use_ability(ability, &online, &outbox, liquid.feet_in(online.world()));
     }
     // Sit, Stand, Camp and the group's kinds run what their Actions window
     // buttons run; melee attack toggles in `combat::input`.
