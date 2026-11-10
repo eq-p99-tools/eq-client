@@ -47,6 +47,9 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<hud::hotbar::Bindings>()
         .init_resource::<hud::hotbar::Files>()
         .init_resource::<contacts::Files>()
+        .init_resource::<abilities::Choices>()
+        .init_resource::<abilities::choices::Files>()
+        .init_resource::<abilities::picker::Picker>()
         .init_resource::<guild::Invitations>()
         .init_resource::<crate::socials::State>()
         .init_resource::<hud::hotbar::carry::Presses>()
@@ -203,6 +206,7 @@ pub(super) fn schedule(app: &mut App) {
                 who::zone_list,
                 whereabouts::answers,
                 (contacts::answers, contacts::persist).chain(),
+                abilities::choices::persist,
                 (guild::invitations, guild::commands, sharing::commands),
                 pet::window,
                 (group::window, group::join),
@@ -231,7 +235,16 @@ pub(super) fn schedule(app: &mut App) {
                     .chain(),
                 raid::buttons,
             ),
-            (abilities::input, skinned::slash),
+            (
+                (
+                    abilities::picker::right_click,
+                    abilities::input,
+                    abilities::picker::choose,
+                    abilities::picker::window,
+                )
+                    .chain(),
+                skinned::slash,
+            ),
             hud::actions,
             (
                 hud::hotbar::update,
@@ -361,7 +374,7 @@ pub(super) fn schedule(app: &mut App) {
                 ),
                 (outbox::show, inventory::say_refusals),
                 (hud::action_bar::cast_window, hud::action_bar::update),
-                (skinned::frames, tracking::frame),
+                (skinned::frames, tracking::frame, abilities::picker::frame),
                 (
                     chat::reconcile,
                     skinned::apply,
@@ -397,7 +410,7 @@ pub(super) fn schedule(app: &mut App) {
                         skinned::show_amount,
                         skinned::show_choices,
                         skinned::fill_lists,
-                        (training::fill, tracking::fill),
+                        (training::fill, tracking::fill, abilities::picker::fill),
                         skills::fill,
                         raid::fill,
                         confirm::show,

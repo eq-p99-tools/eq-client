@@ -728,6 +728,8 @@ pub(crate) enum Listing {
     Training,
     /// The spawns Tracking finds.
     Tracking,
+    /// What an Actions window ability button can hold.
+    SkillSelect,
     /// The player's skills.
     Skills,
     /// A merchant's wares.
@@ -754,6 +756,7 @@ fn listing(id: Option<&str>, owner: WindowId) -> Option<Listing> {
         (WindowId::Options, Some(KEY_LIST)) => Some(Listing::Keys),
         (WindowId::Training, Some("SkillList")) => Some(Listing::Training),
         (WindowId::Tracking, Some("TRW_TrackingList")) => Some(Listing::Tracking),
+        (WindowId::SkillSelect, Some("SKSW_SkillSelectorList")) => Some(Listing::SkillSelect),
         (WindowId::Skills, Some("SkillList")) => Some(Listing::Skills),
         (WindowId::Merchant, Some("ItemList")) => Some(Listing::Merchant),
         (WindowId::Raid, Some("RAID_PlayerList")) => {
@@ -885,6 +888,9 @@ fn filled_by(rows: &mut EntityCommands, listing: Listing, columns: Vec<f32>) {
         )),
         Listing::Training => rows.insert((crate::training::SkillRows::new(columns), wheel)),
         Listing::Tracking => rows.insert((crate::tracking::TrackRows::new(columns), wheel)),
+        Listing::SkillSelect => {
+            rows.insert((crate::abilities::picker::PickRows::new(columns), wheel))
+        }
         Listing::Skills => rows.insert((crate::skills::SkillsList::new(columns), wheel)),
         Listing::Merchant => rows.insert((crate::trade::MerchantRows::new(columns), wheel)),
         Listing::Raid(list) => rows.insert((crate::raid::RaidRows::new(list, columns), wheel)),
@@ -962,6 +968,7 @@ pub(crate) fn fill_lists(
             // themselves.
             Listing::Training
             | Listing::Tracking
+            | Listing::SkillSelect
             | Listing::Skills
             | Listing::Merchant
             | Listing::Raid(_) => continue,

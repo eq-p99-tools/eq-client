@@ -2,19 +2,41 @@
 
 ## Unreleased
 
+- Choose what each Actions window ability button holds, as the Titanium
+  program does (reads R17 and R17b). A left click on an empty button, or a
+  right click on any, opens the skills picker for it: the skin's
+  `SkillsSelectWindow` where the skin has one, the client's own panel
+  otherwise. The Abilities page's picker lists the program's ability skills
+  then its combat skills, and the Combat page's its combat skills only,
+  each the player has, in the program's order, with the player's value.
+  Then both list a knight's Harm Touch (105) or Lay on Hands (107) by the
+  program's special numbers, offered by class and level where the program
+  reads a profile byte (checklist 6.450), and then the disciplines the
+  player knows (6.450). A click on a row puts it on the button and closes
+  the picker. Its close box or Escape only closes it, as the program's
+  does; so do a zone change, a new session and the Actions window closing.
+  Until the first choice nothing is saved, and the buttons follow the
+  installed client's saved choice where it has one, else the client's own
+  order, worked out again on each entry. The first choice keeps all ten
+  and saves them in the character's own settings file under the program's
+  `Ability1`-`Ability6` and `CombatSkill1`-`CombatSkill4` keys, with a
+  discipline in the client's own section (6.448). The installed client's
+  file is only read. A button holding a number the client cannot use (the
+  specials 111, 114 and 115, or skills 16, 71 and 72) keeps it, says "Not
+  available" and does nothing on a left click (6.449). Scripts choose a row
+  with `click skill_select N`, and the `Script ability report` line names
+  each button's choice.
 - Use the class tools as the Titanium program does (Batch B2). On EQEmu and
   P99, Fishing, Pick Pockets, Begging, Sense Traps, Disarm Traps, Pick Lock
-  and Tracking are abilities the player can use where they have the skill.
-  The Actions window's ability page shows its six slots in the client's
-  fixed order, so some may not be on it yet; choosing which abilities fill
-  the slots follows as its own change. The client tells the session whether
-  the player stands in liquid, which Fishing refuses on. A press while an
-  ability's wait runs sends nothing and says the client's own line, where
-  the program says nothing (a chat-only departure, checklist 6.447). Between a
-  beg or a pick and its answer the program holds casting and some window
-  actions until the server replies, and the client does not yet (checklist
-  6.452). Fishing's cast line, and the
-  answer to a beg or a pick (nothing, coins of one kind, or an item by
+  and Tracking are abilities the player can use where they have the skill,
+  on the Actions window's buttons the player chooses (above). The client
+  tells the session whether the player stands in liquid, which Fishing
+  refuses on. A press while an ability's wait runs sends nothing and says
+  the client's own line, where the program says nothing (a chat-only
+  departure, checklist 6.447). Between a beg or a pick and its answer the
+  program holds casting and some window actions until the server replies,
+  and the client does not yet (checklist 6.452). Fishing's cast line, and
+  the answer to a beg or a pick (nothing, coins of one kind, or an item by
   name), are the installed string table's lines by id. Tracking opens the
   track window, the skin's `TrackingWnd` where the skin has one and the
   client's own panel otherwise, emptied until the server's list comes. The
@@ -27,14 +49,14 @@
   closes the window. Cancel stops tracking and closes the window, as
   `/stoptracking` does, since the program binds the two to one routine;
   the close box only closes it (inferred, checklist 6.446), as Escape does.
-  A bearing's side word is put in by its words from the string table. While following, the
-  session's bearing lines say where the spawn lies, and its end lines say
-  when the spawn is gone or the six minutes pass (checklist 6.441). The
-  Ranger's colour filters are drawn greyed and the sort and players
-  comboboxes are not drawn, and
-  another class's `/tracksort` or `/trackfilter` gets the program's
-  Rangers-only line; a Ranger's own, and `/trackplayers`, are answered as
-  before (checklist 6.446). The host's auto-attack follows the session's at
+  A bearing's side word is put in by its words from the string table.
+  While following, the session's bearing lines say where the spawn lies,
+  and its end lines say when the spawn is gone or the six minutes pass
+  (checklist 6.441). The Ranger's colour filters are drawn greyed and the
+  sort and players comboboxes are not drawn, and another class's
+  `/tracksort` or `/trackfilter` gets the program's Rangers-only line; a
+  Ranger's own, and `/trackplayers`, are answered as before (checklist
+  6.446). The host's auto-attack follows the session's at
   every zone change, so a new zone starts with it off on both sides
   (checklist 6.445), and an off the client sends on its own, when the
   player stops standing or dies, goes again until it leaves a full queue.

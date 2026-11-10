@@ -99,6 +99,7 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::Options => "EQUI_OptionsWindow.xml",
         WindowId::Training => "EQUI_TrainWindow.xml",
         WindowId::Tracking => "EQUI_TrackingWnd.xml",
+        WindowId::SkillSelect => "EQUI_SkillsSelectWindow.xml",
         WindowId::Skills => "EQUI_SkillsWindow.xml",
         WindowId::Confirmation => "EQUI_ConfirmationDialog.xml",
         WindowId::Note => "EQUI_NoteWindow.xml",
