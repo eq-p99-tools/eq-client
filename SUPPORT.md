@@ -16,8 +16,8 @@ Quarm/TAKP behavior. Frontends use runtime capabilities, not server-name flags.
 ## Server policy snapshot
 
 The following summarizes the networking revision pinned by this application's
-Cargo.lock: `a50913d30320df694ece30160eea3123b5087659`. Its
-[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/a50913d30320df694ece30160eea3123b5087659/crates/eq-network/src/client/session/servers.rs)
+Cargo.lock: `a1296f6b86b63e2e6c01b2377d6e510d0fe7bf68`. Its
+[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/a1296f6b86b63e2e6c01b2377d6e510d0fe7bf68/crates/eq-network/src/client/session/servers.rs)
 are the source for this table. **Yes means provided by that policy**, not a live
 certification, and individual operations still validate their prerequisites.
 
@@ -172,11 +172,11 @@ affected mechanics unavailable while chat remains usable. See [installed spell
 providers](docs/spell-providers.md). These source and synthetic checks add no live
 compatibility certification.
 
-The pinned networking [combat](https://github.com/eq-p99-tools/eq-network/blob/a50913d30320df694ece30160eea3123b5087659/docs/quarm-combat.md),
-[loot](https://github.com/eq-p99-tools/eq-network/blob/a50913d30320df694ece30160eea3123b5087659/docs/eqmac-looting.md) and
-[world-object](https://github.com/eq-p99-tools/eq-network/blob/a50913d30320df694ece30160eea3123b5087659/docs/eqmac-world-objects.md)
+The pinned networking [combat](https://github.com/eq-p99-tools/eq-network/blob/a1296f6b86b63e2e6c01b2377d6e510d0fe7bf68/docs/quarm-combat.md),
+[loot](https://github.com/eq-p99-tools/eq-network/blob/a1296f6b86b63e2e6c01b2377d6e510d0fe7bf68/docs/eqmac-looting.md) and
+[world-object](https://github.com/eq-p99-tools/eq-network/blob/a1296f6b86b63e2e6c01b2377d6e510d0fe7bf68/docs/eqmac-world-objects.md)
 contracts record their limits and controlled live checklists. The dated
-[P99/Quarm gap report](https://github.com/eq-p99-tools/eq-network/blob/a50913d30320df694ece30160eea3123b5087659/docs/public-server-gaps.md)
+[P99/Quarm gap report](https://github.com/eq-p99-tools/eq-network/blob/a1296f6b86b63e2e6c01b2377d6e510d0fe7bf68/docs/public-server-gaps.md)
 retains the earlier inspection and its scenario-specific evidence.
 
 ### Public-parity checks, 2026-11-02

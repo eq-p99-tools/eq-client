@@ -26,7 +26,7 @@
   input waits; there is no "Movement paused" line while the player can move.
   By Adam's decision of 11-10 this can be faster than the original client
   would allow until the inputs are proven (recording checklist 6.451).
-  Networking pinned to a50913d (eq-network #292).
+  Networking pinned to a1296f6 (eq-network #292).
 
 - Open the Runbook window, in front, whenever the local harness starts a
   Runbook, so whoever watches can see a run is in use. Only a start opens
