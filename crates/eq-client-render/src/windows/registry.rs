@@ -74,6 +74,9 @@ pub(crate) enum WindowId {
     /// The skin's Training window: the skills a guildmaster teaches, open
     /// while the player trains.
     Training,
+    /// The skin's track window: the spawns Tracking finds, open from the
+    /// press until Track follows one or the player closes it.
+    Tracking,
     /// The skin's Skills window: the player's skills and their values,
     /// opened from the inventory's Skills button.
     Skills,
@@ -345,8 +348,10 @@ const fn floating(
 
 impl WindowId {
     /// Scripts has open/close states only; other titled windows may collapse.
+    /// The track window's one box is its close box: the program's closes
+    /// it, and drawing only one, the client keeps that one.
     pub(crate) const fn can_minimize(self) -> bool {
-        !matches!(self, Self::Scripts | Self::ChatGroup(_))
+        !matches!(self, Self::Scripts | Self::ChatGroup(_) | Self::Tracking)
     }
 
     /// The primary chat and its detached instances use the same authored widgets.
@@ -357,7 +362,7 @@ impl WindowId {
     /// Every singleton window, in the order the selector lists the toggled ones.
     /// Bags are left out: there is one for each slot that can hold a bag
     /// (see [`WindowId::bags`]), and none of them is toggled.
-    pub(crate) const ALL: [Self; 37] = [
+    pub(crate) const ALL: [Self; 38] = [
         Self::Status,
         Self::Target,
         Self::Player,
@@ -383,6 +388,7 @@ impl WindowId {
         Self::Raid,
         Self::Options,
         Self::Training,
+        Self::Tracking,
         Self::Skills,
         Self::Confirmation,
         Self::ServerDialog,
@@ -433,6 +439,7 @@ impl WindowId {
             Self::Raid => Some("RaidWindow"),
             Self::Options => Some("OptionsWindow"),
             Self::Training => Some("TrainWindow"),
+            Self::Tracking => Some("TrackingWnd"),
             Self::Skills => Some("SkillsWindow"),
             Self::Confirmation => Some("ConfirmationDialogBox"),
             Self::Note => Some("NoteWindow"),
@@ -503,6 +510,7 @@ impl WindowId {
             Self::Raid => "raid",
             Self::Options => "options",
             Self::Training => "training",
+            Self::Tracking => "tracking",
             Self::Skills => "skills",
             Self::Confirmation => "confirmation",
             Self::ServerDialog => "server-dialog",
@@ -694,6 +702,8 @@ impl WindowId {
             // Where the skin places it; it opens with a guildmaster's answer
             // and closes when training ends.
             Self::Training => floating("TRAINING", Placement::TopLeft(120.0, 20.0), false, &[]),
+            // Where the skin places it; the Tracking press opens it.
+            Self::Tracking => floating("TRACKING", Placement::TopLeft(0.0, 20.0), false, &[]),
             // Where the skin places it, over the chat; the inventory's
             // Skills button opens it too.
             Self::Skills => floating("SKILLS", Placement::TopLeft(120.0, 445.0), true, &[]),

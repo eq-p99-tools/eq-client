@@ -16,8 +16,8 @@ Quarm/TAKP behavior. Frontends use runtime capabilities, not server-name flags.
 ## Server policy snapshot
 
 The following summarizes the networking revision pinned by this application's
-Cargo.lock: `6ad1e4120db27822227e873d851bde835ff64e0a`. Its
-[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/6ad1e4120db27822227e873d851bde835ff64e0a/crates/eq-network/src/client/session/servers.rs)
+Cargo.lock: `2993c5ba97e0189f0c7b8429f4f5c818de80819b`. Its
+[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/2993c5ba97e0189f0c7b8429f4f5c818de80819b/crates/eq-network/src/client/session/servers.rs)
 are the source for this table. **Yes means provided by that policy**, not a live
 certification, and individual operations still validate their prerequisites.
 
@@ -117,6 +117,25 @@ shortfall of the read rule), and walking out of a door that moved into the
 player stay labelled (checklist 6.423-6.426, 6.428, 6.436, 6.439); Quarm and
 TAKP keep their own doors as before.
 
+On EQEmu and P99, the class tools are the Titanium program's: Fishing's
+checks and cast line, Pick Pockets and Begging with their answers, the trap
+skills at a treasure, and Tracking with its window, which the skin draws
+where it has one. The track list keeps the server's order and colours each
+name by the track window's rule; Cancel stops tracking as `/stoptracking`
+does. The Actions window's ability page shows its six slots in the client's
+fixed order; choosing which abilities fill them follows as its own change.
+A press while a class tool's wait runs sends nothing and says the client's
+own line, where the program says nothing (a chat-only departure,
+checklist 6.447). Between a beg or a pick and its answer the program holds
+casting and some window actions until the server replies; the client does
+not yet (checklist 6.452). Labelled: the song state's item-flag test (checklist 6.429),
+Begging's unseen check (6.430) and reach (6.431), the trap skills'
+treasure match (6.432), Pick Pockets' PvP level range
+(6.438), the bearing's side word (6.441), the Bard's song state without a
+spell table (6.442), the mount gate (6.443), light blue and the green
+threshold's rounding (6.444), auto attack at a zone change (6.445), and the
+Ranger's sort, filters and players choice and the close box (6.446).
+
 Movement starts once the load/STR/buff inputs are complete at zone-in. After
 that, nothing but a root, a stun, a freeze, death, zoning or not standing stops
 it, as in the original client (reads R7, R18): a buff, a song pulse, a spell
@@ -144,11 +163,11 @@ affected mechanics unavailable while chat remains usable. See [installed spell
 providers](docs/spell-providers.md). These source and synthetic checks add no live
 compatibility certification.
 
-The pinned networking [combat](https://github.com/eq-p99-tools/eq-network/blob/6ad1e4120db27822227e873d851bde835ff64e0a/docs/quarm-combat.md),
-[loot](https://github.com/eq-p99-tools/eq-network/blob/6ad1e4120db27822227e873d851bde835ff64e0a/docs/eqmac-looting.md) and
-[world-object](https://github.com/eq-p99-tools/eq-network/blob/6ad1e4120db27822227e873d851bde835ff64e0a/docs/eqmac-world-objects.md)
+The pinned networking [combat](https://github.com/eq-p99-tools/eq-network/blob/2993c5ba97e0189f0c7b8429f4f5c818de80819b/docs/quarm-combat.md),
+[loot](https://github.com/eq-p99-tools/eq-network/blob/2993c5ba97e0189f0c7b8429f4f5c818de80819b/docs/eqmac-looting.md) and
+[world-object](https://github.com/eq-p99-tools/eq-network/blob/2993c5ba97e0189f0c7b8429f4f5c818de80819b/docs/eqmac-world-objects.md)
 contracts record their limits and controlled live checklists. The dated
-[P99/Quarm gap report](https://github.com/eq-p99-tools/eq-network/blob/6ad1e4120db27822227e873d851bde835ff64e0a/docs/public-server-gaps.md)
+[P99/Quarm gap report](https://github.com/eq-p99-tools/eq-network/blob/2993c5ba97e0189f0c7b8429f4f5c818de80819b/docs/public-server-gaps.md)
 retains the earlier inspection and its scenario-specific evidence.
 
 ### Public-parity checks, 2026-11-02

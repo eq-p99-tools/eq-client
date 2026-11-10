@@ -24,8 +24,48 @@
   with no "Movement paused" line while the player can move. By Adam's
   decision of 11-10 this can be faster than the original client would allow
   until the inputs are proven (recording checklist 6.451). Networking pinned
-  to ba65b64 (eq-network #292).
+  to 2993c5b (eq-network #292).
 
+- Use the class tools as the Titanium program does (Batch B2). On EQEmu and
+  P99, Fishing, Pick Pockets, Begging, Sense Traps, Disarm Traps, Pick Lock
+  and Tracking are abilities the player can use where they have the skill.
+  The Actions window's ability page shows its six slots in the client's
+  fixed order, so some may not be on it yet; choosing which abilities fill
+  the slots follows as its own change. The client tells the session whether
+  the player stands in liquid, which Fishing refuses on. A press while an
+  ability's wait runs sends nothing and says the client's own line, where
+  the program says nothing (a chat-only departure, checklist 6.447). Between a
+  beg or a pick and its answer the program holds casting and some window
+  actions until the server replies, and the client does not yet (checklist
+  6.452). Fishing's cast line, and the
+  answer to a beg or a pick (nothing, coins of one kind, or an item by
+  name), are the installed string table's lines by id. Tracking opens the
+  track window, the skin's `TrackingWnd` where the skin has one and the
+  client's own panel otherwise, emptied until the server's list comes. The
+  list keeps the server's order and leaves out spawns the zone does not
+  know, each name in the colour of its level against the player's by the
+  track window's own rule, which is not Consider's; the program's light
+  blue near the green edge is drawn blue, and the green threshold's
+  rounding and edge are inferred (checklist 6.444). A click chooses an
+  entry, kept across a new list while it is listed; Track follows it and
+  closes the window. Cancel stops tracking and closes the window, as
+  `/stoptracking` does, since the program binds the two to one routine;
+  the close box only closes it (inferred, checklist 6.446), as Escape does.
+  A bearing's side word is put in by its words from the string table. While following, the
+  session's bearing lines say where the spawn lies, and its end lines say
+  when the spawn is gone or the six minutes pass (checklist 6.441). The
+  Ranger's colour filters are drawn greyed and the sort and players
+  comboboxes are not drawn, and
+  another class's `/tracksort` or `/trackfilter` gets the program's
+  Rangers-only line; a Ranger's own, and `/trackplayers`, are answered as
+  before (checklist 6.446). The host's auto-attack follows the session's at
+  every zone change, so a new zone starts with it off on both sides
+  (checklist 6.445), and an off the client sends on its own, when the
+  player stops standing or dies, goes again until it leaves a full queue.
+  Fishing's liquid test is made at the press, from the zone's collision and
+  the player's place then; with no zone collision loaded it answers dry and
+  the server decides. Scripts gain `click tracking N` and `click track`, and
+  the script report a tracking line.
 - Ride lifts as the Titanium program does (Batch B1). On EQEmu and P99,
   vertical doors (lifts, sinking floors and platforms) rise and sink at
   their type's travel and speed, counted from the server's action, and
@@ -179,6 +219,11 @@
 - Bound inspection note and landmark file reads, protect oversized
   landmark files from replacement, and share immutable installed spell
   definitions across sessions.
+
+- Pin networking ebdff963 (Batch B2 landing): the Titanium class tools,
+  Fishing, Pick Pockets, Begging, the trap skills, Pick Lock, Tracking and
+  `/stopsong`, as the program uses them, with the session's own line for a
+  press during a class tool's wait (checklist 6.447).
 
 - Pin networking 0e45bfcc (Batch B1 landing): Titanium lifts and doors as
   the program moves them (vertical travel and speeds by open type, slides,

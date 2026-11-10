@@ -7623,3 +7623,82 @@ pub(super) mod tests {
         assert_eq!(reported(&mut app, &receiver), None);
     }
 }
+
+/// The host's liquid test for an ability press, the one the session's
+/// Fishing check takes (read R15c), made at the press from the zone's
+/// collision and the player's position then, so no movement pass needs to
+/// have run since a zone-in, a revival or while the load inputs are unknown.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct Liquid<'w, 's> {
+    collision: Option<Res<'w, crate::Collision>>,
+    bodies: Query<'w, 's, &'static crate::PlayerBody, With<crate::Player>>,
+}
+
+impl Liquid<'_, '_> {
+    /// Whether the player's feet stand in a liquid now. With no zone
+    /// collision loaded, or no player body yet, the client cannot tell, and
+    /// it answers false: the press goes out and the server's own check
+    /// decides, rather than a refusal the program would not give on dry
+    /// land.
+    pub(crate) fn feet_in(&self, world: &ClientWorld) -> bool {
+        feet_in_liquid(
+            self.collision
+                .as_deref()
+                .and_then(|collision| collision.0.as_ref()),
+            self.bodies.single().ok(),
+            world,
+        )
+    }
+}
+
+/// Whether the player's feet stand in a liquid of this collision world.
+fn feet_in_liquid(
+    collision: Option<&eq_client_core::movement::CollisionWorld>,
+    body: Option<&crate::PlayerBody>,
+    world: &ClientWorld,
+) -> bool {
+    collision
+        .zip(body)
+        .zip(world.player())
+        .is_some_and(|((collision, body), player)| {
+            let origin = Vec3::from_array(eq_client_core::render_position(player.position));
+            collision.in_liquid(origin - Vec3::Y * body.feet_offset)
+        })
+}
+
+#[cfg(test)]
+mod liquid_tests {
+    use super::feet_in_liquid;
+    use crate::online::{OnlineState, testing};
+    use eq_client_assets::regions::{Liquid, ZoneRegions};
+    use eq_client_core::movement::CollisionWorld;
+
+    /// A press reads the water from the collision and the player's place
+    /// then, so a movement pass that returned early (just zoned in,
+    /// revived, or load inputs unknown) does not leave it dry.
+    #[test]
+    fn a_press_in_water_finds_the_water_without_a_movement_pass() {
+        let pool = CollisionWorld::new([[
+            [-20.0, -20.0, -20.0],
+            [20.0, -20.0, -20.0],
+            [0.0, -20.0, 20.0],
+        ]])
+        .unwrap()
+        .with_liquids(crate::scene_collision::ZoneLiquids(
+            ZoneRegions::test_liquid_surface(0.0, Liquid::Water).with_titanium_liquids(),
+        ));
+        let body = crate::PlayerBody {
+            feet_offset: 3.0,
+            height: 6.0,
+            size: 6.0,
+        };
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        testing::place(&mut online, crate::world_position([0.0, -5.0, 0.0], 0.0));
+        assert!(feet_in_liquid(Some(&pool), Some(&body), online.world()));
+        // With no zone collision the client cannot tell: the press goes out.
+        assert!(!feet_in_liquid(None, Some(&body), online.world()));
+        testing::place(&mut online, crate::world_position([0.0, 10.0, 0.0], 0.0));
+        assert!(!feet_in_liquid(Some(&pool), Some(&body), online.world()));
+    }
+}

@@ -111,6 +111,32 @@ pub(super) fn state(
         })
     });
     info!(label, state = %economy::state(online.world(), trade), "Script economy report");
+    let track = online.world().track_window();
+    let yours = online.world().player().map(|player| player.level);
+    let tracked: Vec<_> = track
+        .entries
+        .iter()
+        .take(10)
+        .map(|entry| {
+            let level = online
+                .world()
+                .spawn(entry.spawn_id)
+                .map(|spawn| spawn.state.level);
+            let color = yours
+                .zip(level.filter(|level| *level != 0))
+                .map(|(yours, theirs)| eq_client_core::world::track_color(yours, theirs));
+            (entry.spawn_id, entry.distance, level, color)
+        })
+        .collect();
+    info!(
+        label,
+        open = track.open,
+        following = ?track.following,
+        selected = ?track.selected,
+        entries = track.entries.len(),
+        ?tracked,
+        "Script tracking report"
+    );
     info!(
         label,
         zone = online.world().zone(),
