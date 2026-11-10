@@ -17,6 +17,9 @@ use eq_client_core::{
 #[derive(Clone, Copy, Default)]
 struct Modifiers {
     rate: i64,
+    /// The fastest positive movement modifier, apart from any snare: the
+    /// rate an unproven term goes back to must never carry a snare.
+    gain: i64,
     strength: i64,
     stamina: i64,
     rooted: bool,
@@ -34,6 +37,7 @@ impl Modifiers {
         } else {
             self.rate.max(other.rate)
         };
+        self.gain = self.gain.max(other.gain);
         self.strength += other.strength;
         self.stamina += other.stamina;
         self.rooted |= other.rooted;
@@ -60,6 +64,7 @@ fn project(effects: &[Effect], level: u16, instrument: u32, dialect: GameDialect
                 if effect.id == 3 {
                     modifiers.add(Modifiers {
                         rate: value,
+                        gain: value.max(0),
                         ..Modifiers::default()
                     });
                 } else {
@@ -264,6 +269,8 @@ fn calculate(
     Ok(Projected {
         inputs,
         exact: exact || modifiers.rooted,
+        complete: exact,
+        terms: Terms::of(modifiers),
     })
 }
 
@@ -322,14 +329,48 @@ fn buff_terms(
 struct Projected {
     inputs: SpeedInputs,
     exact: bool,
+    /// Whether every term was evaluable, a root aside.
+    complete: bool,
+    terms: Terms,
 }
 
-/// The root or the strongest snare among the effects the client can evaluate
-/// on the player, when it cannot work the rest out. By the programs' rule an
-/// actual root dominates and the strongest snare wins over every positive
-/// modifier, so either proves the rate is at most its own; neither may be
-/// masked by what the client cannot evaluate.
-fn known_slowing(world: &ClientWorld, effects: impl Fn(u32) -> Option<Vec<Effect>>) -> Option<i16> {
+/// The movement terms the client can evaluate: the fastest gain apart from
+/// any snare, and a root or the strongest snare.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Terms {
+    gain: i16,
+    slowing: Option<i16>,
+}
+
+impl Terms {
+    fn of(modifiers: Modifiers) -> Self {
+        Self {
+            gain: i16::try_from(modifiers.gain.min(i64::from(i16::MAX))).expect("bounded gain"),
+            slowing: if modifiers.rooted {
+                Some(-1000)
+            } else if modifiers.rate < 0 {
+                Some(i16::try_from(modifiers.rate.max(-999)).expect("bounded rate"))
+            } else {
+                None
+            },
+        }
+    }
+
+    /// The rate from a remembered one with no root or snare in it: the
+    /// higher of it and the gain now, lowered by a root or snare now.
+    fn rate(self, remembered: i16) -> i16 {
+        let base = remembered.max(self.gain);
+        self.slowing.map_or(base, |slowing| slowing.min(base))
+    }
+}
+
+/// The movement terms among the player's buffs and effects that the client
+/// can evaluate, when it cannot work the rest out: the fastest gain, and the
+/// root or the strongest snare. By the programs' rule an actual root
+/// dominates and the strongest snare wins over every positive modifier, so
+/// either proves the rate is at most its own; neither may be masked by what
+/// the client cannot evaluate.
+fn known_terms(world: &ClientWorld, effects: impl Fn(u32) -> Option<Vec<Effect>>) -> Terms {
     let dialect = world.generation();
     let buffs = world.buffs();
     let slotted = buffs.slots().into_iter().flat_map(|slots| {
@@ -348,24 +389,19 @@ fn known_slowing(world: &ClientWorld, effects: impl Fn(u32) -> Option<Vec<Effect
             effect.instrument_modifier,
         )
     });
-    let mut slowing = Modifiers::default();
+    let mut known = Modifiers::default();
     for (spell, level, instrument) in slotted.chain(unslotted) {
         if let Some(list) = effects(spell) {
-            let projected = project(&list, level, instrument, dialect).modifiers;
-            slowing.add(Modifiers {
-                rate: projected.rate.min(0),
-                rooted: projected.rooted,
-                ..Modifiers::default()
-            });
+            known.add(project(&list, level, instrument, dialect).modifiers);
         }
     }
-    if slowing.rooted {
-        Some(-1000)
-    } else if slowing.rate < 0 {
-        Some(i16::try_from(slowing.rate.max(-999)).expect("bounded rate"))
-    } else {
-        None
-    }
+    Terms::of(known)
+}
+
+/// The root or the strongest snare among the effects the client can
+/// evaluate on the player.
+fn known_slowing(world: &ClientWorld, effects: impl Fn(u32) -> Option<Vec<Effect>>) -> Option<i16> {
+    known_terms(world, effects).slowing
 }
 
 /// The same typed readiness result for movement reporting and script diagnostics.
@@ -377,6 +413,7 @@ pub(crate) fn inputs(
         Ok(Projected {
             inputs,
             exact: true,
+            ..
         }) => SpeedInputState::Ready(inputs),
         Ok(_) => SpeedInputState::Unavailable(Missing::Effects),
         Err(reason) => SpeedInputState::Unavailable(reason),
@@ -387,34 +424,41 @@ pub(crate) fn inputs(
 /// Otherwise the inputs from every term it can prove
 /// ([`SpeedInputState::Bounded`]; Adam's decision of 11-10, recording
 /// checklist 6.451): each unproven term is taken from the last report where
-/// one exists and left out where none does, and every term it can prove
-/// slower applies (a root or a snare it can evaluate, a weight it knows that
-/// is heavier). The session takes a bound no faster than the inputs in force.
-/// With nothing provable it says what is missing, and the session keeps the
-/// grant in force, or waits where there is none.
+/// one exists and left out where none does. The rate is the higher of the
+/// remembered one and the gain evaluable now, lowered by a root or a snare
+/// evaluable now; the weight is as proven. The session takes a bound as
+/// reported. With no earlier report and nothing provable it says what is
+/// missing, and the session keeps the grant in force, or waits where there
+/// is none.
 fn reported(
     world: &ClientWorld,
     effects: impl Fn(u32) -> Option<Vec<Effect>> + Copy,
     last: Option<SpeedInputs>,
 ) -> Reported {
-    let slowing = || known_slowing(world, effects);
-    // The rate a later unproven term goes back to: the last report's, with
-    // no root or snare of now in it, so one that fades frees the player.
-    let remember = |bounded: SpeedInputs, rate| SpeedInputs { rate, ..bounded };
+    // What a later unproven term goes back to: the rate with no root or
+    // snare in it, so one that fades frees the player.
+    let remember = |inputs: SpeedInputs, complete: bool, terms: Terms| SpeedInputs {
+        rate: match last {
+            Some(last) if !complete => last.rate.max(terms.gain),
+            _ => terms.gain,
+        },
+        ..inputs
+    };
     match calculate(world, effects) {
         Ok(Projected {
             inputs,
             exact: true,
+            complete,
+            terms,
         }) => Reported {
             state: SpeedInputState::Ready(inputs),
-            remember: Some(inputs).filter(|inputs| inputs.rate > -1000),
+            remember: Some(remember(inputs, complete, terms)),
         },
-        // The effects are unproven: the rate from the last report, bounded
-        // by any root or snare proven, and the load as proven.
-        Ok(Projected { inputs, .. }) => {
+        // The effects are unproven: the rate from the remembered one and the
+        // terms evaluable now, and the load as proven.
+        Ok(Projected { inputs, terms, .. }) => {
             let bounded = last.map_or(inputs, |last| SpeedInputs {
-                rate: slowing().map_or(last.rate, |rate| rate.min(last.rate)),
-                capacity: inputs.capacity.min(last.capacity),
+                rate: terms.rate(last.rate),
                 ..inputs
             });
             Reported {
@@ -422,48 +466,40 @@ fn reported(
                     inputs: bounded,
                     missing: Missing::Effects,
                 },
-                remember: Some(remember(
-                    bounded,
-                    last.map_or(inputs.rate, |last| last.rate),
-                )),
+                remember: Some(remember(bounded, false, terms)),
             }
         }
         Err(missing) => {
-            let unavailable = Reported {
-                state: SpeedInputState::Unavailable(missing),
-                remember: None,
-            };
             let Some(last) = last else {
-                return unavailable;
+                return Reported {
+                    state: SpeedInputState::Unavailable(missing),
+                    remember: None,
+                };
             };
-            let mut bounded = last;
-            if let Some(rate) = slowing().filter(|rate| *rate < last.rate) {
-                bounded.rate = rate;
-            }
+            let terms = known_terms(world, effects);
+            let mut bounded = SpeedInputs {
+                rate: terms.rate(last.rate),
+                ..last
+            };
             if let Ok(tenths) = world.movement_weight() {
-                let weight = u16::try_from(
+                bounded.weight = u16::try_from(
                     (tenths / 10).min(u64::from(eq_client_core::inventory::MAX_CARRIED_WEIGHT)),
                 )
                 .expect("bounded weight");
-                bounded.weight = bounded.weight.max(weight);
-            }
-            if bounded == last {
-                return unavailable;
             }
             Reported {
                 state: SpeedInputState::Bounded {
                     inputs: bounded,
                     missing,
                 },
-                remember: Some(remember(bounded, last.rate)),
+                remember: Some(remember(bounded, false, terms)),
             }
         }
     }
 }
 
-/// A report, and the inputs a later unproven term goes back to: None
-/// keeps the earlier ones, as for a root's, which a root that fades must
-/// not leave behind.
+/// A report, and the inputs a later unproven term goes back to, with no
+/// root or snare in their rate; None keeps the earlier ones.
 #[derive(Debug, PartialEq)]
 struct Reported {
     state: SpeedInputState,

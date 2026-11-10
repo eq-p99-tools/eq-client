@@ -17,14 +17,17 @@
   client can evaluate applies, even where another effect cannot be
   evaluated. Where the client cannot prove every term, it reports the terms
   it can prove as a bound: each unproven term from its last report, or left
-  out where there is none, with that root or snare and the weight as it
-  stands. The session never lets a bound speed a grant up, and starts one
-  from it where none is in force, so a zone-in or a root fading under a
-  song moves at once. With nothing provable the last speeds stay in force,
-  with no "Movement paused" line while the player can move. By Adam's
+  out where there is none. The rate is the higher of the rate remembered
+  from the last report, which never carries a root or a snare, and the gain
+  it can evaluate now, lowered by a root or a snare it can evaluate now; the
+  weight is as it stands. The session takes the bound as reported and
+  starts a grant from it where none is in force, so a zone-in, or a root or
+  snare fading under a song, moves at once. With no earlier report and
+  nothing provable, input waits; there is no "Movement paused" line while
+  the player can move. By Adam's
   decision of 11-10 this can be faster than the original client would allow
   until the inputs are proven (recording checklist 6.451). Networking pinned
-  to 2993c5b (eq-network #292).
+  to 88e6afe (eq-network #292).
 
 - Use the class tools as the Titanium program does (Batch B2). On EQEmu and
   P99, Fishing, Pick Pockets, Begging, Sense Traps, Disarm Traps, Pick Lock

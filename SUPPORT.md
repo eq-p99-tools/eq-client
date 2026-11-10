@@ -16,8 +16,8 @@ Quarm/TAKP behavior. Frontends use runtime capabilities, not server-name flags.
 ## Server policy snapshot
 
 The following summarizes the networking revision pinned by this application's
-Cargo.lock: `2993c5ba97e0189f0c7b8429f4f5c818de80819b`. Its
-[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/2993c5ba97e0189f0c7b8429f4f5c818de80819b/crates/eq-network/src/client/session/servers.rs)
+Cargo.lock: `88e6afe8a302b283a3e202e0ed9f64f09e6c8d54`. Its
+[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/88e6afe8a302b283a3e202e0ed9f64f09e6c8d54/crates/eq-network/src/client/session/servers.rs)
 are the source for this table. **Yes means provided by that policy**, not a live
 certification, and individual operations still validate their prerequisites.
 
@@ -143,11 +143,12 @@ landing, a level, a change in belongings or a server's move asks for the
 inputs again while the speeds in force go on, and a server's move keeps
 autorun and held keys. Where a term cannot be proven, the client reports the
 terms it can prove: each unproven one from its last report, or left out where
-there is none, with any root or snare it can evaluate and the weight as it
-stands. The session never lets that speed a grant up, and starts one from it
-where none is in force. This can be faster than the original client would
-allow until the inputs are proven, by Adam's decision of 11-10 (checklist
-6.451). Bounded passive falls remain
+there is none. The rate is the higher of the rate remembered with no root or
+snare in it and the gain it can evaluate now, lowered by any root or snare it
+can evaluate now; the weight is as it stands. The session takes that as
+reported, and starts a grant from it where none is in force. This can be
+faster than the original client would allow until the inputs are proven, by
+Adam's decision of 11-10 (checklist 6.451). Bounded passive falls remain
 available. Supported spell values scale by caster level. Equipment, food,
 bag reduction, coins and EQMac fatigue contribute where established; unsupported
 effects and affecting or unknown equipment histories remain unavailable.
@@ -163,11 +164,11 @@ affected mechanics unavailable while chat remains usable. See [installed spell
 providers](docs/spell-providers.md). These source and synthetic checks add no live
 compatibility certification.
 
-The pinned networking [combat](https://github.com/eq-p99-tools/eq-network/blob/2993c5ba97e0189f0c7b8429f4f5c818de80819b/docs/quarm-combat.md),
-[loot](https://github.com/eq-p99-tools/eq-network/blob/2993c5ba97e0189f0c7b8429f4f5c818de80819b/docs/eqmac-looting.md) and
-[world-object](https://github.com/eq-p99-tools/eq-network/blob/2993c5ba97e0189f0c7b8429f4f5c818de80819b/docs/eqmac-world-objects.md)
+The pinned networking [combat](https://github.com/eq-p99-tools/eq-network/blob/88e6afe8a302b283a3e202e0ed9f64f09e6c8d54/docs/quarm-combat.md),
+[loot](https://github.com/eq-p99-tools/eq-network/blob/88e6afe8a302b283a3e202e0ed9f64f09e6c8d54/docs/eqmac-looting.md) and
+[world-object](https://github.com/eq-p99-tools/eq-network/blob/88e6afe8a302b283a3e202e0ed9f64f09e6c8d54/docs/eqmac-world-objects.md)
 contracts record their limits and controlled live checklists. The dated
-[P99/Quarm gap report](https://github.com/eq-p99-tools/eq-network/blob/2993c5ba97e0189f0c7b8429f4f5c818de80819b/docs/public-server-gaps.md)
+[P99/Quarm gap report](https://github.com/eq-p99-tools/eq-network/blob/88e6afe8a302b283a3e202e0ed9f64f09e6c8d54/docs/public-server-gaps.md)
 retains the earlier inspection and its scenario-specific evidence.
 
 ### Public-parity checks, 2026-11-02

@@ -570,8 +570,10 @@ impl Controls {
     }
 
     /// A same-zone landing ends the old move and probes collision afresh.
+    /// Input goes on as after any server's move: the program's same-zone
+    /// warp touches no input (read R18, 0x48aaa6).
     pub(super) fn same_zone_landed(&mut self) {
-        self.reset(None);
+        self.rebase();
         self.pending = None;
         self.placement = placement::Check::default();
     }

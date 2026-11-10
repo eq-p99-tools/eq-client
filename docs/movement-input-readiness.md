@@ -2,18 +2,21 @@
 
 The renderer reports explicit ready, bounded or unavailable movement inputs for
 the current session revision. Before the first grant of an admission, missing
-inventory, attributes, coin state, buff membership or affecting spell data
-holds input back. After it, nothing but a root, a stun, a freeze, death,
-zoning or not standing stops the player, as in the original client (reads R7,
-R18): a recheck keeps the speeds in force while the new report is worked out,
-and an unproven report carries every term the client can prove (`Bounded`:
-each unproven term from the last report, or left out where there is none, with
-a root or a snare it can evaluate and the weight as it stands). The session
-never lets a bound speed up a grant in force and starts one from it where none
-is, so a zone-in or a root fading under a song moves at once. By Adam's decision of 11-10 this can be faster
-than the original client would allow until the inputs are proven (recording
-checklist 6.451). A confirmed empty inventory is a valid zero load. Corrections and new admissions cannot reuse an earlier report.
-Queue saturation retries rather than leaving an old grant indefinitely.
+inventory, attributes, coin state, buff membership or affecting spell data holds
+input back. After it, nothing but a root, a stun, a freeze, death, zoning or not
+standing stops the player, as in the original client (reads R7, R18): a recheck
+keeps the speeds in force while the new report is worked out, and an unproven
+report carries every term the client can prove (`Bounded`: each unproven term
+from the last report, or left out where there is none). Its rate is the higher
+of the rate remembered from the last report, which never carries a root or a
+snare, and the gain the client can evaluate now, lowered by a root or a snare it
+can evaluate now; its weight is as it stands. The session takes a bound as
+reported and starts a grant from it where none is in force, so a zone-in, or a
+root or snare fading under a song, moves at once. By Adam's decision of 11-10
+this can be faster than the original client would allow until the inputs are
+proven (recording checklist 6.451). A confirmed empty inventory is a valid zero
+load. Corrections and new admissions cannot reuse an earlier report. Queue
+saturation retries rather than leaving an old grant indefinitely.
 Purse and cursor coins require receipt in this admission. Bank balances do not
 contribute to carried weight, and an unknown bank balance alone does not block it.
 
@@ -40,16 +43,16 @@ inventory snapshot. An ordinary cursor resync can leave the landing bound
 usable during that pause.
 Recalibration preserves an in-progress descent and pending fall report.
 
-The session owns HP/sneak speed adjustments, movement caps and permission. A
-new positive speed for a player already moving replaces only the speeds; held
-keys, taps, a queued or crouched jump, autorun and a jump under way go on, the
-jump's sideways carry limited to the new speed. A server's move starts
-prediction afresh with the speeds kept; autorun, held keys, a jump request and
-a crouch go on from the new place (read R18). When the session withdraws input (a
-root, death, zoning), the renderer clears taps, autorun and queued jumps but
-still simulates passive descent where supported. The session independently rejects
-horizontal drift, turns and ascent during withdrawal. Death and transfer still
-suspend all movement.
+The session owns HP/sneak speed adjustments, movement caps and permission. A new
+positive speed for a player already moving replaces only the speeds; held keys,
+taps, a queued or crouched jump, autorun and a jump under way go on, the jump's
+sideways carry limited to the new speed. A server's move or a same-zone landing
+starts prediction afresh with the speeds kept; autorun, held keys, a jump
+request and a crouch go on from the new place (read R18). When the session
+withdraws input (a root, death, zoning), the renderer clears taps, autorun and
+queued jumps but still simulates passive descent where supported. The session
+independently rejects horizontal drift, turns and ascent during withdrawal.
+Death and transfer still suspend all movement.
 
 ## Buff membership and diagnostic reports
 

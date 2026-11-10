@@ -16,6 +16,7 @@ fn calculate(
         Projected {
             inputs,
             exact: true,
+            ..
         } => Ok(inputs),
         Projected { .. } => Err(Missing::Effects),
     }
@@ -1098,7 +1099,7 @@ fn identical_value_recovery_uses_a_fresh_identity_and_rejects_the_old_receipt() 
     assert!(matches!(
         rx.try_recv(),
         Ok(ClientCommand::SpeedInputs {
-            state: SpeedInputState::Unavailable(_),
+            state: SpeedInputState::Bounded { .. },
             ..
         })
     ));
@@ -1201,7 +1202,10 @@ fn pending_drop_keeps_movement_bounded_until_inventory_is_invalidated() {
     assert!(matches!(
         rx.try_recv(),
         Ok(ClientCommand::SpeedInputs {
-            state: SpeedInputState::Unavailable(Missing::Inventory),
+            state: SpeedInputState::Bounded {
+                missing: Missing::Inventory,
+                ..
+            },
             ..
         })
     ));
@@ -1493,7 +1497,10 @@ fn unresolved_strength_and_predicted_load_keep_their_actual_refusal() {
     assert!(matches!(
         rx.try_recv(),
         Ok(ClientCommand::SpeedInputs {
-            state: SpeedInputState::Unavailable(Missing::Prediction),
+            state: SpeedInputState::Bounded {
+                missing: Missing::Prediction,
+                ..
+            },
             ..
         })
     ));
@@ -1678,7 +1685,7 @@ fn a_root_after_an_unevaluable_effect_still_roots() {
         SpeedInputState::Ready(SpeedInputs { rate: -1000, .. })
     ));
     // The root is not what a later unproven term goes back to.
-    assert_eq!(report.remember, None);
+    assert_eq!(report.remember.map(|inputs| inputs.rate), Some(30));
 }
 
 /// A snare the client can evaluate proves the rate is at most its own, by
@@ -1776,7 +1783,7 @@ fn a_root_fading_under_an_unproven_song_restores_the_kept_rate() {
         rooted.state,
         SpeedInputState::Ready(SpeedInputs { rate: -1000, .. })
     ));
-    assert_eq!(rooted.remember, None);
+    assert_eq!(rooted.remember.map(|inputs| inputs.rate), Some(30));
     testing::news(
         &mut state,
         [WorldEvent::Buff(BuffUpdate {
@@ -1796,10 +1803,10 @@ fn a_root_fading_under_an_unproven_song_restores_the_kept_rate() {
     ));
 }
 
-/// Inputs the host cannot work out at all are reported as a bound only
-/// where a term it can prove is slower than the last report.
+/// Inputs the host cannot work out at all are a bound from the last report
+/// with what it can prove now; only with no last report is it unavailable.
 #[test]
-fn missing_inputs_bound_the_last_report_only_where_proven_slower() {
+fn missing_inputs_bound_the_last_report() {
     let mut state = online();
     let last = SpeedInputs {
         rate: 30,
@@ -1807,10 +1814,13 @@ fn missing_inputs_bound_the_last_report_only_where_proven_slower() {
         capacity: 90,
         eqmac_fatigue: None,
     };
-    // No belongings yet: nothing provable, so the session keeps its grant.
+    // No belongings yet: the last report as it stands.
     assert_eq!(
         super::reported(state.world(), effects, Some(last)).state,
-        SpeedInputState::Unavailable(Missing::Inventory)
+        SpeedInputState::Bounded {
+            inputs: last,
+            missing: Missing::Inventory,
+        }
     );
     assert_eq!(
         super::reported(state.world(), effects, None).state,
@@ -1825,6 +1835,71 @@ fn missing_inputs_bound_the_last_report_only_where_proven_slower() {
             missing: Missing::Inventory,
         }
     ));
+}
+
+fn fade(slot: u32, spell_id: u32) -> WorldEvent {
+    WorldEvent::Buff(BuffUpdate {
+        replaces_slot: false,
+        entity_id: 7,
+        slot,
+        spell_id,
+        buff: None,
+    })
+}
+
+fn rate(report: &Reported) -> i16 {
+    match report.state {
+        SpeedInputState::Ready(inputs) | SpeedInputState::Bounded { inputs, .. } => inputs.rate,
+        SpeedInputState::Unavailable(missing) => panic!("{missing:?}"),
+    }
+}
+
+/// A snare that lands before an unproven song and fades during it gives the
+/// gain kept from before the snare back: the rate remembered never carries
+/// a snare.
+#[test]
+fn a_snare_fading_under_an_unproven_song_gives_the_kept_gain_back() {
+    let mut state = online();
+    ready(&mut state);
+    testing::news(&mut state, [buff(0, 1)]);
+    let gained = super::reported(state.world(), effects, None);
+    assert!(rate(&gained) > 0);
+    testing::news(&mut state, [buff(1, 2)]);
+    let snared = super::reported(state.world(), effects, gained.remember);
+    assert!(rate(&snared) < 0);
+    assert_eq!(
+        snared.remember.map(|inputs| inputs.rate),
+        Some(rate(&gained))
+    );
+    testing::news(&mut state, [buff(2, 6)]);
+    let song = super::reported(state.world(), effects, snared.remember);
+    assert!(matches!(song.state, SpeedInputState::Bounded { .. }));
+    assert_eq!(rate(&song), rate(&snared));
+    testing::news(&mut state, [fade(1, 2)]);
+    let faded = super::reported(state.world(), effects, song.remember);
+    assert!(matches!(faded.state, SpeedInputState::Bounded { .. }));
+    assert_eq!(rate(&faded), rate(&gained));
+}
+
+/// A speed buff the client can evaluate that lands during an unproven song
+/// applies at once.
+#[test]
+fn an_evaluable_gain_during_an_unproven_song_applies() {
+    let mut state = online();
+    ready(&mut state);
+    let last = SpeedInputs {
+        rate: 0,
+        weight: 0,
+        capacity: 90,
+        eqmac_fatigue: None,
+    };
+    testing::news(&mut state, [buff(0, 6)]);
+    let song = super::reported(state.world(), effects, Some(last));
+    assert_eq!(rate(&song), 0);
+    testing::news(&mut state, [buff(1, 1)]);
+    let gained = super::reported(state.world(), effects, song.remember);
+    assert!(matches!(gained.state, SpeedInputState::Bounded { .. }));
+    assert!(rate(&gained) > 0);
 }
 
 #[test]
@@ -1880,7 +1955,10 @@ fn reports_withdrawal_recovery_each_revision_and_retries_full_queue() {
     assert!(matches!(
         rx.try_recv(),
         Ok(ClientCommand::SpeedInputs {
-            state: SpeedInputState::Unavailable(Missing::Inventory),
+            state: SpeedInputState::Bounded {
+                missing: Missing::Inventory,
+                ..
+            },
             ..
         })
     ));
@@ -2137,7 +2215,13 @@ fn scribed_scroll_consumption_reports_known_load_without_hiding_an_unresolved_ba
             app.world().resource::<crate::spellbook::SpellNames>(),
         );
         if banked {
-            assert_eq!(input, SpeedInputState::Unavailable(Missing::Prediction));
+            assert!(matches!(
+                input,
+                SpeedInputState::Bounded {
+                    missing: Missing::Prediction,
+                    ..
+                }
+            ));
             assert!(load.is_none());
         } else {
             assert!(matches!(
