@@ -22,6 +22,16 @@ fn calculate(
     }
 }
 
+/// A report kept from earlier: its inputs, with its rate as the gain of
+/// equipment and food and of buffs alike.
+fn kept(inputs: SpeedInputs) -> Remembered {
+    Remembered {
+        inputs,
+        worn_gain: inputs.rate.max(0),
+        buff_gain: inputs.rate.max(0),
+    }
+}
+
 fn online() -> OnlineState {
     let mut state = OnlineState::new(true);
     let mut player = testing::player(7);
@@ -1679,13 +1689,16 @@ fn a_root_after_an_unevaluable_effect_still_roots() {
         capacity: 90,
         eqmac_fatigue: None,
     };
-    let report = super::reported(state.world(), effects, Some(last));
+    let report = super::reported(state.world(), effects, Some(kept(last)));
     assert!(matches!(
         report.state,
         SpeedInputState::Ready(SpeedInputs { rate: -1000, .. })
     ));
-    // The root is not what a later unproven term goes back to.
-    assert_eq!(report.remember.map(|inputs| inputs.rate), Some(30));
+    // Nothing of the root is remembered, and nothing of the last report.
+    assert_eq!(
+        report.remember.map(|kept| (kept.worn_gain, kept.buff_gain)),
+        Some((0, 0))
+    );
 }
 
 /// A snare the client can evaluate proves the rate is at most its own, by
@@ -1710,16 +1723,16 @@ fn a_snare_after_an_unevaluable_effect_bounds_the_rate() {
         capacity: 90,
         eqmac_fatigue: None,
     };
-    match super::reported(state.world(), effects, Some(last)).state {
+    match super::reported(state.world(), effects, Some(kept(last))).state {
         SpeedInputState::Bounded { inputs, .. } => assert_eq!(inputs.rate, rate),
         other => panic!("{other:?}"),
     }
 }
 
-/// Unproven effects report every term the host can prove: the rate kept
-/// from the last report, the weight as it stands. The session takes the
-/// bound no faster than the grant in force; with none in force, it starts
-/// one at once (a zone-in with an unproven song).
+/// Unproven effects report every term the host can prove now, with the
+/// unproven ones left out and nothing from the last report, since buff
+/// membership, equipment and load are all known. The session starts a
+/// grant from it at once where none is in force (a zone-in mid-song).
 #[test]
 fn unproven_effects_report_the_proven_terms() {
     let mut state = online();
@@ -1738,103 +1751,95 @@ fn unproven_effects_report_the_proven_terms() {
         capacity: 90,
         eqmac_fatigue: None,
     };
-    assert!(matches!(
-        super::reported(state.world(), effects, Some(last)).state,
-        SpeedInputState::Bounded {
-            inputs: SpeedInputs {
-                weight: 150,
-                rate: 30,
-                ..
-            },
-            missing: Missing::Effects,
-        }
-    ));
-    // With no earlier report, the unproven terms are left out.
-    let first = super::reported(state.world(), effects, None);
-    assert!(matches!(
-        first.state,
-        SpeedInputState::Bounded {
-            inputs: SpeedInputs {
-                weight: 150,
-                rate: 0,
-                ..
-            },
-            missing: Missing::Effects,
-        }
-    ));
-    assert_eq!(first.remember.map(|inputs| inputs.rate), Some(0));
+    for last in [Some(kept(last)), None] {
+        assert!(matches!(
+            super::reported(state.world(), effects, last).state,
+            SpeedInputState::Bounded {
+                inputs: SpeedInputs {
+                    weight: 150,
+                    rate: 0,
+                    ..
+                },
+                missing: Missing::Effects,
+            }
+        ));
+    }
 }
 
-/// A root that fades while an unproven song runs gives the player back
-/// the rate kept from before the root, not the root's.
+/// A root that fades while an unproven song runs frees the player at once.
 #[test]
-fn a_root_fading_under_an_unproven_song_restores_the_kept_rate() {
+fn a_root_fading_under_an_unproven_song_frees_the_player() {
     let mut state = online();
     ready(&mut state);
-    let last = SpeedInputs {
-        rate: 30,
-        weight: 0,
-        capacity: 90,
-        eqmac_fatigue: None,
-    };
     testing::news(&mut state, [buff(0, 6), buff(1, 3)]);
-    let rooted = super::reported(state.world(), effects, Some(last));
+    let rooted = super::reported(state.world(), effects, None);
     assert!(matches!(
         rooted.state,
         SpeedInputState::Ready(SpeedInputs { rate: -1000, .. })
     ));
-    assert_eq!(rooted.remember.map(|inputs| inputs.rate), Some(30));
-    testing::news(
-        &mut state,
-        [WorldEvent::Buff(BuffUpdate {
-            replaces_slot: false,
-            entity_id: 7,
-            slot: 1,
-            spell_id: 3,
-            buff: None,
-        })],
-    );
+    testing::news(&mut state, [fade(1, 3)]);
     assert!(matches!(
-        super::reported(state.world(), effects, Some(last)).state,
+        super::reported(state.world(), effects, rooted.remember).state,
         SpeedInputState::Bounded {
-            inputs: SpeedInputs { rate: 30, .. },
+            inputs: SpeedInputs { rate: 0, .. },
             ..
         }
     ));
 }
 
-/// Inputs the host cannot work out at all are a bound from the last report
-/// with what it can prove now; only with no last report is it unavailable.
+/// Inputs the host cannot work out at all are a bound: a term comes from
+/// the last report only where the client no longer knows it. With buff
+/// membership known, buffs are as they are now; only equipment and food
+/// come from the last report. Only with no last report is it unavailable.
 #[test]
-fn missing_inputs_bound_the_last_report() {
+fn missing_inputs_take_from_the_last_report_only_what_is_unknown() {
     let mut state = online();
-    let last = SpeedInputs {
+    let inputs = SpeedInputs {
         rate: 30,
         weight: 0,
         capacity: 90,
         eqmac_fatigue: None,
     };
-    // No belongings yet: the last report as it stands.
-    assert_eq!(
-        super::reported(state.world(), effects, Some(last)).state,
+    let rate_with =
+        |state: &OnlineState, last| rate(&super::reported(state.world(), effects, last));
+    // (e) Belongings unknown, membership known: a remembered speed buff that
+    // has faded gives no gain; a remembered worn gain stays.
+    let buffed = Remembered {
+        inputs,
+        worn_gain: 0,
+        buff_gain: 30,
+    };
+    assert_eq!(rate_with(&state, Some(buffed)), 0);
+    let worn = Remembered {
+        inputs,
+        worn_gain: 30,
+        buff_gain: 0,
+    };
+    assert_eq!(rate_with(&state, Some(worn)), 30);
+    assert!(matches!(
+        super::reported(state.world(), effects, Some(worn)).state,
         SpeedInputState::Bounded {
-            inputs: last,
             missing: Missing::Inventory,
+            ..
         }
-    );
+    ));
+    // A buff evaluable now applies, and a root proven roots.
+    testing::news(&mut state, [buff(0, 1)]);
+    assert!(rate_with(&state, Some(buffed)) > 0);
+    testing::news(&mut state, [buff(1, 3)]);
+    assert_eq!(rate_with(&state, Some(worn)), -1000);
+    // (g) With no last report there is nothing to take from.
     assert_eq!(
         super::reported(state.world(), effects, None).state,
         SpeedInputState::Unavailable(Missing::Inventory)
     );
-    // A root proven: the bound roots.
-    testing::news(&mut state, [buff(0, 3)]);
-    assert!(matches!(
-        super::reported(state.world(), effects, Some(last)).state,
-        SpeedInputState::Bounded {
-            inputs: SpeedInputs { rate: -1000, .. },
-            missing: Missing::Inventory,
-        }
-    ));
+    // (f) Membership unknown: the remembered buff gain is kept.
+    let mut unknown = OnlineState::new(true);
+    let mut player = testing::player(7);
+    player.level = 20;
+    testing::admit(&mut unknown, 1, player);
+    assert!(unknown.world().buffs().slots().is_none());
+    assert_eq!(rate_with(&unknown, Some(buffed)), 30);
 }
 
 fn fade(slot: u32, spell_id: u32) -> WorldEvent {
@@ -1868,7 +1873,7 @@ fn a_snare_fading_under_an_unproven_song_gives_the_kept_gain_back() {
     let snared = super::reported(state.world(), effects, gained.remember);
     assert!(rate(&snared) < 0);
     assert_eq!(
-        snared.remember.map(|inputs| inputs.rate),
+        snared.remember.map(|kept| kept.buff_gain),
         Some(rate(&gained))
     );
     testing::news(&mut state, [buff(2, 6)]);
@@ -1894,12 +1899,56 @@ fn an_evaluable_gain_during_an_unproven_song_applies() {
         eqmac_fatigue: None,
     };
     testing::news(&mut state, [buff(0, 6)]);
-    let song = super::reported(state.world(), effects, Some(last));
+    let song = super::reported(state.world(), effects, Some(kept(last)));
     assert_eq!(rate(&song), 0);
     testing::news(&mut state, [buff(1, 1)]);
     let gained = super::reported(state.world(), effects, song.remember);
     assert!(matches!(gained.state, SpeedInputState::Bounded { .. }));
     assert!(rate(&gained) > 0);
+}
+
+/// (a) A speed buff that fades while an unevaluable effect stays gives no
+/// gain at once: a buff the client knows has ended is proven wrong.
+#[test]
+fn a_faded_speed_buff_under_an_unevaluable_effect_ends_at_once() {
+    let mut state = online();
+    ready(&mut state);
+    testing::news(&mut state, [buff(0, 6), buff(1, 1)]);
+    let gained = super::reported(state.world(), effects, None);
+    assert!(rate(&gained) > 0);
+    testing::news(&mut state, [fade(1, 1)]);
+    let faded = super::reported(state.world(), effects, gained.remember);
+    assert!(matches!(faded.state, SpeedInputState::Bounded { .. }));
+    assert_eq!(rate(&faded), 0);
+}
+
+/// (b) The same with the unevaluable term on a worn item.
+#[test]
+fn a_faded_speed_buff_beside_an_unevaluable_worn_effect_ends_at_once() {
+    let mut state = online();
+    ready(&mut state);
+    let mut worn = item(13, 0, 0);
+    worn.details.equipment = Some(eq_client_core::EquipmentRules {
+        worn: Some(eq_network_game::items::WornEffect {
+            spell_id: 6,
+            effect_type: 1,
+            level: 0,
+            level2: 0,
+        }),
+        ..eq_client_core::EquipmentRules::default()
+    });
+    testing::news(
+        &mut state,
+        [WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![worn]))],
+    );
+    testing::news(&mut state, [buff(0, 1)]);
+    let gained = super::reported(state.world(), effects, None);
+    assert!(matches!(gained.state, SpeedInputState::Bounded { .. }));
+    assert!(rate(&gained) > 0);
+    testing::news(&mut state, [fade(0, 1)]);
+    let faded = super::reported(state.world(), effects, gained.remember);
+    assert!(matches!(faded.state, SpeedInputState::Bounded { .. }));
+    assert_eq!(rate(&faded), 0);
 }
 
 #[test]

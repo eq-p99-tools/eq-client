@@ -6,17 +6,19 @@ inventory, attributes, coin state, buff membership or affecting spell data holds
 input back. After it, nothing but a root, a stun, a freeze, death, zoning or not
 standing stops the player, as in the original client (reads R7, R18): a recheck
 keeps the speeds in force while the new report is worked out, and an unproven
-report carries every term the client can prove (`Bounded`: each unproven term
-from the last report, or left out where there is none). Its rate is the higher
-of the rate remembered from the last report, which never carries a root or a
-snare, and the gain the client can evaluate now, lowered by a root or a snare it
-can evaluate now; its weight is as it stands. The session takes a bound as
-reported and starts a grant from it where none is in force, so a zone-in, or a
-root or snare fading under a song, moves at once. By Adam's decision of 11-10
-this can be faster than the original client would allow until the inputs are
-proven (recording checklist 6.451). A confirmed empty inventory is a valid zero
-load. Corrections and new admissions cannot reuse an earlier report. Queue
-saturation retries rather than leaving an old grant indefinitely.
+report carries every term the client can prove (`Bounded`). A term it can
+evaluate now is taken as it is now, slower or faster, and one it cannot evaluate
+is left out. A term comes from the last report only where the client no longer
+knows it: the gain of equipment and food while belongings are not known, and of
+buffs while buff membership is not known, never with a root or a snare in it,
+and with any root or snare it can evaluate now applied. A speed buff the client
+knows has ended ends at once. The session takes a bound as reported and starts a
+grant from it where none is in force, so a zone-in, or a root or snare fading
+under a song, moves at once. By Adam's decision of 11-10 this can be faster than
+the original client would allow until the inputs are proven (recording checklist
+6.451). A confirmed empty inventory is a valid zero load. Corrections and new
+admissions cannot reuse an earlier report. Queue saturation retries rather than
+leaving an old grant indefinitely.
 Purse and cursor coins require receipt in this admission. Bank balances do not
 contribute to carried weight, and an unknown bank balance alone does not block it.
 

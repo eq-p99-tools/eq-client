@@ -227,6 +227,7 @@ fn calculate(
             }
         }
     }
+    let worn = Terms::of(modifiers);
     let (buffed, proven) = buff_terms(world, &effects)?;
     modifiers.add(buffed);
     exact &= proven;
@@ -269,8 +270,8 @@ fn calculate(
     Ok(Projected {
         inputs,
         exact: exact || modifiers.rooted,
-        complete: exact,
-        terms: Terms::of(modifiers),
+        worn_gain: worn.gain,
+        buff_gain: Terms::of(buffed).gain,
     })
 }
 
@@ -329,9 +330,10 @@ fn buff_terms(
 struct Projected {
     inputs: SpeedInputs,
     exact: bool,
-    /// Whether every term was evaluable, a root aside.
-    complete: bool,
-    terms: Terms,
+    /// The fastest evaluable gain of equipment and food, and of buffs and
+    /// effects, each apart from any snare.
+    worn_gain: i16,
+    buff_gain: i16,
 }
 
 /// The movement terms the client can evaluate: the fastest gain apart from
@@ -356,11 +358,10 @@ impl Terms {
         }
     }
 
-    /// The rate from a remembered one with no root or snare in it: the
-    /// higher of it and the gain now, lowered by a root or snare now.
-    fn rate(self, remembered: i16) -> i16 {
-        let base = remembered.max(self.gain);
-        self.slowing.map_or(base, |slowing| slowing.min(base))
+    /// The rate: the gain, lowered by a root or a snare.
+    fn rate(self) -> i16 {
+        self.slowing
+            .map_or(self.gain, |slowing| slowing.min(self.gain))
     }
 }
 
@@ -423,50 +424,38 @@ pub(crate) fn inputs(
 /// What the host reports: the exact inputs where it can work them out.
 /// Otherwise the inputs from every term it can prove
 /// ([`SpeedInputState::Bounded`]; Adam's decision of 11-10, recording
-/// checklist 6.451): each unproven term is taken from the last report where
-/// one exists and left out where none does. The rate is the higher of the
-/// remembered one and the gain evaluable now, lowered by a root or a snare
-/// evaluable now; the weight is as proven. The session takes a bound as
-/// reported. With no earlier report and nothing provable it says what is
-/// missing, and the session keeps the grant in force, or waits where there
-/// is none.
+/// checklist 6.451). A term it can evaluate now is taken as it is now,
+/// slower or faster; one it cannot evaluate is left out. A term comes from
+/// the last report only where the client no longer knows it: the gain of
+/// equipment and food while belongings are unknown, and of buffs while buff
+/// membership is unknown, with any root or snare it can evaluate now
+/// applied. The session takes a bound as reported. With no earlier report
+/// and nothing provable it says what is missing, and the session keeps the
+/// grant in force, or waits where there is none.
 fn reported(
     world: &ClientWorld,
     effects: impl Fn(u32) -> Option<Vec<Effect>> + Copy,
-    last: Option<SpeedInputs>,
+    last: Option<Remembered>,
 ) -> Reported {
-    // What a later unproven term goes back to: the rate with no root or
-    // snare in it, so one that fades frees the player.
-    let remember = |inputs: SpeedInputs, complete: bool, terms: Terms| SpeedInputs {
-        rate: match last {
-            Some(last) if !complete => last.rate.max(terms.gain),
-            _ => terms.gain,
-        },
-        ..inputs
-    };
     match calculate(world, effects) {
-        Ok(Projected {
-            inputs,
-            exact: true,
-            complete,
-            terms,
-        }) => Reported {
-            state: SpeedInputState::Ready(inputs),
-            remember: Some(remember(inputs, complete, terms)),
-        },
-        // The effects are unproven: the rate from the remembered one and the
-        // terms evaluable now, and the load as proven.
-        Ok(Projected { inputs, terms, .. }) => {
-            let bounded = last.map_or(inputs, |last| SpeedInputs {
-                rate: terms.rate(last.rate),
-                ..inputs
-            });
-            Reported {
-                state: SpeedInputState::Bounded {
-                    inputs: bounded,
+        // Membership, equipment and load are known: the proven terms now,
+        // with nothing from the last report.
+        Ok(projected) => {
+            let state = if projected.exact {
+                SpeedInputState::Ready(projected.inputs)
+            } else {
+                SpeedInputState::Bounded {
+                    inputs: projected.inputs,
                     missing: Missing::Effects,
-                },
-                remember: Some(remember(bounded, false, terms)),
+                }
+            };
+            Reported {
+                state,
+                remember: Some(Remembered {
+                    inputs: projected.inputs,
+                    worn_gain: projected.worn_gain,
+                    buff_gain: projected.buff_gain,
+                }),
             }
         }
         Err(missing) => {
@@ -476,10 +465,22 @@ fn reported(
                     remember: None,
                 };
             };
-            let terms = known_terms(world, effects);
+            let known = known_terms(world, effects);
+            // Buffs are evaluated as they are now wherever membership is
+            // known; equipment and food come from the last report.
+            let buff_gain = if world.buffs().slots().is_some() {
+                known.gain
+            } else {
+                last.buff_gain
+            };
+            let rate = Terms {
+                gain: last.worn_gain.max(buff_gain),
+                slowing: known.slowing,
+            }
+            .rate();
             let mut bounded = SpeedInputs {
-                rate: terms.rate(last.rate),
-                ..last
+                rate,
+                ..last.inputs
             };
             if let Ok(tenths) = world.movement_weight() {
                 bounded.weight = u16::try_from(
@@ -492,18 +493,31 @@ fn reported(
                     inputs: bounded,
                     missing,
                 },
-                remember: Some(remember(bounded, false, terms)),
+                remember: Some(Remembered {
+                    inputs: bounded,
+                    buff_gain,
+                    ..last
+                }),
             }
         }
     }
 }
 
-/// A report, and the inputs a later unproven term goes back to, with no
-/// root or snare in their rate; None keeps the earlier ones.
+/// What a later report takes a term from where the client no longer knows
+/// it: the last inputs, and the gains apart from any root or snare.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Remembered {
+    inputs: SpeedInputs,
+    worn_gain: i16,
+    buff_gain: i16,
+}
+
+/// A report, and what a later report takes an unknown term from; None
+/// keeps the earlier one.
 #[derive(Debug, PartialEq)]
 struct Reported {
     state: SpeedInputState,
-    remember: Option<SpeedInputs>,
+    remember: Option<Remembered>,
 }
 
 /// Whether the player is rooted, as far as the client can prove: the exact
@@ -595,7 +609,7 @@ pub(crate) struct Reports {
     current: Option<Report>,
     /// The inputs last reported in this admission, exact or bounded: what the
     /// session keeps in force while new ones are unproven.
-    proven: Option<(u64, SpeedInputs)>,
+    proven: Option<(u64, Remembered)>,
 }
 
 /// One logical report, retained across queue retries. Its id also distinguishes

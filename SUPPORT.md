@@ -142,11 +142,11 @@ it, as in the original client (reads R7, R18): a buff, a song pulse, a spell
 landing, a level, a change in belongings or a server's move asks for the
 inputs again while the speeds in force go on, and a server's move keeps
 autorun and held keys. Where a term cannot be proven, the client reports the
-terms it can prove: each unproven one from its last report, or left out where
-there is none. The rate is the higher of the rate remembered with no root or
-snare in it and the gain it can evaluate now, lowered by any root or snare it
-can evaluate now; the weight is as it stands. The session takes that as
-reported, and starts a grant from it where none is in force. This can be
+terms it can prove: a term it can evaluate now is taken as it is now, slower or
+faster, one it cannot evaluate is left out, and a term comes from its last
+report only where the client no longer knows it (buff membership or belongings
+not known). The session takes that as reported, and starts a grant from it
+where none is in force. This can be
 faster than the original client would allow until the inputs are proven, by
 Adam's decision of 11-10 (checklist 6.451). Bounded passive falls remain
 available. Supported spell values scale by caster level. Equipment, food,
