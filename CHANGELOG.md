@@ -11,7 +11,10 @@
   behind (farther on the long leash, at the same steepest slope), looking
   down at the player, never below eye level; other views are the free
   camera's. A strafe goes at the run speed running and the walk speed
-  walking, halved while ducking. The duck key's toggle gains a test.
+  walking, halved while ducking. The duck key's toggle gains a test. The
+  air still slows a fall once a 50 ms step: the program does it once a
+  frame, and taking 60 frames a second would about halve the damage of
+  mid-height falls, so it waits on a recording (checklist 6.419).
 - Jump and turn as the Titanium program does. A hurt or overloaded
   player's jump starts at the same health and weight share that slows
   running. A jump from standing still with no forward input crouches for
