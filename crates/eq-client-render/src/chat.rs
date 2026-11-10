@@ -2217,7 +2217,28 @@ fn game_commands(
                 spawn_id: targeted_corpse(online).ok(),
             }]
         }),
-        "sit" => posture(eq_client_core::Posture::Sitting).map(|command| vec![command]),
+        // Titanium's /sit runs the sit toggle (0x46a445, read R19), which
+        // stands a player lying or looting; otherwise it sits, as before.
+        // Its refusal under a mesmerize is not modelled here (recording
+        // checklist 6.455).
+        "sit" => {
+            let world = online.world();
+            let standing_up = world.player().is_some_and(|player| {
+                matches!(
+                    world.posture(player.spawn_id),
+                    Some(
+                        eq_client_core::PostureState::Lying | eq_client_core::PostureState::Looting
+                    )
+                ) && super::hud::toggled_seat(world.posture(player.spawn_id), world.generation())
+                    == Some(eq_client_core::Posture::Standing)
+            });
+            posture(if standing_up {
+                eq_client_core::Posture::Standing
+            } else {
+                eq_client_core::Posture::Sitting
+            })
+            .map(|command| vec![command])
+        }
         "stand" => posture(eq_client_core::Posture::Standing).map(|command| vec![command]),
         "ranged" => {
             if words.trim().is_empty() {

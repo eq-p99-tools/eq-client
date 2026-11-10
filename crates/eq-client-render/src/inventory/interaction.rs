@@ -241,7 +241,13 @@ impl InventoryState {
 
     /// Takes the answer to the pending item use, never an earlier one;
     /// success is submission, not activation.
-    pub fn item_use_result(&mut self, session_id: u64, request_id: u64, error: Option<String>) {
+    pub fn item_use_result(
+        &mut self,
+        session_id: u64,
+        request_id: u64,
+        error: Option<String>,
+        present_error: bool,
+    ) {
         if self.actions.pending_use != Some((session_id, request_id)) {
             return;
         }
@@ -251,7 +257,8 @@ impl InventoryState {
                 self.actions.message =
                     "Item-use packet submitted; waiting for server result".into();
             }
-            Some(reason) => self.refuse(format!("Item use rejected: {reason}")),
+            Some(reason) if present_error => self.refuse(format!("Item use rejected: {reason}")),
+            Some(reason) => self.actions.message = format!("Item use rejected: {reason}"),
         }
         self.revision = self.revision.wrapping_add(1);
     }
@@ -923,11 +930,16 @@ mod tests {
         state.use_slot(InventorySlot(13), online, &sender, None, false, Vec::new);
         assert!(receiver.try_recv().is_err());
         assert_eq!(state.actions.pending_use, Some((9, request.request_id)));
-        state.item_use_result(8, request.request_id, None);
-        state.item_use_result(9, request.request_id + 1, None);
+        state.item_use_result(8, request.request_id, None, true);
+        state.item_use_result(9, request.request_id + 1, None, true);
         state.use_slot(InventorySlot(13), online, &sender, None, false, Vec::new);
         assert!(receiver.try_recv().is_err());
-        state.item_use_result(9, request.request_id, Some("Synthetic rejection".into()));
+        state.item_use_result(
+            9,
+            request.request_id,
+            Some("Synthetic rejection".into()),
+            true,
+        );
         state.use_slot(InventorySlot(13), online, &sender, None, false, Vec::new);
         let ClientCommand::UseItem(next) = receiver.try_recv().unwrap() else {
             panic!("expected a fresh manual item-use request")
@@ -956,10 +968,10 @@ mod tests {
         let state = &mut bench.state;
         state.actions.pending_use = Some((9, 2));
         state.actions.message = "Queued".into();
-        state.item_use_result(9, 1, Some("old rejection".into()));
-        state.item_use_result(8, 2, None);
+        state.item_use_result(9, 1, Some("old rejection".into()), true);
+        state.item_use_result(8, 2, None, true);
         assert_eq!(state.actions.message, "Queued");
-        state.item_use_result(9, 2, Some("Target unavailable".into()));
+        state.item_use_result(9, 2, Some("Target unavailable".into()), true);
         assert_eq!(
             state.actions.message,
             "Item use rejected: Target unavailable"
@@ -967,18 +979,18 @@ mod tests {
         // Only the refusal is on its way to the chat; progress stays here.
         assert_eq!(state.refused, ["Item use rejected: Target unavailable"]);
         state.actions.pending_use = Some((9, 3));
-        state.item_use_result(9, 3, None);
+        state.item_use_result(9, 3, None, true);
         assert_eq!(
             state.actions.message,
             "Item-use packet submitted; waiting for server result"
         );
-        state.item_use_result(9, 2, Some("late duplicate".into()));
+        state.item_use_result(9, 2, Some("late duplicate".into()), true);
         assert!(state.actions.message.contains("submitted"));
         assert_eq!(state.refused.len(), 1);
         state.actions.pending_use = Some((9, 4));
         state.next_use_id = 4;
         state.cancel_actions();
-        state.item_use_result(9, 4, None);
+        state.item_use_result(9, 4, None, true);
         assert_eq!(state.actions.message, "");
         assert_eq!(state.next_use_id, 4);
         assert_eq!(bench.data(), &before);

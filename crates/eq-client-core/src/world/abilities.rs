@@ -105,6 +105,11 @@ impl ClientWorld {
         if ability == Ability::Tracking {
             self.tracking_pressed();
         }
+        // The press lies down, turns auto attack off and feigns, in that
+        // order (Titanium read R19 a); the session tells the press after
+        // its request has gone.
+        changes.attack_ended |=
+            ability == Ability::FeignDeath && self.generation.lying().press_ends_attack;
         // The client says where the player faces; servers say nothing.
         if ability == Ability::SenseHeading
             && let Some(player) = self.player.as_ref()

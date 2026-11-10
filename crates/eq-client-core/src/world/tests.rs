@@ -2869,6 +2869,25 @@ fn abilities_are_the_skills_the_player_has_and_wait_on_the_sessions_timers() {
         },
     );
     assert_eq!(changes.notices, [Notice::Heading(6)]);
+    assert!(!changes.attack_ended);
+    // Titanium's Feign Death press turns auto attack off (read R19 a); the
+    // Mac-era client's is unread and does not.
+    let feigned = |world: &mut ClientWorld| {
+        game(
+            world,
+            WorldEvent::AbilityUsed {
+                session_id: 1,
+                ability: Ability::FeignDeath,
+                ready_in: Duration::ZERO,
+                string_id: None,
+            },
+        )
+        .attack_ended
+    };
+    assert!(feigned(&mut world));
+    world.carry_as(crate::GameDialect::EqMac);
+    assert!(!feigned(&mut world));
+    world.carry_as(crate::GameDialect::Titanium);
     let changes = game(
         &mut world,
         WorldEvent::AbilityRefused {
@@ -3682,6 +3701,7 @@ fn moves_and_replies_reach_the_front_end_for_the_current_admission() {
         session_id,
         request_id: 3,
         error: None,
+        string_id: None,
     };
     assert_eq!(game(&mut world, used(2)).replies, []);
     assert_eq!(
@@ -3689,7 +3709,34 @@ fn moves_and_replies_reach_the_front_end_for_the_current_admission() {
         [Reply::ItemUse {
             session_id: 1,
             request_id: 3,
-            error: None
+            error: None,
+            present_error: true,
+        }]
+    );
+    // A refusal in the program's words is said once, by its notice.
+    let lying = game(
+        &mut world,
+        WorldEvent::ItemUseAction {
+            session_id: 1,
+            request_id: 4,
+            error: Some("You can't cast lying down".into()),
+            string_id: Some(0x3099),
+        },
+    );
+    assert_eq!(
+        lying.notices,
+        [Notice::ItemUseRefused {
+            reason: "You can't cast lying down".into(),
+            string_id: Some(0x3099),
+        }]
+    );
+    assert_eq!(
+        lying.replies,
+        [Reply::ItemUse {
+            session_id: 1,
+            request_id: 4,
+            error: Some("You can't cast lying down".into()),
+            present_error: false,
         }]
     );
     // The connection's word names death when the player is dead.

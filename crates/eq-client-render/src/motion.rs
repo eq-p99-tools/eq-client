@@ -70,6 +70,8 @@ pub(super) struct Controls {
     /// program sets it, such as following, are not in this client:
     /// recording checklist 6.359).
     autorun: bool,
+    /// The player's posture as last seen, so a change turns autorun off.
+    posture: Option<eq_client_core::PostureState>,
     pending: Option<Pending>,
     pub last_accepted: Instant,
     moving: bool,
@@ -215,6 +217,7 @@ impl Default for Controls {
             jump_factor: 1.0,
             walking: false,
             autorun: false,
+            posture: None,
             pending: None,
             last_accepted: Instant::now(),
             moving: false,
@@ -1032,9 +1035,28 @@ pub(super) fn input(
         return;
     }
     let focused = keys.focused() && !detached && !stunned && controls.speed.is_some();
-    let scripted_facing = focused.then(|| keys.scripted_facing()).flatten();
+    // Where the program holds a lying player still (read R19 c), the keys
+    // neither move nor turn them, nor jump; mouse look turns them in the
+    // chase views only.
+    let posture = online
+        .world()
+        .player()
+        .and_then(|player| online.world().posture(player.spawn_id));
+    let lying = online.world().generation().lying().holds_still
+        && posture == Some(eq_client_core::PostureState::Lying);
+    let first_person = cameras
+        .single()
+        .is_ok_and(|(camera, _)| camera.is_first_person());
+    if lying {
+        controls.facing = None;
+    }
+    let scripted_facing = focused
+        .then(|| keys.scripted_facing())
+        .flatten()
+        .filter(|_| !lying);
     let scripted = keys.scripted();
-    let scripted_turn = scripted.contains(&Act::TurnLeft) || scripted.contains(&Act::TurnRight);
+    let scripted_turn =
+        !lying && (scripted.contains(&Act::TurnLeft) || scripted.contains(&Act::TurnRight));
     let heading_snapshots = online.world().generation().supports_heading_snapshots();
     // Following owns the heading, so a mouse turn meanwhile is not kept for
     // the sample after it ends.
@@ -1042,6 +1064,7 @@ pub(super) fn input(
         && scripted_facing.is_none()
         && !scripted_turn
         && controls.following.is_none()
+        && !(lying && first_person)
         && !aim.as_ref().is_some_and(|aim| aim.interrupted);
     let mouse_aim = aim
         .as_ref()
@@ -1070,14 +1093,21 @@ pub(super) fn input(
     if focused && keys.pressed(Act::Walk) && controls.walk_speed.is_some() {
         controls.walking = !controls.walking;
     }
-    let standing = online
-        .world()
-        .player()
-        .and_then(|player| online.world().posture(player.spawn_id))
-        .is_none_or(|posture| posture == eq_client_core::PostureState::Standing);
+    // Every change of the player's posture, theirs or the server's, turns
+    // autorun off (read R19, 0x483556). Autorun pressed while sitting never
+    // stands them (read R19c), so it stays off until they stand, which
+    // clears it again; a lying player's latch moves nothing while they lie
+    // (read R19 c).
+    let posture_changed = controls.posture != posture;
+    controls.posture = posture;
+    let standing = posture.is_none_or(|posture| posture == eq_client_core::PostureState::Standing);
     if focused && keys.pressed(Act::Autorun) {
         controls.autorun = !controls.autorun;
-    } else if keys.pressed(Act::Forward) || keys.pressed(Act::Back) || !standing {
+    } else if keys.pressed(Act::Forward)
+        || keys.pressed(Act::Back)
+        || posture_changed
+        || !(standing || lying)
+    {
         controls.autorun = false;
     }
     let now = Instant::now();
@@ -1109,6 +1139,7 @@ pub(super) fn input(
         && !swimming
         && !shoreline_active
         && !online.world().is_stunned()
+        && !lying
         && keys.pressed(Act::Jump)
         && controls.airborne.is_some()
         && controls.crouch.is_none()
@@ -1455,6 +1486,12 @@ pub(super) fn input(
     {
         intent.direction = Vec3::ZERO;
         intent.diagonal = None;
+    }
+    if lying {
+        intent.direction = Vec3::ZERO;
+        intent.diagonal = None;
+        intent.turn = 0.0;
+        controls.jump = None;
     }
     // Ducking halves a strafe (the Titanium speeds read; the R5 audit's S1),
     // which the session doesn't track.
