@@ -17,8 +17,13 @@
   leaves the player put (checklist 6.427), and the model is not drawn
   rising there. A player who steps off a rising lift is carried no further,
   and the step still names the lift that raised it. Between samples the
-  model is drawn on the rising floor. A lift is clicked where it stands now, so one
-  resting raised is used from its top (checklist 6.436). A lift that sinks drops its
+  model is drawn on the rising floor. A lift is in click reach from where it was
+  placed or from where it stands now, so one resting raised is called from
+  below and used from its top (checklist 6.436). A door that moves into the
+  player, such as a lift landing around someone beside it, no longer holds
+  them in place: its walls let them walk out, and its floor still holds them
+  up (checklist 6.439). The movement report names the door whose floor is
+  under the feet, if any. A lift that sinks drops its
   rider at once, as the program's floor sweep does, rather than leaving
   them standing on air until the gap passes a step. The script report lists nearby
   doors with their mechanism, field, offset and solidity. EQMac servers keep

@@ -1290,6 +1290,14 @@ pub(super) fn input(
         None
     };
     let world = surface_world.as_ref().unwrap_or(world);
+    // A door that moved into the body, such as a lift landing around a
+    // player beside it, does not hold them in (recording checklist 6.439).
+    let released_world = if placement_blocked || flying {
+        None
+    } else {
+        world.releasing_overlapped_doors(feet, body.height)
+    };
+    let world = released_world.as_ref().unwrap_or(world);
     if !placement_blocked && let Some(player) = online.world().player() {
         let position = player.position;
         let boundary = online

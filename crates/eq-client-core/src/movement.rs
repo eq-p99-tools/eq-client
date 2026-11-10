@@ -311,6 +311,44 @@ impl CollisionWorld {
     }
 
     /// The zone and the obstacles that stop the player walking.
+    /// This world without the walls of each door the body at `feet` is
+    /// already inside, if any: a door that moved into the body, such as a
+    /// lift landing around a player beside it, so the player can walk out
+    /// rather than be held in every direction. Its floor still holds them
+    /// up: the capsule rides above the feet, so a floor it stands on does not
+    /// count. What the program does with a body a door moves into is unread
+    /// (recording checklist 6.439, inferred).
+    #[must_use]
+    pub fn releasing_overlapped_doors(&self, feet: Vec3, height: f32) -> Option<Self> {
+        if !feet.is_finite() || !height.is_finite() || height < 1.0 {
+            return None;
+        }
+        let (pose, capsule) = body(feet, height);
+        let inside = |mesh: &CollisionMesh| {
+            contact(&pose, &capsule, &Pose::IDENTITY, &mesh.mesh, 0.0)
+                .ok()
+                .flatten()
+                .is_some_and(|contact| contact.dist < 0.0)
+        };
+        let mut released = false;
+        let obstacles = self
+            .obstacles
+            .iter()
+            .map(|(door, mesh, solidity)| {
+                let mut solidity = *solidity;
+                if door.is_some() && solidity.wall && inside(mesh) {
+                    solidity.wall = false;
+                    released = true;
+                }
+                (*door, Arc::clone(mesh), solidity)
+            })
+            .collect();
+        released.then(|| Self {
+            obstacles,
+            ..self.clone()
+        })
+    }
+
     fn wall_meshes(&self) -> impl Iterator<Item = &TriMesh> {
         std::iter::once(&self.terrain.mesh).chain(
             self.obstacles
@@ -866,6 +904,42 @@ mod tests {
                 .ray_distance(origin, Vec3::splat(f32::NAN), 20.0)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn a_door_that_moved_into_the_body_lets_it_walk_out_but_still_holds_it_up() {
+        // A box of walls 8 across, a door, dropped around a player at the
+        // origin, who could not otherwise take a step.
+        let walls = |half: f32| {
+            let mut triangles = Vec::new();
+            for (a, b) in [
+                ([-half, -half], [half, -half]),
+                ([half, -half], [half, half]),
+                ([half, half], [-half, half]),
+                ([-half, half], [-half, -half]),
+            ] {
+                let low = |p: [f32; 2]| [p[0], 0.0, p[1]];
+                let high = |p: [f32; 2]| [p[0], 10.0, p[1]];
+                triangles.push([low(a), low(b), high(b)]);
+                triangles.push([low(a), high(b), high(a)]);
+            }
+            Arc::new(CollisionMesh::new(triangles).unwrap())
+        };
+        let mut world = CollisionWorld::new(floor(0.0)).unwrap();
+        let feet = Vec3::new(3.8, 0.0, 0.0);
+        world.set_door_obstacles_with(vec![(1, walls(4.0), Solidity::BOTH)]);
+        assert!(world.step(feet, Vec3::X, 6.0).x - feet.x < 0.01);
+        let released = world.releasing_overlapped_doors(feet, 6.0).unwrap();
+        assert!(released.step(feet, Vec3::X, 6.0).x - feet.x > 0.9);
+        // Clear of it, or only standing on a door's floor, nothing changes.
+        assert!(world.releasing_overlapped_doors(Vec3::ZERO, 6.0).is_none());
+        let mut deck = CollisionWorld::new(floor(0.0)).unwrap();
+        deck.set_door_obstacles_with(vec![(
+            1,
+            Arc::new(CollisionMesh::new(floor(1.0)).unwrap()),
+            Solidity::BOTH,
+        )]);
+        assert!(deck.releasing_overlapped_doors(Vec3::Y, 6.0).is_none());
     }
 
     #[test]

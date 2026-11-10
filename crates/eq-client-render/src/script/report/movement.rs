@@ -103,6 +103,9 @@ struct LocalGeometry {
     body: Option<PlayerBody>,
     collision_ready: bool,
     support_z_at_session_feet: Option<f32>,
+    /// The door whose floor is under the centre of the feet, if a door's,
+    /// so a report tells a lift's floor from the zone's own.
+    support_door_at_session_feet: Option<u8>,
     selected_target_los: Option<LocalTargetLos>,
 }
 
@@ -123,6 +126,9 @@ impl LocalGeometry {
             support_z_at_session_feet: collision.zip(body).and_then(|(collision, body)| {
                 collision.support(origin - Vec3::Y * body.feet_offset)
             }),
+            support_door_at_session_feet: collision.zip(body).and_then(|(collision, body)| {
+                collision.ground_door(origin - Vec3::Y * body.feet_offset, 0.01, 0.05)
+            }),
             selected_target_los: collision
                 .and_then(|collision| LocalTargetLos::read(world, collision, origin)),
         }
@@ -137,6 +143,7 @@ impl LocalGeometry {
             })),
             "collision_ready": self.collision_ready,
             "support_z_at_session_feet": self.support_z_at_session_feet,
+            "support_door_at_session_feet": self.support_door_at_session_feet,
             "selected_target_los": self.selected_target_los.map(|line| json!({
                 "spawn_id": line.spawn_id,
                 "spawn_revision": line.spawn_revision,
@@ -391,6 +398,7 @@ mod tests {
         assert_eq!(missing["collision_ready"], false);
         assert_eq!(missing["body"]["size"], 7.0);
         assert!(missing["support_z_at_session_feet"].is_null());
+        assert!(missing["support_door_at_session_feet"].is_null());
         assert!(missing["selected_target_los"].is_null());
 
         let world = online.world();
