@@ -14,8 +14,10 @@
   walking, stunned or not, is carried up by the lift's own rise since the
   last sample, however long the frame took, and each move on a lift names
   it so the movement guard allows its rise; a lift rising into a ceiling
-  leaves the player put (checklist 6.427). Between samples the model is
-  drawn on the rising floor. A lift is clicked where it stands now, so one
+  leaves the player put (checklist 6.427), and the model is not drawn
+  rising there. A player who steps off a rising lift is carried no further,
+  and the step still names the lift that raised it. Between samples the
+  model is drawn on the rising floor. A lift is clicked where it stands now, so one
   resting raised is used from its top (checklist 6.436). A lift that sinks drops its
   rider at once, as the program's floor sweep does, rather than leaving
   them standing on air until the gap passes a step. The script report lists nearby

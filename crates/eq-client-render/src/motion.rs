@@ -80,6 +80,9 @@ pub(super) struct Controls {
     /// height it put the model at: the next pass carries the feet by the
     /// lift's own rise since then, and the model is drawn on the floor.
     riding: Option<(u8, Instant, f32)>,
+    /// Whether the last pass found no room for the lift to carry the body
+    /// (recording checklist 6.427), so the model is not drawn rising.
+    ride_blocked: bool,
     sent_yaw: SentYaw,
     boundary: BoundaryTracker,
     placement: placement::Check,
@@ -220,6 +223,7 @@ impl Default for Controls {
             moving: false,
             sent_span: 0.1,
             riding: None,
+            ride_blocked: false,
             sent_yaw: SentYaw::Ordinary,
             boundary: BoundaryTracker::default(),
             placement: placement::Check::default(),
@@ -1273,6 +1277,7 @@ pub(super) fn input(
             now,
         )
     };
+    controls.ride_blocked = ride.blocked;
     let (origin, feet) = (origin + Vec3::Y * ride.rise, feet + Vec3::Y * ride.rise);
     let surface_world = if !placement_blocked
         && !flying
@@ -1830,9 +1835,9 @@ pub(super) fn input(
     } else {
         world_position(position.to_array(), heading)
     };
-    // The lift that carried the origin, or the one under the landing, which
-    // may carry the player up with it.
-    let support = request_support(ride, world, lifts.as_deref(), landing);
+    // The sample names the lift that carried the origin, or the one under
+    // the landing; only the one under the landing carries the next pass.
+    let (support, under) = request_support(ride, world, lifts.as_deref(), landing);
     let mut created = now;
     let sent = outbox.post(online.world(), |stamp| {
         // Shoreline physics already ended at the observed frame. Its next
@@ -1868,7 +1873,7 @@ pub(super) fn input(
     // request's stamp to this one's, so the next span runs from the stamp.
     controls.last_sent = Some(created);
     controls.sent_span = span;
-    controls.riding = support.map(|door| (door, created, position.y));
+    controls.riding = under.map(|door| (door, created, position.y));
     controls.sent_yaw = if mouse_snapshot.is_some() {
         SentYaw::MouseSnapshot
     } else if mouse_aim.is_some() || follow_heading.is_some() && heading_snapshots {
@@ -1929,6 +1934,8 @@ struct Ride {
     rise: f32,
     /// Whether it sank away from under them, so they fall at once.
     sinking: bool,
+    /// Whether it rose but the body had no room to be carried.
+    blocked: bool,
 }
 
 /// How far the lift a rider stood on at `riding`'s stamp has carried their
@@ -1960,26 +1967,30 @@ fn ride(
             carried: Some(door),
             rise,
             sinking: false,
+            blocked: false,
         }
     } else {
         Ride {
             sinking: lifts.sinks(door, since, now),
+            blocked: rise > 0.0,
             ..Ride::default()
         }
     }
 }
 
-/// The lift a sample names: the one that carried its origin this pass, even
-/// when the step lands off it, or else the one under its landing. The
-/// session still checks the rider's reach.
+/// The lift a sample names, and the one that carries the next pass. The
+/// sample names the lift that carried its origin this pass, even when the
+/// step lands off it, or else the one under its landing; the session still
+/// checks the rider's reach. Only the lift under the landing carries the
+/// next pass, so a rider who stepped off is not raised beside it.
 fn request_support(
     ride: Ride,
     world: &eq_client_core::movement::CollisionWorld,
     lifts: Option<&crate::doors::LiftReach>,
     landing: Vec3,
-) -> Option<u8> {
-    ride.carried
-        .or_else(|| lifts.and_then(|lifts| lift_support(world, lifts, landing)))
+) -> (Option<u8>, Option<u8>) {
+    let under = lifts.and_then(|lifts| lift_support(world, lifts, landing));
+    (ride.carried.or(under), under)
 }
 
 /// The rideable lift whose floor holds the feet up, when they stand within
@@ -2491,7 +2502,7 @@ pub(super) fn interpolate(
     }
     // A rising lift carries the drawn model on its floor between samples,
     // as the program draws its rider; the samples sent are unchanged.
-    if let Some((door, at, sent)) = controls.riding {
+    if let Some((door, at, sent)) = controls.riding.filter(|_| !controls.ride_blocked) {
         let floor = sent
             + online
                 .world()
@@ -2641,6 +2652,7 @@ pub(super) mod tests {
     };
 
     #[test]
+    #[allow(clippy::too_many_lines, reason = "one ride, its step-off and its sinking")]
     fn a_ride_carries_the_feet_by_the_lifts_own_rise_across_any_frame_gap() {
         use eq_client_core::doors::{Door, DoorTable, DoorUpdate};
         use eq_client_core::movement::{CollisionMesh, CollisionWorld};
@@ -2686,17 +2698,29 @@ pub(super) mod tests {
         assert!((carried.rise - 5.4).abs() < 0.01, "{carried:?}");
         assert!(!carried.sinking);
         // Carried up and stepped off onto the zone in the same pass, the
-        // sample still names the lift that raised it.
+        // sample still names the lift that raised it, but the lift no
+        // longer carries the next pass.
         let off = Vec3::new(30.0, 14.4, -1.0);
         assert_eq!(super::lift_support(&world, &reach, off), None);
-        assert_eq!(
-            super::request_support(carried, &world, Some(&reach), off),
-            Some(4)
-        );
+        let (named, under) = super::request_support(carried, &world, Some(&reach), off);
+        assert_eq!((named, under), (Some(4), None));
         assert_eq!(
             super::request_support(super::Ride::default(), &world, Some(&reach), off),
-            None
+            (None, None)
         );
+        // So the next pass, with the lift still rising, neither raises the
+        // rider beside it nor names it, and when it later sinks a rider
+        // standing on the platform beside it is not falling.
+        let next = now + Duration::from_millis(500);
+        let riding = under.map(|door| (door, now));
+        let stepped_off = super::ride(&world, Some(&reach), &doors, riding, (off, 6.0), next);
+        assert_eq!(stepped_off, super::Ride::default());
+        assert_eq!(
+            super::request_support(stepped_off, &world, Some(&reach), off),
+            (None, None)
+        );
+        let down = start + Duration::from_secs(31);
+        assert!(!super::ride(&world, Some(&reach), &doors, riding, (off, 6.0), down).sinking);
         // Nothing rides a door that is not a listed lift, or nothing named.
         let unlisted = crate::doors::LiftReach::default();
         assert_eq!(
@@ -2733,6 +2757,8 @@ pub(super) mod tests {
         );
         assert_eq!(blocked.carried, None);
         assert!(!blocked.sinking);
+        // Nor is the model drawn rising there.
+        assert!(blocked.blocked && !carried.blocked);
         // On its way back down (from 30 s), the rider falls at once.
         let down = start + Duration::from_secs(31);
         let sinking = super::ride(
