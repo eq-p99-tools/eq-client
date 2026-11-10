@@ -510,7 +510,8 @@ mod tests {
         session::news(
             &mut online,
             [WorldEvent::Buff(eq_client_core::BuffUpdate {
-                replaces_slot: false,
+                applies: eq_client_core::buffs::Applies::Received,
+                record_type: 0,
                 entity_id: 7,
                 spell_id: 42,
                 slot: 1,

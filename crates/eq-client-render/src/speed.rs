@@ -285,17 +285,29 @@ fn buff_terms(
     let buffs = world.buffs();
     let mut modifiers = Modifiers::default();
     let mut exact = true;
+    let mut seen = std::collections::BTreeSet::new();
     for buff in buffs.slots().ok_or(Missing::Effects)?.values() {
         let Some(list) = effects(buff.spell_id) else {
             exact = false;
             continue;
         };
-        let projected = project(
+        let mut projected = project(
             &list,
             u16::from(buff.caster_level),
             u32::from(buff.bard_modifier),
             dialect,
         );
+        // A spell the server wrote into a second slot (Titanium action 3)
+        // is held twice; how the program totals STR and STA over the two
+        // is unread, so the second's is left out. Speed takes the strongest
+        // gain and snare, which a duplicate cannot change.
+        if !seen.insert(buff.spell_id)
+            && (projected.modifiers.strength != 0 || projected.modifiers.stamina != 0)
+        {
+            projected.modifiers.strength = 0;
+            projected.modifiers.stamina = 0;
+            projected.exact = false;
+        }
         exact &= projected.exact;
         modifiers.add(projected.modifiers);
     }

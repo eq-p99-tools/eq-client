@@ -484,6 +484,10 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
                 Progress::Submitted | Progress::FadeObserved | Progress::Changed => Vec::new(),
             }
         }
+        Notice::BuffSlotMismatch => {
+            bevy::log::warn!("The server contradicted a modelled buff slot in this zone visit");
+            Vec::new()
+        }
         Notice::SongStopUnconfirmed { released_cast } => chat(
             if *released_cast {
                 "Song stop unconfirmed. The previous casting hold was released."

@@ -214,7 +214,8 @@ fn only_the_admitted_discipline_slot_can_report_an_active_effect() {
     game(&mut world, WorldEvent::BuffSnapshot(vec![Some(buff(42))]));
     let update = |entity_id, slot, spell_id, present: bool| {
         WorldEvent::Buff(crate::BuffUpdate {
-            replaces_slot: false,
+            applies: eq_network_game::buffs::Applies::Received,
+            record_type: 0,
             entity_id,
             slot,
             spell_id,
@@ -244,7 +245,7 @@ fn only_the_admitted_discipline_slot_can_report_an_active_effect() {
     let WorldEvent::Buff(mut empty) = update(9, TITANIUM_BUFF_SLOT, u32::MAX, false) else {
         unreachable!();
     };
-    empty.replaces_slot = true;
+    empty.applies = eq_network_game::buffs::Applies::BySlot;
     game(&mut world, WorldEvent::Buff(empty));
     assert_eq!(world.casting().active_discipline(), Active::Inactive);
     assert!(
@@ -1038,7 +1039,8 @@ fn an_instant_effect_never_removes_a_buff_the_server_slotted() {
     game(
         &mut world,
         WorldEvent::Buff(crate::BuffUpdate {
-            replaces_slot: false,
+            applies: eq_network_game::buffs::Applies::Received,
+            record_type: 0,
             entity_id: 9,
             slot: 2,
             spell_id: 42,
@@ -1069,7 +1071,8 @@ fn only_the_players_lasting_effects_wait_for_a_slot_and_a_fade_clears_them() {
     game(
         &mut world,
         WorldEvent::Buff(crate::BuffUpdate {
-            replaces_slot: false,
+            applies: eq_network_game::buffs::Applies::Received,
+            record_type: 0,
             entity_id: 9,
             slot: 3,
             spell_id: 42,

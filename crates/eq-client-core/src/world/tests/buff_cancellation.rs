@@ -41,6 +41,7 @@ fn staged_discipline_state_leaves_a_profile_buff_cancellable() {
             beneficial: Some(true),
             cancellable: Some(true),
             created: Instant::now(),
+            placement: eq_network_game::buffs::cancel::Placement::Received,
         };
         request.check(1, world.buffs().slots()).unwrap();
     }

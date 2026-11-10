@@ -18,6 +18,8 @@ pub struct ReplayProjection {
     casting_animation: Option<u16>,
     effect: Option<u32>,
     mechanics: Option<Mechanics>,
+    buff_band: Option<(bool, bool)>,
+    target_type: Option<u32>,
 }
 
 impl ReplayProjection {
@@ -37,6 +39,8 @@ impl ReplayProjection {
             casting_animation: source.casting_animation,
             effect: source.effect,
             mechanics: source.mechanics.clone(),
+            buff_band: source.buff_band,
+            target_type: source.target_type,
         }
     }
 
@@ -55,6 +59,8 @@ impl ReplayProjection {
         destination.casting_animation = self.casting_animation;
         destination.effect = self.effect;
         destination.mechanics.clone_from(&self.mechanics);
+        destination.buff_band = self.buff_band;
+        destination.target_type = self.target_type;
     }
 }
 

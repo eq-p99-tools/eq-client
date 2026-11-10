@@ -1,4 +1,5 @@
-//! Received buff display and explicit right-click cancellation of a beneficial slot.
+//! Buff display and explicit right-click cancellation of a beneficial buff
+//! in a received or modelled slot.
 use super::{online::OnlineState, spell_icons, spellbook::SpellNames, windows};
 use crate::{
     skinned::Shows,
@@ -6,7 +7,10 @@ use crate::{
 };
 use bevy::prelude::*;
 use eq_client_core::{
-    buffs::{BuffTracker, Shown, TimeLeft, cancel::Request},
+    buffs::{
+        BuffTracker, Shown, TimeLeft,
+        cancel::{Placement, Request},
+    },
     qol::Fix,
 };
 use std::{collections::BTreeMap, time::Instant};
@@ -61,6 +65,23 @@ impl Selection {
                     beneficial: names.beneficial(buff.spell_id),
                     cancellable: cancellable(names, buff.spell_id),
                     created: stamp.created,
+                    placement: eq_client_core::buffs::cancel::Placement::Received,
+                })
+            }
+            Shown::Modelled(slot, effect) => {
+                let stamp = outbox.peek(world)?;
+                let spell_id = u32::from(effect.spell_id);
+                Self::Slot(Request {
+                    session_id: stamp.session_id,
+                    revision: world.buffs().revision(),
+                    slot,
+                    spell_id,
+                    beneficial: names.beneficial(spell_id),
+                    cancellable: cancellable(names, spell_id),
+                    created: stamp.created,
+                    placement: Placement::Modelled(
+                        world.buffs().modelled_record(effect.spell_id)?.clone(),
+                    ),
                 })
             }
             Shown::Unplaced(effect) => Self::Unplaced {
@@ -85,7 +106,15 @@ fn shown_buff<'a>(
             .map(|buff| Shown::Slot(slot, buff));
     }
     if let Some(&Unplaced(spell)) = unplaced {
-        return buffs.effects().get(&spell).map(Shown::Unplaced);
+        // A landing the program would slot shows at its modelled slot.
+        let effect = buffs.effects().get(&spell)?;
+        return Some(
+            buffs
+                .slot_of(spell)
+                .map_or(Shown::Unplaced(effect), |slot| {
+                    Shown::Modelled(slot, effect)
+                }),
+        );
     }
     let &Shows::Buff(window, button) = shows? else {
         return None;
@@ -179,6 +208,14 @@ pub(super) fn cancel(
                 cancellable(&names, request.spell_id) == request.cancellable,
                 "Spell effects changed; select the buff again"
             );
+            if let Placement::Modelled(record) = &request.placement {
+                let spell = u16::try_from(request.spell_id)?;
+                anyhow::ensure!(
+                    world.buffs().slot_of(spell) == Some(request.slot)
+                        && world.buffs().modelled_record(spell) == Some(record),
+                    "The selected buff slot changed or is unavailable"
+                );
+            }
             request.check(world.buffs().revision(), world.buffs().slots())
         })();
         if let Err(error) = check {
@@ -546,7 +583,10 @@ pub(super) fn skinned_details(
             Some(eq_client_core::buffs::Shown::Slot(slot, buff)) => {
                 details(buff, buffs.time_left(slot, now), &names, qol)
             }
-            Some(eq_client_core::buffs::Shown::Unplaced(effect)) => effect_details(
+            Some(
+                eq_client_core::buffs::Shown::Modelled(_, effect)
+                | eq_client_core::buffs::Shown::Unplaced(effect),
+            ) => effect_details(
                 effect.spell_id,
                 (Some(effect), buffs.landed(effect.spell_id)),
                 &names,
@@ -660,6 +700,20 @@ mod tests {
         }
     }
 
+    /// Spell 42, "Constructed buff", a lasting spell with its band's short
+    /// flag (field 154) as given.
+    fn constructed_buff(beneficial: bool, short: &str) -> SpellNames {
+        let mut fields = vec!["0"; 203];
+        fields[0] = "42";
+        fields[1] = "Constructed buff";
+        fields[83] = if beneficial { "1" } else { "0" };
+        fields[154] = short;
+        // A lasting spell: formula 3, up to 30 ticks.
+        fields[16] = "3";
+        fields[17] = "30";
+        SpellNames::parse(&fields.join("^"))
+    }
+
     fn cancellation_fixture(
         skinned: bool,
         beneficial: Option<bool>,
@@ -674,11 +728,7 @@ mod tests {
         crate::online::testing::admit(&mut online, 5, crate::online::testing::player(7));
         crate::online::testing::buffs(&mut online, BTreeMap::from([(3, synthetic_buff(42))]));
         let names = beneficial.map_or_else(SpellNames::default, |beneficial| {
-            let mut fields = vec!["0"; 203];
-            fields[0] = "42";
-            fields[1] = "Constructed buff";
-            fields[83] = if beneficial { "1" } else { "0" };
-            SpellNames::parse(&fields.join("^"))
+            constructed_buff(beneficial, "0")
         });
         app.insert_resource(online)
             .insert_resource(names)
@@ -697,6 +747,68 @@ mod tests {
         }
         let button_id = button.id();
         (app, button_id, receiver)
+    }
+
+    /// A Titanium table of 25 empty slots.
+    fn clear_buffs(app: &mut App) {
+        crate::online::testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [eq_client_core::WorldEvent::BuffSnapshot(vec![None; 25])],
+        );
+    }
+
+    /// Spell 42 taking hold on the player, with this flag, read with the
+    /// app's spell data.
+    fn lands(app: &mut App, effect_flag: u8) {
+        let names = app.world_mut().remove_resource::<SpellNames>().unwrap();
+        crate::online::testing::news_with(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [eq_client_core::WorldEvent::SpellEffect(
+                eq_client_core::SpellEffect {
+                    target_id: 7,
+                    caster_id: 7,
+                    caster_level: 12,
+                    instrument_modifier: 10,
+                    spell_id: 42,
+                    spell_level: 12,
+                    effect_flag,
+                    push: None,
+                },
+            )],
+            &names,
+        );
+        app.insert_resource(names);
+    }
+
+    #[test]
+    fn right_click_a_modelled_landing_cancels_the_record_the_program_holds() {
+        for skinned in [false, true] {
+            let (mut app, button, receiver) = cancellation_fixture(skinned, Some(true));
+            clear_buffs(&mut app);
+            let mut button = app.world_mut().entity_mut(button);
+            if skinned {
+                button.insert(Shows::Buff(eq_client_core::buffs::EffectWindow::Long, 0));
+            } else {
+                button.remove::<Entry>().insert(Unplaced(42));
+            }
+            // A flag with other bits set besides 4 takes hold too.
+            lands(&mut app, 0x14);
+            right_press(&mut app);
+            right_release(&mut app);
+            let eq_client_core::ClientCommand::CancelBuff(request) = receiver.try_recv().unwrap()
+            else {
+                panic!("wrong command")
+            };
+            assert_eq!(
+                (request.session_id, request.slot, request.spell_id),
+                (5, 0, 42)
+            );
+            assert!(matches!(
+                &request.placement,
+                Placement::Modelled(record) if record.spell_id == 42
+            ));
+            assert!(receiver.try_recv().is_err());
+        }
     }
 
     fn right_press(app: &mut App) {
@@ -803,6 +915,10 @@ mod tests {
     fn right_click_an_unslotted_effect_explains_why_without_submitting() {
         for (skinned, beneficial) in [(false, true), (true, true), (false, false), (true, false)] {
             let (mut app, button, receiver) = cancellation_fixture(skinned, Some(beneficial));
+            // Nothing holds the spell, and a malformed band flag leaves the
+            // program's slot for its landing unknown.
+            clear_buffs(&mut app);
+            app.insert_resource(constructed_buff(beneficial, "bad"));
             let mut button = app.world_mut().entity_mut(button);
             if skinned {
                 // The first empty long-window button shows the received effect,
@@ -811,21 +927,7 @@ mod tests {
             } else {
                 button.remove::<Entry>().insert(Unplaced(42));
             }
-            crate::online::testing::news(
-                &mut app.world_mut().resource_mut::<OnlineState>(),
-                [eq_client_core::WorldEvent::SpellEffect(
-                    eq_client_core::SpellEffect {
-                        target_id: 7,
-                        caster_id: 7,
-                        caster_level: 12,
-                        instrument_modifier: 10,
-                        spell_id: 42,
-                        spell_level: 12,
-                        effect_flag: 4,
-                        push: None,
-                    },
-                )],
-            );
+            lands(&mut app, 4);
             right_press(&mut app);
             assert_eq!(
                 app.world().resource::<crate::chat::ChatState>().newest(),

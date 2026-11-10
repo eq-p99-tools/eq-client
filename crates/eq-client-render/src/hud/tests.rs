@@ -1163,7 +1163,8 @@ fn titaniums_sit_toggle_refuses_under_a_mesmerize() {
         [
             WorldEvent::BuffSnapshot(Vec::new()),
             WorldEvent::Buff(BuffUpdate {
-                replaces_slot: false,
+                applies: eq_client_core::buffs::Applies::Received,
+                record_type: 2,
                 entity_id: 12,
                 slot: 0,
                 spell_id: 42,

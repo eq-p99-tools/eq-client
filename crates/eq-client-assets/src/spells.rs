@@ -33,6 +33,11 @@ pub struct Layout {
     effect: Option<usize>,
     alternate_duration: Option<usize>,
     linked_timer: Option<usize>,
+    /// The two band flags the program's buff slot finder reads with the
+    /// beneficial column (R20 (a)).
+    buff_band: Option<(usize, usize)>,
+    /// The target type (program spell +0x180, R20 (a)).
+    target_type: Option<usize>,
 }
 
 impl Layout {
@@ -59,6 +64,10 @@ impl Layout {
         alternate_duration: Some(181),
         // EQEmu SPDat TIMER_INDEX for gem casts.
         linked_timer: Some(167),
+        // Parser 0x44dbf0 loads 154 into +0x19b and 168 into +0x1c4, and
+        // the target type, +0x180, from 98 (R20 (a)).
+        buff_band: Some((154, 168)),
+        target_type: Some(98),
     };
 
     /// The Mac-era client's `spells_en.txt` (147 fields a row, a few rows
@@ -90,6 +99,8 @@ impl Layout {
         effect: None,
         alternate_duration: None,
         linked_timer: None,
+        buff_band: None,
+        target_type: None,
     };
 }
 
