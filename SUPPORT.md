@@ -105,11 +105,17 @@ their type's distance, and each door returns after its type's delay counted
 from its arrival. A door is a floor or a wall only where the program says, so
 a hinged door holds no one up. A rider standing on a rising lift is carried,
 even stunned, and the movement guard allows that rise only for the floor-solid
-lift the client names, within its reach, by what it rose. Zone-in states 2 and
-3, the rider radius, a blocked rider, a changed door field, door reach
+lift the client names, within its reach, by what it rose. At a lift whose rest
+floor lies inside zone geometry, the rider is carried up and rests on the
+lift's floor under the deck until their first step, when the ordinary floor
+sweep stands them on the deck; the lift does not carry them down from there,
+and a rider at its origin rides into the zone's own column. What the program
+does at the top and how its rider goes down are unread (checklist 6.440).
+Zone-in states 2 and 3, the rider radius, a changed door field, door reach
 measured to the door's origin rather than the clicked point on it (a
 shortfall of the read rule), and walking out of a door that moved into the
-player stay labelled (checklist 6.423-6.428, 6.436, 6.439); Quarm and TAKP keep their own doors as before.
+player stay labelled (checklist 6.423-6.426, 6.428, 6.436, 6.439); Quarm and
+TAKP keep their own doors as before.
 
 Current movement requires complete load/STR/buff inputs. Unknown state withdraws
 player input without inventing a zero load or a root, and bounded passive falls

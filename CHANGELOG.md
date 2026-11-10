@@ -30,7 +30,13 @@
   rider at once, as the program's floor sweep does, rather than leaving
   them standing on air until the gap passes a step. The script report lists nearby
   doors with their mechanism, field, offset and solidity. EQMac servers keep
-  their doors solid both ways (checklist 6.425).
+  their doors solid both ways (checklist 6.425). At a lift whose rest floor
+  lies inside zone geometry, the rider is carried up and rests on the lift's
+  floor under the deck; the ordinary floor sweep stands them on the deck with
+  their first step, and the lift does not carry them down from there: when it
+  leaves, they stand on the deck. A rider at such a lift's origin rides into
+  the zone's own column. What the program does at the top, and how its rider
+  goes down, is unread (checklist 6.440).
 - Look and swim as the Titanium program does (Batch M slice 3). Look Up
   and Look Down (keypad 9 and Page Up, keypad 3 and Page Down) tilt the
   first-person view while held, ramping as the turn keys do up to straight
