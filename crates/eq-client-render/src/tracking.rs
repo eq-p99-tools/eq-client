@@ -75,7 +75,7 @@ pub(crate) fn say_rangers_only(
 pub(crate) struct TrackButton;
 
 /// The track window's Cancel, which stops tracking as `/stoptracking` does
-/// and closes the window (read C1: the constructor 0x5663a4 binds
+/// and closes the window (read R15d: the constructor 0x5663a4 binds
 /// `DoneButton` to 0x566312). The close box only closes it [I].
 #[derive(Component)]
 pub(crate) struct StopButton;

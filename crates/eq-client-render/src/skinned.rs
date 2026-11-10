@@ -3236,7 +3236,7 @@ mod tests {
             Some(Does::Closes)
         ));
         // The track window's Cancel also stops tracking, as the program's
-        // window binds it (read C1).
+        // window binds it (read R15d).
         assert!(matches!(
             does("DoneButton", WindowId::Tracking),
             Some(Does::StopsTracking)
