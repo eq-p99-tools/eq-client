@@ -49,8 +49,8 @@ pub(crate) use controls::{
 };
 
 pub(crate) use items::{
-    Closes, Content as SlotContent, TheirSlot, close, contents, draw as draw_item, frames, loot,
-    quantity, theirs, toggle_bag,
+    Closes, Content as SlotContent, TheirSlot, close, closes_here, contents, draw as draw_item,
+    frames, loot, quantity, theirs, toggle_bag,
 };
 
 use super::{hud::hotbar, windows::WindowId};
@@ -1771,8 +1771,7 @@ fn title_boxes(
     owner: WindowId,
 ) {
     let frame = window.target_entity();
-    let closes =
-        owner.describe().toggle != crate::windows::Toggle::Never || items::framed_while_open(owner);
+    let closes = owner.describe().toggle != crate::windows::Toggle::Never || closes_here(owner);
     let mut right = inside.x + inside.width;
     for (wanted, look, close) in [
         (

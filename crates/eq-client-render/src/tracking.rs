@@ -479,6 +479,80 @@ mod tests {
     }
 
     #[test]
+    fn escape_and_the_close_box_close_the_window_and_following_goes_on() {
+        // Both close here, as nothing toggles the track window (B2 run 1b:
+        // Escape stopped at it and closed nothing, and its box was greyed).
+        assert!(crate::skinned::closes_here(WindowId::Tracking));
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let mut app = crate::testing::app();
+        app.insert_resource(Outbox::new(Some(tx))).add_systems(
+            Update,
+            (crate::escape::route, crate::skinned::close, window, frame).chain(),
+        );
+        let opened = |app: &mut App| {
+            let mut online = app.world_mut().resource_mut::<OnlineState>();
+            testing::news(&mut online, [pressed()]);
+            app.update();
+            app.update();
+            assert!(
+                app.world()
+                    .resource::<Shown>()
+                    .displayed(WindowId::Tracking)
+            );
+        };
+        let following = |app: &App| {
+            app.world()
+                .resource::<OnlineState>()
+                .world()
+                .track_window()
+                .following
+        };
+        let mut online = admitted();
+        testing::news(
+            &mut online,
+            [WorldEvent::Tracking(TrackingUpdate::Following {
+                spawn_id: 30,
+                string_id: 0x2f08,
+                arguments: vec!["a_bat00".into()],
+            })],
+        );
+        app.insert_resource(online);
+        opened(&mut app);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Escape);
+        app.update();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        app.update();
+        assert!(!app.world().resource::<Shown>().is_open(WindowId::Tracking));
+        assert!(
+            !app.world()
+                .resource::<OnlineState>()
+                .world()
+                .track_window()
+                .open
+        );
+        assert_eq!(following(&app), Some(30));
+        opened(&mut app);
+        let close_box = app
+            .world_mut()
+            .spawn((
+                Button,
+                crate::skinned::Closes(WindowId::Tracking),
+                Interaction::None,
+            ))
+            .id();
+        crate::clicks::testing::click(&mut app, close_box);
+        app.update();
+        assert!(!app.world().resource::<Shown>().is_open(WindowId::Tracking));
+        assert_eq!(following(&app), Some(30));
+        // Neither sends anything.
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
     fn the_one_title_box_closes_and_an_opening_comes_to_the_front() {
         // The close box only closes: it is the one box drawn.
         assert!(!WindowId::Tracking.can_minimize());
