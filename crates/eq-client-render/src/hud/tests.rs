@@ -318,6 +318,41 @@ fn native_sit_stand_chord_uses_reported_posture_and_respects_typing() {
 }
 
 #[test]
+fn the_duck_key_toggles_between_standing_and_ducking_and_leaves_other_stances() {
+    use eq_client_core::{Posture, PostureState};
+    let (tx, rx) = std::sync::mpsc::sync_channel(4);
+    let mut app = bar_app(tx);
+    crate::keys::testing::bind(
+        &mut app,
+        crate::keys::Act::Duck,
+        crate::keys::Chord::key(KeyCode::KeyC),
+    );
+    // Titanium 0x4619cd case 0x4623b1 and EQMac 0x54050c: a key-down ducks
+    // a standing player and stands a ducking one (audit D1).
+    for (reported, wanted) in [
+        (PostureState::Standing, Some(Posture::Ducking)),
+        (PostureState::Ducking, Some(Posture::Standing)),
+        (PostureState::Sitting, None),
+    ] {
+        testing::news(
+            &mut online(&mut app),
+            [WorldEvent::Posture {
+                spawn_id: 12,
+                posture: reported,
+            }],
+        );
+        tap(&mut app, KeyCode::KeyC);
+        match wanted {
+            Some(wanted) => assert!(
+                matches!(rx.try_recv(), Ok(ClientCommand::SetPosture { posture, .. }) if posture == wanted),
+                "{reported:?}"
+            ),
+            None => assert!(rx.try_recv().is_err(), "{reported:?}"),
+        }
+    }
+}
+
+#[test]
 fn a_hotbuttons_sit_and_stand_send_the_postures_their_keys_send_and_say_a_refusal_once() {
     let (tx, rx) = std::sync::mpsc::sync_channel(4);
     let mut app = bar_app(tx);

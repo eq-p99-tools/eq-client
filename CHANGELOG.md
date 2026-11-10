@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Move and look as the Titanium program does (Batch M slice 2). A
+  jump takes a tenth of the maximum endurance, at most 50, off the shown
+  bar at take-off, until the server's next report. The mouse turns the
+  program's (0.5 + 1.5 x (s - 1) / 7) x 512 heading units per screen width,
+  the sensitivity setting spanning the program's 1 to 8 (checklist 6.418).
+  The chase camera sits 0 to 30 above the eyes and 2 to 200
+  behind (farther on the long leash, at the same steepest slope), looking
+  down at the player, never below eye level; other views are the free
+  camera's. A strafe goes at the run speed running and the walk speed
+  walking, halved while ducking. The duck key's toggle gains a test. The
+  air still slows a fall once a 50 ms step: the program does it once a
+  frame, and taking 60 frames a second would about halve the damage of
+  mid-height falls, so it waits on a recording (checklist 6.419).
 - Jump and turn as the Titanium program does. A hurt or overloaded
   player's jump starts at the same health and weight share that slows
   running. A jump from standing still with no forward input crouches for
@@ -97,6 +110,9 @@
 - Bound inspection note and landmark file reads, protect oversized
   landmark files from replacement, and share immutable installed spell
   definitions across sessions.
+
+- Pin networking 835c95d2 (Batch M slice 2 landing): Titanium strafes on the
+  selected base speed, and the grant carries the walking strafe rate.
 
 - Pin networking 4ef182e4 (kept-grant landing): a change in the player's belongings (an item
   eaten, drunk, looted or moved, or coins) keeps the movement grant until

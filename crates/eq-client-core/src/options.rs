@@ -140,9 +140,9 @@ pub enum Level {
     /// The most frames drawn each second, or 0 to leave the rate to the
     /// display (the Display page's Max. Frames Per Second).
     MaxFps,
-    /// How fast the camera turns as the mouse drags it, as a percentage
-    /// where 50 is the client's own speed (the Mouse page's Mouselook
-    /// Sensitivity).
+    /// How fast the camera turns as the mouse drags it, from 0 to 100
+    /// across the program's sensitivity 1 to 8 (the Mouse page's Mouselook
+    /// Sensitivity; see [`Options::turn_per_pixel`]).
     MouseSensitivity,
     /// How large this client's windows are drawn, as a percentage of the
     /// desktop's scaling (the Interface scale on the quality-of-life page); the installation's
@@ -478,11 +478,19 @@ impl Options {
     }
 
     /// How far the camera turns, in radians, for each pixel the mouse drags
-    /// it: the client's own 0.005 at a sensitivity of 50, doubling with
-    /// every 25 above and halving with every 25 below.
+    /// it on a screen `width` pixels wide. The program turns
+    /// (0.5 + 1.5 × (s − 1) / 7) × dx / width × 512 heading units, a whole
+    /// turn being 512, for its sensitivity s from 1 to 8 (Titanium
+    /// 0x4929dd). The setting's 0 to 100 spans s from 1 to 8 (inferred,
+    /// recording checklist 6.418), so a drag across the whole screen turns
+    /// from half a turn to two. A width that is no width turns nothing.
     #[must_use]
-    pub fn turn_per_pixel(&self) -> f32 {
-        0.005 * ((f32::from(self.mouse_sensitivity.min(100)) - 50.0) / 25.0).exp2()
+    pub fn turn_per_pixel(&self, width: f32) -> f32 {
+        if !(width.is_finite() && width >= 1.0) {
+            return 0.0;
+        }
+        let share = f32::from(self.mouse_sensitivity.min(100)) / 100.0;
+        (0.5 + 1.5 * share) * std::f32::consts::TAU / width
     }
 
     /// What the session may eat and drink on its own.
@@ -620,11 +628,22 @@ mod tests {
         assert_eq!(Level::ClipPlane.words(40), "40 %");
         assert_eq!(Options::default().frame_cap(), Some(60));
         assert_eq!(options.frame_cap(), None);
-        // Sensitivity 50 is the client's own speed; 75 doubles it.
+        // The program's curve: a drag across the whole screen turns half a
+        // turn at sensitivity 1 (0) and two at 8 (100); 50 is s = 4.5.
         let mut quick = Options::default();
-        assert!((quick.turn_per_pixel() - 0.005).abs() < 1e-6);
-        quick.set_level(Level::MouseSensitivity, 75);
-        assert!((quick.turn_per_pixel() - 0.01).abs() < 1e-6);
+        let across = |options: &Options| options.turn_per_pixel(1_000.0) * 1_000.0;
+        let turn = std::f32::consts::TAU;
+        assert!((across(&quick) - 1.25 * turn).abs() < 1e-4);
+        quick.set_level(Level::MouseSensitivity, 0);
+        assert!((across(&quick) - 0.5 * turn).abs() < 1e-4);
+        quick.set_level(Level::MouseSensitivity, 100);
+        assert!((across(&quick) - 2.0 * turn).abs() < 1e-4);
+        // Program sensitivity 4 is 3/7 of the way: 0.5 + 1.5 × 3/7.
+        quick.set_level(Level::MouseSensitivity, 43);
+        assert!((across(&quick) - (0.5 + 1.5 * 0.43) * turn).abs() < 1e-4);
+        // The same drag on a screen twice as wide turns half as far.
+        assert!((quick.turn_per_pixel(2_000.0) * 2.0 - quick.turn_per_pixel(1_000.0)).abs() < 1e-7);
+        assert!(quick.turn_per_pixel(0.0).abs() < f32::EPSILON);
         // The scene always draws at least a twentieth of the way; how far
         // that is, each client generation's far plane says.
         options.set_level(Level::ClipPlane, 0);

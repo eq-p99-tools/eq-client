@@ -7,6 +7,12 @@
 //! on 10-30 (TAKP Batch 1 R3, recording checklist item 6.161), and the
 //! Titanium ones from its program (sittings 6, 8g, 8h and 8i), except where
 //! a rule says it is this client's reading or not yet known.
+//!
+//! The program slows a fall by the air's share once a rendered frame, so how
+//! fast its falls go depends on the frame rate. This client slows it once a
+//! 50 ms step, which lands faster and costs more than the program at any
+//! higher frame rate, the slower side for the player, until a recording at a
+//! known frame rate shows the rate to take (recording checklist 6.419).
 
 /// The length of the program's movement step, in seconds: it counts
 /// elapsed milliseconds × 0.02 steps (the clock's unit is unsure, 6.161).

@@ -213,6 +213,12 @@ impl OnlineState {
             })
     }
 
+    /// The player took off in a jump that costs this much endurance, shown
+    /// at once ([`eq_client_core::world::ClientWorld::spend_endurance`]).
+    pub(super) fn spend_endurance(&mut self, cost: u32) {
+        self.world.spend_endurance(cost);
+    }
+
     /// The player asked to camp, ending there.
     pub(super) fn camp_to(&mut self, to: eq_client_core::camp::CampTo) {
         self.world.camp_to(to);
@@ -958,6 +964,7 @@ fn log_grant(grant: eq_client_core::world::MotionGrant) {
         backward_units_per_second,
         walk_units_per_second,
         strafe_units_per_second,
+        strafe_walk_units_per_second,
         diagonal,
         falls,
         jump_factor,
@@ -970,6 +977,7 @@ fn log_grant(grant: eq_client_core::world::MotionGrant) {
             ?backward_units_per_second,
             ?walk_units_per_second,
             ?strafe_units_per_second,
+            ?strafe_walk_units_per_second,
             ?diagonal,
             falls,
             jump_factor,

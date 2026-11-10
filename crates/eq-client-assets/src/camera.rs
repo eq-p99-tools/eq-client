@@ -31,6 +31,9 @@ pub struct CameraLimits {
     /// The third-person camera's distance behind the player, least and
     /// most, in units.
     pub chase_distance: (f32, f32),
+    /// How far behind the player [`Self::chase_height`] holds as read: the
+    /// program's own farthest distance, which [`Self::on_leash`] keeps.
+    pub chase_height_reach: f32,
     /// How far the camera draws.
     pub far_plane: FarPlane,
 }
@@ -52,6 +55,22 @@ pub enum ChaseLeash {
 pub const LONG_CHASE_DISTANCE: (f32, f32) = (2.0, 20_000.0);
 
 impl CameraLimits {
+    /// The highest the chase camera may sit above the player's eyes at
+    /// `distance` behind them: the program's height limit, and past the
+    /// program's farthest distance, which only this client's long leash
+    /// reaches, as high as keeps the view no steeper than the program's
+    /// steepest view from its farthest point (this client's own rule for
+    /// its own range).
+    #[must_use]
+    pub fn most_chase_height(self, distance: f32) -> f32 {
+        let (_, most) = self.chase_height;
+        if distance > self.chase_height_reach && self.chase_height_reach > 0.0 {
+            most * distance / self.chase_height_reach
+        } else {
+            most
+        }
+    }
+
     /// The limits with the chase camera's distance on `leash`: the program's
     /// as read, or this client's long range. The height and everything else
     /// stay the generation's.
@@ -120,6 +139,7 @@ pub const TITANIUM: CameraLimits = CameraLimits {
     look_pitch_degrees: 90.0,
     chase_height: (0.0, 30.0),
     chase_distance: (2.0, 200.0),
+    chase_height_reach: 200.0,
     far_plane: FarPlane::ZoneRange,
 };
 
@@ -146,6 +166,17 @@ mod tests {
             assert_eq!(long.far_plane, program.far_plane);
         }
         assert_eq!(TITANIUM.chase_distance, (2.0, 200.0));
+    }
+
+    #[test]
+    fn the_height_limit_holds_to_the_programs_farthest_then_keeps_its_slope() {
+        for leash in [ChaseLeash::Program, ChaseLeash::Long] {
+            let limits = TITANIUM.on_leash(leash);
+            assert!((limits.most_chase_height(2.0) - 30.0).abs() < f32::EPSILON);
+            assert!((limits.most_chase_height(200.0) - 30.0).abs() < f32::EPSILON);
+            // Past 200, only on the long leash, 30 in every 200.
+            assert!((limits.most_chase_height(2_000.0) - 300.0).abs() < 1e-3);
+        }
     }
 
     #[test]
