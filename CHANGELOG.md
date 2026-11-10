@@ -150,6 +150,14 @@
   landmark files from replacement, and share immutable installed spell
   definitions across sessions.
 
+- Pin networking 0e45bfcc (Batch B1 landing): Titanium lifts and doors as
+  the program moves them (vertical travel and speeds by open type, slides,
+  floor and wall solidity, the client's own returns, and the return click
+  for types 40 and 45), the movement guard's allowance for a lift's rise
+  while a sample names it, and a door's click reach to where it stands now.
+  It also brings the zone-in admission of a player with an empty inventory,
+  such as after a death (checklist 6.437).
+
 - Pin networking 9d9d0ee1 (Batch M slice 3 landing): Titanium's own position
   update carries the program's movement-history entry counter, goes out by
   the program's flag rule (a straight run once a second), repeats while
