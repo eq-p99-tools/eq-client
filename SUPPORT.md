@@ -16,8 +16,8 @@ Quarm/TAKP behavior. Frontends use runtime capabilities, not server-name flags.
 ## Server policy snapshot
 
 The following summarizes the networking revision pinned by this application's
-Cargo.lock: `0e45bfcc3a50956d41fb8697babb5b84d239a382`. Its
-[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/0e45bfcc3a50956d41fb8697babb5b84d239a382/crates/eq-network/src/client/session/servers.rs)
+Cargo.lock: `ebdff963a32d035691d5dec3c5f7a9c9ea749798`. Its
+[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/ebdff963a32d035691d5dec3c5f7a9c9ea749798/crates/eq-network/src/client/session/servers.rs)
 are the source for this table. **Yes means provided by that policy**, not a live
 certification, and individual operations still validate their prerequisites.
 
@@ -126,7 +126,9 @@ does. The Actions window's ability page shows its six slots in the client's
 fixed order; choosing which abilities fill them follows as its own change.
 A press while a class tool's wait runs sends nothing and says the client's
 own line, where the program says nothing (a chat-only departure,
-checklist 6.447). Labelled: the song state's item-flag test (checklist 6.429),
+checklist 6.447). Between a beg or a pick and its answer the program holds
+casting and some window actions until the server replies; the client does
+not yet (checklist 6.452). Labelled: the song state's item-flag test (checklist 6.429),
 Begging's unseen check (6.430) and reach (6.431), the trap skills'
 treasure match (6.432), Pick Pockets' PvP level range
 (6.438), the bearing's side word (6.441), the Bard's song state without a
@@ -151,11 +153,11 @@ affected mechanics unavailable while chat remains usable. See [installed spell
 providers](docs/spell-providers.md). These source and synthetic checks add no live
 compatibility certification.
 
-The pinned networking [combat](https://github.com/eq-p99-tools/eq-network/blob/0e45bfcc3a50956d41fb8697babb5b84d239a382/docs/quarm-combat.md),
-[loot](https://github.com/eq-p99-tools/eq-network/blob/0e45bfcc3a50956d41fb8697babb5b84d239a382/docs/eqmac-looting.md) and
-[world-object](https://github.com/eq-p99-tools/eq-network/blob/0e45bfcc3a50956d41fb8697babb5b84d239a382/docs/eqmac-world-objects.md)
+The pinned networking [combat](https://github.com/eq-p99-tools/eq-network/blob/ebdff963a32d035691d5dec3c5f7a9c9ea749798/docs/quarm-combat.md),
+[loot](https://github.com/eq-p99-tools/eq-network/blob/ebdff963a32d035691d5dec3c5f7a9c9ea749798/docs/eqmac-looting.md) and
+[world-object](https://github.com/eq-p99-tools/eq-network/blob/ebdff963a32d035691d5dec3c5f7a9c9ea749798/docs/eqmac-world-objects.md)
 contracts record their limits and controlled live checklists. The dated
-[P99/Quarm gap report](https://github.com/eq-p99-tools/eq-network/blob/0e45bfcc3a50956d41fb8697babb5b84d239a382/docs/public-server-gaps.md)
+[P99/Quarm gap report](https://github.com/eq-p99-tools/eq-network/blob/ebdff963a32d035691d5dec3c5f7a9c9ea749798/docs/public-server-gaps.md)
 retains the earlier inspection and its scenario-specific evidence.
 
 ### Public-parity checks, 2026-11-02

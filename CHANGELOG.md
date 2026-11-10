@@ -10,7 +10,10 @@
   the slots follows as its own change. The client tells the session whether
   the player stands in liquid, which Fishing refuses on. A press while an
   ability's wait runs sends nothing and says the client's own line, where
-  the program says nothing (a chat-only departure, checklist 6.447). Fishing's cast line, and the
+  the program says nothing (a chat-only departure, checklist 6.447). Between a
+  beg or a pick and its answer the program holds casting and some window
+  actions until the server replies, and the client does not yet (checklist
+  6.452). Fishing's cast line, and the
   answer to a beg or a pick (nothing, coins of one kind, or an item by
   name), are the installed string table's lines by id. Tracking opens the
   track window, the skin's `TrackingWnd` where the skin has one and the
@@ -192,6 +195,11 @@
 - Bound inspection note and landmark file reads, protect oversized
   landmark files from replacement, and share immutable installed spell
   definitions across sessions.
+
+- Pin networking ebdff963 (Batch B2 landing): the Titanium class tools,
+  Fishing, Pick Pockets, Begging, the trap skills, Pick Lock, Tracking and
+  `/stopsong`, as the program uses them, with the session's own line for a
+  press during a class tool's wait (checklist 6.447).
 
 - Pin networking 0e45bfcc (Batch B1 landing): Titanium lifts and doors as
   the program moves them (vertical travel and speeds by open type, slides,
