@@ -623,8 +623,8 @@ pub(super) fn actions(
     let requested = match requested_posture(&keys, online.world(), player_id, flying) {
         Ok(posture) => posture,
         // Titanium's sit toggle refuses under a mesmerize (read R19b 5).
-        Err(_) if seat_refused(online.world(), &definitions.0) => {
-            chat.refuse(definitions.1.said(SEAT_REFUSAL, &[]));
+        Err(_) if let Some(refusal) = seat_refusal(online.world(), &definitions.0) => {
+            chat.refuse(definitions.1.said(refusal, &[]));
             None
         }
         Err(seat) => seat,
@@ -683,21 +683,22 @@ fn flight_uses_duck(
 }
 
 /// The native sit/stand command chooses a request from reported posture:
-/// standing or ducking sits, and sitting stands. Titanium's toggle
-/// (0x49dcfa, read R19) stands any other posture too, lying and looting
-/// included; frozen keeps the earlier choice of nothing, as that branch is
-/// unread on its own (recording checklist 6.455). The Mac-era client's
-/// toggle is unread, so it keeps the earlier choice.
+/// standing or ducking sits, and sitting stands. Where the generation's
+/// toggle stands lying and looting players too (`SitToggle`; Titanium
+/// 0x49dcfa, read R19), so does this; frozen keeps the earlier choice of
+/// nothing, as that branch is unread on its own (recording checklist
+/// 6.455). The Mac-era client's toggle is unread, so it keeps the earlier
+/// choice.
 pub(super) const fn toggled_seat(
     posture: Option<eq_client_core::PostureState>,
     generation: eq_client_core::GameDialect,
 ) -> Option<eq_client_core::Posture> {
-    use eq_client_core::{GameDialect, Posture, PostureState};
+    use eq_client_core::{Posture, PostureState};
     match posture {
         None | Some(PostureState::Standing | PostureState::Ducking) => Some(Posture::Sitting),
         Some(PostureState::Sitting) => Some(Posture::Standing),
         Some(PostureState::Lying | PostureState::Looting)
-            if matches!(generation, GameDialect::Titanium) =>
+            if generation.sit_toggle().stands_lying_and_looting =>
         {
             Some(Posture::Standing)
         }
@@ -705,33 +706,32 @@ pub(super) const fn toggled_seat(
     }
 }
 
-/// Titanium's sit toggle refuses with this line (`eqstr_us.txt` 0x3050).
-const SEAT_REFUSAL: u32 = 0x3050;
-
-/// Whether Titanium's sit toggle refuses: while a buff of the player's
-/// carries effect 31 (mesmerize, read R19b 5). Only buffs whose effects
-/// the installed spell data knows are counted, and only the slots, not
-/// effects landed without one (recording checklist 6.455). The Mac-era
+/// The line the generation's sit toggle refuses with (`SitToggle`;
+/// Titanium `eqstr_us.txt` 0x3050), if it refuses: while a buff of the
+/// player's carries effect 31 (mesmerize, read R19b 5). Only buffs whose
+/// effects the installed spell data knows are counted, and only the slots,
+/// not effects landed without one (recording checklist 6.455). The Mac-era
 /// client's toggle is unread and never refuses.
-fn seat_refused(
+fn seat_refusal(
     world: &eq_client_core::world::ClientWorld,
     names: &super::spellbook::SpellNames,
-) -> bool {
+) -> Option<u32> {
     const MESMERIZE: u32 = 31;
-    world.generation() == eq_client_core::GameDialect::Titanium
-        && world
-            .buffs()
-            .slots()
-            .into_iter()
-            .flat_map(|slots| slots.values())
-            .any(|buff| {
-                names.mechanics(buff.spell_id).is_some_and(|mechanics| {
-                    mechanics
-                        .effects
-                        .iter()
-                        .any(|effect| effect.id == MESMERIZE)
-                })
+    let refusal = world.generation().sit_toggle().mesmerize_refusal?;
+    world
+        .buffs()
+        .slots()
+        .into_iter()
+        .flat_map(|slots| slots.values())
+        .any(|buff| {
+            names.mechanics(buff.spell_id).is_some_and(|mechanics| {
+                mechanics
+                    .effects
+                    .iter()
+                    .any(|effect| effect.id == MESMERIZE)
             })
+        })
+        .then_some(refusal)
 }
 
 /// Creates a consistently framed HUD group.

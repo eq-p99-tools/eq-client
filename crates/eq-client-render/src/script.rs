@@ -374,6 +374,15 @@ impl Script {
         self.facing
     }
 
+    /// A script holding these movement acts and this `face` heading, as its
+    /// steps would, for tests of the systems that read them.
+    #[cfg(test)]
+    pub(crate) fn holding_for_test(mut self, acts: Vec<Act>, facing: Option<f32>) -> Self {
+        self.acts = acts;
+        self.facing = facing;
+        self
+    }
+
     /// Whether cancellation must release input before yielding the window.
     fn holding(&self) -> bool {
         !self.held.is_empty()

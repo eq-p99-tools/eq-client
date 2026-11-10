@@ -997,6 +997,20 @@ mod tests {
     }
 
     #[test]
+    fn a_refusal_the_program_already_said_stays_out_of_the_chat() {
+        // The server's own line already told the player (the cast refusal
+        // the item's click effect gets), so the Actions window keeps the
+        // reason and nothing more goes to the chat.
+        let mut bench = Bench::demo(9);
+        let state = &mut bench.state;
+        state.actions.pending_use = Some((9, 2));
+        state.item_use_result(9, 2, Some("Too distracted".into()), false);
+        assert_eq!(state.actions.message, "Item use rejected: Too distracted");
+        assert_eq!(state.refused, Vec::<String>::new());
+        assert_eq!(state.actions.pending_use, None);
+    }
+
+    #[test]
     fn plain_stack_click_waits_for_quantity_before_posting_a_move() {
         let mut bench = Bench::demo(7);
         let before = bench.data().clone();

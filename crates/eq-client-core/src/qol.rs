@@ -323,7 +323,7 @@ impl Fix {
                 "Allow horizontal movement while stunned. Attacks, spells, items and jumping still obey stun restrictions."
             }
             Self::MoveWhileFeigned => {
-                "Feign Death without lying down: the press sends only the feign, so you stay standing, others see you standing, and you move normally while the server keeps the feign. Your next stand ends it, and so does your first step if you pressed it sitting. Departs from the original client, which lies you down."
+                "Feign Death without lying down: the press sends only the feign, so you stay standing, others see you standing, and you move normally while the server keeps the feign. Your next stand ends it, as a jump or a duck does (each sends its own duck or stand), and so does your first step if you pressed it sitting. Departs from the original client, which lies you down."
             }
             Self::StandWhenHit => {
                 "Stand up when a hit lands while you sit or kneel to loot, as the original client does. Turning this off departs from the original client and keeps you seated."

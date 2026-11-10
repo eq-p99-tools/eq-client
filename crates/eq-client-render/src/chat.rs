@@ -2118,9 +2118,10 @@ fn pet_order(
         created: stamp.created,
     })
 }
-/// The posture `/sit` asks for. Titanium's runs the sit toggle (0x46a445,
-/// read R19), which stands a player lying or looting; otherwise it sits, as
-/// before. Its refusal under a mesmerize is not modelled here (recording
+/// The posture `/sit` asks for. Where the generation's sit toggle stands a
+/// player lying or looting (`SitToggle`; Titanium's `/sit` runs it,
+/// 0x46a445, read R19), so does this; otherwise it sits, as before. The
+/// toggle's refusal under a mesmerize is not modelled here (recording
 /// checklist 6.455).
 fn sit_command(world: &eq_client_core::world::ClientWorld) -> eq_client_core::Posture {
     let posture = world
@@ -2129,8 +2130,7 @@ fn sit_command(world: &eq_client_core::world::ClientWorld) -> eq_client_core::Po
     if matches!(
         posture,
         Some(eq_client_core::PostureState::Lying | eq_client_core::PostureState::Looting)
-    ) && super::hud::toggled_seat(posture, world.generation())
-        == Some(eq_client_core::Posture::Standing)
+    ) && world.generation().sit_toggle().stands_lying_and_looting
     {
         eq_client_core::Posture::Standing
     } else {

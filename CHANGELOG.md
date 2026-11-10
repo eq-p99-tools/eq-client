@@ -22,7 +22,9 @@
   keeps a hit sitter seated (checklist 6.453), and Move While Feigned, off
   by default, where the press sends only the feign so the player stays
   standing, is seen standing and moves while the server keeps the feign;
-  their next stand ends it (checklist 6.454).
+  their next stand ends it, as a jump or a duck does (checklist 6.454).
+  Autorun pressed while sitting neither stands the player nor runs them
+  once they stand (read R19c), and any posture change ends autorun.
 - Open the Runbook window, in front, whenever the local harness starts a
   Runbook, so whoever watches can see a run is in use. Only a start opens
   it: once closed, it stays closed until the next start. It takes no
