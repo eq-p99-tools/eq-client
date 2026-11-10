@@ -2652,7 +2652,10 @@ pub(super) mod tests {
     };
 
     #[test]
-    #[allow(clippy::too_many_lines, reason = "one ride, its step-off and its sinking")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one ride, its step-off and its sinking"
+    )]
     fn a_ride_carries_the_feet_by_the_lifts_own_rise_across_any_frame_gap() {
         use eq_client_core::doors::{Door, DoorTable, DoorUpdate};
         use eq_client_core::movement::{CollisionMesh, CollisionWorld};
