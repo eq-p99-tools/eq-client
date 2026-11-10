@@ -25,6 +25,7 @@
   their next stand ends it, as a jump or a duck does (checklist 6.454).
   Autorun pressed while sitting neither stands the player nor runs them
   once they stand (read R19c), and any posture change ends autorun.
+  Networking pinned to 5248ca5 (eq-network #293).
 - Stop needless movement blocking. A Bard's song pulse, any buff or spell
   landing on the player, a level, eating, looting or moving items, and a
   server's move no longer stop the player, cancel autorun or drop a jump:
