@@ -182,6 +182,7 @@ fn only_the_matching_worker_refusal_releases_a_move_after_a_grant_reset() {
             backward_units_per_second: None,
             walk_units_per_second: None,
             strafe_units_per_second: None,
+            strafe_walk_units_per_second: None,
             diagonal: default(),
             falls: false,
             jump_factor: 1.0,

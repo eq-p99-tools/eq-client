@@ -56,23 +56,25 @@ fn inward_zoom_enters_first_person_and_outward_zoom_keeps_the_view_heading() {
 }
 
 #[test]
-fn chase_pitch_stops_short_of_both_poles_on_either_leash() {
+fn the_chase_view_looks_down_at_the_eyes_from_at_most_30_above_on_either_leash() {
     for leash in [ChaseLeash::Program, ChaseLeash::Long] {
         let mut camera = orbit();
         camera.radius = 100.0;
         let body = head_only(2.4);
         let eye = camera.focus + Vec3::Y * body.head;
         let heading = Quat::from_rotation_y(camera.yaw) * Vec3::NEG_Z;
-        for (tilt, sign) in [(1_000.0, -1.0), (-1_000.0, 1.0)] {
+        let behind = camera.behind_distance();
+        for (tilt, height) in [(1_000.0, 30.0), (-1_000.0, 0.0)] {
             let pose = camera.attached_view(TITANIUM.on_leash(leash), tilt, 0.0, None, body, 0.016);
             assert!(matches!(camera.view, View::Chase));
             let forward = *pose.forward();
             let horizontal = Vec3::new(forward.x, 0.0, forward.z);
-            assert!((forward.y - sign * 89.0_f32.to_radians().sin()).abs() < 1e-6);
+            assert!(forward.y <= 1e-6, "never looks up: {forward}");
             assert!(horizontal.normalize().abs_diff_eq(heading, 1e-4));
             let toward_eye = eye - pose.translation;
             assert!(toward_eye.normalize().abs_diff_eq(forward, 1e-5));
-            assert!((toward_eye.length() - 100.0).abs() < 1e-3);
+            assert!((-toward_eye.y - height).abs() < 1e-3, "{toward_eye}");
+            assert!((toward_eye.with_y(0.0).length() - behind).abs() < 1e-3);
         }
     }
 }
@@ -239,7 +241,9 @@ fn ordinary_wheel_steps_snap_in_early_and_need_more_than_one_step_to_reenter() {
 
 #[test]
 fn wheel_moves_toward_the_first_person_eye_without_rotating_chase() {
-    for pixels in [-90.0, -60.0, 0.0, 100.0, 500.0] {
+    // Within the height limit; held at it, zooming out keeps the height and
+    // flattens the view.
+    for pixels in [-90.0, -60.0, 0.0, 100.0] {
         let (mut app, camera, _, window) = app();
         app.world_mut()
             .get_mut::<OrbitCamera>(camera)
@@ -299,7 +303,7 @@ fn ordinary_look_reaches_both_vertical_directions_after_snapping_in() {
 }
 
 #[test]
-fn chase_looks_nearly_vertical_both_ways_with_normal_and_inverted_mouse_input() {
+fn chase_looks_down_from_at_most_30_above_and_never_up_with_normal_and_inverted_mouse_input() {
     for (invert_y, pixels) in [(false, -180.0), (true, 180.0)] {
         let (mut app, camera, player, _) = app();
         app.world_mut()
@@ -307,91 +311,48 @@ fn chase_looks_nearly_vertical_both_ways_with_normal_and_inverted_mouse_input() 
             .options
             .invert_y = invert_y;
         start_look(&mut app);
+        // The eyes: the body's center plus its head line.
+        let eye = 3.0 + 6.0 * camera::HEAD_LINE;
+        // Looking up brings the camera down to eye level and no lower: the
+        // program's chase never looks up (0x570d81).
         for _ in 0..4 {
             drag(&mut app, Vec2::new(15.0, pixels));
         }
-
         let view = app.world().get::<OrbitCamera>(camera).unwrap();
         let pose = app.world().get::<Transform>(camera).unwrap();
         assert!(matches!(view.view, View::Chase));
-        let forward = pose.forward();
-        let pitch = forward.y.atan2(forward.x.hypot(forward.z)).to_degrees();
-        assert!((88.9..89.1).contains(&pitch), "{pitch}");
+        assert!(pose.forward().y.abs() < 1e-5, "{}", pose.forward());
+        assert!(
+            (pose.translation.y - eye).abs() < 1e-3,
+            "{}",
+            pose.translation
+        );
         assert!(pose.rotation.is_finite());
         assert!(pose.right().is_finite());
-        assert!(pose.translation.y > 0.0);
-        assert!(pose.translation.y < view.focus.y);
         assert_eq!(
             app.world().get::<Visibility>(player),
             Some(&Visibility::Inherited)
         );
 
+        // Looking down raises it to 30 above the eyes and no higher.
         for _ in 0..4 {
             drag(&mut app, Vec2::new(0.0, -pixels));
         }
         let pose = app.world().get::<Transform>(camera).unwrap();
-        let forward = pose.forward();
-        let pitch = forward.y.atan2(forward.x.hypot(forward.z)).to_degrees();
-        assert!((-89.1..-88.9).contains(&pitch), "{pitch}");
+        assert!(pose.forward().y < 0.0);
+        assert!(
+            (pose.translation.y - eye - 30.0).abs() < 1e-3,
+            "{}",
+            pose.translation
+        );
         assert!(pose.rotation.is_finite());
-        assert!(pose.translation.y > 30.0);
         let view = app.world().get::<OrbitCamera>(camera).unwrap();
         assert!(matches!(view.view, View::Chase));
     }
 }
 
 #[test]
-fn upward_chase_shrinks_the_view_at_a_wall_and_raised_ground() {
-    let (mut app, camera, _, window) = app();
-    app.world_mut().get_mut::<OrbitCamera>(camera).unwrap().yaw = 0.0;
-    let world = CollisionWorld::new([
-        [[-10.0, 0.0, 2.0], [10.0, 0.0, 2.0], [10.0, 20.0, 2.0]],
-        [[-10.0, 0.0, 2.0], [10.0, 20.0, 2.0], [-10.0, 20.0, 2.0]],
-        [[-10.0, 1.0, 0.02], [10.0, 1.0, 0.02], [10.0, 1.0, 10.0]],
-        [[-10.0, 1.0, 0.02], [10.0, 1.0, 10.0], [-10.0, 1.0, 10.0]],
-        [[0.025, 0.0, -1.0], [0.025, 0.0, 1.0], [0.025, 4.25, 1.0]],
-        [[0.025, 0.0, -1.0], [0.025, 4.25, 1.0], [0.025, 4.25, -1.0]],
-    ])
-    .unwrap();
-    app.insert_resource(crate::Collision(Some(world)));
-    start_look(&mut app);
-    drag(&mut app, Vec2::new(0.0, -200.0));
-    let at_wall = *app.world().get::<Transform>(camera).unwrap();
-    assert!(at_wall.forward().y > 0.35);
-    assert!((0.0..2.0).contains(&at_wall.translation.z));
-
-    for _ in 0..3 {
-        drag(&mut app, Vec2::new(0.0, -200.0));
-    }
-    for _ in 0..60 {
-        app.update();
-    }
-    let at_ground = *app.world().get::<Transform>(camera).unwrap();
-    assert!(at_ground.forward().y > 0.999);
-    assert!(at_ground.translation.y > 1.0);
-    assert!((near(&app, camera) - 0.1).abs() < 1e-5);
-
-    // Wheel zoom changes the requested orbit even while the same ground
-    // limits the displayed camera. It does not toggle first person.
-    let radius = app.world().get::<OrbitCamera>(camera).unwrap().radius;
-    wheel(&mut app, window, -1.0);
-    let view = app.world().get::<OrbitCamera>(camera).unwrap();
-    assert!(view.radius > radius);
-    assert!(matches!(view.view, View::Chase));
-    let zoomed = app.world().get::<Transform>(camera).unwrap();
-    assert!(zoomed.translation.y > 1.0);
-    assert!(zoomed.forward().abs_diff_eq(*at_ground.forward(), 1e-5));
-
-    // Turn the near-vertical orbit toward the low wall beside the avatar.
-    drag(&mut app, Vec2::new(-314.0, 0.0));
-    let turned = app.world().get::<Transform>(camera).unwrap();
-    assert!(turned.forward().y > 0.999);
-    assert!((0.0..0.025).contains(&turned.translation.x));
-    assert!(turned.right().is_finite());
-}
-
-#[test]
-fn downward_chase_zoom_stays_below_the_ceiling_and_moves_in_when_clear() {
+fn downward_chase_stays_below_the_ceiling_while_zooming_in() {
     let (mut app, camera, _, window) = app();
     app.world_mut()
         .get_mut::<OrbitCamera>(camera)
@@ -412,21 +373,17 @@ fn downward_chase_zoom_stays_below_the_ceiling_and_moves_in_when_clear() {
     .unwrap();
     app.insert_resource(crate::Collision(Some(roof)));
     start_look(&mut app);
+    // Looking down asks for 30 above the eyes; the roof holds it under.
     drag(&mut app, Vec2::new(0.0, 500.0));
     let under_roof = *app.world().get::<Transform>(camera).unwrap();
-    assert!(under_roof.forward().y < -0.999);
+    assert!(under_roof.forward().y < -0.9, "{}", under_roof.forward());
     assert!(under_roof.translation.y < 10.5);
 
-    wheel(&mut app, window, -1.0);
-    let zoomed_out = app.world().get::<Transform>(camera).unwrap();
-    assert!(
-        zoomed_out
-            .translation
-            .abs_diff_eq(under_roof.translation, 1e-5)
-    );
-    wheel(&mut app, window, 6.0);
+    // In along the sightline, short of the first-person snap: the roof
+    // still holds it under.
+    wheel(&mut app, window, 3.0);
     let zoomed_in = app.world().get::<Transform>(camera).unwrap();
-    assert!(zoomed_in.translation.y < under_roof.translation.y);
+    assert!(zoomed_in.translation.y < 10.5);
     assert!(zoomed_in.forward().abs_diff_eq(*under_roof.forward(), 1e-5));
     assert!(matches!(
         app.world().get::<OrbitCamera>(camera).unwrap().view,

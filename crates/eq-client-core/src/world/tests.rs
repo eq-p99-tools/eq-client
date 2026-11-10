@@ -852,6 +852,7 @@ fn input_acceptance_is_current_and_never_supplies_movement_permission() {
             backward_units_per_second: None,
             walk_units_per_second: None,
             strafe_units_per_second: None,
+            strafe_walk_units_per_second: None,
             falls: true,
             jump_factor: 1.0,
         },
@@ -3634,6 +3635,7 @@ fn the_session_grants_motion_until_any_reset() {
         backward_units_per_second: None,
         walk_units_per_second: None,
         strafe_units_per_second: None,
+        strafe_walk_units_per_second: None,
         falls: true,
         jump_factor: 1.0,
     };
@@ -6361,13 +6363,10 @@ fn initial_group_leadership_keeps_members_received_before_formation() {
 
 #[test]
 fn a_jump_takes_its_cost_off_the_shown_endurance_until_the_next_report() {
+    let mut unreported = ClientWorld::default();
+    unreported.spend_endurance(20);
+    assert_eq!(unreported.vitals().endurance, None, "nothing to take from");
     let mut world = admitted();
-    world.spend_endurance(20);
-    assert_eq!(
-        world.vitals().endurance,
-        None,
-        "nothing reported to take from"
-    );
     game(
         &mut world,
         WorldEvent::Resources {

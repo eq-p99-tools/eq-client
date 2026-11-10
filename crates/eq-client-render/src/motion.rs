@@ -52,6 +52,9 @@ pub(super) struct Controls {
     pub backward_speed: Option<f32>,
     pub walk_speed: Option<f32>,
     pub strafe_speed: Option<f32>,
+    /// The strafe speed with walking selected, where it is slower than
+    /// [`Self::strafe_speed`].
+    pub strafe_walk_speed: Option<f32>,
     diagonal_rates: DiagonalRates,
     /// The share of the jump speed a jump starts with, as the session
     /// grants it: the health and weight factor.
@@ -199,6 +202,7 @@ impl Default for Controls {
             backward_speed: None,
             walk_speed: None,
             strafe_speed: None,
+            strafe_walk_speed: None,
             diagonal_rates: DiagonalRates::default(),
             jump_factor: 1.0,
             walking: false,
@@ -448,7 +452,13 @@ impl Controls {
             intent.preserve_facing = true;
             if let Some(speed) = self.strafe_speed {
                 intent.mode = MovementMode::Strafe;
-                intent.speed = speed;
+                // Titanium strafes on the selected base speed (the R5
+                // audit's S1).
+                intent.speed = if self.walking {
+                    self.strafe_walk_speed.unwrap_or(speed)
+                } else {
+                    speed
+                };
                 let facing = Vec3::new(radians.sin(), 0.0, radians.cos());
                 intent.direction = facing.cross(Vec3::Y) * sideways;
             } else {
@@ -665,6 +675,7 @@ impl Controls {
         self.backward_speed = grant.backward_units_per_second;
         self.walk_speed = grant.walk_units_per_second;
         self.strafe_speed = grant.strafe_units_per_second;
+        self.strafe_walk_speed = grant.strafe_walk_units_per_second;
         self.diagonal_rates = grant.diagonal;
         self.jump_factor = if grant.jump_factor.is_finite() {
             grant.jump_factor.clamp(0.0, 1.0)
@@ -1406,6 +1417,17 @@ pub(super) fn input(
     {
         intent.direction = Vec3::ZERO;
         intent.diagonal = None;
+    }
+    // Ducking halves a strafe (the Titanium speeds read; the R5 audit's S1),
+    // which the session doesn't track.
+    if intent.mode == MovementMode::Strafe
+        && online
+            .world()
+            .player()
+            .and_then(|player| online.world().posture(player.spawn_id))
+            == Some(eq_client_core::PostureState::Ducking)
+    {
+        intent.speed *= 0.5;
     }
     let MotionInput {
         mode,
@@ -2528,6 +2550,32 @@ pub(super) mod tests {
             controls.walking = true;
             assert!((intent(&controls, Act::Forward).speed - 1.5).abs() < 0.001);
         }
+    }
+
+    #[test]
+    fn a_strafe_takes_the_walking_rate_with_walking_selected() {
+        // Titanium strafes on the selected base speed (the R5 audit's S1):
+        // the grant's strafe rate running, its walking rate walking.
+        let mut controls = Controls {
+            speed: Some(6.0),
+            walk_speed: Some(4.0),
+            strafe_speed: Some(6.0),
+            strafe_walk_speed: Some(4.0),
+            ..Controls::default()
+        };
+        let map = KeyMap::for_client(InstalledClient::Titanium);
+        let keys = ButtonInput::<KeyCode>::default();
+        let strafe = |controls: &Controls| {
+            controls
+                .intent(&keys, &map, &[Act::StrafeLeft], true, (0.0, 0.0), None)
+                .speed
+        };
+        assert!((strafe(&controls) - 6.0).abs() < 0.001);
+        controls.walking = true;
+        assert!((strafe(&controls) - 4.0).abs() < 0.001);
+        // Without a walking rate, one rate for both.
+        controls.strafe_walk_speed = None;
+        assert!((strafe(&controls) - 6.0).abs() < 0.001);
     }
 
     #[test]
@@ -4364,6 +4412,7 @@ pub(super) mod tests {
                 backward_units_per_second: None,
                 walk_units_per_second: None,
                 strafe_units_per_second: None,
+                strafe_walk_units_per_second: None,
                 diagonal: eq_client_core::DiagonalRates::default(),
                 falls: true,
                 jump_factor: 1.0,
@@ -4806,6 +4855,7 @@ pub(super) mod tests {
             backward_units_per_second: None,
             walk_units_per_second: Some(2.0),
             strafe_units_per_second: None,
+            strafe_walk_units_per_second: None,
             falls: false,
             jump_factor: 1.0,
         });
@@ -4884,6 +4934,41 @@ pub(super) mod tests {
             panic!("expected movement")
         };
         assert_eq!(request.mode, MovementMode::Forward);
+    }
+
+    #[test]
+    fn ducking_halves_a_strafe() {
+        // The Titanium speeds read (the R5 audit's S1); the session doesn't
+        // track the stance, so the player's side halves it.
+        for (posture, moved) in [
+            (eq_client_core::PostureState::Standing, 0.4),
+            (eq_client_core::PostureState::Ducking, 0.2),
+        ] {
+            let (mut app, receiver) = app();
+            crate::keys::testing::bind(
+                &mut app,
+                Act::StrafeRight,
+                crate::keys::Chord::key(KeyCode::KeyL),
+            );
+            app.world_mut().resource_mut::<Controls>().strafe_speed = Some(4.0);
+            crate::online::testing::news(
+                &mut app.world_mut().resource_mut::<online::OnlineState>(),
+                [eq_client_core::WorldEvent::Posture {
+                    spawn_id: 7,
+                    posture,
+                }],
+            );
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.reset_all();
+            keys.press(KeyCode::KeyL);
+            app.update();
+            let ClientCommand::Move(request) = receiver.try_recv().unwrap() else {
+                panic!("expected a strafe")
+            };
+            assert_eq!(request.mode, MovementMode::Strafe);
+            let across = request.position.x.hypot(request.position.y);
+            assert!((across - moved).abs() < 0.001, "{posture:?}: {across}");
+        }
     }
 
     #[test]
@@ -5546,7 +5631,7 @@ pub(super) mod tests {
                 .world()
                 .resource::<crate::options::OptionsState>()
                 .options
-                .turn_per_pixel();
+                .turn_per_pixel(crate::camera::screen_width(None));
         app.world_mut().resource_mut::<Controls>().last_accepted = Instant::now();
         mouse_drag(&mut app, pixels, 0.0);
         app.update();
@@ -5604,7 +5689,7 @@ pub(super) mod tests {
                 .world()
                 .resource::<crate::options::OptionsState>()
                 .options
-                .turn_per_pixel();
+                .turn_per_pixel(crate::camera::screen_width(None));
         mouse_drag(&mut app, -pixels, 0.0);
         app.update();
         assert_attached_heading(&app, camera, player, 256.0);
@@ -6246,6 +6331,7 @@ pub(super) mod tests {
             backward_units_per_second: None,
             walk_units_per_second: None,
             strafe_units_per_second: None,
+            strafe_walk_units_per_second: None,
             falls: true,
             jump_factor: 1.0,
         });
@@ -6280,6 +6366,7 @@ pub(super) mod tests {
             backward_units_per_second: None,
             walk_units_per_second: None,
             strafe_units_per_second: None,
+            strafe_walk_units_per_second: None,
             falls: true,
             jump_factor: 1.0,
         };
@@ -6663,6 +6750,7 @@ pub(super) mod tests {
                 backward_units_per_second: None,
                 walk_units_per_second: None,
                 strafe_units_per_second: None,
+                strafe_walk_units_per_second: None,
                 diagonal: eq_client_core::DiagonalRates::default(),
                 falls: true,
                 jump_factor: 1.0,
@@ -6825,6 +6913,7 @@ pub(super) mod tests {
                 backward_units_per_second: None,
                 walk_units_per_second: None,
                 strafe_units_per_second: None,
+                strafe_walk_units_per_second: None,
                 diagonal: DiagonalRates::default(),
                 falls: true,
                 jump_factor: 1.0,
@@ -6896,6 +6985,7 @@ pub(super) mod tests {
                     backward_units_per_second: None,
                     walk_units_per_second: None,
                     strafe_units_per_second: None,
+                    strafe_walk_units_per_second: None,
                     diagonal: DiagonalRates::default(),
                     falls: true,
                     jump_factor: 1.0,

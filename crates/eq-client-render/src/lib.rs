@@ -565,7 +565,7 @@ mod script_window_tests {
 
 /// The sliders' settings from `eqclient.ini`, on the scales assumed until a
 /// recording of the official client says otherwise: `ClipPlane` 0 to 20 and
-/// `MouseSensitivity` 0 to 10 as fractions of the slider, `MaxFPS` in frames.
+/// `MouseSensitivity` as the program's sensitivity 1 to 8, `MaxFPS` in frames.
 fn seed_levels(
     options: &mut eq_client_core::options::Options,
     official: &eq_client_assets::ui::OfficialOptions,
@@ -578,8 +578,13 @@ fn seed_levels(
     if let Some(fps) = official.max_fps {
         options.set_level(Level::MaxFps, u16::try_from(fps.min(1000)).unwrap_or(1000));
     }
+    // The ini's value taken as the program's sensitivity 1 to 8, which the
+    // setting spans (inferred, 6.418).
     if let Some(sensitivity) = official.mouse_sensitivity {
-        options.set_level(Level::MouseSensitivity, share(sensitivity, 10));
+        options.set_level(
+            Level::MouseSensitivity,
+            share(sensitivity.clamp(1, 8) - 1, 7),
+        );
     }
 }
 
@@ -1842,8 +1847,10 @@ mod tests {
         app.update();
         let state = app.world().get::<OrbitCamera>(camera).unwrap();
         assert!(state.pitch > previous.1);
-        // With wheel zoom disabled, pitching keeps the orbit radius fixed.
-        assert!((state.radius - previous.2).abs() < f32::EPSILON);
+        // With wheel zoom disabled, pitching keeps the distance behind the
+        // player fixed and moves only the camera's height.
+        let behind = |pitch: f32, radius: f32| radius * pitch.cos();
+        assert!((behind(state.pitch, state.radius) - behind(previous.1, previous.2)).abs() < 1e-3);
     }
 
     #[test]

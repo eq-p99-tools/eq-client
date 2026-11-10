@@ -111,6 +111,7 @@ pub(crate) fn fly_camera(
     options: Res<options::OptionsState>,
     mut motion: MessageReader<MouseMotion>,
     mut cameras: Query<(&mut FreeCamera, &mut Transform)>,
+    windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     use crate::keys::Act;
     let drag = if look.held && keys.focused() {
@@ -131,7 +132,9 @@ pub(crate) fn fly_camera(
             - f32::from(held(Act::Back, Act::CameraBack));
         turning = keys.map.axis(&input, Act::TurnRight, Act::TurnLeft);
     }
-    let turn = options.options.turn_per_pixel();
+    let turn = options
+        .options
+        .turn_per_pixel(screen_width(windows.single().ok()));
     let rise = if options.options.invert_y { -1.0 } else { 1.0 };
     for (mut free, mut transform) in &mut cameras {
         free.fly(
@@ -142,6 +145,13 @@ pub(crate) fn fly_camera(
             time.delta_secs(),
         );
     }
+}
+
+/// The width the program measures a mouse drag against: the main window's
+/// drawn width in pixels, or Bevy's default window's (1280) without one.
+pub(crate) fn screen_width(window: Option<&Window>) -> f32 {
+    #[allow(clippy::cast_precision_loss)] // Screen widths are far below 2^24.
+    window.map_or(1280.0, |window| window.physical_width() as f32)
 }
 
 /// A right press over the world keeps the look until release, even if the
@@ -246,6 +256,7 @@ pub(super) fn turn(
     mut aim: ResMut<MouseAim>,
     mut motion: MessageReader<MouseMotion>,
     mut cameras: Query<&mut OrbitCamera, Without<FreeCamera>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
 ) {
     aim.horizontal = None;
     if !look.held {
@@ -254,7 +265,10 @@ pub(super) fn turn(
     }
     let horizontal = motion.read().map(|event| event.delta.x).sum::<f32>();
     if let Ok(mut camera) = cameras.single_mut() {
-        let yaw = -horizontal * options.options.turn_per_pixel();
+        let yaw = -horizontal
+            * options
+                .options
+                .turn_per_pixel(screen_width(windows.single().ok()));
         if online.enabled {
             aim.horizontal = Some(yaw);
         } else {
@@ -264,7 +278,8 @@ pub(super) fn turn(
 }
 
 /// The chase view's pitch as it first opens: a little above the player,
-/// looking down past them. Inferred, item 6.240.
+/// looking down past them. Inferred, item 6.240; [`chase`] holds it to the
+/// program's height limit at the opening distance.
 pub(super) const CHASE_PITCH: f32 = -20.0_f32.to_radians();
 
 /// The orbit yaw that puts the camera behind whatever faces the render yaw
@@ -412,11 +427,13 @@ pub(super) fn orbit_camera(
     let limits = program.on_leash(leash(&options.options));
     let rise = if options.options.invert_y { -1.0 } else { 1.0 };
     let clip = clip_distance(client, &options.options, online.world());
+    let turn = options
+        .options
+        .turn_per_pixel(screen_width(windows.single().ok()));
     for (mut camera, mut transform, projection, free) in &mut cameras {
-        let turn = options.options.turn_per_pixel();
         if free {
             let radius = camera.radius;
-            let clip = clip.map(|clip| clip + past_program(radius, program));
+            let clip = clip.map(|clip| clip + past_program(camera.behind_distance(), program));
             if let Some(mut projection) = projection {
                 fit_view_projection(&mut projection, radius, clip, false);
             }
@@ -451,7 +468,12 @@ pub(super) fn orbit_camera(
             );
         }
         let radius = camera.radius;
-        let clip = clip.map(|clip| clip + past_program(radius, program));
+        let reach = if matches!(projection.as_deref(), Some(Projection::Orthographic(_))) {
+            radius
+        } else {
+            camera.behind_distance()
+        };
+        let clip = clip.map(|clip| clip + past_program(reach, program));
         if let Some(mut projection) = projection {
             let close_upward_orbit =
                 camera.pitch > 0.0 && transform.translation.distance_squared(camera.focus) < 4.0;
@@ -484,11 +506,26 @@ pub(crate) fn show_player(
     }
 }
 
-/// Stops short of either pole so the orbit retains its horizontal heading.
+/// Stops short of looking straight down so the view keeps its heading.
 const MAX_CHASE_PITCH: f32 = 89.0_f32.to_radians();
 
-/// Drag changes the angle and zoom changes the distance along that sightline.
-/// The selected leash bounds that distance before collision adjusts the pose.
+impl OrbitCamera {
+    /// How far behind the pivot the camera sits, along the ground.
+    pub(super) fn behind_distance(&self) -> f32 {
+        self.radius * self.pitch.cos()
+    }
+}
+
+/// The program's chase camera sits a distance behind the player's eyes and
+/// a height above them, each held within its range on every update, and
+/// tilts down at the player from there (Titanium 0x570d81, read N2; the R5
+/// audit's C1), so it never drops below eye level and never looks up. A
+/// drag tilts the view, which moves the height at the current distance; the
+/// wheel moves the camera along its sightline, its distance on the selected
+/// leash, until a limit holds the height or the distance.
+/// The camera's pitch and radius are that height and distance's angle and
+/// sightline. Views from below or above the program's are the free
+/// camera's ([`eq_client_core::qol::Fix::FreeCamera`]).
 pub(super) fn chase(
     camera: &mut OrbitCamera,
     limits: eq_client_assets::camera::CameraLimits,
@@ -496,8 +533,23 @@ pub(super) fn chase(
     zoom: f32,
 ) {
     let (least_distance, most_distance) = limits.chase_distance;
-    camera.pitch = (camera.pitch - tilt).clamp(-MAX_CHASE_PITCH, MAX_CHASE_PITCH);
-    camera.radius = (camera.radius * zoom).clamp(least_distance, most_distance);
+    let behind = camera.radius * camera.pitch.clamp(-MAX_CHASE_PITCH, 0.0).cos();
+    // The tilt's height at the distance the drag began from.
+    let wanted = (camera.pitch - tilt).clamp(-MAX_CHASE_PITCH, 0.0);
+    let height = behind * (-wanted).tan();
+    let distance = (behind * zoom).clamp(least_distance, most_distance);
+    // The wheel moves the camera along its sightline, height and distance
+    // alike, until a limit holds one of them.
+    let height = if behind > f32::EPSILON {
+        height * distance / behind
+    } else {
+        height
+    };
+    let (least_height, _) = limits.chase_height;
+    let most_height = limits.most_chase_height(distance).max(least_height);
+    let height = height.clamp(least_height, most_height);
+    camera.pitch = -height.atan2(distance);
+    camera.radius = distance.hypot(height);
 }
 
 /// How far behind the player the player lets the chase camera go: this
@@ -514,7 +566,7 @@ pub(crate) fn leash(
 }
 
 /// How much farther out than the program lets its chase camera go a camera
-/// `radius` from the player is, if at all. The far plane moves out by as
+/// `radius` behind the player is, if at all. The far plane moves out by as
 /// much, so on the long leash the scene around the player draws as far as
 /// it would with the camera at the program's limit, and the player never
 /// drops past the far plane. Within the program's limit it is nothing, and
@@ -1142,8 +1194,14 @@ mod tests {
         assert_eq!(corner_reach(&top_down), None);
     }
 
+    /// The camera's height above the pivot and its distance behind it.
+    fn height_and_distance(camera: &OrbitCamera) -> (f32, f32) {
+        let offset = orbit_transform(camera).translation - camera.focus;
+        (offset.y, offset.with_y(0.0).length())
+    }
+
     #[test]
-    fn the_classic_chase_leash_bounds_distance_at_steep_pitch() {
+    fn the_chase_camera_sits_within_the_programs_height_and_distance() {
         let limits = eq_client_assets::camera::TITANIUM;
         let mut camera = OrbitCamera {
             focus: Vec3::ZERO,
@@ -1153,16 +1211,36 @@ mod tests {
             pulled: None,
             view: default(),
         };
-        // Pitch can be changed at the current distance.
-        chase(&mut camera, limits, 1000.0, 1.0);
-        assert!((camera.radius - 100.0).abs() < 1e-3);
-        let before = orbit_transform(&camera);
+        // Within the limits, nothing moves.
+        let (height, distance) = height_and_distance(&camera);
+        chase(&mut camera, limits, 0.0, 1.0);
+        let (same_height, same_distance) = height_and_distance(&camera);
+        assert!((same_height - height).abs() < 1e-3 && (same_distance - distance).abs() < 1e-3);
+        // Tilted down hard, the camera rises only to 30 above the eyes, at
+        // the same distance behind.
+        chase(&mut camera, limits, 1_000.0, 1.0);
+        let (height, behind) = height_and_distance(&camera);
+        assert!((height - 30.0).abs() < 1e-3, "{height}");
+        assert!((behind - distance).abs() < 1e-3, "{behind}");
+        // Tilted up, it comes down to eye level and no lower: it never looks up.
+        chase(&mut camera, limits, -1_000.0, 1.0);
+        let (height, _) = height_and_distance(&camera);
+        assert!(height.abs() < 1e-3, "{height}");
+        assert!(camera.pitch.abs() < 1e-6);
+        // The wheel moves along the sightline, the distance within 2 to 200.
+        chase(&mut camera, limits, 0.1, 1.0);
+        let (raised, behind) = height_and_distance(&camera);
+        let slope = raised / behind;
         for (zoom, distance) in [(100.0, 200.0), (0.0, 2.0)] {
             chase(&mut camera, limits, 0.0, zoom);
-            let pose = orbit_transform(&camera);
-            assert!((pose.translation.distance(camera.focus) - distance).abs() < 1e-3);
-            assert!(pose.forward().abs_diff_eq(*before.forward(), 1e-5));
+            let (height, behind) = height_and_distance(&camera);
+            assert!((behind - distance).abs() < 1e-3, "{behind}");
+            assert!((height / behind - slope).abs() < 1e-4, "{height}");
         }
+        // Close in, the same 30 is a steep view down.
+        chase(&mut camera, limits, 1_000.0, 1.0);
+        assert!((height_and_distance(&camera).0 - 30.0).abs() < 1e-3);
+        assert!(camera.pitch < -1.5);
     }
 
     #[test]
@@ -1181,10 +1259,13 @@ mod tests {
             view: default(),
         };
         chase(&mut camera, limits, 0.0, 1_000.0);
-        for tilt in [-1000.0, 1000.0] {
+        for (tilt, height) in [(-1000.0, 0.0), (1000.0, 3_000.0)] {
             chase(&mut camera, limits, tilt, 1.0);
-            assert!((camera.radius - 20_000.0).abs() < 0.1);
-            assert!((past_program(camera.radius, TITANIUM) - 19_800.0).abs() < 0.1);
+            // Past 200 the height keeps the program's steepest slope there.
+            let (high, behind) = height_and_distance(&camera);
+            assert!((behind - 20_000.0).abs() < 0.1, "{behind}");
+            assert!((high - height).abs() < 0.1, "{high}");
+            assert!((past_program(camera.behind_distance(), TITANIUM) - 19_800.0).abs() < 0.1);
         }
         assert!(past_program(150.0, TITANIUM).abs() < f32::EPSILON);
         // Turned off, the program's limit.
@@ -1193,7 +1274,9 @@ mod tests {
             .set(eq_client_core::qol::Fix::LongChaseCamera, false);
         assert_eq!(leash(&options), ChaseLeash::Program);
         chase(&mut camera, TITANIUM.on_leash(leash(&options)), 0.0, 1.0);
-        assert!((camera.radius - 200.0).abs() < 1e-3);
+        let (height, behind) = height_and_distance(&camera);
+        assert!((behind - 200.0).abs() < 1e-3, "{behind}");
+        assert!((height - 30.0).abs() < 1e-3, "{height}");
     }
 
     #[test]

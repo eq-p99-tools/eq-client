@@ -180,8 +180,12 @@ pub struct MotionGrant {
     pub backward_units_per_second: Option<f32>,
     /// Walking, when calibrated apart from running.
     pub walk_units_per_second: Option<f32>,
-    /// Moving sideways, when calibrated apart.
+    /// Moving sideways, when calibrated apart; the rate running where
+    /// [`Self::strafe_walk_units_per_second`] gives the walking one.
     pub strafe_units_per_second: Option<f32>,
+    /// Moving sideways with walking selected, where it is slower: Titanium
+    /// strafes on the selected base speed.
+    pub strafe_walk_units_per_second: Option<f32>,
     /// Lateral rates when holding longitudinal input in the calibrated ground mode.
     pub diagonal: crate::DiagonalRates,
     /// Whether the session sends falling samples.
@@ -749,6 +753,7 @@ impl ClientWorld {
                 backward_units_per_second,
                 walk_units_per_second,
                 strafe_units_per_second,
+                strafe_walk_units_per_second,
                 diagonal,
                 falls,
                 jump_factor,
@@ -759,6 +764,7 @@ impl ClientWorld {
                     backward_units_per_second: *backward_units_per_second,
                     walk_units_per_second: *walk_units_per_second,
                     strafe_units_per_second: *strafe_units_per_second,
+                    strafe_walk_units_per_second: *strafe_walk_units_per_second,
                     diagonal: *diagonal,
                     falls: *falls,
                     jump_factor: *jump_factor,
