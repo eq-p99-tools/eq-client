@@ -1009,10 +1009,10 @@ fn motion_state(speed: Option<f32>) -> WorldEvent {
 
 #[test]
 fn only_the_exact_posted_ready_report_with_a_positive_grant_clears_the_wait() {
+    const UNACCEPTED: &str = "waiting for the session to accept";
     let (mut app, rx) = reporting_ready();
     let command = rx.try_recv().unwrap();
     let accepted = receipt(&command, true);
-    const UNACCEPTED: &str = "waiting for the session to accept";
     app.update();
     assert!(movement_notice(&app).contains(UNACCEPTED));
     let mut different_inputs = accepted.inputs;
@@ -1135,6 +1135,7 @@ fn identical_value_recovery_uses_a_fresh_identity_and_rejects_the_old_receipt() 
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // One drop's whole life, from pending to settled.
 fn pending_drop_keeps_movement_bounded_until_inventory_is_invalidated() {
     use std::num::NonZeroU32;
 
@@ -1204,8 +1205,7 @@ fn pending_drop_keeps_movement_bounded_until_inventory_is_invalidated() {
             ..
         })
     ));
-    // The grant in force goes on, so nothing is said (6.451); without one
-    // the line names what is missing.
+    // Nothing is said under a grant (6.451); without one, what is missing.
     assert_eq!(movement_notice(&app), "");
     testing::news(
         &mut app.world_mut().resource_mut::<OnlineState>(),

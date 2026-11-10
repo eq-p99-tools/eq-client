@@ -222,43 +222,9 @@ fn calculate(
             }
         }
     }
-    let buffs = world.buffs();
-    for buff in buffs.slots().ok_or(Missing::Effects)?.values() {
-        let Some(list) = effects(buff.spell_id) else {
-            exact = false;
-            continue;
-        };
-        let projected = project(
-            &list,
-            u16::from(buff.caster_level),
-            u32::from(buff.bard_modifier),
-            dialect,
-        );
-        exact &= projected.exact;
-        modifiers.add(projected.modifiers);
-    }
-    for effect in buffs.effects().values() {
-        let Some(list) = effects(u32::from(effect.spell_id)) else {
-            exact = false;
-            continue;
-        };
-        let mut projected = project(
-            &list,
-            effect.caster_level,
-            effect.instrument_modifier,
-            dialect,
-        );
-        // An unslotted STR effect could replace an existing contributor, so
-        // its STR/STA is left out. Speed extremum/root selection is safe
-        // across the union; additive STR isn't.
-        if projected.modifiers.strength != 0 || projected.modifiers.stamina != 0 {
-            projected.modifiers.strength = 0;
-            projected.modifiers.stamina = 0;
-            projected.exact = false;
-        }
-        exact &= projected.exact;
-        modifiers.add(projected.modifiers);
-    }
+    let (buffed, proven) = buff_terms(world, &effects)?;
+    modifiers.add(buffed);
+    exact &= proven;
     let strength = i64::from(base.strength) + modifiers.strength;
     let eqmac_fatigue = if dialect.uses_fatigue_for_carry_capacity() {
         Some(EqMacFatigueInputs {
@@ -299,6 +265,55 @@ fn calculate(
         inputs,
         exact: exact || modifiers.rooted,
     })
+}
+
+/// What the player's buffs and unslotted effects add, and whether every
+/// term was evaluable. Missing buff membership fails.
+fn buff_terms(
+    world: &ClientWorld,
+    effects: &impl Fn(u32) -> Option<Vec<Effect>>,
+) -> Result<(Modifiers, bool), Missing> {
+    let dialect = world.generation();
+    let buffs = world.buffs();
+    let mut modifiers = Modifiers::default();
+    let mut exact = true;
+    for buff in buffs.slots().ok_or(Missing::Effects)?.values() {
+        let Some(list) = effects(buff.spell_id) else {
+            exact = false;
+            continue;
+        };
+        let projected = project(
+            &list,
+            u16::from(buff.caster_level),
+            u32::from(buff.bard_modifier),
+            dialect,
+        );
+        exact &= projected.exact;
+        modifiers.add(projected.modifiers);
+    }
+    for effect in buffs.effects().values() {
+        let Some(list) = effects(u32::from(effect.spell_id)) else {
+            exact = false;
+            continue;
+        };
+        let mut projected = project(
+            &list,
+            effect.caster_level,
+            effect.instrument_modifier,
+            dialect,
+        );
+        // An unslotted STR effect could replace an existing contributor, so
+        // its STR/STA is left out. Speed extremum/root selection is safe
+        // across the union; additive STR isn't.
+        if projected.modifiers.strength != 0 || projected.modifiers.stamina != 0 {
+            projected.modifiers.strength = 0;
+            projected.modifiers.stamina = 0;
+            projected.exact = false;
+        }
+        exact &= projected.exact;
+        modifiers.add(projected.modifiers);
+    }
+    Ok((modifiers, exact))
 }
 
 /// Inputs from every term the client can prove, and whether that was all of
