@@ -121,11 +121,12 @@
   landmark files from replacement, and share immutable installed spell
   definitions across sessions.
 
-- Pin networking 00edc1b8 (Batch M slice 3, draft): Titanium's own position
+- Pin networking 1600a250 (Batch M slice 3, draft): Titanium's own position
   update carries the program's movement-history entry counter, goes out by
   the program's flag rule (a straight run once a second), repeats while
   frozen and stops while stunned; the session grants the rate for backing
-  up in water.
+  up in water; and a moving player stops only on this client's own stop,
+  so a frame stall no longer sends one.
 
 - Pin networking 835c95d2 (Batch M slice 2 landing): Titanium strafes on the
   selected base speed, and the grant carries the walking strafe rate.
