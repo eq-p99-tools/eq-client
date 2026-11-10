@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- Stop needless movement blocking. A Bard's song pulse, any buff or spell
+  landing on the player, a level, eating, looting or moving items, and a
+  server's move no longer stop the player, cancel autorun or drop a jump:
+  the original client stops input only for a stun, a freeze or not standing
+  (reads R7, R18). Run 1d's Bard, frozen for the whole song, moves freely.
+  A speed change for a player already moving replaces only the speeds, so
+  held keys, taps, a queued or crouched jump and autorun go on, and the
+  sideways carry of a jump under way is limited to the new speed. A server's
+  move starts prediction afresh with the speeds kept, and autorun, held
+  keys, a jump request and a crouch go on from the new place, as the
+  original client's own-spawn update and warp touch no input (read R18). A
+  root anywhere among a buff's effects roots and the strongest snare the
+  client can evaluate applies, even where another effect cannot be
+  evaluated. Where the client cannot prove every term, it reports the terms
+  it can prove as a bound: each unproven term from its last report, or left
+  out where there is none, with that root or snare and the weight as it
+  stands. The session never lets a bound speed a grant up, and starts one
+  from it where none is in force, so a zone-in or a root fading under a
+  song moves at once. With nothing provable the last speeds stay in force,
+  with no "Movement paused" line while the player can move. By Adam's
+  decision of 11-10 this can be faster than the original client would allow
+  until the inputs are proven (recording checklist 6.451). Networking pinned
+  to ba65b64 (eq-network #292).
+
 - Ride lifts as the Titanium program does (Batch B1). On EQEmu and P99,
   vertical doors (lifts, sinking floors and platforms) rise and sink at
   their type's travel and speed, counted from the server's action, and
