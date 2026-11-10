@@ -49,6 +49,11 @@ pub enum Toggle {
     /// Zooms the camera with the mouse wheel (the Mouse page's Mouse Wheel
     /// Zoom).
     WheelZoom,
+    /// Brings the first-person view back level when no look key or mouse
+    /// look holds it. The official client keeps it as `LookSpring` in
+    /// `[Options]` of `eqclient.ini`, off unless set on (Titanium 0x4af32c,
+    /// read R13); this client per character.
+    LookSpring,
     /// Logs the chat, as the official client's `/log` does; it keeps the
     /// choice in `eqclient.ini`, this client per character.
     Log,
@@ -69,7 +74,7 @@ pub enum Toggle {
 impl Toggle {
     /// The official client's own toggles, in the order a file lists them; a
     /// file is read back by name, so the order is only how it is written.
-    pub const OFFICIAL: [Self; 11] = [
+    pub const OFFICIAL: [Self; 12] = [
         Self::PetWindowPopup,
         Self::AutoStand,
         Self::TargetRing,
@@ -78,6 +83,7 @@ impl Toggle {
         Self::NpcNames,
         Self::InvertY,
         Self::WheelZoom,
+        Self::LookSpring,
         Self::Log,
         Self::Sound,
         Self::SpellEffects,
@@ -103,6 +109,7 @@ impl Toggle {
             Self::NpcNames => "npc_names",
             Self::InvertY => "invert_y",
             Self::WheelZoom => "wheel_zoom",
+            Self::LookSpring => "look_spring",
             Self::Log => "log",
             Self::Sound => "sound",
             Self::SpellEffects => "spell_effects",
@@ -123,6 +130,7 @@ impl Toggle {
             | Self::NpcNames
             | Self::InvertY
             | Self::WheelZoom
+            | Self::LookSpring
             | Self::Log
             | Self::Sound
             | Self::SpellEffects => None,
@@ -321,6 +329,8 @@ pub struct Options {
     pub invert_y: bool,
     /// See [`Toggle::WheelZoom`].
     pub wheel_zoom: bool,
+    /// See [`Toggle::LookSpring`].
+    pub look_spring: bool,
     /// See [`Toggle::Log`].
     pub log: bool,
     /// See [`Toggle::Sound`].
@@ -349,7 +359,7 @@ impl Default for Options {
     /// The client's defaults: the pet's window pops up, a sitting player
     /// stands to move, the target ring, the
     /// player's helm and everyone's names show, the mouse is not inverted and its wheel
-    /// zooms, the chat is logged, sounds play at full volume, each
+    /// zooms, the view does not spring back level, the chat is logged, sounds play at full volume, each
     /// quality-of-life fix starts as it is
     /// defined, players' names show in full, spawns draw as far as the zone
     /// allows, at most 60 frames a second ([`Fix::FrameCap`]), the camera
@@ -366,6 +376,7 @@ impl Default for Options {
             npc_names: true,
             invert_y: false,
             wheel_zoom: true,
+            look_spring: false,
             log: true,
             sound: true,
             spell_effects: true,
@@ -393,6 +404,7 @@ impl Options {
             Toggle::NpcNames => self.npc_names,
             Toggle::InvertY => self.invert_y,
             Toggle::WheelZoom => self.wheel_zoom,
+            Toggle::LookSpring => self.look_spring,
             Toggle::Log => self.log,
             Toggle::Sound => self.sound,
             Toggle::SpellEffects => self.spell_effects,
@@ -411,6 +423,7 @@ impl Options {
             Toggle::NpcNames => &mut self.npc_names,
             Toggle::InvertY => &mut self.invert_y,
             Toggle::WheelZoom => &mut self.wheel_zoom,
+            Toggle::LookSpring => &mut self.look_spring,
             Toggle::Log => &mut self.log,
             Toggle::Sound => &mut self.sound,
             Toggle::SpellEffects => &mut self.spell_effects,

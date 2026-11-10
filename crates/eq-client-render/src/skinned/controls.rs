@@ -1131,7 +1131,8 @@ mod tests {
             .id();
         app.add_systems(Update, (bindings::capture, fill_lists).chain());
         app.update();
-        assert_eq!(app.world().get::<Children>(list).unwrap().len(), 3);
+        // Free Camera, its up and down, and the look keys.
+        assert_eq!(app.world().get::<Children>(list).unwrap().len(), 6);
         let world = app.world_mut();
         let mut cells = world.query::<(Entity, &bindings::Assignment, &Text)>();
         let (button, _, text) = cells

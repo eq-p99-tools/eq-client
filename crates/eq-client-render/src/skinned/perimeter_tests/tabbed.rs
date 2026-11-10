@@ -202,6 +202,16 @@ fn two_row_options() -> eq_client_assets::sidl::TabBox {
             ..pages[0].clone()
         });
     }
+    // A Mouse page with Invert Y Axis, where Look Spring goes.
+    let invert = pages[0]
+        .pieces
+        .iter()
+        .find(|(_, element)| matches!(element, Element::Button(button) if button.checkbox))
+        .cloned()
+        .unwrap();
+    pages[1]
+        .pieces
+        .push(("OMP_InvertYAxisCheckbox".into(), invert.1));
     TabBox {
         name: "OptionsTabs".into(),
         area: None,

@@ -183,6 +183,7 @@ fn only_the_matching_worker_refusal_releases_a_move_after_a_grant_reset() {
             walk_units_per_second: None,
             strafe_units_per_second: None,
             strafe_walk_units_per_second: None,
+            swim_backward_units_per_second: None,
             diagonal: default(),
             falls: false,
             jump_factor: 1.0,
@@ -578,4 +579,36 @@ fn next_move(commands: &mpsc::Receiver<ClientCommand>) -> MovementRequest {
         panic!("expected another movement command");
     };
     request
+}
+
+#[test]
+fn titanium_backs_up_in_water_only_at_the_grants_rate() {
+    use crate::keys::{Act, Chord};
+    for (rate, moves) in [(Some(0.0), false), (Some(6.0), true), (None, true)] {
+        let (mut app, commands, _updates) = scheduled();
+        prepare_p99_surface(&mut app);
+        crate::keys::testing::bind(&mut app, Act::Back, Chord::key(KeyCode::KeyB));
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.reset_all();
+            keys.press(KeyCode::KeyB);
+        }
+        {
+            let mut controls = app.world_mut().resource_mut::<Controls>();
+            controls.backward_speed = Some(6.0);
+            controls.swim_backward_speed = rate;
+        }
+        let origin = app
+            .world()
+            .resource::<OnlineState>()
+            .world()
+            .player()
+            .unwrap()
+            .position;
+        app.update();
+        let backing = next_move(&commands);
+        assert_eq!(backing.mode, MovementMode::Swim, "{rate:?}");
+        let moved = (backing.position.x - origin.x).hypot(backing.position.y - origin.y);
+        assert_eq!(moved > 0.0, moves, "{rate:?}: {moved}");
+    }
 }

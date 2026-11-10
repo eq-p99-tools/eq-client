@@ -186,6 +186,10 @@ pub struct MotionGrant {
     /// Moving sideways with walking selected, where it is slower: Titanium
     /// strafes on the selected base speed.
     pub strafe_walk_units_per_second: Option<f32>,
+    /// Backing up in water, in the land's units per second before the
+    /// water's share applies; 0 backs up not at all. None backs up in water
+    /// as any swim stroke.
+    pub swim_backward_units_per_second: Option<f32>,
     /// Lateral rates when holding longitudinal input in the calibrated ground mode.
     pub diagonal: crate::DiagonalRates,
     /// Whether the session sends falling samples.
@@ -754,6 +758,7 @@ impl ClientWorld {
                 walk_units_per_second,
                 strafe_units_per_second,
                 strafe_walk_units_per_second,
+                swim_backward_units_per_second,
                 diagonal,
                 falls,
                 jump_factor,
@@ -765,6 +770,7 @@ impl ClientWorld {
                     walk_units_per_second: *walk_units_per_second,
                     strafe_units_per_second: *strafe_units_per_second,
                     strafe_walk_units_per_second: *strafe_walk_units_per_second,
+                    swim_backward_units_per_second: *swim_backward_units_per_second,
                     diagonal: *diagonal,
                     falls: *falls,
                     jump_factor: *jump_factor,

@@ -313,7 +313,7 @@ pub(super) fn schedule(app: &mut App) {
                 (login::login_screen, login::worlds_screen, login::scroll).chain(),
                 skinned::scroll_lists,
                 motion::interpolate,
-                crate::camera::fly_camera,
+                (crate::camera::fly_camera, crate::camera::look_keys).chain(),
                 orbit_camera,
                 weather::update,
                 crate::camera::show_player,

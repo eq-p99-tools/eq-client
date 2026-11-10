@@ -3528,27 +3528,8 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn the_options_window_checkboxes_turn_its_options_on_and_off() {
+    fn options_general_page() -> eq_client_assets::sidl::Page {
         use eq_client_assets::sidl::{Button, ButtonLook, Element, Page};
-        use eq_client_core::{options::Toggle, qol::Fix};
-        assert!(matches!(
-            does("ODP_ShowTargetRingCheckbox", WindowId::Options),
-            Some(Does::Option(Toggle::TargetRing))
-        ));
-        assert!(matches!(
-            does("ODP_ShowHelmCheckbox", WindowId::Options),
-            Some(Does::Option(Toggle::ShowHelm))
-        ));
-        // What this client does not keep yet is greyed out, and of the two
-        // window-mode buttons the skin stacks, only fullscreen shows.
-        assert!(matches!(
-            does("ODP_LevelOfDetailCheckbox", WindowId::Options),
-            Some(Does::Nothing)
-        ));
-        assert!(does("ODP_SetWindowedButton", WindowId::Options).is_none());
-        // The QoL page comes last, a checkbox for each quality-of-life
-        // setting in the skin's own, one under another.
         let checkbox = Button {
             id: Some("OGP_PetWindowPopupCheckbox".into()),
             area: Area {
@@ -3568,7 +3549,7 @@ mod tests {
             decal_area: None,
             tooltip: None,
         };
-        let general = Page {
+        Page {
             name: "OptionsGeneralPage".into(),
             title: Some("General".into()),
             area: None,
@@ -3577,7 +3558,62 @@ mod tests {
             icon: [None, None],
             title_colors: [None, None],
             tooltip: None,
-        };
+        }
+    }
+
+    #[test]
+    fn look_spring_takes_the_skins_checkbox_or_one_of_this_clients() {
+        use eq_client_core::{options::Toggle, qol::Fix};
+        let general = options_general_page();
+        let settings = Fix::settings().count();
+        let inside = 26.0 * (to_f32(u32::try_from(settings).unwrap_or_default()) + 3.0) + 100.0;
+        // A skin with its own Look Spring checkbox keeps it on its page.
+        let mut mouse = general.clone();
+        mouse.pieces[0].0 = "OMP_LookSpringCheckbox".into();
+        let skin = [general.clone(), mouse];
+        let own = with_qol_page(&skin, WindowId::Options, Vec2::new(5000.0, inside), None);
+        assert_eq!(qol_page_checkboxes(&own[2]).len(), settings);
+        assert!(matches!(
+            does("OMP_LookSpringCheckbox", WindowId::Options),
+            Some(Does::Option(Toggle::LookSpring))
+        ));
+        // A skin with Invert Y Axis but no Look Spring gets one under it.
+        let mut mouse = general.clone();
+        mouse.pieces[0].0 = "OMP_InvertYAxisCheckbox".into();
+        let skin = [general.clone(), mouse];
+        let added = with_qol_page(&skin, WindowId::Options, Vec2::new(5000.0, inside), None);
+        assert_eq!(qol_page_checkboxes(&added[2]).len(), settings);
+        let mouse = qol_page_checkboxes(&added[1]);
+        assert_eq!(mouse.len(), 2);
+        assert_eq!(mouse[1].text.as_deref(), Some("Look Spring"));
+        assert!(mouse[1].area.y >= mouse[0].area.y + mouse[0].area.height);
+        assert!(matches!(
+            does(mouse[1].id.as_deref().unwrap(), WindowId::Options),
+            Some(Does::Option(Toggle::LookSpring))
+        ));
+    }
+
+    #[test]
+    fn the_options_window_checkboxes_turn_its_options_on_and_off() {
+        use eq_client_core::{options::Toggle, qol::Fix};
+        assert!(matches!(
+            does("ODP_ShowTargetRingCheckbox", WindowId::Options),
+            Some(Does::Option(Toggle::TargetRing))
+        ));
+        assert!(matches!(
+            does("ODP_ShowHelmCheckbox", WindowId::Options),
+            Some(Does::Option(Toggle::ShowHelm))
+        ));
+        // What this client does not keep yet is greyed out, and of the two
+        // window-mode buttons the skin stacks, only fullscreen shows.
+        assert!(matches!(
+            does("ODP_LevelOfDetailCheckbox", WindowId::Options),
+            Some(Does::Nothing)
+        ));
+        assert!(does("ODP_SetWindowedButton", WindowId::Options).is_none());
+        // The QoL page comes last, a checkbox for each quality-of-life
+        // setting in the skin's own, one under another.
+        let general = options_general_page();
         let mut settings: Vec<_> = Fix::settings().collect();
         settings.sort_by_key(|fix| fix.is_unsafe());
         // A tall page holds every setting in one column, with room for both
@@ -3593,9 +3629,15 @@ mod tests {
         assert_eq!(pages.len(), 2);
         assert_eq!(pages[1].title.as_deref(), Some("QoL"));
         let buttons = qol_page_checkboxes(&pages[1]);
-        assert_eq!(buttons.len(), settings.len());
-        let mut above: Option<Area> = None;
-        for (checkbox, fix) in buttons.iter().zip(settings.iter().copied()) {
+        // This skin's Mouse page has no Look Spring, so the page leads with it.
+        assert_eq!(buttons.len(), settings.len() + 1);
+        assert_eq!(buttons[0].text.as_deref(), Some("Look Spring"));
+        assert!(matches!(
+            does(buttons[0].id.as_deref().unwrap(), WindowId::Options),
+            Some(Does::Option(Toggle::LookSpring))
+        ));
+        let mut above: Option<Area> = Some(buttons[0].area);
+        for (checkbox, fix) in buttons[1..].iter().zip(settings.iter().copied()) {
             assert!(checkbox.checkbox);
             assert_eq!(checkbox.text.as_deref(), Some(fix.label()));
             assert_eq!(checkbox.tooltip.as_deref(), Some(fix.tooltip()));

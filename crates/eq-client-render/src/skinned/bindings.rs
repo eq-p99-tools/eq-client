@@ -360,7 +360,7 @@ pub(super) fn hot_button(id: &str) -> Option<usize> {
 
 /// The skin's Options window checkboxes for the official client's options
 /// this client keeps, by screen ID.
-const OPTION_CHECKBOXES: [(&str, eq_client_core::options::Toggle); 9] = {
+const OPTION_CHECKBOXES: [(&str, eq_client_core::options::Toggle); 11] = {
     use eq_client_core::options::Toggle;
     [
         ("OGP_PetWindowPopupCheckbox", Toggle::PetWindowPopup),
@@ -371,9 +371,16 @@ const OPTION_CHECKBOXES: [(&str, eq_client_core::options::Toggle); 9] = {
         ("ODP_NPCNamesCheckbox", Toggle::NpcNames),
         ("OMP_InvertYAxisCheckbox", Toggle::InvertY),
         ("OMP_MouseWheelZoomCheckbox", Toggle::WheelZoom),
+        (LOOK_SPRING_CHECKBOX, Toggle::LookSpring),
+        (super::qol::LOOK_SPRING_FALLBACK, Toggle::LookSpring),
         ("EQC_SpellEffectsCheckbox", Toggle::SpellEffects),
     ]
 };
+
+/// The Mouse page's Look Spring checkbox, by its screen ID on the installed
+/// skins' Options window; where a skin has none, this client adds its own
+/// under Invert Y Axis, or on the quality-of-life page.
+pub(super) const LOOK_SPRING_CHECKBOX: &str = "OMP_LookSpringCheckbox";
 
 /// The option an Options window checkbox turns on and off: one of the
 /// official client's options this client keeps, or a quality-of-life

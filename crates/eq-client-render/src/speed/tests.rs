@@ -962,6 +962,7 @@ fn motion_state(speed: Option<f32>) -> WorldEvent {
         walk_units_per_second: None,
         strafe_units_per_second: None,
         strafe_walk_units_per_second: None,
+        swim_backward_units_per_second: None,
         falls: true,
         jump_factor: 1.0,
     }
