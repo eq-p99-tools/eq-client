@@ -889,7 +889,7 @@ pub(super) fn receive(
             if changes.same_zone_relocation {
                 panels.motion.same_zone_landed();
             } else {
-                panels.motion.reset(None);
+                panels.motion.rebase();
             }
             if let Some(sets) = panels.spell_sets.as_mut() {
                 sets.interrupt("The server moved the character.");

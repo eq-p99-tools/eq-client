@@ -5,6 +5,33 @@ use eq_client_core::{
     inventory::{InventoryItem, InventorySlot, InventoryUpdate},
 };
 
+/// The exact inputs, as a Ready report carries them: an unproven effect
+/// is `Err(Missing::Effects)` here, while [`super::calculate`] gives the
+/// partial inputs a Bounded report starts from.
+fn calculate(
+    world: &ClientWorld,
+    effects: impl Fn(u32) -> Option<Vec<Effect>>,
+) -> Result<SpeedInputs, Missing> {
+    match super::calculate(world, effects)? {
+        Projected {
+            inputs,
+            exact: true,
+            ..
+        } => Ok(inputs),
+        Projected { .. } => Err(Missing::Effects),
+    }
+}
+
+/// A report kept from earlier: its inputs, with its rate as the gain of
+/// equipment and food and of buffs alike.
+fn kept(inputs: SpeedInputs) -> Remembered {
+    Remembered {
+        inputs,
+        worn_gain: inputs.rate.max(0),
+        buff_gain: inputs.rate.max(0),
+    }
+}
+
 fn online() -> OnlineState {
     let mut state = OnlineState::new(true);
     let mut player = testing::player(7);
@@ -514,6 +541,19 @@ fn queued_food_projection_does_not_mix_with_worker_movement_weight_or_capacity()
 }
 
 fn effects(spell: u32) -> Option<Vec<Effect>> {
+    let effect = |(id, base, maximum, formula)| Effect {
+        id,
+        base,
+        maximum,
+        formula,
+        limit: 0,
+    };
+    // An unevaluable movement term first, then a root or a snare after it.
+    match spell {
+        7 => return Some(vec![effect((3, 10, 50, 123)), effect((99, 0, 0, 100))]),
+        8 => return Some(vec![effect((3, 10, 50, 123)), effect((3, -20, -60, 102))]),
+        _ => (),
+    }
     let (id, base, maximum, formula) = match spell {
         1 => (3, 10, 50, 102),
         2 => (3, -20, -60, 102),
@@ -553,7 +593,11 @@ fn buff(slot: u32, spell_id: u32) -> WorldEvent {
 #[test]
 fn titanium_instrument_scales_capped_signed_effects_and_preserves_unknowns() {
     let project = |spell, level, modifier, dialect| {
-        super::project(&effects(spell).unwrap(), level, modifier, dialect)
+        let projected = super::project(&effects(spell).unwrap(), level, modifier, dialect);
+        projected
+            .exact
+            .then_some(projected.modifiers)
+            .ok_or(Missing::Effects)
     };
     let titanium = GameDialect::Titanium;
     assert_eq!(project(1, 60, 21, titanium).unwrap().rate, 105);
@@ -900,14 +944,20 @@ fn spell_provider_recovery_requires_a_fresh_matching_movement_receipt() {
         .resource_mut::<crate::spellbook::SpellNames>()
         .receive(&binding.envelope(Fact::Table(failed)));
     app.update();
+    // The spell's record is gone: its terms are unproven, so the report is
+    // a bound from the last one, and the player moving at the grant in
+    // force is told nothing (6.451).
     assert!(matches!(
         rx.try_recv(),
         Ok(ClientCommand::SpeedInputs {
-            state: SpeedInputState::Unavailable(Missing::Effects),
+            state: SpeedInputState::Bounded {
+                missing: Missing::Effects,
+                ..
+            },
             ..
         })
     ));
-    assert_ne!(movement_notice(&app), "");
+    assert_eq!(movement_notice(&app), "");
     // Provider replacement and real registration/replay restore the same input
     // values without changing this report owner's admission or revision.
     ready_spell_provider(
@@ -923,14 +973,14 @@ fn spell_provider_recovery_requires_a_fresh_matching_movement_receipt() {
         (original.revision, original.inputs)
     );
     assert_ne!(recovered.report_id, original.report_id);
-    assert_ne!(movement_notice(&app), "");
+    // A player moving at a grant is told nothing whichever receipt comes.
     for accepted in [original, recovered] {
         testing::news(
             &mut app.world_mut().resource_mut::<OnlineState>(),
             [WorldEvent::SpeedInputsAccepted(accepted)],
         );
         app.update();
-        assert_eq!(movement_notice(&app).is_empty(), accepted == recovered);
+        assert_eq!(movement_notice(&app), "");
     }
 }
 
@@ -970,18 +1020,12 @@ fn motion_state(speed: Option<f32>) -> WorldEvent {
 
 #[test]
 fn only_the_exact_posted_ready_report_with_a_positive_grant_clears_the_wait() {
+    const UNACCEPTED: &str = "waiting for the session to accept";
     let (mut app, rx) = reporting_ready();
     let command = rx.try_recv().unwrap();
     let accepted = receipt(&command, true);
-    testing::news(
-        &mut app.world_mut().resource_mut::<OnlineState>(),
-        [motion_state(Some(6.0))],
-    );
     app.update();
-    assert!(
-        !movement_notice(&app).is_empty(),
-        "cached speed is insufficient"
-    );
+    assert!(movement_notice(&app).contains(UNACCEPTED));
     let mut different_inputs = accepted.inputs;
     different_inputs.weight += 1;
     for stale in [
@@ -1011,7 +1055,13 @@ fn only_the_exact_posted_ready_report_with_a_positive_grant_clears_the_wait() {
             [WorldEvent::SpeedInputsAccepted(stale)],
         );
         app.update();
-        assert_ne!(movement_notice(&app), "");
+        // A refused grant of the exact report is accepted, not granted.
+        let expected = if stale.granted {
+            UNACCEPTED
+        } else {
+            "waiting for a movement grant"
+        };
+        assert!(movement_notice(&app).contains(expected));
     }
     app.world_mut()
         .resource_mut::<crate::notices::Lines>()
@@ -1020,6 +1070,12 @@ fn only_the_exact_posted_ready_report_with_a_positive_grant_clears_the_wait() {
     testing::news(
         &mut app.world_mut().resource_mut::<OnlineState>(),
         [WorldEvent::SpeedInputsAccepted(accepted)],
+    );
+    app.update();
+    assert!(movement_notice(&app).contains("waiting for a movement grant"));
+    testing::news(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        [motion_state(Some(6.0))],
     );
     app.update();
     assert_eq!(movement_notice(&app), "");
@@ -1053,11 +1109,17 @@ fn identical_value_recovery_uses_a_fresh_identity_and_rejects_the_old_receipt() 
     assert!(matches!(
         rx.try_recv(),
         Ok(ClientCommand::SpeedInputs {
-            state: SpeedInputState::Unavailable(_),
+            state: SpeedInputState::Bounded { .. },
             ..
         })
     ));
-    assert_ne!(movement_notice(&app), "");
+    // The grant in force goes on, so nothing is said (6.451).
+    assert_eq!(movement_notice(&app), "");
+    // Without a grant the line says which receipt is outstanding.
+    testing::news(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        [motion_state(None)],
+    );
     ready(&mut app.world_mut().resource_mut::<OnlineState>());
     app.update();
     let recovered = receipt(&rx.try_recv().unwrap(), true);
@@ -1066,18 +1128,25 @@ fn identical_value_recovery_uses_a_fresh_identity_and_rejects_the_old_receipt() 
         (original.revision, original.inputs)
     );
     assert_ne!(recovered.report_id, original.report_id);
-    assert!(!movement_notice(&app).is_empty(), "cached receipt is stale");
+    assert!(
+        movement_notice(&app).contains("waiting for the session to accept"),
+        "cached receipt is stale"
+    );
     for accepted in [original, recovered] {
         testing::news(
             &mut app.world_mut().resource_mut::<OnlineState>(),
             [WorldEvent::SpeedInputsAccepted(accepted)],
         );
         app.update();
-        assert_eq!(movement_notice(&app).is_empty(), accepted == recovered);
+        assert_eq!(
+            movement_notice(&app).contains("waiting for a movement grant"),
+            accepted == recovered
+        );
     }
 }
 
 #[test]
+#[allow(clippy::too_many_lines)] // One drop's whole life, from pending to settled.
 fn pending_drop_keeps_movement_bounded_until_inventory_is_invalidated() {
     use std::num::NonZeroU32;
 
@@ -1143,10 +1212,20 @@ fn pending_drop_keeps_movement_bounded_until_inventory_is_invalidated() {
     assert!(matches!(
         rx.try_recv(),
         Ok(ClientCommand::SpeedInputs {
-            state: SpeedInputState::Unavailable(Missing::Inventory),
+            state: SpeedInputState::Bounded {
+                missing: Missing::Inventory,
+                ..
+            },
             ..
         })
     ));
+    // Nothing is said under a grant (6.451); without one, what is missing.
+    assert_eq!(movement_notice(&app), "");
+    testing::news(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        [motion_state(None)],
+    );
+    app.update();
     assert!(movement_notice(&app).contains("fresh inventory snapshot"));
     let retained = app
         .world()
@@ -1196,21 +1275,23 @@ fn withdrawal_and_new_input_requirements_invalidate_the_previous_acceptance() {
     );
     app.update();
     assert_eq!(movement_notice(&app), "");
+    // A player moving at a grant is told nothing, whatever its receipt.
     testing::news(
         &mut app.world_mut().resource_mut::<OnlineState>(),
         [motion_state(None), motion_state(Some(6.0))],
     );
     app.update();
-    assert!(
-        !movement_notice(&app).is_empty(),
-        "an unacknowledged regrant is insufficient"
-    );
+    assert_eq!(movement_notice(&app), "");
+    // Without a grant, only the current report's receipt counts.
     testing::news(
         &mut app.world_mut().resource_mut::<OnlineState>(),
-        [WorldEvent::SpeedInputsRequired {
-            session_id: 1,
-            revision: 2,
-        }],
+        [
+            motion_state(None),
+            WorldEvent::SpeedInputsRequired {
+                session_id: 1,
+                revision: 2,
+            },
+        ],
     );
     app.update();
     let current = receipt(&rx.try_recv().unwrap(), true);
@@ -1221,7 +1302,10 @@ fn withdrawal_and_new_input_requirements_invalidate_the_previous_acceptance() {
             [WorldEvent::SpeedInputsAccepted(accepted)],
         );
         app.update();
-        assert_eq!(movement_notice(&app).is_empty(), accepted == current);
+        assert_eq!(
+            movement_notice(&app).contains("waiting for a movement grant"),
+            accepted == current
+        );
     }
 }
 
@@ -1269,6 +1353,7 @@ fn report_identity_wrap_and_admission_changes_do_not_match_the_previous_report()
     let mut reports = Reports {
         next_id: u64::MAX - 1,
         current: None,
+        proven: None,
     };
     let state = SpeedInputState::Ready(SpeedInputs {
         rate: 0,
@@ -1384,10 +1469,15 @@ fn unresolved_strength_and_predicted_load_keep_their_actual_refusal() {
         movement_notice(&app),
         "Movement paused: spell or item effect details are unavailable."
     );
+    // The unslotted term is left out of a bound, which the session grants
+    // from at once (6.451).
     assert!(matches!(
         rx.try_recv(),
         Ok(ClientCommand::SpeedInputs {
-            state: SpeedInputState::Unavailable(Missing::Effects),
+            state: SpeedInputState::Bounded {
+                missing: Missing::Effects,
+                ..
+            },
             ..
         })
     ));
@@ -1417,7 +1507,10 @@ fn unresolved_strength_and_predicted_load_keep_their_actual_refusal() {
     assert!(matches!(
         rx.try_recv(),
         Ok(ClientCommand::SpeedInputs {
-            state: SpeedInputState::Unavailable(Missing::Prediction),
+            state: SpeedInputState::Bounded {
+                missing: Missing::Prediction,
+                ..
+            },
             ..
         })
     ));
@@ -1578,6 +1671,286 @@ fn scaled_snare_overrides_speed_and_root_fade_restores_without_inflation() {
     assert_eq!(calculate(state.world(), effects), Err(Missing::Effects));
 }
 
+/// An effect the client cannot evaluate never hides a root after it: the
+/// whole list is scanned and the root dominates (6.451).
+#[test]
+fn a_root_after_an_unevaluable_effect_still_roots() {
+    let mut state = online();
+    ready(&mut state);
+    testing::news(&mut state, [buff(0, 7)]);
+    // A root settles the rate whatever else is unevaluable.
+    let projected = super::calculate(state.world(), effects).unwrap();
+    assert_eq!(projected.inputs.rate, -1000);
+    assert!(projected.exact);
+    assert_eq!(known_slowing(state.world(), effects), Some(-1000));
+    let last = SpeedInputs {
+        rate: 30,
+        weight: 0,
+        capacity: 90,
+        eqmac_fatigue: None,
+    };
+    let report = super::reported(state.world(), effects, Some(kept(last)));
+    assert!(matches!(
+        report.state,
+        SpeedInputState::Ready(SpeedInputs { rate: -1000, .. })
+    ));
+    // Nothing of the root is remembered, and nothing of the last report.
+    assert_eq!(
+        report.remember.map(|kept| (kept.worn_gain, kept.buff_gain)),
+        Some((0, 0))
+    );
+}
+
+/// A snare the client can evaluate proves the rate is at most its own, by
+/// the programs' rule that the strongest snare wins, whatever else it
+/// cannot evaluate.
+#[test]
+fn a_snare_after_an_unevaluable_effect_bounds_the_rate() {
+    let mut state = online();
+    ready(&mut state);
+    // Unevaluable alone: a gain proves nothing.
+    testing::news(&mut state, [buff(0, 6)]);
+    assert_eq!(calculate(state.world(), effects), Err(Missing::Effects));
+    assert_eq!(known_slowing(state.world(), effects), None);
+    // A snare after an unevaluable term: at most the snare's rate.
+    testing::news(&mut state, [buff(1, 8)]);
+    assert_eq!(calculate(state.world(), effects), Err(Missing::Effects));
+    let rate = known_slowing(state.world(), effects).unwrap();
+    assert!(rate <= -40, "{rate}");
+    let last = SpeedInputs {
+        rate: 30,
+        weight: 0,
+        capacity: 90,
+        eqmac_fatigue: None,
+    };
+    match super::reported(state.world(), effects, Some(kept(last))).state {
+        SpeedInputState::Bounded { inputs, .. } => assert_eq!(inputs.rate, rate),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Unproven effects report every term the host can prove now, with the
+/// unproven ones left out and nothing from the last report, since buff
+/// membership, equipment and load are all known. The session starts a
+/// grant from it at once where none is in force (a zone-in mid-song).
+#[test]
+fn unproven_effects_report_the_proven_terms() {
+    let mut state = online();
+    ready(&mut state);
+    testing::news(
+        &mut state,
+        [WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![
+            item(23, 1_500, 0),
+        ]))],
+    );
+    // Spell 999 has no data here: its terms are unproven and left out.
+    testing::news(&mut state, [buff(0, 999)]);
+    let last = SpeedInputs {
+        rate: 30,
+        weight: 10,
+        capacity: 90,
+        eqmac_fatigue: None,
+    };
+    for last in [Some(kept(last)), None] {
+        assert!(matches!(
+            super::reported(state.world(), effects, last).state,
+            SpeedInputState::Bounded {
+                inputs: SpeedInputs {
+                    weight: 150,
+                    rate: 0,
+                    ..
+                },
+                missing: Missing::Effects,
+            }
+        ));
+    }
+}
+
+/// A root that fades while an unproven song runs frees the player at once.
+#[test]
+fn a_root_fading_under_an_unproven_song_frees_the_player() {
+    let mut state = online();
+    ready(&mut state);
+    testing::news(&mut state, [buff(0, 6), buff(1, 3)]);
+    let rooted = super::reported(state.world(), effects, None);
+    assert!(matches!(
+        rooted.state,
+        SpeedInputState::Ready(SpeedInputs { rate: -1000, .. })
+    ));
+    testing::news(&mut state, [fade(1, 3)]);
+    assert!(matches!(
+        super::reported(state.world(), effects, rooted.remember).state,
+        SpeedInputState::Bounded {
+            inputs: SpeedInputs { rate: 0, .. },
+            ..
+        }
+    ));
+}
+
+/// Inputs the host cannot work out at all are a bound: a term comes from
+/// the last report only where the client no longer knows it. With buff
+/// membership known, buffs are as they are now; only equipment and food
+/// come from the last report. Only with no last report is it unavailable.
+#[test]
+fn missing_inputs_take_from_the_last_report_only_what_is_unknown() {
+    let mut state = online();
+    let inputs = SpeedInputs {
+        rate: 30,
+        weight: 0,
+        capacity: 90,
+        eqmac_fatigue: None,
+    };
+    let rate_with =
+        |state: &OnlineState, last| rate(&super::reported(state.world(), effects, last));
+    // (e) Belongings unknown, membership known: a remembered speed buff that
+    // has faded gives no gain; a remembered worn gain stays.
+    let buffed = Remembered {
+        inputs,
+        worn_gain: 0,
+        buff_gain: 30,
+    };
+    assert_eq!(rate_with(&state, Some(buffed)), 0);
+    let worn = Remembered {
+        inputs,
+        worn_gain: 30,
+        buff_gain: 0,
+    };
+    assert_eq!(rate_with(&state, Some(worn)), 30);
+    assert!(matches!(
+        super::reported(state.world(), effects, Some(worn)).state,
+        SpeedInputState::Bounded {
+            missing: Missing::Inventory,
+            ..
+        }
+    ));
+    // A buff evaluable now applies, and a root proven roots.
+    testing::news(&mut state, [buff(0, 1)]);
+    assert!(rate_with(&state, Some(buffed)) > 0);
+    testing::news(&mut state, [buff(1, 3)]);
+    assert_eq!(rate_with(&state, Some(worn)), -1000);
+    // (g) With no last report there is nothing to take from.
+    assert_eq!(
+        super::reported(state.world(), effects, None).state,
+        SpeedInputState::Unavailable(Missing::Inventory)
+    );
+    // (f) Membership unknown: the remembered buff gain is kept.
+    let mut unknown = OnlineState::new(true);
+    let mut player = testing::player(7);
+    player.level = 20;
+    testing::admit(&mut unknown, 1, player);
+    assert!(unknown.world().buffs().slots().is_none());
+    assert_eq!(rate_with(&unknown, Some(buffed)), 30);
+}
+
+fn fade(slot: u32, spell_id: u32) -> WorldEvent {
+    WorldEvent::Buff(BuffUpdate {
+        replaces_slot: false,
+        entity_id: 7,
+        slot,
+        spell_id,
+        buff: None,
+    })
+}
+
+fn rate(report: &Reported) -> i16 {
+    match report.state {
+        SpeedInputState::Ready(inputs) | SpeedInputState::Bounded { inputs, .. } => inputs.rate,
+        SpeedInputState::Unavailable(missing) => panic!("{missing:?}"),
+    }
+}
+
+/// A snare that lands before an unproven song and fades during it gives the
+/// gain kept from before the snare back: the rate remembered never carries
+/// a snare.
+#[test]
+fn a_snare_fading_under_an_unproven_song_gives_the_kept_gain_back() {
+    let mut state = online();
+    ready(&mut state);
+    testing::news(&mut state, [buff(0, 1)]);
+    let gained = super::reported(state.world(), effects, None);
+    assert!(rate(&gained) > 0);
+    testing::news(&mut state, [buff(1, 2)]);
+    let snared = super::reported(state.world(), effects, gained.remember);
+    assert!(rate(&snared) < 0);
+    assert_eq!(
+        snared.remember.map(|kept| kept.buff_gain),
+        Some(rate(&gained))
+    );
+    testing::news(&mut state, [buff(2, 6)]);
+    let song = super::reported(state.world(), effects, snared.remember);
+    assert!(matches!(song.state, SpeedInputState::Bounded { .. }));
+    assert_eq!(rate(&song), rate(&snared));
+    testing::news(&mut state, [fade(1, 2)]);
+    let faded = super::reported(state.world(), effects, song.remember);
+    assert!(matches!(faded.state, SpeedInputState::Bounded { .. }));
+    assert_eq!(rate(&faded), rate(&gained));
+}
+
+/// A speed buff the client can evaluate that lands during an unproven song
+/// applies at once.
+#[test]
+fn an_evaluable_gain_during_an_unproven_song_applies() {
+    let mut state = online();
+    ready(&mut state);
+    let last = SpeedInputs {
+        rate: 0,
+        weight: 0,
+        capacity: 90,
+        eqmac_fatigue: None,
+    };
+    testing::news(&mut state, [buff(0, 6)]);
+    let song = super::reported(state.world(), effects, Some(kept(last)));
+    assert_eq!(rate(&song), 0);
+    testing::news(&mut state, [buff(1, 1)]);
+    let gained = super::reported(state.world(), effects, song.remember);
+    assert!(matches!(gained.state, SpeedInputState::Bounded { .. }));
+    assert!(rate(&gained) > 0);
+}
+
+/// (a) A speed buff that fades while an unevaluable effect stays gives no
+/// gain at once: a buff the client knows has ended is proven wrong.
+#[test]
+fn a_faded_speed_buff_under_an_unevaluable_effect_ends_at_once() {
+    let mut state = online();
+    ready(&mut state);
+    testing::news(&mut state, [buff(0, 6), buff(1, 1)]);
+    let gained = super::reported(state.world(), effects, None);
+    assert!(rate(&gained) > 0);
+    testing::news(&mut state, [fade(1, 1)]);
+    let faded = super::reported(state.world(), effects, gained.remember);
+    assert!(matches!(faded.state, SpeedInputState::Bounded { .. }));
+    assert_eq!(rate(&faded), 0);
+}
+
+/// (b) The same with the unevaluable term on a worn item.
+#[test]
+fn a_faded_speed_buff_beside_an_unevaluable_worn_effect_ends_at_once() {
+    let mut state = online();
+    ready(&mut state);
+    let mut worn = item(13, 0, 0);
+    worn.details.equipment = Some(eq_client_core::EquipmentRules {
+        worn: Some(eq_network_game::items::WornEffect {
+            spell_id: 6,
+            effect_type: 1,
+            level: 0,
+            level2: 0,
+        }),
+        ..eq_client_core::EquipmentRules::default()
+    });
+    testing::news(
+        &mut state,
+        [WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![worn]))],
+    );
+    testing::news(&mut state, [buff(0, 1)]);
+    let gained = super::reported(state.world(), effects, None);
+    assert!(matches!(gained.state, SpeedInputState::Bounded { .. }));
+    assert!(rate(&gained) > 0);
+    testing::news(&mut state, [fade(0, 1)]);
+    let faded = super::reported(state.world(), effects, gained.remember);
+    assert!(matches!(faded.state, SpeedInputState::Bounded { .. }));
+    assert_eq!(rate(&faded), 0);
+}
+
 #[test]
 fn reports_withdrawal_recovery_each_revision_and_retries_full_queue() {
     let (tx, rx) = std::sync::mpsc::sync_channel(1);
@@ -1631,7 +2004,10 @@ fn reports_withdrawal_recovery_each_revision_and_retries_full_queue() {
     assert!(matches!(
         rx.try_recv(),
         Ok(ClientCommand::SpeedInputs {
-            state: SpeedInputState::Unavailable(Missing::Inventory),
+            state: SpeedInputState::Bounded {
+                missing: Missing::Inventory,
+                ..
+            },
             ..
         })
     ));
@@ -1888,7 +2264,13 @@ fn scribed_scroll_consumption_reports_known_load_without_hiding_an_unresolved_ba
             app.world().resource::<crate::spellbook::SpellNames>(),
         );
         if banked {
-            assert_eq!(input, SpeedInputState::Unavailable(Missing::Prediction));
+            assert!(matches!(
+                input,
+                SpeedInputState::Bounded {
+                    missing: Missing::Prediction,
+                    ..
+                }
+            ));
             assert!(load.is_none());
         } else {
             assert!(matches!(

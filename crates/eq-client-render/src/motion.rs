@@ -573,8 +573,10 @@ impl Controls {
     }
 
     /// A same-zone landing ends the old move and probes collision afresh.
+    /// Input goes on as after any server's move: the program's same-zone
+    /// warp touches no input (read R18, 0x48aaa6).
     pub(super) fn same_zone_landed(&mut self) {
-        self.reset(None);
+        self.rebase();
         self.pending = None;
         self.placement = placement::Check::default();
     }
@@ -664,10 +666,30 @@ impl Controls {
             .as_secs_f32()
             .min(if self.moving { MAX_CYCLE } else { 0.1 })
     }
-    /// Takes the session's word on how the player may move.
+    /// Takes the session's word on how the player may move. A new positive
+    /// speed for a player who already moves only replaces the speeds, as the
+    /// program reads its speed modifier live (read R7, 0x4a1d74): held
+    /// keys, taps, a queued or crouched jump, autorun and a jump or fall
+    /// under way all go on, the sideways carry in the air limited to the new
+    /// run speed. Anything else starts motion afresh.
     pub fn grant(&mut self, grant: eq_client_core::world::MotionGrant) {
-        // A changed positive speed keeps the current intent. Any actual
-        // withdrawal/reset still clears it, including death and zoning.
+        let positive =
+            |speed: Option<f32>| speed.is_some_and(|value| value.is_finite() && value > 0.0);
+        if positive(self.speed) && positive(grant.units_per_second) {
+            self.set_speeds(grant);
+            if let (Some(airborne), Some(speed)) = (self.airborne.as_mut(), grant.units_per_second)
+            {
+                airborne.limit_drift(speed);
+            }
+            if !grant.falls {
+                self.airborne = None;
+            } else if self.airborne.is_none() {
+                self.airborne = Some(AirborneController::default());
+            }
+            return;
+        }
+        // A withdrawal or a first grant clears intent, including death and
+        // zoning.
         let autorun = self.autorun
             && self
                 .speed
@@ -684,6 +706,21 @@ impl Controls {
         // session places the player; a root ends it in `input`.
         self.reset(grant.units_per_second);
         self.autorun = autorun;
+        self.set_speeds(grant);
+        if grant.falls {
+            // A speed recalibration may withdraw input anywhere in the jump
+            // or fall. Keep the vertical history and any unsent cost, and
+            // release lateral drift. Placement and lifecycle events reset it.
+            let mut airborne = in_flight.unwrap_or_default();
+            airborne.limit_drift(0.0);
+            self.airborne = Some(airborne);
+            self.unreported = unreported;
+        }
+    }
+
+    /// The speeds of a grant, and nothing else.
+    fn set_speeds(&mut self, grant: eq_client_core::world::MotionGrant) {
+        self.speed = grant.units_per_second;
         self.backward_speed = grant.backward_units_per_second;
         self.walk_speed = grant.walk_units_per_second;
         self.strafe_speed = grant.strafe_units_per_second;
@@ -695,14 +732,45 @@ impl Controls {
         } else {
             1.0
         };
-        if grant.falls {
-            // A speed recalibration may withdraw input anywhere in the jump
-            // or fall. Keep the vertical history and any unsent cost, and
-            // release lateral drift. Placement and lifecycle events reset it.
-            let mut airborne = in_flight.unwrap_or_default();
-            airborne.limit_drift(0.0);
-            self.airborne = Some(airborne);
-            self.unreported = unreported;
+    }
+
+    /// A server's move: prediction starts afresh where it put the player,
+    /// and the speeds in force stay, as the session grants them again at
+    /// once (the speeds do not depend on where the player stands). The
+    /// program's handler of a server update to the player's own spawn, and
+    /// its same-zone warp, touch no input: autorun, the held keys, the jump
+    /// request and the crouch go on driving from the new place on the next
+    /// frame (read R18, 0x451aba, 0x48aaa6). Only the heading and vertical
+    /// momentum are the server's.
+    pub(super) fn rebase(&mut self) {
+        let autorun = self.autorun;
+        let jump = self.jump;
+        let crouch = self.crouch.take();
+        let taps = std::mem::take(&mut self.taps);
+        let turn_held = self.turn_held;
+        let speeds = eq_client_core::world::MotionGrant {
+            units_per_second: self.speed,
+            backward_units_per_second: self.backward_speed,
+            walk_units_per_second: self.walk_speed,
+            strafe_units_per_second: self.strafe_speed,
+            strafe_walk_units_per_second: self.strafe_walk_speed,
+            swim_backward_units_per_second: self.swim_backward_speed,
+            diagonal: self.diagonal_rates,
+            falls: self.airborne.is_some(),
+            jump_factor: self.jump_factor,
+        };
+        self.reset(None);
+        self.set_speeds(speeds);
+        (
+            self.autorun,
+            self.jump,
+            self.crouch,
+            self.taps,
+            self.turn_held,
+        ) = (autorun, jump, crouch, taps, turn_held);
+        // Falls go on from the new place, with no momentum carried.
+        if speeds.falls {
+            self.airborne = Some(AirborneController::default());
         }
     }
 
@@ -957,12 +1025,9 @@ pub(super) fn input(
     // The program's speed-modifier routine ends following once a root
     // stops the player (R6, 0x411076); a server's move does not.
     if let Some(following) = controls.following.as_ref()
-        && spells.as_deref().is_some_and(|spells| {
-            matches!(
-                crate::speed::inputs(online.world(), spells),
-                eq_client_core::SpeedInputState::Ready(inputs) if inputs.rate <= -1000
-            )
-        })
+        && spells
+            .as_deref()
+            .is_some_and(|spells| crate::speed::rooted(online.world(), spells))
     {
         chat.history.push(crate::chat::system_line(follow::ended(
             follow::End::Stopped,
@@ -7066,6 +7131,58 @@ pub(super) mod tests {
         assert!(!controls.autorun);
     }
 
+    /// A speed change for a player who already moves replaces only the
+    /// speeds: a queued or crouched jump, autorun and the moving state go on,
+    /// as the program reads its speed modifier live (read R7). A server's
+    /// move rebases prediction and keeps the speeds (read R18).
+    #[test]
+    fn a_speed_change_only_replaces_the_speeds_and_a_server_move_keeps_them() {
+        let now = Instant::now();
+        let mut controls = Controls {
+            speed: Some(10.0),
+            walk_speed: Some(4.0),
+            autorun: true,
+            moving: true,
+            jump: Some(now),
+            crouch: Some(Crouch::Over),
+            airborne: Some(AirborneController::default()),
+            ..Default::default()
+        };
+        let grant = |speed, walk| eq_client_core::world::MotionGrant {
+            diagonal: eq_client_core::DiagonalRates::default(),
+            units_per_second: speed,
+            backward_units_per_second: None,
+            walk_units_per_second: walk,
+            strafe_units_per_second: None,
+            strafe_walk_units_per_second: None,
+            swim_backward_units_per_second: None,
+            falls: true,
+            jump_factor: 0.5,
+        };
+        controls.grant(grant(Some(13.0), Some(5.0)));
+        assert_eq!(controls.speed, Some(13.0));
+        assert_eq!(controls.walk_speed, Some(5.0));
+        assert!((controls.jump_factor - 0.5).abs() < f32::EPSILON);
+        assert!(controls.autorun);
+        assert!(controls.moving);
+        assert_eq!(controls.jump, Some(now));
+        assert_eq!(controls.crouch, Some(Crouch::Over));
+        assert!(controls.airborne.is_some());
+        // A server's move starts prediction afresh with the speeds kept,
+        // and autorun, the jump request and the crouch go on (read R18).
+        controls.rebase();
+        assert_eq!(controls.speed, Some(13.0));
+        assert_eq!(controls.walk_speed, Some(5.0));
+        assert!(!controls.moving);
+        assert!(controls.autorun);
+        assert_eq!(controls.jump, Some(now));
+        assert_eq!(controls.crouch, Some(Crouch::Over));
+        assert!(controls.airborne.is_some());
+        // The session's grant again at once lands in place.
+        controls.grant(grant(Some(13.0), Some(5.0)));
+        assert!(controls.autorun);
+    }
+
     #[test]
     fn the_session_hears_the_bodys_climb_at_each_admission_and_change() {
         let (mut app, receiver) = app();
@@ -7610,6 +7727,85 @@ pub(super) mod tests {
         }
     }
 
+    /// A summon or GM move with a grant in force, as eq-network sends it:
+    /// the grant again, the relocation, then the request for inputs. Autorun,
+    /// a held key's tap, the turn ramp, a crouch and a queued jump go on from
+    /// the landing, and prediction starts afresh there (read R18, the
+    /// same-zone warp 0x48aaa6).
+    #[test]
+    fn a_summon_keeps_autorun_and_held_intent_through_the_sessions_events() {
+        use eq_client_core::{WorldEvent, WorldUpdate};
+        let mut app = crate::testing::app();
+        let mut online = online::OnlineState::new(true);
+        online::testing::admit(&mut online, 11, online::testing::player(7));
+        let (sender, receiver) = mpsc::sync_channel(1);
+        app.insert_resource(online)
+            .insert_resource(online::Updates(std::sync::Mutex::new(Some(receiver))))
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .init_resource::<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>()
+            .add_systems(Update, online::receive);
+        let grant = || WorldEvent::MotionState {
+            session_id: 11,
+            units_per_second: Some(30.0),
+            backward_units_per_second: None,
+            walk_units_per_second: None,
+            strafe_units_per_second: None,
+            strafe_walk_units_per_second: None,
+            swim_backward_units_per_second: None,
+            diagonal: DiagonalRates::default(),
+            falls: true,
+            jump_factor: 1.0,
+        };
+        sender.send(WorldUpdate::Game(grant())).unwrap();
+        app.update();
+        let now = Instant::now();
+        {
+            let mut controls = app.world_mut().resource_mut::<Controls>();
+            assert_eq!(controls.speed, Some(30.0));
+            controls.autorun = true;
+            controls.moving = true;
+            controls.crouch = Some(Crouch::Over);
+            controls.jump = Some(now);
+            controls.taps.0.push((KeyCode::KeyW, now));
+            controls.turn_held = Some((true, now));
+        }
+        let landing = world_position([40.0, 3.0, 0.0], 0.0);
+        for event in [
+            grant(),
+            WorldEvent::SameZoneRelocated(eq_client_core::SameZoneRelocation {
+                session_id: 11,
+                spawn_id: 7,
+                position: landing,
+            }),
+            WorldEvent::SpeedInputsRequired {
+                session_id: 11,
+                revision: 2,
+            },
+        ] {
+            sender.send(WorldUpdate::Game(event)).unwrap();
+            app.update();
+        }
+        let controls = app.world().resource::<Controls>();
+        assert!(controls.autorun);
+        assert_eq!(controls.speed, Some(30.0));
+        assert_eq!(controls.crouch, Some(Crouch::Over));
+        assert_eq!(controls.jump, Some(now));
+        assert_eq!(controls.taps.0.len(), 1);
+        assert_eq!(controls.turn_held, Some((true, now)));
+        // Prediction starts afresh at the landing.
+        assert!(!controls.moving);
+        assert!(controls.pending.is_none());
+        assert_eq!(
+            app.world()
+                .resource::<online::OnlineState>()
+                .world()
+                .player()
+                .map(|player| player.position),
+            Some(landing)
+        );
+    }
+
     #[test]
     fn received_placement_and_death_clear_the_preserved_descent_and_cost() {
         use eq_client_core::{WorldEvent, WorldUpdate, movement::MotionStep};
@@ -7682,10 +7878,18 @@ pub(super) mod tests {
             assert!(fall.velocity() < 0.0 && fall.peak() == peak);
             assert_eq!(controls.unreported, Some(cost));
 
+            let placed = matches!(update, WorldEvent::Position { .. });
             sender.send(WorldUpdate::Game(update)).unwrap();
             app.update();
             let controls = app.world().resource::<Controls>();
-            assert!(controls.airborne.is_none());
+            // A server's move keeps falls with no momentum carried; death
+            // ends them.
+            if placed {
+                let fall = controls.airborne.as_ref().unwrap();
+                assert!(fall.velocity().abs() < f32::EPSILON && fall.peak().is_none());
+            } else {
+                assert!(controls.airborne.is_none());
+            }
             assert!(controls.unreported.is_none());
         }
     }
