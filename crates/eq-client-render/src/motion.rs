@@ -76,9 +76,10 @@ pub(super) struct Controls {
     /// Seconds of play the latest sample sent covers: the model shows it
     /// over that long once the session accepts it.
     sent_span: f32,
-    /// The lift the last sample sent stood on, and that sample's stamp: the
-    /// next pass carries the feet by the lift's own rise since then.
-    riding: Option<(u8, Instant)>,
+    /// The lift the last sample sent stood on, that sample's stamp and the
+    /// height it put the model at: the next pass carries the feet by the
+    /// lift's own rise since then, and the model is drawn on the floor.
+    riding: Option<(u8, Instant, f32)>,
     sent_yaw: SentYaw,
     boundary: BoundaryTracker,
     placement: placement::Check,
@@ -1267,7 +1268,7 @@ pub(super) fn input(
             world,
             lifts.as_deref(),
             online.world().doors(),
-            controls.riding,
+            controls.riding.map(|(door, at, _)| (door, at)),
             (feet, body.height),
             now,
         )
@@ -1577,7 +1578,7 @@ pub(super) fn input(
             }
             controls.last_sent = Some(created);
             controls.sent_span = span;
-            controls.riding = Some((door, created));
+            controls.riding = Some((door, created, raised.y + body.feet_offset));
             controls.held = None;
             controls.wait_for(session_id, created, PendingKind::Move);
             return;
@@ -1829,10 +1830,9 @@ pub(super) fn input(
     } else {
         world_position(position.to_array(), heading)
     };
-    // The lift under the landing, which may carry the player up with it.
-    let support = lifts
-        .as_deref()
-        .and_then(|lifts| lift_support(world, lifts, landing));
+    // The lift that carried the origin, or the one under the landing, which
+    // may carry the player up with it.
+    let support = request_support(ride, world, lifts.as_deref(), landing);
     let mut created = now;
     let sent = outbox.post(online.world(), |stamp| {
         // Shoreline physics already ended at the observed frame. Its next
@@ -1868,7 +1868,7 @@ pub(super) fn input(
     // request's stamp to this one's, so the next span runs from the stamp.
     controls.last_sent = Some(created);
     controls.sent_span = span;
-    controls.riding = support.map(|door| (door, created));
+    controls.riding = support.map(|door| (door, created, position.y));
     controls.sent_yaw = if mouse_snapshot.is_some() {
         SentYaw::MouseSnapshot
     } else if mouse_aim.is_some() || follow_heading.is_some() && heading_snapshots {
@@ -1967,6 +1967,19 @@ fn ride(
             ..Ride::default()
         }
     }
+}
+
+/// The lift a sample names: the one that carried its origin this pass, even
+/// when the step lands off it, or else the one under its landing. The
+/// session still checks the rider's reach.
+fn request_support(
+    ride: Ride,
+    world: &eq_client_core::movement::CollisionWorld,
+    lifts: Option<&crate::doors::LiftReach>,
+    landing: Vec3,
+) -> Option<u8> {
+    ride.carried
+        .or_else(|| lifts.and_then(|lifts| lift_support(world, lifts, landing)))
 }
 
 /// The rideable lift whose floor holds the feet up, when they stand within
@@ -2444,7 +2457,11 @@ pub(super) fn interpolate(
     mut displayed_mouse: Local<Option<Entity>>,
 ) {
     let preview = controls.mouse_heading;
-    if controls.visual.is_none() && preview.is_none() && displayed_mouse.is_none() {
+    if controls.visual.is_none()
+        && preview.is_none()
+        && displayed_mouse.is_none()
+        && controls.riding.is_none()
+    {
         return;
     }
     let Ok((entity, mut transform)) = players.single_mut() else {
@@ -2471,6 +2488,17 @@ pub(super) fn interpolate(
         if visual.finished() {
             controls.visual = None;
         }
+    }
+    // A rising lift carries the drawn model on its floor between samples,
+    // as the program draws its rider; the samples sent are unchanged.
+    if let Some((door, at, sent)) = controls.riding {
+        let floor = sent
+            + online
+                .world()
+                .doors()
+                .lifts()
+                .rise(door, at, std::time::Instant::now());
+        transform.translation.y = transform.translation.y.max(floor);
     }
     if let Some(heading) = preview {
         // Position still plays only accepted samples. An older queued pose
@@ -2657,6 +2685,18 @@ pub(super) mod tests {
         assert_eq!(carried.carried, Some(4));
         assert!((carried.rise - 5.4).abs() < 0.01, "{carried:?}");
         assert!(!carried.sinking);
+        // Carried up and stepped off onto the zone in the same pass, the
+        // sample still names the lift that raised it.
+        let off = Vec3::new(30.0, 14.4, -1.0);
+        assert_eq!(super::lift_support(&world, &reach, off), None);
+        assert_eq!(
+            super::request_support(carried, &world, Some(&reach), off),
+            Some(4)
+        );
+        assert_eq!(
+            super::request_support(super::Ride::default(), &world, Some(&reach), off),
+            None
+        );
         // Nothing rides a door that is not a listed lift, or nothing named.
         let unlisted = crate::doors::LiftReach::default();
         assert_eq!(

@@ -154,14 +154,20 @@ impl DoorTable {
             _ => return None,
         };
         let door = self.doors.entries().get(&id)?;
-        if !reach.admits(position, door.position) {
+        // A lift is reached where it stands now, as the session checks
+        // (recording checklist 6.436).
+        let at = WorldPosition {
+            z: door.position.z + self.lifts.offset(id, now).unwrap_or(0.0),
+            ..door.position
+        };
+        if !reach.admits(position, at) {
             return None;
         }
-        let flat = (door.position.x - position.x).hypot(door.position.y - position.y);
+        let flat = (at.x - position.x).hypot(at.y - position.y);
         Some(if reach.flat {
             flat
         } else {
-            flat.hypot(door.position.z - position.z)
+            flat.hypot(at.z - position.z)
         })
     }
 
@@ -583,6 +589,27 @@ mod tests {
         assert!(!table.closes_due(again + Duration::from_secs(24)));
         assert!(table.closes_due(again + Duration::from_secs(25)));
         assert_eq!(action(&table, 4), Some(OPEN));
+    }
+
+    #[test]
+    fn a_raised_lift_is_in_reach_from_its_top_not_its_base() {
+        let start = Instant::now();
+        let mut table = DoorTable::default();
+        let raised = Door {
+            state_at_spawn: 1,
+            ..lift(4, 69)
+        };
+        table.apply(&DoorUpdate::Spawn(vec![raised]), start);
+        let at = |z: f32| WorldPosition {
+            z,
+            ..WorldPosition::default()
+        };
+        assert_eq!(table.use_distance(4, at(0.0), start), None);
+        assert!(
+            table
+                .use_distance(4, at(69.0), start)
+                .is_some_and(|d| d < 0.01)
+        );
     }
 
     #[test]
