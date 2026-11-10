@@ -1,5 +1,6 @@
 //! Chase camera placement, input arbitration and collision-aware zoom.
 mod attached;
+mod look_keys;
 use crate::{
     Collision, Player, PlayerBody, ProjectionStyle, chat, inventory, items, online, options,
     sounds, windows,
@@ -8,6 +9,7 @@ use bevy::input::mouse::{MouseButtonInput, MouseMotion};
 use bevy::prelude::*;
 use bevy::window::{PrimaryWindow, WindowFocused};
 use eq_client_core::movement::CollisionWorld;
+pub(crate) use look_keys::look_keys;
 #[derive(Component)]
 pub(super) struct OrbitCamera {
     /// Body center before the view chooses its pivot.

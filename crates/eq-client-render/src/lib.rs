@@ -325,6 +325,7 @@ fn seed_official_options(
             (Toggle::SpellEffects, official.spell_effects),
             (Toggle::PcNames, official.pc_names),
             (Toggle::NpcNames, official.npc_names),
+            (Toggle::LookSpring, official.look_spring),
         ] {
             if let Some(on) = setting {
                 option_defaults.set(toggle, on);

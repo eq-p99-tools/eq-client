@@ -55,6 +55,9 @@ pub(super) struct Controls {
     /// The strafe speed with walking selected, where it is slower than
     /// [`Self::strafe_speed`].
     pub strafe_walk_speed: Option<f32>,
+    /// Backing up in water, before the water's share applies; the session's
+    /// grant (`MotionGrant::swim_backward_units_per_second`).
+    pub swim_backward_speed: Option<f32>,
     diagonal_rates: DiagonalRates,
     /// The share of the jump speed a jump starts with, as the session
     /// grants it: the health and weight factor.
@@ -203,6 +206,7 @@ impl Default for Controls {
             walk_speed: None,
             strafe_speed: None,
             strafe_walk_speed: None,
+            swim_backward_speed: None,
             diagonal_rates: DiagonalRates::default(),
             jump_factor: 1.0,
             walking: false,
@@ -676,6 +680,7 @@ impl Controls {
         self.walk_speed = grant.walk_units_per_second;
         self.strafe_speed = grant.strafe_units_per_second;
         self.strafe_walk_speed = grant.strafe_walk_units_per_second;
+        self.swim_backward_speed = grant.swim_backward_units_per_second;
         self.diagonal_rates = grant.diagonal;
         self.jump_factor = if grant.jump_factor.is_finite() {
             grant.jump_factor.clamp(0.0, 1.0)
@@ -803,7 +808,7 @@ fn turn_cap(walking: bool, race: u32) -> f32 {
 /// second, each later step 20 more, up to the cap. It applies standing and
 /// going forward or back, which keep the facing; camera-relative movement
 /// faces its own direction and takes no ramp.
-fn ramped_turn(from: f32, to: f32, cap: f32) -> f32 {
+pub(crate) fn ramped_turn(from: f32, to: f32, cap: f32) -> f32 {
     let turned = |seconds: f32| {
         let seconds = seconds.max(0.0);
         let full = (cap - 1.0) / TURN_STEPS_PER_SECOND;
@@ -1438,7 +1443,16 @@ pub(super) fn input(
         diagonal,
     } = intent;
     if swimming {
-        speed = swim_speed(controls.speed.unwrap_or(0.0));
+        // Titanium backs up in water only by the buffs' modifier (0x4a2bd8;
+        // read R13 b), so not at all without one; the grant carries it. A
+        // ducked player is stood to move by the session.
+        speed = swim_speed(
+            controls
+                .swim_backward_speed
+                .filter(|_| mode == MovementMode::Backward)
+                .or(controls.speed)
+                .unwrap_or(0.0),
+        );
         if !focused || controls.stun_active {
             direction = Vec3::ZERO;
             turn = 0.0;
@@ -4413,6 +4427,7 @@ pub(super) mod tests {
                 walk_units_per_second: None,
                 strafe_units_per_second: None,
                 strafe_walk_units_per_second: None,
+                swim_backward_units_per_second: None,
                 diagonal: eq_client_core::DiagonalRates::default(),
                 falls: true,
                 jump_factor: 1.0,
@@ -4856,6 +4871,7 @@ pub(super) mod tests {
             walk_units_per_second: Some(2.0),
             strafe_units_per_second: None,
             strafe_walk_units_per_second: None,
+            swim_backward_units_per_second: None,
             falls: false,
             jump_factor: 1.0,
         });
@@ -5615,6 +5631,7 @@ pub(super) mod tests {
         session
             .calibrate(
                 eq_client_core::MotionCalibration {
+                    swim_backward_units_per_second: None,
                     units_per_second: 6.0,
                     velocity_scale: 1.0,
                     animation: 1,
@@ -5988,6 +6005,7 @@ pub(super) mod tests {
             session
                 .calibrate(
                     eq_client_core::MotionCalibration {
+                        swim_backward_units_per_second: None,
                         units_per_second: 6.0,
                         diagonal: DiagonalRates {
                             run: Some(3.0),
@@ -6157,6 +6175,7 @@ pub(super) mod tests {
         session
             .calibrate(
                 eq_client_core::MotionCalibration {
+                    swim_backward_units_per_second: None,
                     diagonal: eq_client_core::DiagonalRates::default(),
                     strafe: None,
                     walk: None,
@@ -6332,6 +6351,7 @@ pub(super) mod tests {
             walk_units_per_second: None,
             strafe_units_per_second: None,
             strafe_walk_units_per_second: None,
+            swim_backward_units_per_second: None,
             falls: true,
             jump_factor: 1.0,
         });
@@ -6367,6 +6387,7 @@ pub(super) mod tests {
             walk_units_per_second: None,
             strafe_units_per_second: None,
             strafe_walk_units_per_second: None,
+            swim_backward_units_per_second: None,
             falls: true,
             jump_factor: 1.0,
         };
@@ -6751,6 +6772,7 @@ pub(super) mod tests {
                 walk_units_per_second: None,
                 strafe_units_per_second: None,
                 strafe_walk_units_per_second: None,
+                swim_backward_units_per_second: None,
                 diagonal: eq_client_core::DiagonalRates::default(),
                 falls: true,
                 jump_factor: 1.0,
@@ -6914,6 +6936,7 @@ pub(super) mod tests {
                 walk_units_per_second: None,
                 strafe_units_per_second: None,
                 strafe_walk_units_per_second: None,
+                swim_backward_units_per_second: None,
                 diagonal: DiagonalRates::default(),
                 falls: true,
                 jump_factor: 1.0,
@@ -6986,6 +7009,7 @@ pub(super) mod tests {
                     walk_units_per_second: None,
                     strafe_units_per_second: None,
                     strafe_walk_units_per_second: None,
+                    swim_backward_units_per_second: None,
                     diagonal: DiagonalRates::default(),
                     falls: true,
                     jump_factor: 1.0,

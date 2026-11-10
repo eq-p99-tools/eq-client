@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Look and swim as the Titanium program does (Batch M slice 3). Look Up
+  and Look Down (keypad 9 and Page Up, keypad 3 and Page Down) tilt the
+  first-person view while held, ramping as the turn keys do up to straight
+  up or down, and Center View (keypad 5 and Home) levels it; in the chase
+  view the keys do not tilt it, and Center View returns it to its opening
+  pitch behind the player (checklist 6.422). The new Look Spring option,
+  off by default and read from `eqclient.ini`, brings the first-person view
+  back level when no look key or mouse look holds it. Backing up in water,
+  unless ducking or sneaking, goes only at the buffs' speed modifier, so
+  not at all without one, as the program's does.
 - Move and look as the Titanium program does (Batch M slice 2). A
   jump takes a tenth of the maximum endurance, at most 50, off the shown
   bar at take-off, until the server's next report. The mouse turns the
@@ -110,6 +120,12 @@
 - Bound inspection note and landmark file reads, protect oversized
   landmark files from replacement, and share immutable installed spell
   definitions across sessions.
+
+- Pin networking 00edc1b8 (Batch M slice 3, draft): Titanium's own position
+  update carries the program's movement-history entry counter, goes out by
+  the program's flag rule (a straight run once a second), repeats while
+  frozen and stops while stunned; the session grants the rate for backing
+  up in water.
 
 - Pin networking 835c95d2 (Batch M slice 2 landing): Titanium strafes on the
   selected base speed, and the grant carries the walking strafe rate.

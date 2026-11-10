@@ -61,6 +61,10 @@ pub(crate) enum Act {
     FreeCamera,
     CameraUp,
     CameraDown,
+    /// Tilts the first-person view up or down while held, and levels it.
+    LookUp,
+    LookDown,
+    CenterView,
     TurnLeft,
     TurnRight,
     Jump,
@@ -123,6 +127,9 @@ impl Act {
             Self::FreeCamera => "Toggle Free Camera",
             Self::CameraUp => "Free Camera Up",
             Self::CameraDown => "Free Camera Down",
+            Self::LookUp => "Look Up",
+            Self::LookDown => "Look Down",
+            Self::CenterView => "Center View",
             Self::TurnLeft => "Turn Left",
             Self::TurnRight => "Turn Right",
             Self::Jump => "Jump",
@@ -144,7 +151,12 @@ impl Act {
             Self::Slot(_) | Self::BindSlot(_) | Self::ClearSlot(_) | Self::HotbarPage(_) => {
                 KeyGroup::Hotbar(1)
             }
-            Self::FreeCamera | Self::CameraUp | Self::CameraDown => KeyGroup::Camera,
+            Self::FreeCamera
+            | Self::CameraUp
+            | Self::CameraDown
+            | Self::LookUp
+            | Self::LookDown
+            | Self::CenterView => KeyGroup::Camera,
             Self::Sit
             | Self::SitStand
             | Self::Duck
@@ -298,6 +310,9 @@ const fn act_for(command: eq_client_assets::keys::Command) -> Option<Act> {
         Command::TurnRight => Act::TurnRight,
         Command::TurnLeft => Act::TurnLeft,
         Command::WalkRun => Act::Walk,
+        Command::LookUp => Act::LookUp,
+        Command::LookDown => Act::LookDown,
+        Command::CenterView => Act::CenterView,
         Command::AutoAttack => Act::Attack,
         Command::Consider => Act::Consider,
         Command::Duck => Act::Duck,
@@ -545,6 +560,13 @@ impl KeyMap {
     }
 
     /// -1, 0 or 1 as the negative or positive action is held, or both or neither.
+    /// Whether one of the action's chords is held with exactly its
+    /// modifiers, for keys that, unlike movement, belong to their chord.
+    pub(crate) fn held_exactly(&self, keys: &ButtonInput<KeyCode>, act: Act) -> bool {
+        self.bound(act)
+            .any(|chord| keys.pressed(chord.key) && chord.modifiers_held(keys))
+    }
+
     pub(crate) fn axis(&self, keys: &ButtonInput<KeyCode>, negative: Act, positive: Act) -> f32 {
         f32::from(self.held(keys, positive)) - f32::from(self.held(keys, negative))
     }
@@ -809,6 +831,19 @@ mod tests {
         assert_eq!(keys(Act::Slot(9)), [Chord::key(KeyCode::Digit0)]);
         assert_eq!(keys(Act::HotbarPage(0)), [Chord::shift(KeyCode::Digit1)]);
         assert_eq!(keys(Act::HotbarPage(9)), [Chord::shift(KeyCode::Digit0)]);
+        // Commands 17-19 of the program's table (read R13).
+        assert_eq!(
+            keys(Act::LookUp),
+            [Chord::key(KeyCode::Numpad9), Chord::key(KeyCode::PageUp)]
+        );
+        assert_eq!(
+            keys(Act::LookDown),
+            [Chord::key(KeyCode::Numpad3), Chord::key(KeyCode::PageDown)]
+        );
+        assert_eq!(
+            keys(Act::CenterView),
+            [Chord::key(KeyCode::Numpad5), Chord::key(KeyCode::Home)]
+        );
         for act in UNBOUND {
             assert_eq!(keys(act), [], "{act:?}");
             assert!(map.assignments().any(|(listed, _)| listed == act));
@@ -835,6 +870,10 @@ mod tests {
         }
         assert_eq!(mac.chords(Act::Attack), [Chord::key(KeyCode::KeyA)]);
         assert_eq!(mac.chords(Act::Autorun), [Chord::key(KeyCode::NumLock)]);
+        // The Mac-era table holds the same keys under commands not yet read.
+        for act in [Act::LookUp, Act::LookDown, Act::CenterView] {
+            assert_eq!(mac.chords(act), [], "{act:?}");
+        }
     }
 
     #[test]
@@ -883,8 +922,8 @@ mod tests {
             for chord in [
                 Chord::ctrl(KeyCode::KeyM),
                 Chord::key(KeyCode::F9),
-                Chord::key(KeyCode::PageUp),
-                Chord::key(KeyCode::PageDown),
+                Chord::shift(KeyCode::PageUp),
+                Chord::shift(KeyCode::PageDown),
             ] {
                 assert!(client.default_keys().unwrap().iter().any(|entry| {
                     matches!(entry.command, eq_client_assets::keys::Command::Reserved(_))

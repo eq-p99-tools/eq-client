@@ -293,7 +293,8 @@ fn section_headings_use_checkbox_typography_if_the_skin_has_no_label() {
             .iter()
             .filter(|(_, piece)| matches!(piece, Element::Button(_)))
             .count(),
-        Fix::settings().count()
+        Fix::settings().count() + 1,
+        "the fixes and Look Spring, which this skin lacks"
     );
     assert!(
         page.pieces

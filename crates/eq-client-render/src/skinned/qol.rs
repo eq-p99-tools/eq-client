@@ -1,5 +1,9 @@
 //! The client-added `QoL` page, using the installed skin's controls and text.
-use super::{bindings::qol_checkbox_id, controls, frame, to_f32, tree::tab_strip};
+use super::{
+    bindings::{LOOK_SPRING_CHECKBOX, qol_checkbox_id},
+    controls, frame, to_f32,
+    tree::tab_strip,
+};
 use crate::windows::WindowId;
 use bevy::prelude::Vec2;
 use eq_client_assets::{
@@ -10,6 +14,67 @@ use eq_client_core::qol::Fix;
 
 #[cfg(test)]
 pub(super) mod tests;
+
+/// This client's Look Spring checkbox, for a skin without one.
+pub(super) const LOOK_SPRING_FALLBACK: &str = "EQC_LookSpringCheckbox";
+const LOOK_SPRING_TEXT: &str = "Look Spring";
+const LOOK_SPRING_TOOLTIP: &str = "Bring the first-person view back level when no look key or mouse look holds it, as the official client's Look Spring does.";
+
+/// The official Look Spring option, where the skin has no checkbox for it:
+/// added under Invert Y Axis on the skin's Mouse page, or else a choice for
+/// this page.
+fn look_spring(pages: &mut [eq_client_assets::sidl::Page]) -> Option<Choice> {
+    let skin_has = pages
+        .iter()
+        .flat_map(|page| &page.pieces)
+        .any(|(name, _)| name == LOOK_SPRING_CHECKBOX);
+    (!skin_has && !add_look_spring(pages)).then_some(Choice::Official {
+        id: LOOK_SPRING_FALLBACK,
+        text: LOOK_SPRING_TEXT,
+        tooltip: LOOK_SPRING_TOOLTIP,
+    })
+}
+
+/// Adds a Look Spring checkbox, cut from the skin's Invert Y Axis one, below
+/// the lowest control of the page that holds it; false where no page does.
+fn add_look_spring(pages: &mut [eq_client_assets::sidl::Page]) -> bool {
+    let invert = |name: &String| name == "OMP_InvertYAxisCheckbox";
+    let Some(page) = pages
+        .iter_mut()
+        .find(|page| page.pieces.iter().any(|(name, _)| invert(name)))
+    else {
+        return false;
+    };
+    let Some(Element::Button(template)) = page
+        .pieces
+        .iter()
+        .find(|(name, _)| invert(name))
+        .map(|(_, element)| element)
+    else {
+        return false;
+    };
+    let mut button = template.clone();
+    let bottom = page
+        .pieces
+        .iter()
+        .filter_map(|(_, element)| match element {
+            Element::Button(button) => Some(button.area),
+            Element::Label(label) => Some(label.area),
+            Element::Slider(slider) => Some(slider.area),
+            _ => None,
+        })
+        .map(|area| area.y + area.height)
+        .fold(0.0, f32::max);
+    button.id = Some(LOOK_SPRING_FALLBACK.to_owned());
+    button.anchors = None;
+    button.placed = true;
+    button.text = Some(LOOK_SPRING_TEXT.to_owned());
+    button.tooltip = Some(LOOK_SPRING_TOOLTIP.to_owned());
+    button.area.y = bottom + GAP;
+    page.pieces
+        .push((LOOK_SPRING_FALLBACK.to_owned(), Element::Button(button)));
+    true
+}
 
 /// The skin's pages of a tab box, and for the Options window a last page,
 /// its quality-of-life page, with checkboxes and sliders drawn from the skin,
@@ -60,7 +125,13 @@ pub(super) fn pages<'a>(
         Element::Label(label) if name.ends_with("ValueLabel") => Some(label),
         _ => None,
     });
-    let mut choices: Vec<_> = Fix::settings().map(Control::Checkbox).collect();
+    let mut all = pages.to_vec();
+    let look_spring = look_spring(&mut all);
+    let mut choices: Vec<_> = look_spring
+        .into_iter()
+        .chain(Fix::settings().map(Choice::Fix))
+        .map(Control::Checkbox)
+        .collect();
     if let Some((slider, value)) = slider.zip(value) {
         choices.extend([
             Control::Slider {
@@ -116,7 +187,6 @@ pub(super) fn pages<'a>(
             y + heading_height + GAP,
         ) + SECTION_GAP;
     }
-    let mut all = pages.to_vec();
     all.push(eq_client_assets::sidl::Page { pieces, ..qol });
     std::borrow::Cow::Owned(all)
 }
@@ -220,9 +290,32 @@ impl Section {
     }
 }
 
+/// What a generated checkbox turns on and off.
+#[derive(Clone, Copy)]
+enum Choice {
+    Fix(Fix),
+    /// One of the official client's options, where the skin has no
+    /// checkbox for it.
+    Official {
+        id: &'static str,
+        text: &'static str,
+        tooltip: &'static str,
+    },
+}
+
+impl Choice {
+    /// The checkbox's screen ID, text and tooltip.
+    fn parts(self) -> (String, &'static str, &'static str) {
+        match self {
+            Self::Fix(fix) => (qol_checkbox_id(fix), fix.label(), fix.tooltip()),
+            Self::Official { id, text, tooltip } => (id.to_owned(), text, tooltip),
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum Control<'a> {
-    Checkbox(Fix),
+    Checkbox(Choice),
     Slider {
         section: Section,
         slider: &'a Slider,
@@ -235,7 +328,7 @@ enum Control<'a> {
 impl Control<'_> {
     fn section(self) -> Section {
         match self {
-            Self::Checkbox(fix) if fix.is_unsafe() => Section::Dangerous,
+            Self::Checkbox(Choice::Fix(fix)) if fix.is_unsafe() => Section::Dangerous,
             Self::Checkbox(_) => Section::Ordinary,
             Self::Slider { section, .. } => section,
         }
@@ -301,14 +394,14 @@ impl Layout {
                     + to_f32(u32::try_from(column).unwrap_or(u32::MAX))
                         * (self.width + self.margin);
                 let control_bottom = match choice {
-                    Control::Checkbox(fix) => {
+                    Control::Checkbox(choice) => {
+                        let (id, text, tooltip) = choice.parts();
                         let mut button = checkbox.clone();
-                        let id = qol_checkbox_id(fix);
                         button.id = Some(id.clone());
                         button.anchors = None;
                         button.placed = true;
-                        button.text = Some(fix.label().to_owned());
-                        button.tooltip = Some(fix.tooltip().to_owned());
+                        button.text = Some(text.to_owned());
+                        button.tooltip = Some(tooltip.to_owned());
                         button.area = Area {
                             x,
                             y,

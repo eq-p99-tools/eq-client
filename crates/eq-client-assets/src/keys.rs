@@ -35,6 +35,12 @@ pub enum Command {
     TurnLeft,
     /// Switches between walking and running.
     WalkRun,
+    /// Tilts the view up while held.
+    LookUp,
+    /// Tilts the view down while held.
+    LookDown,
+    /// Levels the view.
+    CenterView,
     /// Turns auto attack on and off.
     AutoAttack,
     /// Considers the target.
@@ -195,7 +201,14 @@ pub const TITANIUM: &[DefaultKey] = &[
     primary(Command::Hail, 0x23),       // 13: H
     primary(Command::Inventory, 0x17),  // 14: I
     primary(Command::Use, 0x16),        // 16: U
-    primary(Command::TargetSelf, 0x3b), // 24: F1
+    // 17-19: pitch up, pitch down and center view (0x4619cd, read R13).
+    primary(Command::LookUp, 0x49),       // 17: keypad 9
+    alternate(Command::LookUp, 0xc9),     // 17: Page Up
+    primary(Command::LookDown, 0x51),     // 18: keypad 3
+    alternate(Command::LookDown, 0xd1),   // 18: Page Down
+    primary(Command::CenterView, 0x4c),   // 19: keypad 5
+    alternate(Command::CenterView, 0xc7), // 19: Home
+    primary(Command::TargetSelf, 0x3b),   // 24: F1
     // 35-44: the first bank's hotbuttons on 1 to 0.
     primary(Command::HotButton(0), 0x02),
     primary(Command::HotButton(1), 0x03),
@@ -276,12 +289,6 @@ pub const TITANIUM: &[DefaultKey] = &[
     // Native chords remain reserved even when their action is unsupported.
     reserved(8, false, 0x58, 0),
     reserved(15, false, 0x14, 0),
-    reserved(17, false, 0x49, 0),
-    reserved(17, true, 0xc9, 0),
-    reserved(18, false, 0x51, 0),
-    reserved(18, true, 0xd1, 0),
-    reserved(19, false, 0x4c, 0),
-    reserved(19, true, 0xc7, 0),
     reserved(20, false, 0x47, 0),
     reserved(20, true, 0xd2, 0),
     reserved(21, false, 0x4f, 0),

@@ -1117,6 +1117,9 @@ pub struct OfficialOptions {
     /// The Mouse page's Mouselook Sensitivity: `MouseSensitivity` in
     /// `[Options]`, from 0 to 10 as far as is known.
     pub mouse_sensitivity: Option<u32>,
+    /// Whether the first-person view springs back level: `LookSpring` in
+    /// `[Options]` (Titanium 0x4af32c).
+    pub look_spring: Option<bool>,
 }
 
 fn options_from_ini(text: &str) -> OfficialOptions {
@@ -1143,6 +1146,7 @@ fn options_from_ini(text: &str) -> OfficialOptions {
         max_fps: ini_value(text, "Options", "MaxFPS").and_then(|v| v.trim().parse().ok()),
         mouse_sensitivity: ini_value(text, "Options", "MouseSensitivity")
             .and_then(|v| v.trim().parse().ok()),
+        look_spring: flag("Options", "LookSpring"),
     }
 }
 
@@ -1947,6 +1951,7 @@ NPCNames=0
 ClipPlane=15
 MaxFPS=100
 MouseSensitivity=4
+LookSpring=1
 "
             ),
             OfficialOptions {
@@ -1959,6 +1964,7 @@ MouseSensitivity=4
                 clip_plane: Some(15),
                 max_fps: Some(100),
                 mouse_sensitivity: Some(4),
+                look_spring: Some(true),
             }
         );
         assert_eq!(options_from_ini(""), OfficialOptions::default());
