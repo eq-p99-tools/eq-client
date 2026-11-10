@@ -311,12 +311,22 @@ impl CollisionWorld {
     }
 
     /// The zone and the obstacles that stop the player walking.
-    /// This world without the walls of each door the body at `feet` is
-    /// already inside, if any: a door that moved into the body, such as a
-    /// lift landing around a player beside it, so the player can walk out
-    /// rather than be held in every direction. Its floor still holds them
-    /// up: the capsule rides above the feet, so a floor it stands on does not
-    /// count. What the program does with a body a door moves into is unread
+    /// This world without the walls of each door the body at `feet`
+    /// overlaps, if any, so the player can walk out rather than be held in
+    /// every direction. Its floor still holds them up: the capsule rides
+    /// above the feet, so a floor it stands on does not count.
+    ///
+    /// Only a door or the world moving the body can make such an overlap,
+    /// never the player walking: every sweep stops [`SKIN`] short of a wall,
+    /// so pressing or sliding into a door never releases it (see the test
+    /// `pressing_or_sliding_into_a_door_never_releases_it`). The ways the body
+    /// is placed without a sweep are: a door that moves into it (a lift
+    /// landing around a player beside it, a hinged door swinging shut on
+    /// them); the server placing it (a summon, a `#goto`, a zone-in); and a
+    /// change of size beside a door. A lift's carry moves the body only where
+    /// it fits, by the same clearance, so it cannot carry it into another
+    /// door. The airborne controller's falls and jumps are swept like a walk.
+    /// What the program does with a body a door moves into is unread
     /// (recording checklist 6.439, inferred).
     #[must_use]
     pub fn releasing_overlapped_doors(&self, feet: Vec3, height: f32) -> Option<Self> {
@@ -904,6 +914,71 @@ mod tests {
                 .ray_distance(origin, Vec3::splat(f32::NAN), 20.0)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn pressing_or_sliding_into_a_door_never_releases_it() {
+        // A box of door walls 8 across; the player walks from its middle
+        // straight at a wall, into a corner, sliding shallowly along a wall
+        // and wobbling sideways, at strides from 0.01 to 3, and is never left
+        // overlapping it, at their own height or a taller or shorter one.
+        let mut triangles = Vec::new();
+        for (a, b) in [
+            ([-4.0, -4.0], [4.0, -4.0]),
+            ([4.0, -4.0], [4.0, 4.0]),
+            ([4.0, 4.0], [-4.0, 4.0]),
+            ([-4.0, 4.0], [-4.0, -4.0]),
+        ] {
+            let low = |p: [f32; 2]| [p[0], 0.0, p[1]];
+            let high = |p: [f32; 2]| [p[0], 12.0, p[1]];
+            triangles.push([low(a), low(b), high(b)]);
+            triangles.push([low(a), high(b), high(a)]);
+        }
+        let mut world = CollisionWorld::new(floor(0.0)).unwrap();
+        world.set_door_obstacles_with(vec![(
+            1,
+            Arc::new(CollisionMesh::new(triangles).unwrap()),
+            Solidity::BOTH,
+        )]);
+        let directions = [
+            Vec3::X,
+            Vec3::new(1.0, 0.0, 1.0),
+            Vec3::new(1.0, 0.0, 0.05),
+            Vec3::new(0.05, 0.0, -1.0),
+            Vec3::new(-1.0, 0.0, 0.3),
+        ];
+        for direction in directions {
+            // Each stride with at least 200 steps, and enough to cross the box.
+            for (stride, steps) in [
+                (0.01, 600),
+                (0.1, 200),
+                (0.5, 200),
+                (1.0, 200),
+                (2.0, 200),
+                (3.0, 200),
+            ] {
+                let mut feet = Vec3::ZERO;
+                for step in 0..steps {
+                    // Every other step wobbles sideways.
+                    let wobble = if step % 2 == 0 { 0.3 } else { -0.3 };
+                    let toward = (direction + Vec3::new(-direction.z, 0.0, direction.x) * wobble)
+                        .normalize()
+                        * stride;
+                    feet = world.step(feet, toward, 6.0);
+                    for height in [3.0, 6.0, 6.5, 9.0] {
+                        assert!(
+                            world.releasing_overlapped_doors(feet, height).is_none(),
+                            "{direction} by {stride}, step {step}, at {feet} for {height}"
+                        );
+                    }
+                }
+                // The walk did reach the walls: within a radius and the skin.
+                assert!(
+                    feet.x.abs().max(feet.z.abs()) > 3.5,
+                    "{direction} by {stride}: {feet}"
+                );
+            }
+        }
     }
 
     #[test]
