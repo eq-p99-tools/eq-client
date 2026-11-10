@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Ride lifts as the Titanium program does (Batch B1). On EQEmu and P99,
+  vertical doors (lifts, sinking floors and platforms) rise and sink at
+  their type's travel and speed, counted from the server's action, and
+  slides go their type's distance and direction. Each door returns on its
+  own after its type's delay from its arrival: 10 s for ordinary doors, 20 s
+  for most others, never for a lift whose field is over 170; types 40 and 45
+  go back by the click the networking sends. A door holds the player up or
+  stops them only as the program's rule says, so a hinged door is no floor,
+  and route searches use the same rule. A player standing still on a rising
+  lift is carried up with it, stunned or not, and each move on a lift names
+  it so the movement guard allows its rise; a lift rising into a ceiling
+  leaves the player put (checklist 6.427). The script report lists nearby
+  doors with their mechanism, field, offset and solidity. EQMac servers keep
+  their doors solid both ways (checklist 6.425).
 - Look and swim as the Titanium program does (Batch M slice 3). Look Up
   and Look Down (keypad 9 and Page Up, keypad 3 and Page Down) tilt the
   first-person view while held, ramping as the turn keys do up to straight

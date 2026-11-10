@@ -912,6 +912,14 @@ type Pointing<'w> = (
     Option<Res<'w, crate::spellbook::SpellNames>>,
 );
 
+/// The input system's optional settings: the movement sync choice, the
+/// session last told to wait, and the lifts a rider can be carried by.
+type InputExtras<'w, 's> = (
+    Option<Res<'w, crate::options::MovementSync>>,
+    Local<'s, Option<u64>>,
+    Option<Res<'w, crate::doors::LiftReach>>,
+);
+
 /// Produces at most one in-flight proposal; renderer stalls never accumulate distance.
 #[allow(
     clippy::needless_pass_by_value,
@@ -925,10 +933,7 @@ pub(super) fn input(
     collision: Res<Collision>,
     outbox: Res<crate::outbox::Outbox>,
     options: Res<crate::options::OptionsState>,
-    (movement_sync, mut told_wait): (
-        Option<Res<crate::options::MovementSync>>,
-        Local<Option<u64>>,
-    ),
+    (movement_sync, mut told_wait, lifts): InputExtras,
     mut controls: ResMut<Controls>,
     players: Query<(&PlayerBody, &Transform), With<Player>>,
     cameras: Query<(&OrbitCamera, Has<crate::camera::FreeCamera>)>,
@@ -1517,6 +1522,43 @@ pub(super) fn input(
         && diagonal.is_none()
         && follow_heading.is_none_or(|heading| arc(current_heading, heading) == 0.0)
     {
+        // A lift rising under a still player stands them on its new floor, as
+        // the program's forced floor sweep does (0x4368b3, read R1).
+        if !placement_blocked
+            && !flying
+            && !swimming
+            && let Some((door, raised)) = lifts
+                .as_deref()
+                .and_then(|lifts| lift_under(world, lifts, feet, body.height))
+        {
+            let position = world_position(
+                (raised + Vec3::Y * body.feet_offset).to_array(),
+                current_heading,
+            );
+            let mut created = now;
+            let sent = outbox.post(online.world(), |stamp| {
+                created = stamp.created;
+                ClientCommand::Move(
+                    MovementRequest::new(
+                        MovementMode::Forward,
+                        stamp.session_id,
+                        position,
+                        stamp.created,
+                    )
+                    .on_door(door),
+                )
+            });
+            if let Err(reason) = sent {
+                controls.send_failed(reason);
+                controls.held = Some(Held::Refused);
+                return;
+            }
+            controls.last_sent = Some(created);
+            controls.sent_span = span;
+            controls.held = None;
+            controls.wait_for(session_id, created, PendingKind::Move);
+            return;
+        }
         controls.held = Some(if placement_blocked {
             Held::PlacementBlocked
         } else {
@@ -1764,6 +1806,10 @@ pub(super) fn input(
     } else {
         world_position(position.to_array(), heading)
     };
+    // The lift under the landing, which may carry the player up with it.
+    let support = lifts
+        .as_deref()
+        .and_then(|lifts| lift_support(world, lifts, landing));
     let mut created = now;
     let sent = outbox.post(online.world(), |stamp| {
         // Shoreline physics already ended at the observed frame. Its next
@@ -1775,6 +1821,7 @@ pub(super) fn input(
             position: position_sent,
             heading: heading_update,
             created,
+            support,
         })
     });
     if let Err(reason) = sent {
@@ -1847,6 +1894,48 @@ pub(super) fn input(
     // Until the heading sent reaches the facing, the model shows the facing.
     controls.facing = (arc(heading, facing).abs() > 0.01).then_some(facing);
     controls.wait_for(session_id, created, PendingKind::Move);
+}
+
+/// The rideable lift whose floor holds the feet up, when they stand within
+/// its reach ([`crate::doors::LiftReach`]).
+fn lift_support(
+    world: &eq_client_core::movement::CollisionWorld,
+    lifts: &crate::doors::LiftReach,
+    feet: Vec3,
+) -> Option<u8> {
+    let door = world.ground_door(feet, 0.05, 0.05)?;
+    let (center, reach) = lifts.0.get(&door)?;
+    (center.distance(feet) <= *reach).then_some(door)
+}
+
+/// A rideable lift that rose into the still feet: the door, and the feet
+/// stood on its new floor. The program's forced floor sweep stands a rider
+/// on the risen floor; where the body would not fit there, what it does is
+/// unread, and this leaves the player to the ordinary support and fall test
+/// (recording checklist 6.427).
+fn lift_under(
+    world: &eq_client_core::movement::CollisionWorld,
+    lifts: &crate::doors::LiftReach,
+    feet: Vec3,
+    height: f32,
+) -> Option<(u8, Vec3)> {
+    let rise = eq_client_core::movement::MAX_GROUNDED_STEP;
+    let door = world.ground_door(feet, rise, 0.05)?;
+    let (center, reach) = lifts.0.get(&door)?;
+    if center.distance(feet) > *reach {
+        return None;
+    }
+    let floor = world.ground(feet, rise, 0.05)?;
+    if floor <= feet.y + 0.001 {
+        return None;
+    }
+    let raised = Vec3::new(feet.x, floor, feet.z);
+    world
+        .clearance(raised, height, 0.0)
+        // A capsule crossing a mesh seam can report touching (0) rather than
+        // its depth, so touching counts as not fitting.
+        .is_none_or(|clearance| clearance > 0.0)
+        .then_some((door, raised))
 }
 
 /// Whether no ground is under the feet within the step the server's
@@ -2449,6 +2538,52 @@ pub(super) mod tests {
         movement::{Liquid, Liquids, RunSpeedMultiplier},
         options::Level,
     };
+
+    #[test]
+    fn a_still_rider_stands_on_a_risen_lift_only_inside_its_reach_and_with_room() {
+        use eq_client_core::movement::{CollisionMesh, CollisionWorld};
+        use std::sync::Arc;
+        let deck = |y: f32| {
+            Arc::new(
+                CollisionMesh::new([
+                    [[-5.0, y, -5.0], [5.0, y, -5.0], [5.0, y, 5.0]],
+                    [[-5.0, y, -5.0], [5.0, y, 5.0], [-5.0, y, 5.0]],
+                ])
+                .unwrap(),
+            )
+        };
+        let mut world = CollisionWorld::new([
+            [[-50.0, 0.0, -50.0], [50.0, 0.0, -50.0], [50.0, 0.0, 50.0]],
+            [[-50.0, 0.0, -50.0], [50.0, 0.0, 50.0], [-50.0, 0.0, 50.0]],
+        ])
+        .unwrap();
+        let solid = eq_client_core::doors::Solidity::BOTH;
+        world.set_door_obstacles_with(vec![(4, deck(0.5), solid)]);
+        let mut lifts = crate::doors::LiftReach::default();
+        lifts.0.insert(4, (Vec3::ZERO, 310.0));
+        // Off the decks' diagonal seam.
+        let feet = Vec3::new(2.0, 0.3, -1.0);
+        let (door, raised) = super::lift_under(&world, &lifts, feet, 6.0).unwrap();
+        assert_eq!(door, 4);
+        assert!(raised.distance(Vec3::new(feet.x, 0.5, feet.z)) < 0.001);
+        assert_eq!(super::lift_support(&world, &lifts, raised), Some(4));
+        // Standing level with the floor already, nothing new is sent.
+        assert!(super::lift_under(&world, &lifts, raised, 6.0).is_none());
+        // Past the door's reach it carries no one.
+        lifts.0.insert(4, (Vec3::new(400.0, 0.0, 0.0), 310.0));
+        assert!(super::lift_under(&world, &lifts, feet, 6.0).is_none());
+        assert_eq!(super::lift_support(&world, &lifts, raised), None);
+        // A door that is not a listed lift carries no one either.
+        lifts.0.clear();
+        assert!(super::lift_under(&world, &lifts, feet, 6.0).is_none());
+        // With a ceiling in the way the body would not fit; it stays put
+        // (recording checklist 6.427).
+        lifts.0.insert(4, (Vec3::ZERO, 310.0));
+        world.set_door_obstacles_with(vec![(4, deck(0.5), solid), (5, deck(4.0), solid)]);
+        assert!(super::lift_under(&world, &lifts, feet, 6.0).is_none());
+        let seam = Vec3::new(1.0, 0.3, 1.0);
+        assert!(super::lift_under(&world, &lifts, seam, 6.0).is_none());
+    }
 
     fn movement_choice(app: &mut App, fix: Fix, on: bool) {
         app.world_mut()
@@ -3662,6 +3797,7 @@ pub(super) mod tests {
                 player: Box::new(player),
                 far_clip: None,
                 spell_landing_flag: None,
+                zone_id: 0,
             }],
         );
         crate::online::testing::connect(&mut state, true);
@@ -4732,6 +4868,7 @@ pub(super) mod tests {
                     player: Box::new(player),
                     far_clip: None,
                     spell_landing_flag: None,
+                    zone_id: 0,
                 }],
             );
             online::testing::connect(&mut state, true);
@@ -6323,6 +6460,7 @@ pub(super) mod tests {
                 player: Box::new(player),
                 far_clip: None,
                 spell_landing_flag: None,
+                zone_id: 0,
             }],
         );
         crate::online::testing::connect(&mut state, true);
@@ -6679,6 +6817,7 @@ pub(super) mod tests {
                 player: Box::new(player),
                 far_clip: None,
                 spell_landing_flag: None,
+                zone_id: 0,
             }],
         );
         crate::online::testing::connect(&mut state, true);

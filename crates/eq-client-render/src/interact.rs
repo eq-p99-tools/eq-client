@@ -155,6 +155,7 @@ mod tests {
                 player: Box::new(player),
                 far_clip: None,
                 spell_landing_flag: None,
+                zone_id: 0,
             }],
         );
         crate::online::testing::objects(
@@ -194,6 +195,7 @@ mod tests {
                 player: Box::new(player),
                 far_clip: None,
                 spell_landing_flag: None,
+                zone_id: 0,
             }],
         );
         crate::online::testing::doors(&mut state, &door_at(3.0), std::time::Instant::now());

@@ -1297,6 +1297,7 @@ pub(crate) mod testing {
                 player: Box::new(player),
                 far_clip,
                 spell_landing_flag: None,
+                zone_id: 0,
             }],
         );
         connect(state, true);
@@ -1754,6 +1755,7 @@ mod tests {
                 player: Box::new(player),
                 far_clip: None,
                 spell_landing_flag: None,
+                zone_id: 0,
             },
             WorldEvent::Spawns(vec![spawn]),
             WorldEvent::Posture {
@@ -1817,6 +1819,7 @@ mod tests {
                 player: Box::new(testing::player(7)),
                 far_clip: None,
                 spell_landing_flag: None,
+                zone_id: 0,
             }))
             .unwrap();
         app.update();
@@ -1950,6 +1953,7 @@ mod tests {
                 player: Box::new(testing::player(7)),
                 far_clip: None,
                 spell_landing_flag: None,
+                zone_id: 0,
             }))
             .unwrap();
         sender.send(resources(6)).unwrap();
@@ -2019,6 +2023,7 @@ mod tests {
                 player: Box::new(testing::player(7)),
                 far_clip: None,
                 spell_landing_flag: None,
+                zone_id: 0,
             }))
             .unwrap();
         drop(sender);
@@ -2076,6 +2081,7 @@ mod tests {
             player: Box::new(testing::player(7)),
             far_clip: None,
             spell_landing_flag: None,
+            zone_id: 0,
         })
     }
 
@@ -2187,6 +2193,7 @@ mod tests {
                 player: Box::new(testing::player(7)),
                 far_clip: None,
                 spell_landing_flag: None,
+                zone_id: 0,
             }))
             .unwrap();
         app.update();
@@ -2254,6 +2261,7 @@ mod tests {
                 player: Box::new(player),
                 far_clip: None,
                 spell_landing_flag: None,
+                zone_id: 0,
             }),
             WorldUpdate::Connection(eq_client_core::world::Link::Connected),
         ] {
@@ -2346,6 +2354,7 @@ mod tests {
                         player: Box::new(timed_player),
                         far_clip: None,
                         spell_landing_flag: None,
+                        zone_id: 0,
                     },
                     WorldEvent::SpellBook(book),
                 ],
@@ -2637,6 +2646,7 @@ mod tests {
                 player: Box::new(player),
                 far_clip: Some(450.0),
                 spell_landing_flag: None,
+                zone_id: 0,
             }))
             .unwrap();
         app.update();

@@ -14,6 +14,7 @@ mod route;
 mod swimming;
 pub use airborne::{AirborneController, Landing, MotionStep, PROVISIONAL_PHYSICS, VerticalPhysics};
 pub use choices::{offered_options, options};
+use eq_network_game::doors::titanium::Solidity;
 pub use eq_network_game::movement::{MovementOptions, RunSpeedMultiplier};
 pub use eq_network_game::movement::{
     SHORELINE_COOLDOWN, SHORELINE_FRAME_MILLIS, SHORELINE_FRAMES, ShorelineFrame, ShorelineStroke,
@@ -143,8 +144,9 @@ impl CollisionMesh {
 #[derive(Clone)]
 pub struct CollisionWorld {
     terrain: Arc<CollisionMesh>,
-    /// Each obstacle with the door it belongs to, if any.
-    obstacles: Vec<(Option<u8>, Arc<CollisionMesh>)>,
+    /// Each obstacle with the door it belongs to, if any, and whether it
+    /// holds the player up and stops them walking.
+    obstacles: Vec<(Option<u8>, Arc<CollisionMesh>, Solidity)>,
     liquids: Option<Arc<dyn Liquids>>,
     liquid_support: bool,
     swim_origin: Option<f32>,
@@ -167,15 +169,32 @@ impl CollisionWorld {
 
     /// Replaces dynamic obstacles without rebuilding the zone's acceleration structure.
     pub fn set_obstacles(&mut self, obstacles: Vec<Arc<CollisionMesh>>) {
-        self.obstacles = obstacles.into_iter().map(|mesh| (None, mesh)).collect();
+        self.obstacles = obstacles
+            .into_iter()
+            .map(|mesh| (None, mesh, Solidity::BOTH))
+            .collect();
     }
 
     /// Replaces dynamic obstacles with doors' colliders, each with its door id,
-    /// so a route search can tell which door stands in its way.
+    /// so a route search can tell which door stands in its way, and its
+    /// solidity: a door the floor sweep skips holds no one up, and one the
+    /// wall contact skips stops no one.
     pub fn set_door_obstacles(&mut self, doors: Vec<(u8, Arc<CollisionMesh>)>) {
+        self.set_door_obstacles_with(
+            doors
+                .into_iter()
+                .map(|(id, mesh)| (id, mesh, Solidity::BOTH))
+                .collect(),
+        );
+    }
+
+    /// Replaces the door colliders, each solid only where its rule says: on
+    /// Titanium most doors are walls nobody stands on, and a few types are
+    /// neither (see [`Solidity::of`]).
+    pub fn set_door_obstacles_with(&mut self, doors: Vec<(u8, Arc<CollisionMesh>, Solidity)>) {
         self.obstacles = doors
             .into_iter()
-            .map(|(id, mesh)| (Some(id), mesh))
+            .map(|(id, mesh, solidity)| (Some(id), mesh, solidity))
             .collect();
     }
 
@@ -188,7 +207,7 @@ impl CollisionWorld {
             obstacles: self
                 .obstacles
                 .iter()
-                .filter(|(door, _)| door.is_none_or(|door| !doors.contains(&door)))
+                .filter(|(door, ..)| door.is_none_or(|door| !doors.contains(&door)))
                 .cloned()
                 .collect(),
             liquids: self.liquids.clone(),
@@ -208,7 +227,7 @@ impl CollisionWorld {
             obstacles: self
                 .obstacles
                 .iter()
-                .filter(|(_, mesh)| {
+                .filter(|(_, mesh, _)| {
                     let bounds = mesh.mesh.local_aabb();
                     center.x >= bounds.mins.x - reach
                         && center.x <= bounds.maxs.x + reach
@@ -240,7 +259,7 @@ impl CollisionWorld {
     pub fn door_bounds(&self) -> Vec<(u8, Vec3, Vec3)> {
         self.obstacles
             .iter()
-            .filter_map(|(door, mesh)| {
+            .filter_map(|(door, mesh, _)| {
                 let bounds = mesh.mesh.local_aabb();
                 Some((
                     (*door)?,
@@ -265,7 +284,7 @@ impl CollisionWorld {
             from.min(to) - Vec3::splat(margin),
             from.max(to) + Vec3::splat(margin),
         );
-        self.obstacles.iter().find_map(|(door, mesh)| {
+        self.obstacles.iter().find_map(|(door, mesh, _)| {
             let door = (*door).filter(|door| doors.contains(door))?;
             let bounds = mesh.mesh.local_aabb();
             let (mins, maxs) = (
@@ -277,7 +296,49 @@ impl CollisionWorld {
     }
 
     fn meshes(&self) -> impl Iterator<Item = &TriMesh> {
-        std::iter::once(&self.terrain.mesh).chain(self.obstacles.iter().map(|(_, mesh)| &mesh.mesh))
+        std::iter::once(&self.terrain.mesh)
+            .chain(self.obstacles.iter().map(|(_, mesh, _)| &mesh.mesh))
+    }
+
+    /// The zone and the obstacles that hold the player up.
+    fn floor_meshes(&self) -> impl Iterator<Item = &TriMesh> {
+        std::iter::once(&self.terrain.mesh).chain(
+            self.obstacles
+                .iter()
+                .filter(|(.., solidity)| solidity.floor)
+                .map(|(_, mesh, _)| &mesh.mesh),
+        )
+    }
+
+    /// The zone and the obstacles that stop the player walking.
+    fn wall_meshes(&self) -> impl Iterator<Item = &TriMesh> {
+        std::iter::once(&self.terrain.mesh).chain(
+            self.obstacles
+                .iter()
+                .filter(|(.., solidity)| solidity.wall)
+                .map(|(_, mesh, _)| &mesh.mesh),
+        )
+    }
+
+    /// The door whose floor holds the player up at `position`, between
+    /// `step_up` above it and `drop` below, if the floor found there is a
+    /// door's: the floor [`Self::ground`] finds, when it is solid.
+    #[must_use]
+    pub fn ground_door(&self, position: Vec3, step_up: f32, drop: f32) -> Option<u8> {
+        const EDGE: f32 = 0.000_1;
+        let origin = Vector::from_array((position + Vec3::Y * (step_up + EDGE)).to_array());
+        let ray = Ray::new(origin, -Vector::Y);
+        let reach = step_up + drop + 2.0 * EDGE;
+        let terrain = self.terrain.mesh.cast_local_ray(&ray, reach, false);
+        let (door, time) = self
+            .obstacles
+            .iter()
+            .filter(|(door, _, solidity)| door.is_some() && solidity.floor)
+            .filter_map(|(door, mesh, _)| {
+                Some(((*door)?, mesh.mesh.cast_local_ray(&ray, reach, false)?))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))?;
+        terrain.is_none_or(|ground| time <= ground).then_some(door)
     }
 
     /// Returns the nearest solid obstruction along a normalized viewing ray.
@@ -321,7 +382,7 @@ impl CollisionWorld {
         const EDGE: f32 = 0.000_1;
         let origin = Vector::from_array((position + Vec3::Y * (step_up + EDGE)).to_array());
         let time = self
-            .meshes()
+            .floor_meshes()
             .filter_map(|mesh| {
                 mesh.cast_local_ray(
                     &Ray::new(origin, -Vector::Y),
@@ -354,7 +415,7 @@ impl CollisionWorld {
             }
             let origin = Vector::from_array(Vec3::new(position.x, from, position.z).to_array());
             let Some(time) = self
-                .meshes()
+                .floor_meshes()
                 .filter_map(|mesh| {
                     mesh.cast_local_ray(&Ray::new(origin, -Vector::Y), from - bottom + EDGE, false)
                 })
@@ -387,7 +448,7 @@ impl CollisionWorld {
             return None;
         }
         let (pose, capsule) = body(feet, height);
-        self.meshes()
+        self.wall_meshes()
             .filter_map(|mesh| {
                 contact(&pose, &capsule, &Pose::IDENTITY, mesh, range)
                     .ok()
@@ -723,7 +784,7 @@ impl CollisionWorld {
             compute_impact_geometry_on_penetration: true,
         };
         let mut nearest: Option<parry3d::query::ShapeCastHit> = None;
-        for mesh in self.meshes() {
+        for mesh in self.wall_meshes() {
             let hit = cast_shapes(
                 &pose,
                 Vector::from_array(delta.to_array()),
@@ -805,6 +866,39 @@ mod tests {
                 .ray_distance(origin, Vec3::splat(f32::NAN), 20.0)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn a_door_holds_the_player_up_or_stops_them_only_as_its_solidity_says() {
+        let wall = || {
+            Arc::new(
+                CollisionMesh::new([
+                    [[0.5, 0.0, -10.0], [0.5, 10.0, -10.0], [0.5, 10.0, 10.0]],
+                    [[0.5, 0.0, -10.0], [0.5, 10.0, 10.0], [0.5, 0.0, 10.0]],
+                ])
+                .unwrap(),
+            )
+        };
+        let deck = || Arc::new(CollisionMesh::new(floor(1.0)).unwrap());
+        let mut world = CollisionWorld::new(floor(0.0)).unwrap();
+        let only = |floor, wall| Solidity { floor, wall };
+        world.set_door_obstacles_with(vec![
+            (1, deck(), only(true, false)),
+            (2, wall(), only(false, true)),
+        ]);
+        assert!((world.ground(Vec3::Y * 1.5, 0.8, 1.5).unwrap() - 1.0).abs() < 0.001);
+        assert_eq!(world.ground_door(Vec3::Y * 1.5, 0.8, 1.5), Some(1));
+        assert!(world.step(Vec3::Y * 1.0, Vec3::X, 6.0).x < 0.5);
+        // A deck that is no floor holds no one up, and a wall that is no
+        // wall stops no one; the zone below still does.
+        world.set_door_obstacles_with(vec![
+            (1, deck(), only(false, true)),
+            (2, wall(), only(true, false)),
+        ]);
+        assert!(world.ground(Vec3::Y * 1.5, 0.8, 1.0).is_none());
+        assert_eq!(world.ground_door(Vec3::Y * 0.5, 0.8, 1.5), None);
+        assert!(world.ground(Vec3::Y * 0.5, 0.8, 1.5).unwrap().abs() < 0.001);
+        assert!(world.step(Vec3::Y * 1.0, Vec3::X, 6.0).x > 0.9);
     }
 
     #[test]

@@ -51,7 +51,7 @@ impl CollisionWorld {
         let velocity = Vector::from_array(delta.to_array());
         let ray = Ray::new(Vector::ZERO, velocity);
         let mut nearest: Option<ShapeCastHit> = None;
-        for mesh in self.meshes() {
+        for mesh in self.wall_meshes() {
             let unsupported = RefCell::new(None);
             let hit = mesh
                 .bvh()

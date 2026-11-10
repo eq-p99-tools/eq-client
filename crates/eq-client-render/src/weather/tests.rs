@@ -123,6 +123,7 @@ fn weather_app() -> App {
             player: Box::new(preview::player(default(), [None; 8])),
             far_clip: None,
             spell_landing_flag: None,
+            zone_id: 0,
         },
     );
     testing::apply(

@@ -16,8 +16,8 @@ Quarm/TAKP behavior. Frontends use runtime capabilities, not server-name flags.
 ## Server policy snapshot
 
 The following summarizes the networking revision pinned by this application's
-Cargo.lock: `9d9d0ee115fb9906ac1d349134aaa1efda5207cf`. Its
-[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/9d9d0ee115fb9906ac1d349134aaa1efda5207cf/crates/eq-network/src/client/session/servers.rs)
+Cargo.lock: `24d1b9cc82e1747a5e6297acc4e651099af3c90a`. Its
+[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/24d1b9cc82e1747a5e6297acc4e651099af3c90a/crates/eq-network/src/client/session/servers.rs)
 are the source for this table. **Yes means provided by that policy**, not a live
 certification, and individual operations still validate their prerequisites.
 
@@ -99,6 +99,16 @@ offer ordinary door use with an empty cursor, within the generation's reach and
 with a settled hinge; specialized, static and unknown mechanisms stay visible
 without use, and sending a click does not open the door.
 
+On EQEmu and P99, doors move and return by the Titanium program's own rules:
+lifts and sinking floors step by their type's travel and speed, slides go
+their type's distance, and each door returns after its type's delay counted
+from its arrival. A door is a floor or a wall only where the program says, so
+a hinged door holds no one up. A rider standing on a rising lift is carried,
+even stunned, and the movement guard allows that rise only for the floor-solid
+lift the client names, within its reach, by what it rose. Zone-in states 2 and
+3, the rider radius, a blocked rider and a changed door field stay labelled
+inferred (checklist 6.423-6.428); Quarm and TAKP keep their own doors as before.
+
 Current movement requires complete load/STR/buff inputs. Unknown state withdraws
 player input without inventing a zero load or a root, and bounded passive falls
 remain available. Supported spell values scale by caster level. Equipment, food,
@@ -116,11 +126,11 @@ affected mechanics unavailable while chat remains usable. See [installed spell
 providers](docs/spell-providers.md). These source and synthetic checks add no live
 compatibility certification.
 
-The pinned networking [combat](https://github.com/eq-p99-tools/eq-network/blob/9d9d0ee115fb9906ac1d349134aaa1efda5207cf/docs/quarm-combat.md),
-[loot](https://github.com/eq-p99-tools/eq-network/blob/9d9d0ee115fb9906ac1d349134aaa1efda5207cf/docs/eqmac-looting.md) and
-[world-object](https://github.com/eq-p99-tools/eq-network/blob/9d9d0ee115fb9906ac1d349134aaa1efda5207cf/docs/eqmac-world-objects.md)
+The pinned networking [combat](https://github.com/eq-p99-tools/eq-network/blob/24d1b9cc82e1747a5e6297acc4e651099af3c90a/docs/quarm-combat.md),
+[loot](https://github.com/eq-p99-tools/eq-network/blob/24d1b9cc82e1747a5e6297acc4e651099af3c90a/docs/eqmac-looting.md) and
+[world-object](https://github.com/eq-p99-tools/eq-network/blob/24d1b9cc82e1747a5e6297acc4e651099af3c90a/docs/eqmac-world-objects.md)
 contracts record their limits and controlled live checklists. The dated
-[P99/Quarm gap report](https://github.com/eq-p99-tools/eq-network/blob/9d9d0ee115fb9906ac1d349134aaa1efda5207cf/docs/public-server-gaps.md)
+[P99/Quarm gap report](https://github.com/eq-p99-tools/eq-network/blob/24d1b9cc82e1747a5e6297acc4e651099af3c90a/docs/public-server-gaps.md)
 retains the earlier inspection and its scenario-specific evidence.
 
 ### Public-parity checks, 2026-11-02

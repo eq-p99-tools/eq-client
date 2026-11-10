@@ -251,6 +251,7 @@ fn admit(
         player: Box::new(player(origin, [None; 8])),
         far_clip: None,
         spell_landing_flag: None,
+        zone_id: 0,
     });
     news.tell(WorldUpdate::Connection(
         eq_client_core::world::Link::Connected,

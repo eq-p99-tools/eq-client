@@ -24,6 +24,7 @@ fn online() -> OnlineState {
             player: Box::new(session::player(1)),
             far_clip: None,
             spell_landing_flag: None,
+            zone_id: 0,
         }],
     );
     online

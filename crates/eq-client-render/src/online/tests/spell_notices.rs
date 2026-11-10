@@ -74,6 +74,7 @@ fn spell_provider_failure_notice_bypasses_held_admission_without_spam() {
             player: Box::new(testing::player(7)),
             far_clip: None,
             spell_landing_flag: None,
+            zone_id: 0,
         }))
         .unwrap();
     let failed = failure(binding, 7, 3);

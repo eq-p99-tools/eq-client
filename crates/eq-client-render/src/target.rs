@@ -1247,7 +1247,8 @@ mod tests {
         let center = Vec2::new(400.0, 300.0);
         scene_camera(&mut app);
         app.init_resource::<Time>()
-            .init_resource::<super::super::doors::Hinges>();
+            .init_resource::<super::super::doors::Hinges>()
+            .init_resource::<super::super::doors::LiftReach>();
         let source = eq_client_assets::ZoneModel {
             name: "TEST".into(),
             primitives: vec![eq_client_assets::ZonePrimitive {
