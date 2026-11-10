@@ -111,6 +111,8 @@ pub(super) enum Does {
     Option(eq_client_core::options::Toggle),
     /// Practices the skill chosen in the Training window.
     Trains,
+    /// Follows the spawn chosen in the track window.
+    Tracks,
     /// Answers the confirmation dialog's question: Yes (true) or No.
     Answers(bool),
     /// Turns a book's pages forward (true) or back.
@@ -301,8 +303,8 @@ pub(super) fn spellbook_button(id: &str) -> Option<Does> {
 }
 
 /// Whether a window's buttons are its own (`own_button`): the pet window's,
-/// the group and Raid windows', the spellbook's, the character list's and
-/// the selector's.
+/// the group and Raid windows', the spellbook's, the character list's, the
+/// selector's and the track window's.
 pub(super) const fn has_own_buttons(owner: WindowId) -> bool {
     matches!(
         owner,
@@ -312,6 +314,7 @@ pub(super) const fn has_own_buttons(owner: WindowId) -> bool {
             | WindowId::Spellbook
             | WindowId::CharacterSelect
             | WindowId::Selector
+            | WindowId::Tracking
     )
 }
 
@@ -325,6 +328,12 @@ pub(super) fn own_button(id: &str, owner: WindowId) -> Option<Does> {
         WindowId::Spellbook => spellbook_button(id),
         WindowId::CharacterSelect => Some(character_button(id)),
         WindowId::Selector => Some(selector_button(id).map_or(Does::Nothing, Does::Toggles)),
+        // The Ranger's sort, filters and players choice are not read closely
+        // enough to act on (6.446): greyed, as Nothing draws them.
+        WindowId::Tracking => Some(match id {
+            "TRW_TrackButton" => Does::Tracks,
+            _ => Does::Nothing,
+        }),
         _ => None,
     }
 }

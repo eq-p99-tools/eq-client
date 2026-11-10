@@ -28,6 +28,7 @@ mod raid;
 mod read;
 mod spells;
 mod target;
+mod tracking;
 mod trade;
 mod vitals;
 mod who;
@@ -45,6 +46,7 @@ pub use motions::{CastDone, Motion};
 pub use notice::{ListingNotice, Notice, Party};
 pub use raid::{Raid, RaidNotice, RaidRank};
 pub use target::Target;
+pub use tracking::{TrackWindow, track_color};
 pub use trade::{Asker, Exchange, Loot, LootContinuation, Merchant};
 pub use vitals::{ReportedHp, Vitals};
 pub use who::ZonePlayer;
@@ -1292,7 +1294,10 @@ impl ClientWorld {
                 session_id,
                 ability,
                 ready_in,
-            } => self.ability_used((*session_id, *ability, *ready_in), now, news),
+                string_id,
+            } => self.ability_used((*session_id, *ability, *ready_in, *string_id), now, news),
+            WorldEvent::AskAnswered(answer) => Self::ask_answered(answer, news),
+            WorldEvent::Tracking(update) => self.tracking_news(update, news),
             WorldEvent::AbilityRefused {
                 session_id,
                 reason,

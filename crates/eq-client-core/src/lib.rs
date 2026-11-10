@@ -80,6 +80,7 @@ pub use eq_network_game::spells::SpellBook;
 pub use eq_network_game::spells::SpellUpdate;
 pub use eq_network_game::sysinfo::{Machine, SysInfo};
 pub use eq_network_game::targets;
+pub use eq_network_game::tracking;
 pub use eq_network_game::tradeskills;
 pub use eq_network_game::training;
 pub use eq_network_game::zones;

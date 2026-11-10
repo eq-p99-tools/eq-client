@@ -333,6 +333,11 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         Notice::LootRefused(response) => chat(loot_line(*response, messages)),
         Notice::ItemRefused => chat("You cannot take that item.".into()),
         Notice::ShopRefused => chat("That merchant will not trade with you.".into()),
+        Notice::ProgramLine {
+            string_id,
+            arguments,
+            said,
+        } => chat(official(Some(*string_id), arguments, said, messages)),
         Notice::AbilityRefused {
             reason,
             string_id,

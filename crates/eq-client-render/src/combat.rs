@@ -39,6 +39,21 @@ pub(super) struct CombatState {
     /// How far each hand is through its swing while auto attack is on with
     /// no one to swing at.
     idle: IdleSwings,
+    /// The zone session auto attack was asked of.
+    session_id: Option<u64>,
+}
+
+impl CombatState {
+    /// A new zone session starts with auto attack off, as the session does,
+    /// so the two agree; whether the program turns it off at a zone change
+    /// is unread (recording checklist 6.445).
+    fn follow_session(&mut self, session_id: Option<u64>) {
+        if self.session_id != session_id {
+            self.session_id = session_id;
+            self.auto_attack = false;
+            self.idle = IdleSwings::default();
+        }
+    }
 }
 
 /// How far the primary and secondary hands are through their swings, in
@@ -120,6 +135,7 @@ pub(super) fn input(
 ) {
     use super::keys::Act;
     let world = online.world();
+    combat.follow_session(world.session_id());
     let Some(player) = world.player() else {
         return;
     };
@@ -443,6 +459,20 @@ mod tests {
             outcome,
             push: None,
         }
+    }
+
+    #[test]
+    fn a_new_zone_session_turns_the_hosts_auto_attack_off_as_the_sessions_is() {
+        let mut combat = CombatState::default();
+        combat.follow_session(Some(1));
+        combat.auto_attack = true;
+        combat.follow_session(Some(1));
+        assert!(combat.auto_attack);
+        combat.follow_session(Some(2));
+        assert!(!combat.auto_attack);
+        combat.auto_attack = true;
+        combat.follow_session(None);
+        assert!(!combat.auto_attack);
     }
 
     #[test]

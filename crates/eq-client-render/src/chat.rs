@@ -154,6 +154,9 @@ pub(super) struct ChatState {
     pub(crate) sharing_asked: Option<super::sharing::Command>,
     /// `/follow` typed or pressed, for [`super::motion::input`] to start.
     pub(crate) follow_asked: Option<super::motion::FollowAsked>,
+    /// A Ranger's tracking option typed by another class, for
+    /// [`super::tracking::say_rangers_only`] to answer.
+    pub(crate) rangers_only: Option<super::tracking::RangersOnly>,
     draft: draft::Draft,
     refusals: Refusals,
 }
@@ -1588,6 +1591,10 @@ fn submit_line(
         state.follow_asked = Some(super::motion::FollowAsked);
         return Ok(());
     }
+    if super::tracking::rangers_only(&command, online.world()) {
+        state.rangers_only = Some(super::tracking::RangersOnly);
+        return Ok(());
+    }
     if let Some(request) = departure_request(&command) {
         state.departure = Some(request?);
         state.socials.stop = true;
@@ -1601,7 +1608,7 @@ fn submit_line(
     }
     if let Some(commands) = game_commands(&command, online, outbox, qol) {
         for command in commands? {
-            outbox.send(online.world(), command)?;
+            send_game(online, outbox, command)?;
         }
         if let Some(to) = camp_destination(&command) {
             online.camp_to(to);
@@ -1720,12 +1727,31 @@ pub(super) fn submit_game_command(
     let commands = game_commands(input, online, outbox, qol)
         .ok_or_else(|| format!("{input} is not a game command"))??;
     for command in commands {
-        outbox
-            .send(online.world(), command)
-            .map_err(|refusal| refusal.text().to_owned())?;
+        send_game(online, outbox, command).map_err(|refusal| refusal.text().to_owned())?;
     }
     if let Some(to) = camp_destination(input) {
         online.camp_to(to);
+    }
+    Ok(())
+}
+
+/// Sends a game command. `/stoptracking` also closes the track window as it
+/// stops (read R14 section 2).
+fn send_game(
+    online: &mut super::online::OnlineState,
+    outbox: &crate::outbox::Outbox,
+    command: ClientCommand,
+) -> Result<(), crate::outbox::Refusal> {
+    let stops_tracking = matches!(
+        command,
+        ClientCommand::Track {
+            action: eq_client_core::tracking::TrackAction::Stop,
+            ..
+        }
+    );
+    outbox.send(online.world(), command)?;
+    if stops_tracking {
+        online.close_track_window();
     }
     Ok(())
 }
@@ -1746,6 +1772,10 @@ pub(super) fn run_game_command(
     let command = command.as_ref();
     if super::motion::FollowAsked::typed(command) {
         chat.follow_asked = Some(super::motion::FollowAsked);
+        return;
+    }
+    if super::tracking::rangers_only(command, online.world()) {
+        chat.rangers_only = Some(super::tracking::RangersOnly);
         return;
     }
     match submit_game_command(command, online, outbox, qol) {
@@ -2227,6 +2257,10 @@ fn class_command(
                 Err(format!("Use /{name} without arguments"))
             }
         }
+        "stoptracking" if words.is_empty() => stamp().map(|stamp| ClientCommand::Track {
+            session_id: stamp.session_id,
+            action: eq_client_core::tracking::TrackAction::Stop,
+        }),
         _ => return None,
     })
 }
@@ -2690,6 +2724,38 @@ mod tests {
             received.try_recv(),
             Ok(ClientCommand::StopSong { session_id: 5, .. })
         ));
+    }
+
+    #[test]
+    fn stop_tracking_stops_and_closes_the_track_window() {
+        use eq_client_core::{WorldEvent, abilities::Ability, tracking::TrackAction};
+        let mut online = super::super::online::OnlineState::new(true);
+        let (queue, received) = std::sync::mpsc::sync_channel(2);
+        let outbox = crate::outbox::Outbox::new(Some(queue));
+        super::super::online::testing::admit(
+            &mut online,
+            5,
+            super::super::online::testing::player(7),
+        );
+        super::super::online::testing::news(
+            &mut online,
+            [WorldEvent::AbilityUsed {
+                session_id: 5,
+                ability: Ability::Tracking,
+                ready_in: std::time::Duration::from_secs(10),
+                string_id: None,
+            }],
+        );
+        assert!(online.world().track_window().open);
+        submit_game_command("/stoptracking", &mut online, &outbox, &Settings::default()).unwrap();
+        assert!(matches!(
+            received.try_recv(),
+            Ok(ClientCommand::Track {
+                session_id: 5,
+                action: TrackAction::Stop
+            })
+        ));
+        assert!(!online.world().track_window().open);
     }
 
     #[test]

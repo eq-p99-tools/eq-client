@@ -83,6 +83,10 @@ merchant action.
   `interact admission spawn revision` with the selected guildmaster's
   current `target_interaction` tuple to open training. On P99, opening the
   same trainer or submitting another practice requires a fresh admission.
+- `tracking row`: a track window row counted from 1, in the server's order.
+- `track`: the track window's Track button, which follows the chosen row.
+  The Tracking ability opens the window; `done tracking` (the skin's Cancel)
+  or `close_box tracking` closes it.
 - `buff number` or `song number`: a buff button counted from 1. `right_click`
   uses ordinary beneficial-buff cancellation, including current slot, spell-data
   and admission checks. Unslotted inferred effects never supply a cancel slot.

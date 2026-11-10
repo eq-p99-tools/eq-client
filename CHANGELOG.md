@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- Use the class tools as the Titanium program does (Batch B2). On EQEmu and
+  P99, Fishing, Pick Pockets, Begging, Sense Traps, Disarm Traps, Pick Lock
+  and Tracking are on the Actions window's ability pages wherever the
+  player has the skill, and the client tells the session whether the player
+  stands in liquid, which Fishing refuses on. Fishing's cast line, and the
+  answer to a beg or a pick (nothing, coins of one kind, or an item by
+  name), are the installed string table's lines by id. Tracking opens the
+  track window, the skin's `TrackingWnd` where the skin has one and the
+  client's own panel otherwise, emptied until the server's list comes. The
+  list keeps the server's order and leaves out spawns the zone does not
+  know, each name in the colour of its level against the player's by the
+  track window's own rule, which is not Consider's; the program's light
+  blue near the green edge is drawn blue (checklist 6.444). A click
+  chooses an entry, kept across a new list while it is listed; Track
+  follows it and closes the window, and Cancel or the close box closes it.
+  `/stoptracking` stops and closes the window. While following, the
+  session's bearing lines say where the spawn lies, and its end lines say
+  when the spawn is gone or the six minutes pass (checklist 6.441). The
+  Ranger's sort, colour filters and players choice are drawn greyed, and
+  another class's `/tracksort` or `/trackfilter` gets the program's
+  Rangers-only line; a Ranger's own, and `/trackplayers`, are answered as
+  before (checklist 6.446). The host's auto-attack follows the session's at
+  every zone change, so a new zone starts with it off on both sides
+  (checklist 6.445). Scripts gain `click tracking N` and `click track`, and
+  the script report a tracking line.
 - Ride lifts as the Titanium program does (Batch B1). On EQEmu and P99,
   vertical doors (lifts, sinking floors and platforms) rise and sink at
   their type's travel and speed, counted from the server's action, and

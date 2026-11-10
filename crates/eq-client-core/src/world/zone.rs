@@ -34,6 +34,8 @@ pub(super) struct Zone {
     pub(super) pet_buffs: super::pet_buffs::PetWindow,
     /// The session's identity for this admission's currently owned pet.
     pub(super) own_pet: Option<crate::pets::PetIdentity>,
+    /// The track window and the spawn followed.
+    pub(super) tracking: super::tracking::TrackWindow,
     /// The guildmaster the player is training with, and what they teach.
     pub(super) training: Option<crate::training::TrainingOffer>,
     /// A submitted practice or level change invalidated the admitted point count.

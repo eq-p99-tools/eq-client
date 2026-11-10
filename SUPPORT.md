@@ -117,6 +117,15 @@ shortfall of the read rule), and walking out of a door that moved into the
 player stay labelled (checklist 6.423-6.426, 6.428, 6.436, 6.439); Quarm and
 TAKP keep their own doors as before.
 
+On EQEmu and P99, the class tools are the Titanium program's: Fishing's
+checks and cast line, Pick Pockets and Begging with their answers, the trap
+skills at a treasure, and Tracking with its window, which the skin draws
+where it has one. The track list keeps the server's order and colours each
+name by the track window's rule; light blue is drawn blue (checklist
+6.444). The bearing's side word, the Ranger's sort, filters and players
+choice, the mount gate, and the Bard's song state without a spell table
+stay labelled (checklist 6.441, 6.446, 6.443, 6.442).
+
 Current movement requires complete load/STR/buff inputs. Unknown state withdraws
 player input without inventing a zero load or a root, and bounded passive falls
 remain available. Supported spell values scale by caster level. Equipment, food,

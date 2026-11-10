@@ -1,7 +1,11 @@
 //! The player's abilities: which they have, by the skills the server counts,
 //! and the recovery timers the session started for them.
 use super::{Changes, ClientWorld, Notice};
-use crate::{abilities::Ability, bind_wound::BindWoundUpdate};
+use crate::{
+    abilities::{Ability, AskAnswer, AskOutcome},
+    bind_wound::BindWoundUpdate,
+    money::Coin,
+};
 use std::time::{Duration, Instant};
 
 /// The compass point a heading faces, clockwise from north (0) to
@@ -14,6 +18,16 @@ fn compass(heading: f32) -> u8 {
     )]
     let point = (heading.rem_euclid(512.0) / 64.0).round() as u8 % 8;
     (8 - point) % 8
+}
+
+/// A kind of coin in the client's words.
+const fn coin_words(coin: Coin) -> &'static str {
+    match coin {
+        Coin::Platinum => "platinum",
+        Coin::Gold => "gold",
+        Coin::Silver => "silver",
+        Coin::Copper => "copper",
+    }
 }
 
 impl ClientWorld {
@@ -65,10 +79,11 @@ impl ClientWorld {
         }
     }
 
-    /// The session used an ability and started its timer.
+    /// The session used an ability and started its timer, with the
+    /// official client's line for it where it has one.
     pub(super) fn ability_used(
         &mut self,
-        (session_id, ability, ready_in): (u64, Ability, Duration),
+        (session_id, ability, ready_in, string_id): (u64, Ability, Duration, Option<u32>),
         now: Instant,
         changes: &mut Changes,
     ) {
@@ -79,6 +94,16 @@ impl ClientWorld {
         if let Some(recovery) = ability.recovery() {
             self.ability_timers.insert(recovery, now + ready_in);
         }
+        if let Some(string_id) = string_id {
+            changes.notices.push(Notice::ProgramLine {
+                string_id,
+                arguments: Vec::new(),
+                said: format!("{}: used", ability.name()),
+            });
+        }
+        if ability == Ability::Tracking {
+            self.tracking_pressed();
+        }
         // The client says where the player faces; servers say nothing.
         if ability == Ability::SenseHeading
             && let Some(player) = self.player.as_ref()
@@ -87,6 +112,25 @@ impl ClientWorld {
                 .notices
                 .push(Notice::Heading(compass(player.position.heading)));
         }
+    }
+
+    /// The answer to a beg or a pick, in the official client's line; the
+    /// session tells the coins it brought separately.
+    pub(super) fn ask_answered(answer: &AskAnswer, changes: &mut Changes) {
+        let (string_id, arguments) = answer.line();
+        let ability = answer.ability.name();
+        let said = match &answer.outcome {
+            AskOutcome::Failed => format!("{ability}: nothing"),
+            AskOutcome::Coins { coin, amount } => {
+                format!("{ability}: {amount} {}", coin_words(*coin))
+            }
+            AskOutcome::Item(name) => format!("{ability}: {name}"),
+        };
+        changes.notices.push(Notice::ProgramLine {
+            string_id,
+            arguments,
+            said,
+        });
     }
 
     /// The session refused an ability, and why: in its words, and the

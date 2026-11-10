@@ -98,6 +98,7 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::ShortEffects => "EQUI_ShortDurationBuffWindow.xml",
         WindowId::Options => "EQUI_OptionsWindow.xml",
         WindowId::Training => "EQUI_TrainWindow.xml",
+        WindowId::Tracking => "EQUI_TrackingWnd.xml",
         WindowId::Skills => "EQUI_SkillsWindow.xml",
         WindowId::Confirmation => "EQUI_ConfirmationDialog.xml",
         WindowId::Note => "EQUI_NoteWindow.xml",
@@ -1174,6 +1175,12 @@ fn behave(
             skin(),
             crate::outbox::Needs::Capability(Capability::Training),
         )),
+        Does::Tracks => drawn.insert((
+            Button,
+            super::tracking::TrackButton,
+            skin(),
+            crate::outbox::Needs::Capability(Capability::Tracking),
+        )),
         // A question shows only where the session offers what it is about.
         Does::Answers(accept) => {
             drawn.insert((Button, super::confirm::AnswerButton(accept), skin()))
@@ -1419,6 +1426,7 @@ fn caption(
         | Does::Unoffered(_)
         | Does::Option(_)
         | Does::Trains
+        | Does::Tracks
         | Does::Answers(_)
         | Does::TurnsPage(_)
         | Does::Combines(_)

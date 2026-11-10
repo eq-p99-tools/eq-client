@@ -134,6 +134,17 @@ pub enum Notice {
         /// What the official string names, in order.
         arguments: Vec<String>,
     },
+    /// One of the official client's own lines that the session names, such
+    /// as a fishing cast, a beg's or a pick's answer, or where a tracked
+    /// spawn lies; in the client's words where the installation lacks it.
+    ProgramLine {
+        /// The line, in `eqstr_us.txt`.
+        string_id: u32,
+        /// What it names, in order.
+        arguments: Vec<String>,
+        /// The client's own words for it.
+        said: String,
+    },
     /// A bandaging started or ended.
     BindWound(crate::bind_wound::BindWoundUpdate),
     /// Sense Heading: the compass point the player faces, clockwise from

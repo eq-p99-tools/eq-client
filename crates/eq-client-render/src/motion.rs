@@ -93,6 +93,9 @@ pub(super) struct Controls {
     shoreline: shoreline::Control,
     /// Why the movement guard refused the latest sample, until one is sent.
     pub refused: Option<String>,
+    /// Whether the player's feet were in a liquid at the last pass: the
+    /// host's liquid test the session's Fishing check takes.
+    pub in_liquid: bool,
     /// When a jump was pressed since the last sample; only where falls are simulated.
     pub jump: Option<Instant>,
     /// When the latest jump started; it outlasts a reset, so a new
@@ -229,6 +232,7 @@ impl Default for Controls {
             water_entry_rollback: None,
             shoreline: shoreline::Control::default(),
             refused: None,
+            in_liquid: false,
             jump: None,
             last_jump: None,
             endurance_spent: None,
@@ -1096,6 +1100,15 @@ pub(super) fn input(
                 let origin = Vec3::from_array(eq_client_core::render_position(player.position));
                 world.in_swimmable_water(origin - Vec3::Y * body.feet_offset, body.height)
             });
+    controls.in_liquid = collision
+        .0
+        .as_ref()
+        .zip(players.single().ok())
+        .zip(online.world().player())
+        .is_some_and(|((world, (body, _)), player)| {
+            let origin = Vec3::from_array(eq_client_core::render_position(player.position));
+            world.in_liquid(origin - Vec3::Y * body.feet_offset)
+        });
     let shoreline_active = controls.shoreline.active();
     if swimming || shoreline_active {
         controls.jump = None;
