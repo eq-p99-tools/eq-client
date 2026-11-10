@@ -36,8 +36,28 @@ struct ExportButton {
 
 pub(in crate::script::control) fn install(app: &mut App) {
     app.add_systems(Startup, spawn)
+        .add_systems(Update, open_on_start.in_set(crate::Stage::Input))
         .add_systems(Update, export.in_set(crate::Stage::Input))
         .add_systems(Update, refresh.in_set(crate::Stage::Present));
+}
+
+/// Opens the window, in front, whenever the harness starts a Runbook, so
+/// whoever watches can see a run is in use. Only a start opens it: once the
+/// player closes it, it stays closed until the next start. It takes no
+/// keyboard focus; being the newest window, Escape closes it first.
+#[allow(clippy::needless_pass_by_value)]
+fn open_on_start(
+    bridge: Res<Bridge>,
+    (mut shown, mut stack): (ResMut<Shown>, ResMut<windows::Stack>),
+    mut opened: Local<Option<u64>>,
+) {
+    let started = bridge.runbook.as_ref().map(|run| run.id);
+    if started.is_none() || started == *opened {
+        return;
+    }
+    *opened = started;
+    shown.open(WindowId::Runbook);
+    stack.raise(WindowId::Runbook);
 }
 
 #[allow(clippy::needless_pass_by_value)]

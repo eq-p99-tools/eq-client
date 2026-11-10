@@ -723,12 +723,10 @@ fn menu_entry(app: &mut App, window: WindowId) -> Option<Display> {
 fn shows_current_results_and_reset_in_the_normal_frame() {
     let mut app = app();
     runbook::view::install(&mut app);
-    assert_eq!(request(&mut app, 1, begin()).code, "runbook_started");
+    frame(&mut app, 0);
     assert_eq!(window_display(&mut app), Display::None);
-
-    app.world_mut()
-        .resource_mut::<Shown>()
-        .open(WindowId::Runbook);
+    // A start opens the window by itself.
+    assert_eq!(request(&mut app, 1, begin()).code, "runbook_started");
     frame(&mut app, 0);
     assert_eq!(window_display(&mut app), Display::Flex);
     assert_text(&mut app, "Synthetic session check");
@@ -811,6 +809,61 @@ fn shows_current_results_and_reset_in_the_normal_frame() {
     );
     assert_text(&mut app, "[ ] Pending · First observation");
     assert!(!has_text(&mut app, "Synthetic evidence summary"));
+}
+
+#[test]
+fn a_start_opens_the_window_in_front_and_a_close_holds_until_the_next_start() {
+    let mut app = app();
+    runbook::view::install(&mut app);
+    let displayed = |app: &App| app.world().resource::<Shown>().displayed(WindowId::Runbook);
+    frame(&mut app, 0);
+    assert!(!displayed(&app));
+    // A malformed start loads nothing and opens nothing.
+    submit_request(&mut app, 1, json!({"op":"runbook_start"}));
+    frame(&mut app, 0);
+    assert!(!displayed(&app));
+
+    assert_eq!(request(&mut app, 2, begin()).code, "runbook_started");
+    frame(&mut app, 0);
+    assert!(displayed(&app));
+    assert_eq!(
+        app.world()
+            .resource::<crate::windows::Stack>()
+            .front_to_back()
+            .next(),
+        Some(WindowId::Runbook)
+    );
+
+    // The player closes it; results and frames leave it closed.
+    app.world_mut()
+        .resource_mut::<Shown>()
+        .close(WindowId::Runbook);
+    request(&mut app, 3, result(2, "first", "running"));
+    frame(&mut app, 0);
+    frame(&mut app, 0);
+    assert!(!displayed(&app));
+
+    // A relog is a new admission, not a start: it stays closed (zoning was
+    // checked live and keeps the window as the player left it).
+    app.world_mut().resource_mut::<OnlineState>().enabled = true;
+    session::admit(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        1,
+        session::player(7),
+    );
+    frame(&mut app, 0);
+    session::admit(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        2,
+        session::player(7),
+    );
+    frame(&mut app, 0);
+    assert!(!displayed(&app));
+
+    // The next start opens it again.
+    assert_eq!(request(&mut app, 4, begin()).code, "runbook_started");
+    frame(&mut app, 0);
+    assert!(displayed(&app));
 }
 
 fn window_display(app: &mut App) -> Display {

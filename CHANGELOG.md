@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Open the Runbook window, in front, whenever the local harness starts a
+  Runbook, so whoever watches can see a run is in use. Only a start opens
+  it: once closed, it stays closed until the next start. It takes no
+  keyboard focus, and as the newest window Escape closes it first. Zoning
+  was checked and keeps the window open.
 - Choose what each Actions window ability button holds, as the Titanium
   program does (reads R17 and R17b). A left click on an empty button, or a
   right click on any, opens the skills picker for it: the skin's
