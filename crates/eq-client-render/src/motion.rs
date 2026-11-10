@@ -1163,6 +1163,10 @@ pub(super) fn input(
     // stands them (read R19c): the latch is dropped the same frame, so
     // nothing runs then or after they stand. A lying player's latch may stay
     // set and moves nothing while they lie (read R19 c); the stand clears it.
+    // Ducking keeps the earlier rule (latch dropped), although Titanium's
+    // can-move test passes a ducking player and its autorun key is gated
+    // only on can-act (reads R19 c, R19c); recording checklist 6.455,
+    // follow-up.
     let posture_changed = controls.posture != posture;
     controls.posture = posture;
     let standing = posture.is_none_or(|posture| posture == eq_client_core::PostureState::Standing);
