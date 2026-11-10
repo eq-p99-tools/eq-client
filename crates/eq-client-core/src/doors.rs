@@ -244,8 +244,15 @@ impl DoorTable {
             .entries()
             .get(&id)
             .filter(|door| !titanium::returns_by_click(door))
-            .and_then(|door| titanium::returns_at(door, now))
-        {
+            .and_then(|door| {
+                // A vertical door's own return runs from where it stood
+                // ([`titanium::Lifts::returns_at`]); the others' from rest.
+                if self.lifts.motion(id).is_some() {
+                    self.lifts.returns_at(id)
+                } else {
+                    titanium::returns_at(door, now)
+                }
+            }) {
             Some(at) => self.closing.insert(id, at),
             None => self.closing.remove(&id),
         };
@@ -557,6 +564,25 @@ mod tests {
             start,
         );
         assert!(!table.closes_due(start + Duration::from_secs(3600)));
+    }
+
+    #[test]
+    fn a_lift_opened_again_mid_return_shows_open_until_its_own_return() {
+        let start = Instant::now();
+        let mut table = DoorTable::default();
+        table.apply(&DoorUpdate::Spawn(vec![lift(4, 90)]), start);
+        let open = DoorUpdate::Move {
+            id: 4,
+            action: OPEN,
+        };
+        table.apply(&open, start);
+        table.close_due(start + Duration::from_secs(30));
+        // Halfway down, it is opened again: 5 s back up, then 20 s.
+        let again = start + Duration::from_secs(35);
+        table.apply(&open, again);
+        assert!(!table.closes_due(again + Duration::from_secs(24)));
+        assert!(table.closes_due(again + Duration::from_secs(25)));
+        assert_eq!(action(&table, 4), Some(OPEN));
     }
 
     #[test]

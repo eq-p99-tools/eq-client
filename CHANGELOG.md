@@ -10,10 +10,13 @@
   for most others, never for a lift whose field is over 170; types 40 and 45
   go back by the click the networking sends. A door holds the player up or
   stops them only as the program's rule says, so a hinged door is no floor,
-  and route searches use the same rule. A player standing still on a rising
-  lift is carried up with it, stunned or not, and each move on a lift names
+  and route searches use the same rule. A player on a rising lift, still or
+  walking, stunned or not, is carried up by the lift's own rise since the
+  last sample, however long the frame took, and each move on a lift names
   it so the movement guard allows its rise; a lift rising into a ceiling
-  leaves the player put (checklist 6.427). The script report lists nearby
+  leaves the player put (checklist 6.427). A lift that sinks drops its
+  rider at once, as the program's floor sweep does, rather than leaving
+  them standing on air until the gap passes a step. The script report lists nearby
   doors with their mechanism, field, offset and solidity. EQMac servers keep
   their doors solid both ways (checklist 6.425).
 - Look and swim as the Titanium program does (Batch M slice 3). Look Up

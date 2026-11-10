@@ -65,7 +65,7 @@ pub use eq_network_game::money;
 pub use eq_network_game::movement::{
     BackwardCalibration, DiagonalAlong, DiagonalRates, EqMacFatigueInputs, GroundedDiagonal,
     HeadingUpdate, MotionCalibration, MovementMode, MovementRequest, SpeedInputAcceptance,
-    SpeedInputState, SpeedInputUnavailable, SpeedInputs, StrafeCalibration, StrafeSide,
+    SpeedInputState, SpeedInputUnavailable, SpeedInputs, StrafeCalibration, StrafeSide, Support,
     WalkCalibration,
 };
 pub use eq_network_game::pets;
