@@ -596,12 +596,12 @@ pub(super) fn actions(
                     .gem(usize::from(gem))
                     .and_then(|spell| names.linked_timer(spell)),
             },
-            (&messages, &keys.map),
+            (messages, &keys.map),
             || {
                 super::invisibility::drop_before_cast(
                     online.world(),
                     &outbox,
-                    &names,
+                    names,
                     settings.0.installed_client,
                 )
             },

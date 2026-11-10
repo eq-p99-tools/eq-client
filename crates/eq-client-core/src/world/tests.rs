@@ -2869,25 +2869,6 @@ fn abilities_are_the_skills_the_player_has_and_wait_on_the_sessions_timers() {
         },
     );
     assert_eq!(changes.notices, [Notice::Heading(6)]);
-    assert!(!changes.attack_ended);
-    // Titanium's Feign Death press turns auto attack off (read R19 a); the
-    // Mac-era client's is unread and does not.
-    let feigned = |world: &mut ClientWorld| {
-        game(
-            world,
-            WorldEvent::AbilityUsed {
-                session_id: 1,
-                ability: Ability::FeignDeath,
-                ready_in: Duration::ZERO,
-                string_id: None,
-            },
-        )
-        .attack_ended
-    };
-    assert!(feigned(&mut world));
-    world.carry_as(crate::GameDialect::EqMac);
-    assert!(!feigned(&mut world));
-    world.carry_as(crate::GameDialect::Titanium);
     let changes = game(
         &mut world,
         WorldEvent::AbilityRefused {
@@ -2907,6 +2888,30 @@ fn abilities_are_the_skills_the_player_has_and_wait_on_the_sessions_timers() {
     );
 }
 
+/// Titanium's Feign Death press turns auto attack off (read R19 a); the
+/// Mac-era client's is unread and does not, and no other press does.
+#[test]
+fn titaniums_feign_death_press_ends_auto_attack() {
+    use crate::abilities::Ability;
+    use std::time::Duration;
+    let mut world = admitted();
+    let used = |world: &mut ClientWorld, ability| {
+        game(
+            world,
+            WorldEvent::AbilityUsed {
+                session_id: 1,
+                ability,
+                ready_in: Duration::ZERO,
+                string_id: None,
+            },
+        )
+        .attack_ended
+    };
+    assert!(used(&mut world, Ability::FeignDeath));
+    assert!(!used(&mut world, Ability::SenseHeading));
+    world.carry_as(crate::GameDialect::EqMac);
+    assert!(!used(&mut world, Ability::FeignDeath));
+}
 #[test]
 fn eqmac_profile_skills_reach_admission_and_follow_wire_updates() {
     use crate::abilities::{Ability, eqmac};

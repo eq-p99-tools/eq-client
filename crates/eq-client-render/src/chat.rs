@@ -2118,6 +2118,25 @@ fn pet_order(
         created: stamp.created,
     })
 }
+/// The posture `/sit` asks for. Titanium's runs the sit toggle (0x46a445,
+/// read R19), which stands a player lying or looting; otherwise it sits, as
+/// before. Its refusal under a mesmerize is not modelled here (recording
+/// checklist 6.455).
+fn sit_command(world: &eq_client_core::world::ClientWorld) -> eq_client_core::Posture {
+    let posture = world
+        .player()
+        .and_then(|player| world.posture(player.spawn_id));
+    if matches!(
+        posture,
+        Some(eq_client_core::PostureState::Lying | eq_client_core::PostureState::Looting)
+    ) && super::hud::toggled_seat(posture, world.generation())
+        == Some(eq_client_core::Posture::Standing)
+    {
+        eq_client_core::Posture::Standing
+    } else {
+        eq_client_core::Posture::Sitting
+    }
+}
 
 /// Slash commands that are game actions rather than chat; None means ordinary chat.
 fn game_commands(
@@ -2217,28 +2236,7 @@ fn game_commands(
                 spawn_id: targeted_corpse(online).ok(),
             }]
         }),
-        // Titanium's /sit runs the sit toggle (0x46a445, read R19), which
-        // stands a player lying or looting; otherwise it sits, as before.
-        // Its refusal under a mesmerize is not modelled here (recording
-        // checklist 6.455).
-        "sit" => {
-            let world = online.world();
-            let standing_up = world.player().is_some_and(|player| {
-                matches!(
-                    world.posture(player.spawn_id),
-                    Some(
-                        eq_client_core::PostureState::Lying | eq_client_core::PostureState::Looting
-                    )
-                ) && super::hud::toggled_seat(world.posture(player.spawn_id), world.generation())
-                    == Some(eq_client_core::Posture::Standing)
-            });
-            posture(if standing_up {
-                eq_client_core::Posture::Standing
-            } else {
-                eq_client_core::Posture::Sitting
-            })
-            .map(|command| vec![command])
-        }
+        "sit" => posture(sit_command(online.world())).map(|command| vec![command]),
         "stand" => posture(eq_client_core::Posture::Standing).map(|command| vec![command]),
         "ranged" => {
             if words.trim().is_empty() {

@@ -323,7 +323,7 @@ impl Fix {
                 "Allow horizontal movement while stunned. Attacks, spells, items and jumping still obey stun restrictions."
             }
             Self::MoveWhileFeigned => {
-                "Feign Death without lying down: the press sends only the feign, so you stay standing, others see you standing, and you move normally while the server keeps the feign. Your next stand ends it. Departs from the original client, which lies you down."
+                "Feign Death without lying down: the press sends only the feign, so you stay standing, others see you standing, and you move normally while the server keeps the feign. Your next stand ends it, and so does your first step if you pressed it sitting. Departs from the original client, which lies you down."
             }
             Self::StandWhenHit => {
                 "Stand up when a hit lands while you sit or kneel to loot, as the original client does. Turning this off departs from the original client and keeps you seated."
@@ -481,9 +481,9 @@ impl Fix {
             | Self::TakeEnvironmentalDamage
             | Self::CorpsesAlongGround
             | Self::LongChaseCamera
-            | Self::FreeCamera => Availability::Setting { default: true },
+            | Self::FreeCamera
             // The original client stands a sitter when hit (read R19 b).
-            Self::StandWhenHit => Availability::Setting { default: true },
+            | Self::StandWhenHit => Availability::Setting { default: true },
             // A comfort the player has to ask for starts as the official
             // client behaves: off.
             Self::HiddenWindows
