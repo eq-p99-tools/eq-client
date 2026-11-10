@@ -7470,6 +7470,85 @@ pub(super) mod tests {
         }
     }
 
+    /// A summon or GM move with a grant in force, as eq-network sends it:
+    /// the grant again, the relocation, then the request for inputs. Autorun,
+    /// a held key's tap, the turn ramp, a crouch and a queued jump go on from
+    /// the landing, and prediction starts afresh there (read R18, the
+    /// same-zone warp 0x48aaa6).
+    #[test]
+    fn a_summon_keeps_autorun_and_held_intent_through_the_sessions_events() {
+        use eq_client_core::{WorldEvent, WorldUpdate};
+        let mut app = crate::testing::app();
+        let mut online = online::OnlineState::new(true);
+        online::testing::admit(&mut online, 11, online::testing::player(7));
+        let (sender, receiver) = mpsc::sync_channel(1);
+        app.insert_resource(online)
+            .insert_resource(online::Updates(std::sync::Mutex::new(Some(receiver))))
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .init_resource::<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>()
+            .add_systems(Update, online::receive);
+        let grant = || WorldEvent::MotionState {
+            session_id: 11,
+            units_per_second: Some(30.0),
+            backward_units_per_second: None,
+            walk_units_per_second: None,
+            strafe_units_per_second: None,
+            strafe_walk_units_per_second: None,
+            swim_backward_units_per_second: None,
+            diagonal: DiagonalRates::default(),
+            falls: true,
+            jump_factor: 1.0,
+        };
+        sender.send(WorldUpdate::Game(grant())).unwrap();
+        app.update();
+        let now = Instant::now();
+        {
+            let mut controls = app.world_mut().resource_mut::<Controls>();
+            assert_eq!(controls.speed, Some(30.0));
+            controls.autorun = true;
+            controls.moving = true;
+            controls.crouch = Some(Crouch::Over);
+            controls.jump = Some(now);
+            controls.taps.0.push((KeyCode::KeyW, now));
+            controls.turn_held = Some((true, now));
+        }
+        let landing = world_position([40.0, 3.0, 0.0], 0.0);
+        for event in [
+            grant(),
+            WorldEvent::SameZoneRelocated(eq_client_core::SameZoneRelocation {
+                session_id: 11,
+                spawn_id: 7,
+                position: landing,
+            }),
+            WorldEvent::SpeedInputsRequired {
+                session_id: 11,
+                revision: 2,
+            },
+        ] {
+            sender.send(WorldUpdate::Game(event)).unwrap();
+            app.update();
+        }
+        let controls = app.world().resource::<Controls>();
+        assert!(controls.autorun);
+        assert_eq!(controls.speed, Some(30.0));
+        assert_eq!(controls.crouch, Some(Crouch::Over));
+        assert_eq!(controls.jump, Some(now));
+        assert_eq!(controls.taps.0.len(), 1);
+        assert_eq!(controls.turn_held, Some((true, now)));
+        // Prediction starts afresh at the landing.
+        assert!(!controls.moving);
+        assert!(controls.pending.is_none());
+        assert_eq!(
+            app.world()
+                .resource::<online::OnlineState>()
+                .world()
+                .player()
+                .map(|player| player.position),
+            Some(landing)
+        );
+    }
+
     #[test]
     fn received_placement_and_death_clear_the_preserved_descent_and_cost() {
         use eq_client_core::{WorldEvent, WorldUpdate, movement::MotionStep};
