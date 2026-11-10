@@ -128,6 +128,17 @@ pub(super) fn state(
             (entry.spawn_id, entry.distance, level, color)
         })
         .collect();
+    if let (Some(choices), Some(picker)) = (observed.15.0.as_deref(), observed.15.1.as_deref()) {
+        let (buttons, rows) = crate::abilities::choices::report(online.world(), choices, picker);
+        info!(
+            label,
+            kept = choices.kept(),
+            ?buttons,
+            picker = ?picker.button(),
+            ?rows,
+            "Script ability report"
+        );
+    }
     info!(
         label,
         open = track.open,

@@ -65,11 +65,16 @@ pub(crate) enum Source {
 impl Source {
     /// What the control gives now, if anything: the one rule for what goes
     /// on the action bar, whether a hold picks it up or a key binds it.
-    pub(crate) fn binding(self, world: &ClientWorld, bindings: &Bindings) -> Option<Action> {
+    pub(crate) fn binding(
+        self,
+        world: &ClientWorld,
+        bindings: &Bindings,
+        choices: &crate::abilities::Choices,
+    ) -> Option<Action> {
         match self {
             Self::Gem(gem) => world.gem(usize::from(gem)).map(|_| Action::Gem(gem)),
             Self::Slot(index) => bindings.0.get(index).copied().flatten(),
-            Self::Ability(button) => crate::abilities::assigned(world, button),
+            Self::Ability(button) => crate::abilities::assigned(world, choices, button),
             Self::Item(slot) => world
                 .inventory()
                 .items()
@@ -325,7 +330,7 @@ pub(crate) fn route(
         Res<crate::profile_files::Profile>,
         Res<crate::escape::Escape>,
     ),
-    mut bindings: ResMut<Bindings>,
+    (mut bindings, choices): (ResMut<Bindings>, Res<crate::abilities::Choices>),
     (mut carry, mut presses, mut button): (
         ResMut<Carry>,
         ResMut<Presses>,
@@ -370,7 +375,7 @@ pub(crate) fn route(
         if let Some(hotkey) = carry.0 {
             presses.taken = true;
             carry.0 = match under {
-                Some((_, Source::Slot(index), _)) => put_down(&mut bindings, world, index, hotkey),
+                Some((_, Source::Slot(index), _)) => put_down(&mut bindings, index, hotkey),
                 _ => None,
             };
             if carry.0.is_some() {
@@ -387,7 +392,7 @@ pub(crate) fn route(
             if plain
                 && can_edit
                 && !busy
-                && let Some(hotkey) = source.binding(world, &bindings)
+                && let Some(hotkey) = source.binding(world, &bindings, &choices)
             {
                 button.claim(entity);
                 presses.held = Some(Held {
@@ -428,7 +433,9 @@ pub(crate) fn route(
     // Also check the deadline on a release frame: a slow frame must not turn a
     // long hold into activation merely because no held frame was rendered.
     if !held.picked && expired(held.since, now) {
-        if over_source != Some(true) || held.source.binding(world, &bindings) != Some(held.hotkey) {
+        if over_source != Some(true)
+            || held.source.binding(world, &bindings, &choices) != Some(held.hotkey)
+        {
             presses.cancel(&mut carry, &mut button);
             return;
         }
@@ -470,7 +477,7 @@ pub(crate) fn route(
             );
         match over {
             Some(index) if held.source != Source::Slot(index) => {
-                carry.0 = put_down(&mut bindings, world, index, hotkey);
+                carry.0 = put_down(&mut bindings, index, hotkey);
             }
             None if matches!(held.source, Source::Slot(_)) => carry.0 = None,
             _ => (),
@@ -487,13 +494,8 @@ fn expired(since: Instant, now: Instant) -> bool {
 
 /// Places a shortcut and carries the exact previous binding, including one
 /// whose current action cannot activate. This never moves an inventory item.
-fn put_down(
-    bindings: &mut Bindings,
-    world: &ClientWorld,
-    index: usize,
-    hotkey: Action,
-) -> Option<Action> {
-    let lifted = Source::Slot(index).binding(world, bindings);
+fn put_down(bindings: &mut Bindings, index: usize, hotkey: Action) -> Option<Action> {
+    let lifted = bindings.0.get(index).copied().flatten();
     *bindings.0.get_mut(index)? = Some(hotkey);
     lifted
 }
@@ -815,22 +817,32 @@ mod tests {
         let world = online.world();
         let bindings = Bindings::default();
         assert_eq!(
-            Source::Gem(0).binding(world, &bindings),
+            Source::Gem(0).binding(world, &bindings, &crate::abilities::Choices::default()),
             Some(Action::Gem(0))
         );
-        assert_eq!(Source::Gem(1).binding(world, &bindings), None);
+        assert_eq!(
+            Source::Gem(1).binding(world, &bindings, &crate::abilities::Choices::default()),
+            None
+        );
         // A hotbutton gives its stored shortcut independently of usability.
         assert_eq!(
-            Source::Slot(0).binding(world, &bindings),
+            Source::Slot(0).binding(world, &bindings, &crate::abilities::Choices::default()),
             Some(Action::Gem(0))
         );
         assert_eq!(
-            Source::Slot(1).binding(world, &bindings),
+            Source::Slot(1).binding(world, &bindings, &crate::abilities::Choices::default()),
             Some(Action::Gem(1))
         );
-        assert_eq!(Source::Slot(8).binding(world, &bindings), Some(Action::Sit));
         assert_eq!(
-            Source::Fixed(Action::Camp).binding(world, &bindings),
+            Source::Slot(8).binding(world, &bindings, &crate::abilities::Choices::default()),
+            Some(Action::Sit)
+        );
+        assert_eq!(
+            Source::Fixed(Action::Camp).binding(
+                world,
+                &bindings,
+                &crate::abilities::Choices::default()
+            ),
             Some(Action::Camp)
         );
     }
@@ -909,7 +921,13 @@ mod tests {
             eq_client_core::inventory::InventoryUpdate::Snapshot(items),
         );
         let world = online.world();
-        let given = |slot| Source::Item(InventorySlot(slot)).binding(world, &Bindings::default());
+        let given = |slot| {
+            Source::Item(InventorySlot(slot)).binding(
+                world,
+                &Bindings::default(),
+                &crate::abilities::Choices::default(),
+            )
+        };
         for slot in [0, 21, 22, 29, 251, 330] {
             assert!(
                 matches!(given(slot), Some(Action::Item { slot: at, .. }) if at.0 == slot),
@@ -930,7 +948,7 @@ mod tests {
                 slot: InventorySlot(slot),
                 id,
             });
-            Source::Slot(0).binding(world, &bindings)
+            Source::Slot(0).binding(world, &bindings, &crate::abilities::Choices::default())
         };
         assert_eq!(
             bound(22, id),

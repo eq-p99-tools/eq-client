@@ -390,6 +390,8 @@ pub enum ClickTarget {
     Training(TrainingClick),
     /// A row of the track window's list, from zero.
     TrackRow(usize),
+    /// A row of the skills picker's list, from zero.
+    SkillRow(usize),
     /// The track window's Track button, the skin's or the client's own.
     Track,
     /// A Raid window button that acts for the member chosen, or for the
@@ -927,10 +929,10 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["training", row] => ClickTarget::Training(TrainingClick::Row(ordinal(row, "a row")?)),
         ["train"] => ClickTarget::Training(TrainingClick::Train),
         ["tracking", row] => ClickTarget::TrackRow(ordinal(row, "a row")?),
+        ["skill_select", row] => ClickTarget::SkillRow(ordinal(row, "a row")?),
         ["track"] => ClickTarget::Track,
         ["answer", answer @ ("yes" | "no")] => ClickTarget::Answer(*answer == "yes"),
-        ["page", "next"] => ClickTarget::Page(true),
-        ["page", "back"] => ClickTarget::Page(false),
+        ["page", way @ ("next" | "back")] => ClickTarget::Page(*way == "next"),
         ["combine", slot] => ClickTarget::Combine(value(slot, "a pack slot number")?),
         ["map", action] => ClickTarget::Map(map_button(action)?),
         ["training_done"] => ClickTarget::Training(TrainingClick::Done),
@@ -2152,9 +2154,14 @@ chat tell Friend inc now
     fn a_script_may_choose_and_follow_a_tracked_spawn() {
         let base = Path::new("private");
         assert_eq!(
-            parse("click tracking 2\nclick track\nclick done tracking\n", base).unwrap(),
+            parse(
+                "click tracking 2\nclick skill_select 3\nclick track\nclick done tracking\n",
+                base
+            )
+            .unwrap(),
             [
                 Step::Click(ClickTarget::TrackRow(1)),
+                Step::Click(ClickTarget::SkillRow(2)),
                 Step::Click(ClickTarget::Track),
                 Step::Click(ClickTarget::Done("tracking")),
             ]

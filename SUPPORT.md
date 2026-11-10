@@ -122,8 +122,16 @@ checks and cast line, Pick Pockets and Begging with their answers, the trap
 skills at a treasure, and Tracking with its window, which the skin draws
 where it has one. The track list keeps the server's order and colours each
 name by the track window's rule; Cancel stops tracking as `/stoptracking`
-does. The Actions window's ability page shows its six slots in the client's
-fixed order; choosing which abilities fill them follows as its own change.
+does. Each Actions window ability button holds what the player chooses
+from the skills picker, as the program has it (reads R17 and R17b); until
+the first choice the buttons follow the installed client's saved choice or
+the client's own order, and nothing is saved (checklist 6.448). Labelled:
+the row text and columns, and the numbers the client cannot use yet, the
+specials 111, 114 and 115 and skills 16, 71 and 72, kept on a button but
+left out of the list (6.449); Harm Touch and Lay on Hands offered by class
+and level where the program reads profile bytes this client does not
+have, 111 not offered for the same reason, and disciplines on the pages
+until a combat-abilities window exists (6.450).
 A press while a class tool's wait runs sends nothing and says the client's
 own line, where the program says nothing (a chat-only departure,
 checklist 6.447). Between a beg or a pick and its answer the program holds

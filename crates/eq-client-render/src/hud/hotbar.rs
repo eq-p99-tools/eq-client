@@ -335,7 +335,10 @@ pub(crate) const fn command(action: Action) -> Option<&'static str> {
 pub(crate) fn update(
     keys: crate::keys::Keys,
     controls: Query<(&Interaction, &Pickable)>,
-    online: Res<crate::online::OnlineState>,
+    (online, choices): (
+        Res<crate::online::OnlineState>,
+        Res<crate::abilities::Choices>,
+    ),
     mut bindings: ResMut<Bindings>,
 ) {
     if let Some(index) = slot_pressed(&keys, crate::keys::Act::ClearSlot) {
@@ -344,7 +347,7 @@ pub(crate) fn update(
         && let Some(binding) = controls
             .iter()
             .filter(|(interaction, _)| **interaction != Interaction::None)
-            .find_map(|(_, pickable)| pickable.0.binding(online.world(), &bindings))
+            .find_map(|(_, pickable)| pickable.0.binding(online.world(), &bindings, &choices))
     {
         bindings.0[index] = Some(binding);
     }
@@ -1109,6 +1112,7 @@ mod tests {
             },
         );
         app.init_resource::<Bindings>()
+            .init_resource::<crate::abilities::Choices>()
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<crate::chat::ChatState>()
             .insert_resource(online)

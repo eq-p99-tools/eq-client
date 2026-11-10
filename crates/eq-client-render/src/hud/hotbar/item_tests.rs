@@ -68,6 +68,7 @@ fn item_binding_uses_current_inventory_and_never_activates_replacement_items() {
         crate::keys::Chord::ctrl(KeyCode::Digit1),
     );
     app.init_resource::<Bindings>()
+        .init_resource::<crate::abilities::Choices>()
         .init_resource::<ButtonInput<KeyCode>>()
         .init_resource::<crate::chat::ChatState>()
         .init_resource::<crate::hud::HudState>()
