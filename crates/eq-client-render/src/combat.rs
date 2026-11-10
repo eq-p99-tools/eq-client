@@ -39,6 +39,26 @@ pub(super) struct CombatState {
     /// How far each hand is through its swing while auto attack is on with
     /// no one to swing at.
     idle: IdleSwings,
+    /// The zone session auto attack was asked of.
+    session_id: Option<u64>,
+    /// Auto attack the client turned off on its own, as the player stopped
+    /// standing or died, whose off has not left yet: the session follows
+    /// only a toggle it was sent, so the off goes again until it leaves.
+    off_unsent: bool,
+}
+
+impl CombatState {
+    /// A new zone session starts with auto attack off, as the session does,
+    /// so the two agree; whether the program turns it off at a zone change
+    /// is unread (recording checklist 6.445).
+    fn follow_session(&mut self, session_id: Option<u64>) {
+        if self.session_id != session_id {
+            self.session_id = session_id;
+            self.auto_attack = false;
+            self.off_unsent = false;
+            self.idle = IdleSwings::default();
+        }
+    }
 }
 
 /// How far the primary and secondary hands are through their swings, in
@@ -120,6 +140,7 @@ pub(super) fn input(
 ) {
     use super::keys::Act;
     let world = online.world();
+    combat.follow_session(world.session_id());
     let Some(player) = world.player() else {
         return;
     };
@@ -145,8 +166,20 @@ pub(super) fn input(
     let live = world.connected() && !world.is_dead();
     if combat.auto_attack && (!live || posture.is_some()) {
         combat.auto_attack = false;
-        if world.connected() && outbox.post(world, attack(false)).is_ok() {
-            chat.history.push(toggle_line(toggle, false, &messages));
+        combat.off_unsent = world.connected();
+    }
+    // A full queue to the session is the one refusal that passes: the off
+    // goes again each frame until it leaves, so the session never stays
+    // attacking while the host shows it off. Any other refusal means the
+    // session cannot be attacking on this connection.
+    if combat.off_unsent {
+        match outbox.try_post(world, attack(false)) {
+            Ok(()) => {
+                combat.off_unsent = false;
+                chat.history.push(toggle_line(toggle, false, &messages));
+            }
+            Err(crate::outbox::Refusal::Busy) => (),
+            Err(_) => combat.off_unsent = false,
         }
     }
     if !live || !keys.focused() {
@@ -443,6 +476,20 @@ mod tests {
             outcome,
             push: None,
         }
+    }
+
+    #[test]
+    fn a_new_zone_session_turns_the_hosts_auto_attack_off_as_the_sessions_is() {
+        let mut combat = CombatState::default();
+        combat.follow_session(Some(1));
+        combat.auto_attack = true;
+        combat.follow_session(Some(1));
+        assert!(combat.auto_attack);
+        combat.follow_session(Some(2));
+        assert!(!combat.auto_attack);
+        combat.auto_attack = true;
+        combat.follow_session(None);
+        assert!(!combat.auto_attack);
     }
 
     #[test]
@@ -753,5 +800,42 @@ mod tests {
                 .posture(12),
             Some(PostureState::Sitting)
         );
+    }
+
+    #[test]
+    fn a_forced_off_that_meets_a_full_queue_goes_again_until_it_leaves() {
+        use crate::online::testing;
+        let (mut app, rx) = attacking(eq_client_assets::ui::InstalledClient::Titanium);
+        press(&mut app);
+        assert_eq!(sent(&rx), Some(true));
+        // A queue to the session with its one place taken.
+        let (tx, full) = std::sync::mpsc::sync_channel(1);
+        let filler = ClientCommand::AutoAttack {
+            session_id: 7,
+            enabled: true,
+            created: std::time::Instant::now(),
+        };
+        tx.try_send(filler).unwrap();
+        app.insert_resource(crate::outbox::Outbox::new(Some(tx)));
+        testing::news(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            [eq_client_core::WorldEvent::Posture {
+                spawn_id: 12,
+                posture: PostureState::Sitting,
+            }],
+        );
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        app.update();
+        assert!(!app.world().resource::<CombatState>().auto_attack);
+        assert!(app.world().resource::<CombatState>().off_unsent);
+        // The place frees: the off leaves on the next frame, once.
+        assert!(full.try_recv().is_ok());
+        app.update();
+        assert_eq!(sent(&full), Some(false));
+        app.update();
+        assert_eq!(sent(&full), None);
+        assert!(!app.world().resource::<CombatState>().off_unsent);
     }
 }

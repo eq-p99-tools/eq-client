@@ -358,6 +358,16 @@ impl OnlineState {
         self.world.close_player_inspection();
     }
 
+    /// The track window closed, by its button or `/stoptracking`.
+    pub(super) fn close_track_window(&mut self) {
+        self.world.close_track_window();
+    }
+
+    /// The player chose an entry of the track window, or none.
+    pub(super) fn select_tracked(&mut self, spawn_id: Option<u16>) {
+        self.world.select_tracked(spawn_id);
+    }
+
     /// The player asked to open a world container.
     pub(super) fn ask_container(&mut self, drop_id: u32) {
         self.world.ask_container(drop_id);

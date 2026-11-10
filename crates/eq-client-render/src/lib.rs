@@ -115,6 +115,7 @@ mod spellbook;
 mod target;
 mod theme;
 mod tooltip;
+mod tracking;
 mod trade;
 mod tradeskills;
 mod training;

@@ -726,6 +726,8 @@ pub(crate) enum Listing {
     Keys,
     /// The skills a guildmaster teaches.
     Training,
+    /// The spawns Tracking finds.
+    Tracking,
     /// The player's skills.
     Skills,
     /// A merchant's wares.
@@ -751,6 +753,7 @@ fn listing(id: Option<&str>, owner: WindowId) -> Option<Listing> {
     match (owner, id) {
         (WindowId::Options, Some(KEY_LIST)) => Some(Listing::Keys),
         (WindowId::Training, Some("SkillList")) => Some(Listing::Training),
+        (WindowId::Tracking, Some("TRW_TrackingList")) => Some(Listing::Tracking),
         (WindowId::Skills, Some("SkillList")) => Some(Listing::Skills),
         (WindowId::Merchant, Some("ItemList")) => Some(Listing::Merchant),
         (WindowId::Raid, Some("RAID_PlayerList")) => {
@@ -881,6 +884,7 @@ fn filled_by(rows: &mut EntityCommands, listing: Listing, columns: Vec<f32>) {
             wheel,
         )),
         Listing::Training => rows.insert((crate::training::SkillRows::new(columns), wheel)),
+        Listing::Tracking => rows.insert((crate::tracking::TrackRows::new(columns), wheel)),
         Listing::Skills => rows.insert((crate::skills::SkillsList::new(columns), wheel)),
         Listing::Merchant => rows.insert((crate::trade::MerchantRows::new(columns), wheel)),
         Listing::Raid(list) => rows.insert((crate::raid::RaidRows::new(list, columns), wheel)),
@@ -956,7 +960,11 @@ pub(crate) fn fill_lists(
             Listing::Keys => filter.0.clone(),
             // The Training, Skills, merchant and Raid windows' lists fill
             // themselves.
-            Listing::Training | Listing::Skills | Listing::Merchant | Listing::Raid(_) => continue,
+            Listing::Training
+            | Listing::Tracking
+            | Listing::Skills
+            | Listing::Merchant
+            | Listing::Raid(_) => continue,
         };
         if rows.filled && rows.filter == wanted && !keys.is_changed() && !bindings.is_changed() {
             continue;

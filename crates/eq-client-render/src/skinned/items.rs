@@ -293,6 +293,14 @@ pub(crate) const fn framed_while_open(id: WindowId) -> bool {
     )
 }
 
+/// Windows the player closes here, with their close box or Escape, that
+/// nothing toggles: those framed while open, and the track window, whose
+/// own system gives it its frame and follows the closing
+/// ([`crate::tracking::window`]).
+pub(crate) const fn closes_here(id: WindowId) -> bool {
+    framed_while_open(id) || matches!(id, WindowId::Tracking)
+}
+
 /// Opens and closes the windows that have no frame of their own until then:
 /// a bag's, while it is open and still a bag, the bank's, while it is open
 /// and a banker is in reach, and the give, quantity, Actions, Pet Info,
@@ -577,7 +585,7 @@ pub(crate) fn close(
     // Closing the give or trade window cancels the exchange; see
     // `give::window`.
     if let crate::escape::Escape::Close(id) = *escape
-        && framed_while_open(id)
+        && closes_here(id)
     {
         shown.dismiss(id);
     }

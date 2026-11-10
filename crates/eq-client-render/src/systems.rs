@@ -7,8 +7,8 @@ use crate::{
     motion, move_player, names, navigation, navmesh_prebuild, notices, online, options,
     orbit_camera, outbox, outfit, paperdoll, pet, profile_files, projectiles, raid, reading,
     resources, schedule_screenshot, select_preview, sharing, sheets, skills, skin, skinned, sounds,
-    speed, spell_effects, spell_icons, spellbook, target, tooltip, trade, tradeskills, training,
-    translocate, update_hud, weather, whereabouts, who, windows,
+    speed, spell_effects, spell_icons, spellbook, target, tooltip, tracking, trade, tradeskills,
+    training, translocate, update_hud, weather, whereabouts, who, windows,
 };
 use bevy::prelude::*;
 /// Starts the presentation state (HUD, windows, chat, targeting, inventory,
@@ -213,7 +213,7 @@ pub(super) fn schedule(app: &mut App) {
             (
                 give::buttons,
                 give::inspect_theirs,
-                training::buttons,
+                (training::buttons, tracking::buttons),
                 // Consume the drop answer in the click's frame, including
                 // the last input of an unfocused script.
                 (confirm::buttons, inventory::ground_drop::input).chain(),
@@ -324,7 +324,11 @@ pub(super) fn schedule(app: &mut App) {
                 (
                     give::window,
                     skinned::quantity,
-                    training::window,
+                    (
+                        training::window,
+                        tracking::window,
+                        tracking::say_rangers_only,
+                    ),
                     (translocate::decline_unasked, confirm::window).chain(),
                     reading::window,
                     tradeskills::world_window,
@@ -357,7 +361,7 @@ pub(super) fn schedule(app: &mut App) {
                 ),
                 (outbox::show, inventory::say_refusals),
                 (hud::action_bar::cast_window, hud::action_bar::update),
-                skinned::frames,
+                (skinned::frames, tracking::frame),
                 (
                     chat::reconcile,
                     skinned::apply,
@@ -393,7 +397,7 @@ pub(super) fn schedule(app: &mut App) {
                         skinned::show_amount,
                         skinned::show_choices,
                         skinned::fill_lists,
-                        training::fill,
+                        (training::fill, tracking::fill),
                         skills::fill,
                         raid::fill,
                         confirm::show,

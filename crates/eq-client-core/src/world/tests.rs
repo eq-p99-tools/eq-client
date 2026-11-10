@@ -2833,6 +2833,7 @@ fn abilities_are_the_skills_the_player_has_and_wait_on_the_sessions_timers() {
         ability: Ability::Kick,
         // Titanium's Kick (eq-network's `Ability::reuse`).
         ready_in: Duration::from_secs(8),
+        string_id: None,
     };
     assert!(game(&mut world, used(2)).ignored, "another admission's");
     world.apply(&WorldUpdate::Game(used(1)), now, &NoSpells);
@@ -2864,6 +2865,7 @@ fn abilities_are_the_skills_the_player_has_and_wait_on_the_sessions_timers() {
             session_id: 1,
             ability: Ability::SenseHeading,
             ready_in: Duration::ZERO,
+            string_id: None,
         },
     );
     assert_eq!(changes.notices, [Notice::Heading(6)]);
@@ -2979,6 +2981,7 @@ fn eqmac_ability_reset_releases_mend_and_shared_strikes_without_claiming_success
                 session_id: 1,
                 ability,
                 ready_in: Duration::from_secs(360),
+                string_id: None,
             }),
             now,
             &NoSpells,
@@ -3060,6 +3063,7 @@ fn bandaging_outcomes_keep_bind_wounds_full_button_recovery() {
             session_id: 1,
             ability: Ability::BindWound,
             ready_in: reuse,
+            string_id: None,
         }),
         now,
         &NoSpells,

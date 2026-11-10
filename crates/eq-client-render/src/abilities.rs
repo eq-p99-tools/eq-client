@@ -131,12 +131,19 @@ pub(super) fn knight_command(
     })
 }
 
-/// Uses an ability; the session, or the outbox, says why one did not go.
-pub(crate) fn use_ability(ability: Ability, online: &OnlineState, outbox: &Outbox) {
+/// Uses an ability, telling the session whether the player stands in a
+/// liquid; the session, or the outbox, says why one did not go.
+pub(crate) fn use_ability(
+    ability: Ability,
+    online: &OnlineState,
+    outbox: &Outbox,
+    in_liquid: bool,
+) {
     let _ = outbox.post(online.world(), |stamp| ClientCommand::UseAbility {
         session_id: stamp.session_id,
         ability,
         target: online.world().target_intent(),
+        in_liquid,
         created: stamp.created,
     });
 }
@@ -167,10 +174,13 @@ pub(crate) fn input(
     outbox: Res<Outbox>,
     mut chat: ResMut<crate::chat::ChatState>,
     buttons: crate::clicks::Clicks<AbilityButton>,
+    liquid: crate::motion::Liquid,
 ) {
     for button in buttons.iter() {
         match assigned(online.world(), *button) {
-            Some(Binding::Ability(ability)) => use_ability(ability, &online, &outbox),
+            Some(Binding::Ability(ability)) => {
+                use_ability(ability, &online, &outbox, liquid.feet_in(online.world()));
+            }
             Some(binding @ (Binding::KnightAbility(_) | Binding::Discipline(_))) => {
                 let Ok(stamp) = outbox.stamp(online.world()) else {
                     continue;
@@ -416,7 +426,7 @@ mod tests {
                 }],
             );
             assert_eq!(online.world().target().selected, spawn_id);
-            use_ability(Ability::Taunt, &online, &outbox);
+            use_ability(Ability::Taunt, &online, &outbox, false);
             assert!(matches!(receive.try_recv().unwrap(),
                 ClientCommand::UseAbility { target: Some(actual), .. } if actual == target));
             assert!(
@@ -433,7 +443,7 @@ mod tests {
                 ..
             }
         ));
-        use_ability(Ability::Taunt, &online, &outbox);
+        use_ability(Ability::Taunt, &online, &outbox, false);
         assert!(matches!(
             receive.try_recv().unwrap(),
             ClientCommand::UseAbility { target: None, .. }
@@ -449,7 +459,7 @@ mod tests {
                 state: target,
             }],
         );
-        use_ability(Ability::Taunt, &online, &outbox);
+        use_ability(Ability::Taunt, &online, &outbox, false);
         assert!(matches!(receive.try_recv().unwrap(),
             ClientCommand::UseAbility { target: Some(actual), .. } if actual == target));
     }

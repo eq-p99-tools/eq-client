@@ -230,6 +230,34 @@ fn official(
     }
 }
 
+/// One of the program's own lines, with each argument that is a line of
+/// its own put in by its words, as a bearing names its side word. Where the
+/// installation lacks the line or a word it names, the client's own words
+/// say it all.
+fn program_line(
+    string_id: u32,
+    arguments: &[String],
+    lines: &[usize],
+    said: &str,
+    messages: Option<&Messages>,
+) -> Said {
+    let Some(messages) = messages else {
+        return Said::own(said);
+    };
+    let mut named = arguments.to_vec();
+    for index in lines {
+        let word = named
+            .get(*index)
+            .and_then(|id| id.parse::<u32>().ok())
+            .and_then(|id| messages.formatted(id, &[]));
+        match (named.get_mut(*index), word) {
+            (Some(argument), Some(word)) => *argument = word,
+            _ => return Said::own(said),
+        }
+    }
+    messages.said_or(string_id, &named, said)
+}
+
 /// What a bandaging's start or end says: the official client's words where
 /// the installation has them.
 fn bind_wound(update: &BindWoundUpdate, messages: Option<&Messages>) -> Option<Said> {
@@ -333,6 +361,12 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         Notice::LootRefused(response) => chat(loot_line(*response, messages)),
         Notice::ItemRefused => chat("You cannot take that item.".into()),
         Notice::ShopRefused => chat("That merchant will not trade with you.".into()),
+        Notice::ProgramLine {
+            string_id,
+            arguments,
+            lines,
+            said,
+        } => chat(program_line(*string_id, arguments, lines, said, messages)),
         Notice::AbilityRefused {
             reason,
             string_id,
@@ -815,6 +849,32 @@ const fn link_text(link: Link) -> &'static str {
 mod tests {
     use super::*;
     use eq_client_core::Coins;
+
+    #[test]
+    fn a_bearing_names_its_side_word_by_its_words() {
+        let messages = Messages::parse(
+            "EQST0002\n0 2\n12677 %1 synthetic ahead, %2 side\n12674 synthetic-right\n",
+        );
+        let bearing = |side: &str| Notice::ProgramLine {
+            string_id: 12677,
+            arguments: vec!["a bat".into(), side.into()],
+            lines: vec![1],
+            said: "Tracking: a bat ahead to one side".into(),
+        };
+        assert_eq!(
+            wording(&bearing("12674"), Some(&messages)),
+            [(
+                Place::Chat,
+                Said::official("a bat synthetic ahead, synthetic-right side")
+            )]
+        );
+        // A side word the installation lacks: the client's words say it all,
+        // never a bare string number.
+        assert_eq!(
+            wording(&bearing("12675"), Some(&messages)),
+            [(Place::Chat, "Tracking: a bat ahead to one side".into())]
+        );
+    }
 
     #[test]
     fn a_refused_creation_says_which_step_on_the_status_line() {

@@ -661,6 +661,10 @@ type Buttons<'w, 's> = Query<
                     Option<&'static super::raid::RaidAction>,
                     Option<&'static super::skinned::Shows>,
                     Option<&'static super::skinned::SkinId>,
+                    (
+                        Option<&'static super::tracking::TrackRow>,
+                        Has<super::tracking::TrackButton>,
+                    ),
                 ),
             ),
         ),
@@ -2510,6 +2514,19 @@ fn dialog_control(
     }
 }
 
+/// Whether a control of the track window is the one a click names: a row
+/// of its list, or Track.
+fn tracking_control(
+    target: ClickTarget,
+    (row, track): (Option<&super::tracking::TrackRow>, bool),
+) -> bool {
+    match target {
+        ClickTarget::TrackRow(index) => row.is_some_and(|row| row.index == index),
+        ClickTarget::Track => track,
+        _ => false,
+    }
+}
+
 /// The loot or merchant window's action a scripted click names.
 const fn trading(click: TradeClick) -> super::trade::Action {
     use super::trade::Action;
@@ -2593,7 +2610,7 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
             slider,
             drop_down,
             choice,
-            (dialog, page, combine, map, (raid_row, raid_action, shows, skin_id)),
+            (dialog, page, combine, map, (raid_row, raid_action, shows, skin_id, tracking)),
         ),
     ) in buttons
     {
@@ -2632,6 +2649,7 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
             ClickTarget::RaidRow(grouped, index) => raid_row.is_some_and(|row| {
                 row.index == index && (row.list == super::raid::RaidList::Grouped) == grouped
             }),
+            ClickTarget::TrackRow(_) | ClickTarget::Track => tracking_control(target, tracking),
             ClickTarget::Buff(long, index) => effects_button(shows, long, index),
             ClickTarget::Button(key, id) => {
                 skin_id.is_some_and(|skin| skin.id == id && skin.window.key() == key)

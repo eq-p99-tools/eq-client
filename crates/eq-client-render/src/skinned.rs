@@ -49,8 +49,8 @@ pub(crate) use controls::{
 };
 
 pub(crate) use items::{
-    Closes, Content as SlotContent, TheirSlot, close, contents, draw as draw_item, frames, loot,
-    quantity, theirs, toggle_bag,
+    Closes, Content as SlotContent, TheirSlot, close, closes_here, contents, draw as draw_item,
+    frames, loot, quantity, theirs, toggle_bag,
 };
 
 use super::{hud::hotbar, windows::WindowId};
@@ -98,6 +98,7 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::ShortEffects => "EQUI_ShortDurationBuffWindow.xml",
         WindowId::Options => "EQUI_OptionsWindow.xml",
         WindowId::Training => "EQUI_TrainWindow.xml",
+        WindowId::Tracking => "EQUI_TrackingWnd.xml",
         WindowId::Skills => "EQUI_SkillsWindow.xml",
         WindowId::Confirmation => "EQUI_ConfirmationDialog.xml",
         WindowId::Note => "EQUI_NoteWindow.xml",
@@ -1174,6 +1175,19 @@ fn behave(
             skin(),
             crate::outbox::Needs::Capability(Capability::Training),
         )),
+        Does::Tracks => drawn.insert((
+            Button,
+            super::tracking::TrackButton,
+            skin(),
+            crate::outbox::Needs::Capability(Capability::Tracking),
+        )),
+        // It closes the window as any Done does, and stops tracking too.
+        Does::StopsTracking => drawn.insert((
+            Button,
+            super::tracking::StopButton,
+            items::Closes(owner),
+            skin(),
+        )),
         // A question shows only where the session offers what it is about.
         Does::Answers(accept) => {
             drawn.insert((Button, super::confirm::AnswerButton(accept), skin()))
@@ -1419,6 +1433,8 @@ fn caption(
         | Does::Unoffered(_)
         | Does::Option(_)
         | Does::Trains
+        | Does::Tracks
+        | Does::StopsTracking
         | Does::Answers(_)
         | Does::TurnsPage(_)
         | Does::Combines(_)
@@ -1755,8 +1771,7 @@ fn title_boxes(
     owner: WindowId,
 ) {
     let frame = window.target_entity();
-    let closes =
-        owner.describe().toggle != crate::windows::Toggle::Never || items::framed_while_open(owner);
+    let closes = owner.describe().toggle != crate::windows::Toggle::Never || closes_here(owner);
     let mut right = inside.x + inside.width;
     for (wanted, look, close) in [
         (
@@ -3218,6 +3233,20 @@ mod tests {
         assert!(matches!(
             does("DoneButton", WindowId::Training),
             Some(Does::Closes)
+        ));
+        // The track window's Cancel also stops tracking, as the program's
+        // window binds it (read R15d).
+        assert!(matches!(
+            does("DoneButton", WindowId::Tracking),
+            Some(Does::StopsTracking)
+        ));
+        assert!(matches!(
+            does("TRW_TrackButton", WindowId::Tracking),
+            Some(Does::Tracks)
+        ));
+        assert!(matches!(
+            does("TRW_FilterRedButton", WindowId::Tracking),
+            Some(Does::Nothing)
         ));
     }
 

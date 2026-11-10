@@ -388,6 +388,10 @@ pub enum ClickTarget {
     /// A row of the Training window's list, its Train button or its Done
     /// button.
     Training(TrainingClick),
+    /// A row of the track window's list, from zero.
+    TrackRow(usize),
+    /// The track window's Track button, the skin's or the client's own.
+    Track,
     /// A Raid window button that acts for the member chosen, or for the
     /// raid.
     Raid(RaidClick),
@@ -922,12 +926,13 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["attack"] => ClickTarget::Attack,
         ["training", row] => ClickTarget::Training(TrainingClick::Row(ordinal(row, "a row")?)),
         ["train"] => ClickTarget::Training(TrainingClick::Train),
-        ["answer", "yes"] => ClickTarget::Answer(true),
+        ["tracking", row] => ClickTarget::TrackRow(ordinal(row, "a row")?),
+        ["track"] => ClickTarget::Track,
+        ["answer", answer @ ("yes" | "no")] => ClickTarget::Answer(*answer == "yes"),
         ["page", "next"] => ClickTarget::Page(true),
         ["page", "back"] => ClickTarget::Page(false),
         ["combine", slot] => ClickTarget::Combine(value(slot, "a pack slot number")?),
         ["map", action] => ClickTarget::Map(map_button(action)?),
-        ["answer", "no"] => ClickTarget::Answer(false),
         ["training_done"] => ClickTarget::Training(TrainingClick::Done),
         ["slider", name, percent] => ClickTarget::Slider(
             slider(name)?,
@@ -2139,6 +2144,22 @@ chat tell Friend inc now
             "click option",
             "click option shiny",
         ] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_script_may_choose_and_follow_a_tracked_spawn() {
+        let base = Path::new("private");
+        assert_eq!(
+            parse("click tracking 2\nclick track\nclick done tracking\n", base).unwrap(),
+            [
+                Step::Click(ClickTarget::TrackRow(1)),
+                Step::Click(ClickTarget::Track),
+                Step::Click(ClickTarget::Done("tracking")),
+            ]
+        );
+        for bad in ["click tracking", "click tracking 0", "click track 1"] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
     }
