@@ -111,7 +111,7 @@
   landmark files from replacement, and share immutable installed spell
   definitions across sessions.
 
-- Pin networking 78542f09 (Batch M slice 2): Titanium strafes on the
+- Pin networking 835c95d2 (Batch M slice 2 landing): Titanium strafes on the
   selected base speed, and the grant carries the walking strafe rate.
 
 - Pin networking 4ef182e4 (kept-grant landing): a change in the player's belongings (an item
