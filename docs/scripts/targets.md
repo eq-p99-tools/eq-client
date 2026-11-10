@@ -78,6 +78,13 @@ merchant action.
 - `actions`: open the Actions window through its EQ menu entry, opening the menu first when it is closed, as `window key` does.
 - `attack`: the attack control.
 - `ability combat number` or `ability abilities number`: a button counted from 1 on an Actions page.
+  `right_click` on one, or `click` on an empty one, opens the skills
+  picker for it.
+- `skill_select row`: a skills picker row counted from 1, in the program's
+  order; it puts that ability on the button and closes the picker.
+  `close_box skill-select` or Escape closes it with no change. The
+  `Script ability report` line names each button's choice and, while the
+  picker is open, its rows.
 - `training row`: a training row counted from 1.
 - `train` or `training_done`: the training window's buttons. Use
   `interact admission spawn revision` with the selected guildmaster's

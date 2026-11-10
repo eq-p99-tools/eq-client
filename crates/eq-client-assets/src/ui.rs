@@ -843,6 +843,13 @@ pub trait OfficialSettings {
         None
     }
 
+    /// The abilities a character chose for the Actions window's pages, as
+    /// the official client saved them; None when it has no settings file
+    /// for the character.
+    fn ability_choices(&self, _character: &str, _world: &str) -> Option<AbilityChoices> {
+        None
+    }
+
     /// The skin a character last chose, by its name. None when the client
     /// says nothing usable.
     fn chosen_skin(&self, _character: &str, _world: &str) -> Option<String> {
@@ -959,6 +966,17 @@ impl OfficialSettings for Titanium<'_> {
         ["eqclient.ini", "defaults.ini"]
             .into_iter()
             .find_map(|file| sysinfo_date(&self.0.join(file)))
+    }
+
+    /// `Ability1` to `Ability6` in `[Abilities]` and `CombatSkill1` to
+    /// `CombatSkill4` in `[CombatSkills]` of `<character>_<world>.ini`
+    /// (program read R17, 0x4b0812).
+    fn ability_choices(&self, character: &str, world: &str) -> Option<AbilityChoices> {
+        if !plain_name(character) || !plain_name(world) {
+            return None;
+        }
+        let bytes = std::fs::read(self.0.join(format!("{character}_{world}.ini"))).ok()?;
+        Some(ability_choices_from_ini(&String::from_utf8_lossy(&bytes)))
     }
 
     /// `UISkin` in the `[Main]` section of `UI_<character>_<world>.ini`, where
@@ -1188,6 +1206,32 @@ fn character_contacts_from_ini(text: &str) -> (Vec<String>, Vec<String>) {
             .collect()
     };
     (list("Friends", "Friend"), list("Ignored", "Ignored"))
+}
+
+/// What a character's settings file says each of the Actions window's
+/// chosen ability buttons holds: a skill number, -1 for an empty button, or
+/// None where the file leaves the button as it was (no value, one that is
+/// not a number, or one starting with `*`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AbilityChoices {
+    /// The Abilities page's six buttons.
+    pub abilities: [Option<i32>; 6],
+    /// The Combat page's four buttons after its fixed ones.
+    pub combat: [Option<i32>; 4],
+}
+
+fn ability_choices_from_ini(text: &str) -> AbilityChoices {
+    let value = |section: &str, key: String| {
+        ini_value(text, section, &key)
+            .filter(|value| !value.trim_start().starts_with('*'))
+            .and_then(|value| value.trim().parse::<i32>().ok())
+    };
+    AbilityChoices {
+        abilities: std::array::from_fn(|slot| value("Abilities", format!("Ability{}", slot + 1))),
+        combat: std::array::from_fn(|slot| {
+            value("CombatSkills", format!("CombatSkill{}", slot + 1))
+        }),
+    }
 }
 
 fn hotbuttons_from_ini(text: &str) -> Vec<(u8, String)> {
@@ -1915,6 +1959,19 @@ Log=maybe
         ));
         assert_eq!(friends, ["Alpha", "beta"]);
         assert_eq!(ignored, ["y".repeat(31)]);
+    }
+
+    #[test]
+    fn a_character_file_keeps_its_chosen_abilities_and_a_star_leaves_a_button_as_it_was() {
+        let choices = ability_choices_from_ini(
+            "[Abilities]\nAbility1=55\nAbility2=-1\nAbility3=*NULL*\nAbility4=Fishing\nAbility6= 62 \nAbility7=9\n[CombatSkills]\nCombatSkill1=30\nCombatSkill4=105\n",
+        );
+        assert_eq!(
+            choices.abilities,
+            [Some(55), Some(-1), None, None, None, Some(62)]
+        );
+        assert_eq!(choices.combat, [Some(30), None, None, Some(105)]);
+        assert_eq!(ability_choices_from_ini(""), AbilityChoices::default());
     }
 
     #[test]

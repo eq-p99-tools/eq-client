@@ -355,10 +355,7 @@ pub(super) fn key_help(
             (Act::BindSlot(slot), "bind the hovered gem, item or button"),
             (Act::ClearSlot(slot), "empty"),
         ]);
-        if hotbar::Source::Slot(*index)
-            .binding(online.world(), &bindings)
-            .is_some()
-        {
+        if bindings.0.get(*index).copied().flatten().is_some() {
             help.push_str(" | Hold: pick up");
         }
         write(entity, tooltip, help);

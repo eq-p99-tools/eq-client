@@ -16,8 +16,8 @@ Quarm/TAKP behavior. Frontends use runtime capabilities, not server-name flags.
 ## Server policy snapshot
 
 The following summarizes the networking revision pinned by this application's
-Cargo.lock: `88e6afe8a302b283a3e202e0ed9f64f09e6c8d54`. Its
-[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/88e6afe8a302b283a3e202e0ed9f64f09e6c8d54/crates/eq-network/src/client/session/servers.rs)
+Cargo.lock: `a50913d30320df694ece30160eea3123b5087659`. Its
+[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/a50913d30320df694ece30160eea3123b5087659/crates/eq-network/src/client/session/servers.rs)
 are the source for this table. **Yes means provided by that policy**, not a live
 certification, and individual operations still validate their prerequisites.
 
@@ -122,8 +122,16 @@ checks and cast line, Pick Pockets and Begging with their answers, the trap
 skills at a treasure, and Tracking with its window, which the skin draws
 where it has one. The track list keeps the server's order and colours each
 name by the track window's rule; Cancel stops tracking as `/stoptracking`
-does. The Actions window's ability page shows its six slots in the client's
-fixed order; choosing which abilities fill them follows as its own change.
+does. Each Actions window ability button holds what the player chooses
+from the skills picker, as the program has it (reads R17 and R17b); until
+the first choice the buttons follow the installed client's saved choice or
+the client's own order, and nothing is saved (checklist 6.448). Labelled:
+the row text and columns, and the numbers the client cannot use yet, the
+specials 111, 114 and 115 and skills 16, 71 and 72, kept on a button but
+left out of the list (6.449); Harm Touch and Lay on Hands offered by class
+and level where the program reads profile bytes this client does not
+have, 111 not offered for the same reason, and disciplines on the pages
+until a combat-abilities window exists (6.450).
 A press while a class tool's wait runs sends nothing and says the client's
 own line, where the program says nothing (a chat-only departure,
 checklist 6.447). Between a beg or a pick and its answer the program holds
@@ -164,11 +172,11 @@ affected mechanics unavailable while chat remains usable. See [installed spell
 providers](docs/spell-providers.md). These source and synthetic checks add no live
 compatibility certification.
 
-The pinned networking [combat](https://github.com/eq-p99-tools/eq-network/blob/88e6afe8a302b283a3e202e0ed9f64f09e6c8d54/docs/quarm-combat.md),
-[loot](https://github.com/eq-p99-tools/eq-network/blob/88e6afe8a302b283a3e202e0ed9f64f09e6c8d54/docs/eqmac-looting.md) and
-[world-object](https://github.com/eq-p99-tools/eq-network/blob/88e6afe8a302b283a3e202e0ed9f64f09e6c8d54/docs/eqmac-world-objects.md)
+The pinned networking [combat](https://github.com/eq-p99-tools/eq-network/blob/a50913d30320df694ece30160eea3123b5087659/docs/quarm-combat.md),
+[loot](https://github.com/eq-p99-tools/eq-network/blob/a50913d30320df694ece30160eea3123b5087659/docs/eqmac-looting.md) and
+[world-object](https://github.com/eq-p99-tools/eq-network/blob/a50913d30320df694ece30160eea3123b5087659/docs/eqmac-world-objects.md)
 contracts record their limits and controlled live checklists. The dated
-[P99/Quarm gap report](https://github.com/eq-p99-tools/eq-network/blob/88e6afe8a302b283a3e202e0ed9f64f09e6c8d54/docs/public-server-gaps.md)
+[P99/Quarm gap report](https://github.com/eq-p99-tools/eq-network/blob/a50913d30320df694ece30160eea3123b5087659/docs/public-server-gaps.md)
 retains the earlier inspection and its scenario-specific evidence.
 
 ### Public-parity checks, 2026-11-02

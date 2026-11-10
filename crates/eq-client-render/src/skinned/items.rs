@@ -294,11 +294,11 @@ pub(crate) const fn framed_while_open(id: WindowId) -> bool {
 }
 
 /// Windows the player closes here, with their close box or Escape, that
-/// nothing toggles: those framed while open, and the track window, whose
-/// own system gives it its frame and follows the closing
-/// ([`crate::tracking::window`]).
+/// nothing toggles: those framed while open, and the track window and the
+/// skills picker, whose own systems give them their frames and follow the
+/// closing ([`crate::tracking::window`], [`crate::abilities::picker`]).
 pub(crate) const fn closes_here(id: WindowId) -> bool {
-    framed_while_open(id) || matches!(id, WindowId::Tracking)
+    framed_while_open(id) || matches!(id, WindowId::Tracking | WindowId::SkillSelect)
 }
 
 /// Opens and closes the windows that have no frame of their own until then:

@@ -77,6 +77,9 @@ pub(crate) enum WindowId {
     /// The skin's track window: the spawns Tracking finds, open from the
     /// press until Track follows one or the player closes it.
     Tracking,
+    /// The skin's skills picker: the abilities an Actions window button can
+    /// hold, open from the button until the player chooses one (read R17).
+    SkillSelect,
     /// The skin's Skills window: the player's skills and their values,
     /// opened from the inventory's Skills button.
     Skills,
@@ -349,9 +352,13 @@ const fn floating(
 impl WindowId {
     /// Scripts has open/close states only; other titled windows may collapse.
     /// The track window's one box is its close box: the program's closes
-    /// it, and drawing only one, the client keeps that one.
+    /// it, and drawing only one, the client keeps that one; the skills
+    /// picker's too.
     pub(crate) const fn can_minimize(self) -> bool {
-        !matches!(self, Self::Scripts | Self::ChatGroup(_) | Self::Tracking)
+        !matches!(
+            self,
+            Self::Scripts | Self::ChatGroup(_) | Self::Tracking | Self::SkillSelect
+        )
     }
 
     /// The primary chat and its detached instances use the same authored widgets.
@@ -362,7 +369,7 @@ impl WindowId {
     /// Every singleton window, in the order the selector lists the toggled ones.
     /// Bags are left out: there is one for each slot that can hold a bag
     /// (see [`WindowId::bags`]), and none of them is toggled.
-    pub(crate) const ALL: [Self; 38] = [
+    pub(crate) const ALL: [Self; 39] = [
         Self::Status,
         Self::Target,
         Self::Player,
@@ -389,6 +396,7 @@ impl WindowId {
         Self::Options,
         Self::Training,
         Self::Tracking,
+        Self::SkillSelect,
         Self::Skills,
         Self::Confirmation,
         Self::ServerDialog,
@@ -440,6 +448,7 @@ impl WindowId {
             Self::Options => Some("OptionsWindow"),
             Self::Training => Some("TrainWindow"),
             Self::Tracking => Some("TrackingWnd"),
+            Self::SkillSelect => Some("SkillsSelectWindow"),
             Self::Skills => Some("SkillsWindow"),
             Self::Confirmation => Some("ConfirmationDialogBox"),
             Self::Note => Some("NoteWindow"),
@@ -511,6 +520,7 @@ impl WindowId {
             Self::Options => "options",
             Self::Training => "training",
             Self::Tracking => "tracking",
+            Self::SkillSelect => "skill-select",
             Self::Skills => "skills",
             Self::Confirmation => "confirmation",
             Self::ServerDialog => "server-dialog",
@@ -704,6 +714,16 @@ impl WindowId {
             Self::Training => floating("TRAINING", Placement::TopLeft(120.0, 20.0), false, &[]),
             // Where the skin places it; the Tracking press opens it.
             Self::Tracking => floating("TRACKING", Placement::TopLeft(0.0, 20.0), false, &[]),
+            // Where the skin places it; an Actions window button opens it.
+            Self::SkillSelect => floating(
+                "SKILLS",
+                Placement::TopCentre {
+                    top: 120.0,
+                    width: 220.0,
+                },
+                false,
+                &[],
+            ),
             // Where the skin places it, over the chat; the inventory's
             // Skills button opens it too.
             Self::Skills => floating("SKILLS", Placement::TopLeft(120.0, 445.0), true, &[]),

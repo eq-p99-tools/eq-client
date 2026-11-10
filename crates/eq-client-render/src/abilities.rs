@@ -1,8 +1,9 @@
 //! The abilities on the skin's Actions window, as the official client has
-//! them: the Combat page's four buttons and the Abilities page's six. They
-//! hold the abilities the player has, strikes and taunt first on the Combat
-//! page and the rest after, each named on its button and greyed while its
-//! recovery timer runs. A click uses one, and Ctrl and a number binds the one
+//! them: the Combat page's four buttons and the Abilities page's six. Each
+//! holds the ability the player chose for it from the skills picker
+//! ([`picker`], read R17), or until the first choice this client's own
+//! order ([`choices`]), named on its button and greyed while its recovery
+//! timer runs. A click uses one, and Ctrl and a number binds the one
 //! under the pointer to the action bar, as gems and items bind. The session
 //! says why an ability did not go.
 use crate::{online::OnlineState, outbox::Outbox, theme};
@@ -36,37 +37,10 @@ pub(crate) struct AbilityButton {
 #[derive(Component, Clone, Copy)]
 pub(crate) struct AbilityLabel(pub(crate) AbilityButton);
 
-/// How many buttons the Combat page has for abilities.
-const COMBAT_BUTTONS: usize = 4;
+pub(crate) mod choices;
+pub(crate) mod picker;
 
-/// The ability a button holds, if the player has one for it.
-pub(crate) fn assigned(world: &ClientWorld, button: AbilityButton) -> Option<Binding> {
-    let (targeted, other): (Vec<Ability>, Vec<Ability>) = world
-        .abilities()
-        .into_iter()
-        .partition(|ability| ability.at_target());
-    // Only a session that offers them gives these their own buttons, so the
-    // ordinary abilities keep their places everywhere else.
-    let targeted = knight(world)
-        .filter(|_| world.can(eq_client_core::Capability::KnightAbilities))
-        .map(Binding::KnightAbility)
-        .into_iter()
-        .chain(
-            Discipline::SUPPORTED
-                .into_iter()
-                .filter(|_| world.can(eq_client_core::Capability::UsingDisciplines))
-                .filter(|&discipline| knows_discipline(world, discipline))
-                .map(Binding::Discipline),
-        )
-        .chain(targeted.into_iter().map(Binding::Ability));
-    match button.page {
-        Page::Combat => targeted.take(COMBAT_BUTTONS).nth(button.index),
-        Page::Abilities => targeted
-            .skip(COMBAT_BUTTONS)
-            .chain(other.into_iter().map(Binding::Ability))
-            .nth(button.index),
-    }
-}
+pub(crate) use choices::{Choices, assigned};
 
 /// The class ability that belongs to the admitted player, if any.
 pub(crate) fn knight(world: &ClientWorld) -> Option<KnightAbility> {
@@ -153,11 +127,12 @@ pub(crate) fn use_ability(
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn needs(
     online: Res<OnlineState>,
+    choices: Res<Choices>,
     mut buttons: Query<(&AbilityButton, &mut crate::outbox::Needs)>,
 ) {
     use crate::outbox::Needs;
     for (button, mut needs) in &mut buttons {
-        let wanted = assigned(online.world(), *button).map_or(
+        let wanted = assigned(online.world(), &choices, *button).map_or(
             Needs::Capability(eq_client_core::Capability::Abilities),
             |binding| crate::hud::hotbar::need(Some(binding)),
         );
@@ -167,7 +142,9 @@ pub(crate) fn needs(
     }
 }
 
-/// A clicked ability button uses its ability.
+/// A clicked ability button uses its ability; an empty one opens the
+/// skills picker for it, and one holding what the client cannot use does
+/// nothing (6.449).
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn input(
     online: Res<OnlineState>,
@@ -175,9 +152,15 @@ pub(crate) fn input(
     mut chat: ResMut<crate::chat::ChatState>,
     buttons: crate::clicks::Clicks<AbilityButton>,
     liquid: crate::motion::Liquid,
+    (choices, mut picker): (Res<Choices>, ResMut<picker::Picker>),
 ) {
     for button in buttons.iter() {
-        match assigned(online.world(), *button) {
+        // An empty button opens the picker for it, as the program's does.
+        if choices::empty(online.world(), &choices, *button) {
+            picker.ask(*button);
+            continue;
+        }
+        match assigned(online.world(), &choices, *button) {
             Some(Binding::Ability(ability)) => {
                 use_ability(ability, &online, &outbox, liquid.feet_in(online.world()));
             }
@@ -210,17 +193,13 @@ pub(crate) fn input(
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn present(
     online: Res<OnlineState>,
+    choices: Res<Choices>,
     mut labels: Query<(&AbilityLabel, &mut Text, &mut TextColor)>,
 ) {
     let now = std::time::Instant::now();
     for (AbilityLabel(button), mut text, mut color) in &mut labels {
-        let binding = assigned(online.world(), *button);
-        let wanted = match binding {
-            Some(Binding::Ability(ability)) => ability.name(),
-            Some(Binding::KnightAbility(ability)) => ability.name(),
-            Some(Binding::Discipline(discipline)) => discipline.name(),
-            _ => "",
-        };
+        let binding = assigned(online.world(), &choices, *button);
+        let wanted = choices::caption(online.world(), &choices, *button);
         if text.0 != wanted {
             wanted.clone_into(&mut text.0);
         }
@@ -288,7 +267,7 @@ mod tests {
             index: 0,
         };
         assert_eq!(
-            assigned(online.world(), button),
+            assigned(online.world(), &Choices::default(), button),
             Some(Binding::KnightAbility(KnightAbility::LayOnHands))
         );
     }
@@ -326,7 +305,7 @@ mod tests {
             index: 0,
         };
         assert_ne!(
-            assigned(online.world(), button),
+            assigned(online.world(), &Choices::default(), button),
             Some(Binding::KnightAbility(KnightAbility::LayOnHands))
         );
     }
@@ -347,7 +326,7 @@ mod tests {
             )],
         );
         let mut app = crate::testing::app();
-        app.add_systems(Update, needs);
+        app.init_resource::<Choices>().add_systems(Update, needs);
         app.insert_resource(online);
         let button = |page, index| {
             (
@@ -371,7 +350,11 @@ mod tests {
     #[test]
     fn the_combat_page_takes_four_strikes_and_the_abilities_page_the_rest() {
         let online = monk();
-        let on = |page, index| match assigned(online.world(), AbilityButton { page, index }) {
+        let on = |page, index| match assigned(
+            online.world(),
+            &Choices::default(),
+            AbilityButton { page, index },
+        ) {
             Some(Binding::Ability(ability)) => Some(ability),
             _ => None,
         };

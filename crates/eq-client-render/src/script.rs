@@ -664,6 +664,7 @@ type Buttons<'w, 's> = Query<
                     (
                         Option<&'static super::tracking::TrackRow>,
                         Has<super::tracking::TrackButton>,
+                        Option<&'static super::abilities::picker::PickRow>,
                     ),
                 ),
             ),
@@ -714,6 +715,10 @@ type Observed<'w> = (
     Option<Res<'w, crate::projectiles::Flights>>,
     Option<Res<'w, crate::socials::State>>,
     Option<Res<'w, crate::options::MovementSync>>,
+    (
+        Option<Res<'w, crate::abilities::Choices>>,
+        Option<Res<'w, crate::abilities::picker::Picker>>,
+    ),
 );
 
 type Input<'w, 's> = (Keyboard<'w, 's>, ResMut<'w, ButtonInput<MouseButton>>);
@@ -2514,15 +2519,20 @@ fn dialog_control(
     }
 }
 
-/// Whether a control of the track window is the one a click names: a row
-/// of its list, or Track.
+/// Whether a control of the track window or the skills picker is the one
+/// a click names: a row of either list, or Track.
 fn tracking_control(
     target: ClickTarget,
-    (row, track): (Option<&super::tracking::TrackRow>, bool),
+    (row, track, pick): (
+        Option<&super::tracking::TrackRow>,
+        bool,
+        Option<&super::abilities::picker::PickRow>,
+    ),
 ) -> bool {
     match target {
         ClickTarget::TrackRow(index) => row.is_some_and(|row| row.index == index),
         ClickTarget::Track => track,
+        ClickTarget::SkillRow(index) => pick.is_some_and(|row| row.index == index),
         _ => false,
     }
 }
@@ -2649,7 +2659,9 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
             ClickTarget::RaidRow(grouped, index) => raid_row.is_some_and(|row| {
                 row.index == index && (row.list == super::raid::RaidList::Grouped) == grouped
             }),
-            ClickTarget::TrackRow(_) | ClickTarget::Track => tracking_control(target, tracking),
+            ClickTarget::TrackRow(_) | ClickTarget::Track | ClickTarget::SkillRow(_) => {
+                tracking_control(target, tracking)
+            }
             ClickTarget::Buff(long, index) => effects_button(shows, long, index),
             ClickTarget::Button(key, id) => {
                 skin_id.is_some_and(|skin| skin.id == id && skin.window.key() == key)
