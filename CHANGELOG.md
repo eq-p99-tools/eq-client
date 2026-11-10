@@ -17,9 +17,11 @@
   leaves the player put (checklist 6.427), and the model is not drawn
   rising there. A player who steps off a rising lift is carried no further,
   and the step still names the lift that raised it. Between samples the
-  model is drawn on the rising floor. A lift is in click reach from where it was
-  placed or from where it stands now, so one resting raised is called from
-  below and used from its top (checklist 6.436). A door that moves into the
+  model is drawn on the rising floor. A door is in click reach, in 3-D within 20,
+  of its origin where it stands now, so a lift resting raised is used from
+  its top; the program measures from the clicked point on the door as drawn,
+  within the player's size and 20, so ours is short of it (read R16b, R16e;
+  checklist 6.436). A door that moves into the
   player, such as a lift landing around someone beside it, no longer holds
   them in place: its walls let them walk out, and its floor still holds them
   up (checklist 6.439). The movement report names the door whose floor is

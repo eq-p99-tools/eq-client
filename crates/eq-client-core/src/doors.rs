@@ -154,18 +154,17 @@ impl DoorTable {
             _ => return None,
         };
         let door = self.doors.entries().get(&id)?;
-        // A lift is reached from where it was placed or where it stands now,
-        // whichever is in reach and nearer, as the session checks (recording
-        // checklist 6.436).
-        let raised = WorldPosition {
+        // A door is reached at its origin where it stands now, within 20, as
+        // the session checks: short of the program, which measures from the
+        // clicked point on the door as drawn, within the player's size and
+        // 20 (read R16b, R16e; recording checklist 6.436).
+        let at = WorldPosition {
             z: door.position.z + self.lifts.offset(id, now).unwrap_or(0.0),
             ..door.position
         };
-        let near = |at: WorldPosition| (at.z - position.z).abs();
-        let at = [door.position, raised]
-            .into_iter()
-            .filter(|at| reach.admits(position, *at))
-            .min_by(|a, b| near(*a).total_cmp(&near(*b)))?;
+        if !reach.admits(position, at) {
+            return None;
+        }
         let flat = (at.x - position.x).hypot(at.y - position.y);
         Some(if reach.flat {
             flat
@@ -595,7 +594,7 @@ mod tests {
     }
 
     #[test]
-    fn a_raised_lift_is_in_reach_from_its_top_and_its_base_not_between() {
+    fn a_raised_lift_is_in_reach_from_its_top_not_its_base() {
         let start = Instant::now();
         let mut table = DoorTable::default();
         let raised = Door {
@@ -607,15 +606,14 @@ mod tests {
             z,
             ..WorldPosition::default()
         };
-        for z in [0.0, 69.0] {
-            assert!(
-                table
-                    .use_distance(4, at(z), start)
-                    .is_some_and(|d| d < 0.01),
-                "from {z}"
-            );
+        for z in [0.0, 34.5] {
+            assert_eq!(table.use_distance(4, at(z), start), None, "from {z}");
         }
-        assert_eq!(table.use_distance(4, at(34.5), start), None);
+        assert!(
+            table
+                .use_distance(4, at(69.0), start)
+                .is_some_and(|d| d < 0.01)
+        );
     }
 
     #[test]

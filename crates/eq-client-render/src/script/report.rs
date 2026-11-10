@@ -612,7 +612,13 @@ fn door_details(online: &crate::online::OnlineState, origin: Option<Vec3>) -> Ve
         .entries()
         .values()
         .filter_map(|door| {
-            let position = Vec3::from_array(eq_client_core::render_position(door.position));
+            // Measured to where the door stands now, so a raised lift stays
+            // listed for its own rider.
+            let at = eq_client_core::WorldPosition {
+                z: door.position.z + table.lift_offset(door.id, now).unwrap_or(0.0),
+                ..door.position
+            };
+            let position = Vec3::from_array(eq_client_core::render_position(at));
             let distance = position.distance(origin);
             if distance > DOOR_DETAIL_REACH {
                 return None;
