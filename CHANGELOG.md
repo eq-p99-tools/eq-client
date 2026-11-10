@@ -121,7 +121,7 @@
   landmark files from replacement, and share immutable installed spell
   definitions across sessions.
 
-- Pin networking 1600a250 (Batch M slice 3, draft): Titanium's own position
+- Pin networking 9d9d0ee1 (Batch M slice 3 landing): Titanium's own position
   update carries the program's movement-history entry counter, goes out by
   the program's flag rule (a straight run once a second), repeats while
   frozen and stops while stunned; the session grants the rate for backing
