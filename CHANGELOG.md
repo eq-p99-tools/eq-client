@@ -15,6 +15,12 @@
   the duck pose is drawn. The Mac-era client is unread and still stands you
   to move. Networking pinned to 50c1662 (eq-network #299).
 
+- The Script report's `effects` field is now `unslotted_effects`, as it
+  only ever held landings the server gave no slot, and a new `held_spells`
+  field lists every spell the player holds, slotted or not. A buff held at
+  zone entry is in the server's slot list, so it was missing from
+  `effects`, which read as a missed buff.
+
 - Scripts on a local test session may read the server's own view of a test
   character with `gm show`: exactly `buffs`, `currencies`, `timers`,
   `distance` or `line_of_sight`, or `inventory SCOPE` with SCOPE one of
