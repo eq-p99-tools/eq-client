@@ -115,6 +115,7 @@ mod tests {
             let mut scroll = crate::preview::items().remove(0);
             scroll.slot = InventorySlot::CURSOR;
             scroll.scroll_spell = Some(73);
+            scroll.rules.item_type = 20;
             testing::inventory(&mut online, InventoryUpdate::Snapshot(vec![scroll]));
             let mut app = crate::testing::app();
             let (updates, incoming) = mpsc::channel();
@@ -267,6 +268,24 @@ mod tests {
         assert_eq!(fixture.world().gem(0), Some(42));
         assert_eq!(fixture.line_count("Memorizing Synthetic spell."), 1);
         assert_eq!(fixture.line_count("Synthetic spell is memorized."), 1);
+    }
+
+    #[test]
+    fn a_press_that_passes_says_12049_with_the_name_and_leaves_the_wait_to_the_worker() {
+        let mut fixture = Fixture::new();
+        fixture
+            .app
+            .insert_resource(Messages::parse("EQST0002\n0 1\n12049 line 12049 %1\n"));
+        fixture.click(|_: &ScribeCursor| true);
+        assert!(matches!(
+            fixture.sent.try_recv().unwrap(),
+            ClientCommand::ScribeSpell { spell_id: 73, .. }
+        ));
+        // The worker sits the player and holds the request for its delay
+        // (eq-network's SITTING, labelled inferred); the client sends once.
+        fixture.frame([status(BookActionStatus::Preparing)]);
+        assert_eq!(fixture.line_count("line 12049 Synthetic scroll"), 1);
+        assert!(fixture.sent.try_recv().is_err());
     }
 
     #[test]

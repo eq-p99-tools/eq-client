@@ -82,6 +82,29 @@ pub enum EquipmentUnavailable {
     Item(crate::inventory::InventorySlot),
 }
 
+/// The bit a base race has in an item's race mask, or None for a race no
+/// mask names.
+#[must_use]
+pub const fn race_bit(base_race: u32) -> Option<u32> {
+    Some(match base_race {
+        1..=12 => base_race - 1,
+        128 => 12,
+        130 => 13,
+        330 => 14,
+        _ => return None,
+    })
+}
+
+/// Whether an item's class and race masks admit this class (1 to 16) and
+/// base race; None when either is one no mask names.
+#[must_use]
+pub fn usable_by(details: &crate::ItemDetails, class: u32, base_race: u32) -> Option<bool> {
+    let race = race_bit(base_race)?;
+    (1..=16)
+        .contains(&class)
+        .then(|| details.classes & (1 << (class - 1)) != 0 && details.races & (1 << race) != 0)
+}
+
 /// Selects direct stat-bearing equipment using Titanium slot and eligibility masks.
 /// Ammo, cursor, carried and bank items are excluded. Food/drink contributions are separate.
 /// Predictions in storage slots and provably stat-neutral equipment histories
@@ -107,13 +130,7 @@ pub fn eqemu_equipped_modifiers(
     if !(1..=16).contains(&class) || level == 0 {
         return Err(EquipmentUnavailable::UnknownCharacter);
     }
-    let race_bit = match base_race {
-        1..=12 => base_race - 1,
-        128 => 12,
-        130 => 13,
-        330 => 14,
-        _ => return Err(EquipmentUnavailable::UnknownCharacter),
-    };
+    let race_bit = race_bit(base_race).ok_or(EquipmentUnavailable::UnknownCharacter)?;
     let mut result = Vec::new();
     for (&slot, item) in inventory
         .items()
