@@ -225,6 +225,7 @@ pub(crate) fn player(
         appearance: eq_client_core::outfit::Appearance::default(),
         listing: eq_client_core::listing::Listing::default(),
         name_parts: eq_client_core::names::NameParts::default(),
+        posture: None,
     }
 }
 
@@ -595,6 +596,7 @@ fn synthetic(id: u16, race: u32, size: f32, position: WorldPosition) -> eq_clien
         name_parts: eq_client_core::names::NameParts::default(),
         pet_owner: None,
         hp_percent: None,
+        posture: None,
     }
 }
 

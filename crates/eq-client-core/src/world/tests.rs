@@ -45,6 +45,7 @@ fn player(spawn_id: u16) -> PlayerState {
         appearance: Appearance::default(),
         listing: crate::listing::Listing::default(),
         name_parts: crate::names::NameParts::default(),
+        posture: None,
     }
 }
 
@@ -69,6 +70,7 @@ fn spawn(spawn_id: u16) -> SpawnState {
         name_parts: crate::names::NameParts::default(),
         pet_owner: None,
         hp_percent: None,
+        posture: None,
     }
 }
 
@@ -6507,4 +6509,42 @@ fn a_jump_takes_its_cost_off_the_shown_endurance_until_the_next_report() {
         },
     );
     assert_eq!(world.vitals().endurance, Some(25));
+}
+
+#[test]
+fn the_players_posture_changes_are_counted_but_not_a_first_standing() {
+    let mut world = admitted();
+    let player = world.player().unwrap().spawn_id;
+    let posture = |world: &mut ClientWorld, posture| {
+        game(
+            world,
+            WorldEvent::Posture {
+                spawn_id: player,
+                posture,
+            },
+        );
+        world.player_posture_changes()
+    };
+    assert_eq!(world.player_posture_changes(), 0);
+    // The standing the session reports at zone entry (read R24), and
+    // equally a Mac-era player's first stand after a zone-in: the rule
+    // doesn't depend on the generation.
+    assert_eq!(posture(&mut world, PostureState::Standing), 0);
+    assert_eq!(posture(&mut world, PostureState::Standing), 0);
+    assert_eq!(posture(&mut world, PostureState::Sitting), 1);
+    assert_eq!(posture(&mut world, PostureState::Standing), 2);
+    // Another spawn's posture is not the player's.
+    game(
+        &mut world,
+        WorldEvent::Posture {
+            spawn_id: 5,
+            posture: PostureState::Sitting,
+        },
+    );
+    assert_eq!(world.player_posture_changes(), 2);
+    // A first posture other than standing is a change: the session's
+    // report of the posture the entry stand replaces.
+    let mut world = admitted();
+    assert_eq!(posture(&mut world, PostureState::Sitting), 1);
+    assert_eq!(posture(&mut world, PostureState::Standing), 2);
 }

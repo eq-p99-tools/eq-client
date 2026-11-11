@@ -653,6 +653,15 @@ impl ClientWorld {
         self.zone.landings.get(&id).copied()
     }
 
+    /// How many times the player's reported posture has changed, wrapping.
+    /// A first standing, as at zone entry, doesn't count; a first other
+    /// posture and every change of a known one do, so a reader that looks
+    /// once a frame still sees a change and its undoing in the same frame.
+    #[must_use]
+    pub const fn player_posture_changes(&self) -> u32 {
+        self.player_posture_changes
+    }
+
     /// The posture last reported for the player or a spawn.
     #[must_use]
     pub fn posture(&self, id: u16) -> Option<PostureState> {

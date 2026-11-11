@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- After a zone-in your first /stand no longer sends a standing report the
+  Titanium program would skip: the session now stands you at entry, as the
+  program does, and sends one stand only when the server's record of you
+  wasn't standing (program reads R24 and R24b; checklist 6.461). A lone
+  first standing is the posture you enter with, not a change, so it leaves
+  autorun alone; a stand at entry that changed your posture ends autorun,
+  as the program's does. The rule is the same on every client generation,
+  so on the Mac-era client (whose entry is unread) a first /stand after a
+  zone-in no longer ends autorun either. Networking pinned to d35b10b
+  (eq-network #297).
 - A root no longer takes the player's input away. The session grants a
   rooted player at no speed (read R18: the program zeroes the speed once and
   blocks nothing else; read R22). The keys, the mouse and a script's

@@ -166,6 +166,7 @@ mod tests {
             name_parts: crate::names::NameParts::default(),
             pet_owner: None,
             hp_percent: None,
+            posture: None,
         };
         // An NPC with an input of 0.5, facing +X, settles at 11.64 a
         // second on either generation; it climbs to it within a few calls.
@@ -234,6 +235,7 @@ mod tests {
             name_parts: crate::names::NameParts::default(),
             pet_owner: None,
             hp_percent: None,
+            posture: None,
         }
     }
     #[test]
