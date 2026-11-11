@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- After a zone-in your first /stand no longer sends a standing report the
+  Titanium program would skip: the session now stands you at entry, as the
+  program does, and sends one stand only when the server's record of you
+  wasn't standing (program reads R24 and R24b; checklist 6.461). A lone
+  first standing is the posture you enter with, not a change, so it leaves
+  autorun alone; a stand at entry that changed your posture ends autorun,
+  as the program's does. Networking pinned to 852b169 (eq-network #297).
 - A Feign Death spell landing on you lies you down, as the Titanium
   program does (program read R21): the session sends one lying posture and
   you are held still as for the ability, with auto attack left as it is and

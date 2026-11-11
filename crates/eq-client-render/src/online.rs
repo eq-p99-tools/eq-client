@@ -1236,6 +1236,7 @@ pub(crate) mod testing {
             appearance: eq_client_core::outfit::Appearance::default(),
             listing: eq_client_core::listing::Listing::default(),
             name_parts: eq_client_core::names::NameParts::default(),
+            posture: None,
         }
     }
 
@@ -1262,6 +1263,7 @@ pub(crate) mod testing {
             name_parts: eq_client_core::names::NameParts::default(),
             pet_owner: Some(owner),
             hp_percent: Some(100),
+            posture: None,
         }
     }
 
@@ -1805,6 +1807,7 @@ mod tests {
             appearance: eq_client_core::outfit::Appearance::default(),
             listing: eq_client_core::listing::Listing::default(),
             name_parts: eq_client_core::names::NameParts::default(),
+            posture: None,
         };
         let spawn = eq_client_core::SpawnState {
             class: None,
@@ -1826,6 +1829,7 @@ mod tests {
             name_parts: eq_client_core::names::NameParts::default(),
             pet_owner: None,
             hp_percent: None,
+            posture: None,
         };
         let door = Door {
             id: 3,
@@ -2344,6 +2348,7 @@ mod tests {
             appearance: eq_client_core::outfit::Appearance::default(),
             listing: eq_client_core::listing::Listing::default(),
             name_parts: eq_client_core::names::NameParts::default(),
+            posture: None,
         };
         let admitted = std::time::Instant::now();
         for update in [

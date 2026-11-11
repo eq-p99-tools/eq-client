@@ -226,6 +226,10 @@ pub struct ClientWorld {
     /// The installed client's generation, whose program carries spawns on
     /// between reports; it outlasts every connection.
     generation: crate::GameDialect,
+    /// How many times the player's reported posture has changed, wrapping;
+    /// it outlasts every zone, so a reader sees each change even when
+    /// several come between two looks.
+    player_posture_changes: u32,
 
     // The connection to the servers.
     connected: bool,
@@ -1123,6 +1127,17 @@ impl ClientWorld {
             WorldEvent::LastName { name, last_name } => self.last_name(name, last_name),
             WorldEvent::Posture { spawn_id, posture } => {
                 let player = self.is_player(*spawn_id);
+                // A first standing, as the session reports a player at zone
+                // entry, is the posture they enter with (read R24), not a
+                // change; any other first posture, and any change of a known
+                // one, is.
+                let before = self.zone.player_posture;
+                if player
+                    && before != Some(*posture)
+                    && !(before.is_none() && *posture == PostureState::Standing)
+                {
+                    self.player_posture_changes = self.player_posture_changes.wrapping_add(1);
+                }
                 self.zone.posture(*spawn_id, *posture, player);
             }
             WorldEvent::HealthPercent { spawn_id, percent } => {
