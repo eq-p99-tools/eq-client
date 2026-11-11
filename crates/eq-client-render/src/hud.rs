@@ -576,7 +576,7 @@ pub(super) fn actions(
         _ => None,
     });
     if let Some(gem) = gem {
-        let (names, messages, settings) = definitions;
+        let (names, messages, settings) = &definitions;
         let mana_cost = online
             .world()
             .gem(usize::from(gem))
@@ -596,12 +596,12 @@ pub(super) fn actions(
                     .gem(usize::from(gem))
                     .and_then(|spell| names.linked_timer(spell)),
             },
-            (&messages, &keys.map),
+            (messages, &keys.map),
             || {
                 super::invisibility::drop_before_cast(
                     online.world(),
                     &outbox,
-                    &names,
+                    names,
                     settings.0.installed_client,
                 )
             },
@@ -620,7 +620,16 @@ pub(super) fn actions(
         super::chat::run_game_command(command, &mut online, &outbox, &mut chat, &qol);
     }
     let flying = flight_uses_duck(options.as_deref(), online.world());
-    if let Some(posture) = requested_posture(&keys, online.world(), player_id, flying) {
+    let requested = match requested_posture(&keys, online.world(), player_id, flying) {
+        Ok(posture) => posture,
+        // Titanium's sit toggle refuses under a mesmerize (read R19b 5).
+        Err(_) if let Some(refusal) = seat_refusal(online.world(), &definitions.0) => {
+            chat.refuse(definitions.1.said(refusal, &[]));
+            None
+        }
+        Err(seat) => seat,
+    };
+    if let Some(posture) = requested {
         // The outbox shows why a stance did not go.
         let _ = outbox.post(online.world(), |stamp| {
             eq_client_core::ClientCommand::SetPosture {
@@ -633,32 +642,34 @@ pub(super) fn actions(
     }
 }
 
+/// The posture a key asks for. The sit toggle's choice comes back as an
+/// error for the caller to check against its refusal first.
 fn requested_posture(
     keys: &super::keys::Keys,
     world: &eq_client_core::world::ClientWorld,
     player_id: u16,
     flying: bool,
-) -> Option<eq_client_core::Posture> {
+) -> Result<Option<eq_client_core::Posture>, Option<eq_client_core::Posture>> {
     use super::keys::Act;
     // The duck key toggles, as both programs' key dispatchers do (Titanium
     // 0x4619cd case 0x4623b1, EQMac 0x54050c): standing ducks, ducking
     // stands, and any other stance leaves the key alone.
     if keys.pressed(Act::Duck) && !flying {
-        match world.posture(player_id) {
+        Ok(match world.posture(player_id) {
             Some(eq_client_core::PostureState::Ducking) => Some(eq_client_core::Posture::Standing),
             None | Some(eq_client_core::PostureState::Standing) => {
                 Some(eq_client_core::Posture::Ducking)
             }
             Some(_) => None,
-        }
+        })
     } else if keys.pressed(Act::SitStand) {
-        toggled_seat(world.posture(player_id))
+        Err(toggled_seat(world.posture(player_id), world.generation()))
     } else if keys.pressed(Act::Sit) {
-        Some(eq_client_core::Posture::Sitting)
+        Ok(Some(eq_client_core::Posture::Sitting))
     } else if keys.pressed(Act::Stand) {
-        Some(eq_client_core::Posture::Standing)
+        Ok(Some(eq_client_core::Posture::Standing))
     } else {
-        None
+        Ok(None)
     }
 }
 
@@ -671,16 +682,56 @@ fn flight_uses_duck(
         && world.can(eq_client_core::Capability::Moving)
 }
 
-/// The native sit/stand command chooses a request from reported posture.
-const fn toggled_seat(
+/// The native sit/stand command chooses a request from reported posture:
+/// standing or ducking sits, and sitting stands. Where the generation's
+/// toggle stands lying and looting players too (`SitToggle`; Titanium
+/// 0x49dcfa, read R19), so does this; frozen keeps the earlier choice of
+/// nothing, as that branch is unread on its own (recording checklist
+/// 6.455). The Mac-era client's toggle is unread, so it keeps the earlier
+/// choice.
+pub(super) const fn toggled_seat(
     posture: Option<eq_client_core::PostureState>,
+    generation: eq_client_core::GameDialect,
 ) -> Option<eq_client_core::Posture> {
     use eq_client_core::{Posture, PostureState};
     match posture {
         None | Some(PostureState::Standing | PostureState::Ducking) => Some(Posture::Sitting),
         Some(PostureState::Sitting) => Some(Posture::Standing),
+        Some(PostureState::Lying | PostureState::Looting)
+            if generation.sit_toggle().stands_lying_and_looting =>
+        {
+            Some(Posture::Standing)
+        }
         Some(_) => None,
     }
+}
+
+/// The line the generation's sit toggle refuses with (`SitToggle`;
+/// Titanium `eqstr_us.txt` 0x3050), if it refuses: while a buff of the
+/// player's carries effect 31 (mesmerize, read R19b 5). Only buffs whose
+/// effects the installed spell data knows are counted, and only the slots,
+/// not effects landed without one (recording checklist 6.455). The Mac-era
+/// client's toggle is unread and never refuses.
+fn seat_refusal(
+    world: &eq_client_core::world::ClientWorld,
+    names: &super::spellbook::SpellNames,
+) -> Option<u32> {
+    const MESMERIZE: u32 = 31;
+    let refusal = world.generation().sit_toggle().mesmerize_refusal?;
+    world
+        .buffs()
+        .slots()
+        .into_iter()
+        .flat_map(|slots| slots.values())
+        .any(|buff| {
+            names.mechanics(buff.spell_id).is_some_and(|mechanics| {
+                mechanics
+                    .effects
+                    .iter()
+                    .any(|effect| effect.id == MESMERIZE)
+            })
+        })
+        .then_some(refusal)
 }
 
 /// Creates a consistently framed HUD group.

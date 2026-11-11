@@ -9,6 +9,30 @@
   owed live rows for a root and snares landing while moving run (recording
   checklist 6.451).
 
+- Feign Death and lying on the ground as the Titanium program handles them
+  (program reads R19, R19b and R19cd). The press lies the player down
+  before the feign request, so others see the body fall, and turns auto
+  attack off without a line (the program's second line is unread,
+  checklist 6.455). A lying player's own forward, back, strafe, keyboard
+  turning, autorun and jump move nothing and stand no one; mouse look still
+  turns them in the chase views. Casting, an item click or a knight's
+  special while lying is refused with the program's line. A hit stands a
+  sitting or looting player; a lying one stays down. The sit toggle and
+  `/sit` stand a lying or looting player, and the toggle refuses under a
+  mesmerize, where the player's buffs' effects are known (checklist
+  6.455). Auto attack now stays on through a sit, a duck or a lie, the
+  server deciding the swings (read R19cd 3); the attack key still turns it
+  off and still refuses to turn it on while the player is not standing.
+  The Mac-era client keeps the earlier rules, its program unread. Two
+  Dangerous options, where the server type offers gameplay departures:
+  Stand When Hit, on by default as the original client behaves, whose off
+  keeps a hit sitter seated (checklist 6.453), and Move While Feigned, off
+  by default, where the press sends only the feign so the player stays
+  standing, is seen standing and moves while the server keeps the feign;
+  their next stand ends it, as a jump or a duck does (checklist 6.454).
+  Autorun pressed while sitting neither stands the player nor runs them
+  once they stand (read R19c), and any posture change ends autorun.
+  Networking pinned to 5248ca5 (eq-network #293).
 - Stop needless movement blocking. A Bard's song pulse, any buff or spell
   landing on the player, a level, eating, looting or moving items, and a
   server's move no longer stop the player, cancel autorun or drop a jump:

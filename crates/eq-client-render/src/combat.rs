@@ -45,6 +45,10 @@ pub(super) struct CombatState {
     /// standing or died, whose off has not left yet: the session follows
     /// only a toggle it was sent, so the off goes again until it leaves.
     off_unsent: bool,
+    /// The unsent off says nothing when it leaves: the Feign Death press
+    /// turns auto attack off without a line (read R19b 3; the 0x117 line of
+    /// its second call is not modelled, recording checklist 6.455).
+    off_quiet: bool,
 }
 
 impl CombatState {
@@ -56,7 +60,20 @@ impl CombatState {
             self.session_id = session_id;
             self.auto_attack = false;
             self.off_unsent = false;
+            self.off_quiet = false;
             self.idle = IdleSwings::default();
+        }
+    }
+
+    /// Turns auto attack off without a line, as the Titanium Feign Death
+    /// press does. The off still goes to the session, which follows only a
+    /// toggle it was sent; whatever the program's own sender does is unread
+    /// (recording checklist 6.455).
+    pub(super) fn end_quietly(&mut self) {
+        if self.auto_attack {
+            self.auto_attack = false;
+            self.off_unsent = true;
+            self.off_quiet = true;
         }
     }
 }
@@ -161,10 +178,15 @@ pub(super) fn input(
     let posture = world
         .posture(player.spawn_id)
         .filter(|posture| *posture != PostureState::Standing);
-    // Both clients stop attacking when the player stops standing, and keep
-    // on whatever becomes of the target.
+    // Titanium keeps attacking through a sit, a duck or a lie, the server
+    // deciding the swings (read R19cd 3); its Feign Death press turns
+    // auto attack off on its own ([`CombatState::end_quietly`]). The
+    // Mac-era client's program is unread, so it keeps the earlier rule and
+    // stops attacking when the player stops standing (checklist 6.455).
+    // Both keep on whatever becomes of the target.
     let live = world.connected() && !world.is_dead();
-    if combat.auto_attack && (!live || posture.is_some()) {
+    let posture_ends = world.generation().posture_ends_attack() && posture.is_some();
+    if combat.auto_attack && (!live || posture_ends) {
         combat.auto_attack = false;
         combat.off_unsent = world.connected();
     }
@@ -176,10 +198,15 @@ pub(super) fn input(
         match outbox.try_post(world, attack(false)) {
             Ok(()) => {
                 combat.off_unsent = false;
-                chat.history.push(toggle_line(toggle, false, &messages));
+                if !std::mem::take(&mut combat.off_quiet) {
+                    chat.history.push(toggle_line(toggle, false, &messages));
+                }
             }
             Err(crate::outbox::Refusal::Busy) => (),
-            Err(_) => combat.off_unsent = false,
+            Err(_) => {
+                combat.off_unsent = false;
+                combat.off_quiet = false;
+            }
         }
     }
     if !live || !keys.focused() {
@@ -577,6 +604,15 @@ mod tests {
         crate::keys::testing::install(&mut app);
         let (tx, rx) = std::sync::mpsc::sync_channel(4);
         let mut online = crate::online::OnlineState::new(true);
+        testing::generation(
+            &mut online,
+            match client {
+                eq_client_assets::ui::InstalledClient::EqMac => eq_client_core::GameDialect::EqMac,
+                eq_client_assets::ui::InstalledClient::Titanium => {
+                    eq_client_core::GameDialect::Titanium
+                }
+            },
+        );
         testing::admit(&mut online, 7, testing::player(12));
         let mut creature = testing::pet(30, 12);
         creature.pet_owner = None;
@@ -803,9 +839,68 @@ mod tests {
     }
 
     #[test]
-    fn a_forced_off_that_meets_a_full_queue_goes_again_until_it_leaves() {
+    fn titanium_keeps_attacking_through_a_posture_and_the_feign_press_ends_it_quietly() {
         use crate::online::testing;
         let (mut app, rx) = attacking(eq_client_assets::ui::InstalledClient::Titanium);
+        let posture = |app: &mut App, posture| {
+            testing::news(
+                &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+                [eq_client_core::WorldEvent::Posture {
+                    spawn_id: 12,
+                    posture,
+                }],
+            );
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .reset_all();
+            app.update();
+        };
+        press(&mut app);
+        assert_eq!(sent(&rx), Some(true));
+        // Sitting, ducking and lying leave it on and send nothing (read
+        // R19cd 3); the server decides the swings.
+        for stance in [
+            PostureState::Sitting,
+            PostureState::Ducking,
+            PostureState::Lying,
+        ] {
+            posture(&mut app, stance);
+            assert_eq!(sent(&rx), None, "{stance:?}");
+            assert!(app.world().resource::<CombatState>().auto_attack);
+        }
+        // Not standing, the key still turns it off, and refuses to turn it
+        // on (line 0x3051).
+        posture(&mut app, PostureState::Sitting);
+        press(&mut app);
+        assert_eq!(sent(&rx), Some(false));
+        press(&mut app);
+        assert_eq!(sent(&rx), None);
+        assert!(!app.world().resource::<CombatState>().auto_attack);
+        // The Feign Death press turns it off once, saying nothing.
+        posture(&mut app, PostureState::Standing);
+        press(&mut app);
+        assert_eq!(sent(&rx), Some(true));
+        let before = lines(&app).len();
+        posture(&mut app, PostureState::Lying);
+        app.world_mut().resource_mut::<CombatState>().end_quietly();
+        app.update();
+        assert_eq!(sent(&rx), Some(false));
+        assert_eq!(lines(&app).len(), before, "no line: {:?}", lines(&app));
+        // Standing from the feign leaves it off.
+        posture(&mut app, PostureState::Standing);
+        assert_eq!(sent(&rx), None);
+        assert!(!app.world().resource::<CombatState>().auto_attack);
+        // Off already, the press sends nothing.
+        app.world_mut().resource_mut::<CombatState>().end_quietly();
+        app.update();
+        assert_eq!(sent(&rx), None);
+    }
+
+    #[test]
+    fn a_forced_off_that_meets_a_full_queue_goes_again_until_it_leaves() {
+        use crate::online::testing;
+        // The Mac-era client's posture rule makes the forced off.
+        let (mut app, rx) = attacking(eq_client_assets::ui::InstalledClient::EqMac);
         press(&mut app);
         assert_eq!(sent(&rx), Some(true));
         // A queue to the session with its one place taken.

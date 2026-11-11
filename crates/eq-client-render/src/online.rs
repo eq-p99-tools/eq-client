@@ -509,6 +509,9 @@ impl Panels<'_> {
         if let Some(text) = self.combat_text.as_mut() {
             text.hear(state.world(), &changes.damage, true);
         }
+        if changes.attack_ended {
+            self.combat.end_quietly();
+        }
         if let Some((flights, flight)) = self.projectiles.as_mut().zip(changes.projectile.as_ref())
         {
             flights.receive(state.world(), flight, std::time::Instant::now());
@@ -560,9 +563,13 @@ impl Panels<'_> {
                     session_id,
                     request_id,
                     error,
-                } => self
-                    .inventory
-                    .item_use_result(*session_id, *request_id, error.clone()),
+                    present_error,
+                } => self.inventory.item_use_result(
+                    *session_id,
+                    *request_id,
+                    error.clone(),
+                    *present_error,
+                ),
                 Reply::InventoryMove {
                     session_id,
                     revision,
@@ -2541,6 +2548,7 @@ mod tests {
                 session_id: 2,
                 spell_id: 73,
                 reason: "Old admission".into(),
+                string_id: None,
             }))
             .unwrap();
         app.update();
@@ -2556,6 +2564,7 @@ mod tests {
                 session_id: 1,
                 spell_id: 73,
                 reason: "Target unavailable".into(),
+                string_id: None,
             }))
             .unwrap();
         app.update();

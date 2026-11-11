@@ -82,6 +82,17 @@ pub enum Fix {
     ClearView,
     /// Allows horizontal movement while stunned; other stun restrictions remain.
     WalkWhileWinded,
+    /// The Feign Death press sends the feign request alone, without the
+    /// lying posture both programs send first, so the player stays standing
+    /// and moves while the server holds the feign; the next stand still goes
+    /// out to end it. A feign by a spell, or a lying posture the server
+    /// reports, is unchanged. Recording checklist 6.454.
+    MoveWhileFeigned,
+    /// A hit stands a sitting or looting player, as the Titanium program
+    /// does (read R19 b, rechecked 11-10); a lying player is never stood.
+    /// On by default; turning it off is the departure. Recording checklist
+    /// 6.453.
+    StandWhenHit,
     /// Opens newly slain nearby NPC corpses naming the player as killer and
     /// uses reply-driven Loot All. NO DROP items remain for manual looting.
     AutoLoot,
@@ -147,7 +158,7 @@ pub enum Fix {
 impl Fix {
     /// Every fix: the settings in the order the quality-of-life page lists
     /// them, then the fixes that are always on.
-    pub const ALL: [Self; 30] = [
+    pub const ALL: [Self; 32] = [
         Self::SkipModifiedFood,
         Self::HiddenWindows,
         Self::AskBeforeDeletingSpells,
@@ -158,6 +169,8 @@ impl Fix {
         Self::FreeCamera,
         Self::ClearView,
         Self::WalkWhileWinded,
+        Self::MoveWhileFeigned,
+        Self::StandWhenHit,
         Self::AutoLoot,
         Self::FloatingCombatText,
         Self::ReadWhileStanding,
@@ -199,6 +212,8 @@ impl Fix {
             Self::FreeCamera => "free_camera",
             Self::ClearView => "clear_view",
             Self::WalkWhileWinded => "walk_while_winded",
+            Self::MoveWhileFeigned => "move_while_feigned",
+            Self::StandWhenHit => "stand_when_hit",
             Self::AutoLoot => "auto_loot",
             Self::FloatingCombatText => "floating_combat_text",
             Self::ReadWhileStanding => "read_while_standing",
@@ -242,6 +257,8 @@ impl Fix {
             Self::FreeCamera => "Free Camera",
             Self::ClearView => "See the World Clearly",
             Self::WalkWhileWinded => "Walk While Winded",
+            Self::MoveWhileFeigned => "Move While Feigned",
+            Self::StandWhenHit => "Stand When Hit",
             Self::AutoLoot => "Loot Corpses Automatically",
             Self::FloatingCombatText => "Floating Combat Text",
             Self::ReadWhileStanding => "Read the Spellbook Standing",
@@ -305,6 +322,12 @@ impl Fix {
             Self::WalkWhileWinded => {
                 "Allow horizontal movement while stunned. Attacks, spells, items and jumping still obey stun restrictions."
             }
+            Self::MoveWhileFeigned => {
+                "Feign Death without lying down: the press sends only the feign, so you stay standing, others see you standing, and you move normally while the server keeps the feign. Your next stand ends it, as a jump or a duck does (each sends its own duck or stand), and so does your first step if you pressed it sitting. Departs from the original client, which lies you down."
+            }
+            Self::StandWhenHit => {
+                "Stand up when a hit lands while you sit or kneel to loot, as the original client does. Turning this off departs from the original client and keeps you seated."
+            }
             Self::AutoLoot => {
                 "Open newly slain NPC corpses naming you as killer within 20 units and use Loot All. Leave NO DROP items for manual looting. Stop on refusal; supported item results are required."
             }
@@ -366,6 +389,8 @@ impl Fix {
             Self::AnswerListPolls
             | Self::MemorizeWhileStanding
             | Self::WalkWhileWinded
+            | Self::MoveWhileFeigned
+            | Self::StandWhenHit
             | Self::AutoLoot
             | Self::Fly
             | Self::JesusMode
@@ -407,6 +432,8 @@ impl Fix {
             // All current server policies offer these opt-ins for testing.
             // The controls can still reflect a policy that withholds them.
             Self::WalkWhileWinded
+            | Self::MoveWhileFeigned
+            | Self::StandWhenHit
             | Self::Fly
             | Self::JesusMode
             | Self::GillsForDays
@@ -454,13 +481,16 @@ impl Fix {
             | Self::TakeEnvironmentalDamage
             | Self::CorpsesAlongGround
             | Self::LongChaseCamera
-            | Self::FreeCamera => Availability::Setting { default: true },
+            | Self::FreeCamera
+            // The original client stands a sitter when hit (read R19 b).
+            | Self::StandWhenHit => Availability::Setting { default: true },
             // A comfort the player has to ask for starts as the official
             // client behaves: off.
             Self::HiddenWindows
             | Self::ShowTimesInChat
             | Self::ClearView
             | Self::WalkWhileWinded
+            | Self::MoveWhileFeigned
             | Self::AutoLoot
             | Self::ReadWhileStanding
             | Self::MemorizeWhileStanding
@@ -498,6 +528,8 @@ impl Fix {
         matches!(
             self,
             Self::WalkWhileWinded
+                | Self::MoveWhileFeigned
+                | Self::StandWhenHit
                 | Self::MemorizeWhileStanding
                 | Self::TakeEnvironmentalDamage
                 | Self::GillsForDays
@@ -610,6 +642,8 @@ mod tests {
                 Fix::FreeCamera,
                 Fix::ClearView,
                 Fix::WalkWhileWinded,
+                Fix::MoveWhileFeigned,
+                Fix::StandWhenHit,
                 Fix::AutoLoot,
                 Fix::FloatingCombatText,
                 Fix::ReadWhileStanding,
@@ -636,6 +670,7 @@ mod tests {
         for fix in [
             Fix::ClearView,
             Fix::WalkWhileWinded,
+            Fix::MoveWhileFeigned,
             Fix::AutoLoot,
             Fix::FloatingCombatText,
             Fix::ReadWhileStanding,
@@ -657,6 +692,7 @@ mod tests {
             Some(Capability::GameplayDepartures)
         );
         assert!(settings.on(Fix::TakeEnvironmentalDamage));
+        assert!(settings.on(Fix::StandWhenHit));
     }
 
     #[test]
@@ -677,6 +713,8 @@ mod tests {
                 .collect::<Vec<_>>(),
             [
                 Fix::WalkWhileWinded,
+                Fix::MoveWhileFeigned,
+                Fix::StandWhenHit,
                 Fix::MemorizeWhileStanding,
                 Fix::TakeEnvironmentalDamage,
                 Fix::GillsForDays,

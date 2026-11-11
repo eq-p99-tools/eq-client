@@ -206,6 +206,7 @@ fn a_late_takp_item_start_uses_its_request_until_received_mana() {
             session_id: 1,
             request_id: 1,
             error: None,
+            string_id: None,
         },
     );
     game(&mut world, unconfirmed(1, u32::from(REQUESTED)));

@@ -38,6 +38,12 @@ impl OrbitCamera {
         matches!(self.view, View::FirstPerson { .. })
     }
 
+    /// Puts a test's camera in first person, level, as the wheel would.
+    #[cfg(test)]
+    pub(crate) const fn look_first_person_for_test(&mut self) {
+        self.view = View::FirstPerson { pitch: 0.0 };
+    }
+
     /// Returns to the chosen chase frame on a placement/lifetime change or
     /// an explicit script/preview frame, clearing collision easing as well.
     pub(crate) fn reset_view(&mut self) {

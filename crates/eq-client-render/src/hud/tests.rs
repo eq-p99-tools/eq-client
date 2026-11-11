@@ -1085,3 +1085,102 @@ fn short_server_mana_refuses_casts_locally_but_never_blocks_forgetting() {
         );
     }
 }
+
+#[test]
+fn titaniums_sit_toggle_stands_a_lying_or_looting_player_and_the_mac_clients_leaves_them() {
+    use eq_client_core::{GameDialect, Posture, PostureState};
+    for (posture, titanium, eqmac) in [
+        (None, Some(Posture::Sitting), Some(Posture::Sitting)),
+        (
+            Some(PostureState::Standing),
+            Some(Posture::Sitting),
+            Some(Posture::Sitting),
+        ),
+        (
+            Some(PostureState::Ducking),
+            Some(Posture::Sitting),
+            Some(Posture::Sitting),
+        ),
+        (
+            Some(PostureState::Sitting),
+            Some(Posture::Standing),
+            Some(Posture::Standing),
+        ),
+        (Some(PostureState::Lying), Some(Posture::Standing), None),
+        (Some(PostureState::Looting), Some(Posture::Standing), None),
+        (Some(PostureState::Frozen), None, None),
+    ] {
+        assert_eq!(
+            toggled_seat(posture, GameDialect::Titanium),
+            titanium,
+            "{posture:?}"
+        );
+        assert_eq!(
+            toggled_seat(posture, GameDialect::EqMac),
+            eqmac,
+            "{posture:?}"
+        );
+    }
+}
+
+#[test]
+fn titaniums_sit_toggle_refuses_under_a_mesmerize() {
+    use eq_client_core::{Buff, BuffUpdate, Posture, PostureState};
+    let (tx, rx) = std::sync::mpsc::sync_channel(4);
+    let mut app = bar_app(tx);
+    app.insert_resource(crate::keys::KeyMap::for_client(
+        eq_client_assets::ui::InstalledClient::Titanium,
+    ));
+    app.insert_resource(messages::Messages::parse(
+        "EQST0002\n0 0\n12368 You can't do that while mesmerized.\n",
+    ));
+    let mut fields = vec!["0"; 183];
+    fields[0] = "42";
+    fields[1] = "Synthetic mesmerize";
+    fields[86..98].fill("254");
+    fields[86] = "31";
+    app.insert_resource(crate::spellbook::SpellNames::parse(&fields.join("^")));
+    let chord = |app: &mut App| {
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.reset_all();
+        keys.press(KeyCode::ControlLeft);
+        keys.press(KeyCode::KeyS);
+        app.update();
+    };
+    testing::news(
+        &mut online(&mut app),
+        [WorldEvent::Posture {
+            spawn_id: 12,
+            posture: PostureState::Lying,
+        }],
+    );
+    chord(&mut app);
+    assert!(
+        matches!(rx.try_recv(), Ok(ClientCommand::SetPosture { posture, .. }) if posture == Posture::Standing)
+    );
+    testing::news(
+        &mut online(&mut app),
+        [
+            WorldEvent::BuffSnapshot(Vec::new()),
+            WorldEvent::Buff(BuffUpdate {
+                replaces_slot: false,
+                entity_id: 12,
+                slot: 0,
+                spell_id: 42,
+                buff: Some(Buff {
+                    spell_id: 42,
+                    caster_level: 20,
+                    bard_modifier: 10,
+                    effect_type: 2,
+                    duration_ticks: 10,
+                    counters: 0,
+                    caster_id: 30,
+                }),
+            }),
+        ],
+    );
+    chord(&mut app);
+    assert!(rx.try_recv().is_err(), "refused");
+    let chat = app.world().resource::<ChatState>();
+    assert!(chat.newest().contains("mesmerized"), "{}", chat.newest());
+}

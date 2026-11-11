@@ -1,6 +1,6 @@
 //! Explicit movement departures shared by input and the session settings send.
 
-use super::MovementOptions;
+use super::{MovementOptions, PostureOptions};
 use crate::qol::{Fix, Settings};
 use crate::{Capability, world::ClientWorld};
 
@@ -11,6 +11,11 @@ pub const fn options(settings: &Settings) -> MovementOptions {
         walk_while_stunned: settings.on(Fix::WalkWhileWinded),
         run_speed_multiplier: settings.run_speed_multiplier,
         fly: settings.on(Fix::Fly),
+        posture: PostureOptions {
+            feign_standing: settings.on(Fix::MoveWhileFeigned),
+            // On is the original client's stand; off is the departure.
+            stay_seated_when_hit: !settings.on(Fix::StandWhenHit),
+        },
     }
 }
 
@@ -52,6 +57,22 @@ mod tests {
             MovementOptions {
                 run_speed_multiplier: RunSpeedMultiplier::MAX,
                 ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn the_feign_and_seat_choices_reach_the_session_options() {
+        let mut settings = Settings::default();
+        // The defaults are the original client's: lie down, stand when hit.
+        assert_eq!(options(&settings).posture, PostureOptions::default());
+        settings.set(Fix::MoveWhileFeigned, true);
+        settings.set(Fix::StandWhenHit, false);
+        assert_eq!(
+            options(&settings).posture,
+            PostureOptions {
+                feign_standing: true,
+                stay_seated_when_hit: true,
             }
         );
     }

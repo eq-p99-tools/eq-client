@@ -240,6 +240,17 @@ pub enum Notice {
         spell_id: u32,
         /// Why.
         reason: String,
+        /// The official client's string for it, in `eqstr_us.txt`, where
+        /// the session names one.
+        string_id: Option<u32>,
+    },
+    /// An item click was refused before it was sent, worded as
+    /// [`Notice::ConsumeRefused`].
+    ItemUseRefused {
+        /// Why, in the session's words.
+        reason: String,
+        /// The official client's string for it, in `eqstr_us.txt`.
+        string_id: Option<u32>,
     },
     /// The player's cast was interrupted. The server names why by a string
     /// that takes no arguments.
