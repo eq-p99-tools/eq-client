@@ -203,6 +203,16 @@ or occluded. The counters are independent of damage and inventory.
   admission and target revision before sending. Keep that NPC selected until
   its removal is observed, since EQEmu acts on its current target and starts
   no respawn timer. A queued command does not establish creation or removal.
+  `gm show` reads the server's own view of the target (or the GM) and changes
+  nothing. The parser takes exactly `gm show buffs`, `gm show currencies`,
+  `gm show timers`, `gm show distance` and `gm show line_of_sight` (these two
+  need a target other than yourself), and `gm show inventory SCOPE` with SCOPE
+  one of `all`, `allbank`, `bank`, `cursor`, `curlimbo`, `equip`, `gen`,
+  `limbo`, `poss`, `shbank`, `trade`, `trib` or `world`. Words are matched
+  exactly, in lower case; every other subcommand, scope or extra word is
+  refused when the script is read. What these print names characters and
+  items, so their output stays in private run notes and never goes into the
+  repository, a pull request or a published page.
 - `chat channel message`: chat on a network-constrained local test session only.
 - `quit`: close the client.
 
