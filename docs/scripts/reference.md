@@ -114,6 +114,13 @@ or occluded. The counters are independent of damage and inventory.
   local breath sample or its first unavailable input. The companion model
   fields give race, gender and raw size, and `breath_zone_scale` gives the
   received classic model scale flag.
+  For buffs, `buff_slot_records` is the server's own slot list (the buffs
+  held at zone entry and any slot it writes since), `modelled_slots` the
+  slots the client gives landings as the program would, `unslotted_effects`
+  the landings the server gave no slot, and `held_spells` every spell the
+  player holds, slotted or not, which is what speed and the other buff
+  effects are read from. A buff held at zone entry shows in
+  `buff_slot_records` and `held_spells`, not in `unslotted_effects`.
   `MovementPending` and `MovementUnconfirmed` defer the due liquid check
   until the worker returns a usable position. After 250 ms the air gauge
   is hidden while the result is outstanding. `Effects` means a relevant spell
