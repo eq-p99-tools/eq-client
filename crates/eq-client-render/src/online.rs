@@ -549,7 +549,7 @@ impl Panels<'_> {
             && let Some(grant) = state.world.motion()
         {
             log_grant(grant);
-            self.motion.grant(grant);
+            self.motion.grant(grant, state.world.generation().root());
         }
         if changes.trade {
             self.trade.changed();
@@ -989,6 +989,8 @@ fn log_grant(grant: eq_client_core::world::MotionGrant) {
     } = grant;
     if units_per_second.is_none() {
         info!(falls, "Movement withdrawn");
+    } else if units_per_second == Some(0.0) {
+        info!(falls, "Movement rooted");
     } else {
         info!(
             ?units_per_second,

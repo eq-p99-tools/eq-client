@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- A root no longer takes the player's input away. The session grants a
+  rooted player at no speed (read R18: the program zeroes the speed once and
+  blocks nothing else; read R22). The keys, the mouse and a script's
+  facing still turn them, nothing carries them, a jump is refused as the
+  Titanium program refuses it, and held keys, a crouch and taps go on. On
+  Titanium the autorun latch survives the root, so the player runs again by
+  themselves when it ends (R22 b). The Mac-era program is unread, and there
+  the root still drops autorun. A sample under way when the root or any
+  speed change lands is no longer refused, and the model keeps playing to
+  where it was sent, so a snare no longer holds the player at its landing
+  and fade. The log line for a root is "Movement rooted". Mouse-look pitch,
+  which the program holds while rooted in camera modes 0-2, is not modelled
+  (recording checklist 6.451). Networking pinned to 6d4e8c9 (eq-network
+  #296).
+
 - Test scripts may set a test character's PvP flag on a local EQEmu or TAKP
   server (`gm pvp on`, `gm pvp off`), as other `gm` steps are allowed, so a
   GM's `castspell` can land a root or snare on another flagged test
