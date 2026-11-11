@@ -140,9 +140,6 @@ pub(super) struct Controls {
     climb_sent: Option<(u64, f32)>,
     /// Admission and revision last used to withdraw voluntary input.
     stun_revision: Option<(u64, u64)>,
-    /// The zone admission the controls last saw, so a new zone's setup can
-    /// end autorun where the installed client's program does (read R26).
-    zone_session: Option<u64>,
     /// Emission permission, separate from actual held-key/autorun intent.
     stunned: bool,
     /// The actual stun also blocks jump and flight's voluntary height changes.
@@ -258,7 +255,6 @@ impl Default for Controls {
             held: None,
             climb_sent: None,
             stun_revision: None,
-            zone_session: None,
             stunned: false,
             stun_active: false,
             movement_options: eq_client_core::movement::MovementOptions::default(),
@@ -556,10 +552,26 @@ impl Controls {
             velocity,
         })
     }
+    /// Whether autorun is latched, for tests elsewhere in the crate.
+    #[cfg(test)]
+    pub(crate) const fn autorun(&self) -> bool {
+        self.autorun
+    }
+
+    /// Latches autorun, for tests elsewhere in the crate.
+    #[cfg(test)]
+    pub(crate) const fn set_autorun(&mut self, on: bool) {
+        self.autorun = on;
+    }
+
     /// Starts motion afresh, as an admission, a zone or a server's
     /// correction does. The walk toggle is the player's and stays as they
     /// left it, as walking is never faster than running (whether the
-    /// program keeps it is unread, recording checklist 6.363).
+    /// program keeps it is unread, recording checklist 6.363). Autorun ends:
+    /// the online reset of every admission and zoning calls this, as
+    /// Titanium's zone setup clears the autorun latch on every zone-in (read
+    /// R26; 0x4a861d), and a grant or a server's move that keeps it restores
+    /// it around the call.
     pub fn reset(&mut self, speed: Option<f32>) {
         self.shoreline.reset();
         *self = Self {
@@ -571,7 +583,6 @@ impl Controls {
             walking: self.walking,
             placement: self.placement,
             stun_revision: self.stun_revision,
-            zone_session: self.zone_session,
             // A correction or a server's move keeps following, which then
             // ends by its own rules; a new admission ends it in `input`.
             following: self.following.take(),
@@ -1297,28 +1308,17 @@ pub(super) fn input(
     // posture before it and then the stand, so the count moves even when
     // both land between two frames, and autorun ends as the program's latch
     // clear does (R19).
-    // Titanium's zone setup zeroes the latch on every zone-in, whatever the
-    // posture (read R26), so a new zone admission ends autorun there. The
-    // Mac-era program is unread, so there leaving a zone (a known posture
-    // becoming unknown) ends it, as before (recording checklist 6.460).
-    // Whether a movement key still held sets its bit again after the clear
-    // is unread; held keys go on as before (inferred, 6.460).
-    // The first admission these controls see comes from character select,
-    // where a lost connection has already reset them.
-    let zone_session = online.world().session_id();
-    let new_zone = controls.zone_session.is_some()
-        && zone_session.is_some()
-        && zone_session != controls.zone_session;
-    if zone_session.is_some() {
-        controls.zone_session = zone_session;
-    }
-    let zone_ends_autorun = client.zone_entry_ends_autorun();
-    if new_zone && zone_ends_autorun {
-        controls.autorun = false;
-    }
+    // A zone change resets the controls, and autorun with them
+    // ([`Controls::reset`]): every admission and every zoning goes through
+    // the online reset. Titanium's zone setup clears the latch on every
+    // zone-in, whatever the posture (read R26), which that reset matches.
+    // The Mac-era program is unread, and the same reset applies there as
+    // before. Whether a movement key still held sets its bit again after the
+    // clear is unread; held keys go on as before (inferred, 6.460). A known
+    // posture becoming unknown also counts as a change here.
     let changes = online.world().player_posture_changes();
-    let posture_changed = changes != controls.posture_changes
-        || (!zone_ends_autorun && controls.posture.is_some() && posture.is_none());
+    let posture_changed =
+        changes != controls.posture_changes || (controls.posture.is_some() && posture.is_none());
     controls.posture_changes = changes;
     controls.posture = posture;
     let standing = posture.is_none_or(|posture| posture == eq_client_core::PostureState::Standing);
@@ -6038,76 +6038,6 @@ pub(super) mod tests {
             assert!(
                 !app.world().resource::<Controls>().autorun,
                 "{posture:?} left autorun on"
-            );
-        }
-    }
-
-    /// Admits the player to a new zone, as session `session_id`.
-    fn enter_zone(app: &mut App, session_id: u64) {
-        let mut state = app.world_mut().resource_mut::<online::OnlineState>();
-        let player = state.world().player().unwrap().clone();
-        crate::online::testing::news(
-            &mut state,
-            [eq_client_core::WorldEvent::Entered {
-                capabilities: eq_client_core::Capability::ALL.to_vec(),
-                choices: Vec::new(),
-                session_id,
-                zone: "qeytoqrg".into(),
-                player: Box::new(player),
-                far_clip: None,
-                spell_landing_flag: None,
-                zone_id: 0,
-            }],
-        );
-        crate::online::testing::connect(&mut state, true);
-    }
-
-    #[test]
-    fn a_new_zone_ends_autorun_on_titanium_whatever_the_posture() {
-        use eq_client_core::PostureState;
-        // Read R26: Titanium's zone setup zeroes the latch on every zone-in
-        // with no branch, so it ends whether or not the posture was known
-        // before. The Mac-era program is unread: there an unknown posture
-        // carries autorun over the line, as before (6.460).
-        for (client, known, ends) in [
-            (InstalledClient::Titanium, None, true),
-            (
-                InstalledClient::Titanium,
-                Some(PostureState::Standing),
-                true,
-            ),
-            (InstalledClient::EqMac, None, false),
-        ] {
-            let (mut app, receiver) = app();
-            app.world_mut()
-                .resource_mut::<crate::ViewerSettings>()
-                .0
-                .installed_client = client;
-            app.world_mut()
-                .resource_mut::<ButtonInput<KeyCode>>()
-                .reset_all();
-            if let Some(posture) = known {
-                report_posture(&mut app, posture);
-            }
-            app.update();
-            app.world_mut().resource_mut::<Controls>().autorun = true;
-            app.update();
-            let running = receiver
-                .try_iter()
-                .find_map(|command| match command {
-                    ClientCommand::Move(running) => Some(running),
-                    _ => None,
-                })
-                .expect("autorun runs");
-            accept(&mut app, &running);
-            app.update();
-            assert!(app.world().resource::<Controls>().autorun);
-            enter_zone(&mut app, 12);
-            app.update();
-            assert_eq!(
-                !app.world().resource::<Controls>().autorun,
-                ends,
-                "{client:?} {known:?}"
             );
         }
     }

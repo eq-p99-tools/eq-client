@@ -2,13 +2,6 @@
 
 ## Unreleased
 
-- On Titanium every zone-in now ends autorun, whatever your posture was,
-  as the program's zone setup clears it (program read R26). Before, it
-  ended only because your posture became unknown on leaving. The Mac-era
-  client is unread and keeps that earlier rule. Whether a movement key
-  still held keeps moving you after the zone-in is unread, and held keys
-  go on as before (checklist 6.460).
-
 - On Titanium a ducking player moves ducked, as its program does (program
   read R23; checklist 6.460). Forward, back, strafe and autorun no longer
   stand you first: you move at the sneaking speeds, half the walk speed

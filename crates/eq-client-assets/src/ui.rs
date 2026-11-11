@@ -545,19 +545,6 @@ impl InstalledClient {
         }
     }
 
-    /// Whether setting up a new zone ends autorun. Titanium's zone
-    /// initialisation (0x4a861d, called by 0x4acf33 on every zone-in) zeroes
-    /// the autorun latch at 0x4a88a0 with no branch before it, and the path
-    /// from character select zeroes it too (0x4a7f18); nothing on the way
-    /// out of a zone writes it (program read R26). The Mac-era program is
-    /// unread, so it keeps this client's earlier rule, where autorun ends
-    /// only as a known posture becomes unknown on leaving (recording
-    /// checklist 6.460).
-    #[must_use]
-    pub const fn zone_entry_ends_autorun(self) -> bool {
-        matches!(self, Self::Titanium)
-    }
-
     /// Where an opening give or trade window puts the cursor's item.
     #[must_use]
     pub const fn give_at_open(self) -> GiveAtOpen {
