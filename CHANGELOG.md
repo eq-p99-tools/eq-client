@@ -24,6 +24,23 @@
   speed report leaves a second copy of a buff's strength out and marks
   itself inexact. Live rows are recording checklist 6.457 (local EQEmu)
   and 6.458 (attended).
+- A root no longer takes the player's input away. The session grants a
+  rooted player at no speed (read R18: the program zeroes the speed once and
+  blocks nothing else; read R22). The keys, the mouse and a script's
+  facing still turn them, nothing carries them, a jump is refused as the
+  Titanium program refuses it, and held keys, a crouch and taps go on. On
+  Titanium the autorun latch survives the root, so the player runs again by
+  themselves when it ends (R22 b). The Mac-era program is unread, and there
+  the root still drops autorun. A sample under way when the root or any
+  speed change lands is no longer refused, and the model keeps playing to
+  where it was sent, so a snare no longer holds the player at its landing
+  and fade. The sample under way when a speed changes asks the lower of
+  each earlier and new speed, and the new speeds apply from the next one,
+  so a fade's raise is no longer refused as faster than its time allows.
+  The log line for a root is "Movement rooted". Mouse-look pitch, which the
+  program holds while rooted in camera modes 0-2, is not modelled
+  (recording checklist 6.451). Networking pinned to 3daa711 (eq-network
+  #296).
 
 - A Feign Death spell landing on you lies you down, as the Titanium
   program does (program read R21): the session sends one lying posture and
