@@ -3,8 +3,8 @@
 The renderer reports explicit ready, bounded or unavailable movement inputs for
 the current session revision. Before the first grant of an admission, missing
 inventory, attributes, coin state, buff membership or affecting spell data holds
-input back. After it, nothing but a root, a stun, a freeze, death, zoning or not
-standing stops the player, as in the original client (reads R7, R18): a recheck
+input back. After it, nothing but a root (which stops the player but keeps
+their input), a stun, a freeze, death, zoning or not standing stops the player, as in the original client (reads R7, R18): a recheck
 keeps the speeds in force while the new report is worked out, and an unproven
 report carries every term the client can prove (`Bounded`). A term it can
 evaluate now is taken as it is now, slower or faster, and one it cannot evaluate
@@ -50,10 +50,15 @@ positive speed for a player already moving replaces only the speeds; held keys,
 taps, a queued or crouched jump, autorun and a jump under way go on, the jump's
 sideways carry limited to the new speed. A server's move or a same-zone landing
 starts prediction afresh with the speeds kept; autorun, held keys, a jump
-request and a crouch go on from the new place (read R18). When the session
-withdraws input (a root, death, zoning), the renderer clears taps, autorun and
-queued jumps but still simulates passive descent where supported. The session
-independently rejects horizontal drift, turns and ascent during withdrawal.
+request and a crouch go on from the new place (read R18). A root grants the
+player at no speed instead of withdrawing input (reads R18, R22): the keys,
+the mouse and a script's facing still turn them, nothing carries them, a jump
+is refused, and on Titanium the autorun latch survives so they run again by
+themselves when it ends; the Mac-era program is unread and the root drops
+autorun there. When the session withdraws input (death, zoning), the
+renderer clears taps, autorun and queued jumps but still simulates passive
+descent where supported. The session independently rejects horizontal drift,
+turns and ascent during withdrawal.
 Death and transfer still suspend all movement.
 
 ## Buff membership and diagnostic reports
