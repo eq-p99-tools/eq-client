@@ -23,7 +23,26 @@
   the program's test (an action of kind 231 whose flag carries 4). The
   speed report leaves a second copy of a buff's strength out and marks
   itself inexact. Live rows are recording checklist 6.457 (local EQEmu)
-  and 6.458 (attended).
+  and 6.458 (attended). Networking pinned to ba1ac5c (eq-network #294 and
+  #298).
+
+- A scribe or memorization the server refuses for your level now ends at
+  once, with the server's line in chat, instead of holding the cursor
+  ("Wait for scribing to finish") until you zone; the same scroll can be
+  tried again. A scribe the server never answers frees the cursor after 30
+  seconds (inferred, checklist 6.462). Networking pinned to ba1ac5c
+  (eq-network #298).
+
+- After a zone-in your first /stand no longer sends a standing report the
+  Titanium program would skip: the session now stands you at entry, as the
+  program does, and sends one stand only when the server's record of you
+  wasn't standing (program reads R24 and R24b; checklist 6.461). A lone
+  first standing is the posture you enter with, not a change, so it leaves
+  autorun alone; a stand at entry that changed your posture ends autorun,
+  as the program's does. The rule is the same on every client generation,
+  so on the Mac-era client (whose entry is unread) a first /stand after a
+  zone-in no longer ends autorun either. Networking pinned to d35b10b
+  (eq-network #297).
 - A root no longer takes the player's input away. The session grants a
   rooted player at no speed (read R18: the program zeroes the speed once and
   blocks nothing else; read R22). The keys, the mouse and a script's

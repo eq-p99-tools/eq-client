@@ -1621,6 +1621,7 @@ mod tests {
                 appearance: eq_client_core::outfit::Appearance::default(),
                 listing: eq_client_core::listing::Listing::default(),
                 name_parts: eq_client_core::names::NameParts::default(),
+                posture: None,
             },
         );
         // A command queue that can no longer take anything.

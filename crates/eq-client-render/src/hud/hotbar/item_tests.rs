@@ -56,6 +56,7 @@ fn item_binding_uses_current_inventory_and_never_activates_replacement_items() {
             appearance: eq_client_core::outfit::Appearance::default(),
             listing: eq_client_core::listing::Listing::default(),
             name_parts: eq_client_core::names::NameParts::default(),
+            posture: None,
         },
     );
     crate::online::testing::inventory(&mut online, InventoryUpdate::Snapshot(vec![item.clone()]));

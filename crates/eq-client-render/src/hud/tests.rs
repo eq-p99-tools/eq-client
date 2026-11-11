@@ -40,6 +40,7 @@ fn caster() -> PlayerState {
         appearance: eq_client_core::outfit::Appearance::default(),
         listing: eq_client_core::listing::Listing::default(),
         name_parts: eq_client_core::names::NameParts::default(),
+        posture: None,
     }
 }
 
@@ -328,11 +329,15 @@ fn the_duck_key_toggles_between_standing_and_ducking_and_leaves_other_stances() 
         crate::keys::Chord::key(KeyCode::KeyC),
     );
     // Titanium 0x4619cd case 0x4623b1 and EQMac 0x54050c: a key-down ducks
-    // a standing player and stands a ducking one (audit D1).
+    // a standing player and stands a ducking one (audit D1). The key acts
+    // only from standing or ducking (read R19, key command 0xc), so it
+    // leaves a sitting, lying or looting player alone and sends nothing.
     for (reported, wanted) in [
         (PostureState::Standing, Some(Posture::Ducking)),
         (PostureState::Ducking, Some(Posture::Standing)),
         (PostureState::Sitting, None),
+        (PostureState::Lying, None),
+        (PostureState::Looting, None),
     ] {
         testing::news(
             &mut online(&mut app),

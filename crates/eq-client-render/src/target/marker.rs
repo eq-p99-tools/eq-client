@@ -139,6 +139,7 @@ mod tests {
                 name_parts: eq_client_core::names::NameParts::default(),
                 pet_owner: None,
                 hp_percent: None,
+                posture: None,
             },
         );
         let entity = app

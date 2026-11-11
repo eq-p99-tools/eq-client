@@ -76,6 +76,8 @@ pub(super) struct Controls {
     autorun: bool,
     /// The player's posture as last seen, so a change turns autorun off.
     posture: Option<eq_client_core::PostureState>,
+    /// The world's count of the player's posture changes as last seen.
+    posture_changes: u32,
     pending: Option<Pending>,
     pub last_accepted: Instant,
     moving: bool,
@@ -223,6 +225,7 @@ impl Default for Controls {
             walking: false,
             autorun: false,
             posture: None,
+            posture_changes: 0,
             pending: None,
             last_accepted: Instant::now(),
             moving: false,
@@ -1280,7 +1283,19 @@ pub(super) fn input(
     // can-move test passes a ducking player and its autorun key is gated
     // only on can-act (reads R19 c, R19c); recording checklist 6.455,
     // follow-up.
-    let posture_changed = controls.posture != posture;
+    // A lone standing the session reports at zone entry is the posture the
+    // player enters with, not a change (read R24): the world counts only a
+    // known posture changing, or a first one other than standing. Where the
+    // program's entry stand changes the posture, the session reports the
+    // posture before it and then the stand, so the count moves even when
+    // both land between two frames, and autorun ends as the program's latch
+    // clear does (R19). Whether the latch otherwise survives a zone change
+    // in the program is unread, so leaving a zone (a known posture becoming
+    // unknown) keeps this client's earlier behaviour of ending it.
+    let changes = online.world().player_posture_changes();
+    let posture_changed =
+        changes != controls.posture_changes || (controls.posture.is_some() && posture.is_none());
+    controls.posture_changes = changes;
     controls.posture = posture;
     let standing = posture.is_none_or(|posture| posture == eq_client_core::PostureState::Standing);
     if focused && keys.pressed(Act::Autorun) {
@@ -4652,6 +4667,7 @@ pub(super) mod tests {
                 appearance: eq_client_core::outfit::Appearance::default(),
                 listing: eq_client_core::listing::Listing::default(),
                 name_parts: eq_client_core::names::NameParts::default(),
+                posture: None,
             },
         );
         let floor = CollisionWorld::new(flat_surface(0.0)).unwrap();
@@ -5937,6 +5953,58 @@ pub(super) mod tests {
                 "{posture:?} left autorun on"
             );
         }
+    }
+
+    #[test]
+    fn the_standing_reported_at_zone_entry_is_no_posture_change() {
+        use eq_client_core::PostureState;
+        let (mut app, receiver) = app();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        app.world_mut().resource_mut::<Controls>().autorun = true;
+        app.update();
+        let ClientCommand::Move(running) = receiver.try_recv().unwrap() else {
+            panic!("expected autorun to run");
+        };
+        accept(&mut app, &running);
+        assert_eq!(app.world().resource::<Controls>().posture, None);
+        // The session's report of the player standing at entry (R24).
+        report_posture(&mut app, PostureState::Standing);
+        app.update();
+        assert!(app.world().resource::<Controls>().autorun);
+        let sent: Vec<_> = receiver.try_iter().collect();
+        assert!(
+            sent.iter()
+                .all(|command| matches!(command, ClientCommand::Move(_))),
+            "{sent:?}"
+        );
+        // A change from that known standing still ends it (R19).
+        report_posture(&mut app, PostureState::Sitting);
+        app.update();
+        assert!(!app.world().resource::<Controls>().autorun);
+    }
+
+    #[test]
+    fn an_entry_stand_that_changed_the_posture_ends_autorun() {
+        use eq_client_core::PostureState;
+        let (mut app, receiver) = app();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        app.world_mut().resource_mut::<Controls>().autorun = true;
+        app.update();
+        let ClientCommand::Move(running) = receiver.try_recv().unwrap() else {
+            panic!("expected autorun to run");
+        };
+        accept(&mut app, &running);
+        assert_eq!(app.world().resource::<Controls>().posture, None);
+        // The record seated the player; the program's stand at entry
+        // changes that (R24), and the session reports both.
+        report_posture(&mut app, PostureState::Sitting);
+        report_posture(&mut app, PostureState::Standing);
+        app.update();
+        assert!(!app.world().resource::<Controls>().autorun);
     }
 
     #[test]
