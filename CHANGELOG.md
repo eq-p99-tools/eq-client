@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- A buff's and a pet buff's icon background no longer shows magenta at its
+  corners. The installed client's skins draw it from CS_Buttons.bmp
+  (BlueIconBackground, RedIconBackground and the pet ones), a picture with
+  no alpha channel whose transparent parts are painted pure magenta, and
+  skin pictures were never keyed. Every skin picture without an alpha
+  channel now reads exact (255, 0, 255) as transparent black, in one
+  reader for all skinned windows; pictures with their own alpha keep it
+  (inferred until program read R30; checklist 6.466).
+
 - A bag's window and a world container's window show the container's icon
   on the skin's recessed box alone, as the Titanium program does (program
   read R29). They used to draw the skin's whole first item-icon sheet
