@@ -1004,6 +1004,10 @@ impl SpellCatalog for InstantFortyTwo {
     fn instant_effect(&self, spell: u32) -> bool {
         spell == 42
     }
+
+    fn feigns(&self, _spell: u32) -> bool {
+        false
+    }
 }
 
 fn buff(duration_ticks: i32) -> crate::Buff {
@@ -1029,6 +1033,56 @@ fn effect(target_id: u16, effect_flag: u8) -> crate::SpellEffect {
         effect_flag,
         push: None,
     }
+}
+
+/// Knows spell 42 as carrying the feign effect, and nothing else.
+struct FeignFortyTwo;
+
+impl SpellCatalog for FeignFortyTwo {
+    fn timing(&self, _spell: u32) -> Option<SpellTiming> {
+        None
+    }
+
+    fn instant_effect(&self, _spell: u32) -> bool {
+        false
+    }
+
+    fn feigns(&self, spell: u32) -> bool {
+        spell == 42
+    }
+}
+
+/// Titanium lies the player down for a feign spell's landing on them,
+/// by the program's own landing test (kind 231 and flag 0x04; read R21);
+/// auto attack is left as it is.
+#[test]
+fn a_feign_spell_landing_on_the_player_asks_the_session_to_lie_them_down() {
+    let landing =
+        |world: &mut ClientWorld, effect: crate::SpellEffect, spells: &dyn SpellCatalog| {
+            world.apply(
+                &WorldUpdate::Game(WorldEvent::SpellEffect(effect)),
+                Instant::now(),
+                spells,
+            )
+        };
+    for (flag, lies) in [(4, true), (0x0c, true), (0, false), (8, false)] {
+        let mut world = admitted();
+        let changes = landing(&mut world, effect(9, flag), &FeignFortyTwo);
+        assert_eq!(changes.feign_landed, lies, "{flag:#x}");
+        assert!(!changes.attack_ended);
+    }
+    let mut world = admitted();
+    // Another spawn, a spell without the effect, or unknown spell data.
+    assert!(!landing(&mut world, effect(5, 4), &FeignFortyTwo).feign_landed);
+    let other = crate::SpellEffect {
+        spell_id: 43,
+        ..effect(9, 4)
+    };
+    assert!(!landing(&mut world, other, &FeignFortyTwo).feign_landed);
+    assert!(!landing(&mut world, effect(9, 4), &NoSpells).feign_landed);
+    // The Mac-era client's landing is unread (6.455).
+    world.carry_as(crate::GameDialect::EqMac);
+    assert!(!landing(&mut world, effect(9, 4), &FeignFortyTwo).feign_landed);
 }
 
 #[test]
