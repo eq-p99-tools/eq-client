@@ -91,6 +91,7 @@ mod tests {
                     font: None,
                     decal: None,
                     decal_area: None,
+                    decal_grid: None,
                     tooltip: None,
                 }),
             )],

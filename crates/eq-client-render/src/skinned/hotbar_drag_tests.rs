@@ -16,6 +16,7 @@ fn button(id: String, area: Area) -> Element {
         font: None,
         decal: None,
         decal_area: None,
+        decal_grid: None,
         tooltip: None,
     })
 }

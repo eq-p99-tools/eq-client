@@ -257,8 +257,15 @@ pub struct Button {
     /// The official client's font number for its words, from 1 for the
     /// smallest, where the skin gives one.
     pub font: Option<u8>,
-    /// A picture on the button, such as a coin on a money button.
+    /// A picture on the button, such as a coin on a money button. None
+    /// where the skin names a grid animation ([`Self::decal_grid`]).
     pub decal: Option<Piece>,
+    /// The grid animation the skin names as the button's picture, such as
+    /// `A_DragItem` for a bag's icon or `BuffIcons` for a buff's: its sheets
+    /// hold many pictures and the window picks one cell, so the sheet is
+    /// never drawn whole. Where the window has picked none, nothing is
+    /// drawn (program read R29 (a)).
+    pub decal_grid: Option<String>,
     /// Where the picture sits, from the button's top left, and its size.
     pub decal_area: Option<Area>,
     /// The tooltip the skin gives it.
@@ -569,8 +576,13 @@ pub enum Element {
         id: Option<String>,
         /// Where it sits in its window.
         area: Area,
-        /// The picture.
-        piece: Piece,
+        /// The picture. None where the skin names a grid animation, such as
+        /// the cursor attachment's sample (`CA_Anim`, `BuffIcons`): a grid
+        /// is many pictures, of which the window picks one, so its sheet is
+        /// never drawn whole. The area is kept for the window to draw in.
+        /// Read for the cursor attachment (program read R29 (d)), inferred
+        /// for any other still picture (checklist 6.464).
+        piece: Option<Piece>,
     },
     /// A button.
     Button(Button),
@@ -1058,7 +1070,7 @@ impl Library {
             })
         };
         let look = child(node, "ButtonDrawTemplate");
-        let state = |name: &str| self.piece(look.and_then(|look| text_of(look, name)));
+        let decal = look.and_then(|look| text_of(look, "NormalDecal"));
         Element::Button(Button {
             id: text_of(node, "ScreenID").map(str::to_owned),
             area: at(),
@@ -1069,7 +1081,12 @@ impl Library {
             text: text_of(node, "Text").map(str::to_owned),
             text_color: color(node, "TextColor"),
             font: number(node, "Font"),
-            decal: state("NormalDecal"),
+            decal: decal
+                .filter(|name| !self.grids.contains_key(*name))
+                .and_then(|name| self.piece(Some(name))),
+            decal_grid: decal
+                .filter(|name| self.grids.contains_key(*name))
+                .map(str::to_owned),
             decal_area: child(node, "DecalSize").and_then(|size| {
                 let offset = child(node, "DecalOffset");
                 Some(Area {
@@ -1295,22 +1312,31 @@ impl Library {
                 scrollbar: self.scrollbar(node),
             })),
             "SpellGem" => Element::SpellGem(self.spell_gem(node, at())),
-            "StaticAnimation" => match self.piece(text_of(node, "Animation")) {
-                Some(piece) => {
-                    let mut area = at();
-                    // A picture without a size of its own is its piece's size.
-                    if area.width <= 0.0 || area.height <= 0.0 {
-                        area.width = to_f32(piece.width);
-                        area.height = to_f32(piece.height);
+            "StaticAnimation" => {
+                let name = text_of(node, "Animation");
+                let grid = name.and_then(|name| self.grids.get(name));
+                // A picture without a size of its own is its piece's size,
+                // or a cell's for a grid.
+                let size = match grid {
+                    Some(grid) => Some((grid.cell_width, grid.cell_height)),
+                    None => self.piece(name).map(|piece| (piece.width, piece.height)),
+                };
+                match size {
+                    Some((width, height)) => {
+                        let mut area = at();
+                        if area.width <= 0.0 || area.height <= 0.0 {
+                            area.width = to_f32(width);
+                            area.height = to_f32(height);
+                        }
+                        Element::Image {
+                            id: text_of(node, "ScreenID").map(str::to_owned),
+                            area,
+                            piece: grid.is_none().then(|| self.piece(name)).flatten(),
+                        }
                     }
-                    Element::Image {
-                        id: text_of(node, "ScreenID").map(str::to_owned),
-                        area,
-                        piece,
-                    }
+                    None => Element::Other("StaticAnimation".into()),
                 }
-                None => Element::Other("StaticAnimation".into()),
-            },
+            }
             other => Element::Other(other.to_owned()),
         }
     }
@@ -1930,12 +1956,116 @@ mod tests {
             (Some(29), Align::Right, Some(1))
         );
         // The window file's own pieces come with it, sized by their piece.
-        let Element::Image { area, piece, .. } = &screen.pieces[2].1 else {
+        let Element::Image {
+            area,
+            piece: Some(piece),
+            ..
+        } = &screen.pieces[2].1
+        else {
             panic!("an image")
         };
         assert_eq!(
             (area.width, area.height, piece.texture.as_str()),
             (116.0, 30.0, "box.tga")
+        );
+    }
+
+    #[test]
+    fn a_decal_naming_a_grid_animation_draws_none_of_its_sheet() {
+        // The stock container window's icon: a recessed box with the item
+        // icons' grid as its decal, whose cell the window picks.
+        let animations = r#"<XML>
+            <Ui2DAnimation item="A_DragItem"><Grid>true</Grid>
+                <CellHeight>40</CellHeight><CellWidth>40</CellWidth>
+                <Frames><Texture>dragitem1.tga</Texture><Location><X>0</X><Y>0</Y></Location>
+                    <Size><CX>256</CX><CY>256</CY></Size></Frames>
+            </Ui2DAnimation>
+            <Ui2DAnimation item="A_RecessedBox">
+                <Frames><Texture>box.tga</Texture><Location><X>0</X><Y>0</Y></Location>
+                    <Size><CX>40</CX><CY>40</CY></Size></Frames>
+            </Ui2DAnimation>
+            <Ui2DAnimation item="A_Coin">
+                <Frames><Texture>coin.tga</Texture><Location><X>0</X><Y>0</Y></Location>
+                    <Size><CX>18</CX><CY>18</CY></Size></Frames>
+            </Ui2DAnimation></XML>"#;
+        let window = r#"<XML>
+            <Button item="Icon"><ScreenID>Container_Icon</ScreenID>
+                <Size><CX>40</CX><CY>40</CY></Size>
+                <ButtonDrawTemplate><Normal>A_RecessedBox</Normal>
+                    <NormalDecal>A_DragItem</NormalDecal></ButtonDrawTemplate>
+                <DecalOffset><X>0</X><Y>0</Y></DecalOffset>
+                <DecalSize><CX>40</CX><CY>40</CY></DecalSize>
+            </Button>
+            <Button item="Money"><Size><CX>20</CX><CY>24</CY></Size>
+                <ButtonDrawTemplate><NormalDecal>A_Coin</NormalDecal></ButtonDrawTemplate>
+            </Button>
+            <Screen item="Bag"><Pieces>Icon</Pieces><Pieces>Money</Pieces></Screen></XML>"#;
+        let library = Library::parse(animations, "<XML/>").unwrap();
+        let screen = library.screen(window, "Bag").unwrap();
+        let Element::Button(icon) = &screen.pieces[0].1 else {
+            panic!("a button")
+        };
+        assert_eq!(
+            (icon.decal.as_ref(), icon.decal_grid.as_deref()),
+            (None, Some("A_DragItem"))
+        );
+        assert_eq!(
+            icon.decal_area.map(|area| area.width),
+            Some(40.0),
+            "the window still knows where its picked cell goes"
+        );
+        assert_eq!(
+            icon.look
+                .normal
+                .as_ref()
+                .map(|piece| piece.texture.as_str()),
+            Some("box.tga")
+        );
+        let Element::Button(money) = &screen.pieces[1].1 else {
+            panic!("a button")
+        };
+        assert_eq!(
+            money.decal.as_ref().map(|piece| piece.texture.as_str()),
+            Some("coin.tga"),
+            "a still picture stays the button's decal"
+        );
+        assert_eq!(money.decal_grid, None);
+    }
+
+    #[test]
+    fn a_still_picture_naming_a_grid_animation_keeps_its_area_but_no_picture() {
+        // As a cursor attachment's sample: the window fills the place.
+        let animations = r#"<XML>
+            <Ui2DAnimation item="Icons"><Grid>true</Grid>
+                <CellHeight>40</CellHeight><CellWidth>40</CellWidth>
+                <Frames><Texture>icons.tga</Texture><Location><X>0</X><Y>0</Y></Location>
+                    <Size><CX>256</CX><CY>256</CY></Size></Frames>
+            </Ui2DAnimation></XML>"#;
+        let window = r#"<XML>
+            <StaticAnimation item="Placed"><ScreenID>Placed</ScreenID>
+                <Location><X>4</X><Y>2</Y></Location><Size><CX>32</CX><CY>30</CY></Size>
+                <Animation>Icons</Animation></StaticAnimation>
+            <StaticAnimation item="Unsized"><Animation>Icons</Animation></StaticAnimation>
+            <Screen item="Cursor"><Pieces>Placed</Pieces><Pieces>Unsized</Pieces></Screen></XML>"#;
+        let library = Library::parse(animations, "<XML/>").unwrap();
+        let screen = library.screen(window, "Cursor").unwrap();
+        let shown: Vec<_> = screen
+            .pieces
+            .iter()
+            .map(|(_, element)| match element {
+                Element::Image { area, piece, .. } => {
+                    Some(([area.x, area.y, area.width, area.height], piece.is_some()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                Some(([4.0, 2.0, 32.0, 30.0], false)),
+                // A cell's size, not the sheet's.
+                Some(([0.0, 0.0, 40.0, 40.0], false)),
+            ]
         );
     }
 
@@ -2326,7 +2456,12 @@ mod tests {
             .collect();
         // A piece no file defines is left out, as a window's always was.
         assert_eq!(names, ["BG_One", "Words", "Go", "Name", "List"]);
-        let Element::Image { area, piece, .. } = &screen.pieces[0].1 else {
+        let Element::Image {
+            area,
+            piece: Some(piece),
+            ..
+        } = &screen.pieces[0].1
+        else {
             panic!("a picture")
         };
         assert_eq!((area.width, piece.texture.as_str()), (256.0, "pieces.tga"));

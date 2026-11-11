@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- A bag's window and a world container's window show the container's icon
+  on the skin's recessed box alone, as the Titanium program does (program
+  read R29). They used to draw the skin's whole first item-icon sheet
+  squashed under it, since the installed client's skins name their icon
+  grid (A_DragItem) as that button's decal. Two rules from the read now
+  cover every window: a grid animation draws one cell or nothing, never
+  its sheet, so a button's grid decal is no picture of its own; and where
+  a window sets a button's picture (buffs, pet buffs, the item display,
+  the merchant's chosen item, the spellbook's places and now the bag's
+  icon) the skin's decal is never drawn under it. That second rule was a
+  list of five windows missing the bag; it is now one rule. An icon below
+  500, such as the 0 servers may send for a world container, shows the box
+  alone, and a bag's icon no longer stays after its bag loses it. A still
+  picture (StaticAnimation) naming a grid keeps its place with no picture,
+  read for the cursor attachment and inferred elsewhere (checklist 6.464).
+
 - On Titanium a ducked strafe now goes on the selected base, halved: the
   run speed when running and the walk speed when walking (program reads
   R28 and R28b; checklist 6.460). It used to take half the walk speed

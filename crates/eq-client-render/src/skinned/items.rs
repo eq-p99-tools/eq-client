@@ -425,13 +425,13 @@ pub(crate) fn contents(
     for (part, mut image) in &mut icons {
         let icon = match part {
             BagPart::Icon(bag) => items.get(bag).and_then(|bag| bag.details.icon),
-            // Servers may send no icon (0) for a world container.
-            BagPart::WorldIcon => container.map(|view| view.icon).filter(|icon| *icon != 0),
-            BagPart::Name(_) | BagPart::WorldName => None,
+            BagPart::WorldIcon => container.map(|view| view.icon),
+            BagPart::Name(_) | BagPart::WorldName => continue,
         };
-        if let Some(icon) = icon.and_then(|icon| art.item(icon)) {
-            *image = icon;
-        }
+        // The icon's cell, icon 500 the first; an icon below 500, as the 0
+        // servers may send for a world container, shows the box alone, and
+        // so does a bag with no icon (program read R29 (b), (c)).
+        *image = icon.and_then(|icon| art.item(icon)).unwrap_or_default();
     }
 }
 
@@ -734,6 +734,43 @@ mod tests {
         };
         assert_eq!(named(&app, first), None);
         assert_eq!(named(&app, second), Some(item.details.name));
+    }
+
+    #[test]
+    fn a_bags_icon_is_its_cell_and_an_icon_below_500_shows_no_picture() {
+        let mut app = app();
+        // The preview's backpack, icon 557: the 22nd cell of the second
+        // sheet, counted down each column of six.
+        let sheet = crate::sheets::testing::sheet(
+            &mut app,
+            "dragitem2.tga",
+            image::RgbaImage::from_pixel(256, 256, image::Rgba([1, 2, 3, 255])),
+        );
+        let icon = app
+            .world_mut()
+            .spawn((BagPart::Icon(InventorySlot(22)), ImageNode::default()))
+            .id();
+        app.update();
+        let picture = |app: &App| {
+            let image = app.world().get::<ImageNode>(icon).unwrap();
+            (image.image.clone(), image.rect)
+        };
+        assert_eq!(
+            picture(&app),
+            (sheet, Some(Rect::new(120.0, 120.0, 160.0, 160.0)))
+        );
+        let mut items = crate::preview::items();
+        for item in &mut items {
+            if item.slot == InventorySlot(22) {
+                item.details.icon = Some(0);
+            }
+        }
+        testing::inventory(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            InventoryUpdate::Snapshot(items),
+        );
+        app.update();
+        assert_eq!(picture(&app), (ImageNode::default().image, None));
     }
 
     fn bag_frames(app: &mut App) -> Vec<WindowId> {

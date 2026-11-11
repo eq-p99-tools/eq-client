@@ -499,7 +499,11 @@ fn pieces(
 ) {
     for (name, element) in pieces {
         match element {
-            Element::Image { area, piece, .. } => {
+            Element::Image {
+                area,
+                piece: Some(piece),
+                ..
+            } => {
                 let area = place(*area, None, inside);
                 skinned::picture(
                     parent,
