@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- On Titanium a ducking player moves ducked, as its program does (program
+  read R23; checklist 6.460). Forward, back, strafe and autorun no longer
+  stand you first: you move at the sneaking speeds, half the walk speed
+  with a run buff added in full, and a strafe halved once (the session's
+  grant now carries it, so the client no longer halves it again). Autorun
+  pressed while ducked runs you ducked; ducking, and the stand a ducked
+  jump sends before it launches, still end autorun as posture changes. A
+  duck doesn't end a Bard song in the program (read R25). Ducked headroom
+  (a clearance of your size plus one) and the refused stand under a low
+  ceiling aren't modelled yet, and the ducked walk animation is unread, so
+  the duck pose is drawn. The Mac-era client is unread and still stands you
+  to move. Networking pinned to 50c1662 (eq-network #299).
+
 - The Script report's `effects` field is now `unslotted_effects`, as it
   only ever held landings the server gave no slot, and a new `held_spells`
   field lists every spell the player holds, slotted or not. A buff held at

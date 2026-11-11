@@ -552,10 +552,26 @@ impl Controls {
             velocity,
         })
     }
+    /// Whether autorun is latched, for tests elsewhere in the crate.
+    #[cfg(test)]
+    pub(crate) const fn autorun(&self) -> bool {
+        self.autorun
+    }
+
+    /// Latches autorun, for tests elsewhere in the crate.
+    #[cfg(test)]
+    pub(crate) const fn set_autorun(&mut self, on: bool) {
+        self.autorun = on;
+    }
+
     /// Starts motion afresh, as an admission, a zone or a server's
     /// correction does. The walk toggle is the player's and stays as they
     /// left it, as walking is never faster than running (whether the
-    /// program keeps it is unread, recording checklist 6.363).
+    /// program keeps it is unread, recording checklist 6.363). Autorun ends:
+    /// the online reset of every admission and zoning calls this, as
+    /// Titanium's zone setup clears the autorun latch on every zone-in (read
+    /// R26; 0x4a861d), and a grant or a server's move that keeps it restores
+    /// it around the call.
     pub fn reset(&mut self, speed: Option<f32>) {
         self.shoreline.reset();
         *self = Self {
@@ -1279,31 +1295,41 @@ pub(super) fn input(
     // stands them (read R19c): the latch is dropped the same frame, so
     // nothing runs then or after they stand. A lying player's latch may stay
     // set and moves nothing while they lie (read R19 c); the stand clears it.
-    // Ducking keeps the earlier rule (latch dropped), although Titanium's
-    // can-move test passes a ducking player and its autorun key is gated
-    // only on can-act (reads R19 c, R19c); recording checklist 6.455,
-    // follow-up.
+    // Titanium moves a ducking player ducked (read R23): its can-move test
+    // passes them and its autorun key is gated only on can-act (reads R19 c,
+    // R19c), so autorun pressed while ducked runs them ducked, and the duck
+    // itself, a posture change, still ends it. The Mac-era client stands a
+    // ducking player to move, so there the latch is dropped as before
+    // (recording checklist 6.460).
     // A lone standing the session reports at zone entry is the posture the
     // player enters with, not a change (read R24): the world counts only a
     // known posture changing, or a first one other than standing. Where the
     // program's entry stand changes the posture, the session reports the
     // posture before it and then the stand, so the count moves even when
     // both land between two frames, and autorun ends as the program's latch
-    // clear does (R19). Whether the latch otherwise survives a zone change
-    // in the program is unread, so leaving a zone (a known posture becoming
-    // unknown) keeps this client's earlier behaviour of ending it.
+    // clear does (R19).
+    // A zone change resets the controls, and autorun with them
+    // ([`Controls::reset`]): every admission and every zoning goes through
+    // the online reset. Titanium's zone setup clears the latch on every
+    // zone-in, whatever the posture (read R26), which that reset matches.
+    // The Mac-era program is unread, and the same reset applies there as
+    // before. Whether a movement key still held sets its bit again after the
+    // clear is unread; held keys go on as before (inferred, 6.460). A known
+    // posture becoming unknown also counts as a change here.
     let changes = online.world().player_posture_changes();
     let posture_changed =
         changes != controls.posture_changes || (controls.posture.is_some() && posture.is_none());
     controls.posture_changes = changes;
     controls.posture = posture;
     let standing = posture.is_none_or(|posture| posture == eq_client_core::PostureState::Standing);
+    let moves_ducked = online.world().generation().ducking().moves_ducked
+        && posture == Some(eq_client_core::PostureState::Ducking);
     if focused && keys.pressed(Act::Autorun) {
         controls.autorun = !controls.autorun;
     } else if keys.pressed(Act::Forward) || keys.pressed(Act::Back) || posture_changed {
         controls.autorun = false;
     }
-    if !(standing || lying) {
+    if !(standing || lying || moves_ducked) {
         controls.autorun = false;
     }
     let now = Instant::now();
@@ -1693,9 +1719,13 @@ pub(super) fn input(
         intent.turn = 0.0;
         controls.jump = None;
     }
-    // Ducking halves a strafe (the Titanium speeds read; the R5 audit's S1),
-    // which the session doesn't track.
+    // Ducking halves a strafe (the Titanium speeds read; the R5 audit's S1).
+    // Where the generation moves a ducking player ducked, the session's grant
+    // already carries the ducked speeds, the strafe halved (read R23), so it
+    // isn't halved again here. Elsewhere the session stands them to move,
+    // and the step it stands them on is halved as before.
     if intent.mode == MovementMode::Strafe
+        && !online.world().generation().ducking().moves_ducked
         && online
             .world()
             .player()
@@ -1715,7 +1745,8 @@ pub(super) fn input(
     if swimming {
         // Titanium backs up in water only by the buffs' modifier (0x4a2bd8;
         // read R13 b), so not at all without one; the grant carries it. A
-        // ducked player is stood to move by the session.
+        // ducking player backs up on the land rule there (R23), which their
+        // grant carries too.
         speed = swim_speed(
             controls
                 .swim_backward_speed
@@ -5927,6 +5958,62 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn autorun_pressed_while_ducked_runs_them_ducked_on_titanium() {
+        use eq_client_core::{GameDialect, PostureState};
+        // Read R23: nothing stands a ducking player to move, and the autorun
+        // key is gated only on can-act (R19c). The Mac-era client stands
+        // them to move, so the latch is dropped there as before.
+        for (generation, runs) in [(GameDialect::Titanium, true), (GameDialect::EqMac, false)] {
+            let (mut app, receiver) = app();
+            online::testing::generation(
+                &mut app.world_mut().resource_mut::<online::OnlineState>(),
+                generation,
+            );
+            report_posture(&mut app, PostureState::Ducking);
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .reset_all();
+            app.update();
+            let _ = receiver.try_iter().count();
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(KeyCode::NumLock);
+            app.update();
+            assert_eq!(
+                app.world().resource::<Controls>().autorun,
+                runs,
+                "{generation:?}"
+            );
+            let sent: Vec<_> = receiver.try_iter().collect();
+            assert!(
+                !sent
+                    .iter()
+                    .any(|command| matches!(command, ClientCommand::SetPosture { .. })),
+                "{generation:?} sent {sent:?}"
+            );
+            if !runs {
+                assert!(sent.is_empty(), "{generation:?} sent {sent:?}");
+                continue;
+            }
+            let Some(ClientCommand::Move(running)) = sent.first() else {
+                panic!("expected autorun to run ducked: {sent:?}");
+            };
+            assert_eq!(running.mode, MovementMode::Forward);
+            accept(&mut app, running);
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .reset_all();
+            app.update();
+            assert!(app.world().resource::<Controls>().autorun);
+            // The stand a ducked jump sends first is a posture change, so it
+            // ends autorun (R19).
+            report_posture(&mut app, PostureState::Standing);
+            app.update();
+            assert!(!app.world().resource::<Controls>().autorun);
+        }
+    }
+
+    #[test]
     fn any_posture_change_ends_autorun() {
         use eq_client_core::PostureState;
         // Read R19 (0x483556): every change, the player's own or one the
@@ -6037,14 +6124,24 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn ducking_halves_a_strafe() {
-        // The Titanium speeds read (the R5 audit's S1); the session doesn't
-        // track the stance, so the player's side halves it.
-        for (posture, moved) in [
-            (eq_client_core::PostureState::Standing, 0.4),
-            (eq_client_core::PostureState::Ducking, 0.2),
+    fn a_ducked_strafe_is_halved_once() {
+        // The Titanium speeds read (the R5 audit's S1). On Titanium the
+        // session's ducked grant carries the halving (read R23), so the
+        // strafe speed it grants goes as it is; the Mac-era client's session
+        // stands a ducking player to move, and the step it stands them on is
+        // halved here as before.
+        use eq_client_core::{GameDialect, PostureState};
+        for (generation, posture, moved) in [
+            (GameDialect::Titanium, PostureState::Standing, 0.4),
+            (GameDialect::Titanium, PostureState::Ducking, 0.4),
+            (GameDialect::EqMac, PostureState::Standing, 0.4),
+            (GameDialect::EqMac, PostureState::Ducking, 0.2),
         ] {
             let (mut app, receiver) = app();
+            online::testing::generation(
+                &mut app.world_mut().resource_mut::<online::OnlineState>(),
+                generation,
+            );
             crate::keys::testing::bind(
                 &mut app,
                 Act::StrafeRight,
@@ -6067,7 +6164,10 @@ pub(super) mod tests {
             };
             assert_eq!(request.mode, MovementMode::Strafe);
             let across = request.position.x.hypot(request.position.y);
-            assert!((across - moved).abs() < 0.001, "{posture:?}: {across}");
+            assert!(
+                (across - moved).abs() < 0.001,
+                "{generation:?} {posture:?}: {across}"
+            );
         }
     }
 

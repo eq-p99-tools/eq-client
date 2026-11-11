@@ -1700,6 +1700,75 @@ mod tests {
         );
     }
 
+    /// Every admission and every zoning goes through the online reset, which
+    /// resets the controls and ends autorun: Titanium's zone setup clears the
+    /// autorun latch on every zone-in (read R26), and the Mac-era client
+    /// takes the same reset.
+    #[test]
+    fn an_admission_or_a_zoning_ends_autorun() {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(16);
+        let mut state = OnlineState::new(true);
+        testing::admit(&mut state, 1, testing::player(7));
+        let mut app = App::new();
+        app.insert_resource(state)
+            .insert_resource(Updates(Mutex::new(Some(receiver))))
+            .insert_resource(ViewerSettings(super::super::ViewerConfig::default()))
+            .init_resource::<hud::HudState>()
+            .init_resource::<crate::motion::Controls>()
+            .init_resource::<crate::chat::ChatState>()
+            .init_resource::<crate::notices::Lines>()
+            .init_resource::<crate::combat::CombatState>()
+            .init_resource::<crate::trade::TradeState>()
+            .init_resource::<crate::items::ItemState>()
+            .init_resource::<crate::inventory::InventoryState>()
+            .init_resource::<crate::sounds::Sounds>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<SkinnedMeshInverseBindposes>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .add_systems(Update, receive);
+        let autorun = |app: &App| app.world().resource::<crate::motion::Controls>().autorun();
+        let latch = |app: &mut App| {
+            app.world_mut()
+                .resource_mut::<crate::motion::Controls>()
+                .set_autorun(true);
+        };
+        latch(&mut app);
+        app.update();
+        assert!(autorun(&app), "nothing reset yet");
+        // A zoning: the server's transfer offer.
+        sender
+            .try_send(WorldUpdate::Game(WorldEvent::ZoneTransfer(
+                eq_client_core::ZoneOffer {
+                    zone_id: 2,
+                    instance_id: 0,
+                    position: eq_client_core::WorldPosition::default(),
+                    reason: 0,
+                    to_bind: false,
+                    solicited: true,
+                },
+            )))
+            .unwrap();
+        app.update();
+        assert!(!autorun(&app), "the zoning ended autorun");
+        // The new zone's admission.
+        latch(&mut app);
+        sender
+            .try_send(WorldUpdate::Game(WorldEvent::Entered {
+                capabilities: Vec::new(),
+                choices: Vec::new(),
+                session_id: 2,
+                zone: "example".into(),
+                player: Box::new(testing::player(7)),
+                far_clip: None,
+                spell_landing_flag: None,
+                zone_id: 2,
+            }))
+            .unwrap();
+        app.update();
+        assert!(!autorun(&app), "the admission ended autorun");
+    }
+
     #[test]
     fn a_blocked_asset_load_keeps_applying_ordered_session_events() {
         use eq_client_core::inventory::InventoryUpdate;
