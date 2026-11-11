@@ -62,6 +62,10 @@ pub(super) struct Controls {
     /// The share of the jump speed a jump starts with, as the session
     /// grants it: the health and weight factor.
     jump_factor: f32,
+    /// The latest grant applied in place and when it arrived, while the
+    /// speeds above are still the lower of each across it (`grant`); it
+    /// applies whole from the first span that starts after it arrived.
+    straddle: Option<(Instant, eq_client_core::world::MotionGrant)>,
     pub walking: bool,
     /// Running forward by itself: on and off by the autorun key; a forward
     /// or back key or a posture change turns it off, while turning,
@@ -215,6 +219,7 @@ impl Default for Controls {
             swim_backward_speed: None,
             diagonal_rates: DiagonalRates::default(),
             jump_factor: 1.0,
+            straddle: None,
             walking: false,
             autorun: false,
             posture: None,
@@ -666,18 +671,50 @@ impl Controls {
             .as_secs_f32()
             .min(if self.moving { MAX_CYCLE } else { 0.1 })
     }
-    /// Takes the session's word on how the player may move. A new positive
-    /// speed for a player who already moves only replaces the speeds, as the
-    /// program reads its speed modifier live (read R7, 0x4a1d74): held
-    /// keys, taps, a queued or crouched jump, autorun and a jump or fall
-    /// under way all go on, the sideways carry in the air limited to the new
-    /// run speed. Anything else starts motion afresh.
-    pub fn grant(&mut self, grant: eq_client_core::world::MotionGrant) {
-        let positive =
-            |speed: Option<f32>| speed.is_some_and(|value| value.is_finite() && value > 0.0);
-        if positive(self.speed) && positive(grant.units_per_second) {
-            self.set_speeds(grant);
-            if let (Some(airborne), Some(speed)) = (self.airborne.as_mut(), grant.units_per_second)
+    /// Takes the session's word on how the player may move. A new speed
+    /// for a player already granted, at a speed or rooted at none, only
+    /// replaces the speeds, as the program reads its speed modifier live
+    /// (read R7, 0x4a1d74): held keys, taps, a queued or crouched jump,
+    /// autorun and a jump or fall under way all go on, the sideways carry in
+    /// the air limited to the lower run speed. The sample under way when
+    /// it arrives takes the lower of each earlier and new speed, and the
+    /// new ones apply from the next (`settle`). A root keeps the autorun latch
+    /// where the generation's program does (`root`). Anything else starts
+    /// motion afresh.
+    pub fn grant(
+        &mut self,
+        grant: eq_client_core::world::MotionGrant,
+        root: eq_client_core::RootRules,
+    ) {
+        // Rooted is granted too, at no speed: the program zeroes the speed
+        // once and blocks nothing else, so input goes on and the player
+        // turns (reads R18, R22).
+        let granted =
+            |speed: Option<f32>| speed.is_some_and(|value| value.is_finite() && value >= 0.0);
+        let rooted = |speed: Option<f32>| speed == Some(0.0);
+        if granted(self.speed) && granted(grant.units_per_second) {
+            let latest = self
+                .straddle
+                .map_or_else(|| self.speeds(), |(_, latest)| latest);
+            // Titanium keeps the autorun latch through a root, so the player
+            // runs again by themselves once it ends (read R22 b); the
+            // Mac-era program is unread and drops it, as before.
+            if rooted(grant.units_per_second)
+                && !rooted(latest.units_per_second)
+                && !root.keeps_autorun
+            {
+                self.autorun = false;
+            }
+            // The session bounds the sample under way span by span: the
+            // earlier speeds up to the change, these after. The client
+            // builds a sample over its whole span at once, so that sample
+            // takes the lower of each speed, and this grant applies whole
+            // from the first span that starts after it arrived (`settle`).
+            // It arrives after the session's stamp, so this is never faster.
+            let lower = lower_speeds(self.speeds(), grant);
+            self.set_speeds(lower);
+            self.straddle = Some((Instant::now(), grant));
+            if let (Some(airborne), Some(speed)) = (self.airborne.as_mut(), lower.units_per_second)
             {
                 airborne.limit_drift(speed);
             }
@@ -718,6 +755,45 @@ impl Controls {
         }
     }
 
+    /// The speeds in force, as a grant.
+    fn speeds(&self) -> eq_client_core::world::MotionGrant {
+        eq_client_core::world::MotionGrant {
+            units_per_second: self.speed,
+            backward_units_per_second: self.backward_speed,
+            walk_units_per_second: self.walk_speed,
+            strafe_units_per_second: self.strafe_speed,
+            strafe_walk_units_per_second: self.strafe_walk_speed,
+            swim_backward_units_per_second: self.swim_backward_speed,
+            diagonal: self.diagonal_rates,
+            falls: self.airborne.is_some(),
+            jump_factor: self.jump_factor,
+        }
+    }
+
+    /// The time the next sample covers, ending `now`.
+    fn next_span(&self, now: Instant) -> f32 {
+        let elapsed = now.saturating_duration_since(self.last_accepted);
+        let since_sent = self.last_sent.map_or(elapsed, |sent| {
+            now.saturating_duration_since(sent).max(elapsed)
+        });
+        self.span(since_sent)
+    }
+
+    /// Applies a grant made in place whole once the next sample's span
+    /// starts at or after its arrival, so no part of that sample ran under
+    /// the earlier speeds. The span's start only moves later as time goes
+    /// on, so settling on a frame that sends nothing is never early.
+    fn settle(&mut self, now: Instant) {
+        let Some((arrived, grant)) = self.straddle else {
+            return;
+        };
+        let start = now.checked_sub(Duration::from_secs_f32(self.next_span(now)));
+        if start.is_some_and(|start| start >= arrived) {
+            self.set_speeds(grant);
+            self.straddle = None;
+        }
+    }
+
     /// The speeds of a grant, and nothing else.
     fn set_speeds(&mut self, grant: eq_client_core::world::MotionGrant) {
         self.speed = grant.units_per_second;
@@ -748,19 +824,11 @@ impl Controls {
         let crouch = self.crouch.take();
         let taps = std::mem::take(&mut self.taps);
         let turn_held = self.turn_held;
-        let speeds = eq_client_core::world::MotionGrant {
-            units_per_second: self.speed,
-            backward_units_per_second: self.backward_speed,
-            walk_units_per_second: self.walk_speed,
-            strafe_units_per_second: self.strafe_speed,
-            strafe_walk_units_per_second: self.strafe_walk_speed,
-            swim_backward_units_per_second: self.swim_backward_speed,
-            diagonal: self.diagonal_rates,
-            falls: self.airborne.is_some(),
-            jump_factor: self.jump_factor,
-        };
+        let speeds = self.speeds();
+        let straddle = self.straddle;
         self.reset(None);
         self.set_speeds(speeds);
+        self.straddle = straddle;
         (
             self.autorun,
             self.jump,
@@ -853,6 +921,51 @@ impl Controls {
 
 /// Longest span one proposal may cover; the session admits up to 0.25 s per sample.
 const MAX_CYCLE: f32 = 0.25;
+
+/// The lower of each speed of two grants, as the sample that straddles a
+/// change made in place may ask (`Controls::grant`). A mode either grant
+/// lacks is not available; a speed a grant leaves to another (strafing
+/// walked, backing up in water) is compared as that one.
+fn lower_speeds(
+    earlier: eq_client_core::world::MotionGrant,
+    grant: eq_client_core::world::MotionGrant,
+) -> eq_client_core::world::MotionGrant {
+    let lower = |a: Option<f32>, b: Option<f32>| a.zip(b).map(|(a, b)| a.min(b));
+    eq_client_core::world::MotionGrant {
+        units_per_second: lower(earlier.units_per_second, grant.units_per_second),
+        backward_units_per_second: lower(
+            earlier.backward_units_per_second,
+            grant.backward_units_per_second,
+        ),
+        walk_units_per_second: lower(earlier.walk_units_per_second, grant.walk_units_per_second),
+        strafe_units_per_second: lower(
+            earlier.strafe_units_per_second,
+            grant.strafe_units_per_second,
+        ),
+        strafe_walk_units_per_second: lower(
+            earlier
+                .strafe_walk_units_per_second
+                .or(earlier.strafe_units_per_second),
+            grant
+                .strafe_walk_units_per_second
+                .or(grant.strafe_units_per_second),
+        ),
+        swim_backward_units_per_second: lower(
+            earlier
+                .swim_backward_units_per_second
+                .or(earlier.units_per_second),
+            grant
+                .swim_backward_units_per_second
+                .or(grant.units_per_second),
+        ),
+        diagonal: DiagonalRates {
+            run: lower(earlier.diagonal.run, grant.diagonal.run),
+            walk: lower(earlier.diagonal.walk, grant.diagonal.walk),
+        },
+        falls: grant.falls,
+        jump_factor: earlier.jump_factor.min(grant.jump_factor),
+    }
+}
 
 /// How fast the heading sent follows the way the player faces, in heading
 /// units a second: the turn keys' fastest rate.
@@ -1179,6 +1292,7 @@ pub(super) fn input(
         controls.autorun = false;
     }
     let now = Instant::now();
+    controls.settle(now);
     let water_enabled =
         client == InstalledClient::Titanium && !flying && online.world().can(Capability::Swimming);
     if !water_enabled || !focused || controls.stun_active {
@@ -1201,13 +1315,16 @@ pub(super) fn input(
     }
     // Held until the next sample; jumps rise and fall like falls, so only
     // where the session takes both, and no sooner after the last than the
-    // installed client allows.
+    // installed client allows. A rooted player's jump is refused where the
+    // generation's program refuses it (read R22 c): the press is dropped.
+    let rooted_still = controls.speed == Some(0.0) && !online.world().generation().root().jumps;
     if focused
         && !flying
         && !swimming
         && !shoreline_active
         && !online.world().is_stunned()
         && !lying
+        && !rooted_still
         && keys.pressed(Act::Jump)
         && controls.airborne.is_some()
         && controls.crouch.is_none()
@@ -4927,17 +5044,20 @@ pub(super) mod tests {
         {
             let mut controls = app.world_mut().resource_mut::<Controls>();
             let last_accepted = controls.last_accepted;
-            controls.grant(eq_client_core::world::MotionGrant {
-                units_per_second: None,
-                backward_units_per_second: None,
-                walk_units_per_second: None,
-                strafe_units_per_second: None,
-                strafe_walk_units_per_second: None,
-                swim_backward_units_per_second: None,
-                diagonal: eq_client_core::DiagonalRates::default(),
-                falls: true,
-                jump_factor: 1.0,
-            });
+            controls.grant(
+                eq_client_core::world::MotionGrant {
+                    units_per_second: None,
+                    backward_units_per_second: None,
+                    walk_units_per_second: None,
+                    strafe_units_per_second: None,
+                    strafe_walk_units_per_second: None,
+                    swim_backward_units_per_second: None,
+                    diagonal: eq_client_core::DiagonalRates::default(),
+                    falls: true,
+                    jump_factor: 1.0,
+                },
+                eq_client_core::GameDialect::Titanium.root(),
+            );
             controls.last_accepted = last_accepted;
         }
         app.update();
@@ -5371,17 +5491,20 @@ pub(super) mod tests {
         controls.reset(None);
         assert!(controls.walking);
         assert!(controls.walk_speed.is_none());
-        controls.grant(eq_client_core::world::MotionGrant {
-            diagonal: eq_client_core::DiagonalRates::default(),
-            units_per_second: Some(6.0),
-            backward_units_per_second: None,
-            walk_units_per_second: Some(2.0),
-            strafe_units_per_second: None,
-            strafe_walk_units_per_second: None,
-            swim_backward_units_per_second: None,
-            falls: false,
-            jump_factor: 1.0,
-        });
+        controls.grant(
+            eq_client_core::world::MotionGrant {
+                diagonal: eq_client_core::DiagonalRates::default(),
+                units_per_second: Some(6.0),
+                backward_units_per_second: None,
+                walk_units_per_second: Some(2.0),
+                strafe_units_per_second: None,
+                strafe_walk_units_per_second: None,
+                swim_backward_units_per_second: None,
+                falls: false,
+                jump_factor: 1.0,
+            },
+            eq_client_core::GameDialect::Titanium.root(),
+        );
         controls.last_accepted = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
@@ -5548,6 +5671,171 @@ pub(super) mod tests {
             let lying = attempt_sends(GameDialect::Titanium, PostureState::Lying, attempt);
             assert!(lying.is_empty(), "{attempt:?} lying sent {lying:?}");
         }
+    }
+
+    /// What one attempt sends from a standing Titanium player the session
+    /// has rooted: granted at no speed.
+    fn rooted_attempt_sends(
+        attempt: Attempt,
+    ) -> (Vec<ClientCommand>, eq_client_core::WorldPosition) {
+        let (mut app, receiver) = standing_jump(InstalledClient::Titanium);
+        let mut controls = app.world_mut().resource_mut::<Controls>();
+        controls.speed = Some(30.0);
+        controls.grant(
+            eq_client_core::world::MotionGrant {
+                units_per_second: Some(0.0),
+                backward_units_per_second: None,
+                walk_units_per_second: None,
+                strafe_units_per_second: None,
+                strafe_walk_units_per_second: None,
+                swim_backward_units_per_second: None,
+                diagonal: DiagonalRates::default(),
+                falls: true,
+                jump_factor: 1.0,
+            },
+            eq_client_core::GameDialect::Titanium.root(),
+        );
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        app.update();
+        let _ = receiver.try_iter().count();
+        let start = app
+            .world()
+            .resource::<online::OnlineState>()
+            .world()
+            .player()
+            .unwrap()
+            .position;
+        match attempt {
+            Attempt::Key(key) => app
+                .world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(key),
+            Attempt::Script(act) => {
+                app.insert_resource(
+                    crate::script::Script::new(Vec::new()).holding_for_test(vec![act], None),
+                );
+            }
+            Attempt::Face(heading) => {
+                app.insert_resource(
+                    crate::script::Script::new(Vec::new())
+                        .holding_for_test(Vec::new(), Some(heading)),
+                );
+            }
+        }
+        app.update();
+        (receiver.try_iter().collect(), start)
+    }
+
+    #[test]
+    fn a_rooted_player_turns_moves_nowhere_and_does_not_jump() {
+        // Read R22: a root zeroes the speed once and blocks nothing else;
+        // the turn keys, the mouse and a script's facing still turn the
+        // player, and the jump gate refuses (c). Run 2026-11-11 row 3 froze
+        // the heading with a turn key held, and `face` failed.
+        for attempt in [
+            Attempt::Key(KeyCode::KeyQ),
+            Attempt::Key(KeyCode::KeyE),
+            Attempt::Script(Act::TurnLeft),
+            Attempt::Face(128.0),
+        ] {
+            let (sent, start) = rooted_attempt_sends(attempt);
+            let turned = sent.iter().find_map(|command| match command {
+                ClientCommand::Move(request) => Some(request.position),
+                _ => None,
+            });
+            let turned = turned.unwrap_or_else(|| panic!("{attempt:?} rooted sent {sent:?}"));
+            assert_ne!(turned.heading, start.heading, "{attempt:?}");
+            assert_eq!((turned.x, turned.y), (start.x, start.y), "{attempt:?}");
+        }
+        // Forward rooted goes nowhere.
+        let (sent, start) = rooted_attempt_sends(Attempt::Key(KeyCode::ArrowUp));
+        for command in &sent {
+            if let ClientCommand::Move(request) = command {
+                assert_eq!((request.position.x, request.position.y), (start.x, start.y));
+            }
+        }
+        let (sent, _) = rooted_attempt_sends(Attempt::Key(KeyCode::Space));
+        assert!(
+            !sent
+                .iter()
+                .any(|command| matches!(command, ClientCommand::Jump { .. })),
+            "{sent:?}"
+        );
+    }
+
+    #[test]
+    fn a_root_keeps_autorun_on_titanium_and_it_runs_again_on_the_fade() {
+        use eq_client_core::GameDialect;
+        // Read R22 b: Titanium's root leaves the autorun latch set, so the
+        // player runs again by themselves when it ends; run 2026-11-11 row
+        // 3 stayed put. The Mac-era program is unread and drops it.
+        let grant = |speed| eq_client_core::world::MotionGrant {
+            diagonal: eq_client_core::DiagonalRates::default(),
+            units_per_second: Some(speed),
+            backward_units_per_second: None,
+            walk_units_per_second: None,
+            strafe_units_per_second: None,
+            strafe_walk_units_per_second: None,
+            swim_backward_units_per_second: None,
+            falls: true,
+            jump_factor: 1.0,
+        };
+        let now = Instant::now();
+        let mut controls = Controls {
+            speed: Some(30.0),
+            autorun: true,
+            moving: true,
+            crouch: Some(Crouch::Over),
+            pending: Some(Pending {
+                session_id: 11,
+                created: now,
+                kind: PendingKind::Move,
+            }),
+            visual: Some(VisualMotion {
+                from: Transform::IDENTITY,
+                to: Transform::from_xyz(1.0, 0.0, 0.0),
+                elapsed: 0.0,
+                duration: 0.1,
+                follow_heading: false,
+                queue: std::collections::VecDeque::new(),
+            }),
+            ..Default::default()
+        };
+        controls.grant(grant(0.0), GameDialect::Titanium.root());
+        assert!(controls.autorun);
+        assert_eq!(controls.speed, Some(0.0));
+        assert_eq!(controls.crouch, Some(Crouch::Over), "held intent stays");
+        // The sample under way still plays to where it was sent (run
+        // 2026-11-11 finding 3: the withdrawal left the model one sample
+        // behind the position sent).
+        assert!(controls.pending.is_some());
+        assert!(
+            controls
+                .visual
+                .as_ref()
+                .is_some_and(|visual| (visual.to.translation.x - 1.0).abs() < f32::EPSILON)
+        );
+        controls.grant(grant(30.0), GameDialect::Titanium.root());
+        assert!(controls.autorun, "the fade runs again with no key");
+        assert_eq!(
+            controls.speed,
+            Some(0.0),
+            "the sample under way stays rooted"
+        );
+        sent_after(&mut controls);
+        assert_eq!(controls.speed, Some(30.0), "the next sample runs");
+        assert!(controls.autorun);
+        let mut mac = Controls {
+            speed: Some(30.0),
+            autorun: true,
+            ..Default::default()
+        };
+        mac.grant(grant(0.0), GameDialect::EqMac.root());
+        assert!(!mac.autorun);
+        mac.grant(grant(30.0), GameDialect::EqMac.root());
+        assert!(!mac.autorun);
     }
 
     #[test]
@@ -7073,17 +7361,20 @@ pub(super) mod tests {
         let mut controls = app.world_mut().resource_mut::<Controls>();
         controls.autorun = true;
         controls.jump = Some(Instant::now());
-        controls.grant(eq_client_core::world::MotionGrant {
-            diagonal: eq_client_core::DiagonalRates::default(),
-            units_per_second: None,
-            backward_units_per_second: None,
-            walk_units_per_second: None,
-            strafe_units_per_second: None,
-            strafe_walk_units_per_second: None,
-            swim_backward_units_per_second: None,
-            falls: true,
-            jump_factor: 1.0,
-        });
+        controls.grant(
+            eq_client_core::world::MotionGrant {
+                diagonal: eq_client_core::DiagonalRates::default(),
+                units_per_second: None,
+                backward_units_per_second: None,
+                walk_units_per_second: None,
+                strafe_units_per_second: None,
+                strafe_walk_units_per_second: None,
+                swim_backward_units_per_second: None,
+                falls: true,
+                jump_factor: 1.0,
+            },
+            eq_client_core::GameDialect::Titanium.root(),
+        );
         assert!(!controls.autorun && controls.jump.is_none());
         controls.last_accepted = Instant::now()
             .checked_sub(Duration::from_millis(150))
@@ -7120,18 +7411,27 @@ pub(super) mod tests {
             falls: true,
             jump_factor: 1.0,
         };
-        controls.grant(grant(Some(9.0)));
+        controls.grant(
+            grant(Some(9.0)),
+            eq_client_core::GameDialect::Titanium.root(),
+        );
         assert!(controls.autorun);
         assert_eq!(controls.speed, Some(9.0));
-        controls.grant(grant(None));
+        controls.grant(grant(None), eq_client_core::GameDialect::Titanium.root());
         assert!(!controls.autorun);
-        controls.grant(grant(Some(10.0)));
+        controls.grant(
+            grant(Some(10.0)),
+            eq_client_core::GameDialect::Titanium.root(),
+        );
         assert!(
             !controls.autorun,
             "a regrant cannot revive withdrawn intent"
         );
         controls.autorun = true;
-        controls.grant(grant(Some(f32::NAN)));
+        controls.grant(
+            grant(Some(f32::NAN)),
+            eq_client_core::GameDialect::Titanium.root(),
+        );
         assert!(!controls.autorun);
     }
 
@@ -7163,9 +7463,14 @@ pub(super) mod tests {
             falls: true,
             jump_factor: 0.5,
         };
-        controls.grant(grant(Some(13.0), Some(5.0)));
-        assert_eq!(controls.speed, Some(13.0));
-        assert_eq!(controls.walk_speed, Some(5.0));
+        controls.grant(
+            grant(Some(13.0), Some(5.0)),
+            eq_client_core::GameDialect::Titanium.root(),
+        );
+        // The sample under way keeps the lower speeds; the raise applies
+        // from the next span.
+        assert_eq!(controls.speed, Some(10.0));
+        assert_eq!(controls.walk_speed, Some(4.0));
         assert!((controls.jump_factor - 0.5).abs() < f32::EPSILON);
         assert!(controls.autorun);
         assert!(controls.moving);
@@ -7174,17 +7479,217 @@ pub(super) mod tests {
         assert!(controls.airborne.is_some());
         // A server's move starts prediction afresh with the speeds kept,
         // and autorun, the jump request and the crouch go on (read R18).
+        // The raise still applies from the next span.
         controls.rebase();
+        assert_eq!(controls.speed, Some(10.0));
+        assert!(!controls.moving);
+        sent_after(&mut controls);
         assert_eq!(controls.speed, Some(13.0));
         assert_eq!(controls.walk_speed, Some(5.0));
-        assert!(!controls.moving);
         assert!(controls.autorun);
         assert_eq!(controls.jump, Some(now));
         assert_eq!(controls.crouch, Some(Crouch::Over));
         assert!(controls.airborne.is_some());
         // The session's grant again at once lands in place.
-        controls.grant(grant(Some(13.0), Some(5.0)));
+        controls.grant(
+            grant(Some(13.0), Some(5.0)),
+            eq_client_core::GameDialect::Titanium.root(),
+        );
         assert!(controls.autorun);
+    }
+
+    /// A sample goes out after every grant so far arrived; the next span
+    /// starts there.
+    fn sent_after(controls: &mut Controls) {
+        let sent = Instant::now();
+        controls.last_sent = Some(sent);
+        controls.last_accepted = sent;
+        controls.settle(sent + Duration::from_millis(100));
+    }
+
+    fn speeds_grant(speed: f32, backward: Option<f32>) -> eq_client_core::world::MotionGrant {
+        eq_client_core::world::MotionGrant {
+            diagonal: eq_client_core::DiagonalRates::default(),
+            units_per_second: Some(speed),
+            backward_units_per_second: backward,
+            walk_units_per_second: None,
+            strafe_units_per_second: None,
+            strafe_walk_units_per_second: None,
+            swim_backward_units_per_second: None,
+            falls: true,
+            jump_factor: 1.0,
+        }
+    }
+
+    /// Run 2026-11-11 rows 4 and 5: the first sample after a fade's raise
+    /// asked the new speed over its whole span, part of it spent under the
+    /// snare, and the session refused it. The sample under way takes the
+    /// lower speed; the span after it the new one.
+    #[test]
+    fn a_raise_mid_sample_waits_for_the_next_span_and_a_lowering_applies_at_once() {
+        let titanium = eq_client_core::GameDialect::Titanium.root();
+        let start = Instant::now();
+        let mut controls = Controls {
+            speed: Some(19.41),
+            moving: true,
+            last_sent: Some(start),
+            last_accepted: start,
+            ..Default::default()
+        };
+        controls.grant(speeds_grant(29.87, None), titanium);
+        // Still inside the span that began before the grant arrived.
+        controls.settle(Instant::now() + Duration::from_millis(50));
+        assert_eq!(controls.speed, Some(19.41));
+        sent_after(&mut controls);
+        assert_eq!(controls.speed, Some(29.87));
+        // A lowering counts at once over the whole sample.
+        controls.grant(speeds_grant(19.41, None), titanium);
+        assert_eq!(controls.speed, Some(19.41));
+        sent_after(&mut controls);
+        assert_eq!(controls.speed, Some(19.41));
+    }
+
+    /// Reviewer 11-11: per speed, not per grant. A grant that raises one
+    /// speed and lowers another runs the straddling sample at the lower of
+    /// each; a mode only one grant has is not available for it.
+    #[test]
+    fn a_mixed_grant_takes_the_lower_of_each_speed_for_the_straddling_sample() {
+        let titanium = eq_client_core::GameDialect::Titanium.root();
+        let mut controls = Controls {
+            speed: Some(20.0),
+            backward_speed: Some(12.0),
+            walk_speed: Some(6.0),
+            moving: true,
+            last_sent: Some(Instant::now()),
+            ..Default::default()
+        };
+        let mut grant = speeds_grant(30.0, Some(8.0));
+        grant.strafe_units_per_second = Some(9.0);
+        controls.grant(grant, titanium);
+        assert_eq!(controls.speed, Some(20.0), "the raise waits");
+        assert_eq!(
+            controls.backward_speed,
+            Some(8.0),
+            "the lowering counts now"
+        );
+        assert_eq!(controls.walk_speed, None, "the new grant has no walk");
+        assert_eq!(controls.strafe_speed, None, "the earlier one had no strafe");
+        sent_after(&mut controls);
+        assert_eq!(controls.speed, Some(30.0));
+        assert_eq!(controls.backward_speed, Some(8.0));
+        assert_eq!(controls.strafe_speed, Some(9.0));
+        let lower = lower_speeds(
+            eq_client_core::world::MotionGrant {
+                strafe_walk_units_per_second: None,
+                swim_backward_units_per_second: None,
+                ..grant
+            },
+            eq_client_core::world::MotionGrant {
+                strafe_units_per_second: Some(12.0),
+                strafe_walk_units_per_second: Some(5.0),
+                swim_backward_units_per_second: Some(3.0),
+                diagonal: eq_client_core::DiagonalRates {
+                    run: Some(4.0),
+                    walk: None,
+                },
+                ..grant
+            },
+        );
+        // A strafe walked or a swim backed that one grant leaves to its
+        // strafe or stroke compares as that.
+        assert_eq!(lower.strafe_units_per_second, Some(9.0));
+        assert_eq!(lower.strafe_walk_units_per_second, Some(5.0));
+        assert_eq!(lower.swim_backward_units_per_second, Some(3.0));
+        assert_eq!(lower.diagonal.run, None);
+    }
+
+    /// Reviewer 11-11 item 2: grants inside one span compare with the
+    /// speed the span started under, not with the one pending.
+    #[test]
+    fn two_raises_inside_one_span_keep_the_speed_the_span_started_under() {
+        let titanium = eq_client_core::GameDialect::Titanium.root();
+        let mut controls = Controls {
+            speed: Some(19.41),
+            moving: true,
+            last_sent: Some(Instant::now()),
+            ..Default::default()
+        };
+        controls.grant(speeds_grant(29.87, None), titanium);
+        controls.grant(speeds_grant(25.0, None), titanium);
+        assert_eq!(controls.speed, Some(19.41));
+        sent_after(&mut controls);
+        assert_eq!(controls.speed, Some(25.0), "the latest grant applies whole");
+        // Raise then lower below the start inside one span.
+        controls.grant(speeds_grant(40.0, None), titanium);
+        controls.grant(speeds_grant(10.0, None), titanium);
+        assert_eq!(controls.speed, Some(10.0));
+        sent_after(&mut controls);
+        assert_eq!(controls.speed, Some(10.0));
+    }
+
+    /// The straddling sample and the one after, at the client's speeds and
+    /// stamps, both pass the real movement session's span-by-span bound.
+    /// Before the fix the first asked 29.87 over its whole span and was
+    /// refused ("movement exceeds elapsed-time budget").
+    #[test]
+    fn the_session_admits_the_straddling_sample_and_the_one_after() {
+        use eq_network_game::movement::MotionSession;
+        let titanium = eq_client_core::GameDialect::Titanium.root();
+        let calibration = |units_per_second| eq_client_core::MotionCalibration {
+            swim_backward_units_per_second: None,
+            units_per_second,
+            velocity_scale: 1.0,
+            animation: 1,
+            diagonal: DiagonalRates::default(),
+            strafe: None,
+            walk: None,
+            backward: None,
+        };
+        let start = Instant::now();
+        let origin = world_position([0.0, 0.0, 0.0], 0.0);
+        let mut session = MotionSession::new(11, 7, origin, start).unwrap();
+        session.calibrate(calibration(19.41), start).unwrap();
+        let mut controls = Controls {
+            speed: Some(19.41),
+            moving: true,
+            last_sent: Some(start),
+            last_accepted: start,
+            ..Default::default()
+        };
+        let at = |millis| start + Duration::from_millis(millis);
+        let sends = |session: &mut MotionSession, x: f32, created| {
+            let position = eq_client_core::WorldPosition { x, ..origin };
+            session
+                .send_move(
+                    &MovementRequest::new(MovementMode::Forward, 11, position, created),
+                    created,
+                    |_| Ok(()),
+                )
+                .is_ok()
+        };
+        // The snare fades 60 ms into a 200 ms sample: the session changes
+        // in place at its stamp, and the grant reaches the client too.
+        session.calibrate(calibration(29.87), at(60)).unwrap();
+        controls.grant(speeds_grant(29.87, None), titanium);
+        controls.settle(at(200));
+        let span = controls.next_span(at(200));
+        assert!((span - 0.2).abs() < 1e-4);
+        // Asking the new speed over the whole span is what was refused.
+        assert!(!sends(&mut session, 29.87 * span, at(200)));
+        let first = controls.speed.unwrap() * span;
+        assert!(
+            sends(&mut session, first, at(200)),
+            "the straddling sample at the lower speed"
+        );
+        controls.last_sent = Some(at(200));
+        controls.last_accepted = at(200);
+        controls.settle(at(400));
+        assert_eq!(controls.speed, Some(29.87));
+        let second = first + controls.speed.unwrap() * controls.next_span(at(400));
+        assert!(
+            sends(&mut session, second, at(400)),
+            "the next sample at the new speed"
+        );
     }
 
     #[test]
@@ -7548,17 +8053,20 @@ pub(super) mod tests {
                 assert!(online.world().fall_weight().is_none());
             }
             let mut controls = app.world_mut().resource_mut::<Controls>();
-            controls.grant(eq_client_core::world::MotionGrant {
-                units_per_second: None,
-                backward_units_per_second: None,
-                walk_units_per_second: None,
-                strafe_units_per_second: None,
-                strafe_walk_units_per_second: None,
-                swim_backward_units_per_second: None,
-                diagonal: eq_client_core::DiagonalRates::default(),
-                falls: true,
-                jump_factor: 1.0,
-            });
+            controls.grant(
+                eq_client_core::world::MotionGrant {
+                    units_per_second: None,
+                    backward_units_per_second: None,
+                    walk_units_per_second: None,
+                    strafe_units_per_second: None,
+                    strafe_walk_units_per_second: None,
+                    swim_backward_units_per_second: None,
+                    diagonal: eq_client_core::DiagonalRates::default(),
+                    falls: true,
+                    jump_factor: 1.0,
+                },
+                eq_client_core::GameDialect::Titanium.root(),
+            );
             // Age the new sample window past its pacing gate and let the
             // real update reannounce the climb before the landing sample.
             controls.last_accepted = Instant::now()
@@ -7712,17 +8220,20 @@ pub(super) mod tests {
                 airborne: Some(airborne.clone()),
                 ..Controls::default()
             };
-            controls.grant(eq_client_core::world::MotionGrant {
-                units_per_second: Some(4.0),
-                backward_units_per_second: None,
-                walk_units_per_second: None,
-                strafe_units_per_second: None,
-                strafe_walk_units_per_second: None,
-                swim_backward_units_per_second: None,
-                diagonal: DiagonalRates::default(),
-                falls: true,
-                jump_factor: 1.0,
-            });
+            controls.grant(
+                eq_client_core::world::MotionGrant {
+                    units_per_second: Some(4.0),
+                    backward_units_per_second: None,
+                    walk_units_per_second: None,
+                    strafe_units_per_second: None,
+                    strafe_walk_units_per_second: None,
+                    swim_backward_units_per_second: None,
+                    diagonal: DiagonalRates::default(),
+                    falls: true,
+                    jump_factor: 1.0,
+                },
+                eq_client_core::GameDialect::Titanium.root(),
+            );
             let preserved = controls.airborne.unwrap();
             assert!((preserved.velocity() - velocity).abs() < f32::EPSILON);
             assert_eq!(preserved.peak(), peak);

@@ -16,8 +16,8 @@ Quarm/TAKP behavior. Frontends use runtime capabilities, not server-name flags.
 ## Server policy snapshot
 
 The following summarizes the networking revision pinned by this application's
-Cargo.lock: `93faf1f4e8df25fc212d56dbac1c983a472d1535`. Its
-[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/93faf1f4e8df25fc212d56dbac1c983a472d1535/crates/eq-network/src/client/session/servers.rs)
+Cargo.lock: `3daa711c6e49f00b879c382752f787e4438e5416`. Its
+[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/3daa711c6e49f00b879c382752f787e4438e5416/crates/eq-network/src/client/session/servers.rs)
 are the source for this table. **Yes means provided by that policy**, not a live
 certification, and individual operations still validate their prerequisites.
 
@@ -145,8 +145,9 @@ threshold's rounding (6.444), auto attack at a zone change (6.445), and the
 Ranger's sort, filters and players choice and the close box (6.446).
 
 Movement starts once the load/STR/buff inputs are complete at zone-in. After
-that, nothing but a root, a stun, a freeze, death, zoning or not standing stops
-it, as in the original client (reads R7, R18): a buff, a song pulse, a spell
+that, nothing but a root (which keeps the player's input, so they turn and,
+on Titanium, run again by themselves when it ends), a stun, a freeze, death,
+zoning or not standing stops it, as in the original client (reads R7, R18): a buff, a song pulse, a spell
 landing, a level, a change in belongings or a server's move asks for the
 inputs again while the speeds in force go on, and a server's move keeps
 autorun and held keys. Where a term cannot be proven, the client reports the
@@ -172,11 +173,11 @@ affected mechanics unavailable while chat remains usable. See [installed spell
 providers](docs/spell-providers.md). These source and synthetic checks add no live
 compatibility certification.
 
-The pinned networking [combat](https://github.com/eq-p99-tools/eq-network/blob/93faf1f4e8df25fc212d56dbac1c983a472d1535/docs/quarm-combat.md),
-[loot](https://github.com/eq-p99-tools/eq-network/blob/93faf1f4e8df25fc212d56dbac1c983a472d1535/docs/eqmac-looting.md) and
-[world-object](https://github.com/eq-p99-tools/eq-network/blob/93faf1f4e8df25fc212d56dbac1c983a472d1535/docs/eqmac-world-objects.md)
+The pinned networking [combat](https://github.com/eq-p99-tools/eq-network/blob/3daa711c6e49f00b879c382752f787e4438e5416/docs/quarm-combat.md),
+[loot](https://github.com/eq-p99-tools/eq-network/blob/3daa711c6e49f00b879c382752f787e4438e5416/docs/eqmac-looting.md) and
+[world-object](https://github.com/eq-p99-tools/eq-network/blob/3daa711c6e49f00b879c382752f787e4438e5416/docs/eqmac-world-objects.md)
 contracts record their limits and controlled live checklists. The dated
-[P99/Quarm gap report](https://github.com/eq-p99-tools/eq-network/blob/93faf1f4e8df25fc212d56dbac1c983a472d1535/docs/public-server-gaps.md)
+[P99/Quarm gap report](https://github.com/eq-p99-tools/eq-network/blob/3daa711c6e49f00b879c382752f787e4438e5416/docs/public-server-gaps.md)
 retains the earlier inspection and its scenario-specific evidence.
 
 ### Public-parity checks, 2026-11-02
