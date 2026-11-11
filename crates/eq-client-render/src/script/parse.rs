@@ -14,7 +14,7 @@ pub(super) const MAX_WAIT: Duration = Duration::from_mins(2);
 const MAX_TRACE: Duration = Duration::from_secs(10);
 const MAX_WALK: Duration = Duration::from_mins(1);
 /// `EQEmu` GM commands a script may send, without the leading `#`.
-const GM_COMMANDS: [&str; 39] = [
+const GM_COMMANDS: [&str; 40] = [
     // The server's own view of the player's stats, weight and coins among
     // them, said back in chat; reads only.
     "showstats",
@@ -90,6 +90,23 @@ const GM_COMMANDS: [&str; 39] = [
     // character, as the server lets no player's detrimental spell land on
     // an unflagged one. The server keeps the flag; `pvp off` puts it back.
     "pvp",
+    // The server's own view of a test character, said back in chat; reads
+    // only, and only the subcommands in `SHOW_QUERIES` and
+    // `SHOW_INVENTORY_SCOPES`.
+    "show",
+];
+
+/// `gm show` subcommands that take no argument and change nothing: the
+/// target's (or the GM's) buffs, currencies and timers, and the distance and
+/// line of sight to a target. Every other subcommand is refused, among them
+/// `zone_status`, which the zone hands to world and whose rows carry
+/// addresses and ports.
+const SHOW_QUERIES: [&str; 5] = ["buffs", "currencies", "distance", "line_of_sight", "timers"];
+
+/// The scopes `show inventory <scope>` reads, as the server compares them.
+const SHOW_INVENTORY_SCOPES: [&str; 13] = [
+    "all", "allbank", "bank", "cursor", "curlimbo", "equip", "gen", "limbo", "poss", "shbank",
+    "trade", "trib", "world",
 ];
 
 /// One scripted action.
@@ -1157,6 +1174,20 @@ pub(super) fn gm_command(words: &[&str]) -> Result<String, String> {
     if *command == "pvp" && !matches!(arguments, ["on" | "off"]) {
         return Err("gm pvp takes on or off".into());
     }
+    if *command == "show" {
+        let allowed = match arguments {
+            [query] => SHOW_QUERIES.contains(query),
+            ["inventory", scope] => SHOW_INVENTORY_SCOPES.contains(scope),
+            _ => false,
+        };
+        if !allowed {
+            return Err(format!(
+                "gm show takes one of {}, or inventory with one of {}",
+                SHOW_QUERIES.join(", "),
+                SHOW_INVENTORY_SCOPES.join(", ")
+            ));
+        }
+    }
     Ok(words.join(" "))
 }
 
@@ -1950,6 +1981,57 @@ mod tests {
         );
         for bad in ["gm pvp", "gm pvp yes", "gm pvp on off", "gm pvp ON"] {
             assert!(parse(bad, Path::new("private")).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn gm_show_reads_only_the_listed_queries_and_inventory_scopes() {
+        let base = Path::new("private");
+        for command in [
+            "show buffs",
+            "show currencies",
+            "show distance",
+            "show line_of_sight",
+            "show timers",
+            "show inventory all",
+            "show inventory allbank",
+            "show inventory bank",
+            "show inventory cursor",
+            "show inventory curlimbo",
+            "show inventory equip",
+            "show inventory gen",
+            "show inventory limbo",
+            "show inventory poss",
+            "show inventory shbank",
+            "show inventory trade",
+            "show inventory trib",
+            "show inventory world",
+        ] {
+            assert_eq!(
+                parse(&format!("gm {command}"), base).unwrap(),
+                [Step::Gm(command.into())]
+            );
+        }
+        for bad in [
+            "gm show",
+            "gm show buffs extra",
+            "gm show BUFFS",
+            "gm show nukebuffs",
+            "gm show zone_status",
+            "gm show aggro",
+            "gm show stats",
+            "gm show inventory",
+            "gm show inventory pockets",
+            "gm show inventory curlim",
+            "gm show inventory EQUIP",
+            "gm show inventory equip gen",
+            "gm show buffs inventory",
+        ] {
+            let error = parse(bad, base).unwrap_err();
+            assert!(
+                error.contains("gm show takes one of buffs"),
+                "{bad}: {error}"
+            );
         }
     }
 

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Scripts on a local test session may read the server's own view of a test
+  character with `gm show`: exactly `buffs`, `currencies`, `timers`,
+  `distance` or `line_of_sight`, or `inventory SCOPE` with SCOPE one of
+  `all`, `allbank`, `bank`, `cursor`, `curlimbo`, `equip`, `gen`, `limbo`,
+  `poss`, `shbank`, `trade`, `trib` or `world`. These read only. Any other
+  subcommand, scope, case or extra word is refused when the script is read,
+  and like every `gm` step they run only in a local test session. Their
+  output names characters and items, so it stays in private run notes.
+
 - Buffs that land on the player take the slot the Titanium program gives
   them (program reads R3 and R20), so the Effects window keeps the
   program's order, received and modelled buffs together, and a right-click

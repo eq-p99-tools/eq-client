@@ -328,6 +328,16 @@ mod tests {
     }
 
     #[test]
+    fn a_gm_show_query_needs_a_local_session() {
+        let program = Program::parse("report before\ngm show buffs\n", Path::new(".")).unwrap();
+        assert_eq!(
+            program.check_local_commands(false).unwrap_err().line,
+            Some(2)
+        );
+        assert!(program.check_local_commands(true).is_ok());
+    }
+
+    #[test]
     fn emote_and_random_steps_need_a_local_session_but_listing_steps_do_not() {
         for (source, line) in [
             ("slash afk\nslash emote waves\n", Some(2)),
