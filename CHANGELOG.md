@@ -14,9 +14,17 @@
   where it was sent, so a snare no longer holds the player at its landing
   and fade. The log line for a root is "Movement rooted". Mouse-look pitch,
   which the program holds while rooted in camera modes 0-2, is not modelled
-  (recording checklist 6.451). Networking pinned to 6d4e8c9 (eq-network
+  (recording checklist 6.451). Networking pinned to 26e40c0 (eq-network
   #296).
 
+- A Feign Death spell landing on you lies you down, as the Titanium
+  program does (program read R21): the session sends one lying posture and
+  you are held still as for the ability, with auto attack left as it is and
+  no feign request. The client reads effect 74 from the installed spell
+  data; a spell whose effects are unknown lies no one (checklist 6.455).
+  Move While Feigned covers the spell too: its landing sends nothing, and
+  your next stand ends the feign (checklist 6.454). Networking pinned to
+  93faf1f (eq-network #295).
 - Test scripts may set a test character's PvP flag on a local EQEmu or TAKP
   server (`gm pvp on`, `gm pvp off`), as other `gm` steps are allowed, so a
   GM's `castspell` can land a root or snare on another flagged test

@@ -102,7 +102,7 @@ The **Dangerous** section sits below the ordinary settings and includes the
 | Setting | File key | Default | Effect |
 | --- | --- | --- | --- |
 | Walk While Winded | `walk_while_winded` | Off | Allows horizontal movement while stunned; other stun restrictions remain |
-| Move While Feigned | `move_while_feigned` | Off | Feign Death without lying down: the press sends only the feign, so you stay standing, other players see you standing, and you move normally while the server keeps the feign. Your next stand ends it, as a jump or a duck does (each sends its own duck or stand), and so does your first step if you pressed it sitting. The original client lies you down |
+| Move While Feigned | `move_while_feigned` | Off | Feign Death without lying down: the press sends only the feign, and a Feign Death spell landing on you sends nothing, so you stay standing, other players see you standing, and you move normally while the server keeps the feign. Your next stand ends it, as a jump or a duck does (each sends its own duck or stand), and so does your first step if you pressed it sitting. The original client lies you down |
 | Stand When Hit | `stand_when_hit` | On | A hit stands you up from sitting or kneeling to loot, as the original client does; a lying player is never stood. Turning it off is the departure: you stay seated |
 | Memorize Without Sitting | `memorize_while_standing` | Off | Memorizes without automatic sitting or the client preparation pause; scribing keeps its normal rules |
 | Take Environmental Damage | `take_environmental_damage` | On | Reports supported falls, drowning and lava heat. Air continues running with reports off |

@@ -144,6 +144,11 @@ pub struct Changes {
     /// The generation's program turns auto attack off on this news, saying
     /// nothing: the Titanium Feign Death press (read R19 a, R19b 3).
     pub attack_ended: bool,
+    /// A spell with the feign effect landed on the player, which the
+    /// generation's program lies them down for (read R21); the host tells
+    /// the session with `ClientCommand::FeignLanded`. Auto attack is left
+    /// as it is.
+    pub feign_landed: bool,
     /// What the news tells the player.
     pub notices: Vec<Notice>,
     /// The sounds the server asks the player's client to play, in the order

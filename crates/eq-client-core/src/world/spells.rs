@@ -192,6 +192,11 @@ impl ClientWorld {
         self.landed(effect.caster_id, now);
         self.landed_on(effect);
         if self.is_player(effect.target_id) {
+            // Titanium's landing lies the player down for effect 74 (read
+            // R21), by the program's own landing test.
+            changes.feign_landed = effect.took_hold()
+                && self.generation.spell_feign_lies()
+                && spells.feigns(u32::from(effect.spell_id));
             if effect.effect_flag == 4
                 && !matches!(effect.spell_id, 0 | u16::MAX)
                 && !spells.instant_effect(u32::from(effect.spell_id))
