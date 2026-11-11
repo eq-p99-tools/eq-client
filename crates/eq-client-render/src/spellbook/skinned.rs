@@ -8,7 +8,7 @@
 //! two, and the Delete key deletes the chosen spell, each where the session
 //! offers it; the client asks first unless the player turned that off
 //! ([`Fix::AskBeforeDeletingSpells`]).
-use super::{BookView, SpellNames, action_pending, note, prepare_scribe};
+use super::{BookView, ScribeRefusal, SpellNames, action_pending, note, prepare_scribe};
 use crate::chat::{ChatState, Said, system_line};
 use crate::confirm::{Asked, Question};
 use crate::hud::action_bar::{ActionRequests, BookChange};
@@ -246,11 +246,15 @@ pub(crate) fn clicks(
     };
     let slot = view.slot(place);
     let in_place = view.spell(book, place);
-    match (cursor.and_then(|item| item.scroll_spell), cursor, in_place) {
-        (Some(scroll), ..) => {
+    // The Titanium program's press takes any item on the cursor and refuses
+    // one that is not a usable scroll (R27 check 4); the Mac-era program is
+    // unread, so another item there leaves the book as it is.
+    let titanium = online.world().generation() == eq_client_core::GameDialect::Titanium;
+    match (cursor, in_place) {
+        (Some(item), _) if item.scroll_spell.is_some() || titanium => {
             let refusal = scribe(
                 (&online, &outbox),
-                (slot, in_place, scroll),
+                (slot, in_place, item.scroll_spell),
                 (&names, &messages),
                 requests.as_deref_mut(),
             );
@@ -258,10 +262,9 @@ pub(crate) fn clicks(
                 chat.refuse(said);
             }
         }
-        // Another item on the cursor leaves the book as it is.
-        (None, Some(_), _) => (),
-        (None, None, Some(spell)) => hand.held = Some(Entry { slot, spell }),
-        (None, None, None) => hand.held = None,
+        (Some(_), _) => (),
+        (None, Some(spell)) => hand.held = Some(Entry { slot, spell }),
+        (None, None) => hand.held = None,
     }
 }
 
@@ -590,30 +593,37 @@ fn answer(
 /// the chat says if it does not.
 fn scribe(
     (online, outbox): (&crate::online::OnlineState, &crate::outbox::Outbox),
-    (slot, in_place, scroll): (usize, Option<u32>, u32),
+    (slot, in_place, scroll): (usize, Option<u32>, Option<u32>),
     (names, messages): (&SpellNames, &crate::hud::messages::Messages),
     requests: Option<&mut ActionRequests>,
 ) -> Option<Said> {
     let world = online.world();
     let book = world.spell_book();
-    if in_place.is_some() {
-        return Some(messages.said_text(12051, "That place in the book holds a spell already."));
-    }
-    if book.is_some_and(|book| book.slots().contains(&Some(scroll))) {
-        return Some(messages.said_or(
-            12050,
-            &[names.label(scroll)],
-            "The book has that spell already.",
-        ));
-    }
-    if action_pending(world) {
-        return Some(Said::own("Wait for the current spell action"));
+    // Titanium's press tests these in its own order (R27), in
+    // `prepare_scribe`; the Mac-era press keeps this client's earlier order.
+    if world.generation() != eq_client_core::GameDialect::Titanium {
+        let scroll = scroll?;
+        if in_place.is_some() {
+            return ScribeRefusal::PlaceTaken.said(messages);
+        }
+        if book.is_some_and(|book| book.slots().contains(&Some(scroll))) {
+            return ScribeRefusal::AlreadyScribed(names.label(scroll)).said(messages);
+        }
+        if action_pending(world) {
+            return Some(Said::own(ScribeRefusal::Busy.to_string()));
+        }
     }
     // The outbox says why a scribe it holds back did not go.
     let stamp = outbox.stamp(world).ok()?;
     let command = match prepare_scribe(Some(online), book, Some(stamp), Some(slot), names) {
         Ok(command) => command,
-        Err(error) => return Some(Said::own(error.to_string())),
+        Err(refusal) => return refusal.said(messages),
+    };
+    let eq_client_core::ClientCommand::ScribeSpell {
+        spell_id: scroll, ..
+    } = command
+    else {
+        return None;
     };
     let receipt = outbox.send_book_edit(world, command).ok()?;
     note(
@@ -671,7 +681,10 @@ mod tests {
             activation: eq_client_core::inventory::ItemActivation::default(),
             scroll_spell: Some(spell),
             book: None,
-            rules: eq_client_core::inventory::ItemPlacement::default(),
+            rules: eq_client_core::inventory::ItemPlacement {
+                item_type: 20,
+                ..eq_client_core::inventory::ItemPlacement::default()
+            },
             slot: InventorySlot::CURSOR,
             details: eq_client_core::ItemDetails {
                 base_held_model: None,
@@ -682,7 +695,7 @@ mod tests {
                 lore: String::new(),
                 weight_tenths: 1,
                 slots: 0,
-                classes: 2,
+                classes: 1,
                 races: 1,
                 flags: Vec::new(),
                 stats: Vec::new(),
@@ -816,7 +829,7 @@ mod tests {
         // The place holds a spell.
         let refused = scribe(
             (&online, &outbox),
-            (1, Some(42), 73),
+            (1, Some(42), Some(73)),
             (&names, &messages),
             Some(&mut requests),
         );
@@ -825,7 +838,7 @@ mod tests {
         // An empty place takes it, where it was clicked.
         let scribed = scribe(
             (&online, &outbox),
-            (5, None, 73),
+            (5, None, Some(73)),
             (&names, &messages),
             Some(&mut requests),
         );
@@ -842,9 +855,231 @@ mod tests {
         assert_eq!(request.change, BookChange::Scribe);
         assert_eq!(request.label, "Scribing Synthetic spell");
         // A scroll for a spell the book has already is refused.
-        let refused = scribe((&online, &outbox), (6, None, 42), (&names, &messages), None);
+        crate::online::testing::inventory(
+            &mut online,
+            eq_client_core::inventory::InventoryUpdate::Snapshot(vec![scroll(42)]),
+        );
+        let refused = scribe(
+            (&online, &outbox),
+            (6, None, Some(42)),
+            (&names, &messages),
+            None,
+        );
         assert!(refused.is_some());
         assert!(sent.try_recv().is_err());
+    }
+
+    /// The Titanium press's refusal for this cursor item clicked into book
+    /// place `slot`: what the chat says, with nothing sent and the item
+    /// still on the cursor.
+    #[allow(clippy::needless_pass_by_value)] // Cases build each item for one press.
+    fn press(
+        item: eq_client_core::inventory::InventoryItem,
+        slot: usize,
+        spells: &str,
+    ) -> Option<Said> {
+        let mut online = online();
+        crate::online::testing::inventory(
+            &mut online,
+            eq_client_core::inventory::InventoryUpdate::Snapshot(vec![item.clone()]),
+        );
+        let (queue, sent) = std::sync::mpsc::sync_channel(4);
+        let outbox = crate::outbox::Outbox::new(Some(queue));
+        let names = SpellNames::parse(spells);
+        // A table with the program's ids, in placeholder words.
+        let messages = crate::hud::messages::Messages::parse(
+            "EQST0002\n0 1\n181 line 181\n6192 line 6192\n12047 line 12047\n\
+             12048 line 12048 %1 %2\n12050 line 12050\n12051 line 12051\n",
+        );
+        let in_place = online
+            .world()
+            .spell_book()
+            .and_then(|book| book.slots()[slot]);
+        let said = scribe(
+            (&online, &outbox),
+            (slot, in_place, item.scroll_spell),
+            (&names, &messages),
+            None,
+        );
+        assert!(sent.try_recv().is_err(), "a refused press sent a request");
+        assert_eq!(
+            online
+                .world()
+                .inventory()
+                .items()
+                .get(&InventorySlot::CURSOR),
+            Some(&item)
+        );
+        said
+    }
+
+    #[allow(clippy::unnecessary_wraps)] // Compared with what a press returns.
+    fn official(text: &str) -> Option<Said> {
+        Some(Said::official(text))
+    }
+
+    #[test]
+    fn the_titanium_press_refuses_in_the_programs_order_by_its_string_ids() {
+        // Spell 73 is level 1 for the player's class (warrior); 74 level 2;
+        // 75 has no warrior level.
+        let mut fields = vec![""; 120];
+        let mut spells = String::new();
+        for (id, level) in [("73", "1"), ("74", "2"), ("75", "255")] {
+            fields[0] = id;
+            fields[1] = "Synthetic spell";
+            fields[104] = level;
+            spells.push_str(&fields.join("^"));
+            spells.push('\n');
+        }
+        // Check 4: not a scroll (item type), or one the class cannot use.
+        let mut not_scroll = scroll(73);
+        not_scroll.rules.item_type = 0;
+        assert_eq!(press(not_scroll, 5, &spells), official("line 181"));
+        let mut other_class = scroll(73);
+        other_class.details.classes = 2;
+        assert_eq!(press(other_class.clone(), 5, &spells), official("line 181"));
+        // The class test comes before the place, the book and the level.
+        other_class.scroll_spell = Some(74);
+        assert_eq!(press(other_class, 1, &spells), official("line 181"));
+        // Check 5, then 6: the place holds a spell; the book has it.
+        assert_eq!(press(scroll(74), 1, &spells), official("line 12051"));
+        assert_eq!(press(scroll(42), 5, &spells), official("line 12050"));
+        // Check 7: no level for the class; above the player's level, with
+        // the level and the spell's name.
+        assert_eq!(press(scroll(75), 5, &spells), official("line 12047"));
+        assert_eq!(
+            press(scroll(74), 5, &spells),
+            official("line 12048 2 Synthetic spell")
+        );
+        // The level comes before the stack.
+        let mut stack = scroll(74);
+        stack.stack_count = Some(2);
+        assert_eq!(
+            press(stack.clone(), 5, &spells),
+            official("line 12048 2 Synthetic spell")
+        );
+        // Check 8: a stack of two or more.
+        stack.scroll_spell = Some(73);
+        assert_eq!(press(stack, 5, &spells), official("line 6192"));
+        // Without the installed strings, this client's words say it.
+        let mut not_scroll = scroll(73);
+        not_scroll.rules.item_type = 0;
+        let mut online = online();
+        crate::online::testing::inventory(
+            &mut online,
+            eq_client_core::inventory::InventoryUpdate::Snapshot(vec![not_scroll]),
+        );
+        let (queue, _sent) = std::sync::mpsc::sync_channel(4);
+        let said = scribe(
+            (&online, &crate::outbox::Outbox::new(Some(queue))),
+            (5, None, None),
+            (
+                &SpellNames::parse(&spells),
+                &crate::hud::messages::Messages::default(),
+            ),
+            None,
+        );
+        assert_eq!(
+            said,
+            Some(Said::own("That is not a scroll you can scribe."))
+        );
+    }
+
+    #[test]
+    fn a_pending_spell_action_returns_silently_on_titanium_and_says_so_on_the_mac_era() {
+        for (generation, said) in [
+            (eq_client_core::GameDialect::Titanium, None),
+            (
+                eq_client_core::GameDialect::EqMac,
+                Some(Said::own("Wait for the current spell action")),
+            ),
+        ] {
+            let mut online = online();
+            let player = online.world().player().unwrap().clone();
+            let mut world = eq_client_core::world::ClientWorld::default();
+            world.carry_as(generation);
+            crate::online::testing::set_world(&mut online, world);
+            crate::online::testing::admit(&mut online, 7, player);
+            let mut book = eq_client_core::SpellBook::default();
+            book.apply(&eq_client_core::SpellUpdate::Slot {
+                slot: 1,
+                spell_id: 42,
+                mode: 0,
+            });
+            crate::online::testing::news(
+                &mut online,
+                [
+                    eq_client_core::WorldEvent::SpellBook(book),
+                    eq_client_core::WorldEvent::BookAction(
+                        eq_client_core::BookActionStatus::Preparing,
+                    ),
+                ],
+            );
+            crate::online::testing::inventory(
+                &mut online,
+                eq_client_core::inventory::InventoryUpdate::Snapshot(vec![scroll(73)]),
+            );
+            let (queue, sent) = std::sync::mpsc::sync_channel(4);
+            let refused = scribe(
+                (&online, &crate::outbox::Outbox::new(Some(queue))),
+                (5, None, Some(73)),
+                (
+                    &SpellNames::parse("73^Synthetic spell"),
+                    &crate::hud::messages::Messages::default(),
+                ),
+                None,
+            );
+            assert_eq!(refused, said, "{generation:?}");
+            assert!(sent.try_recv().is_err());
+        }
+    }
+
+    #[test]
+    fn the_mac_era_press_keeps_its_earlier_rules() {
+        let mut online = online();
+        let player = online.world().player().unwrap().clone();
+        let mut world = eq_client_core::world::ClientWorld::default();
+        world.carry_as(eq_client_core::GameDialect::EqMac);
+        crate::online::testing::set_world(&mut online, world);
+        crate::online::testing::admit(&mut online, 7, player);
+        crate::online::testing::news(
+            &mut online,
+            [eq_client_core::WorldEvent::SpellBook(
+                eq_client_core::SpellBook::default(),
+            )],
+        );
+        // A stack of a class's unusable scroll typed as no scroll, above
+        // the player's level: none of the Titanium press's tests apply.
+        let mut item = scroll(74);
+        item.rules.item_type = 0;
+        item.details.classes = 2;
+        item.stack_count = Some(2);
+        crate::online::testing::inventory(
+            &mut online,
+            eq_client_core::inventory::InventoryUpdate::Snapshot(vec![item]),
+        );
+        let (queue, sent) = std::sync::mpsc::sync_channel(4);
+        let mut fields = vec![""; 120];
+        fields[0] = "74";
+        fields[104] = "2";
+        let said = scribe(
+            (&online, &crate::outbox::Outbox::new(Some(queue))),
+            (5, None, Some(74)),
+            (
+                &SpellNames::parse(&fields.join("^")),
+                &crate::hud::messages::Messages::default(),
+            ),
+            None,
+        );
+        assert_eq!(said, None);
+        assert!(matches!(
+            sent.try_recv().unwrap(),
+            ClientCommand::ScribeSpell {
+                slot: 5,
+                spell_id: 74,
+                ..
+            }
+        ));
     }
 
     #[test]

@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- The Titanium scribe press refuses as the Titanium program does (program
+  read R27, checklist 6.463), in its order and by its strings: an item that
+  is not a scroll, or one your class or race cannot use (181; the class and
+  race test is inferred), a place that holds a spell (12051), a spell the
+  book has (12050), a spell with no level for your class (12047) or above
+  your level (12048, with the level and the spell's name, replacing this
+  client's own wording), and a stack of two or more (6192). Nothing is sent
+  and the scroll stays on the cursor. A press while a spell action is in
+  flight now returns without a line, as the program's does; the cast test
+  in it is this client's own. The 12049 line and the worker's sit and
+  5-second wait before the request are unchanged (the program's countdown
+  step is unread). The Mac-era client keeps its earlier press, its program
+  unread; the level check stays Titanium-only, as before.
 - On Titanium a ducking player moves ducked, as its program does (program
   read R23; checklist 6.460). Forward, back, strafe and autorun no longer
   stand you first: you move at the sneaking speeds, half the walk speed

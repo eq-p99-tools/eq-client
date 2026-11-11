@@ -1020,6 +1020,88 @@ fn request_scribe(
     Ok((spell_id, receipt))
 }
 
+/// The item type the Titanium program takes as a scroll at the scribe
+/// press (R27, 0x5572da; that type 20 means a scroll is inferred).
+const SCROLL_ITEM_TYPE: u8 = 20;
+
+/// Why a scroll is not scribed. On Titanium the program's own refusals come
+/// in the order its scribe press tests them (program read R27, recording
+/// checklist 6.463), each said by its string id; the rest are this
+/// client's own guards for its model and say our words.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum ScribeRefusal {
+    /// A spell action is in flight. The program returns without a line
+    /// while a memorization or scribe is in progress (R27 check 2); the
+    /// cast test here is ours, kept silent the same way.
+    Busy,
+    /// Not a scroll, or one the player's class or race cannot use (R27
+    /// check 4, 181; that 0x4192aa is the class and race test is inferred).
+    NotUsable,
+    /// The place clicked holds a spell (R27 check 5, 12051).
+    PlaceTaken,
+    /// The book holds the spell (R27 check 6, 12050). The string's own
+    /// placeholders take what they name of the spell's name; one with none
+    /// takes nothing.
+    AlreadyScribed(String),
+    /// The player's class has no level for the spell, 255 (R27 check 7,
+    /// 12047, no arguments).
+    NoClassLevel,
+    /// The spell's level for the player's class is above the player's
+    /// (R27 check 7, 12048: the level, then the spell's name).
+    Level { required: u8, spell: String },
+    /// A stack of two or more on the cursor (R27 check 8, 6192).
+    Stack,
+    /// This client's own words.
+    Own(String),
+}
+
+impl std::fmt::Display for ScribeRefusal {
+    /// This client's words, where the installation lacks the program's.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Busy => formatter.write_str("Wait for the current spell action"),
+            Self::NotUsable => formatter.write_str("That is not a scroll you can scribe."),
+            Self::PlaceTaken => {
+                formatter.write_str("That place in the book holds a spell already.")
+            }
+            Self::AlreadyScribed(_) => formatter.write_str("The book has that spell already."),
+            Self::NoClassLevel => formatter.write_str("Your class cannot scribe that spell."),
+            Self::Level { required, spell } => {
+                write!(formatter, "You need level {required} to scribe {spell}.")
+            }
+            Self::Stack => formatter.write_str("Scribe one scroll, not a stack."),
+            Self::Own(words) => formatter.write_str(words),
+        }
+    }
+}
+
+impl std::error::Error for ScribeRefusal {}
+
+impl ScribeRefusal {
+    /// What the chat says, in the installed client's words where it has
+    /// them; nothing for the press's silent return.
+    pub(super) fn said(
+        &self,
+        messages: &crate::hud::messages::Messages,
+    ) -> Option<crate::chat::Said> {
+        let fallback = self.to_string();
+        Some(match self {
+            Self::Busy => return None,
+            Self::NotUsable => messages.said_text(181, &fallback),
+            Self::PlaceTaken => messages.said_text(12051, &fallback),
+            Self::AlreadyScribed(spell) => {
+                messages.said_or(12050, std::slice::from_ref(spell), &fallback)
+            }
+            Self::NoClassLevel => messages.said_text(12047, &fallback),
+            Self::Level { required, spell } => {
+                messages.said_or(12048, &[required.to_string(), spell.clone()], &fallback)
+            }
+            Self::Stack => messages.said_text(6192, &fallback),
+            Self::Own(words) => crate::chat::Said::own(words.clone()),
+        })
+    }
+}
+
 /// Shares admission, cursor and book validation between presentation and
 /// submission; the stamp is the one the outbox gives a command made now. The
 /// scroll goes into the book's first empty place, or into the place given.
@@ -1029,50 +1111,39 @@ fn prepare_scribe(
     stamp: Option<crate::outbox::Stamp>,
     place: Option<usize>,
     names: &SpellNames,
-) -> anyhow::Result<eq_client_core::ClientCommand> {
-    use anyhow::{Context, ensure};
-    let online = online.context("Connect to scribe a scroll")?;
-    let stamp = stamp.context("Connect to scribe a scroll")?;
-    ensure!(
-        !online.world().inventory_moves_pending(),
-        "Wait for queued item moves before scribing"
-    );
-    let inventory = online.world().inventory();
-    ensure!(
-        inventory.received() && !inventory.stale(),
-        "Inventory awaiting refresh"
-    );
-    let book = book.context("Spellbook unavailable")?;
+) -> Result<eq_client_core::ClientCommand, ScribeRefusal> {
+    let own = |words: &str| ScribeRefusal::Own(words.into());
+    let online = online.ok_or_else(|| own("Connect to scribe a scroll"))?;
+    let stamp = stamp.ok_or_else(|| own("Connect to scribe a scroll"))?;
+    let world = online.world();
+    if world.generation() == eq_client_core::GameDialect::Titanium {
+        titanium_press(world, book, place, names)?;
+    }
+    if world.inventory_moves_pending() {
+        return Err(own("Wait for queued item moves before scribing"));
+    }
+    let inventory = world.inventory();
+    if !inventory.received() || inventory.stale() {
+        return Err(own("Inventory awaiting refresh"));
+    }
+    let book = book.ok_or_else(|| own("Spellbook unavailable"))?;
     let spell_id = inventory
         .items()
         .get(&eq_client_core::inventory::InventorySlot::CURSOR)
-        .context("Put a scroll on the cursor first")?
+        .ok_or_else(|| own("Put a scroll on the cursor first"))?
         .scroll_spell
-        .context("The cursor item is not a spell scroll")?;
-    // Whether the Titanium program refuses a scroll outside its class or
-    // level before asking the server is unread; this local check is inferred
-    // (recording checklist 6.394) and only refuses what the server would.
-    if online.world().generation() == eq_client_core::GameDialect::Titanium
-        && let Some(player) = online.world().player().filter(|player| player.level > 0)
-        && let Some(level) = player
-            .class
-            .and_then(|class| names.installed_scribe_level(spell_id, class))
-    {
-        ensure!(level != u8::MAX, "Installed spell data excludes your class");
-        ensure!(
-            player.level >= level,
-            "Installed spell data requires level {level} to scribe"
-        );
-    }
-    let slot = u16::try_from(match place {
+        .ok_or_else(|| own("The cursor item is not a spell scroll"))?;
+    let slot = match place {
         Some(place) => place,
         None => book
             .slots()
             .iter()
             .position(Option::is_none)
-            .context("Spellbook is full")?,
-    })?;
-    book.scribe_packet(inventory, inventory.revision(), slot, spell_id)?;
+            .ok_or_else(|| own("Spellbook is full"))?,
+    };
+    let slot = u16::try_from(slot).map_err(|error| own(&error.to_string()))?;
+    book.scribe_packet(inventory, inventory.revision(), slot, spell_id)
+        .map_err(|error| own(&error.to_string()))?;
     Ok(eq_client_core::ClientCommand::ScribeSpell {
         session_id: stamp.session_id,
         revision: inventory.revision(),
@@ -1080,6 +1151,72 @@ fn prepare_scribe(
         spell_id,
         created: stamp.created,
     })
+}
+
+/// The Titanium program's own tests at the scribe press, in its order (R27,
+/// 0x55721c). The reply-pending test (check 1) is the 6.452 interlock's,
+/// and checks 3 and 9 are unread, so those keep this client's behaviour.
+/// The Mac-era program is unread: its press keeps this client's earlier
+/// rules, with none of these.
+fn titanium_press(
+    world: &ClientWorld,
+    book: Option<&eq_client_core::SpellBook>,
+    place: Option<usize>,
+    names: &SpellNames,
+) -> Result<(), ScribeRefusal> {
+    if action_pending(world) {
+        return Err(ScribeRefusal::Busy);
+    }
+    // Check 3 is unread: with nothing on the cursor the later guards answer.
+    let Some(item) = world
+        .inventory()
+        .items()
+        .get(&eq_client_core::inventory::InventorySlot::CURSOR)
+    else {
+        return Ok(());
+    };
+    let player = world.player().filter(|player| player.level > 0);
+    let usable = player
+        .and_then(|player| player.class.zip(Some(player.race)))
+        .and_then(|(class, race)| eq_client_core::resources::usable_by(&item.details, class, race));
+    if item.rules.item_type != SCROLL_ITEM_TYPE || usable == Some(false) {
+        return Err(ScribeRefusal::NotUsable);
+    }
+    // A scroll that teaches no spell is left to the later guards (check 9
+    // is unread).
+    let Some(spell_id) = item.scroll_spell else {
+        return Ok(());
+    };
+    if let Some(book) = book {
+        if place.is_some_and(|place| book.slots().get(place).is_some_and(Option::is_some)) {
+            return Err(ScribeRefusal::PlaceTaken);
+        }
+        if book.slots().contains(&Some(spell_id)) {
+            return Err(ScribeRefusal::AlreadyScribed(names.label(spell_id)));
+        }
+    }
+    // The spell's level for the player's class against the player's level,
+    // from the installed spell data the program reads too; without that
+    // data or the player's class and level the server decides.
+    if let Some(player) = player
+        && let Some(level) = player
+            .class
+            .and_then(|class| names.installed_scribe_level(spell_id, class))
+    {
+        if level == u8::MAX {
+            return Err(ScribeRefusal::NoClassLevel);
+        }
+        if level > player.level {
+            return Err(ScribeRefusal::Level {
+                required: level,
+                spell: names.label(spell_id),
+            });
+        }
+    }
+    if item.stack_count.is_some_and(|count| count >= 2) {
+        return Err(ScribeRefusal::Stack);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1232,7 +1369,7 @@ mod tests {
             lore: String::new(),
             weight_tenths: 1,
             slots: 0,
-            classes: 2,
+            classes: 1,
             races: 1,
             flags: Vec::new(),
             stats: Vec::new(),
@@ -1248,7 +1385,10 @@ mod tests {
                 activation: eq_client_core::inventory::ItemActivation::default(),
                 scroll_spell: Some(73),
                 book: None,
-                rules: ItemPlacement::default(),
+                rules: ItemPlacement {
+                    item_type: 20,
+                    ..ItemPlacement::default()
+                },
                 slot: InventorySlot::CURSOR,
                 details,
                 stack_count: None,
@@ -1261,15 +1401,21 @@ mod tests {
         let sender = crate::outbox::Outbox::new(Some(tx));
         let mut fields = [""; 120];
         fields[0] = "73";
-        for (level, reason) in [
-            ("2", "Installed spell data requires level 2 to scribe"),
-            ("255", "Installed spell data excludes your class"),
+        for (level, refusal) in [
+            (
+                "2",
+                super::ScribeRefusal::Level {
+                    required: 2,
+                    spell: "Spell 73".into(),
+                },
+            ),
+            ("255", super::ScribeRefusal::NoClassLevel),
         ] {
             fields[104] = level;
             let names = super::SpellNames::parse(&fields.join("^"));
             let error =
                 request_scribe(Some(&online), Some(&book), Some(&sender), &names).unwrap_err();
-            assert_eq!(error.to_string(), reason);
+            assert_eq!(error.downcast_ref::<super::ScribeRefusal>(), Some(&refusal));
             assert!(rx.try_recv().is_err());
             assert_eq!(online.world().inventory(), &before);
         }

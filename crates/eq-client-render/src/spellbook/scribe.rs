@@ -20,6 +20,7 @@ pub(crate) fn presentation(
     } else {
         let stamp = outbox.as_deref().and_then(|outbox| outbox.peek(world));
         prepare_scribe(online.as_deref(), world.spell_book(), stamp, None, &names)
+            .map_err(anyhow::Error::from)
     };
     let enabled = available.is_ok();
     let label = match available {
