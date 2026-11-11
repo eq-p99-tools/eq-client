@@ -317,7 +317,7 @@ impl CollisionWorld {
     /// above the feet, so a floor it stands on does not count.
     ///
     /// Only a door or the world moving the body can make such an overlap,
-    /// never the player walking: every sweep stops [`SKIN`] short of a wall,
+    /// never the player walking: every sweep stops `SKIN` short of a wall,
     /// so pressing or sliding into a door never releases it (see the test
     /// `pressing_or_sliding_into_a_door_never_releases_it`). The ways the body
     /// is placed without a sweep are: a door that moves into it (a lift
