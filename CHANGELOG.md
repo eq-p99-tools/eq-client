@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- A buff's and a pet buff's icon background no longer shows magenta at its
+  corners. The installed client's skins draw it from CS_Buttons.bmp
+  (BlueIconBackground, RedIconBackground and the pet ones), whose
+  transparent parts are painted pure magenta, and skin pictures were never
+  keyed. Every skin picture, in any format, now reads exact opaque
+  (255, 0, 255) as transparent black, as the Titanium program does
+  (program read R30); magenta below full alpha is kept, and cursors are
+  not keyed. One reader does it for all skinned windows. The installed
+  velious skin's logo on the Actions window is keyed the same way.
+
 - A bag's window and a world container's window show the container's icon
   on the skin's recessed box alone, as the Titanium program does (program
   read R29). They used to draw the skin's whole first item-icon sheet
