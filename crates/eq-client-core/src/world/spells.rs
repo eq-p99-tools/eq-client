@@ -241,6 +241,9 @@ impl ClientWorld {
             .map(|caster| caster.state.level)
             .filter(|level| *level != 0);
         Landing {
+            finder: self.generation().buff_placement(),
+            keeps_record: new
+                .is_some_and(|ids| ids.iter().any(|id| matches!(id, 0x43 | 0x65 | 0x71))),
             band: spells.buff_band(spell),
             blocker,
             conflict,

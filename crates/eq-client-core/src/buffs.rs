@@ -74,8 +74,14 @@ impl Shown<'_> {
 /// Why a landed effect has no modelled slot.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NoSlot {
+    /// The generation's program is unread for this, so no slot finder is
+    /// ported ([`eq_network_game::GameDialect::buff_placement`]).
+    NoFinder,
     /// The program's slot finder, as far as it is ported, names none.
     Unplaceable(placement::Unplaced),
+    /// Another landed effect is held without a slot, so where the program's
+    /// table has room is unknown until the next zone-in gives every slot.
+    OccupancyUnknown,
     /// A held spell could be one the slot finder's unported step 4 would
     /// replace in its own slot: it shares an effect at a position both
     /// compare, or its effects are not known.
@@ -84,8 +90,11 @@ pub enum NoSlot {
 
 /// What the client knows about a landing on the player, for placing it as
 /// the Titanium program does (R3, R20).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct Landing {
+    /// The generation's slot finder, where its program is read
+    /// ([`eq_network_game::GameDialect::buff_placement`]).
+    pub finder: Option<placement::Finder>,
     /// The spell's band fields, `None` where the spell data has none.
     pub band: Option<Band>,
     /// Whether a held spell carries effect 148, step 2's blocker.
@@ -98,6 +107,9 @@ pub struct Landing {
     pub record_type: Option<u8>,
     /// The caster's level as the program records it, where known.
     pub caster_level: Option<u8>,
+    /// Whether the spell carries effect 0x43, 0x65 or 0x71, on which step 3
+    /// refuses a refresh and keeps the old record (R20 (g)).
+    pub keeps_record: bool,
 }
 
 /// A landing held in a modelled slot.
@@ -235,12 +247,23 @@ impl BuffTracker {
         self.long_slots
     }
 
-    /// Whether the player has a short effect, such as a song.
+    /// Whether the player has a short effect, such as a song, received or
+    /// modelled.
     #[must_use]
     pub fn has_short(&self) -> bool {
-        self.slots
-            .as_ref()
-            .is_some_and(|slots| slots.range(self.long_slots..).next().is_some())
+        self.slots.as_ref().is_some_and(|slots| {
+            slots.range(self.long_slots..).next().is_some()
+                || self.placed.range(self.long_slots..).next().is_some()
+        })
+    }
+
+    /// The landed effects without a modelled slot, in the order they
+    /// landed, with why each has none (`None` before any admission table).
+    pub fn unslotted(&self) -> impl Iterator<Item = (&SpellEffect, Option<NoSlot>)> + '_ {
+        self.landed
+            .iter()
+            .filter(|spell| self.slot_of(**spell).is_none())
+            .filter_map(|spell| Some((self.effects.get(spell)?, self.unplaced_reason(*spell))))
     }
 
     /// Creates a tracker with a known empty admission snapshot.
@@ -324,11 +347,15 @@ impl BuffTracker {
     }
 
     /// Records an icon-bearing action at `now`, after the caller excludes
-    /// known instant spells, and models the slot the program gives it
-    /// ([`placement::titanium_player`]) from what `landing` says. A refresh
-    /// of a received buff takes over its slot, since the program's step 3
-    /// keeps it there, but drops the received record, whose duration no
-    /// longer holds.
+    /// known instant spells, and models the slot the program gives it with
+    /// the generation's slot finder (`landing.finder`) from what `landing`
+    /// says. A refresh of a buff held in a slot keeps that slot, as the
+    /// program's step 3 does, and takes the slot over from a received
+    /// record, whose duration no longer holds; where step 3 refuses the
+    /// refresh, the old record stays as it was. While another landed effect
+    /// is held without a slot, where the program's table has room is
+    /// unknown, so a new landing gets no slot: a wrong slot would go out in
+    /// a click-off and could take off another buff.
     pub fn observe_effect(&mut self, effect: SpellEffect, landing: Landing, now: Instant) {
         if !effect.took_hold() || matches!(effect.spell_id, 0 | u16::MAX) {
             return;
@@ -345,12 +372,35 @@ impl BuffTracker {
                     .map(|(slot, spell)| (*slot, u32::from(*spell))),
             )
             .collect();
-        let refresh = held.values().any(|held| *held == u32::from(spell));
+        // The record step 3 would refresh: the spell's first slot's.
+        let old = held
+            .iter()
+            .find(|(_, held)| **held == u32::from(spell))
+            .and_then(|(slot, _)| {
+                self.slots
+                    .as_ref()
+                    .and_then(|slots| slots.get(slot))
+                    .map(|buff| (buff.clone(), true))
+                    .or_else(|| {
+                        let model = self.models.get(&spell)?;
+                        Some((model.record.clone(), model.type_known))
+                    })
+            });
+        let unslotted = self
+            .landed
+            .iter()
+            .any(|landed| self.slot_of(*landed).is_none());
         let placed = self.slots.as_ref().map(|_| {
-            if landing.conflict && !refresh {
-                return Err(NoSlot::PossibleReplacement);
+            let finder = landing.finder.ok_or(NoSlot::NoFinder)?;
+            if old.is_none() {
+                if landing.conflict {
+                    return Err(NoSlot::PossibleReplacement);
+                }
+                if unslotted {
+                    return Err(NoSlot::OccupancyUnknown);
+                }
             }
-            placement::titanium_player(&held, u32::from(spell), landing.band, landing.blocker)
+            finder(&held, u32::from(spell), landing.band, landing.blocker)
                 .map_err(NoSlot::Unplaceable)
         });
         if let Some(slots) = &mut self.slots {
@@ -362,13 +412,20 @@ impl BuffTracker {
         self.unplaced.remove(&spell);
         match placed {
             Some(Ok(slot)) => {
-                self.placed.insert(slot, spell);
-                self.models.insert(
-                    spell,
-                    Model {
+                let caster_level = landing.caster_level.unwrap_or(0);
+                // Step 3 refuses a refresh where the stored level is above
+                // the caster's, or for effects 0x43, 0x65 and 0x71, and
+                // keeps the old record (R20 (g)).
+                let model = match old {
+                    Some((record, type_known))
+                        if landing.keeps_record || record.caster_level > caster_level =>
+                    {
+                        Model { record, type_known }
+                    }
+                    _ => Model {
                         record: Buff {
                             spell_id: u32::from(spell),
-                            caster_level: landing.caster_level.unwrap_or(0),
+                            caster_level,
                             effect_type: landing.record_type.unwrap_or(2),
                             // A constant 10, not the action's modifier.
                             bard_modifier: 10,
@@ -383,7 +440,9 @@ impl BuffTracker {
                         },
                         type_known: landing.record_type.is_some(),
                     },
-                );
+                };
+                self.placed.insert(slot, spell);
+                self.models.insert(spell, model);
             }
             Some(Err(why)) => {
                 self.unplaced.insert(spell, why);
@@ -454,6 +513,9 @@ impl BuffTracker {
 
     /// Whether a fade or by-spell update of `record_type` reaches a slot of
     /// `held_type`: the program matches the type byte (R20 (e)).
+    /// A type-4 record (target types 13 and 20 on oneself) therefore
+    /// outlives a type-2 fade, as in the program: a known parity item,
+    /// counted as a mismatch (recording checklist 6.459).
     fn same_type(held_type: u8, known: bool, record_type: u8) -> bool {
         held_type != 0 && (!known || held_type == record_type)
     }
@@ -547,11 +609,22 @@ impl BuffTracker {
 
     /// Titanium action 3: the record, empty or not, goes into the named slot
     /// as it stands, over whatever was held there, received or modelled.
-    /// The spell can then be held in two slots, as in the program.
+    /// A spell modelled in another slot is then held in two, as in the
+    /// program (read). A spell held without a slot ends there: where the
+    /// program put its own copy is unknown, so the write is taken as its
+    /// place, as before this model (inferred). Only a write over a modelled
+    /// slot of another spell contradicts the model.
     fn write_slot(&mut self, update: BuffUpdate, now: Instant) {
         if let Some(spell) = self.placed.get(&update.slot).copied() {
             self.end_effect(spell);
-            self.mismatch();
+            if u32::from(spell) != update.spell_id {
+                self.mismatch();
+            }
+        }
+        if let Ok(id) = u16::try_from(update.spell_id) {
+            if self.effects.contains_key(&id) && self.slot_of(id).is_none() {
+                self.end_effect(id);
+            }
         }
         if let Some(slots) = &mut self.slots {
             if let Some(buff) = update.buff {
@@ -915,6 +988,7 @@ mod tests {
     fn lands(band: Option<Band>) -> Landing {
         Landing {
             band,
+            finder: crate::GameDialect::Titanium.buff_placement(),
             ..Landing::default()
         }
     }
@@ -989,13 +1063,16 @@ mod tests {
             short: true,
             last: false,
         });
+        assert!(!state.has_short());
         state.observe_effect(effect(700), lands(song), now());
         assert_eq!(state.slot_of(700), Some(25));
+        // A modelled song opens the short window.
+        assert!(state.has_short());
         assert!(matches!(
             state.in_window(EffectWindow::Short, 0),
             Some(Shown::Modelled(25, effect)) if effect.spell_id == 700
         ));
-        state.observe_effect(effect(50), Landing::default(), now());
+        state.observe_effect(effect(50), lands(None), now());
         assert_eq!(
             state.unplaced_reason(50),
             Some(NoSlot::Unplaceable(placement::Unplaced::SpellFieldsUnknown))
@@ -1137,6 +1214,116 @@ mod tests {
             state.slots().unwrap().keys().copied().collect::<Vec<_>>(),
             [0, 5]
         );
+        // Over a modelled 50 in 0, the write of 50 itself contradicts
+        // nothing.
+        assert_eq!(state.slot_mismatches(), 1);
+        state.observe_effect(effect(50), lands(NORMAL), now());
+        assert_eq!(state.slot_of(50), Some(1));
+        state.apply(titanium(Applies::BySlot, 1, 50, Some(buff(50))), now());
+        assert_eq!(state.slot_mismatches(), 1);
+        assert_eq!(spells(&state), [50, 60, 61]);
+    }
+
+    #[test]
+    fn a_slot_write_ends_the_unslotted_copy_of_its_spell() {
+        let mut state = BuffTracker::default();
+        state.replace_snapshot(BTreeMap::new(), 25, now());
+        state.observe_effect(effect(50), lands(None), now());
+        assert_eq!(state.slot_of(50), None);
+        state.apply(titanium(Applies::BySlot, 4, 50, Some(buff(50))), now());
+        // One icon, in the slot written.
+        assert_eq!(spells(&state), [50]);
+        assert!(state.effects().is_empty());
+        assert_eq!(state.slots().unwrap()[&4].spell_id, 50);
+        assert_eq!(state.slot_mismatches(), 0);
+    }
+
+    #[test]
+    fn while_a_landing_is_held_without_a_slot_no_new_one_is_modelled() {
+        // (i) 50 in 0; 51 could replace it, so the program has it in 0, in
+        // 1 or nowhere; 52 could then be in 1 or 2.
+        let mut state = BuffTracker::default();
+        state.replace_snapshot(BTreeMap::new(), 25, now());
+        state.observe_effect(effect(50), lands(NORMAL), now());
+        let conflict = Landing {
+            conflict: true,
+            ..lands(NORMAL)
+        };
+        state.observe_effect(effect(51), conflict, now());
+        state.observe_effect(effect(52), lands(NORMAL), now());
+        assert_eq!(state.unplaced_reason(52), Some(NoSlot::OccupancyUnknown));
+        assert_eq!(state.slot_of(52), None);
+        // A refresh of a spell with a slot keeps it.
+        state.observe_effect(effect(50), lands(NORMAL), now());
+        assert_eq!(state.slot_of(50), Some(0));
+        // (ii) A spell held without a slot landing again, as a song pulses:
+        // step 3 keeps it where the program has it, which is unknown.
+        state.observe_effect(effect(51), lands(NORMAL), now());
+        assert_eq!(state.slot_of(51), None);
+        assert_eq!(state.unplaced_reason(51), Some(NoSlot::OccupancyUnknown));
+        assert_eq!(
+            state
+                .unslotted()
+                .map(|(effect, why)| (effect.spell_id, why))
+                .collect::<Vec<_>>(),
+            [
+                (51, Some(NoSlot::OccupancyUnknown)),
+                (52, Some(NoSlot::OccupancyUnknown))
+            ]
+        );
+        // Once nothing is held without a slot, placement resumes.
+        state.apply(titanium(Applies::FadeBySpell, 1, 51, None), now());
+        state.apply(titanium(Applies::FadeBySpell, 2, 52, None), now());
+        state.observe_effect(effect(53), lands(NORMAL), now());
+        assert_eq!(state.slot_of(53), Some(1));
+        // The next zone-in gives every slot, and the uncertainty ends.
+        state.observe_effect(effect(54), conflict, now());
+        state.replace_snapshot(BTreeMap::from([(0, buff(50))]), 25, now());
+        state.observe_effect(effect(55), lands(NORMAL), now());
+        assert_eq!(state.slot_of(55), Some(1));
+    }
+
+    #[test]
+    fn a_generation_without_a_read_finder_models_no_slot() {
+        let mut state = BuffTracker::default();
+        state.replace_snapshot(BTreeMap::from([(0, buff(43))]), 15, now());
+        let mac = Landing {
+            finder: crate::GameDialect::EqMac.buff_placement(),
+            ..lands(NORMAL)
+        };
+        state.observe_effect(effect(278), mac, now());
+        assert_eq!(state.slot_of(278), None);
+        assert_eq!(state.unplaced_reason(278), Some(NoSlot::NoFinder));
+        // A refresh of a received buff drops its record, as before.
+        state.observe_effect(effect(43), mac, now());
+        assert_eq!(state.slot_of(43), None);
+        assert!(state.slots().unwrap().is_empty());
+        assert_eq!(state.effects().len(), 2);
+    }
+
+    #[test]
+    fn a_refresh_step_3_refuses_keeps_the_old_record() {
+        let mut state = BuffTracker::default();
+        state.replace_snapshot(BTreeMap::new(), 25, now());
+        let level = |caster_level| Landing {
+            caster_level: Some(caster_level),
+            ..lands(NORMAL)
+        };
+        state.observe_effect(effect(50), level(40), now());
+        // A lower caster's refresh keeps the stored level.
+        state.observe_effect(effect(50), level(20), now());
+        assert_eq!(state.modelled_record(50).unwrap().caster_level, 40);
+        // A higher one's writes its own.
+        state.observe_effect(effect(50), level(50), now());
+        assert_eq!(state.modelled_record(50).unwrap().caster_level, 50);
+        // Effects 0x43, 0x65 and 0x71 refuse any refresh.
+        let kept = Landing {
+            keeps_record: true,
+            ..level(60)
+        };
+        state.observe_effect(effect(50), kept, now());
+        assert_eq!(state.modelled_record(50).unwrap().caster_level, 50);
+        assert_eq!(state.slot_of(50), Some(0));
     }
 
     #[test]
