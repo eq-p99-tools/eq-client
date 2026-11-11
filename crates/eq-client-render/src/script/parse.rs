@@ -14,7 +14,7 @@ pub(super) const MAX_WAIT: Duration = Duration::from_mins(2);
 const MAX_TRACE: Duration = Duration::from_secs(10);
 const MAX_WALK: Duration = Duration::from_mins(1);
 /// `EQEmu` GM commands a script may send, without the leading `#`.
-const GM_COMMANDS: [&str; 38] = [
+const GM_COMMANDS: [&str; 39] = [
     // The server's own view of the player's stats, weight and coins among
     // them, said back in chat; reads only.
     "showstats",
@@ -85,6 +85,11 @@ const GM_COMMANDS: [&str; 38] = [
     // their gems, and every buff taken off them.
     "unmemspell",
     "nukebuffs",
+    // The target's (or the GM's) PvP flag, `on` or `off`, so a GM's
+    // `castspell` can land a root or snare on another flagged test
+    // character, as the server lets no player's detrimental spell land on
+    // an unflagged one. The server keeps the flag; `pvp off` puts it back.
+    "pvp",
 ];
 
 /// One scripted action.
@@ -1149,6 +1154,9 @@ pub(super) fn gm_command(words: &[&str]) -> Result<String, String> {
     if *command == "rules" && !matches!(arguments, ["set", _, _] | ["reload"]) {
         return Err("gm rules takes set <Category:Rule> <value> or reload".into());
     }
+    if *command == "pvp" && !matches!(arguments, ["on" | "off"]) {
+        return Err("gm pvp takes on or off".into());
+    }
     Ok(words.join(" "))
 }
 
@@ -1924,6 +1932,25 @@ mod tests {
                 Step::Gm("nukebuffs".into()),
             ]
         );
+    }
+
+    #[test]
+    fn a_gm_may_flag_test_characters_for_pvp_and_put_the_flag_back() {
+        assert_eq!(
+            parse(
+                "gm pvp on\ngm castspell 230\ngm pvp off\n",
+                Path::new("private")
+            )
+            .unwrap(),
+            [
+                Step::Gm("pvp on".into()),
+                Step::Gm("castspell 230".into()),
+                Step::Gm("pvp off".into()),
+            ]
+        );
+        for bad in ["gm pvp", "gm pvp yes", "gm pvp on off", "gm pvp ON"] {
+            assert!(parse(bad, Path::new("private")).is_err(), "{bad}");
+        }
     }
 
     #[test]

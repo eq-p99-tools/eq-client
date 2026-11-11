@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Test scripts may set a test character's PvP flag on a local EQEmu or TAKP
+  server (`gm pvp on`, `gm pvp off`), as other `gm` steps are allowed, so a
+  GM's `castspell` can land a root or snare on another flagged test
+  character. The server keeps the flag until `gm pvp off`. This lets the
+  owed live rows for a root and snares landing while moving run (recording
+  checklist 6.451).
+
 - Feign Death and lying on the ground as the Titanium program handles them
   (program reads R19, R19b and R19cd). The press lies the player down
   before the feign request, so others see the body fall, and turns auto
