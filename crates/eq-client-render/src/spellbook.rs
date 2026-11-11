@@ -163,6 +163,12 @@ impl eq_client_core::world::SpellCatalog for SpellNames {
     fn target_type(&self, spell: u32) -> Option<u32> {
         self.spell(spell)?.target_type
     }
+
+    fn feigns(&self, spell: u32) -> bool {
+        const FEIGN: u32 = 74;
+        self.mechanics(spell)
+            .is_some_and(|mechanics| mechanics.effects.iter().any(|effect| effect.id == FEIGN))
+    }
 }
 
 /// The installed client's spells, with the client's words for them.

@@ -969,6 +969,18 @@ fn apply(
         if let WorldUpdate::Game(event) = update {
             outbox.book_news(event, world.session_id());
         }
+        // The program lies the player down for a feign spell's landing
+        // (read R21); the session holds no spell data, so it is told. The
+        // outbox shows why it did not go.
+        if changes.feign_landed
+            && let Some(spawn_id) = world.player().map(|player| player.spawn_id)
+        {
+            let _ = outbox.post(world, |stamp| eq_client_core::ClientCommand::FeignLanded {
+                session_id: stamp.session_id,
+                spawn_id,
+                created: stamp.created,
+            });
+        }
     }
     (changes, before, old_gems)
 }
@@ -1452,6 +1464,71 @@ mod tests {
     use eq_client_core::PlayerState;
 
     mod spell_notices;
+
+    /// A feign spell's landing on the player goes to the session as one
+    /// `FeignLanded`, and nothing else: no auto attack off (read R21).
+    #[test]
+    fn a_feign_spell_landing_tells_the_session_once_and_leaves_attack_alone() {
+        use crate::outbox::Outbox;
+        use eq_client_core::{ClientCommand, SpellEffect, world::SpellTiming};
+        use std::sync::mpsc;
+
+        struct FeignFortyTwo;
+        impl SpellCatalog for FeignFortyTwo {
+            fn timing(&self, _spell: u32) -> Option<SpellTiming> {
+                None
+            }
+            fn instant_effect(&self, _spell: u32) -> bool {
+                false
+            }
+            fn feigns(&self, spell: u32) -> bool {
+                spell == 42
+            }
+        }
+        let mut state = OnlineState::new(true);
+        testing::admit(&mut state, 5, testing::player(7));
+        let (sender, sent) = mpsc::sync_channel(4);
+        let outbox = Outbox::new(Some(sender));
+        let landing = |spell_id| {
+            WorldUpdate::Game(WorldEvent::SpellEffect(SpellEffect {
+                target_id: 7,
+                caster_id: 7,
+                caster_level: 20,
+                instrument_modifier: 10,
+                spell_id,
+                spell_level: 20,
+                effect_flag: 4,
+                push: None,
+            }))
+        };
+        let (changes, ..) = apply(
+            &mut state.world,
+            &landing(42),
+            &FeignFortyTwo,
+            Some(&outbox),
+        );
+        assert!(changes.feign_landed && !changes.attack_ended);
+        let commands: Vec<_> = sent.try_iter().collect();
+        assert!(
+            matches!(
+                commands[..],
+                [ClientCommand::FeignLanded {
+                    session_id: 5,
+                    spawn_id: 7,
+                    ..
+                }]
+            ),
+            "{commands:?}"
+        );
+        // Another spell's landing says nothing.
+        apply(
+            &mut state.world,
+            &landing(43),
+            &FeignFortyTwo,
+            Some(&outbox),
+        );
+        assert!(sent.try_recv().is_err());
+    }
 
     #[test]
     fn a_resumed_admission_keeps_manual_book_ownership_until_the_worker_result() {

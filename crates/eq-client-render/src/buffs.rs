@@ -333,6 +333,29 @@ pub(super) fn update(
 }
 
 /// Builds icons from occupied server slots without renumbering holes.
+/// The own list's order: received and modelled buffs together in slot
+/// order, as the program holds them, a modelled one by its spell; then
+/// those without a slot, as they landed.
+fn drawn_order(
+    buffs: &BTreeMap<u32, eq_client_core::Buff>,
+    tracker: &eq_client_core::buffs::BuffTracker,
+) -> (Vec<(u32, Option<u16>)>, Vec<u16>) {
+    let mut slotted: Vec<(u32, Option<u16>)> = buffs.keys().map(|slot| (*slot, None)).collect();
+    slotted.extend(
+        tracker
+            .modelled()
+            .iter()
+            .filter(|(slot, _)| !buffs.contains_key(slot))
+            .map(|(slot, spell)| (*slot, Some(*spell))),
+    );
+    slotted.sort_unstable_by_key(|(slot, _)| *slot);
+    let unslotted = tracker
+        .unslotted()
+        .map(|(effect, _)| effect.spell_id)
+        .collect();
+    (slotted, unslotted)
+}
+
 fn content(
     commands: &mut Commands,
     body: Entity,
@@ -379,21 +402,7 @@ fn content(
             },
         )
     };
-    // Received and modelled buffs together in slot order, as the program
-    // holds them; then those without a slot, as they landed.
-    let mut slotted: Vec<(u32, Option<u16>)> = buffs.keys().map(|slot| (*slot, None)).collect();
-    slotted.extend(
-        tracker
-            .modelled()
-            .iter()
-            .filter(|(slot, _)| !buffs.contains_key(slot))
-            .map(|(slot, spell)| (*slot, Some(*spell))),
-    );
-    slotted.sort_unstable_by_key(|(slot, _)| *slot);
-    let unslotted: Vec<u16> = tracker
-        .unslotted()
-        .map(|(effect, _)| effect.spell_id)
-        .collect();
+    let (slotted, unslotted) = drawn_order(buffs, tracker);
     commands.entity(body).with_children(|parent| {
         parent
             .spawn(Node {

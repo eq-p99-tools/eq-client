@@ -621,10 +621,11 @@ impl BuffTracker {
                 self.mismatch();
             }
         }
-        if let Ok(id) = u16::try_from(update.spell_id) {
-            if self.effects.contains_key(&id) && self.slot_of(id).is_none() {
-                self.end_effect(id);
-            }
+        if let Ok(id) = u16::try_from(update.spell_id)
+            && self.effects.contains_key(&id)
+            && self.slot_of(id).is_none()
+        {
+            self.end_effect(id);
         }
         if let Some(slots) = &mut self.slots {
             if let Some(buff) = update.buff {
