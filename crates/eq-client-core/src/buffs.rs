@@ -1285,6 +1285,35 @@ mod tests {
     }
 
     #[test]
+    fn a_sixteenth_normal_landing_stays_unslotted_and_shown() {
+        let mut state = BuffTracker::default();
+        state.replace_snapshot(BTreeMap::new(), 25, now());
+        for spell in 100..115 {
+            state.observe_effect(effect(spell), lands(NORMAL), now());
+        }
+        assert_eq!(state.modelled().len(), 15);
+        assert_eq!(state.modelled().keys().max(), Some(&14));
+        state.observe_effect(effect(115), lands(NORMAL), now());
+        assert_eq!(state.slot_of(115), None);
+        assert_eq!(
+            state.unplaced_reason(115),
+            Some(NoSlot::Unplaceable(placement::Unplaced::TopUnknown))
+        );
+        // It takes the long window's first free button, past the fifteen.
+        assert!(matches!(
+            state.in_window(EffectWindow::Long, 15),
+            Some(Shown::Unplaced(effect)) if effect.spell_id == 115
+        ));
+        // A later landing waits until the next zone-in; the fifteen keep
+        // their slots on a refresh.
+        state.observe_effect(effect(116), lands(NORMAL), now());
+        assert_eq!(state.unplaced_reason(116), Some(NoSlot::OccupancyUnknown));
+        state.observe_effect(effect(100), lands(NORMAL), now());
+        assert_eq!(state.slot_of(100), Some(0));
+        assert_eq!(state.slot_mismatches(), 0);
+    }
+
+    #[test]
     fn a_generation_without_a_read_finder_models_no_slot() {
         let mut state = BuffTracker::default();
         state.replace_snapshot(BTreeMap::from([(0, buff(43))]), 15, now());
