@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Test scripts may set a test character's PvP flag on a local EQEmu or TAKP
+  server (`gm pvp on`, `gm pvp off`), as other `gm` steps are allowed, so a
+  GM's `castspell` can land a root or snare on another flagged test
+  character. The server keeps the flag until `gm pvp off`. This lets the
+  owed live rows for a root and snares landing while moving run (recording
+  checklist 6.451).
+
 - Stop needless movement blocking. A Bard's song pulse, any buff or spell
   landing on the player, a level, eating, looting or moving items, and a
   server's move no longer stop the player, cancel autorun or drop a jump:
