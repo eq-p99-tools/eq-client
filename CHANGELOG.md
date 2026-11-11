@@ -13,7 +13,7 @@
   (a clearance of your size plus one) and the refused stand under a low
   ceiling aren't modelled yet, and the ducked walk animation is unread, so
   the duck pose is drawn. The Mac-era client is unread and still stands you
-  to move. Networking pinned to PENDING.
+  to move. Networking pinned to 50c1662 (eq-network #299).
 
 - Buffs that land on the player take the slot the Titanium program gives
   them (program reads R3 and R20), so the Effects window keeps the
