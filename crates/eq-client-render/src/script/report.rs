@@ -83,7 +83,12 @@ pub(super) fn state(
             .map(|(slot, buff)| (*slot, buff.spell_id))
             .collect::<Vec<_>>()
     });
-    let effects: Vec<u16> = online.world().buffs().effects().keys().copied().collect();
+    // Landings the server gave no slot, by spell; a buff held in a server
+    // slot (one held at zone entry among them) is in `buff_slot_records`.
+    let unslotted_effects: Vec<u16> = online.world().buffs().effects().keys().copied().collect();
+    // Every spell the player holds, slotted or not: what speed and the
+    // other buff effects are read from.
+    let held_spells: Vec<u32> = online.world().buffs().spells().collect();
     let modelled_slots: Vec<(u32, u16)> = online
         .world()
         .buffs()
@@ -219,7 +224,8 @@ pub(super) fn state(
         buff_slot_mismatches = online.world().buffs().slot_mismatches(),
         buff_cancellation = ?online.world().buffs().cancellation(),
         ?slots,
-        ?effects,
+        ?unslotted_effects,
+        ?held_spells,
         ?items,
         inventory_predicted = online.world().inventory().predicted(),
         inventory_stale = online.world().inventory().stale(),
