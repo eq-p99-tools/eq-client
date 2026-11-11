@@ -152,24 +152,27 @@ pub fn texture(
     skin_pixels(path)
 }
 
-/// The colour the skins' art without an alpha channel paints where it is
-/// transparent, such as the corners of `CS_Buttons.bmp`'s buff backgrounds.
-pub const SKIN_KEY: [u8; 3] = [255, 0, 255];
+/// The colour key the official program loads every skin texture with:
+/// opaque magenta, as the corners of `CS_Buttons.bmp`'s buff backgrounds
+/// are painted. Read on the program's side (R30 (a): the UI texture draw
+/// 0x60a4e0 loads through 0x60c3a0); that the call reaches the graphics
+/// library's texture loader is inferred, and the exact match and the
+/// transparent-black result are that loader's documented behaviour, not
+/// read from its body (checklist 6.466).
+pub const SKIN_KEY: [u8; 4] = [255, 0, 255, 255];
 
-/// Decodes a skin's picture as RGBA pixels. In a file without an alpha
-/// channel, such as a BMP, each pixel of exactly [`SKIN_KEY`] becomes
-/// transparent black, so no pink bleeds from it when the picture is
-/// stretched; a file with an alpha channel keeps its own (inferred until
-/// program read R30; checklist 6.466).
+/// Decodes a skin's picture as RGBA pixels, keyed as the program keys it:
+/// in any format, each pixel of exactly [`SKIN_KEY`] becomes transparent
+/// black, while magenta with less than full alpha stays as it is. A pixel
+/// without alpha, as in a BMP, reads as opaque (program read R30 (b), (c)).
+/// Cursors are not keyed: the program loads them as cursor files (0x5acde0).
 fn skin_pixels(path: PathBuf) -> Result<image::RgbaImage, UiLayoutError> {
-    let decoded = image::open(&path).map_err(|source| UiLayoutError::Image { path, source })?;
-    let keyed = !decoded.color().has_alpha();
-    let mut pixels = decoded.into_rgba8();
-    if keyed {
-        for pixel in pixels.pixels_mut() {
-            if pixel.0[..3] == SKIN_KEY {
-                pixel.0 = [0; 4];
-            }
+    let mut pixels = image::open(&path)
+        .map_err(|source| UiLayoutError::Image { path, source })?
+        .into_rgba8();
+    for pixel in pixels.pixels_mut() {
+        if pixel.0 == SKIN_KEY {
+            pixel.0 = [0; 4];
         }
     }
     Ok(pixels)
@@ -2330,20 +2333,22 @@ LookSpring=1
     }
 
     #[test]
-    fn a_skin_picture_without_alpha_is_transparent_where_it_is_the_key_colour() {
+    fn a_skin_picture_is_transparent_where_it_is_opaque_magenta() {
         let install = std::env::temp_dir().join(format!("eq-ui-key-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&install);
         std::fs::create_dir_all(install.join("uifiles/default")).unwrap();
         // A button sheet as a 24-bit BMP: a key-coloured corner, a near
         // miss beside it and a plain pixel.
         let mut bmp = image::RgbImage::from_pixel(4, 1, image::Rgb([10, 20, 30]));
-        bmp.put_pixel(0, 0, image::Rgb(SKIN_KEY));
+        bmp.put_pixel(0, 0, image::Rgb([255, 0, 255]));
         bmp.put_pixel(1, 0, image::Rgb([254, 0, 255]));
         bmp.save(install.join("uifiles/default/buttons.bmp"))
             .unwrap();
-        // A picture with its own alpha keeps an opaque key-coloured pixel.
-        let mut tga = image::RgbaImage::from_pixel(2, 1, image::Rgba([1, 2, 3, 0]));
+        // A picture with its own alpha: opaque magenta is keyed, magenta
+        // below full alpha is kept.
+        let mut tga = image::RgbaImage::from_pixel(3, 1, image::Rgba([1, 2, 3, 0]));
         tga.put_pixel(0, 0, image::Rgba([255, 0, 255, 255]));
+        tga.put_pixel(1, 0, image::Rgba([255, 0, 255, 200]));
         tga.save(install.join("uifiles/default/book.tga")).unwrap();
         let read = |file| texture(&install, DEFAULT_SKIN, file).unwrap();
         let (bmp, tga) = (read("buttons.bmp"), read("book.tga"));
@@ -2359,8 +2364,14 @@ LookSpring=1
             ],
             "keyed to transparent black, so nothing pink is left to bleed"
         );
-        assert!(bmp.pixels().all(|pixel| pixel.0[..3] != SKIN_KEY));
-        assert_eq!(tga.get_pixel(0, 0).0, [255, 0, 255, 255]);
+        assert!(bmp.pixels().all(|pixel| pixel.0[..3] != [255, 0, 255]));
+        assert!(
+            bmp.pixels()
+                .chain(tga.pixels())
+                .all(|pixel| pixel.0 != SKIN_KEY)
+        );
+        let tga: Vec<_> = tga.pixels().map(|pixel| pixel.0).collect();
+        assert_eq!(tga, [[0, 0, 0, 0], [255, 0, 255, 200], [1, 2, 3, 0]]);
     }
 
     #[test]
