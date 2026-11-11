@@ -28,14 +28,27 @@ impl ClientWorld {
     pub(super) fn item_used(
         &self,
         (session_id, request_id): (u64, u64),
-        error: Option<&String>,
+        (error, string_id): (Option<&String>, Option<u32>),
         changes: &mut Changes,
     ) {
         if self.accepts_reply(session_id) {
+            // A refusal the program words itself is said in the chat, as
+            // the program says it, and not a second time by the inventory.
+            let spoken = match (error, string_id) {
+                (Some(reason), Some(string_id)) => {
+                    changes.notices.push(Notice::ItemUseRefused {
+                        reason: reason.clone(),
+                        string_id: Some(string_id),
+                    });
+                    true
+                }
+                _ => false,
+            };
             changes.replies.push(Reply::ItemUse {
                 session_id,
                 request_id,
                 error: error.cloned(),
+                present_error: !spoken,
             });
         } else {
             changes.ignored = true;

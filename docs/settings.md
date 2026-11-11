@@ -86,9 +86,9 @@ The Interface scale slider appears with the ordinary settings.
 | Answer List Presence Polls | `answer_list_polls` | Off | Answers supported P99 presence polls after a local delay; does not join a list or answer numeric challenges |
 
 These choices take effect in the current session. Controls are unavailable where
-their required session feature is absent. Walk While Winded, Memorize Without
-Sitting, Run a Little Faster, Fly and Jesus Mode depart from the official client's
-behaviour, so they are offered only where the server type lists gameplay
+their required session feature is absent. Walk While Winded, Move While
+Feigned, Stand When Hit (when turned off), Memorize Without Sitting, Run a Little
+Faster, Fly and Jesus Mode depart from the official client's behaviour, so they are offered only where the server type lists gameplay
 departures; where it does not, they are greyed out and the session keeps the
 official client's movement and memorization whatever the saved settings say.
 Every checked server type lists them while they are under test (2026-11-06). Automatic looting requires supported
@@ -102,6 +102,8 @@ The **Dangerous** section sits below the ordinary settings and includes the
 | Setting | File key | Default | Effect |
 | --- | --- | --- | --- |
 | Walk While Winded | `walk_while_winded` | Off | Allows horizontal movement while stunned; other stun restrictions remain |
+| Move While Feigned | `move_while_feigned` | Off | Feign Death without lying down: the press sends only the feign, so you stay standing, other players see you standing, and you move normally while the server keeps the feign. Your next stand ends it, as a jump or a duck does (each sends its own duck or stand), and so does your first step if you pressed it sitting. The original client lies you down |
+| Stand When Hit | `stand_when_hit` | On | A hit stands you up from sitting or kneeling to loot, as the original client does; a lying player is never stood. Turning it off is the departure: you stay seated |
 | Memorize Without Sitting | `memorize_while_standing` | Off | Memorizes without automatic sitting or the client preparation pause; scribing keeps its normal rules |
 | Take Environmental Damage | `take_environmental_damage` | On | Reports supported falls, drowning and lava heat. Air continues running with reports off |
 | Gills for Days | `gills_for_days` | Off | Disables the local air calculation and hides Air Remaining on Titanium sessions that offer gameplay departures |

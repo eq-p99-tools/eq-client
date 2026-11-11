@@ -50,6 +50,9 @@ pub enum Reply {
         request_id: u64,
         /// Why it was refused.
         error: Option<String>,
+        /// Whether the inventory presents the refusal: false when a notice
+        /// already says it in the program's words.
+        present_error: bool,
     },
     /// An inventory move was submitted to the server, or refused.
     InventoryMove {
@@ -138,6 +141,9 @@ pub struct Changes {
     pub kills: Vec<u16>,
     /// Received combat outcomes, independent of whether they produce chat.
     pub damage: Vec<crate::combat::Damage>,
+    /// The generation's program turns auto attack off on this news, saying
+    /// nothing: the Titanium Feign Death press (read R19 a, R19b 3).
+    pub attack_ended: bool,
     /// What the news tells the player.
     pub notices: Vec<Notice>,
     /// The sounds the server asks the player's client to play, in the order

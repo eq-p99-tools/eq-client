@@ -1210,7 +1210,8 @@ impl ClientWorld {
                 session_id,
                 request_id,
                 error,
-            } => self.item_used((*session_id, *request_id), error.as_ref(), news),
+                string_id,
+            } => self.item_used((*session_id, *request_id), (error.as_ref(), *string_id), news),
             WorldEvent::ItemDetails(item) => self.items.insert(item.clone()),
             // The session keeps the coins and says where they are.
             WorldEvent::Coins(coins) => {
@@ -1571,7 +1572,8 @@ impl ClientWorld {
                 session_id,
                 spell_id,
                 reason,
-            } => self.cast_refused((*session_id, *spell_id), reason, news),
+                string_id,
+            } => self.cast_refused((*session_id, *spell_id), (reason, *string_id), news),
             WorldEvent::BuffSnapshot(buffs) => self.buff_snapshot(buffs, now),
             WorldEvent::Buff(update) => {
                 if self.generation == crate::GameDialect::Titanium

@@ -378,6 +378,7 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
             arguments,
         } => chat(official(*string_id, arguments, reason, messages)),
         Notice::ConsumeRefused { reason, string_id }
+        | Notice::ItemUseRefused { reason, string_id }
         | Notice::CorpseRefused { reason, string_id }
         | Notice::PetRefused { reason, string_id }
         | Notice::CombineRefused { reason, string_id }
@@ -491,9 +492,16 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
             }
             .into(),
         ),
-        Notice::CastRefused { spell_id, reason } => {
-            chat(format!("Cast rejected (spell {spell_id}): {reason}").into())
-        }
+        Notice::CastRefused {
+            reason,
+            string_id: Some(string_id),
+            ..
+        } => chat(official(Some(*string_id), &[], reason, messages)),
+        Notice::CastRefused {
+            spell_id,
+            reason,
+            string_id: None,
+        } => chat(format!("Cast rejected (spell {spell_id}): {reason}").into()),
         // The official client says why in the chat; the HUD keeps it on its
         // casting label as well.
         Notice::CastInterrupted { string_id } => chat(own_interruption(*string_id, messages)),

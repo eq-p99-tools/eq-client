@@ -222,7 +222,7 @@ fn two_row_options() -> eq_client_assets::sidl::TabBox {
 }
 
 #[test]
-fn default_size_wrapped_qol_keeps_the_heading_and_speed_control_in_view() {
+fn default_size_wrapped_qol_shows_the_heading_and_a_line_down_the_speed_control() {
     use crate::windows::pointer::{LINE_PIXELS, Wheel};
     use eq_client_core::options::Level;
 
@@ -280,8 +280,8 @@ fn default_size_wrapped_qol_keeps_the_heading_and_speed_control_in_view() {
             .find(|(_, slider)| slider.sets == Sets::Level(Level::RunSpeed))
             .unwrap()
             .0;
-        let assert_visible = |world: &World| {
-            for entity in [heading, speed] {
+        let assert_visible = |world: &World, entities: &[Entity]| {
+            for &entity in entities {
                 let control = bounds(world, entity);
                 let clip = world.get::<CalculatedClip>(entity).unwrap().clip;
                 assert!(
@@ -291,8 +291,9 @@ fn default_size_wrapped_qol_keeps_the_heading_and_speed_control_in_view() {
             }
         };
         let max_scroll = (content + insets.top + insets.bottom - view.height()).max(0.0);
-        // At the default size the opening view includes both controls.
-        assert_visible(app.world());
+        // At the default size the opening view includes the heading, and
+        // run speed, under the Dangerous checkboxes, is one wheel line down.
+        assert_visible(app.world(), &[heading]);
         *app.world_mut().resource_mut::<Wheel>() = Wheel {
             surface: Some(page),
             pixels: -LINE_PIXELS,
@@ -301,7 +302,7 @@ fn default_size_wrapped_qol_keeps_the_heading_and_speed_control_in_view() {
         app.update();
         app.world_mut().resource_mut::<Wheel>().pixels = 0.0;
         app.update();
-        assert_visible(app.world());
+        assert_visible(app.world(), &[speed]);
         let scroll = app.world().get::<ScrollPosition>(page).unwrap().y;
         assert!((scroll - max_scroll.min(LINE_PIXELS)).abs() < 0.01);
     }

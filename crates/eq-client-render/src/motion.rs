@@ -70,6 +70,8 @@ pub(super) struct Controls {
     /// program sets it, such as following, are not in this client:
     /// recording checklist 6.359).
     autorun: bool,
+    /// The player's posture as last seen, so a change turns autorun off.
+    posture: Option<eq_client_core::PostureState>,
     pending: Option<Pending>,
     pub last_accepted: Instant,
     moving: bool,
@@ -215,6 +217,7 @@ impl Default for Controls {
             jump_factor: 1.0,
             walking: false,
             autorun: false,
+            posture: None,
             pending: None,
             last_accepted: Instant::now(),
             moving: false,
@@ -1097,9 +1100,28 @@ pub(super) fn input(
         return;
     }
     let focused = keys.focused() && !detached && !stunned && controls.speed.is_some();
-    let scripted_facing = focused.then(|| keys.scripted_facing()).flatten();
+    // Where the program holds a lying player still (read R19 c), the keys
+    // neither move nor turn them, nor jump; mouse look turns them in the
+    // chase views only.
+    let posture = online
+        .world()
+        .player()
+        .and_then(|player| online.world().posture(player.spawn_id));
+    let lying = online.world().generation().lying().holds_still
+        && posture == Some(eq_client_core::PostureState::Lying);
+    let first_person = cameras
+        .single()
+        .is_ok_and(|(camera, _)| camera.is_first_person());
+    if lying {
+        controls.facing = None;
+    }
+    let scripted_facing = focused
+        .then(|| keys.scripted_facing())
+        .flatten()
+        .filter(|_| !lying);
     let scripted = keys.scripted();
-    let scripted_turn = scripted.contains(&Act::TurnLeft) || scripted.contains(&Act::TurnRight);
+    let scripted_turn =
+        !lying && (scripted.contains(&Act::TurnLeft) || scripted.contains(&Act::TurnRight));
     let heading_snapshots = online.world().generation().supports_heading_snapshots();
     // Following owns the heading, so a mouse turn meanwhile is not kept for
     // the sample after it ends.
@@ -1107,6 +1129,7 @@ pub(super) fn input(
         && scripted_facing.is_none()
         && !scripted_turn
         && controls.following.is_none()
+        && !(lying && first_person)
         && !aim.as_ref().is_some_and(|aim| aim.interrupted);
     let mouse_aim = aim
         .as_ref()
@@ -1135,14 +1158,24 @@ pub(super) fn input(
     if focused && keys.pressed(Act::Walk) && controls.walk_speed.is_some() {
         controls.walking = !controls.walking;
     }
-    let standing = online
-        .world()
-        .player()
-        .and_then(|player| online.world().posture(player.spawn_id))
-        .is_none_or(|posture| posture == eq_client_core::PostureState::Standing);
+    // Every change of the player's posture, theirs or the server's, turns
+    // autorun off (read R19, 0x483556). Autorun pressed while sitting never
+    // stands them (read R19c): the latch is dropped the same frame, so
+    // nothing runs then or after they stand. A lying player's latch may stay
+    // set and moves nothing while they lie (read R19 c); the stand clears it.
+    // Ducking keeps the earlier rule (latch dropped), although Titanium's
+    // can-move test passes a ducking player and its autorun key is gated
+    // only on can-act (reads R19 c, R19c); recording checklist 6.455,
+    // follow-up.
+    let posture_changed = controls.posture != posture;
+    controls.posture = posture;
+    let standing = posture.is_none_or(|posture| posture == eq_client_core::PostureState::Standing);
     if focused && keys.pressed(Act::Autorun) {
         controls.autorun = !controls.autorun;
-    } else if keys.pressed(Act::Forward) || keys.pressed(Act::Back) || !standing {
+    } else if keys.pressed(Act::Forward) || keys.pressed(Act::Back) || posture_changed {
+        controls.autorun = false;
+    }
+    if !(standing || lying) {
         controls.autorun = false;
     }
     let now = Instant::now();
@@ -1174,6 +1207,7 @@ pub(super) fn input(
         && !swimming
         && !shoreline_active
         && !online.world().is_stunned()
+        && !lying
         && keys.pressed(Act::Jump)
         && controls.airborne.is_some()
         && controls.crouch.is_none()
@@ -1520,6 +1554,12 @@ pub(super) fn input(
     {
         intent.direction = Vec3::ZERO;
         intent.diagonal = None;
+    }
+    if lying {
+        intent.direction = Vec3::ZERO;
+        intent.diagonal = None;
+        intent.turn = 0.0;
+        controls.jump = None;
     }
     // Ducking halves a strafe (the Titanium speeds read; the R5 audit's S1),
     // which the session doesn't track.
@@ -5417,6 +5457,227 @@ pub(super) mod tests {
             panic!("expected movement")
         };
         assert_eq!(request.mode, MovementMode::Forward);
+    }
+
+    /// The session's news of the player's posture, theirs (echoed as the
+    /// session sends it) or the server's: the motion system sees them alike.
+    fn report_posture(app: &mut App, posture: eq_client_core::PostureState) {
+        crate::online::testing::news(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            [eq_client_core::WorldEvent::Posture {
+                spawn_id: 7,
+                posture,
+            }],
+        );
+    }
+
+    /// One way a player or a script tries to move, turn or jump.
+    #[derive(Clone, Copy, Debug)]
+    enum Attempt {
+        Key(KeyCode),
+        Script(Act),
+        Face(f32),
+    }
+
+    /// What one attempt sends, from standing still on the floor, in this
+    /// generation and posture.
+    fn attempt_sends(
+        generation: eq_client_core::GameDialect,
+        posture: eq_client_core::PostureState,
+        attempt: Attempt,
+    ) -> Vec<ClientCommand> {
+        let (mut app, receiver) = standing_jump(InstalledClient::Titanium);
+        online::testing::generation(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            generation,
+        );
+        crate::keys::testing::bind(
+            &mut app,
+            Act::StrafeRight,
+            crate::keys::Chord::key(KeyCode::KeyL),
+        );
+        let mut controls = app.world_mut().resource_mut::<Controls>();
+        controls.strafe_speed = Some(4.0);
+        controls.backward_speed = Some(2.0);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        report_posture(&mut app, posture);
+        app.update();
+        let _ = receiver.try_iter().count();
+        match attempt {
+            Attempt::Key(key) => app
+                .world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(key),
+            Attempt::Script(act) => {
+                app.insert_resource(
+                    crate::script::Script::new(Vec::new()).holding_for_test(vec![act], None),
+                );
+            }
+            Attempt::Face(heading) => {
+                app.insert_resource(
+                    crate::script::Script::new(Vec::new())
+                        .holding_for_test(Vec::new(), Some(heading)),
+                );
+            }
+        }
+        app.update();
+        receiver.try_iter().collect()
+    }
+
+    #[test]
+    fn titanium_holds_a_lying_player_still_against_every_key_and_script() {
+        use eq_client_core::{GameDialect, PostureState};
+        // Read R19 c: lying, the program neither moves nor turns the player,
+        // nor jumps; the keys, a script's held acts and its facing alike.
+        for attempt in [
+            Attempt::Key(KeyCode::ArrowUp),
+            Attempt::Key(KeyCode::ArrowDown),
+            Attempt::Key(KeyCode::KeyL),
+            Attempt::Key(KeyCode::KeyQ),
+            Attempt::Key(KeyCode::KeyE),
+            Attempt::Key(KeyCode::Space),
+            Attempt::Script(Act::Forward),
+            Attempt::Script(Act::TurnLeft),
+            Attempt::Face(128.0),
+        ] {
+            // Standing, each attempt sends something, so the fixture can tell.
+            let standing = attempt_sends(GameDialect::Titanium, PostureState::Standing, attempt);
+            assert!(!standing.is_empty(), "{attempt:?} standing sent nothing");
+            let lying = attempt_sends(GameDialect::Titanium, PostureState::Lying, attempt);
+            assert!(lying.is_empty(), "{attempt:?} lying sent {lying:?}");
+        }
+    }
+
+    #[test]
+    fn the_mac_era_client_still_moves_a_lying_player() {
+        use eq_client_core::{GameDialect, PostureState};
+        // The Mac-era program holds no lying player still (LyingRules), so
+        // this is unchanged there.
+        for attempt in [Attempt::Key(KeyCode::ArrowUp), Attempt::Key(KeyCode::KeyQ)] {
+            let sent = attempt_sends(GameDialect::EqMac, PostureState::Lying, attempt);
+            assert!(
+                sent.iter()
+                    .any(|command| matches!(command, ClientCommand::Move(_))),
+                "{attempt:?} sent {sent:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_lying_player_turns_by_mouse_in_a_chase_view_only() {
+        for first_person in [false, true] {
+            let (mut app, receiver, camera, player) = mouse_look_app();
+            report_posture(&mut app, eq_client_core::PostureState::Lying);
+            if first_person {
+                app.world_mut()
+                    .get_mut::<OrbitCamera>(camera)
+                    .unwrap()
+                    .look_first_person_for_test();
+            }
+            crate::camera::testing::button(&mut app, MouseButton::Right, true);
+            app.world_mut().resource_mut::<Controls>().last_accepted = Instant::now();
+            mouse_drag(&mut app, 80.0, 0.0);
+            app.update();
+            let shown = app.world().get::<Transform>(player).unwrap().rotation;
+            let turned = shown.angle_between(turned_to(0.0)) > 0.1;
+            assert_eq!(turned, !first_person, "first person {first_person}");
+            if first_person {
+                assert!(app.world().resource::<Controls>().mouse_heading.is_none());
+                assert!(receiver.try_recv().is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn autorun_pressed_while_sitting_neither_stands_nor_runs_them() {
+        use eq_client_core::PostureState;
+        let (mut app, receiver) = app();
+        report_posture(&mut app, PostureState::Sitting);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        app.update();
+        let _ = receiver.try_iter().count();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::NumLock);
+        app.update();
+        assert!(receiver.try_recv().is_err(), "the press sends nothing");
+        assert!(!app.world().resource::<Controls>().autorun);
+        let posture = {
+            let world = app.world().resource::<online::OnlineState>().world();
+            world.posture(world.player().unwrap().spawn_id)
+        };
+        assert_eq!(posture, Some(PostureState::Sitting));
+        // Once they stand, nothing runs.
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        report_posture(&mut app, PostureState::Standing);
+        app.update();
+        app.update();
+        assert!(receiver.try_recv().is_err(), "nothing runs after the stand");
+        assert!(!app.world().resource::<Controls>().autorun);
+    }
+
+    #[test]
+    fn any_posture_change_ends_autorun() {
+        use eq_client_core::PostureState;
+        // Read R19 (0x483556): every change, the player's own or one the
+        // server makes, turns it off.
+        for posture in [
+            PostureState::Sitting,
+            PostureState::Ducking,
+            PostureState::Lying,
+        ] {
+            let (mut app, receiver) = app();
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .reset_all();
+            app.world_mut().resource_mut::<Controls>().autorun = true;
+            app.update();
+            let ClientCommand::Move(running) = receiver.try_recv().unwrap() else {
+                panic!("expected autorun to run");
+            };
+            accept(&mut app, &running);
+            report_posture(&mut app, posture);
+            app.update();
+            assert!(
+                !app.world().resource::<Controls>().autorun,
+                "{posture:?} left autorun on"
+            );
+        }
+    }
+
+    #[test]
+    fn a_latch_set_while_lying_moves_nothing_and_ends_with_the_stand() {
+        use eq_client_core::PostureState;
+        let (mut app, receiver) = app();
+        report_posture(&mut app, PostureState::Lying);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        app.update();
+        let _ = receiver.try_iter().count();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::NumLock);
+        app.update();
+        // Read R19 c: the latch may be set, and moves nothing.
+        assert!(app.world().resource::<Controls>().autorun);
+        assert!(receiver.try_recv().is_err());
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        app.update();
+        assert!(receiver.try_recv().is_err());
+        report_posture(&mut app, PostureState::Standing);
+        app.update();
+        app.update();
+        assert!(!app.world().resource::<Controls>().autorun);
+        assert!(receiver.try_recv().is_err(), "nothing runs after the stand");
     }
 
     #[test]

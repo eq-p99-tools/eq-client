@@ -2118,6 +2118,25 @@ fn pet_order(
         created: stamp.created,
     })
 }
+/// The posture `/sit` asks for. Where the generation's sit toggle stands a
+/// player lying or looting (`SitToggle`; Titanium's `/sit` runs it,
+/// 0x46a445, read R19), so does this; otherwise it sits, as before. The
+/// toggle's refusal under a mesmerize is not modelled here (recording
+/// checklist 6.455).
+fn sit_command(world: &eq_client_core::world::ClientWorld) -> eq_client_core::Posture {
+    let posture = world
+        .player()
+        .and_then(|player| world.posture(player.spawn_id));
+    if matches!(
+        posture,
+        Some(eq_client_core::PostureState::Lying | eq_client_core::PostureState::Looting)
+    ) && world.generation().sit_toggle().stands_lying_and_looting
+    {
+        eq_client_core::Posture::Standing
+    } else {
+        eq_client_core::Posture::Sitting
+    }
+}
 
 /// Slash commands that are game actions rather than chat; None means ordinary chat.
 fn game_commands(
@@ -2217,7 +2236,7 @@ fn game_commands(
                 spawn_id: targeted_corpse(online).ok(),
             }]
         }),
-        "sit" => posture(eq_client_core::Posture::Sitting).map(|command| vec![command]),
+        "sit" => posture(sit_command(online.world())).map(|command| vec![command]),
         "stand" => posture(eq_client_core::Posture::Standing).map(|command| vec![command]),
         "ranged" => {
             if words.trim().is_empty() {

@@ -140,13 +140,14 @@ impl ClientWorld {
     pub(super) fn cast_refused(
         &self,
         (session_id, spell_id): (u64, u32),
-        reason: &str,
+        (reason, string_id): (&str, Option<u32>),
         changes: &mut Changes,
     ) {
         if self.accepts_reply(session_id) && self.death.is_none() {
             changes.notices.push(Notice::CastRefused {
                 spell_id,
                 reason: reason.to_owned(),
+                string_id,
             });
         } else {
             changes.ignored = true;
