@@ -9,7 +9,7 @@
   data; a spell whose effects are unknown lies no one (checklist 6.455).
   Move While Feigned covers the spell too: its landing sends nothing, and
   your next stand ends the feign (checklist 6.454). Networking pinned to
-  99e2543 (eq-network #295).
+  93faf1f (eq-network #295).
 - Test scripts may set a test character's PvP flag on a local EQEmu or TAKP
   server (`gm pvp on`, `gm pvp off`), as other `gm` steps are allowed, so a
   GM's `castspell` can land a root or snare on another flagged test
