@@ -1130,7 +1130,10 @@ impl ClientWorld {
                 // A first standing, as the session reports a player at zone
                 // entry, is the posture they enter with (read R24), not a
                 // change; any other first posture, and any change of a known
-                // one, is.
+                // one, is. The rule is the same for every generation, so on
+                // the Mac-era client, whose entry is unread and whose posture
+                // stays unknown after it, a first stand after a zone-in no
+                // longer ends autorun as it did before.
                 let before = self.zone.player_posture;
                 if player
                     && before != Some(*posture)

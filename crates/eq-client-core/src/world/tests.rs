@@ -6526,7 +6526,9 @@ fn the_players_posture_changes_are_counted_but_not_a_first_standing() {
         world.player_posture_changes()
     };
     assert_eq!(world.player_posture_changes(), 0);
-    // The standing the session reports at zone entry (read R24).
+    // The standing the session reports at zone entry (read R24), and
+    // equally a Mac-era player's first stand after a zone-in: the rule
+    // doesn't depend on the generation.
     assert_eq!(posture(&mut world, PostureState::Standing), 0);
     assert_eq!(posture(&mut world, PostureState::Standing), 0);
     assert_eq!(posture(&mut world, PostureState::Sitting), 1);
