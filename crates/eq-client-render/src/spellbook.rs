@@ -145,6 +145,12 @@ impl eq_client_core::world::SpellCatalog for SpellNames {
     fn instant_effect(&self, spell: u32) -> bool {
         Self::instant_effect(self, spell)
     }
+
+    fn feigns(&self, spell: u32) -> bool {
+        const FEIGN: u32 = 74;
+        self.mechanics(spell)
+            .is_some_and(|mechanics| mechanics.effects.iter().any(|effect| effect.id == FEIGN))
+    }
 }
 
 /// The installed client's spells, with the client's words for them.

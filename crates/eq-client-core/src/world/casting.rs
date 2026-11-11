@@ -27,6 +27,12 @@ pub trait SpellCatalog {
 
     /// Whether a spell's effect is over at once, leaving no buff behind.
     fn instant_effect(&self, spell: u32) -> bool;
+
+    /// Whether any of a spell's effect slots is the feign effect (74),
+    /// which the Titanium program lies the player down for when it lands on
+    /// them (read R21). A spell whose effects are unknown feigns no one
+    /// (recording checklist 6.455).
+    fn feigns(&self, spell: u32) -> bool;
 }
 
 /// A catalog that knows no spells: nothing comes back on a timer, and every
@@ -39,6 +45,10 @@ impl SpellCatalog for NoSpells {
     }
 
     fn instant_effect(&self, _spell: u32) -> bool {
+        false
+    }
+
+    fn feigns(&self, _spell: u32) -> bool {
         false
     }
 }
@@ -500,6 +510,10 @@ mod tests {
         }
 
         fn instant_effect(&self, _spell: u32) -> bool {
+            false
+        }
+
+        fn feigns(&self, _spell: u32) -> bool {
             false
         }
     }
