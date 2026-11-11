@@ -566,8 +566,11 @@ impl Controls {
 
     /// Starts motion afresh, as an admission, a zone or a server's
     /// correction does. The walk toggle is the player's and stays as they
-    /// left it, as walking is never faster than running (whether the
-    /// program keeps it is unread, recording checklist 6.363). Autorun ends:
+    /// left it, as walking is never faster than running. Across a zone line
+    /// that is read: Titanium's zone-in reset (0x4a861d) doesn't write the
+    /// run flag (read R28b). Whether it is kept across a new login is
+    /// unread, as the two setup routines that set it to running (0x4a4ea7,
+    /// 0x4a7eb7) aren't placed yet (recording checklist 6.363). Autorun ends:
     /// the online reset of every admission and zoning calls this, as
     /// Titanium's zone setup clears the autorun latch on every zone-in (read
     /// R26; 0x4a861d), and a grant or a server's move that keeps it restores
@@ -1721,8 +1724,10 @@ pub(super) fn input(
     }
     // Ducking halves a strafe (the Titanium speeds read; the R5 audit's S1).
     // Where the generation moves a ducking player ducked, the session's grant
-    // already carries the ducked speeds, the strafe halved (read R23), so it
-    // isn't halved again here. Elsewhere the session stands them to move,
+    // already carries the ducked speeds, the strafe halved on the selected
+    // base and a diagonal's sideways rates as standing (reads R23, R28 and
+    // R28b),
+    // so it isn't halved again here. Elsewhere the session stands them to move,
     // and the step it stands them on is halved as before.
     if intent.mode == MovementMode::Strafe
         && !online.world().generation().ducking().moves_ducked
@@ -1924,9 +1929,11 @@ pub(super) fn input(
     // budgets. Run the usual sweep on a copy before selecting that sample.
     // A slide that spends one component on the other or a ledge that needs
     // a Fall sample uses the ordinary cardinal path from the original state.
+    // A ducking player the generation moves ducked goes diagonally too, the
+    // grant's diagonal rates being the standing ones (read R28).
     let combined = diagonal
         .filter(|_| {
-            standing
+            (standing || moves_ducked)
                 && !jump
                 && !airborne
                 && !swimming
@@ -6172,6 +6179,52 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_ducked_strafe_takes_the_granted_rate_running_and_walking() {
+        // Read R28: on Titanium a ducked strafe goes on the selected base,
+        // halved in the session's grant, so the client takes the grant's
+        // running strafe running and its walking strafe walking, as standing.
+        use eq_client_core::{GameDialect, PostureState};
+        for (walking, moved) in [(false, 0.4), (true, 0.2)] {
+            let (mut app, receiver) = app();
+            online::testing::generation(
+                &mut app.world_mut().resource_mut::<online::OnlineState>(),
+                GameDialect::Titanium,
+            );
+            crate::keys::testing::bind(
+                &mut app,
+                Act::StrafeRight,
+                crate::keys::Chord::key(KeyCode::KeyL),
+            );
+            {
+                let mut controls = app.world_mut().resource_mut::<Controls>();
+                controls.strafe_speed = Some(4.0);
+                controls.strafe_walk_speed = Some(2.0);
+                controls.walking = walking;
+            }
+            crate::online::testing::news(
+                &mut app.world_mut().resource_mut::<online::OnlineState>(),
+                [eq_client_core::WorldEvent::Posture {
+                    spawn_id: 7,
+                    posture: PostureState::Ducking,
+                }],
+            );
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.reset_all();
+            keys.press(KeyCode::KeyL);
+            app.update();
+            let ClientCommand::Move(request) = receiver.try_recv().unwrap() else {
+                panic!("expected a strafe, with no stand before it")
+            };
+            assert_eq!(request.mode, MovementMode::Strafe);
+            let across = request.position.x.hypot(request.position.y);
+            assert!(
+                (across - moved).abs() < 0.001,
+                "walking {walking}: {across}"
+            );
+        }
+    }
+
+    #[test]
     fn turning_in_place_changes_heading_without_displacing_the_player() {
         let (mut app, receiver) = app();
         let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
@@ -7142,6 +7195,38 @@ pub(super) mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_ducked_diagonal_goes_at_the_granted_rates_without_a_stand() {
+        // Read R28: on Titanium a ducked forward-plus-strafe goes forward at
+        // the ducked grant and sideways at the diagonal rate the grant gives,
+        // the standing one; nothing halves it again or stands the player.
+        let (mut app, receiver, _, _) = keyboard_mouse_look_app();
+        online::testing::generation(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            eq_client_core::GameDialect::Titanium,
+        );
+        crate::online::testing::news(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            [eq_client_core::WorldEvent::Posture {
+                spawn_id: 7,
+                posture: eq_client_core::PostureState::Ducking,
+            }],
+        );
+        crate::camera::testing::button(&mut app, MouseButton::Right, true);
+        native_movement_key(&mut app, KeyCode::KeyW, true);
+        native_movement_key(&mut app, KeyCode::KeyD, true);
+        app.update();
+        let ClientCommand::Move(chord) = receiver.try_recv().unwrap() else {
+            panic!("expected a diagonal, with no stand before it");
+        };
+        assert_diagonal_step(
+            &app,
+            world_position([0.0, 3.0, 0.0], 0.0),
+            &chord,
+            StrafeSide::Right,
+        );
     }
 
     #[test]

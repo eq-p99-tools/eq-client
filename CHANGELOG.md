@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- On Titanium a ducked strafe now goes on the selected base, halved: the
+  run speed when running and the walk speed when walking (program reads
+  R28 and R28b; checklist 6.460). It used to take half the walk speed
+  either way, which was slower than the program. A ducked forward-plus-
+  strafe now moves diagonally as standing, its sideways part unhalved and
+  its forward part the ducked one; it used to go forward only. Sneaking
+  strafes the same way; neither sneaking nor ducking changes the run flag
+  (read R28b). Networking pinned to 9b2ab94 (eq-network #300).
+
 - The Titanium scribe press refuses as the Titanium program does (program
   read R27, checklist 6.463), in its order and by its strings: an item that
   is not a scroll, or one your class or race cannot use (181; the class and
@@ -15,6 +24,7 @@
   5-second wait before the request are unchanged (the program's countdown
   step is unread). The Mac-era client keeps its earlier press, its program
   unread; the level check stays Titanium-only, as before.
+
 - On Titanium a ducking player moves ducked, as its program does (program
   read R23; checklist 6.460). Forward, back, strafe and autorun no longer
   stand you first: you move at the sneaking speeds, half the walk speed
