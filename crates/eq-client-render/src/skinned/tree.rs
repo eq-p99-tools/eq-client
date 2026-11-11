@@ -147,7 +147,10 @@ pub(super) fn pieces(
                     area.width,
                     area.height,
                 );
-                if let Some(image) = art.cut(piece) {
+                // A grid's place has no picture until the window picks a
+                // cell (R29 (d) for the cursor attachment; inferred for any
+                // other, checklist 6.464).
+                if let Some(image) = piece.as_ref().and_then(|piece| art.cut(piece)) {
                     let mut picture = window.spawn((image, node));
                     if context.id == WindowId::Map {
                         picture.insert(crate::map::Backdrop::Artwork);

@@ -1009,16 +1009,12 @@ fn button(
         _ => button.text_color.map_or(theme::INK_BRIGHT, rgb),
     };
     drawn.with_children(|inner| {
-        // A buff slot's decal is the buff's own icon, which the caption draws.
+        // The skin's still decal, under the caption. A grid decal is no
+        // picture of its own (`decal_grid`, R29 (a)), and where the window
+        // sets the button's picture, the skin's decal is never drawn under
+        // it (R29 (e)).
         if let (Some(decal), Some(place)) = (&button.decal, button.decal_area)
-            && !matches!(
-                does,
-                Does::PetBuff(_)
-                    | Does::Buff(..)
-                    | Does::Chosen
-                    | Does::ItemIcon
-                    | Does::BookPlace(_)
-            )
+            && !does.sets_picture()
         {
             picture(
                 inner,
@@ -1366,11 +1362,21 @@ fn caption(
                 WindowId::WorldContainer => Some(items::BagPart::WorldIcon),
                 _ => None,
             };
+            // The bag's icon replaces the button's decal, a cell of the
+            // skin's item icons where the skin puts the decal, over the
+            // Normal piece (a recessed box in the installed client's skins;
+            // program read R29 (b)).
+            let place = button.decal_area.unwrap_or(Area {
+                x: 0.0,
+                y: 0.0,
+                width: area.width,
+                height: area.height,
+            });
             if let Some(part) = part {
                 inner.spawn((
                     part,
                     ImageNode::default(),
-                    at(0.0, 0.0, area.width, area.height),
+                    at(place.x, place.y, place.width, place.height),
                 ));
             }
         }
@@ -1421,7 +1427,7 @@ fn caption(
         // `items::icon`).
         Does::Chosen | Does::ItemIcon => (),
         Does::CharacterSlot(slot) => slot_name(inner, slot, (button, area), ink),
-        Does::Nothing if button.decal.is_some() => (),
+        Does::Nothing if button.decal.is_some() || button.decal_grid.is_some() => (),
         Does::Toggles(_)
         | Does::Closes
         | Does::Gives
@@ -2643,6 +2649,7 @@ mod tests {
                 font: None,
                 decal: None,
                 decal_area: None,
+                decal_grid: None,
                 tooltip: None,
             })
         };
@@ -2747,6 +2754,7 @@ mod tests {
                     font: None,
                     decal: None,
                     decal_area: Some(whole),
+                    decal_grid: None,
                     tooltip: None,
                 }),
             )],
@@ -2787,6 +2795,185 @@ mod tests {
     }
 
     #[test]
+    fn a_bags_icon_sits_where_the_skin_puts_its_decal_over_its_normal_piece() {
+        use eq_client_assets::sidl::{Button, ButtonLook, Element, Piece};
+        // As the stock skins' Container_Icon: a recessed box with the item
+        // icons' grid as its decal, which the skin reader leaves unset.
+        let area = Area {
+            x: 26.0,
+            y: 38.0,
+            width: 40.0,
+            height: 40.0,
+        };
+        let decal = Area {
+            x: 2.0,
+            y: 3.0,
+            width: 36.0,
+            height: 34.0,
+        };
+        let screen = Screen {
+            sizable: eq_client_assets::sidl::Sizable::Omitted,
+            name: "ContainerWindow".into(),
+            title: None,
+            title_color: None,
+            font: None,
+            area,
+            template: None,
+            title_bar: None,
+            border: false,
+            tooltip: None,
+            pieces: vec![(
+                "icon".into(),
+                Element::Button(Button {
+                    id: Some("Container_Icon".into()),
+                    area,
+                    placed: true,
+                    anchors: None,
+                    look: ButtonLook {
+                        normal: Some(Piece {
+                            texture: "box.tga".into(),
+                            x: 0,
+                            y: 0,
+                            width: 40,
+                            height: 40,
+                        }),
+                        ..ButtonLook::default()
+                    },
+                    checkbox: false,
+                    text: None,
+                    text_color: None,
+                    font: None,
+                    decal: None,
+                    decal_area: Some(decal),
+                    decal_grid: None,
+                    tooltip: None,
+                }),
+            )],
+            tab_frame: None,
+            transparent: false,
+        };
+        let mut app = App::new();
+        app.init_resource::<crate::sheets::Sheets>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<super::super::skin::UiSkin>()
+            .insert_resource(crate::ViewerSettings(crate::ViewerConfig::default()))
+            .add_systems(
+                Update,
+                move |mut commands: Commands, mut art: crate::sheets::Art| {
+                    let context = Context {
+                        id: WindowId::Bag(23),
+                        paperdoll: None,
+                        depth: 0,
+                        tab_frame: None,
+                    };
+                    commands.spawn(Node::default()).with_children(|window| {
+                        draw(window, &screen, &mut art, &context);
+                    });
+                },
+            );
+        app.update();
+        // One picture for the bag, at the decal's place and size; nothing
+        // else is drawn over the button's Normal piece (unread here, as the
+        // test has no installation).
+        let mut pictures = app
+            .world_mut()
+            .query::<(&Node, &ImageNode, Option<&items::BagPart>)>();
+        let inner: Vec<_> = pictures
+            .iter(app.world())
+            .map(|(node, _, part)| {
+                (
+                    matches!(part, Some(items::BagPart::Icon(InventorySlot(23)))),
+                    (node.left, node.top, node.width, node.height),
+                )
+            })
+            .collect();
+        assert_eq!(inner, [(true, (px(2), px(3), px(36), px(34)))]);
+    }
+
+    #[test]
+    fn no_window_draws_a_grid_decals_sheet_or_a_do_nothing_buttons_sample_text() {
+        use eq_client_assets::sidl::{Element, Library};
+        // Hand-written: one grid of icons, named as each button's decal, as
+        // the installed client's skins name theirs (checklist 6.464).
+        let animations = r#"<XML>
+            <Ui2DAnimation item="Icons"><Grid>true</Grid><Vertical>true</Vertical>
+                <CellHeight>40</CellHeight><CellWidth>40</CellWidth>
+                <Frames><Texture>icons.tga</Texture><Location><X>0</X><Y>0</Y></Location>
+                    <Size><CX>256</CX><CY>256</CY></Size></Frames>
+            </Ui2DAnimation></XML>"#;
+        let library = Library::parse(animations, "<XML/>").unwrap();
+        let cases = [
+            (WindowId::Effects, "Buff0"),
+            (WindowId::PetInfo, "PetBuff0"),
+            (WindowId::Item, "IconButton"),
+            (WindowId::Merchant, "MW_SelectedItem"),
+            (WindowId::Spellbook, "SBW_Spell0"),
+            (WindowId::Bag(23), "Container_Icon"),
+            // A button that does nothing yet keeps its sample words hidden.
+            (WindowId::Bag(23), "Container_Sample"),
+        ];
+        assert!(matches!(
+            does("Container_Sample", WindowId::Bag(23)),
+            Some(Does::Nothing)
+        ));
+        for (id, screen_id) in cases {
+            let window = format!(
+                r#"<XML><Button item="B"><ScreenID>{screen_id}</ScreenID>
+                    <Location><X>0</X><Y>0</Y></Location><Size><CX>40</CX><CY>40</CY></Size>
+                    <Text>Sample</Text>
+                    <ButtonDrawTemplate><NormalDecal>Icons</NormalDecal></ButtonDrawTemplate>
+                    <DecalOffset><X>0</X><Y>0</Y></DecalOffset>
+                    <DecalSize><CX>40</CX><CY>40</CY></DecalSize></Button>
+                    <Screen item="W"><Pieces>B</Pieces></Screen></XML>"#
+            );
+            let screen = library.screen(&window, "W").unwrap();
+            let Element::Button(button) = &screen.pieces[0].1 else {
+                panic!("a button")
+            };
+            assert_eq!(button.decal_grid.as_deref(), Some("Icons"), "{screen_id}");
+            let mut app = App::new();
+            app.init_resource::<crate::sheets::Sheets>()
+                .init_resource::<Assets<Image>>()
+                .init_resource::<super::super::skin::UiSkin>()
+                .insert_resource(crate::ViewerSettings(crate::ViewerConfig {
+                    eq_directory: Some("synthetic-no-files".into()),
+                    ..crate::ViewerConfig::default()
+                }));
+            let sheet = crate::sheets::testing::sheet(
+                &mut app,
+                "icons.tga",
+                image::RgbaImage::from_pixel(256, 256, image::Rgba([9, 9, 9, 255])),
+            );
+            app.add_systems(
+                Update,
+                move |mut commands: Commands, mut art: crate::sheets::Art| {
+                    let context = Context {
+                        id,
+                        paperdoll: None,
+                        depth: 0,
+                        tab_frame: None,
+                    };
+                    commands.spawn(Node::default()).with_children(|window| {
+                        draw(window, &screen, &mut art, &context);
+                    });
+                },
+            );
+            app.update();
+            let mut images = app.world_mut().query::<&ImageNode>();
+            assert!(
+                images.iter(app.world()).all(|image| image.image != sheet),
+                "{screen_id} drew the grid's sheet"
+            );
+            let mut texts = app.world_mut().query::<&Text>();
+            assert!(
+                screen_id != "Container_Sample"
+                    || texts.iter(app.world()).all(|text| text.0 != "Sample"),
+                "{screen_id} showed its sample words"
+            );
+        }
+    }
+
+    #[test]
     fn a_button_the_client_does_not_have_yet_says_so_on_hover() {
         use crate::outbox::Needs;
         use eq_client_assets::sidl::{Button, ButtonLook, Element};
@@ -2808,6 +2995,7 @@ mod tests {
                 font: None,
                 decal: None,
                 decal_area: None,
+                decal_grid: None,
                 tooltip: Some("Sample".into()),
             })
         };
@@ -2908,6 +3096,7 @@ mod tests {
                 font: None,
                 decal: None,
                 decal_area: None,
+                decal_grid: None,
                 tooltip: None,
             })
         };
@@ -3042,6 +3231,7 @@ mod tests {
                 font: None,
                 decal: None,
                 decal_area: None,
+                decal_grid: None,
                 tooltip: None,
             })
         };
@@ -3393,6 +3583,7 @@ mod tests {
                         width: 32.0,
                         height: 32.0,
                     }),
+                    decal_grid: None,
                     tooltip: None,
                 }),
             )],
@@ -3577,6 +3768,7 @@ mod tests {
             font: None,
             decal: None,
             decal_area: None,
+            decal_grid: None,
             tooltip: None,
         };
         Page {
@@ -3825,6 +4017,7 @@ mod tests {
             font: None,
             decal: None,
             decal_area: None,
+            decal_grid: None,
             tooltip: None,
         }
     }
@@ -4941,7 +5134,7 @@ mod tests {
                         width: 40.0,
                         height: 40.0,
                     },
-                    piece: piece.clone(),
+                    piece: Some(piece.clone()),
                 },
             )
         };

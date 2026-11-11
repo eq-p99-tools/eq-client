@@ -157,6 +157,29 @@ pub(super) enum Does {
     Nothing,
 }
 
+impl Does {
+    /// Whether the window sets this button's picture itself, so the skin's
+    /// decal, a still picture or a grid, is never drawn under it: the
+    /// program writes its own picture over the button's `NormalDecal`, or
+    /// clears it (program read R29 (e): the buff windows at 0x4e955b, pet
+    /// buffs 0x542620, the merchant's chosen item 0x537fce and cleared at
+    /// 0x537c13 and 0x537b4c, the spellbook's places 0x558521, the item
+    /// display's icon 0x4f8cbc and the bag's icon 0x4fc9a4). The potion
+    /// belt (0x548b9d) and bandolier (0x4dbbc0) do too; this client has
+    /// neither yet.
+    pub(super) const fn sets_picture(self) -> bool {
+        matches!(
+            self,
+            Self::PetBuff(_)
+                | Self::Buff(..)
+                | Self::Chosen
+                | Self::ItemIcon
+                | Self::BookPlace(_)
+                | Self::BagIcon
+        )
+    }
+}
+
 /// What a loot or merchant window's button does: the loot window's Done
 /// ends the loot, and the merchant window's Buy and Sell act on what it has
 /// chosen. Their others are not in this client: Link all, and the Loot all

@@ -45,6 +45,7 @@ pub(in crate::skinned) fn source() -> Page {
                     font: Some(2),
                     decal: None,
                     decal_area: None,
+                    decal_grid: None,
                     tooltip: None,
                 }),
             ),
