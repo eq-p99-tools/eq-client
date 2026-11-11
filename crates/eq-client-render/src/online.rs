@@ -1198,6 +1198,21 @@ pub(crate) mod testing {
         news_at(state, events, Instant::now());
     }
 
+    /// Applies session news to the world with this spell data, as the
+    /// receiver does with the loaded spell file.
+    pub(crate) fn news_with(
+        state: &mut OnlineState,
+        events: impl IntoIterator<Item = WorldEvent>,
+        spells: &dyn eq_client_core::world::SpellCatalog,
+    ) {
+        for event in events {
+            let changes = state
+                .world
+                .apply(&WorldUpdate::Game(event), Instant::now(), spells);
+            state.observe_server_placement(&changes);
+        }
+    }
+
     /// Applies session news to the world as if it arrived at `now`.
     pub(crate) fn news_at(
         state: &mut OnlineState,
@@ -2408,7 +2423,8 @@ mod tests {
         sender
             .send(WorldUpdate::Game(WorldEvent::Buff(
                 eq_client_core::BuffUpdate {
-                    replaces_slot: false,
+                    applies: eq_client_core::buffs::Applies::Received,
+                    record_type: 0,
                     spell_id: 42,
                     entity_id: 99,
                     slot: 1,
@@ -2421,7 +2437,8 @@ mod tests {
         sender
             .send(WorldUpdate::Game(WorldEvent::Buff(
                 eq_client_core::BuffUpdate {
-                    replaces_slot: false,
+                    applies: eq_client_core::buffs::Applies::Received,
+                    record_type: 0,
                     spell_id: 42,
                     entity_id: 7,
                     slot: 1,

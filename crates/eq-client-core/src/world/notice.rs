@@ -48,6 +48,10 @@ impl Notice {
 /// Something to tell the player.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Notice {
+    /// The server contradicted a buff slot modelled from the program's slot
+    /// finder, for the first time in this zone visit: a diagnostic, not a
+    /// message the official client gives.
+    BuffSlotMismatch,
     /// Where the connection stands.
     Connection {
         /// Where it stands now.

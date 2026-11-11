@@ -1,4 +1,5 @@
-//! Received buff display and explicit right-click cancellation of a beneficial slot.
+//! Buff display and explicit right-click cancellation of a beneficial buff
+//! in a received or modelled slot.
 use super::{online::OnlineState, spell_icons, spellbook::SpellNames, windows};
 use crate::{
     skinned::Shows,
@@ -6,7 +7,10 @@ use crate::{
 };
 use bevy::prelude::*;
 use eq_client_core::{
-    buffs::{BuffTracker, Shown, TimeLeft, cancel::Request},
+    buffs::{
+        BuffTracker, Shown, TimeLeft,
+        cancel::{Placement, Request},
+    },
     qol::Fix,
 };
 use std::{collections::BTreeMap, time::Instant};
@@ -61,6 +65,23 @@ impl Selection {
                     beneficial: names.beneficial(buff.spell_id),
                     cancellable: cancellable(names, buff.spell_id),
                     created: stamp.created,
+                    placement: eq_client_core::buffs::cancel::Placement::Received,
+                })
+            }
+            Shown::Modelled(slot, effect) => {
+                let stamp = outbox.peek(world)?;
+                let spell_id = u32::from(effect.spell_id);
+                Self::Slot(Request {
+                    session_id: stamp.session_id,
+                    revision: world.buffs().revision(),
+                    slot,
+                    spell_id,
+                    beneficial: names.beneficial(spell_id),
+                    cancellable: cancellable(names, spell_id),
+                    created: stamp.created,
+                    placement: Placement::Modelled(
+                        world.buffs().modelled_record(effect.spell_id)?.clone(),
+                    ),
                 })
             }
             Shown::Unplaced(effect) => Self::Unplaced {
@@ -85,7 +106,15 @@ fn shown_buff<'a>(
             .map(|buff| Shown::Slot(slot, buff));
     }
     if let Some(&Unplaced(spell)) = unplaced {
-        return buffs.effects().get(&spell).map(Shown::Unplaced);
+        // A landing the program would slot shows at its modelled slot.
+        let effect = buffs.effects().get(&spell)?;
+        return Some(
+            buffs
+                .slot_of(spell)
+                .map_or(Shown::Unplaced(effect), |slot| {
+                    Shown::Modelled(slot, effect)
+                }),
+        );
     }
     let &Shows::Buff(window, button) = shows? else {
         return None;
@@ -179,6 +208,14 @@ pub(super) fn cancel(
                 cancellable(&names, request.spell_id) == request.cancellable,
                 "Spell effects changed; select the buff again"
             );
+            if let Placement::Modelled(record) = &request.placement {
+                let spell = u16::try_from(request.spell_id)?;
+                anyhow::ensure!(
+                    world.buffs().slot_of(spell) == Some(request.slot)
+                        && world.buffs().modelled_record(spell) == Some(record),
+                    "The selected buff slot changed or is unavailable"
+                );
+            }
             request.check(world.buffs().revision(), world.buffs().slots())
         })();
         if let Err(error) = check {
@@ -216,6 +253,7 @@ pub(super) fn update(
     bodies: Query<Entity, With<Body>>,
     mut previous: Local<Option<BTreeMap<u32, eq_client_core::Buff>>>,
     mut previous_effects: Local<BTreeMap<u16, eq_client_core::SpellEffect>>,
+    mut previous_modelled: Local<BTreeMap<u32, u16>>,
 ) {
     // The player closes and opens the window from the selector.
     let display = if shown.is_open(windows::WindowId::Effects) {
@@ -234,16 +272,19 @@ pub(super) fn update(
         }
         *previous = None;
         previous_effects.clear();
+        previous_modelled.clear();
         return;
     };
     if previous.as_ref() == Some(buffs)
         && *previous_effects == *online.world().buffs().effects()
+        && *previous_modelled == *online.world().buffs().modelled()
         && !panels.is_empty()
     {
         return;
     }
     *previous = Some(buffs.clone());
     previous_effects.clone_from(online.world().buffs().effects());
+    previous_modelled.clone_from(online.world().buffs().modelled());
     if skinned.has(windows::WindowId::Effects) {
         if panels.is_empty() {
             let frame = windows::frame(
@@ -288,23 +329,80 @@ pub(super) fn update(
         commands.entity(frame).add_child(body);
         body
     };
-    content(
-        &mut commands,
-        body,
-        buffs,
-        online.world().buffs().effects(),
-        online.world().buffs().long_slots(),
-    );
+    content(&mut commands, body, buffs, online.world().buffs());
 }
 
 /// Builds icons from occupied server slots without renumbering holes.
+/// The own list's order: received and modelled buffs together in slot
+/// order, as the program holds them, a modelled one by its spell; then
+/// those without a slot, as they landed.
+fn drawn_order(
+    buffs: &BTreeMap<u32, eq_client_core::Buff>,
+    tracker: &eq_client_core::buffs::BuffTracker,
+) -> (Vec<(u32, Option<u16>)>, Vec<u16>) {
+    let mut slotted: Vec<(u32, Option<u16>)> = buffs.keys().map(|slot| (*slot, None)).collect();
+    slotted.extend(
+        tracker
+            .modelled()
+            .iter()
+            .filter(|(slot, _)| !buffs.contains_key(slot))
+            .map(|(slot, spell)| (*slot, Some(*spell))),
+    );
+    slotted.sort_unstable_by_key(|(slot, _)| *slot);
+    let unslotted = tracker
+        .unslotted()
+        .map(|(effect, _)| effect.spell_id)
+        .collect();
+    (slotted, unslotted)
+}
+
 fn content(
     commands: &mut Commands,
     body: Entity,
     buffs: &BTreeMap<u32, eq_client_core::Buff>,
-    effects: &BTreeMap<u16, eq_client_core::SpellEffect>,
-    long_slots: u32,
+    tracker: &eq_client_core::buffs::BuffTracker,
 ) {
+    let long_slots = tracker.long_slots();
+    let shows = |slot: u32| {
+        crate::skinned::Shows::Buff(
+            if slot < long_slots {
+                eq_client_core::buffs::EffectWindow::Long
+            } else {
+                eq_client_core::buffs::EffectWindow::Short
+            },
+            if slot < long_slots {
+                slot
+            } else {
+                slot - long_slots
+            },
+        )
+    };
+    let button = || {
+        (
+            Button,
+            Node {
+                width: px(42),
+                height: px(42),
+                border: UiRect::all(px(1)),
+                ..default()
+            },
+            BorderColor::all(theme::EDGE),
+            BackgroundColor(theme::INSET),
+        )
+    };
+    let caption = |slot: u32| {
+        (
+            Text::new((u64::from(slot) + 1).to_string()),
+            theme::font(Size::Caption),
+            Node {
+                position_type: PositionType::Absolute,
+                bottom: px(0),
+                right: px(2),
+                ..default()
+            },
+        )
+    };
+    let (slotted, unslotted) = drawn_order(buffs, tracker);
     commands.entity(body).with_children(|parent| {
         parent
             .spawn(Node {
@@ -314,69 +412,41 @@ fn content(
                 ..default()
             })
             .with_children(|grid| {
-                for &slot in buffs.keys() {
-                    grid.spawn((
-                        Entry(slot),
-                        crate::skinned::Shows::Buff(
-                            if slot < long_slots {
-                                eq_client_core::buffs::EffectWindow::Long
-                            } else {
-                                eq_client_core::buffs::EffectWindow::Short
-                            },
-                            if slot < long_slots {
-                                slot
-                            } else {
-                                slot - long_slots
-                            },
-                        ),
-                        Button,
-                        Node {
-                            width: px(42),
-                            height: px(42),
-                            border: UiRect::all(px(1)),
-                            ..default()
-                        },
-                        BorderColor::all(theme::EDGE),
-                        BackgroundColor(theme::INSET),
-                    ))
-                    .with_children(|icon| {
-                        icon.spawn(spell_icons::artwork(spell_icons::Source::Buff(slot), 36.0));
-                        icon.spawn((
-                            Text::new((u64::from(slot) + 1).to_string()),
-                            theme::font(Size::Caption),
-                            Node {
-                                position_type: PositionType::Absolute,
-                                bottom: px(0),
-                                right: px(2),
-                                ..default()
-                            },
-                        ));
-                    });
+                for &(slot, modelled) in &slotted {
+                    match modelled {
+                        None => grid
+                            .spawn((Entry(slot), shows(slot), button()))
+                            .with_children(|icon| {
+                                icon.spawn(spell_icons::artwork(
+                                    spell_icons::Source::Buff(slot),
+                                    36.0,
+                                ));
+                                icon.spawn(caption(slot));
+                            }),
+                        Some(spell) => grid
+                            .spawn((Unplaced(spell), shows(slot), button()))
+                            .with_children(|icon| {
+                                icon.spawn(spell_icons::artwork(
+                                    spell_icons::Source::Effect(spell),
+                                    36.0,
+                                ));
+                                icon.spawn(caption(slot));
+                            }),
+                    };
                 }
-                for &spell in effects.keys() {
-                    grid.spawn((
-                        Unplaced(spell),
-                        Button,
-                        Node {
-                            width: px(42),
-                            height: px(42),
-                            border: UiRect::all(px(1)),
-                            ..default()
-                        },
-                        BorderColor::all(theme::EDGE),
-                        BackgroundColor(theme::INSET),
-                    ))
-                    .with_children(|icon| {
-                        icon.spawn(spell_icons::artwork(
-                            spell_icons::Source::Effect(spell),
-                            36.0,
-                        ));
-                    });
+                for &spell in &unslotted {
+                    grid.spawn((Unplaced(spell), button()))
+                        .with_children(|icon| {
+                            icon.spawn(spell_icons::artwork(
+                                spell_icons::Source::Effect(spell),
+                                36.0,
+                            ));
+                        });
                 }
             });
         parent.spawn((
             Hint,
-            Text::new(if buffs.is_empty() && effects.is_empty() {
+            Text::new(if slotted.is_empty() && unslotted.is_empty() {
                 "No active buffs"
             } else {
                 "Hover an effect for details"
@@ -546,7 +616,10 @@ pub(super) fn skinned_details(
             Some(eq_client_core::buffs::Shown::Slot(slot, buff)) => {
                 details(buff, buffs.time_left(slot, now), &names, qol)
             }
-            Some(eq_client_core::buffs::Shown::Unplaced(effect)) => effect_details(
+            Some(
+                eq_client_core::buffs::Shown::Modelled(_, effect)
+                | eq_client_core::buffs::Shown::Unplaced(effect),
+            ) => effect_details(
                 effect.spell_id,
                 (Some(effect), buffs.landed(effect.spell_id)),
                 &names,
@@ -660,6 +733,20 @@ mod tests {
         }
     }
 
+    /// Spell 42, "Constructed buff", a lasting spell with its band's short
+    /// flag (field 154) as given.
+    fn constructed_buff(beneficial: bool, short: &str) -> SpellNames {
+        let mut fields = vec!["0"; 203];
+        fields[0] = "42";
+        fields[1] = "Constructed buff";
+        fields[83] = if beneficial { "1" } else { "0" };
+        fields[154] = short;
+        // A lasting spell: formula 3, up to 30 ticks.
+        fields[16] = "3";
+        fields[17] = "30";
+        SpellNames::parse(&fields.join("^"))
+    }
+
     fn cancellation_fixture(
         skinned: bool,
         beneficial: Option<bool>,
@@ -674,11 +761,7 @@ mod tests {
         crate::online::testing::admit(&mut online, 5, crate::online::testing::player(7));
         crate::online::testing::buffs(&mut online, BTreeMap::from([(3, synthetic_buff(42))]));
         let names = beneficial.map_or_else(SpellNames::default, |beneficial| {
-            let mut fields = vec!["0"; 203];
-            fields[0] = "42";
-            fields[1] = "Constructed buff";
-            fields[83] = if beneficial { "1" } else { "0" };
-            SpellNames::parse(&fields.join("^"))
+            constructed_buff(beneficial, "0")
         });
         app.insert_resource(online)
             .insert_resource(names)
@@ -697,6 +780,68 @@ mod tests {
         }
         let button_id = button.id();
         (app, button_id, receiver)
+    }
+
+    /// A Titanium table of 25 empty slots.
+    fn clear_buffs(app: &mut App) {
+        crate::online::testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [eq_client_core::WorldEvent::BuffSnapshot(vec![None; 25])],
+        );
+    }
+
+    /// Spell 42 taking hold on the player, with this flag, read with the
+    /// app's spell data.
+    fn lands(app: &mut App, effect_flag: u8) {
+        let names = app.world_mut().remove_resource::<SpellNames>().unwrap();
+        crate::online::testing::news_with(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [eq_client_core::WorldEvent::SpellEffect(
+                eq_client_core::SpellEffect {
+                    target_id: 7,
+                    caster_id: 7,
+                    caster_level: 12,
+                    instrument_modifier: 10,
+                    spell_id: 42,
+                    spell_level: 12,
+                    effect_flag,
+                    push: None,
+                },
+            )],
+            &names,
+        );
+        app.insert_resource(names);
+    }
+
+    #[test]
+    fn right_click_a_modelled_landing_cancels_the_record_the_program_holds() {
+        for skinned in [false, true] {
+            let (mut app, button, receiver) = cancellation_fixture(skinned, Some(true));
+            clear_buffs(&mut app);
+            let mut button = app.world_mut().entity_mut(button);
+            if skinned {
+                button.insert(Shows::Buff(eq_client_core::buffs::EffectWindow::Long, 0));
+            } else {
+                button.remove::<Entry>().insert(Unplaced(42));
+            }
+            // A flag with other bits set besides 4 takes hold too.
+            lands(&mut app, 0x14);
+            right_press(&mut app);
+            right_release(&mut app);
+            let eq_client_core::ClientCommand::CancelBuff(request) = receiver.try_recv().unwrap()
+            else {
+                panic!("wrong command")
+            };
+            assert_eq!(
+                (request.session_id, request.slot, request.spell_id),
+                (5, 0, 42)
+            );
+            assert!(matches!(
+                &request.placement,
+                Placement::Modelled(record) if record.spell_id == 42
+            ));
+            assert!(receiver.try_recv().is_err());
+        }
     }
 
     fn right_press(app: &mut App) {
@@ -803,6 +948,10 @@ mod tests {
     fn right_click_an_unslotted_effect_explains_why_without_submitting() {
         for (skinned, beneficial) in [(false, true), (true, true), (false, false), (true, false)] {
             let (mut app, button, receiver) = cancellation_fixture(skinned, Some(beneficial));
+            // Nothing holds the spell, and a malformed band flag leaves the
+            // program's slot for its landing unknown.
+            clear_buffs(&mut app);
+            app.insert_resource(constructed_buff(beneficial, "bad"));
             let mut button = app.world_mut().entity_mut(button);
             if skinned {
                 // The first empty long-window button shows the received effect,
@@ -811,21 +960,7 @@ mod tests {
             } else {
                 button.remove::<Entry>().insert(Unplaced(42));
             }
-            crate::online::testing::news(
-                &mut app.world_mut().resource_mut::<OnlineState>(),
-                [eq_client_core::WorldEvent::SpellEffect(
-                    eq_client_core::SpellEffect {
-                        target_id: 7,
-                        caster_id: 7,
-                        caster_level: 12,
-                        instrument_modifier: 10,
-                        spell_id: 42,
-                        spell_level: 12,
-                        effect_flag: 4,
-                        push: None,
-                    },
-                )],
-            );
+            lands(&mut app, 4);
             right_press(&mut app);
             assert_eq!(
                 app.world().resource::<crate::chat::ChatState>().newest(),
@@ -917,6 +1052,97 @@ mod tests {
         assert_eq!(
             resource_hint(Some(&mechanics), None),
             "\nBonuses unavailable"
+        );
+    }
+
+    #[test]
+    fn the_own_list_draws_received_and_modelled_buffs_in_slot_order_then_unslotted_ones() {
+        let mut app = crate::testing::app();
+        app.insert_resource({
+            let mut online = OnlineState::new(true);
+            crate::online::testing::admit(&mut online, 1, crate::online::testing::player(7));
+            online
+        })
+        .add_systems(Update, update);
+        // 42 held in 1; 50 and 51 lasting with their bands; 52 with a
+        // malformed band flag.
+        let line = |id: &str, short: &str| {
+            let mut fields = vec!["0"; 203];
+            fields[0] = id;
+            fields[1] = "Constructed";
+            fields[16] = "3";
+            fields[17] = "30";
+            fields[154] = short;
+            // No effects (254 in each of the twelve), so none could replace
+            // another.
+            fields[86..98].fill("254");
+            fields.join("^")
+        };
+        let names = SpellNames::parse(
+            &[
+                line("42", "0"),
+                line("50", "0"),
+                line("51", "0"),
+                line("52", "bad"),
+            ]
+            .join("\n"),
+        );
+        let mut table = vec![None; 25];
+        table[1] = Some(synthetic_buff(42));
+        let landing = |spell_id| {
+            eq_client_core::WorldEvent::SpellEffect(eq_client_core::SpellEffect {
+                target_id: 7,
+                caster_id: 7,
+                caster_level: 12,
+                instrument_modifier: 10,
+                spell_id,
+                spell_level: 12,
+                effect_flag: 4,
+                push: None,
+            })
+        };
+        crate::online::testing::news_with(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [
+                eq_client_core::WorldEvent::BuffSnapshot(table),
+                landing(50),
+                landing(51),
+                landing(52),
+            ],
+            &names,
+        );
+        app.update();
+        let grid = app
+            .world_mut()
+            .query_filtered::<&ChildOf, With<Entry>>()
+            .single(app.world())
+            .unwrap()
+            .parent();
+        let children: Vec<Entity> = app.world().get::<Children>(grid).unwrap().to_vec();
+        let drawn: Vec<(Option<u32>, Option<u16>, Option<String>)> = children
+            .iter()
+            .map(|child| {
+                let caption = app
+                    .world()
+                    .get::<Children>(*child)
+                    .into_iter()
+                    .flatten()
+                    .find_map(|part| app.world().get::<Text>(*part).map(|text| text.0.clone()));
+                (
+                    app.world().get::<Entry>(*child).map(|entry| entry.0),
+                    app.world().get::<Unplaced>(*child).map(|effect| effect.0),
+                    caption,
+                )
+            })
+            .collect();
+        assert_eq!(
+            drawn,
+            [
+                (None, Some(50), Some("1".into())),
+                (Some(1), None, Some("2".into())),
+                (None, Some(51), Some("3".into())),
+                (None, Some(52), None),
+            ]
         );
     }
 

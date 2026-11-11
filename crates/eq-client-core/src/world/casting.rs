@@ -28,6 +28,24 @@ pub trait SpellCatalog {
     /// Whether a spell's effect is over at once, leaving no buff behind.
     fn instant_effect(&self, spell: u32) -> bool;
 
+    /// The spell fields that choose the band the Titanium program places a
+    /// landing buff in; `None` where they are not known, which leaves the
+    /// landing without a modelled slot.
+    fn buff_band(&self, _spell: u32) -> Option<crate::buffs::Band> {
+        None
+    }
+
+    /// A spell's twelve effect ids in order, where the spell data has them.
+    fn effect_ids(&self, _spell: u32) -> Option<[u32; 12]> {
+        None
+    }
+
+    /// A spell's target type (Titanium field 98), where the spell data has
+    /// it.
+    fn target_type(&self, _spell: u32) -> Option<u32> {
+        None
+    }
+
     /// Whether any of a spell's effect slots is the feign effect (74),
     /// which the Titanium program lies the player down for when it lands on
     /// them (read R21). A spell whose effects are unknown feigns no one

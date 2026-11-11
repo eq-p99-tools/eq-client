@@ -53,6 +53,13 @@ pub struct Definition {
     pub effect: Option<u32>,
     /// The spell's numeric mechanics.
     pub mechanics: Option<Mechanics>,
+    /// Titanium fields 154 and 168 (program spell +0x19b and +0x1c4, R20
+    /// (a)), which with [`Definition::beneficial`] (+0x17d) choose the band
+    /// the program's slot finder places a landing buff in; unread on the
+    /// Mac-era client.
+    pub buff_band: Option<(bool, bool)>,
+    /// Titanium field 98, the target type (program spell +0x180, R20 (a)).
+    pub target_type: Option<u32>,
     /// Field 8: what the client says when the spell fades from the player.
     pub fades: Option<String>,
 }
@@ -169,6 +176,11 @@ impl Definitions {
                     .and_then(|field| field.parse().ok()),
                 effect: layout.effect.and_then(number),
                 mechanics: Mechanics::read(&fields, layout),
+                buff_band: layout.buff_band.and_then(|(short, last)| {
+                    let flag = |column| number(column).map(|value: u32| value != 0);
+                    flag(short).zip(flag(last))
+                }),
+                target_type: layout.target_type.and_then(number),
                 fades: fields
                     .get(8)
                     .map(|text| text.trim())
@@ -339,6 +351,27 @@ mod tests {
                 fields[column] = "0";
             }
         }
+    }
+
+    #[test]
+    fn titanium_reads_the_slot_finders_band_flags_and_target_type() {
+        let mut fields = vec!["0"; 183];
+        fields[0] = "42";
+        fields[98] = "6";
+        fields[154] = "1";
+        fields[168] = "0";
+        let spells = Definitions::parse(&fields.join("^"), &Layout::TITANIUM);
+        let spell = spells.get(42).unwrap();
+        assert_eq!(spell.buff_band, Some((true, false)));
+        assert_eq!(spell.target_type, Some(6));
+        // A malformed flag leaves the band unknown.
+        fields[168] = "bad";
+        let spells = Definitions::parse(&fields.join("^"), &Layout::TITANIUM);
+        assert_eq!(spells.get(42).unwrap().buff_band, None);
+        // The Mac-era layout has neither.
+        let spells = Definitions::parse(&fields.join("^"), &Layout::EQMAC);
+        assert_eq!(spells.get(42).unwrap().buff_band, None);
+        assert_eq!(spells.get(42).unwrap().target_type, None);
     }
 
     #[test]

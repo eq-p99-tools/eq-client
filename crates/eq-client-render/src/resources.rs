@@ -102,7 +102,8 @@ mod tests {
 
     fn buff(spell_id: u32, buff: Option<eq_client_core::Buff>) -> WorldEvent {
         WorldEvent::Buff(eq_client_core::BuffUpdate {
-            replaces_slot: false,
+            applies: eq_client_core::buffs::Applies::Received,
+            record_type: 0,
             entity_id: 7,
             slot: 0,
             spell_id,

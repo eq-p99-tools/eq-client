@@ -146,6 +146,24 @@ impl eq_client_core::world::SpellCatalog for SpellNames {
         Self::instant_effect(self, spell)
     }
 
+    fn buff_band(&self, spell: u32) -> Option<eq_client_core::buffs::Band> {
+        let definition = self.spell(spell)?;
+        let (short, last) = definition.buff_band?;
+        Some(eq_client_core::buffs::Band {
+            beneficial: definition.beneficial?,
+            short,
+            last,
+        })
+    }
+
+    fn effect_ids(&self, spell: u32) -> Option<[u32; 12]> {
+        Some(self.mechanics(spell)?.effects.map(|slot| slot.id))
+    }
+
+    fn target_type(&self, spell: u32) -> Option<u32> {
+        self.spell(spell)?.target_type
+    }
+
     fn feigns(&self, spell: u32) -> bool {
         const FEIGN: u32 = 74;
         self.mechanics(spell)

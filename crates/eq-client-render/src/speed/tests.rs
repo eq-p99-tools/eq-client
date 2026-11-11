@@ -574,7 +574,8 @@ fn effects(spell: u32) -> Option<Vec<Effect>> {
 
 fn buff(slot: u32, spell_id: u32) -> WorldEvent {
     WorldEvent::Buff(BuffUpdate {
-        replaces_slot: false,
+        applies: eq_client_core::buffs::Applies::Received,
+        record_type: 0,
         entity_id: 7,
         slot,
         spell_id,
@@ -673,7 +674,8 @@ fn bard_speed_reports_follow_landing_refresh_and_fade_across_equipment_changes()
     };
     let slot = |buff, entity_id| {
         WorldEvent::Buff(BuffUpdate {
-            replaces_slot: false,
+            applies: eq_client_core::buffs::Applies::Received,
+            record_type: 0,
             entity_id,
             slot: 24,
             spell_id: 42,
@@ -1655,7 +1657,8 @@ fn scaled_snare_overrides_speed_and_root_fade_restores_without_inflation() {
     testing::news(
         &mut state,
         [WorldEvent::Buff(BuffUpdate {
-            replaces_slot: false,
+            applies: eq_client_core::buffs::Applies::Received,
+            record_type: 0,
             entity_id: 7,
             slot: 3,
             spell_id: 3,
@@ -1844,7 +1847,8 @@ fn missing_inputs_take_from_the_last_report_only_what_is_unknown() {
 
 fn fade(slot: u32, spell_id: u32) -> WorldEvent {
     WorldEvent::Buff(BuffUpdate {
-        replaces_slot: false,
+        applies: eq_client_core::buffs::Applies::Received,
+        record_type: 0,
         entity_id: 7,
         slot,
         spell_id,
@@ -2280,4 +2284,27 @@ fn scribed_scroll_consumption_reports_known_load_without_hiding_an_unresolved_ba
             assert_eq!(load.map(|(weight, _)| weight), Some(7));
         }
     }
+}
+
+#[test]
+fn a_buff_held_twice_leaves_the_second_strength_out_and_the_report_inexact() {
+    let mut state = online();
+    ready(&mut state);
+    // Spell 4 adds strength; the server writes it into a second slot
+    // (Titanium action 3), so the program holds it twice.
+    testing::news(&mut state, [buff(0, 4)]);
+    let once = calculate(state.world(), effects).unwrap();
+    let WorldEvent::Buff(mut twice) = buff(5, 4) else {
+        unreachable!()
+    };
+    twice.applies = eq_client_core::buffs::Applies::BySlot;
+    twice.record_type = 2;
+    testing::news(&mut state, [WorldEvent::Buff(twice)]);
+    assert_eq!(calculate(state.world(), effects), Err(Missing::Effects));
+    // Bounded from the first slot's strength alone, never a higher exact
+    // figure.
+    assert_eq!(
+        super::calculate(state.world(), effects).unwrap().inputs,
+        once
+    );
 }

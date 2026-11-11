@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+- Buffs that land on the player take the slot the Titanium program gives
+  them (program reads R3 and R20), so the Effects window keeps the
+  program's order, received and modelled buffs together, and a right-click
+  cancels a buff the server has not slotted yet. A held spell keeps its
+  slot; otherwise it takes the lowest empty slot of its band, songs in the
+  short window, and after a fade a re-landing takes the lowest empty slot
+  again, as the program does. The server's own slot updates win: a fade
+  removes its spell wherever it is held, a duration update changes the
+  buff in place, and a slot write overwrites the slot (and ends an
+  unslotted copy of its spell, inferred). Each contradiction of a modelled
+  slot is counted (`buff_slot_mismatches` in the Script report, with
+  `modelled_slots` and `unslotted_reasons`) and logged; a type-4 record a
+  type-2 fade leaves held is one, as in the program (recording checklist
+  6.459). A landing whose slot is unknown, such as one that may replace
+  another buff, stays unslotted, and while one is held no new landing is
+  given a slot until the next zone-in; its click-off is still refused as
+  its slot is unknown. Only Titanium places landings; the Mac-era client
+  keeps them unslotted, its program unread. A spell counts as landed on
+  the program's test (an action of kind 231 whose flag carries 4). The
+  speed report leaves a second copy of a buff's strength out and marks
+  itself inexact. Live rows are recording checklist 6.457 (local EQEmu)
+  and 6.458 (attended). Networking pinned to ba1ac5c (eq-network #294 and
+  #298).
+
+- A scribe or memorization the server refuses for your level now ends at
+  once, with the server's line in chat, instead of holding the cursor
+  ("Wait for scribing to finish") until you zone; the same scroll can be
+  tried again. A scribe the server never answers frees the cursor after 30
+  seconds (inferred, checklist 6.462). Networking pinned to ba1ac5c
+  (eq-network #298).
+
 - After a zone-in your first /stand no longer sends a standing report the
   Titanium program would skip: the session now stands you at entry, as the
   program does, and sends one stand only when the server's record of you

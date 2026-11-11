@@ -84,6 +84,20 @@ pub(super) fn state(
             .collect::<Vec<_>>()
     });
     let effects: Vec<u16> = online.world().buffs().effects().keys().copied().collect();
+    let modelled_slots: Vec<(u32, u16)> = online
+        .world()
+        .buffs()
+        .modelled()
+        .iter()
+        .map(|(slot, spell)| (*slot, *spell))
+        .collect();
+    // Each landing without a modelled slot, as it landed, and why.
+    let unslotted_reasons: Vec<(u16, Option<eq_client_core::buffs::NoSlot>)> = online
+        .world()
+        .buffs()
+        .unslotted()
+        .map(|(effect, why)| (effect.spell_id, why))
+        .collect();
     let posture = online
         .world()
         .player()
@@ -200,6 +214,9 @@ pub(super) fn state(
         ?book,
         buff_revision = online.world().buffs().revision(),
         ?buff_slot_records,
+        ?modelled_slots,
+        ?unslotted_reasons,
+        buff_slot_mismatches = online.world().buffs().slot_mismatches(),
         buff_cancellation = ?online.world().buffs().cancellation(),
         ?slots,
         ?effects,

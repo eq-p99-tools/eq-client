@@ -1,7 +1,7 @@
 //! News about the player's spells: gems and the book, casts, buffs and
 //! lasting effects, and spellbook changes.
 use super::{CastNews, Changes, ClientWorld, Notice, SpellCatalog};
-use crate::{BookActionStatus, Buff, BuffUpdate, SpellEffect, SpellUpdate};
+use crate::{BookActionStatus, Buff, BuffUpdate, SpellEffect, SpellUpdate, buffs::Landing};
 use std::time::Instant;
 
 impl ClientWorld {
@@ -174,7 +174,9 @@ impl ClientWorld {
             .as_ref()
             .is_some_and(|player| u32::from(player.spawn_id) == update.entity_id)
         {
-            self.buffs.apply(update.clone(), now);
+            if self.buffs.apply(update.clone(), now) {
+                changes.notices.push(Notice::BuffSlotMismatch);
+            }
         } else {
             changes.ignored = true;
         }
@@ -197,14 +199,63 @@ impl ClientWorld {
             changes.feign_landed = effect.took_hold()
                 && self.generation.spell_feign_lies()
                 && spells.feigns(u32::from(effect.spell_id));
-            if effect.effect_flag == 4
+            if effect.took_hold()
                 && !matches!(effect.spell_id, 0 | u16::MAX)
                 && !spells.instant_effect(u32::from(effect.spell_id))
             {
-                self.buffs.observe_effect(effect.clone(), now);
+                let landing = self.landing(effect, spells);
+                self.buffs.observe_effect(effect.clone(), landing, now);
             }
         } else {
             changes.ignored = true;
+        }
+    }
+
+    /// What the spell data and the world say about a landing on the player,
+    /// for placing it as the Titanium program does.
+    fn landing(&self, effect: &SpellEffect, spells: &dyn SpellCatalog) -> Landing {
+        let spell = u32::from(effect.spell_id);
+        let own = effect.caster_id == effect.target_id;
+        let held: Vec<u32> = self.buffs.spells().filter(|held| *held != spell).collect();
+        let new = spells.effect_ids(spell);
+        // Step 2's blocker test, only partly read: any held spell with
+        // effect 148 leaves the landing unplaced.
+        let blocker = held.iter().any(|held| {
+            spells
+                .effect_ids(*held)
+                .is_some_and(|ids| ids.contains(&148))
+        });
+        // Step 4 is not ported: a held spell that shares an effect with the
+        // landing at a position both compare (before an effect 254), or
+        // whose effects are not known, could be the one it replaces.
+        let conflict = held.iter().any(|held| {
+            let (Some(new), Some(old)) = (new, spells.effect_ids(*held)) else {
+                return true;
+            };
+            new.iter()
+                .zip(old.iter())
+                .take_while(|(new, old)| **new != 254 && **old != 254)
+                .any(|(new, old)| new == old)
+        });
+        // R20 (d): caster spawn +0x24c, plus effect 0x110's total for a Bard
+        // song, which this client does not know: a Bard caster's is left
+        // unknown.
+        let caster_level = self
+            .spawn(effect.caster_id)
+            .filter(|caster| caster.state.class != Some(8))
+            .map(|caster| caster.state.level)
+            .filter(|level| *level != 0);
+        Landing {
+            finder: self.generation().buff_placement(),
+            keeps_record: new
+                .is_some_and(|ids| ids.iter().any(|id| matches!(id, 0x43 | 0x65 | 0x71))),
+            band: spells.buff_band(spell),
+            blocker,
+            conflict,
+            record_type: spells
+                .target_type(spell)
+                .map(|kind| if own && matches!(kind, 13 | 20) { 4 } else { 2 }),
+            caster_level,
         }
     }
 
