@@ -15,7 +15,7 @@ use bevy::prelude::*;
 use eq_client_core::{Capability, ClientCommand, WorldEvent, world::ClientWorld};
 use std::{
     sync::{
-        Mutex,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc::{SyncSender, TrySendError},
     },
@@ -106,9 +106,12 @@ pub(crate) const MISSING: &str = "Not in this client yet";
 #[derive(Resource)]
 pub(crate) struct Outbox {
     queue: Option<SyncSender<ClientCommand>>,
-    spell_ready: AtomicBool,
-    refused: Mutex<Vec<Refusal>>,
-    book: Mutex<BookQueue>,
+    spell_ready: Arc<AtomicBool>,
+    refused: Arc<Mutex<Vec<Refusal>>>,
+    book: Arc<Mutex<BookQueue>>,
+    /// Present only on a short-lived facade passed by an identified script
+    /// dispatch. The shared outbox never stores a script's context.
+    chat_admission: Option<u64>,
 }
 
 fn interrupts_apply(command: &ClientCommand) -> bool {
@@ -130,10 +133,30 @@ impl Outbox {
     pub(crate) fn new(queue: Option<SyncSender<ClientCommand>>) -> Self {
         Self {
             queue,
-            spell_ready: AtomicBool::new(true),
-            refused: Mutex::new(Vec::new()),
-            book: Mutex::default(),
+            spell_ready: Arc::new(AtomicBool::new(true)),
+            refused: Arc::new(Mutex::new(Vec::new())),
+            book: Arc::default(),
+            chat_admission: None,
         }
+    }
+
+    /// One synchronous script dispatch, sharing ordinary queue/book feedback
+    /// while binding any legacy chat it emits to its originating admission.
+    pub(crate) fn for_script(&self, chat_admission: Option<u64>) -> Self {
+        Self {
+            queue: self.queue.clone(),
+            spell_ready: self.spell_ready.clone(),
+            refused: self.refused.clone(),
+            book: self.book.clone(),
+            chat_admission,
+        }
+    }
+
+    pub(crate) fn script_world(&self, world: &ClientWorld) -> Option<crate::script::ExpectedWorld> {
+        Some(crate::script::ExpectedWorld {
+            admission_id: self.chat_admission?,
+            zone: world.zone().to_owned(),
+        })
     }
 
     pub(crate) fn set_spell_ready(&self, ready: bool) {
@@ -143,7 +166,7 @@ impl Outbox {
     /// Sends to another session's queue from now on, or to none.
     pub(crate) fn connect(&mut self, queue: Option<SyncSender<ClientCommand>>) {
         self.queue = queue;
-        self.book = Mutex::default();
+        self.book = Arc::default();
     }
 
     /// Claims the book between set steps only after any manual edit settles.
@@ -293,6 +316,15 @@ impl Outbox {
         set_step: bool,
         receipt: Option<&BookEditReceipt>,
     ) -> Result<(), Refusal> {
+        let command = match (command, self.chat_admission) {
+            (ClientCommand::SendChat(message), Some(session_id)) => {
+                ClientCommand::SendChatInAdmission {
+                    session_id,
+                    message,
+                }
+            }
+            (command, _) => command,
+        };
         let edit = Expected::from_command(&command);
         let interrupt = interrupts_apply(&command);
         self.check(world, &command).and_then(|queue| {
@@ -359,6 +391,11 @@ impl Outbox {
         command: &ClientCommand,
     ) -> Result<&SyncSender<ClientCommand>, Refusal> {
         let queue = self.queue.as_ref().ok_or(Refusal::Offline)?;
+        if let ClientCommand::SendChatInAdmission { session_id, .. } = command {
+            if Some(*session_id) != world.session_id() {
+                return Err(Refusal::Away);
+            }
+        }
         // The world server's commands need no zone; every other one needs a
         // player in the world and what the admission offers.
         if let Some(capability) = command.capability() {
@@ -612,6 +649,36 @@ mod tests {
 
     fn say() -> ClientCommand {
         ClientCommand::SendChat(OutboundChat::Say("Hail".into()))
+    }
+
+    #[test]
+    fn only_the_scoped_facade_stamps_chat_and_native_sends_keep_the_legacy_api() {
+        let (queue, received) = std::sync::mpsc::sync_channel(4);
+        let outbox = Outbox::new(Some(queue));
+        let world = admitted(vec![Capability::Talking]);
+        let scoped = outbox.for_script(Some(4));
+        scoped.send(&world, say()).unwrap();
+        assert!(matches!(
+            received.try_recv(),
+            Ok(ClientCommand::SendChatInAdmission { session_id: 4, .. })
+        ));
+        // Even while the facade exists, the shared native outbox is unscoped.
+        outbox.send(&world, say()).unwrap();
+        assert!(matches!(
+            received.try_recv(),
+            Ok(ClientCommand::SendChat(_))
+        ));
+        assert_eq!(
+            outbox.for_script(Some(3)).send(&world, say()),
+            Err(Refusal::Away)
+        );
+        assert!(received.try_recv().is_err());
+        drop(scoped);
+        outbox.send(&world, say()).unwrap();
+        assert!(matches!(
+            received.try_recv(),
+            Ok(ClientCommand::SendChat(_))
+        ));
     }
 
     #[test]

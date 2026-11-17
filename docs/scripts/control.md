@@ -67,7 +67,12 @@ scope can receive `start_queued` followed by a failed result before any action.
 
 This is a caller-selected local precondition, not server permission or proof of
 an action's outcome. It cannot undo commands already submitted in the matching
-admission. Existing outbox admission stamps still apply. Unscoped starts retain
+admission. Scoped chat and GM messages carry their originating admission through
+the worker queue, with ordinary chat timing; an old admission is refused before
+features can observe or send it. Deferred target, guild, sharing and follow
+requests also retain their script world stamp until their local handler runs.
+A native replacement clears that request's script stamp. Other gameplay uses
+its existing admission-bound command paths. Unscoped starts retain
 their usual behavior, including login and cleanup scenarios across zones. Status
 and Stop requests remain available independently of the scope. A separate
 `zone.name` condition in script source does not bind a later action to that zone.

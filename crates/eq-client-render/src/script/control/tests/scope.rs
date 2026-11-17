@@ -13,7 +13,15 @@ fn admitted() -> App {
         online.enabled = true;
         enter(&mut online, 7, "samplezone");
     }
-    app.add_systems(Update, (super::super::super::guard_scope, observe).chain());
+    app.add_systems(
+        Update,
+        (
+            crate::chat::guard_script_requests,
+            super::super::super::guard_scope,
+            observe,
+        )
+            .chain(),
+    );
     app
 }
 
@@ -239,4 +247,122 @@ fn delayed_social_dispatch_checks_the_current_world_even_before_driver_observati
             .social_dispatch(&owner, app.world().resource::<OnlineState>())
             .is_none()
     );
+}
+
+#[test]
+fn controlled_gm_and_chat_queue_the_originating_admission() {
+    use eq_client_core::{ClientCommand, OutboundChat};
+    let mut app = admitted();
+    let (queue, received) = std::sync::mpsc::sync_channel(4);
+    app.insert_resource(crate::outbox::Outbox::new(Some(queue)));
+    scoped(&mut app, "gm level 1\nchat say synthetic\nwait 1000\n");
+    for ms in 1..10 {
+        frame(&mut app, ms);
+    }
+    for expected in ["#level 1", "synthetic"] {
+        assert_eq!(
+            received.try_recv().unwrap(),
+            ClientCommand::SendChatInAdmission {
+                session_id: 7,
+                message: OutboundChat::Say(expected.into()),
+            }
+        );
+    }
+    request(&mut app, 2, json!({"op":"stop","run_id":1}));
+    app.world()
+        .resource::<crate::outbox::Outbox>()
+        .send(
+            app.world().resource::<OnlineState>().world(),
+            ClientCommand::SendChat(OutboundChat::Say("native".into())),
+        )
+        .unwrap();
+    assert!(matches!(
+        received.try_recv(),
+        Ok(ClientCommand::SendChat(_))
+    ));
+}
+
+#[test]
+fn synthetic_enter_stamps_its_draft_without_changing_native_chat() {
+    use eq_client_core::ClientCommand;
+    let mut app = admitted();
+    super::super::super::install_input(&mut app, super::super::super::InputMode::Attended);
+    let (queue, received) = std::sync::mpsc::sync_channel(4);
+    app.insert_resource(crate::outbox::Outbox::new(Some(queue)))
+        .add_systems(
+            Update,
+            crate::chat::input.after(super::super::super::guard_scope),
+        );
+    scoped(
+        &mut app,
+        "press Enter\npress H\npress I\npress Enter\nwait 1000\n",
+    );
+    for ms in 1..20 {
+        frame(&mut app, ms);
+    }
+    assert!(matches!(
+        received.try_recv(),
+        Ok(ClientCommand::SendChatInAdmission { session_id: 7, .. })
+    ));
+    assert!(received.try_recv().is_err());
+}
+
+#[test]
+fn a_scripted_hail_key_queues_a_current_admission_message() {
+    use eq_client_core::ClientCommand;
+    let mut app = admitted();
+    let (queue, received) = std::sync::mpsc::sync_channel(4);
+    app.insert_resource(crate::outbox::Outbox::new(Some(queue)))
+        .insert_resource(crate::keys::testing::map(&[(
+            crate::keys::Act::Hail,
+            crate::keys::Chord::key(KeyCode::KeyY),
+        )]))
+        .add_systems(
+            Update,
+            crate::combat::input.after(super::super::super::guard_scope),
+        );
+    scoped(&mut app, "press Y\nwait 1000\n");
+    assert!(matches!(
+        received.try_recv(),
+        Ok(ClientCommand::SendChatInAdmission { session_id: 7, .. })
+    ));
+}
+
+#[test]
+fn deferred_target_world_stamp_is_withdrawn_but_native_replacement_survives() {
+    use crate::script::ExpectedWorld;
+    for native_replacement in [false, true] {
+        let mut app = admitted();
+        {
+            let mut chat = app.world_mut().resource_mut::<crate::chat::ChatState>();
+            crate::chat::client_request_in_scope(
+                "/target Scoped",
+                &mut chat,
+                Some(ExpectedWorld {
+                    admission_id: 7,
+                    zone: "samplezone".into(),
+                }),
+            )
+            .unwrap()
+            .unwrap();
+            if native_replacement {
+                crate::chat::client_request("/target Native", &mut chat)
+                    .unwrap()
+                    .unwrap();
+            }
+        }
+        enter(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            8,
+            "samplezone",
+        );
+        frame(&mut app, 1);
+        assert_eq!(
+            app.world()
+                .resource::<crate::chat::ChatState>()
+                .requested_target
+                .as_deref(),
+            native_replacement.then_some("Native")
+        );
+    }
 }

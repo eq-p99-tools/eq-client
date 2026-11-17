@@ -528,6 +528,10 @@ pub(super) fn actions(
     bar_clicks: crate::clicks::Clicks<hotbar::Slot>,
     bindings: Res<hotbar::Bindings>,
     options: Option<Res<crate::options::OptionsState>>,
+    (script, authored): (
+        Option<Res<crate::script::Script>>,
+        Option<Res<crate::script::AuthoredInput>>,
+    ),
     definitions: (
         Res<super::spellbook::SpellNames>,
         Res<messages::Messages>,
@@ -617,7 +621,20 @@ pub(super) fn actions(
         let qol = options
             .as_ref()
             .map_or_else(Default::default, |options| options.options.qol);
-        super::chat::run_game_command(command, &mut online, &outbox, &mut chat, &qol);
+        let synthetic = authored.as_ref().is_some_and(|input| {
+            hotbar::requested_slot(&keys, &bar_clicks).is_some_and(|(_, key)| {
+                key.map_or(input.left_button, |act| {
+                    keys.map.keys(act).any(|key| input.keys.contains(&key))
+                })
+            })
+        });
+        let admission = if synthetic {
+            script.as_ref().and_then(|script| script.chat_admission())
+        } else {
+            None
+        };
+        let dispatch = outbox.for_script(admission);
+        super::chat::run_game_command(command, &mut online, &dispatch, &mut chat, &qol);
     }
     let flying = flight_uses_duck(options.as_deref(), online.world());
     let requested = match requested_posture(&keys, online.world(), player_id, flying) {

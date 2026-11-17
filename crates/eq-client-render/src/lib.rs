@@ -639,7 +639,8 @@ fn install_script(
     .add_systems(
         Update,
         (
-            script::guard_scope
+            (chat::guard_script_requests, script::guard_scope)
+                .chain()
                 .after(Stage::Receive)
                 .before(Stage::Scene),
             script::observe.in_set(Stage::Receive),

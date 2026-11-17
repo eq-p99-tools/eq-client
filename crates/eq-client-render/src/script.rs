@@ -367,6 +367,13 @@ impl Script {
         }
     }
 
+    pub(crate) fn chat_admission(&self) -> Option<u64> {
+        self.progress
+            .expected_world
+            .as_ref()
+            .map(|expected| expected.admission_id)
+    }
+
     /// Whether native pointer hit testing yields to the explicit script owner.
     pub(crate) const fn background_owns_input(&self) -> bool {
         matches!(self.input_mode, InputMode::Background) && self.owns_input
@@ -1917,7 +1924,12 @@ pub(super) fn drive(
                 .9
                 .as_ref()
                 .map_or_else(Default::default, |options| options.options.qol);
-            let queued = super::chat::client_request(command, &mut chat).unwrap_or_else(|| {
+            let queued = super::chat::client_request_in_scope(
+                command,
+                &mut chat,
+                script.progress.expected_world.clone(),
+            )
+            .unwrap_or_else(|| {
                 super::chat::submit_game_command(command, &mut online, &observed.1, &qol)
             });
             if let Err(error) = queued {
@@ -2054,6 +2066,7 @@ pub(super) fn drive(
             let sent = command.and_then(|command| {
                 observed
                     .1
+                    .for_script(script.chat_admission())
                     .send(online.world(), command)
                     .map_err(|refusal| refusal.text().to_owned())
             });

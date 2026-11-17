@@ -1517,12 +1517,22 @@ pub(crate) fn slash(
     mut chat: ResMut<super::chat::ChatState>,
     buttons: crate::clicks::Clicks<SlashButton>,
     options: Option<Res<crate::options::OptionsState>>,
+    (script, authored): (
+        Option<Res<crate::script::Script>>,
+        Option<Res<crate::script::AuthoredInput>>,
+    ),
 ) {
     let qol = options
         .as_ref()
         .map_or_else(Default::default, |options| options.options.qol);
     for SlashButton(command) in buttons.iter() {
-        super::chat::run_game_command(command, &mut online, &outbox, &mut chat, &qol);
+        let admission = if authored.as_ref().is_some_and(|input| input.left_button) {
+            script.as_ref().and_then(|script| script.chat_admission())
+        } else {
+            None
+        };
+        let dispatch = outbox.for_script(admission);
+        super::chat::run_game_command(command, &mut online, &dispatch, &mut chat, &qol);
     }
 }
 

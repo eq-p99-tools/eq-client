@@ -391,12 +391,23 @@ pub(super) fn update(
         }
     }
 
+    let chat_admission = state
+        .run
+        .as_ref()
+        .and_then(|run| run.owner.as_ref())
+        .and_then(|owner| {
+            script
+                .as_ref()
+                .filter(|script| script.social_dispatch(owner, &online).is_some())
+                .and_then(|script| script.chat_admission())
+        });
+    let dispatch = outbox.for_script(chat_admission);
     if let Some(error) = state.tick(admission, now, |command| {
         crate::chat::submit_social_line(
             command,
             &mut chat,
             &mut online,
-            &outbox,
+            &dispatch,
             &options.options.qol,
         )
     }) {

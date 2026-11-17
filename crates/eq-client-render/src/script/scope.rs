@@ -9,7 +9,7 @@ pub(crate) struct ExpectedWorld {
 
 impl ExpectedWorld {
     /// Transfers withdraw the identity immediately, even before a new admission.
-    pub(super) fn current(online: &OnlineState) -> Option<Self> {
+    pub(crate) fn current(online: &OnlineState) -> Option<Self> {
         let world = online.world();
         let admission_id = world.session_id().filter(|_| {
             online.enabled && world.connected() && world.pending_transfer().is_none()
@@ -20,7 +20,7 @@ impl ExpectedWorld {
         })
     }
 
-    pub(super) fn refusal(&self, online: &OnlineState) -> Option<String> {
+    pub(crate) fn refusal(&self, online: &OnlineState) -> Option<String> {
         let observed = Self::current(online);
         if observed.as_ref() == Some(self) {
             return None;
