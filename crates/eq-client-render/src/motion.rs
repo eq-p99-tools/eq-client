@@ -1,4 +1,6 @@
 //! Calibrated P99 input; no movement is generated without a session grant.
+#[cfg(test)]
+mod boat_pace_tests;
 mod boats;
 mod follow;
 mod placement;
@@ -2952,21 +2954,13 @@ pub(super) fn interpolate(
     };
     let had_preview = displayed_mouse.take() == Some(entity);
     let mut follow_heading = false;
+    let pace = controls
+        .visual
+        .as_ref()
+        .map(|_| (time.delta_secs(), transform.translation));
     let advanced_in_boat = controls.visual.is_some() && controls.visual_boat.is_some();
     if let Some(visual) = controls.visual.as_mut() {
-        let seconds = time.delta_secs();
-        let before = transform.translation;
-        visual.advance(seconds, &mut transform);
-        if seconds > 0.0 {
-            let moved = transform.translation - before;
-            debug!(
-                target: "eq_client_render::motion::pace",
-                seconds,
-                shown_speed = moved.with_y(0.0).length() / seconds,
-                waiting = visual.queue.len(),
-                "Shown pace"
-            );
-        }
+        visual.advance(time.delta_secs(), &mut transform);
         follow_heading = visual.follow_heading;
         if visual.finished() {
             controls.visual = None;
@@ -3027,6 +3021,21 @@ pub(super) fn interpolate(
         if let Some(visual) = controls.visual.as_mut() {
             visual.face(visual_rotation);
         }
+    }
+    // Both measurements are the drawn world-space root. A carrier queue
+    // temporarily writes local coordinates until the carry above restores
+    // them; measuring there would compare different coordinate frames.
+    if let Some((seconds, before)) = pace
+        && seconds > 0.0
+    {
+        let moved = transform.translation - before;
+        debug!(
+            target: "eq_client_render::motion::pace",
+            seconds,
+            shown_speed = moved.with_y(0.0).length() / seconds,
+            waiting = controls.visual.as_ref().map_or(0, |visual| visual.queue.len()),
+            "Shown pace"
+        );
     }
     for (mut camera, free) in &mut cameras {
         camera.focus = transform.translation;
