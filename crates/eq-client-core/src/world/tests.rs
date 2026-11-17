@@ -4288,8 +4288,9 @@ fn training_opens_raises_skills_with_a_line_and_closes() {
     let player = world.player().unwrap();
     assert_eq!(player.languages.as_ref().unwrap()[5], 1);
     assert_eq!(player.skills.as_ref().unwrap()[5], 0);
-    assert!(
-        changes.notices.is_empty(),
+    assert_eq!(
+        changes.notices,
+        [],
         "a language must not produce an ordinary skill notice"
     );
     assert!(world.skills_revision() > revision);
