@@ -36,6 +36,12 @@ impl BuffPress {
     pub(crate) fn cancel(&mut self) {
         self.0 = None;
     }
+
+    pub(crate) fn cancel_target(&mut self, entity: Entity) {
+        if self.0.as_ref().is_some_and(|(target, _)| *target == entity) {
+            self.cancel();
+        }
+    }
 }
 
 enum Selection {

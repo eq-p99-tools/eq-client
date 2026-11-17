@@ -175,6 +175,191 @@ fn a_transfer_withdraws_scoped_held_input_and_pending_clicks() {
     );
 }
 
+fn receive_new_admission(app: &mut App) {
+    app.add_systems(
+        Update,
+        (|mut online: ResMut<OnlineState>| enter(&mut online, 8, "samplezone"))
+            .before(super::super::super::guard_scope),
+    );
+}
+
+#[test]
+fn late_waiting_scope_refusal_preserves_native_click_and_release() {
+    let mut app = admitted();
+    scoped(&mut app, "wait 1000\n");
+    let native = app
+        .world_mut()
+        .spawn((
+            Node::default(),
+            Interaction::Pressed,
+            InheritedVisibility::VISIBLE,
+        ))
+        .id();
+    app.world_mut()
+        .resource_mut::<ButtonInput<MouseButton>>()
+        .press(MouseButton::Left);
+    frame(&mut app, 1);
+    app.world_mut()
+        .resource_mut::<ButtonInput<MouseButton>>()
+        .clear();
+    *app.world_mut().get_mut::<Interaction>(native).unwrap() = Interaction::Hovered;
+    app.world_mut()
+        .resource_mut::<ButtonInput<MouseButton>>()
+        .release(MouseButton::Left);
+    // clicks::track sees the native release in PreUpdate, then Receive
+    // withdraws the script world before the ordinary Input handlers run.
+    receive_new_admission(&mut app);
+    frame(&mut app, 2);
+    refused(&app);
+    assert!(
+        app.world()
+            .resource::<crate::clicks::LeftButton>()
+            .clicked(native)
+    );
+    assert!(
+        app.world()
+            .resource::<ButtonInput<MouseButton>>()
+            .just_released(MouseButton::Left)
+    );
+    assert_eq!(
+        app.world().get::<Interaction>(native),
+        Some(&Interaction::Hovered)
+    );
+}
+
+#[test]
+fn late_waiting_scope_refusal_preserves_an_unrelated_native_hotbar_drag() {
+    use crate::hud::hotbar::{
+        Action,
+        carry::{self, Carry, Pickable, Presses, Source},
+    };
+    use bevy::{ecs::system::RunSystemOnce, ui::RelativeCursorPosition};
+    let mut app = admitted();
+    scoped(&mut app, "wait 1000\n");
+    app.world_mut().spawn((
+        Node::default(),
+        Interaction::Pressed,
+        InheritedVisibility::VISIBLE,
+        Pickable(Source::Fixed(Action::Sit)),
+        RelativeCursorPosition {
+            cursor_over: true,
+            normalized: Some(Vec2::ZERO),
+        },
+    ));
+    app.world_mut()
+        .resource_mut::<ButtonInput<MouseButton>>()
+        .press(MouseButton::Left);
+    app.world_mut().run_system_once(carry::route).unwrap();
+    assert!(app.world().resource::<Presses>().pending());
+    app.world_mut()
+        .resource_mut::<ButtonInput<MouseButton>>()
+        .clear();
+    app.world_mut().resource_mut::<Presses>().hold_past();
+    app.world_mut().run_system_once(carry::route).unwrap();
+    assert_eq!(app.world().resource::<Carry>().hotkey(), Some(Action::Sit));
+    let own_right = app
+        .world_mut()
+        .spawn((
+            Node::default(),
+            Interaction::Pressed,
+            InheritedVisibility::VISIBLE,
+        ))
+        .id();
+    {
+        let mut script = app.world_mut().resource_mut::<Script>();
+        script.clicked = Some(MouseButton::Right);
+        script.pressed = Some(own_right);
+    }
+    app.world_mut()
+        .resource_mut::<ButtonInput<MouseButton>>()
+        .press(MouseButton::Right);
+    receive_new_admission(&mut app);
+    frame(&mut app, 2);
+    refused(&app);
+    // Check the script barrier's output before a hotbar handler applies its
+    // own admission/profile rules. The script cannot erase native ownership.
+    assert!(app.world().resource::<Presses>().pending());
+    assert_eq!(app.world().resource::<Carry>().hotkey(), Some(Action::Sit));
+    assert_eq!(
+        app.world().get::<Interaction>(own_right),
+        Some(&Interaction::None)
+    );
+    assert!(
+        app.world()
+            .resource::<ButtonInput<MouseButton>>()
+            .pressed(MouseButton::Left)
+    );
+}
+
+#[test]
+fn late_scope_refusal_cancels_only_the_owned_pending_or_just_released_click() {
+    use crate::{
+        hud::hotbar::{
+            Action,
+            carry::{self, Pickable, Presses, Source},
+        },
+        script::{ClickTarget, Step},
+    };
+    use bevy::{ecs::system::RunSystemOnce, ui::RelativeCursorPosition};
+    for released_in_preupdate in [false, true] {
+        let mut app = admitted();
+        super::super::super::install_input(&mut app, super::super::super::InputMode::Attended);
+        scoped(&mut app, "wait 1000\n");
+        let own = app
+            .world_mut()
+            .spawn((
+                Node::default(),
+                Interaction::Pressed,
+                InheritedVisibility::VISIBLE,
+                Pickable(Source::Fixed(Action::Sit)),
+                RelativeCursorPosition {
+                    cursor_over: true,
+                    normalized: Some(Vec2::ZERO),
+                },
+            ))
+            .id();
+        {
+            let mut script = app.world_mut().resource_mut::<Script>();
+            script.clicked = Some(MouseButton::Left);
+            script.pressed = Some(own);
+        }
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
+        frame(&mut app, 1);
+        app.world_mut().run_system_once(carry::route).unwrap();
+        assert!(app.world().resource::<Presses>().pending());
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .clear();
+        if released_in_preupdate {
+            // Exercise the real driver's hold-release branch. It clears
+            // Script::pressed before Receive, retaining the authored target.
+            app.world_mut().resource_mut::<Script>().current = Some((
+                Step::HoldClick(
+                    ClickTarget::Button("synthetic", "own"),
+                    Duration::from_millis(1),
+                ),
+                Duration::ZERO,
+            ));
+        }
+        receive_new_admission(&mut app);
+        frame(&mut app, 2);
+        refused(&app);
+        assert!(
+            !app.world()
+                .resource::<crate::clicks::LeftButton>()
+                .clicked(own)
+        );
+        assert!(!app.world().resource::<Presses>().pending());
+        assert!(!app.world().resource::<Presses>().clicked(own));
+        assert_eq!(
+            app.world().get::<Interaction>(own),
+            Some(&Interaction::None)
+        );
+    }
+}
+
 #[test]
 fn receiving_a_new_world_after_preupdate_cancels_that_frames_synthetic_edges() {
     #[derive(Resource, Default)]
@@ -220,7 +405,7 @@ fn receiving_a_new_world_after_preupdate_cancels_that_frames_synthetic_edges() {
             .filter(|event| event.key_code == KeyCode::KeyA)
             .all(|event| !event.state.is_pressed() && event.text.is_none())
     );
-    let (native, _) = messages.get_message(native.id).unwrap();
+    let (native, _) = messages.get_message(native.unwrap().id).unwrap();
     assert!(native.state.is_pressed());
     assert_eq!(native.text.as_deref(), Some("k"));
 }

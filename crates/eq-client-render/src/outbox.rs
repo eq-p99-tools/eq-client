@@ -391,10 +391,10 @@ impl Outbox {
         command: &ClientCommand,
     ) -> Result<&SyncSender<ClientCommand>, Refusal> {
         let queue = self.queue.as_ref().ok_or(Refusal::Offline)?;
-        if let ClientCommand::SendChatInAdmission { session_id, .. } = command {
-            if Some(*session_id) != world.session_id() {
-                return Err(Refusal::Away);
-            }
+        if let ClientCommand::SendChatInAdmission { session_id, .. } = command
+            && Some(*session_id) != world.session_id()
+        {
+            return Err(Refusal::Away);
         }
         // The world server's commands need no zone; every other one needs a
         // player in the world and what the admission offers.

@@ -523,30 +523,11 @@ impl Script {
 
     /// Cancels a synthetic press before releasing it, so cancellation cannot click.
     fn cancel_press(&self, buttons: &mut Buttons, commands: &mut Commands) {
-        if let Some(entity) = self.pressed
-            && let Ok((_, mut interaction, ..)) = buttons.get_mut(entity)
-        {
-            *interaction = Interaction::None;
-        }
-        let cancel_right = self.clicked == Some(MouseButton::Right);
-        commands.queue(move |world: &mut World| {
-            if let Some(mut button) = world.get_resource_mut::<crate::clicks::LeftButton>() {
-                button.cancel();
-            }
-            if let Some(mut presses) =
-                world.get_resource_mut::<crate::hud::hotbar::carry::Presses>()
-            {
-                *presses = crate::hud::hotbar::carry::Presses::default();
-            }
-            if cancel_right {
-                if let Some(mut press) = world.get_resource_mut::<crate::hud::GemPress>() {
-                    press.cancel();
-                }
-                if let Some(mut press) = world.get_resource_mut::<crate::buffs::BuffPress>() {
-                    press.cancel();
-                }
-            }
-        });
+        cancel_pointer_presses(
+            self.clicked.zip(self.pressed).into_iter().collect(),
+            buttons,
+            commands,
+        );
     }
 
     fn stop(&mut self, keys: &mut Keyboard, mouse: &mut ButtonInput<MouseButton>, reason: &str) {
@@ -825,7 +806,9 @@ impl Keyboard<'_, '_> {
         if let Some(authored) = &mut self.authored {
             authored.buttons.insert(button);
             authored.left_button |= button == MouseButton::Left;
-            authored.pointer_targets.extend(target);
+            authored
+                .pointer_targets
+                .extend(target.map(|target| (button, target)));
         }
     }
 
@@ -847,7 +830,7 @@ impl Keyboard<'_, '_> {
     }
 }
 
-/// A new world observation can arrive between PreUpdate injection and Update's
+/// A new world observation can arrive between `PreUpdate` injection and `Update`'s
 /// input handlers. Withdraw synthetic edges and typed presses before those
 /// handlers can reinterpret them in a different admission/zone.
 #[allow(clippy::needless_pass_by_value)]
@@ -867,7 +850,18 @@ pub(super) fn guard_scope(
     else {
         return;
     };
-    script.cancel_press(&mut buttons, &mut commands);
+    let pointer_presses = script
+        .clicked
+        .zip(script.pressed)
+        .into_iter()
+        .chain(
+            keys.authored
+                .as_ref()
+                .into_iter()
+                .flat_map(|authored| authored.pointer_targets.iter().copied()),
+        )
+        .collect();
+    cancel_pointer_presses(pointer_presses, &mut buttons, &mut commands);
     script.progress.scope_refused = true;
     script.stop(&mut keys, &mut mouse, &reason);
     if let Some(authored) = &keys.authored {
@@ -880,22 +874,8 @@ pub(super) fn guard_scope(
                 mouse.reset(*button);
             }
         }
-        for target in &authored.pointer_targets {
-            if let Ok((_, mut interaction, ..)) = buttons.get_mut(*target) {
-                *interaction = Interaction::None;
-            }
-        }
         let typed = authored.typed.clone();
-        let cancel_right = authored.buttons.contains(&MouseButton::Right);
         commands.queue(move |world: &mut World| {
-            if cancel_right {
-                if let Some(mut press) = world.get_resource_mut::<crate::hud::GemPress>() {
-                    press.cancel();
-                }
-                if let Some(mut press) = world.get_resource_mut::<crate::buffs::BuffPress>() {
-                    press.cancel();
-                }
-            }
             let mut messages =
                 world.resource_mut::<Messages<bevy::input::keyboard::KeyboardInput>>();
             let mut cursor = messages.get_cursor();
@@ -908,6 +888,48 @@ pub(super) fn guard_scope(
         });
     }
     script.retire(&mut commands);
+}
+
+/// The click rules can also contain unrelated native input from `PreUpdate`.
+/// Withdraw only each authored button/target, including a release this frame
+/// whose active `Script::pressed` slot has already been cleared.
+fn cancel_pointer_presses(
+    presses: Vec<(MouseButton, Entity)>,
+    buttons: &mut Buttons,
+    commands: &mut Commands,
+) {
+    if presses.is_empty() {
+        return;
+    }
+    for (_, target) in &presses {
+        if let Ok((_, mut interaction, ..)) = buttons.get_mut(*target) {
+            *interaction = Interaction::None;
+        }
+    }
+    commands.queue(move |world: &mut World| {
+        for (button, target) in presses {
+            if let Ok(mut entity) = world.get_entity_mut(target) {
+                entity.remove::<crate::tooltip::ScriptPressed>();
+            }
+            if button == MouseButton::Left {
+                if let Some(mut button) = world.get_resource_mut::<crate::clicks::LeftButton>() {
+                    button.claim(target);
+                }
+                if let Some(mut presses) =
+                    world.get_resource_mut::<crate::hud::hotbar::carry::Presses>()
+                {
+                    presses.cancel_target(target);
+                }
+            } else if button == MouseButton::Right {
+                if let Some(mut press) = world.get_resource_mut::<crate::hud::GemPress>() {
+                    press.cancel_target(target);
+                }
+                if let Some(mut press) = world.get_resource_mut::<crate::buffs::BuffPress>() {
+                    press.cancel_target(target);
+                }
+            }
+        }
+    });
 }
 
 /// Runs after Bevy's keyboard and UI focus updates so injected input is seen this frame.

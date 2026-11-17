@@ -1862,6 +1862,7 @@ pub(super) fn run_game_command(
 /// A slash command the client answers itself, noted for the system that
 /// answers it: `/target Name`, a plain `/who`, `/loc`, `/time`, `/log`,
 /// `/shownames` or `/raidwindow`. None for any other line.
+#[cfg(test)]
 pub(super) fn client_request(input: &str, state: &mut ChatState) -> Option<Result<(), String>> {
     client_request_in_scope(input, state, None)
 }
