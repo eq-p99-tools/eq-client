@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Add a read-only guild roster using received lists and member changes, with
+  explicit unknown fields and retained history across matched zone transfers.
+- Horizontal follow keeps moving in mapped water while chat or another app
+  owns keyboard input; the near-target stop cap follows swim-rate selection.
+- Add bounded `wheel world` and `look world` script gestures through the
+  ordinary camera path, with ownership and lifecycle cancellation.
+
 - Movement speed changes use exact clock boundaries, preventing rounding from
   delaying root fades or applying a higher speed to a sample that began
   before the new grant.

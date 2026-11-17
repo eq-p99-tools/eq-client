@@ -14,7 +14,7 @@ pub(super) const MAX_WAIT: Duration = Duration::from_mins(2);
 const MAX_TRACE: Duration = Duration::from_secs(10);
 const MAX_WALK: Duration = Duration::from_mins(1);
 /// `EQEmu` GM commands a script may send, without the leading `#`.
-const GM_COMMANDS: [&str; 40] = [
+const GM_COMMANDS: [&str; 41] = [
     // The server's own view of the player's stats, weight and coins among
     // them, said back in chat; reads only.
     "showstats",
@@ -74,6 +74,8 @@ const GM_COMMANDS: [&str; 40] = [
     "scribespells",
     // Readies the learned discipline list for a local EQEmu fixture.
     "traindisc",
+    // Disposable local EQEmu guild setup and cleanup, limited to create/delete/set.
+    "guild",
     "maxskills",
     "giveitem",
     // Another test character's standing with a faction: `faction view` and
@@ -775,6 +777,10 @@ pub(super) fn parse_step(line: &str) -> Result<Step, String> {
 /// those that change nothing beyond the test characters.
 fn parse_slash(words: &[&str]) -> Result<Step, String> {
     Ok(match words {
+        [
+            "guildinvite" | "guildremove" | "guildmotd" | "getguildmotd",
+            ..,
+        ] => Step::Slash(guild_slash(words)?),
         [command]
             if matches!(
                 *command,
@@ -868,6 +874,28 @@ fn parse_slash(words: &[&str]) -> Result<Step, String> {
         ),
         _ => return Err("unknown or malformed slash command".into()),
     })
+}
+
+/// The existing typed guild handlers, with bounded names and MOTD text.
+/// This does not provide a raw chat or unimplemented guild-command escape.
+fn guild_slash(words: &[&str]) -> Result<String, String> {
+    let valid = match words {
+        ["guildinvite"] | ["guildinvite", "o"] | ["guildremove"] | ["getguildmotd"] => true,
+        ["guildinvite" | "guildremove", name] | ["guildinvite", name, "o"] => character_name(name),
+        ["guildmotd", message @ ..] => {
+            let text = message.join(" ");
+            text.len() < 512 && text.chars().all(|c| c.is_ascii_graphic() || c == ' ')
+        }
+        _ => false,
+    };
+    if !valid {
+        return Err("guild slash takes a character name, optional invite o, or a MOTD below 512 ASCII bytes".into());
+    }
+    Ok(format!("/{}", words.join(" ")))
+}
+
+fn character_name(name: &str) -> bool {
+    !name.is_empty() && name.len() <= 63 && name.bytes().all(|byte| byte.is_ascii_alphabetic())
 }
 
 /// A button by the slash command it runs: a Pet Info window button, by its
@@ -1163,6 +1191,10 @@ pub(super) fn gm_command(words: &[&str]) -> Result<String, String> {
         return Err("gm takes plain arguments".into());
     }
     match *command {
+        "guild" if !guild_fixture(arguments) => {
+            return Err("gm guild takes create <character ID|name> <guild name>, delete <guild ID>, or set <character ID|name> <guild ID|0>".into());
+        }
+        "guild" => (),
         "spawn" => match arguments {
             [_, ..] if arguments.len() <= 4 => (),
             _ if fixture_spawn(arguments) => (),
@@ -1213,6 +1245,29 @@ pub(super) fn gm_command(words: &[&str]) -> Result<String, String> {
         }
     }
     Ok(words.join(" "))
+}
+
+/// Deployed EQEmu command_guild create/delete/set argument shapes. Names and
+/// IDs are deliberately narrower than a general GM command for fixture work.
+fn guild_fixture(arguments: &[&str]) -> bool {
+    let id = |word: &str| {
+        word.parse::<u32>()
+            .ok()
+            .filter(|value| *value < u32::MAX && word.bytes().all(|byte| byte.is_ascii_digit()))
+    };
+    let character = |word: &str| character_name(word) || id(word).is_some_and(|value| value > 0);
+    match arguments {
+        ["create", owner, name @ ..] if character(owner) && !name.is_empty() => {
+            let text = name.join(" ");
+            text.len() <= 63
+                && name.iter().all(|word| {
+                    !word.is_empty() && word.bytes().all(|byte| byte.is_ascii_alphanumeric())
+                })
+        }
+        ["delete", guild] => id(guild).is_some_and(|value| value > 0),
+        ["set", member, guild] => character(member) && id(guild).is_some(),
+        _ => false,
+    }
 }
 
 /// The complete `EQEmu` temporary NPC form uses explicit decimal fields.
@@ -2201,6 +2256,82 @@ mod tests {
         ] {
             assert!(parse(&format!("gm {command}"), base).is_err(), "{command}");
         }
+    }
+
+    #[test]
+    fn guild_fixture_commands_allow_only_bounded_create_delete_and_set() {
+        let base = Path::new("private");
+        for command in [
+            "guild create Example Synthetic Guild",
+            "guild create 12 Fixture",
+            "guild delete 3",
+            "guild set Example 3",
+            "guild set 12 0",
+        ] {
+            assert_eq!(
+                parse(&format!("gm {command}"), base).unwrap(),
+                [Step::Gm(command.into())]
+            );
+        }
+        for command in [
+            "guild",
+            "guild create",
+            "guild create 0 Fixture",
+            "guild create 1",
+            "guild create Ex4mple Fixture",
+            "guild create Example Fixture-Name",
+            "guild delete",
+            "guild delete 0",
+            "guild delete 4294967295",
+            "guild delete 3 extra",
+            "guild set Example",
+            "guild set Example -1",
+            "guild set Example 4294967296",
+            "guild set 0 3",
+            "guild set Example 3 extra",
+            "guild rename 3 Renamed",
+            "guild setleader 3 Example",
+            "guild setrank Example 1",
+            "guild list",
+            "guild CREATE Example Fixture",
+        ] {
+            assert!(parse(&format!("gm {command}"), base).is_err(), "{command}");
+        }
+        assert!(parse(&format!("gm guild create Example {}", "a".repeat(64)), base).is_err());
+    }
+
+    #[test]
+    fn guild_slash_steps_use_only_existing_typed_handlers() {
+        let base = Path::new("private");
+        for line in [
+            "guildinvite",
+            "guildinvite Member",
+            "guildinvite Member o",
+            "guildinvite o",
+            "guildremove",
+            "guildremove Member",
+            "guildmotd",
+            "guildmotd Meet at the gate",
+            "getguildmotd",
+        ] {
+            assert_eq!(
+                parse(&format!("slash {line}"), base).unwrap(),
+                [Step::Slash(format!("/{line}"))]
+            );
+        }
+        for line in [
+            "guildinvite Member officer",
+            "guildinvite Member o extra",
+            "guildinvite M3mber",
+            "guildremove Member extra",
+            "getguildmotd extra",
+            "guildleader Member",
+            "guilddelete",
+            "guildmotd café",
+        ] {
+            assert!(parse(&format!("slash {line}"), base).is_err(), "{line}");
+        }
+        assert!(parse(&format!("slash guildmotd {}", "a".repeat(512)), base).is_err());
     }
 
     #[test]

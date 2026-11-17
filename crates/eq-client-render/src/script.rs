@@ -2612,6 +2612,9 @@ fn gm_request(
     if words.first() == Some(&"traindisc") && !titanium {
         return Err("gm traindisc requires local EQEmu".into());
     }
+    if words.first() == Some(&"guild") && !titanium {
+        return Err("gm guild requires local EQEmu".into());
+    }
     if depop {
         let Some((session_id, target)) =
             world
@@ -4650,6 +4653,34 @@ mod tests {
         );
         session::generation(&mut online, GameDialect::EqMac);
         assert!(gm_request(command, true, online.world()).is_err());
+    }
+
+    #[test]
+    fn guild_fixtures_keep_parser_local_and_generation_gates_at_dispatch() {
+        use crate::online::{OnlineState, testing as session};
+        use eq_client_core::{ClientCommand, GameDialect, OutboundChat};
+        let mut online = OnlineState::new(true);
+        session::admit(&mut online, 1, session::player(7));
+        for command in [
+            "guild create Example Synthetic Guild",
+            "guild delete 3",
+            "guild set Example 0",
+        ] {
+            let program =
+                Program::parse(&format!("gm {command}"), std::path::Path::new(".")).unwrap();
+            assert!(program.check_local_commands(false).is_err());
+            assert!(program.check_local_commands(true).is_ok());
+            assert!(gm_request(command, false, online.world()).is_err());
+            assert_eq!(
+                gm_request(command, true, online.world()),
+                Ok(ClientCommand::SendChat(OutboundChat::Say(format!(
+                    "#{command}"
+                ))))
+            );
+        }
+        assert!(gm_request("guild rename 3 Other", true, online.world()).is_err());
+        session::generation(&mut online, GameDialect::EqMac);
+        assert!(gm_request("guild set Example 0", true, online.world()).is_err());
     }
 
     #[test]

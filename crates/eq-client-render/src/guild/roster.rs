@@ -31,7 +31,8 @@ const ROW_HEIGHT: f32 = 18.0;
 type Row = [String; 7];
 
 #[derive(Component)]
-struct RosterFrame;
+/// The roster frame created and retired by the shared window lifecycle.
+pub(crate) struct RosterFrame;
 
 /// Shared list contents for the authored and fallback guild windows.
 #[derive(Component)]
@@ -50,9 +51,11 @@ impl GuildRows {
 }
 
 #[derive(Component)]
-struct Heading;
+/// The dynamic guild name and received member count.
+pub(crate) struct Heading;
 #[derive(Component)]
-struct Summary;
+/// The roster's availability and last-received provenance line.
+pub(crate) struct Summary;
 
 /// A member's received fields. Numeric rank/class values remain visible when
 /// their names are unknown. Only the decoded location field establishes status.

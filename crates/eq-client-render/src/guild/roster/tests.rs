@@ -1,5 +1,6 @@
 use super::*;
 use crate::online::testing;
+use bevy::ecs::relationship::RelationshipTarget;
 use eq_client_core::{
     WorldEvent, WorldUpdate,
     guild::{GuildTribute, GuildUpdate},
@@ -54,7 +55,7 @@ fn list(online: &mut OnlineState) {
 #[test]
 fn deterministic_roster_snapshot_keeps_unknowns_and_received_offline_distinct() {
     let mut online = online();
-    assert!(rows(online.world()).is_empty());
+    assert_eq!(rows(online.world()), Vec::<Row>::new());
     assert_eq!(
         words(online.world()).1,
         "Waiting for the server's member list."
@@ -108,9 +109,9 @@ fn received_empty_unavailable_and_disconnected_rosters_are_different() {
         &mut online,
         [WorldEvent::Guild(GuildUpdate::Disbanded { guild_id: 3 })],
     );
-    assert!(rows(online.world()).is_empty());
+    assert_eq!(rows(online.world()), Vec::<Row>::new());
     testing::apply(&mut online, &WorldUpdate::Connection(Link::Offline));
-    assert!(rows(online.world()).is_empty());
+    assert_eq!(rows(online.world()), Vec::<Row>::new());
     assert_eq!(
         words(online.world()).1,
         "Enter the world to view your guild."
@@ -204,7 +205,7 @@ fn fallback_rows_follow_deltas_and_closing_reopening_and_admission_changes() {
     assert!(
         app.world()
             .get::<Children>(list)
-            .is_none_or(|children| children.is_empty())
+            .is_none_or(RelationshipTarget::is_empty)
     );
 }
 

@@ -210,11 +210,27 @@ or occluded. The counters are independent of damage and inventory.
   `slash pet target` selects your visible pet. Pet orders complete the script
   step when queued. Read subsequent server observations to check their effects.
   `slash camp desktop` uses the ordinary camp destination and current QoL exit choice.
+  `slash guildinvite [Name] [o]`, `slash guildremove [Name]`,
+  `slash guildmotd [text]` and `slash getguildmotd` use the existing typed guild
+  handlers. Omit a name to use the current target; `o` offers officer rank.
+  Names contain at most 63 ASCII letters. MOTD text is below 512 ASCII bytes;
+  an empty MOTD requests clearing it. Membership, rank and listed-member checks
+  remain with the ordinary handlers and session. Queueing a step proves no
+  invitation acceptance, roster change or MOTD update; check received evidence.
   `slash stopsong` queues the Bard's stop request on Titanium EQEmu.
   The immediate disconnect aliases typed in chat are not script slash commands.
   `slash emote` and `slash random` reach everyone nearby, so like `chat` they
   run only in a network-constrained local test session.
 - `gm command [arguments]`: an allowed GM command on a network-constrained local test session only.
+  Local Titanium EQEmu also supports `gm guild create CHARACTER_ID_OR_NAME GUILD_NAME`,
+  `gm guild delete GUILD_ID` and `gm guild set CHARACTER_ID_OR_NAME GUILD_ID`.
+  These are narrowly bounded fixture setup/cleanup forms: character names use
+  ASCII letters, IDs use unsigned decimal, and guild names contain at most
+  63 ASCII letters/digits/spaces. Create/delete IDs must be positive; `set`
+  accepts guild ID zero to remove membership. The reserved maximum ID is
+  refused. Use the guild ID actually returned by the server for cleanup;
+  request submission alone does not establish fixture creation or deletion.
+  Other GM guild subcommands are unavailable to scripts.
   On local EQEmu, `gm traindisc MAX [MIN]` requests all eligible disciplines
   in that inclusive level range for a disposable fixture. Each level is a number
   from 1 to 126 written with up to three decimal digits. Give MAX first. MIN
