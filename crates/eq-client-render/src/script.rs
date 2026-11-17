@@ -742,6 +742,7 @@ type Observed<'w> = (
     (
         Option<Res<'w, crate::abilities::Choices>>,
         Option<Res<'w, crate::abilities::picker::Picker>>,
+        Option<Res<'w, crate::keys::Typing>>,
     ),
 );
 
@@ -2293,6 +2294,7 @@ pub(super) fn drive(
                 label,
                 &online,
                 &observed,
+                &chat,
                 players.single().ok(),
                 cameras.single().ok(),
             );
@@ -4426,6 +4428,36 @@ mod tests {
         run_keys(&mut app, &[(KeyCode::Escape, true)]);
         let typing = app.world().resource::<crate::keys::Typing>();
         assert!(!typing.composing && typing.escape_consumed);
+    }
+
+    #[test]
+    fn chat_input_report_observes_scripted_enter_and_escape_results() {
+        let mut app = scripted_keyboard();
+        let report = |app: &App| {
+            app.world()
+                .resource::<crate::chat::ChatState>()
+                .input_report(Some(app.world().resource::<crate::keys::Typing>()))
+        };
+        run_keys(&mut app, &[(KeyCode::Escape, true)]);
+        assert_eq!(report(&app)["composing"], false);
+        run_keys(
+            &mut app,
+            &[(KeyCode::Escape, false), (KeyCode::Enter, true)],
+        );
+        assert_eq!(
+            report(&app),
+            serde_json::json!({
+                "composing": true,
+                "composition_window": {"kind": "main"},
+                "other_text_input_active": false,
+            })
+        );
+        run_keys(
+            &mut app,
+            &[(KeyCode::Enter, false), (KeyCode::Escape, true)],
+        );
+        assert_eq!(report(&app)["composing"], false);
+        assert_eq!(report(&app)["composition_window"], serde_json::Value::Null);
     }
 
     #[test]

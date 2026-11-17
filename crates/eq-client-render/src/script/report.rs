@@ -29,6 +29,7 @@ pub(super) fn state(
     label: &str,
     online: &crate::online::OnlineState,
     observed: &Observed,
+    chat: &crate::chat::ChatState,
     transform: Option<&Transform>,
     camera: Option<&crate::OrbitCamera>,
 ) {
@@ -179,6 +180,7 @@ pub(super) fn state(
         character_lifecycle = %lifecycle::state(online),
         character_deletion = %online.deletion.report(),
         guild_state = %guild::state(online.world()),
+        chat_input = %chat.input_report(observed.15.2.as_deref()),
         ?position,
         ?posture,
         attached_camera_mode = ?camera.map(crate::OrbitCamera::view_name),

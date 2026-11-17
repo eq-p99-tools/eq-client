@@ -361,6 +361,74 @@ mod tests {
     use std::{num::NonZeroU32, time::Duration};
 
     #[test]
+    fn pending_move_cannot_sample_the_old_projection_or_refill_spent_air() {
+        use crate::online::testing;
+        use eq_client_core::qol::Settings;
+
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 5, testing::player(7));
+        let mut qol = Settings::default();
+        qol.set(Fix::TakeEnvironmentalDamage, true);
+        let mut state = AirState::default();
+        let start = Instant::now();
+        let at = |seconds| start + Duration::from_secs(seconds);
+        let wet = |_: &PlayerState| {
+            (
+                Some(Medium::Water),
+                Ok((Sample::Submerged(NonZeroU32::MIN), Some(80))),
+            )
+        };
+        for seconds in [0, 1] {
+            assert_eq!(
+                state.advance(
+                    at(seconds),
+                    online.world(),
+                    &qol,
+                    1,
+                    LiquidBasis::Observed,
+                    wet
+                ),
+                None
+            );
+        }
+        assert_eq!(state.breath.air().unwrap().remaining, 0);
+        assert_eq!(
+            state.advance(at(2), online.world(), &qol, 1, LiquidBasis::Pending, |_| {
+                panic!("the worker may already have moved beyond this projection")
+            }),
+            None
+        );
+        assert_eq!(state.probe, Some((None, Err(Unavailable::MovementPending))));
+        assert_eq!(
+            state.advance(
+                at(3),
+                online.world(),
+                &qol,
+                1,
+                LiquidBasis::Unconfirmed,
+                |_| { panic!("an overdue move does not establish the current head medium") }
+            ),
+            None
+        );
+        assert_eq!(
+            state.probe,
+            Some((None, Err(Unavailable::MovementUnconfirmed)))
+        );
+        assert!(state.breath.air().is_none());
+        // An actual settled observation uses the still-due tick and spent
+        // reserve. Neither pending interval manufactured air or damage.
+        assert_eq!(
+            state.advance(at(4), online.world(), &qol, 1, LiquidBasis::Observed, wet),
+            Some(10)
+        );
+        assert_eq!(state.breath.air().unwrap().remaining, 0);
+        assert_eq!(
+            state.advance(at(4), online.world(), &qol, 1, LiquidBasis::Observed, wet),
+            None
+        );
+    }
+
+    #[test]
     fn missing_head_basis_is_reported_and_interrupts_air_without_damage() {
         use crate::online::testing;
         use eq_client_core::qol::Settings;
