@@ -2,7 +2,7 @@
 
 use bevy::prelude::Vec3;
 use eq_client_core::{
-    MovementMode,
+    MovementMode, axes,
     movement::{
         CollisionWorld, SHORELINE_COOLDOWN, SHORELINE_FRAME_MILLIS, SHORELINE_FRAMES,
         ShorelineFrame, ShorelineStroke, ShorelineTrace, ShorelineVelocity, SwimDepth,
@@ -83,7 +83,7 @@ fn advance(
     let frame = ShorelineFrame::new(observed.millis, water, false, observed.stroke)?;
     arc.velocity.advance(frame, body.grant, body.gravity);
     let ([x, y], vertical) = arc.velocity.travel(frame);
-    let horizontal = eq_client_axes::from_world(Vec3::new(x, y, 0.0));
+    let horizontal = axes::from_world(Vec3::new(x, y, 0.0));
     let step = body
         .world
         .shoreline_step(*feet, horizontal, vertical, body.height)?;
@@ -162,7 +162,7 @@ impl Control {
             // otherwise lift a slow frame's arc higher (inferred, 6.407).
             millis: u8::try_from(millis.min(u128::from(SHORELINE_FRAME_MILLIS)))
                 .unwrap_or(SHORELINE_FRAME_MILLIS),
-            stroke: ShorelineStroke::new(eq_client_axes::to_world(direction).to_array()),
+            stroke: ShorelineStroke::new(axes::to_world(direction).to_array()),
             forward_up,
         });
     }
@@ -194,8 +194,7 @@ impl Control {
             }
             active
         } else {
-            let heading =
-                eq_client_axes::from_world(eq_client_axes::heading_direction(body.heading));
+            let heading = axes::from_world(axes::heading_direction(body.heading));
             if !self.previous_swim
                 || self
                     .last_attempt
@@ -745,7 +744,7 @@ mod tests {
             assert!(controls.plan(next, stamp, FRESH_LIMIT).is_none());
             assert!(!controls.active());
             assert!(controls.pending.is_none());
-            assert!(controls.frames.is_empty());
+            assert_eq!(controls.frames.len(), 0);
         }
     }
 

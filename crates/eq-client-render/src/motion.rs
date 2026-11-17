@@ -4507,7 +4507,7 @@ pub(super) mod tests {
             controls.observe_turn(0.0, released + Duration::from_millis(10), 12.0, true);
             assert!((controls.released_turn - expected).abs() < 1e-4);
             controls.observe_turn(0.0, released, 12.0, false);
-            assert_eq!(controls.released_turn, 0.0);
+            assert_eq!(controls.released_turn.to_bits(), 0.0_f32.to_bits());
         }
     }
 
@@ -4542,9 +4542,12 @@ pub(super) mod tests {
             panic!("expected the completed key turn");
         };
         assert!(arc(first.position.heading, released.position.heading) > 0.0);
-        assert_eq!(released.position.x, first.position.x);
-        assert_eq!(released.position.y, first.position.y);
-        assert_eq!(app.world().resource::<Controls>().released_turn, 0.0);
+        assert_eq!(released.position.x.to_bits(), first.position.x.to_bits());
+        assert_eq!(released.position.y.to_bits(), first.position.y.to_bits());
+        assert_eq!(
+            app.world().resource::<Controls>().released_turn.to_bits(),
+            0.0_f32.to_bits()
+        );
         accept(&mut app, &released);
         app.update();
         let ClientCommand::Move(stop) = receiver.try_recv().unwrap() else {
@@ -7544,7 +7547,7 @@ pub(super) mod tests {
 
     #[test]
     fn settled_mouse_yaw_and_physical_diagonal_share_the_first_movement_snapshot() {
-        use eq_network_game::movement::{MotionSession, UpdateGate};
+        use eq_network_game::movement::{MotionSession, TITANIUM_FLAGS, UpdateGate};
         for (key, side) in [
             (KeyCode::KeyA, StrafeSide::Left),
             (KeyCode::KeyD, StrafeSide::Right),
@@ -7579,11 +7582,14 @@ pub(super) mod tests {
             assert_diagonal_step(&app, origin, &chord, side);
 
             let start = Instant::now();
-            let spacing = Duration::from_millis(280);
+            let spacing = TITANIUM_FLAGS.spacing;
             let mut session = MotionSession::new(11, 7, origin, start)
                 .unwrap()
                 .with_heading_snapshots(true)
-                .with_gate(Some(UpdateGate::Changed { spacing }));
+                .with_gate(Some(UpdateGate::Flagged {
+                    pack: |sample| sample.packet(),
+                    rule: TITANIUM_FLAGS,
+                }));
             session
                 .calibrate(
                     eq_client_core::MotionCalibration {
@@ -7617,8 +7623,13 @@ pub(super) mod tests {
             };
             assert_eq!(stop.position, chord.position);
             assert!(
+                !session
+                    .tick_sample(start + spacing, |_| panic!("strict native spacing"))
+                    .unwrap()
+            );
+            assert!(
                 session
-                    .tick_sample(start + spacing, |sample| {
+                    .tick_sample(start + spacing + Duration::from_nanos(1), |sample| {
                         assert_eq!(sample.position, chord.position);
                         assert_eq!((sample.animation, sample.delta_heading), (1, 0));
                         Ok(())
