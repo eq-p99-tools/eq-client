@@ -511,8 +511,10 @@ skill or language increase. The update contains no point or cost receipt;
 re-entering the zone supplies fresh profile balances for verification. A language
 practice that times out or loses its trainer leaves points unknown and also
 withdraws the purse when coins may have been spent. Free practice uncertainty
-preserves known coins. Expired openings or replaced trainer IDs require a
-fresh admission before that trainer can be asked again. Silence never reports success.
+preserves known coins. Expired or invalidated unanswered openings require a
+fresh admission before that trainer can be asked again. An already answered
+offer can reopen after invalidation through a fresh request and received offer.
+Silence never reports success.
 
 Grouping, raids, pets, training, reading and consent dialogs have separate
 capabilities by server. Pet Info can hold an early buff snapshot while the
