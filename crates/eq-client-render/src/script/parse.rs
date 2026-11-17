@@ -880,7 +880,7 @@ fn parse_slash(words: &[&str]) -> Result<Step, String> {
 /// This does not provide a raw chat or unimplemented guild-command escape.
 fn guild_slash(words: &[&str]) -> Result<String, String> {
     let valid = match words {
-        ["guildinvite"] | ["guildinvite", "o"] | ["guildremove"] | ["getguildmotd"] => true,
+        ["guildinvite" | "guildremove" | "getguildmotd"] | ["guildinvite", "o"] => true,
         ["guildinvite" | "guildremove", name] | ["guildinvite", name, "o"] => character_name(name),
         ["guildmotd", message @ ..] => {
             let text = message.join(" ");
@@ -1247,7 +1247,7 @@ pub(super) fn gm_command(words: &[&str]) -> Result<String, String> {
     Ok(words.join(" "))
 }
 
-/// Deployed EQEmu command_guild create/delete/set argument shapes. Names and
+/// Deployed `EQEmu` `command_guild` create/delete/set argument shapes. Names and
 /// IDs are deliberately narrower than a general GM command for fixture work.
 fn guild_fixture(arguments: &[&str]) -> bool {
     let id = |word: &str| {
