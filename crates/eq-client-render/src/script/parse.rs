@@ -884,12 +884,12 @@ fn guild_slash(words: &[&str]) -> Result<String, String> {
         ["guildinvite" | "guildremove", name] | ["guildinvite", name, "o"] => character_name(name),
         ["guildmotd", message @ ..] => {
             let text = message.join(" ");
-            text.len() < 512 && text.chars().all(|c| c.is_ascii_graphic() || c == ' ')
+            text.len() < 512 && !text.chars().any(char::is_control)
         }
         _ => false,
     };
     if !valid {
-        return Err("guild slash takes a character name, optional invite o, or a MOTD below 512 ASCII bytes".into());
+        return Err("guild slash takes a character name, optional invite o, or a MOTD below 512 bytes without control characters".into());
     }
     Ok(format!("/{}", words.join(" ")))
 }
@@ -2312,6 +2312,7 @@ mod tests {
             "guildremove Member",
             "guildmotd",
             "guildmotd Meet at the gate",
+            "guildmotd Café rendezvous",
             "getguildmotd",
         ] {
             assert_eq!(
@@ -2327,11 +2328,18 @@ mod tests {
             "getguildmotd extra",
             "guildleader Member",
             "guilddelete",
-            "guildmotd café",
+            "guildmotd bad\u{0007}",
+            "guildmotd bad\u{001b}",
         ] {
             assert!(parse(&format!("slash {line}"), base).is_err(), "{line}");
         }
         assert!(parse(&format!("slash guildmotd {}", "a".repeat(512)), base).is_err());
+        assert!(parse(&format!("slash guildmotd {}", "é".repeat(256)), base).is_err());
+        let maximum = format!("{}a", "é".repeat(255));
+        assert_eq!(
+            parse(&format!("slash guildmotd {maximum}"), base).unwrap(),
+            [Step::Slash(format!("/guildmotd {maximum}"))]
+        );
     }
 
     #[test]

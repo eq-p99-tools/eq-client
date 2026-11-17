@@ -213,7 +213,8 @@ or occluded. The counters are independent of damage and inventory.
   `slash guildinvite [Name] [o]`, `slash guildremove [Name]`,
   `slash guildmotd [text]` and `slash getguildmotd` use the existing typed guild
   handlers. Omit a name to use the current target; `o` offers officer rank.
-  Names contain at most 63 ASCII letters. MOTD text is below 512 ASCII bytes;
+  Names contain at most 63 ASCII letters. MOTD text is below 512 UTF-8 bytes
+  and contains no control characters;
   an empty MOTD requests clearing it. Membership, rank and listed-member checks
   remain with the ordinary handlers and session. Queueing a step proves no
   invitation acceptance, roster change or MOTD update; check received evidence.
