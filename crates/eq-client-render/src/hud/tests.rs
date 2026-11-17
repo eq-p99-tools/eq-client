@@ -857,6 +857,9 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
     let feedback = |app: &App| app.world().resource::<ChatState>().newest();
     // A submitted request blocks another click even before a server Begin notification.
     testing::pending_cast(&mut online(&mut app), Some(73));
+    press(&mut app);
+    assert!(rx.try_recv().is_err());
+    assert!(feedback(&app).contains("acknowledge"));
     forget(&mut app);
     assert!(rx.try_recv().is_err());
     testing::pending_cast(&mut online(&mut app), None);
@@ -870,6 +873,9 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
             duration_ms: 2000,
         },
     );
+    press(&mut app);
+    assert!(rx.try_recv().is_err());
+    assert!(feedback(&app).contains("Already casting"));
     forget(&mut app);
     assert!(rx.try_recv().is_err());
     assert!(feedback(&app).contains("Already casting"));

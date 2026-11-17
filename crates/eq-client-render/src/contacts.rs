@@ -10,9 +10,10 @@
 //! which friends are online.
 //!
 //! The lists are saved per character in this client's own file after every
-//! change. A character with no file of their own starts from the lists the
-//! official client saved for them in the installation (R9), or, where it
-//! has no settings file for them either, from the 20-name defaults in its
+//! change, including the first import. A character with no file of their
+//! own starts from the lists the official client saved for them in the
+//! installation (R9), or, where it has no settings file for them either,
+//! from the 20-name defaults in its
 //! `eqclient.ini`, as it starts a new character (R8). The installation's
 //! files are only read.
 use crate::chat::{ChatState, Said, system_line};
@@ -280,9 +281,13 @@ pub(crate) fn persist(
     }
     chat.contacts.changed = false;
     store.profile = profile.key();
+    let mut missing = false;
     let saved = store.profile.as_ref().and_then(|profile| {
         match store.read_result(&crate::profile_files::exact_name(FILE, profile)) {
-            Ok(text) => text,
+            Ok(text) => {
+                missing = text.is_none();
+                text
+            }
             Err(error) => {
                 warn!("Could not read the character's friends and ignore lists: {error}");
                 None
@@ -311,7 +316,15 @@ pub(crate) fn persist(
     };
     chat.contacts.lists.friends = lists.friends;
     chat.contacts.lists.ignored = lists.ignored;
-    store.loaded_text(chat.contacts.lists.text());
+    if missing {
+        // A missing file needs an initial write, even if the previous
+        // character's lists happened to serialize identically. An unreadable
+        // existing file is not a missing file and gets no import write.
+        store.loaded_text(String::new());
+        save(store, &chat.contacts.lists);
+    } else {
+        store.loaded_text(chat.contacts.lists.text());
+    }
 }
 
 /// Writes the lists to the profile's file when they changed.
@@ -326,6 +339,87 @@ fn save(store: &mut Store, contacts: &Contacts) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn imported_contacts_are_saved_without_an_edit_and_win_on_the_next_run() {
+        use crate::{online::testing, profile_files};
+        let directory = std::env::temp_dir().join(format!(
+            "eq-contacts-import-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+        ));
+        let install = directory.join("install");
+        let settings = directory.join("settings");
+        std::fs::create_dir_all(&install).unwrap();
+        std::fs::create_dir_all(&settings).unwrap();
+        let source = install.join("Example_ExampleWorld.ini");
+        std::fs::write(
+            &source,
+            "[Friends]\nFriend0=Alpha\n[Ignored]\nIgnored0=Pest\n",
+        )
+        .unwrap();
+        let app = || {
+            let mut app = crate::testing::app();
+            {
+                let mut config = app.world_mut().resource_mut::<crate::ViewerSettings>();
+                config.0.eq_directory = Some(install.clone());
+                config.0.settings_directory = Some(settings.clone());
+                config.0.installed_client = eq_client_assets::ui::InstalledClient::Titanium;
+            }
+            let mut online = crate::online::OnlineState::new(true);
+            let mut player = testing::player(7);
+            player.name = "Example".into();
+            testing::news(
+                &mut online,
+                [eq_client_core::WorldEvent::WorldName {
+                    short_name: "ExampleWorld".into(),
+                }],
+            );
+            testing::admit(&mut online, 1, player);
+            app.insert_resource(online)
+                .init_resource::<ChatState>()
+                .init_resource::<Files>()
+                .add_systems(Update, (profile_files::follow, persist).chain());
+            app.update();
+            app
+        };
+        let first = app();
+        let profile = first
+            .world()
+            .resource::<profile_files::Profile>()
+            .key()
+            .unwrap();
+        let file = settings.join(profile_files::exact_name(FILE, &profile));
+        let saved = std::fs::read_to_string(&file).unwrap();
+        assert!(Contacts::read(&saved).friends.contains("Alpha"));
+        assert!(Contacts::read(&saved).ignored.contains("Pest"));
+        drop(first);
+        std::fs::write(&source, "[Friends]\nFriend0=Beta\n").unwrap();
+        let second = app();
+        let chat = second.world().resource::<ChatState>();
+        assert!(chat.contacts.lists.friends.contains("Alpha"));
+        assert!(!chat.contacts.lists.friends.contains("Beta"));
+        assert!(chat.contacts.lists.ignored.contains("Pest"));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), saved);
+        drop(second);
+        // An existing unreadable destination is not replaced by an import.
+        std::fs::remove_file(&file).unwrap();
+        std::fs::create_dir(&file).unwrap();
+        let third = app();
+        assert!(file.is_dir());
+        assert!(
+            !third
+                .world()
+                .resource::<Files>()
+                .0
+                .pending(file.file_name().unwrap().to_str().unwrap())
+        );
+        drop(third);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn commands_follow_the_official_prefix_rule() {

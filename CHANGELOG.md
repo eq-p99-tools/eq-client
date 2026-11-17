@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Bare slash commands this client does not implement keep their unsupported-command
+  explanation. Only the seven chat channel commands ask for a message when empty.
+  The ability picker's fallback uses the installed default skin's "Choose a skill"
+  title and opening position; a skin that omits its title gets the same title.
+  Authored skin placement, including overlap with Actions, is preserved.
+
+- Imported friends and ignore lists are saved to this client's per-character file
+  immediately, without waiting for the first edit. An unreadable existing file
+  does not trigger an import write. Camping or ending a session clears guild MOTD
+  deduplication so the next character can see the same notice; zoning keeps it.
+
+- Fixed buff rows can expand the Effects window vertically as fixed columns
+  already expand it horizontally. The extent includes borders and a title bar;
+  anchored buttons and skin-hidden windows keep their authored sizes. Expansion
+  rather than clipping remains an inferred display policy (recording checklist
+  6.474 for height, 6.406 for width), pending official-client comparison.
+
 - A buff's and a pet buff's icon background no longer shows magenta at its
   corners. The installed client's skins draw it from CS_Buttons.bmp
   (BlueIconBackground, RedIconBackground and the pet ones), whose

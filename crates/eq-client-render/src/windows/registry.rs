@@ -714,13 +714,11 @@ impl WindowId {
             Self::Training => floating("TRAINING", Placement::TopLeft(120.0, 20.0), false, &[]),
             // Where the skin places it; the Tracking press opens it.
             Self::Tracking => floating("TRACKING", Placement::TopLeft(0.0, 20.0), false, &[]),
-            // Where the skin places it; an Actions window button opens it.
+            // Both installed skins put it here, overlapping the Actions window.
+            // The default skin names it "Choose a skill"; Velious omits the title.
             Self::SkillSelect => floating(
-                "SKILLS",
-                Placement::TopCentre {
-                    top: 120.0,
-                    width: 220.0,
-                },
+                "Choose a skill",
+                Placement::TopLeft(400.0, 250.0),
                 false,
                 &[],
             ),

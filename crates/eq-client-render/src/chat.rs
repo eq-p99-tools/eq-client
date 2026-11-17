@@ -262,6 +262,13 @@ impl ChatState {
         self.draft.demote_links();
     }
 
+    /// Ends character-scoped chat state when camping or losing the session.
+    /// Zoning keeps the last MOTD so the same guild notice stays quiet.
+    pub(super) fn end_session(&mut self) {
+        self.clear_link_scope();
+        self.guild_motd = None;
+    }
+
     /// Links can follow a known profile through zoning on the same connection.
     /// Without a known profile, keep them only within the observed admission.
     pub(super) fn admit_links(&mut self, online: &OnlineState) {
@@ -2346,19 +2353,20 @@ fn outbound(tab: ChatTab, input: &str) -> Result<OutboundChat, String> {
                 message: message.trim().into(),
             });
         }
+        let channel: fn(String) -> OutboundChat = match name.to_ascii_lowercase().as_str() {
+            "say" => OutboundChat::Say,
+            "auction" => OutboundChat::Auction,
+            "ooc" => OutboundChat::Ooc,
+            "guildsay" => OutboundChat::Guild,
+            "gsay" => OutboundChat::Group,
+            "shout" => OutboundChat::Shout,
+            "rsay" => OutboundChat::Raid,
+            _ => return Err(format!("This client does not take /{name} that way yet.")),
+        };
         if rest.is_empty() {
             return Err("Type a message after the channel command".into());
         }
-        return match name.to_ascii_lowercase().as_str() {
-            "say" => Ok(OutboundChat::Say(rest.into())),
-            "auction" => Ok(OutboundChat::Auction(rest.into())),
-            "ooc" => Ok(OutboundChat::Ooc(rest.into())),
-            "guildsay" => Ok(OutboundChat::Guild(rest.into())),
-            "gsay" => Ok(OutboundChat::Group(rest.into())),
-            "shout" => Ok(OutboundChat::Shout(rest.into())),
-            "rsay" => Ok(OutboundChat::Raid(rest.into())),
-            _ => Err(format!("This client does not take /{name} that way yet.")),
-        };
+        return Ok(channel(rest.into()));
     }
     match tab {
         ChatTab::Guild => Ok(OutboundChat::Guild(input.into())),
@@ -2405,6 +2413,52 @@ mod tests {
         },
         ui::ComputedStackIndex,
     };
+
+    #[test]
+    fn only_chat_channels_ask_for_a_message_on_a_bare_slash_command() {
+        for name in ["say", "auction", "ooc", "guildsay", "gsay", "shout", "rsay"] {
+            for rest in ["", "   "] {
+                assert_eq!(
+                    outbound(ChatTab::All, &format!("/{name}{rest}")).unwrap_err(),
+                    "Type a message after the channel command",
+                );
+            }
+            assert!(outbound(ChatTab::All, &format!("/{name} hello")).is_ok());
+        }
+        for name in ["help", "played", "unknown"] {
+            assert_eq!(
+                outbound(ChatTab::All, &format!("/{name}")).unwrap_err(),
+                format!("This client does not take /{name} that way yet."),
+            );
+        }
+        assert_eq!(
+            outbound(ChatTab::All, "/tell").unwrap_err(),
+            "Use /tell Name message",
+        );
+    }
+
+    #[test]
+    fn a_new_character_session_can_show_the_same_guild_motd_again() {
+        let online = OnlineState::new(true);
+        let mut chat = ChatState::default();
+        let motd = |channel, text: &str| {
+            let mut line = system_line(text);
+            line.channel = channel;
+            line.source = Source::Server;
+            line
+        };
+        chat.receive(motd(ChannelName::GuildMotd, "Welcome"), &online);
+        let first = chat.history.revision();
+        chat.receive(motd(ChannelName::GuildMotd, "Welcome"), &online);
+        assert_eq!(chat.history.revision(), first);
+        chat.receive(motd(ChannelName::GuildMotdReply, "Welcome"), &online);
+        assert_eq!(chat.history.revision(), first + 1);
+        chat.end_session();
+        chat.receive(motd(ChannelName::GuildMotd, "Welcome"), &online);
+        assert_eq!(chat.history.revision(), first + 2);
+        chat.receive(motd(ChannelName::GuildMotd, ""), &online);
+        assert_eq!(chat.history.revision(), first + 2);
+    }
 
     #[test]
     fn random_rolls_to_100_to_one_number_or_between_two() {

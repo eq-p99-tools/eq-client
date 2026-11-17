@@ -863,7 +863,7 @@ pub(super) fn receive(
             chat.socials = super::socials::Inbox::default();
             match reason {
                 Reset::Entered => chat.admit_links(&state),
-                Reset::Camped | Reset::Lost { ended: true, .. } => chat.clear_link_scope(),
+                Reset::Camped | Reset::Lost { ended: true, .. } => chat.end_session(),
                 _ => (),
             }
             state.reset_presentation((reason, old_gems), &mut panels, &mut scene, &mut commands);
