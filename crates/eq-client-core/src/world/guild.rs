@@ -18,8 +18,9 @@ pub struct GuildInvitation {
 }
 
 impl ClientWorld {
-    /// The guild's members as the server last listed them and changed
-    /// them since; None before a list came this admission.
+    /// The guild's members as the server last listed them and changed them
+    /// since. A bound ordinary transfer of the same character keeps this last
+    /// received evidence; other admission boundaries require a new list.
     #[must_use]
     pub fn guild_members(&self) -> Option<&[GuildMember]> {
         self.guild_members.as_deref()
@@ -62,6 +63,42 @@ fn member<'a>(
 }
 
 impl ClientWorld {
+    /// Whether a positively identified character is making an ordinary
+    /// server-offered transfer. Link loss without such an offer clears the list.
+    pub(super) fn guild_transfer_pending(&self) -> bool {
+        self.world_name
+            .as_ref()
+            .is_some_and(|name| !name.is_empty())
+            && self.session_id.is_some()
+            && self
+                .player()
+                .and_then(|player| player.listing.guild)
+                .is_some()
+            && self
+                .pending_transfer
+                .as_ref()
+                .is_some_and(|offer| !offer.to_bind)
+    }
+
+    /// Whether the next admission completes that same character's offered
+    /// transfer. World changes withdraw roster evidence when their event arrives.
+    pub(super) fn guild_follows_transfer(
+        &self,
+        player: &crate::PlayerState,
+        zone_id: u16,
+        session_id: u64,
+    ) -> bool {
+        self.guild_transfer_pending()
+            && self.session_id != Some(session_id)
+            && self
+                .pending_transfer
+                .as_ref()
+                .is_some_and(|offer| offer.zone_id == zone_id)
+            && self.player().is_some_and(|old| {
+                old.name == player.name && old.listing.guild == player.listing.guild
+            })
+    }
+
     /// Discards roster and invitation evidence at a membership or admission boundary.
     pub(super) fn forget_guild(&mut self) {
         self.guild_members = None;

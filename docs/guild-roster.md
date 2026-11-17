@@ -14,12 +14,21 @@ than a fresh presence check. Numeric ranks are displayed as received, including
 the server's rank mapping. Unknown class/rank numbers remain visible. A newly
 added member's note remains Unknown until a note update or full list supplies it.
 
-Membership changes, disband, removal of the player, zoning, connection loss,
-camping and new admissions discard old roster evidence. Death alone retains it.
+The last received list survives a server-offered ordinary zone transfer only
+when the next admission matches the destination, exact character name and
+guild in the same known world. Location/status remain last-received values;
+the transfer does not refresh them. Membership changes, disband, removal of the
+player, world changes, character selection, terminal or unoffered connection
+loss, camping and other admissions discard roster evidence. Death retains it.
 There are no moderation controls, note edits, polling or refresh request.
 The current network API has no established Titanium roster-refresh operation;
 opening the window sends nothing. A session without guild roster capability
 reports that availability separately from a guilded session awaiting its list.
+
+EQEmu supplies the full list on an ordinary fresh character login and guild
+join. Its initial-login marker is server lifecycle state, separate from the
+native window's local offline-member filter. Ordinary zoning can rely on the
+retained list and received member changes rather than resending the full list.
 
 The deterministic synthetic text snapshot and UI/lifecycle regressions are in
 `guild/roster/tests.rs` and `world/tests/guild_roster.rs`. Run them through the

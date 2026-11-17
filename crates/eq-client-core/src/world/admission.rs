@@ -68,6 +68,9 @@ impl ClientWorld {
             changes.ignored = true;
             return;
         }
+        // A character list is a fresh character-selection boundary, including
+        // one reached without a camp-completion event.
+        self.forget_guild();
         self.servers = None;
         self.characters = Some(CharacterList {
             connection_id,
@@ -125,7 +128,18 @@ impl ClientWorld {
         player: &PlayerState,
         now: Instant,
     ) -> Changes {
+        let roster = if self.guild_follows_transfer(player, zone_id, session_id) {
+            self.guild_members
+                .take()
+                .map(|members| (members, std::mem::take(&mut self.guild_unknown_notes)))
+        } else {
+            None
+        };
         let mut changes = self.reset(Reset::Entered);
+        if let Some((members, notes)) = roster {
+            self.guild_members = Some(members);
+            self.guild_unknown_notes = notes;
+        }
         changes.entered = true;
         self.capabilities = capabilities.to_vec();
         self.choices = choices.to_vec();

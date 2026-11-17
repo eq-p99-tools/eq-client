@@ -241,7 +241,7 @@ pub struct ClientWorld {
     time: Option<(crate::clock::GameTime, Instant)>,
     /// Guild names by number, from the world's guild list.
     guild_names: BTreeMap<u32, String>,
-    /// The guild's members, from the list sent this admission.
+    /// The guild's members, retained across a bound ordinary character transfer.
     guild_members: Option<Vec<crate::guild::GuildMember>>,
     /// Members added without a public-note field, until a note or full list arrives.
     guild_unknown_notes: std::collections::BTreeSet<String>,
@@ -685,7 +685,12 @@ impl ClientWorld {
                 }
             }
             // The connection, the characters on offer and the admission.
-            WorldEvent::WorldName { short_name } => self.world_name = Some(short_name.clone()),
+            WorldEvent::WorldName { short_name } => {
+                if self.world_name.as_deref() != Some(short_name.as_str()) {
+                    self.forget_guild();
+                }
+                self.world_name = Some(short_name.clone());
+            }
             // The time of day, and how the zone's sky looks.
             WorldEvent::TimeOfDay(time) => self.time = Some((*time, now)),
             WorldEvent::Sky(sky) => self.zone.sky = Some(*sky),
@@ -1754,7 +1759,21 @@ impl ClientWorld {
         self.popup = None;
         self.player_inspection = None;
         if reason != Reset::Died {
-            self.forget_guild();
+            // The server sends the initial list at character login, not on
+            // every zone admission. Keep received membership while a known
+            // ordinary transfer is pending; `entered` binds it to the new player.
+            let transferring = matches!(
+                reason,
+                Reset::Zoning { to_bind: false }
+                    | Reset::Lost {
+                        ended: false,
+                        transferring: true
+                    }
+            );
+            if !transferring || !self.guild_transfer_pending() {
+                self.forget_guild();
+            }
+            self.guild_invitations.clear();
             self.camp = None;
             self.camp_to = crate::camp::CampTo::default();
         }
