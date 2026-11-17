@@ -61,13 +61,16 @@ fn read_actor(path: &Path, stem: &str, tag: &str) -> Result<ActorAsset, LoadErro
         .ok_or_else(|| LoadError::MissingWorld(name.clone()))?;
     let (doc, world) = parse_wld(&bytes, &name)?;
     let actor_name = format!("{tag}_ACTORDEF");
-    let (staged, collision) = if let Some(mesh) = world.models().find_map(|model| {
-        model
-            .name()
-            .filter(|name| name.eq_ignore_ascii_case(&actor_name))
-            .and_then(|_| model.mesh())
-    }) {
-        (stage_mesh(&mesh), mesh_collision(&mesh))
+    let geometry = world.models().find_map(|model| {
+        let name = model.name()?;
+        if !name.eq_ignore_ascii_case(&actor_name) {
+            return None;
+        }
+        let mesh = model.mesh()?;
+        Some((stage_mesh(&mesh), mesh_collision(&mesh)))
+    });
+    let (staged, collision) = if let Some(geometry) = geometry {
+        geometry
     } else {
         let meshes = ObjectMeshes::new(&doc, &world);
         let actor = doc

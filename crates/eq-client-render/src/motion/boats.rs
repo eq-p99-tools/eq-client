@@ -105,13 +105,13 @@ mod tests {
             run_speed: 0.0,
             size: 1.0,
             invisible: false,
-            appearance: Default::default(),
+            appearance: eq_client_core::outfit::Appearance::default(),
             level: 1,
-            listing: Default::default(),
+            listing: eq_client_core::listing::Listing::default(),
             pet_owner: None,
             hp_percent: None,
             posture: None,
-            name_parts: Default::default(),
+            name_parts: eq_client_core::names::NameParts::default(),
         }
     }
     #[test]
@@ -153,7 +153,7 @@ mod tests {
         let carried = riding.carried(&carriers, later).unwrap();
         assert!((carried.position.x - 100.0).abs() < 0.001);
         assert!((carried.position.y - 10.0).abs() < 0.001);
-        assert_eq!(carried.position.heading, 116.0);
+        assert!((carried.position.heading - 116.0).abs() < 0.001);
         carriers.observe(&WorldEvent::Despawn(8), GameDialect::Titanium, later);
         assert!(carried.carried(&carriers, later).is_none());
     }
@@ -219,7 +219,7 @@ mod tests {
         let mut controls = super::super::Controls {
             boat: Some(accepted),
             boat_pending: Some((now, Some(proposed))),
-            ..Default::default()
+            ..super::super::Controls::default()
         };
         controls.wait_for(Some(11), now, super::super::PendingKind::Move);
         assert_eq!(controls.boat.unwrap().position, accepted.position);
@@ -259,7 +259,7 @@ mod tests {
         let mut controls = super::super::Controls {
             boat: Some(riding),
             sent_span: 0.1,
-            ..Default::default()
+            ..super::super::Controls::default()
         };
         let from = Transform::from_translation(Vec3::from_array(eq_client_core::render_position(
             WorldPosition {
