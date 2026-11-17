@@ -4,6 +4,8 @@
 
 - Route `slash follow` through ordinary deferred follow input while retaining
   the script's admission and zone guard.
+- Use received own-guild membership changes for network requests without
+  requiring a relog.
 
 - Add a read-only guild roster using received lists and member changes, with
   explicit unknown fields and retained history across matched zone transfers.
