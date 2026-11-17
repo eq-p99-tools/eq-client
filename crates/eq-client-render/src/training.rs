@@ -13,7 +13,7 @@ use crate::{
 use bevy::prelude::*;
 use eq_client_core::{
     ClientCommand, Coins,
-    training::{PracticePoints, TrainingRequest, practice_cost},
+    training::{PracticePoints, TrainingRequest, TrainingSubject, practice_cost},
     world::ClientWorld,
 };
 
@@ -27,7 +27,7 @@ pub(crate) fn is_guildmaster(class: Option<u8>) -> bool {
 
 /// The skill chosen in the Training window's list, which Train practices.
 #[derive(Resource, Default)]
-pub(crate) struct Chosen(pub(crate) Option<u32>);
+pub(crate) struct Chosen(pub(crate) Option<TrainingSubject>);
 
 /// The Training window's Train button.
 #[derive(Component)]
@@ -37,7 +37,7 @@ pub(crate) struct TrainButton;
 /// from the top.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct SkillRow {
-    pub(crate) skill: u32,
+    pub(crate) subject: TrainingSubject,
     pub(crate) index: usize,
 }
 
@@ -57,7 +57,7 @@ pub(crate) struct SkillRows {
 struct Inputs {
     skills: u64,
     training: u64,
-    chosen: Option<u32>,
+    chosen: Option<TrainingSubject>,
 }
 
 impl SkillRows {
@@ -74,7 +74,7 @@ impl SkillRows {
 /// cost, and whether it is the one chosen.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Row {
-    skill: u32,
+    subject: TrainingSubject,
     name: String,
     value: Option<u32>,
     cost: Option<Coins>,
@@ -83,7 +83,11 @@ struct Row {
 
 /// The skills the guildmaster teaches, by name, with the player's value and
 /// what the next practice costs.
-fn rows(world: &ClientWorld, chosen: Option<u32>) -> Vec<Row> {
+fn rows(
+    world: &ClientWorld,
+    chosen: Option<TrainingSubject>,
+    messages: &crate::hud::messages::Messages,
+) -> Vec<Row> {
     let Some(offer) = world.training() else {
         return Vec::new();
     };
@@ -99,16 +103,50 @@ fn rows(world: &ClientWorld, chosen: Option<u32>) -> Vec<Row> {
             }
             let value = skills.get(index).copied();
             Some(Row {
-                skill,
+                subject: TrainingSubject::Skill(skill),
                 name: eq_client_core::skills::name(skill)
                     .map_or_else(|| format!("Skill {skill}"), str::to_owned),
                 value,
                 cost: value.map(|value| in_coins(practice_cost(value))),
-                chosen: chosen == Some(skill),
+                chosen: chosen == Some(TrainingSubject::Skill(skill)),
             })
         })
         .collect();
-    rows.sort_by(|left, right| left.name.cmp(&right.name));
+    let common_variant = world
+        .language_zero_selector()
+        .map(eq_client_core::rules::LanguageZeroSelector::alternate_name);
+    rows.extend(
+        offer
+            .language_caps
+            .iter()
+            .enumerate()
+            .filter_map(|(index, cap)| {
+                let language = u8::try_from(index).ok()?;
+                let subject = TrainingSubject::Language(language);
+                if *cap == 0 || language >= eq_client_core::training::LANGUAGES {
+                    return None;
+                }
+                let value = world.player().and_then(|player| subject.value(player));
+                let name = eq_client_assets::skills::SkillRules::language_name_string(
+                    language,
+                    common_variant,
+                )
+                .and_then(|id| messages.argument_free(id))
+                .map_or_else(|| format!("Language {language}"), str::to_owned);
+                Some(Row {
+                    subject,
+                    name,
+                    value,
+                    cost: value.map(|value| in_coins(practice_cost(value))),
+                    chosen: chosen == Some(subject),
+                })
+            }),
+    );
+    rows.sort_by(|left, right| {
+        left.name
+            .cmp(&right.name)
+            .then(left.subject.update_id().cmp(&right.subject.update_id()))
+    });
     rows
 }
 
@@ -193,18 +231,18 @@ pub(crate) fn buttons(
     train: crate::clicks::Clicks<TrainButton>,
 ) {
     for (interaction, row) in &rows {
-        if *interaction == Interaction::Pressed && chosen.0 != Some(row.skill) {
-            chosen.0 = Some(row.skill);
+        if *interaction == Interaction::Pressed && chosen.0 != Some(row.subject) {
+            chosen.0 = Some(row.subject);
         }
     }
     if train.any()
         && let Some(offer) = online.world().training()
-        && let Some(skill) = chosen.0
+        && let Some(subject) = chosen.0
     {
         ask(
-            TrainingRequest::TrainAt {
+            TrainingRequest::PracticeAt {
                 trainer: offer.trainer,
-                skill,
+                subject,
             },
             online.world(),
             &outbox,
@@ -222,6 +260,7 @@ pub(crate) fn fill(
     mut commands: Commands,
     online: Res<OnlineState>,
     chosen: Res<Chosen>,
+    messages: Res<crate::hud::messages::Messages>,
     mut lists: Query<(Entity, &mut SkillRows, Option<&Children>)>,
 ) {
     let input = Inputs {
@@ -230,12 +269,12 @@ pub(crate) fn fill(
         chosen: chosen.0,
     };
     // No list, or every existing list is current: no row allocation or sorting.
-    if lists.iter().all(|(_, list, _)| list.checked == Some(input)) {
+    if !messages.is_changed() && lists.iter().all(|(_, list, _)| list.checked == Some(input)) {
         return;
     }
-    let wanted = rows(online.world(), chosen.0);
+    let wanted = rows(online.world(), chosen.0, &messages);
     for (entity, mut list, children) in &mut lists {
-        if list.checked == Some(input) {
+        if !messages.is_changed() && list.checked == Some(input) {
             continue;
         }
         list.checked = Some(input);
@@ -267,7 +306,7 @@ pub(crate) fn fill(
                 .spawn((
                     Button,
                     SkillRow {
-                        skill: row.skill,
+                        subject: row.subject,
                         index,
                     },
                     Node {
@@ -307,6 +346,100 @@ mod tests {
     };
 
     #[test]
+    fn language_rows_keep_their_bank_values_prices_and_received_revisions() {
+        let mut app = crate::testing::app();
+        app.add_systems(Update, fill);
+        let mut online = OnlineState::new(true);
+        let mut player = testing::player(7);
+        player.skills = Some(vec![0; 100]);
+        player.skills.as_mut().unwrap()[5] = 70;
+        player.languages = Some(vec![20; 28]);
+        player.languages.as_mut().unwrap()[25] = 0;
+        testing::admit(&mut online, 1, player);
+        let mut caps = vec![0; 100];
+        caps[5] = 200;
+        let mut language_caps = vec![0; 26];
+        language_caps[5] = 100;
+        language_caps[25] = 100;
+        testing::news(
+            &mut online,
+            [WorldEvent::Training(TrainingUpdate::Offered(
+                TrainingOffer {
+                    trainer: 42,
+                    caps,
+                    language_caps,
+                },
+            ))],
+        );
+        app.insert_resource(online);
+        let list = app.world_mut().spawn(SkillRows::new(vec![50.0; 7])).id();
+        app.world_mut().resource_mut::<Chosen>().0 = Some(TrainingSubject::Language(5));
+        app.update();
+        let drawn = app
+            .world()
+            .get::<SkillRows>(list)
+            .unwrap()
+            .drawn
+            .as_ref()
+            .unwrap();
+        assert_eq!(drawn.len(), 3);
+        let language = drawn
+            .iter()
+            .find(|row| row.subject == TrainingSubject::Language(5))
+            .unwrap();
+        assert_eq!(language.value, Some(20));
+        assert_eq!(language.cost, Some(in_coins(10)));
+        assert!(language.chosen);
+        assert!(
+            !drawn
+                .iter()
+                .find(|row| row.subject == TrainingSubject::Skill(5))
+                .unwrap()
+                .chosen
+        );
+        // Unknown installed language strings remain identifiable; unlearned zero is still trainable.
+        assert!(
+            drawn
+                .iter()
+                .any(|row| row.subject == TrainingSubject::Language(25)
+                    && row.name == "Language 25"
+                    && row.value == Some(0)
+                    && row.cost == Some(Coins::default()))
+        );
+        testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [WorldEvent::Skill {
+                skill_id: 105,
+                value: 21,
+            }],
+        );
+        app.update();
+        let drawn = app
+            .world()
+            .get::<SkillRows>(list)
+            .unwrap()
+            .drawn
+            .as_ref()
+            .unwrap();
+        assert_eq!(
+            drawn
+                .iter()
+                .find(|row| row.subject == TrainingSubject::Language(5))
+                .unwrap()
+                .value,
+            Some(21)
+        );
+        assert_eq!(
+            drawn
+                .iter()
+                .find(|row| row.subject == TrainingSubject::Skill(5))
+                .unwrap()
+                .value,
+            Some(70)
+        );
+    }
+
+    #[test]
     fn a_window_the_player_closes_stays_closed_until_training_ends() {
         let mut app = crate::testing::app();
         app.add_systems(Update, window);
@@ -318,6 +451,7 @@ mod tests {
                 TrainingOffer {
                     trainer: 42,
                     caps: vec![0; 100],
+                    language_caps: Vec::new(),
                 },
             ))],
         );
@@ -344,6 +478,7 @@ mod tests {
                 TrainingOffer {
                     trainer: 42,
                     caps: vec![0; 100],
+                    language_caps: Vec::new(),
                 },
             ))],
         );
@@ -360,17 +495,33 @@ mod tests {
         skills[10] = 5;
         player.skills = Some(skills);
         testing::admit(&mut online, 1, player);
-        assert_eq!(rows(online.world(), None).len(), 0);
+        assert_eq!(
+            rows(
+                online.world(),
+                None,
+                &crate::hud::messages::Messages::default()
+            )
+            .len(),
+            0
+        );
         let mut caps = vec![0; 100];
         caps[30] = 200;
         caps[10] = 100;
         testing::news(
             &mut online,
             [WorldEvent::Training(TrainingUpdate::Offered(
-                TrainingOffer { trainer: 42, caps },
+                TrainingOffer {
+                    trainer: 42,
+                    caps,
+                    language_caps: Vec::new(),
+                },
             ))],
         );
-        let rows = rows(online.world(), Some(30));
+        let rows = rows(
+            online.world(),
+            Some(TrainingSubject::Skill(30)),
+            &crate::hud::messages::Messages::default(),
+        );
         let names: Vec<_> = rows.iter().map(|row| row.name.as_str()).collect();
         assert_eq!(names, ["Bash", "Kick"]);
         // Kick at 20: ten over ten, cubed, over a hundred is ten copper.
@@ -441,7 +592,11 @@ mod tests {
         testing::news(
             &mut online,
             [WorldEvent::Training(TrainingUpdate::Offered(
-                TrainingOffer { trainer: 42, caps },
+                TrainingOffer {
+                    trainer: 42,
+                    caps,
+                    language_caps: Vec::new(),
+                },
             ))],
         );
         app.insert_resource(online);
@@ -450,7 +605,7 @@ mod tests {
         let first = app.world().get::<Children>(list).unwrap()[0];
         app.update();
         assert_eq!(app.world().get::<Children>(list).unwrap()[0], first);
-        app.world_mut().resource_mut::<Chosen>().0 = Some(30);
+        app.world_mut().resource_mut::<Chosen>().0 = Some(TrainingSubject::Skill(30));
         app.update();
         let selected = app.world().get::<Children>(list).unwrap()[0];
         assert_eq!(

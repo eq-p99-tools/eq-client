@@ -186,6 +186,7 @@ fn scripted_interaction_refuses_training_pending_container_and_combine() {
                     TrainingOffer {
                         trainer: 75,
                         caps: vec![0; 100],
+                        language_caps: Vec::new(),
                     },
                 ))],
             );
@@ -814,4 +815,33 @@ fn guild_slash_steps_dispatch_typed_guild_commands_without_sending_chat() {
         assert_eq!(rx.try_recv().unwrap(), expected);
         assert!(rx.try_recv().is_err());
     }
+}
+
+#[test]
+fn a_language_script_target_matches_only_the_offered_language_bank() {
+    use eq_client_core::training::TrainingSubject;
+    let target = crate::script::ClickTarget::Training(crate::script::TrainingClick::Language(5));
+    let ordinary = crate::training::SkillRow {
+        subject: TrainingSubject::Skill(5),
+        index: 0,
+    };
+    let language = crate::training::SkillRow {
+        subject: TrainingSubject::Language(5),
+        index: 1,
+    };
+    assert!(!super::super::dialog_control(
+        target,
+        (Some(&ordinary), false, None, None, None),
+        None
+    ));
+    assert!(super::super::dialog_control(
+        target,
+        (Some(&language), false, None, None, None),
+        None
+    ));
+    assert!(!super::super::dialog_control(
+        target,
+        (None, false, None, None, None),
+        None
+    ));
 }

@@ -256,6 +256,7 @@ pub(super) fn state(
         ?pet,
         pet_ownership = %pet_ownership(online.world()),
         training = ?training(online),
+        training_languages = ?training_languages(online),
         training_points = ?online.world().training_points(),
         practice_points = ?online.world().player().and_then(|player| player.practice_points),
         resurrection = ?resurrection(online),
@@ -419,6 +420,32 @@ fn training(online: &crate::online::OnlineState) -> Option<(u16, usize)> {
         offer.trainer,
         offer.caps.iter().filter(|cap| **cap > 0).count(),
     ))
+}
+
+/// Source-backed offered language IDs with received values and training caps.
+fn training_languages(online: &crate::online::OnlineState) -> Vec<(u8, Option<u32>, u32)> {
+    use eq_client_core::training::TrainingSubject;
+    let Some(offer) = online.world().training() else {
+        return Vec::new();
+    };
+    offer
+        .language_caps
+        .iter()
+        .enumerate()
+        .filter_map(|(index, cap)| {
+            let language = u8::try_from(index).ok()?;
+            (*cap > 0).then(|| {
+                (
+                    language,
+                    online
+                        .world()
+                        .player()
+                        .and_then(|player| TrainingSubject::Language(language).value(player)),
+                    *cap,
+                )
+            })
+        })
+        .collect()
 }
 
 /// The carried books and notes: slot, item, window kind and text name.

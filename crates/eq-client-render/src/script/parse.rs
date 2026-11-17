@@ -473,6 +473,8 @@ pub enum CharacterClick {
 pub enum TrainingClick {
     /// A row of the list, from zero.
     Row(usize),
+    /// The offered row for this language ID (not its sorted row number).
+    Language(u8),
     /// Train.
     Train,
     /// Done.
@@ -1001,6 +1003,13 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ),
         ["attack"] => ClickTarget::Attack,
         ["training", row] => ClickTarget::Training(TrainingClick::Row(ordinal(row, "a row")?)),
+        ["training_language", id] => {
+            let id: u8 = id.parse().map_err(|_| "expected a language ID (0..25)")?;
+            if id >= eq_client_core::training::LANGUAGES {
+                return Err("expected a language ID (0..25)".into());
+            }
+            ClickTarget::Training(TrainingClick::Language(id))
+        }
         ["train"] => ClickTarget::Training(TrainingClick::Train),
         ["tracking", row] => ClickTarget::TrackRow(ordinal(row, "a row")?),
         ["skill_select", row] => ClickTarget::SkillRow(ordinal(row, "a row")?),
@@ -1599,6 +1608,32 @@ pub(super) fn typed(key: KeyCode, shift: bool, chorded: bool) -> (Key, Option<St
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn training_language_selects_a_bounded_offered_row_without_sending_a_numeric_request() {
+        let base = Path::new("private");
+        assert_eq!(
+            parse(
+                "click training_language 0\nclick training_language 25\nclick train",
+                base
+            )
+            .unwrap(),
+            [
+                Step::Click(ClickTarget::Training(TrainingClick::Language(0))),
+                Step::Click(ClickTarget::Training(TrainingClick::Language(25))),
+                Step::Click(ClickTarget::Training(TrainingClick::Train)),
+            ]
+        );
+        for bad in [
+            "click training_language",
+            "click training_language 26",
+            "click training_language -1",
+            "click training_language 256",
+            "click training_language 1 2",
+        ] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
+    }
+
     #[test]
     fn deletion_requires_exact_repeated_name_without_position_fallback() {
         assert_eq!(

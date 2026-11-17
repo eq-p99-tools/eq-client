@@ -490,14 +490,26 @@ prompt already issued during the same zone visit stays withheld. Bind
 translocates need an explicit server-directed destination. Attended P99
 verification is pending.
 
-On P99, interact with an in-reach guildmaster of your class, select a skill
-from the received Training list and press Train once. The listed price
+Interact with an in-reach guildmaster of your class to open Training. Ordinary
+skills and languages share its list. Language rows use received proficiency
+and the same estimated price formula as skills. EQEmu permits language IDs
+0..25 up to proficiency 100 when the current offer enables the language;
+P99 follows Titanium's racial level table and
+class exceptions. Native race/class/level rules do not restrict EQEmu's separate
+server policy. Unknown proficiency stays blank and cannot be practiced.
+
+On P99, select a skill or language from the received Training list and press Train once. The listed price
 estimates the cost in copper denominations. The skill value follows server
 updates. The point count goes blank as soon as the request is sent. A skill
 increase leaves the practice outcome unknown. Paid practice leaves the
 purse unknown until a new balance arrives. Re-enter the zone before
 practicing again or asking the same guildmaster again. Done closes the
-trainer. This path covers skills and awaits an attended P99 check.
+trainer. This path awaits an attended P99 check.
+
+EQEmu retains its existing point and purse projection after a matching received
+skill or language increase. The update contains no point or cost receipt;
+re-entering the zone supplies fresh profile balances for verification. A language
+practice that times out leaves points unknown. Silence never reports success.
 
 Grouping, raids, pets, training, reading and consent dialogs have separate
 capabilities by server. Pet Info can hold an early buff snapshot while the

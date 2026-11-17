@@ -4234,6 +4234,7 @@ fn training_opens_raises_skills_with_a_line_and_closes() {
     let mut world = ClientWorld::default();
     let mut trainee = player(9);
     trainee.skills = Some(vec![0; 100]);
+    trainee.languages = Some(vec![0; 28]);
     trainee.practice_points = Some(5);
     game(
         &mut world,
@@ -4253,7 +4254,11 @@ fn training_opens_raises_skills_with_a_line_and_closes() {
     caps[30] = 200;
     game(
         &mut world,
-        WorldEvent::Training(TrainingUpdate::Offered(TrainingOffer { trainer: 42, caps })),
+        WorldEvent::Training(TrainingUpdate::Offered(TrainingOffer {
+            trainer: 42,
+            caps,
+            language_caps: Vec::new(),
+        })),
     );
     assert_eq!(world.training().map(|offer| offer.trainer), Some(42));
     let changes = game(
@@ -4271,6 +4276,23 @@ fn training_opens_raises_skills_with_a_line_and_closes() {
             value: 1
         }]
     );
+    let revision = world.skills_revision();
+    let changes = game(
+        &mut world,
+        WorldEvent::Training(TrainingUpdate::Trained {
+            skill: 105,
+            value: 1,
+            cost: 0,
+        }),
+    );
+    let player = world.player().unwrap();
+    assert_eq!(player.languages.as_ref().unwrap()[5], 1);
+    assert_eq!(player.skills.as_ref().unwrap()[5], 0);
+    assert!(
+        changes.notices.is_empty(),
+        "a language must not produce an ordinary skill notice"
+    );
+    assert!(world.skills_revision() > revision);
     game(&mut world, WorldEvent::PracticePoints(4));
     assert_eq!(
         world.player().and_then(|player| player.practice_points),
@@ -6005,6 +6027,7 @@ fn list_revisions_track_their_own_inputs_and_survive_restart() {
     let offer = WorldEvent::Training(TrainingUpdate::Offered(TrainingOffer {
         trainer: 42,
         caps: vec![200; 100],
+        language_caps: Vec::new(),
     }));
     game(&mut world, offer.clone());
     let after_offer = revisions(&world);

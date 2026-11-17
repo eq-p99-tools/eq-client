@@ -2712,6 +2712,9 @@ fn dialog_control(
         ClickTarget::Training(TrainingClick::Row(index)) => {
             skill_row.is_some_and(|row| row.index == index)
         }
+        ClickTarget::Training(TrainingClick::Language(language)) => skill_row.is_some_and(|row| {
+            row.subject == eq_client_core::training::TrainingSubject::Language(language)
+        }),
         ClickTarget::Training(TrainingClick::Train) => train,
         ClickTarget::Training(TrainingClick::Done) => {
             closes.is_some_and(|closes| closes.0 == super::windows::WindowId::Training)
