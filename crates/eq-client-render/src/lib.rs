@@ -176,6 +176,8 @@ pub enum Source {
 #[derive(Clone, Debug, Default, PartialEq)]
 #[allow(clippy::struct_excessive_bools)] // Independent display switches.
 pub struct ViewerConfig {
+    /// Application-supplied compile-time provenance for the startup log.
+    pub build_identity: Option<&'static str>,
     /// Permit explicitly labeled pre-SoF resource estimates for the Titanium session.
     pub estimate_titanium_resources: bool,
     /// Initial camera projection.
@@ -445,6 +447,9 @@ pub fn run(
                 ..default()
             }),
     );
+    if let Some(build) = app.world().resource::<ViewerSettings>().0.build_identity {
+        info!(build, "Client build identity");
+    }
     theme::install_font(&mut app, installed_client);
     app.add_systems(Startup, (setup_scene, navmesh_prebuild::offer))
         .add_systems(Update, exit_log::close_requests);
@@ -634,6 +639,10 @@ fn install_script(
     .add_systems(
         Update,
         (
+            (chat::guard_script_requests, script::guard_scope)
+                .chain()
+                .after(Stage::Receive)
+                .before(Stage::Scene),
             script::observe.in_set(Stage::Receive),
             script::pointer::draw,
             // A scripted notch of the wheel replaces the real wheel's

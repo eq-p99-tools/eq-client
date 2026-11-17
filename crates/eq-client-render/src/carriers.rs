@@ -1,9 +1,14 @@
-//! Received carrier actors: one pose for drawing, collision and rider motion.
-use crate::{ViewerSettings, background::Background, entities::Drawn, online::OnlineState};
+//! Authored carrier children on ordinary spawn roots, with shared posed collision.
+use crate::{
+    ViewerSettings,
+    background::Background,
+    entities::{Drawn, NearbyEntities},
+    online::OnlineState,
+};
 use bevy::prelude::*;
 use eq_client_assets::actors::{ActorAsset, load_installed_actor};
 use eq_client_core::{
-    movement::{CollisionMesh, CollisionWorld},
+    movement::{CollisionInstance, CollisionMesh},
     races,
 };
 use std::{
@@ -16,67 +21,113 @@ use std::{
 struct Model {
     primitives: crate::doors::Primitives,
     collision: Arc<Vec<[[f32; 3]; 3]>>,
+    top: f32,
 }
 
-/// Only this admission's static actor assets and entities. Failed loads are
-/// remembered until the admission changes; old jobs cannot install into it.
+/// The ordinary spawn renderer owns this root and its visible fallback.
+/// Installing a carrier actor hides only this child, retaining target/name identity.
+#[derive(Component)]
+pub(super) struct Placeholder {
+    pub(super) spawn_id: u16,
+    pub(super) root: Entity,
+    pub(super) overhead: f32,
+}
+
+#[derive(Component)]
+struct CarrierModel;
+
+struct Visual {
+    root: Entity,
+    model: Entity,
+    tag: &'static str,
+    incarnation: u64,
+    scale: f32,
+    top: f32,
+}
+
+/// Admission-scoped actor loads, children and scaled geometry. Failed loads
+/// retain the ordinary spawn's marker and never fabricate collision.
 #[derive(Resource, Default)]
 pub(super) struct Scene {
     admission: Option<u64>,
     models: BTreeMap<&'static str, Option<Model>>,
     loading: Option<(&'static str, Background<Option<ActorAsset>>)>,
-    rendered: BTreeMap<u16, (Entity, &'static str)>,
+    rendered: BTreeMap<u16, Visual>,
     colliders: BTreeMap<u16, CachedCollider>,
 }
 
 struct CachedCollider {
     incarnation: u64,
     tag: &'static str,
-    transform: Transform,
+    scale: Vec3,
     mesh: Option<Arc<CollisionMesh>>,
 }
 
+/// Scale changes rebuild the geometry once. Each moving frame only places
+/// that same BVH at the shared carrier pose; no world-space triangle baking.
 fn cached_collider(
     cache: &mut BTreeMap<u16, CachedCollider>,
     sample: eq_client_core::movement::CarrierSample,
     tag: &'static str,
     model: &Model,
     transform: &Transform,
-) -> Option<Arc<CollisionMesh>> {
+) -> Option<CollisionInstance> {
     let previous = cache.get(&sample.spawn_id).filter(|cached| {
         cached.incarnation == sample.incarnation
             && cached.tag == tag
-            && cached.transform == *transform
+            && cached.scale == transform.scale
     });
-    if let Some(previous) = previous {
-        return previous.mesh.clone();
-    }
-    let mesh = collider(model, transform);
-    cache.insert(
-        sample.spawn_id,
-        CachedCollider {
-            incarnation: sample.incarnation,
-            tag,
-            transform: *transform,
-            mesh: mesh.clone(),
-        },
-    );
-    mesh
+    let mesh = if let Some(previous) = previous {
+        previous.mesh.clone()
+    } else {
+        let mesh = CollisionMesh::new(model.collision.iter().map(|triangle| {
+            triangle.map(|point| (Vec3::from_array(point) * transform.scale).to_array())
+        }))
+        .ok()
+        .map(Arc::new);
+        cache.insert(
+            sample.spawn_id,
+            CachedCollider {
+                incarnation: sample.incarnation,
+                tag,
+                scale: transform.scale,
+                mesh: mesh.clone(),
+            },
+        );
+        mesh
+    }?;
+    CollisionInstance::new(mesh, transform.translation, transform.rotation).ok()
 }
 
-/// Carries a real model's solid triangles with the exact drawn transform.
-/// The source of the original client's carrier mesh is unread; choosing its
-/// own authored model collision is inferred (recording checklist 6.467).
-fn collider(model: &Model, transform: &Transform) -> Option<Arc<CollisionMesh>> {
-    CollisionMesh::new(model.collision.iter().map(|triangle| {
-        triangle.map(|point| {
-            transform
-                .transform_point(Vec3::from_array(point))
-                .to_array()
-        })
-    }))
-    .ok()
-    .map(Arc::new)
+fn prepare(
+    asset: ActorAsset,
+    images: &mut Assets<Image>,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+) -> Model {
+    let top = asset
+        .model
+        .primitives
+        .iter()
+        .flat_map(|primitive| &primitive.positions)
+        .map(|point| point[1])
+        .filter(|height| height.is_finite())
+        .max_by(f32::total_cmp)
+        .unwrap_or(0.0);
+    let textures = crate::create_texture_images(asset.textures, images);
+    Model {
+        primitives: crate::create_render_primitives(
+            asset.model.primitives,
+            &asset.model.materials,
+            &textures,
+            meshes,
+            materials,
+            false,
+            crate::character::ON_A_SPAWN,
+        ),
+        collision: Arc::new(asset.model.collision),
+        top,
+    }
 }
 
 #[allow(
@@ -88,22 +139,23 @@ pub(super) fn reconcile(
     mut commands: Commands,
     state: Res<OnlineState>,
     settings: Res<ViewerSettings>,
-    options: Res<crate::options::OptionsState>,
+    nearby: Res<NearbyEntities>,
     mut scene: ResMut<Scene>,
     mut collision: ResMut<crate::Collision>,
     mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    mut transforms: Query<&mut Transform, Without<crate::OrbitCamera>>,
-    cameras: Query<(&Transform, &Projection), With<crate::OrbitCamera>>,
+    mut placeholders: Query<(&Placeholder, &mut Visibility)>,
+    mut overheads: Query<&mut crate::names::Overhead>,
+    mut roots: Query<&mut Transform, With<crate::entities::RemoteEntity>>,
 ) {
     let admission = state
         .world()
         .session_id()
         .filter(|_| state.world().connected());
     if scene.admission != admission {
-        for (_, (entity, _)) in std::mem::take(&mut scene.rendered) {
-            commands.entity(entity).despawn();
+        for (_, visual) in std::mem::take(&mut scene.rendered) {
+            commands.entity(visual.model).try_despawn();
         }
         *scene = Scene {
             admission,
@@ -114,24 +166,17 @@ pub(super) fn reconcile(
         && let Some(asset) = job.poll(admission)
     {
         let tag = *tag;
-        let model = asset.map(|asset| {
-            let textures = crate::create_texture_images(asset.textures, &mut images);
-            Model {
-                primitives: crate::create_render_primitives(
-                    asset.model.primitives,
-                    &asset.model.materials,
-                    &textures,
-                    &mut meshes,
-                    &mut materials,
-                    false,
-                    bevy::asset::RenderAssetUsages::RENDER_WORLD,
-                ),
-                collision: Arc::new(asset.model.collision),
-            }
-        });
+        let model = asset.map(|asset| prepare(asset, &mut images, &mut meshes, &mut materials));
         scene.models.insert(tag, model);
         scene.loading = None;
     }
+    // A Spawns/Carriers pair may cross receive frames. Only a root prepared
+    // for this carrier may receive an authored child, avoiding a second visual
+    // on an ordinary model while its renderer catches up.
+    let carrier_roots: BTreeSet<_> = placeholders
+        .iter()
+        .map(|(placeholder, _)| placeholder.root)
+        .collect();
     let now = Instant::now();
     let mut remaining = BTreeSet::new();
     let mut colliders = Vec::new();
@@ -141,37 +186,31 @@ pub(super) fn reconcile(
         settings.0.eq_directory.as_ref(),
         admission,
     ) {
-        let clip = crate::camera::clip_distance(
-            settings.0.installed_client,
-            &options.options,
-            state.world(),
-        )
-        .unwrap_or(eq_client_assets::camera::FarPlane::UNCLIPPED);
-        let reach = crate::entities::loading_reach(
-            clip,
-            cameras.single().ok(),
-            Vec3::from_array(eq_client_core::render_position(player.position)),
-        );
-        let draw_reach = settings
-            .0
-            .entity_distance
-            .map_or(reach, |distance| distance.min(reach));
         for report in state.world().carriers().reports() {
             let id = report.sample().spawn_id;
             let Some(spawn) = state.world().spawn(id).map(|spawn| &spawn.state) else {
                 continue;
             };
             let pose = report.pose(now);
+            // The ordinary spawn renderer owns draw range and visibility.
+            // Collision loading retains its separate bounded reach.
+            let root = nearby
+                .rendered
+                .get(&id)
+                .copied()
+                .filter(|root| carrier_roots.contains(root));
+            if let Some(root) = root
+                && let Ok(mut transform) = roots.get_mut(root)
+            {
+                transform.translation = Vec3::from_array(eq_client_core::render_position(pose));
+                transform.rotation =
+                    Quat::from_rotation_y(eq_client_core::render_heading(pose.heading));
+            }
             let distance = (pose.x - player.position.x)
                 .hypot(pose.y - player.position.y)
                 .hypot(pose.z - player.position.z);
-            let reveal = options
-                .options
-                .qol
-                .on(eq_client_core::qol::Fix::ShowInvisible);
-            let draw_near = distance <= draw_reach && (reveal || state.world().can_see(spawn));
             let collision_near = distance <= eq_client_core::movement::CARRIER_REACH * 2.0;
-            if !draw_near && !collision_near {
+            if root.is_none() && !collision_near {
                 continue;
             }
             let Some(tag) = races::carrier_actor(spawn.race, spawn.gender) else {
@@ -208,43 +247,59 @@ pub(super) fn reconcile(
             .with_scale(Vec3::splat(drawn.scale));
             if collision_near {
                 collision_ids.insert(id);
-                if let Some(mesh) = cached_collider(
+                if let Some(instance) = cached_collider(
                     &mut scene.colliders,
                     report.sample(),
                     tag,
                     &model,
                     &transform,
                 ) {
-                    colliders.push((id, mesh));
+                    colliders.push((id, instance));
                 }
             }
-            if !draw_near {
+            let Some(root) = root.filter(|_| !model.primitives.is_empty()) else {
+                continue;
+            };
+            remaining.insert(id);
+            if scene.rendered.get(&id).is_some_and(|visual| {
+                visual.root == root
+                    && visual.tag == tag
+                    && visual.incarnation == report.sample().incarnation
+                    && visual.scale.to_bits() == drawn.scale.to_bits()
+            }) {
                 continue;
             }
-            remaining.insert(id);
-            let current = scene.rendered.get(&id).copied();
-            match current {
-                Some((entity, previous)) if previous == tag => {
-                    if let Ok(mut current) = transforms.get_mut(entity) {
-                        *current = transform;
-                    }
-                }
-                previous => {
-                    if let Some((entity, _)) = previous {
-                        commands.entity(entity).despawn();
-                    }
-                    let primitives = model.primitives.clone();
-                    let entity = commands
-                        .spawn((transform, Visibility::Inherited))
-                        .with_children(|parent| {
-                            for (mesh, material) in primitives {
-                                parent.spawn((Mesh3d(mesh), MeshMaterial3d(material)));
-                            }
-                        })
-                        .id();
-                    scene.rendered.insert(id, (entity, tag));
-                }
+            if let Some(previous) = scene.rendered.remove(&id) {
+                commands.entity(previous.model).try_despawn();
             }
+            let primitives = model.primitives.clone();
+            // Spawn roots use the common protocol heading. Only the authored
+            // child receives the model-frame yaw and size, as characters do.
+            let model_entity = commands
+                .spawn((
+                    CarrierModel,
+                    ChildOf(root),
+                    Visibility::Inherited,
+                    Transform::from_rotation(Quat::from_rotation_y(eq_client_core::model_yaw()))
+                        .with_scale(Vec3::splat(drawn.scale)),
+                ))
+                .with_children(|parent| {
+                    for (mesh, material) in primitives {
+                        parent.spawn((Mesh3d(mesh), MeshMaterial3d(material)));
+                    }
+                })
+                .id();
+            scene.rendered.insert(
+                id,
+                Visual {
+                    root,
+                    model: model_entity,
+                    tag,
+                    incarnation: report.sample().incarnation,
+                    scale: drawn.scale,
+                    top: model.top * drawn.scale,
+                },
+            );
         }
     }
     scene.colliders.retain(|id, _| collision_ids.contains(id));
@@ -255,80 +310,28 @@ pub(super) fn reconcile(
         .filter(|id| !remaining.contains(id))
         .collect();
     for id in removed {
-        if let Some((entity, _)) = scene.rendered.remove(&id) {
-            commands.entity(entity).despawn();
+        if let Some(visual) = scene.rendered.remove(&id) {
+            commands.entity(visual.model).try_despawn();
+        }
+    }
+    for (placeholder, mut visibility) in &mut placeholders {
+        let visual = scene
+            .rendered
+            .get(&placeholder.spawn_id)
+            .filter(|visual| visual.root == placeholder.root);
+        *visibility = if visual.is_some() {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        };
+        if let Ok(mut overhead) = overheads.get_mut(placeholder.root) {
+            overhead.0 = visual.map_or(placeholder.overhead, |visual| visual.top);
         }
     }
     if let Some(world) = collision.0.as_mut() {
-        replace_colliders(world, colliders);
+        world.set_spawn_instances(colliders);
     }
-}
-
-fn replace_colliders(world: &mut CollisionWorld, colliders: Vec<(u16, Arc<CollisionMesh>)>) {
-    world.set_spawn_obstacles(colliders);
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn deck_collision_uses_the_drawn_translation_rotation_and_scale() {
-        let model = Model {
-            primitives: Vec::new(),
-            collision: Arc::new(vec![[[-4.0, 0.0, -3.0], [4.0, 0.0, -3.0], [0.0, 0.0, 3.0]]]),
-        };
-        let transform = Transform::from_xyz(20.0, 5.0, 30.0)
-            .with_rotation(Quat::from_rotation_y(1.0))
-            .with_scale(Vec3::splat(2.0));
-        let mut world = CollisionWorld::new([[
-            [-100.0, -10.0, -100.0],
-            [100.0, -10.0, -100.0],
-            [0.0, -10.0, 100.0],
-        ]])
-        .unwrap();
-        replace_colliders(&mut world, vec![(8, collider(&model, &transform).unwrap())]);
-        assert_eq!(
-            world.ground_spawn(Vec3::new(20.0, 5.0, 30.0), 0.1, 0.1),
-            Some(8)
-        );
-        replace_colliders(&mut world, Vec::new());
-        assert!(
-            world
-                .ground_spawn(Vec3::new(20.0, 5.0, 30.0), 0.1, 0.1)
-                .is_none()
-        );
-    }
-    #[test]
-    fn an_unchanged_carrier_pose_reuses_its_collision_acceleration_structure() {
-        let now = Instant::now();
-        let mut spawn = crate::online::testing::pet(8, 7);
-        spawn.race = 72;
-        spawn.pet_owner = None;
-        let mut reports = eq_client_core::movement::Carriers::default();
-        reports.observe(
-            &eq_client_core::WorldEvent::Spawns(vec![spawn]),
-            eq_client_core::GameDialect::Titanium,
-            now,
-        );
-        let sample = reports.latest(8).unwrap().sample();
-        let model = Model {
-            primitives: Vec::new(),
-            collision: Arc::new(vec![[[-4.0, 0.0, -3.0], [4.0, 0.0, -3.0], [0.0, 0.0, 3.0]]]),
-        };
-        let mut cache = BTreeMap::new();
-        let first =
-            cached_collider(&mut cache, sample, "SHIP", &model, &Transform::IDENTITY).unwrap();
-        let second =
-            cached_collider(&mut cache, sample, "SHIP", &model, &Transform::IDENTITY).unwrap();
-        assert!(Arc::ptr_eq(&first, &second));
-        let moved = cached_collider(
-            &mut cache,
-            sample,
-            "SHIP",
-            &model,
-            &Transform::from_xyz(1.0, 0.0, 0.0),
-        )
-        .unwrap();
-        assert!(!Arc::ptr_eq(&first, &moved));
-    }
-}
+mod tests;

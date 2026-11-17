@@ -41,6 +41,13 @@ narrow data/lookup interfaces where installed assets provide inputs.
 owns entities, GPU assets, layout, input arbitration and presentation. The app
 owns configuration, worker lifetime and the event bridge.
 
+`CollisionMesh` owns immutable solid geometry and its acceleration structure;
+`CollisionInstance` places shared geometry with a rigid pose. Rays, contacts and
+sweeps use that pose; changing translation or yaw does not rebuild a mesh.
+Carrier actors are children of ordinary spawn roots, which keep the existing
+name, visibility and targeting policy. Missing actors retain the ordinary
+marker, and only decoded authored collision may supply a carrier floor.
+
 Session validation state and frontend presentation state serve different owners.
 Share their rules and typed records rather than letting the UI mutate session
 state directly. Route commands through `Outbox`; do not add feature-specific

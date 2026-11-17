@@ -454,6 +454,16 @@ impl GemPress {
     pub(crate) fn cancel(&mut self) {
         self.0 = None;
     }
+
+    pub(crate) fn cancel_target(&mut self, entity: Entity) {
+        if self
+            .0
+            .as_ref()
+            .is_some_and(|target| target.entity == entity)
+        {
+            self.cancel();
+        }
+    }
 }
 
 /// Right-button edges and Bevy's focus-filtered gem hit targets.
@@ -528,6 +538,10 @@ pub(super) fn actions(
     bar_clicks: crate::clicks::Clicks<hotbar::Slot>,
     bindings: Res<hotbar::Bindings>,
     options: Option<Res<crate::options::OptionsState>>,
+    (script, authored): (
+        Option<Res<crate::script::Script>>,
+        Option<Res<crate::script::AuthoredInput>>,
+    ),
     definitions: (
         Res<super::spellbook::SpellNames>,
         Res<messages::Messages>,
@@ -613,12 +627,12 @@ pub(super) fn actions(
     // Sit, Stand, Camp and the group's kinds run what their Actions window
     // buttons run; melee attack toggles in `combat::input`.
     let player_id = player.spawn_id;
-    if let Some(command) = bar_action.and_then(hotbar::command) {
-        let qol = options
-            .as_ref()
-            .map_or_else(Default::default, |options| options.options.qol);
-        super::chat::run_game_command(command, &mut online, &outbox, &mut chat, &qol);
-    }
+    run_hotbar_command(
+        bar_action.and_then(hotbar::command),
+        (&keys, &bar_clicks),
+        (script.as_deref(), authored.as_deref(), options.as_deref()),
+        (&mut online, &outbox, &mut chat),
+    );
     let flying = flight_uses_duck(options.as_deref(), online.world());
     let requested = match requested_posture(&keys, online.world(), player_id, flying) {
         Ok(posture) => posture,
@@ -640,6 +654,38 @@ pub(super) fn actions(
             }
         });
     }
+}
+
+fn run_hotbar_command(
+    command: Option<&str>,
+    (keys, clicks): (&super::keys::Keys, &crate::clicks::Clicks<hotbar::Slot>),
+    (script, authored, options): (
+        Option<&crate::script::Script>,
+        Option<&crate::script::AuthoredInput>,
+        Option<&crate::options::OptionsState>,
+    ),
+    (online, outbox, chat): (
+        &mut crate::online::OnlineState,
+        &crate::outbox::Outbox,
+        &mut crate::chat::ChatState,
+    ),
+) {
+    let Some(command) = command else { return };
+    let qol = options.map_or_else(Default::default, |options| options.options.qol);
+    let synthetic = authored.is_some_and(|input| {
+        hotbar::requested_slot(keys, clicks).is_some_and(|(_, key)| {
+            key.map_or(input.left_button, |act| {
+                keys.map.keys(act).any(|key| input.keys.contains(&key))
+            })
+        })
+    });
+    let admission = if synthetic {
+        script.and_then(super::script::Script::chat_admission)
+    } else {
+        None
+    };
+    let dispatch = outbox.for_script(admission);
+    super::chat::run_game_command(command, online, &dispatch, chat, &qol);
 }
 
 /// The posture a key asks for. The sit toggle's choice comes back as an

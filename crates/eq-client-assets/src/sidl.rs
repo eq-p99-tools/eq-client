@@ -52,7 +52,10 @@ impl IconGrid {
         for sheet in &self.sheets {
             let across = sheet.width.checked_div(self.cell_width)?;
             let down = sheet.height.checked_div(self.cell_height)?;
-            let cells = across * down;
+            if across == 0 || down == 0 {
+                return None;
+            }
+            let cells = across.checked_mul(down)?;
             if index >= cells {
                 index -= cells;
                 continue;
@@ -64,8 +67,8 @@ impl IconGrid {
             };
             return Some(Piece {
                 texture: sheet.texture.clone(),
-                x: sheet.x + column * self.cell_width,
-                y: sheet.y + row * self.cell_height,
+                x: sheet.x.checked_add(column.checked_mul(self.cell_width)?)?,
+                y: sheet.y.checked_add(row.checked_mul(self.cell_height)?)?,
                 width: self.cell_width,
                 height: self.cell_height,
             });
@@ -708,6 +711,7 @@ impl Sizable {
 /// The pieces and window templates a skin's windows refer to by name.
 #[derive(Clone, Debug, Default)]
 pub struct Library {
+    texture_sizes: HashMap<String, (u32, u32)>,
     pieces: HashMap<String, Piece>,
     grids: HashMap<String, IconGrid>,
     templates: HashMap<String, WindowTemplate>,
@@ -872,33 +876,69 @@ impl Library {
 
     /// Notes every `Ui2DAnimation` in a document by name, as its first frame.
     fn add_pieces(&mut self, document: &roxmltree::Document<'_>) {
+        for node in document
+            .root_element()
+            .children()
+            .filter(|node| node.has_tag_name("TextureInfo"))
+        {
+            if let (Some(name), Some(size)) = (node.attribute("item"), child(node, "Size"))
+                && let (Some(width), Some(height)) = (number(size, "CX"), number(size, "CY"))
+            {
+                self.texture_sizes.insert(name.to_owned(), (width, height));
+            }
+        }
         for node in document.root_element().children() {
             if node.has_tag_name("Ui2DAnimation")
                 && let Some(name) = node.attribute("item")
-                && let Some(piece) = child(node, "Frames").and_then(frame)
             {
-                self.pieces.insert(name.to_owned(), piece);
-                if flag(node, "Grid")
-                    && let Some(cell_width) = number(node, "CellWidth").filter(|cx| *cx > 0)
-                    && let Some(cell_height) = number(node, "CellHeight").filter(|cy| *cy > 0)
-                {
-                    let sheets = node
-                        .children()
-                        .filter(|frames| frames.has_tag_name("Frames"))
-                        .filter_map(frame)
-                        .collect();
-                    self.grids.insert(
-                        name.to_owned(),
-                        IconGrid {
-                            sheets,
-                            cell_width,
-                            cell_height,
-                            vertical: flag(node, "Vertical"),
-                        },
-                    );
+                self.pieces.remove(name);
+                self.grids.remove(name);
+                if let Some(piece) = child(node, "Frames").and_then(frame) {
+                    self.pieces.insert(name.to_owned(), piece);
+                }
+                if let Some(grid) = self.grid(node) {
+                    self.grids.insert(name.to_owned(), grid);
                 }
             }
         }
+    }
+
+    fn grid(&self, node: roxmltree::Node<'_, '_>) -> Option<IconGrid> {
+        if !flag(node, "Grid") {
+            return None;
+        }
+        let cell_width = number(node, "CellWidth").filter(|width| *width > 0)?;
+        let cell_height = number(node, "CellHeight").filter(|height| *height > 0)?;
+        // Dropping a malformed frame would renumber every later icon.
+        let sheets = node
+            .children()
+            .filter(|node| node.has_tag_name("Frames"))
+            .map(frame)
+            .collect::<Option<Vec<_>>>()?;
+        if sheets.is_empty()
+            || !sheets.iter().all(|sheet| {
+                sheet.width >= cell_width
+                    && sheet.height >= cell_height
+                    && sheet.x.checked_add(sheet.width).is_some_and(|right| {
+                        self.texture_sizes
+                            .get(&sheet.texture)
+                            .is_none_or(|(width, _)| right <= *width)
+                    })
+                    && sheet.y.checked_add(sheet.height).is_some_and(|bottom| {
+                        self.texture_sizes
+                            .get(&sheet.texture)
+                            .is_none_or(|(_, height)| bottom <= *height)
+                    })
+            })
+        {
+            return None;
+        }
+        Some(IconGrid {
+            sheets,
+            cell_width,
+            cell_height,
+            vertical: flag(node, "Vertical"),
+        })
     }
 
     fn piece(&self, name: Option<&str>) -> Option<Piece> {
@@ -2103,6 +2143,61 @@ mod tests {
         assert_eq!(place(62), Some(("one.tga".into(), 216, 224, 36, 28)));
         assert_eq!(place(63), Some(("two.tga".into(), 0, 0, 36, 28)));
         assert_eq!(place(126), None);
+    }
+
+    #[test]
+    fn malformed_grid_frames_do_not_shift_later_icons_or_overflow() {
+        for frame in [
+            "<Frames><Texture>broken.tga</Texture></Frames>",
+            "<Frames><Texture>broken.tga</Texture><Size><CX>0</CX><CY>10</CY></Size></Frames>",
+            "<Frames><Texture>broken.tga</Texture><Location><X>4294967295</X></Location><Size><CX>10</CX><CY>10</CY></Size></Frames>",
+        ] {
+            let library = Library::parse(
+                &format!(
+                    "<XML><Ui2DAnimation item=\"A_DragItem\">\
+                <Grid>true</Grid><CellWidth>10</CellWidth><CellHeight>10</CellHeight>{frame}\
+                <Frames><Texture>later.tga</Texture><Size><CX>10</CX><CY>10</CY></Size></Frames>\
+                </Ui2DAnimation></XML>"
+                ),
+                "<XML/>",
+            )
+            .unwrap();
+            assert!(library.named_grid("A_DragItem").is_none());
+        }
+        let grid = IconGrid {
+            sheets: vec![Piece {
+                texture: "huge.tga".into(),
+                x: 0,
+                y: 0,
+                width: u32::MAX,
+                height: u32::MAX,
+            }],
+            cell_width: 1,
+            cell_height: 1,
+            vertical: false,
+        };
+        assert!(grid.cell(0).is_none());
+    }
+
+    #[test]
+    fn grid_frames_must_fit_declared_texture_dimensions() {
+        let xml = "<XML><TextureInfo item=\"atlas.tga\"><Size><CX>20</CX><CY>10</CY></Size></TextureInfo>\
+            <Ui2DAnimation item=\"A_DragItem\"><Grid>true</Grid><CellWidth>10</CellWidth><CellHeight>10</CellHeight>\
+            <Frames><Texture>atlas.tga</Texture><Location><X>10</X></Location><Size><CX>20</CX><CY>10</CY></Size></Frames>\
+            </Ui2DAnimation></XML>";
+        assert!(
+            Library::parse(xml, "<XML/>")
+                .unwrap()
+                .named_grid("A_DragItem")
+                .is_none()
+        );
+        let valid = xml.replace("<X>10</X>", "<X>0</X>");
+        assert!(
+            Library::parse(&valid, "<XML/>")
+                .unwrap()
+                .named_grid("A_DragItem")
+                .is_some()
+        );
     }
 
     #[test]

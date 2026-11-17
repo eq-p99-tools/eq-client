@@ -1,11 +1,11 @@
 //! Typed chat presentation and bounded per-tab history.
 mod text;
-use chrono::NaiveDateTime;
 pub use eq_network_game::chat::{ChannelName, ItemLink, LinkExpansion, Message, SpeakMode};
 pub use eq_network_game::{
     chat::{outbound_text_len, outbound_text_limit},
     items::chat_link,
 };
+use jiff::civil::DateTime;
 use std::collections::{BTreeMap, VecDeque};
 pub use text::RichText;
 
@@ -208,7 +208,7 @@ pub fn channel_rgb(channel: ChannelName) -> [u8; 3] {
 /// Keeps 200 messages per channel group so busy auctions cannot evict guild/tell history.
 #[derive(Default)]
 pub struct ChatHistory {
-    messages: BTreeMap<ChatTab, VecDeque<(u64, NaiveDateTime, ChatLine)>>,
+    messages: BTreeMap<ChatTab, VecDeque<(u64, DateTime, ChatLine)>>,
     revision: u64,
 }
 
@@ -219,7 +219,7 @@ pub struct Arrival<'a> {
     /// gives it.
     pub id: u64,
     /// When it arrived, by the computer's clock.
-    pub at: NaiveDateTime,
+    pub at: DateTime,
     /// The line.
     pub line: &'a ChatLine,
 }
@@ -239,12 +239,12 @@ impl ChatHistory {
     /// Adds nonempty text without dropping its item links, as arriving now
     /// by the computer's clock.
     pub fn push(&mut self, line: ChatLine) {
-        self.push_at(line, chrono::Local::now().naive_local());
+        self.push_at(line, jiff::Zoned::now().datetime());
     }
 
     /// Adds nonempty text as [`push`](Self::push) does, as arriving at a
     /// given time by the computer's clock.
-    pub fn push_at(&mut self, line: ChatLine, at: NaiveDateTime) {
+    pub fn push_at(&mut self, line: ChatLine, at: DateTime) {
         if line.message.text.is_empty() {
             return;
         }
@@ -376,11 +376,7 @@ mod tests {
     #[test]
     fn a_line_keeps_when_it_arrived() {
         let mut history = ChatHistory::default();
-        let at = |second| {
-            chrono::NaiveDate::from_ymd_opt(2026, 10, 3)
-                .and_then(|day| day.and_hms_opt(17, 42, second))
-                .unwrap()
-        };
+        let at = |second| jiff::civil::date(2026, 10, 3).at(17, 42, second, 0);
         history.push_at(line(ChannelName::Tell), at(5));
         history.push_at(line(ChannelName::Guild), at(9));
         let arrivals = history.arrivals(ChatTab::All);
@@ -397,6 +393,26 @@ mod tests {
         assert_eq!(tells.len(), 1);
         assert_eq!(tells[0].at, at(5));
         assert_eq!(history.lines(ChatTab::Tell)[0].0, tells[0].id);
+    }
+
+    #[test]
+    fn local_arrivals_keep_receive_order_when_dst_repeats_the_clock() {
+        let mut history = ChatHistory::default();
+        for instant in ["2024-11-03T05:30:00Z", "2024-11-03T06:30:00Z"] {
+            let local = instant
+                .parse::<jiff::Timestamp>()
+                .unwrap()
+                .in_tz("America/New_York")
+                .unwrap()
+                .datetime();
+            history.push_at(line(ChannelName::Tell), local);
+        }
+        let arrivals = history.arrivals(ChatTab::All);
+        assert_eq!(arrivals.len(), 2);
+        assert_eq!((arrivals[0].id, arrivals[1].id), (1, 2));
+        let repeated = jiff::civil::date(2024, 11, 3).at(1, 30, 0, 0);
+        assert_eq!(arrivals[0].at, repeated);
+        assert_eq!(arrivals[1].at, repeated);
     }
 
     #[test]

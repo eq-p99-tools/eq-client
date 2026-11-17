@@ -529,6 +529,13 @@ mod tests {
             "dragitem1.tga",
             image::RgbaImage::from_pixel(240, 240, image::Rgba([12, 34, 56, 255])),
         );
+        crate::sheets::testing::definitions(
+            &mut app,
+            "<XML><Ui2DAnimation item=\"A_DragItem\">\
+            <Grid>true</Grid><CellWidth>40</CellWidth><CellHeight>40</CellHeight>\
+            <Frames><Texture>dragitem1.tga</Texture><Size><CX>240</CX><CY>240</CY></Size></Frames>\
+            </Ui2DAnimation></XML>",
+        );
         // Match the production order. A report arriving in Present needs to
         // raise above an item window already stacked by Route.
         app.add_systems(

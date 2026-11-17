@@ -4,6 +4,12 @@ mod logins;
 mod presets;
 mod session;
 
+const BUILD_IDENTITY: &str = env!("EQ_CLIENT_BUILD_IDENTITY");
+
+#[cfg(test)]
+#[path = "../build_identity.rs"]
+mod build_identity;
+
 use std::path::{Path, PathBuf};
 
 use clap::{CommandFactory, FromArgMatches, Parser, ValueEnum, parser::ValueSource};
@@ -22,7 +28,7 @@ enum CameraStyle {
 }
 
 #[derive(Debug, Parser)]
-#[command(version, about)]
+#[command(version = BUILD_IDENTITY, about)]
 #[command(group(clap::ArgGroup::new("script_execution").args(["script", "script_control"]).multiple(true)))]
 #[allow(clippy::struct_excessive_bools)] // Independent CLI switches, with clap enforcing incompatible modes.
 struct Arguments {
@@ -464,6 +470,7 @@ fn main() {
         report(panic);
     }));
     let (mut arguments, typed_installation) = parse_arguments();
+    println!("eq-client {BUILD_IDENTITY}");
     // Validate every local input before the session logs in.
     let (script, script_follow) = script_input(&arguments);
     let mode = mode(&arguments, script.as_ref()).unwrap_or_else(|error| {
@@ -691,6 +698,7 @@ fn viewer_config(
     (local, display): (bool, DisplaySnapshot),
 ) -> ViewerConfig {
     ViewerConfig {
+        build_identity: Some(BUILD_IDENTITY),
         estimate_titanium_resources: client == Some(InstalledClient::Titanium),
         projection: match arguments.camera {
             CameraStyle::Perspective => ProjectionStyle::Perspective,
@@ -869,6 +877,16 @@ mod tests {
         presets, run_client, script_session, seconds,
     };
     use clap::Parser;
+
+    #[test]
+    fn version_reports_the_same_compile_time_identity_as_startup() {
+        let result = Arguments::try_parse_from(["eq-client", "--version"]).unwrap_err();
+        assert_eq!(result.kind(), clap::error::ErrorKind::DisplayVersion);
+        assert_eq!(
+            result.to_string(),
+            format!("eq-client {}\n", super::BUILD_IDENTITY)
+        );
+    }
 
     #[test]
     fn the_weather_demo_requires_no_session_and_conflicts_with_online() {

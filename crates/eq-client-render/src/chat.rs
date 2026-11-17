@@ -116,6 +116,7 @@ impl Default for TabView {
 }
 #[derive(Resource, Default)]
 pub(super) struct ChatState {
+    script_requests: ScriptRequests,
     pub history: ChatHistory,
     link_scope: Option<LinkScope>,
     /// Retained server arrivals whose links belong to this scope.
@@ -159,6 +160,56 @@ pub(super) struct ChatState {
     pub(crate) rangers_only: Option<super::tracking::RangersOnly>,
     draft: draft::Draft,
     refusals: Refusals,
+}
+
+/// Only deferred gameplay intents need a script world stamp. Each ordinary
+/// setter clears the corresponding stamp, so native replacement stays native.
+#[derive(Default)]
+struct ScriptRequests {
+    target: Option<crate::script::ExpectedWorld>,
+    guild: Option<crate::script::ExpectedWorld>,
+    sharing: Option<crate::script::ExpectedWorld>,
+    follow: Option<crate::script::ExpectedWorld>,
+}
+
+#[allow(clippy::needless_pass_by_value)]
+pub(crate) fn guard_script_requests(
+    mut chat: ResMut<ChatState>,
+    online: Res<super::online::OnlineState>,
+) {
+    fn withdraw(
+        scope: &mut Option<crate::script::ExpectedWorld>,
+        online: &super::online::OnlineState,
+    ) -> Option<String> {
+        let reason = scope.as_ref()?.refusal(online)?;
+        *scope = None;
+        Some(reason)
+    }
+    let chat = &mut *chat;
+    let mut refusal = None;
+    if let Some(reason) = withdraw(&mut chat.script_requests.target, &online)
+        && chat.requested_target.take().is_some()
+    {
+        refusal = Some(reason);
+    }
+    if let Some(reason) = withdraw(&mut chat.script_requests.guild, &online)
+        && chat.guild_asked.take().is_some()
+    {
+        refusal = Some(reason);
+    }
+    if let Some(reason) = withdraw(&mut chat.script_requests.sharing, &online)
+        && chat.sharing_asked.take().is_some()
+    {
+        refusal = Some(reason);
+    }
+    if let Some(reason) = withdraw(&mut chat.script_requests.follow, &online)
+        && chat.follow_asked.take().is_some()
+    {
+        refusal = Some(reason);
+    }
+    if let Some(reason) = refusal {
+        chat.refuse(reason);
+    }
 }
 
 struct LinkScope {
@@ -869,9 +920,10 @@ pub(super) fn input(
     ),
     mut typing: ResMut<crate::keys::Typing>,
     (mut keyboard, mouse): (MessageReader<KeyboardInput>, Res<ButtonInput<MouseButton>>),
-    (keys, authored): (
+    (keys, authored, script): (
         Option<Res<ButtonInput<Key>>>,
         Option<Res<crate::script::AuthoredInput>>,
+        Option<Res<crate::script::Script>>,
     ),
     mut clipboard: Option<ResMut<bevy::clipboard::Clipboard>>,
     mut paste: Local<paste::Paste>,
@@ -995,7 +1047,13 @@ pub(super) fn input(
             {
                 state.refuse("Use a named social step in a local script.");
             } else {
-                submit_draft(&mut state, &mut typing, &mut online, &outbox, &qol);
+                let admission = if scripted_submit {
+                    script.as_ref().and_then(|script| script.chat_admission())
+                } else {
+                    None
+                };
+                let dispatch = outbox.for_script(admission);
+                submit_draft(&mut state, &mut typing, &mut online, &dispatch, &qol);
             }
         }
     }
@@ -1486,8 +1544,8 @@ fn spawn_line(
 /// Starts a line's words with the time it arrived, by the computer's clock,
 /// as the chat log writes the time of day ([`Fix::ShowTimesInChat`]); its
 /// item links move along with the words.
-fn stamp(message: &mut Message, at: chrono::NaiveDateTime) {
-    let time = at.format("[%H:%M:%S] ").to_string();
+fn stamp(message: &mut Message, at: jiff::civil::DateTime) {
+    let time = at.strftime("[%H:%M:%S] ").to_string();
     for link in &mut message.item_links {
         link.text_start += time.len();
         link.text_end += time.len();
@@ -1587,14 +1645,17 @@ fn submit_line(
         return contacts_command(contacts, active, state, online, outbox, qol);
     }
     if let Some(guild) = super::guild::Command::typed(&command) {
+        state.script_requests.guild = outbox.script_world(online.world());
         state.guild_asked = Some(guild);
         return Ok(());
     }
     if let Some(sharing) = super::sharing::Command::typed(&command) {
+        state.script_requests.sharing = outbox.script_world(online.world());
         state.sharing_asked = Some(sharing);
         return Ok(());
     }
     if super::motion::FollowAsked::typed(&command) {
+        state.script_requests.follow = outbox.script_world(online.world());
         state.follow_asked = Some(super::motion::FollowAsked);
         return Ok(());
     }
@@ -1607,7 +1668,9 @@ fn submit_line(
         state.socials.stop = true;
         return Ok(());
     }
-    if let Some(request) = client_request(&command, state) {
+    if let Some(request) =
+        client_request_in_scope(&command, state, outbox.script_world(online.world()))
+    {
         return Ok(request?);
     }
     if let Some(result) = super::pet::target_command(&command, online, outbox) {
@@ -1656,7 +1719,10 @@ fn contacts_command(
             None => state.contacts.asked = Some(Asked::NoReply),
         },
         Command::ReplyTarget => match latest {
-            Some(name) => state.requested_target = Some(name),
+            Some(name) => {
+                state.script_requests.target = outbox.script_world(online.world());
+                state.requested_target = Some(name);
+            }
             None => state.contacts.asked = Some(Asked::NoReplyTarget),
         },
         Command::Friends(name) => state.contacts.asked = Some(Asked::Friends(name)),
@@ -1778,6 +1844,7 @@ pub(super) fn run_game_command(
     };
     let command = command.as_ref();
     if super::motion::FollowAsked::typed(command) {
+        chat.script_requests.follow = outbox.script_world(online.world());
         chat.follow_asked = Some(super::motion::FollowAsked);
         return;
     }
@@ -1795,12 +1862,24 @@ pub(super) fn run_game_command(
 /// A slash command the client answers itself, noted for the system that
 /// answers it: `/target Name`, a plain `/who`, `/loc`, `/time`, `/log`,
 /// `/shownames` or `/raidwindow`. None for any other line.
+#[cfg(test)]
 pub(super) fn client_request(input: &str, state: &mut ChatState) -> Option<Result<(), String>> {
+    client_request_in_scope(input, state, None)
+}
+
+pub(super) fn client_request_in_scope(
+    input: &str,
+    state: &mut ChatState,
+    scope: Option<crate::script::ExpectedWorld>,
+) -> Option<Result<(), String>> {
     if let Some(request) = super::socials::Request::parse(input) {
         return Some(request.and_then(|request| state.queue_social(request, None)));
     }
     if let Some(request) = target_request(input) {
-        return Some(request.map(|name| state.requested_target = Some(name)));
+        return Some(request.map(|name| {
+            state.script_requests.target = scope;
+            state.requested_target = Some(name);
+        }));
     }
     if let Some(asked) = super::whereabouts::Asked::typed(input) {
         state.asked = Some(asked);
@@ -2585,9 +2664,7 @@ mod tests {
             .insert_resource(crate::online::OnlineState::new(false))
             .add_systems(Update, refresh);
         app.world_mut().spawn(Content::default());
-        let at = chrono::NaiveDate::from_ymd_opt(2026, 10, 3)
-            .and_then(|day| day.and_hms_opt(17, 42, 5))
-            .unwrap();
+        let at = jiff::civil::date(2026, 10, 3).at(17, 42, 5, 0);
         let auction = crate::preview::chat_lines()
             .into_iter()
             .find(|line| line.channel == ChannelName::Auction)
@@ -2632,6 +2709,57 @@ mod tests {
         assert!(target_request("/target  ").unwrap().is_err());
         assert_eq!(target_request("/targetx rat"), None);
         assert_eq!(target_request("target rat"), None);
+    }
+
+    #[test]
+    fn deferred_gameplay_requests_keep_scope_and_native_replacements_clear_it() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut app = crate::testing::app();
+        let mut online = super::super::online::OnlineState::new(true);
+        crate::online::testing::admit(&mut online, 1, crate::online::testing::player(7));
+        let outbox = crate::outbox::Outbox::new(None);
+        let mut chat = ChatState::default();
+        let scoped = outbox.for_script(Some(1));
+        for line in [
+            "/target Scoped",
+            "/guildmotd scoped",
+            "/split 0 0 0 1",
+            "/follow",
+        ] {
+            submit_social_line(line, &mut chat, &mut online, &scoped, &Settings::default())
+                .unwrap();
+        }
+        assert!(
+            chat.requested_target.is_some()
+                && chat.guild_asked.is_some()
+                && chat.sharing_asked.is_some()
+                && chat.follow_asked.is_some()
+        );
+        // Replacing just the guild intent through the original native outbox
+        // leaves that one ordinary, even while the scoped facade still exists.
+        submit_social_line(
+            "/guildmotd native",
+            &mut chat,
+            &mut online,
+            &outbox,
+            &Settings::default(),
+        )
+        .unwrap();
+        crate::online::testing::admit(&mut online, 2, crate::online::testing::player(7));
+        app.insert_resource(online).insert_resource(chat);
+        app.world_mut()
+            .run_system_once(guard_script_requests)
+            .unwrap();
+        let chat = app.world().resource::<ChatState>();
+        assert!(
+            chat.requested_target.is_none()
+                && chat.sharing_asked.is_none()
+                && chat.follow_asked.is_none()
+        );
+        assert_eq!(
+            chat.guild_asked,
+            Some(crate::guild::Command::SetMotd("native".into()))
+        );
     }
 
     #[test]

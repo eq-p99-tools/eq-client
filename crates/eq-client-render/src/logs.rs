@@ -69,7 +69,7 @@ pub(crate) fn write(
     ) else {
         return;
     };
-    let now = chrono::Local::now().naive_local();
+    let now = jiff::Zoned::now().datetime();
     let mut text = String::new();
     // A line in this client's own words is never the official client's,
     // so the log leaves it out (`logs::words`).

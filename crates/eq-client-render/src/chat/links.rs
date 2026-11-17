@@ -148,7 +148,7 @@ mod tests {
                     parent,
                     &eq_client_core::chat::Arrival {
                         id: 1,
-                        at: chrono::NaiveDateTime::default(),
+                        at: jiff::civil::date(1970, 1, 1).at(0, 0, 0, 0),
                         line: &line,
                     },
                     (None, times),

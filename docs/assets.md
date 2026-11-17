@@ -28,6 +28,15 @@ complete coverage for every race, armor set, animation or custom UI atlas.
 Terrain, collision and zone regions share coordinate conversions in
 `eq-client-axes`.
 
+Item icons use the selected skin's `A_DragItem` grid: declared filenames,
+frame origins and sizes, cell dimensions, sheet order and numbering direction.
+The existing item-icon numbering starts at 500 for the first cell. Rectangles
+must fit both declared texture bounds (when supplied) and the decoded image.
+Missing, malformed or out-of-range metadata preserves the window's ordinary
+placeholder or label; the log labels missing layout metadata as unverified.
+Cell registration follows SIDL and still needs visual validation for a custom
+skin. This does not establish official executable lookup parity.
+
 Character creation also previews Luclin models where its server policy uses
 those appearance options. It reads layered face textures, hair/beard attachments
 and the installed executable's color palette locally. See the

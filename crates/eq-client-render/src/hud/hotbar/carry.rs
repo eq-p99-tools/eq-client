@@ -184,6 +184,18 @@ impl Presses {
     pub(crate) fn clicked(&self, control: Entity) -> bool {
         self.clicked == Some(control)
     }
+
+    /// Withdraw a script-owned control without clearing another native
+    /// control's hold, click, cursor shortcut or drag ownership.
+    pub(crate) fn cancel_target(&mut self, control: Entity) {
+        if self.held.is_some_and(|held| held.entity == control) {
+            self.held = None;
+            self.editing = None;
+        }
+        if self.clicked == Some(control) {
+            self.clicked = None;
+        }
+    }
 }
 
 #[cfg(test)]

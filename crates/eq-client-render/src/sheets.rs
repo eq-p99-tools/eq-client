@@ -7,7 +7,7 @@ use eq_client_assets::{
     sidl::{Library, Piece},
     ui::texture,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 type CutKey = (String, String, [u32; 4]);
 
@@ -23,6 +23,7 @@ pub(crate) struct Sheets {
     visible: BTreeMap<CutKey, bool>,
     /// Animation definitions, including missing libraries, read once per skin.
     libraries: BTreeMap<String, Option<Library>>,
+    missing_item_grid: BTreeSet<String>,
 }
 
 /// Cuts icons out of the skin's sheets.
@@ -52,10 +53,29 @@ impl Art<'_> {
         visible.then(|| self.cut(piece)).flatten()
     }
 
-    /// An item's icon.
+    /// An item's icon in the installed skin's authored drag-item grid. The
+    /// existing icon-ID mapping starts at 500; sheet layout comes from SIDL.
     pub(crate) fn item(&mut self, icon: u32) -> Option<ImageNode> {
-        let (sheet, rect) = item_cell(icon)?;
-        self.piece(&format!("dragitem{sheet}.tga"), rect)
+        let index = icon.checked_sub(500)?;
+        let grid = self
+            .library()
+            .and_then(|library| library.named_grid("A_DragItem"));
+        let Some(grid) = grid else {
+            let skin = self.sheets.drawing.as_ref().unwrap_or(&self.skin.0).clone();
+            if self.sheets.missing_item_grid.insert(skin) {
+                warn!(
+                    "Item icon layout unavailable; keeping fallback artwork (skin layout unverified)"
+                );
+            }
+            return None;
+        };
+        let cell = grid.cell(index)?;
+        let handle = self.texture(&cell.texture)?;
+        let size = self.images.get(&handle)?.size();
+        if cell.x.checked_add(cell.width)? > size.x || cell.y.checked_add(cell.height)? > size.y {
+            return None;
+        }
+        self.cut(&cell)
     }
 
     /// A spell's icon.
@@ -179,16 +199,6 @@ pub(crate) fn image(pixels: image::RgbaImage) -> Image {
     texture
 }
 
-/// Titanium's 40px drag-item cells are column-major, starting at icon 500.
-fn item_cell(icon: u32) -> Option<(u32, Rect)> {
-    let index = icon.checked_sub(500)?;
-    let sheet = index / 36 + 1;
-    let cell = index % 36;
-    let x = f32::from(u16::try_from(cell / 6 * 40).ok()?);
-    let y = f32::from(u16::try_from(cell % 6 * 40).ok()?);
-    Some((sheet, Rect::new(x, y, x + 40.0, y + 40.0)))
-}
-
 #[cfg(test)]
 pub(crate) mod testing {
     use super::*;
@@ -217,7 +227,7 @@ pub(crate) mod testing {
         let handle = app
             .world_mut()
             .resource_mut::<Assets<Image>>()
-            .add(Image::default());
+            .add(image(image::RgbaImage::new(256, 256)));
         let mut sheets = Sheets::default();
         let skin = app
             .world()
@@ -232,14 +242,18 @@ pub(crate) mod testing {
                 .insert((skin.clone(), file), Some(handle.clone()));
         }
         let mut frames = String::new();
+        let mut items = String::new();
         for sheet in 1..=4 {
             write!(frames, "<Frames><Texture>spells{sheet:02}.tga</Texture><Location><X>0</X><Y>0</Y></Location>\
                 <Size><CX>240</CX><CY>240</CY></Size></Frames>").unwrap();
+            write!(items, "<Frames><Texture>dragitem{sheet}.tga</Texture><Size><CX>256</CX><CY>256</CY></Size></Frames>").unwrap();
         }
         let animations = format!(
             "<XML><Ui2DAnimation item=\"A_SpellIcons\">\
             <Grid>true</Grid><CellWidth>40</CellWidth><CellHeight>40</CellHeight>\
-            {frames}</Ui2DAnimation></XML>"
+            {frames}</Ui2DAnimation><Ui2DAnimation item=\"A_DragItem\">\
+            <Grid>true</Grid><Vertical>true</Vertical><CellWidth>40</CellWidth><CellHeight>40</CellHeight>\
+            {items}</Ui2DAnimation></XML>"
         );
         sheets
             .libraries
@@ -264,6 +278,119 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
 
     #[test]
+    fn item_registration_uses_authored_origins_cells_order_and_real_file_dimensions() {
+        let mut app = crate::testing::app();
+        app.world_mut()
+            .resource_mut::<crate::ViewerSettings>()
+            .0
+            .eq_directory = Some("synthetic-install".into());
+        let first = testing::sheet(&mut app, "custom-b.tga", image::RgbaImage::new(40, 30));
+        let second = testing::sheet(&mut app, "custom-a.tga", image::RgbaImage::new(20, 15));
+        testing::definitions(
+            &mut app,
+            "<XML><Ui2DAnimation item=\"A_DragItem\">\
+            <Grid>true</Grid><Vertical>true</Vertical><CellWidth>14</CellWidth><CellHeight>10</CellHeight>\
+            <Frames><Texture>custom-b.tga</Texture><Location><X>3</X><Y>5</Y></Location>\
+            <Size><CX>28</CX><CY>20</CY></Size></Frames>\
+            <Frames><Texture>custom-a.tga</Texture><Location><X>2</X><Y>3</Y></Location>\
+            <Size><CX>14</CX><CY>10</CY></Size></Frames></Ui2DAnimation></XML>",
+        );
+        app.world_mut()
+            .run_system_once(move |mut art: Art| {
+                assert!(art.item(499).is_none());
+                for (id, handle, rect) in [
+                    (500, first.clone(), Rect::new(3.0, 5.0, 17.0, 15.0)),
+                    (501, first.clone(), Rect::new(3.0, 15.0, 17.0, 25.0)),
+                    (502, first.clone(), Rect::new(17.0, 5.0, 31.0, 15.0)),
+                    (503, first.clone(), Rect::new(17.0, 15.0, 31.0, 25.0)),
+                    (504, second.clone(), Rect::new(2.0, 3.0, 16.0, 13.0)),
+                ] {
+                    let image = art.item(id).unwrap();
+                    assert_eq!(image.image, handle);
+                    assert_eq!(image.rect, Some(rect));
+                }
+                assert!(art.item(505).is_none());
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn item_metadata_missing_or_outside_the_actual_image_preserves_fallback() {
+        let mut app = crate::testing::app();
+        app.world_mut()
+            .resource_mut::<crate::ViewerSettings>()
+            .0
+            .eq_directory = Some("synthetic-install".into());
+        testing::sheet(&mut app, "custom.tga", image::RgbaImage::new(12, 10));
+        testing::definitions(
+            &mut app,
+            "<XML><Ui2DAnimation item=\"A_DragItem\">\
+            <Grid>true</Grid><CellWidth>12</CellWidth><CellHeight>10</CellHeight>\
+            <Frames><Texture>custom.tga</Texture><Size><CX>24</CX><CY>10</CY></Size></Frames>\
+            </Ui2DAnimation></XML>",
+        );
+        app.world_mut()
+            .run_system_once(|mut art: Art| {
+                assert!(art.item(500).is_some());
+                assert!(art.item(501).is_none());
+            })
+            .unwrap();
+        testing::definitions(&mut app, "<XML/>");
+        app.world_mut()
+            .run_system_once(|mut art: Art| {
+                assert!(art.item(500).is_none());
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn item_grids_resolve_per_selected_skin_and_support_horizontal_numbering() {
+        let mut app = crate::testing::app();
+        app.world_mut()
+            .resource_mut::<crate::ViewerSettings>()
+            .0
+            .eq_directory = Some("synthetic-install".into());
+        let skin = app.world().resource::<crate::skin::UiSkin>().0.clone();
+        testing::sheet(&mut app, "cells.tga", image::RgbaImage::new(24, 20));
+        testing::definitions(
+            &mut app,
+            "<XML><Ui2DAnimation item=\"A_DragItem\">\
+            <Grid>true</Grid><CellWidth>12</CellWidth><CellHeight>10</CellHeight>\
+            <Frames><Texture>cells.tga</Texture><Size><CX>24</CX><CY>20</CY></Size></Frames>\
+            </Ui2DAnimation></XML>",
+        );
+        app.world_mut().resource_mut::<crate::skin::UiSkin>().0 = "other".into();
+        testing::sheet(&mut app, "other.tga", image::RgbaImage::new(8, 8));
+        testing::definitions(
+            &mut app,
+            "<XML><Ui2DAnimation item=\"A_DragItem\">\
+            <Grid>true</Grid><CellWidth>8</CellWidth><CellHeight>8</CellHeight>\
+            <Frames><Texture>other.tga</Texture><Size><CX>8</CX><CY>8</CY></Size></Frames>\
+            </Ui2DAnimation></XML>",
+        );
+        app.world_mut()
+            .run_system_once(move |mut art: Art| {
+                assert_eq!(
+                    art.item(500).unwrap().rect,
+                    Some(Rect::new(0.0, 0.0, 8.0, 8.0))
+                );
+                assert!(art.item(501).is_none());
+                art.draw_in(Some(skin.clone()));
+                assert_eq!(
+                    art.item(501).unwrap().rect,
+                    Some(Rect::new(12.0, 0.0, 24.0, 10.0))
+                );
+                assert_eq!(
+                    art.item(502).unwrap().rect,
+                    Some(Rect::new(0.0, 10.0, 12.0, 20.0))
+                );
+                art.draw_in(None);
+                assert!(art.item(501).is_none());
+            })
+            .unwrap();
+    }
+
+    #[test]
     fn empty_icon_regions_preserve_the_fallback_even_on_nonempty_sheets() {
         let mut pixels = image::RgbaImage::new(4, 4);
         pixels.put_pixel(0, 0, image::Rgba([255; 4]));
@@ -281,15 +408,6 @@ mod tests {
         assert!(!visible_pixels(&pixels, &piece));
         piece.x = 3;
         assert!(!visible_pixels(&pixels, &piece));
-    }
-
-    #[test]
-    fn item_cells_follow_columns_and_advance_sheets() {
-        assert!(item_cell(499).is_none());
-        assert_eq!(item_cell(500), Some((1, Rect::new(0.0, 0.0, 40.0, 40.0))));
-        assert_eq!(item_cell(501), Some((1, Rect::new(0.0, 40.0, 40.0, 80.0))));
-        assert_eq!(item_cell(506), Some((1, Rect::new(40.0, 0.0, 80.0, 40.0))));
-        assert_eq!(item_cell(536), Some((2, Rect::new(0.0, 0.0, 40.0, 40.0))));
     }
 
     #[test]

@@ -41,7 +41,7 @@ impl Asked {
 fn answer(
     asked: Asked,
     world: &ClientWorld,
-    earth: chrono::NaiveDateTime,
+    earth: jiff::civil::DateTime,
     messages: &Messages,
     clock: ClientClock,
 ) -> Result<Vec<Said>, String> {
@@ -96,7 +96,7 @@ pub(super) fn answers(
     };
     let empty = Messages::default();
     let messages = messages.as_deref().unwrap_or(&empty);
-    let now = chrono::Local::now().naive_local();
+    let now = jiff::Zoned::now().datetime();
     let clock = settings.0.installed_client.clock();
     match answer(asked, online.world(), now, messages, clock) {
         Ok(lines) => {
@@ -130,10 +130,7 @@ mod tests {
         player.position.x = 2.0;
         player.position.y = 1.0;
         player.position.z = 3.0;
-        let earth = chrono::NaiveDate::from_ymd_opt(2026, 10, 3)
-            .unwrap()
-            .and_hms_opt(12, 0, 0)
-            .unwrap();
+        let earth = jiff::civil::date(2026, 10, 3).at(12, 0, 0, 0);
         assert_eq!(
             answer(Asked::Location, state.world(), earth, &messages, TITANIUM),
             Err("Enter the world first".into())
@@ -190,10 +187,7 @@ mod tests {
 12389 Earth %1
 ",
         );
-        let earth = chrono::NaiveDate::from_ymd_opt(2026, 10, 3)
-            .unwrap()
-            .and_hms_opt(12, 0, 0)
-            .unwrap();
+        let earth = jiff::civil::date(2026, 10, 3).at(12, 0, 0, 0);
         let mut state = OnlineState::new(true);
         testing::admit(&mut state, 1, testing::player(7));
         // Wire hour 13, the calendar's 12: the Mac client shows 1 PM.

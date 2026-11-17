@@ -2158,7 +2158,7 @@ pub(super) fn input(
             );
             (world.support(landing).is_some()
                 && intent.request.admits_with_heading(
-                    accepted.position,
+                    carried_position,
                     resolved,
                     heading_update,
                     intent.longitudinal,
@@ -7465,6 +7465,148 @@ pub(super) mod tests {
         let sign = if side == StrafeSide::Left { -1.0 } else { 1.0 };
         assert!((delta.dot(facing) - 6.0 * span).abs() < 0.001);
         assert!((delta.dot(facing.cross(Vec3::Y)) - sign * 3.0 * span).abs() < 0.001);
+    }
+
+    fn carried_diagonal_app() -> (
+        App,
+        mpsc::Receiver<ClientCommand>,
+        eq_client_core::WorldPosition,
+    ) {
+        use eq_client_core::{GameDialect, SpawnKind, SpawnState, WorldEvent};
+        let (mut app, receiver, _, _) = keyboard_mouse_look_app();
+        let origin = app
+            .world()
+            .resource::<online::OnlineState>()
+            .world()
+            .player()
+            .unwrap()
+            .position;
+        let start = Instant::now()
+            .checked_sub(Duration::from_millis(100))
+            .unwrap();
+        let mut carriers = eq_client_core::movement::Carriers::default();
+        let spawned = carriers.observe(
+            &WorldEvent::Spawns(vec![SpawnState {
+                spawn_id: 8,
+                race: 72,
+                kind: SpawnKind::Npc,
+                position: eq_client_core::WorldPosition::default(),
+                class: None,
+                name: String::new(),
+                gender: 2,
+                velocity: [0.0; 3],
+                forward: 0.0,
+                walk_speed: 0.0,
+                run_speed: 0.0,
+                size: 1.0,
+                invisible: false,
+                appearance: eq_client_core::outfit::Appearance::default(),
+                level: 1,
+                listing: eq_client_core::listing::Listing::default(),
+                pet_owner: None,
+                hp_percent: None,
+                posture: None,
+                name_parts: eq_client_core::names::NameParts::default(),
+            }]),
+            GameDialect::Titanium,
+            start,
+        );
+        let riding = boats::Riding {
+            sample: carriers.latest(8).unwrap().sample(),
+            pose: eq_client_core::WorldPosition::default(),
+            position: origin,
+        };
+        let pose = eq_client_core::WorldPosition {
+            x: 100.0,
+            ..eq_client_core::WorldPosition::default()
+        };
+        let moved = carriers.observe(
+            &WorldEvent::Position {
+                spawn_id: 8,
+                position: pose,
+                velocity: [0.0; 3],
+                forward: 0.0,
+            },
+            GameDialect::Titanium,
+            Instant::now(),
+        );
+        online::testing::news(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            [WorldEvent::Carriers(spawned), WorldEvent::Carriers(moved)],
+        );
+        // Plain ground under the endpoint means this sample leaves the boat.
+        app.insert_resource(Collision(Some(
+            CollisionWorld::new([
+                [
+                    [-1000.0, 0.0, -1000.0],
+                    [1000.0, 0.0, -1000.0],
+                    [1000.0, 0.0, 1000.0],
+                ],
+                [
+                    [-1000.0, 0.0, -1000.0],
+                    [1000.0, 0.0, 1000.0],
+                    [-1000.0, 0.0, 1000.0],
+                ],
+            ])
+            .unwrap(),
+        )));
+        let mut controls = app.world_mut().resource_mut::<Controls>();
+        controls.boat = Some(riding);
+        controls.last_sent = Some(start);
+        controls.last_accepted = start;
+        let carried = eq_client_core::movement::carrier_world(pose, origin);
+        (app, receiver, carried)
+    }
+
+    #[test]
+    fn a_diagonal_walk_off_a_fast_boat_keeps_both_components_and_clears_on_acceptance() {
+        let (mut app, receiver, carried) = carried_diagonal_app();
+        let prior = app.world().resource::<Controls>().boat.unwrap();
+        crate::camera::testing::button(&mut app, MouseButton::Right, true);
+        native_movement_key(&mut app, KeyCode::KeyW, true);
+        native_movement_key(&mut app, KeyCode::KeyD, true);
+        app.update();
+        let ClientCommand::Move(leaving) = receiver.try_recv().unwrap() else {
+            panic!("expected the diagonal leaving sample");
+        };
+        assert_diagonal_step(&app, carried, &leaving, StrafeSide::Right);
+        assert!(matches!(leaving.support, Some(Support::Spawn(sample)) if sample.spawn_id == 8));
+        assert!(
+            app.world()
+                .resource::<Controls>()
+                .boat_pending
+                .unwrap()
+                .1
+                .is_none()
+        );
+        app.world_mut().resource_mut::<Controls>().move_refused(
+            Some(11),
+            leaving.created,
+            "synthetic refusal",
+        );
+        assert_eq!(
+            app.world().resource::<Controls>().boat.unwrap().position,
+            prior.position
+        );
+        app.world_mut().resource_mut::<Controls>().last_accepted = Instant::now()
+            .checked_sub(Duration::from_millis(100))
+            .unwrap();
+        app.update();
+        let ClientCommand::Move(retry) = receiver.try_recv().unwrap() else {
+            panic!("expected a fresh diagonal leaving sample");
+        };
+        assert_diagonal_step(&app, carried, &retry, StrafeSide::Right);
+        accept(&mut app, &retry);
+        app.world_mut()
+            .resource_mut::<Controls>()
+            .resolve_carrier(retry.created, false);
+        assert!(app.world().resource::<Controls>().boat.is_none());
+        app.update();
+        let ClientCommand::Move(ordinary) = receiver.try_recv().unwrap() else {
+            panic!("expected an ordinary diagonal after walking off");
+        };
+        assert!(ordinary.support.is_none());
+        assert_diagonal_step(&app, retry.position, &ordinary, StrafeSide::Right);
     }
 
     #[test]

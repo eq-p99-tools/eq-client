@@ -26,8 +26,8 @@ pub fn file_name(character: &str, server: &str) -> String {
 /// official client ends every line of its logs. The words go as they are,
 /// non-ASCII text in the UTF-8 the server sent it in.
 #[must_use]
-pub fn line(time: chrono::NaiveDateTime, words: &str) -> String {
-    format!("[{}] {words}\r\n", time.format("%a %b %d %H:%M:%S %Y"))
+pub fn line(time: jiff::civil::DateTime, words: &str) -> String {
+    format!("[{}] {words}\r\n", time.strftime("%a %b %d %H:%M:%S %Y"))
 }
 
 /// What a chat line says in a log: the installed client's string for it,
@@ -168,10 +168,7 @@ mod tests {
 
     #[test]
     fn lines_read_as_the_official_clients_do() {
-        let time = chrono::NaiveDate::from_ymd_opt(2026, 10, 2)
-            .unwrap()
-            .and_hms_opt(2, 41, 5)
-            .unwrap();
+        let time = jiff::civil::date(2026, 10, 2).at(2, 41, 5, 0);
         assert_eq!(
             line(time, "Arrived in The Qeynos Hills."),
             "[Fri Oct 02 02:41:05 2026] Arrived in The Qeynos Hills.\r\n"
@@ -184,6 +181,51 @@ mod tests {
             file_name("Examplar", "ExampleWorld"),
             "eqlog_Examplar_ExampleWorld.txt"
         );
+    }
+
+    #[test]
+    fn log_dates_keep_english_names_padding_and_whole_seconds() {
+        for (time, expected) in [
+            (
+                jiff::civil::date(1970, 1, 1).at(0, 0, 0, 0),
+                "[Thu Jan 01 00:00:00 1970] words\r\n",
+            ),
+            (
+                jiff::civil::date(1969, 12, 31).at(23, 59, 59, 999_999_999),
+                "[Wed Dec 31 23:59:59 1969] words\r\n",
+            ),
+            (
+                jiff::civil::date(2024, 2, 29).at(2, 4, 5, 987_654_321),
+                "[Thu Feb 29 02:04:05 2024] words\r\n",
+            ),
+        ] {
+            assert_eq!(line(time, "words"), expected);
+        }
+    }
+
+    #[test]
+    fn local_dates_keep_timezone_offsets_and_daylight_saving() {
+        for (instant, log, earth) in [
+            (
+                "2024-07-04T02:04:05.987Z",
+                "[Wed Jul 03 22:04:05 2024] words\r\n",
+                "Wednesday, July 03, 2024 22:04:05",
+            ),
+            (
+                "2024-01-01T02:04:05.987Z",
+                "[Sun Dec 31 21:04:05 2023] words\r\n",
+                "Sunday, December 31, 2023 21:04:05",
+            ),
+        ] {
+            let local = instant
+                .parse::<jiff::Timestamp>()
+                .unwrap()
+                .in_tz("America/New_York")
+                .unwrap()
+                .datetime();
+            assert_eq!(line(local, "words"), log);
+            assert_eq!(crate::whereabouts::earth(local), earth);
+        }
     }
 
     fn heard(string_id: u32, arguments: &[&str], text: &str) -> Words {

@@ -1,6 +1,7 @@
 //! Bounded local requests. Receipts describe the executor, never server acceptance.
 use serde_json::Value;
 
+use super::super::ExpectedWorld;
 use super::runbook::{Definition, ResultUpdate};
 
 pub(super) const VERSION: u64 = 1;
@@ -12,6 +13,7 @@ pub(super) struct Envelope {
     pub instance: String,
     pub id: u64,
     pub operation: Operation,
+    pub expected_world: Option<ExpectedWorld>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -97,8 +99,18 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Envelope, &'static str> {
         Operation::RunbookResult(_) => Some("result"),
         Operation::RunbookExport(_) => Some("runbook_id"),
     };
+    let expected_world = object
+        .get("expected_world")
+        .map(expected_world)
+        .transpose()?;
+    if expected_world.is_some() && !matches!(operation, Operation::Start(_)) {
+        return Err("Only start accepts expected_world");
+    }
     if object.keys().any(|key| {
-        !matches!(key.as_str(), "version" | "instance" | "id" | "op") && Some(key.as_str()) != extra
+        !matches!(
+            key.as_str(),
+            "version" | "instance" | "id" | "op" | "expected_world"
+        ) && Some(key.as_str()) != extra
     }) {
         return Err("Request contains an unexpected field");
     }
@@ -106,6 +118,32 @@ pub(super) fn parse(bytes: &[u8]) -> Result<Envelope, &'static str> {
         instance: instance.to_owned(),
         id,
         operation,
+        expected_world,
+    })
+}
+
+fn expected_world(value: &Value) -> Result<ExpectedWorld, &'static str> {
+    let expected = value
+        .as_object()
+        .ok_or("expected_world must be an object")?;
+    if expected.len() != 2 {
+        return Err("expected_world requires only admission_id and zone");
+    }
+    let admission_id = expected
+        .get("admission_id")
+        .and_then(Value::as_u64)
+        .filter(|id| *id != 0)
+        .ok_or("expected_world requires a positive admission_id")?;
+    let zone = expected
+        .get("zone")
+        .and_then(Value::as_str)
+        .filter(|zone| !zone.is_empty() && zone.len() <= 128 && !zone.chars().any(char::is_control))
+        .ok_or(
+            "expected_world requires the nonempty zone short name from status (up to 128 bytes)",
+        )?;
+    Ok(ExpectedWorld {
+        admission_id,
+        zone: zone.to_owned(),
     })
 }
 
@@ -174,5 +212,41 @@ mod tests {
         let bounded = message(&"é".repeat(MAX_MESSAGE_BYTES));
         assert_eq!(bounded.len(), MAX_MESSAGE_BYTES);
         assert!(bounded.chars().all(|character| character == 'é'));
+    }
+
+    #[test]
+    fn world_scope_is_optional_but_requires_both_identifiers_only_on_start() {
+        let start = json!({"version":1,"instance":"one","id":1,"op":"start","source":"wait 1\n"});
+        assert!(
+            parse(&serde_json::to_vec(&start).unwrap())
+                .unwrap()
+                .expected_world
+                .is_none()
+        );
+        for expected in [
+            json!(null),
+            json!({"admission_id":7}),
+            json!({"zone":"samplezone"}),
+            json!({"admission_id":0,"zone":"samplezone"}),
+            json!({"admission_id":7,"zone":""}),
+            json!({"admission_id":7,"zone":"samplezone","extra":true}),
+        ] {
+            let mut invalid = start.clone();
+            invalid["expected_world"] = expected;
+            assert!(parse(&serde_json::to_vec(&invalid).unwrap()).is_err());
+        }
+        let mut valid = start;
+        valid["expected_world"] = json!({"admission_id":7,"zone":"SampleZone"});
+        assert_eq!(
+            parse(&serde_json::to_vec(&valid).unwrap())
+                .unwrap()
+                .expected_world
+                .unwrap()
+                .zone,
+            "SampleZone"
+        );
+        valid["op"] = json!("status");
+        valid.as_object_mut().unwrap().remove("source");
+        assert!(parse(&serde_json::to_vec(&valid).unwrap()).is_err());
     }
 }

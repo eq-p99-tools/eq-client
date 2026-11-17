@@ -1,5 +1,6 @@
 //! Synthetic control requests through the production receiver and driver.
 mod checklist;
+mod scope;
 
 use super::*;
 use crate::online::testing as session;
