@@ -117,6 +117,18 @@ shortfall of the read rule), and walking out of a door that moved into the
 player stay labelled (checklist 6.423-6.426, 6.428, 6.436, 6.439); Quarm and
 TAKP keep their own doors as before.
 
+Titanium carrier support stands on an available installed actor's authored
+solid geometry and carries the rider with its shared received-report pose.
+The exact race/gender actor registration is read at `eqgame.exe` 0x48c8af;
+no missing actor gets a guessed deck. Models load from zone and global character
+archives, including explicit installed zone imports. Model collision and rest
+poses are inferred (6.467), as are the fixed-step between-report path (6.468),
+600-unit rider reach and bounded frontend pose history (6.469), and zero own
+velocity/yaw/animation on a still rider's ordinary tick (6.470). Unit scenarios
+cover attachment, carry, turning, walking off and identity cleanup; source and
+synthetic coverage do not establish a live ride. Pitch and boat zoning remain
+unsupported, and public-server rides require attended validation.
+
 On EQEmu and P99, the class tools are the Titanium program's: Fishing's
 checks and cast line, Pick Pockets and Begging with their answers, the trap
 skills at a treasure, and Tracking with its window, which the skin draws

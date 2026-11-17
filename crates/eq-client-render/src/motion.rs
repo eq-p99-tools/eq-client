@@ -1,4 +1,7 @@
 //! Calibrated P99 input; no movement is generated without a session grant.
+#[cfg(test)]
+mod boat_pace_tests;
+mod boats;
 mod follow;
 mod placement;
 mod shoreline;
@@ -88,6 +91,11 @@ pub(super) struct Controls {
     /// height it put the model at: the next pass carries the feet by the
     /// lift's own rise since then, and the model is drawn on the floor.
     riding: Option<(u8, Instant, f32)>,
+    boat: Option<boats::Riding>,
+    /// A queued endpoint never becomes the next physics/display basis until
+    /// its exact movement result accepts it.
+    boat_pending: Option<(Instant, Option<boats::Riding>)>,
+    visual_boat: Option<boats::DisplayFrame>,
     sent_yaw: SentYaw,
     boundary: BoundaryTracker,
     placement: placement::Check,
@@ -124,6 +132,8 @@ pub(super) struct Controls {
     /// held, which the turn ramp counts from; None while neither or both
     /// are held.
     turn_held: Option<(bool, Instant)>,
+    /// Turn completed between samples, retained after the key is released.
+    released_turn: f32,
     /// Latest immediately displayed Titanium mouse heading awaiting a sample.
     mouse_heading: Option<f32>,
     /// What the samples sent lately asked of the controller and moved.
@@ -231,6 +241,9 @@ impl Default for Controls {
             moving: false,
             sent_span: 0.1,
             riding: None,
+            boat: None,
+            boat_pending: None,
+            visual_boat: None,
             sent_yaw: SentYaw::Ordinary,
             boundary: BoundaryTracker::default(),
             placement: placement::Check::default(),
@@ -248,6 +261,7 @@ impl Default for Controls {
             facing: None,
             mouse_turn: 0.0,
             turn_held: None,
+            released_turn: 0.0,
             mouse_heading: None,
             recent: RecentMotion::default(),
             last_sent: None,
@@ -356,6 +370,60 @@ impl Controls {
     /// turn in the sample's span is the player facing a new way at once, so
     /// it shows at once while the positions still play.
     pub fn display_sample(&mut self, from: Transform, position: eq_client_core::WorldPosition) {
+        self.display_in_frame(from, position, self.facing);
+    }
+
+    /// Plays accepted rider motion in the boat frame; carry is applied only
+    /// when drawing. Pending and refused endpoints never enter this queue.
+    pub(super) fn display_carrier_sample(
+        &mut self,
+        from: Transform,
+        position: eq_client_core::WorldPosition,
+        carriers: &eq_client_core::movement::Carriers,
+    ) {
+        let carried = self.boat.and_then(|riding| {
+            riding
+                .carried(carriers, Instant::now())
+                .map(|carried| (riding, carried))
+        });
+        if let Some(frame) = self.visual_boat
+            && carried.is_none_or(|(_, riding)| {
+                riding.sample.spawn_id != frame.sample.spawn_id
+                    || riding.sample.incarnation != frame.sample.incarnation
+            })
+        {
+            if let Some(visual) = self.visual.as_mut() {
+                visual.map(|transform| boats::to_world(frame.pose, transform));
+            }
+            self.visual_boat = None;
+        }
+        if let Some((riding, carried)) = carried {
+            if self.visual_boat.is_none()
+                && let Some(visual) = self.visual.as_mut()
+            {
+                visual.map(|transform| boats::to_local(carried.pose, transform));
+            }
+            let from = boats::to_local(carried.pose, from);
+            let local = eq_client_core::movement::carrier_local(riding.pose, position);
+            let facing = self
+                .facing
+                .map(|heading| (heading - carried.pose.heading).rem_euclid(512.0));
+            self.visual_boat = Some(boats::DisplayFrame {
+                sample: carried.sample,
+                pose: carried.pose,
+            });
+            self.display_in_frame(from, local, facing);
+        } else {
+            self.display_sample(from, position);
+        }
+    }
+
+    fn display_in_frame(
+        &mut self,
+        from: Transform,
+        position: eq_client_core::WorldPosition,
+        facing: Option<f32>,
+    ) {
         if self.refused.is_some()
             || self
                 .mouse_heading
@@ -364,7 +432,7 @@ impl Controls {
             self.mouse_heading = None;
         }
         let rotation = Quat::from_rotation_y(eq_client_core::render_heading(
-            self.facing.unwrap_or(position.heading),
+            facing.unwrap_or(position.heading),
         ));
         let to = Transform::from_translation(Vec3::from_array(eq_client_core::render_position(
             position,
@@ -627,6 +695,8 @@ impl Controls {
             self.crouch = None;
             self.facing = None;
             self.mouse_turn = 0.0;
+            self.turn_held = None;
+            self.released_turn = 0.0;
             self.mouse_heading = None;
         }
         if changed && revision.is_some() {
@@ -653,6 +723,8 @@ impl Controls {
         self.crouch = None;
         self.facing = None;
         self.mouse_turn = 0.0;
+        self.turn_held = None;
+        self.released_turn = 0.0;
         self.mouse_heading = None;
         self.moving = false;
         // The session schedules its paced stop when the permission changes.
@@ -669,6 +741,8 @@ impl Controls {
         self.taps = TapBuffer::default();
         self.jump = None;
         self.mouse_turn = 0.0;
+        self.turn_held = None;
+        self.released_turn = 0.0;
         if self.crouch == Some(Crouch::Over) {
             self.crouch = None;
         }
@@ -801,6 +875,31 @@ impl Controls {
         self.span(since_sent)
     }
 
+    /// Keeps the part of a key turn that ended before the next sample.
+    fn observe_turn(&mut self, turning: f32, now: Instant, cap: f32, owned: bool) {
+        if !owned {
+            self.turn_held = None;
+            self.released_turn = 0.0;
+            return;
+        }
+        if let Some((left, since)) = self.turn_held {
+            if turning != 0.0 && left == (turning > 0.0) {
+                return;
+            }
+            let held =
+                now.saturating_duration_since(since).as_secs_f32() + 1.0 / TURN_STEPS_PER_SECOND;
+            let sign = if left { 1.0 } else { -1.0 };
+            // The last answer can predate an in-flight request. Count only
+            // time after that request, never the turn it already consumed.
+            let span = self.last_sent.map_or_else(
+                || self.next_span(now),
+                |sent| self.span(now.saturating_duration_since(sent)),
+            );
+            self.released_turn += sign * ramped_turn(held - span, held, cap);
+        }
+        self.turn_held = (turning != 0.0).then_some((turning > 0.0, now));
+    }
+
     /// Applies a grant made in place whole once the next sample's span
     /// starts at or after its arrival, so no part of that sample ran under
     /// the earlier speeds. The span's start only moves later as time goes
@@ -846,6 +945,7 @@ impl Controls {
         let crouch = self.crouch.take();
         let taps = std::mem::take(&mut self.taps);
         let turn_held = self.turn_held;
+        let released_turn = self.released_turn;
         let speeds = self.speeds();
         let straddle = self.straddle;
         self.reset(None);
@@ -858,6 +958,7 @@ impl Controls {
             self.taps,
             self.turn_held,
         ) = (autorun, jump, crouch, taps, turn_held);
+        self.released_turn = released_turn;
         // Falls go on from the new place, with no momentum carried.
         if speeds.falls {
             self.airborne = Some(AirborneController::default());
@@ -879,6 +980,29 @@ impl Controls {
         false
     }
 
+    /// Settles only the matching proposed carrier link. A rejection retains
+    /// the previously accepted frame, which the carrier may still carry.
+    pub(super) fn resolve_carrier(&mut self, created: Instant, refused: bool) {
+        if self.boat_pending.is_some_and(|(at, _)| at == created) {
+            let (_, proposed) = self.boat_pending.take().expect("matching carrier proposal");
+            if !refused {
+                self.boat = proposed;
+            }
+        }
+    }
+
+    /// Accepted local carrier basis, for explicit script diagnostics.
+    pub(crate) fn carrier_support(
+        &self,
+    ) -> Option<(
+        eq_client_core::movement::CarrierSample,
+        eq_client_core::WorldPosition,
+        eq_client_core::WorldPosition,
+    )> {
+        self.boat
+            .map(|riding| (riding.sample, riding.pose, riding.position))
+    }
+
     pub(super) fn crossing_resolved(&mut self) {
         if self
             .pending
@@ -890,6 +1014,7 @@ impl Controls {
 
     pub(super) fn move_refused(&mut self, session_id: Option<u64>, created: Instant, reason: &str) {
         if self.is_pending_move(session_id, created) {
+            self.resolve_carrier(created, true);
             self.finish();
             self.resolve_water_entry(true);
             self.refused = Some(reason.to_owned());
@@ -1418,11 +1543,16 @@ pub(super) fn input(
     } else {
         0.0
     };
-    controls.turn_held = match (turning, controls.turn_held) {
-        (0.0, _) => None,
-        (turning, Some((left, since))) if left == (turning > 0.0) => Some((left, since)),
-        (turning, _) => Some((turning > 0.0, now)),
-    };
+    let cap = turn_cap(
+        controls.walking,
+        online.world().player().map_or(0, |player| player.race),
+    );
+    controls.observe_turn(
+        turning,
+        now,
+        cap,
+        focused && !lying && look.as_deref().is_none_or(|look| !look.held),
+    );
     if focused
         && !controls.stun_active
         && (swimming || shoreline_active)
@@ -1515,7 +1645,18 @@ pub(super) fn input(
         controls.held = Some(Held::Withdrawn);
         return;
     }
-    let origin = Vec3::from_array(eq_client_core::render_position(accepted.position));
+    let boat = if placement_blocked || flying || swimming {
+        None
+    } else {
+        controls
+            .boat
+            .and_then(|riding| riding.carried(online.world().carriers(), now))
+    };
+    if boat.is_none() {
+        controls.boat = None;
+    }
+    let carried_position = boat.map_or(accepted.position, |riding| riding.position);
+    let origin = Vec3::from_array(eq_client_core::render_position(carried_position));
     let feet = origin - Vec3::Y * body.feet_offset;
     // The lift the last sample stood on has carried the feet by its own rise
     // since, however long the frame took, as the program's floor sweep
@@ -1572,7 +1713,7 @@ pub(super) fn input(
             return;
         }
     }
-    let current_heading = accepted.position.heading;
+    let current_heading = carried_position.heading;
     // The clock runs from the previous sample's request stamp (which is
     // never after its answer came), so each sample covers the time since
     // the last one, its round trip included, and never more than the time
@@ -1812,6 +1953,7 @@ pub(super) fn input(
     // So does a heading sent that still turns toward the facing.
     if direction == Vec3::ZERO
         && turn == 0.0
+        && controls.released_turn == 0.0
         && !controls.moving
         && !airborne
         && !shoreline_active
@@ -1822,6 +1964,40 @@ pub(super) fn input(
         && diagonal.is_none()
         && follow_heading.is_none_or(|heading| arc(current_heading, heading) == 0.0)
     {
+        // Even without voluntary input, refresh the ordinary floor sweep's
+        // carrier link and submit its world pose through the existing gate.
+        if !placement_blocked
+            && !flying
+            && !swimming
+            && let Some((sample, pose)) = boats::under(world, online.world().carriers(), feet, now)
+        {
+            let position = world_position(origin.to_array(), current_heading);
+            let sent = outbox.post(online.world(), |stamp| {
+                ClientCommand::Move(
+                    MovementRequest::new(MovementMode::Forward, stamp.session_id, position, now)
+                        .supported_by(Support::Spawn(sample)),
+                )
+            });
+            if let Err(reason) = sent {
+                controls.send_failed(reason);
+                controls.held = Some(Held::Refused);
+                return;
+            }
+            controls.last_sent = Some(now);
+            controls.sent_span = span;
+            controls.boat_pending = Some((
+                now,
+                Some(boats::Riding {
+                    sample,
+                    pose,
+                    position,
+                }),
+            ));
+            controls.riding = None;
+            controls.held = None;
+            controls.wait_for(session_id, now, PendingKind::Move);
+            return;
+        }
         // A lift rising under a still player stands them on its new floor, as
         // the program's forced floor sweep does (0x4368b3, read R1).
         if !placement_blocked
@@ -2093,7 +2269,8 @@ pub(super) fn input(
         let held = controls.turn_held.map_or(0.0, |(_, since)| {
             now.saturating_duration_since(since).as_secs_f32() + 1.0 / TURN_STEPS_PER_SECOND
         });
-        (shown + turn * ramped_turn(held - span, held, cap)).rem_euclid(512.0)
+        (shown + controls.released_turn + turn * ramped_turn(held - span, held, cap))
+            .rem_euclid(512.0)
     } else {
         eq_client_core::world_heading(direction.x.atan2(direction.z))
     };
@@ -2114,18 +2291,34 @@ pub(super) fn input(
     // The sample names the lift that carried the origin, or the one under
     // the landing; only the one under the landing carries the next pass.
     let (support, under) = request_support(ride, world, lifts.as_deref(), landing);
+    let boat_under = if placement_blocked || flying || swimming {
+        None
+    } else {
+        boats::under(world, online.world().carriers(), landing, now)
+    };
+    // The sample that walks off still removes the carrying motion from its
+    // own budget. Only the floor under the landing carries the next pass.
+    let boat_sample = boat
+        .map(|riding| riding.sample)
+        .or(boat_under.map(|(sample, _)| sample));
     let mut created = now;
     let sent = outbox.post(online.world(), |stamp| {
         // Shoreline physics already ended at the observed frame. Its next
         // request must budget from that same tick, even if planning was slow.
-        created = shore.as_ref().map_or(stamp.created, |plan| plan.created);
+        created = if boat_sample.is_some() {
+            now
+        } else {
+            shore.as_ref().map_or(stamp.created, |plan| plan.created)
+        };
         ClientCommand::Move(MovementRequest {
             mode,
             session_id: stamp.session_id,
             position: position_sent,
             heading: heading_update,
             created,
-            support: support.map(Support::Door),
+            support: boat_sample
+                .map(Support::Spawn)
+                .or(support.map(Support::Door)),
         })
     });
     if let Err(reason) = sent {
@@ -2150,6 +2343,15 @@ pub(super) fn input(
     controls.last_sent = Some(created);
     controls.sent_span = span;
     controls.riding = under.map(|door| (door, created, position.y));
+    controls.boat_pending = Some((
+        created,
+        boat_under.map(|(sample, pose)| boats::Riding {
+            sample,
+            pose,
+            position: position_sent,
+        }),
+    ));
+    debug!(target: "eq_client_render::motion::boats", support = ?boat_sample, linked = ?controls.boat, "Carrier floor sweep");
     controls.sent_yaw = if mouse_snapshot.is_some() {
         SentYaw::MouseSnapshot
     } else if mouse_aim.is_some() || follow_heading.is_some() && heading_snapshots {
@@ -2158,6 +2360,7 @@ pub(super) fn input(
         SentYaw::Ordinary
     };
     controls.mouse_turn -= mouse_step;
+    controls.released_turn = 0.0;
     controls.held = placement_blocked.then_some(Held::PlacementBlocked);
     // A landing's damage follows the sample that lands.
     if !placement_blocked
@@ -2680,6 +2883,16 @@ impl VisualMotion {
         }
     }
 
+    /// Re-expresses the whole accepted queue when entering or leaving a
+    /// carrier frame, preserving its timing and accepted endpoints.
+    fn map(&mut self, mut map: impl FnMut(Transform) -> Transform) {
+        self.from = map(self.from);
+        self.to = map(self.to);
+        for segment in &mut self.queue {
+            segment.to = map(segment.to);
+        }
+    }
+
     /// Where the newest accepted sample ends.
     fn last(&self) -> Transform {
         self.queue.back().map_or(self.to, |segment| segment.to)
@@ -2730,6 +2943,8 @@ pub(super) fn interpolate(
         && preview.is_none()
         && displayed_mouse.is_none()
         && controls.riding.is_none()
+        && controls.boat.is_none()
+        && controls.visual_boat.is_none()
     {
         return;
     }
@@ -2739,20 +2954,13 @@ pub(super) fn interpolate(
     };
     let had_preview = displayed_mouse.take() == Some(entity);
     let mut follow_heading = false;
+    let pace = controls
+        .visual
+        .as_ref()
+        .map(|_| (time.delta_secs(), transform.translation));
+    let advanced_in_boat = controls.visual.is_some() && controls.visual_boat.is_some();
     if let Some(visual) = controls.visual.as_mut() {
-        let seconds = time.delta_secs();
-        let before = transform.translation;
-        visual.advance(seconds, &mut transform);
-        if seconds > 0.0 {
-            let moved = transform.translation - before;
-            debug!(
-                target: "eq_client_render::motion::pace",
-                seconds,
-                shown_speed = moved.with_y(0.0).length() / seconds,
-                waiting = visual.queue.len(),
-                "Shown pace"
-            );
-        }
+        visual.advance(time.delta_secs(), &mut transform);
         follow_heading = visual.follow_heading;
         if visual.finished() {
             controls.visual = None;
@@ -2769,6 +2977,34 @@ pub(super) fn interpolate(
                 .rise(door, at, std::time::Instant::now());
         transform.translation.y = transform.translation.y.max(floor);
     }
+    if let Some(frame) = controls.visual_boat {
+        if let Some(report) = online
+            .world()
+            .carriers()
+            .latest(frame.sample.spawn_id)
+            .filter(|report| report.sample().incarnation == frame.sample.incarnation)
+        {
+            let pose = report.pose(Instant::now());
+            // advance() above writes local coordinates. With no remaining
+            // segment, recover the shown local point from its last frame.
+            if !advanced_in_boat {
+                *transform = boats::to_local(frame.pose, *transform);
+            }
+            *transform = boats::to_world(pose, *transform);
+            controls.visual_boat = Some(boats::DisplayFrame {
+                sample: report.sample(),
+                pose,
+            });
+        } else {
+            if let Some(visual) = controls.visual.as_mut() {
+                visual.map(|transform| boats::to_world(frame.pose, transform));
+            }
+            if advanced_in_boat {
+                *transform = boats::to_world(frame.pose, *transform);
+            }
+            controls.visual_boat = None;
+        }
+    }
     if let Some(heading) = preview {
         // Position still plays only accepted samples. An older queued pose
         // never overwrites the latest local mouse orientation.
@@ -2779,9 +3015,27 @@ pub(super) fn interpolate(
         let rotation =
             Quat::from_rotation_y(eq_client_core::render_heading(player.position.heading));
         transform.rotation = rotation;
+        let visual_rotation = controls.visual_boat.map_or(rotation, |frame| {
+            boats::to_local(frame.pose, Transform::default().with_rotation(rotation)).rotation
+        });
         if let Some(visual) = controls.visual.as_mut() {
-            visual.face(rotation);
+            visual.face(visual_rotation);
         }
+    }
+    // Both measurements are the drawn world-space root. A carrier queue
+    // temporarily writes local coordinates until the carry above restores
+    // them; measuring there would compare different coordinate frames.
+    if let Some((seconds, before)) = pace
+        && seconds > 0.0
+    {
+        let moved = transform.translation - before;
+        debug!(
+            target: "eq_client_render::motion::pace",
+            seconds,
+            shown_speed = moved.with_y(0.0).length() / seconds,
+            waiting = controls.visual.as_ref().map_or(0, |visual| visual.queue.len()),
+            "Shown pace"
+        );
     }
     for (mut camera, free) in &mut cameras {
         camera.focus = transform.translation;
@@ -4238,6 +4492,77 @@ pub(super) mod tests {
         for start in [0.0, 0.05, 0.13, 0.4] {
             assert!(ramped_turn(start, start + 0.25, 12.0) <= TURN_RATE * 0.25 + 1e-3);
         }
+    }
+
+    #[test]
+    fn a_released_turn_keeps_only_the_unsampled_part_and_focus_loss_discards_it() {
+        let start = Instant::now();
+        for left in [false, true] {
+            let mut controls = Controls {
+                turn_held: Some((left, start)),
+                last_sent: Some(start + Duration::from_millis(30)),
+                // An answer older than the in-flight sample cannot replay
+                // the turn that sample already consumed.
+                last_accepted: start,
+                ..Controls::default()
+            };
+            let released = start + Duration::from_millis(80);
+            controls.observe_turn(0.0, released, 12.0, true);
+            let held = 0.08 + 1.0 / TURN_STEPS_PER_SECOND;
+            let sign = if left { 1.0 } else { -1.0 };
+            let expected = sign * ramped_turn(held - 0.05, held, 12.0);
+            assert!((controls.released_turn - expected).abs() < 1e-4);
+            assert!(controls.turn_held.is_none());
+            controls.observe_turn(0.0, released + Duration::from_millis(10), 12.0, true);
+            assert!((controls.released_turn - expected).abs() < 1e-4);
+            controls.observe_turn(0.0, released, 12.0, false);
+            assert_eq!(controls.released_turn.to_bits(), 0.0_f32.to_bits());
+        }
+    }
+
+    #[test]
+    fn a_turn_released_while_the_sample_gate_is_closed_goes_with_the_next_sample() {
+        let (mut app, receiver) = app();
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.reset_all();
+        keys.press(KeyCode::KeyQ);
+        app.update();
+        let ClientCommand::Move(first) = receiver.try_recv().unwrap() else {
+            panic!("expected the first key turn");
+        };
+        accept(&mut app, &first);
+        let now = Instant::now();
+        {
+            let mut controls = app.world_mut().resource_mut::<Controls>();
+            controls.last_accepted = now;
+            controls.last_sent = now.checked_sub(Duration::from_millis(40));
+            controls.turn_held = Some((true, now.checked_sub(Duration::from_millis(40)).unwrap()));
+        }
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        app.update();
+        assert!(receiver.try_recv().is_err());
+        assert!(app.world().resource::<Controls>().released_turn > 0.0);
+        app.world_mut().resource_mut::<Controls>().last_accepted =
+            now.checked_sub(Duration::from_millis(100)).unwrap();
+        app.update();
+        let ClientCommand::Move(released) = receiver.try_recv().unwrap() else {
+            panic!("expected the completed key turn");
+        };
+        assert!(arc(first.position.heading, released.position.heading) > 0.0);
+        assert_eq!(released.position.x.to_bits(), first.position.x.to_bits());
+        assert_eq!(released.position.y.to_bits(), first.position.y.to_bits());
+        assert_eq!(
+            app.world().resource::<Controls>().released_turn.to_bits(),
+            0.0_f32.to_bits()
+        );
+        accept(&mut app, &released);
+        app.update();
+        let ClientCommand::Move(stop) = receiver.try_recv().unwrap() else {
+            panic!("expected a stop after the completed turn");
+        };
+        assert_eq!(stop.position, released.position);
     }
 
     #[test]
@@ -7231,7 +7556,7 @@ pub(super) mod tests {
 
     #[test]
     fn settled_mouse_yaw_and_physical_diagonal_share_the_first_movement_snapshot() {
-        use eq_network_game::movement::{MotionSession, UpdateGate};
+        use eq_network_game::movement::{MotionSession, TITANIUM_FLAGS, UpdateGate};
         for (key, side) in [
             (KeyCode::KeyA, StrafeSide::Left),
             (KeyCode::KeyD, StrafeSide::Right),
@@ -7266,11 +7591,14 @@ pub(super) mod tests {
             assert_diagonal_step(&app, origin, &chord, side);
 
             let start = Instant::now();
-            let spacing = Duration::from_millis(280);
+            let spacing = TITANIUM_FLAGS.spacing;
             let mut session = MotionSession::new(11, 7, origin, start)
                 .unwrap()
                 .with_heading_snapshots(true)
-                .with_gate(Some(UpdateGate::Changed { spacing }));
+                .with_gate(Some(UpdateGate::Flagged {
+                    pack: |sample| sample.packet(),
+                    rule: TITANIUM_FLAGS,
+                }));
             session
                 .calibrate(
                     eq_client_core::MotionCalibration {
@@ -7304,8 +7632,13 @@ pub(super) mod tests {
             };
             assert_eq!(stop.position, chord.position);
             assert!(
+                !session
+                    .tick_sample(start + spacing, |_| panic!("strict native spacing"))
+                    .unwrap()
+            );
+            assert!(
                 session
-                    .tick_sample(start + spacing, |sample| {
+                    .tick_sample(start + spacing + Duration::from_nanos(1), |sample| {
                         assert_eq!(sample.position, chord.position);
                         assert_eq!((sample.animation, sample.delta_heading), (1, 0));
                         Ok(())

@@ -977,6 +977,7 @@ impl ClientWorld {
             | WorldEvent::SystemInfoReported { .. } => (),
 
             // The zone and what is in it.
+            WorldEvent::Carriers(updates) => { for update in updates { self.zone.carriers.apply(*update); } },
             WorldEvent::Spawns(spawns) => {
                 for spawn in spawns {
                     self.clear_inspected_spawn(spawn.spawn_id);

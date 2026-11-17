@@ -511,7 +511,9 @@ pub(crate) fn apply(
         let fitted = places.and_then(|places| fit::fitted(screen, places));
         let screen = fitted.as_ref().unwrap_or(screen);
         let mut effective = screen.clone();
-        effective.area.width = effects_width(*id, screen);
+        let size = effects_size(*id, screen);
+        effective.area.width = size.x;
+        effective.area.height = size.y;
         // This first retained reflow contract belongs to chat. Other authored
         // sizable screens are preserved by the parser without assuming that
         // their widgets share chat's sizing policy.
@@ -581,33 +583,35 @@ fn drawn_size(
     screens
         .get(directory, &from, id)
         .map_or(Vec2::ZERO, |screen| {
-            Vec2::new(effects_width(id, screen), screen.area.height).max(Vec2::ZERO)
+            effects_size(id, screen).max(Vec2::ZERO)
         })
 }
 
-/// Leave room for a skin's fixed buff columns inside the clipped client area.
+/// Leave room for a skin's fixed buff rows and columns inside the clipped client area.
 /// Hidden windows and buttons whose position follows the frame keep their sizing.
-/// Whether the official client widens or clips these windows is unread
-/// (inferred, recording checklist 6.406).
-fn effects_width(id: WindowId, screen: &Screen) -> f32 {
-    let width = screen.area.width;
-    if !matches!(id, WindowId::Effects | WindowId::ShortEffects)
-        || width <= 0.0
-        || screen.area.height <= 0.0
-    {
-        return width;
+/// Whether the official client expands or clips these windows is unread
+/// (inferred, recording checklist 6.406 for width and 6.474 for height).
+fn effects_size(id: WindowId, screen: &Screen) -> Vec2 {
+    let size = Vec2::new(screen.area.width, screen.area.height);
+    if !matches!(id, WindowId::Effects | WindowId::ShortEffects) || size.x <= 0.0 || size.y <= 0.0 {
+        return size;
     }
-    let inset = screen
-        .template
-        .as_ref()
-        .filter(|_| screen.border)
-        .map_or(0.0, |template| {
+    let inset = screen.template.as_ref().map_or(Vec2::ZERO, |template| {
+        let mut inset = Vec2::ZERO;
+        if screen.border {
             let border = border_insets(&template.border);
-            border.left + border.right
-        });
-    screen.pieces.iter().fold(width, |width, (_, element)| {
+            inset = Vec2::new(border.left + border.right, border.top + border.bottom);
+        }
+        if screen.title_bar.is_some()
+            && let Some(middle) = &template.title[1]
+        {
+            inset.y += to_f32(middle.height);
+        }
+        inset
+    });
+    screen.pieces.iter().fold(size, |size, (_, element)| {
         let Element::Button(button) = element else {
-            return width;
+            return size;
         };
         if button.placed
             && button.anchors.is_none()
@@ -616,9 +620,14 @@ fn effects_width(id: WindowId, screen: &Screen) -> f32 {
                 Some(Does::Buff(..))
             )
         {
-            width.max(button.area.x + button.area.width + inset)
+            size.max(
+                Vec2::new(
+                    button.area.x + button.area.width,
+                    button.area.y + button.area.height,
+                ) + inset,
+            )
         } else {
-            width
+            size
         }
     })
 }
@@ -1720,8 +1729,12 @@ fn title(
         ..at(inside.x + left_width, inside.y, middle_width, tall)
     };
     let ink = screen.title_color.map_or(theme::INK_BRIGHT, rgb);
-    if let Some(words) = &screen.title {
-        let text = theme::text(words.as_str(), font(screen.font), ink);
+    let words = screen
+        .title
+        .as_deref()
+        .or_else(|| (owner == WindowId::SkillSelect).then_some(owner.describe().title));
+    if let Some(words) = words {
+        let text = theme::text(words, font(screen.font), ink);
         window
             .spawn((
                 node,
@@ -4063,18 +4076,22 @@ mod tests {
     #[test]
     #[allow(
         clippy::float_cmp,
-        reason = "These exact authored pixel widths must fit"
+        clippy::too_many_lines,
+        reason = "Keep the exact authored-size and chrome cases together"
     )]
-    fn a_fixed_buff_column_fits_the_effects_window_client_area() {
-        use eq_client_assets::sidl::{Anchor, Anchors, WindowTemplate};
+    fn fixed_buff_rows_and_columns_fit_the_effects_window_client_area() {
+        use eq_client_assets::sidl::{Anchor, Anchors, TitleBar, WindowTemplate};
 
         let mut third = buff_button(34.0);
         third.id = Some("Buff2".into());
         third.area.x = 93.0;
+        third.area.y = 380.0;
+        third.area.height = 34.0;
         third.placed = true;
         let mut parked = buff_button(34.0);
         parked.id = Some("Buff3".into());
         parked.area.x = 200.0;
+        parked.area.y = 900.0;
         let mut anchored = parked.clone();
         anchored.id = Some("Buff4".into());
         anchored.placed = true;
@@ -4108,26 +4125,52 @@ mod tests {
             tab_frame: None,
             transparent: false,
         };
-        assert_eq!(effects_width(WindowId::Effects, &screen), 127.0);
-        assert_eq!(effects_width(WindowId::PetInfo, &screen), 104.0);
-        let edge = |width| Piece {
+        assert_eq!(
+            effects_size(WindowId::Effects, &screen),
+            Vec2::new(127.0, 414.0)
+        );
+        assert_eq!(
+            effects_size(WindowId::PetInfo, &screen),
+            Vec2::new(104.0, 395.0)
+        );
+        let edge = |width, height| Piece {
             texture: "synthetic".into(),
             x: 0,
             y: 0,
             width,
-            height: 1,
+            height,
         };
         let mut template = WindowTemplate::default();
-        template.border.left = Some(edge(2));
-        template.border.right = Some(edge(3));
+        template.border.left = Some(edge(2, 1));
+        template.border.right = Some(edge(3, 1));
+        template.border.top = Some(edge(1, 4));
+        template.border.bottom = Some(edge(1, 5));
+        template.title[1] = Some(edge(1, 14));
         screen.template = Some(template);
         screen.border = true;
-        assert_eq!(effects_width(WindowId::Effects, &screen), 132.0);
+        assert_eq!(
+            effects_size(WindowId::Effects, &screen),
+            Vec2::new(132.0, 423.0)
+        );
+        screen.title_bar = Some(TitleBar::default());
+        assert_eq!(
+            effects_size(WindowId::Effects, &screen),
+            Vec2::new(132.0, 437.0)
+        );
         // Even a skin declaring this frame sizable cannot apply a chat preference.
         screen.sizable = eq_client_assets::sidl::Sizable::Enabled;
         assert!(reflow::eligible_scope("synthetic", WindowId::Effects, &screen).is_none());
         screen.area.width = 0.0;
-        assert_eq!(effects_width(WindowId::Effects, &screen), 0.0);
+        assert_eq!(
+            effects_size(WindowId::Effects, &screen),
+            Vec2::new(0.0, 395.0)
+        );
+        screen.area.width = 104.0;
+        screen.area.height = 0.0;
+        assert_eq!(
+            effects_size(WindowId::Effects, &screen),
+            Vec2::new(104.0, 0.0)
+        );
     }
 
     #[test]

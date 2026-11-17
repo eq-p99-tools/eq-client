@@ -2,7 +2,7 @@
 
 use bevy::prelude::Vec3;
 use eq_client_core::{
-    MovementMode,
+    MovementMode, axes,
     movement::{
         CollisionWorld, SHORELINE_COOLDOWN, SHORELINE_FRAME_MILLIS, SHORELINE_FRAMES,
         ShorelineFrame, ShorelineStroke, ShorelineTrace, ShorelineVelocity, SwimDepth,
@@ -83,9 +83,10 @@ fn advance(
     let frame = ShorelineFrame::new(observed.millis, water, false, observed.stroke)?;
     arc.velocity.advance(frame, body.grant, body.gravity);
     let ([x, y], vertical) = arc.velocity.travel(frame);
+    let horizontal = axes::from_world(Vec3::new(x, y, 0.0));
     let step = body
         .world
-        .shoreline_step(*feet, Vec3::new(y, 0.0, -x), vertical, body.height)?;
+        .shoreline_step(*feet, horizontal, vertical, body.height)?;
     *feet = step.feet;
     // A wall clips travel, but does not grant more momentum. Preserve the
     // decaying impulse while a separately clear rise clears the lip.
@@ -161,7 +162,7 @@ impl Control {
             // otherwise lift a slow frame's arc higher (inferred, 6.407).
             millis: u8::try_from(millis.min(u128::from(SHORELINE_FRAME_MILLIS)))
                 .unwrap_or(SHORELINE_FRAME_MILLIS),
-            stroke: ShorelineStroke::new([-direction.z, direction.x, direction.y]),
+            stroke: ShorelineStroke::new(axes::to_world(direction).to_array()),
             forward_up,
         });
     }
@@ -188,12 +189,12 @@ impl Control {
         };
         let mut arc = if let Some(active) = self.active {
             if now.saturating_duration_since(active.started) >= SHORELINE_COOLDOWN {
+                self.reset();
                 return None;
             }
             active
         } else {
-            let (x, y) = (body.heading / 512.0 * std::f32::consts::TAU).sin_cos();
-            let heading = Vec3::new(y, 0.0, -x);
+            let heading = axes::from_world(axes::heading_direction(body.heading));
             if !self.previous_swim
                 || self
                     .last_attempt
@@ -242,7 +243,10 @@ impl Control {
             frames: [ShorelineFrame::EMPTY; SHORELINE_FRAMES],
         };
         for (slot, &observed) in trace.frames.iter_mut().zip(frames) {
-            let (frame, end) = advance(body, &mut arc, &mut feet, observed)?;
+            let Some((frame, end)) = advance(body, &mut arc, &mut feet, observed) else {
+                self.reset();
+                return None;
+            };
             *slot = frame;
             trace.finish = !matches!(end, End::Continue);
             if trace.finish {
@@ -704,6 +708,44 @@ mod tests {
         controls.sent(MovementMode::Shoreline(next.trace), Some(next), then);
         controls.resolved(true);
         assert!(!controls.active());
+    }
+
+    #[test]
+    fn an_expired_or_unresolved_arc_retires_before_another_sample_is_sent() {
+        for expired in [false, true] {
+            let start = Instant::now();
+            let world = world(Some(-2.75), false, false);
+            let initial = body(&world);
+            let mut controls = controls(start);
+            let proposal = controls
+                .plan(initial, start, FRESH_LIMIT)
+                .expect("reachable low lip");
+            let stamp = proposal.created;
+            let mut next = Body {
+                feet: proposal.feet,
+                ..initial
+            };
+            controls.sent(
+                MovementMode::Shoreline(proposal.trace),
+                Some(proposal),
+                stamp,
+            );
+            controls.resolved(false);
+            assert!(controls.active());
+            let now = if expired {
+                stamp + SHORELINE_COOLDOWN
+            } else {
+                // A dry arc cannot resume after re-entering water.
+                controls.active.as_mut().unwrap().dry = true;
+                next.feet = initial.feet;
+                stamp + Duration::from_millis(16)
+            };
+            controls.observe(now, Vec3::ZERO, false);
+            assert!(controls.plan(next, stamp, FRESH_LIMIT).is_none());
+            assert!(!controls.active());
+            assert!(controls.pending.is_none());
+            assert_eq!(controls.frames.len(), 0);
+        }
     }
 
     #[test]

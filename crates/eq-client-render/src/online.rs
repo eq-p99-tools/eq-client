@@ -608,7 +608,13 @@ impl Panels<'_> {
     }
 
     /// The worker's local result for the player's move.
-    fn moved(&mut self, admission_id: Option<u64>, moved: &Moved, drawn: Option<Transform>) {
+    fn moved(
+        &mut self,
+        admission_id: Option<u64>,
+        moved: &Moved,
+        drawn: Option<Transform>,
+        carriers: &eq_client_core::movement::Carriers,
+    ) {
         debug!(
             admission_id = ?admission_id,
             position = ?moved.position,
@@ -618,11 +624,14 @@ impl Panels<'_> {
         );
 
         if self.motion.moved(admission_id, moved.created) {
+            self.motion
+                .resolve_carrier(moved.created, moved.refused.is_some());
             self.motion.resolve_water_entry(moved.refused.is_some());
             self.motion.refused.clone_from(&moved.refused);
         }
         if let Some(transform) = drawn {
-            self.motion.display_sample(transform, moved.position);
+            self.motion
+                .display_carrier_sample(transform, moved.position, carriers);
         }
     }
 
@@ -863,14 +872,19 @@ pub(super) fn receive(
             chat.socials = super::socials::Inbox::default();
             match reason {
                 Reset::Entered => chat.admit_links(&state),
-                Reset::Camped | Reset::Lost { ended: true, .. } => chat.clear_link_scope(),
+                Reset::Camped | Reset::Lost { ended: true, .. } => chat.end_session(),
                 _ => (),
             }
             state.reset_presentation((reason, old_gems), &mut panels, &mut scene, &mut commands);
         }
         panels.show(&changes, &mut state, messages.as_deref(), &mut chat);
         if let Some(moved) = &changes.moved {
-            panels.moved(state.world.session_id(), moved, scene.player());
+            panels.moved(
+                state.world.session_id(),
+                moved,
+                scene.player(),
+                state.world.carriers(),
+            );
         }
         // Offline, the zone on screen is the viewer's own, and the preview
         // admits its player into it.
