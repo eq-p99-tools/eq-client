@@ -26,6 +26,22 @@ only once all required dependencies have been fetched.
 Use separate worktrees and `CARGO_TARGET_DIR` directories for concurrent feature
 work. Do not reset or clean another session's worktree or build output.
 
+The application's `--version`, startup output and client log share a compile-time
+build identity: package version, full Git SHA and `tracked tree clean`, `dirty`
+or `unknown`. Dirty includes staged and unstaged changes to tracked files;
+untracked and ignored files are outside this flag. It describes the source at
+build time, not subsequent edits or a hash of the binary. Source archives and
+missing Git data say `git unavailable` and `tracked tree unknown`.
+
+Packagers can set `EQ_CLIENT_BUILD_SHA` to a full 40- or 64-digit hexadecimal
+commit ID and `EQ_CLIENT_BUILD_DIRTY` to `clean`, `dirty` or `unknown` when
+building an archive. Setting either selects override provenance for both;
+an omitted/invalid field stays unavailable/unknown rather than borrowing
+checkout state. Invalid values produce a generic build warning without echoing
+their contents. The stamp contains no build time, machine path or identity.
+Git HEAD, index, refs and tracked inputs are watched for incremental rebuilds;
+only the application receives the stamp, with no new library dependency.
+
 ## Validation
 
 ```console
