@@ -421,6 +421,9 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
                 PracticeUpdate::Unanswered { .. } => {
                     "The practice outcome is unknown. Re-enter the zone to refresh practice points.".into()
                 }
+                PracticeUpdate::OutcomeUnknown { estimated_cost, .. } => {
+                    format!("The language practice outcome is unknown (estimated price: {estimated_cost} copper). Re-enter the zone to refresh practice points and balances.").into()
+                }
                 PracticeUpdate::PointsUncertain => {
                     "Practice points are unknown after the level change. Re-enter the zone to refresh them.".into()
                 }

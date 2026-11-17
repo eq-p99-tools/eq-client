@@ -2609,8 +2609,8 @@ fn gm_request(
     if (depop || full_spawn) && !titanium {
         return Err("Full fixture spawn and depop require local EQEmu".into());
     }
-    if words.first() == Some(&"traindisc") && !titanium {
-        return Err("gm traindisc requires local EQEmu".into());
+    if matches!(words.first(), Some(&"traindisc" | &"setlanguage")) && !titanium {
+        return Err("This GM fixture command requires local EQEmu".into());
     }
     if words.first() == Some(&"guild") && !titanium {
         return Err("gm guild requires local EQEmu".into());
@@ -4632,6 +4632,28 @@ mod tests {
             gm_request("stun 8000", true, &world).unwrap(),
             ClientCommand::SendChat(OutboundChat::Say("#stun 8000".into()))
         );
+    }
+
+    #[test]
+    fn language_fixture_preserves_local_eqemu_and_admission_gates() {
+        use crate::online::{OnlineState, testing as session};
+        use eq_client_core::{ClientCommand, GameDialect, OutboundChat};
+        let command = "setlanguage 5 20";
+        let program = Program::parse(&format!("gm {command}"), std::path::Path::new(".")).unwrap();
+        assert!(program.check_local_commands(false).is_err());
+        assert!(program.check_local_commands(true).is_ok());
+        let mut online = OnlineState::new(true);
+        session::admit(&mut online, 1, session::player(7));
+        assert!(gm_request(command, false, online.world()).is_err());
+        assert!(gm_request("setlanguage 28 20", true, online.world()).is_err());
+        assert_eq!(
+            gm_request(command, true, online.world()),
+            Ok(ClientCommand::SendChat(OutboundChat::Say(
+                "#setlanguage 5 20".into()
+            )))
+        );
+        session::generation(&mut online, GameDialect::EqMac);
+        assert!(gm_request(command, true, online.world()).is_err());
     }
 
     #[test]

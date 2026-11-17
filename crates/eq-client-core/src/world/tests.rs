@@ -4298,6 +4298,31 @@ fn training_opens_raises_skills_with_a_line_and_closes() {
         world.player().and_then(|player| player.practice_points),
         Some(4)
     );
+    game(
+        &mut world,
+        WorldEvent::Training(TrainingUpdate::Practice(
+            crate::training::PracticeUpdate::OutcomeUnknown {
+                skill: 105,
+                estimated_cost: 10,
+            },
+        )),
+    );
+    assert_eq!(
+        world.training_points(),
+        crate::training::PracticePoints::Unknown
+    );
+    // A late proficiency update cannot establish a point balance.
+    game(
+        &mut world,
+        WorldEvent::Skill {
+            skill_id: 105,
+            value: 2,
+        },
+    );
+    assert_eq!(
+        world.training_points(),
+        crate::training::PracticePoints::Unknown
+    );
     game(&mut world, WorldEvent::Disciplines(vec![4585, 0]));
     assert_eq!(
         world.player().and_then(|player| player.disciplines.clone()),

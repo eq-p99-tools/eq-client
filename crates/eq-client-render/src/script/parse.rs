@@ -52,6 +52,8 @@ const GM_COMMANDS: [&str; 41] = [
     "zone",
     "goto",
     "level",
+    // The deployed SetLanguage alias, with bounded language ID/proficiency.
+    "setlanguage",
     "heal",
     "kill",
     "repop",
@@ -1213,6 +1215,12 @@ pub(super) fn gm_command(words: &[&str]) -> Result<String, String> {
             ).into()),
         },
         "depop" if !arguments.is_empty() => return Err("gm depop takes no arguments".into()),
+        "setlanguage" => {
+            let valid = matches!(arguments, [id, value] if
+                id.parse::<u8>().is_ok_and(|id| id <= 27)
+                && value.parse::<u8>().is_ok_and(|value| value <= 100));
+            if !valid { return Err("gm setlanguage takes LANGUAGE_ID (0..27) PROFICIENCY (0..100)".into()); }
+        }
         "traindisc" => {
             // EQEmu compares class levels against these bounds. Keep the
             // range below unavailable class levels such as 127 and 255.
@@ -1608,6 +1616,41 @@ pub(super) fn typed(key: KeyCode, shift: bool, chorded: bool) -> (Key, Option<St
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn language_fixture_recipe_uses_only_bounded_supported_gm_commands() {
+        let base = Path::new("private");
+        for command in [
+            "level 2",
+            "setlanguage 5 20",
+            "setlanguage 5 0",
+            "setlanguage 5 100",
+            "givemoney 0 0 0 20",
+            "spawn LaneLanguageTrainer 1 1 0 100 0 20 0 0 0 1",
+            "depop",
+        ] {
+            assert_eq!(
+                parse(&format!("gm {command}"), base).unwrap(),
+                [Step::Gm(command.into())]
+            );
+        }
+        for command in [
+            "setlanguage",
+            "setlanguage 5",
+            "setlanguage 28 20",
+            "setlanguage 5 101",
+            "setlanguage -1 20",
+            "setlanguage 5 -1",
+            "setlanguage 256 20",
+            "setlanguage 5 0 extra",
+            "set language 5 20",
+            "set level 2",
+            "set other 1",
+            "spawn LaneLanguageTrainer 1 1 0 100 0 20",
+        ] {
+            assert!(parse(&format!("gm {command}"), base).is_err(), "{command}");
+        }
+    }
+
     #[test]
     fn training_language_selects_a_bounded_offered_row_without_sending_a_numeric_request() {
         let base = Path::new("private");

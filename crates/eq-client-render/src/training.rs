@@ -346,6 +346,72 @@ mod tests {
     };
 
     #[test]
+    fn selecting_a_language_is_local_and_train_posts_its_typed_subject() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let mut app = crate::testing::app();
+        app.insert_resource(Outbox::new(Some(tx)))
+            .add_systems(Update, buttons);
+        let mut online = OnlineState::new(true);
+        let mut player = testing::player(7);
+        player.skills = Some(vec![70; 100]);
+        player.languages = Some(vec![20; 28]);
+        testing::admit(&mut online, 1, player);
+        testing::news(
+            &mut online,
+            [WorldEvent::Training(TrainingUpdate::Offered(
+                TrainingOffer {
+                    trainer: 42,
+                    caps: vec![200; 100],
+                    language_caps: vec![100; 26],
+                },
+            ))],
+        );
+        app.insert_resource(online);
+        let row = app
+            .world_mut()
+            .spawn((
+                Button,
+                Interaction::None,
+                SkillRow {
+                    subject: TrainingSubject::Language(5),
+                    index: 0,
+                },
+            ))
+            .id();
+        let train = app
+            .world_mut()
+            .spawn((Button, Interaction::None, TrainButton))
+            .id();
+        crate::clicks::testing::click(&mut app, row);
+        assert!(rx.try_recv().is_err(), "selection alone sends no practice");
+        assert_eq!(
+            app.world().resource::<Chosen>().0,
+            Some(TrainingSubject::Language(5))
+        );
+        crate::clicks::testing::click(&mut app, train);
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ClientCommand::Training {
+                request: TrainingRequest::PracticeAt {
+                    trainer: 42,
+                    subject: TrainingSubject::Language(5)
+                },
+                ..
+            })
+        ));
+        assert!(rx.try_recv().is_err());
+        let online = app.world().resource::<OnlineState>();
+        assert_eq!(
+            online.world().player().unwrap().skills.as_ref().unwrap()[5],
+            70
+        );
+        assert_eq!(
+            online.world().player().unwrap().languages.as_ref().unwrap()[5],
+            20
+        );
+    }
+
+    #[test]
     fn language_rows_keep_their_bank_values_prices_and_received_revisions() {
         let mut app = crate::testing::app();
         app.add_systems(Update, fill);

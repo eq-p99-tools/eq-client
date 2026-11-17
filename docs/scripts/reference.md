@@ -242,6 +242,10 @@ or occluded. The counters are independent of damage and inventory.
   refused. Use the guild ID actually returned by the server for cleanup;
   request submission alone does not establish fixture creation or deletion.
   Other GM guild subcommands are unavailable to scripts.
+  On local EQEmu, `gm setlanguage ID VALUE` uses the supported SetLanguage
+  alias for a staged fixture: language ID 0..27 and proficiency 0..100.
+  It retains the local-session and Titanium gates. General `gm set` commands
+  remain unavailable. Training itself permits only offered IDs 0..25.
   On local EQEmu, `gm traindisc MAX [MIN]` requests all eligible disciplines
   in that inclusive level range for a disposable fixture. Each level is a number
   from 1 to 126 written with up to three decimal digits. Give MAX first. MIN

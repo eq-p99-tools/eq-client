@@ -95,6 +95,7 @@ impl ClientWorld {
                     update,
                     PracticeUpdate::Requested { .. }
                         | PracticeUpdate::Unanswered { .. }
+                        | PracticeUpdate::OutcomeUnknown { .. }
                         | PracticeUpdate::PointsUncertain
                 ) {
                     self.zone.training_points_uncertain = true;
