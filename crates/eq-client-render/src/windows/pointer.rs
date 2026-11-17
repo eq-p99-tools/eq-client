@@ -105,6 +105,12 @@ type Surfaces<'w, 's> = Query<
 pub(crate) struct PointerUi<'w, 's> {
     script: Option<Res<'w, crate::script::Script>>,
     drag: Option<Res<'w, super::DragState>>,
+    geometry: WorldUi<'w, 's>,
+}
+
+/// Read-only world hit geometry, reusable without borrowing script ownership.
+#[derive(SystemParam)]
+pub(crate) struct WorldUi<'w, 's> {
     surfaces: Surfaces<'w, 's>,
     clipping: Query<
         'w,
@@ -134,7 +140,7 @@ impl PointerUi<'_, '_> {
     /// Whether the hit surface belongs to this window or is the window itself.
     pub(crate) fn descends_from(&self, mut entity: Entity, ancestor: Entity) -> bool {
         while entity != ancestor {
-            let Ok(parent) = self.parents.get(entity) else {
+            let Ok(parent) = self.geometry.parents.get(entity) else {
                 return false;
             };
             entity = parent.parent();
@@ -144,6 +150,13 @@ impl PointerUi<'_, '_> {
 
     /// The frontmost control or blocking panel at an event's original position.
     /// This also works when several pointer events arrive in one rendered frame.
+    pub(crate) fn top_at(&self, cursor: Vec2) -> Option<Entity> {
+        self.geometry.top_at(cursor)
+    }
+}
+
+impl WorldUi<'_, '_> {
+    /// The frontmost visible blocking world-input surface.
     pub(crate) fn top_at(&self, cursor: Vec2) -> Option<Entity> {
         self.surfaces
             .iter()

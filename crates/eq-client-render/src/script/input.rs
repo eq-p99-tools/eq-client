@@ -1,4 +1,5 @@
 //! Explicit background ownership of the existing in-client input paths.
+pub(super) mod world;
 
 use std::collections::HashSet;
 
@@ -6,7 +7,7 @@ use bevy::{
     ecs::message::MessageId,
     input::{
         keyboard::{KeyboardFocusLost, KeyboardInput},
-        mouse::{MouseButtonInput, MouseWheel},
+        mouse::{MouseButtonInput, MouseMotion, MouseWheel},
     },
     prelude::*,
     window::{PrimaryWindow, WindowFocused},
@@ -104,6 +105,7 @@ impl BackgroundInput {
 pub(crate) fn install(app: &mut App, mode: InputMode) {
     app.insert_resource(mode)
         .init_resource::<AuthoredInput>()
+        .init_resource::<world::WorldInput>()
         .init_resource::<Replayed>()
         .add_systems(
             PreUpdate,
@@ -115,7 +117,8 @@ pub(crate) fn install(app: &mut App, mode: InputMode) {
             ),
         );
     if mode == InputMode::Background {
-        app.init_resource::<BackgroundInput>()
+        app.add_message::<MouseMotion>()
+            .init_resource::<BackgroundInput>()
             .configure_sets(PreUpdate, bevy::ui::UiSystems::Focus.run_if(native_focus))
             .add_systems(
                 PreUpdate,
@@ -171,22 +174,26 @@ fn isolate_ui(
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(super) fn observe(
     mut state: ResMut<BackgroundInput>,
-    windows: Query<Entity, With<PrimaryWindow>>,
+    windows: Query<(Entity, &Window), With<PrimaryWindow>>,
     mut keyboard: MessageReader<KeyboardInput>,
     mut mouse: MessageReader<MouseButtonInput>,
     mut wheel: MessageReader<MouseWheel>,
+    mut motion: MessageReader<MouseMotion>,
     mut focus: MessageReader<WindowFocused>,
     mut lost: MessageReader<KeyboardFocusLost>,
     script: Option<ResMut<super::Script>>,
 ) {
     state.activity = false;
+    let mut focused = windows.iter().any(|(_, window)| window.focused);
     for event in focus.read().filter(|event| windows.contains(event.window)) {
+        focused = event.focused;
         if !event.focused {
             state.keys.clear();
             state.buttons.clear();
         }
     }
     if !lost.is_empty() {
+        focused = false;
         state.keys.clear();
         lost.clear();
     }
@@ -213,6 +220,16 @@ pub(super) fn observe(
         }
     }
     state.activity |= wheel.read().count() != 0;
+    // Device motion can arrive while another app owns the desktop. Only a
+    // focused client can reclaim an active world gesture through motion.
+    let moved = motion
+        .read()
+        .fold(false, |moved, event| moved || event.delta != Vec2::ZERO);
+    state.activity |= moved
+        && focused
+        && script
+            .as_ref()
+            .is_some_and(|script| script.world_gesture.is_some());
     if let Some(mut script) = script {
         script.owns_input = script.input_mode == InputMode::Background
             && script.progress.phase.active()

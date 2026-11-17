@@ -17,6 +17,8 @@ mod input;
 pub(crate) use input::AuthoredInput;
 pub use input::InputMode;
 pub(super) use input::install as install_input;
+pub(crate) use input::world::WorldInput;
+pub(super) use input::world::apply as world_input;
 pub(crate) mod language;
 mod parse;
 pub(crate) mod pointer;
@@ -93,6 +95,8 @@ pub struct Script {
     facing: Option<f32>,
     /// The mouse button a scripted click holds down until the next frame.
     clicked: Option<MouseButton>,
+    /// A bounded semantic gesture captured over visible world space.
+    world_gesture: Option<input::world::WorldGesture>,
     /// The control a scripted click pressed, which the pointer is over as
     /// the button is let go.
     pressed: Option<Entity>,
@@ -217,6 +221,7 @@ impl Script {
             acts: Vec::new(),
             facing: None,
             clicked: None,
+            world_gesture: None,
             pressed: None,
             started: None,
             session: RunSession::BeforeAdmission,
@@ -404,6 +409,7 @@ impl Script {
             || !self.acts.is_empty()
             || self.facing.is_some()
             || self.clicked.is_some()
+            || self.world_gesture.is_some()
     }
 
     /// Marks the run offline (the `Script::offline` field).
@@ -506,6 +512,7 @@ impl Script {
     }
 
     fn release(&mut self, keys: &mut Keyboard, mouse: &mut ButtonInput<MouseButton>) {
+        self.world_gesture = None;
         for key in self.held.drain(..) {
             keys.release(key);
         }
@@ -519,6 +526,18 @@ impl Script {
             }
         }
         self.pressed = None;
+    }
+
+    fn scope_refusal(&self, online: &crate::online::OnlineState) -> Option<String> {
+        self.progress
+            .expected_world
+            .as_ref()
+            .and_then(|expected| expected.refusal(online))
+            .or_else(|| {
+                self.world_gesture
+                    .as_ref()
+                    .and_then(|gesture| gesture.refusal(online))
+            })
     }
 
     /// Cancels a synthetic press before releasing it, so cancellation cannot click.
@@ -842,12 +861,7 @@ pub(super) fn guard_scope(
     mut buttons: Buttons,
 ) {
     let Some(mut script) = script else { return };
-    let Some(reason) = script
-        .progress
-        .expected_world
-        .as_ref()
-        .and_then(|expected| expected.refusal(&online))
-    else {
+    let Some(reason) = script.scope_refusal(&online) else {
         return;
     };
     let pointer_presses = script
@@ -978,6 +992,9 @@ pub(super) fn drive(
     // Plain borrows of the fields, so a walk can hold its route and note
     // where it heads at once.
     let script = &mut *script;
+    if let Some(gesture) = &mut script.world_gesture {
+        gesture.clear_frame();
+    }
     script.stepped_social = false;
     let now = time.elapsed();
     if !script.progress.phase.active() {
@@ -1018,12 +1035,7 @@ pub(super) fn drive(
     // Check the same world used by this dispatch, before restoring any held
     // input, releasing a click to its handler, or advancing a wait/loop. A
     // condition in script source cannot bind the action in a later frame.
-    if let Some(reason) = script
-        .progress
-        .expected_world
-        .as_ref()
-        .and_then(|expected| expected.refusal(&online))
-    {
+    if let Some(reason) = script.scope_refusal(&online) {
         script.cancel_press(&mut buttons, &mut commands);
         script.progress.scope_refused = true;
         script.stop(&mut keys, &mut mouse, &reason);
@@ -1205,6 +1217,23 @@ pub(super) fn drive(
         }
         let done = match &step {
             Step::Wait(duration) => elapsed >= *duration,
+            Step::WorldWheel(_) => true,
+            Step::WorldLook { delta, duration } => {
+                let Some(gesture) = &mut script.world_gesture else {
+                    script.stop(&mut keys, &mut mouse, "world look lost its input ownership");
+                    return;
+                };
+                if let Ok(camera) = cameras.single() {
+                    debug!(
+                        elapsed_ms = elapsed.as_millis(),
+                        attached_camera_mode = camera.view_name(),
+                        camera_pitch = camera.view_pitch(),
+                        camera_yaw = camera.yaw,
+                        "Script held world look trace"
+                    );
+                }
+                gesture.sample(*delta, *duration, elapsed)
+            }
             Step::DeleteCharacter { .. } => {
                 let result = script
                     .deleting
@@ -2176,6 +2205,46 @@ pub(super) fn drive(
                 }
             }
             return;
+        }
+        Step::WorldWheel(_) | Step::WorldLook { .. } => {
+            if !script.background_owns_input() {
+                script.stop(
+                    &mut keys,
+                    &mut mouse,
+                    "world gestures require background input ownership",
+                );
+                return;
+            }
+            if (online.enabled && ExpectedWorld::current(&online).is_none())
+                || online.selection.is_some()
+                || online.world().is_dead()
+                || players.single().is_err()
+                || cameras.single().is_err()
+                || detached_camera.iter().any(|free| free)
+            {
+                script.stop(
+                    &mut keys,
+                    &mut mouse,
+                    "world gestures need an admitted player and attached camera",
+                );
+                return;
+            }
+            let Some(at) = aim.world_at() else {
+                script.stop(
+                    &mut keys,
+                    &mut mouse,
+                    "world gesture needs visible uncovered world space",
+                );
+                return;
+            };
+            script.pointed = script.hovering.take().or(script.pointed);
+            point(script, None, &mut commands, &mut buttons);
+            aim.place(&mut commands, at);
+            let (held, scroll) = match &step {
+                Step::WorldWheel(lines) => (false, *lines),
+                _ => (true, 0.0),
+            };
+            script.world_gesture = Some(input::world::WorldGesture::new(&online, held, scroll));
         }
         Step::FaceHeading(heading) => script.facing = Some(*heading),
         Step::Move(command, _) => {
@@ -3703,6 +3772,7 @@ fn runs(distance: Option<f32>, range: f32) -> bool {
 mod tests {
     mod background_pointer;
     mod semantic;
+    mod world_input;
     use super::*;
     use eq_client_assets::ui::InstalledClient;
 
@@ -4873,6 +4943,7 @@ mod tests {
             .add_message::<bevy::input::keyboard::KeyboardFocusLost>()
             .add_message::<bevy::input::mouse::MouseButtonInput>()
             .add_message::<bevy::input::mouse::MouseWheel>()
+            .add_message::<bevy::input::mouse::MouseMotion>()
             .add_message::<bevy::window::WindowFocused>()
             .add_message::<AppExit>()
             .init_resource::<SeenKeys>()

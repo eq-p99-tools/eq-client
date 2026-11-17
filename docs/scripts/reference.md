@@ -29,6 +29,30 @@ Run a script from the workbench while logged in to act on your current character
 - `hover target`: rest the synthetic pointer over a control.
 - `hold_click milliseconds target`: hold the left button on a control.
 - `drag window x y`: move a named window to logical screen pixels.
+- `wheel world lines`: turn the wheel over visible world space, from -64 to
+  64 lines; positive zooms inward, negative outward.
+- `look world dx dy milliseconds`: hold right over visible world space and
+  spread this relative mouse displacement over 1 to 10000 milliseconds, then
+  release after the final input frame. Each axis is limited to +/-4096 physical
+  pixels. `look world 0 0 500` holds the view still for half a second.
+
+World gestures require `--script-background` and an attached camera with a
+player present. The drawn script pointer chooses an uncovered world point;
+the step refuses when no sampled point is clear. Wheel Zoom, Mouse Sensitivity,
+Invert Y, attached camera limits and Look Spring retain their ordinary effects.
+The wheel uses the normal chase/first-person transition; `camera` sets a chase
+frame directly and therefore cannot test that transition. The look gesture
+uses the right-button look ownership and ordinary character/camera turn path.
+It never presses the OS mouse button or moves the physical cursor.
+
+Stop, failed scope checks and session/zone changes release world gestures.
+Pause finishes the bounded gesture before pausing. Genuine keyboard, button or
+wheel input cancels an active gesture; mouse motion does so while the client
+has focus. Desktop motion while another app has focus is ignored. A gesture
+binds the admission it starts in even when the caller omits `expected_world`;
+controllers should still supply the current `expected_world` for the whole run.
+Script gesture results establish semantic input behavior; physical mouse
+hit-testing, capture and feel need their own attended observation.
 
 Click targets include `slot 22`, `spell_gem 1`, `hot_button 1`, and `character 1`. They refer to controls, not arbitrary desktop coordinates. An invalid target produces a source-line error.
 

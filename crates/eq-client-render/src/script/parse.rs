@@ -163,6 +163,16 @@ pub enum Step {
     Press(Vec<KeyCode>),
     /// Holds keys together for a bounded duration.
     Hold(Vec<KeyCode>, Duration),
+    /// Turns the wheel over visible world space, upward positive, in lines.
+    WorldWheel(f32),
+    /// Holds right over visible world space and distributes a bounded mouse
+    /// displacement, in physical pixels, over the duration before releasing.
+    WorldLook {
+        /// Total relative displacement; zero holds the look still.
+        delta: bevy::math::Vec2,
+        /// Longest hold, excluding the final input frame before release.
+        duration: Duration,
+    },
     /// Pauses for a bounded duration.
     Wait(Duration),
     /// Orbits the camera to look along an EQ heading (0..512), so the
@@ -661,6 +671,20 @@ pub(super) fn parse_step(line: &str) -> Result<Step, String> {
         ),
         ("press", [keys]) => Step::Press(chord(keys)?),
         ("hold", [keys, duration]) => Step::Hold(chord(keys)?, millis(duration, MAX_HOLD)?),
+        ("wheel", ["world", lines]) => Step::WorldWheel(number(lines, -64.0, 64.0)?),
+        ("look", ["world", x, y, duration]) => {
+            let duration = millis(duration, MAX_HOLD)?;
+            if duration.is_zero() {
+                return Err("world look needs a positive duration".into());
+            }
+            Step::WorldLook {
+                delta: bevy::math::Vec2::new(
+                    number(x, -4096.0, 4096.0)?,
+                    number(y, -4096.0, 4096.0)?,
+                ),
+                duration,
+            }
+        }
         ("wait", [duration]) => Step::Wait(millis(duration, MAX_WAIT)?),
         ("camera", arguments) => parse_camera(arguments)?,
         ("trace", [duration]) => Step::Trace(millis(duration, MAX_TRACE)?),
@@ -1872,6 +1896,48 @@ mod tests {
             "camera player 64",
             "press numpad10",
             "press numpad",
+        ] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn world_gestures_have_finite_displacement_and_hold_bounds() {
+        let base = Path::new("private");
+        assert_eq!(
+            parse(
+                "wheel world 64\nwheel world -1.5\nlook world 120 -80 500\nlook world 0 0 10000",
+                base
+            )
+            .unwrap(),
+            [
+                Step::WorldWheel(64.0),
+                Step::WorldWheel(-1.5),
+                Step::WorldLook {
+                    delta: bevy::math::Vec2::new(120.0, -80.0),
+                    duration: Duration::from_millis(500)
+                },
+                Step::WorldLook {
+                    delta: bevy::math::Vec2::ZERO,
+                    duration: Duration::from_secs(10)
+                },
+            ]
+        );
+        for bad in [
+            "wheel world NaN",
+            "wheel world inf",
+            "wheel world 65",
+            "wheel world -65",
+            "wheel 1",
+            "wheel world 1 2",
+            "look world 0 0 0",
+            "look world 0 0 10001",
+            "look world NaN 0 100",
+            "look world 0 inf 100",
+            "look world 4097 0 100",
+            "look world 0 -4097 100",
+            "look world 0 0",
+            "look world 0 0 100 extra",
         ] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
