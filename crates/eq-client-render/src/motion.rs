@@ -763,9 +763,15 @@ impl Controls {
     /// admits; a fresh start covers at most 0.1 s so an idle gap never
     /// becomes a jump.
     fn span(&self, elapsed: Duration) -> f32 {
-        elapsed
-            .as_secs_f32()
-            .min(if self.moving { MAX_CYCLE } else { 0.1 })
+        elapsed.as_secs_f32().min(self.span_limit().as_secs_f32())
+    }
+
+    fn span_limit(&self) -> Duration {
+        if self.moving {
+            MAX_CYCLE_DURATION
+        } else {
+            Duration::from_millis(100)
+        }
     }
     /// Takes the session's word on how the player may move. A new speed
     /// for a player already granted, at a speed or rooted at none, only
@@ -866,13 +872,17 @@ impl Controls {
         }
     }
 
+    /// The elapsed time available to the next sample, ending `now`.
+    fn next_elapsed(&self, now: Instant) -> Duration {
+        let elapsed = now.saturating_duration_since(self.last_accepted);
+        self.last_sent.map_or(elapsed, |sent| {
+            now.saturating_duration_since(sent).max(elapsed)
+        })
+    }
+
     /// The time the next sample covers, ending `now`.
     fn next_span(&self, now: Instant) -> f32 {
-        let elapsed = now.saturating_duration_since(self.last_accepted);
-        let since_sent = self.last_sent.map_or(elapsed, |sent| {
-            now.saturating_duration_since(sent).max(elapsed)
-        });
-        self.span(since_sent)
+        self.span(self.next_elapsed(now))
     }
 
     /// Keeps the part of a key turn that ended before the next sample.
@@ -908,7 +918,10 @@ impl Controls {
         let Some((arrived, grant)) = self.straddle else {
             return;
         };
-        let start = now.checked_sub(Duration::from_secs_f32(self.next_span(now)));
+        // Keep the boundary in clock units: a float round trip can move it
+        // before an equal grant/send stamp, or after a grant inside the span.
+        let span = self.next_elapsed(now).min(self.span_limit());
+        let start = now.checked_sub(span);
         if start.is_some_and(|start| start >= arrived) {
             self.set_speeds(grant);
             self.straddle = None;
@@ -1067,7 +1080,8 @@ impl Controls {
 }
 
 /// Longest span one proposal may cover; the session admits up to 0.25 s per sample.
-const MAX_CYCLE: f32 = 0.25;
+const MAX_CYCLE_DURATION: Duration = Duration::from_millis(250);
+const MAX_CYCLE: f32 = MAX_CYCLE_DURATION.as_secs_f32();
 
 /// The lower of each speed of two grants, as the sample that straddles a
 /// change made in place may ask (`Controls::grant`). A mode either grant
@@ -8226,10 +8240,10 @@ pub(super) mod tests {
         assert!(controls.autorun);
     }
 
-    /// A sample goes out after every grant so far arrived; the next span
-    /// starts there.
+    /// A sample goes out at the latest grant's stamp, so the next span
+    /// starts there even when the clock gives both events the same tick.
     fn sent_after(controls: &mut Controls) {
-        let sent = Instant::now();
+        let sent = controls.straddle.expect("a grant awaits the next span").0;
         controls.last_sent = Some(sent);
         controls.last_accepted = sent;
         controls.settle(sent + Duration::from_millis(100));
@@ -8246,6 +8260,80 @@ pub(super) mod tests {
             swim_backward_units_per_second: None,
             falls: true,
             jump_factor: 1.0,
+        }
+    }
+
+    #[test]
+    fn a_grant_at_the_sample_start_applies_without_a_float_boundary_round_trip() {
+        let titanium = eq_client_core::GameDialect::Titanium.root();
+        for moving in [false, true] {
+            let mut controls = Controls {
+                speed: Some(20.0),
+                moving,
+                ..Default::default()
+            };
+            controls.grant(speeds_grant(30.0, None), titanium);
+            assert_eq!(controls.speed, Some(20.0), "the raise initially waits");
+            // Consecutive Instant::now() calls may return the same tick.
+            // 100 ms through f32 becomes 100,000,001 ns, which used to
+            // reconstruct a start one nanosecond before the grant.
+            sent_after(&mut controls);
+            assert_eq!(controls.speed, Some(30.0), "the span starts at the grant");
+            assert!(controls.straddle.is_none());
+        }
+    }
+
+    #[test]
+    fn a_grant_inside_the_sample_waits_even_when_the_float_span_rounds_down() {
+        let titanium = eq_client_core::GameDialect::Titanium.root();
+        let mut controls = Controls {
+            speed: Some(20.0),
+            moving: true,
+            ..Default::default()
+        };
+        controls.grant(speeds_grant(30.0, None), titanium);
+        let arrived = controls.straddle.unwrap().0;
+        let sent = arrived.checked_sub(Duration::from_nanos(1)).unwrap();
+        controls.last_sent = Some(sent);
+        controls.last_accepted = sent;
+        // 130 ms through f32 becomes 129,999,995 ns: reconstructing the
+        // boundary from that would skip the grant's first nanosecond.
+        let next = sent + Duration::from_millis(130);
+        controls.settle(next);
+        assert_eq!(controls.speed, Some(20.0), "the span straddles the grant");
+        assert!(controls.straddle.is_some());
+        controls.last_sent = Some(next);
+        controls.last_accepted = next;
+        controls.settle(next + Duration::from_millis(100));
+        assert_eq!(controls.speed, Some(30.0), "the next span uses the raise");
+        assert!(controls.straddle.is_none());
+    }
+
+    #[test]
+    fn a_grant_settles_when_the_capped_window_no_longer_straddles_it() {
+        let titanium = eq_client_core::GameDialect::Titanium.root();
+        for (moving, limit) in [
+            (false, Duration::from_millis(100)),
+            (true, Duration::from_millis(250)),
+        ] {
+            let mut controls = Controls {
+                speed: Some(20.0),
+                moving,
+                ..Default::default()
+            };
+            controls.grant(speeds_grant(30.0, None), titanium);
+            let arrived = controls.straddle.unwrap().0;
+            controls.last_accepted = arrived.checked_sub(Duration::from_millis(1)).unwrap();
+            controls.last_sent = arrived.checked_sub(Duration::from_millis(2));
+            controls.settle(
+                (arrived + limit)
+                    .checked_sub(Duration::from_nanos(1))
+                    .unwrap(),
+            );
+            assert_eq!(controls.speed, Some(20.0), "the window still straddles");
+            controls.settle(arrived + limit);
+            assert_eq!(controls.speed, Some(30.0), "the window starts at the grant");
+            assert!(controls.straddle.is_none());
         }
     }
 
