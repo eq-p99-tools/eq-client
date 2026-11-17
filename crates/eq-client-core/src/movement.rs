@@ -4,7 +4,10 @@ mod airborne;
 mod choices;
 mod falls;
 mod flight;
+mod instances;
 mod jesus_mode;
+pub use instances::CollisionInstance;
+use instances::Surface;
 mod liquids;
 mod navigator;
 pub mod navmesh;
@@ -151,7 +154,7 @@ pub struct CollisionWorld {
     /// holds the player up and stops them walking.
     obstacles: Vec<(Option<u8>, Arc<CollisionMesh>, Solidity)>,
     /// Actual model geometry of nearby received carrier spawns.
-    spawn_obstacles: Vec<(u16, Arc<CollisionMesh>)>,
+    spawn_obstacles: Vec<(u16, CollisionInstance)>,
     liquids: Option<Arc<dyn Liquids>>,
     liquid_support: bool,
     swim_origin: Option<f32>,
@@ -207,6 +210,15 @@ impl CollisionWorld {
     /// Replaces carrier colliders independently of doors. Their floor sweep
     /// identifies the spawn underfoot; no generic NPC gains collision.
     pub fn set_spawn_obstacles(&mut self, spawns: Vec<(u16, Arc<CollisionMesh>)>) {
+        self.spawn_obstacles = spawns
+            .into_iter()
+            .map(|(id, mesh)| (id, CollisionInstance::identity(mesh)))
+            .collect();
+    }
+
+    /// Replaces carrier placements while sharing their authored geometry and
+    /// acceleration structures. No triangles are rebuilt to move an instance.
+    pub fn set_spawn_instances(&mut self, spawns: Vec<(u16, CollisionInstance)>) {
         self.spawn_obstacles = spawns;
     }
 
@@ -309,22 +321,34 @@ impl CollisionWorld {
         })
     }
 
-    fn meshes(&self) -> impl Iterator<Item = &TriMesh> {
-        std::iter::once(&self.terrain.mesh)
-            .chain(self.obstacles.iter().map(|(_, mesh, _)| &mesh.mesh))
-            .chain(self.spawn_obstacles.iter().map(|(_, mesh)| &mesh.mesh))
+    fn meshes(&self) -> impl Iterator<Item = Surface<'_>> {
+        std::iter::once(Surface::identity(&self.terrain))
+            .chain(
+                self.obstacles
+                    .iter()
+                    .map(|(_, mesh, _)| Surface::identity(mesh)),
+            )
+            .chain(
+                self.spawn_obstacles
+                    .iter()
+                    .map(|(_, instance)| instance.surface()),
+            )
     }
 
     /// The zone and the obstacles that hold the player up.
-    fn floor_meshes(&self) -> impl Iterator<Item = &TriMesh> {
-        std::iter::once(&self.terrain.mesh)
+    fn floor_meshes(&self) -> impl Iterator<Item = Surface<'_>> {
+        std::iter::once(Surface::identity(&self.terrain))
             .chain(
                 self.obstacles
                     .iter()
                     .filter(|(.., solidity)| solidity.floor)
-                    .map(|(_, mesh, _)| &mesh.mesh),
+                    .map(|(_, mesh, _)| Surface::identity(mesh)),
             )
-            .chain(self.spawn_obstacles.iter().map(|(_, mesh)| &mesh.mesh))
+            .chain(
+                self.spawn_obstacles
+                    .iter()
+                    .map(|(_, instance)| instance.surface()),
+            )
     }
 
     /// The zone and the obstacles that stop the player walking.
@@ -376,15 +400,19 @@ impl CollisionWorld {
         })
     }
 
-    fn wall_meshes(&self) -> impl Iterator<Item = &TriMesh> {
-        std::iter::once(&self.terrain.mesh)
+    fn wall_meshes(&self) -> impl Iterator<Item = Surface<'_>> {
+        std::iter::once(Surface::identity(&self.terrain))
             .chain(
                 self.obstacles
                     .iter()
                     .filter(|(.., solidity)| solidity.wall)
-                    .map(|(_, mesh, _)| &mesh.mesh),
+                    .map(|(_, mesh, _)| Surface::identity(mesh)),
             )
-            .chain(self.spawn_obstacles.iter().map(|(_, mesh)| &mesh.mesh))
+            .chain(
+                self.spawn_obstacles
+                    .iter()
+                    .map(|(_, instance)| instance.surface()),
+            )
     }
 
     /// The door whose floor holds the player up at `position`, between
@@ -417,10 +445,11 @@ impl CollisionWorld {
         for (x, z) in SUPPORT_OFFSETS {
             let sample = position + Vec3::new(x, step_up + EDGE, z);
             let ray = Ray::new(Vector::from_array(sample.to_array()), -Vector::Y);
-            for (id, mesh) in &self.spawn_obstacles {
+            for (id, instance) in &self.spawn_obstacles {
                 if let Some(time) =
-                    mesh.mesh
-                        .cast_local_ray(&ray, step_up + drop + 2.0 * EDGE, false)
+                    instance
+                        .surface()
+                        .cast_ray(&ray, step_up + drop + 2.0 * EDGE, false)
                     && (sample.y - time - supported).abs() <= EDGE
                 {
                     return Some(*id);
@@ -445,7 +474,7 @@ impl CollisionWorld {
             Vector::from_array(direction.to_array()),
         );
         self.meshes()
-            .filter_map(|mesh| mesh.cast_local_ray(&ray, max_distance, false))
+            .filter_map(|mesh| mesh.cast_ray(&ray, max_distance, false))
             .min_by(f32::total_cmp)
     }
 
@@ -473,7 +502,7 @@ impl CollisionWorld {
         let time = self
             .floor_meshes()
             .filter_map(|mesh| {
-                mesh.cast_local_ray(
+                mesh.cast_ray(
                     &Ray::new(origin, -Vector::Y),
                     step_up + drop + 2.0 * EDGE,
                     false,
@@ -506,7 +535,7 @@ impl CollisionWorld {
             let Some(time) = self
                 .floor_meshes()
                 .filter_map(|mesh| {
-                    mesh.cast_local_ray(&Ray::new(origin, -Vector::Y), from - bottom + EDGE, false)
+                    mesh.cast_ray(&Ray::new(origin, -Vector::Y), from - bottom + EDGE, false)
                 })
                 .min_by(f32::total_cmp)
             else {
@@ -539,7 +568,7 @@ impl CollisionWorld {
         let (pose, capsule) = body(feet, height);
         self.wall_meshes()
             .filter_map(|mesh| {
-                contact(&pose, &capsule, &Pose::IDENTITY, mesh, range)
+                contact(&pose, &capsule, &mesh.pose, mesh.mesh, range)
                     .ok()
                     .flatten()
             })
@@ -573,7 +602,7 @@ impl CollisionWorld {
         let range = body_size - probe_lift;
         let bottom = self
             .meshes()
-            .map(|mesh| mesh.local_aabb().mins.y)
+            .map(Surface::minimum_y)
             .fold(probe.y, f32::min);
         let drop = probe.y - bottom;
         let mut center = None;
@@ -878,11 +907,18 @@ impl CollisionWorld {
                 &pose,
                 Vector::from_array(delta.to_array()),
                 &capsule,
-                &Pose::IDENTITY,
+                &mesh.pose,
                 Vector::ZERO,
-                mesh,
+                mesh.mesh,
                 options,
-            )?;
+            )?
+            .map(|mut hit| {
+                // Keep the world-mesh witness/normal convention used before
+                // placements: Parry reports shape 2 in its own local frame.
+                hit.normal2 = mesh.pose.transform_vector(hit.normal2);
+                hit.witness2 = mesh.pose.transform_point(hit.witness2);
+                hit
+            });
             if let Some(hit) = hit
                 && nearest
                     .as_ref()

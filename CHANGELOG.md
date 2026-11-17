@@ -6,6 +6,11 @@
   The boat's own travel no longer makes the diagonal collision trial fall back
   to a single direction, including the final step onto ordinary ground.
 
+- Carrier actors and their missing-model markers share the ordinary spawn
+  root, nameplate and targeting rules. Loaded actors replace only the marker;
+  missing geometry supplies no floor. Moving collision now poses a shared
+  authored mesh rather than rebuilding its triangles and BVH each frame.
+
 - Bare slash commands this client does not implement keep their unsupported-command
   explanation. Only the seven chat channel commands ask for a message when empty.
   The ability picker's fallback uses the installed default skin's "Choose a skill"
@@ -31,7 +36,9 @@
   translation and yaw. The client and session share the report-driven pose
   and budget only the rider's relative motion. Geometry source, between-report
   motion, rider reach and still-rider wire details remain labelled inferences
-  (6.467-6.470). Pitch and boat zoning remain separate; live rides are unverified.
+  (6.467-6.470). A prior local EQEmu run observed canopy support, translation,
+  turning and short relative movement. Ordinary deck boarding, dock walk-off
+  and attended P99 remain unverified; pitch and boat zoning remain separate.
 
 - A buff's and a pet buff's icon background no longer shows magenta at its
   corners. The installed client's skins draw it from CS_Buttons.bmp

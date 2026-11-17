@@ -54,19 +54,25 @@ impl CollisionWorld {
         for mesh in self.wall_meshes() {
             let unsupported = RefCell::new(None);
             let hit = mesh
+                .mesh
                 .bvh()
                 .find_best(
                     1.0,
                     |node, best| {
+                        let node = Aabb {
+                            mins: node.mins(),
+                            maxs: node.maxs(),
+                        }
+                        .transform_by(&mesh.pose);
                         Aabb {
-                            mins: node.mins() + shift - margin,
-                            maxs: node.maxs() + shift + margin,
+                            mins: node.mins + shift - margin,
+                            maxs: node.maxs + shift + margin,
                         }
                         .cast_local_ray(&ray, best, true)
                         .unwrap_or(f32::MAX)
                     },
                     |index, best| {
-                        let triangle = mesh.triangle(index);
+                        let triangle = mesh.mesh.triangle(index).transformed(&mesh.pose);
                         if let Some(mut face) = triangle.normal() {
                             let mut distance = (pose.translation - triangle.a).dot(face);
                             if distance < 0.0 {

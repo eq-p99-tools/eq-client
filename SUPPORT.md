@@ -125,9 +125,13 @@ archives, including explicit installed zone imports. Model collision and rest
 poses are inferred (6.467), as are the fixed-step between-report path (6.468),
 600-unit rider reach and bounded frontend pose history (6.469), and zero own
 velocity/yaw/animation on a still rider's ordinary tick (6.470). Unit scenarios
-cover attachment, carry, turning, walking off and identity cleanup; source and
-synthetic coverage do not establish a live ride. Pitch and boat zoning remain
-unsupported, and public-server rides require attended validation.
+cover attachment, carry, turning, walking off and identity cleanup. A prior local EQEmu run observed support on a launch canopy,
+translation/yaw carry and short relative movement. That observation does not
+verify ordinary deck boarding, dock walk-off or this successor's collision
+refactor. Missing actor models retain the ordinary visible/nameplate/target
+representation under existing visibility/range rules, without an invented
+floor; actor placements share authored geometry and its BVH. Pitch and boat zoning remain unsupported. P99 boarding,
+ride, turn and walk-off still require attended validation.
 
 On EQEmu and P99, the class tools are the Titanium program's: Fishing's
 checks and cast line, Pick Pockets and Begging with their answers, the trap

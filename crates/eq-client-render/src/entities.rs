@@ -12,6 +12,8 @@ use std::collections::{BTreeMap, BTreeSet};
 pub(super) struct NearbyEntities {
     pub(super) rendered: BTreeMap<u16, Entity>,
     revisions: BTreeMap<u16, u64>,
+    /// Which ordinary roots were prepared for a canonical carrier report.
+    carrier_roots: BTreeSet<u16>,
     models: BTreeMap<&'static str, Option<character::PreparedCharacter>>,
     loading: Option<(
         &'static str,
@@ -41,6 +43,7 @@ impl NearbyEntities {
         self.donors = DonorArchives::default();
         self.loading = None;
         self.revisions.clear();
+        self.carrier_roots.clear();
         self.settled = false;
     }
 
@@ -261,6 +264,8 @@ pub(super) fn reconcile(
         .copied()
         .filter(|id| {
             rescaled
+                || nearby_state.carrier_roots.contains(id)
+                    != state.world().carriers().latest(*id).is_some()
                 || nearby_state.revisions.get(id).copied()
                     != state.world().spawn(*id).map(|spawn| spawn.revision)
         })
@@ -270,6 +275,7 @@ pub(super) fn reconcile(
             commands.entity(entity).despawn();
         }
         nearby_state.revisions.remove(&id);
+        nearby_state.carrier_roots.remove(&id);
     }
     let present: BTreeSet<_> = nearby_state.rendered.keys().copied().collect();
     // Spawns are loaded as far as the view could show one, with no distance
@@ -300,7 +306,6 @@ pub(super) fn reconcile(
         .spawns()
         .values()
         .map(|spawn| &spawn.state)
-        .filter(|spawn| world.carriers().latest(spawn.spawn_id).is_none())
         .filter(|spawn| reveal || world.can_see(spawn));
     let selected = nearby_with_invisible(
         candidates,
@@ -354,6 +359,7 @@ pub(super) fn reconcile(
 /// first time the zone shows a race, its model is read from the
 /// installation in the background and the spawn waits for it; says whether
 /// the spawn was drawn.
+#[allow(clippy::too_many_lines)] // One ordinary root and its model or marker are built together.
 fn draw(
     commands: &mut Commands,
     state: &OnlineState,
@@ -363,7 +369,12 @@ fn draw(
     (meshes, materials): Stores,
 ) -> bool {
     let spawn = &state.world().spawns()[&id].state;
-    let model = races::model(spawn.race, spawn.gender);
+    let carrier = state.world().carriers().latest(id).is_some();
+    let model = if carrier {
+        None
+    } else {
+        races::model(spawn.race, spawn.gender)
+    };
     if let Some(code) = model
         && !nearby_state.models.contains_key(code)
     {
@@ -448,7 +459,7 @@ fn draw(
             .entity(entity)
             .insert(super::names::Overhead(height / 2.0));
         commands.entity(entity).with_children(|children| {
-            children.spawn((
+            let mut marker = children.spawn((
                 Mesh3d(meshes.add(Cuboid::new(0.6, height, 0.6))),
                 MeshMaterial3d(materials.add(StandardMaterial {
                     base_color: color,
@@ -456,9 +467,24 @@ fn draw(
                     ..default()
                 })),
             ));
+            if carrier {
+                marker.insert((
+                    crate::carriers::Placeholder {
+                        spawn_id: id,
+                        root: entity,
+                        overhead: height / 2.0,
+                    },
+                    Visibility::Inherited,
+                ));
+            }
         });
     }
     nearby_state.rendered.insert(id, entity);
+    if carrier {
+        nearby_state.carrier_roots.insert(id);
+    } else {
+        nearby_state.carrier_roots.remove(&id);
+    }
     nearby_state
         .revisions
         .insert(id, state.world().spawns()[&id].revision);
@@ -514,6 +540,16 @@ pub(super) fn interpolate(
         let Some(spawn) = state.world().spawn(entity.id) else {
             continue;
         };
+        if let Some(report) = state.world().carriers().latest(entity.id) {
+            let pose = report.pose(now);
+            transform.translation = Vec3::from_array(render_position(pose));
+            transform.rotation =
+                Quat::from_rotation_y(eq_client_core::render_heading(pose.heading));
+            entity.seen = Some(spawn.reported);
+            entity.soles = None;
+            entity.carried = None;
+            continue;
+        }
         // A spawn moves on from its latest report, from when the report
         // came, however late it is drawn.
         let first = entity.seen.is_none();
