@@ -951,32 +951,34 @@ fn slash_click(window: &str, words: &[&str]) -> Result<ClickTarget, String> {
     })
 }
 
+/// A numeric click argument, with the existing target-specific parse error.
+fn number<T: std::str::FromStr>(text: &str, what: &str) -> Result<T, String> {
+    text.parse().map_err(|_| format!("expected {what}"))
+}
+
 /// `click <target>` or `right_click <target>`: a slot, spellbook, trade or
 /// bag tint button.
 fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
-    fn value<T: std::str::FromStr>(text: &str, what: &str) -> Result<T, String> {
-        text.parse().map_err(|_| format!("expected {what}"))
-    }
     if let Some(training) = training_click(words)? {
         return Ok(ClickTarget::Training(training));
     }
     Ok(match words {
-        ["slot", slot] => ClickTarget::Slot(value(slot, "a slot number")?),
+        ["slot", slot] => ClickTarget::Slot(number(slot, "a slot number")?),
         ["scribe"] => ClickTarget::Scribe,
         ["store"] => ClickTarget::Store,
         ["destroy"] => ClickTarget::Destroy,
         ["drop"] => ClickTarget::Drop,
-        ["book", row] => ClickTarget::BookRow(value(row, "a book row number")?),
+        ["book", row] => ClickTarget::BookRow(number(row, "a book row number")?),
         ["loot", place] => {
-            ClickTarget::Trade(TradeClick::Take(value(place, "a place on the corpse")?))
+            ClickTarget::Trade(TradeClick::Take(number(place, "a place on the corpse")?))
         }
         ["loot_all"] => ClickTarget::Trade(TradeClick::TakeAll),
         ["loot_done"] => ClickTarget::Trade(TradeClick::EndLoot),
-        ["buy", slot] => ClickTarget::Trade(TradeClick::Buy(value(slot, "a merchant slot")?)),
-        ["sell", slot] => ClickTarget::Trade(TradeClick::Sell(value(slot, "an inventory slot")?)),
+        ["buy", slot] => ClickTarget::Trade(TradeClick::Buy(number(slot, "a merchant slot")?)),
+        ["sell", slot] => ClickTarget::Trade(TradeClick::Sell(number(slot, "an inventory slot")?)),
         ["shop_done"] => ClickTarget::Trade(TradeClick::EndShop),
         ["merchant_row", slot] => {
-            ClickTarget::Trade(TradeClick::Choose(value(slot, "a merchant slot")?))
+            ClickTarget::Trade(TradeClick::Choose(number(slot, "a merchant slot")?))
         }
         ["buy_chosen"] => ClickTarget::Trade(TradeClick::BuyChosen),
         ["sell_chosen"] => ClickTarget::Trade(TradeClick::SellChosen),
@@ -1012,7 +1014,7 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["track"] => ClickTarget::Track,
         ["answer", answer @ ("yes" | "no")] => ClickTarget::Answer(*answer == "yes"),
         ["page", way @ ("next" | "back")] => ClickTarget::Page(*way == "next"),
-        ["combine", slot] => ClickTarget::Combine(value(slot, "a pack slot number")?),
+        ["combine", slot] => ClickTarget::Combine(number(slot, "a pack slot number")?),
         ["map", action] => ClickTarget::Map(map_button(action)?),
         ["slider", name, percent] => ClickTarget::Slider(
             slider(name)?,
@@ -1035,10 +1037,10 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ),
         ["coins", place, coin] => ClickTarget::Coins(coin_place(place)?, coin_kind(coin)?),
         ["pick", button] => ClickTarget::Pick(pick_button(button)?),
-        ["tint", slot] => ClickTarget::Tint(value(slot, "a bag slot")?, None),
+        ["tint", slot] => ClickTarget::Tint(number(slot, "a bag slot")?, None),
         ["tint", slot, color] => ClickTarget::Tint(
-            value(slot, "a bag slot")?,
-            Some(value(color, "a palette color")?),
+            number(slot, "a bag slot")?,
+            Some(number(color, "a palette color")?),
         ),
         ["memorize", gem] => ClickTarget::MemorizeGem(gem_number(gem)?),
         ["spell_gem", gem] => ClickTarget::SpellGem(gem_number(gem)?),
