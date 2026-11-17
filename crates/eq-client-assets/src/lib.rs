@@ -1,5 +1,7 @@
 #![doc = "Owned, renderer-independent world, character and UI data from a local EQ installation."]
 
+/// Model actors in character archives.
+pub mod actors;
 pub mod camera;
 pub mod characters;
 pub mod clock;

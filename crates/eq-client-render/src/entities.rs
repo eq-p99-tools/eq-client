@@ -175,7 +175,11 @@ pub(crate) const fn dialect(
 /// own place behind the player. This is how far spawns are loaded, not how
 /// far they show; the far plane decides that ([`super::camera::past_far`]).
 /// An orthographic view, or none yet, loads them to the clip.
-fn loading_reach(clip: f32, view: Option<(&Transform, &Projection)>, player: Vec3) -> f32 {
+pub(super) fn loading_reach(
+    clip: f32,
+    view: Option<(&Transform, &Projection)>,
+    player: Vec3,
+) -> f32 {
     view.and_then(|(transform, projection)| {
         super::camera::corner_reach(projection)
             .map(|corner| clip * corner + transform.translation.distance(player))
@@ -296,6 +300,7 @@ pub(super) fn reconcile(
         .spawns()
         .values()
         .map(|spawn| &spawn.state)
+        .filter(|spawn| world.carriers().latest(spawn.spawn_id).is_none())
         .filter(|spawn| reveal || world.can_see(spawn));
     let selected = nearby_with_invisible(
         candidates,

@@ -1,4 +1,5 @@
 //! Calibrated P99 input; no movement is generated without a session grant.
+mod boats;
 mod follow;
 mod placement;
 mod shoreline;
@@ -88,6 +89,11 @@ pub(super) struct Controls {
     /// height it put the model at: the next pass carries the feet by the
     /// lift's own rise since then, and the model is drawn on the floor.
     riding: Option<(u8, Instant, f32)>,
+    boat: Option<boats::Riding>,
+    /// A queued endpoint never becomes the next physics/display basis until
+    /// its exact movement result accepts it.
+    boat_pending: Option<(Instant, Option<boats::Riding>)>,
+    visual_boat: Option<boats::DisplayFrame>,
     sent_yaw: SentYaw,
     boundary: BoundaryTracker,
     placement: placement::Check,
@@ -233,6 +239,9 @@ impl Default for Controls {
             moving: false,
             sent_span: 0.1,
             riding: None,
+            boat: None,
+            boat_pending: None,
+            visual_boat: None,
             sent_yaw: SentYaw::Ordinary,
             boundary: BoundaryTracker::default(),
             placement: placement::Check::default(),
@@ -359,6 +368,60 @@ impl Controls {
     /// turn in the sample's span is the player facing a new way at once, so
     /// it shows at once while the positions still play.
     pub fn display_sample(&mut self, from: Transform, position: eq_client_core::WorldPosition) {
+        self.display_in_frame(from, position, self.facing);
+    }
+
+    /// Plays accepted rider motion in the boat frame; carry is applied only
+    /// when drawing. Pending and refused endpoints never enter this queue.
+    pub(super) fn display_carrier_sample(
+        &mut self,
+        from: Transform,
+        position: eq_client_core::WorldPosition,
+        carriers: &eq_network_game::movement::Carriers,
+    ) {
+        let carried = self.boat.and_then(|riding| {
+            riding
+                .carried(carriers, Instant::now())
+                .map(|carried| (riding, carried))
+        });
+        if let Some(frame) = self.visual_boat
+            && carried.is_none_or(|(_, riding)| {
+                riding.sample.spawn_id != frame.sample.spawn_id
+                    || riding.sample.incarnation != frame.sample.incarnation
+            })
+        {
+            if let Some(visual) = self.visual.as_mut() {
+                visual.map(|transform| boats::to_world(frame.pose, transform));
+            }
+            self.visual_boat = None;
+        }
+        if let Some((riding, carried)) = carried {
+            if self.visual_boat.is_none()
+                && let Some(visual) = self.visual.as_mut()
+            {
+                visual.map(|transform| boats::to_local(carried.pose, transform));
+            }
+            let from = boats::to_local(carried.pose, from);
+            let local = eq_network_game::movement::carrier_local(riding.pose, position);
+            let facing = self
+                .facing
+                .map(|heading| (heading - carried.pose.heading).rem_euclid(512.0));
+            self.visual_boat = Some(boats::DisplayFrame {
+                sample: carried.sample,
+                pose: carried.pose,
+            });
+            self.display_in_frame(from, local, facing);
+        } else {
+            self.display_sample(from, position);
+        }
+    }
+
+    fn display_in_frame(
+        &mut self,
+        from: Transform,
+        position: eq_client_core::WorldPosition,
+        facing: Option<f32>,
+    ) {
         if self.refused.is_some()
             || self
                 .mouse_heading
@@ -367,7 +430,7 @@ impl Controls {
             self.mouse_heading = None;
         }
         let rotation = Quat::from_rotation_y(eq_client_core::render_heading(
-            self.facing.unwrap_or(position.heading),
+            facing.unwrap_or(position.heading),
         ));
         let to = Transform::from_translation(Vec3::from_array(eq_client_core::render_position(
             position,
@@ -915,6 +978,29 @@ impl Controls {
         false
     }
 
+    /// Settles only the matching proposed carrier link. A rejection retains
+    /// the previously accepted frame, which the carrier may still carry.
+    pub(super) fn resolve_carrier(&mut self, created: Instant, refused: bool) {
+        if self.boat_pending.is_some_and(|(at, _)| at == created) {
+            let (_, proposed) = self.boat_pending.take().expect("matching carrier proposal");
+            if !refused {
+                self.boat = proposed;
+            }
+        }
+    }
+
+    /// Accepted local carrier basis, for explicit script diagnostics.
+    pub(crate) fn carrier_support(
+        &self,
+    ) -> Option<(
+        eq_network_game::movement::CarrierSample,
+        eq_client_core::WorldPosition,
+        eq_client_core::WorldPosition,
+    )> {
+        self.boat
+            .map(|riding| (riding.sample, riding.pose, riding.position))
+    }
+
     pub(super) fn crossing_resolved(&mut self) {
         if self
             .pending
@@ -926,6 +1012,7 @@ impl Controls {
 
     pub(super) fn move_refused(&mut self, session_id: Option<u64>, created: Instant, reason: &str) {
         if self.is_pending_move(session_id, created) {
+            self.resolve_carrier(created, true);
             self.finish();
             self.resolve_water_entry(true);
             self.refused = Some(reason.to_owned());
@@ -1556,7 +1643,18 @@ pub(super) fn input(
         controls.held = Some(Held::Withdrawn);
         return;
     }
-    let origin = Vec3::from_array(eq_client_core::render_position(accepted.position));
+    let boat = if placement_blocked || flying || swimming {
+        None
+    } else {
+        controls
+            .boat
+            .and_then(|riding| riding.carried(online.world().carriers(), now))
+    };
+    if boat.is_none() {
+        controls.boat = None;
+    }
+    let carried_position = boat.map_or(accepted.position, |riding| riding.position);
+    let origin = Vec3::from_array(eq_client_core::render_position(carried_position));
     let feet = origin - Vec3::Y * body.feet_offset;
     // The lift the last sample stood on has carried the feet by its own rise
     // since, however long the frame took, as the program's floor sweep
@@ -1613,7 +1711,7 @@ pub(super) fn input(
             return;
         }
     }
-    let current_heading = accepted.position.heading;
+    let current_heading = carried_position.heading;
     // The clock runs from the previous sample's request stamp (which is
     // never after its answer came), so each sample covers the time since
     // the last one, its round trip included, and never more than the time
@@ -1864,6 +1962,40 @@ pub(super) fn input(
         && diagonal.is_none()
         && follow_heading.is_none_or(|heading| arc(current_heading, heading) == 0.0)
     {
+        // Even without voluntary input, refresh the ordinary floor sweep's
+        // carrier link and submit its world pose through the existing gate.
+        if !placement_blocked
+            && !flying
+            && !swimming
+            && let Some((sample, pose)) = boats::under(world, online.world().carriers(), feet, now)
+        {
+            let position = world_position(origin.to_array(), current_heading);
+            let sent = outbox.post(online.world(), |stamp| {
+                ClientCommand::Move(
+                    MovementRequest::new(MovementMode::Forward, stamp.session_id, position, now)
+                        .supported_by(Support::Spawn(sample)),
+                )
+            });
+            if let Err(reason) = sent {
+                controls.send_failed(reason);
+                controls.held = Some(Held::Refused);
+                return;
+            }
+            controls.last_sent = Some(now);
+            controls.sent_span = span;
+            controls.boat_pending = Some((
+                now,
+                Some(boats::Riding {
+                    sample,
+                    pose,
+                    position,
+                }),
+            ));
+            controls.riding = None;
+            controls.held = None;
+            controls.wait_for(session_id, now, PendingKind::Move);
+            return;
+        }
         // A lift rising under a still player stands them on its new floor, as
         // the program's forced floor sweep does (0x4368b3, read R1).
         if !placement_blocked
@@ -2157,18 +2289,34 @@ pub(super) fn input(
     // The sample names the lift that carried the origin, or the one under
     // the landing; only the one under the landing carries the next pass.
     let (support, under) = request_support(ride, world, lifts.as_deref(), landing);
+    let boat_under = if placement_blocked || flying || swimming {
+        None
+    } else {
+        boats::under(world, online.world().carriers(), landing, now)
+    };
+    // The sample that walks off still removes the carrying motion from its
+    // own budget. Only the floor under the landing carries the next pass.
+    let boat_sample = boat
+        .map(|riding| riding.sample)
+        .or(boat_under.map(|(sample, _)| sample));
     let mut created = now;
     let sent = outbox.post(online.world(), |stamp| {
         // Shoreline physics already ended at the observed frame. Its next
         // request must budget from that same tick, even if planning was slow.
-        created = shore.as_ref().map_or(stamp.created, |plan| plan.created);
+        created = if boat_sample.is_some() {
+            now
+        } else {
+            shore.as_ref().map_or(stamp.created, |plan| plan.created)
+        };
         ClientCommand::Move(MovementRequest {
             mode,
             session_id: stamp.session_id,
             position: position_sent,
             heading: heading_update,
             created,
-            support: support.map(Support::Door),
+            support: boat_sample
+                .map(Support::Spawn)
+                .or(support.map(Support::Door)),
         })
     });
     if let Err(reason) = sent {
@@ -2193,6 +2341,15 @@ pub(super) fn input(
     controls.last_sent = Some(created);
     controls.sent_span = span;
     controls.riding = under.map(|door| (door, created, position.y));
+    controls.boat_pending = Some((
+        created,
+        boat_under.map(|(sample, pose)| boats::Riding {
+            sample,
+            pose,
+            position: position_sent,
+        }),
+    ));
+    debug!(target: "eq_client_render::motion::boats", support = ?boat_sample, linked = ?controls.boat, "Carrier floor sweep");
     controls.sent_yaw = if mouse_snapshot.is_some() {
         SentYaw::MouseSnapshot
     } else if mouse_aim.is_some() || follow_heading.is_some() && heading_snapshots {
@@ -2724,6 +2881,16 @@ impl VisualMotion {
         }
     }
 
+    /// Re-expresses the whole accepted queue when entering or leaving a
+    /// carrier frame, preserving its timing and accepted endpoints.
+    fn map(&mut self, mut map: impl FnMut(Transform) -> Transform) {
+        self.from = map(self.from);
+        self.to = map(self.to);
+        for segment in &mut self.queue {
+            segment.to = map(segment.to);
+        }
+    }
+
     /// Where the newest accepted sample ends.
     fn last(&self) -> Transform {
         self.queue.back().map_or(self.to, |segment| segment.to)
@@ -2774,6 +2941,8 @@ pub(super) fn interpolate(
         && preview.is_none()
         && displayed_mouse.is_none()
         && controls.riding.is_none()
+        && controls.boat.is_none()
+        && controls.visual_boat.is_none()
     {
         return;
     }
@@ -2783,6 +2952,7 @@ pub(super) fn interpolate(
     };
     let had_preview = displayed_mouse.take() == Some(entity);
     let mut follow_heading = false;
+    let advanced_in_boat = controls.visual.is_some() && controls.visual_boat.is_some();
     if let Some(visual) = controls.visual.as_mut() {
         let seconds = time.delta_secs();
         let before = transform.translation;
@@ -2813,6 +2983,34 @@ pub(super) fn interpolate(
                 .rise(door, at, std::time::Instant::now());
         transform.translation.y = transform.translation.y.max(floor);
     }
+    if let Some(frame) = controls.visual_boat {
+        if let Some(report) = online
+            .world()
+            .carriers()
+            .latest(frame.sample.spawn_id)
+            .filter(|report| report.sample().incarnation == frame.sample.incarnation)
+        {
+            let pose = report.pose(Instant::now());
+            // advance() above writes local coordinates. With no remaining
+            // segment, recover the shown local point from its last frame.
+            if !advanced_in_boat {
+                *transform = boats::to_local(frame.pose, *transform);
+            }
+            *transform = boats::to_world(pose, *transform);
+            controls.visual_boat = Some(boats::DisplayFrame {
+                sample: report.sample(),
+                pose,
+            });
+        } else {
+            if let Some(visual) = controls.visual.as_mut() {
+                visual.map(|transform| boats::to_world(frame.pose, transform));
+            }
+            if advanced_in_boat {
+                *transform = boats::to_world(frame.pose, *transform);
+            }
+            controls.visual_boat = None;
+        }
+    }
     if let Some(heading) = preview {
         // Position still plays only accepted samples. An older queued pose
         // never overwrites the latest local mouse orientation.
@@ -2823,8 +3021,11 @@ pub(super) fn interpolate(
         let rotation =
             Quat::from_rotation_y(eq_client_core::render_heading(player.position.heading));
         transform.rotation = rotation;
+        let visual_rotation = controls.visual_boat.map_or(rotation, |frame| {
+            boats::to_local(frame.pose, Transform::default().with_rotation(rotation)).rotation
+        });
         if let Some(visual) = controls.visual.as_mut() {
-            visual.face(rotation);
+            visual.face(visual_rotation);
         }
     }
     for (mut camera, free) in &mut cameras {

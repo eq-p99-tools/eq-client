@@ -608,7 +608,13 @@ impl Panels<'_> {
     }
 
     /// The worker's local result for the player's move.
-    fn moved(&mut self, admission_id: Option<u64>, moved: &Moved, drawn: Option<Transform>) {
+    fn moved(
+        &mut self,
+        admission_id: Option<u64>,
+        moved: &Moved,
+        drawn: Option<Transform>,
+        carriers: &eq_network_game::movement::Carriers,
+    ) {
         debug!(
             admission_id = ?admission_id,
             position = ?moved.position,
@@ -618,11 +624,14 @@ impl Panels<'_> {
         );
 
         if self.motion.moved(admission_id, moved.created) {
+            self.motion
+                .resolve_carrier(moved.created, moved.refused.is_some());
             self.motion.resolve_water_entry(moved.refused.is_some());
             self.motion.refused.clone_from(&moved.refused);
         }
         if let Some(transform) = drawn {
-            self.motion.display_sample(transform, moved.position);
+            self.motion
+                .display_carrier_sample(transform, moved.position, carriers);
         }
     }
 
@@ -870,7 +879,12 @@ pub(super) fn receive(
         }
         panels.show(&changes, &mut state, messages.as_deref(), &mut chat);
         if let Some(moved) = &changes.moved {
-            panels.moved(state.world.session_id(), moved, scene.player());
+            panels.moved(
+                state.world.session_id(),
+                moved,
+                scene.player(),
+                state.world.carriers(),
+            );
         }
         // Offline, the zone on screen is the viewer's own, and the preview
         // admits its player into it.

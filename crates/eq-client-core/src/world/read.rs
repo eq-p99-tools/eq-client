@@ -920,3 +920,11 @@ impl ClientWorld {
         self.connected && self.session_id == Some(session_id)
     }
 }
+
+impl super::ClientWorld {
+    /// Session-clock carrier reports, shared with the movement validator.
+    #[must_use]
+    pub const fn carriers(&self) -> &eq_network_game::movement::Carriers {
+        &self.zone.carriers
+    }
+}

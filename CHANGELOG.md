@@ -22,6 +22,12 @@
   for the next request. Focus, stun and permission resets discard it.
   Shoreline arcs retire immediately when their continuation cannot be
   resolved or has expired, and share the ordinary coordinate conversions.
+- Titanium carrier actors use their installed model's authored collision, so
+  a floor sweep can stand on the model and carry its rider through received
+  translation and yaw. The client and session share the report-driven pose
+  and budget only the rider's relative motion. Geometry source, between-report
+  motion, rider reach and still-rider wire details remain labelled inferences
+  (6.467-6.470). Pitch and boat zoning remain separate; live rides are unverified.
 
 - A buff's and a pet buff's icon background no longer shows magenta at its
   corners. The installed client's skins draw it from CS_Buttons.bmp

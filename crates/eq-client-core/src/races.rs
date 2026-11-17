@@ -309,3 +309,20 @@ mod tests {
         );
     }
 }
+
+/// The exact static actor registration for carrier races and genders in
+/// Titanium (`eqgame.exe` 0x48c8af). Missing genders stay unsupported; these
+/// actor tags are not the three-letter skeletal character identifiers.
+#[must_use]
+pub const fn carrier_actor(race: u32, gender: u32) -> Option<&'static str> {
+    match (race, gender) {
+        (141, 0..=2) => Some("BOAT"),
+        (72, 0) => Some("SHIP"),
+        (72, 1..=2) => Some("PRE"),
+        (73, 0) => Some("LAUNCHM"),
+        (73, 2) => Some("LAUNCH"),
+        (114, 2) => Some("GSP"),
+        (404, 2) => Some("SHP"),
+        _ => None,
+    }
+}

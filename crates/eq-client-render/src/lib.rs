@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use theme::Size;
 
 mod camera;
+mod carriers;
 mod gpu_assets;
 #[cfg(test)]
 mod object_material_tests;

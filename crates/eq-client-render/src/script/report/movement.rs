@@ -73,6 +73,30 @@ pub(in crate::script) fn report(
             sync.report(admission, wanted, Instant::now())
         },
     ));
+    let now = Instant::now();
+    movement_state["carriers"] = json!(
+        world
+            .carriers()
+            .reports()
+            .map(|report| {
+                let pose = report.pose(now);
+                json!({ "sample": report.sample(), "received_report": report, "reported_pose": report.pose(report.sample().reported), "sampled_pose": pose,
+                    "model": world.spawn(report.sample().spawn_id).map(|spawn| (spawn.state.race, spawn.state.gender, eq_client_core::races::carrier_actor(spawn.state.race, spawn.state.gender))),
+            "report_age_ms": now.saturating_duration_since(report.sample().reported).as_millis() })
+            })
+            .collect::<Vec<_>>()
+    );
+    movement_state["carrier_support"] = json!(observed.4.carrier_support().map(|(sample, pose, position)| json!({ "sample": sample, "accepted_pose": pose, "accepted_position": position })));
+    movement_state["carrier_floor"] = json!(session_position.zip(body.zip(collision)).and_then(
+        |(position, (body, collision))| {
+            collision.ground_spawn(
+                Vec3::from_array(eq_client_core::render_position(position))
+                    - Vec3::Y * body.feet_offset,
+                0.1,
+                0.1,
+            )
+        }
+    ));
     movement_state["camera_detached"] = json!(camera_detached);
     info!(label, %movement_state, "Script movement report");
 }

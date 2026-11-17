@@ -147,6 +147,8 @@ pub struct CollisionWorld {
     /// Each obstacle with the door it belongs to, if any, and whether it
     /// holds the player up and stops them walking.
     obstacles: Vec<(Option<u8>, Arc<CollisionMesh>, Solidity)>,
+    /// Actual model geometry of nearby received carrier spawns.
+    spawn_obstacles: Vec<(u16, Arc<CollisionMesh>)>,
     liquids: Option<Arc<dyn Liquids>>,
     liquid_support: bool,
     swim_origin: Option<f32>,
@@ -161,6 +163,7 @@ impl CollisionWorld {
         Ok(Self {
             terrain: Arc::new(CollisionMesh::new(triangles)?),
             obstacles: Vec::new(),
+            spawn_obstacles: Vec::new(),
             liquids: None,
             liquid_support: false,
             swim_origin: None,
@@ -198,6 +201,12 @@ impl CollisionWorld {
             .collect();
     }
 
+    /// Replaces carrier colliders independently of doors. Their floor sweep
+    /// identifies the spawn underfoot; no generic NPC gains collision.
+    pub fn set_spawn_obstacles(&mut self, spawns: Vec<(u16, Arc<CollisionMesh>)>) {
+        self.spawn_obstacles = spawns;
+    }
+
     /// The same world with these doors' colliders left out, sharing its
     /// geometry, as if they stood open.
     #[must_use]
@@ -210,6 +219,7 @@ impl CollisionWorld {
                 .filter(|(door, ..)| door.is_none_or(|door| !doors.contains(&door)))
                 .cloned()
                 .collect(),
+            spawn_obstacles: self.spawn_obstacles.clone(),
             liquids: self.liquids.clone(),
             liquid_support: self.liquid_support,
             swim_origin: self.swim_origin,
@@ -236,6 +246,7 @@ impl CollisionWorld {
                 })
                 .cloned()
                 .collect(),
+            spawn_obstacles: self.spawn_obstacles.clone(),
             liquids: self.liquids.clone(),
             liquid_support: self.liquid_support,
             swim_origin: self.swim_origin,
@@ -273,7 +284,7 @@ impl CollisionWorld {
     /// How many obstacles stand in the world, for diagnostics.
     #[must_use]
     pub fn obstacle_count(&self) -> usize {
-        self.obstacles.len()
+        self.obstacles.len() + self.spawn_obstacles.len()
     }
 
     /// The first of these doors whose collider comes within `margin` of the box
@@ -298,16 +309,19 @@ impl CollisionWorld {
     fn meshes(&self) -> impl Iterator<Item = &TriMesh> {
         std::iter::once(&self.terrain.mesh)
             .chain(self.obstacles.iter().map(|(_, mesh, _)| &mesh.mesh))
+            .chain(self.spawn_obstacles.iter().map(|(_, mesh)| &mesh.mesh))
     }
 
     /// The zone and the obstacles that hold the player up.
     fn floor_meshes(&self) -> impl Iterator<Item = &TriMesh> {
-        std::iter::once(&self.terrain.mesh).chain(
-            self.obstacles
-                .iter()
-                .filter(|(.., solidity)| solidity.floor)
-                .map(|(_, mesh, _)| &mesh.mesh),
-        )
+        std::iter::once(&self.terrain.mesh)
+            .chain(
+                self.obstacles
+                    .iter()
+                    .filter(|(.., solidity)| solidity.floor)
+                    .map(|(_, mesh, _)| &mesh.mesh),
+            )
+            .chain(self.spawn_obstacles.iter().map(|(_, mesh)| &mesh.mesh))
     }
 
     /// The zone and the obstacles that stop the player walking.
@@ -360,12 +374,14 @@ impl CollisionWorld {
     }
 
     fn wall_meshes(&self) -> impl Iterator<Item = &TriMesh> {
-        std::iter::once(&self.terrain.mesh).chain(
-            self.obstacles
-                .iter()
-                .filter(|(.., solidity)| solidity.wall)
-                .map(|(_, mesh, _)| &mesh.mesh),
-        )
+        std::iter::once(&self.terrain.mesh)
+            .chain(
+                self.obstacles
+                    .iter()
+                    .filter(|(.., solidity)| solidity.wall)
+                    .map(|(_, mesh, _)| &mesh.mesh),
+            )
+            .chain(self.spawn_obstacles.iter().map(|(_, mesh)| &mesh.mesh))
     }
 
     /// The door whose floor holds the player up at `position`, between
@@ -387,6 +403,28 @@ impl CollisionWorld {
             })
             .min_by(|a, b| a.1.total_cmp(&b.1))?;
         terrain.is_none_or(|ground| time <= ground).then_some(door)
+    }
+
+    /// The carrier whose actual model floor wins the ordinary downward
+    /// floor probe. Terrain and door floors keep priority when higher.
+    #[must_use]
+    pub fn ground_spawn(&self, position: Vec3, step_up: f32, drop: f32) -> Option<u16> {
+        const EDGE: f32 = 0.000_1;
+        let supported = self.support_height(position, step_up, drop)?;
+        for (x, z) in SUPPORT_OFFSETS {
+            let sample = position + Vec3::new(x, step_up + EDGE, z);
+            let ray = Ray::new(Vector::from_array(sample.to_array()), -Vector::Y);
+            for (id, mesh) in &self.spawn_obstacles {
+                if let Some(time) =
+                    mesh.mesh
+                        .cast_local_ray(&ray, step_up + drop + 2.0 * EDGE, false)
+                    && (sample.y - time - supported).abs() <= EDGE
+                {
+                    return Some(*id);
+                }
+            }
+        }
+        None
     }
 
     /// Returns the nearest solid obstruction along a normalized viewing ray.

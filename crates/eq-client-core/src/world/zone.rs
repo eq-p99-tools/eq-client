@@ -17,6 +17,7 @@ use std::{collections::BTreeMap, time::Instant};
 #[derive(Default)]
 pub(super) struct Zone {
     pub(super) spawns: BTreeMap<u16, Spawn>,
+    pub(super) carriers: eq_network_game::movement::Carriers,
     pub(super) sees_invisible: bool,
     /// Level colors the server reported for spawns the player considered.
     pub(super) considered: BTreeMap<u16, ConColor>,
@@ -98,6 +99,8 @@ impl Zone {
     }
 
     fn clear_spawn(&mut self, id: u16) {
+        self.carriers
+            .apply(eq_network_game::movement::CarrierUpdate::Removed(id));
         self.spawns.remove(&id);
         self.considered.remove(&id);
         self.motions.remove(&id);
