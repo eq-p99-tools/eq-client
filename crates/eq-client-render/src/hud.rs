@@ -680,7 +680,7 @@ fn run_hotbar_command(
         })
     });
     let admission = if synthetic {
-        script.and_then(|script| script.chat_admission())
+        script.and_then(super::script::Script::chat_admission)
     } else {
         None
     };
