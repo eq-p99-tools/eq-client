@@ -9,7 +9,7 @@ rust-version.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-chrono.workspace = true
+jiff.workspace = true
 parry3d.workspace = true
 eq-client-axes.workspace = true
 glam.workspace = true

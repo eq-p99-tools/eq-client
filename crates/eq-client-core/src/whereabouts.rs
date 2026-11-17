@@ -93,8 +93,8 @@ const fn ordinal(day: u8) -> &'static str {
 /// A time on Earth as `/time` names it: the weekday, the date and the time
 /// to the second.
 #[must_use]
-pub fn earth(now: chrono::NaiveDateTime) -> String {
-    now.format("%A, %B %d, %Y %H:%M:%S").to_string()
+pub fn earth(now: jiff::civil::DateTime) -> String {
+    now.strftime("%A, %B %d, %Y %H:%M:%S").to_string()
 }
 
 /// An hour of the day, from 0 at midnight, on a twelve-hour clock.
@@ -109,6 +109,26 @@ const fn twelve_hour(hour: u8) -> (u8, &'static str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn earth_dates_keep_local_calendar_text_at_epoch_and_leap_day() {
+        for (time, expected) in [
+            (
+                jiff::civil::date(1970, 1, 1).at(0, 0, 0, 0),
+                "Thursday, January 01, 1970 00:00:00",
+            ),
+            (
+                jiff::civil::date(1969, 12, 31).at(23, 59, 59, 999_999_999),
+                "Wednesday, December 31, 1969 23:59:59",
+            ),
+            (
+                jiff::civil::date(2024, 2, 29).at(2, 4, 5, 987_654_321),
+                "Thursday, February 29, 2024 02:04:05",
+            ),
+        ] {
+            assert_eq!(earth(time), expected);
+        }
+    }
 
     #[test]
     fn a_location_names_y_first_to_two_places() {
@@ -164,10 +184,7 @@ mod tests {
         assert_eq!(weekday(7), "Saturday, February 7, 3200 - 12 AM");
         assert_eq!(weekday(8), "Sunday, February 8, 3200 - 12 AM");
         assert_eq!(weekday(28), "Saturday, February 28, 3200 - 12 AM");
-        let now = chrono::NaiveDate::from_ymd_opt(2026, 10, 3)
-            .unwrap()
-            .and_hms_opt(12, 34, 5)
-            .unwrap();
+        let now = jiff::civil::date(2026, 10, 3).at(12, 34, 5, 0);
         assert_eq!(earth(now), "Saturday, October 03, 2026 12:34:05");
     }
 }

@@ -1486,8 +1486,8 @@ fn spawn_line(
 /// Starts a line's words with the time it arrived, by the computer's clock,
 /// as the chat log writes the time of day ([`Fix::ShowTimesInChat`]); its
 /// item links move along with the words.
-fn stamp(message: &mut Message, at: chrono::NaiveDateTime) {
-    let time = at.format("[%H:%M:%S] ").to_string();
+fn stamp(message: &mut Message, at: jiff::civil::DateTime) {
+    let time = at.strftime("[%H:%M:%S] ").to_string();
     for link in &mut message.item_links {
         link.text_start += time.len();
         link.text_end += time.len();
@@ -2585,9 +2585,7 @@ mod tests {
             .insert_resource(crate::online::OnlineState::new(false))
             .add_systems(Update, refresh);
         app.world_mut().spawn(Content::default());
-        let at = chrono::NaiveDate::from_ymd_opt(2026, 10, 3)
-            .and_then(|day| day.and_hms_opt(17, 42, 5))
-            .unwrap();
+        let at = jiff::civil::date(2026, 10, 3).at(17, 42, 5, 0);
         let auction = crate::preview::chat_lines()
             .into_iter()
             .find(|line| line.channel == ChannelName::Auction)
