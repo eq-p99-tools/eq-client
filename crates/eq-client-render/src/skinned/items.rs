@@ -739,6 +739,7 @@ mod tests {
     #[test]
     fn a_bags_icon_is_its_cell_and_an_icon_below_500_shows_no_picture() {
         let mut app = app();
+        crate::sheets::testing::blank(&mut app);
         // The preview's backpack, icon 557: the 22nd cell of the second
         // sheet, counted down each column of six.
         let sheet = crate::sheets::testing::sheet(
