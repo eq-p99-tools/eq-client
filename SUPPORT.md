@@ -15,11 +15,14 @@ Quarm/TAKP behavior. Frontends use runtime capabilities, not server-name flags.
 
 ## Server policy snapshot
 
-The following summarizes the networking revision pinned by this application's
-Cargo.lock: `9b2ab94a95f84d6816323fdbf3292e791a0c22e2`. Its
-[server policy and tests](https://github.com/eq-p99-tools/eq-network/blob/9b2ab94a95f84d6816323fdbf3292e791a0c22e2/crates/eq-network/src/client/session/servers.rs)
-are the source for this table. **Yes means provided by that policy**, not a live
-certification, and individual operations still validate their prerequisites.
+The following summarizes the networking dependency selected by
+[Cargo.toml](Cargo.toml) and resolved in [Cargo.lock](Cargo.lock). Its
+`crates/eq-network/src/client/session/servers.rs` policy and tests are the source
+for this table. The [networking source](https://github.com/eq-p99-tools/eq-network)
+and documentation links below may advance; select the lockfile's revision when
+checking this application's behavior. **Yes means provided by that policy**,
+not a live certification, and individual operations still validate their
+prerequisites.
 
 | Area | P99 | EQEmu | Quarm | TAKP |
 | --- | --- | --- | --- | --- |
@@ -50,6 +53,8 @@ certification, and individual operations still validate their prerequisites.
 | Ground-item state and pickup | Yes | Yes | Yes | Yes |
 | Camping and zone transfers | Yes | Yes | Yes | Yes |
 | Groups | Yes | Yes | No | Yes |
+| Coin splitting and banker change | Yes | Yes | No | No |
+| Friends-online lookup and guild requests | Yes | Yes | No | No |
 | Ordinary assist, dice and emotes | Source-backed, public verification pending | Yes | No | No |
 | AFK, anonymity and roleplay | Source-backed, public verification pending | Yes | No | Anonymity and roleplay |
 | Raids | No | Yes | No | No |
@@ -189,12 +194,13 @@ affected mechanics unavailable while chat remains usable. See [installed spell
 providers](docs/spell-providers.md). These source and synthetic checks add no live
 compatibility certification.
 
-The pinned networking [combat](https://github.com/eq-p99-tools/eq-network/blob/9b2ab94a95f84d6816323fdbf3292e791a0c22e2/docs/quarm-combat.md),
-[loot](https://github.com/eq-p99-tools/eq-network/blob/9b2ab94a95f84d6816323fdbf3292e791a0c22e2/docs/eqmac-looting.md) and
-[world-object](https://github.com/eq-p99-tools/eq-network/blob/9b2ab94a95f84d6816323fdbf3292e791a0c22e2/docs/eqmac-world-objects.md)
-contracts record their limits and controlled live checklists. The dated
-[P99/Quarm gap report](https://github.com/eq-p99-tools/eq-network/blob/9b2ab94a95f84d6816323fdbf3292e791a0c22e2/docs/public-server-gaps.md)
-retains the earlier inspection and its scenario-specific evidence.
+The networking [combat](https://github.com/eq-p99-tools/eq-network/blob/main/docs/quarm-combat.md),
+[loot](https://github.com/eq-p99-tools/eq-network/blob/main/docs/eqmac-looting.md) and
+[world-object](https://github.com/eq-p99-tools/eq-network/blob/main/docs/eqmac-world-objects.md)
+contracts record their limits and controlled live checklists. The
+[P99/Quarm gap report](https://github.com/eq-p99-tools/eq-network/blob/main/docs/public-server-gaps.md)
+separates the source/policy inventory from earlier inspections and their
+scenario-specific evidence.
 
 ### Public-parity checks, 2026-11-02
 

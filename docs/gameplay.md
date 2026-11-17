@@ -33,12 +33,22 @@ until the worker position is usable. The Air Remaining gauge is hidden
 after 250 ms without a result, and a late result allows one due check
 against the current sample.
 
-Movement waits for usable inventory, coin, attribute and buff state. Unknown
-load or effects never become a zero-weight speed grant. Weight-preserving
-ordinary cursor moves can keep movement available; unresolved weight/equipment
-changes withdraw input until recovery. Withdrawal clears autorun, taps and
-queued jumps while supported passive falls continue. The [readiness guide](movement-input-readiness.md)
-records supported calculations, conservative limits and deferred live checks.
+Movement initially waits for usable inventory, coin, attribute and buff inputs.
+Once a grant is in force, ordinary belongings changes, buff updates and spell
+landings ask for fresh inputs while the existing speeds continue. A usable new
+report updates the speeds without clearing held keys, autorun or a jump already
+under way. A server correction also preserves those controls at the corrected
+position.
+Unresolved terms use the bounded-input rules in the
+[readiness guide](movement-input-readiness.md); they do not confirm inventory
+placement or server acceptance. This deliberate policy can temporarily allow
+more speed than the original client until all inputs are proven.
+
+A root stops travel while preserving turning; on Titanium, autorun resumes when
+the root ends. Stun, freeze, posture, death and zoning still apply their movement
+holds. When input is withdrawn, autorun, taps and queued jumps clear while
+supported passive falls continue. The readiness guide records calculation
+limits and deferred live checks.
 
 Use the current [key bindings](controls.md#keyboard). Autorun stops on the relevant
 movement/posture input or when free camera takes control. Losing focus or typing
