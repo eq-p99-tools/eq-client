@@ -85,7 +85,12 @@ merchant action.
   `close_box skill-select` or Escape closes it with no change. The
   `Script ability report` line names each button's choice and, while the
   picker is open, its rows.
-- `training row`: a training row counted from 1.
+- `training row`: a training row counted from 1; ordinary skills and languages
+  share the installed trainer list.
+- `training_language id`: the currently offered language row by its zero-based
+  language ID (0..25). This selects a visible ordinary row; it sends no training
+  request. An unavailable row is refused. `report` includes `training_languages`
+  as `(id, received_value, cap)`; a missing value remains unknown.
 - `train` or `training_done`: the training window's buttons. Use
   `interact admission spawn revision` with the selected guildmaster's
   current `target_interaction` tuple to open training. On P99, opening the

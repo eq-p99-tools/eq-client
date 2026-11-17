@@ -92,6 +92,7 @@ pub(crate) struct Aim<'w, 's> {
     pointer: Option<ResMut<'w, ScriptPointer>>,
     windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
     nodes: Nodes<'w, 's>,
+    world_ui: crate::windows::pointer::WorldUi<'w, 's>,
     clipping: Query<
         'w,
         's,
@@ -115,6 +116,21 @@ pub(crate) struct Aim<'w, 's> {
 }
 
 impl Aim<'_, '_> {
+    /// A visible world point, using the same blocking geometry as native
+    /// world input. Prefer the center, then a small finite viewport grid.
+    pub(super) fn world_at(&self) -> Option<Vec2> {
+        let size = self.windows.single().ok()?.size();
+        for y in [0.5, 0.25, 0.75, 0.1, 0.9] {
+            for x in [0.5, 0.25, 0.75, 0.1, 0.9] {
+                let at = size * Vec2::new(x, y);
+                if self.world_ui.top_at(at * self.scale()).is_none() {
+                    return Some(at);
+                }
+            }
+        }
+        None
+    }
+
     /// Physical pixels to the window's logical pixel.
     fn scale(&self) -> f32 {
         self.windows.single().map_or(1.0, Window::scale_factor)

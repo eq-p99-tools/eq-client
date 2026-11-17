@@ -551,3 +551,131 @@ fn deferred_target_world_stamp_is_withdrawn_but_native_replacement_survives() {
         );
     }
 }
+
+#[test]
+fn deferred_guild_world_stamp_is_withdrawn_but_native_replacement_survives() {
+    use crate::{guild::Command, script::ExpectedWorld};
+    for (admission, zone) in [(8, "samplezone"), (7, "otherzone")] {
+        for native_replacement in [false, true] {
+            let mut app = admitted();
+            {
+                let mut chat = app.world_mut().resource_mut::<crate::chat::ChatState>();
+                crate::chat::client_request_in_scope(
+                    "/guildmotd scoped",
+                    &mut chat,
+                    Some(ExpectedWorld {
+                        admission_id: 7,
+                        zone: "samplezone".into(),
+                    }),
+                )
+                .unwrap()
+                .unwrap();
+                if native_replacement {
+                    crate::chat::client_request("/guildmotd native", &mut chat)
+                        .unwrap()
+                        .unwrap();
+                }
+            }
+            enter(
+                &mut app.world_mut().resource_mut::<OnlineState>(),
+                admission,
+                zone,
+            );
+            frame(&mut app, 1);
+            assert_eq!(
+                app.world().resource::<crate::chat::ChatState>().guild_asked,
+                native_replacement.then(|| Command::SetMotd("native".into()))
+            );
+        }
+    }
+}
+
+#[test]
+fn scripted_follow_defers_to_ordinary_follow_without_a_network_command() {
+    let mut app = admitted();
+    let (queue, received) = std::sync::mpsc::sync_channel(4);
+    app.insert_resource(crate::outbox::Outbox::new(Some(queue)));
+    assert_eq!(
+        scoped(&mut app, "slash follow\nwait 1000\n").code,
+        "start_queued"
+    );
+    assert_eq!(app.world().resource::<RunStatus>().phase(), Phase::Running);
+    assert!(
+        app.world()
+            .resource::<crate::chat::ChatState>()
+            .follow_asked
+            .is_some()
+    );
+    assert_eq!(
+        app.world()
+            .resource::<Script>()
+            .status()
+            .expected_world
+            .as_ref(),
+        Some(&crate::script::ExpectedWorld {
+            admission_id: 7,
+            zone: "samplezone".into(),
+        })
+    );
+    assert!(received.try_recv().is_err());
+}
+
+#[test]
+fn scripted_follow_world_stamp_is_withdrawn_but_native_replacement_survives() {
+    for (admission, zone) in [(8, "samplezone"), (7, "otherzone")] {
+        for native_replacement in [false, true] {
+            let mut app = admitted();
+            scoped(&mut app, "slash follow\nwait 1000\n");
+            assert!(
+                app.world()
+                    .resource::<crate::chat::ChatState>()
+                    .follow_asked
+                    .is_some()
+            );
+            if native_replacement {
+                crate::chat::client_request(
+                    "/follow",
+                    &mut app.world_mut().resource_mut::<crate::chat::ChatState>(),
+                )
+                .unwrap()
+                .unwrap();
+            }
+            enter(
+                &mut app.world_mut().resource_mut::<OnlineState>(),
+                admission,
+                zone,
+            );
+            frame(&mut app, 1);
+            refused(&app);
+            assert_eq!(
+                app.world()
+                    .resource::<crate::chat::ChatState>()
+                    .follow_asked
+                    .is_some(),
+                native_replacement
+            );
+        }
+    }
+}
+
+#[test]
+fn stopping_before_a_follow_step_does_not_queue_follow() {
+    let mut app = admitted();
+    let (queue, received) = std::sync::mpsc::sync_channel(4);
+    app.insert_resource(crate::outbox::Outbox::new(Some(queue)));
+    scoped(&mut app, "wait 1000\nslash follow\n");
+    assert_eq!(
+        request(&mut app, 2, json!({"op":"stop","run_id":1})).code,
+        "stop_requested"
+    );
+    frame(&mut app, 2000);
+    assert!(!app.world().contains_resource::<Script>());
+    assert_eq!(app.world().resource::<RunStatus>().phase(), Phase::Stopped);
+    assert!(
+        app.world()
+            .resource::<crate::chat::ChatState>()
+            .follow_asked
+            .is_none()
+    );
+    assert!(received.try_recv().is_err());
+}

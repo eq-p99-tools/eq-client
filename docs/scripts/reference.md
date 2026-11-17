@@ -29,6 +29,30 @@ Run a script from the workbench while logged in to act on your current character
 - `hover target`: rest the synthetic pointer over a control.
 - `hold_click milliseconds target`: hold the left button on a control.
 - `drag window x y`: move a named window to logical screen pixels.
+- `wheel world lines`: turn the wheel over visible world space, from -64 to
+  64 lines; positive zooms inward, negative outward.
+- `look world dx dy milliseconds`: hold right over visible world space and
+  spread this relative mouse displacement over 1 to 10000 milliseconds, then
+  release after the final input frame. Each axis is limited to +/-4096 physical
+  pixels. `look world 0 0 500` holds the view still for half a second.
+
+World gestures require `--script-background` and an attached camera with a
+player present. The drawn script pointer chooses an uncovered world point;
+the step refuses when no sampled point is clear. Wheel Zoom, Mouse Sensitivity,
+Invert Y, attached camera limits and Look Spring retain their ordinary effects.
+The wheel uses the normal chase/first-person transition; `camera` sets a chase
+frame directly and therefore cannot test that transition. The look gesture
+uses the right-button look ownership and ordinary character/camera turn path.
+It never presses the OS mouse button or moves the physical cursor.
+
+Stop, failed scope checks and session/zone changes release world gestures.
+Pause finishes the bounded gesture before pausing. Genuine keyboard, button or
+wheel input cancels an active gesture; mouse motion does so while the client
+has focus. Desktop motion while another app has focus is ignored. A gesture
+binds the admission it starts in even when the caller omits `expected_world`;
+controllers should still supply the current `expected_world` for the whole run.
+Script gesture results establish semantic input behavior; physical mouse
+hit-testing, capture and feel need their own attended observation.
 
 Click targets include `slot 22`, `spell_gem 1`, `hot_button 1`, and `character 1`. They refer to controls, not arbitrary desktop coordinates. An invalid target produces a source-line error.
 
@@ -108,6 +132,16 @@ types can produce a receipt without a model. Scene instances may be off-camera
 or occluded. The counters are independent of damage and inventory.
 
 - `report [label]` logs a state summary with an optional label. Its `option_levels` field includes slider settings, with `run_boost` in hundredths of ordinary running speed. For a selected target, `considered` shows the decoded received color and `display_con_color` shows the presentation color. The report includes `selected_target_level` and `own_level` when known.
+  `guild_state` is a read-only JSON snapshot of the known guild ID/name/rank
+  and last-received member fields. `members: null` means no retained list;
+  `members: []` means a received empty list. A member's `note: null` remains
+  unknown after an add without a note field; `note: ""` is a received empty
+  note. At most 80 rows are included, with the total in `member_count` and
+  explicit `members_truncated`. Current admission/connection fields describe
+  report context, without establishing when the list was received or refreshed.
+  Opt-in debug logging also records actual `GuildUpdate` events as
+  `Guild update received`. Use these events to distinguish a newly received
+  full list from retained history.
   `air_remaining` gives the local air reserve and capacity in ticks while
   Air Remaining is active.
   `breath_probe` reports the last sampled head medium, when resolved, and the
@@ -177,6 +211,11 @@ or occluded. The counters are independent of damage and inventory.
   tuple gives the selected item ID and whether a received definition is
   available, including a definition already cached in the admission.
 - `slash command [arguments]`: run one of the supported game slash commands, without a leading slash.
+  `slash follow` queues the ordinary local follow request for the targeted group
+  member. Its deferred request keeps the script's expected admission and zone;
+  a changed world withdraws it before movement handles it. Completion of the
+  step does not establish movement. The ordinary standing, movement and group
+  checks still apply, and a movement key ends following.
   `slash ranged` requests one shot or throw against the current target on Titanium.
   `slash layonhands` and `slash harmtouch` request the class ability against the
   settled selection. Select yourself before using Lay on Hands on yourself.
@@ -186,11 +225,32 @@ or occluded. The counters are independent of damage and inventory.
   `slash pet target` selects your visible pet. Pet orders complete the script
   step when queued. Read subsequent server observations to check their effects.
   `slash camp desktop` uses the ordinary camp destination and current QoL exit choice.
+  `slash guildinvite [Name] [o]`, `slash guildremove [Name]`,
+  `slash guildmotd [text]` and `slash getguildmotd` use the existing typed guild
+  handlers. Omit a name to use the current target; `o` offers officer rank.
+  Names contain at most 63 ASCII letters. MOTD text is below 512 UTF-8 bytes
+  and contains no control characters;
+  an empty MOTD requests clearing it. Membership, rank and listed-member checks
+  remain with the ordinary handlers and session. Queueing a step proves no
+  invitation acceptance, roster change or MOTD update; check received evidence.
   `slash stopsong` queues the Bard's stop request on Titanium EQEmu.
   The immediate disconnect aliases typed in chat are not script slash commands.
   `slash emote` and `slash random` reach everyone nearby, so like `chat` they
   run only in a network-constrained local test session.
 - `gm command [arguments]`: an allowed GM command on a network-constrained local test session only.
+  Local Titanium EQEmu also supports `gm guild create CHARACTER_ID_OR_NAME GUILD_NAME`,
+  `gm guild delete GUILD_ID` and `gm guild set CHARACTER_ID_OR_NAME GUILD_ID`.
+  These are narrowly bounded fixture setup/cleanup forms: character names use
+  ASCII letters, IDs use unsigned decimal, and guild names contain at most
+  63 ASCII letters/digits/spaces. Create/delete IDs must be positive; `set`
+  accepts guild ID zero to remove membership. The reserved maximum ID is
+  refused. Use the guild ID actually returned by the server for cleanup;
+  request submission alone does not establish fixture creation or deletion.
+  Other GM guild subcommands are unavailable to scripts.
+  On local EQEmu, `gm setlanguage ID VALUE` uses the supported SetLanguage
+  alias for a staged fixture: language ID 0..27 and proficiency 0..100.
+  It retains the local-session and Titanium gates. General `gm set` commands
+  remain unavailable. Training itself permits only offered IDs 0..25.
   On local EQEmu, `gm traindisc MAX [MIN]` requests all eligible disciplines
   in that inclusive level range for a disposable fixture. Each level is a number
   from 1 to 126 written with up to three decimal digits. Give MAX first. MIN

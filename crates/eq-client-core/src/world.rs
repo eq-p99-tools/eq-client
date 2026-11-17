@@ -241,8 +241,10 @@ pub struct ClientWorld {
     time: Option<(crate::clock::GameTime, Instant)>,
     /// Guild names by number, from the world's guild list.
     guild_names: BTreeMap<u32, String>,
-    /// The guild's members, from the list sent this admission.
+    /// The guild's members, retained across a bound ordinary character transfer.
     guild_members: Option<Vec<crate::guild::GuildMember>>,
+    /// Members added without a public-note field, until a note or full list arrives.
+    guild_unknown_notes: std::collections::BTreeSet<String>,
     /// Guild invitations waiting for the player's answer, oldest first.
     guild_invitations: std::collections::VecDeque<guild::GuildInvitation>,
     /// Whether looted coins are shared with the group, once known.
@@ -683,7 +685,12 @@ impl ClientWorld {
                 }
             }
             // The connection, the characters on offer and the admission.
-            WorldEvent::WorldName { short_name } => self.world_name = Some(short_name.clone()),
+            WorldEvent::WorldName { short_name } => {
+                if self.world_name.as_deref() != Some(short_name.as_str()) {
+                    self.forget_guild();
+                }
+                self.world_name = Some(short_name.clone());
+            }
             // The time of day, and how the zone's sky looks.
             WorldEvent::TimeOfDay(time) => self.time = Some((*time, now)),
             WorldEvent::Sky(sky) => self.zone.sky = Some(*sky),
@@ -1079,7 +1086,11 @@ impl ClientWorld {
                 if self.is_player(*spawn_id)
                     && let Some(player) = self.player.as_mut()
                 {
+                    let guild = player.listing.guild;
                     who::relist(*change, &mut player.level, &mut player.listing);
+                    if guild != player.listing.guild {
+                        self.forget_guild();
+                    }
                 }
             }
             WorldEvent::ListingSet { session_id, change } => {
@@ -1124,7 +1135,13 @@ impl ClientWorld {
                 }
             }
             WorldEvent::GuildNames(names) => self.guild_names = names.iter().cloned().collect(),
-            WorldEvent::Guild(update) => self.guild_news(update),
+            WorldEvent::Guild(update) => {
+                if self.connected && self.session_id.is_some() && self.pending_transfer.is_none() {
+                    self.guild_news(update);
+                } else {
+                    news.ignored = true;
+                }
+            }
             WorldEvent::LastName { name, last_name } => self.last_name(name, last_name),
             WorldEvent::Posture { spawn_id, posture } => {
                 let player = self.is_player(*spawn_id);
@@ -1741,6 +1758,7 @@ impl ClientWorld {
         self.translocate = None;
         self.popup = None;
         self.player_inspection = None;
+        self.reset_guild(reason);
         if reason != Reset::Died {
             self.camp = None;
             self.camp_to = crate::camp::CampTo::default();
@@ -1844,8 +1862,7 @@ impl ClientWorld {
         self.combining = None;
         self.group = None;
         self.group_invitation = None;
-        self.guild_members = None;
-        self.guild_invitations.clear();
+        self.forget_guild();
         self.auto_split = None;
         self.joining_group = false;
         self.assisted = None;

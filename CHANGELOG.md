@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- Route `slash follow` through ordinary deferred follow input while retaining
+  the script's admission and zone guard.
+- Use received own-guild membership changes for network requests without
+  requiring a relog.
+
+- Add a read-only guild roster using received lists and member changes, with
+  explicit unknown fields and retained history across matched zone transfers.
+- Horizontal follow keeps moving in mapped water while chat or another app
+  owns keyboard input; the near-target stop cap follows swim-rate selection.
+- Add bounded `wheel world` and `look world` script gestures through the
+  ordinary camera path, with ownership and lifecycle cancellation.
+
+- Guildmaster Training lists include offered languages with received proficiency
+  and estimated prices. Scripts can select `click training_language ID` and
+  inspect `training_languages`; local EQEmu fixtures can use bounded
+  `gm setlanguage ID VALUE`.
+- Unresolved language practices withdraw practice-point authority and, when
+  coins may have been spent, purse authority. Free uncertainty preserves coins;
+  late proficiency updates do not restore balances. Expired or invalidated
+  unanswered trainer openings require fresh admission before that ID reopens.
+- **Breaking:** re-exported `training::TrainingOffer` and `TrainingReply` require
+  `language_caps` and `language_flags` fields. Exhaustive `TrainingRequest` and
+  `PracticeUpdate` matches must handle `PracticeAt` and `OutcomeUnknown`.
+
 - Movement speed changes use exact clock boundaries, preventing rounding from
   delaying root fades or applying a higher speed to a sample that began
   before the new grant.

@@ -68,6 +68,8 @@ pub(crate) enum WindowId {
     /// The skin's Raid window: the raid's members, by raid group, and
     /// buttons to invite, leave, accept and decline.
     Raid,
+    /// The received guild roster, with no membership or rank controls.
+    Guild,
     /// The skin's Options window: the options the player sets, on its pages,
     /// and a page of the options only this client has.
     Options,
@@ -369,7 +371,7 @@ impl WindowId {
     /// Every singleton window, in the order the selector lists the toggled ones.
     /// Bags are left out: there is one for each slot that can hold a bag
     /// (see [`WindowId::bags`]), and none of them is toggled.
-    pub(crate) const ALL: [Self; 39] = [
+    pub(crate) const ALL: [Self; 40] = [
         Self::Status,
         Self::Target,
         Self::Player,
@@ -393,6 +395,7 @@ impl WindowId {
         Self::PetInfo,
         Self::Group,
         Self::Raid,
+        Self::Guild,
         Self::Options,
         Self::Training,
         Self::Tracking,
@@ -445,6 +448,7 @@ impl WindowId {
             Self::PetInfo => Some("PetInfoWindow"),
             Self::Group => Some("GroupWindow"),
             Self::Raid => Some("RaidWindow"),
+            Self::Guild => Some("GuildManagementWnd"),
             Self::Options => Some("OptionsWindow"),
             Self::Training => Some("TrainWindow"),
             Self::Tracking => Some("TrackingWnd"),
@@ -517,6 +521,7 @@ impl WindowId {
             Self::PetInfo => "pet-info",
             Self::Group => "group",
             Self::Raid => "raid",
+            Self::Guild => "guild",
             Self::Options => "options",
             Self::Training => "training",
             Self::Tracking => "tracking",
@@ -706,6 +711,7 @@ impl WindowId {
             // (`raidsdoc.txt`), and an invitation opens it (inferred: the
             // installed line for one points the player to its Accept button).
             Self::Raid => floating("RAID", Placement::TopLeft(100.0, 78.0), true, &[]),
+            Self::Guild => floating("GUILD", Placement::TopLeft(100.0, 80.0), true, &[]),
             // Where the skin places it; Alt+O opens and closes it, as in the
             // official client.
             Self::Options => floating("OPTIONS", Placement::TopLeft(90.0, 47.0), true, &[]),

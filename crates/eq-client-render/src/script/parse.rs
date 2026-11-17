@@ -14,7 +14,7 @@ pub(super) const MAX_WAIT: Duration = Duration::from_mins(2);
 const MAX_TRACE: Duration = Duration::from_secs(10);
 const MAX_WALK: Duration = Duration::from_mins(1);
 /// `EQEmu` GM commands a script may send, without the leading `#`.
-const GM_COMMANDS: [&str; 40] = [
+const GM_COMMANDS: &[&str] = &[
     // The server's own view of the player's stats, weight and coins among
     // them, said back in chat; reads only.
     "showstats",
@@ -52,6 +52,8 @@ const GM_COMMANDS: [&str; 40] = [
     "zone",
     "goto",
     "level",
+    // The deployed SetLanguage alias, with bounded language ID/proficiency.
+    "setlanguage",
     "heal",
     "kill",
     "repop",
@@ -74,6 +76,8 @@ const GM_COMMANDS: [&str; 40] = [
     "scribespells",
     // Readies the learned discipline list for a local EQEmu fixture.
     "traindisc",
+    // Disposable local EQEmu guild setup and cleanup, limited to create/delete/set.
+    "guild",
     "maxskills",
     "giveitem",
     // Another test character's standing with a faction: `faction view` and
@@ -163,6 +167,16 @@ pub enum Step {
     Press(Vec<KeyCode>),
     /// Holds keys together for a bounded duration.
     Hold(Vec<KeyCode>, Duration),
+    /// Turns the wheel over visible world space, upward positive, in lines.
+    WorldWheel(f32),
+    /// Holds right over visible world space and distributes a bounded mouse
+    /// displacement, in physical pixels, over the duration before releasing.
+    WorldLook {
+        /// Total relative displacement; zero holds the look still.
+        delta: bevy::math::Vec2,
+        /// Longest hold, excluding the final input frame before release.
+        duration: Duration,
+    },
     /// Pauses for a bounded duration.
     Wait(Duration),
     /// Orbits the camera to look along an EQ heading (0..512), so the
@@ -461,6 +475,8 @@ pub enum CharacterClick {
 pub enum TrainingClick {
     /// A row of the list, from zero.
     Row(usize),
+    /// The offered row for this language ID (not its sorted row number).
+    Language(u8),
     /// Train.
     Train,
     /// Done.
@@ -661,6 +677,20 @@ pub(super) fn parse_step(line: &str) -> Result<Step, String> {
         ),
         ("press", [keys]) => Step::Press(chord(keys)?),
         ("hold", [keys, duration]) => Step::Hold(chord(keys)?, millis(duration, MAX_HOLD)?),
+        ("wheel", ["world", lines]) => Step::WorldWheel(number(lines, -64.0, 64.0)?),
+        ("look", ["world", x, y, duration]) => {
+            let duration = millis(duration, MAX_HOLD)?;
+            if duration.is_zero() {
+                return Err("world look needs a positive duration".into());
+            }
+            Step::WorldLook {
+                delta: bevy::math::Vec2::new(
+                    number(x, -4096.0, 4096.0)?,
+                    number(y, -4096.0, 4096.0)?,
+                ),
+                duration,
+            }
+        }
         ("wait", [duration]) => Step::Wait(millis(duration, MAX_WAIT)?),
         ("camera", arguments) => parse_camera(arguments)?,
         ("trace", [duration]) => Step::Trace(millis(duration, MAX_TRACE)?),
@@ -751,6 +781,10 @@ pub(super) fn parse_step(line: &str) -> Result<Step, String> {
 /// those that change nothing beyond the test characters.
 fn parse_slash(words: &[&str]) -> Result<Step, String> {
     Ok(match words {
+        [
+            "guildinvite" | "guildremove" | "guildmotd" | "getguildmotd",
+            ..,
+        ] => Step::Slash(guild_slash(words)?),
         [command]
             if matches!(
                 *command,
@@ -846,6 +880,28 @@ fn parse_slash(words: &[&str]) -> Result<Step, String> {
     })
 }
 
+/// The existing typed guild handlers, with bounded names and MOTD text.
+/// This does not provide a raw chat or unimplemented guild-command escape.
+fn guild_slash(words: &[&str]) -> Result<String, String> {
+    let valid = match words {
+        ["guildinvite" | "guildremove" | "getguildmotd"] | ["guildinvite", "o"] => true,
+        ["guildinvite" | "guildremove", name] | ["guildinvite", name, "o"] => character_name(name),
+        ["guildmotd", message @ ..] => {
+            let text = message.join(" ");
+            text.len() < 512 && !text.chars().any(char::is_control)
+        }
+        _ => false,
+    };
+    if !valid {
+        return Err("guild slash takes a character name, optional invite o, or a MOTD below 512 bytes without control characters".into());
+    }
+    Ok(format!("/{}", words.join(" ")))
+}
+
+fn character_name(name: &str) -> bool {
+    !name.is_empty() && name.len() <= 63 && name.bytes().all(|byte| byte.is_ascii_alphabetic())
+}
+
 /// A button by the slash command it runs: a Pet Info window button, by its
 /// `/pet` words, or a group or Raid window button, by its name. The group
 /// window's Decline is in Disband's place and runs the same command, so
@@ -895,29 +951,34 @@ fn slash_click(window: &str, words: &[&str]) -> Result<ClickTarget, String> {
     })
 }
 
+/// A numeric click argument, with the existing target-specific parse error.
+fn number<T: std::str::FromStr>(text: &str, what: &str) -> Result<T, String> {
+    text.parse().map_err(|_| format!("expected {what}"))
+}
+
 /// `click <target>` or `right_click <target>`: a slot, spellbook, trade or
 /// bag tint button.
 fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
-    fn value<T: std::str::FromStr>(text: &str, what: &str) -> Result<T, String> {
-        text.parse().map_err(|_| format!("expected {what}"))
+    if let Some(training) = training_click(words)? {
+        return Ok(ClickTarget::Training(training));
     }
     Ok(match words {
-        ["slot", slot] => ClickTarget::Slot(value(slot, "a slot number")?),
+        ["slot", slot] => ClickTarget::Slot(number(slot, "a slot number")?),
         ["scribe"] => ClickTarget::Scribe,
         ["store"] => ClickTarget::Store,
         ["destroy"] => ClickTarget::Destroy,
         ["drop"] => ClickTarget::Drop,
-        ["book", row] => ClickTarget::BookRow(value(row, "a book row number")?),
+        ["book", row] => ClickTarget::BookRow(number(row, "a book row number")?),
         ["loot", place] => {
-            ClickTarget::Trade(TradeClick::Take(value(place, "a place on the corpse")?))
+            ClickTarget::Trade(TradeClick::Take(number(place, "a place on the corpse")?))
         }
         ["loot_all"] => ClickTarget::Trade(TradeClick::TakeAll),
         ["loot_done"] => ClickTarget::Trade(TradeClick::EndLoot),
-        ["buy", slot] => ClickTarget::Trade(TradeClick::Buy(value(slot, "a merchant slot")?)),
-        ["sell", slot] => ClickTarget::Trade(TradeClick::Sell(value(slot, "an inventory slot")?)),
+        ["buy", slot] => ClickTarget::Trade(TradeClick::Buy(number(slot, "a merchant slot")?)),
+        ["sell", slot] => ClickTarget::Trade(TradeClick::Sell(number(slot, "an inventory slot")?)),
         ["shop_done"] => ClickTarget::Trade(TradeClick::EndShop),
         ["merchant_row", slot] => {
-            ClickTarget::Trade(TradeClick::Choose(value(slot, "a merchant slot")?))
+            ClickTarget::Trade(TradeClick::Choose(number(slot, "a merchant slot")?))
         }
         ["buy_chosen"] => ClickTarget::Trade(TradeClick::BuyChosen),
         ["sell_chosen"] => ClickTarget::Trade(TradeClick::SellChosen),
@@ -948,16 +1009,13 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
                 .ok_or("expected an option, by its name in a file")?,
         ),
         ["attack"] => ClickTarget::Attack,
-        ["training", row] => ClickTarget::Training(TrainingClick::Row(ordinal(row, "a row")?)),
-        ["train"] => ClickTarget::Training(TrainingClick::Train),
         ["tracking", row] => ClickTarget::TrackRow(ordinal(row, "a row")?),
         ["skill_select", row] => ClickTarget::SkillRow(ordinal(row, "a row")?),
         ["track"] => ClickTarget::Track,
         ["answer", answer @ ("yes" | "no")] => ClickTarget::Answer(*answer == "yes"),
         ["page", way @ ("next" | "back")] => ClickTarget::Page(*way == "next"),
-        ["combine", slot] => ClickTarget::Combine(value(slot, "a pack slot number")?),
+        ["combine", slot] => ClickTarget::Combine(number(slot, "a pack slot number")?),
         ["map", action] => ClickTarget::Map(map_button(action)?),
-        ["training_done"] => ClickTarget::Training(TrainingClick::Done),
         ["slider", name, percent] => ClickTarget::Slider(
             slider(name)?,
             percent
@@ -979,10 +1037,10 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ),
         ["coins", place, coin] => ClickTarget::Coins(coin_place(place)?, coin_kind(coin)?),
         ["pick", button] => ClickTarget::Pick(pick_button(button)?),
-        ["tint", slot] => ClickTarget::Tint(value(slot, "a bag slot")?, None),
+        ["tint", slot] => ClickTarget::Tint(number(slot, "a bag slot")?, None),
         ["tint", slot, color] => ClickTarget::Tint(
-            value(slot, "a bag slot")?,
-            Some(value(color, "a palette color")?),
+            number(slot, "a bag slot")?,
+            Some(number(color, "a palette color")?),
         ),
         ["memorize", gem] => ClickTarget::MemorizeGem(gem_number(gem)?),
         ["spell_gem", gem] => ClickTarget::SpellGem(gem_number(gem)?),
@@ -998,6 +1056,24 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["book_page", "back"] => ClickTarget::BookPage(false),
         _ => return Err("unknown or malformed step".into()),
     })
+}
+
+/// Training row/subject selection and the ordinary Train/Done buttons.
+/// Unrecognized shapes retain the general click parser's existing fallback.
+fn training_click(words: &[&str]) -> Result<Option<TrainingClick>, String> {
+    Ok(Some(match words {
+        ["training", row] => TrainingClick::Row(ordinal(row, "a row")?),
+        ["training_language", id] => {
+            let id: u8 = id.parse().map_err(|_| "expected a language ID (0..25)")?;
+            if id >= eq_client_core::training::LANGUAGES {
+                return Err("expected a language ID (0..25)".into());
+            }
+            TrainingClick::Language(id)
+        }
+        ["train"] => TrainingClick::Train,
+        ["training_done"] => TrainingClick::Done,
+        _ => return Ok(None),
+    }))
 }
 
 /// One of the chat window's tabs, by its label in any case.
@@ -1139,6 +1215,10 @@ pub(super) fn gm_command(words: &[&str]) -> Result<String, String> {
         return Err("gm takes plain arguments".into());
     }
     match *command {
+        "guild" if !guild_fixture(arguments) => {
+            return Err("gm guild takes create <character ID|name> <guild name>, delete <guild ID>, or set <character ID|name> <guild ID|0>".into());
+        }
+        "guild" => (),
         "spawn" => match arguments {
             [_, ..] if arguments.len() <= 4 => (),
             _ if fixture_spawn(arguments) => (),
@@ -1148,6 +1228,12 @@ pub(super) fn gm_command(words: &[&str]) -> Result<String, String> {
             ).into()),
         },
         "depop" if !arguments.is_empty() => return Err("gm depop takes no arguments".into()),
+        "setlanguage" => {
+            let valid = matches!(arguments, [id, value] if
+                id.parse::<u8>().is_ok_and(|id| id <= 27)
+                && value.parse::<u8>().is_ok_and(|value| value <= 100));
+            if !valid { return Err("gm setlanguage takes LANGUAGE_ID (0..27) PROFICIENCY (0..100)".into()); }
+        }
         "traindisc" => {
             // EQEmu compares class levels against these bounds. Keep the
             // range below unavailable class levels such as 127 and 255.
@@ -1189,6 +1275,29 @@ pub(super) fn gm_command(words: &[&str]) -> Result<String, String> {
         }
     }
     Ok(words.join(" "))
+}
+
+/// Deployed `EQEmu` `command_guild` create/delete/set argument shapes. Names and
+/// IDs are deliberately narrower than a general GM command for fixture work.
+fn guild_fixture(arguments: &[&str]) -> bool {
+    let id = |word: &str| {
+        word.parse::<u32>()
+            .ok()
+            .filter(|value| *value < u32::MAX && word.bytes().all(|byte| byte.is_ascii_digit()))
+    };
+    let character = |word: &str| character_name(word) || id(word).is_some_and(|value| value > 0);
+    match arguments {
+        ["create", owner, name @ ..] if character(owner) && !name.is_empty() => {
+            let text = name.join(" ");
+            text.len() <= 63
+                && name.iter().all(|word| {
+                    !word.is_empty() && word.bytes().all(|byte| byte.is_ascii_alphanumeric())
+                })
+        }
+        ["delete", guild] => id(guild).is_some_and(|value| value > 0),
+        ["set", member, guild] => character(member) && id(guild).is_some(),
+        _ => false,
+    }
 }
 
 /// The complete `EQEmu` temporary NPC form uses explicit decimal fields.
@@ -1520,6 +1629,74 @@ pub(super) fn typed(key: KeyCode, shift: bool, chorded: bool) -> (Key, Option<St
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn language_fixture_recipe_uses_only_bounded_supported_gm_commands() {
+        let base = Path::new("private");
+        for command in [
+            "level 2",
+            "setlanguage 5 20",
+            "setlanguage 5 0",
+            "setlanguage 5 100",
+            "givemoney 0 0 0 20",
+            "spawn LaneLanguageTrainer 1 1 0 100 0 20 0 0 0 1",
+            "depop",
+        ] {
+            assert_eq!(
+                parse(&format!("gm {command}"), base).unwrap(),
+                [Step::Gm(command.into())]
+            );
+        }
+        for command in [
+            "setlanguage",
+            "setlanguage 5",
+            "setlanguage 28 20",
+            "setlanguage 5 101",
+            "setlanguage -1 20",
+            "setlanguage 5 -1",
+            "setlanguage 256 20",
+            "setlanguage 5 0 extra",
+            "set language 5 20",
+            "set level 2",
+            "set other 1",
+            "spawn LaneLanguageTrainer 1 1 0 100 0 20",
+        ] {
+            assert!(parse(&format!("gm {command}"), base).is_err(), "{command}");
+        }
+    }
+
+    #[test]
+    fn training_language_selects_a_bounded_offered_row_without_sending_a_numeric_request() {
+        let base = Path::new("private");
+        assert_eq!(
+            parse(
+                "click training 1\nclick training_language 0\nclick training_language 25\nclick train\nclick training_done",
+                base
+            )
+            .unwrap(),
+            [
+                Step::Click(ClickTarget::Training(TrainingClick::Row(0))),
+                Step::Click(ClickTarget::Training(TrainingClick::Language(0))),
+                Step::Click(ClickTarget::Training(TrainingClick::Language(25))),
+                Step::Click(ClickTarget::Training(TrainingClick::Train)),
+                Step::Click(ClickTarget::Training(TrainingClick::Done)),
+            ]
+        );
+        for bad in [
+            "click training",
+            "click training 0",
+            "click training 1 2",
+            "click train 1",
+            "click training_done 1",
+            "click training_language",
+            "click training_language 26",
+            "click training_language -1",
+            "click training_language 256",
+            "click training_language 1 2",
+        ] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
+    }
+
     #[test]
     fn deletion_requires_exact_repeated_name_without_position_fallback() {
         assert_eq!(
@@ -1878,6 +2055,48 @@ mod tests {
     }
 
     #[test]
+    fn world_gestures_have_finite_displacement_and_hold_bounds() {
+        let base = Path::new("private");
+        assert_eq!(
+            parse(
+                "wheel world 64\nwheel world -1.5\nlook world 120 -80 500\nlook world 0 0 10000",
+                base
+            )
+            .unwrap(),
+            [
+                Step::WorldWheel(64.0),
+                Step::WorldWheel(-1.5),
+                Step::WorldLook {
+                    delta: bevy::math::Vec2::new(120.0, -80.0),
+                    duration: Duration::from_millis(500)
+                },
+                Step::WorldLook {
+                    delta: bevy::math::Vec2::ZERO,
+                    duration: Duration::from_secs(10)
+                },
+            ]
+        );
+        for bad in [
+            "wheel world NaN",
+            "wheel world inf",
+            "wheel world 65",
+            "wheel world -65",
+            "wheel 1",
+            "wheel world 1 2",
+            "look world 0 0 0",
+            "look world 0 0 10001",
+            "look world NaN 0 100",
+            "look world 0 inf 100",
+            "look world 4097 0 100",
+            "look world 0 -4097 100",
+            "look world 0 0",
+            "look world 0 0 100 extra",
+        ] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
     fn an_object_approach_names_a_tradeskill_container_kind() {
         let base = Path::new("private");
         assert_eq!(
@@ -2135,6 +2354,90 @@ mod tests {
         ] {
             assert!(parse(&format!("gm {command}"), base).is_err(), "{command}");
         }
+    }
+
+    #[test]
+    fn guild_fixture_commands_allow_only_bounded_create_delete_and_set() {
+        let base = Path::new("private");
+        for command in [
+            "guild create Example Synthetic Guild",
+            "guild create 12 Fixture",
+            "guild delete 3",
+            "guild set Example 3",
+            "guild set 12 0",
+        ] {
+            assert_eq!(
+                parse(&format!("gm {command}"), base).unwrap(),
+                [Step::Gm(command.into())]
+            );
+        }
+        for command in [
+            "guild",
+            "guild create",
+            "guild create 0 Fixture",
+            "guild create 1",
+            "guild create Ex4mple Fixture",
+            "guild create Example Fixture-Name",
+            "guild delete",
+            "guild delete 0",
+            "guild delete 4294967295",
+            "guild delete 3 extra",
+            "guild set Example",
+            "guild set Example -1",
+            "guild set Example 4294967296",
+            "guild set 0 3",
+            "guild set Example 3 extra",
+            "guild rename 3 Renamed",
+            "guild setleader 3 Example",
+            "guild setrank Example 1",
+            "guild list",
+            "guild CREATE Example Fixture",
+        ] {
+            assert!(parse(&format!("gm {command}"), base).is_err(), "{command}");
+        }
+        assert!(parse(&format!("gm guild create Example {}", "a".repeat(64)), base).is_err());
+    }
+
+    #[test]
+    fn guild_slash_steps_use_only_existing_typed_handlers() {
+        let base = Path::new("private");
+        for line in [
+            "guildinvite",
+            "guildinvite Member",
+            "guildinvite Member o",
+            "guildinvite o",
+            "guildremove",
+            "guildremove Member",
+            "guildmotd",
+            "guildmotd Meet at the gate",
+            "guildmotd Café rendezvous",
+            "getguildmotd",
+        ] {
+            assert_eq!(
+                parse(&format!("slash {line}"), base).unwrap(),
+                [Step::Slash(format!("/{line}"))]
+            );
+        }
+        for line in [
+            "guildinvite Member officer",
+            "guildinvite Member o extra",
+            "guildinvite M3mber",
+            "guildremove Member extra",
+            "getguildmotd extra",
+            "guildleader Member",
+            "guilddelete",
+            "guildmotd bad\u{0007}",
+            "guildmotd bad\u{001b}",
+        ] {
+            assert!(parse(&format!("slash {line}"), base).is_err(), "{line}");
+        }
+        assert!(parse(&format!("slash guildmotd {}", "a".repeat(512)), base).is_err());
+        assert!(parse(&format!("slash guildmotd {}", "é".repeat(256)), base).is_err());
+        let maximum = format!("{}a", "é".repeat(255));
+        assert_eq!(
+            parse(&format!("slash guildmotd {maximum}"), base).unwrap(),
+            [Step::Slash(format!("/guildmotd {maximum}"))]
+        );
     }
 
     #[test]

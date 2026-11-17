@@ -651,6 +651,9 @@ fn install_script(
                 .after(windows::pointer::wheel)
                 .after(skinned::scrollbar::scroll)
                 .in_set(Stage::Typing),
+            script::world_input
+                .after(script::pointer::turn)
+                .in_set(Stage::Typing),
         ),
     );
     if arrow {

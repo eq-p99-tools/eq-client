@@ -1092,6 +1092,7 @@ fn trace(update: &WorldUpdate, changes: &eq_client_core::world::Changes, world: 
         _ => return,
     };
     match event {
+        WorldEvent::Guild(update) => debug!(?update, "Guild update received"),
         WorldEvent::ItemDetails(item) => debug!("Item definition received: ID {}", item.id),
         WorldEvent::TargetSent { state, .. } if !changes.ignored => {
             debug!("Target packet sent: {:?}", state.spawn_id);

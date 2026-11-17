@@ -31,6 +31,11 @@ You may focus the client and hover the physical pointer to watch a background ru
 
 A background run can minimize and restore the Runbook through its ordinary window controls; dragging and resizing still need real window focus.
 
+Bounded `wheel world` and `look world` gestures use the script's drawn pointer
+and the ordinary world camera path. While one is active, native mouse motion
+also cancels it if the client has focus. Motion while using another app does
+not reclaim the background gesture. See the [command reference](reference.md).
+
 Background mode does not enable `gm` or `chat`, change the selected server, or imply an online launch. Network restrictions, gameplay validation, named-control visibility and geometry checks, source and runtime limits, and Stop remain in effect. The default workbench run remains attended on public servers. The background policy is explicit for each run, including any replacement created by an opt-in controller.
 
 ## Limits and errors

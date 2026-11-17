@@ -91,6 +91,7 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::PetInfo => "EQUI_PetInfoWindow.xml",
         WindowId::Group => "EQUI_GroupWindow.xml",
         WindowId::Raid => "EQUI_RaidWindow.xml",
+        WindowId::Guild => "EQUI_GuildManagementWnd.xml",
         WindowId::Selector => "EQUI_SelectorWnd.xml",
         WindowId::CastBar => "EQUI_CastingWindow.xml",
         WindowId::Breath => "EQUI_BreathWindow.xml",
@@ -514,6 +515,11 @@ pub(crate) fn apply(
         let size = effects_size(*id, screen);
         effective.area.width = size.x;
         effective.area.height = size.y;
+        // Retain the authored frame/list while offering only received roster
+        // fields. Unimplemented management widgets and sample labels are omitted.
+        if *id == WindowId::Guild && !crate::guild::roster::adapt(&mut effective) {
+            continue;
+        }
         // This first retained reflow contract belongs to chat. Other authored
         // sizable screens are preserved by the parser without assuming that
         // their widgets share chat's sizing policy.
@@ -549,6 +555,9 @@ pub(crate) fn apply(
                 tab_frame: screen.tab_frame.as_deref(),
             };
             title_bottom = draw(window, screen, &mut art, &context);
+            if *id == WindowId::Guild {
+                crate::guild::roster::labels(window, screen.area.width, screen.area.height);
+            }
             if book_footer {
                 let base_height = screen.area.height + crate::spellbook::search::FOOTER_HEIGHT;
                 crate::spellbook::search::spawn(

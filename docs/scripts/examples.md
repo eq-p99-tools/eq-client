@@ -77,6 +77,31 @@ report camera check complete
 
 ## Optional offline and startup use
 
+For a bounded attached-camera check, launch with `--script-background` and
+enable Wheel Zoom. The generation's verified default Look Up key is Page Up
+(also Numpad 9), and Center View is Home (also Numpad 5); check Keys if these
+were remapped. Reports show `attached_camera_mode` and `camera_pitch`.
+
+```eqscript
+wheel world 64
+wait 100
+report wheel inward
+look world 0 -80 500
+wait 500
+report look released
+press Home
+wheel world -1
+wait 100
+report wheel outward
+```
+
+With Look Spring enabled, a held right look retains its pitch until release,
+then levels. Disable it to check retained pitch, then restore the saved setting.
+Debug logs named `Script held world look trace` sample the actual previous
+camera frame while the gesture remains held. This sequence exercises the
+semantic world-input path and leaves physical mouse behavior for an attended
+check.
+
 The same inventory and camera examples also work in an offline preview. That is useful for trying a script without connecting, but normal in-game use needs no special launch arguments.
 
 The existing runner accepts `--script path/to/scenario.eqscript`. Add `--script-editor` to watch it execute in the client. `--script-follow` continues reading complete lines appended to that file; it is an append-only workflow, separate from editing and rerunning a whole document.

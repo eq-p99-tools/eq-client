@@ -166,6 +166,18 @@ pub(crate) struct MouseLook {
     pub(crate) left: bool,
 }
 
+impl MouseLook {
+    /// Both native and script world gestures capture right only from an
+    /// available world press, and release the captured look together.
+    pub(crate) fn right(&mut self, down: bool, available: bool, world: bool) {
+        if down {
+            self.held = available && world;
+        } else {
+            *self = Self::default();
+        }
+    }
+}
+
 #[derive(Resource, Default)]
 pub(crate) struct MouseAim {
     /// Horizontal input owned by an attached online look this frame.
@@ -226,8 +238,7 @@ pub(crate) fn look(
     let mut mask_left = ownership.left;
     for event in events.read().filter(|event| Some(event.window) == primary) {
         match (event.button, event.state.is_pressed()) {
-            (MouseButton::Right, true) => look.held = available && free,
-            (MouseButton::Right, false) => *look = MouseLook::default(),
+            (MouseButton::Right, down) => look.right(down, available, free),
             (MouseButton::Left, true) => {
                 look.left = look.held;
                 ownership.left = look.left;
@@ -256,7 +267,10 @@ pub(super) fn turn(
     online: Res<online::OnlineState>,
     options: Res<options::OptionsState>,
     mut aim: ResMut<MouseAim>,
-    mut motion: MessageReader<MouseMotion>,
+    (mut motion, scripted): (
+        MessageReader<MouseMotion>,
+        Option<Res<crate::script::WorldInput>>,
+    ),
     mut cameras: Query<&mut OrbitCamera, Without<FreeCamera>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {
@@ -265,7 +279,7 @@ pub(super) fn turn(
         motion.clear();
         return;
     }
-    let horizontal = motion.read().map(|event| event.delta.x).sum::<f32>();
+    let horizontal = world_motion(&mut motion, scripted.as_deref()).x;
     if let Ok(mut camera) = cameras.single_mut() {
         let yaw = -horizontal
             * options
@@ -276,6 +290,20 @@ pub(super) fn turn(
         } else {
             camera.yaw += yaw;
         }
+    }
+}
+
+/// Semantic script input and native motion share the camera conversion, but
+/// never mix an idle background device stream into an owned script gesture.
+fn world_motion(
+    motion: &mut MessageReader<MouseMotion>,
+    scripted: Option<&crate::script::WorldInput>,
+) -> Vec2 {
+    if let Some(input) = scripted.filter(|input| input.active) {
+        motion.clear();
+        input.delta
+    } else {
+        motion.read().map(|event| event.delta).sum()
     }
 }
 
@@ -370,6 +398,7 @@ pub(super) fn orbit_camera(
     inventory: Res<inventory::InventoryState>,
     look: Res<MouseLook>,
     mut motion: MessageReader<MouseMotion>,
+    scripted: Option<Res<crate::script::WorldInput>>,
     (wheel, options, settings): (
         Res<windows::pointer::Wheel>,
         Res<options::OptionsState>,
@@ -395,16 +424,17 @@ pub(super) fn orbit_camera(
     let playing = online.selection.is_none()
         && !online.world().is_dead()
         && (!online.enabled || online.world().connected());
-    let accepts_input = windows.single().is_ok_and(|window| {
-        window.focused
-            && !window
-                .physical_cursor_position()
-                .is_some_and(|cursor| ui.contains(cursor))
-    });
+    let accepts_input = scripted.as_ref().is_some_and(|input| input.active)
+        || windows.single().is_ok_and(|window| {
+            window.focused
+                && !window
+                    .physical_cursor_position()
+                    .is_some_and(|cursor| ui.contains(cursor))
+        });
     // The drag is the look's ([`look`]): once begun over the world it goes
     // on over the windows until the button is let go.
     let drag = if look.held {
-        motion.read().map(|event| event.delta).sum::<Vec2>()
+        world_motion(&mut motion, scripted.as_deref())
     } else {
         motion.clear();
         Vec2::ZERO
@@ -415,9 +445,8 @@ pub(super) fn orbit_camera(
         || !accepts_input
         || !options.options.wheel_zoom
         || wheel.surface.is_some()
-        || chat.hovered
-        || items.hovered
-        || inventory.hovered
+        || (!scripted.as_ref().is_some_and(|input| input.active)
+            && (chat.hovered || items.hovered || inventory.hovered))
     {
         0.0
     } else {

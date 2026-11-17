@@ -1,24 +1,31 @@
 # Movement inputs and deferred compatibility checks
 
 The renderer reports explicit ready, bounded or unavailable movement inputs for
-the current session revision. Before the first grant of an admission, missing
-inventory, attributes, coin state, buff membership or affecting spell data holds
-input back. After it, nothing but a root (which stops the player but keeps
-their input), a stun, a freeze, death, zoning or not standing stops the player, as in the original client (reads R7, R18): a recheck
-keeps the speeds in force while the new report is worked out, and an unproven
-report carries every term the client can prove (`Bounded`). A term it can
-evaluate now is taken as it is now, slower or faster, and one it cannot evaluate
-is left out. A term comes from the last report only where the client no longer
-knows it: the gain of equipment and food while belongings are not known, and of
-buffs while buff membership is not known, never with a root or a snare in it,
-and with any root or snare it can evaluate now applied. A speed buff the client
-knows has ended ends at once. The session takes a bound as reported and starts a
-grant from it where none is in force, so a zone-in, or a root or snare fading
-under a song, moves at once. By Adam's decision of 11-10 this can be faster than
-the original client would allow until the inputs are proven (recording checklist
-6.451). A confirmed empty inventory is a valid zero load. Corrections and new
-admissions cannot reuse an earlier report. Queue saturation retries rather than
-leaving an old grant indefinitely.
+the current admission and session revision. A first grant needs a usable report:
+missing inventory, attributes, carried coins or buff membership can prevent
+calculation, while an unsupported effect can leave the calculable terms usable
+as `Bounded`. The session can start a grant from a bound without an earlier one.
+
+Once a grant is in force, ordinary belongings changes, buffs, spell landings and
+level changes ask for fresh inputs while the existing speeds continue (reads R7,
+R18). A usable report replaces the speeds in place. An `Unavailable` report
+preserves the active grant without a timeout. A root stops travel but keeps
+turning input; stun, freeze, posture, death and zoning still apply their holds.
+
+Each term the client can evaluate now is taken as it is now, slower or faster;
+one it cannot evaluate is left out. Positive equipment/food or buff terms come
+from the earlier same-admission report where the corresponding state is
+unknown, with any known current root or snare applied. A known ended speed buff
+ends at once. This policy can be faster than the original client would allow
+until all inputs are proven (recording checklist 6.451). A confirmed empty
+inventory is a valid zero load; missing inventory never becomes zero.
+
+Reports carry `session_id`, `revision`, `report_id` and state. A changed state or
+revision gets a new report identity; queue retries reuse the identity of that
+logical report. Corrections request a fresh revision while keeping an active
+grant and controls at the corrected position. A new admission discards the old
+report history. Queue saturation retries; a late host report does not expire an
+active grant. Local input acceptance is not a server acknowledgement.
 Purse and cursor coins require receipt in this admission. Bank balances do not
 contribute to carried weight, and an unknown bank balance alone does not block it.
 
@@ -31,18 +38,24 @@ modifier; an actual root dominates. STR is clamped to 1..255. Known EQMac fatigu
 subtracts `clamp(fatigue - effective_STA, 0, 10)`; absent fatigue conservatively
 subtracts its source-defined maximum 10.
 
-Weight-preserving ordinary inventory predictions can keep movement ready.
-Pending equipment/stat-food changes or changes to carried weight cannot. An
-invalidation remains unavailable until authoritative recovery. This calculation
-does not turn a timeout into a confirmed inventory update.
+Weight-preserving ordinary predictions can keep the calculated load usable
+without proving their placements. Pending equipment/stat-food changes or
+unbounded carried-weight changes can prevent a complete report until covering
+updates or a fresh snapshot restore the required authority. That calculation
+limit does not withdraw an active grant: the renderer reports usable bounded
+terms from the same admission, or the session retains its inputs when the
+report is unavailable. A known current weight or slowing effect still applies.
+Inventory actions retain their own guards, and neither silence nor a movement
+grant confirms an inventory update.
 
 After a ground drop, the server may already hold a queued arrival as its
 current cursor item. Take the heaviest possible current cursor group and
-count the rest of the carried inventory once. The worker requires a fresh
-input report meeting that bound. If a correction makes movement inputs
-unavailable, the readiness notice asks the player to re-enter for a fresh
-inventory snapshot. An ordinary cursor resync can leave the landing bound
-usable during that pause.
+count the rest of the carried inventory once. The worker checks that bound
+independently and raises an understated report to it. Without a current bound,
+it refuses a new grant; an active grant can continue with its weight retained
+as a floor while usable reported terms apply. If inventory state cannot recover,
+re-enter for a fresh snapshot. A cursor resync can leave the separate landing
+bound usable even when inventory actions remain held.
 Recalibration preserves an in-progress descent and pending fall report.
 
 The session owns HP/sneak speed adjustments, movement caps and permission. A new
@@ -94,9 +107,11 @@ server fade or new snapshot. The displayed duration is an estimate.
   unresolved instrument modifiers (a Bard song's STR term, run 1d), unslotted
   additive STR/STA effects (they might replace a slotted effect rather than add
   to it) and the inventory states that end only with a full refresh leave the
-  inputs unproven: before the first grant they hold input back, after it the
-  last inputs stay in force (6.451). Each is closed as its rule is read. Every
-  effect is still scanned, so none of them hides a root or a snare.
+  inputs unproven. Calculable terms can form a bounded report even before the
+  first grant; otherwise a missing prerequisite waits without a grant and
+  retains the inputs where a grant is already active (6.451). Each is closed
+  as its rule is read. Every effect is still scanned, so none hides an
+  evaluable root or snare.
 - Positive AA/stat-cap, alcohol and berserk STR bonuses are not granted. The
   255 cap and omitted positive bonuses produce a conservative capacity. This is
   not a complete replacement for all server stat calculations.
@@ -114,11 +129,12 @@ server fade or new snapshot. The displayed duration is an estimate.
 - Source evidence and decoder details are in the companion network document
   `docs/movement-input-readiness.md`. No live session was used for these changes.
 
-## Single deferred live-check batch
+## Deferred scenario checklist
 
-Run only after final inventory/abilities/spell integration, using the executable
-built from the final client head and its exact network pin. The coordinator owns
-the dedicated live-check chat. None of the following has been run by this task.
+Use an executable built from the recorded client head and its exact network pin.
+Check the shared scenarios on local Titanium EQEmu before public-server checks;
+EQMac behavior needs its own policy-specific validation. P99 checks remain
+attended. This table is a checklist, not a record that a scenario passed.
 
 Prerequisites: authorized disposable test character; user-provided installed
 assets and matching spell data; a safe flat area with room to walk; a harmless
@@ -127,12 +143,12 @@ no active combat. Keep account/character identifiers, captures and assets privat
 
 | Check | Servers | Steps | Expected | Risk / cleanup |
 | --- | --- | --- | --- | --- |
-| Admission and recovery | Quarm first; TAKP, EQEmu, P99 separately | Enter zone, wait for profile/inventory/buffs, walk; zone again | Input starts only after complete state; no old grant crosses admission | Use safe zone; stop autorun before zoning |
+| Admission and recovery | Local EQEmu first; Quarm, TAKP and attended P99 separately | Enter zone, wait for usable profile/inventory/buff inputs, walk; zone again | A ready or usable bounded report establishes the grant; no old grant or report history crosses admission | Use safe zone; stop autorun before zoning |
 | Weight and STR | Same server matrix | Walk a fixed safe distance; equip/remove known STR gear; compare load with coins, a stack and a reduction bag | Reported weight/STR change by supported rules; speed responds at encumbrance boundary | Use disposable gear; restore original layout |
-| Ordinary cursor round trip | Quarm first | Move an ordinary non-stat item to cursor and back without changing total load | No invented authority; unchanged load remains usable while prediction origins persist | Do not use consumable/valuable items |
-| Uncertain weight/equipment | Isolated Quarm first | Change bag reduction/carried load or worn STR; exercise a server-controlled refused move/resync on disposable state | Movement goes on at the last inputs (a known heavier load slows it); only covering updates/snapshot prove new inputs (6.451) | No deliberate public-server refusal; obtain authoritative resync before proceeding |
-| Buff values and fade | Quarm; others independently | Apply known level-scaled speed buff, snare, root and STR buff/debuff; let each fade | Correct supported magnitude; strongest snare wins; root blocks input; fade recomputes | Safe consenting setup; remove all effects afterward |
-| Correction and passive fall | Quarm/EQEmu controlled test server first | Cause a supported safe correction; repeat above a harmless ledge | Old queued input rejected; the player stops at the new place and moves on at the speeds in force; bounded descent/landing persists | Fall damage possible; avoid dangerous drops |
+| Ordinary cursor round trip | Local EQEmu first; Quarm separately | Move an ordinary non-stat item to cursor and back without changing total load | No invented authority; unchanged load remains usable while prediction origins persist | Do not use consumable/valuable items |
+| Uncertain weight/equipment | Controlled local EQEmu first; Quarm separately | Change bag reduction/carried load or worn STR; exercise a server-controlled refused move/resync on disposable state | An active grant continues while usable current terms replace stale ones; inventory recovery follows that policy's rules and silence never proves delivery (6.451) | No deliberate public-server refusal; obtain authoritative resync before proceeding |
+| Buff values and fade | Local EQEmu first; other policies independently | Apply known level-scaled speed buff, snare, root and STR buff/debuff; let each fade | Correct supported magnitude; strongest snare wins; root stops travel while preserving turning; fade recomputes | Safe consenting setup; remove all effects afterward |
+| Correction and passive fall | Controlled local EQEmu first; Quarm separately | Cause a supported safe correction; repeat above a harmless ledge | Old queued input rejected; held input continues from the corrected position at the speeds in force; bounded descent/landing persists | Fall damage possible; avoid dangerous drops |
 | Fatigue | Quarm/TAKP | Compare known fatigue/STA state and its subsequent stamina updates | At most 10 STR penalty, recomputed on changed fatigue | Avoid exhaustion/combat; recover before leaving |
 
 Record each server, exact source heads, steps, expected versus observed behavior
@@ -154,16 +170,20 @@ worker replica once; duplicates, old admissions and inconsistent payloads cannot
 overwrite newer authoritative state. Typed dependent refusals remain available,
 while `Reply::InventoryMove { present_error, .. }` controls repeated UI notices.
 
-For EQMac, ready reports include the network-owned `EqMacFatigueInputs`: signed
-effective strength before fatigue/cap, and known effective stamina capped to
-1..255. All metadata, effects, inventory and coin prerequisites still apply.
+For EQMac, ready and bounded reports can include `EqMacFatigueInputs`: signed
+effective strength before fatigue/cap, and effective stamina capped to 1..255
+when known. This host-calculated component lets the network session own fatigue
+application. Complete reports still require the metadata, effects, inventory
+and coin prerequisites; bounded reports keep their unresolved category.
 The scalar capacity is a stable final capped maximum-penalty fallback; the typed
 component is the sole basis for current fatigue-adjusted capacity. The session
 applies authoritative fatigue before the final cap. The display calls the same
 network formula without changing the report or weakening receipt equality.
 Fatigue alone therefore leaves the exact posted payload and report identity
-unchanged. Missing prerequisites remain unavailable; absent components retain
-legacy handling and Titanium capacity/zero-sentinel semantics are unchanged.
+unchanged. Missing prerequisites do not become proven: usable retained terms
+can form a bounded report, while an unavailable report keeps an active grant
+or waits where there is none. Absent components retain legacy handling and
+Titanium capacity/zero-sentinel semantics are unchanged.
 
 These are source and synthetic regression contracts. Final combined dependency
 pins, client execution and separately coordinated live validation remain required.

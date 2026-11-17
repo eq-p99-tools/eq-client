@@ -376,7 +376,12 @@ pub(super) fn schedule(app: &mut App) {
                 ),
                 (outbox::show, inventory::say_refusals),
                 (hud::action_bar::cast_window, hud::action_bar::update),
-                (skinned::frames, tracking::frame, abilities::picker::frame),
+                (
+                    skinned::frames,
+                    tracking::frame,
+                    abilities::picker::frame,
+                    guild::roster::window,
+                ),
                 (
                     chat::reconcile,
                     skinned::apply,
@@ -415,6 +420,7 @@ pub(super) fn schedule(app: &mut App) {
                         (training::fill, tracking::fill, abilities::picker::fill),
                         skills::fill,
                         raid::fill,
+                        guild::roster::fill,
                         confirm::show,
                         reading::show,
                         tradeskills::show,

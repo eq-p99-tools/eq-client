@@ -33,12 +33,22 @@ until the worker position is usable. The Air Remaining gauge is hidden
 after 250 ms without a result, and a late result allows one due check
 against the current sample.
 
-Movement waits for usable inventory, coin, attribute and buff state. Unknown
-load or effects never become a zero-weight speed grant. Weight-preserving
-ordinary cursor moves can keep movement available; unresolved weight/equipment
-changes withdraw input until recovery. Withdrawal clears autorun, taps and
-queued jumps while supported passive falls continue. The [readiness guide](movement-input-readiness.md)
-records supported calculations, conservative limits and deferred live checks.
+Movement initially waits for usable inventory, coin, attribute and buff inputs.
+Once a grant is in force, ordinary belongings changes, buff updates and spell
+landings ask for fresh inputs while the existing speeds continue. A usable new
+report updates the speeds without clearing held keys, autorun or a jump already
+under way. A server correction also preserves those controls at the corrected
+position.
+Unresolved terms use the bounded-input rules in the
+[readiness guide](movement-input-readiness.md); they do not confirm inventory
+placement or server acceptance. This deliberate policy can temporarily allow
+more speed than the original client until all inputs are proven.
+
+A root stops travel while preserving turning; on Titanium, autorun resumes when
+the root ends. Stun, freeze, posture, death and zoning still apply their movement
+holds. When input is withdrawn, autorun, taps and queued jumps clear while
+supported passive falls continue. The readiness guide records calculation
+limits and deferred live checks.
 
 Use the current [key bindings](controls.md#keyboard). Autorun stops on the relevant
 movement/posture input or when free camera takes control. Losing focus or typing
@@ -61,6 +71,11 @@ and swim forward toward a nearby bank to use Titanium's shoreline boost.
 The client checks that the capsule can reach a supported landing. Automated
 ground routes and EQMac-era sessions retain the deep-water guard. Ordinary
 movement guards against entering lava.
+
+Group-member `/follow` keeps its horizontal input when entering water, including
+while typing in chat or the window is unfocused, and uses the ordinary swim rate
+and stopping distance. It supplies no vertical stroke; manual movement ends
+following.
 
 The shoreline profile is derived from Titanium movement code and checked with
 synthetic traces. Attended P99 shoreline traversal is still pending; it does not
@@ -475,14 +490,31 @@ prompt already issued during the same zone visit stays withheld. Bind
 translocates need an explicit server-directed destination. Attended P99
 verification is pending.
 
-On P99, interact with an in-reach guildmaster of your class, select a skill
-from the received Training list and press Train once. The listed price
+Interact with an in-reach guildmaster of your class to open Training. Ordinary
+skills and languages share its list. Language rows use received proficiency
+and the same estimated price formula as skills. EQEmu permits language IDs
+0..25 up to proficiency 100 when the current offer enables the language;
+P99 follows Titanium's racial level table and
+class exceptions. Native race/class/level rules do not restrict EQEmu's separate
+server policy. Unknown proficiency stays blank and cannot be practiced.
+
+On P99, select a skill or language from the received Training list and press Train once. The listed price
 estimates the cost in copper denominations. The skill value follows server
 updates. The point count goes blank as soon as the request is sent. A skill
 increase leaves the practice outcome unknown. Paid practice leaves the
 purse unknown until a new balance arrives. Re-enter the zone before
 practicing again or asking the same guildmaster again. Done closes the
-trainer. This path covers skills and awaits an attended P99 check.
+trainer. This path awaits an attended P99 check.
+
+EQEmu retains its existing point and purse projection after a matching received
+skill or language increase. The update contains no point or cost receipt;
+re-entering the zone supplies fresh profile balances for verification. A language
+practice that times out or loses its trainer leaves points unknown and also
+withdraws the purse when coins may have been spent. Free practice uncertainty
+preserves known coins. Expired or invalidated unanswered openings require a
+fresh admission before that trainer can be asked again. An already answered
+offer can reopen after invalidation through a fresh request and received offer.
+Silence never reports success.
 
 Grouping, raids, pets, training, reading and consent dialogs have separate
 capabilities by server. Pet Info can hold an early buff snapshot while the

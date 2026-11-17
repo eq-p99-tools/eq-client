@@ -89,6 +89,8 @@ fn syntax() -> Syntax {
             "hold",
             "wait",
             "camera",
+            "wheel",
+            "look",
             "trace",
             "face",
             "move",

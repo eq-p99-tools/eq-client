@@ -736,6 +736,8 @@ pub(crate) enum Listing {
     Merchant,
     /// The members of the player's raid in a raid group, or in none.
     Raid(crate::raid::RaidList),
+    /// The received guild roster.
+    Guild,
 }
 
 /// A list's rows, which the client fills and the wheel scrolls.
@@ -758,6 +760,7 @@ fn listing(id: Option<&str>, owner: WindowId) -> Option<Listing> {
         (WindowId::Tracking, Some("TRW_TrackingList")) => Some(Listing::Tracking),
         (WindowId::SkillSelect, Some("SKSW_SkillSelectorList")) => Some(Listing::SkillSelect),
         (WindowId::Skills, Some("SkillList")) => Some(Listing::Skills),
+        (WindowId::Guild, Some("MemberList")) => Some(Listing::Guild),
         (WindowId::Merchant, Some("ItemList")) => Some(Listing::Merchant),
         (WindowId::Raid, Some("RAID_PlayerList")) => {
             Some(Listing::Raid(crate::raid::RaidList::Grouped))
@@ -894,6 +897,7 @@ fn filled_by(rows: &mut EntityCommands, listing: Listing, columns: Vec<f32>) {
         Listing::Skills => rows.insert((crate::skills::SkillsList::new(columns), wheel)),
         Listing::Merchant => rows.insert((crate::trade::MerchantRows::new(columns), wheel)),
         Listing::Raid(list) => rows.insert((crate::raid::RaidRows::new(list, columns), wheel)),
+        Listing::Guild => rows.insert((crate::guild::roster::GuildRows::new(columns), wheel)),
     };
 }
 
@@ -964,13 +968,14 @@ pub(crate) fn fill_lists(
     for (entity, mut rows, children) in &mut lists {
         let wanted = match rows.listing {
             Listing::Keys => filter.0.clone(),
-            // The Training, Skills, merchant and Raid windows' lists fill
+            // The Training, Skills, merchant, Raid and Guild windows' lists fill
             // themselves.
             Listing::Training
             | Listing::Tracking
             | Listing::SkillSelect
             | Listing::Skills
             | Listing::Merchant
+            | Listing::Guild
             | Listing::Raid(_) => continue,
         };
         if rows.filled && rows.filter == wanted && !keys.is_changed() && !bindings.is_changed() {
@@ -1043,6 +1048,7 @@ type ScrolledList = Or<(
     With<crate::skills::SkillsList>,
     With<crate::trade::MerchantRows>,
     With<crate::raid::RaidRows>,
+    With<crate::guild::roster::GuildRows>,
     With<super::ScrolledView>,
     With<super::ScrolledText>,
 )>;
@@ -1252,6 +1258,12 @@ mod tests {
             Some(Listing::Keys)
         );
         assert_eq!(listing(Some("OFP_FilterList"), WindowId::Options), None);
+        assert_eq!(
+            listing(Some("MemberList"), WindowId::Guild),
+            Some(Listing::Guild)
+        );
+        assert_eq!(listing(Some("NoteList"), WindowId::Guild), None);
+        assert_eq!(listing(Some("TributeList"), WindowId::Guild), None);
     }
 
     #[test]

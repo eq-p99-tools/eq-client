@@ -186,6 +186,7 @@ fn scripted_interaction_refuses_training_pending_container_and_combine() {
                     TrainingOffer {
                         trainer: 75,
                         caps: vec![0; 100],
+                        language_caps: Vec::new(),
                     },
                 ))],
             );
@@ -730,4 +731,117 @@ fn scripted_item_inspection_does_not_replace_a_pending_request() {
         app.world().resource::<ItemState>().inspection(),
         Some((42, false))
     );
+}
+
+#[test]
+fn guild_slash_steps_dispatch_typed_guild_commands_without_sending_chat() {
+    use bevy::ecs::system::RunSystemOnce;
+    use eq_client_core::{
+        guild::{GuildMember, GuildTribute, GuildUpdate},
+        listing::GuildRank,
+    };
+    for (source, expected) in [
+        (
+            "slash guildinvite Member",
+            ClientCommand::GuildInvite {
+                session_id: ADMISSION,
+                name: "Member".into(),
+                officer: false,
+            },
+        ),
+        (
+            "slash guildremove Member",
+            ClientCommand::GuildRemove {
+                session_id: ADMISSION,
+                name: "Member".into(),
+            },
+        ),
+        (
+            "slash guildmotd Fixture notice",
+            ClientCommand::SetGuildMotd {
+                session_id: ADMISSION,
+                motd: "Fixture notice".into(),
+            },
+        ),
+        (
+            "slash getguildmotd",
+            ClientCommand::RequestGuildMotd {
+                session_id: ADMISSION,
+            },
+        ),
+    ] {
+        let (mut app, rx) = app();
+        let mut player = session::player(7);
+        player.listing.guild = Some(3);
+        player.listing.guild_rank = Some(GuildRank::Leader);
+        {
+            let mut online = app.world_mut().resource_mut::<OnlineState>();
+            session::admit(&mut online, ADMISSION, player);
+            let mut member = session::pet(TARGET, 7);
+            member.kind = SpawnKind::Player;
+            member.name = "Member".into();
+            session::spawn_entry(&mut online, TARGET, member);
+            session::news(
+                &mut online,
+                [WorldEvent::Guild(GuildUpdate::Members(vec![GuildMember {
+                    name: "Member".into(),
+                    level: 5,
+                    class: 1,
+                    rank: GuildRank::Member,
+                    banker: false,
+                    alt: false,
+                    last_on: 0,
+                    tribute: GuildTribute {
+                        on: false,
+                        total: 0,
+                        last: 0,
+                    },
+                    note: String::new(),
+                    zone_id: None,
+                }]))],
+            );
+        }
+        start(&mut app, source);
+        frame_at(&mut app, 0);
+        frame_at(&mut app, 10);
+        assert!(app.world().resource::<ChatState>().guild_asked.is_some());
+        assert!(
+            rx.try_recv().is_err(),
+            "the slash step must defer to the typed handler"
+        );
+        app.world_mut()
+            .run_system_once(crate::guild::commands)
+            .unwrap();
+        assert_eq!(rx.try_recv().unwrap(), expected);
+        assert!(rx.try_recv().is_err());
+    }
+}
+
+#[test]
+fn a_language_script_target_matches_only_the_offered_language_bank() {
+    use eq_client_core::training::TrainingSubject;
+    let target = crate::script::ClickTarget::Training(crate::script::TrainingClick::Language(5));
+    let ordinary = crate::training::SkillRow {
+        subject: TrainingSubject::Skill(5),
+        index: 0,
+    };
+    let language = crate::training::SkillRow {
+        subject: TrainingSubject::Language(5),
+        index: 1,
+    };
+    assert!(!super::super::dialog_control(
+        target,
+        (Some(&ordinary), false, None, None, None),
+        None
+    ));
+    assert!(super::super::dialog_control(
+        target,
+        (Some(&language), false, None, None, None),
+        None
+    ));
+    assert!(!super::super::dialog_control(
+        target,
+        (None, false, None, None, None),
+        None
+    ));
 }
