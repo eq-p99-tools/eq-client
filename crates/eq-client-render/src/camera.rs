@@ -267,8 +267,10 @@ pub(super) fn turn(
     online: Res<online::OnlineState>,
     options: Res<options::OptionsState>,
     mut aim: ResMut<MouseAim>,
-    mut motion: MessageReader<MouseMotion>,
-    scripted: Option<Res<crate::script::WorldInput>>,
+    (mut motion, scripted): (
+        MessageReader<MouseMotion>,
+        Option<Res<crate::script::WorldInput>>,
+    ),
     mut cameras: Query<&mut OrbitCamera, Without<FreeCamera>>,
     windows: Query<&Window, With<PrimaryWindow>>,
 ) {

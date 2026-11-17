@@ -222,9 +222,12 @@ pub(super) fn observe(
     state.activity |= wheel.read().count() != 0;
     // Device motion can arrive while another app owns the desktop. Only a
     // focused client can reclaim an active world gesture through motion.
-    let moved = motion
-        .read()
-        .fold(false, |moved, event| moved || event.delta != Vec2::ZERO);
+    // Consume every event, including motion from an unfocused desktop frame.
+    // A short-circuiting read could replay a remainder after focus returns.
+    let mut moved = false;
+    for event in motion.read() {
+        moved |= event.delta != Vec2::ZERO;
+    }
     state.activity |= moved
         && focused
         && script

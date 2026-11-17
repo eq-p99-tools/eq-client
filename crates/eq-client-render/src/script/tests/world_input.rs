@@ -169,6 +169,9 @@ fn native_motion_reclaims_only_a_focused_client_world_gesture() {
         app.world_mut().write_message(MouseMotion {
             delta: Vec2::new(500.0, 100.0),
         });
+        app.world_mut().write_message(MouseMotion {
+            delta: Vec2::new(200.0, 50.0),
+        });
         frame(&mut app, 10);
         if focused {
             assert_eq!(app.world().resource::<RunStatus>().phase(), Phase::Failed);
@@ -176,6 +179,10 @@ fn native_motion_reclaims_only_a_focused_client_world_gesture() {
         } else {
             assert!(app.world().resource::<MouseLook>().held);
             assert!((app.world().resource::<WorldInput>().delta.x - 1.2).abs() < 0.0001);
+            set_focus(&mut app, window, true);
+            frame(&mut app, 20);
+            assert!(app.world().resource::<MouseLook>().held);
+            assert!(app.world().contains_resource::<Script>());
         }
     }
 }

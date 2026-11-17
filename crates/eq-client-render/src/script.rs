@@ -1217,7 +1217,6 @@ pub(super) fn drive(
         }
         let done = match &step {
             Step::Wait(duration) => elapsed >= *duration,
-            Step::WorldWheel(_) => true,
             Step::WorldLook { delta, duration } => {
                 let Some(gesture) = &mut script.world_gesture else {
                     script.stop(&mut keys, &mut mouse, "world look lost its input ownership");
