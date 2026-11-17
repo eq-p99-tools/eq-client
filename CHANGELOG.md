@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Positive local fall, drowning and lava reports stand a sitting or kneeling
+  Titanium character through the same policy as received damage. The
+  stay-seated option and lying posture are preserved; local reports do not
+  fabricate a received damage event or change authoritative hit points.
+
 - Script-control starts can bind to an observed admission and zone with
   `expected_world`. A transfer or re-entry stops the scoped run, withdraws its
   synthetic input and deferred gameplay intent, and rejects queued chat from
