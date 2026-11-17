@@ -255,7 +255,7 @@ fn transfer_evidence_does_not_cross_world_character_guild_or_destination_boundar
     for case in 0..7 {
         let mut world = transfer_fixture();
         let mut player = world.player().cloned().unwrap();
-        game(&mut world, offer(case == 5));
+        game(&mut world, offer(false));
         let mut zone_id = 2;
         match case {
             0 => player.name = "Other".into(),
@@ -270,7 +270,7 @@ fn transfer_evidence_does_not_cross_world_character_guild_or_destination_boundar
                 );
             }
             4 => world.world_name = None,
-            5 => (), // A bind/death transfer is outside this ordinary-transfer scope.
+            5 => world.pending_transfer = None,
             6 => {
                 connection(&mut world, false, true);
             }
@@ -297,4 +297,18 @@ fn character_selection_clears_roster_even_without_a_camp_event() {
     );
     assert!(world.guild_members().is_none());
     assert!(world.guild_unknown_notes.is_empty());
+}
+
+#[test]
+fn a_bound_death_transfer_keeps_the_same_characters_received_roster() {
+    let mut world = transfer_fixture();
+    let before = world.guild_members().unwrap().to_vec();
+    let player = world.player().cloned().unwrap();
+    game(&mut world, WorldEvent::DeathBind { session_id: 1 });
+    assert_eq!(world.guild_members(), Some(before.as_slice()));
+    game(&mut world, offer(true));
+    connection(&mut world, false, false);
+    arrive(&mut world, player, 2);
+    assert_eq!(world.guild_members(), Some(before.as_slice()));
+    assert_eq!(world.guild_member_note("Second"), None);
 }

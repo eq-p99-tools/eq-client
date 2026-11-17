@@ -14,7 +14,7 @@ than a fresh presence check. Numeric ranks are displayed as received, including
 the server's rank mapping. Unknown class/rank numbers remain visible. A newly
 added member's note remains Unknown until a note update or full list supplies it.
 
-The last received list survives a server-offered ordinary zone transfer only
+The last received list survives a session-reported zone or bind transfer only
 when the next admission matches the destination, exact character name and
 guild in the same known world. Location/status remain last-received values;
 the transfer does not refresh them. Membership changes, disband, removal of the

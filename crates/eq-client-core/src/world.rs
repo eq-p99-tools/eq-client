@@ -1758,22 +1758,8 @@ impl ClientWorld {
         self.translocate = None;
         self.popup = None;
         self.player_inspection = None;
+        self.reset_guild(reason);
         if reason != Reset::Died {
-            // The server sends the initial list at character login, not on
-            // every zone admission. Keep received membership while a known
-            // ordinary transfer is pending; `entered` binds it to the new player.
-            let transferring = matches!(
-                reason,
-                Reset::Zoning { to_bind: false }
-                    | Reset::Lost {
-                        ended: false,
-                        transferring: true
-                    }
-            );
-            if !transferring || !self.guild_transfer_pending() {
-                self.forget_guild();
-            }
-            self.guild_invitations.clear();
             self.camp = None;
             self.camp_to = crate::camp::CampTo::default();
         }

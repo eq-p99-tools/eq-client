@@ -1,7 +1,7 @@
 //! The player's guild as the server tells it: its members, kept from the
 //! full list the server sends at zone entry and the changes after it, and
 //! an invitation waiting for an answer.
-use super::ClientWorld;
+use super::{ClientWorld, Reset};
 use crate::guild::{GuildMember, GuildUpdate};
 use crate::listing::GuildRank;
 
@@ -19,7 +19,7 @@ pub struct GuildInvitation {
 
 impl ClientWorld {
     /// The guild's members as the server last listed them and changed them
-    /// since. A bound ordinary transfer of the same character keeps this last
+    /// since. A bound transfer of the same character keeps this last
     /// received evidence; other admission boundaries require a new list.
     #[must_use]
     pub fn guild_members(&self) -> Option<&[GuildMember]> {
@@ -63,9 +63,9 @@ fn member<'a>(
 }
 
 impl ClientWorld {
-    /// Whether a positively identified character is making an ordinary
-    /// server-offered transfer. Link loss without such an offer clears the list.
-    pub(super) fn guild_transfer_pending(&self) -> bool {
+    /// Whether a positively identified character has a session-reported
+    /// transfer. Link loss without such a destination clears the list.
+    fn guild_transfer_pending(&self) -> bool {
         self.world_name
             .as_ref()
             .is_some_and(|name| !name.is_empty())
@@ -74,10 +74,7 @@ impl ClientWorld {
                 .player()
                 .and_then(|player| player.listing.guild)
                 .is_some()
-            && self
-                .pending_transfer
-                .as_ref()
-                .is_some_and(|offer| !offer.to_bind)
+            && self.pending_transfer.is_some()
     }
 
     /// Whether the next admission completes that same character's offered
@@ -104,6 +101,71 @@ impl ClientWorld {
         self.guild_members = None;
         self.guild_unknown_notes.clear();
         self.guild_invitations.clear();
+    }
+
+    /// Preserves last-received membership during a bound transfer;
+    /// invitations remain zone-scoped even when the member list survives.
+    pub(super) fn reset_guild(&mut self, reason: Reset) {
+        if reason == Reset::Died {
+            return;
+        }
+        let transferring = matches!(
+            reason,
+            Reset::Zoning { .. }
+                | Reset::Lost {
+                    ended: false,
+                    transferring: true
+                }
+        );
+        if !transferring || !self.guild_transfer_pending() {
+            self.forget_guild();
+        }
+        self.guild_invitations.clear();
+    }
+
+    /// An add has no note or flags: retain prior reports for an existing
+    /// member and keep a new member's absent note explicitly unknown.
+    fn guild_member_added(&mut self, update: &GuildUpdate) {
+        let GuildUpdate::MemberAdded {
+            name,
+            level,
+            class,
+            rank,
+            zone_id,
+            last_on,
+            ..
+        } = update
+        else {
+            return;
+        };
+        let Some(members) = &mut self.guild_members else {
+            return;
+        };
+        if let Some(member) = members.iter_mut().find(|member| member.name == *name) {
+            member.level = *level;
+            member.class = *class;
+            member.rank = *rank;
+            member.zone_id = *zone_id;
+            member.last_on = *last_on;
+            return;
+        }
+        members.push(GuildMember {
+            name: name.clone(),
+            level: *level,
+            class: *class,
+            rank: *rank,
+            banker: false,
+            alt: false,
+            last_on: *last_on,
+            tribute: crate::guild::GuildTribute {
+                on: false,
+                total: 0,
+                last: 0,
+            },
+            note: String::new(),
+            zone_id: *zone_id,
+        });
+        self.guild_unknown_notes.insert(name.clone());
     }
 
     /// Keeps the guild's news.
@@ -143,45 +205,7 @@ impl ClientWorld {
                     member.last_on = *last_on;
                 }
             }
-            GuildUpdate::MemberAdded {
-                name,
-                level,
-                class,
-                rank,
-                zone_id,
-                last_on,
-                ..
-            } => {
-                if let Some(members) = &mut self.guild_members {
-                    // An add message carries no note or flags. Keep previously
-                    // received values when the server adds a listed name again.
-                    if let Some(member) = members.iter_mut().find(|member| member.name == *name) {
-                        member.level = *level;
-                        member.class = *class;
-                        member.rank = *rank;
-                        member.zone_id = *zone_id;
-                        member.last_on = *last_on;
-                        return;
-                    }
-                    members.push(GuildMember {
-                        name: name.clone(),
-                        level: *level,
-                        class: *class,
-                        rank: *rank,
-                        banker: false,
-                        alt: false,
-                        last_on: *last_on,
-                        tribute: crate::guild::GuildTribute {
-                            on: false,
-                            total: 0,
-                            last: 0,
-                        },
-                        note: String::new(),
-                        zone_id: *zone_id,
-                    });
-                    self.guild_unknown_notes.insert(name.clone());
-                }
-            }
+            GuildUpdate::MemberAdded { .. } => self.guild_member_added(update),
             GuildUpdate::MemberRemoved { name, .. } => {
                 if self
                     .player()
