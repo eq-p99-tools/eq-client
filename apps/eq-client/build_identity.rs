@@ -2,13 +2,13 @@
 use std::{path::Path, process::Command};
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum Dirty {
+pub enum TreeState {
     Clean,
     Dirty,
     Unknown,
 }
 
-impl Dirty {
+impl TreeState {
     pub const fn text(&self) -> &'static str {
         match self {
             Self::Clean => "clean",
@@ -21,7 +21,7 @@ impl Dirty {
 #[derive(Debug)]
 pub struct Identity {
     pub sha: Option<String>,
-    pub dirty: Dirty,
+    pub dirty: TreeState,
     pub source: &'static str,
     pub invalid_override: bool,
 }
@@ -64,9 +64,9 @@ pub fn identify(root: &Path, sha_override: Option<&str>, dirty_override: Option<
     if sha_override.is_some() || dirty_override.is_some() {
         let sha = sha_override.and_then(sha);
         let dirty = match dirty_override {
-            Some("clean") => Dirty::Clean,
-            Some("dirty") => Dirty::Dirty,
-            _ => Dirty::Unknown,
+            Some("clean") => TreeState::Clean,
+            Some("dirty") => TreeState::Dirty,
+            _ => TreeState::Unknown,
         };
         return Identity {
             invalid_override: (sha_override.is_some() && sha.is_none())
@@ -99,13 +99,13 @@ pub fn identify(root: &Path, sha_override: Option<&str>, dirty_override: Option<
             ])
             .output()
             .ok()
-            .map_or(Dirty::Unknown, |output| match output.status.code() {
-                Some(0) => Dirty::Clean,
-                Some(1) => Dirty::Dirty,
-                _ => Dirty::Unknown,
+            .map_or(TreeState::Unknown, |output| match output.status.code() {
+                Some(0) => TreeState::Clean,
+                Some(1) => TreeState::Dirty,
+                _ => TreeState::Unknown,
             })
     } else {
-        Dirty::Unknown
+        TreeState::Unknown
     };
     Identity {
         sha,
@@ -123,7 +123,7 @@ mod tests {
     fn overrides_are_bounded_and_never_mix_with_checkout_state() {
         let root = Path::new("synthetic-archive");
         let id = identify(root, Some(&"a".repeat(40)), None);
-        assert_eq!(id.dirty, Dirty::Unknown);
+        assert_eq!(id.dirty, TreeState::Unknown);
         assert_eq!(id.source, "override");
         assert!(!id.invalid_override);
         for bad in ["1234567", "bad\nvalue", &"z".repeat(40)] {
@@ -133,7 +133,7 @@ mod tests {
             assert!(!id.version("1.0").contains(bad));
         }
         assert!(identify(root, None, Some("false")).invalid_override);
-        assert_eq!(identify(root, None, Some("dirty")).dirty, Dirty::Dirty);
+        assert_eq!(identify(root, None, Some("dirty")).dirty, TreeState::Dirty);
     }
 
     #[test]
@@ -192,15 +192,15 @@ mod tests {
             "fixture",
         ]);
         let clean = identify(&root, None, None);
-        assert_eq!(clean.dirty, Dirty::Clean);
+        assert_eq!(clean.dirty, TreeState::Clean);
         std::fs::write(root.join("untracked"), "outside tracked flag\n").unwrap();
-        assert_eq!(identify(&root, None, None).dirty, Dirty::Clean);
+        assert_eq!(identify(&root, None, None).dirty, TreeState::Clean);
         std::fs::write(root.join("tracked"), "two\n").unwrap();
         let dirty = identify(&root, None, None);
         assert_eq!(dirty.sha, clean.sha);
-        assert_eq!(dirty.dirty, Dirty::Dirty);
+        assert_eq!(dirty.dirty, TreeState::Dirty);
         run(&["add", "tracked"]);
-        assert_eq!(identify(&root, None, None).dirty, Dirty::Dirty);
+        assert_eq!(identify(&root, None, None).dirty, TreeState::Dirty);
         run(&[
             "-c",
             "user.name=Build Fixture",
@@ -216,7 +216,7 @@ mod tests {
         ]);
         let changed = identify(&root, None, None);
         assert_ne!(changed.sha, clean.sha);
-        assert_eq!(changed.dirty, Dirty::Clean);
+        assert_eq!(changed.dirty, TreeState::Clean);
         run(&["worktree", "add", "-q", "--detach", "linked", "HEAD"]);
         assert_eq!(identify(&root.join("linked"), None, None).sha, changed.sha);
         std::fs::create_dir(root.join("archive")).unwrap();
