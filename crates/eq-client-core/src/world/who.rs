@@ -92,12 +92,16 @@ impl ClientWorld {
             return;
         };
         let before = player.listing.anonymity;
+        let guild = player.listing.guild;
         relist(change, &mut player.level, &mut player.listing);
         let notice = match change {
             ListingChange::Away(away) => Some(ListingNotice::Away(away)),
             ListingChange::Anonymity(after) => anonymity_notice(before, after),
             _ => None,
         };
+        if guild != player.listing.guild {
+            self.forget_guild();
+        }
         news.notices.extend(notice.map(Notice::Listing));
     }
 

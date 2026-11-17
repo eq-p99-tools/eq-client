@@ -1,6 +1,7 @@
 mod buff_cancellation;
 mod carriers;
 mod casting;
+mod guild_roster;
 mod loot_requests;
 mod own_stun;
 mod pet_buffs;

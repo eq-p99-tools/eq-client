@@ -243,6 +243,8 @@ pub struct ClientWorld {
     guild_names: BTreeMap<u32, String>,
     /// The guild's members, from the list sent this admission.
     guild_members: Option<Vec<crate::guild::GuildMember>>,
+    /// Members added without a public-note field, until a note or full list arrives.
+    guild_unknown_notes: std::collections::BTreeSet<String>,
     /// Guild invitations waiting for the player's answer, oldest first.
     guild_invitations: std::collections::VecDeque<guild::GuildInvitation>,
     /// Whether looted coins are shared with the group, once known.
@@ -1079,7 +1081,11 @@ impl ClientWorld {
                 if self.is_player(*spawn_id)
                     && let Some(player) = self.player.as_mut()
                 {
+                    let guild = player.listing.guild;
                     who::relist(*change, &mut player.level, &mut player.listing);
+                    if guild != player.listing.guild {
+                        self.forget_guild();
+                    }
                 }
             }
             WorldEvent::ListingSet { session_id, change } => {
@@ -1124,7 +1130,13 @@ impl ClientWorld {
                 }
             }
             WorldEvent::GuildNames(names) => self.guild_names = names.iter().cloned().collect(),
-            WorldEvent::Guild(update) => self.guild_news(update),
+            WorldEvent::Guild(update) => {
+                if self.connected && self.session_id.is_some() && self.pending_transfer.is_none() {
+                    self.guild_news(update);
+                } else {
+                    news.ignored = true;
+                }
+            }
             WorldEvent::LastName { name, last_name } => self.last_name(name, last_name),
             WorldEvent::Posture { spawn_id, posture } => {
                 let player = self.is_player(*spawn_id);
@@ -1742,6 +1754,7 @@ impl ClientWorld {
         self.popup = None;
         self.player_inspection = None;
         if reason != Reset::Died {
+            self.forget_guild();
             self.camp = None;
             self.camp_to = crate::camp::CampTo::default();
         }
@@ -1844,8 +1857,7 @@ impl ClientWorld {
         self.combining = None;
         self.group = None;
         self.group_invitation = None;
-        self.guild_members = None;
-        self.guild_invitations.clear();
+        self.forget_guild();
         self.auto_split = None;
         self.joining_group = false;
         self.assisted = None;

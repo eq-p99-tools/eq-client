@@ -25,6 +25,19 @@ impl ClientWorld {
         self.guild_members.as_deref()
     }
 
+    /// A listed member's public note, once a full list or note update supplied
+    /// it. An add-member update has no note field; that note remains unknown.
+    #[must_use]
+    pub fn guild_member_note(&self, name: &str) -> Option<&str> {
+        if self.guild_unknown_notes.contains(name) {
+            return None;
+        }
+        self.guild_members()?
+            .iter()
+            .find(|member| member.name == name)
+            .map(|member| member.note.as_str())
+    }
+
     /// Takes the oldest guild invitation not yet answered or asked about.
     pub fn take_guild_invitation(&mut self) -> Option<GuildInvitation> {
         self.guild_invitations.pop_front()
@@ -49,10 +62,39 @@ fn member<'a>(
 }
 
 impl ClientWorld {
+    /// Discards roster and invitation evidence at a membership or admission boundary.
+    pub(super) fn forget_guild(&mut self) {
+        self.guild_members = None;
+        self.guild_unknown_notes.clear();
+        self.guild_invitations.clear();
+    }
+
     /// Keeps the guild's news.
     pub(super) fn guild_news(&mut self, update: &GuildUpdate) {
+        let guild_id = match update {
+            GuildUpdate::MemberLocation { guild_id, .. }
+            | GuildUpdate::MemberAdded { guild_id, .. }
+            | GuildUpdate::MemberRemoved { guild_id, .. }
+            | GuildUpdate::MemberLevel { guild_id, .. }
+            | GuildUpdate::MemberNote { guild_id, .. }
+            | GuildUpdate::MemberRenamed { guild_id, .. }
+            | GuildUpdate::Renamed { guild_id, .. }
+            | GuildUpdate::Disbanded { guild_id } => Some(*guild_id),
+            GuildUpdate::MemberRank { guild_id, .. } => *guild_id,
+            GuildUpdate::Members(_) | GuildUpdate::Invite { .. } => None,
+        };
+        if let (Some(current), Some(received)) = (
+            self.player().and_then(|player| player.listing.guild),
+            guild_id,
+        ) && current != received
+        {
+            return;
+        }
         match update {
-            GuildUpdate::Members(members) => self.guild_members = Some(members.clone()),
+            GuildUpdate::Members(members) => {
+                self.guild_members = Some(members.clone());
+                self.guild_unknown_notes.clear();
+            }
             GuildUpdate::MemberLocation {
                 name,
                 zone_id,
@@ -74,7 +116,16 @@ impl ClientWorld {
                 ..
             } => {
                 if let Some(members) = &mut self.guild_members {
-                    members.retain(|member| member.name != *name);
+                    // An add message carries no note or flags. Keep previously
+                    // received values when the server adds a listed name again.
+                    if let Some(member) = members.iter_mut().find(|member| member.name == *name) {
+                        member.level = *level;
+                        member.class = *class;
+                        member.rank = *rank;
+                        member.zone_id = *zone_id;
+                        member.last_on = *last_on;
+                        return;
+                    }
                     members.push(GuildMember {
                         name: name.clone(),
                         level: *level,
@@ -91,12 +142,21 @@ impl ClientWorld {
                         note: String::new(),
                         zone_id: *zone_id,
                     });
+                    self.guild_unknown_notes.insert(name.clone());
                 }
             }
             GuildUpdate::MemberRemoved { name, .. } => {
+                if self
+                    .player()
+                    .is_some_and(|player| player.name.eq_ignore_ascii_case(name))
+                {
+                    self.forget_guild();
+                    return;
+                }
                 if let Some(members) = &mut self.guild_members {
                     members.retain(|member| member.name != *name);
                 }
+                self.guild_unknown_notes.remove(name);
             }
             GuildUpdate::MemberLevel { name, level, .. } => {
                 if let Some(member) = member(&mut self.guild_members, name) {
@@ -106,6 +166,7 @@ impl ClientWorld {
             GuildUpdate::MemberNote { name, note, .. } => {
                 if let Some(member) = member(&mut self.guild_members, name) {
                     member.note.clone_from(note);
+                    self.guild_unknown_notes.remove(name);
                 }
             }
             GuildUpdate::MemberRank {
@@ -129,10 +190,13 @@ impl ClientWorld {
             } => {
                 if let Some(member) = member(&mut self.guild_members, old_name) {
                     member.name.clone_from(new_name);
+                    if self.guild_unknown_notes.remove(old_name) {
+                        self.guild_unknown_notes.insert(new_name.clone());
+                    }
                 }
             }
             GuildUpdate::Renamed { .. } => (),
-            GuildUpdate::Disbanded { .. } => self.guild_members = None,
+            GuildUpdate::Disbanded { .. } => self.forget_guild(),
             GuildUpdate::Invite {
                 inviter,
                 guild_id,

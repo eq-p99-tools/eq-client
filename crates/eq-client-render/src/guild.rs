@@ -33,6 +33,8 @@ use eq_client_core::{
 };
 use std::time::{Duration, Instant};
 
+pub(crate) mod roster;
+
 /// How long the official client's invitation dialog waits (R11, [I]).
 const DIALOG_WAIT: Duration = Duration::from_secs(10);
 
