@@ -1,5 +1,6 @@
 //! State a script logs for later review.
 mod economy;
+mod guild;
 mod lifecycle;
 mod movement;
 pub(super) use movement::report as movement_state;
@@ -177,6 +178,7 @@ pub(super) fn state(
         connected = online.world().connected(),
         character_lifecycle = %lifecycle::state(online),
         character_deletion = %online.deletion.report(),
+        guild_state = %guild::state(online.world()),
         ?position,
         ?posture,
         attached_camera_mode = ?camera.map(crate::OrbitCamera::view_name),

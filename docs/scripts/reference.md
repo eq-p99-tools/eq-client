@@ -132,6 +132,16 @@ types can produce a receipt without a model. Scene instances may be off-camera
 or occluded. The counters are independent of damage and inventory.
 
 - `report [label]` logs a state summary with an optional label. Its `option_levels` field includes slider settings, with `run_boost` in hundredths of ordinary running speed. For a selected target, `considered` shows the decoded received color and `display_con_color` shows the presentation color. The report includes `selected_target_level` and `own_level` when known.
+  `guild_state` is a read-only JSON snapshot of the known guild ID/name/rank
+  and last-received member fields. `members: null` means no retained list;
+  `members: []` means a received empty list. A member's `note: null` remains
+  unknown after an add without a note field; `note: ""` is a received empty
+  note. At most 80 rows are included, with the total in `member_count` and
+  explicit `members_truncated`. Current admission/connection fields describe
+  report context, without establishing when the list was received or refreshed.
+  Opt-in debug logging also records actual `GuildUpdate` events as
+  `Guild update received`. Use these events to distinguish a newly received
+  full list from retained history.
   `air_remaining` gives the local air reserve and capacity in ticks while
   Air Remaining is active.
   `breath_probe` reports the last sampled head medium, when resolved, and the
