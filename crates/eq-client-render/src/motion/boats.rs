@@ -1,9 +1,9 @@
 //! The rider's floor-sweep link to a received carrier.
 use bevy::prelude::*;
-use eq_client_core::{WorldPosition, movement::CollisionWorld};
-use eq_network_game::movement::{
+use eq_client_core::movement::{
     CARRIER_REACH, CarrierSample, Carriers, carrier_local, carrier_world,
 };
+use eq_client_core::{WorldPosition, movement::CollisionWorld};
 use std::time::Instant;
 
 /// The frame and world point used by the last locally submitted sample.
@@ -223,10 +223,10 @@ mod tests {
         };
         controls.wait_for(Some(11), now, super::super::PendingKind::Move);
         assert_eq!(controls.boat.unwrap().position, accepted.position);
-        assert_eq!(
+        assert!(matches!(
             controls.liquid_basis(Some(11), now + std::time::Duration::from_secs(3)),
             super::super::LiquidBasis::Unconfirmed
-        );
+        ));
         assert_eq!(controls.boat.unwrap().position, accepted.position);
         controls.move_refused(Some(11), now, "rejected");
         assert_eq!(controls.boat.unwrap().position, accepted.position);

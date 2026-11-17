@@ -15,7 +15,10 @@ mod swimming;
 pub use airborne::{AirborneController, Landing, MotionStep, PROVISIONAL_PHYSICS, VerticalPhysics};
 pub use choices::{offered_options, options};
 use eq_network_game::doors::titanium::Solidity;
-pub use eq_network_game::movement::{MovementOptions, PostureOptions, RunSpeedMultiplier};
+pub use eq_network_game::movement::{
+    CARRIER_REACH, CarrierSample, Carriers, MovementOptions, PostureOptions, RunSpeedMultiplier,
+    carrier_local, carrier_world,
+};
 pub use eq_network_game::movement::{
     SHORELINE_COOLDOWN, SHORELINE_FRAME_MILLIS, SHORELINE_FRAMES, ShorelineFrame, ShorelineStroke,
     ShorelineTrace, ShorelineVelocity,

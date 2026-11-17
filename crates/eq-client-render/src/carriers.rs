@@ -38,7 +38,7 @@ struct CachedCollider {
 
 fn cached_collider(
     cache: &mut BTreeMap<u16, CachedCollider>,
-    sample: eq_network_game::movement::CarrierSample,
+    sample: eq_client_core::movement::CarrierSample,
     tag: &'static str,
     model: &Model,
     transform: &Transform,
@@ -170,7 +170,7 @@ pub(super) fn reconcile(
                 .qol
                 .on(eq_client_core::qol::Fix::ShowInvisible);
             let draw_near = distance <= draw_reach && (reveal || state.world().can_see(spawn));
-            let collision_near = distance <= eq_network_game::movement::CARRIER_REACH * 2.0;
+            let collision_near = distance <= eq_client_core::movement::CARRIER_REACH * 2.0;
             if !draw_near && !collision_near {
                 continue;
             }
@@ -304,7 +304,7 @@ mod tests {
         let mut spawn = crate::online::testing::pet(8, 7);
         spawn.race = 72;
         spawn.pet_owner = None;
-        let mut reports = eq_network_game::movement::Carriers::default();
+        let mut reports = eq_client_core::movement::Carriers::default();
         reports.observe(
             &eq_client_core::WorldEvent::Spawns(vec![spawn]),
             eq_client_core::GameDialect::Titanium,

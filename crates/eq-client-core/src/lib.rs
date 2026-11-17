@@ -1,5 +1,7 @@
 #![doc = "Engine-independent state shared by EQ client front ends and network adapters."]
 
+pub use eq_client_axes as axes;
+
 pub mod breath;
 pub mod buffs;
 pub mod camp;

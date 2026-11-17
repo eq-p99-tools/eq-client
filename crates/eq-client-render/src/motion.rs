@@ -377,7 +377,7 @@ impl Controls {
         &mut self,
         from: Transform,
         position: eq_client_core::WorldPosition,
-        carriers: &eq_network_game::movement::Carriers,
+        carriers: &eq_client_core::movement::Carriers,
     ) {
         let carried = self.boat.and_then(|riding| {
             riding
@@ -402,7 +402,7 @@ impl Controls {
                 visual.map(|transform| boats::to_local(carried.pose, transform));
             }
             let from = boats::to_local(carried.pose, from);
-            let local = eq_network_game::movement::carrier_local(riding.pose, position);
+            let local = eq_client_core::movement::carrier_local(riding.pose, position);
             let facing = self
                 .facing
                 .map(|heading| (heading - carried.pose.heading).rem_euclid(512.0));
@@ -993,7 +993,7 @@ impl Controls {
     pub(crate) fn carrier_support(
         &self,
     ) -> Option<(
-        eq_network_game::movement::CarrierSample,
+        eq_client_core::movement::CarrierSample,
         eq_client_core::WorldPosition,
         eq_client_core::WorldPosition,
     )> {

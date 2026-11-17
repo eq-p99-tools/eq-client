@@ -613,7 +613,7 @@ impl Panels<'_> {
         admission_id: Option<u64>,
         moved: &Moved,
         drawn: Option<Transform>,
-        carriers: &eq_network_game::movement::Carriers,
+        carriers: &eq_client_core::movement::Carriers,
     ) {
         debug!(
             admission_id = ?admission_id,

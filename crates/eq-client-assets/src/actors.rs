@@ -139,6 +139,6 @@ mod tests {
         let text =
             "5\nSHP,SHP_CHR\nOTHER,OTHER_CHR\nSHP,../outside\nSHP,shp_chr\nSHP,C:\\outside\n";
         assert_eq!(imports(text, "SHP"), ["shp_chr"]);
-        assert!(imports(text, "MISSING").is_empty());
+        assert_eq!(imports(text, "MISSING"), Vec::<String>::new());
     }
 }
