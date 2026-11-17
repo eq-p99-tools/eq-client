@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Movement speed changes use exact clock boundaries, preventing rounding from
+  delaying root fades or applying a higher speed to a sample that began
+  before the new grant.
+
 - Positive local fall, drowning and lava reports stand a sitting or kneeling
   Titanium character through the same policy as received damage. The
   stay-seated option and lying posture are preserved; local reports do not
