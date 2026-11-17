@@ -66,6 +66,8 @@ struct Snapshot {
     executed_statements: Option<usize>,
     elapsed_ms: u64,
     message: Option<String>,
+    expected_world: Option<super::ExpectedWorld>,
+    scope_refused: bool,
 }
 
 impl Snapshot {
@@ -80,6 +82,8 @@ impl Snapshot {
             .events()
             .back()
             .map(|event| protocol::message(&event.message));
+        self.expected_world.clone_from(&status.expected_world);
+        self.scope_refused = status.scope_refused;
     }
 
     fn terminal(&self) -> bool {
@@ -99,12 +103,21 @@ impl Snapshot {
         let mut result = json!({"id":self.id,"origin":self.origin,"phase":phase,"line":self.line,
             "completed_steps":self.completed,"total_steps":total,
             "elapsed_ms":self.elapsed_ms,"message":self.message});
+        result["expected_world"] = world_json(self.expected_world.as_ref());
+        result["scope_refused"] = json!(self.scope_refused);
         if let Some(statements) = self.executed_statements {
             result["authored_actions"] = json!(self.authored_actions);
             result["executed_statements"] = json!(statements);
         }
         result
     }
+}
+
+fn world_json(world: Option<&super::ExpectedWorld>) -> Value {
+    world.map_or(
+        Value::Null,
+        |world| json!({"admission_id":world.admission_id,"zone":world.zone}),
+    )
 }
 
 fn phase_name(phase: Phase) -> &'static str {
@@ -144,6 +157,7 @@ pub(crate) struct Bridge {
     current: Option<Tracked>,
     runbook: Option<runbook::Run>,
     admission_id: Option<u64>,
+    world: Option<super::ExpectedWorld>,
     export: runbook::export::Export,
     ui_export: runbook::export::Export,
     history: VecDeque<Snapshot>,
@@ -169,6 +183,7 @@ impl Bridge {
             current: None,
             runbook: None,
             admission_id: None,
+            world: None,
             export: runbook::export::Export::default(),
             ui_export: runbook::export::Export::default(),
             history: VecDeque::new(),
@@ -216,6 +231,8 @@ impl Bridge {
             executed_statements: None,
             elapsed_ms: 0,
             message: None,
+            expected_world: None,
+            scope_refused: false,
         };
         snapshot.update(status, true);
         self.current = Some(Tracked {
@@ -327,6 +344,7 @@ impl Bridge {
             "last_request":self.receipt.as_ref().map(Receipt::json),
             "run":self.current.as_ref().map(|run| run.snapshot.json()),
             "admission_id":self.admission_id,"control_health":self.channel_health(),
+            "world":world_json(self.world.as_ref()),
             "runbook":self.runbook.as_ref().map(runbook::Run::json),
             "runbook_export":self.export.json(self.closed),
             "runbook_ui_export":self.ui_export.json(self.closed),
@@ -342,6 +360,7 @@ impl Drop for Bridge {
         }
         self.closed = true;
         self.admission_id = None;
+        self.world = None;
         self.export.poll();
         self.ui_export.poll();
         self.revision = self.revision.saturating_add(1);
@@ -417,6 +436,7 @@ fn receive(
     observe_run(&mut bridge, script.as_deref(), &status);
     let admission_id = runbook::admission_id(&online);
     bridge.admission_id = admission_id;
+    bridge.world = super::ExpectedWorld::current(&online);
     bridge.export.poll();
     bridge.ui_export.poll();
     let Some(result) = bridge.job.poll(Some(0)) else {
@@ -451,7 +471,7 @@ fn receive(
         Operation::Start(_) if script.is_some() => Receipt::rejected(request.id, "busy"),
         Operation::Start(source) => start_request(
             &mut bridge,
-            (request.id, source),
+            (request.id, source, request.expected_world.as_ref()),
             (&settings.0, online.enabled),
             &mut commands,
             focus.as_deref_mut(),
@@ -494,7 +514,7 @@ fn receive(
 
 fn start_request(
     bridge: &mut Bridge,
-    (request_id, source): (u64, &str),
+    (request_id, source, expected_world): (u64, &str, Option<&super::ExpectedWorld>),
     (settings, online): (&crate::ViewerConfig, bool),
     commands: &mut Commands,
     focus: Option<&mut InputFocus>,
@@ -508,7 +528,8 @@ fn start_request(
             return receipt;
         }
     };
-    let script = Script::for_viewer(program, settings, online);
+    let mut script = Script::for_viewer(program, settings, online);
+    script.progress.expected_world = expected_world.cloned();
     let Some(id) = bridge.bind(script.status(), "control") else {
         return Receipt::rejected(request_id, "run_ids_exhausted");
     };
@@ -568,6 +589,7 @@ fn publish(
 ) {
     observe_run(&mut bridge, script.as_deref(), &status);
     bridge.admission_id = runbook::admission_id(&online);
+    bridge.world = super::ExpectedWorld::current(&online);
     if bridge.job.pending(Some(0)) || time.elapsed() < bridge.next_poll {
         return;
     }

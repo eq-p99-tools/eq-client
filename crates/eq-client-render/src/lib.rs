@@ -634,6 +634,9 @@ fn install_script(
     .add_systems(
         Update,
         (
+            script::guard_scope
+                .after(Stage::Receive)
+                .before(Stage::Scene),
             script::observe.in_set(Stage::Receive),
             script::pointer::draw,
             // A scripted notch of the wheel replaces the real wheel's

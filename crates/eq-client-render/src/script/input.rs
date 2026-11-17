@@ -32,6 +32,8 @@ pub(crate) struct AuthoredInput {
     pub(super) typed: HashSet<MessageId<KeyboardInput>>,
     pub(crate) keys: HashSet<KeyCode>,
     pub(crate) left_button: bool,
+    pub(super) buttons: HashSet<MouseButton>,
+    pub(super) pointer_targets: HashSet<Entity>,
     /// Every key the script sent a press or a release of this frame.
     pub(super) sent: HashSet<KeyCode>,
 }

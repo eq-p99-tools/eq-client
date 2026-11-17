@@ -47,6 +47,31 @@ at 256 KiB; decoded script text retains the 128 KiB source, 500-action and
 15-minute limits from Run controls. Request files must be ordinary files; links,
 reparse points and directories are refused.
 
+For actions that must stay in one observed world, copy both identifiers from
+`status.world` into the optional `expected_world` field on a start request:
+
+```json
+{"version":1,"instance":"copy-from-status","id":10,"op":"start","expected_world":{"admission_id":42,"zone":"samplezone"},"source":"wait 1000\npress W\n"}
+```
+
+The executor checks both values together before dispatching input or an action,
+and again after receiving world updates before input handlers run. Zone names
+match the server-reported short name exactly, including case; copy the value
+from status. A transfer, disconnect, different admission, or different zone
+fails the scoped run, releases held input, cancels pending clicks and discards
+remaining actions. The check stays active during waits, loops and pauses.
+Re-entering the same zone under a new admission also fails. The failed run
+retains `expected_world` and `scope_refused: true` in status; its message gives
+the expected and observed world. A start receipt only queues the run, so a stale
+scope can receive `start_queued` followed by a failed result before any action.
+
+This is a caller-selected local precondition, not server permission or proof of
+an action's outcome. It cannot undo commands already submitted in the matching
+admission. Existing outbox admission stamps still apply. Unscoped starts retain
+their usual behavior, including login and cleanup scenarios across zones. Status
+and Stop requests remain available independently of the scope. A separate
+`zone.name` condition in script source does not bind a later action to that zone.
+
 An active run, including a paused or followed run, rejects another start. There
 is no gameplay queue or automatic replacement. To stop, use the run ID actually
 reported by status:
@@ -82,6 +107,7 @@ requests an observation.
 | `run` | Current/latest run: `id`, `origin`, `phase`, `line`, `completed_steps`, `total_steps`, `elapsed_ms`, `message` |
 | `recent_runs` | At most 16 terminal run snapshots, oldest first |
 | `admission_id` | Current connected online admission outside a zone transfer, or null |
+| `world` | The same admission plus its server-reported zone short name, or null; copy both into `expected_world` |
 | `control_health` | State of the local file exchange. See [Control health](#control-health) |
 | `runbook` | Current test checklist or null. See [Runbook checklist](#runbook-checklist) |
 | `runbook_export`, `runbook_ui_export` | Latest harness and window export attempts, respectively, or null. See [Export a checklist](#export-a-checklist) |
@@ -94,6 +120,9 @@ accepted action lines and `executed_statements` for structured interpreter
 steps, including condition checks and repeated action lines. `completed_steps`
 counts actions that finished in the executor. Use `phase` to determine the
 run's outcome.
+
+Every run snapshot also includes `expected_world` (null for an unscoped run)
+and `scope_refused` (whether a mismatched world stopped this run).
 
 `last_request.outcome` is `accepted`, `rejected`, `stop_requested` or `observed`.
 Start acceptance means only that a validated local run was queued. It does not

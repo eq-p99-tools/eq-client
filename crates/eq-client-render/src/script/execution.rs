@@ -91,6 +91,8 @@ impl FlowStatus {
 /// The latest run's source, progress and result, retained after execution ends.
 #[derive(Clone, Debug, Default, Resource)]
 pub struct RunStatus {
+    pub(super) expected_world: Option<super::ExpectedWorld>,
+    pub(super) scope_refused: bool,
     /// Stable for this execution, even when follow mode extends its source.
     pub(super) identity: Arc<()>,
     pub(super) source: Arc<str>,

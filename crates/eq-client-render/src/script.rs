@@ -22,6 +22,8 @@ mod parse;
 pub(crate) mod pointer;
 mod program;
 mod report;
+mod scope;
+pub(crate) use scope::ExpectedWorld;
 
 use execution::RunMode;
 pub use execution::{Phase, RunEvent, RunStatus};
@@ -343,10 +345,16 @@ impl Script {
     pub(crate) fn social_dispatch(
         &self,
         owner: &std::sync::Arc<()>,
+        online: &crate::online::OnlineState,
     ) -> Option<crate::socials::ScriptDispatch> {
         use crate::socials::ScriptDispatch;
 
         if !self.local
+            || self
+                .progress
+                .expected_world
+                .as_ref()
+                .is_some_and(|expected| expected.refusal(online).is_some())
             || !std::sync::Arc::ptr_eq(&self.progress.identity, owner)
             || !matches!(self.progress.phase, Phase::Running | Phase::Following)
         {
@@ -499,7 +507,7 @@ impl Script {
         if let Some(button) = self.clicked.take() {
             // A genuine press of the same button belongs to the user now.
             if !keys.native_button(button) {
-                keys.mark_pointer(button);
+                keys.mark_pointer(button, self.pressed);
                 mouse.release(button);
             }
         }
@@ -806,11 +814,11 @@ impl Keyboard<'_, '_> {
         }
     }
 
-    fn mark_pointer(&mut self, button: MouseButton) {
-        if button == MouseButton::Left
-            && let Some(authored) = &mut self.authored
-        {
-            authored.left_button = true;
+    fn mark_pointer(&mut self, button: MouseButton, target: Option<Entity>) {
+        if let Some(authored) = &mut self.authored {
+            authored.buttons.insert(button);
+            authored.left_button |= button == MouseButton::Left;
+            authored.pointer_targets.extend(target);
         }
     }
 
@@ -830,6 +838,69 @@ impl Keyboard<'_, '_> {
             }
         }
     }
+}
+
+/// A new world observation can arrive between PreUpdate injection and Update's
+/// input handlers. Withdraw synthetic edges and typed presses before those
+/// handlers can reinterpret them in a different admission/zone.
+#[allow(clippy::needless_pass_by_value)]
+pub(super) fn guard_scope(
+    mut commands: Commands,
+    script: Option<ResMut<Script>>,
+    online: Res<crate::online::OnlineState>,
+    (mut keys, mut mouse): Input,
+    mut buttons: Buttons,
+) {
+    let Some(mut script) = script else { return };
+    let Some(reason) = script
+        .progress
+        .expected_world
+        .as_ref()
+        .and_then(|expected| expected.refusal(&online))
+    else {
+        return;
+    };
+    script.cancel_press(&mut buttons, &mut commands);
+    script.progress.scope_refused = true;
+    script.stop(&mut keys, &mut mouse, &reason);
+    if let Some(authored) = &keys.authored {
+        for key in &authored.keys {
+            keys.state.clear_just_pressed(*key);
+            keys.state.clear_just_released(*key);
+        }
+        for button in &authored.buttons {
+            if !keys.native_button(*button) {
+                mouse.reset(*button);
+            }
+        }
+        for target in &authored.pointer_targets {
+            if let Ok((_, mut interaction, ..)) = buttons.get_mut(*target) {
+                *interaction = Interaction::None;
+            }
+        }
+        let typed = authored.typed.clone();
+        let cancel_right = authored.buttons.contains(&MouseButton::Right);
+        commands.queue(move |world: &mut World| {
+            if cancel_right {
+                if let Some(mut press) = world.get_resource_mut::<crate::hud::GemPress>() {
+                    press.cancel();
+                }
+                if let Some(mut press) = world.get_resource_mut::<crate::buffs::BuffPress>() {
+                    press.cancel();
+                }
+            }
+            let mut messages =
+                world.resource_mut::<Messages<bevy::input::keyboard::KeyboardInput>>();
+            let mut cursor = messages.get_cursor();
+            for (message, id) in cursor.read_mut_with_id(&mut messages) {
+                if typed.contains(&id) {
+                    message.state = bevy::input::ButtonState::Released;
+                    message.text = None;
+                }
+            }
+        });
+    }
+    script.retire(&mut commands);
 }
 
 /// Runs after Bevy's keyboard and UI focus updates so injected input is seen this frame.
@@ -914,6 +985,21 @@ pub(super) fn drive(
             }
             Request::Step => (),
         }
+    }
+    // Check the same world used by this dispatch, before restoring any held
+    // input, releasing a click to its handler, or advancing a wait/loop. A
+    // condition in script source cannot bind the action in a later frame.
+    if let Some(reason) = script
+        .progress
+        .expected_world
+        .as_ref()
+        .and_then(|expected| expected.refusal(&online))
+    {
+        script.cancel_press(&mut buttons, &mut commands);
+        script.progress.scope_refused = true;
+        script.stop(&mut keys, &mut mouse, &reason);
+        script.retire(&mut commands);
+        return;
     }
     if matches!(script.mode, RunMode::Paused(_)) {
         script.owns_input = false;
@@ -1566,7 +1652,7 @@ pub(super) fn drive(
                 } else {
                     MouseButton::Left
                 };
-                keys.mark_pointer(button);
+                keys.mark_pointer(button, Some(entity));
                 mouse.press(button);
                 script.clicked = Some(button);
                 script.pressed = Some(entity);
@@ -1601,7 +1687,7 @@ pub(super) fn drive(
                         }
                     };
                     press(&mut commands, entity, *target, &mut buttons, &mut pointers);
-                    keys.mark_pointer(MouseButton::Left);
+                    keys.mark_pointer(MouseButton::Left, Some(entity));
                     mouse.press(MouseButton::Left);
                     script.clicked = Some(MouseButton::Left);
                     script.pressed = Some(entity);

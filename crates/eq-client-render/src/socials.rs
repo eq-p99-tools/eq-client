@@ -74,13 +74,13 @@ impl State {
     }
 
     /// A script can lose its executor between any two due lines.
-    fn retire_script(&mut self, script: Option<&crate::script::Script>) {
+    fn retire_script(&mut self, script: Option<&crate::script::Script>, online: &OnlineState) {
         if self
             .run
             .as_ref()
             .and_then(|run| run.owner.as_ref())
             .is_some_and(|owner| {
-                script.and_then(|script| script.social_dispatch(owner))
+                script.and_then(|script| script.social_dispatch(owner, online))
                     != Some(ScriptDispatch::Continue)
             })
         {
@@ -343,7 +343,7 @@ pub(super) fn update(
     authored: Option<Res<crate::script::AuthoredInput>>,
 ) {
     let now = Instant::now();
-    state.retire_script(script.as_deref());
+    state.retire_script(script.as_deref(), &online);
     let admission = online
         .world()
         .session_id()
@@ -361,7 +361,7 @@ pub(super) fn update(
             .map_or(Some(ScriptDispatch::Continue), |owner| {
                 script
                     .as_ref()
-                    .and_then(|script| script.social_dispatch(owner))
+                    .and_then(|script| script.social_dispatch(owner, &online))
             });
         if let Some(dispatch) = dispatch {
             match state.request(request, admission, now, &mut bindings) {
