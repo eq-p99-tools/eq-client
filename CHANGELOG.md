@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Script reports expose raw received buff durations and observation ages,
+  with local remaining-time estimates separate from server ticks.
+
 - Script reports expose current chat composition and its main or detached
   window without recording draft text or typed keys.
 
