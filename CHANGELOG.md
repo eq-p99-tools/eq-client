@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- A forward-plus-strafe step on a moving boat keeps both movement components.
+  The boat's own travel no longer makes the diagonal collision trial fall back
+  to a single direction, including the final step onto ordinary ground.
+
 - Bare slash commands this client does not implement keep their unsupported-command
   explanation. Only the seven chat channel commands ask for a message when empty.
   The ability picker's fallback uses the installed default skin's "Choose a skill"
