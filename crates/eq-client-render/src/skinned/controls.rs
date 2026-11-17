@@ -968,13 +968,14 @@ pub(crate) fn fill_lists(
     for (entity, mut rows, children) in &mut lists {
         let wanted = match rows.listing {
             Listing::Keys => filter.0.clone(),
-            // The Training, Skills, merchant and Raid windows' lists fill
+            // The Training, Skills, merchant, Raid and Guild windows' lists fill
             // themselves.
             Listing::Training
             | Listing::Tracking
             | Listing::SkillSelect
             | Listing::Skills
             | Listing::Merchant
+            | Listing::Guild
             | Listing::Raid(_) => continue,
         };
         if rows.filled && rows.filter == wanted && !keys.is_changed() && !bindings.is_changed() {
