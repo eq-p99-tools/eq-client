@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Route `slash follow` through ordinary deferred follow input while retaining
+  the script's admission and zone guard.
+
 - Add a read-only guild roster using received lists and member changes, with
   explicit unknown fields and retained history across matched zone transfers.
 - Horizontal follow keeps moving in mapped water while chat or another app

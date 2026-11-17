@@ -1856,7 +1856,7 @@ pub(super) fn run_game_command(
 
 /// A slash command the client answers itself, noted for the system that
 /// answers it: `/target Name`, a plain `/who`, `/loc`, `/time`, `/log`,
-/// `/shownames`, guild requests or `/raidwindow`. None for any other line.
+/// `/shownames`, guild requests, `/follow` or `/raidwindow`. None for any other line.
 #[cfg(test)]
 pub(super) fn client_request(input: &str, state: &mut ChatState) -> Option<Result<(), String>> {
     client_request_in_scope(input, state, None)
@@ -1879,6 +1879,11 @@ pub(super) fn client_request_in_scope(
     if let Some(guild) = super::guild::Command::typed(input) {
         state.script_requests.guild = scope;
         state.guild_asked = Some(guild);
+        return Some(Ok(()));
+    }
+    if super::motion::FollowAsked::typed(input) {
+        state.script_requests.follow = scope;
+        state.follow_asked = Some(super::motion::FollowAsked);
         return Some(Ok(()));
     }
     if let Some(asked) = super::whereabouts::Asked::typed(input) {

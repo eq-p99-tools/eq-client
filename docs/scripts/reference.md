@@ -211,6 +211,11 @@ or occluded. The counters are independent of damage and inventory.
   tuple gives the selected item ID and whether a received definition is
   available, including a definition already cached in the admission.
 - `slash command [arguments]`: run one of the supported game slash commands, without a leading slash.
+  `slash follow` queues the ordinary local follow request for the targeted group
+  member. Its deferred request keeps the script's expected admission and zone;
+  a changed world withdraws it before movement handles it. Completion of the
+  step does not establish movement. The ordinary standing, movement and group
+  checks still apply, and a movement key ends following.
   `slash ranged` requests one shot or throw against the current target on Titanium.
   `slash layonhands` and `slash harmtouch` request the class ability against the
   settled selection. Select yourself before using Lay on Hands on yourself.
