@@ -1644,11 +1644,6 @@ fn submit_line(
     if let Some(contacts) = super::contacts::Command::typed(&command) {
         return contacts_command(contacts, active, state, online, outbox, qol);
     }
-    if let Some(guild) = super::guild::Command::typed(&command) {
-        state.script_requests.guild = outbox.script_world(online.world());
-        state.guild_asked = Some(guild);
-        return Ok(());
-    }
     if let Some(sharing) = super::sharing::Command::typed(&command) {
         state.script_requests.sharing = outbox.script_world(online.world());
         state.sharing_asked = Some(sharing);
@@ -1861,7 +1856,7 @@ pub(super) fn run_game_command(
 
 /// A slash command the client answers itself, noted for the system that
 /// answers it: `/target Name`, a plain `/who`, `/loc`, `/time`, `/log`,
-/// `/shownames` or `/raidwindow`. None for any other line.
+/// `/shownames`, guild requests or `/raidwindow`. None for any other line.
 #[cfg(test)]
 pub(super) fn client_request(input: &str, state: &mut ChatState) -> Option<Result<(), String>> {
     client_request_in_scope(input, state, None)
@@ -1880,6 +1875,11 @@ pub(super) fn client_request_in_scope(
             state.script_requests.target = scope;
             state.requested_target = Some(name);
         }));
+    }
+    if let Some(guild) = super::guild::Command::typed(input) {
+        state.script_requests.guild = scope;
+        state.guild_asked = Some(guild);
+        return Some(Ok(()));
     }
     if let Some(asked) = super::whereabouts::Asked::typed(input) {
         state.asked = Some(asked);

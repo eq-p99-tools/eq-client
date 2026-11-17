@@ -5679,6 +5679,13 @@ pub(super) mod tests {
             };
             accept(&mut app, &first);
             if manual {
+                {
+                    let world = app.world_mut();
+                    let mut cameras = world.query::<&mut OrbitCamera>();
+                    let mut camera = cameras.single_mut(world).unwrap();
+                    camera.yaw = std::f32::consts::FRAC_PI_2;
+                    camera.pitch = 0.0;
+                }
                 app.world_mut()
                     .resource_mut::<ButtonInput<KeyCode>>()
                     .press(KeyCode::KeyW);
@@ -5696,10 +5703,14 @@ pub(super) mod tests {
             if manual {
                 let from = Vec3::from_array(eq_client_core::render_position(first.position));
                 let to = Vec3::from_array(eq_client_core::render_position(next.position));
+                let moved = to - from;
+                let span = app.world().resource::<Controls>().sent_span;
+                assert_eq!(next.mode, MovementMode::Swim);
                 assert!(
-                    to.x < from.x,
+                    (moved.x + swim_speed(6.0) * span).abs() < 0.001,
                     "the camera-relative key must take over: {from:?} to {to:?}"
                 );
+                assert!(moved.y.abs() < 0.001 && moved.z.abs() < 0.001, "{moved:?}");
             } else {
                 assert_eq!(next.position, first.position);
             }

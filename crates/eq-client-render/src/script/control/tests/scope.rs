@@ -551,3 +551,41 @@ fn deferred_target_world_stamp_is_withdrawn_but_native_replacement_survives() {
         );
     }
 }
+
+#[test]
+fn deferred_guild_world_stamp_is_withdrawn_but_native_replacement_survives() {
+    use crate::{guild::Command, script::ExpectedWorld};
+    for (admission, zone) in [(8, "samplezone"), (7, "otherzone")] {
+        for native_replacement in [false, true] {
+            let mut app = admitted();
+            {
+                let mut chat = app.world_mut().resource_mut::<crate::chat::ChatState>();
+                crate::chat::client_request_in_scope(
+                    "/guildmotd scoped",
+                    &mut chat,
+                    Some(ExpectedWorld {
+                        admission_id: 7,
+                        zone: "samplezone".into(),
+                    }),
+                )
+                .unwrap()
+                .unwrap();
+                if native_replacement {
+                    crate::chat::client_request("/guildmotd native", &mut chat)
+                        .unwrap()
+                        .unwrap();
+                }
+            }
+            enter(
+                &mut app.world_mut().resource_mut::<OnlineState>(),
+                admission,
+                zone,
+            );
+            frame(&mut app, 1);
+            assert_eq!(
+                app.world().resource::<crate::chat::ChatState>().guild_asked,
+                native_replacement.then(|| Command::SetMotd("native".into()))
+            );
+        }
+    }
+}
