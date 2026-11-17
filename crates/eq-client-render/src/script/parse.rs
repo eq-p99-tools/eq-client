@@ -957,6 +957,9 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
     fn value<T: std::str::FromStr>(text: &str, what: &str) -> Result<T, String> {
         text.parse().map_err(|_| format!("expected {what}"))
     }
+    if let Some(training) = training_click(words)? {
+        return Ok(ClickTarget::Training(training));
+    }
     Ok(match words {
         ["slot", slot] => ClickTarget::Slot(value(slot, "a slot number")?),
         ["scribe"] => ClickTarget::Scribe,
@@ -1004,15 +1007,6 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
                 .ok_or("expected an option, by its name in a file")?,
         ),
         ["attack"] => ClickTarget::Attack,
-        ["training", row] => ClickTarget::Training(TrainingClick::Row(ordinal(row, "a row")?)),
-        ["training_language", id] => {
-            let id: u8 = id.parse().map_err(|_| "expected a language ID (0..25)")?;
-            if id >= eq_client_core::training::LANGUAGES {
-                return Err("expected a language ID (0..25)".into());
-            }
-            ClickTarget::Training(TrainingClick::Language(id))
-        }
-        ["train"] => ClickTarget::Training(TrainingClick::Train),
         ["tracking", row] => ClickTarget::TrackRow(ordinal(row, "a row")?),
         ["skill_select", row] => ClickTarget::SkillRow(ordinal(row, "a row")?),
         ["track"] => ClickTarget::Track,
@@ -1020,7 +1014,6 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["page", way @ ("next" | "back")] => ClickTarget::Page(*way == "next"),
         ["combine", slot] => ClickTarget::Combine(value(slot, "a pack slot number")?),
         ["map", action] => ClickTarget::Map(map_button(action)?),
-        ["training_done"] => ClickTarget::Training(TrainingClick::Done),
         ["slider", name, percent] => ClickTarget::Slider(
             slider(name)?,
             percent
@@ -1061,6 +1054,24 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["book_page", "back"] => ClickTarget::BookPage(false),
         _ => return Err("unknown or malformed step".into()),
     })
+}
+
+/// Training row/subject selection and the ordinary Train/Done buttons.
+/// Unrecognized shapes retain the general click parser's existing fallback.
+fn training_click(words: &[&str]) -> Result<Option<TrainingClick>, String> {
+    Ok(Some(match words {
+        ["training", row] => TrainingClick::Row(ordinal(row, "a row")?),
+        ["training_language", id] => {
+            let id: u8 = id.parse().map_err(|_| "expected a language ID (0..25)")?;
+            if id >= eq_client_core::training::LANGUAGES {
+                return Err("expected a language ID (0..25)".into());
+            }
+            TrainingClick::Language(id)
+        }
+        ["train"] => TrainingClick::Train,
+        ["training_done"] => TrainingClick::Done,
+        _ => return Ok(None),
+    }))
 }
 
 /// One of the chat window's tabs, by its label in any case.
@@ -1656,17 +1667,24 @@ mod tests {
         let base = Path::new("private");
         assert_eq!(
             parse(
-                "click training_language 0\nclick training_language 25\nclick train",
+                "click training 1\nclick training_language 0\nclick training_language 25\nclick train\nclick training_done",
                 base
             )
             .unwrap(),
             [
+                Step::Click(ClickTarget::Training(TrainingClick::Row(0))),
                 Step::Click(ClickTarget::Training(TrainingClick::Language(0))),
                 Step::Click(ClickTarget::Training(TrainingClick::Language(25))),
                 Step::Click(ClickTarget::Training(TrainingClick::Train)),
+                Step::Click(ClickTarget::Training(TrainingClick::Done)),
             ]
         );
         for bad in [
+            "click training",
+            "click training 0",
+            "click training 1 2",
+            "click train 1",
+            "click training_done 1",
             "click training_language",
             "click training_language 26",
             "click training_language -1",
