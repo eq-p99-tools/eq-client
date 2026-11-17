@@ -4228,9 +4228,7 @@ fn last_names_change_by_the_name_spawned_with() {
     assert_eq!(world.spawn(6).unwrap().state.name_parts.last_name, "");
 }
 
-#[test]
-fn training_opens_raises_skills_with_a_line_and_closes() {
-    use crate::training::{TrainingOffer, TrainingUpdate};
+fn trainee_with_skills_and_languages() -> ClientWorld {
     let mut world = ClientWorld::default();
     let mut trainee = player(9);
     trainee.skills = Some(vec![0; 100]);
@@ -4250,6 +4248,13 @@ fn training_opens_raises_skills_with_a_line_and_closes() {
         },
     );
     connection(&mut world, true, false);
+    world
+}
+
+#[test]
+fn training_opens_raises_skills_with_a_line_and_closes() {
+    use crate::training::{TrainingOffer, TrainingUpdate};
+    let mut world = trainee_with_skills_and_languages();
     let mut caps = vec![0; 100];
     caps[30] = 200;
     game(
@@ -4276,53 +4281,10 @@ fn training_opens_raises_skills_with_a_line_and_closes() {
             value: 1
         }]
     );
-    let revision = world.skills_revision();
-    let changes = game(
-        &mut world,
-        WorldEvent::Training(TrainingUpdate::Trained {
-            skill: 105,
-            value: 1,
-            cost: 0,
-        }),
-    );
-    let player = world.player().unwrap();
-    assert_eq!(player.languages.as_ref().unwrap()[5], 1);
-    assert_eq!(player.skills.as_ref().unwrap()[5], 0);
-    assert_eq!(
-        changes.notices,
-        Vec::<Notice>::new(),
-        "a language must not produce an ordinary skill notice"
-    );
-    assert!(world.skills_revision() > revision);
     game(&mut world, WorldEvent::PracticePoints(4));
     assert_eq!(
         world.player().and_then(|player| player.practice_points),
         Some(4)
-    );
-    game(
-        &mut world,
-        WorldEvent::Training(TrainingUpdate::Practice(
-            crate::training::PracticeUpdate::OutcomeUnknown {
-                skill: 105,
-                estimated_cost: 10,
-            },
-        )),
-    );
-    assert_eq!(
-        world.training_points(),
-        crate::training::PracticePoints::Unknown
-    );
-    // A late proficiency update cannot establish a point balance.
-    game(
-        &mut world,
-        WorldEvent::Skill {
-            skill_id: 105,
-            value: 2,
-        },
-    );
-    assert_eq!(
-        world.training_points(),
-        crate::training::PracticePoints::Unknown
     );
     game(&mut world, WorldEvent::Disciplines(vec![4585, 0]));
     assert_eq!(
@@ -4351,6 +4313,69 @@ fn training_opens_raises_skills_with_a_line_and_closes() {
         changes.notices,
         [Notice::TrainingRefused("No practice points".into())]
     );
+}
+
+#[test]
+fn language_training_updates_its_bank_and_retains_unknown_points() {
+    use crate::training::{TrainingOffer, TrainingUpdate};
+    let mut world = trainee_with_skills_and_languages();
+    game(
+        &mut world,
+        WorldEvent::Training(TrainingUpdate::Offered(TrainingOffer {
+            trainer: 42,
+            caps: vec![0; 100],
+            language_caps: vec![100; 26],
+        })),
+    );
+    let revision = world.skills_revision();
+    let changes = game(
+        &mut world,
+        WorldEvent::Training(TrainingUpdate::Trained {
+            skill: 105,
+            value: 1,
+            cost: 0,
+        }),
+    );
+    let player = world.player().unwrap();
+    assert_eq!(player.languages.as_ref().unwrap()[5], 1);
+    assert_eq!(player.skills.as_ref().unwrap()[5], 0);
+    assert_eq!(
+        changes.notices,
+        Vec::<Notice>::new(),
+        "a language must not produce an ordinary skill notice"
+    );
+    assert!(world.skills_revision() > revision);
+    game(&mut world, WorldEvent::PracticePoints(4));
+    assert_eq!(
+        world.training_points(),
+        crate::training::PracticePoints::Balance(4)
+    );
+    game(
+        &mut world,
+        WorldEvent::Training(TrainingUpdate::Practice(
+            crate::training::PracticeUpdate::OutcomeUnknown {
+                skill: 105,
+                estimated_cost: 10,
+            },
+        )),
+    );
+    assert_eq!(
+        world.training_points(),
+        crate::training::PracticePoints::Unknown
+    );
+    // A late proficiency update cannot establish a point balance.
+    game(
+        &mut world,
+        WorldEvent::Skill {
+            skill_id: 105,
+            value: 2,
+        },
+    );
+    assert_eq!(
+        world.training_points(),
+        crate::training::PracticePoints::Unknown
+    );
+    assert_eq!(world.player().unwrap().languages.as_ref().unwrap()[5], 2);
 }
 
 #[test]
