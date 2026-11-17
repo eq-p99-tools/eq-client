@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Script-control starts can bind to an observed admission and zone with
+  `expected_world`. A transfer or re-entry stops the scoped run, withdraws its
+  synthetic input and deferred gameplay intent, and rejects queued chat from
+  an earlier admission. Unscoped control runs remain available.
+- Item icons follow the selected skin's declared `A_DragItem` atlas rather
+  than fixed sheet names and cell dimensions. Invalid layouts retain the
+  existing placeholder or label.
+- Version output and startup logs include the compiled Git revision and
+  tracked-tree state. Archives and build overrides identify unavailable or
+  unknown provenance explicitly.
+- Replace unmaintained `chrono` with `jiff`, preserving local chat/log/time
+  formatting. Client crate timestamp APIs now use `jiff::civil::DateTime`.
+
 - A forward-plus-strafe step on a moving boat keeps both movement components.
   The boat's own travel no longer makes the diagonal collision trial fall back
   to a single direction, including the final step onto ordinary ground.
