@@ -1788,7 +1788,7 @@ pub(super) fn input(
     // Following turns and goes by itself until a movement key moves the
     // player; it then ends, and the keys move them this sample. A stun
     // holds the player where they are, and following goes on after it.
-    let follow_heading = if controls.following.is_some() && !stunned {
+    let follow_step = if controls.following.is_some() && !stunned {
         let speeds = (
             controls.speed.unwrap_or(0.0),
             controls.walk_speed.or(controls.speed).unwrap_or(0.0),
@@ -1819,10 +1819,6 @@ pub(super) fn input(
                     (false, Some(walk)) => (MovementMode::Walk, walk),
                     _ => (MovementMode::Forward, controls.speed.unwrap_or(0.0)),
                 };
-                // The program stops in the frame it comes within reach; a
-                // sample covers many frames, so it goes no further than
-                // that frame would.
-                let speed = speed.min((step.beyond + speed / 60.0) / span.max(f32::EPSILON));
                 intent = MotionInput {
                     mode,
                     speed,
@@ -1834,7 +1830,7 @@ pub(super) fn input(
                 if heading_snapshots {
                     heading_update = HeadingUpdate::Snapshot;
                 }
-                Some(step.heading)
+                Some(step)
             }
             Err(end) => {
                 if let Some(following) = controls.following.take() {
@@ -1852,6 +1848,7 @@ pub(super) fn input(
     } else {
         None
     };
+    let follow_heading = follow_step.map(|step| step.heading);
     if placement_blocked {
         // Keep the turn inputs and ordinary sample timing. Translation,
         // jumps and gravity cannot start from the suspect received XYZ.
@@ -1914,10 +1911,12 @@ pub(super) fn input(
                 .or(controls.speed)
                 .unwrap_or(0.0),
         );
-        if !focused || controls.stun_active {
+        // Focus gates manual strokes; following supplies its own horizontal
+        // input, as it does on land. A stun still stops every water stroke.
+        if controls.stun_active || !(focused || follow_step.is_some()) {
             direction = Vec3::ZERO;
             turn = 0.0;
-        } else {
+        } else if focused {
             direction = swim_stroke(
                 direction,
                 mode,
@@ -1927,6 +1926,12 @@ pub(super) fn input(
             )
             .0;
         }
+    }
+    if let Some(step) = follow_step {
+        // Stop within one frame of reach at the selected movement rate.
+        // Water selects its ordinary swim rate above, so it shares this
+        // limit rather than replacing an already limited land speed.
+        speed = speed.min((step.beyond + speed / 60.0) / span.max(f32::EPSILON));
     }
     let physics = climbing(physics(client, online.world().zone_gravity()), client, body);
     // A hurt or burdened player jumps at the share of the speed the session
@@ -5499,6 +5504,278 @@ pub(super) mod tests {
         CollisionWorld::new(flat_surface(-12.0))
             .unwrap()
             .with_liquids(Pool { top: 0.0, liquid })
+    }
+
+    /// Starts real follow input toward a grouped player to the right of
+    /// the fixture's camera-relative forward direction.
+    fn follow_to(app: &mut App, origin: Vec3, distance: f32) {
+        use eq_client_core::{SpawnKind, SpawnState, WorldEvent, group::GroupUpdate};
+
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        {
+            let mut online = app.world_mut().resource_mut::<online::OnlineState>();
+            online::testing::place(
+                &mut online,
+                world_position(
+                    origin.to_array(),
+                    eq_client_core::world_heading(std::f32::consts::FRAC_PI_2),
+                ),
+            );
+            online::testing::spawn_entry(
+                &mut online,
+                5,
+                SpawnState {
+                    name: "Friend".into(),
+                    kind: SpawnKind::Player,
+                    race: 1,
+                    size: 6.0,
+                    pet_owner: None,
+                    position: world_position((origin + Vec3::X * distance).to_array(), 0.0),
+                    ..online::testing::pet(5, 0)
+                },
+            );
+            online::testing::news(
+                &mut online,
+                [WorldEvent::Group(GroupUpdate::Members {
+                    leader: "Friend".into(),
+                    members: vec!["Friend".into()],
+                })],
+            );
+            online.select_target(Some(5));
+        }
+        app.world_mut()
+            .resource_mut::<crate::chat::ChatState>()
+            .follow_asked = Some(FollowAsked);
+    }
+
+    fn unfocus(app: &mut App) {
+        let world = app.world_mut();
+        let mut windows = world.query::<&mut Window>();
+        windows.single_mut(world).unwrap().focused = false;
+    }
+
+    #[test]
+    fn water_follow_crosses_from_land_and_keeps_swimming_while_unfocused() {
+        let (mut app, receiver) = stationary_airborne_app();
+        // A short dry shelf ends above a deep pool. Follow must walk off,
+        // fall into the mapped water, and retain its horizontal input.
+        let shelf = [
+            [[-20.0, 0.0, -20.0], [2.0, 0.0, -20.0], [2.0, 0.0, 20.0]],
+            [[-20.0, 0.0, -20.0], [2.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
+        ];
+        app.insert_resource(Collision(Some(
+            CollisionWorld::new(shelf.into_iter().chain(flat_surface(-12.0)))
+                .unwrap()
+                .with_liquids(Pool {
+                    top: 0.0,
+                    liquid: Liquid::Water,
+                }),
+        )));
+        follow_to(&mut app, Vec3::Y * 3.0, 60.0);
+        unfocus(&mut app);
+        let mut saw_land = false;
+        let mut saw_fall = false;
+        let mut wet_samples = 0;
+        for _ in 0..20 {
+            let from = app
+                .world()
+                .resource::<online::OnlineState>()
+                .world()
+                .player()
+                .unwrap()
+                .position;
+            app.update();
+            let ClientCommand::Move(request) = receiver.try_recv().expect("follow sample") else {
+                panic!("follow must use ordinary movement proposals");
+            };
+            saw_land |= request.mode == MovementMode::Forward;
+            saw_fall |= request.mode == MovementMode::Fall;
+            let moved = Vec3::from_array(eq_client_core::render_position(request.position))
+                - Vec3::from_array(eq_client_core::render_position(from));
+            assert!(
+                moved.x > 0.0,
+                "follow stopped at {:?}: {moved:?}",
+                request.mode
+            );
+            if request.mode == MovementMode::Swim {
+                wet_samples += 1;
+                let span = app.world().resource::<Controls>().sent_span;
+                assert!(
+                    (moved.x - swim_speed(6.0) * span).abs() < 0.001,
+                    "{moved:?}"
+                );
+                assert!(
+                    moved.y.abs() < 0.001,
+                    "follow must not invent vertical input: {moved:?}"
+                );
+            }
+            assert!(app.world().resource::<Controls>().following.is_some());
+            assert!(receiver.try_recv().is_err());
+            accept(&mut app, &request);
+            if wet_samples == 3 {
+                break;
+            }
+        }
+        assert!(saw_land && saw_fall && wet_samples == 3);
+    }
+
+    #[test]
+    fn water_follow_stops_within_one_swim_frame_of_reach() {
+        for keyboard_owner in ["game", "another window", "chat"] {
+            let (mut app, receiver) = app();
+            app.insert_resource(Collision(Some(liquid_pool(Liquid::Water))));
+            // Both bodies' stand offsets plus follow's ordinary 15-unit
+            // reach, with only 0.01 left before it should stop.
+            let reach = 3.0 + eq_client_core::z_offset(1, 6.0) + 15.0;
+            let origin = Vec3::new(0.0, -4.0, 0.0);
+            follow_to(&mut app, origin, reach + 0.01);
+            match keyboard_owner {
+                "another window" => unfocus(&mut app),
+                "chat" => {
+                    app.world_mut()
+                        .resource_mut::<crate::keys::Typing>()
+                        .composing = true
+                }
+                _ => (),
+            }
+            app.update();
+            let ClientCommand::Move(near) = receiver.try_recv().expect("closing swim sample")
+            else {
+                panic!("expected movement");
+            };
+            assert_eq!(near.mode, MovementMode::Swim);
+            let moved = Vec3::from_array(eq_client_core::render_position(near.position)) - origin;
+            assert!(
+                moved.x > 0.01 && moved.x <= 0.01 + swim_speed(6.0) / 60.0 + 0.001,
+                "{moved:?}"
+            );
+            accept(&mut app, &near);
+            app.update();
+            let ClientCommand::Move(stopped) = receiver.try_recv().expect("stop sample") else {
+                panic!("expected movement");
+            };
+            assert_eq!(stopped.position, near.position);
+            assert!(app.world().resource::<Controls>().following.is_some());
+            accept(&mut app, &stopped);
+            app.update();
+            assert!(
+                receiver.try_recv().is_err(),
+                "being within reach stays still"
+            );
+        }
+    }
+
+    #[test]
+    fn water_follow_yields_to_manual_input_and_stops_when_the_target_leaves() {
+        for manual in [false, true] {
+            let (mut app, receiver) = app();
+            app.insert_resource(Collision(Some(liquid_pool(Liquid::Water))));
+            follow_to(&mut app, Vec3::new(0.0, -4.0, 0.0), 60.0);
+            app.update();
+            let ClientCommand::Move(first) = receiver.try_recv().unwrap() else {
+                panic!("expected following movement");
+            };
+            accept(&mut app, &first);
+            if manual {
+                app.world_mut()
+                    .resource_mut::<ButtonInput<KeyCode>>()
+                    .press(KeyCode::KeyW);
+            } else {
+                online::testing::news(
+                    &mut app.world_mut().resource_mut::<online::OnlineState>(),
+                    [eq_client_core::WorldEvent::Despawn(5)],
+                );
+            }
+            app.update();
+            let ClientCommand::Move(next) = receiver.try_recv().expect("takeover or stop") else {
+                panic!("expected movement");
+            };
+            assert!(app.world().resource::<Controls>().following.is_none());
+            if manual {
+                let from = Vec3::from_array(eq_client_core::render_position(first.position));
+                let to = Vec3::from_array(eq_client_core::render_position(next.position));
+                assert!(
+                    to.x < from.x,
+                    "the camera-relative key must take over: {from:?} to {to:?}"
+                );
+            } else {
+                assert_eq!(next.position, first.position);
+            }
+            assert!(receiver.try_recv().is_err());
+        }
+    }
+
+    #[test]
+    fn water_follow_pauses_for_stun_and_resumes_without_a_jump() {
+        let (mut app, receiver) = app();
+        app.insert_resource(Collision(Some(liquid_pool(Liquid::Water))));
+        follow_to(&mut app, Vec3::new(0.0, -4.0, 0.0), 60.0);
+        unfocus(&mut app);
+        for (revision, state) in [
+            (1, eq_client_core::control::StunState::Stunned),
+            (2, eq_client_core::control::StunState::Clear),
+        ] {
+            app.world_mut().resource_mut::<Controls>().jump = Some(Instant::now());
+            online::testing::news(
+                &mut app.world_mut().resource_mut::<online::OnlineState>(),
+                [eq_client_core::WorldEvent::OwnStun {
+                    session_id: 11,
+                    revision,
+                    state,
+                }],
+            );
+            app.update();
+            assert!(app.world().resource::<Controls>().following.is_some());
+            if revision == 1 {
+                assert!(receiver.try_recv().is_err());
+            } else {
+                let ClientCommand::Move(resumed) = receiver.try_recv().expect("follow resumes")
+                else {
+                    panic!("stun recovery must not jump");
+                };
+                assert_eq!(resumed.mode, MovementMode::Swim);
+                let position = Vec3::from_array(eq_client_core::render_position(resumed.position));
+                assert!(position.x > 0.0 && (position.y + 4.0).abs() < 0.001);
+                assert!(receiver.try_recv().is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn water_follow_does_not_resume_on_a_reused_spawn_in_a_new_admission() {
+        let (mut app, receiver) = app();
+        app.insert_resource(Collision(Some(liquid_pool(Liquid::Water))));
+        follow_to(&mut app, Vec3::new(0.0, -4.0, 0.0), 60.0);
+        unfocus(&mut app);
+        app.update();
+        let ClientCommand::Move(first) = receiver.try_recv().unwrap() else {
+            panic!("expected following movement");
+        };
+        accept(&mut app, &first);
+        {
+            let mut online = app.world_mut().resource_mut::<online::OnlineState>();
+            let player = online.world().player().unwrap().clone();
+            let friend = online.world().spawn(5).unwrap().state.clone();
+            online::testing::admit(&mut online, 12, player);
+            online::testing::spawn_entry(&mut online, 5, friend);
+        }
+        app.world_mut().resource_mut::<Controls>().climb_sent = Some((
+            12,
+            eq_client_assets::falls::TITANIUM.climb_per_step(3.0, 6.0),
+        ));
+        app.update();
+        assert!(app.world().resource::<Controls>().following.is_none());
+        // An ordinary stop may still be due; it must spend no distance
+        // toward the unrelated spawn in the new admission.
+        for command in receiver.try_iter() {
+            let ClientCommand::Move(request) = command else {
+                panic!("expected only an ordinary stop");
+            };
+            assert_eq!(request.session_id, 12);
+            assert_eq!(request.position, first.position);
+        }
     }
 
     #[test]

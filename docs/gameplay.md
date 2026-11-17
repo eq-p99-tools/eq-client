@@ -72,6 +72,11 @@ The client checks that the capsule can reach a supported landing. Automated
 ground routes and EQMac-era sessions retain the deep-water guard. Ordinary
 movement guards against entering lava.
 
+Group-member `/follow` keeps its horizontal input when entering water, including
+while typing in chat or the window is unfocused, and uses the ordinary swim rate
+and stopping distance. It supplies no vertical stroke; manual movement ends
+following.
+
 The shoreline profile is derived from Titanium movement code and checked with
 synthetic traces. Attended P99 shoreline traversal is still pending; it does not
 claim identical trajectories across frame rates or water depths. Its damping
