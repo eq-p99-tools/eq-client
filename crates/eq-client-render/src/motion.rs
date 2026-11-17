@@ -5636,7 +5636,7 @@ pub(super) mod tests {
                 "chat" => {
                     app.world_mut()
                         .resource_mut::<crate::keys::Typing>()
-                        .composing = true
+                        .composing = true;
                 }
                 _ => (),
             }
