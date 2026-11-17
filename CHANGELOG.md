@@ -18,6 +18,10 @@
   anchored buttons and skin-hidden windows keep their authored sizes. Expansion
   rather than clipping remains an inferred display policy (recording checklist
   6.474 for height, 6.406 for width), pending official-client comparison.
+- Releasing a turn key between movement samples keeps the unsampled turn
+  for the next request. Focus, stun and permission resets discard it.
+  Shoreline arcs retire immediately when their continuation cannot be
+  resolved or has expired, and share the ordinary coordinate conversions.
 
 - A buff's and a pet buff's icon background no longer shows magenta at its
   corners. The installed client's skins draw it from CS_Buttons.bmp

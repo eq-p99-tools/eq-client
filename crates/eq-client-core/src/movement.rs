@@ -190,7 +190,7 @@ impl CollisionWorld {
 
     /// Replaces the door colliders, each solid only where its rule says: on
     /// Titanium most doors are walls nobody stands on, and a few types are
-    /// neither (see [`Solidity::of`]).
+    /// neither (see [`crate::doors::Solidity::of`]).
     pub fn set_door_obstacles_with(&mut self, doors: Vec<(u8, Arc<CollisionMesh>, Solidity)>) {
         self.obstacles = doors
             .into_iter()

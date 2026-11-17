@@ -124,6 +124,8 @@ pub(super) struct Controls {
     /// held, which the turn ramp counts from; None while neither or both
     /// are held.
     turn_held: Option<(bool, Instant)>,
+    /// Turn completed between samples, retained after the key is released.
+    released_turn: f32,
     /// Latest immediately displayed Titanium mouse heading awaiting a sample.
     mouse_heading: Option<f32>,
     /// What the samples sent lately asked of the controller and moved.
@@ -248,6 +250,7 @@ impl Default for Controls {
             facing: None,
             mouse_turn: 0.0,
             turn_held: None,
+            released_turn: 0.0,
             mouse_heading: None,
             recent: RecentMotion::default(),
             last_sent: None,
@@ -627,6 +630,8 @@ impl Controls {
             self.crouch = None;
             self.facing = None;
             self.mouse_turn = 0.0;
+            self.turn_held = None;
+            self.released_turn = 0.0;
             self.mouse_heading = None;
         }
         if changed && revision.is_some() {
@@ -653,6 +658,8 @@ impl Controls {
         self.crouch = None;
         self.facing = None;
         self.mouse_turn = 0.0;
+        self.turn_held = None;
+        self.released_turn = 0.0;
         self.mouse_heading = None;
         self.moving = false;
         // The session schedules its paced stop when the permission changes.
@@ -669,6 +676,8 @@ impl Controls {
         self.taps = TapBuffer::default();
         self.jump = None;
         self.mouse_turn = 0.0;
+        self.turn_held = None;
+        self.released_turn = 0.0;
         if self.crouch == Some(Crouch::Over) {
             self.crouch = None;
         }
@@ -801,6 +810,31 @@ impl Controls {
         self.span(since_sent)
     }
 
+    /// Keeps the part of a key turn that ended before the next sample.
+    fn observe_turn(&mut self, turning: f32, now: Instant, cap: f32, owned: bool) {
+        if !owned {
+            self.turn_held = None;
+            self.released_turn = 0.0;
+            return;
+        }
+        if let Some((left, since)) = self.turn_held {
+            if turning != 0.0 && left == (turning > 0.0) {
+                return;
+            }
+            let held =
+                now.saturating_duration_since(since).as_secs_f32() + 1.0 / TURN_STEPS_PER_SECOND;
+            let sign = if left { 1.0 } else { -1.0 };
+            // The last answer can predate an in-flight request. Count only
+            // time after that request, never the turn it already consumed.
+            let span = self.last_sent.map_or_else(
+                || self.next_span(now),
+                |sent| self.span(now.saturating_duration_since(sent)),
+            );
+            self.released_turn += sign * ramped_turn(held - span, held, cap);
+        }
+        self.turn_held = (turning != 0.0).then_some((turning > 0.0, now));
+    }
+
     /// Applies a grant made in place whole once the next sample's span
     /// starts at or after its arrival, so no part of that sample ran under
     /// the earlier speeds. The span's start only moves later as time goes
@@ -846,6 +880,7 @@ impl Controls {
         let crouch = self.crouch.take();
         let taps = std::mem::take(&mut self.taps);
         let turn_held = self.turn_held;
+        let released_turn = self.released_turn;
         let speeds = self.speeds();
         let straddle = self.straddle;
         self.reset(None);
@@ -858,6 +893,7 @@ impl Controls {
             self.taps,
             self.turn_held,
         ) = (autorun, jump, crouch, taps, turn_held);
+        self.released_turn = released_turn;
         // Falls go on from the new place, with no momentum carried.
         if speeds.falls {
             self.airborne = Some(AirborneController::default());
@@ -1418,11 +1454,16 @@ pub(super) fn input(
     } else {
         0.0
     };
-    controls.turn_held = match (turning, controls.turn_held) {
-        (0.0, _) => None,
-        (turning, Some((left, since))) if left == (turning > 0.0) => Some((left, since)),
-        (turning, _) => Some((turning > 0.0, now)),
-    };
+    let cap = turn_cap(
+        controls.walking,
+        online.world().player().map_or(0, |player| player.race),
+    );
+    controls.observe_turn(
+        turning,
+        now,
+        cap,
+        focused && !lying && look.as_deref().is_none_or(|look| !look.held),
+    );
     if focused
         && !controls.stun_active
         && (swimming || shoreline_active)
@@ -1812,6 +1853,7 @@ pub(super) fn input(
     // So does a heading sent that still turns toward the facing.
     if direction == Vec3::ZERO
         && turn == 0.0
+        && controls.released_turn == 0.0
         && !controls.moving
         && !airborne
         && !shoreline_active
@@ -2093,7 +2135,8 @@ pub(super) fn input(
         let held = controls.turn_held.map_or(0.0, |(_, since)| {
             now.saturating_duration_since(since).as_secs_f32() + 1.0 / TURN_STEPS_PER_SECOND
         });
-        (shown + turn * ramped_turn(held - span, held, cap)).rem_euclid(512.0)
+        (shown + controls.released_turn + turn * ramped_turn(held - span, held, cap))
+            .rem_euclid(512.0)
     } else {
         eq_client_core::world_heading(direction.x.atan2(direction.z))
     };
@@ -2158,6 +2201,7 @@ pub(super) fn input(
         SentYaw::Ordinary
     };
     controls.mouse_turn -= mouse_step;
+    controls.released_turn = 0.0;
     controls.held = placement_blocked.then_some(Held::PlacementBlocked);
     // A landing's damage follows the sample that lands.
     if !placement_blocked
@@ -4238,6 +4282,74 @@ pub(super) mod tests {
         for start in [0.0, 0.05, 0.13, 0.4] {
             assert!(ramped_turn(start, start + 0.25, 12.0) <= TURN_RATE * 0.25 + 1e-3);
         }
+    }
+
+    #[test]
+    fn a_released_turn_keeps_only_the_unsampled_part_and_focus_loss_discards_it() {
+        let start = Instant::now();
+        for left in [false, true] {
+            let mut controls = Controls {
+                turn_held: Some((left, start)),
+                last_sent: Some(start + Duration::from_millis(30)),
+                // An answer older than the in-flight sample cannot replay
+                // the turn that sample already consumed.
+                last_accepted: start,
+                ..Controls::default()
+            };
+            let released = start + Duration::from_millis(80);
+            controls.observe_turn(0.0, released, 12.0, true);
+            let held = 0.08 + 1.0 / TURN_STEPS_PER_SECOND;
+            let sign = if left { 1.0 } else { -1.0 };
+            let expected = sign * ramped_turn(held - 0.05, held, 12.0);
+            assert!((controls.released_turn - expected).abs() < 1e-4);
+            assert!(controls.turn_held.is_none());
+            controls.observe_turn(0.0, released + Duration::from_millis(10), 12.0, true);
+            assert!((controls.released_turn - expected).abs() < 1e-4);
+            controls.observe_turn(0.0, released, 12.0, false);
+            assert_eq!(controls.released_turn, 0.0);
+        }
+    }
+
+    #[test]
+    fn a_turn_released_while_the_sample_gate_is_closed_goes_with_the_next_sample() {
+        let (mut app, receiver) = app();
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.reset_all();
+        keys.press(KeyCode::KeyQ);
+        app.update();
+        let ClientCommand::Move(first) = receiver.try_recv().unwrap() else {
+            panic!("expected the first key turn");
+        };
+        accept(&mut app, &first);
+        let now = Instant::now();
+        {
+            let mut controls = app.world_mut().resource_mut::<Controls>();
+            controls.last_accepted = now;
+            controls.last_sent = now.checked_sub(Duration::from_millis(40));
+            controls.turn_held = Some((true, now.checked_sub(Duration::from_millis(40)).unwrap()));
+        }
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        app.update();
+        assert!(receiver.try_recv().is_err());
+        assert!(app.world().resource::<Controls>().released_turn > 0.0);
+        app.world_mut().resource_mut::<Controls>().last_accepted =
+            now.checked_sub(Duration::from_millis(100)).unwrap();
+        app.update();
+        let ClientCommand::Move(released) = receiver.try_recv().unwrap() else {
+            panic!("expected the completed key turn");
+        };
+        assert!(arc(first.position.heading, released.position.heading) > 0.0);
+        assert_eq!(released.position.x, first.position.x);
+        assert_eq!(released.position.y, first.position.y);
+        assert_eq!(app.world().resource::<Controls>().released_turn, 0.0);
+        accept(&mut app, &released);
+        app.update();
+        let ClientCommand::Move(stop) = receiver.try_recv().unwrap() else {
+            panic!("expected a stop after the completed turn");
+        };
+        assert_eq!(stop.position, released.position);
     }
 
     #[test]
