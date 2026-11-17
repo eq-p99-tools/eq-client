@@ -1,7 +1,7 @@
 //! The pace log measures the final drawn world pose, including carrier motion.
 use super::{Controls, boats, interpolate};
 use bevy::{
-    ecs::schedule::ExecutorKind,
+    ecs::schedule::SingleThreadedExecutor,
     log::{
         tracing::{
             Event,
@@ -107,7 +107,7 @@ fn carrier_pace_uses_world_endpoints_after_local_playback_and_carry() {
         .insert_resource(time)
         .add_systems(Update, interpolate)
         .edit_schedule(Update, |schedule| {
-            schedule.set_executor_kind(ExecutorKind::SingleThreaded);
+            schedule.set_executor(SingleThreadedExecutor::new());
         });
     let player = app.world_mut().spawn((crate::Player, drawn)).id();
     let changed_pose = WorldPosition {
