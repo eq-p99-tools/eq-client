@@ -4290,7 +4290,7 @@ fn training_opens_raises_skills_with_a_line_and_closes() {
     assert_eq!(player.skills.as_ref().unwrap()[5], 0);
     assert_eq!(
         changes.notices,
-        [],
+        Vec::<Notice>::new(),
         "a language must not produce an ordinary skill notice"
     );
     assert!(world.skills_revision() > revision);
