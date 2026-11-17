@@ -236,6 +236,32 @@ const REPEATED: std::time::Duration = std::time::Duration::from_secs(3);
 const SCRIPT_LINK_MESSAGES: usize = 16;
 
 impl ChatState {
+    /// Current local composition ownership, without the draft or typed keys.
+    pub(super) fn input_report(&self, typing: Option<&crate::keys::Typing>) -> serde_json::Value {
+        let Some(typing) = typing else {
+            return serde_json::Value::Null;
+        };
+        let owner = self.groups.owner();
+        let composition_window = if typing.composing && self.groups.active(owner).is_some() {
+            match owner {
+                WindowId::Chat => serde_json::json!({ "kind": "main" }),
+                WindowId::ChatGroup(slot) => {
+                    serde_json::json!({ "kind": "detached", "slot": slot })
+                }
+                _ => serde_json::Value::Null,
+            }
+        } else {
+            serde_json::Value::Null
+        };
+        serde_json::json!({
+            "composing": typing.composing,
+            "composition_window": composition_window,
+            "other_text_input_active": typing.counting || typing.logging_in || typing.map_search
+                || typing.spell_search || typing.spell_search_claimed || typing.spell_set_name
+                || typing.rebinding || typing.editing_script || typing.creating_character,
+        })
+    }
+
     pub(super) fn receive(&mut self, line: ChatLine, online: &OnlineState) {
         // The guild's message of the day shows only when its text is new
         // and not empty; the copy kept changes either way (R11, 0x40a7fd).
@@ -2497,6 +2523,57 @@ mod tests {
         },
         ui::ComputedStackIndex,
     };
+
+    #[test]
+    fn input_report_preserves_unknown_and_omits_the_private_draft() {
+        let mut chat = ChatState::default();
+        chat.draft.replace("private draft contents");
+        assert_eq!(chat.input_report(None), serde_json::Value::Null);
+        let mut typing = crate::keys::Typing::default();
+        assert_eq!(
+            chat.input_report(Some(&typing)),
+            serde_json::json!({
+                "composing": false,
+                "composition_window": null,
+                "other_text_input_active": false,
+            })
+        );
+        typing.composing = true;
+        typing.counting = true;
+        let report = chat.input_report(Some(&typing));
+        assert_eq!(report["composing"], true);
+        assert_eq!(
+            report["composition_window"],
+            serde_json::json!({"kind": "main"})
+        );
+        assert_eq!(report["other_text_input_active"], true);
+        assert!(!report.to_string().contains("private draft contents"));
+        assert_eq!(chat.draft(), "private draft contents");
+        assert!(typing.composing && typing.counting);
+    }
+
+    #[test]
+    fn input_report_names_the_detached_composition_window_only_while_composing() {
+        let mut chat = ChatState::default();
+        let WindowId::ChatGroup(slot) = chat.groups.detach(WindowId::Chat, ChatTab::Group).unwrap()
+        else {
+            panic!("expected a detached chat group")
+        };
+        let mut typing = crate::keys::Typing {
+            composing: true,
+            ..default()
+        };
+        assert_eq!(
+            chat.input_report(Some(&typing))["composition_window"],
+            serde_json::json!({"kind": "detached", "slot": slot})
+        );
+        typing.composing = false;
+        assert_eq!(
+            chat.input_report(Some(&typing))["composition_window"],
+            serde_json::Value::Null
+        );
+        assert_eq!(chat.groups.owner(), WindowId::ChatGroup(slot));
+    }
 
     #[test]
     fn only_chat_channels_ask_for_a_message_on_a_bare_slash_command() {

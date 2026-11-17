@@ -142,6 +142,11 @@ or occluded. The counters are independent of damage and inventory.
   Opt-in debug logging also records actual `GuildUpdate` events as
   `Guild update received`. Use these events to distinguish a newly received
   full list from retained history.
+  `chat_input` is a read-only JSON observation of local chat composition:
+  `composing`, `composition_window` (main/detached or null), and
+  `other_text_input_active`. Missing input state is null, not false. It never
+  includes the draft or typed keys. See [observation limits](observations.md)
+  for ownership, timing and settled breathing checks.
   `air_remaining` gives the local air reserve and capacity in ticks while
   Air Remaining is active.
   `breath_probe` reports the last sampled head medium, when resolved, and the

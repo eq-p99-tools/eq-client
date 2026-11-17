@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Script reports expose current chat composition and its main or detached
+  window without recording draft text or typed keys.
+
 - Route `slash follow` through ordinary deferred follow input while retaining
   the script's admission and zone guard.
 - Use received own-guild membership changes for network requests without
