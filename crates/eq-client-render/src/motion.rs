@@ -8325,7 +8325,11 @@ pub(super) mod tests {
             let arrived = controls.straddle.unwrap().0;
             controls.last_accepted = arrived.checked_sub(Duration::from_millis(1)).unwrap();
             controls.last_sent = arrived.checked_sub(Duration::from_millis(2));
-            controls.settle(arrived + limit - Duration::from_nanos(1));
+            controls.settle(
+                (arrived + limit)
+                    .checked_sub(Duration::from_nanos(1))
+                    .unwrap(),
+            );
             assert_eq!(controls.speed, Some(20.0), "the window still straddles");
             controls.settle(arrived + limit);
             assert_eq!(controls.speed, Some(30.0), "the window starts at the grant");
