@@ -54,6 +54,10 @@ impl eq_client_core::movement::Liquids for ZoneLiquids {
             .first_outside(from.to_array(), to.to_array(), asset_liquid(liquid))
     }
 
+    fn water_surface_exit(&self, from: Vec3, to: Vec3) -> bool {
+        self.0.water_surface_exit(from.to_array(), to.to_array())
+    }
+
     fn liquid_surface(
         &self,
         top: Vec3,

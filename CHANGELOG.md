@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Level swimming can cross into known air above continuous water and use
+  ordinary falling to reenter, preserving unknown-region and dry-gap guards.
+
 - Script reports expose raw received buff durations and observation ages,
   with local remaining-time estimates separate from server ticks.
 

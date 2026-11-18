@@ -192,7 +192,9 @@ impl CollisionWorld {
 
     /// Sweeps a bounded stroke from water. A collision can spend the rest of
     /// the stroke along the solid; surfacing can spend it horizontally.
-    /// The result stays in water or reaches a supported bank under its feet.
+    /// The result stays in water, reaches a supported bank, or crosses into
+    /// known air while the soles remain continuously in water. That last
+    /// case hands off to ordinary gravity on the next sample.
     #[must_use]
     pub fn swim_step(&self, feet: Vec3, delta: Vec3, height: f32) -> Vec3 {
         if !self.in_swimmable_water(feet, height)
@@ -204,7 +206,8 @@ impl CollisionWorld {
         let Some((contact, normal)) = self.swim_sweep(feet, delta, height) else {
             return feet;
         };
-        let position = self.limit_swim(feet, contact, height);
+        let level = delta.y == 0.0;
+        let position = self.limit_swim(feet, contact, height, level);
         if !self.in_swimmable_water(position, height) {
             return position;
         }
@@ -220,7 +223,9 @@ impl CollisionWorld {
             return position;
         }
         self.swim_sweep(position, slide, height)
-            .map_or(position, |(end, _)| self.limit_swim(position, end, height))
+            .map_or(position, |(end, _)| {
+                self.limit_swim(position, end, height, level)
+            })
     }
 
     fn swim_sweep(&self, from: Vec3, delta: Vec3, height: f32) -> Option<(Vec3, Option<Vec3>)> {
@@ -236,13 +241,31 @@ impl CollisionWorld {
 
     /// Clips before the first break in water or lava, even if the stroke
     /// would end in water. A bank hands off at the water boundary.
-    fn limit_swim(&self, from: Vec3, to: Vec3, height: f32) -> Vec3 {
+    fn limit_swim(&self, from: Vec3, to: Vec3, height: f32, level: bool) -> Vec3 {
         let Some(liquids) = &self.liquids else {
             return from;
         };
         let soles = Vec3::Y * SOLES;
         let lava = |at| liquids.passes_through(from + soles, at + soles, Liquid::Lava);
         let probe = self.swim_probe(height);
+        // The native frame integrates from the previous region, resolves
+        // collision, then refreshes the origin's region (Titanium 0x445243,
+        // 0x48ba76, 0x489b0a). Known air above the same water can therefore
+        // take ordinary gravity next frame. Keep a conservative subset:
+        // only a level stroke with continuously wet soles, never a dry gap,
+        // unknown medium, or an upward launch. No surface height is invented.
+        if level
+            && to.y - from.y == 0.0
+            && liquids.water_surface_exit(from + probe, to + probe)
+            && liquids.liquid_at(from + soles) == Some(Liquid::Water)
+            && liquids.liquid_at(to + soles) == Some(Liquid::Water)
+            && liquids.water_surface_exit(to + soles, to + probe)
+            && liquids
+                .first_outside(from + soles, to + soles, Liquid::Water)
+                .is_none()
+        {
+            return to;
+        }
         let to = if let Some(gap) = liquids.first_outside(from + probe, to + probe, Liquid::Water) {
             if gap.is_empty() {
                 return from;
@@ -468,6 +491,77 @@ mod tests {
         assert!((0.99..=1.0).contains(&edge.x), "{edge:?}");
         let next = world.swim_step(edge, delta, HEIGHT);
         assert!(next.x <= 1.0, "{next:?}");
+    }
+
+    fn falling_water_surface() -> CollisionWorld {
+        let pools = Boxes(vec![
+            (
+                Vec3::new(-20.0, -20.0, -20.0),
+                Vec3::new(0.5, 0.0, 20.0),
+                Liquid::Water,
+            ),
+            (
+                Vec3::new(0.5, -20.0, -20.0),
+                Vec3::new(20.0, -0.02, 20.0),
+                Liquid::Water,
+            ),
+        ]);
+        CollisionWorld::new(flat(-12.0))
+            .unwrap()
+            .with_liquids(pools)
+            .with_swim_origin(3.0)
+    }
+
+    #[test]
+    fn a_level_surface_exit_uses_ordinary_falling_to_reenter_water() {
+        let world = falling_water_surface();
+        let feet = Vec3::new(-0.1, -3.01, 0.0);
+        let delta = Vec3::X * 0.8;
+        let exited = world.swim_step(feet, delta, HEIGHT);
+        assert!(exited.abs_diff_eq(feet + delta, 1e-6), "{exited:?}");
+        assert!(!world.in_swimmable_water(exited, HEIGHT));
+        assert_eq!(world.liquid_contact(exited, HEIGHT), LiquidContact::Wading);
+        assert!(world.support(exited).is_none());
+
+        let mut fall = AirborneController::default();
+        let entered = fall.step_into_water(
+            &world,
+            exited,
+            PROVISIONAL_PHYSICS,
+            MotionStep {
+                horizontal: Vec3::ZERO,
+                height: HEIGHT,
+                jump: false,
+                seconds: 0.05,
+            },
+        );
+        assert!(entered.y < exited.y, "{entered:?}");
+        assert!((entered.x - exited.x).abs() < 1e-6, "{entered:?}");
+        assert!(world.in_swimmable_water(entered, HEIGHT));
+        assert!(
+            fall.take_landing().is_none(),
+            "water is not a solid landing"
+        );
+        assert!(world.swim_step(entered, delta, HEIGHT).x > entered.x + 0.79);
+    }
+
+    #[test]
+    fn a_surface_exit_still_sweeps_solids_and_does_not_launch_upward() {
+        let mut world = falling_water_surface();
+        let wall = [
+            [[0.0, -12.0, -10.0], [0.0, 10.0, -10.0], [0.0, 10.0, 10.0]],
+            [[0.0, -12.0, -10.0], [0.0, 10.0, 10.0], [0.0, -12.0, 10.0]],
+        ];
+        world.set_obstacles(vec![std::sync::Arc::new(
+            super::super::CollisionMesh::new(wall).unwrap(),
+        )]);
+        let feet = Vec3::new(-0.8, -3.01, 0.0);
+        assert!(world.swim_step(feet, Vec3::X * 1.6, HEIGHT).x < -0.4);
+
+        let world = falling_water_surface();
+        let feet = Vec3::new(-0.1, -3.01, 0.0);
+        let raised = world.swim_step(feet, Vec3::new(0.8, 0.1, 0.0), HEIGHT);
+        assert!(world.in_swimmable_water(raised, HEIGHT), "{raised:?}");
     }
 
     #[test]

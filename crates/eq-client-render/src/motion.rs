@@ -5622,6 +5622,88 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn level_swimming_and_follow_reenter_water_after_a_surface_exit() {
+        use eq_client_assets::regions::{Liquid as AssetLiquid, ZoneRegions};
+
+        for following in [false, true] {
+            let (mut app, receiver) = stationary_airborne_app();
+            let regions = ZoneRegions::test_sloping_liquid_surface(0.0, 0.02, AssetLiquid::Water);
+            let collision = CollisionWorld::new(flat_surface(-12.0))
+                .unwrap()
+                .with_liquids(crate::scene_collision::ZoneLiquids(regions))
+                .with_swim_origin(3.0);
+            app.insert_resource(Collision(Some(collision)));
+            // Settled just inside a gently descending top, with no vertical
+            // input or residual fall. A level stroke reaches known air while
+            // the feet stay wet; the existing passive fall reenters water.
+            let origin = Vec3::new(0.0, -0.001, 0.0);
+            if following {
+                follow_to(&mut app, origin, 60.0);
+                unfocus(&mut app);
+            } else {
+                online::testing::place(
+                    &mut app.world_mut().resource_mut::<online::OnlineState>(),
+                    world_position(
+                        origin.to_array(),
+                        eq_client_core::world_heading(std::f32::consts::FRAC_PI_2),
+                    ),
+                );
+                crate::keys::testing::bind(
+                    &mut app,
+                    Act::Forward,
+                    crate::keys::Chord::key(KeyCode::ArrowUp),
+                );
+                app.world_mut()
+                    .resource_mut::<ButtonInput<KeyCode>>()
+                    .press(KeyCode::ArrowUp);
+            }
+            let mut exits = 0;
+            let mut reentries = 0;
+            let mut previous = origin;
+            for _ in 0..12 {
+                app.update();
+                let ClientCommand::Move(request) = receiver.try_recv().expect("surface sample")
+                else {
+                    panic!("surface traversal uses existing movement modes");
+                };
+                let next = Vec3::from_array(eq_client_core::render_position(request.position));
+                let delta = next - previous;
+                let world = app.world().resource::<Collision>().0.as_ref().unwrap();
+                let feet = next - Vec3::Y * 3.0;
+                match request.mode {
+                    MovementMode::Swim => {
+                        assert!(delta.x > 0.0 && delta.y.abs() < 1e-6, "{delta:?}");
+                        let span = app.world().resource::<Controls>().sent_span;
+                        assert!(delta.length() <= swim_speed(6.0) * span + 0.001);
+                        if !world.in_swimmable_water(feet, 6.0) {
+                            exits += 1;
+                            assert_eq!(
+                                world.liquid_contact(feet, 6.0),
+                                eq_client_core::movement::LiquidContact::Wading
+                            );
+                        }
+                    }
+                    MovementMode::Fall => {
+                        assert!(delta.y < 0.0, "ordinary gravity must reenter: {delta:?}");
+                        assert!(delta.x.abs() < 1e-6, "no fresh airborne input: {delta:?}");
+                        assert!(world.in_swimmable_water(feet, 6.0));
+                        reentries += 1;
+                    }
+                    mode => panic!("unexpected surface mode {mode:?}"),
+                }
+                assert!(receiver.try_recv().is_err(), "no jump or new wire action");
+                assert_eq!(
+                    app.world().resource::<Controls>().following.is_some(),
+                    following
+                );
+                accept(&mut app, &request);
+                previous = next;
+            }
+            assert!(exits >= 3 && reentries >= 3 && previous.x > 0.25);
+        }
+    }
+
+    #[test]
     fn water_follow_stops_within_one_swim_frame_of_reach() {
         for keyboard_owner in ["game", "another window", "chat"] {
             let (mut app, receiver) = app();

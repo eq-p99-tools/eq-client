@@ -132,6 +132,15 @@ impl ZoneRegions {
         }
     }
 
+    /// Constructs a liquid top falling by `slope` per renderer X unit.
+    #[cfg(feature = "testing")]
+    #[must_use]
+    pub fn test_sloping_liquid_surface(height: f32, slope: f32, liquid: Liquid) -> Self {
+        let mut regions = Self::test_liquid_surface(height, liquid);
+        regions.nodes[0].normal[0] = slope;
+        regions
+    }
+
     /// Stable identity of the spatial tree and liquid assignments for navigation
     /// caches. Zone destinations are excluded because they do not affect liquids.
     /// Change the policy tag when the interpretation of these inputs changes.
@@ -334,10 +343,49 @@ impl ZoneRegions {
             .map(|(span, _)| span)
     }
 
+    /// A segment from water that ends in resolved air and crosses only
+    /// air or water. Other submerging media and unresolved spans are excluded.
+    #[must_use]
+    pub fn water_surface_exit(&self, start: [f32; 3], end: [f32; 3]) -> bool {
+        self.medium_at(start) == Some(Medium::Water)
+            && self.medium_at(end) == Some(Medium::Air)
+            && self
+                .first_matching_span_with(
+                    start,
+                    end,
+                    |region| match self.media.get(&region).copied().unwrap_or(Medium::Air) {
+                        Medium::Air => SpanKind::Dry,
+                        Medium::Water => SpanKind::Wet(Liquid::Water),
+                        Medium::Lava | Medium::OtherSubmerging => SpanKind::Unresolved,
+                    },
+                    |kind| !matches!(kind, SpanKind::Dry | SpanKind::Wet(Liquid::Water)),
+                )
+                .is_none()
+    }
+
     fn first_matching_span(
         &self,
         start: [f32; 3],
         end: [f32; 3],
+        matches: impl Fn(SpanKind) -> bool,
+    ) -> Option<(Range<f64>, SpanKind)> {
+        self.first_matching_span_with(
+            start,
+            end,
+            |region| {
+                self.liquids
+                    .get(&region)
+                    .map_or(SpanKind::Dry, |&liquid| SpanKind::Wet(liquid))
+            },
+            matches,
+        )
+    }
+
+    fn first_matching_span_with(
+        &self,
+        start: [f32; 3],
+        end: [f32; 3],
+        classify: impl Fn(usize) -> SpanKind,
         matches: impl Fn(SpanKind) -> bool,
     ) -> Option<(Range<f64>, SpanKind)> {
         if !start.iter().chain(&end).all(|v| v.is_finite()) {
@@ -356,10 +404,7 @@ impl ZoneRegions {
                 continue;
             };
             if let Some(region) = node.region {
-                let kind = self
-                    .liquids
-                    .get(&region)
-                    .map_or(SpanKind::Dry, |&liquid| SpanKind::Wet(liquid));
+                let kind = classify(region);
                 if matches(kind) {
                     return Some((part, kind));
                 }
@@ -989,6 +1034,66 @@ mod tests {
 
         regions.liquids.insert(1, Liquid::Water);
         assert!(regions.first_outside(a, b, Liquid::Water).is_none());
+    }
+
+    #[test]
+    fn a_water_surface_exit_requires_resolved_air_and_no_other_medium() {
+        let mut regions = ZoneRegions {
+            nodes: vec![
+                Node {
+                    normal: [0.02, 1.0, 0.0],
+                    distance: 0.0,
+                    region: None,
+                    front: Some(1),
+                    back: Some(2),
+                },
+                leaf(0),
+                leaf(1),
+            ],
+            routes: BTreeMap::new(),
+            liquids: BTreeMap::from([(1, Liquid::Water)]),
+            media: BTreeMap::from([(1, Medium::Water)]),
+        };
+        let (water, air) = ([-1.0, -0.01, 0.0], [1.0, -0.01, 0.0]);
+        assert!(regions.water_surface_exit(water, air));
+        assert!(!regions.water_surface_exit(air, water));
+        assert!(!regions.water_surface_exit(water, [0.0; 3]));
+        for medium in [Medium::Lava, Medium::OtherSubmerging] {
+            regions.media.insert(0, medium);
+            assert!(!regions.water_surface_exit(water, air));
+        }
+        regions.media.remove(&0);
+        regions.nodes[0].front = None;
+        assert!(!regions.water_surface_exit(water, air));
+    }
+
+    #[test]
+    fn a_water_surface_exit_cannot_skip_a_thin_other_medium() {
+        let split = |distance, front, back| Node {
+            normal: [1.0, 0.0, 0.0],
+            distance,
+            region: None,
+            front: Some(front),
+            back: Some(back),
+        };
+        let mut regions = ZoneRegions {
+            nodes: vec![
+                split(0.0, 2, 1),
+                leaf(0),
+                split(-0.0625, 4, 3),
+                leaf(1),
+                leaf(2),
+            ],
+            routes: BTreeMap::new(),
+            liquids: BTreeMap::from([(0, Liquid::Water)]),
+            media: BTreeMap::from([(0, Medium::Water), (1, Medium::OtherSubmerging)]),
+        };
+        for medium in [Medium::OtherSubmerging, Medium::Lava] {
+            regions.media.insert(1, medium);
+            assert!(!regions.water_surface_exit([-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]));
+        }
+        regions.nodes[2].back = None;
+        assert!(!regions.water_surface_exit([-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]));
     }
 
     #[test]
