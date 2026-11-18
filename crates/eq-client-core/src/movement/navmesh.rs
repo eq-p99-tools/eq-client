@@ -540,17 +540,7 @@ impl NavMesh {
     /// (the select spot check), not the program's.
     #[must_use]
     pub fn main_island(&self, dry: impl Fn(Vec3) -> bool) -> Option<MainIsland> {
-        let mut all = vec![0.0_f32; self.islands];
-        let mut wet_free = vec![0.0_f32; self.islands];
-        for (polygon, &island) in self.polygons.iter().zip(&self.island) {
-            let area = polygon.area();
-            all[island as usize] += area;
-            if polygon.point().is_some_and(&dry) {
-                wet_free[island as usize] += area;
-            }
-        }
-        let is_dry = wet_free.iter().any(|&area| area > 0.0);
-        let areas = if is_dry { wet_free } else { all };
+        let (areas, is_dry) = self.weighed_areas(dry);
         let mut order: Vec<usize> = (0..self.islands).collect();
         order.sort_by(|&a, &b| areas[b].total_cmp(&areas[a]).then(a.cmp(&b)));
         let island = *order.first()?;
@@ -562,6 +552,45 @@ impl NavMesh {
             runner_up: order.get(1).map_or(0.0, |&next| areas[next]),
             dry: is_dry,
         })
+    }
+
+    /// The islands whose floor, weighed as [`NavMesh::main_island`] weighs
+    /// it, is at least `share` of the main island's: where a zone's players
+    /// walk, since the mesh can split floors a player walks as one (a door,
+    /// a lift, a teleport pad) into islands of like size. The main island
+    /// first. Our rule, for the select spot check.
+    #[must_use]
+    pub fn walked_islands(&self, dry: impl Fn(Vec3) -> bool, share: f32) -> Vec<u32> {
+        let (areas, _) = self.weighed_areas(dry);
+        let Some(main) = areas.iter().copied().reduce(f32::max) else {
+            return Vec::new();
+        };
+        let mut walked: Vec<u32> = (0..self.islands)
+            .filter(|&island| areas[island] > 0.0 && areas[island] >= main * share)
+            .map(|island| u32::try_from(island).unwrap_or(u32::MAX))
+            .collect();
+        walked.sort_by(|&a, &b| {
+            areas[b as usize]
+                .total_cmp(&areas[a as usize])
+                .then(a.cmp(&b))
+        });
+        walked
+    }
+
+    /// Each island's floor area across, dry floor only where the mesh has
+    /// any (and whether it has).
+    fn weighed_areas(&self, dry: impl Fn(Vec3) -> bool) -> (Vec<f32>, bool) {
+        let mut all = vec![0.0_f32; self.islands];
+        let mut wet_free = vec![0.0_f32; self.islands];
+        for (polygon, &island) in self.polygons.iter().zip(&self.island) {
+            let area = polygon.area();
+            all[island as usize] += area;
+            if polygon.point().is_some_and(&dry) {
+                wet_free[island as usize] += area;
+            }
+        }
+        let is_dry = wet_free.iter().any(|&area| area > 0.0);
+        (if is_dry { wet_free } else { all }, is_dry)
     }
 
     /// The floor area across of island `island`, all its polygons counted.

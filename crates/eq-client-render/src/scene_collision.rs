@@ -138,13 +138,32 @@ pub fn select_spot_main_island(zone: &ZoneAsset, mesh: &NavMesh) -> Option<MainI
     mesh.main_island(|at| zone.regions.liquid_at(at.to_array()).is_none())
 }
 
+/// How large an island must be, as a share of the main island's dry floor,
+/// to count as walked: the mesh splits floors a player walks as one at
+/// doors, lifts and pads, and can split one floor into islands of like
+/// size. Ours.
+const WALKED_SHARE: f32 = 0.5;
+
+/// The islands a player walks on `mesh`: the main island and those near
+/// its size ([`NavMesh::walked_islands`]).
+fn walked_islands(zone: &ZoneAsset, mesh: &NavMesh) -> Vec<u32> {
+    mesh.walked_islands(
+        |at| zone.regions.liquid_at(at.to_array()).is_none(),
+        WALKED_SHARE,
+    )
+}
+
 /// Whether a player can walk to the floor under `feet` (the renderer's
-/// frame): it lies on the main island, or the main island's drops lead
+/// frame): it lies on a walked island, or a walked island's drops lead
 /// down to it. A floor the mesh doesn't cover (no collision under it) can't
 /// be walked to.
-fn walked_to(mesh: &NavMesh, main: MainIsland, feet: Vec3) -> bool {
-    mesh.locate(feet)
-        .is_some_and(|(polygon, _)| mesh.island_reaches(main.island, mesh.island_of(polygon), true))
+fn walked_to(mesh: &NavMesh, walked: &[u32], feet: Vec3) -> bool {
+    mesh.locate(feet).is_some_and(|(polygon, _)| {
+        let island = mesh.island_of(polygon);
+        walked
+            .iter()
+            .any(|&from| mesh.island_reaches(from, island, true))
+    })
 }
 
 /// What [`check_select_spot`] finds for one spot.
@@ -152,7 +171,7 @@ fn walked_to(mesh: &NavMesh, main: MainIsland, feet: Vec3) -> bool {
 pub enum SpotVerdict {
     /// The preview stands on a floor a player can walk to.
     Reachable,
-    /// The preview stands on a floor no walk from the main island reaches.
+    /// The preview stands on a floor no walk from a walked island reaches.
     Unreachable {
         /// The floor's height, as the server's z.
         z: f32,
@@ -174,11 +193,12 @@ pub fn check_select_spot(
     mesh: &NavMesh,
 ) -> (SpotVerdict, Option<MainIsland>) {
     let main = select_spot_main_island(zone, mesh);
+    let walked = walked_islands(zone, mesh);
     let terrain = TerrainSurface::from_primitives(&zone.primitives);
     let verdict = match (terrain.spot_feet(spot), main) {
         (None, _) => SpotVerdict::NoFloor,
         (Some(_), None) => SpotVerdict::NoMainIsland,
-        (Some(feet), Some(main)) if walked_to(mesh, main, feet) => SpotVerdict::Reachable,
+        (Some(feet), Some(_)) if walked_to(mesh, &walked, feet) => SpotVerdict::Reachable,
         (Some(feet), Some(_)) => SpotVerdict::Unreachable {
             z: eq_client_core::axes::to_world(feet).z,
             island_area: mesh
@@ -194,14 +214,18 @@ pub fn check_select_spot(
 /// Collision-only shells cannot stand a preview; passable liquid surfaces
 /// can, and must therefore participate in the floor and liquid tests. Only
 /// floors a player can walk to on `mesh` (the zone's, as
-/// [`select_spot_mesh`] builds it) are weighed; None where the mesh has no
-/// main island.
+/// [`select_spot_mesh`] builds it) are weighed: on the main island or one
+/// near its size, or reached from one by drops. None where the mesh has no
+/// floor.
 #[must_use]
 pub fn propose_select_spot(
     zone: &ZoneAsset,
     mesh: &NavMesh,
 ) -> Option<eq_client_core::select_spots::Spot> {
-    let main = select_spot_main_island(zone, mesh)?;
+    let walked = walked_islands(zone, mesh);
+    if walked.is_empty() {
+        return None;
+    }
     let world = zone_collision(zone)?;
     let surfaces = eq_client_core::movement::CollisionWorld::new(
         TerrainSurface::from_primitives(&zone.primitives)
@@ -219,7 +243,7 @@ pub fn propose_select_spot(
         &floors,
         (Vec3::from_array(min), Vec3::from_array(max)),
         |point| zone.regions.liquid_at(point.to_array()).is_some(),
-        |feet| walked_to(mesh, main, feet),
+        |feet| walked_to(mesh, &walked, feet),
     )
 }
 

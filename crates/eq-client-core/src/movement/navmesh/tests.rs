@@ -2263,3 +2263,19 @@ fn a_zone_with_no_dry_floor_takes_the_largest_island_of_any_kind() {
         None
     );
 }
+
+#[test]
+fn islands_near_the_main_ones_size_count_as_walked_too() {
+    // Two floors alike, as a zone the mesh splits at a door, and a small
+    // top far off: both large floors are walked, the small top isn't.
+    let mut triangles = floor(0.0, -32.0, 0.0);
+    triangles.extend(floor(0.0, 16.0, 48.0));
+    triangles.extend(floor(20.0, 60.0, 66.0));
+    let (mesh, _) = build(&triangles);
+    let walked = mesh.walked_islands(|_| true, 0.5);
+    let island = |at: Vec3| mesh.island_of(mesh.locate(at).unwrap().0);
+    assert!(walked.contains(&island(Vec3::new(-16.0, 0.0, -16.0))));
+    assert!(walked.contains(&island(Vec3::new(32.0, 0.0, 32.0))));
+    assert!(!walked.contains(&island(Vec3::new(63.0, 20.0, 63.0))));
+    assert_eq!(walked.len(), 2);
+}

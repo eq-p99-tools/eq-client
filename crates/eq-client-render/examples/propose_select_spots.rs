@@ -17,8 +17,10 @@
 //! folder's cache, as zone entry does; without it every mesh is built anew.
 //!
 //! Only floors a player can walk to are proposed: floors on the zone's main
-//! island (the largest by dry floor area on its navigation mesh), or that
-//! island's drops lead down to. That is our rule, not the program's.
+//! island (the largest by dry floor area on its navigation mesh) or an island
+//! at least half its size, or that such an island's drops lead down to. That
+//! is our rule, not the program's. The mesh splits floors at doors, lifts and
+//! pads, so a flag is a lead for a look, not a verdict.
 //!
 //! `--check` prints one line a listed zone: `reachable`, `NOT REACHABLE`,
 //! `NO FLOOR` (the preview falls back), `kept` (the row's `# kept: reason`
