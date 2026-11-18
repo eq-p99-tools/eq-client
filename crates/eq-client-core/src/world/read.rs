@@ -942,4 +942,24 @@ impl super::ClientWorld {
     pub const fn boat_control_notice(&self) -> Option<crate::boats::ControlBoat> {
         self.zone.boat_notice
     }
+
+    /// How the player is arriving aboard a boat, as the session last said.
+    #[must_use]
+    pub const fn arrival(&self) -> Option<&crate::boats::riders::Arrival> {
+        self.zone.arrival.as_ref()
+    }
+
+    /// Whether the session holds the player's movement for an arrival
+    /// aboard: it awaits the host's placement on the boat, or the server's
+    /// transfer.
+    #[must_use]
+    pub const fn arrival_held(&self) -> bool {
+        matches!(
+            self.zone.arrival,
+            Some(
+                crate::boats::riders::Arrival::Aboard { .. }
+                    | crate::boats::riders::Arrival::Waiting { .. }
+            )
+        )
+    }
 }

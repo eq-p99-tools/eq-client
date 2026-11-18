@@ -1329,7 +1329,13 @@ pub(super) fn input(
     {
         controls.following = None;
     }
-    if !online.enabled || !online.world().connected() || online.world().is_dead() {
+    // An arrival aboard holds the player until the session places them
+    // (read R36 §3): no frames run in the program meanwhile.
+    if !online.enabled
+        || !online.world().connected()
+        || online.world().is_dead()
+        || online.world().arrival_held()
+    {
         controls.following = None;
         *told_wait = None;
         controls.reset(None);

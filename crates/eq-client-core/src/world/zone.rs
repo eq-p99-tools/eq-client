@@ -19,6 +19,9 @@ pub(super) struct Zone {
     pub(super) spawns: BTreeMap<u16, Spawn>,
     pub(super) boat_control: crate::boats::ControlState,
     pub(super) boat_notice: Option<crate::boats::ControlBoat>,
+    /// How the player is arriving aboard, as the session last said: held
+    /// while aboard or waiting, settled once placed or at the safe point.
+    pub(super) arrival: Option<crate::boats::riders::Arrival>,
     pub(super) carriers: eq_network_game::movement::Carriers,
     pub(super) sees_invisible: bool,
     /// Level colors the server reported for spawns the player considered.

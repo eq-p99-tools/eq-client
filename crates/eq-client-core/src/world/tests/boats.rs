@@ -49,3 +49,77 @@ fn replacement_disconnect_and_new_admission_withdraw_acquired_knowledge() {
     assert_eq!(world.boat_control(), ControlState::Unknown);
     assert!(world.boat_control_notice().is_none());
 }
+
+#[test]
+fn an_arrival_aboard_holds_until_placed_and_a_new_admission_forgets_it() {
+    use crate::boats::riders::Arrival;
+    let mut world = admitted();
+    let waiting = Arrival::Waiting {
+        name: "SirensBane00".into(),
+    };
+    // Another admission's word changes nothing.
+    game(
+        &mut world,
+        WorldEvent::Arrival {
+            session_id: 0,
+            arrival: waiting.clone(),
+        },
+    );
+    assert!(world.arrival().is_none() && !world.arrival_held());
+    game(
+        &mut world,
+        WorldEvent::Arrival {
+            session_id: 1,
+            arrival: waiting.clone(),
+        },
+    );
+    assert_eq!(world.arrival(), Some(&waiting));
+    assert!(world.arrival_held());
+    let placed = Arrival::SafePoint {
+        position: WorldPosition::default(),
+    };
+    game(
+        &mut world,
+        WorldEvent::Arrival {
+            session_id: 1,
+            arrival: placed.clone(),
+        },
+    );
+    assert_eq!(world.arrival(), Some(&placed));
+    assert!(!world.arrival_held());
+    game(
+        &mut world,
+        WorldEvent::Arrival {
+            session_id: 1,
+            arrival: waiting,
+        },
+    );
+    game(&mut world, entered(2));
+    assert!(world.arrival().is_none() && !world.arrival_held());
+}
+
+#[test]
+fn a_server_move_within_the_zone_ends_a_held_arrival() {
+    use crate::boats::riders::Arrival;
+    let mut world = admitted();
+    game(
+        &mut world,
+        WorldEvent::Arrival {
+            session_id: 1,
+            arrival: Arrival::Waiting {
+                name: "SirensBane00".into(),
+            },
+        },
+    );
+    assert!(world.arrival_held());
+    let moved = game(
+        &mut world,
+        WorldEvent::SameZoneRelocated(crate::SameZoneRelocation {
+            session_id: 1,
+            spawn_id: 9,
+            position: WorldPosition::default(),
+        }),
+    );
+    assert!(!moved.ignored);
+    assert!(world.arrival().is_none() && !world.arrival_held());
+}

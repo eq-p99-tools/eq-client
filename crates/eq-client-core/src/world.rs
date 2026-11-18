@@ -996,6 +996,9 @@ impl ClientWorld {
             WorldEvent::BoatControlState { session_id, state } => {
                 if self.accepts_reply(*session_id) { self.zone.boat_control = *state; }
             }
+            WorldEvent::Arrival { session_id, arrival } => {
+                if self.accepts_reply(*session_id) { self.zone.arrival = Some(arrival.clone()); }
+            }
             WorldEvent::Carriers(updates) => { for update in updates { self.zone.carriers.apply(*update); } },
             WorldEvent::Spawns(spawns) => {
                 for spawn in spawns {
@@ -1742,6 +1745,7 @@ impl ClientWorld {
     fn reset(&mut self, reason: Reset) -> Changes {
         self.zone.boat_control = crate::boats::ControlState::Unknown;
         self.zone.boat_notice = None;
+        self.zone.arrival = None;
         self.zone.pet_buffs.suspend();
         self.movement_options_result = None;
         self.held_models = held_models::HeldModels::default();

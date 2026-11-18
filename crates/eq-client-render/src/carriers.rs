@@ -209,7 +209,15 @@ pub(super) fn reconcile(
             let distance = (pose.x - player.position.x)
                 .hypot(pose.y - player.position.y)
                 .hypot(pose.z - player.position.z);
-            let collision_near = distance <= eq_client_core::movement::CARRIER_REACH * 2.0;
+            // The boat an arrival is held for needs its collider wherever
+            // the profile's boat-frame position seems to put the player.
+            let arriving = matches!(
+                state.world().arrival(),
+                Some(eq_client_core::boats::riders::Arrival::Aboard { sample, .. })
+                    if sample.spawn_id == id
+            );
+            let collision_near =
+                arriving || distance <= eq_client_core::movement::CARRIER_REACH * 2.0;
             if root.is_none() && !collision_near {
                 continue;
             }
