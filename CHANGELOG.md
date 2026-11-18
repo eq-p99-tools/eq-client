@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Uses eq-network 0d9570be: a rider arriving aboard is restored where the
+  program's profile loader puts them (read R36c).
 - Arrive aboard a boat as the Titanium program does (read R36): when the
   session says the boat the profile names is here, the client stands the
   player at the profile's place in the boat's frame, sweeps for the boat's
