@@ -12,9 +12,9 @@ const RETURN_DISTANCE_SCALE: f32 = 1.25;
 pub(crate) enum View {
     #[default]
     Chase,
-    FirstPerson {
-        pitch: f32,
-    },
+    /// First person, looking at the character's own pitch
+    /// ([`OrbitCamera::look`]).
+    FirstPerson,
 }
 
 impl OrbitCamera {
@@ -22,33 +22,44 @@ impl OrbitCamera {
     pub(crate) const fn view_name(&self) -> &'static str {
         match self.view {
             View::Chase => "chase",
-            View::FirstPerson { .. } => "first_person",
+            View::FirstPerson => "first_person",
         }
     }
 
     /// Attached pitch; first-person look has its own installed-client limits.
     pub(crate) const fn view_pitch(&self) -> f32 {
         match self.view {
-            View::FirstPerson { pitch } => pitch,
+            View::FirstPerson => self.look,
             View::Chase => self.pitch,
         }
     }
 
+    /// The character's look pitch in radians, upward positive.
+    pub(crate) const fn look_pitch(&self) -> f32 {
+        self.look
+    }
+
     pub(crate) fn is_first_person(&self) -> bool {
-        matches!(self.view, View::FirstPerson { .. })
+        matches!(self.view, View::FirstPerson)
     }
 
     /// Puts a test's camera in first person, level, as the wheel would.
     #[cfg(test)]
     pub(crate) const fn look_first_person_for_test(&mut self) {
-        self.view = View::FirstPerson { pitch: 0.0 };
+        self.view = View::FirstPerson;
+        self.look = 0.0;
     }
 
     /// Returns to the chosen chase frame on a placement/lifetime change or
     /// an explicit script/preview frame, clearing collision easing as well.
+    /// The character's look pitch levels with it: each zone entry makes the
+    /// player's spawn anew (inferred, recording checklist 6.480). Nothing
+    /// else levels it but Center View in first person, so a pitch set in
+    /// the chase view, where it does not show, stays until then.
     pub(crate) fn reset_view(&mut self) {
         self.view = View::Chase;
         self.pulled = None;
+        self.look = 0.0;
     }
 
     /// Switches on wheel input before collision shortens the chase view.
@@ -69,17 +80,19 @@ impl OrbitCamera {
         // moves and the snap into first person measures.
         let distance = self.behind_distance();
         let snap_distance = limits.chase_distance.0 * SNAP_DISTANCE_SCALE;
-        let (tilt, zoom) = if let View::FirstPerson { pitch } = self.view {
+        let (tilt, zoom) = if let View::FirstPerson = self.view {
             if scroll >= 0.0 {
                 let limit = limits.look_pitch_degrees.to_radians();
-                let pitch = (pitch - tilt).clamp(-limit, limit);
-                self.view = View::FirstPerson { pitch };
-                return self.first_person_pose(pitch, eye);
+                self.look = (self.look - tilt).clamp(-limit, limit);
+                return self.first_person_pose(self.look, eye);
             }
 
             // Place the chase camera this frame so the avatar can be drawn
-            // immediately. Large outward turns still zoom past the gap.
+            // immediately. Large outward turns still zoom past the gap. The
+            // program's zoom hand-off levels the character's pitch on the
+            // way out (0x4946ac, read R39 D).
             self.view = View::Chase;
+            self.look = 0.0;
             let outward = snap_distance * zoom.max(RETURN_DISTANCE_SCALE);
             (0.0, outward / distance)
         } else {
@@ -91,7 +104,11 @@ impl OrbitCamera {
         // camera close, or a script choosing a close frame, is not a zoom.
         if scroll > 0.0 && distance * zoom <= snap_distance {
             self.pulled = None;
-            self.view = View::FirstPerson { pitch: 0.0 };
+            // On the way in the program copies its camera's pitch, whose
+            // match to this chase pitch is unread, so the view opens level
+            // as before (inferred, recording checklist 6.480).
+            self.view = View::FirstPerson;
+            self.look = 0.0;
             return self.first_person_pose(0.0, eye);
         }
 

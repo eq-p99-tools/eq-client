@@ -3,12 +3,13 @@
 //! keys ramp; Center View levels it; and with Look Spring on, the view comes
 //! back level by itself.
 //!
-//! The program's keys change the character's pitch in every camera mode,
-//! and its chase cameras have pitch commands of their own. How a chase
-//! camera uses the character's pitch is unread, so here the keys tilt only
-//! the first-person view and the chase view ignores them (recording
+//! The program's keys change the character's pitch in every camera mode
+//! (read R13 d), and a swim stroke follows that pitch (R33, R37 d), so here
+//! they move [`OrbitCamera::look`] in every view. Its chase cameras have
+//! pitch commands of their own; how a chase camera uses the character's
+//! pitch is unread, so the chase view does not show it (recording
 //! checklist 6.422).
-use super::{CHASE_PITCH, FreeCamera, MouseLook, OrbitCamera, attached::View, start_behind};
+use super::{CHASE_PITCH, FreeCamera, MouseLook, OrbitCamera, start_behind};
 use crate::{Player, keys::Act, options};
 use bevy::prelude::*;
 use std::f32::consts::FRAC_PI_2;
@@ -93,10 +94,12 @@ pub(crate) fn look_keys(
     if keys.pressed(Act::CenterView) {
         hold.held = None;
         if camera.is_first_person() {
-            camera.view = View::FirstPerson { pitch: 0.0 };
+            camera.look = 0.0;
         } else {
-            // The program calls the chase camera's own reset, unread; here it
-            // returns to the view's opening pitch behind the player (inferred,
+            // The program levels the character's pitch only in first person
+            // and calls the chase camera's own reset, unread; here it
+            // returns to the view's opening pitch behind the player and the
+            // character's pitch stays (read R13 d; the reset inferred,
             // 6.422).
             camera.pitch = CHASE_PITCH;
             if let Ok(player) = players.single() {
@@ -105,22 +108,16 @@ pub(crate) fn look_keys(
         }
         return;
     }
-    let View::FirstPerson { pitch } = camera.view else {
-        // The ramp still counts in the chase view, as the program's does.
-        hold.tilt(time.delta_secs());
-        return;
-    };
     let client = settings.map_or_else(Default::default, |settings| settings.0.installed_client);
     let limit = client.camera_limits().look_pitch_degrees.to_radians();
-    let pitch = if let Some(tilt) = hold.tilt(time.delta_secs()) {
-        (pitch + tilt).clamp(-limit, limit)
-    } else if options.options.look_spring && !look.held {
+    // The keys move the character's pitch in every view (read R13 d); only
+    // first person shows it.
+    if let Some(tilt) = hold.tilt(time.delta_secs()) {
+        camera.look = (camera.look + tilt).clamp(-limit, limit);
+    } else if camera.is_first_person() && options.options.look_spring && !look.held {
         let step = SPRING_RATE * time.delta_secs() * FRAC_PI_2 / UNITS_PER_QUARTER_TURN;
-        pitch.signum() * (pitch.abs() - step).max(0.0)
-    } else {
-        return;
-    };
-    camera.view = View::FirstPerson { pitch };
+        camera.look = camera.look.signum() * (camera.look.abs() - step).max(0.0);
+    }
 }
 
 #[cfg(test)]

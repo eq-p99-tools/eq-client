@@ -324,6 +324,7 @@ mod tests {
                 pitch: -0.5,
                 pulled: None,
                 view: default(),
+                look: 0.0,
             })
             .id();
         crate::online::testing::news(

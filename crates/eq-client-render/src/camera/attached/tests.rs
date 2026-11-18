@@ -17,6 +17,7 @@ fn orbit() -> OrbitCamera {
         pitch: -0.3,
         pulled: None,
         view: default(),
+        look: 0.0,
     }
 }
 

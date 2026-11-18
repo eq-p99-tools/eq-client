@@ -189,6 +189,7 @@ pub(super) fn state(
         camera_radius = ?camera.map(|camera| camera.radius),
         camera_yaw = ?camera.map(|camera| camera.yaw),
         camera_pitch = ?camera.map(crate::OrbitCamera::view_pitch),
+        look_pitch = ?camera.map(crate::OrbitCamera::look_pitch),
         ?own_stun,
         air_remaining = ?breath.and_then(crate::breath::State::air)
             .map(|air| (air.remaining, air.capacity.get())),
