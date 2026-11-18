@@ -155,6 +155,8 @@ pub(super) struct ChatState {
     pub(crate) guild_asked: Option<super::guild::Command>,
     /// A sharing command typed, for [`super::sharing::commands`] to run.
     pub(crate) sharing_asked: Option<super::sharing::Command>,
+    /// Deferred boat acquire/release, resolved against current floor support.
+    pub(crate) boat_asked: Option<eq_client_core::boats::Intent>,
     /// `/follow` typed or pressed, for [`super::motion::input`] to start.
     pub(crate) follow_asked: Option<super::motion::FollowAsked>,
     /// A Ranger's tracking option typed by another class, for
@@ -172,6 +174,7 @@ struct ScriptRequests {
     guild: Option<crate::script::ExpectedWorld>,
     sharing: Option<crate::script::ExpectedWorld>,
     follow: Option<crate::script::ExpectedWorld>,
+    boat: Option<crate::script::ExpectedWorld>,
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -206,6 +209,11 @@ pub(crate) fn guard_script_requests(
     }
     if let Some(reason) = withdraw(&mut chat.script_requests.follow, &online)
         && chat.follow_asked.take().is_some()
+    {
+        refusal = Some(reason);
+    }
+    if let Some(reason) = withdraw(&mut chat.script_requests.boat, &online)
+        && chat.boat_asked.take().is_some()
     {
         refusal = Some(reason);
     }
@@ -1867,6 +1875,14 @@ pub(super) fn run_game_command(
         return;
     };
     let command = command.as_ref();
+    if let Some(request) = super::piloting::typed(command) {
+        chat.script_requests.boat = outbox.script_world(online.world());
+        match request {
+            Ok(intent) => chat.boat_asked = Some(intent),
+            Err(reason) => chat.refuse(reason),
+        }
+        return;
+    }
     if super::motion::FollowAsked::typed(command) {
         chat.script_requests.follow = outbox.script_world(online.world());
         chat.follow_asked = Some(super::motion::FollowAsked);
@@ -1898,6 +1914,10 @@ pub(super) fn client_request_in_scope(
 ) -> Option<Result<(), String>> {
     if let Some(request) = super::socials::Request::parse(input) {
         return Some(request.and_then(|request| state.queue_social(request, None)));
+    }
+    if let Some(request) = super::piloting::typed(input) {
+        state.script_requests.boat = scope;
+        return Some(request.map(|intent| state.boat_asked = Some(intent)));
     }
     if let Some(request) = target_request(input) {
         return Some(request.map(|name| {

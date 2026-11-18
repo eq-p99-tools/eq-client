@@ -367,7 +367,14 @@ const NAMES: &[(&str, Kind)] = &[
 ];
 
 /// This client's own commands, which no official name starts with.
-const OURS: &[&str] = &["social", "pause", "ranged", "harmtouch", "layonhands"];
+const OURS: &[&str] = &[
+    "boat",
+    "social",
+    "pause",
+    "ranged",
+    "harmtouch",
+    "layonhands",
+];
 
 /// What a typed command word resolves to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -2,6 +2,7 @@
 
 pub use eq_client_axes as axes;
 
+pub mod alternate_advancement;
 pub mod breath;
 pub mod buffs;
 pub mod camp;
@@ -36,6 +37,7 @@ pub mod world;
 pub use eq_network_game::GameDialect;
 pub use eq_network_game::abilities;
 pub use eq_network_game::bind_wound;
+pub use eq_network_game::boats;
 pub use eq_network_game::books;
 pub use eq_network_game::characters::{CharacterChoice, CharacterLook};
 pub use eq_network_game::chat::OutboundChat;

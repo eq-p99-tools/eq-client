@@ -534,6 +534,13 @@ fn prepare_liquid(app: &mut App, capabilities: Option<Vec<Capability>>) -> u64 {
         testing::admit(&mut online, 11, player);
     }
     testing::inventory(&mut online, InventoryUpdate::Snapshot(Vec::new()));
+    testing::news(
+        &mut online,
+        [WorldEvent::AlternateAdvancement {
+            session_id: 11,
+            update: eq_client_core::alternate_advancement::Update::Selections(Some(Vec::new())),
+        }],
+    );
     testing::buffs(&mut online, default());
     let description = eq_client_core::zones::titanium_description(&[0; 700]).unwrap();
     testing::news(

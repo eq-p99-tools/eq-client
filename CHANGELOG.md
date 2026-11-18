@@ -2,8 +2,15 @@
 
 ## Unreleased
 
+- Use received local EQEmu AA definitions for supported breathing effects;
+  unresolved capacity modifiers keep unprotected capacity unavailable.
+
 - Submit chat at each Enter event before routing later keys in the frame,
   retaining main/detached channel ownership and suppressing held Enter repeats.
+
+- Add EQEmu boat acquire/release through `/boat` and scripts, bound to the
+  current accepted floor link. Echoes, pending requests and unconfirmed
+  outcomes stay distinct; vessel steering remains unavailable.
 
 - Level swimming can cross into known air above continuous water and use
   ordinary falling to reenter, preserving unknown-region and dry-gap guards.

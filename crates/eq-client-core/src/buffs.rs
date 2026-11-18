@@ -110,8 +110,9 @@ pub struct Landing {
     pub finder: Option<placement::Finder>,
     /// The spell's band fields, `None` where the spell data has none.
     pub band: Option<Band>,
-    /// Whether a held spell carries effect 148, step 2's blocker.
-    pub blocker: bool,
+    /// Whether a held spell carries effect 148, step 2's blocker; unknown
+    /// when held effect identifiers are missing and none proves a blocker.
+    pub blocker: Option<bool>,
     /// Whether a held spell could be one step 4 replaces ([`NoSlot::PossibleReplacement`]).
     pub conflict: bool,
     /// The record's type byte the program writes (R20 (d)): 4 for a spell
@@ -121,8 +122,9 @@ pub struct Landing {
     /// The caster's level as the program records it, where known.
     pub caster_level: Option<u8>,
     /// Whether the spell carries effect 0x43, 0x65 or 0x71, on which step 3
-    /// refuses a refresh and keeps the old record (R20 (g)).
-    pub keeps_record: bool,
+    /// refuses a refresh and keeps the old record (R20 (g)); unknown without
+    /// the spell's effect identifiers.
+    pub keeps_record: Option<bool>,
 }
 
 /// A landing held in a modelled slot.
@@ -133,6 +135,50 @@ struct Model {
     record: Buff,
     /// Whether the record's type byte is known; one that isn't matches any.
     type_known: bool,
+    /// Whether the caster level is established rather than the UI's zero fallback.
+    level_known: bool,
+    /// Whether the native refresh decision selects this record unambiguously.
+    choice_known: bool,
+}
+
+impl Model {
+    /// Retains the display model while separately tracking a proven record choice.
+    fn landed(old: Option<Self>, spell: u16, landing: Landing) -> Self {
+        let caster_level = landing.caster_level.unwrap_or(0);
+        match old {
+            Some(mut old)
+                if landing.keeps_record == Some(true) || old.record.caster_level > caster_level =>
+            {
+                old.choice_known &= landing.keeps_record == Some(true)
+                    || (old.level_known && landing.caster_level.is_some());
+                old
+            }
+            old => Self {
+                record: Buff {
+                    spell_id: u32::from(spell),
+                    caster_level,
+                    effect_type: landing.record_type.unwrap_or(2),
+                    // A constant 10, not the action's modifier (R20 (d)).
+                    bard_modifier: 10,
+                    // Duration (0x410e5a/0x40ebc3), counters and caster ID
+                    // remain unread/modelled.
+                    duration_ticks: 0,
+                    counters: 0,
+                    caster_id: 0,
+                },
+                type_known: landing.record_type.is_some(),
+                level_known: landing.caster_level.is_some(),
+                choice_known: landing.caster_level.is_some()
+                    && landing.blocker == Some(false)
+                    && old.as_ref().is_none_or(|old| {
+                        old.choice_known
+                            && old.level_known
+                            && landing.caster_level.is_some()
+                            && landing.keeps_record == Some(false)
+                    }),
+            },
+        }
+    }
 }
 
 /// Server slots and observed lasting effects awaiting explicit slot information.
@@ -252,6 +298,16 @@ impl BuffTracker {
     #[must_use]
     pub fn modelled_record(&self, spell: u16) -> Option<&Buff> {
         self.models.get(&spell).map(|model| &model.record)
+    }
+
+    /// A native-modelled record with established type, caster level and refresh
+    /// choice. Duration and unread bookkeeping remain modelled evidence.
+    #[must_use]
+    pub fn modelled_effect_record(&self, spell: u16) -> Option<&Buff> {
+        self.models
+            .get(&spell)
+            .filter(|model| model.type_known && model.level_known && model.choice_known)
+            .map(|model| &model.record)
     }
 
     /// Number of slots in the admission table, which the long window shows.
@@ -414,11 +470,13 @@ impl BuffTracker {
                 self.slots
                     .as_ref()
                     .and_then(|slots| slots.get(slot))
-                    .map(|buff| (buff.clone(), true))
-                    .or_else(|| {
-                        let model = self.models.get(&spell)?;
-                        Some((model.record.clone(), model.type_known))
+                    .map(|buff| Model {
+                        record: buff.clone(),
+                        type_known: true,
+                        level_known: true,
+                        choice_known: true,
                     })
+                    .or_else(|| self.models.get(&spell).cloned())
             });
         let unslotted = self
             .landed
@@ -434,8 +492,13 @@ impl BuffTracker {
                     return Err(NoSlot::OccupancyUnknown);
                 }
             }
-            finder(&held, u32::from(spell), landing.band, landing.blocker)
-                .map_err(NoSlot::Unplaceable)
+            finder(
+                &held,
+                u32::from(spell),
+                landing.band,
+                landing.blocker.unwrap_or(false),
+            )
+            .map_err(NoSlot::Unplaceable)
         });
         if let Some(slots) = &mut self.slots {
             slots.retain(|_, buff| buff.spell_id != u32::from(spell));
@@ -446,35 +509,10 @@ impl BuffTracker {
         self.unplaced.remove(&spell);
         match placed {
             Some(Ok(slot)) => {
-                let caster_level = landing.caster_level.unwrap_or(0);
                 // Step 3 refuses a refresh where the stored level is above
                 // the caster's, or for effects 0x43, 0x65 and 0x71, and
                 // keeps the old record (R20 (g)).
-                let model = match old {
-                    Some((record, type_known))
-                        if landing.keeps_record || record.caster_level > caster_level =>
-                    {
-                        Model { record, type_known }
-                    }
-                    _ => Model {
-                        record: Buff {
-                            spell_id: u32::from(spell),
-                            caster_level,
-                            effect_type: landing.record_type.unwrap_or(2),
-                            // A constant 10, not the action's modifier.
-                            bard_modifier: 10,
-                            // The action's duration is not read, and the
-                            // program's own computation (0x410e5a,
-                            // 0x40ebc3) is unread: 0.
-                            duration_ticks: 0,
-                            // The counters (+0x1d0/+0x1d4) and the caster's
-                            // character id are not read: 0.
-                            counters: 0,
-                            caster_id: 0,
-                        },
-                        type_known: landing.record_type.is_some(),
-                    },
-                };
+                let model = Model::landed(old, spell, landing);
                 self.placed.insert(slot, spell);
                 self.models.insert(spell, model);
             }
@@ -626,8 +664,13 @@ impl BuffTracker {
                 if Self::same_type(model.record.effect_type, model.type_known, record_type) {
                     held = true;
                     elsewhere |= slot != update.slot;
+                    let proven_write = model.choice_known && model.type_known;
                     model.record = buff.clone();
                     model.type_known = true;
+                    model.level_known = true;
+                    // This conditional update cannot prove whether an earlier
+                    // ambiguous refresh held a different record type.
+                    model.choice_known = proven_write;
                     self.landed_at.insert(id, now);
                 }
             } else if self.effects.contains_key(&id) {
@@ -1215,7 +1258,7 @@ mod tests {
         state.observe_effect(
             effect(52),
             Landing {
-                blocker: true,
+                blocker: Some(true),
                 ..lands(NORMAL)
             },
             now(),
@@ -1444,6 +1487,146 @@ mod tests {
     }
 
     #[test]
+    fn environmental_records_withhold_ambiguous_refreshes_until_received_slot() {
+        let mut old = buff(50);
+        old.caster_level = 40;
+        let known = Landing {
+            caster_level: Some(40),
+            record_type: Some(4),
+            keeps_record: Some(false),
+            blocker: Some(false),
+            ..lands(NORMAL)
+        };
+        for incoming in [
+            Landing {
+                caster_level: None,
+                ..known
+            },
+            Landing {
+                keeps_record: None,
+                ..known
+            },
+            Landing {
+                blocker: Some(true),
+                ..known
+            },
+            Landing {
+                blocker: None,
+                ..known
+            },
+        ] {
+            let mut state = BuffTracker::default();
+            state.replace_snapshot(BTreeMap::from([(0, old.clone())]), 25, now());
+            state.observe_effect(effect(50), incoming, now());
+            assert!(state.modelled_effect_record(50).is_none());
+            // A later apparent refusal cannot resolve an earlier ambiguous choice.
+            state.observe_effect(
+                effect(50),
+                Landing {
+                    keeps_record: Some(true),
+                    ..known
+                },
+                now(),
+            );
+            assert!(state.modelled_effect_record(50).is_none());
+            state.apply(titanium(Applies::BySpell, 0, 50, Some(old.clone())), now());
+            assert!(state.modelled_effect_record(50).is_none());
+            state.apply(titanium(Applies::BySlot, 0, 50, Some(old.clone())), now());
+            state.observe_effect(
+                effect(50),
+                Landing {
+                    caster_level: Some(20),
+                    ..known
+                },
+                now(),
+            );
+            assert_eq!(state.modelled_effect_record(50), Some(&old));
+            assert!(state.received_duration(0, now()).is_none());
+        }
+        // An unreceived old model's zero fallback is not a known caster level.
+        let mut state = BuffTracker::empty_snapshot();
+        state.observe_effect(
+            effect(50),
+            Landing {
+                caster_level: None,
+                ..known
+            },
+            now(),
+        );
+        state.observe_effect(effect(50), known, now());
+        assert!(state.modelled_effect_record(50).is_none());
+    }
+
+    #[test]
+    fn conditional_by_spell_updates_do_not_prove_unknown_record_creation_or_type() {
+        let known = Landing {
+            caster_level: Some(40),
+            record_type: Some(2),
+            keeps_record: Some(false),
+            blocker: Some(false),
+            ..lands(NORMAL)
+        };
+        let mut correction = buff(50);
+        correction.caster_level = 40;
+        for incoming in [
+            Landing {
+                caster_level: None,
+                ..known
+            },
+            Landing {
+                record_type: None,
+                ..known
+            },
+        ] {
+            let mut state = BuffTracker::empty_snapshot();
+            state.observe_effect(effect(50), incoming, now());
+            assert!(state.modelled_effect_record(50).is_none());
+            state.apply(
+                titanium(Applies::BySpell, 0, 50, Some(correction.clone())),
+                now(),
+            );
+            assert!(state.modelled_effect_record(50).is_none());
+            assert!(state.received_duration(0, now()).is_none());
+        }
+    }
+
+    #[test]
+    fn environmental_records_preserve_proven_refusals_and_apply_known_equal_refreshes() {
+        let mut old = buff(50);
+        old.caster_level = 40;
+        let equal = Landing {
+            caster_level: Some(40),
+            record_type: Some(4),
+            keeps_record: Some(false),
+            blocker: Some(false),
+            ..lands(NORMAL)
+        };
+        for incoming in [
+            Landing {
+                caster_level: Some(20),
+                keeps_record: None,
+                ..equal
+            },
+            Landing {
+                caster_level: None,
+                keeps_record: Some(true),
+                ..equal
+            },
+        ] {
+            let mut state = BuffTracker::default();
+            state.replace_snapshot(BTreeMap::from([(0, old.clone())]), 25, now());
+            state.observe_effect(effect(50), incoming, now());
+            assert_eq!(state.modelled_effect_record(50), Some(&old));
+        }
+        let mut state = BuffTracker::default();
+        state.replace_snapshot(BTreeMap::from([(0, old)]), 25, now());
+        state.observe_effect(effect(50), equal, now());
+        let refreshed = state.modelled_effect_record(50).unwrap();
+        assert_eq!((refreshed.caster_level, refreshed.effect_type), (40, 4));
+        assert!(state.received_duration(0, now()).is_none());
+    }
+
+    #[test]
     fn a_refresh_step_3_refuses_keeps_the_old_record() {
         let mut state = BuffTracker::default();
         state.replace_snapshot(BTreeMap::new(), 25, now());
@@ -1460,7 +1643,7 @@ mod tests {
         assert_eq!(state.modelled_record(50).unwrap().caster_level, 50);
         // Effects 0x43, 0x65 and 0x71 refuse any refresh.
         let kept = Landing {
-            keeps_record: true,
+            keeps_record: Some(true),
             ..level(60)
         };
         state.observe_effect(effect(50), kept, now());

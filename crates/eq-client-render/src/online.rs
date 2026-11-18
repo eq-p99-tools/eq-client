@@ -1092,6 +1092,9 @@ fn trace(update: &WorldUpdate, changes: &eq_client_core::world::Changes, world: 
         _ => return,
     };
     match event {
+        WorldEvent::AlternateAdvancement { session_id, update } if !changes.ignored => {
+            debug!(session_id, ?update, "AA environmental input received");
+        }
         WorldEvent::Guild(update) => debug!(?update, "Guild update received"),
         WorldEvent::ItemDetails(item) => debug!("Item definition received: ID {}", item.id),
         WorldEvent::TargetSent { state, .. } if !changes.ignored => {

@@ -928,3 +928,18 @@ impl super::ClientWorld {
         &self.zone.carriers
     }
 }
+
+impl super::ClientWorld {
+    /// Correlated current-admission acquire/release knowledge. This does not
+    /// enable steering or turn an echoed release into proof of prior ownership.
+    #[must_use]
+    pub const fn boat_control(&self) -> crate::boats::ControlState {
+        self.zone.boat_control
+    }
+
+    /// Latest raw received packet, separate from the correlated state.
+    #[must_use]
+    pub const fn boat_control_notice(&self) -> Option<crate::boats::ControlBoat> {
+        self.zone.boat_notice
+    }
+}
