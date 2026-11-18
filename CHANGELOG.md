@@ -7,7 +7,7 @@
   never the newest line twice, an empty line or the installed password
   command; Shift+Down past the newest clears the line. The lines live in
   memory only and go with their window or the character. Held repeats step
-  once and the caret lands at the end (inferred, checklist 6.467).
+  once and the caret lands at the end (inferred, checklist 6.476).
 
 - Take a boat by right-clicking it while standing on it, and let it go with a
   second right-click, as the Titanium program does (read R35). The click asks
@@ -15,7 +15,7 @@
   all apply; a boat not underfoot gets nothing, not a consider. A script's
   `interact` step on the boat does the same. The program's release resets
   local control at once; this client still waits for the echo (checklist
-  6.468). Only where boat control is offered; elsewhere a right-click
+  6.477). Only where boat control is offered; elsewhere a right-click
   considers as before.
 
 - Fold ordered environmental AA admission batches without discarding facts,

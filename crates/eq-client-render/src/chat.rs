@@ -1264,7 +1264,7 @@ fn compose(
             Key::Delete if typing.composing => state.draft.delete(),
             // Shift+Up and Shift+Down step through the window's sent lines,
             // once per press (read R34 (g); a held key's repeats do not
-            // step, inferred, checklist 6.467). Plain Up and Down stay as
+            // step, inferred, checklist 6.476). Plain Up and Down stay as
             // they were.
             Key::ArrowUp if typing.composing && held[1] => {
                 if !event.repeat {

@@ -125,7 +125,7 @@ impl Recall {
 
 /// Whether the line starts as the withheld command does. The program
 /// compares four characters (0x573f00); the case rule is inferred, and
-/// ignoring case keeps more out (checklist 6.467).
+/// ignoring case keeps more out (checklist 6.476).
 fn withholds(withheld: Option<&str>, text: &str) -> bool {
     let Some(withheld) = withheld else {
         return false;
