@@ -33,6 +33,7 @@ use gpu_assets::{bevy_texture_coordinates, create_image, generate_mip_chain};
 use scene_collision::{ZoneLiquids, build_collision, triangle_height_at};
 
 mod abilities;
+mod arrival;
 mod asset_loads;
 mod attention;
 mod background;

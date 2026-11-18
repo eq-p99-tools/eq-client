@@ -240,6 +240,12 @@ impl CollisionWorld {
             .collect();
     }
 
+    /// Whether this carrier's collider is loaded.
+    #[must_use]
+    pub fn has_spawn(&self, id: u16) -> bool {
+        self.spawn_obstacles.iter().any(|(spawn, _)| *spawn == id)
+    }
+
     /// Replaces carrier placements while sharing their authored geometry and
     /// acceleration structures. No triangles are rebuilt to move an instance.
     pub fn set_spawn_instances(&mut self, spawns: Vec<(u16, CollisionInstance)>) {
@@ -450,7 +456,10 @@ impl CollisionWorld {
     }
 
     /// What the body would touch first sweeping `delta` from `feet`, and the
-    /// contact normal, for diagnostics only: movement never calls it.
+    /// contact normal, for diagnostics only: movement never calls it. It
+    /// sweeps the whole delta on one straight line, while the mover steps
+    /// and slides in parts, so it names the first obstacle on that line,
+    /// which is not always the one that stopped the move.
     #[must_use]
     pub fn first_contact(&self, feet: Vec3, delta: Vec3, height: f32) -> Option<Contact> {
         if !feet.is_finite() || !delta.is_finite() || delta.length_squared() < 1e-12 {
@@ -491,6 +500,13 @@ impl CollisionWorld {
     /// floor probe. Terrain and door floors keep priority when higher.
     #[must_use]
     pub fn ground_spawn(&self, position: Vec3, step_up: f32, drop: f32) -> Option<u16> {
+        self.spawn_floor(position, step_up, drop).map(|(id, _)| id)
+    }
+
+    /// The carrier [`Self::ground_spawn`] finds, with the height of the
+    /// floor it holds the footprint up at.
+    #[must_use]
+    pub fn spawn_floor(&self, position: Vec3, step_up: f32, drop: f32) -> Option<(u16, f32)> {
         const EDGE: f32 = 0.000_1;
         let supported = self.support_height(position, step_up, drop)?;
         for (x, z) in SUPPORT_OFFSETS {
@@ -503,7 +519,7 @@ impl CollisionWorld {
                         .cast_ray(&ray, step_up + drop + 2.0 * EDGE, false)
                     && (sample.y - time - supported).abs() <= EDGE
                 {
-                    return Some(*id);
+                    return Some((*id, supported));
                 }
             }
         }
