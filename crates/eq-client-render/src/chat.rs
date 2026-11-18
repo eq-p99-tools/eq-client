@@ -20,6 +20,8 @@ use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 mod draft;
 mod drag;
 mod groups;
+#[cfg(test)]
+mod input_tests;
 pub(super) mod links;
 mod paste;
 
@@ -1026,63 +1028,60 @@ pub(super) fn input(
         keyboard.clear();
         paste.clear();
     }
-    let mut scripted_enter = false;
     let (events, ids): (Vec<_>, Vec<_>) = keyboard
         .read_with_id()
         .filter(|(event, id)| {
             !(typing.spell_search_captured(*id)
                 || typing.escape_consumed && event.logical_key == Key::Escape)
         })
-        .map(|(event, id)| {
-            scripted_enter |= event.state.is_pressed()
-                && event.logical_key == Key::Enter
-                && authored.as_ref().is_some_and(|authored| authored.typed(id));
-            (event.clone(), id)
-        })
+        .map(|(event, id)| (event.clone(), id))
         .unzip();
+    let session = online.world().session_id();
+    let qol = options
+        .as_ref()
+        .map_or_else(Settings::default, |options| options.options.qol);
+    let mut submit =
+        |state: &mut ChatState, typing: &mut crate::keys::Typing, index: Option<usize>| {
+            if state.draft.text().trim().is_empty() {
+                // Enter on an empty line closes the input, as in the official client.
+                typing.composing = false;
+            } else {
+                let scripted_submit = authored.as_ref().is_some_and(|authored| {
+                    index.map_or(authored.left_button, |index| authored.typed(ids[index]))
+                });
+                if scripted_submit
+                    && super::socials::Request::parse(state.draft.text().trim()).is_some()
+                {
+                    state.refuse("Use a named social step in a local script.");
+                } else {
+                    let admission = if scripted_submit {
+                        script.as_ref().and_then(|script| script.chat_admission())
+                    } else {
+                        None
+                    };
+                    let dispatch = outbox.for_script(admission);
+                    submit_draft(state, typing, &mut online, &dispatch, &qol);
+                }
+            }
+        };
     let empty = ButtonInput::default();
     let mut claimed = Vec::new();
-    let submit = compose(
+    compose(
         &mut state,
         (&mut typing, &mut claimed),
         &events,
         keys.as_deref().unwrap_or(&empty),
-        clipboard.as_deref_mut(),
-        &mut paste,
-        online.world().session_id(),
-    ) || send;
+        (clipboard.as_deref_mut(), &mut paste),
+        session,
+        |state, typing, index| submit(state, typing, Some(index)),
+    );
+    if send {
+        paste.clear();
+        submit(&mut state, &mut typing, None);
+    }
     typing
         .chat_events
         .extend(claimed.into_iter().map(|index| ids[index]));
-    if submit {
-        paste.clear();
-        if state.draft.text().trim().is_empty() {
-            // Enter on an empty line closes the input, as in the official client.
-            typing.composing = false;
-        } else {
-            let qol = options
-                .as_ref()
-                .map_or_else(Settings::default, |options| options.options.qol);
-            let scripted_submit = scripted_enter
-                || (send
-                    && authored
-                        .as_ref()
-                        .is_some_and(|authored| authored.left_button));
-            if scripted_submit
-                && super::socials::Request::parse(state.draft.text().trim()).is_some()
-            {
-                state.refuse("Use a named social step in a local script.");
-            } else {
-                let admission = if scripted_submit {
-                    script.as_ref().and_then(|script| script.chat_admission())
-                } else {
-                    None
-                };
-                let dispatch = outbox.for_script(admission);
-                submit_draft(&mut state, &mut typing, &mut online, &dispatch, &qol);
-            }
-        }
-    }
     for Latest(id) in latest.iter() {
         if let Some(tab) = state.groups.active(*id) {
             state.views.entry(tab).or_default().follow = true;
@@ -1139,24 +1138,24 @@ pub(super) fn capture(
 }
 
 /// Edit one chat draft with ordered modifier snapshots; clipboard input never
-/// submits. Notes, by their place in `events`, each press the line took.
+/// submits. Enter submits at its position in the batch, before later keys
+/// decide whether the line or game owns them. Notes each press the line took.
 fn compose(
     state: &mut ChatState,
     (typing, claimed): (&mut crate::keys::Typing, &mut Vec<usize>),
     events: &[KeyboardInput],
     keys: &ButtonInput<Key>,
-    mut clipboard: Option<&mut bevy::clipboard::Clipboard>,
-    paste: &mut paste::Paste,
+    (mut clipboard, paste): (Option<&mut bevy::clipboard::Clipboard>, &mut paste::Paste),
     session: Option<u64>,
-) -> bool {
-    let mut submit = false;
+    mut submit: impl FnMut(&mut ChatState, &mut crate::keys::Typing, usize),
+) {
     let modifiers = crate::keys::modifiers::snapshots(events, keys);
     for (index, (event, held)) in events.iter().zip(modifiers).enumerate() {
         if !event.state.is_pressed() {
             continue;
         }
         let chorded = crate::keys::modifiers::chorded(held);
-        let opens = matches!(&event.logical_key, Key::Enter)
+        let opens = matches!(&event.logical_key, Key::Enter) && !event.repeat
             || matches!(&event.logical_key, Key::Character(value) if value.as_str() == "/");
         // A held Shift, Ctrl or Alt stays the game's as well.
         let modifier = matches!(
@@ -1180,10 +1179,15 @@ fn compose(
         }
         match &event.logical_key {
             Key::Enter => {
-                if typing.composing {
-                    submit = true;
-                } else {
-                    typing.composing = true;
+                // Holding Enter must not submit a newly opened line or
+                // reopen one that this same held key just submitted.
+                if !event.repeat {
+                    if typing.composing {
+                        paste.clear();
+                        submit(state, typing, index);
+                    } else {
+                        typing.composing = true;
+                    }
                 }
             }
             Key::Escape if typing.composing => {
@@ -1221,7 +1225,6 @@ fn compose(
     {
         state.refuse("Could not read clipboard text.");
     }
-    submit
 }
 
 /// The chat's colours for its kinds of text, and its font, as the player
