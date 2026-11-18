@@ -48,6 +48,22 @@ fn support(
         .then_some((current, position))
 }
 
+/// What the program's boat interaction asks (read R35 (b), (c), (f)): only
+/// for the boat the player stands on, taking it, or letting it go when the
+/// player already holds it; for any other boat, nothing, said or sent. The
+/// program's release resets local control at once; here, as for
+/// `/boat release`, control follows the echo.
+fn interaction(boat: u16, standing_on: Option<u16>, held: Option<u16>) -> Option<Intent> {
+    if standing_on != Some(boat) {
+        return None;
+    }
+    Some(if held == Some(boat) {
+        Intent::Release
+    } else {
+        Intent::Acquire
+    })
+}
+
 #[derive(Default)]
 pub(super) struct LastSupport {
     key: Option<(u64, Option<Vessel>)>,
@@ -77,6 +93,7 @@ pub(super) fn update(
         if chat.boat_asked.take().is_some() {
             chat.refuse("Boat acquire/release is not offered on this session");
         }
+        chat.boat_interacted = None;
         *last = LastSupport::default();
         return;
     }
@@ -110,6 +127,29 @@ pub(super) fn update(
                 request,
             },
         );
+    }
+    if let Some(boat) = chat.boat_interacted.take() {
+        let held = match world.boat_control() {
+            ControlState::Acquired(vessel) => Some(vessel.spawn_id),
+            _ => None,
+        };
+        let request = match interaction(boat, support.map(|(sample, _)| sample.spawn_id), held) {
+            Some(Intent::Release) => Some(Request::Release),
+            Some(Intent::Acquire) => {
+                support.map(|(support, position)| Request::Acquire { support, position })
+            }
+            None => None,
+        };
+        if let Some(request) = request {
+            let _ = outbox.send(
+                world,
+                ClientCommand::BoatControl {
+                    session_id: stamp.session_id,
+                    created: stamp.created,
+                    request,
+                },
+            );
+        }
     }
     let selected = match world.boat_control() {
         ControlState::Acquiring { vessel } | ControlState::Acquired(vessel) => Some(vessel),
@@ -157,6 +197,36 @@ mod tests {
         assert!(typed("/boat acquire 8").unwrap().is_err());
         assert!(typed("/boat move").unwrap().is_err());
         assert!(typed("/follow").is_none());
+    }
+
+    #[test]
+    fn interacting_takes_only_the_boat_underfoot_and_lets_go_of_one_held() {
+        assert_eq!(interaction(8, Some(8), None), Some(Intent::Acquire));
+        assert_eq!(interaction(8, Some(8), Some(9)), Some(Intent::Acquire));
+        assert_eq!(interaction(8, Some(8), Some(8)), Some(Intent::Release));
+        // Another boat, or none underfoot: nothing at all.
+        assert_eq!(interaction(8, Some(9), None), None);
+        assert_eq!(interaction(8, None, Some(8)), None);
+    }
+
+    #[test]
+    fn an_interaction_with_no_boat_underfoot_sends_and_says_nothing() {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(8);
+        let mut online = crate::online::OnlineState::new(true);
+        crate::online::testing::admit(&mut online, 1, crate::online::testing::player(7));
+        let mut app = App::new();
+        app.insert_resource(online)
+            .insert_resource(crate::outbox::Outbox::new(Some(sender)))
+            .init_resource::<crate::motion::Controls>()
+            .init_resource::<crate::chat::ChatState>()
+            .add_systems(Update, update);
+        app.world_mut()
+            .resource_mut::<crate::chat::ChatState>()
+            .interact_with_boat(8, None);
+        app.update();
+        assert!(receiver.try_recv().is_err());
+        let chat = app.world().resource::<crate::chat::ChatState>();
+        assert!(chat.boat_interacted.is_none());
     }
 
     #[test]

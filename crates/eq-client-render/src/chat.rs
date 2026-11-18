@@ -24,6 +24,7 @@ mod groups;
 mod input_tests;
 pub(super) mod links;
 mod paste;
+mod recall;
 
 pub(super) use drag::{TabDrag, drag_tabs, paint as paint_drag};
 pub(crate) use groups::Groups;
@@ -157,12 +158,18 @@ pub(super) struct ChatState {
     pub(crate) sharing_asked: Option<super::sharing::Command>,
     /// Deferred boat acquire/release, resolved against current floor support.
     pub(crate) boat_asked: Option<eq_client_core::boats::Intent>,
+    /// A boat the player interacted with, for [`super::piloting::update`] to
+    /// take or let go if the player stands on it (read R35).
+    pub(crate) boat_interacted: Option<u16>,
     /// `/follow` typed or pressed, for [`super::motion::input`] to start.
     pub(crate) follow_asked: Option<super::motion::FollowAsked>,
     /// A Ranger's tracking option typed by another class, for
     /// [`super::tracking::say_rangers_only`] to answer.
     pub(crate) rangers_only: Option<super::tracking::RangersOnly>,
     draft: draft::Draft,
+    /// The lines this character sent, for recalling into the draft. Memory
+    /// only: never saved, reported or logged.
+    recall: recall::Recall,
     refusals: Refusals,
 }
 
@@ -213,7 +220,7 @@ pub(crate) fn guard_script_requests(
         refusal = Some(reason);
     }
     if let Some(reason) = withdraw(&mut chat.script_requests.boat, &online)
-        && chat.boat_asked.take().is_some()
+        && (chat.boat_asked.take().is_some() | chat.boat_interacted.take().is_some())
     {
         refusal = Some(reason);
     }
@@ -347,6 +354,41 @@ impl ChatState {
         self.received_links.clear();
         self.script_link_messages.clear();
         self.draft.demote_links();
+        self.recall.demote_links();
+    }
+
+    /// Notes an interaction with a boat, from a right-click (no script
+    /// scope) or a script `interact` step (its scope). It replaces any
+    /// pending `/boat` request, so one request and one scope stand.
+    pub(crate) fn interact_with_boat(
+        &mut self,
+        boat: u16,
+        scope: Option<crate::script::ExpectedWorld>,
+    ) {
+        self.script_requests.boat = scope;
+        self.boat_asked = None;
+        self.boat_interacted = Some(boat);
+    }
+
+    /// Keeps a submitted line in its window's recall (read R34 (b), (c)).
+    fn remember_submitted(&mut self, withheld: Option<&str>) {
+        self.recall
+            .remember(self.groups.owner(), &self.draft, withheld);
+    }
+
+    /// Shift+Up or Shift+Down in the line (read R34 (d), (g)).
+    fn step_recall(&mut self, older: bool) {
+        let window = self.groups.owner();
+        let step = if older {
+            self.recall.older(window).map(recall::Step::Line)
+        } else {
+            self.recall.newer(window)
+        };
+        match step {
+            Some(recall::Step::Line(line)) => self.draft.recall(&line),
+            Some(recall::Step::Clear) => self.draft.clear(),
+            None => (),
+        }
     }
 
     /// Ends character-scoped chat state when camping or losing the session.
@@ -354,6 +396,7 @@ impl ChatState {
     pub(super) fn end_session(&mut self) {
         self.clear_link_scope();
         self.guild_motd = None;
+        self.recall.clear();
     }
 
     /// Links can follow a known profile through zoning on the same connection.
@@ -976,7 +1019,10 @@ pub(super) fn input(
     input_box: Query<(&Interaction, Option<&InGroup>), (With<InputBox>, Changed<Interaction>)>,
     send: crate::clicks::Clicks<Send>,
     viewports: Query<(&ComputedNode, Option<&InGroup>), With<Viewport>>,
-    drag: Option<Res<TabDrag>>,
+    (drag, messages): (
+        Option<Res<TabDrag>>,
+        Option<Res<crate::hud::messages::Messages>>,
+    ),
 ) {
     typing.escape_consumed = drag.as_ref().is_some_and(|drag| drag.escaped);
     typing.chat_events.clear();
@@ -1019,6 +1065,9 @@ pub(super) fn input(
     for TabButton(tab, id) in tabs.iter() {
         state.groups.select(*id, *tab);
     }
+    // A window's recall goes with it (read R34 (h)).
+    let ChatState { recall, groups, .. } = &mut *state;
+    recall.retain(|window| groups.contains(window));
     if let Some((_, marker)) = input_box
         .iter()
         .find(|(value, _)| **value == Interaction::Pressed)
@@ -1054,6 +1103,15 @@ pub(super) fn input(
                 // Enter on an empty line closes the input, as in the official client.
                 typing.composing = false;
             } else {
+                // The program keeps the line as the box submits it, before
+                // any command handling, so a refused line is kept too
+                // (read R34 (c)); the installed password command is not
+                // (eqstr 14193).
+                state.remember_submitted(
+                    messages
+                        .as_deref()
+                        .and_then(|messages| messages.argument_free(WITHHELD_FROM_RECALL)),
+                );
                 let scripted_submit = authored.as_ref().is_some_and(|authored| {
                     index.map_or(authored.left_button, |index| authored.typed(ids[index]))
                 });
@@ -1204,6 +1262,20 @@ fn compose(
             }
             Key::Backspace if typing.composing => state.draft.backspace(),
             Key::Delete if typing.composing => state.draft.delete(),
+            // Shift+Up and Shift+Down step through the window's sent lines,
+            // once per press (read R34 (g); a held key's repeats do not
+            // step, inferred, checklist 6.467). Plain Up and Down stay as
+            // they were.
+            Key::ArrowUp if typing.composing && held[1] => {
+                if !event.repeat {
+                    state.step_recall(true);
+                }
+            }
+            Key::ArrowDown if typing.composing && held[1] => {
+                if !event.repeat {
+                    state.step_recall(false);
+                }
+            }
             Key::ArrowLeft if typing.composing => state.draft.left(),
             Key::ArrowRight if typing.composing => state.draft.right(),
             Key::Home if typing.composing => state.draft.home(),
@@ -1608,6 +1680,10 @@ impl From<crate::outbox::Refusal> for Unsent {
         Self::Refused
     }
 }
+
+/// The installed client's password command, which the program keeps out of
+/// a chat window's recall by its first four characters (read R34 (b)).
+const WITHHELD_FROM_RECALL: u32 = 14193;
 
 fn submit_draft(
     state: &mut ChatState,
@@ -5244,5 +5320,25 @@ mod tests {
         );
         assert_ne!(crate::group::joining(online.world(), 7), accept);
         assert_ne!(group_command("disband", "", &online, 7), decline);
+    }
+
+    #[test]
+    fn a_boat_interaction_takes_its_own_script_scope_and_replaces_a_pending_boat_request() {
+        let mut chat = ChatState::default();
+        let scope = crate::script::ExpectedWorld {
+            admission_id: 1,
+            zone: "test".into(),
+        };
+        chat.script_requests.boat = Some(scope.clone());
+        chat.boat_asked = Some(eq_client_core::boats::Intent::Acquire);
+        // A right-click is native: it clears the script's scope.
+        chat.interact_with_boat(8, None);
+        assert!(chat.script_requests.boat.is_none());
+        assert!(chat.boat_asked.is_none());
+        assert_eq!(chat.boat_interacted, Some(8));
+        // A script's interaction carries its own.
+        chat.interact_with_boat(9, Some(scope.clone()));
+        assert_eq!(chat.script_requests.boat, Some(scope));
+        assert_eq!(chat.boat_interacted, Some(9));
     }
 }
