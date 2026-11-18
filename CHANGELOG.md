@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fold ordered environmental AA admission batches without discarding facts,
+  reducing event amplification while preserving unknown and withdrawal states.
+
 - Accept the documented bare boat script steps and add `--check-script` for
   complete syntax checks before settings, assets or sessions are opened.
 

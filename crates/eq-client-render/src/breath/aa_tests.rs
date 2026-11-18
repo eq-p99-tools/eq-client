@@ -68,7 +68,10 @@ fn fixture() -> OnlineState {
 fn receive(online: &mut OnlineState, session_id: u64, update: Update) {
     testing::news(
         online,
-        [WorldEvent::AlternateAdvancement { session_id, update }],
+        [WorldEvent::AlternateAdvancement {
+            session_id,
+            updates: vec![update],
+        }],
     );
 }
 

@@ -538,7 +538,9 @@ fn prepare_liquid(app: &mut App, capabilities: Option<Vec<Capability>>) -> u64 {
         &mut online,
         [WorldEvent::AlternateAdvancement {
             session_id: 11,
-            update: eq_client_core::alternate_advancement::Update::Selections(Some(Vec::new())),
+            updates: vec![eq_client_core::alternate_advancement::Update::Selections(
+                Some(Vec::new()),
+            )],
         }],
     );
     testing::buffs(&mut online, default());

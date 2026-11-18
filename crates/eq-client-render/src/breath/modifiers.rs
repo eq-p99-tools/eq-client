@@ -318,7 +318,9 @@ mod tests {
             &mut online,
             [WorldEvent::AlternateAdvancement {
                 session_id: 5,
-                update: eq_client_core::alternate_advancement::Update::Selections(Some(Vec::new())),
+                updates: vec![eq_client_core::alternate_advancement::Update::Selections(
+                    Some(Vec::new()),
+                )],
             }],
         );
         assert!(matches!(
@@ -354,7 +356,9 @@ mod tests {
             &mut online,
             [WorldEvent::AlternateAdvancement {
                 session_id: 5,
-                update: eq_client_core::alternate_advancement::Update::Selections(None),
+                updates: vec![eq_client_core::alternate_advancement::Update::Selections(
+                    None,
+                )],
             }],
         );
         assert!(matches!(
@@ -421,7 +425,9 @@ mod tests {
             &mut online,
             [WorldEvent::AlternateAdvancement {
                 session_id: 5,
-                update: eq_client_core::alternate_advancement::Update::Selections(Some(Vec::new())),
+                updates: vec![eq_client_core::alternate_advancement::Update::Selections(
+                    Some(Vec::new()),
+                )],
             }],
         );
         testing::buffs(&mut online, std::collections::BTreeMap::new());

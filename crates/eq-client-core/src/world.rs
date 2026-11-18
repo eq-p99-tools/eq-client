@@ -1205,10 +1205,10 @@ impl ClientWorld {
             } => self.level_news(*current, *experience, news),
             WorldEvent::Skill { skill_id, value } => self.skill_news(*skill_id, *value, news),
             WorldEvent::Disciplines(list) => self.disciplines_news(list, news),
-            WorldEvent::AlternateAdvancement { session_id, update } => {
+            WorldEvent::AlternateAdvancement { session_id, updates } => {
                 if self.session_id == Some(*session_id) && !self.ended && self.player.is_some()
                     && self.generation == crate::GameDialect::Titanium {
-                    self.environmental_aa.apply(update);
+                    for update in updates { self.environmental_aa.apply(update); }
                 } else {
                     news.ignored = true;
                 }
