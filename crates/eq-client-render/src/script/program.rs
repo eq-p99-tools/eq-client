@@ -1,11 +1,11 @@
 //! Validated script source and the source location of each executable step.
 
-use std::{fmt, path::Path, sync::Arc};
+use std::{fmt, ops::Range, path::Path, sync::Arc};
 
 use super::{
     Step,
     language::{self, Builder, Code},
-    parse::{MAX_STEPS, parse_step},
+    parse::{COMMANDS, MAX_STEPS, parse_step},
     source::without_bom,
 };
 
@@ -58,6 +58,14 @@ impl Program {
         Self::compile(text, base).map_err(|errors| errors[0].clone())
     }
 
+    /// The program, or every error the parser finds in the source.
+    ///
+    /// # Errors
+    /// Every malformed line in source order, or one source/step limit violation.
+    pub fn check(text: &str, base: &Path) -> Result<Self, Vec<ParseError>> {
+        Self::compile(text, base)
+    }
+
     /// Check every source line with the executor's parser, without running it.
     #[must_use]
     pub fn diagnostics(text: &str, base: &Path) -> Vec<ParseError> {
@@ -77,12 +85,17 @@ impl Program {
     }
 
     fn compile(text: &str, base: &Path) -> Result<Self, Vec<ParseError>> {
+        #[cfg(test)]
+        COMPILES.set(COMPILES.get() + 1);
         if text.len() > MAX_SOURCE_BYTES {
             return Err(vec![ParseError::document(format!(
                 "script exceeds the {MAX_SOURCE_BYTES}-byte source limit"
             ))]);
         }
+        let source = text;
         let text = without_bom(text);
+        // Spans count bytes of the line as given, before a leading BOM is dropped.
+        let bom = source.len() - text.len();
         let mut instructions = Vec::new();
         let mut errors = Vec::new();
         let mut flow = Builder::default();
@@ -92,6 +105,8 @@ impl Program {
             if line.is_empty() {
                 continue;
             }
+            let start = language::offset(raw, line) + if index == 0 { bom } else { 0 };
+            let at = |span: Range<usize>| Some(start + span.start..start + span.end);
             statements += 1;
             if statements > MAX_STEPS {
                 return Err(vec![ParseError::document(format!(
@@ -101,10 +116,11 @@ impl Program {
             match flow.statement(line, index + 1) {
                 Ok(false) => (),
                 Ok(true) => continue,
-                Err(message) => {
+                Err(fault) => {
                     errors.push(ParseError {
                         line: Some(index + 1),
-                        message,
+                        span: at(fault.span.unwrap_or(0..line.len())),
+                        message: fault.message,
                     });
                     continue;
                 }
@@ -112,8 +128,17 @@ impl Program {
             let step = match parse_step(line) {
                 Ok(step) => step,
                 Err(message) => {
+                    // An unknown command marks its word; a malformed one, its arguments.
+                    let word = line.find(char::is_whitespace).unwrap_or(line.len());
+                    let arguments = line[word..].trim_start();
+                    let span = if COMMANDS.contains(&&line[..word]) && !arguments.is_empty() {
+                        line.len() - arguments.len()..line.len()
+                    } else {
+                        0..word
+                    };
                     errors.push(ParseError {
                         line: Some(index + 1),
+                        span: at(span),
                         message,
                     });
                     continue;
@@ -131,6 +156,11 @@ impl Program {
         }
         errors.extend(flow.unclosed().map(|line| ParseError {
             line: Some(line),
+            span: text.lines().nth(line - 1).map(|raw| {
+                let code = raw.trim_start();
+                let start = raw.len() - code.len() + if line == 1 { bom } else { 0 };
+                start..start + code.find(char::is_whitespace).unwrap_or(code.len())
+            }),
             message: "block needs a matching end".into(),
         }));
         if !errors.is_empty() {
@@ -180,6 +210,7 @@ impl Program {
         {
             return Err(ParseError {
                 line: Some(instruction.line()),
+                span: None,
                 message: if matches!(instruction.step(), Step::Social(_)) {
                     "social steps require a network-enforced local test session.".into()
                 } else if matches!(instruction.step(), Step::Slash(_)) {
@@ -208,6 +239,7 @@ impl Program {
         if self.code.is_some() {
             return Err(ParseError {
                 line: language::first_structured_line(&self.source),
+                span: None,
                 message: "use Program to run scripts with variables or control flow".into(),
             });
         }
@@ -219,11 +251,20 @@ impl Program {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Compilations on this thread, so tests can show work is not repeated.
+    pub(crate) static COMPILES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// A script validation error with a source line where one can be identified.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParseError {
     /// One-based source line; `None` for a limit applying to the entire document.
     pub line: Option<usize>,
+    /// Bytes of that line the error is about, where they can be identified.
+    /// Presentation only: the line and message carry the verdict.
+    pub span: Option<Range<usize>>,
     /// The reason validation failed, without a redundant source-location prefix.
     pub message: String,
 }
@@ -232,6 +273,7 @@ impl ParseError {
     fn document(message: String) -> Self {
         Self {
             line: None,
+            span: None,
             message,
         }
     }
@@ -292,6 +334,81 @@ mod tests {
             errors[0]
         );
         assert_eq!(Program::diagnostics("wait 1\n", Path::new(".")), []);
+    }
+
+    /// The text each error's span covers, by line.
+    fn spans(source: &str) -> Vec<(usize, &str)> {
+        let lines = source.lines().collect::<Vec<_>>();
+        Program::diagnostics(source, Path::new("."))
+            .into_iter()
+            .map(|error| {
+                let line = error.line.unwrap();
+                (line, &lines[line - 1][error.span.unwrap()])
+            })
+            .collect()
+    }
+
+    #[test]
+    fn errors_point_at_the_words_they_are_about() {
+        let source = concat!(
+            "  pres I # typo\n",
+            "\twait soon\n",
+            "let n: int = 1 + \"é\"\n",
+            "let m: int = missing * 2\n",
+            "let t: text = \"open\n",
+            "set nope = 1\n",
+            "let 9x: int = 0\n",
+            "let k: number = 0\n",
+            "let flag: bool = 5\n",
+            "if (true\n",
+            "end\n",
+            "else\n",
+            "end now\n",
+            "while true limit\n",
+            "end\n",
+            "if !3 # é\n",
+            "end\n",
+            "if n == 1 n\n",
+            "end\n",
+            "  repeat 2\n",
+        );
+        assert_eq!(
+            spans(source),
+            [
+                (1, "pres"),
+                (2, "soon"),
+                (3, "+"),
+                (4, "missing"),
+                (5, "\"open"),
+                (6, "nope"),
+                (7, "9x"),
+                (8, "number"),
+                (9, "5"),
+                (10, "("),
+                // A header that fails opens no block, so its end has none.
+                (11, "end"),
+                (12, "else"),
+                (13, "now"),
+                (14, "limit"),
+                (15, "end"),
+                (16, "!"),
+                (17, "end"),
+                (18, "n"),
+                (19, "end"),
+                (20, "repeat"),
+            ]
+        );
+    }
+
+    #[test]
+    fn spans_count_bytes_of_the_line_as_given_with_a_bom() {
+        let errors = Program::diagnostics("\u{feff}  pres I\r\nwait x\r\n", Path::new("."));
+        assert_eq!(errors[0].span, Some(5..9));
+        assert_eq!(errors[1].span, Some(5..6));
+        assert_eq!(
+            errors[0].to_string(),
+            "script line 1: unknown command 'pres'"
+        );
     }
 
     #[test]

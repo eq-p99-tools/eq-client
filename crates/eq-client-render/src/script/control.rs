@@ -572,6 +572,7 @@ fn prepare(
     if program.statement_count() == 0 {
         return Err(super::ParseError {
             line: None,
+            span: None,
             message: "Add a statement before running".into(),
         });
     }
