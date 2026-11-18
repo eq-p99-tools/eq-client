@@ -5,6 +5,15 @@
 [Command reference](reference.md)
 [Variables, conditions and loops](language.md)
 
+## Check syntax before running
+
+Use `eq-client --check-script --script scenario.eqscript` to parse the complete
+file and exit before settings, assets, network or graphics setup. It prints a
+statement count on success or an error line on failure, without printing source
+text. The option requires `--script` and cannot be combined with `--script-follow`.
+It executes no steps; session permissions and world conditions are checked when
+a script runs.
+
 ## Execution view
 
 The current line is highlighted in the running source snapshot. Linear scripts show completed and total actions. Structured scripts show how many statements ran and how many actions finished, since the path depends on observations and loop counts. The Execution state panel shows the last branch result, current loop iterations and initialized variables. Scroll that panel for more bindings. Recent events and the final outcome remain after execution, including the source line that failed. The event list retains the most recent 64 entries.

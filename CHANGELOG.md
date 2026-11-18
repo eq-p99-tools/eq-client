@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Accept the documented bare boat script steps and add `--check-script` for
+  complete syntax checks before settings, assets or sessions are opened.
+
 - Use received local EQEmu AA definitions for supported breathing effects;
   unresolved capacity modifiers keep unprotected capacity unavailable.
 

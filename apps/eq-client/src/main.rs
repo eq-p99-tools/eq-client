@@ -198,6 +198,10 @@ struct Arguments {
     #[arg(long, conflicts_with = "screenshot")]
     script: Option<PathBuf>,
 
+    /// Parse the complete script and exit before session, asset or graphics setup.
+    #[arg(long, requires = "script", conflicts_with = "script_follow")]
+    check_script: bool,
+
     /// Open the in-client script editor; opening it never starts a script.
     #[arg(long)]
     script_editor: bool,
@@ -470,6 +474,11 @@ fn main() {
         report(panic);
     }));
     let (mut arguments, typed_installation) = parse_arguments();
+    if arguments.check_script {
+        std::process::exit(script_check_exit(
+            arguments.script.as_deref().expect("Clap requires --script"),
+        ));
+    }
     println!("eq-client {BUILD_IDENTITY}");
     // Validate every local input before the session logs in.
     let (script, script_follow) = script_input(&arguments);
@@ -826,6 +835,34 @@ fn load_script(path: &Path, follow: bool) -> (Program, usize) {
         })
 }
 
+/// Parses the complete source without constructing a session or running a step.
+fn check_script(path: &Path) -> Result<usize, String> {
+    let text = eq_client_render::script::read_source(path)
+        .map_err(|_| "Unable to read script source".to_owned())?;
+    Program::parse(&text, path.parent().unwrap_or_else(|| Path::new(".")))
+        .map(|program| program.statement_count())
+        .map_err(|error| {
+            error.line.map_or_else(
+                || "Invalid script syntax".to_owned(),
+                |line| format!("Invalid script syntax at line {line}"),
+            )
+        })
+}
+
+/// Prints only syntax status/count or an error line, never source text or paths.
+fn script_check_exit(path: &Path) -> i32 {
+    match check_script(path) {
+        Ok(count) => {
+            println!("Script syntax valid: {count} statements");
+            0
+        }
+        Err(error) => {
+            eprintln!("Script syntax check failed: {error}");
+            2
+        }
+    }
+}
+
 fn default_eq_directory() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     {
@@ -872,9 +909,9 @@ fn print_summary(zone: &ZoneAsset) {
 #[cfg(test)]
 mod tests {
     use super::{
-        Arguments, InstalledClient, Mode, Path, Program, ServerProtocol, distance, finite,
-        launch_preset, load_script, local_session, mode, parse_window_position, parse_window_size,
-        presets, run_client, script_session, seconds,
+        Arguments, InstalledClient, Mode, Path, Program, ServerProtocol, check_script, distance,
+        finite, launch_preset, load_script, local_session, mode, parse_window_position,
+        parse_window_size, presets, run_client, script_session, seconds,
     };
     use clap::Parser;
 
@@ -1104,6 +1141,50 @@ mod tests {
         assert!(distance("0").is_err() && distance("40").is_ok());
         assert!(seconds("1e20").is_err() && seconds("-1").is_err());
         assert_eq!(seconds("2.5"), Ok(2.5));
+    }
+
+    #[test]
+    fn script_syntax_check_requires_complete_file_input() {
+        assert!(Arguments::try_parse_from(["eq-client", "--check-script"]).is_err());
+        assert!(
+            Arguments::try_parse_from([
+                "eq-client",
+                "--check-script",
+                "--script",
+                "unused.eqscript",
+                "--script-follow",
+            ])
+            .is_err()
+        );
+        let arguments = Arguments::try_parse_from([
+            "eq-client",
+            "--check-script",
+            "--script",
+            "unused.eqscript",
+            "--eq-dir",
+            "missing-assets",
+            "--settings-dir",
+            "missing-settings",
+        ])
+        .unwrap();
+        assert!(arguments.check_script);
+    }
+
+    #[test]
+    fn script_syntax_check_parses_unterminated_lines_and_redacts_failures() {
+        let path = std::env::temp_dir().join(format!("eq-client-check-{}.txt", std::process::id()));
+        std::fs::write(&path, "gm damage 1\nboat acquire").unwrap();
+        assert_eq!(check_script(&path), Ok(2));
+        std::fs::write(&path, "report private_marker\nboat steer private_value").unwrap();
+        assert_eq!(
+            check_script(&path),
+            Err("Invalid script syntax at line 2".into())
+        );
+        std::fs::remove_file(&path).unwrap();
+        assert_eq!(
+            check_script(&path),
+            Err("Unable to read script source".into())
+        );
     }
 
     #[test]

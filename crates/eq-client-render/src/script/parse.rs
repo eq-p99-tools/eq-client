@@ -664,6 +664,7 @@ pub(super) fn parse_step(line: &str) -> Result<Step, String> {
         ("wait_relocation", [duration]) => Step::WaitRelocation(millis(duration, MAX_WAIT)?),
         ("wait_dead", [duration]) => Step::WaitDead(millis(duration, MAX_WAIT)?),
         ("slash", words) => parse_slash(words)?,
+        ("boat", [intent @ ("acquire" | "release")]) => Step::Slash(format!("/boat {intent}")),
         ("social", operation) if !operation.is_empty() => {
             Step::Social(format!("/social {}", operation.join(" ")))
         }
@@ -1630,6 +1631,25 @@ pub(super) fn typed(key: KeyCode, shift: bool, chorded: bool) -> (Key, Option<St
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn documented_boat_steps_use_the_slash_path_and_reject_other_actions() {
+        let base = Path::new("private");
+        assert_eq!(
+            parse("boat acquire\nboat release\n", base).unwrap(),
+            parse("slash boat acquire\nslash boat release\n", base).unwrap()
+        );
+        for bad in [
+            "boat",
+            "boat steer",
+            "boat acquire extra",
+            "boat release extra",
+        ] {
+            let source = format!("report before\n{bad}\nreport after\n");
+            let error = super::super::Program::parse(&source, base).unwrap_err();
+            assert_eq!(error.line, Some(2), "{bad}");
+        }
+    }
+
     #[test]
     fn language_fixture_recipe_uses_only_bounded_supported_gm_commands() {
         let base = Path::new("private");
