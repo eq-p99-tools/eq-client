@@ -683,10 +683,12 @@ fn flow_summary(status: &RunStatus) -> String {
     }
     lines.push(String::new());
     lines.push("Variables".into());
-    if flow.variables().is_empty() {
+    // A loop's variable that has not run yet holds an empty line.
+    let variables = flow.variables().iter().filter(|line| !line.is_empty());
+    if variables.clone().next().is_none() {
         lines.push("None initialized".into());
     } else {
-        lines.extend(flow.variables().iter().cloned());
+        lines.extend(variables.cloned());
     }
     lines.join("\n")
 }

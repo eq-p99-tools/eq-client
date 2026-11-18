@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Scripts now use a Python-style syntax, and only that syntax. Every action
+  is a call with literal arguments, such as `press("I")`, `wait(500)` or
+  `click("slot", 22)`; free-text commands such as `report`, `slash` and `gm`
+  take one quoted string. Variables are declared `name: int = 0` and
+  assigned `name = 1`, `+=`, `-=` or `*=`. Blocks follow indentation under
+  `if`, `elif`, `else`, `for i in range(n):` and `while c, limit=n:` headers,
+  with `break`, `continue` and `pass`; conditions use `and`, `or`, `not`,
+  `True` and `False`, and text takes single or double quotes. `def` and
+  `return` are reserved for functions. Help, the editor highlighter and the
+  Vim plugin (now with indenting after `:`) follow the new syntax, and a
+  thin line divides the editor's line numbers from the text.
+
 - Arrive aboard a boat as the Titanium program does (read R36): when the
   session says the boat the profile names is here, the client stands the
   player at the profile's place in the boat's frame, sweeps for the boat's

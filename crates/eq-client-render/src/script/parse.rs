@@ -608,7 +608,7 @@ fn parse_camera(arguments: &[&str]) -> Result<Step, String> {
     })
 }
 
-/// Every action word `parse_step` accepts, for the editor's highlighter and
+/// Every action command `parse_words` accepts, for the editor's highlighter and
 /// the unknown-command diagnostic. A test keeps it in step with the grammar.
 pub(crate) const COMMANDS: &[&str] = &[
     "login",
@@ -658,14 +658,17 @@ pub(crate) const COMMANDS: &[&str] = &[
     "quit",
 ];
 
+/// Commands whose argument is free text: a call takes it as one string,
+/// split into words for the grammar.
+pub(crate) const FREE_TEXT: &[&str] = &["server", "slash", "social", "gm", "chat", "report"];
+
+/// One action from its command and argument words: the grammar every call
+/// lowers to.
 #[allow(
     clippy::too_many_lines,
     reason = "one exhaustive command grammar keeps unknown-command rejection explicit"
 )]
-pub(super) fn parse_step(line: &str) -> Result<Step, String> {
-    let mut words = line.split_whitespace();
-    let command = words.next().unwrap_or_default();
-    let rest: Vec<&str> = words.collect();
+pub(super) fn parse_words(command: &str, rest: &[&str]) -> Result<Step, String> {
     let millis = |value: &str, limit: Duration| {
         value
             .parse::<u64>()
@@ -689,7 +692,7 @@ pub(super) fn parse_step(line: &str) -> Result<Step, String> {
             .filter(|kind| eq_client_core::tradeskills::combines(*kind))
             .ok_or("expected a tradeskill container type")
     };
-    Ok(match (command, rest.as_slice()) {
+    Ok(match (command, rest) {
         ("login", []) => Step::Login,
         ("wait_servers", []) => Step::WaitServers,
         ("server", name) if !name.is_empty() => Step::Server(name.join(" ")),
@@ -1689,14 +1692,14 @@ mod tests {
     #[test]
     fn listed_commands_are_known_and_every_other_word_is_unknown() {
         for command in super::COMMANDS {
-            // A bare word is valid or malformed, never unknown.
-            if let Err(error) = super::parse_step(command) {
+            // A call without arguments is valid or malformed, never unknown.
+            if let Err(error) = super::parse_words(command, &[]) {
                 assert!(!error.starts_with("unknown command"), "{command}: {error}");
             }
         }
         for word in ["pres", "Press", "let", "fn", "wait_", "x"] {
             assert_eq!(
-                super::parse_step(&format!("{word} 1")).unwrap_err(),
+                super::parse_words(word, &["1"]).unwrap_err(),
                 format!("unknown command '{word}'")
             );
         }
@@ -1705,7 +1708,7 @@ mod tests {
         let list = vim
             .lines()
             .find_map(|line| line.strip_prefix(r"syntax match eqscriptCommand /^\s*\zs\%("))
-            .and_then(|line| line.split_once(r"\)\>/"))
+            .and_then(|line| line.split_once(r"\)\>"))
             .map(|(list, _)| list.split(r"\|").collect::<Vec<_>>())
             .unwrap();
         assert_eq!(list, super::COMMANDS);
@@ -1715,16 +1718,16 @@ mod tests {
     fn documented_boat_steps_use_the_slash_path_and_reject_other_actions() {
         let base = Path::new("private");
         assert_eq!(
-            parse("boat acquire\nboat release\n", base).unwrap(),
-            parse("slash boat acquire\nslash boat release\n", base).unwrap()
+            parse("boat(\"acquire\")\nboat(\"release\")\n", base).unwrap(),
+            parse("slash(\"boat acquire\")\nslash(\"boat release\")\n", base).unwrap()
         );
         for bad in [
             "boat",
-            "boat steer",
-            "boat acquire extra",
-            "boat release extra",
+            "boat(\"steer\")",
+            "boat(\"acquire\", \"extra\")",
+            "boat(\"release\", \"extra\")",
         ] {
-            let source = format!("report before\n{bad}\nreport after\n");
+            let source = format!("report(\"before\")\n{bad}\nreport(\"after\")\n");
             let error = super::super::Program::parse(&source, base).unwrap_err();
             assert_eq!(error.line, Some(2), "{bad}");
         }
@@ -1743,7 +1746,7 @@ mod tests {
             "depop",
         ] {
             assert_eq!(
-                parse(&format!("gm {command}"), base).unwrap(),
+                parse(&format!("gm(\"{command}\")"), base).unwrap(),
                 [Step::Gm(command.into())]
             );
         }
@@ -1761,7 +1764,10 @@ mod tests {
             "set other 1",
             "spawn LaneLanguageTrainer 1 1 0 100 0 20",
         ] {
-            assert!(parse(&format!("gm {command}"), base).is_err(), "{command}");
+            assert!(
+                parse(&format!("gm(\"{command}\")"), base).is_err(),
+                "{command}"
+            );
         }
     }
 
@@ -1770,7 +1776,7 @@ mod tests {
         let base = Path::new("private");
         assert_eq!(
             parse(
-                "click training 1\nclick training_language 0\nclick training_language 25\nclick train\nclick training_done",
+                "click(\"training\", 1)\nclick(\"training_language\", 0)\nclick(\"training_language\", 25)\nclick(\"train\")\nclick(\"training_done\")",
                 base
             )
             .unwrap(),
@@ -1783,16 +1789,16 @@ mod tests {
             ]
         );
         for bad in [
-            "click training",
-            "click training 0",
-            "click training 1 2",
-            "click train 1",
-            "click training_done 1",
-            "click training_language",
-            "click training_language 26",
-            "click training_language -1",
-            "click training_language 256",
-            "click training_language 1 2",
+            "click(\"training\")",
+            "click(\"training\", 0)",
+            "click(\"training\", 1, 2)",
+            "click(\"train\", 1)",
+            "click(\"training_done\", 1)",
+            "click(\"training_language\")",
+            "click(\"training_language\", 26)",
+            "click(\"training_language\", -1)",
+            "click(\"training_language\", 256)",
+            "click(\"training_language\", 1, 2)",
         ] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
@@ -1802,7 +1808,7 @@ mod tests {
     fn deletion_requires_exact_repeated_name_without_position_fallback() {
         assert_eq!(
             parse(
-                "delete Disposable confirm Disposable",
+                "delete(\"Disposable\", \"confirm\", \"Disposable\")",
                 std::path::Path::new(".")
             )
             .unwrap(),
@@ -1812,11 +1818,11 @@ mod tests {
             }]
         );
         for source in [
-            "delete Disposable",
-            "delete Disposable confirm Other",
-            "delete Disposable confirm disposable",
-            "delete 0",
-            "delete Disposable yes",
+            "delete(\"Disposable\")",
+            "delete(\"Disposable\", \"confirm\", \"Other\")",
+            "delete(\"Disposable\", \"confirm\", \"disposable\")",
+            "delete(0)",
+            "delete(\"Disposable\", \"yes\")",
         ] {
             assert!(
                 parse(source, std::path::Path::new(".")).is_err(),
@@ -1832,7 +1838,7 @@ mod tests {
         let base = Path::new(".");
         assert_eq!(
             parse(
-                "interact 6 42 12\ninspect_link 6 70 0\ncompose_owned_link 6 23",
+                "interact(6, 42, 12)\ninspect_link(6, 70, 0)\ncompose_owned_link(6, 23)",
                 base
             )
             .unwrap(),
@@ -1854,16 +1860,16 @@ mod tests {
             ],
         );
         for malformed in [
-            "interact 42",
-            "interact 6 65536 12",
-            "interact 6 42 -1",
-            "inspect_link 70 0",
-            "inspect_link 6 70 -1",
-            "inspect_link 6 70 0 raw",
-            "compose_owned_link 23",
-            "compose_owned_link -1 23",
-            "compose_owned_link 6 worn",
-            "compose_owned_link 6 23 raw",
+            "interact(42)",
+            "interact(6, 65536, 12)",
+            "interact(6, 42, -1)",
+            "inspect_link(70, 0)",
+            "inspect_link(6, 70, -1)",
+            "inspect_link(6, 70, 0, \"raw\")",
+            "compose_owned_link(23)",
+            "compose_owned_link(-1, 23)",
+            "compose_owned_link(6, \"worn\")",
+            "compose_owned_link(6, 23, \"raw\")",
         ] {
             assert!(parse(malformed, base).is_err(), "{malformed}");
         }
@@ -1873,7 +1879,7 @@ mod tests {
     fn dialog_and_player_inspection_steps_require_scoped_choices() {
         let base = Path::new(".");
         assert_eq!(
-            parse("popup 6 14 no\ninspect_player 6 42 12", base).unwrap(),
+            parse("popup(6, 14, \"no\")\ninspect_player(6, 42, 12)", base).unwrap(),
             [
                 Step::RespondToPopup {
                     admission: 6,
@@ -1888,10 +1894,10 @@ mod tests {
             ],
         );
         for text in [
-            "popup yes",
-            "popup 6 14 auto",
-            "inspect_player 42",
-            "inspect_player 6 65536 12",
+            "popup(\"yes\")",
+            "popup(6, 14, \"auto\")",
+            "inspect_player(42)",
+            "inspect_player(6, 65536, 12)",
         ] {
             assert!(parse(text, base).is_err(), "{text}");
         }
@@ -1900,7 +1906,7 @@ mod tests {
     #[test]
     fn a_scrollbar_arrow_is_reached_by_its_windows_key() {
         let steps = parse(
-            "click scroll_up chat\nclick scroll_down skills\n",
+            "click(\"scroll_up\", \"chat\")\nclick(\"scroll_down\", \"skills\")\n",
             Path::new("private"),
         )
         .unwrap();
@@ -1911,14 +1917,14 @@ mod tests {
                 Step::Click(ClickTarget::Scroll("skills", false)),
             ]
         );
-        assert!(parse("click scroll_up nowhere\n", Path::new("private")).is_err());
+        assert!(parse("click(\"scroll_up\", \"nowhere\")\n", Path::new("private")).is_err());
     }
 
     #[test]
     fn parses_the_login_steps() {
         let base = Path::new("private");
         assert_eq!(
-            parse("login\nwait_servers\nserver Example  World\n", base).unwrap(),
+            parse("login()\nwait_servers()\nserver(\"Example World\")\n", base).unwrap(),
             [
                 Step::Login,
                 Step::WaitServers,
@@ -1926,19 +1932,52 @@ mod tests {
             ]
         );
         // The account and password come only from the environment.
-        for bad in ["login someone", "wait_servers now", "server"] {
+        for bad in ["login(\"someone\")", "wait_servers(\"now\")", "server"] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
     }
 
     #[test]
+    #[allow(clippy::too_many_lines, reason = "one table of step bounds")]
     fn parses_bounded_steps_and_rejects_unsafe_input() {
         let base = Path::new("private");
         let steps = parse(
-            "wait_select\nselect Someone\ncreate Testcleric 1 2 0 212 1 4\ncreate_refused Testcleric 1 2 0 212 1 4\nwait_online\nwait_zone TOX\nslash camp\nslash target a cave rat\n\
-             gm summon\ngm damage 10000\ngm givemoney 0 0 5 0\npress F1 # self\n\
-             press alt+1\nhold W 1500\nwait 250\ntrace 2000\nface\napproach 12 5000\nwalk 8 30000\nclick slot 23\nright_click slot 22\nhover close_box chat\n\
-             click scribe\nclick store\nclick book 0\nclick memorize 2\nclick loot 0\nclick loot_all\nclick buy 3\nclick sell 23\nclick shop_done\ngive\nclick give\nreport after cast\nscreenshot a.png\nquit\n",
+            "wait_select()\n\
+             select(\"Someone\")\n\
+             create(\"Testcleric\", 1, 2, 0, 212, 1, 4)\n\
+             create_refused(\"Testcleric\", 1, 2, 0, 212, 1, 4)\n\
+             wait_online()\n\
+             wait_zone(\"TOX\")\n\
+             slash(\"camp\")\n\
+             slash(\"target a cave rat\")\n\
+             gm(\"summon\")\n\
+             gm(\"damage 10000\")\n\
+             gm(\"givemoney 0 0 5 0\")\n\
+             press(\"F1\") # self\n\
+             press(\"alt+1\")\n\
+             hold(\"W\", 1500)\n\
+             wait(250)\n\
+             trace(2000)\n\
+             face()\n\
+             approach(12, 5000)\n\
+             walk(8, 30000)\n\
+             click(\"slot\", 23)\n\
+             right_click(\"slot\", 22)\n\
+             hover(\"close_box\", \"chat\")\n\
+             click(\"scribe\")\n\
+             click(\"store\")\n\
+             click(\"book\", 0)\n\
+             click(\"memorize\", 2)\n\
+             click(\"loot\", 0)\n\
+             click(\"loot_all\")\n\
+             click(\"buy\", 3)\n\
+             click(\"sell\", 23)\n\
+             click(\"shop_done\")\n\
+             give()\n\
+             click(\"give\")\n\
+             report(\"after cast\")\n\
+             screenshot(\"a.png\")\n\
+             quit()\n",
             base,
         )
         .unwrap();
@@ -2000,37 +2039,37 @@ mod tests {
             ]
         );
         for bad in [
-            "hold W 20000",
-            "wait 999999",
-            "press Nope",
-            "screenshot ../a.png",
-            "screenshot a.jpg",
+            "hold(\"W\", 20000)",
+            "wait(999999)",
+            "press(\"Nope\")",
+            "screenshot(\"../a.png\")",
+            "screenshot(\"a.jpg\")",
             "teleport 1 2 3",
-            "camera 600 -20",
-            "camera 10 -90",
-            "trace 60000",
-            "click slot x",
-            "click anything",
-            "click memorize 9",
-            "click memorize 0",
-            "slash say hello",
-            "create lowercase 1 2 0 212 1 4",
-            "create Testbad 1 17 0 212 1 4",
-            "slash ooc",
-            "walk 8 90000",
-            "walk 0 1000",
+            "camera(600, -20)",
+            "camera(10, -90)",
+            "trace(60000)",
+            "click(\"slot\", \"x\")",
+            "click(\"anything\")",
+            "click(\"memorize\", 9)",
+            "click(\"memorize\", 0)",
+            "slash(\"say hello\")",
+            "create(\"lowercase\", 1, 2, 0, 212, 1, 4)",
+            "create(\"Testbad\", 1, 17, 0, 212, 1, 4)",
+            "slash(\"ooc\")",
+            "walk(8, 90000)",
+            "walk(0, 1000)",
             "gm",
-            "gm shutdown",
-            "gm SUMMON",
-            "gm zone a b c d e",
-            "gm goto 1;2",
-            "gm summon Name,Other",
+            "gm(\"shutdown\")",
+            "gm(\"SUMMON\")",
+            "gm(\"zone a b c d e\")",
+            "gm(\"goto 1;2\")",
+            "gm(\"summon Name,Other\")",
         ] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
         // `#` starts a comment, so a script can never smuggle one into a step.
         assert_eq!(
-            parse("gm zone qeynos #givemoney 999", base).unwrap(),
+            parse("gm(\"zone qeynos\") #givemoney 999", base).unwrap(),
             [Step::Gm("zone qeynos".into())]
         );
     }
@@ -2039,10 +2078,10 @@ mod tests {
     fn desktop_camp_uses_the_game_command_owner_and_rejects_other_destinations() {
         let base = Path::new("private");
         assert_eq!(
-            parse("slash camp desktop\n", base).unwrap(),
+            parse("slash(\"camp desktop\")\n", base).unwrap(),
             [Step::Slash("/camp desktop".into())]
         );
-        for bad in ["slash camp server", "slash camp desktop now"] {
+        for bad in ["slash(\"camp server\")", "slash(\"camp desktop now\")"] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
     }
@@ -2051,44 +2090,44 @@ mod tests {
     fn wait_relocation_is_a_bounded_observation() {
         let base = std::path::Path::new(".");
         assert_eq!(
-            parse("wait_relocation 1500\n", base).unwrap(),
+            parse("wait_relocation(1500)\n", base).unwrap(),
             [Step::WaitRelocation(Duration::from_millis(1500))]
         );
-        assert!(parse("wait_relocation\n", base).is_err());
-        assert!(parse("wait_relocation 12 34 56\n", base).is_err());
+        assert!(parse("wait_relocation()\n", base).is_err());
+        assert!(parse("wait_relocation(12, 34, 56)\n", base).is_err());
     }
 
     #[test]
     fn discipline_slash_names_only_the_supported_set() {
         let base = std::path::Path::new(".");
         assert_eq!(
-            parse("slash discipline defensive\n", base).unwrap(),
+            parse("slash(\"discipline defensive\")\n", base).unwrap(),
             [Step::Slash("/discipline defensive".into())]
         );
-        assert!(parse("slash discipline 4499\n", base).is_err());
+        assert!(parse("slash(\"discipline 4499\")\n", base).is_err());
     }
 
     #[test]
     fn knight_slash_actions_use_the_current_target() {
         let base = std::path::Path::new(".");
         assert_eq!(
-            parse("slash harmtouch\nslash layonhands\n", base).unwrap(),
+            parse("slash(\"harmtouch\")\nslash(\"layonhands\")\n", base).unwrap(),
             [
                 Step::Slash("/harmtouch".into()),
                 Step::Slash("/layonhands".into())
             ]
         );
-        assert!(parse("slash harmtouch 12\n", base).is_err());
+        assert!(parse("slash(\"harmtouch 12\")\n", base).is_err());
     }
 
     #[test]
     fn ranged_slash_uses_the_current_target_and_takes_no_arguments() {
         let base = Path::new("private");
         assert_eq!(
-            parse("slash ranged\n", base).unwrap(),
+            parse("slash(\"ranged\")\n", base).unwrap(),
             [Step::Slash("/ranged".into())]
         );
-        assert!(parse("slash ranged 12\n", base).is_err());
+        assert!(parse("slash(\"ranged 12\")\n", base).is_err());
     }
 
     #[test]
@@ -2096,9 +2135,17 @@ mod tests {
         let base = Path::new("private");
         assert_eq!(
             parse(
-                "face 128\nmove forward 12000\nmove turn_left 500\ncamera 64 0 150\n\
-                 camera player 0 -89\ncamera 128 -20\ncamera player 256 -15 300\npress numlock\nhold numpad8 500\npress pageup\n\
-                 press numpad_add\n",
+                "face(128)\n\
+                 move(\"forward\", 12000)\n\
+                 move(\"turn_left\", 500)\n\
+                 camera(64, 0, 150)\n\
+                 camera(\"player\", 0, -89)\n\
+                 camera(128, -20)\n\
+                 camera(\"player\", 256, -15, 300)\n\
+                 press(\"numlock\")\n\
+                 hold(\"numpad8\", 500)\n\
+                 press(\"pageup\")\n\
+                 press(\"numpad_add\")\n",
                 base,
             )
             .unwrap(),
@@ -2137,19 +2184,19 @@ mod tests {
             ]
         );
         for bad in [
-            "face 600",
-            "face north",
-            "move up 1000",
-            "move forward",
-            "move forward 70000",
-            "camera 64 -20 0",
-            "camera 64 -20 30000",
-            "camera 64 -20 100 5",
-            "camera 64 5",
-            "camera player",
-            "camera player 64",
-            "press numpad10",
-            "press numpad",
+            "face(600)",
+            "face(\"north\")",
+            "move(\"up\", 1000)",
+            "move(\"forward\")",
+            "move(\"forward\", 70000)",
+            "camera(64, -20, 0)",
+            "camera(64, -20, 30000)",
+            "camera(64, -20, 100, 5)",
+            "camera(64, 5)",
+            "camera(\"player\")",
+            "camera(\"player\", 64)",
+            "press(\"numpad10\")",
+            "press(\"numpad\")",
         ] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
@@ -2160,7 +2207,7 @@ mod tests {
         let base = Path::new("private");
         assert_eq!(
             parse(
-                "wheel world 64\nwheel world -1.5\nlook world 120 -80 500\nlook world 0 0 10000",
+                "wheel(\"world\", 64)\nwheel(\"world\", -1.5)\nlook(\"world\", 120, -80, 500)\nlook(\"world\", 0, 0, 10000)",
                 base
             )
             .unwrap(),
@@ -2178,20 +2225,20 @@ mod tests {
             ]
         );
         for bad in [
-            "wheel world NaN",
-            "wheel world inf",
-            "wheel world 65",
-            "wheel world -65",
-            "wheel 1",
-            "wheel world 1 2",
-            "look world 0 0 0",
-            "look world 0 0 10001",
-            "look world NaN 0 100",
-            "look world 0 inf 100",
-            "look world 4097 0 100",
-            "look world 0 -4097 100",
-            "look world 0 0",
-            "look world 0 0 100 extra",
+            "wheel(\"world\", \"NaN\")",
+            "wheel(\"world\", \"inf\")",
+            "wheel(\"world\", 65)",
+            "wheel(\"world\", -65)",
+            "wheel(1)",
+            "wheel(\"world\", 1, 2)",
+            "look(\"world\", 0, 0, 0)",
+            "look(\"world\", 0, 0, 10001)",
+            "look(\"world\", \"NaN\", 0, 100)",
+            "look(\"world\", 0, \"inf\", 100)",
+            "look(\"world\", 4097, 0, 100)",
+            "look(\"world\", 0, -4097, 100)",
+            "look(\"world\", 0, 0)",
+            "look(\"world\", 0, 0, 100, \"extra\")",
         ] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
@@ -2201,7 +2248,7 @@ mod tests {
     fn an_object_approach_names_a_tradeskill_container_kind() {
         let base = Path::new("private");
         assert_eq!(
-            parse("approach object 21 12 8000\n", base).unwrap(),
+            parse("approach(\"object\", 21, 12, 8000)\n", base).unwrap(),
             [Step::ApproachObject {
                 kind: 21,
                 range: 12.0,
@@ -2211,14 +2258,14 @@ mod tests {
         // Bags that only hold things are not stations; the range and time
         // keep the targeted approach's bounds.
         for bad in [
-            "approach object",
-            "approach object 21 12",
-            "approach object 51 12 8000",
-            "approach object 8 12 8000",
-            "approach object 256 12 8000",
-            "approach object wheel 12 8000",
-            "approach object 21 0 8000",
-            "approach object 21 12 10001",
+            "approach(\"object\")",
+            "approach(\"object\", 21, 12)",
+            "approach(\"object\", 51, 12, 8000)",
+            "approach(\"object\", 8, 12, 8000)",
+            "approach(\"object\", 256, 12, 8000)",
+            "approach(\"object\", \"wheel\", 12, 8000)",
+            "approach(\"object\", 21, 0, 8000)",
+            "approach(\"object\", 21, 12, 10001)",
         ] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
@@ -2228,7 +2275,7 @@ mod tests {
     fn an_object_walk_names_a_tradeskill_container_kind() {
         let base = Path::new("private");
         assert_eq!(
-            parse("walk object 21 12 20000\n", base).unwrap(),
+            parse("walk(\"object\", 21, 12, 20000)\n", base).unwrap(),
             [Step::WalkObject {
                 kind: 21,
                 range: 12.0,
@@ -2237,14 +2284,14 @@ mod tests {
         );
         // The kinds are `approach object`'s; the range and time keep `walk`'s bounds.
         for bad in [
-            "walk object",
-            "walk object 21 12",
-            "walk object 51 12 8000",
-            "walk object 8 12 8000",
-            "walk object 256 12 8000",
-            "walk object wheel 12 8000",
-            "walk object 21 0 8000",
-            "walk object 21 12 60001",
+            "walk(\"object\")",
+            "walk(\"object\", 21, 12)",
+            "walk(\"object\", 51, 12, 8000)",
+            "walk(\"object\", 8, 12, 8000)",
+            "walk(\"object\", 256, 12, 8000)",
+            "walk(\"object\", \"wheel\", 12, 8000)",
+            "walk(\"object\", 21, 0, 8000)",
+            "walk(\"object\", 21, 12, 60001)",
         ] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
@@ -2254,13 +2301,13 @@ mod tests {
     fn a_death_wait_takes_a_time_up_to_the_longest_wait() {
         let base = Path::new("private");
         assert_eq!(
-            parse("wait_dead 90000\nwait_dead 120000\n", base).unwrap(),
+            parse("wait_dead(90000)\nwait_dead(120000)\n", base).unwrap(),
             [
                 Step::WaitDead(Duration::from_secs(90)),
                 Step::WaitDead(MAX_WAIT),
             ]
         );
-        for bad in ["wait_dead", "wait_dead 120001", "wait_dead soon"] {
+        for bad in ["wait_dead", "wait_dead(120001)", "wait_dead(\"soon\")"] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
     }
@@ -2269,8 +2316,12 @@ mod tests {
     fn a_gm_may_ready_another_test_character_and_put_them_back() {
         assert_eq!(
             parse(
-                "gm gm on\ngm scribespells 10\ngm maxskills\ngm giveitem 1001 1\n\
-                 gm unmemspell 200\ngm nukebuffs\n",
+                "gm(\"gm on\")\n\
+                 gm(\"scribespells 10\")\n\
+                 gm(\"maxskills\")\n\
+                 gm(\"giveitem 1001 1\")\n\
+                 gm(\"unmemspell 200\")\n\
+                 gm(\"nukebuffs\")\n",
                 Path::new("private")
             )
             .unwrap(),
@@ -2289,7 +2340,7 @@ mod tests {
     fn a_gm_may_flag_test_characters_for_pvp_and_put_the_flag_back() {
         assert_eq!(
             parse(
-                "gm pvp on\ngm castspell 230\ngm pvp off\n",
+                "gm(\"pvp on\")\ngm(\"castspell 230\")\ngm(\"pvp off\")\n",
                 Path::new("private")
             )
             .unwrap(),
@@ -2299,7 +2350,12 @@ mod tests {
                 Step::Gm("pvp off".into()),
             ]
         );
-        for bad in ["gm pvp", "gm pvp yes", "gm pvp on off", "gm pvp ON"] {
+        for bad in [
+            "gm(\"pvp\")",
+            "gm(\"pvp yes\")",
+            "gm(\"pvp on off\")",
+            "gm(\"pvp ON\")",
+        ] {
             assert!(parse(bad, Path::new("private")).is_err(), "{bad}");
         }
     }
@@ -2328,24 +2384,24 @@ mod tests {
             "show inventory world",
         ] {
             assert_eq!(
-                parse(&format!("gm {command}"), base).unwrap(),
+                parse(&format!("gm(\"{command}\")"), base).unwrap(),
                 [Step::Gm(command.into())]
             );
         }
         for bad in [
-            "gm show",
-            "gm show buffs extra",
-            "gm show BUFFS",
-            "gm show nukebuffs",
-            "gm show zone_status",
-            "gm show aggro",
-            "gm show stats",
-            "gm show inventory",
-            "gm show inventory pockets",
-            "gm show inventory curlim",
-            "gm show inventory EQUIP",
-            "gm show inventory equip gen",
-            "gm show buffs inventory",
+            "gm(\"show\")",
+            "gm(\"show buffs extra\")",
+            "gm(\"show BUFFS\")",
+            "gm(\"show nukebuffs\")",
+            "gm(\"show zone_status\")",
+            "gm(\"show aggro\")",
+            "gm(\"show stats\")",
+            "gm(\"show inventory\")",
+            "gm(\"show inventory pockets\")",
+            "gm(\"show inventory curlim\")",
+            "gm(\"show inventory EQUIP\")",
+            "gm(\"show inventory equip gen\")",
+            "gm(\"show buffs inventory\")",
         ] {
             let error = parse(bad, base).unwrap_err();
             assert!(
@@ -2365,7 +2421,7 @@ mod tests {
             "traindisc 126 1",
         ] {
             assert_eq!(
-                parse(&format!("gm {command}"), base).unwrap(),
+                parse(&format!("gm(\"{command}\")"), base).unwrap(),
                 [Step::Gm(command.into())]
             );
         }
@@ -2374,7 +2430,7 @@ mod tests {
             "55 52 50",
         ] {
             assert!(
-                parse(&format!("gm traindisc {arguments}"), base).is_err(),
+                parse(&format!("gm(\"traindisc {arguments}\")"), base).is_err(),
                 "{arguments}"
             );
         }
@@ -2384,7 +2440,7 @@ mod tests {
     fn a_gm_may_read_raise_and_reset_another_test_characters_faction() {
         assert_eq!(
             parse(
-                "gm faction view\ngm factionassociation 406 1500\ngm faction reset 406\n",
+                "gm(\"faction view\")\ngm(\"factionassociation 406 1500\")\ngm(\"faction reset 406\")\n",
                 Path::new("private")
             )
             .unwrap(),
@@ -2401,7 +2457,7 @@ mod tests {
         let base = Path::new("private");
         assert_eq!(
             parse(
-                "gm rules set Character:FoodLossPerUpdate 4000\ngm rules reload\n",
+                "gm(\"rules set Character:FoodLossPerUpdate 4000\")\ngm(\"rules reload\")\n",
                 base
             )
             .unwrap(),
@@ -2411,9 +2467,9 @@ mod tests {
             ]
         );
         for bad in [
-            "gm rules reset",
-            "gm rules setdb Character:FoodLossPerUpdate 32",
-            "gm rules set Character:FoodLossPerUpdate",
+            "gm(\"rules reset\")",
+            "gm(\"rules setdb Character:FoodLossPerUpdate 32\")",
+            "gm(\"rules set Character:FoodLossPerUpdate\")",
         ] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
@@ -2429,7 +2485,7 @@ mod tests {
             "depop",
         ] {
             assert_eq!(
-                parse(&format!("gm {command}"), base).unwrap(),
+                parse(&format!("gm(\"{command}\")"), base).unwrap(),
                 [Step::Gm(command.into())]
             );
         }
@@ -2453,7 +2509,10 @@ mod tests {
             "depopzone",
             "damage 1 2 3 4 5",
         ] {
-            assert!(parse(&format!("gm {command}"), base).is_err(), "{command}");
+            assert!(
+                parse(&format!("gm(\"{command}\")"), base).is_err(),
+                "{command}"
+            );
         }
     }
 
@@ -2468,7 +2527,7 @@ mod tests {
             "guild set 12 0",
         ] {
             assert_eq!(
-                parse(&format!("gm {command}"), base).unwrap(),
+                parse(&format!("gm(\"{command}\")"), base).unwrap(),
                 [Step::Gm(command.into())]
             );
         }
@@ -2494,9 +2553,18 @@ mod tests {
             "guild list",
             "guild CREATE Example Fixture",
         ] {
-            assert!(parse(&format!("gm {command}"), base).is_err(), "{command}");
+            assert!(
+                parse(&format!("gm(\"{command}\")"), base).is_err(),
+                "{command}"
+            );
         }
-        assert!(parse(&format!("gm guild create Example {}", "a".repeat(64)), base).is_err());
+        assert!(
+            parse(
+                &format!("gm(\"guild create Example {}\")", "a".repeat(64)),
+                base
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -2515,7 +2583,7 @@ mod tests {
             "getguildmotd",
         ] {
             assert_eq!(
-                parse(&format!("slash {line}"), base).unwrap(),
+                parse(&format!("slash(\"{line}\")"), base).unwrap(),
                 [Step::Slash(format!("/{line}"))]
             );
         }
@@ -2530,13 +2598,16 @@ mod tests {
             "guildmotd bad\u{0007}",
             "guildmotd bad\u{001b}",
         ] {
-            assert!(parse(&format!("slash {line}"), base).is_err(), "{line}");
+            assert!(
+                parse(&format!("slash(\"{line}\")"), base).is_err(),
+                "{line}"
+            );
         }
-        assert!(parse(&format!("slash guildmotd {}", "a".repeat(512)), base).is_err());
-        assert!(parse(&format!("slash guildmotd {}", "é".repeat(256)), base).is_err());
+        assert!(parse(&format!("slash(\"guildmotd {}\")", "a".repeat(512)), base).is_err());
+        assert!(parse(&format!("slash(\"guildmotd {}\")", "é".repeat(256)), base).is_err());
         let maximum = format!("{}a", "é".repeat(255));
         assert_eq!(
-            parse(&format!("slash guildmotd {maximum}"), base).unwrap(),
+            parse(&format!("slash(\"guildmotd {maximum}\")"), base).unwrap(),
             [Step::Slash(format!("/guildmotd {maximum}"))]
         );
     }
@@ -2545,20 +2616,20 @@ mod tests {
     fn a_script_may_ask_who_is_online() {
         let base = Path::new("private");
         assert_eq!(
-            parse("slash who\nslash who all wiz 50\n", base).unwrap(),
+            parse("slash(\"who\")\nslash(\"who all wiz 50\")\n", base).unwrap(),
             [
                 Step::Slash("/who".into()),
                 Step::Slash("/who all wiz 50".into())
             ]
         );
         assert_eq!(
-            parse("slash consent Helper\nslash corpsedrag\n", base).unwrap(),
+            parse("slash(\"consent Helper\")\nslash(\"corpsedrag\")\n", base).unwrap(),
             [
                 Step::Slash("/consent Helper".into()),
                 Step::Slash("/corpsedrag".into())
             ]
         );
-        assert!(parse("slash consent\n", base).is_err());
+        assert!(parse("slash(\"consent\")\n", base).is_err());
     }
 
     #[test]
@@ -2567,10 +2638,7 @@ mod tests {
         let base = Path::new("private");
         assert_eq!(
             parse(
-                "chat say Hail there
-chat ooc lfg
-chat tell Friend inc now
-",
+                "chat(\"say Hail there\")\nchat(\"ooc lfg\")\nchat(\"tell Friend inc now\")\n",
                 base
             )
             .unwrap(),
@@ -2586,11 +2654,11 @@ chat tell Friend inc now
         // Never an empty line or a `#` command, which only a gm step sends.
         for bad in [
             "chat",
-            "chat say",
-            "chat yell hi",
-            "chat tell Friend",
-            "chat tell Fr1end hi",
-            "chat say #summon",
+            "chat(\"say\")",
+            "chat(\"yell hi\")",
+            "chat(\"tell Friend\")",
+            "chat(\"tell Fr1end hi\")",
+            "chat(\"say #summon\")",
         ] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
@@ -2600,14 +2668,18 @@ chat tell Friend inc now
     fn a_script_may_drag_a_window_by_its_name() {
         let base = Path::new("private");
         assert_eq!(
-            parse("drag actions 600 300\ndrag chat 700.5 450\n", base).unwrap(),
+            parse(
+                "drag(\"actions\", 600, 300)\ndrag(\"chat\", 700.5, 450)\n",
+                base
+            )
+            .unwrap(),
             [
                 Step::Drag("actions".into(), bevy::math::Vec2::new(600.0, 300.0)),
                 Step::Drag("chat".into(), bevy::math::Vec2::new(700.5, 450.0)),
             ]
         );
         assert_eq!(
-            parse("drag chat-group-1 400 300\n", base).unwrap(),
+            parse("drag(\"chat-group-1\", 400, 300)\n", base).unwrap(),
             [Step::Drag(
                 "chat-group-1".into(),
                 bevy::math::Vec2::new(400.0, 300.0)
@@ -2615,10 +2687,10 @@ chat tell Friend inc now
         );
         for bad in [
             "drag",
-            "drag chat 1",
-            "drag nowhere 1 2",
-            "drag chat -5 2",
-            "drag chat-group-0 400 300",
+            "drag(\"chat\", 1)",
+            "drag(\"nowhere\", 1, 2)",
+            "drag(\"chat\", -5, 2)",
+            "drag(\"chat-group-0\", 400, 300)",
         ] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
@@ -2629,7 +2701,7 @@ chat tell Friend inc now
         let base = Path::new("private");
         assert_eq!(
             parse(
-                "gm makepet SumEarthR2\nslash pet back off\nclick pet sit down\n",
+                "gm(\"makepet SumEarthR2\")\nslash(\"pet back off\")\nclick(\"pet\", \"sit\", \"down\")\n",
                 base
             )
             .unwrap(),
@@ -2640,24 +2712,24 @@ chat tell Friend inc now
             ]
         );
         assert_eq!(
-            parse("click option target_ring\n", base).unwrap(),
+            parse("click(\"option\", \"target_ring\")\n", base).unwrap(),
             [Step::Click(ClickTarget::Option(
                 eq_client_core::options::Toggle::TargetRing
             ))]
         );
         // A quality-of-life setting goes by its name in a file too.
         assert_eq!(
-            parse("click option skip_modified_food\n", base).unwrap(),
+            parse("click(\"option\", \"skip_modified_food\")\n", base).unwrap(),
             [Step::Click(ClickTarget::Option(
                 eq_client_core::options::Toggle::Qol(eq_client_core::qol::Fix::SkipModifiedFood)
             ))]
         );
         for bad in [
-            "slash pet",
-            "click pet",
-            "click pet dance",
-            "click option",
-            "click option shiny",
+            "slash(\"pet\")",
+            "click(\"pet\")",
+            "click(\"pet\", \"dance\")",
+            "click(\"option\")",
+            "click(\"option\", \"shiny\")",
         ] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
@@ -2668,7 +2740,7 @@ chat tell Friend inc now
         let base = Path::new("private");
         assert_eq!(
             parse(
-                "click tracking 2\nclick skill_select 3\nclick track\nclick done tracking\n",
+                "click(\"tracking\", 2)\nclick(\"skill_select\", 3)\nclick(\"track\")\nclick(\"done\", \"tracking\")\n",
                 base
             )
             .unwrap(),
@@ -2679,7 +2751,11 @@ chat tell Friend inc now
                 Step::Click(ClickTarget::Done("tracking")),
             ]
         );
-        for bad in ["click tracking", "click tracking 0", "click track 1"] {
+        for bad in [
+            "click(\"tracking\")",
+            "click(\"tracking\", 0)",
+            "click(\"track\", 1)",
+        ] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
     }
@@ -2693,7 +2769,7 @@ chat tell Friend inc now
         ] {
             assert_eq!(
                 parse(
-                    &format!("click {name}\nclick answer no\nclick {name}\nclick answer yes\n"),
+                    &format!("click(\"{name}\")\nclick(\"answer\", \"no\")\nclick(\"{name}\")\nclick(\"answer\", \"yes\")\n"),
                     base,
                 )
                 .unwrap(),
@@ -2707,9 +2783,9 @@ chat tell Friend inc now
             for invalid in [
                 name.to_owned(),
                 format!("{name} 30"),
-                format!("click {name} 30"),
-                format!("click {name} all"),
-                format!("click {name} yes"),
+                format!("click(\"{name}\", 30)"),
+                format!("click(\"{name}\", \"all\")"),
+                format!("click(\"{name}\", \"yes\")"),
             ] {
                 assert!(parse(&invalid, base).is_err());
             }
@@ -2720,22 +2796,22 @@ chat tell Friend inc now
     fn parses_a_sound_by_its_file_name() {
         let base = Path::new("private");
         assert_eq!(
-            parse("sound LevelUp.WAV\n", base).unwrap(),
+            parse("sound(\"LevelUp.WAV\")\n", base).unwrap(),
             [Step::Sound("LevelUp.WAV".into())]
         );
         assert_eq!(
-            parse("sound theme.MP3", base).unwrap(),
+            parse("sound(\"theme.MP3\")", base).unwrap(),
             [Step::Sound("theme.MP3".into())]
         );
         for bad in [
             "sound",
-            "sound .wav",
-            "sound theme.ogg",
-            "sound a.wav b.wav",
-            "sound audio/theme.mp3",
-            r"sound audio\theme.mp3",
-            "sound C:theme.mp3",
-            "sound ../levelup.wav",
+            "sound(\".wav\")",
+            "sound(\"theme.ogg\")",
+            "sound(\"a.wav\", \"b.wav\")",
+            "sound(\"audio/theme.mp3\")",
+            r#"sound("audio\\theme.mp3")"#,
+            "sound(\"C:theme.mp3\")",
+            "sound(\"../levelup.wav\")",
         ] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
@@ -2746,7 +2822,7 @@ chat tell Friend inc now
         let base = Path::new("private");
         assert_eq!(
             parse(
-                "click hot_button 1\nhold_click 800 spell_gem 1\nhold_click 600 hot_button 10\n",
+                "click(\"hot_button\", 1)\nhold_click(800, \"spell_gem\", 1)\nhold_click(600, \"hot_button\", 10)\n",
                 base
             )
             .unwrap(),
@@ -2757,11 +2833,11 @@ chat tell Friend inc now
             ]
         );
         for bad in [
-            "click hot_button 0",
-            "click hot_button 11",
-            "hold_click 800",
-            "hold_click spell_gem 1",
-            "hold_click 20000 spell_gem 1",
+            "click(\"hot_button\", 0)",
+            "click(\"hot_button\", 11)",
+            "hold_click(800)",
+            "hold_click(\"spell_gem\", 1)",
+            "hold_click(20000, \"spell_gem\", 1)",
         ] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
@@ -2771,13 +2847,17 @@ chat tell Friend inc now
     fn parses_bag_tint_clicks() {
         let base = Path::new("private");
         assert_eq!(
-            parse("click tint 23\nclick tint 23 4\n", base).unwrap(),
+            parse("click(\"tint\", 23)\nclick(\"tint\", 23, 4)\n", base).unwrap(),
             [
                 Step::Click(ClickTarget::Tint(23, None)),
                 Step::Click(ClickTarget::Tint(23, Some(4))),
             ]
         );
-        for bad in ["click tint x", "click tint 23 x", "click tint 23 4 5"] {
+        for bad in [
+            "click(\"tint\", \"x\")",
+            "click(\"tint\", 23, \"x\")",
+            "click(\"tint\", 23, 4, 5)",
+        ] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
     }
@@ -2787,7 +2867,7 @@ chat tell Friend inc now
         use eq_client_core::chat::ChatTab;
         assert_eq!(
             parse(
-                "click chat_tab say\nclick chat_tab OOC\n",
+                "click(\"chat_tab\", \"say\")\nclick(\"chat_tab\", \"OOC\")\n",
                 Path::new("private")
             )
             .unwrap(),
@@ -2796,14 +2876,14 @@ chat tell Friend inc now
                 Step::Click(ClickTarget::ChatTab(ChatTab::Ooc)),
             ]
         );
-        assert!(parse("click chat_tab nowhere\n", Path::new("private")).is_err());
+        assert!(parse("click(\"chat_tab\", \"nowhere\")\n", Path::new("private")).is_err());
     }
 
     #[test]
     fn right_click_buff_uses_the_ordinary_effects_button_target() {
         assert_eq!(
             parse(
-                "right_click buff 4\nright_click song 1\n",
+                "right_click(\"buff\", 4)\nright_click(\"song\", 1)\n",
                 Path::new("private")
             )
             .unwrap(),
@@ -2812,16 +2892,14 @@ chat tell Friend inc now
                 Step::RightClick(ClickTarget::Buff(false, 0))
             ]
         );
-        assert!(parse("right_click buff 0\n", Path::new("private")).is_err());
+        assert!(parse("right_click(\"buff\", 0)\n", Path::new("private")).is_err());
     }
 
     #[test]
     fn parses_the_skins_effects_window_buttons() {
         assert_eq!(
             parse(
-                "hover buff 1
-hover song 2
-",
+                "hover(\"buff\", 1)\nhover(\"song\", 2)\n",
                 Path::new("private")
             )
             .unwrap(),
@@ -2830,17 +2908,14 @@ hover song 2
                 Step::Hover(ClickTarget::Buff(false, 1)),
             ]
         );
-        assert!(parse("hover buff 0\n", Path::new("private")).is_err());
+        assert!(parse("hover(\"buff\", 0)\n", Path::new("private")).is_err());
     }
 
     #[test]
     fn parses_the_skins_merchant_window_clicks() {
         assert_eq!(
             parse(
-                "click merchant_row 3
-click buy_chosen
-click sell_chosen
-",
+                "click(\"merchant_row\", 3)\nclick(\"buy_chosen\")\nclick(\"sell_chosen\")\n",
                 Path::new("private")
             )
             .unwrap(),
@@ -2856,7 +2931,7 @@ click sell_chosen
     fn parses_a_windows_own_done_button() {
         assert_eq!(
             parse(
-                "click done bank\nhover done world-container\n",
+                "click(\"done\", \"bank\")\nhover(\"done\", \"world-container\")\n",
                 Path::new("private")
             )
             .unwrap(),
@@ -2865,7 +2940,7 @@ click sell_chosen
                 Step::Hover(ClickTarget::Done("world-container")),
             ]
         );
-        assert!(parse("click done nowhere\n", Path::new("private")).is_err());
+        assert!(parse("click(\"done\", \"nowhere\")\n", Path::new("private")).is_err());
     }
 
     #[test]
@@ -2873,8 +2948,10 @@ click sell_chosen
         let base = Path::new("private");
         assert_eq!(
             parse(
-                "click button bank Fake_Button1\nright_click button bank Fake_Button1\n\
-                 hover button merchant FakeButton\nhold_click 500 button bank FakeButton\n",
+                "click(\"button\", \"bank\", \"Fake_Button1\")\n\
+                 right_click(\"button\", \"bank\", \"Fake_Button1\")\n\
+                 hover(\"button\", \"merchant\", \"FakeButton\")\n\
+                 hold_click(500, \"button\", \"bank\", \"FakeButton\")\n",
                 base
             )
             .unwrap(),
@@ -2889,14 +2966,14 @@ click sell_chosen
             ]
         );
         for bad in [
-            "click button bank",
-            "click button nowhere FakeButton",
-            "click button bank Fake-Button",
-            "click button bank Fake Button",
+            "click(\"button\", \"bank\")",
+            "click(\"button\", \"nowhere\", \"FakeButton\")",
+            "click(\"button\", \"bank\", \"Fake-Button\")",
+            "click(\"button\", \"bank\", \"Fake\", \"Button\")",
         ] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
-        let long = format!("click button bank {}", "A".repeat(65));
+        let long = format!("click(\"button\", \"bank\", \"{}\")", "A".repeat(65));
         assert!(parse(&long, base).is_err());
     }
 
@@ -2905,13 +2982,7 @@ click sell_chosen
         let base = Path::new("private");
         assert_eq!(
             parse(
-                "click slider quantity 50
-click slider max_fps 10
-click slider run_boost 50
-click slider run_boost 100
-click pick amount
-press backspace
-",
+                "click(\"slider\", \"quantity\", 50)\nclick(\"slider\", \"max_fps\", 10)\nclick(\"slider\", \"run_boost\", 50)\nclick(\"slider\", \"run_boost\", 100)\nclick(\"pick\", \"amount\")\npress(\"backspace\")\n",
                 base
             )
             .unwrap(),
@@ -2934,9 +3005,9 @@ press backspace
             ]
         );
         for bad in [
-            "click slider quantity 101",
-            "click slider amount 5",
-            "click pick all",
+            "click(\"slider\", \"quantity\", 101)",
+            "click(\"slider\", \"amount\", 5)",
+            "click(\"pick\", \"all\")",
         ] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }

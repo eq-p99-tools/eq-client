@@ -75,7 +75,7 @@ fn a_queued_action_requires_both_exact_current_identifiers() {
     for (id, zone) in [(8, "samplezone"), (7, "otherzone"), (7, "SampleZone")] {
         let mut app = admitted();
         enter(&mut app.world_mut().resource_mut::<OnlineState>(), id, zone);
-        assert_eq!(scoped(&mut app, "press A\n").code, "start_queued");
+        assert_eq!(scoped(&mut app, "press(\"A\")\n").code, "start_queued");
         refused(&app);
         let value: Value =
             serde_json::from_slice(&app.world().resource::<Bridge>().snapshot()).unwrap();
@@ -87,7 +87,7 @@ fn a_queued_action_requires_both_exact_current_identifiers() {
         assert_eq!(value["world"], json!({"admission_id":id,"zone":zone}));
         // Reading status and an explicitly unscoped recovery remain possible.
         assert_eq!(request(&mut app, 2, json!({"op":"status"})).code, "status");
-        assert_eq!(start(&mut app, 3, "wait 1000\n").code, "start_queued");
+        assert_eq!(start(&mut app, 3, "wait(1000)\n").code, "start_queued");
         assert_eq!(
             request(&mut app, 4, json!({"op":"stop","run_id":2})).code,
             "stop_requested"
@@ -98,8 +98,8 @@ fn a_queued_action_requires_both_exact_current_identifiers() {
 #[test]
 fn waits_loops_and_paused_runs_cannot_resume_in_a_new_admission_of_the_same_zone() {
     for source in [
-        "wait 1000\npress A\n",
-        "repeat 2\nwait 1000\npress A\nend\n",
+        "wait(1000)\npress(\"A\")\n",
+        "for _ in range(2):\n    wait(1000)\n    press(\"A\")\n",
     ] {
         for paused in [false, true] {
             let mut app = admitted();
@@ -129,7 +129,7 @@ fn waits_loops_and_paused_runs_cannot_resume_in_a_new_admission_of_the_same_zone
 #[test]
 fn a_transfer_withdraws_scoped_held_input_and_pending_clicks() {
     let mut app = admitted();
-    scoped(&mut app, "hold W 1000\npress A\n");
+    scoped(&mut app, "hold(\"W\", 1000)\npress(\"A\")\n");
     assert!(
         app.world()
             .resource::<ButtonInput<KeyCode>>()
@@ -186,7 +186,7 @@ fn receive_new_admission(app: &mut App) {
 #[test]
 fn late_waiting_scope_refusal_preserves_native_click_and_release() {
     let mut app = admitted();
-    scoped(&mut app, "wait 1000\n");
+    scoped(&mut app, "wait(1000)\n");
     let native = app
         .world_mut()
         .spawn((
@@ -235,7 +235,7 @@ fn late_waiting_scope_refusal_preserves_an_unrelated_native_hotbar_drag() {
     };
     use bevy::{ecs::system::RunSystemOnce, ui::RelativeCursorPosition};
     let mut app = admitted();
-    scoped(&mut app, "wait 1000\n");
+    scoped(&mut app, "wait(1000)\n");
     app.world_mut().spawn((
         Node::default(),
         Interaction::Pressed,
@@ -304,7 +304,7 @@ fn late_scope_refusal_cancels_only_the_owned_pending_or_just_released_click() {
     for released_in_preupdate in [false, true] {
         let mut app = admitted();
         super::super::super::install_input(&mut app, super::super::super::InputMode::Attended);
-        scoped(&mut app, "wait 1000\n");
+        scoped(&mut app, "wait(1000)\n");
         let own = app
             .world_mut()
             .spawn((
@@ -373,7 +373,7 @@ fn receiving_a_new_world_after_preupdate_cancels_that_frames_synthetic_edges() {
     super::super::super::install_input(&mut app, super::super::super::InputMode::Attended);
     app.init_resource::<Change>()
         .add_systems(Update, change.before(super::super::super::guard_scope));
-    scoped(&mut app, "wait 1\npress A\n");
+    scoped(&mut app, "wait(1)\npress(\"A\")\n");
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
         .press(KeyCode::KeyK);
@@ -413,7 +413,7 @@ fn receiving_a_new_world_after_preupdate_cancels_that_frames_synthetic_edges() {
 #[test]
 fn delayed_social_dispatch_checks_the_current_world_even_before_driver_observation() {
     let mut app = admitted();
-    scoped(&mut app, "wait 1000\n");
+    scoped(&mut app, "wait(1000)\n");
     let owner = app.world().resource::<Script>().status().identity.clone();
     assert!(
         app.world()
@@ -440,7 +440,10 @@ fn controlled_gm_and_chat_queue_the_originating_admission() {
     let mut app = admitted();
     let (queue, received) = std::sync::mpsc::sync_channel(4);
     app.insert_resource(crate::outbox::Outbox::new(Some(queue)));
-    scoped(&mut app, "gm level 1\nchat say synthetic\nwait 1000\n");
+    scoped(
+        &mut app,
+        "gm(\"level 1\")\nchat(\"say synthetic\")\nwait(1000)\n",
+    );
     for ms in 1..10 {
         frame(&mut app, ms);
     }
@@ -480,7 +483,7 @@ fn synthetic_enter_stamps_its_draft_without_changing_native_chat() {
         );
     scoped(
         &mut app,
-        "press Enter\npress H\npress I\npress Enter\nwait 1000\n",
+        "press(\"Enter\")\npress(\"H\")\npress(\"I\")\npress(\"Enter\")\nwait(1000)\n",
     );
     for ms in 1..20 {
         frame(&mut app, ms);
@@ -506,7 +509,7 @@ fn a_scripted_hail_key_queues_a_current_admission_message() {
             Update,
             crate::combat::input.after(super::super::super::guard_scope),
         );
-    scoped(&mut app, "press Y\nwait 1000\n");
+    scoped(&mut app, "press(\"Y\")\nwait(1000)\n");
     assert!(matches!(
         received.try_recv(),
         Ok(ClientCommand::SendChatInAdmission { session_id: 7, .. })
@@ -596,7 +599,7 @@ fn scripted_follow_defers_to_ordinary_follow_without_a_network_command() {
     let (queue, received) = std::sync::mpsc::sync_channel(4);
     app.insert_resource(crate::outbox::Outbox::new(Some(queue)));
     assert_eq!(
-        scoped(&mut app, "slash follow\nwait 1000\n").code,
+        scoped(&mut app, "slash(\"follow\")\nwait(1000)\n").code,
         "start_queued"
     );
     assert_eq!(app.world().resource::<RunStatus>().phase(), Phase::Running);
@@ -625,7 +628,7 @@ fn scripted_follow_world_stamp_is_withdrawn_but_native_replacement_survives() {
     for (admission, zone) in [(8, "samplezone"), (7, "otherzone")] {
         for native_replacement in [false, true] {
             let mut app = admitted();
-            scoped(&mut app, "slash follow\nwait 1000\n");
+            scoped(&mut app, "slash(\"follow\")\nwait(1000)\n");
             assert!(
                 app.world()
                     .resource::<crate::chat::ChatState>()
@@ -663,7 +666,7 @@ fn stopping_before_a_follow_step_does_not_queue_follow() {
     let mut app = admitted();
     let (queue, received) = std::sync::mpsc::sync_channel(4);
     app.insert_resource(crate::outbox::Outbox::new(Some(queue)));
-    scoped(&mut app, "wait 1000\nslash follow\n");
+    scoped(&mut app, "wait(1000)\nslash(\"follow\")\n");
     assert_eq!(
         request(&mut app, 2, json!({"op":"stop","run_id":1})).code,
         "stop_requested"

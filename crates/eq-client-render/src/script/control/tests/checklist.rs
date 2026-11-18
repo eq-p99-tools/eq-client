@@ -134,7 +134,7 @@ fn validates_inline_definitions_and_result_bounds() {
 #[test]
 fn maximum_checklist_can_share_status_with_full_executor_history() {
     let mut bridge = Bridge::new("synthetic-control".into(), "test-1".into());
-    let program = Program::parse("wait 1\n", std::path::Path::new(".")).unwrap();
+    let program = Program::parse("wait(1)\n", std::path::Path::new(".")).unwrap();
     let diagnostic = "\0".repeat(protocol::MAX_MESSAGE_BYTES);
     for _ in 0..=HISTORY {
         let mut progress = Script::from_program(program.clone()).progress;
@@ -170,7 +170,7 @@ fn maximum_checklist_can_share_status_with_full_executor_history() {
 #[test]
 fn results_are_run_scoped_and_start_resets_without_touching_the_executor() {
     let mut app = app();
-    let script = start(&mut app, 1, "wait 1000\n");
+    let script = start(&mut app, 1, "wait(1000)\n");
     assert_eq!(script.run_id, Some(1));
     assert_eq!(
         request(&mut app, 2, result(1, "first", "passed")).code,

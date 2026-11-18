@@ -4,20 +4,24 @@
 [Command reference](reference.md)
 [Run controls](running.md)
 
-Write one statement per line. Indentation is optional. Use the same action commands inside a block as you would on their own. The parser checks every action in the file, including actions in branches that may be skipped. Runtime action checks still use the current client and its ordinary controls.
+Scripts read like a small subset of Python. Write one statement per line. Every action is a call such as `press("I")` or `wait(500)`, and a block is the indented lines under a header that ends in `:`. The parser checks every action in the file, including actions in branches that may be skipped. Runtime action checks still use the current client and its ordinary controls.
+
+## Actions
+
+Each action takes literal arguments, separated by commas: quoted text, such as `"I"` or `'CTRL+I'`, and numbers, such as `500` or `-55`. An argument names one word, so `click("button", "spellbook", "Spellbook_Search")` takes three. The commands that carry free text (`report`, `slash`, `social`, `server`, `gm` and `chat`) take one quoted string, such as `report("camera check complete")`. Use `wait_select()` with empty parentheses for a command with no arguments. Action arguments cannot read variables yet. [The command reference](reference.md) lists each action.
 
 ## Variables and expressions
 
-Declare a variable with `let name: type = expression` before using it. Declare at the top level and change its value with `set name = expression`, including inside blocks. There are up to 32 variables per run. Names are case-sensitive and use up to 32 ASCII letters, digits or underscores, starting with a letter or underscore.
+Declare a variable with `name: type = expression` before using it. Declare at the top level, then change its value with `name = expression`, including inside blocks. `name += expression`, `-=` and `*=` update an integer in place. There are up to 32 variables per run. Names are case-sensitive and use up to 32 ASCII letters, digits or underscores, starting with a letter or underscore. A name cannot be a command or a keyword.
 
 - `int` holds a signed 64-bit integer. Operators `+ - * / %` use checked integer arithmetic. Division rounds toward zero.
-- `bool` holds `true` or `false`. Use `!`, `&&` and `||` for negation, conjunction and disjunction. `false && …` and `true || …` skip the right operand.
-- `text` holds case-sensitive text. Use double quotes, with `\"` for a quote and `\\` for a backslash. Text literals may contain `#` and are limited to 120 UTF-8 bytes.
+- `bool` holds `True` or `False`. Use `not`, `and` and `or` for negation, conjunction and disjunction. `False and …` and `True or …` skip the right operand.
+- `text` holds case-sensitive text in single or double quotes, with `\"` or `\'` for the quote and `\\` for a backslash. Text literals may contain `#` and are limited to 120 UTF-8 bytes.
 - `==` and `!=` compare matching types. `<`, `<=`, `>` and `>=` compare integers. Use parentheses to group expressions.
 
-From tightest to loosest, precedence is unary `!` and `-`, then `* / %`, then `+ -`, then ordering, equality, `&&` and `||`.
+From tightest to loosest, precedence is unary `-`, then `* / %`, then `+ -`, then ordering and equality, then `not`, `and` and `or`. As in Python, `not a == b` means `not (a == b)`.
 
-Variables hold the value read at the assignment line. To refresh an observation, read the field again. Action arguments keep their own syntax and take literal text.
+Variables hold the value read at the assignment line. To refresh an observation, read the field again.
 
 ## Current client observations
 
@@ -29,34 +33,39 @@ Fields read the local client projection on the statement's frame. Values give th
 - `player.mana` and `player.endurance` are the last reported integer values, when available.
 - `target.selected` is a `bool` from the reconciled target state. A pending or unresolved selection is unavailable. `target.name` is the display name of the known selected spawn, when available.
 
-An observation can be `unknown` before a usable value arrives, or `stale` when the client can identify that its retained context no longer applies, such as a stale target or a retained admission during a transfer. Both stay distinct from `false`, zero and an empty string. `known(value)` is true for a usable value. `stale(value)` is true for a stale value. Ordinary operators preserve an unavailable operand when they read it. A condition that remains unavailable stops the run at that source line.
+An observation can be `unknown` before a usable value arrives, or `stale` when the client can identify that its retained context no longer applies, such as a stale target or a retained admission during a transfer. Both stay distinct from `False`, zero and an empty string. `known(value)` is true for a usable value. `stale(value)` is true for a stale value. Ordinary operators preserve an unavailable operand when they read it. A condition that remains unavailable stops the run at that source line.
 
-## Branches and bounded loops
+## Branches and loops
 
-`if condition` runs its body when the condition is true. Add `else` for an optional second body and close with `end`.
-
-```eqscript
-let mana: int = player.mana
-if known(mana) && mana > 0
-    report mana_observed
-else
-    report mana_empty_or_unavailable
-end
-```
-
-`repeat count` evaluates its integer count once and runs up to 100 iterations. Zero skips the block. `while condition limit N` checks a boolean at the start of each iteration, with a required literal cap `N` from 1 to 100. Both use `end`. The Execution tab records when a while loop reaches its cap. Add a `wait` when polling for an incoming change.
+`if condition:` runs the indented body under it when the condition is true. Add `elif condition:` for further tests and `else:` for the remaining case, each at the same indentation as its `if`. A block ends where the indentation returns to an outer level. Indent with spaces or with tabs, consistently within a script; four spaces is conventional. A block with nothing to do yet holds `pass`.
 
 ```eqscript
-let attempts: int = 0
-while !client.ready limit 5
-    wait 500
-    set attempts = attempts + 1
-end
-if client.ready
-    report admitted
-else
-    report admission_unavailable
-end
+mana: int = player.mana
+if known(mana) and mana > 0:
+    report("mana_observed")
+else:
+    report("mana_empty_or_unavailable")
 ```
 
-Blocks can nest up to 16 levels. Execution advances one statement per frame or waits for its current action. Stop remains available during loops. The Execution tab shows which branch was taken, active iteration counts, and the latest values assigned to variables.
+`for i in range(count):` evaluates its integer count once and runs up to 100 iterations. Zero skips the block. The loop variable counts from 0, can only be read, and exists only inside its loop; write `for _ in range(count):` when the body doesn't need it. `while condition, limit=N:` checks a boolean at the start of each iteration, with a required literal cap `N` from 1 to 100. The Execution tab records when a while loop reaches its cap. Add a `wait` when polling for an incoming change. `break` leaves the innermost loop and `continue` starts its next iteration.
+
+```eqscript
+attempts: int = 0
+while not client.ready, limit=5:
+    wait(500)
+    attempts = attempts + 1
+if client.ready:
+    report("admitted")
+else:
+    report("admission_unavailable")
+```
+
+```eqscript
+for i in range(3):
+    if i == 1:
+        continue
+    press("I")
+    wait(500)
+```
+
+Blocks can nest up to 16 levels. `def` and `return` are reserved for functions in a later release. Execution advances one statement per frame or waits for its current action. Stop remains available during loops. The Execution tab shows which branch was taken, active iteration counts, and the latest values assigned to variables.

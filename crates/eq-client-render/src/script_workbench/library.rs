@@ -435,7 +435,7 @@ mod tests {
         ));
         let file = root.join("practice/nested/camera.eqscript");
         prepare(&root, &file, true).unwrap();
-        fs::write(&file, "wait 1\n").unwrap();
+        fs::write(&file, "wait(1)\n").unwrap();
         fs::write(root.join("ignore.png"), b"not a script").unwrap();
         assert_eq!(
             listing(&root, Path::new("")).unwrap(),
@@ -448,7 +448,7 @@ mod tests {
             listing(&root, Path::new("practice/nested")).unwrap()[0].path,
             PathBuf::from("practice/nested/camera.eqscript")
         );
-        fs::write(root.join("external.eqscript"), "wait 2\n").unwrap();
+        fs::write(root.join("external.eqscript"), "wait(2)\n").unwrap();
         assert_eq!(listing(&root, Path::new("")).unwrap().len(), 2);
         assert!(listing(&root, Path::new("..")).is_err());
         assert!(root.starts_with(&temporary));

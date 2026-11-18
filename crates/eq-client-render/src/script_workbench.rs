@@ -411,7 +411,7 @@ mod tests {
         let source = app.world().resource::<Workbench>().document.text.clone();
         crate::clicks::testing::click(&mut app, run);
         assert_eq!(app.world().resource::<Script>().status().source(), source);
-        app.world_mut().resource_mut::<Workbench>().document.text = "wait 10\n".into();
+        app.world_mut().resource_mut::<Workbench>().document.text = "wait(10)\n".into();
         assert_eq!(app.world().resource::<Script>().status().source(), source);
         app.world_mut().resource_mut::<Workbench>().tab = Tab::Help;
         app.update();
@@ -427,7 +427,7 @@ mod tests {
         assert_eq!(app.world().resource::<Script>().status().source(), source);
         assert_eq!(
             app.world().resource::<Workbench>().document.text,
-            "wait 10\n"
+            "wait(10)\n"
         );
         app.world_mut()
             .resource_mut::<Shown>()
@@ -444,7 +444,7 @@ mod tests {
     #[test]
     fn replacing_a_dirty_document_requires_an_explicit_discard() {
         let mut state = Workbench::default();
-        state.document.text.push_str("wait 50\n");
+        state.document.text.push_str("wait(50)\n");
         let text = state.document.text.clone();
         state.replace(Replace::New);
         assert!(state.confirm.is_some());
@@ -475,7 +475,7 @@ mod tests {
         assert_eq!(state.message, "missing");
         let mut state = app.world_mut().resource_mut::<Workbench>();
         state.job.start(0, || {
-            FileResult::Open(Ok(("old.eqscript".into(), "wait 1".into())))
+            FileResult::Open(Ok(("old.eqscript".into(), "wait(1)".into())))
         });
         state.generation = 1;
         app.update();

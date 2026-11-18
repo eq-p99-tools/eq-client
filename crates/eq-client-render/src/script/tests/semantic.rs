@@ -51,7 +51,7 @@ fn select_service(app: &mut App, kind: SpawnKind, class: u8, distance: f32) -> S
     session::spawn_entry(&mut online, TARGET, spawn);
     online.select_target(Some(TARGET));
     let revision = online.world().spawn(TARGET).unwrap().revision;
-    format!("interact {ADMISSION} {TARGET} {revision}")
+    format!("interact({ADMISSION}, {TARGET}, {revision})")
 }
 
 fn refused(app: &App, line: usize, reason: &str) {
@@ -145,9 +145,9 @@ fn scripted_interaction_refuses_reselection_range_and_pending_open() {
             _ => (),
         }
         let source = if case == "pending" {
-            format!("{source}\n{source}\nreport must not run")
+            format!("{source}\n{source}\nreport(\"must not run\")")
         } else {
-            format!("{source}\nreport must not run")
+            format!("{source}\nreport(\"must not run\")")
         };
         start(&mut app, &source);
         frame_at(&mut app, 0);
@@ -212,7 +212,7 @@ fn scripted_interaction_refuses_training_pending_container_and_combine() {
             let (mut app, rx) = app();
             let source = select_service(&mut app, kind, class, 10.0);
             setup(&mut app.world_mut().resource_mut::<OnlineState>());
-            start(&mut app, &format!("{source}\nreport must not run"));
+            start(&mut app, &format!("{source}\nreport(\"must not run\")"));
             frame_at(&mut app, 0);
             frame_at(&mut app, 10);
             refused(
@@ -260,7 +260,7 @@ fn scripted_item_inspection_reuses_the_exact_received_link_and_definition() {
     let (mut app, rx) = app();
     let (message, body) = linked_message(&mut app);
     app.add_systems(Update, crate::items::input.after(crate::script::drive));
-    let source = format!("inspect_link {ADMISSION} {message} 0");
+    let source = format!("inspect_link({ADMISSION}, {message}, 0)");
     start(&mut app, &source);
     frame_at(&mut app, 0);
     assert_eq!(
@@ -312,7 +312,7 @@ fn scripted_item_inspection_refuses_unknown_and_stale_links() {
         }
         start(
             &mut app,
-            &format!("inspect_link {admission} {message} {ordinal}"),
+            &format!("inspect_link({admission}, {message}, {ordinal})"),
         );
         frame_at(&mut app, 0);
         frame_at(&mut app, 10);
@@ -331,7 +331,7 @@ fn scripted_item_inspection_refuses_unknown_and_stale_links() {
 fn named_social_script_control_requires_a_local_session() {
     for local in [false, true] {
         let (mut app, rx) = app();
-        let program = Program::parse("social play Test", Path::new(".")).unwrap();
+        let program = Program::parse("social(\"play Test\")", Path::new(".")).unwrap();
         app.insert_resource(Script::from_program(program).local_session(local));
         frame_at(&mut app, 0);
         frame_at(&mut app, 10);
@@ -416,7 +416,7 @@ fn single_step_applies_social_edits_without_interrupting_a_manual_social() {
 
     let (mut app, rx) = socials_app();
     let program = Program::parse(
-        "social set Stepped | /say Synthetic\nsocial bind 1 Stepped\nsocial delete Stepped\nwait 1000",
+        "social(\"set Stepped | /say Synthetic\")\nsocial(\"bind 1 Stepped\")\nsocial(\"delete Stepped\")\nwait(1000)",
         Path::new("."),
     ).unwrap();
     app.insert_resource(Script::from_program(program).local_session(true));
@@ -467,7 +467,7 @@ fn single_step_plays_one_social_line_even_if_the_script_resumes_immediately() {
     use crate::script::Request;
 
     let (mut app, rx) = socials_app();
-    let program = Program::parse("social play Test\nwait 1000", Path::new(".")).unwrap();
+    let program = Program::parse("social(\"play Test\")\nwait(1000)", Path::new(".")).unwrap();
     app.insert_resource(Script::from_program(program).local_session(true));
     control_at(&mut app, Request::Pause, 10);
     assert_eq!(
@@ -493,7 +493,7 @@ fn stopping_or_pausing_a_script_retires_its_social_before_the_next_line() {
 
     for control in [Request::Stop, Request::Pause] {
         let (mut app, rx) = socials_app();
-        let program = Program::parse("social play Test\nwait 1000", Path::new(".")).unwrap();
+        let program = Program::parse("social(\"play Test\")\nwait(1000)", Path::new(".")).unwrap();
         app.insert_resource(Script::from_program(program).local_session(true));
         frame_at(&mut app, 10);
         assert_eq!(
@@ -521,7 +521,7 @@ fn native_takeover_cancels_a_background_scripts_social() {
         .insert_resource(Outbox::new(Some(tx)));
     install_socials(&mut app);
     frame_at(&mut app, 0);
-    let program = Program::parse("social play Test\nwait 1000", Path::new(".")).unwrap();
+    let program = Program::parse("social(\"play Test\")\nwait(1000)", Path::new(".")).unwrap();
     app.insert_resource(
         Script::from_program(program)
             .local_session(true)
@@ -567,7 +567,7 @@ fn a_stopped_script_does_not_cancel_a_manually_owned_social() {
     use crate::script::{Request, RunControl};
 
     let (mut app, rx) = socials_app();
-    let program = Program::parse("wait 1000", Path::new(".")).unwrap();
+    let program = Program::parse("wait(1000)", Path::new(".")).unwrap();
     app.insert_resource(Script::from_program(program));
     queue_social(&mut app, "/social play Test");
     frame_at(&mut app, 10);
@@ -591,7 +591,7 @@ fn a_public_script_press_cannot_activate_a_social_but_a_native_press_can() {
     let (mut app, rx) = socials_app();
     queue_social(&mut app, "/social bind 1 Test");
     frame_at(&mut app, 10);
-    start(&mut app, "press 1");
+    start(&mut app, "press(1)");
     frame_at(&mut app, 20);
     assert!(rx.try_recv().is_err());
     assert!(
@@ -615,7 +615,10 @@ fn a_public_script_press_cannot_activate_a_social_but_a_native_press_can() {
 fn scripted_link_composition_edits_the_draft_and_sends_no_request() {
     let (mut app, rx) = app();
     let (message, _) = linked_message(&mut app);
-    start(&mut app, &format!("compose_link {ADMISSION} {message} 0"));
+    start(
+        &mut app,
+        &format!("compose_link({ADMISSION}, {message}, 0)"),
+    );
     frame_at(&mut app, 0);
     frame_at(&mut app, 10);
     assert_eq!(
@@ -673,13 +676,13 @@ fn scripted_owned_link_uses_the_current_received_item_without_sending() {
         session::inventory(&mut online, InventoryUpdate::Snapshot(vec![item.clone()]));
     }
 
-    start(&mut app, "compose_owned_link 8 23");
+    start(&mut app, "compose_owned_link(8, 23)");
     frame_at(&mut app, 0);
     frame_at(&mut app, 10);
     refused(&app, 1, "Item link composition needs the current admission");
     assert_eq!(app.world().resource::<ChatState>().draft(), "");
 
-    let source = format!("compose_owned_link {ADMISSION} 23");
+    let source = format!("compose_owned_link({ADMISSION}, 23)");
     start(&mut app, &source);
     frame_at(&mut app, 20);
     frame_at(&mut app, 30);
@@ -716,7 +719,7 @@ fn scripted_owned_link_uses_the_current_received_item_without_sending() {
 fn scripted_item_inspection_does_not_replace_a_pending_request() {
     let (mut app, rx) = app();
     let (message, _) = linked_message(&mut app);
-    let action = format!("inspect_link {ADMISSION} {message} 0");
+    let action = format!("inspect_link({ADMISSION}, {message}, 0)");
     start(&mut app, &format!("{action}\n{action}"));
     for ms in [0, 10, 20] {
         frame_at(&mut app, ms);
@@ -742,7 +745,7 @@ fn guild_slash_steps_dispatch_typed_guild_commands_without_sending_chat() {
     };
     for (source, expected) in [
         (
-            "slash guildinvite Member",
+            "slash(\"guildinvite Member\")",
             ClientCommand::GuildInvite {
                 session_id: ADMISSION,
                 name: "Member".into(),
@@ -750,21 +753,21 @@ fn guild_slash_steps_dispatch_typed_guild_commands_without_sending_chat() {
             },
         ),
         (
-            "slash guildremove Member",
+            "slash(\"guildremove Member\")",
             ClientCommand::GuildRemove {
                 session_id: ADMISSION,
                 name: "Member".into(),
             },
         ),
         (
-            "slash guildmotd Fixture notice",
+            "slash(\"guildmotd Fixture notice\")",
             ClientCommand::SetGuildMotd {
                 session_id: ADMISSION,
                 motd: "Fixture notice".into(),
             },
         ),
         (
-            "slash getguildmotd",
+            "slash(\"getguildmotd\")",
             ClientCommand::RequestGuildMotd {
                 session_id: ADMISSION,
             },

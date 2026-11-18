@@ -142,7 +142,10 @@ enum Token<'a> {
     Text(Arc<str>),
     Open,
     Close,
-    Bang,
+    /// `not`: binds looser than comparisons and tighter than `and`, as in Python.
+    Not,
+    Comma,
+    Assign,
     Operator(Binary),
 }
 
@@ -181,15 +184,22 @@ fn lex(whole: &str) -> Result<Vec<Spanned<'_>>, Fault> {
                     .bytes()
                     .take_while(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'_' | b'.'))
                     .count();
-                (Token::Word(&source[..len]), len)
+                let word = &source[..len];
+                let token = match word {
+                    "and" => Token::Operator(Binary::And),
+                    "or" => Token::Operator(Binary::Or),
+                    "not" => Token::Not,
+                    _ => Token::Word(word),
+                };
+                (token, len)
             }
-            '"' => {
-                let (text, width) = text_literal(&source[1..])
+            '"' | '\'' => {
+                let (text, width) = text_literal(&source[1..], ch, MAX_TEXT_BYTES)
                     .map_err(|(message, end)| Fault::at(message, start..start + 1 + end))?;
                 (Token::Text(text.into()), 1 + width)
             }
             _ => operator(source)
-                .map_err(|message| Fault::at(message, start..start + ch.len_utf8()))?,
+                .map_err(|(message, width)| Fault::at(message, start..start + width))?,
         };
         source = &source[width..];
         tokens.push(Spanned {
@@ -199,20 +209,26 @@ fn lex(whole: &str) -> Result<Vec<Spanned<'_>>, Fault> {
     }
 }
 
-/// The literal after its opening quote and the bytes it used, including the
+/// The literal after its opening `quote` and the bytes it used, including the
 /// closing quote, or a message and the byte where the literal stops being valid.
-fn text_literal(source: &str) -> Result<(String, usize), (String, usize)> {
+/// Expressions bound text to `MAX_TEXT_BYTES`; action arguments keep the
+/// bounds their command has.
+pub(super) fn text_literal(
+    source: &str,
+    quote: char,
+    max: usize,
+) -> Result<(String, usize), (String, usize)> {
     let mut text = String::new();
     let mut chars = source.char_indices();
     while let Some((index, ch)) = chars.next() {
         let end = index + ch.len_utf8();
         match ch {
-            '"' => return Ok((text, end)),
+            ch if ch == quote => return Ok((text, end)),
             '\\' => match chars.next() {
-                Some((_, escaped @ ('\\' | '"'))) => text.push(escaped),
+                Some((_, escaped)) if escaped == '\\' || escaped == quote => text.push(escaped),
                 next => {
                     return Err((
-                        "text escapes are limited to \\\" and \\\\".into(),
+                        format!("text escapes are limited to \\{quote} and \\\\"),
                         next.map_or(end, |(index, ch)| index + ch.len_utf8()),
                     ));
                 }
@@ -222,24 +238,26 @@ fn text_literal(source: &str) -> Result<(String, usize), (String, usize)> {
             }
             ch => text.push(ch),
         }
-        if text.len() > MAX_TEXT_BYTES {
-            return Err((
-                format!("text literals are limited to {MAX_TEXT_BYTES} bytes"),
-                end,
-            ));
+        if text.len() > max {
+            return Err((format!("text literals are limited to {max} bytes"), end));
         }
     }
     Err(("unterminated text literal".into(), source.len()))
 }
 
-fn operator(source: &str) -> Result<(Token<'_>, usize), &'static str> {
+/// An operator token and its width, or a message and the width it covers.
+fn operator(source: &str) -> Result<(Token<'_>, usize), (&'static str, usize)> {
     use Binary::{
-        Add, And, Divide, Equal, Greater, GreaterEqual, Less, LessEqual, Multiply, NotEqual, Or,
-        Remainder, Subtract,
+        Add, Divide, Equal, Greater, GreaterEqual, Less, LessEqual, Multiply, NotEqual, Remainder,
+        Subtract,
     };
+    if source.starts_with(',') {
+        return Ok((Token::Comma, 1));
+    }
+    if source.starts_with('=') && !source.starts_with("==") {
+        return Ok((Token::Assign, 1));
+    }
     for (symbol, op) in [
-        ("||", Or),
-        ("&&", And),
         ("==", Equal),
         ("!=", NotEqual),
         ("<=", LessEqual),
@@ -259,8 +277,10 @@ fn operator(source: &str) -> Result<(Token<'_>, usize), &'static str> {
     let token = match source.as_bytes()[0] {
         b'(' => Token::Open,
         b')' => Token::Close,
-        b'!' => Token::Bang,
-        _ => return Err("unexpected symbol in expression"),
+        _ => {
+            let width = source.chars().next().map_or(1, char::len_utf8);
+            return Err(("unexpected symbol in expression", width));
+        }
     };
     Ok((token, 1))
 }
@@ -286,6 +306,7 @@ pub(super) fn parse(
     Ok(value)
 }
 
+/// A `while` header's condition and its required iteration cap: `c, limit=N`.
 pub(super) fn limited_condition(
     source: &str,
     lookup: impl Fn(&str) -> Option<(usize, Kind)>,
@@ -296,21 +317,61 @@ pub(super) fn limited_condition(
         lookup,
     };
     let condition = parser.binary(1)?;
-    match parser.remaining {
+    let limit = match parser.remaining {
         [
             Spanned {
+                token: Token::Comma,
+                ..
+            },
+            Spanned {
                 token: Token::Word("limit"),
+                ..
+            },
+            Spanned {
+                token: Token::Assign,
                 ..
             },
             Spanned {
                 token: Token::Number(limit),
                 ..
             },
-        ] => Ok((condition, *limit)),
-        rest => Err(Fault {
-            message: "expected 'while <bool expression> limit <integer literal>'".into(),
-            span: covering(rest),
-        }),
+        ] => Some(*limit),
+        _ => None,
+    };
+    limit.map(|limit| (condition, limit)).ok_or_else(|| Fault {
+        message: "expected 'while <bool expression>, limit=<integer literal>:'".into(),
+        span: covering(parser.remaining).or(Some(0..source.len())),
+    })
+}
+
+impl Expr {
+    /// `variable op= value`, typed and checked as the long form would be.
+    pub(super) fn compound(
+        variable: usize,
+        kind: Kind,
+        op: char,
+        value: Expr,
+    ) -> Result<Self, &'static str> {
+        let op = match op {
+            '+' => Binary::Add,
+            '-' => Binary::Subtract,
+            '*' => Binary::Multiply,
+            _ => return Err("expected +=, -= or *="),
+        };
+        if kind != Kind::Int || value.kind != Kind::Int {
+            return Err("+=, -= and *= need an int variable and an int value");
+        }
+        Ok(Self {
+            kind: Kind::Int,
+            node: Node::Binary(
+                op,
+                Box::new(Self {
+                    kind,
+                    node: Node::Variable(variable),
+                }),
+                Box::new(value),
+            ),
+        })
     }
 }
 
@@ -360,8 +421,17 @@ impl<'source, Lookup: Fn(&str) -> Option<(usize, Kind)>> Parser<'_, 'source, Loo
                 )),
             ),
             Token::Text(value) => (Kind::Text, Node::Literal(Value::Text(value))),
-            Token::Word(word @ ("true" | "false")) => {
-                (Kind::Bool, Node::Literal(Value::Bool(word == "true")))
+            Token::Word(word @ ("True" | "False")) => {
+                (Kind::Bool, Node::Literal(Value::Bool(word == "True")))
+            }
+            Token::Not => {
+                // Looser than comparisons, tighter than `and`: `not a == b` is
+                // `not (a == b)`.
+                let child = self.binary(Binary::Equal.precedence())?;
+                if child.kind != Kind::Bool {
+                    return Err(Fault::at("not requires a bool operand", span));
+                }
+                (Kind::Bool, Node::Unary(Unary::Not, Box::new(child)))
             }
             Token::Word(word @ ("known" | "stale")) => {
                 let op = if word == "known" {
@@ -405,20 +475,12 @@ impl<'source, Lookup: Fn(&str) -> Option<(usize, Kind)>> Parser<'_, 'source, Loo
                 self.take();
                 (Kind::Int, Node::Literal(Value::Int(i64::MIN)))
             }
-            Token::Bang | Token::Operator(Binary::Subtract) => {
-                let (kind, op) = if token == Token::Bang {
-                    (Kind::Bool, Unary::Not)
-                } else {
-                    (Kind::Int, Unary::Negate)
-                };
+            Token::Operator(Binary::Subtract) => {
                 let child = self.prefix()?;
-                if child.kind != kind {
-                    return Err(Fault::at(
-                        format!("unary operator requires a {kind} operand"),
-                        span,
-                    ));
+                if child.kind != Kind::Int {
+                    return Err(Fault::at("unary minus requires an int operand", span));
                 }
-                (kind, Node::Unary(op, Box::new(child)))
+                (Kind::Int, Node::Unary(Unary::Negate, Box::new(child)))
             }
             _ => {
                 return Err(Fault::at(
@@ -472,8 +534,8 @@ mod tests {
         );
         assert!(parse("9223372036854775808", |_| None).is_err());
         assert!(parse("-9223372036854775809", |_| None).is_err());
-        assert!(parse("true + 1", |_| None).is_err());
-        assert!(parse("1 == \"1\"", |_| None).is_err());
+        assert!(parse("True + 1", |_| None).is_err());
+        assert!(parse("1 == '1'", |_| None).is_err());
     }
 
     #[test]
@@ -496,12 +558,36 @@ mod tests {
             Ok(Value::Bool(false))
         );
         assert_eq!(
-            eval("known(player.mana) && player.mana > 0", &Value::Unknown),
+            eval("known(player.mana) and player.mana > 0", &Value::Unknown),
             Ok(Value::Bool(false))
         );
         assert_eq!(
-            eval("true || 1 / 0 > 0", &Value::Unknown),
+            eval("True or 1 / 0 > 0", &Value::Unknown),
             Ok(Value::Bool(true))
         );
+    }
+
+    #[test]
+    fn python_words_and_precedence() {
+        let python = |source: &str| parse(source, |_| None);
+        let value = |source: &str| python(source).unwrap().evaluate(&[], &|_| Value::Unknown);
+        // `not` is looser than comparisons and tighter than `and`.
+        assert_eq!(value("not 1 == 2"), Ok(Value::Bool(true)));
+        assert_eq!(value("not True and False"), Ok(Value::Bool(false)));
+        assert_eq!(value("not False or False"), Ok(Value::Bool(true)));
+        assert_eq!(value("'a\\'b' == \"a'b\""), Ok(Value::Bool(true)));
+        for (bad, span) in [
+            ("!True", 0..1),
+            ("True && True", 5..6),
+            ("False || True", 6..7),
+        ] {
+            let error = python(bad).unwrap_err();
+            assert_eq!(error.message, "unexpected symbol in expression", "{bad}");
+            assert_eq!(error.span, Some(span), "{bad}");
+        }
+        assert!(python("1 != 2").is_ok());
+        assert!(python("'unterminated").is_err());
+        assert_eq!(limited_condition("True, limit=5", |_| None).unwrap().1, 5);
+        assert!(limited_condition("True limit 5", |_| None).is_err());
     }
 }

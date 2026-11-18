@@ -19,6 +19,7 @@ const ROWS: usize = 14;
 const PROBLEM_ROWS: usize = 4;
 pub(super) const BACKGROUND: Color32 = Color32::from_rgb(15, 20, 25);
 const GUTTER_INK: Color32 = Color32::from_rgb(92, 103, 115);
+const GUTTER_RULE: Color32 = Color32::from_rgb(52, 60, 68);
 pub(super) const ERROR: Color32 = Color32::from_rgb(255, 105, 100);
 
 pub(super) fn id() -> egui::Id {
@@ -233,6 +234,14 @@ fn gutter_and_marks(
     let left = output.response.rect.left();
     let galley: &Galley = &output.galley;
     let origin = output.galley_pos.to_vec2();
+    // A thin rule between the line numbers and the text.
+    let rule = left + gutter - 4.0;
+    let span = output.response.rect.y_range();
+    painter.vline(
+        rule,
+        span.min.max(clip.top())..=span.max.min(clip.bottom()),
+        Stroke::new(1.0, GUTTER_RULE),
+    );
     let mut line = 1;
     for placed in &galley.rows {
         let rect = placed.rect().translate(origin);
@@ -384,7 +393,7 @@ mod tests {
 
     #[test]
     fn a_leading_bom_and_windows_newlines_line_up_with_the_parser() {
-        let text = "\u{feff}pres I\r\nlet x: int = nope\r\n";
+        let text = "\u{feff}pres(\"I\")\r\nx: int = nope\r\n";
         let errors = crate::script::Program::diagnostics(text, std::path::Path::new("."));
         let found = marks(text, &errors)
             .into_iter()
@@ -410,7 +419,7 @@ mod tests {
     #[test]
     fn the_text_starts_right_of_the_gutter() {
         let ctx = egui::Context::default();
-        let mut text = String::from("wait 1\npres I\n");
+        let mut text = String::from("wait(1)\npres(\"I\")\n");
         let mut memory = Memory::default();
         let mut placed = None;
         for _ in 0..2 {
@@ -427,7 +436,7 @@ mod tests {
 
     #[test]
     fn layout_keeps_every_byte() {
-        let text = "let n: int = 1 # é\r\n\tpress CTRL+I\n\n";
+        let text = "n: int = 1 # é\r\n\tpress(\"CTRL+I\")\n\n";
         assert_eq!(layout(text).text, text);
     }
 }

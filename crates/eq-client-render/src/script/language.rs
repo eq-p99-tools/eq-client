@@ -59,11 +59,20 @@ pub(in crate::script) fn offset(outer: &str, inner: &str) -> usize {
     offset.min(outer.len())
 }
 
-/// Only these leading words opt in to expression syntax and quoted comments.
+/// Statement keywords. `def` and `return` are reserved for functions.
 pub(crate) fn keyword(word: &str) -> bool {
     matches!(
         word,
-        "let" | "set" | "if" | "else" | "repeat" | "while" | "end"
+        "if" | "elif"
+            | "else"
+            | "for"
+            | "in"
+            | "while"
+            | "break"
+            | "continue"
+            | "pass"
+            | "def"
+            | "return"
     )
 }
 
@@ -72,17 +81,74 @@ pub(crate) fn field(name: &str) -> bool {
     observe::Field::parse(name).is_some()
 }
 
-/// Words a variable cannot be named, besides the statement keywords.
+/// Words a variable cannot be named, besides keywords and command names.
 pub(crate) const RESERVED: &[&str] = &[
-    "limit", "int", "bool", "text", "true", "false", "known", "stale",
+    "limit", "int", "bool", "text", "True", "False", "known", "stale", "range", "and", "or", "not",
 ];
 
-/// Recognize a structured line even if a malformed BOM would prevent parsing it.
+/// What a statement line is, from its first word. One classifier serves the
+/// compiler, the highlighter and the line-at-a-time control protocol.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Shape<'a> {
+    Blank,
+    /// A command name and the call after it, from its opening parenthesis.
+    Action(&'a str, &'a str),
+    Keyword(&'a str),
+    /// A name followed by `:`, `=` or `+=`, `-=`, `*=`.
+    Assignment(&'a str),
+    /// A command used as a variable name.
+    CommandName(&'a str),
+    /// A command name without its call's parentheses.
+    Uncalled(&'a str),
+    /// A name with parentheses that is no command, or anything else.
+    Unknown(&'a str),
+}
+
+/// Classify a statement's code, without its indent or comment.
+pub(crate) fn shape(code: &str) -> Shape<'_> {
+    let code = code.trim();
+    if code.is_empty() {
+        return Shape::Blank;
+    }
+    let length = code
+        .bytes()
+        .take_while(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+        .count();
+    if length == 0 {
+        let first = code.chars().next().map_or(0, char::len_utf8);
+        return Shape::Unknown(&code[..first]);
+    }
+    let word = &code[..length];
+    let rest = code[length..].trim_start();
+    let assigns = rest.starts_with(':')
+        || (rest.starts_with('=') && !rest.starts_with("=="))
+        || ["+=", "-=", "*="].iter().any(|op| rest.starts_with(op));
+    if keyword(word) {
+        Shape::Keyword(word)
+    } else if super::COMMANDS.contains(&word) {
+        if rest.starts_with('(') {
+            Shape::Action(word, rest)
+        } else if assigns {
+            Shape::CommandName(word)
+        } else {
+            Shape::Uncalled(word)
+        }
+    } else if assigns {
+        Shape::Assignment(word)
+    } else {
+        Shape::Unknown(word)
+    }
+}
+
+/// Recognize a structured line even if a malformed BOM would prevent parsing it:
+/// a keyword, an assignment or an indented line. An action call, a comment
+/// and an unknown line are not.
 fn starts_statement(line: &str) -> bool {
-    line.trim_start_matches(|ch: char| ch.is_whitespace() || ch == '\u{feff}')
-        .split(|ch: char| ch.is_whitespace() || ch == '#')
-        .next()
-        .is_some_and(keyword)
+    let line = line.trim_start_matches('\u{feff}');
+    let code = &line[..comment(line)];
+    !code.trim().is_empty()
+        && (code.starts_with(char::is_whitespace)
+            || matches!(shape(code), Shape::Keyword(_) | Shape::Assignment(_)))
 }
 
 pub(super) fn first_structured_line(source: &str) -> Option<usize> {
@@ -92,21 +158,19 @@ pub(super) fn first_structured_line(source: &str) -> Option<usize> {
         .map(|index| index + 1)
 }
 
-/// The comment boundary, keeping legacy action arguments byte-for-byte compatible.
+/// The comment boundary: the first `#` outside quoted text.
 pub(crate) fn comment(line: &str) -> usize {
-    if !starts_statement(line) {
-        return line.find('#').unwrap_or(line.len());
-    }
-    let mut quoted = false;
+    let mut quote = None;
     let mut escaped = false;
     for (index, ch) in line.char_indices() {
         if std::mem::take(&mut escaped) {
             continue;
         }
-        match ch {
-            '\\' if quoted => escaped = true,
-            '"' => quoted = !quoted,
-            '#' if !quoted => return index,
+        match (ch, quote) {
+            ('\\', Some(_)) => escaped = true,
+            ('"' | '\'', None) => quote = Some(ch),
+            (ch, Some(open)) if ch == open => quote = None,
+            ('#', None) => return index,
             _ => {}
         }
     }

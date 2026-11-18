@@ -838,22 +838,22 @@ impl Spot {
         );
         let heading = self.heading();
         let mut steps = vec![
-            format!("gm goto {:.1} {:.1} {:.1}", start.x, start.y, start.z),
-            "wait 3000".to_owned(),
-            format!("camera {heading:.0} -20"),
-            "hold w 10000".to_owned(),
-            format!("report {name} stopped"),
-            format!("screenshot {name}.png"),
+            format!("gm(\"goto {:.1} {:.1} {:.1}\")", start.x, start.y, start.z),
+            "wait(3000)".to_owned(),
+            format!("camera({heading:.0}, -20)"),
+            "hold(\"w\", 10000)".to_owned(),
+            format!("report(\"{name} stopped\")"),
+            format!("screenshot(\"{name}.png\")"),
         ];
         match self.look {
             Look::Wade => steps.extend([
-                format!("camera {:.0} -20", (heading + 256.0) % 512.0),
-                "hold w 5000".to_owned(),
-                format!("report {name} back out"),
+                format!("camera({:.0}, -20)", (heading + 256.0) % 512.0),
+                "hold(\"w\", 5000)".to_owned(),
+                format!("report(\"{name} back out\")"),
             ]),
             Look::Edge => steps.extend([
-                "hold w+space 2000".to_owned(),
-                format!("report {name} after the jump"),
+                "hold(\"w+space\", 2000)".to_owned(),
+                format!("report(\"{name} after the jump\")"),
             ]),
             Look::Lava => {}
         }
@@ -1583,10 +1583,10 @@ fn the_liquid_probe_finds_a_wade_a_ledge_and_lava() {
     }
     let script = edge.script("edge", 6.0);
     assert!(
-        script[0].starts_with("gm goto ") && script[0].ends_with(" 15.0"),
+        script[0].starts_with("gm(\"goto ") && script[0].ends_with(" 15.0\")"),
         "{script:?}"
     );
-    assert_eq!(script[script.len() - 2], "hold w+space 2000");
+    assert_eq!(script[script.len() - 2], "hold(\"w+space\", 2000)");
 }
 
 /// Prints, for every race and gender in `EQ_PROBE_RACES` (as

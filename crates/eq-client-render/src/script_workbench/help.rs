@@ -224,13 +224,13 @@ mod tests {
         // The JSON and Vim examples are drawn plain.
         assert!(other > 0);
         assert_eq!(
-            lines("```json\n{}\n```\n```\nwait 1\n```\ntext"),
+            lines("```json\n{}\n```\n```\nwait(1)\n```\ntext"),
             [
                 ("```json", Block::Fence),
                 ("{}", Block::Other),
                 ("```", Block::Fence),
                 ("```", Block::Fence),
-                ("wait 1", Block::Script),
+                ("wait(1)", Block::Script),
                 ("```", Block::Fence),
                 ("text", Block::Prose),
             ]
