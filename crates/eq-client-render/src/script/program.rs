@@ -507,9 +507,9 @@ mod tests {
             ),
             [(Some(6), "else requires an open if without an else".into())]
         );
-        assert!(
-            errors("t: text = 'it\\'s'\nu: text = \"say \\\"hi\\\"\"\nv: text = \"it\\'s\"\n")
-                .is_empty()
+        assert_eq!(
+            errors("t: text = 'it\\'s'\nu: text = \"say \\\"hi\\\"\"\nv: text = \"it\\'s\"\n"),
+            Vec::new()
         );
         assert_eq!(
             errors("press(\"I\") extra\n"),
