@@ -133,6 +133,25 @@ impl Polygon {
         };
         on_floor(&self.vertices).or_else(|| on_floor(self.vertices.get(..3)?))
     }
+
+    /// The floor's area across, seen from above.
+    fn area(&self) -> f32 {
+        let Some(&first) = self.vertices.first() else {
+            return 0.0;
+        };
+        let flat = |v: Vec3| Vec2::new(v.x, v.z);
+        let first = flat(first);
+        self.vertices
+            .windows(2)
+            .skip(1)
+            .map(|pair| {
+                (flat(pair[0]) - first)
+                    .perp_dot(flat(pair[1]) - first)
+                    .abs()
+                    / 2.0
+            })
+            .sum()
+    }
 }
 
 /// A link [`NavMesh::link_faults`] finds wrong.
@@ -430,7 +449,13 @@ impl NavMesh {
     /// or with `drops`, through islands its drops lead down to.
     #[must_use]
     pub fn reaches(&self, a: u32, b: u32, drops: bool) -> bool {
-        let (from, to) = (self.island[a as usize], self.island[b as usize]);
+        self.island_reaches(self.island[a as usize], self.island[b as usize], drops)
+    }
+
+    /// Whether a walk from anywhere on island `from` can reach island `to`:
+    /// the same island, or with `drops`, an island its drops lead down to.
+    #[must_use]
+    pub fn island_reaches(&self, from: u32, to: u32, drops: bool) -> bool {
         if from == to || !drops {
             return from == to;
         }
@@ -503,21 +528,50 @@ impl NavMesh {
         self.polygons
             .iter()
             .filter(|polygon| polygon.size >= size)
-            .map(|polygon| {
-                let flat = |v: Vec3| Vec2::new(v.x, v.z);
-                let first = flat(polygon.vertices[0]);
-                polygon
-                    .vertices
-                    .windows(2)
-                    .skip(1)
-                    .map(|pair| {
-                        (flat(pair[0]) - first)
-                            .perp_dot(flat(pair[1]) - first)
-                            .abs()
-                            / 2.0
-                    })
-                    .sum::<f32>()
-            })
+            .map(Polygon::area)
+            .sum()
+    }
+
+    /// The island with the most floor, by area across, and how clearly it
+    /// is the zone's main one. Floor `dry` refuses (water or lava) doesn't
+    /// count towards an island's area; in a zone with no dry floor at all
+    /// the island with the most floor of any kind is the main one. None for
+    /// a mesh without polygons. Our rule, for weighing where players walk
+    /// (the select spot check), not the program's.
+    #[must_use]
+    pub fn main_island(&self, dry: impl Fn(Vec3) -> bool) -> Option<MainIsland> {
+        let mut all = vec![0.0_f32; self.islands];
+        let mut wet_free = vec![0.0_f32; self.islands];
+        for (polygon, &island) in self.polygons.iter().zip(&self.island) {
+            let area = polygon.area();
+            all[island as usize] += area;
+            if polygon.point().is_some_and(&dry) {
+                wet_free[island as usize] += area;
+            }
+        }
+        let is_dry = wet_free.iter().any(|&area| area > 0.0);
+        let areas = if is_dry { wet_free } else { all };
+        let mut order: Vec<usize> = (0..self.islands).collect();
+        order.sort_by(|&a, &b| areas[b].total_cmp(&areas[a]).then(a.cmp(&b)));
+        let island = *order.first()?;
+        #[allow(clippy::cast_possible_truncation)] // Island counts fit u32.
+        Some(MainIsland {
+            island: island as u32,
+            area: areas[island],
+            total: areas.iter().sum(),
+            runner_up: order.get(1).map_or(0.0, |&next| areas[next]),
+            dry: is_dry,
+        })
+    }
+
+    /// The floor area across of island `island`, all its polygons counted.
+    #[must_use]
+    pub fn island_area(&self, island: u32) -> f32 {
+        self.polygons
+            .iter()
+            .zip(&self.island)
+            .filter(|&(_, &of)| of == island)
+            .map(|(polygon, _)| polygon.area())
             .sum()
     }
 
@@ -575,6 +629,30 @@ impl NavMesh {
             sizes,
             meshes: [short, medium, tall],
         }
+    }
+}
+
+/// A mesh's island with the most floor ([`NavMesh::main_island`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MainIsland {
+    /// The island.
+    pub island: u32,
+    /// Its floor area across, dry floor only where the mesh has any.
+    pub area: f32,
+    /// Every island's floor area across, counted the same way.
+    pub total: f32,
+    /// The next largest island's area, counted the same way.
+    pub runner_up: f32,
+    /// Whether the areas count dry floor only; false where the mesh has none.
+    pub dry: bool,
+}
+
+impl MainIsland {
+    /// Whether it is clearly the main one: at least half the floor, and
+    /// more than twice the next largest island. Our rule.
+    #[must_use]
+    pub fn clear(&self) -> bool {
+        self.area * 2.0 >= self.total && self.runner_up * 2.0 < self.area
     }
 }
 

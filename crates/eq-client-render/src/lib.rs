@@ -17,8 +17,11 @@ use camera::{
     OrbitCamera, behind, camera_relative_direction, orbit_camera, spawn_camera, start_behind,
 };
 use gpu_assets::{create_material, create_render_primitives, create_texture_images};
+pub use scene_collision::{
+    SpotVerdict, check_select_spot, propose_select_spot, select_spot_main_island, select_spot_mesh,
+    zone_collision,
+};
 use scene_collision::{TerrainSurface, collision_triangles, collision_world, object_transform};
-pub use scene_collision::{propose_select_spot, zone_collision};
 pub use spell_provider::SightProvider;
 pub(crate) use systems::Stage;
 use systems::{init_presentation, install_overlays, schedule};

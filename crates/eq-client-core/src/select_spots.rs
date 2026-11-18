@@ -77,7 +77,12 @@ impl Spot {
 
 /// The spots, by zone short name.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct Spots(HashMap<String, Spot>);
+pub struct Spots {
+    spots: HashMap<String, Spot>,
+    /// Why a row the reachability check flags is kept as it is, by zone:
+    /// a row's comment that starts `kept:`.
+    kept: HashMap<String, String>,
+}
 
 impl Spots {
     /// The spots built into the client.
@@ -91,21 +96,21 @@ impl Spots {
         &SPOTS
     }
 
-    /// Reads a spots file: one zone a line, `#` starting a comment.
+    /// Reads a spots file: one zone a line, `#` starting a comment. A row's
+    /// comment that starts `kept:` gives the reason the row stays although
+    /// the reachability check flags it.
     ///
     /// # Errors
     /// Names the first line that isn't a short name, six numbers and a
-    /// state, or that lists a zone a second time.
+    /// state, that lists a zone a second time, or that is kept without a
+    /// reason.
     pub fn parse(text: &str) -> Result<Self, String> {
         let mut spots = HashMap::new();
+        let mut kept = HashMap::new();
         for (index, line) in text.lines().enumerate() {
             let number = index + 1;
-            let words: Vec<&str> = line
-                .split('#')
-                .next()
-                .unwrap_or_default()
-                .split_whitespace()
-                .collect();
+            let (data, comment) = line.split_once('#').unwrap_or((line, ""));
+            let words: Vec<&str> = data.split_whitespace().collect();
             let [zone, numbers @ .., state] = &words[..] else {
                 continue;
             };
@@ -133,22 +138,39 @@ impl Spots {
                 pitch,
                 reviewed,
             };
-            if spots.insert(zone.to_ascii_lowercase(), spot).is_some() {
+            let zone = zone.to_ascii_lowercase();
+            if let Some(reason) = comment.trim().strip_prefix("kept:") {
+                let reason = reason.trim();
+                if reason.is_empty() {
+                    return Err(format!("line {number}: kept needs a reason"));
+                }
+                kept.insert(zone.clone(), reason.to_owned());
+            }
+            if spots.insert(zone.clone(), spot).is_some() {
                 return Err(format!("line {number}: {zone} is listed twice"));
             }
         }
-        Ok(Self(spots))
+        Ok(Self { spots, kept })
     }
 
     /// The spot for a zone, by its short name.
     #[must_use]
     pub fn get(&self, zone: &str) -> Option<&Spot> {
-        self.0.get(&zone.to_ascii_lowercase())
+        self.spots.get(&zone.to_ascii_lowercase())
+    }
+
+    /// Why a zone's row is kept although the reachability check flags it,
+    /// when its row says so.
+    #[must_use]
+    pub fn kept(&self, zone: &str) -> Option<&str> {
+        self.kept
+            .get(&zone.to_ascii_lowercase())
+            .map(String::as_str)
     }
 
     /// Every zone listed, with its spot.
     pub fn iter(&self) -> impl Iterator<Item = (&str, &Spot)> {
-        self.0.iter().map(|(zone, spot)| (zone.as_str(), spot))
+        self.spots.iter().map(|(zone, spot)| (zone.as_str(), spot))
     }
 }
 
@@ -191,8 +213,11 @@ struct Floor {
 /// `floor_surfaces` contains only upward-authored drawn faces: a downward
 /// ceiling cannot nominate a spot even though the collision ray hits it.
 /// `wet` says whether a point is in water or lava. The standing floor,
-/// camera orbit and some visible background must be dry. None when no
-/// floor qualifies. A proposal remains unreviewed until visually inspected.
+/// camera orbit and some visible background must be dry. `reachable` says
+/// whether a player can walk to a floor (feet in the renderer's frame), so
+/// a cliff top or a wall top with the longest views is never chosen; only
+/// floors it takes are weighed. None when no floor qualifies. A proposal
+/// remains unreviewed until visually inspected.
 #[must_use]
 pub fn propose(
     world: &CollisionWorld,
@@ -200,8 +225,12 @@ pub fn propose(
     floor_surfaces: &CollisionWorld,
     (min, max): (Vec3, Vec3),
     wet: impl Fn(Vec3) -> bool,
+    reachable: impl Fn(Vec3) -> bool,
 ) -> Option<Spot> {
-    let floors = floors(world, surfaces, floor_surfaces, (min, max), &wet);
+    let floors: Vec<Floor> = floors(world, surfaces, floor_surfaces, (min, max), &wet)
+        .into_iter()
+        .filter(|floor| reachable(floor.feet))
+        .collect();
     let covered = floors.iter().filter(|floor| floor.covered).count();
     // A dungeon's shell gives each column one open floor on top of at least
     // one covered floor inside, so covered floors at least match open ones.
@@ -521,6 +550,7 @@ mod tests {
             &world,
             (Vec3::new(-80.0, 0.0, -200.0), Vec3::new(80.0, 40.0, 60.0)),
             |_| false,
+            |_| true,
         )
         .unwrap();
         let feet = eq_client_axes::from_world(Vec3::new(spot.loc[1], spot.loc[0], spot.loc[2]));
@@ -531,6 +561,68 @@ mod tests {
         assert!(toward.z > 0.5, "faces the wall: {toward}");
         assert!(spot.distance > 0.0 && spot.distance <= DISTANCE);
         assert!(!spot.reviewed);
+    }
+
+    #[test]
+    fn a_kept_row_says_why_and_a_kept_row_without_a_reason_is_refused() {
+        let spot = Spot {
+            loc: [1.0, 2.0, 3.0],
+            heading: 0.0,
+            distance: 25.0,
+            pitch: 10.0,
+            reviewed: true,
+        };
+        let text = format!(
+            "{}  # kept: pads join the levels\n{}  # a note\n",
+            spot.line("erudnint"),
+            spot.line("ecommons")
+        );
+        let spots = Spots::parse(&text).unwrap();
+        assert_eq!(spots.kept("ErudNint"), Some("pads join the levels"));
+        assert_eq!(spots.kept("ecommons"), None);
+        assert_eq!(spots.get("erudnint"), Some(&spot));
+        let bare = format!("{}  # kept:  \n", spot.line("erudnint"));
+        assert!(Spots::parse(&bare).unwrap_err().contains("reason"));
+    }
+
+    #[test]
+    fn a_cliff_top_no_walk_reaches_is_never_proposed() {
+        // A wide floor with a flat-topped block in its middle, 30 high: the
+        // block's top has the longest views and lies nearest the middle, so
+        // without a reachability rule it wins; with one that takes only the
+        // floor around it, the character stands on that floor.
+        let mut triangles = floor(200.0, 0.0);
+        triangles.extend(floor(40.0, 30.0));
+        for (from, to) in [
+            ([-40.0, -40.0], [40.0, -40.0]),
+            ([40.0, -40.0], [40.0, 40.0]),
+            ([40.0, 40.0], [-40.0, 40.0]),
+            ([-40.0, 40.0], [-40.0, -40.0]),
+        ] {
+            triangles.extend(wall(from, to, 30.0));
+        }
+        let world = CollisionWorld::new(triangles).unwrap();
+        let bounds = (
+            Vec3::new(-200.0, 0.0, -200.0),
+            Vec3::new(200.0, 30.0, 200.0),
+        );
+        let height = |spot: Spot| spot.loc[2];
+        let anywhere = propose(&world, &world, &world, bounds, |_| false, |_| true).unwrap();
+        assert!(
+            (height(anywhere) - 30.0).abs() < 0.01,
+            "today's rule takes the top: {anywhere:?}"
+        );
+        let walked = propose(
+            &world,
+            &world,
+            &world,
+            bounds,
+            |_| false,
+            |feet| feet.y < 1.0,
+        )
+        .unwrap();
+        assert!(height(walked).abs() < 0.01, "on the floor: {walked:?}");
+        assert!(propose(&world, &world, &world, bounds, |_| false, |_| false).is_none());
     }
 
     #[test]
@@ -576,6 +668,7 @@ mod tests {
             &world,
             (Vec3::new(-50.0, 0.0, -50.0), Vec3::new(50.0, 30.0, 50.0)),
             |_| false,
+            |_| true,
         )
         .unwrap();
         assert!(spot.loc[2].abs() < 0.01, "on the room's floor: {spot:?}");
@@ -588,8 +681,8 @@ mod tests {
             Vec3::new(-100.0, 0.0, -100.0),
             Vec3::new(100.0, 10.0, 100.0),
         );
-        assert!(propose(&world, &world, &world, bounds, |_| true).is_none());
-        assert!(propose(&world, &world, &world, bounds, |_| false).is_some());
+        assert!(propose(&world, &world, &world, bounds, |_| true, |_| true).is_none());
+        assert!(propose(&world, &world, &world, bounds, |_| false, |_| true).is_some());
     }
 
     #[test]
@@ -609,10 +702,10 @@ mod tests {
         );
         let wet = |point: Vec3| point.y <= 0.0 && point.y > -30.0;
         assert!(
-            propose(&world, &world, &world, bounds, wet).is_some(),
+            propose(&world, &world, &world, bounds, wet, |_| true).is_some(),
             "the old geometry would choose the shell"
         );
-        assert!(propose(&world, &surfaces, &surfaces, bounds, wet).is_none());
+        assert!(propose(&world, &surfaces, &surfaces, bounds, wet, |_| true).is_none());
     }
 
     #[test]
@@ -636,6 +729,7 @@ mod tests {
             &surfaces,
             (Vec3::new(-50.0, 0.0, -50.0), Vec3::new(50.0, 60.0, 50.0)),
             |_| false,
+            |_| true,
         )
         .unwrap();
         assert!(
@@ -653,7 +747,17 @@ mod tests {
         );
         // Model an exact BSP plane that reports neither kind, with liquid
         // immediately under it. The old feet+1 check sees only dry air.
-        assert!(propose(&world, &world, &world, bounds, |point| point.y < 0.0).is_none());
+        assert!(
+            propose(
+                &world,
+                &world,
+                &world,
+                bounds,
+                |point| point.y < 0.0,
+                |_| true
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -665,7 +769,17 @@ mod tests {
             Vec3::new(-100.0, 0.0, -100.0),
             Vec3::new(100.0, 15.0, 100.0),
         );
-        assert!(propose(&world, &world, &world, bounds, |point| point.y > 1.5).is_none());
+        assert!(
+            propose(
+                &world,
+                &world,
+                &world,
+                bounds,
+                |point| point.y > 1.5,
+                |_| true
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -676,7 +790,7 @@ mod tests {
             Vec3::new(100.0, 10.0, 100.0),
         );
         let wet = |point: Vec3| point.with_y(0.0).length() > 12.0 && point.y <= 0.0;
-        assert!(propose(&world, &world, &world, bounds, wet).is_none());
+        assert!(propose(&world, &world, &world, bounds, wet, |_| true).is_none());
     }
 
     #[test]
@@ -695,7 +809,7 @@ mod tests {
             Vec3::new(-200.0, 0.0, -200.0),
             Vec3::new(200.0, 10.0, 200.0),
         );
-        assert!(propose(&world, &world, &world, bounds, wet).is_none());
+        assert!(propose(&world, &world, &world, bounds, wet, |_| true).is_none());
     }
 
     #[test]

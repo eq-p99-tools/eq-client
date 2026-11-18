@@ -11,8 +11,16 @@
 # One zone a line: short name, y, x, z, heading, distance, pitch, and
 # "reviewed" once a render of the spot has been looked at, "unreviewed"
 # while it is the tool's untouched proposal. Anything after "#" is a
-# comment. A zone without a line uses the fallback: the highest surface at
-# the centre of the zone's bounds.
+# comment; a row's comment "# kept: <reason>" keeps the row although the
+# reachability check flags it (a door, lift or teleport pad joins floors
+# the navigation mesh can't). A zone without a line uses the fallback: the
+# highest surface at the centre of the zone's bounds.
+#
+# Reachable (our rule, not the program's): the floor the preview stands on
+# lies on the zone's main island, the largest by dry floor area on its
+# navigation mesh, or that island's drops lead down to it. The spot tool
+# proposes only such floors, and propose_select_spots --check tests every
+# row against it.
 #
 # 2026-11-03: 202 rows were marked reviewed after the offline four-angle
 # audit of every zone's proposal (812 stills, 50 replacements picked by
