@@ -1059,7 +1059,8 @@ struct Footing<Boat = eq_client_core::movement::CarrierSample> {
 /// How far, squared, a character moved itself between two footings: across
 /// the boat it stood on both times, so a boat carrying a still rider is not
 /// the rider walking; else across the world. A still rider stands while the
-/// boat moves, as the original client shows it (Adam's sighting 11-18).
+/// boat moves. Inferred, recording checklist 6.479: the program's choice is
+/// unread.
 fn moved<Boat: PartialEq>(previous: Footing<Boat>, now: Footing<Boat>) -> f32 {
     let local = |at: Vec3, pose| {
         let world = eq_client_core::world_position(at.to_array(), 0.0);
