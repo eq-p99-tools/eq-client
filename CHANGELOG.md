@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Doors of open type 54, 55 and 56 are no longer clicked on Titanium: the
+  program's click routine returns at once for them, sending and saying
+  nothing (read R37). They stay solid at their placed pose, as before.
+- Debug logs name what stopped a movement proposal that resolved short: the
+  zone, a door id or a carrier spawn id, with the contact normal and no world
+  coordinates. Diagnostic only; movement is unchanged.
 - Script editor: one highlighter, driven by the parser's own command list,
   colours the editor, the Execution view and help examples alike, now
   including statement keywords, types, quoted text, client fields and

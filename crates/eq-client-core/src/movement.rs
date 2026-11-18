@@ -144,6 +144,30 @@ impl CollisionMesh {
     }
 }
 
+/// What a body sweep touched.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Obstacle {
+    /// The zone's own geometry.
+    Terrain,
+    /// A door, by its id.
+    Door(u8),
+    /// A placed obstacle that belongs to no door.
+    Static,
+    /// A carrier spawn's model, by its spawn id.
+    Carrier(u16),
+}
+
+/// The first wall a body sweep meets, for diagnostics.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Contact {
+    /// What was met.
+    pub obstacle: Obstacle,
+    /// The contact normal on the body, in render axes.
+    pub normal: Vec3,
+    /// The fraction of the sweep reached before contact.
+    pub time_of_impact: f32,
+}
+
 /// Static zone geometry plus replaceable nearby obstacles, and the zone's
 /// water and lava where they are known. A clone shares all of it, so a
 /// snapshot for another thread costs a few reference counts.
@@ -401,18 +425,45 @@ impl CollisionWorld {
     }
 
     fn wall_meshes(&self) -> impl Iterator<Item = Surface<'_>> {
-        std::iter::once(Surface::identity(&self.terrain))
+        self.labelled_wall_meshes().map(|(_, surface)| surface)
+    }
+
+    /// The walls, each with what it belongs to.
+    fn labelled_wall_meshes(&self) -> impl Iterator<Item = (Obstacle, Surface<'_>)> {
+        std::iter::once((Obstacle::Terrain, Surface::identity(&self.terrain)))
             .chain(
                 self.obstacles
                     .iter()
                     .filter(|(.., solidity)| solidity.wall)
-                    .map(|(_, mesh, _)| Surface::identity(mesh)),
+                    .map(|(door, mesh, _)| {
+                        (
+                            door.map_or(Obstacle::Static, Obstacle::Door),
+                            Surface::identity(mesh),
+                        )
+                    }),
             )
             .chain(
                 self.spawn_obstacles
                     .iter()
-                    .map(|(_, instance)| instance.surface()),
+                    .map(|(id, instance)| (Obstacle::Carrier(*id), instance.surface())),
             )
+    }
+
+    /// What the body would touch first sweeping `delta` from `feet`, and the
+    /// contact normal, for diagnostics only: movement never calls it.
+    #[must_use]
+    pub fn first_contact(&self, feet: Vec3, delta: Vec3, height: f32) -> Option<Contact> {
+        if !feet.is_finite() || !delta.is_finite() || delta.length_squared() < 1e-12 {
+            return None;
+        }
+        self.labelled_sweep(feet, delta, height)
+            .ok()
+            .flatten()
+            .map(|(obstacle, hit)| Contact {
+                obstacle,
+                normal: Vec3::from_array(hit.normal1.to_array()),
+                time_of_impact: hit.time_of_impact,
+            })
     }
 
     /// The door whose floor holds the player up at `position`, between
@@ -892,7 +943,18 @@ impl CollisionWorld {
         delta: Vec3,
         height: f32,
     ) -> Result<Option<parry3d::query::ShapeCastHit>, parry3d::query::Unsupported> {
-        let (pose, capsule) = body(feet, height);
+        Ok(self
+            .labelled_sweep(feet, delta, height)?
+            .map(|(_, hit)| hit))
+    }
+
+    /// The nearest wall hit with what it belongs to.
+    fn labelled_sweep(
+        &self,
+        feet: Vec3,
+        delta: Vec3,
+        height: f32,
+    ) -> Result<Option<(Obstacle, parry3d::query::ShapeCastHit)>, parry3d::query::Unsupported> {
         // A sweep that starts inside the margin (or overlapping) is refused only when it
         // goes deeper; one that stops there would pin the character in every direction.
         let options = ShapeCastOptions {
@@ -901,8 +963,9 @@ impl CollisionWorld {
             stop_at_penetration: false,
             compute_impact_geometry_on_penetration: true,
         };
-        let mut nearest: Option<parry3d::query::ShapeCastHit> = None;
-        for mesh in self.wall_meshes() {
+        let (pose, capsule) = body(feet, height);
+        let mut nearest: Option<(Obstacle, parry3d::query::ShapeCastHit)> = None;
+        for (obstacle, mesh) in self.labelled_wall_meshes() {
             let hit = cast_shapes(
                 &pose,
                 Vector::from_array(delta.to_array()),
@@ -922,9 +985,9 @@ impl CollisionWorld {
             if let Some(hit) = hit
                 && nearest
                     .as_ref()
-                    .is_none_or(|previous| hit.time_of_impact < previous.time_of_impact)
+                    .is_none_or(|(_, previous)| hit.time_of_impact < previous.time_of_impact)
             {
-                nearest = Some(hit);
+                nearest = Some((obstacle, hit));
             }
         }
         Ok(nearest)
@@ -948,6 +1011,43 @@ mod tests {
             [[-20.0, y, -20.0], [20.0, y, 20.0], [-20.0, y, 20.0]],
         ]
     }
+    /// A wall across x = `x`, two units thick, from the floor up.
+    fn wall(x: f32) -> Arc<CollisionMesh> {
+        let (near, far) = (x, x + 2.0);
+        Arc::new(
+            CollisionMesh::new([
+                [[near, 0.0, -10.0], [near, 20.0, -10.0], [near, 20.0, 10.0]],
+                [[near, 0.0, -10.0], [near, 20.0, 10.0], [near, 0.0, 10.0]],
+                [[far, 0.0, -10.0], [far, 20.0, 10.0], [far, 20.0, -10.0]],
+                [[far, 0.0, -10.0], [far, 0.0, 10.0], [far, 20.0, 10.0]],
+            ])
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn a_contact_names_the_nearest_door_carrier_or_nothing() {
+        let mut world = CollisionWorld::new(floor(0.0)).unwrap();
+        world.set_door_obstacles(vec![(7, wall(8.0))]);
+        world.set_spawn_obstacles(vec![(50, wall(4.0))]);
+        let feet = Vec3::new(0.0, 0.0, 0.0);
+        let contact = world
+            .first_contact(feet, Vec3::X * 12.0, 6.0)
+            .expect("the carrier stands nearer");
+        assert_eq!(contact.obstacle, Obstacle::Carrier(50));
+        assert!(contact.normal.x > 0.9, "{:?}", contact.normal);
+        assert!((0.0..1.0).contains(&contact.time_of_impact));
+        world.set_spawn_obstacles(Vec::new());
+        assert_eq!(
+            world
+                .first_contact(feet, Vec3::X * 12.0, 6.0)
+                .map(|c| c.obstacle),
+            Some(Obstacle::Door(7))
+        );
+        assert!(world.first_contact(feet, -Vec3::X * 5.0, 6.0).is_none());
+        assert!(world.first_contact(feet, Vec3::ZERO, 6.0).is_none());
+    }
+
     #[test]
     fn placement_checks_require_a_nearby_surface_and_no_lower_floor() {
         let level = CollisionWorld::new(floor(0.0)).unwrap();
