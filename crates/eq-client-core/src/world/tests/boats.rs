@@ -97,3 +97,29 @@ fn an_arrival_aboard_holds_until_placed_and_a_new_admission_forgets_it() {
     game(&mut world, entered(2));
     assert!(world.arrival().is_none() && !world.arrival_held());
 }
+
+#[test]
+fn a_server_move_within_the_zone_ends_a_held_arrival() {
+    use crate::boats::riders::Arrival;
+    let mut world = admitted();
+    game(
+        &mut world,
+        WorldEvent::Arrival {
+            session_id: 1,
+            arrival: Arrival::Waiting {
+                name: "SirensBane00".into(),
+            },
+        },
+    );
+    assert!(world.arrival_held());
+    let moved = game(
+        &mut world,
+        WorldEvent::SameZoneRelocated(crate::SameZoneRelocation {
+            session_id: 1,
+            spawn_id: 9,
+            position: WorldPosition::default(),
+        }),
+    );
+    assert!(!moved.ignored);
+    assert!(world.arrival().is_none() && !world.arrival_held());
+}

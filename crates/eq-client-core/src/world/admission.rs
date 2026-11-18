@@ -261,6 +261,9 @@ impl ClientWorld {
             changes,
         );
         changes.same_zone_relocation = true;
+        // The server placed the player, so the session holds no arrival
+        // aboard any longer (it forgets the boat on a zone command).
+        self.zone.arrival = None;
         let revision = self
             .same_zone_relocation
             .map_or(1, |(revision, _)| revision.saturating_add(1));

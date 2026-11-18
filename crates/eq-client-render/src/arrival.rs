@@ -122,7 +122,7 @@ pub(super) fn place(
     };
     let position = placement(
         collision,
-        world.carriers().pose(*sample, now),
+        world.carriers().pose(*sample, stamp.created),
         *local,
         body.feet_offset,
         sample.spawn_id,
