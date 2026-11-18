@@ -33,6 +33,17 @@ until the worker position is usable. The Air Remaining gauge is hidden
 after 250 ms without a result, and a late result allows one due check
 against the current sample.
 
+Local EQEmu breathing uses received AA selections and definitions alongside
+parsed equipment and received buff effects. Every selected definition must be
+known before its signed water-breathing contribution can participate. A known
+positive total resolves breathing independently of reserve capacity. Missing
+definitions, unconfirmed buff replacements and unsupported effect inputs remain
+unavailable. AA breath-level percentages are supported; AA changes to effective
+stamina, stat caps or invulnerability still withhold unprotected reserve/damage
+calculation. Modelled landing contributions require a known non-Bard caster and
+an unambiguous native refresh decision; their duration remains modelled.
+Other server policies retain their existing calculation limits.
+
 Movement initially waits for usable inventory, coin, attribute and buff inputs.
 Once a grant is in force, ordinary belongings changes, buff updates and spell
 landings ask for fresh inputs while the existing speeds continue. A usable new
@@ -528,3 +539,11 @@ ownership conflict invalidates the old snapshot for that ID.
 Camp uses timed preparation and acknowledgement where offered. The local
 `--demo-trade` mode previews loot, merchant and trade UI.
 See the [policy matrix](../SUPPORT.md).
+
+Boat acquire/release is available on EQEmu with `/boat acquire` and `/boat release`
+when the current accepted floor link identifies a supported race-141 vessel.
+An acquire remains pending until its unambiguous server echo. An unresolved
+same-ID acquisition needs a release echo before retrying; completed ordered
+releases permit ordinary reacquisition. A late acquire cannot undo release
+intent or timeout. Walking off requests release. P99,
+EQMac, steering and control across zone admissions remain unverified gaps.

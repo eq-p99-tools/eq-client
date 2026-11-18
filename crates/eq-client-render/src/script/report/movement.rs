@@ -97,6 +97,8 @@ pub(in crate::script) fn report(
             )
         }
     ));
+    movement_state["boat_control"] = json!(world.boat_control());
+    movement_state["boat_control_notice"] = json!(world.boat_control_notice());
     movement_state["camera_detached"] = json!(camera_detached);
     info!(label, %movement_state, "Script movement report");
 }

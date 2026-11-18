@@ -90,6 +90,7 @@ mod outbox;
 mod outfit;
 mod paperdoll;
 mod pet;
+mod piloting;
 mod preview;
 #[cfg(test)]
 mod probes;

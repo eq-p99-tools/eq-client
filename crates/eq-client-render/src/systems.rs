@@ -514,6 +514,7 @@ pub(super) fn liquid_and_movement()
 -> bevy::ecs::schedule::ScheduleConfigs<bevy::ecs::system::ScheduleSystem> {
     (
         crate::breath::update,
+        crate::piloting::update,
         motion::input,
         motion::spend_endurance,
     )

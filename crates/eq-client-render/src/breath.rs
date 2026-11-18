@@ -1,4 +1,6 @@
 //! Samples local air from the player's head, independently of camera and HP.
+#[cfg(test)]
+mod aa_tests;
 pub(super) mod head;
 mod lava;
 mod modifiers;
@@ -263,6 +265,11 @@ fn submerged(
         .spawn(player.spawn_id)
         .map_or(player.race, |spawn| spawn.state.race);
     if water_breathing_race(race) {
+        return Ok((Sample::CanBreathe, None));
+    }
+    if world.can(Capability::Drowning)
+        && modifiers::read(world, spells, player, modifiers::Need::Breathing)?.water_breathing
+    {
         return Ok((Sample::CanBreathe, None));
     }
     let inputs = modifiers::read(world, spells, player, modifiers::Need::Air)?;

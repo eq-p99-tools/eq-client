@@ -12,6 +12,18 @@ One statement per line. Blank lines are ignored. `#` begins a comment, including
 
 Durations are milliseconds. Headings use EQ's 0 to 512 units; positions and distances use EQ world units unless described as screen pixels. The first invalid line prevents the entire buffer from running.
 
+## Boat acquire/release
+
+`boat acquire` and `boat release` use the same deferred actions as `/boat acquire`
+and `/boat release`. EQEmu offers this first slice for a supported race-141
+vessel under the player's current accepted floor link. There is no steering
+command. P99 and EQMac are unverified gaps. Script step completion means input
+submission; inspect `report [label]`'s movement `boat_control` for correlated state and
+`boat_control_notice` for the separate raw received packet. An unresolved acquisition needs an observed release echo before a same-ID
+retry; a completed ordered release permits ordinary reacquisition. Walk-off, camp and admission changes withdraw local control. An unanswered
+floor-link withdrawal is retried until the worker reports changed state; queue
+acceptance alone does not settle it.
+
 ## Your current session
 
 Run a script from the workbench while logged in to act on your current character. Commands use your existing target and UI state. Login and character-selection commands are unnecessary for this workflow.

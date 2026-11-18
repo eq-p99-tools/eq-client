@@ -219,12 +219,26 @@ impl ClientWorld {
         let held: Vec<u32> = self.buffs.spells().filter(|held| *held != spell).collect();
         let new = spells.effect_ids(spell);
         // Step 2's blocker test, only partly read: any held spell with
-        // effect 148 leaves the landing unplaced.
-        let blocker = held.iter().any(|held| {
+        // effect 148 leaves the landing unplaced. Native 0x40ea07 includes
+        // the same spell only for 0x0abf; step 4 still excludes it.
+        let blockers: Vec<u32> = self
+            .buffs
+            .spells()
+            .filter(|held| *held != spell || spell == 0x0abf)
+            .collect();
+        let blocker = blockers.iter().try_fold(false, |found, held| {
+            let ids = spells.effect_ids(*held)?;
+            Some(found || ids.contains(&148))
+        });
+        let blocker = if blockers.iter().any(|held| {
             spells
                 .effect_ids(*held)
                 .is_some_and(|ids| ids.contains(&148))
-        });
+        }) {
+            Some(true)
+        } else {
+            blocker
+        };
         // Step 4 is not ported: a held spell that shares an effect with the
         // landing at a position both compare (before an effect 254), or
         // whose effects are not known, could be the one it replaces.
@@ -242,13 +256,12 @@ impl ClientWorld {
         // unknown.
         let caster_level = self
             .spawn(effect.caster_id)
-            .filter(|caster| caster.state.class != Some(8))
+            .filter(|caster| caster.state.class.is_some_and(|class| class != 8))
             .map(|caster| caster.state.level)
             .filter(|level| *level != 0);
         Landing {
             finder: self.generation().buff_placement(),
-            keeps_record: new
-                .is_some_and(|ids| ids.iter().any(|id| matches!(id, 0x43 | 0x65 | 0x71))),
+            keeps_record: new.map(|ids| ids.iter().any(|id| matches!(id, 0x43 | 0x65 | 0x71))),
             band: spells.buff_band(spell),
             blocker,
             conflict,

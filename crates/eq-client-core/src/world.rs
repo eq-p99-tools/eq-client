@@ -273,6 +273,7 @@ pub struct ClientWorld {
     // The admission: from entering a zone until the next admission.
     session_id: Option<u64>,
     liquid_hazards: LiquidHazardInputs,
+    environmental_aa: crate::alternate_advancement::State,
     /// The session's interpreted stun state and latest revision; None is
     /// unknown/unconfigured, not proof of clear control.
     own_stun: Option<(u64, crate::control::StunState)>,
@@ -398,6 +399,11 @@ pub struct ClientWorld {
 }
 
 impl ClientWorld {
+    /// This admission's received environmental AA observations.
+    pub const fn environmental_aa(&self) -> &crate::alternate_advancement::State {
+        &self.environmental_aa
+    }
+
     /// Applies one update from the session and says what a front end must redo.
     /// The installed client's spell data tells lasting effects from instant ones.
     pub fn apply(
@@ -984,6 +990,12 @@ impl ClientWorld {
             | WorldEvent::SystemInfoReported { .. } => (),
 
             // The zone and what is in it.
+            WorldEvent::BoatControl(packet) => {
+                if self.in_world() { self.zone.boat_notice = Some(*packet); }
+            }
+            WorldEvent::BoatControlState { session_id, state } => {
+                if self.accepts_reply(*session_id) { self.zone.boat_control = *state; }
+            }
             WorldEvent::Carriers(updates) => { for update in updates { self.zone.carriers.apply(*update); } },
             WorldEvent::Spawns(spawns) => {
                 for spawn in spawns {
@@ -1193,6 +1205,14 @@ impl ClientWorld {
             } => self.level_news(*current, *experience, news),
             WorldEvent::Skill { skill_id, value } => self.skill_news(*skill_id, *value, news),
             WorldEvent::Disciplines(list) => self.disciplines_news(list, news),
+            WorldEvent::AlternateAdvancement { session_id, updates } => {
+                if self.session_id == Some(*session_id) && !self.ended && self.player.is_some()
+                    && self.generation == crate::GameDialect::Titanium {
+                    for update in updates { self.environmental_aa.apply(update); }
+                } else {
+                    news.ignored = true;
+                }
+            }
             WorldEvent::DisciplineReuse(reuse) => self.casting.discipline_timers.set(*reuse, now),
             WorldEvent::LinkedReuse(reuse) => self.casting.linked_timers.set(*reuse, now),
             WorldEvent::Discipline(discipline) => {
@@ -1720,6 +1740,8 @@ impl ClientWorld {
 
     /// Forgets what the reason makes stale, and says so.
     fn reset(&mut self, reason: Reset) -> Changes {
+        self.zone.boat_control = crate::boats::ControlState::Unknown;
+        self.zone.boat_notice = None;
         self.zone.pet_buffs.suspend();
         self.movement_options_result = None;
         self.held_models = held_models::HeldModels::default();
@@ -1801,22 +1823,7 @@ impl ClientWorld {
             Reset::Lost {
                 ended,
                 transferring,
-            } => {
-                self.zone.weather = None;
-                self.drop_actions();
-                if ended || !transferring {
-                    self.casting.reset_cooldowns();
-                    self.buffs.clear();
-                }
-                if ended {
-                    self.spell_book = None;
-                    self.servers = None;
-                    self.characters = None;
-                    self.pending_transfer = None;
-                    self.inventory = Inventory::default();
-                    self.forget_zone();
-                }
-            }
+            } => self.reset_after_loss(ended, transferring),
             Reset::Zoning { .. } => {
                 self.zone.weather = None;
                 self.drop_actions();
@@ -1826,6 +1833,25 @@ impl ClientWorld {
         Changes {
             reset: Some(reason),
             ..Changes::default()
+        }
+    }
+
+    /// Withdraws connection-dependent state, retaining a pending transfer's facts.
+    fn reset_after_loss(&mut self, ended: bool, transferring: bool) {
+        self.zone.weather = None;
+        self.drop_actions();
+        if ended || !transferring {
+            self.casting.reset_cooldowns();
+            self.buffs.clear();
+        }
+        if ended {
+            self.environmental_aa = crate::alternate_advancement::State::default();
+            self.spell_book = None;
+            self.servers = None;
+            self.characters = None;
+            self.pending_transfer = None;
+            self.inventory = Inventory::default();
+            self.forget_zone();
         }
     }
 
@@ -1850,6 +1876,7 @@ impl ClientWorld {
 
     /// Forgets the admission and its zone.
     fn forget_admission(&mut self) {
+        self.environmental_aa = crate::alternate_advancement::State::default();
         self.liquid_hazards = LiquidHazardInputs::default();
         self.characters = None;
         self.last_consent_refusal = None;

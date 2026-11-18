@@ -17,6 +17,8 @@ use std::{collections::BTreeMap, time::Instant};
 #[derive(Default)]
 pub(super) struct Zone {
     pub(super) spawns: BTreeMap<u16, Spawn>,
+    pub(super) boat_control: crate::boats::ControlState,
+    pub(super) boat_notice: Option<crate::boats::ControlBoat>,
     pub(super) carriers: eq_network_game::movement::Carriers,
     pub(super) sees_invisible: bool,
     /// Level colors the server reported for spawns the player considered.
@@ -99,6 +101,18 @@ impl Zone {
     }
 
     fn clear_spawn(&mut self, id: u16) {
+        use crate::boats::ControlState;
+        let vessel = match self.boat_control {
+            ControlState::Acquiring { vessel, .. }
+            | ControlState::Acquired(vessel)
+            | ControlState::Releasing(vessel)
+            | ControlState::Released(vessel)
+            | ControlState::Unconfirmed(vessel) => Some(vessel),
+            ControlState::Unknown => None,
+        };
+        if let Some(vessel) = vessel.filter(|vessel| vessel.spawn_id == id) {
+            self.boat_control = ControlState::Unconfirmed(vessel);
+        }
         self.carriers
             .apply(eq_network_game::movement::CarrierUpdate::Removed(id));
         self.spawns.remove(&id);
