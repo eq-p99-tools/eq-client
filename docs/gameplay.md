@@ -65,9 +65,11 @@ offer bounded swimming in classic water marked by the installed zone.
 Wet movement starts when the character's body origin enters that region.
 Wade or fall into water, move in any
 horizontal direction, and use first-person or mouse-look pitch to swim up or
-down with forward or backward input. The surface holds the swimmer in the water,
-and a supported bank returns them to ordinary movement. At the surface, look up
-and swim forward toward a nearby bank to use Titanium's shoreline boost.
+down with forward or backward input. A level stroke can cross into known air
+above the same continuous water while the feet stay wet; ordinary gravity then
+returns the body origin to the water. Unknown regions and dry gaps still hold
+the stroke. A supported bank returns the swimmer to ordinary movement. At the
+surface, look up and swim forward toward a nearby bank to use Titanium's shoreline boost.
 The client checks that the capsule can reach a supported landing. Automated
 ground routes and EQMac-era sessions retain the deep-water guard. Ordinary
 movement guards against entering lava.
@@ -94,7 +96,7 @@ Turning the setting off restores ordinary movement on the next sample.
 Scripted ground route finding uses solid terrain.
 
 The swim rate is a conservative bound based on the session's current
-movement grant. Exact native speed, skill scaling and live P99 wet movement
+movement grant. Exact native speed, wet gravity, skill scaling and live P99 wet movement
 remain to be verified. The Titanium air meter samples the character's
 model-dependent head reference separately. Drowning and lava reports are
 available on local-only EQEmu. See [settings](settings.md).

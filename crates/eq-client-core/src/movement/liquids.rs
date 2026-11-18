@@ -58,6 +58,13 @@ pub trait Liquids: Send + Sync {
         Some(0.0..0.0)
     }
 
+    /// The segment starts in known water, ends in known air, and its whole
+    /// segment contains only resolved air or water. This does not establish
+    /// water under the swimmer; the collision caller checks that separately.
+    fn water_surface_exit(&self, _from: Vec3, _to: Vec3) -> bool {
+        false
+    }
+
     /// The top and kind of known liquid entered by a vertical ray from above.
     /// Missing surface data leaves ordinary solid ground as the only support.
     fn liquid_surface(&self, _top: Vec3, _bottom: f32) -> Option<(f32, Liquid)> {
@@ -404,6 +411,14 @@ impl Liquids for Boxes {
             reached = reached.max(span.end);
         }
         (reached < 1.0).then_some(reached..1.0)
+    }
+
+    fn water_surface_exit(&self, from: Vec3, to: Vec3) -> bool {
+        from.is_finite()
+            && to.is_finite()
+            && self.liquid_at(from) == Some(Liquid::Water)
+            && self.liquid_at(to).is_none()
+            && !self.passes_through(from, to, Liquid::Lava)
     }
 
     fn liquid_surface(&self, top: Vec3, bottom: f32) -> Option<(f32, Liquid)> {
