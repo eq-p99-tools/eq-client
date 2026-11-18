@@ -19,6 +19,14 @@ pub(in crate::script) struct Code {
     pub(super) variables: Vec<Variable>,
 }
 
+impl Code {
+    /// How many variable slots the script uses.
+    #[cfg(test)]
+    pub(in crate::script) fn variable_count(&self) -> usize {
+        self.variables.len()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Variable {
     pub(super) name: String,
@@ -74,6 +82,29 @@ enum Block {
         start: usize,
         variable: Option<usize>,
     },
+    /// A header that failed. It emits no ops, but its body is read by the
+    /// ordinary rules, so errors inside it are its own: a loop's `break`
+    /// still has a loop, its variable is still known, and an `if` still
+    /// takes its `elif` and `else`.
+    Failed {
+        looping: bool,
+        variable: Option<usize>,
+        alternatives: bool,
+    },
+}
+
+impl Block {
+    /// An `if` chain that an `elif` or `else` at its indent continues.
+    const fn takes_alternatives(&self) -> bool {
+        matches!(
+            self,
+            Self::If { .. }
+                | Self::Failed {
+                    alternatives: true,
+                    ..
+                }
+        )
+    }
 }
 
 /// An open block's place in the source, for indentation.
@@ -109,9 +140,6 @@ pub(in crate::script) struct Builder {
     used: bool,
     indent: Option<char>,
     stray: Option<(usize, Range<usize>)>,
-    /// The indent of a block header that failed, so its body is read for
-    /// its own errors without one for each indent.
-    failed: Option<usize>,
     deferred: Vec<Deferred>,
 }
 
@@ -124,7 +152,6 @@ impl Builder {
             used: false,
             indent: None,
             stray: None,
-            failed: None,
             deferred: Vec::new(),
         }
     }
@@ -139,8 +166,16 @@ impl Builder {
         let code = raw[..super::comment(raw)].trim_end();
         let indent = &code[..code.len() - code.trim_start().len()];
         let code = &code[indent.len()..];
-        self.indentation(indent, code, line)?;
         let start = indent.len();
+        if let Err(fault) = self.indentation(indent, code, line) {
+            // A misplaced header still holds its body, so the body's lines
+            // are read without an indent error each.
+            if let Shape::Keyword(word @ ("if" | "elif" | "else" | "for" | "while")) = shape(code) {
+                self.used = true;
+                self.fail(word, code, line, start, false);
+            }
+            return Err(fault);
+        }
         let at = |fault: Fault| fault.within(raw, code);
         match shape(code) {
             Shape::Blank => Ok(None),
@@ -157,12 +192,12 @@ impl Builder {
             }
             Shape::Keyword(word) => {
                 self.used = true;
-                self.keyword(word, code, line, start).map_err(|fault| {
+                if let Err(fault) = self.keyword(word, code, line, start) {
                     if matches!(word, "if" | "elif" | "else" | "for" | "while") {
-                        self.failed = Some(start);
+                        self.fail(word, code, line, start, true);
                     }
-                    at(fault)
-                })?;
+                    return Err(at(fault));
+                }
                 Ok(None)
             }
             Shape::Assignment(name) => {
@@ -188,10 +223,6 @@ impl Builder {
     /// Close the blocks this line's indent ends and check the indent itself.
     fn indentation(&mut self, indent: &str, code: &str, line: usize) -> Result<(), Fault> {
         let width = indent.len();
-        match self.failed {
-            Some(header) if width > header => return Ok(()),
-            _ => self.failed = None,
-        }
         if let Some(first) = indent.chars().next() {
             let mixed = indent.chars().any(|ch| ch != first)
                 || self.indent.is_some_and(|used| used != first);
@@ -206,7 +237,7 @@ impl Builder {
         {
             if width > top.header {
                 top.body = Some(width);
-            } else if alternative && width == top.header && matches!(top.block, Block::If { .. }) {
+            } else if alternative && width == top.header && top.block.takes_alternatives() {
                 // Report the empty branch but keep the if open for its else.
                 let fault = empty(top.keyword.clone());
                 top.body = Some(width + 1);
@@ -217,21 +248,34 @@ impl Builder {
                 self.empty_block(header, keyword);
             }
         }
-        let mut closed = false;
+        let (mut closed, mut finished) = (false, false);
         while let Some(top) = self.blocks.last() {
-            let body = top
-                .body
-                .expect("only the innermost block can await its body");
-            let pairs = alternative && top.header == width && matches!(top.block, Block::If { .. });
+            // Only the innermost block can still await its body.
+            let body = top.body.unwrap_or(width + 1);
+            let pairs = alternative && top.header == width && top.block.takes_alternatives();
             if body <= width || pairs {
                 break;
             }
-            let header = top.line;
+            let (header, same) = (top.line, top.header == width);
             self.close(header).map_err(Fault::from)?;
             closed = true;
+            finished |= same;
         }
         if alternative {
+            if finished {
+                // The block at this indentation already ended, such as an if that has its else.
+                let (word, message) = if code.starts_with("elif") {
+                    ("elif", "elif requires an if without an else")
+                } else {
+                    ("else", "else requires an open if without an else")
+                };
+                return Err(Fault::at(message, width..width + word.len()));
+            }
             return match self.blocks.last() {
+                Some(top) if top.header != width && top.body == Some(width) => Err(Fault::at(
+                    "this needs an 'if' at the same indentation",
+                    0..width,
+                )),
                 Some(top) if top.header != width => Err(Fault::at(
                     "unindent does not match any outer indentation level",
                     0..width,
@@ -258,11 +302,59 @@ impl Builder {
     }
 
     fn empty_block(&mut self, line: usize, keyword: Range<usize>) {
-        self.deferred.push(Deferred {
-            line,
-            fault: empty(keyword),
-        });
+        // A failed header has its own error; an empty body adds nothing.
+        if !matches!(
+            self.blocks.last().map(|open| &open.block),
+            Some(Block::Failed { .. })
+        ) {
+            self.deferred.push(Deferred {
+                line,
+                fault: empty(keyword),
+            });
+        }
         self.close(line).expect("the block is open");
+    }
+
+    /// Keep a failed header's place: an `elif` or `else` continues its chain
+    /// as a failed one, any other header opens a failed block. `continues` is
+    /// false when the line's indentation was the failure.
+    fn fail(&mut self, word: &str, code: &str, line: usize, indent: usize, continues: bool) {
+        let looping = matches!(word, "for" | "while");
+        // A `for` whose name is sound keeps its variable for the body.
+        let variable = (word == "for")
+            .then(|| inside_header(code[word.len()..].trim()))
+            .and_then(|body| body.split_once(" in "))
+            .map(|(name, _)| name.trim())
+            .filter(|name| *name != "_")
+            .and_then(|name| {
+                self.lookup(name)
+                    .map(|(index, _)| index)
+                    .or_else(|| self.declare(name, Kind::Int, true).ok())
+            });
+        let block = Block::Failed {
+            looping,
+            variable,
+            alternatives: matches!(word, "if" | "elif"),
+        };
+        let keyword = indent..indent + word.len();
+        if continues
+            && matches!(word, "elif" | "else")
+            && let Some(top) = self.blocks.last_mut()
+            && top.header == indent
+        {
+            top.block = block;
+            top.body = None;
+            top.line = line;
+            top.keyword = keyword;
+            return;
+        }
+        self.blocks.push(Open {
+            block,
+            line,
+            header: indent,
+            body: None,
+            keyword,
+        });
     }
 
     /// A keyword line; spans are in `code`, which starts at `indent` in its line.
@@ -412,18 +504,23 @@ impl Builder {
                         .iter()
                         .rev()
                         .find_map(|open| match open.block {
-                            Block::Loop { start, .. } => Some(start),
+                            Block::Loop { start, .. } => Some(Some(start)),
+                            Block::Failed { looping: true, .. } => Some(None),
                             _ => None,
                         })
                         .ok_or_else(|| {
                             Fault::at(format!("'{word}' outside a loop"), keyword.clone())
                         })?;
-                    let op = if word == "break" {
-                        Op::Break(header)
-                    } else {
-                        Op::Continue(header)
-                    };
-                    self.push(line, op);
+                    // Inside a failed loop there is nothing to jump to; the
+                    // script has an error already.
+                    if let Some(header) = header {
+                        let op = if word == "break" {
+                            Op::Break(header)
+                        } else {
+                            Op::Continue(header)
+                        };
+                        self.push(line, op);
+                    }
                 }
             }
             "def" | "return" => {
@@ -539,7 +636,12 @@ impl Builder {
     fn visible(&self, index: usize) -> bool {
         !self.variables[index].loop_counter
             || self.blocks.iter().any(|open| {
-                matches!(open.block, Block::Loop { variable: Some(variable), .. } if variable == index)
+                matches!(
+                    open.block,
+                    Block::Loop { variable: Some(variable), .. }
+                        | Block::Failed { variable: Some(variable), .. }
+                        if variable == index
+                )
             })
     }
 
@@ -553,6 +655,15 @@ impl Builder {
             || self.lookup(name).is_some()
         {
             return Err(format!("variable '{name}' is reserved or already declared"));
+        }
+        // A finished loop's variable of the same name takes the new loop, so
+        // loops in sequence share one slot.
+        if loop_counter
+            && let Some(index) = self.variables.iter().position(|variable| {
+                variable.name == name && variable.loop_counter && variable.kind == kind
+            })
+        {
+            return Ok(index);
         }
         let index = self.variables.len();
         if index == MAX_VARIABLES {
@@ -601,6 +712,20 @@ impl Builder {
     }
 
     fn elif(&mut self, line: usize, condition: Expr) -> Result<(), String> {
+        // A chain whose header failed takes its branches without ops.
+        if let Some(top) = self.blocks.last_mut()
+            && matches!(
+                top.block,
+                Block::Failed {
+                    alternatives: true,
+                    ..
+                }
+            )
+        {
+            top.body = None;
+            top.line = line;
+            return Ok(());
+        }
         let Some(Open {
             block: Block::If { start, jumps },
             body,
@@ -633,6 +758,14 @@ impl Builder {
         let Some(open) = self.blocks.last_mut() else {
             return Err("else requires an open if without an else".into());
         };
+        if let Block::Failed { alternatives, .. } = &mut open.block
+            && *alternatives
+        {
+            *alternatives = false;
+            open.body = None;
+            open.line = line;
+            return Ok(());
+        }
         let Block::If { start, jumps } = &mut open.block else {
             return Err("else requires an open if without an else".into());
         };
@@ -662,6 +795,7 @@ impl Builder {
             Block::If { start, jumps } => (start, jumps),
             Block::Else { jump, jumps } => (jump, jumps),
             Block::Loop { start, .. } => (start, Vec::new()),
+            Block::Failed { .. } => return Ok(()),
         };
         for jump in jumps {
             self.ops[jump].op = Op::Jump(after);
@@ -680,15 +814,20 @@ impl Builder {
 /// Each argument is one literal: a number as written, or quoted text.
 fn arguments(command: &str, call: &str) -> Result<(Vec<String>, Range<usize>), Fault> {
     let free = crate::script::FREE_TEXT.contains(&command);
-    let inner_end = call
-        .rfind(')')
-        .filter(|end| call[end + 1..].trim().is_empty())
-        .ok_or_else(|| {
-            Fault::at(
-                "expected ')' to close the call on the same line",
-                0..call.len(),
-            )
-        })?;
+    let inner_end = call.rfind(')').ok_or_else(|| {
+        Fault::at(
+            "expected ')' to close the call on the same line",
+            0..call.len(),
+        )
+    })?;
+    let after = call[inner_end + 1..].trim();
+    if !after.is_empty() {
+        let start = offset(call, after);
+        return Err(Fault::at(
+            "unexpected text after the call",
+            start..start + after.len(),
+        ));
+    }
     let inside = 1..inner_end;
     let mut words = Vec::new();
     let mut rest = &call[1..inner_end];

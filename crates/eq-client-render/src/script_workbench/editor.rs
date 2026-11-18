@@ -248,13 +248,13 @@ mod tests {
 
     #[test]
     fn choosing_a_problem_moves_the_caret_to_its_line() {
-        let (mut app, ctx) = app("wait 1\nwait 2\npres I\n");
+        let (mut app, ctx) = app("wait(1)\nwait(2)\npres(\"I\")\n");
         frame(&mut app, &ctx, Vec::new());
         app.world_mut().resource_mut::<State>().code.jump = Some(3);
         frame(&mut app, &ctx, Vec::new());
         let state = egui::text_edit::TextEditState::load(&ctx, code::id()).unwrap();
         let cursor = state.cursor.char_range().unwrap();
-        assert_eq!(cursor.primary.index.0, 14);
+        assert_eq!(cursor.primary.index.0, 16);
         assert!(ctx.memory(|memory| memory.has_focus(code::id())));
         assert!(app.world().resource::<State>().code.jump.is_none());
     }

@@ -1722,7 +1722,7 @@ mod tests {
             parse("slash(\"boat acquire\")\nslash(\"boat release\")\n", base).unwrap()
         );
         for bad in [
-            "boat",
+            "boat()",
             "boat(\"steer\")",
             "boat(\"acquire\", \"extra\")",
             "boat(\"release\", \"extra\")",
@@ -1932,7 +1932,11 @@ mod tests {
             ]
         );
         // The account and password come only from the environment.
-        for bad in ["login(\"someone\")", "wait_servers(\"now\")", "server"] {
+        for bad in [
+            "login(\"someone\")",
+            "wait_servers(\"now\")",
+            "server(\"\")",
+        ] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
     }
@@ -2044,7 +2048,7 @@ mod tests {
             "press(\"Nope\")",
             "screenshot(\"../a.png\")",
             "screenshot(\"a.jpg\")",
-            "teleport 1 2 3",
+            "teleport(1, 2, 3)",
             "camera(600, -20)",
             "camera(10, -90)",
             "trace(60000)",
@@ -2058,7 +2062,7 @@ mod tests {
             "slash(\"ooc\")",
             "walk(8, 90000)",
             "walk(0, 1000)",
-            "gm",
+            "gm(\"\")",
             "gm(\"shutdown\")",
             "gm(\"SUMMON\")",
             "gm(\"zone a b c d e\")",
@@ -2067,11 +2071,13 @@ mod tests {
         ] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
-        // `#` starts a comment, so a script can never smuggle one into a step.
+        // A `#` after a call starts a comment. Inside a text argument it is
+        // plain text, so the gm check refuses it there (chat is tested below).
         assert_eq!(
             parse("gm(\"zone qeynos\") #givemoney 999", base).unwrap(),
             [Step::Gm("zone qeynos".into())]
         );
+        assert!(parse("gm(\"zone qeynos #givemoney 999\")", base).is_err());
     }
 
     #[test]
@@ -2307,7 +2313,7 @@ mod tests {
                 Step::WaitDead(MAX_WAIT),
             ]
         );
-        for bad in ["wait_dead", "wait_dead(120001)", "wait_dead(\"soon\")"] {
+        for bad in ["wait_dead()", "wait_dead(120001)", "wait_dead(\"soon\")"] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
     }
@@ -2653,7 +2659,7 @@ mod tests {
         );
         // Never an empty line or a `#` command, which only a gm step sends.
         for bad in [
-            "chat",
+            "chat()",
             "chat(\"say\")",
             "chat(\"yell hi\")",
             "chat(\"tell Friend\")",
@@ -2686,7 +2692,7 @@ mod tests {
             )]
         );
         for bad in [
-            "drag",
+            "drag()",
             "drag(\"chat\", 1)",
             "drag(\"nowhere\", 1, 2)",
             "drag(\"chat\", -5, 2)",
@@ -2804,7 +2810,7 @@ mod tests {
             [Step::Sound("theme.MP3".into())]
         );
         for bad in [
-            "sound",
+            "sound()",
             "sound(\".wav\")",
             "sound(\"theme.ogg\")",
             "sound(\"a.wav\", \"b.wav\")",

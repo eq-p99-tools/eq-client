@@ -6760,7 +6760,7 @@ mod tests {
     fn follow_rejects_a_structured_append_before_any_branch_action_can_escape() {
         let path =
             std::env::temp_dir().join(format!("eq-client-flow-follow-{}.txt", std::process::id()));
-        std::fs::write(&path, "wait 10\nif false\n").unwrap();
+        std::fs::write(&path, "wait(10)\nif False:\n").unwrap();
         let mut script = Script::following(Vec::new(), path.clone(), 8);
         script.poll(Duration::ZERO);
         assert_eq!(script.status().phase(), Phase::Failed);
@@ -6779,7 +6779,7 @@ mod tests {
             std::process::id()
         ));
         let prefix = "wait(10)\n";
-        let header = "\u{feff}\u{feff}if false";
+        let header = "\u{feff}\u{feff}if False:";
         std::fs::write(&path, format!("{prefix}{header}")).unwrap();
         let mut script = Script::following(Vec::new(), path.clone(), prefix.len());
         script.poll(Duration::ZERO);
@@ -6792,7 +6792,7 @@ mod tests {
         assert_eq!(script.status().line(), Some(2));
         assert!(script.follow.is_none());
 
-        std::fs::write(&path, format!("{prefix}{header}\nquit\n")).unwrap();
+        std::fs::write(&path, format!("{prefix}{header}\n    quit()\n")).unwrap();
         script.poll(Duration::from_secs(2));
         assert!(script.steps.is_empty());
         let _ = std::fs::remove_file(&path);

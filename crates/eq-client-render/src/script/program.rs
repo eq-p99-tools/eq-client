@@ -365,7 +365,8 @@ mod tests {
             "k: number = 0\n",
             "flag: bool = 5\n",
             "if (True:\n",
-            // The body of a header that failed is read without an indent error.
+            // The body of a header that failed is read without an indent
+            // error, and its else pairs with it.
             "    pass\n",
             "else:\n",
             "    pass\n",
@@ -406,7 +407,6 @@ mod tests {
                 (8, "number"),
                 (9, "5"),
                 (10, "("),
-                (12, "else"),
                 (14, "limit 5"),
                 (16, "not"),
                 (18, "n"),
@@ -438,6 +438,90 @@ mod tests {
             errors[0].to_string(),
             "script line 1: unknown command 'pres'"
         );
+    }
+
+    /// Each error as (line, message).
+    fn errors(source: &str) -> Vec<(Option<usize>, String)> {
+        Program::diagnostics(source, Path::new("."))
+            .into_iter()
+            .map(|error| (error.line, error.message))
+            .collect()
+    }
+
+    #[test]
+    fn a_failed_header_keeps_its_body_without_errors_of_its_own() {
+        // Nested headers in the body of a failed one.
+        assert_eq!(
+            errors("if nope:\n    if True:\n        if True:\n            pass\nreport(\"x\")\n"),
+            [(Some(1), "unknown variable or client field 'nope'".into())]
+        );
+        assert_eq!(
+            errors("if nope:\n    if True:\n        pass\nreport(\"x\")\n"),
+            [(Some(1), "unknown variable or client field 'nope'".into())]
+        );
+        // A failed loop still holds its break and its variable.
+        assert_eq!(
+            errors("while nope, limit=3:\n    break\n"),
+            [(Some(1), "unknown variable or client field 'nope'".into())]
+        );
+        assert_eq!(
+            errors("for i in range(nope):\n    if i == 1:\n        continue\n"),
+            [(Some(1), "unknown variable or client field 'nope'".into())]
+        );
+        // A failed if still takes its elif and else.
+        assert_eq!(
+            errors("if nope:\n    pass\nelif True:\n    pass\nelse:\n    pass\n"),
+            [(Some(1), "unknown variable or client field 'nope'".into())]
+        );
+        // A failed header with no body has one error, not two.
+        assert_eq!(
+            errors("if nope:\nreport(\"x\")\n"),
+            [(Some(1), "unknown variable or client field 'nope'".into())]
+        );
+    }
+
+    #[test]
+    fn every_prefix_of_a_script_is_checked_without_panicking() {
+        let scripts = [
+            "if nope:\n    if True:\n        if True:\n            pass\nreport(\"x\")\n",
+            "n: int = 0\nwhile n < 3, limit=5:\n    n += 1\n    if n == 2:\n        continue\n    elif n == 9:\n        break\n    else:\n        wait(1)\nfor i in range(2):\n    press(\"I\")\n",
+            "for _ in range(2):\n    report(\"a\")\n    else:\n        pass\n\tif True:\n  pass\n",
+            "if True:\n    if (False:\n        for x in rang(2):\n            while x, limit=:\n                pass\n        else\n    elif:\n",
+        ];
+        for script in scripts {
+            for end in (0..=script.len()).filter(|end| script.is_char_boundary(*end)) {
+                let _ = Program::diagnostics(&script[..end], Path::new("."));
+            }
+        }
+    }
+
+    #[test]
+    fn misplaced_else_needs_an_if_and_quotes_escape_both_ways() {
+        assert_eq!(
+            errors("for _ in range(2):\n    report(\"a\")\n    else:\n        pass\n"),
+            [(Some(3), "this needs an 'if' at the same indentation".into())]
+        );
+        assert_eq!(
+            errors(
+                "if True:\n    if True:\n        pass\n    else:\n        pass\n    else:\n        pass\n"
+            ),
+            [(Some(6), "else requires an open if without an else".into())]
+        );
+        assert!(
+            errors("t: text = 'it\\'s'\nu: text = \"say \\\"hi\\\"\"\nv: text = \"it\\'s\"\n")
+                .is_empty()
+        );
+        assert_eq!(
+            errors("press(\"I\") extra\n"),
+            [(Some(1), "unexpected text after the call".into())]
+        );
+    }
+
+    #[test]
+    fn loops_in_sequence_share_their_variable_slot() {
+        let source = "for i in range(1):\n    wait(1)\n".repeat(40);
+        let program = Program::parse(&source, Path::new(".")).unwrap();
+        assert_eq!(program.code.unwrap().variable_count(), 1);
     }
 
     #[test]

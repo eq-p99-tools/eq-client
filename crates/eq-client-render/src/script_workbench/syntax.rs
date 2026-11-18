@@ -11,8 +11,8 @@ pub(super) enum Kind {
     Keyword,
     /// A known action command, called.
     Command,
-    /// A leading word that is no statement or command, an old-syntax word,
-    /// or a dotted name that is no field.
+    /// A leading word that is no statement or command, or a dotted name
+    /// that is no field.
     Unknown,
     /// `int`, `bool` and `text`.
     Type,

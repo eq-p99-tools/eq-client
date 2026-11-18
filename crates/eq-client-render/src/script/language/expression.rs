@@ -225,10 +225,10 @@ pub(super) fn text_literal(
         match ch {
             ch if ch == quote => return Ok((text, end)),
             '\\' => match chars.next() {
-                Some((_, escaped)) if escaped == '\\' || escaped == quote => text.push(escaped),
+                Some((_, escaped)) if matches!(escaped, '\\' | '"' | '\'') => text.push(escaped),
                 next => {
                     return Err((
-                        format!("text escapes are limited to \\{quote} and \\\\"),
+                        "text escapes are limited to \\', \\\" and \\\\".into(),
                         next.map_or(end, |(index, ch)| index + ch.len_utf8()),
                     ));
                 }

@@ -47,9 +47,9 @@ fn main() -> Result<()> {
         }
     }
     let zone = eq_client_assets::load_zone(&install, "ecommons")?;
-    let mut source = String::from("wait 1000\n");
+    let mut source = String::from("wait(1000)\n");
     for _ in 0..page {
-        source.push_str("press enter\n");
+        source.push_str("press(\"enter\")\n");
     }
     let script = Program::parse(&source, output.parent().context("output needs a parent")?)?;
     let status = eq_client_render::run(

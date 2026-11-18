@@ -104,16 +104,16 @@ outdoor sky and sends light rain, heavy rain, snow and clear at four-second
 intervals through the normal weather reducer. Run the following with
 `--script` from a private scenario file to capture each settled phase.
 
-```text
-wait_online
-wait 2000
-screenshot rain-light.png
-wait 4000
-screenshot rain-heavy.png
-wait 4000
-screenshot snow.png
-wait 4000
-screenshot clear.png
+```eqscript
+wait_online()
+wait(2000)
+screenshot("rain-light.png")
+wait(4000)
+screenshot("rain-heavy.png")
+wait(4000)
+screenshot("snow.png")
+wait(4000)
+screenshot("clear.png")
 ```
 
 Inspect a local character archive:

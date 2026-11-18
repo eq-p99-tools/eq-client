@@ -16,7 +16,7 @@ Declare a variable with `name: type = expression` before using it. Declare at th
 
 - `int` holds a signed 64-bit integer. Operators `+ - * / %` use checked integer arithmetic. Division rounds toward zero.
 - `bool` holds `True` or `False`. Use `not`, `and` and `or` for negation, conjunction and disjunction. `False and …` and `True or …` skip the right operand.
-- `text` holds case-sensitive text in single or double quotes, with `\"` or `\'` for the quote and `\\` for a backslash. Text literals may contain `#` and are limited to 120 UTF-8 bytes.
+- `text` holds case-sensitive text in single or double quotes, with `\"` and `\'` for either quote in either style and `\\` for a backslash, such as `'it\'s'` or `"say \"hi\""`. Text literals may contain `#` and are limited to 120 UTF-8 bytes.
 - `==` and `!=` compare matching types. `<`, `<=`, `>` and `>=` compare integers. Use parentheses to group expressions.
 
 From tightest to loosest, precedence is unary `-`, then `* / %`, then `+ -`, then ordering and equality, then `not`, `and` and `or`. As in Python, `not a == b` means `not (a == b)`.
