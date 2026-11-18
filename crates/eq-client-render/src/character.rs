@@ -1051,17 +1051,21 @@ fn played_clip(action: u16, has: impl Fn(&str) -> bool) -> Option<&'static str> 
 /// Where a drawn character stands: its root, and for the player the boat
 /// it is drawn on with that boat's drawn pose.
 #[derive(Clone, Copy, Debug)]
-struct Footing<Boat = eq_client_core::movement::CarrierSample> {
+struct Footing {
     at: Vec3,
-    carrier: Option<(Boat, eq_client_core::WorldPosition)>,
+    carrier: Option<(
+        eq_client_core::movement::CarrierSample,
+        eq_client_core::WorldPosition,
+    )>,
 }
 
 /// How far, squared, a character moved itself between two footings: across
-/// the boat it stood on both times, so a boat carrying a still rider is not
+/// the boat it stood on both times (the same spawn incarnation, whichever
+/// report drew it), so a boat carrying a still rider is not
 /// the rider walking; else across the world. A still rider stands while the
 /// boat moves. Inferred, recording checklist 6.479: the program's choice is
 /// unread.
-fn moved<Boat: PartialEq>(previous: Footing<Boat>, now: Footing<Boat>) -> f32 {
+fn moved(previous: Footing, now: Footing) -> f32 {
     let local = |at: Vec3, pose| {
         let world = eq_client_core::world_position(at.to_array(), 0.0);
         Vec3::from_array(eq_client_core::render_position(
@@ -1069,7 +1073,9 @@ fn moved<Boat: PartialEq>(previous: Footing<Boat>, now: Footing<Boat>) -> f32 {
         ))
     };
     match (previous.carrier, now.carrier) {
-        (Some((was, then)), Some((is, pose))) if was == is => {
+        (Some((was, then)), Some((is, pose)))
+            if was.spawn_id == is.spawn_id && was.incarnation == is.incarnation =>
+        {
             local(previous.at, then).distance_squared(local(now.at, pose))
         }
         _ => previous.at.distance_squared(now.at),
@@ -1658,6 +1664,60 @@ mod tests {
         assert_eq!(paced_clip(("C05", true), true, full), ("C05", true));
     }
 
+    /// Two reports of boat `id` from the network's carrier tracker, the
+    /// second a later position report of the same spawn.
+    fn boat_reports(
+        id: u16,
+    ) -> (
+        eq_client_core::movement::CarrierSample,
+        eq_client_core::movement::CarrierSample,
+    ) {
+        use eq_client_core::{SpawnKind, SpawnState, WorldEvent};
+        let mut carriers = eq_client_core::movement::Carriers::default();
+        let start = std::time::Instant::now();
+        carriers.observe(
+            &WorldEvent::Spawns(vec![SpawnState {
+                spawn_id: id,
+                race: 72,
+                kind: SpawnKind::Npc,
+                position: eq_client_core::WorldPosition::default(),
+                class: None,
+                name: String::new(),
+                gender: 2,
+                velocity: [0.0; 3],
+                forward: 0.0,
+                walk_speed: 0.0,
+                run_speed: 0.0,
+                size: 1.0,
+                invisible: false,
+                appearance: eq_client_core::outfit::Appearance::default(),
+                level: 1,
+                listing: eq_client_core::listing::Listing::default(),
+                pet_owner: None,
+                hp_percent: None,
+                posture: None,
+                name_parts: eq_client_core::names::NameParts::default(),
+            }]),
+            eq_client_core::GameDialect::Titanium,
+            start,
+        );
+        let first = carriers.latest(id).unwrap().sample();
+        carriers.observe(
+            &WorldEvent::Position {
+                spawn_id: id,
+                position: eq_client_core::WorldPosition {
+                    x: 5.0,
+                    ..eq_client_core::WorldPosition::default()
+                },
+                velocity: [0.0; 3],
+                forward: 0.0,
+            },
+            eq_client_core::GameDialect::Titanium,
+            start + std::time::Duration::from_millis(250),
+        );
+        (first, carriers.latest(id).unwrap().sample())
+    }
+
     #[test]
     fn a_rider_the_boat_carries_is_not_moving_but_one_walking_its_deck_is() {
         let pose = |x: f32, heading: f32| eq_client_core::WorldPosition {
@@ -1666,7 +1726,7 @@ mod tests {
             z: 0.0,
             heading,
         };
-        let on = |boat: u16, pose, local: [f32; 3]| {
+        let on = |boat, pose, local: [f32; 3]| {
             let world = eq_client_core::movement::carrier_world(
                 pose,
                 eq_client_core::WorldPosition {
@@ -1681,17 +1741,21 @@ mod tests {
                 carrier: Some((boat, pose)),
             }
         };
+        let (first, later) = boat_reports(50);
+        // Each boat report is a new sample of the same boat.
+        assert_ne!(first, later);
         // The boat moves 5 and turns while the rider stands on its deck.
-        let before = on(50, pose(0.0, 0.0), [3.0, 4.0, 2.0]);
-        let still = on(50, pose(5.0, 20.0), [3.0, 4.0, 2.0]);
+        let before = on(first, pose(0.0, 0.0), [3.0, 4.0, 2.0]);
+        let still = on(later, pose(5.0, 20.0), [3.0, 4.0, 2.0]);
         assert!(before.at.distance_squared(still.at) > 1.0);
         assert!(moved(before, still) < 0.0001);
         // The rider walks one across the deck.
-        let walked = on(50, pose(5.0, 20.0), [4.0, 4.0, 2.0]);
+        let walked = on(later, pose(5.0, 20.0), [4.0, 4.0, 2.0]);
         assert!((moved(before, walked) - 1.0).abs() < 0.001);
         // Onto another boat, or off it, the world decides.
-        let other = on(51, pose(5.0, 20.0), [3.0, 4.0, 2.0]);
-        assert!(moved(before, other) > 1.0);
+        let (other, _) = boat_reports(51);
+        let across = on(other, pose(5.0, 20.0), [3.0, 4.0, 2.0]);
+        assert!(moved(before, across) > 1.0);
         let off = Footing {
             carrier: None,
             ..still
