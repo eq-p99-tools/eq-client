@@ -128,7 +128,9 @@ impl DoorTable {
             .entries()
             .get(&id)
             .is_some_and(|door| match self.generation {
-                GameDialect::Titanium => id != u8::MAX,
+                // The program's click routine returns at once for open
+                // types 54-56: nothing is sent or said (0x4906c5, read R37 a).
+                GameDialect::Titanium => id != u8::MAX && !(54..=56).contains(&door.open_type),
                 GameDialect::EqMac => eqmac::ordinary(door),
                 _ => false,
             })
@@ -287,6 +289,31 @@ mod tests {
             invert_state: 0,
             parameter: 0,
             action: None,
+        }
+    }
+
+    #[test]
+    fn titanium_never_clicks_the_open_types_its_click_routine_skips() {
+        let now = Instant::now();
+        let mut definition = ordinary();
+        for (open_type, usable) in [
+            (53, true),
+            (54, false),
+            (55, false),
+            (56, false),
+            (57, true),
+        ] {
+            definition.open_type = open_type;
+            let mut table = DoorTable::default();
+            table.apply(&DoorUpdate::Spawn(vec![definition.clone()]), now);
+            assert_eq!(table.supports_use(7), usable, "open type {open_type}");
+            assert_eq!(
+                table
+                    .use_distance(7, WorldPosition::default(), now)
+                    .is_some(),
+                usable,
+                "open type {open_type}"
+            );
         }
     }
 

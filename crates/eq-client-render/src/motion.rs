@@ -2299,6 +2299,7 @@ pub(super) fn input(
         turn_toward(current_heading, facing, TURN_RATE * span)
     };
     trace_proposal(mode, delta, position - origin, heading, facing);
+    trace_contact(world, feet, delta, position - origin, body.height);
     let position_sent = if placement_blocked {
         eq_client_core::WorldPosition {
             heading,
@@ -3086,6 +3087,34 @@ fn trace_proposal(mode: MovementMode, requested: Vec3, resolved: Vec3, heading: 
         facing,
         "Movement proposal after local collision"
     );
+}
+
+/// Names what stopped or turned a proposal that resolved short: the
+/// obstacle (zone, door id or carrier spawn id) and the contact normal, never
+/// the character's world coordinates. Diagnostic only: the sweep is repeated
+/// at debug level and changes nothing.
+fn trace_contact(
+    world: &eq_client_core::movement::CollisionWorld,
+    feet: Vec3,
+    requested: Vec3,
+    resolved: Vec3,
+    height: f32,
+) {
+    if !bevy::log::tracing::enabled!(bevy::log::Level::DEBUG) || !short(requested, resolved) {
+        return;
+    }
+    let contact = world.first_contact(feet, requested, height);
+    debug!(
+        obstacle = ?contact.map(|contact| contact.obstacle),
+        normal = ?contact.map(|contact| contact.normal.to_array()),
+        reached = contact.map(|contact| contact.time_of_impact),
+        "Movement contact"
+    );
+}
+
+/// A proposal that resolved to less than 95% of its requested length.
+fn short(requested: Vec3, resolved: Vec3) -> bool {
+    requested.length_squared() > 1e-8 && resolved.length() < 0.95 * requested.length()
 }
 
 /// Input intent remains separate from collision, timing and network submission.

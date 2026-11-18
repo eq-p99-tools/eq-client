@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Doors of open type 54, 55 and 56 are no longer clicked on Titanium: the
+  program's click routine returns at once for them, sending and saying
+  nothing (read R37). They stay solid at their placed pose, as before.
+- Debug logs name what stopped a movement proposal that resolved short: the
+  zone, a door id or a carrier spawn id, with the contact normal and no world
+  coordinates. Diagnostic only; movement is unchanged.
 - Recall sent chat lines with Shift+Up and Shift+Down while typing, as the
   Titanium program does (read R34): 40 lines per chat window, kept at submit,
   never the newest line twice, an empty line or the installed password
