@@ -152,10 +152,13 @@ fn walked_to(mesh: &NavMesh, main: MainIsland, feet: Vec3) -> bool {
 pub enum SpotVerdict {
     /// The preview stands on a floor a player can walk to.
     Reachable,
-    /// The preview stands on a floor no walk from the main island reaches:
-    /// its height (the server's z) and its island's area, or None off the
-    /// mesh.
-    Unreachable { z: f32, island_area: Option<f32> },
+    /// The preview stands on a floor no walk from the main island reaches.
+    Unreachable {
+        /// The floor's height, as the server's z.
+        z: f32,
+        /// Its island's floor area across, or None off the mesh.
+        island_area: Option<f32>,
+    },
     /// No floor under the spot: the preview uses the fallback.
     NoFloor,
     /// The mesh has no floor at all to weigh.
