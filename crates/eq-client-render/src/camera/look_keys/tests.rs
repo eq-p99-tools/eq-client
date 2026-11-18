@@ -139,9 +139,16 @@ fn in_the_chase_view_the_keys_tilt_the_character_not_the_camera() {
 }
 
 #[test]
-fn a_zone_entry_levels_the_characters_pitch() {
-    let mut app = app(View::Chase, 0.7);
+fn a_view_reset_keeps_the_characters_pitch_and_a_zone_entry_levels_it() {
+    let mut app = app(View::FirstPerson, 0.0);
+    hold(&mut app, Some(KeyCode::PageUp), 30);
+    let up = camera(&mut app).look_pitch();
+    assert!(up > 0.1, "{up}");
+    // A script camera step or the top-down view resets the view only.
     camera(&mut app).reset_view();
+    assert!((camera(&mut app).look_pitch() - up).abs() < 1e-6);
+    // The zone entry also levels it.
+    camera(&mut app).level_look();
     assert!(camera(&mut app).look_pitch().abs() < 1e-6);
 }
 

@@ -52,13 +52,18 @@ impl OrbitCamera {
 
     /// Returns to the chosen chase frame on a placement/lifetime change or
     /// an explicit script/preview frame, clearing collision easing as well.
-    /// The character's look pitch levels with it: each zone entry makes the
-    /// player's spawn anew (inferred, recording checklist 6.480). Nothing
-    /// else levels it but Center View in first person, so a pitch set in
-    /// the chase view, where it does not show, stays until then.
+    /// The character's look pitch stays; see [`Self::level_look`].
     pub(crate) fn reset_view(&mut self) {
         self.view = View::Chase;
         self.pulled = None;
+    }
+
+    /// Levels the character's look pitch, as each zone entry makes the
+    /// player's spawn anew (inferred, recording checklist 6.480). Besides
+    /// this, Center View in first person and a wheel change of view level
+    /// it, so a pitch set in the chase view, where it does not show, stays
+    /// until one of them.
+    pub(crate) fn level_look(&mut self) {
         self.look = 0.0;
     }
 

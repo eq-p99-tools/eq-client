@@ -1021,8 +1021,10 @@ impl Controls {
     /// Whether a jump in water strokes up this frame, given whether the jump
     /// key is `held` now. The program strokes up for 500 ms from a jump
     /// request in water (0x4ac9f3-0x4acbac, read R39 B); a key still held
-    /// when that runs out starts another (inferred, recording checklist
-    /// 6.480).
+    /// when that runs out starts another. The rate is this client's: the
+    /// program adds 0.5 to vz each frame under the water's damping, here the
+    /// stroke takes a unit up within the swim budget (both inferred,
+    /// recording checklist 6.480).
     fn water_jump(&mut self, held: bool, now: Instant) -> bool {
         if self
             .water_jump
