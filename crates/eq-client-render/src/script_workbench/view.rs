@@ -648,7 +648,7 @@ pub(super) fn refresh(
                     &mut commands,
                     parent,
                     line,
-                    &symbols,
+                    Some(&symbols),
                     Some(index + 1),
                     status.line() == Some(index + 1),
                     &mono,
@@ -696,7 +696,7 @@ pub(super) fn source_line(
     commands: &mut Commands,
     parent: Entity,
     source: &str,
-    symbols: &syntax::Symbols,
+    symbols: Option<&syntax::Symbols>,
     line: Option<usize>,
     active: bool,
     mono: &Mono,
@@ -726,7 +726,12 @@ pub(super) fn source_line(
             TextLayout::no_wrap(),
         ))
         .id();
-    for (token, kind) in syntax::tokens(source, symbols) {
+    // Without symbols the line is another language's example: drawn plain.
+    let tokens = symbols.map_or_else(
+        || vec![(source, syntax::Kind::Argument)],
+        |symbols| syntax::tokens(source, symbols),
+    );
+    for (token, kind) in tokens {
         let color = kind.color();
         let span = commands
             .spawn((TextSpan::new(token), font(mono, 13.0), TextColor(color)))

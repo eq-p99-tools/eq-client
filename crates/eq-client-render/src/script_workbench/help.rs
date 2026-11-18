@@ -92,20 +92,64 @@ fn link(line: &str) -> Option<(&str, &str)> {
     line.split_once("](")
 }
 
+/// What a help page line is, by the fenced block around it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Block {
+    Prose,
+    /// A fence delimiter itself.
+    Fence,
+    /// Inside an `eqscript` or untagged fence: coloured as script.
+    Script,
+    /// Inside a fence for another language, such as JSON or Vim: plain.
+    Other,
+}
+
+fn lines(source: &str) -> Vec<(&str, Block)> {
+    let mut open = None;
+    source
+        .lines()
+        .map(|line| {
+            if let Some(tag) = line.strip_prefix("```") {
+                open = match open {
+                    Some(_) => None,
+                    None => Some(if matches!(tag.trim(), "" | "eqscript") {
+                        Block::Script
+                    } else {
+                        Block::Other
+                    }),
+                };
+                (line, Block::Fence)
+            } else {
+                (line, open.unwrap_or(Block::Prose))
+            }
+        })
+        .collect()
+}
+
 pub(super) fn draw(commands: &mut Commands, parent: Entity, page: usize, mono: &Mono) {
     let Some(page) = PAGES.get(page) else {
         return;
     };
-    let mut code = false;
-    let symbols = super::syntax::Symbols::scan(page.source);
-    for line in page.source.lines() {
-        if line.starts_with("```") {
-            code = !code;
-            continue;
-        }
-        if code {
-            view::source_line(commands, parent, line, &symbols, None, false, mono);
-            continue;
+    let lines = lines(page.source);
+    let script = lines
+        .iter()
+        .filter(|(_, block)| *block == Block::Script)
+        .map(|(line, _)| *line)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let symbols = super::syntax::Symbols::scan(&script);
+    for (line, block) in lines {
+        match block {
+            Block::Fence => continue,
+            Block::Script => {
+                view::source_line(commands, parent, line, Some(&symbols), None, false, mono);
+                continue;
+            }
+            Block::Other => {
+                view::source_line(commands, parent, line, None, None, false, mono);
+                continue;
+            }
+            Block::Prose => (),
         }
         if line.is_empty() {
             continue;
@@ -156,6 +200,42 @@ pub(super) fn draw(commands: &mut Commands, parent: Entity, page: usize, mono: &
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_script_examples_are_coloured_as_script() {
+        use super::super::syntax::{Kind, Symbols, tokens};
+        let mut other = 0;
+        for page in PAGES {
+            let lines = lines(page.source);
+            let symbols = Symbols::scan(page.source);
+            for (line, block) in &lines {
+                if *block == Block::Script {
+                    assert!(
+                        tokens(line, &symbols)
+                            .iter()
+                            .all(|(_, kind)| *kind != Kind::Unknown),
+                        "{}: {line}",
+                        page.name
+                    );
+                }
+                other += usize::from(*block == Block::Other);
+            }
+        }
+        // The JSON and Vim examples are drawn plain.
+        assert!(other > 0);
+        assert_eq!(
+            lines("```json\n{}\n```\n```\nwait 1\n```\ntext"),
+            [
+                ("```json", Block::Fence),
+                ("{}", Block::Other),
+                ("```", Block::Fence),
+                ("```", Block::Fence),
+                ("wait 1", Block::Script),
+                ("```", Block::Fence),
+                ("text", Block::Prose),
+            ]
+        );
+    }
 
     #[test]
     fn help_links_resolve_inside_the_bundled_pages() {
