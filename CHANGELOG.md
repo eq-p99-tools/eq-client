@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- A player standing still on a moving boat stands, rather than playing the
+  run: the animation measures the player's own motion across the boat it is
+  drawn on, not the boat carrying it.
 - Uses eq-network 0d9570be: a rider arriving aboard is restored where the
   program's profile loader puts them (read R36c).
 - Arrive aboard a boat as the Titanium program does (read R36): when the
