@@ -2028,6 +2028,22 @@ pub(super) fn drive(
             spawn,
             revision,
         } => {
+            // A boat goes to the piloting request, as a right-click does,
+            // under this script's world (read R35).
+            let world = online.world();
+            if world.in_world()
+                && world.session_id() == Some(*admission)
+                && world.target().selected == Some(*spawn)
+                && !world.target_stale()
+                && world
+                    .spawn(*spawn)
+                    .is_some_and(|known| known.revision == *revision)
+                && super::trade::spawn_use::boat(world, *spawn)
+            {
+                let scope = observed.1.script_world(world);
+                chat.interact_with_boat(*spawn, scope);
+                return;
+            }
             if let Err(reason) = observed.2.script_interact(
                 &mut online,
                 &observed.1,

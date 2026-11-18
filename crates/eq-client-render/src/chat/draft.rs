@@ -4,7 +4,7 @@ use std::ops::Range;
 
 const MAX_TEXT: usize = 512;
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct Draft {
     text: String,
     caret: usize,
@@ -12,6 +12,7 @@ pub(super) struct Draft {
     revision: u64,
 }
 
+#[derive(Clone)]
 struct Link {
     range: Range<usize>,
     wire: String,
@@ -48,6 +49,15 @@ impl Draft {
     pub(super) fn replace(&mut self, text: &str) {
         self.clear();
         self.insert_text(text);
+    }
+
+    /// Shows a recalled line, with its links, the caret at its end (read R34
+    /// (e): set-text leaves it there, inferred).
+    pub(super) fn recall(&mut self, line: &Self) {
+        self.text.clone_from(&line.text);
+        self.links.clone_from(&line.links);
+        self.caret = self.text.len();
+        self.changed();
     }
 
     fn changed(&mut self) {
@@ -243,6 +253,24 @@ mod tests {
         draft.demote_links();
         assert_eq!(draft.encoded(), "/auc sword Other link");
         assert_eq!(draft.marked(), marked);
+    }
+
+    #[test]
+    fn a_recalled_line_keeps_its_links_whole_with_the_caret_at_its_end() {
+        let dialect = GameDialect::Titanium;
+        let mut sent = Draft::default();
+        sent.insert_text("/auc ");
+        sent.insert_link(&item(1, "First link"), dialect).unwrap();
+        sent.home();
+        let mut draft = Draft::default();
+        draft.insert_text("typed");
+        let before = draft.revision();
+        draft.recall(&sent);
+        assert_ne!(draft.revision(), before);
+        assert_eq!(draft.marked(), "/auc First link|");
+        assert_eq!(draft.encoded(), sent.encoded());
+        draft.backspace();
+        assert_eq!(draft.text(), "/auc ");
     }
 
     #[test]

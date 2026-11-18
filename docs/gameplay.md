@@ -540,8 +540,12 @@ Camp uses timed preparation and acknowledgement where offered. The local
 `--demo-trade` mode previews loot, merchant and trade UI.
 See the [policy matrix](../SUPPORT.md).
 
-Boat acquire/release is available on EQEmu with `/boat acquire` and `/boat release`
-when the current accepted floor link identifies a supported race-141 vessel.
+On EQEmu, take a race-141 boat you stand on by right-clicking it, as the
+Titanium program does; right-click it again to let it go. A right-click on a
+boat you are not standing on does nothing, and considers nothing. `/boat
+acquire` and `/boat release` are this client's own shortcut to the same
+request, and a script's `interact` step on the boat makes it too. Both need
+the current accepted floor link to identify the vessel.
 An acquire remains pending until its unambiguous server echo. An unresolved
 same-ID acquisition needs a release echo before retrying; completed ordered
 releases permit ordinary reacquisition. A late acquire cannot undo release

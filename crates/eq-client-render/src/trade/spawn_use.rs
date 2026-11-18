@@ -13,14 +13,33 @@ use eq_client_core::{Capability, ClientCommand, SpawnKind, world::ClientWorld};
 pub(super) enum Use {
     Loot(u16),
     Trade(u16),
+    /// A boat the program lets the player take or let go (read R35).
+    Boat(u16),
 }
 
 impl Use {
     pub(super) const fn id(self) -> u16 {
         match self {
-            Self::Loot(id) | Self::Trade(id) => id,
+            Self::Loot(id) | Self::Trade(id) | Self::Boat(id) => id,
         }
     }
+}
+
+/// The program's boat race (read R35 (b): race 141, an NPC; race 502 is not
+/// tested there).
+const BOAT_RACE: u32 = 141;
+
+/// Whether an interaction with this spawn goes to the program's boat
+/// branch, where the session offers boat control: a visible race-141 NPC.
+/// Whether the player stands on it is the piloting system's check; the
+/// branch has no distance test (R35 (b)).
+pub(crate) fn boat(world: &ClientWorld, id: u16) -> bool {
+    world.can(Capability::BoatControl)
+        && world.spawn(id).is_some_and(|spawn| {
+            spawn.state.kind == SpawnKind::Npc
+                && spawn.state.race == BOAT_RACE
+                && !spawn.state.invisible
+        })
 }
 
 fn eligible(world: &ClientWorld, client: InstalledClient, id: u16) -> Result<Use, &'static str> {
@@ -119,7 +138,11 @@ impl TradeState {
                     },
                 )
                 .map_err(crate::outbox::Refusal::text),
-            (Use::Trade(_), _) => Err("Target a merchant, banker, guildmaster or corpse"),
+            // `eligible` never names a boat: the script's boat interaction
+            // goes to the piloting request before this (`script.rs`).
+            (Use::Trade(_) | Use::Boat(_), _) => {
+                Err("Target a merchant, banker, guildmaster or corpse")
+            }
         }
     }
 
@@ -142,6 +165,11 @@ impl TradeState {
         }
         if let Ok(service) = eligible(world, client, id) {
             return Some(service);
+        }
+        // After the services, the program tries its boat branch, which
+        // considers nothing (read R35 (a), (d)).
+        if boat(world, id) {
+            return Some(Use::Boat(id));
         }
         let spawn = &world.spawn(id)?.state;
         if spawn.invisible {
@@ -235,6 +263,44 @@ mod tests {
                 .selected,
             Some(9)
         );
+    }
+
+    #[test]
+    fn right_click_on_a_boat_asks_piloting_and_considers_nothing_where_boats_are_offered() {
+        let boat = || {
+            let mut boat = actor(None, 500.0);
+            boat.race = BOAT_RACE;
+            boat
+        };
+        // Offered: the piloting request, with no script scope, and no
+        // consider or retarget, however far away (read R35 (a), (b), (d)).
+        let (mut test, rx) = app(boat(), Some(Capability::Trading));
+        queue(&mut test);
+        test.update();
+        assert!(rx.try_recv().is_err());
+        unchanged_target(&test);
+        let chat = test.world().resource::<crate::chat::ChatState>();
+        assert_eq!(chat.boat_interacted, Some(8));
+        // Not offered (P99, EQMac): as before, a consider.
+        let (mut test, rx) = app(boat(), Some(Capability::BoatControl));
+        queue(&mut test);
+        test.update();
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ClientCommand::Consider { target_id: 8, .. })
+        ));
+        let chat = test.world().resource::<crate::chat::ChatState>();
+        assert_eq!(chat.boat_interacted, None);
+        // Race 502 is not the program's boat branch.
+        let mut other = boat();
+        other.race = 502;
+        let (mut test, rx) = app(other, Some(Capability::Trading));
+        queue(&mut test);
+        test.update();
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ClientCommand::Consider { target_id: 8, .. })
+        ));
     }
 
     #[test]

@@ -18,7 +18,7 @@ mod loot_requests;
 mod merchant;
 mod merchant_quantity;
 pub(crate) use merchant_quantity::Selection as MerchantSelection;
-mod spawn_use;
+pub(crate) mod spawn_use;
 use loot_requests::PendingLoot;
 pub(crate) use merchant::{
     ChosenPicture, MerchantRows, MerchantSlot, chosen, fill as fill_wares, picture,
@@ -439,6 +439,11 @@ pub(super) fn input(
     }
     let right_clicked =
         trade.take_right_click(online.world(), settings.0.installed_client, &outbox);
+    // A right-click on a boat goes to the piloting request, which sends
+    // nothing unless the player stands on it (read R35).
+    if let Some(spawn_use::Use::Boat(boat)) = right_clicked {
+        chat.interact_with_boat(boat, None);
+    }
     // Only a player in the world trades; the outbox stamps what they ask.
     let (Some(stamp), Some(own_id)) = (
         outbox.peek(online.world()),

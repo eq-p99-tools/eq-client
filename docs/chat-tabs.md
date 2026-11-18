@@ -26,6 +26,9 @@ Enter sends the current line and returns keyboard input to the game. Keys
 pressed after Enter start from that new state, including a slash opening a
 new command. Holding Enter does not repeatedly send or reopen the line.
 Escape leaves composition while keeping the draft for the next Enter.
+While typing, Shift+Up and Shift+Down step through the last 40 lines sent from
+that window, as the Titanium program does; Shift+Down past the newest clears
+the line. The lines stay in memory only, for that window and character.
 
 Tab membership, order, selection and window placement are saved with the
 character's window layout.
