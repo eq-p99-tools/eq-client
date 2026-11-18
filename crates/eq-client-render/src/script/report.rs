@@ -1,4 +1,5 @@
 //! State a script logs for later review.
+mod buffs;
 mod economy;
 mod guild;
 mod lifecycle;
@@ -85,6 +86,7 @@ pub(super) fn state(
             .map(|(slot, buff)| (*slot, buff.spell_id))
             .collect::<Vec<_>>()
     });
+    let buff_slot_durations = buffs::slots(online.world().buffs(), std::time::Instant::now());
     // Landings the server gave no slot, by spell; a buff held in a server
     // slot (one held at zone entry among them) is in `buff_slot_records`.
     let unslotted_effects: Vec<u16> = online.world().buffs().effects().keys().copied().collect();
@@ -223,6 +225,7 @@ pub(super) fn state(
         ?book,
         buff_revision = online.world().buffs().revision(),
         ?buff_slot_records,
+        buff_slot_durations = %buff_slot_durations,
         ?modelled_slots,
         ?unslotted_reasons,
         buff_slot_mismatches = online.world().buffs().slot_mismatches(),

@@ -160,6 +160,23 @@ or occluded. The counters are independent of damage and inventory.
   player holds, slotted or not, which is what speed and the other buff
   effects are read from. A buff held at zone entry shows in
   `buff_slot_records` and `held_spells`, not in `unslotted_effects`.
+  The additive `buff_slot_durations` field is JSON: null before a received
+  snapshot, otherwise an array of objects with `slot`, `spell_id`, signed
+  `duration_ticks`, `duration_kind`, `observation_age_ms` and
+  `estimated_remaining_ms`. Existing buff identity fields keep their format.
+  `duration_ticks` is the unchanged value in the last received record; one tick
+  is six seconds. `duration_kind` is `finite` for nonnegative ticks and
+  `negative_special` for negative values, which have no finite estimate.
+  The age measures time since the core applied the record, excluding unknown
+  transport, queue and pre-admission staging delays. Reading a report does not
+  renew that age; a newly received snapshot or applicable update does.
+  `estimated_remaining_ms` subtracts that age from the finite tick duration,
+  saturating at zero. It is a local elapsed estimate, can differ from the
+  server's tick phase, and is never current authoritative remaining ticks.
+  Missing age or estimate is null. Modelled and unslotted effects supply no
+  received-duration evidence; spell metadata is not used by this report.
+  Bind the records to the same report's current admission and connection state;
+  retained records during a transfer or disconnection are not current evidence.
   `MovementPending` and `MovementUnconfirmed` defer the due liquid check
   until the worker returns a usable position. After 250 ms the air gauge
   is hidden while the result is outstanding. `Effects` means a relevant spell

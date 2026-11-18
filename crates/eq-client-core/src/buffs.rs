@@ -13,6 +13,19 @@ use std::{
 /// How long a server tick lasts: the unit buff durations count in.
 pub const TICK: Duration = Duration::from_secs(6);
 
+/// A received slot's duration record and its separate local elapsed estimate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReceivedDuration {
+    /// The signed tick count in the last received record, unchanged by reads.
+    pub duration_ticks: i32,
+    /// Time since the core applied that record, excluding unknown transport,
+    /// queue and pre-admission staging delays. Reading does not refresh it.
+    pub observation_age: Duration,
+    /// Local elapsed estimate for a nonnegative tick count, not current server
+    /// ticks. Negative special durations have no finite estimate.
+    pub estimated_remaining: Option<Duration>,
+}
+
 /// How long a buff or effect has left.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TimeLeft {
@@ -324,6 +337,27 @@ impl BuffTracker {
     #[must_use]
     pub fn effects(&self) -> &BTreeMap<u16, SpellEffect> {
         &self.effects
+    }
+
+    /// Reads duration evidence only for an occupied received slot. Modelled
+    /// records and unslotted landings supply no received-duration provenance.
+    #[must_use]
+    pub fn received_duration(&self, slot: u32, now: Instant) -> Option<ReceivedDuration> {
+        let buff = self.slots.as_ref()?.get(&slot)?;
+        let given = self.given.get(&slot)?;
+        let observation_age = now.saturating_duration_since(*given);
+        Some(ReceivedDuration {
+            duration_ticks: buff.duration_ticks,
+            observation_age,
+            estimated_remaining: match TimeLeft::of_ticks(
+                i64::from(buff.duration_ticks),
+                *given,
+                now,
+            ) {
+                TimeLeft::About(remaining) => Some(remaining),
+                TimeLeft::Lasting => None,
+            },
+        })
     }
 
     /// How long the buff in a server slot has left at `now`: the ticks the
@@ -960,6 +994,84 @@ mod tests {
         state.observe_effect(effect(42), Landing::default(), later(40));
         assert_eq!(state.time_left(3, later(40)), None);
         assert_eq!(state.landed(42), Some(later(40)));
+    }
+
+    #[test]
+    fn received_duration_reads_keep_raw_ticks_and_only_received_news_renews_age() {
+        let start = Instant::now();
+        let later = |seconds| start + Duration::from_secs(seconds);
+        let mut state = BuffTracker::default();
+        let records = BTreeMap::from([(3, buff(42))]);
+        state.replace_snapshot(records.clone(), 25, start);
+        let first = state.received_duration(3, later(10)).unwrap();
+        assert_eq!(first.duration_ticks, 10);
+        assert_eq!(first.observation_age, Duration::from_secs(10));
+        assert_eq!(first.estimated_remaining, Some(Duration::from_secs(50)));
+        let second = state.received_duration(3, later(20)).unwrap();
+        assert_eq!(second.duration_ticks, first.duration_ticks);
+        assert_eq!(second.observation_age, Duration::from_secs(20));
+        assert_eq!(second.estimated_remaining, Some(Duration::from_secs(40)));
+
+        // A new received snapshot is new evidence even when its bytes agree.
+        state.replace_snapshot(records, 25, later(25));
+        assert_eq!(
+            state
+                .received_duration(3, later(30))
+                .unwrap()
+                .observation_age,
+            Duration::from_secs(5)
+        );
+        // A matching by-spell correction reaches the held slot, not its named
+        // slot. A different spell or record type must not renew this record.
+        for (at, spell, record_type, applies) in [
+            (31, 43, 2, Applies::BySpell),
+            (32, 42, 4, Applies::BySpell),
+            (35, 42, 2, Applies::BySpell),
+            (40, 42, 2, Applies::BySlot),
+            (45, 42, 2, Applies::Received),
+        ] {
+            state.apply(
+                BuffUpdate {
+                    slot: if applies == Applies::BySpell { 9 } else { 3 },
+                    applies,
+                    record_type,
+                    ..update(3, spell, true)
+                },
+                later(at),
+            );
+            let expected_age = if at < 35 { at - 25 } else { 0 };
+            assert_eq!(
+                state
+                    .received_duration(3, later(at))
+                    .unwrap()
+                    .observation_age,
+                Duration::from_secs(expected_age)
+            );
+        }
+        state.apply(update(3, 42, false), later(46));
+        assert_eq!(state.received_duration(3, later(46)), None);
+        state.clear();
+        assert_eq!(state.received_duration(3, later(47)), None);
+    }
+
+    #[test]
+    fn received_duration_does_not_promote_modelled_records_or_special_ticks() {
+        let start = Instant::now();
+        let mut state = BuffTracker::default();
+        let mut special = buff(43);
+        special.duration_ticks = -1;
+        state.replace_snapshot(BTreeMap::from([(3, buff(42)), (4, special)]), 25, start);
+        let received = state.received_duration(4, start).unwrap();
+        assert_eq!(received.duration_ticks, -1);
+        assert_eq!(received.estimated_remaining, None);
+        // A landing invalidates the received assignment and its duration.
+        state.observe_effect(effect(42), lands(NORMAL), start);
+        assert_eq!(state.slot_of(42), Some(3));
+        assert_eq!(state.received_duration(3, start), None);
+        // A by-spell correction can reach a modelled record without proving
+        // the modelled slot was received. Do not promote that assignment.
+        state.apply(titanium(Applies::BySpell, 3, 42, Some(buff(42))), start);
+        assert_eq!(state.received_duration(3, start), None);
     }
 
     #[test]
