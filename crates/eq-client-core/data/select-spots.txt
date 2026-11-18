@@ -17,16 +17,22 @@
 # highest surface at the centre of the zone's bounds.
 #
 # Reachable (our rule, not the program's): the floor the preview stands on
-# lies on the zone's main island, the largest by dry floor area on its
-# navigation mesh, or that island's drops lead down to it. The spot tool
-# proposes only such floors, and propose_select_spots --check tests every
-# row against it.
+# lies on the zone's main island (the largest by dry floor area on its
+# navigation mesh) or an island at least half its size, or such an island's
+# drops lead down to it. The spot tool proposes only such floors, and
+# propose_select_spots --check tests every row against it. The mesh splits
+# floors at doors, lifts and pads, so a flag is a lead for a look.
 #
 # 2026-11-03: 202 rows were marked reviewed after the offline four-angle
 # audit of every zone's proposal (812 stills, 50 replacements picked by
 # hand, evidence kept privately); the combined build was re-rendered for
 # eight of them. qrg and kedge stay unreviewed (pink tree backgrounds; no
 # dry sampled spot).
+#
+# 2026-11-18: erudnext moved off an isolated cliff top on the zone's east
+# edge into the city (the reachability rule's proposal; wide renders of
+# the old and new spot looked at). The first --check run flagged rows that wait
+# for a look before any is moved or kept.
 #
 # zone          y         x         z       heading  distance  pitch  state
 acrylia        -576.54    -41.42    -18.50    256.0      25.0   10.0  reviewed
@@ -57,7 +63,7 @@ eastkarana    -1390.93   -987.51    391.33    128.0      25.0   10.0  reviewed
 eastwastes    -4315.08   1560.72    171.14    128.0      25.0   10.0  reviewed
 ecommons         -8.32   1619.59    -55.34    352.0      25.0   10.0  reviewed
 emeraldjungle    412.48   -767.62   -242.06    384.0      25.0   10.0  reviewed
-erudnext       -381.11     98.22    159.94     96.0      25.0   10.0  reviewed
+erudnext       -943.39   -214.15     47.97     64.0      25.0   10.0  reviewed
 erudnint       -639.24  -1054.08    159.94    448.0      25.0   10.0  reviewed
 erudsxing     -1367.16   1233.03    122.24    288.0      25.0   10.0  reviewed
 everfrost       845.89  -3352.50     -8.24    384.0      25.0   10.0  reviewed
