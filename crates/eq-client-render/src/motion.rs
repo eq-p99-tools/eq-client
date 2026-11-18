@@ -1004,6 +1004,17 @@ impl Controls {
         }
     }
 
+    /// The boat the drawn player stands on and the pose it was last drawn
+    /// at, which the player's drawn root moved with.
+    pub(crate) fn drawn_carrier(
+        &self,
+    ) -> Option<(
+        eq_client_core::movement::CarrierSample,
+        eq_client_core::WorldPosition,
+    )> {
+        self.visual_boat.map(|frame| (frame.sample, frame.pose))
+    }
+
     /// Accepted local carrier basis, for explicit script diagnostics.
     pub(crate) fn carrier_support(
         &self,

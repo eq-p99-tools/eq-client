@@ -9,11 +9,16 @@
   assigned `name = 1`, `+=`, `-=` or `*=`. Blocks follow indentation under
   `if`, `elif`, `else`, `for i in range(n):` and `while c, limit=n:` headers,
   with `break`, `continue` and `pass`; conditions use `and`, `or`, `not`,
-  `True` and `False`, and text takes single or double quotes. `def` and
-  `return` are reserved for functions. Help, the editor highlighter and the
-  Vim plugin (now with indenting after `:`) follow the new syntax, and a
-  thin line divides the editor's line numbers from the text.
-
+  `True` and `False`, and text takes single or double quotes with `\"`,
+  `\'` and `\\` escapes. `def` and `return` are reserved for functions.
+  Help, the editor highlighter and the Vim plugin (now with indenting after
+  `:`) follow the new syntax, and a thin line divides the editor's line
+  numbers from the text.
+- A player standing still on a moving boat stands, rather than playing the
+  run: the animation measures the player's own motion across the boat it is
+  drawn on, not the boat carrying it (inferred, checklist 6.479).
+- Uses eq-network 0d9570be: a rider arriving aboard is restored where the
+  program's profile loader puts them (read R36c).
 - Arrive aboard a boat as the Titanium program does (read R36): when the
   session says the boat the profile names is here, the client stands the
   player at the profile's place in the boat's frame, sweeps for the boat's
