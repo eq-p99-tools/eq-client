@@ -13,7 +13,6 @@ anyhow.workspace = true
 serde_json.workspace = true
 bevy.workspace = true
 bevy_egui = { version = "0.42", default-features = false, features = ["render", "default_fonts", "manage_clipboard"] }
-egui_code_editor = "0.4.2"
 eq-client-assets.workspace = true
 eq-client-core.workspace = true
 image.workspace = true

@@ -30,7 +30,9 @@ New starts a blank buffer. Give it a name relative to Scripts, such as `practice
 
 If the file changed externally, Save refuses to replace it. Save your buffer to a new path or Reload.
 
-The editor includes syntax highlighting, line numbers, selection, multiline entry, clipboard copy/cut/paste, undo/redo, cursor navigation, and scrolling. Invalid lines are underlined in red; hover one for the parser's explanation. The validation summary reports the error count and first error even when that line is out of view. Execution also shows highlighted source and follows the running line. Autocomplete is not enabled.
+The editor includes syntax highlighting, line numbers, selection, multiline entry, clipboard copy/cut/paste, undo/redo, Tab indentation, cursor navigation, and scrolling. Highlighting colours commands, statement keywords, types, numbers, quoted text, client fields, `known` and `stale`, declared variables, key chords and comments. A leading word that is not a command, and a dotted name that is not a client field, show in red.
+
+The parser checks the buffer as you type, with the same rules Run uses. Each error gets a red wavy underline under the word it is about, such as an unknown command, a malformed argument list, an unknown variable or an operator with mismatched types, and the line number turns red. Hover the underline or the line number for the explanation. Every error is also listed under the editor, including limits that apply to the whole script; click an entry to move the cursor to its line. The validation summary reports the error count and first error. Execution also shows highlighted source and follows the running line. Autocomplete is not enabled.
 
 ## Running
 

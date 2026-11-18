@@ -1,9 +1,9 @@
 //! Lower line-oriented blocks to a bounded sequence of typed operations.
 
 use super::{
-    Kind,
+    Fault, Kind,
     expression::{self, Expr},
-    keyword,
+    keyword, offset,
 };
 
 const MAX_VARIABLES: usize = 32;
@@ -76,18 +76,27 @@ impl Builder {
         &mut self,
         source: &str,
         line: usize,
-    ) -> Result<bool, String> {
+    ) -> Result<bool, Fault> {
         let (word, rest) = source
             .split_once(char::is_whitespace)
-            .map_or((source, ""), |(word, rest)| (word, rest.trim()));
+            // An empty rest is still a slice of the statement, at its end.
+            .map_or((source, &source[source.len()..]), |(word, rest)| {
+                (word, rest.trim())
+            });
         if !keyword(word) {
             return Ok(false);
         }
         self.used = true;
+        let keyword = 0..word.len();
+        let at_keyword = |message: String| Fault::at(message, keyword.clone());
         match word {
-            "let" | "set" => self.store(word, rest, line)?,
+            "let" | "set" => self
+                .store(word, rest, line)
+                .map_err(|fault| fault.within(source, rest))?,
             "if" => {
-                let condition = self.expression(rest, Kind::Bool)?;
+                let condition = self
+                    .expression(rest, Kind::Bool)
+                    .map_err(|fault| fault.within(source, rest))?;
                 self.open(
                     line,
                     Block::If,
@@ -95,16 +104,22 @@ impl Builder {
                         condition,
                         otherwise: 0,
                     },
-                )?;
+                )
+                .map_err(at_keyword)?;
             }
             "repeat" => {
-                let count = self.expression(rest, Kind::Int)?;
-                self.open(line, Block::Loop, Op::Repeat { count, exit: 0 })?;
+                let count = self
+                    .expression(rest, Kind::Int)
+                    .map_err(|fault| fault.within(source, rest))?;
+                self.open(line, Block::Loop, Op::Repeat { count, exit: 0 })
+                    .map_err(at_keyword)?;
             }
             "while" => {
                 let (condition, limit) =
-                    expression::limited_condition(rest, |name| self.lookup(name))?;
-                expect_kind(&condition, Kind::Bool)?;
+                    expression::limited_condition(rest, |name| self.lookup(name))
+                        .map_err(|fault| fault.within(source, rest))?;
+                expect_kind(&condition, Kind::Bool)
+                    .map_err(|message| Fault::at(message, offset(source, rest)..source.len()))?;
                 let limit = u16::try_from(limit)
                     .ok()
                     .filter(|limit| (1..=MAX_ITERATIONS).contains(&i64::from(*limit)))
@@ -117,11 +132,17 @@ impl Builder {
                         limit,
                         exit: 0,
                     },
-                )?;
+                )
+                .map_err(at_keyword)?;
             }
-            "else" if rest.is_empty() => self.otherwise(line)?,
-            "end" if rest.is_empty() => self.close(line)?,
-            _ => return Err(format!("'{word}' takes no arguments")),
+            "else" if rest.is_empty() => self.otherwise(line).map_err(at_keyword)?,
+            "end" if rest.is_empty() => self.close(line).map_err(at_keyword)?,
+            _ => {
+                return Err(Fault::at(
+                    format!("'{word}' takes no arguments"),
+                    offset(source, rest)..source.len(),
+                ));
+            }
         }
         Ok(true)
     }
@@ -149,22 +170,36 @@ impl Builder {
             .map(|(index, variable)| (index, variable.kind))
     }
 
-    fn expression(&self, source: &str, kind: Kind) -> Result<Expr, String> {
+    /// A typed expression; a fault's span is in `source`.
+    fn expression(&self, source: &str, kind: Kind) -> Result<Expr, Fault> {
         let expr = expression::parse(source, |name| self.lookup(name))?;
-        expect_kind(&expr, kind)?;
+        expect_kind(&expr, kind).map_err(|message| {
+            let trimmed = source.trim();
+            let start = offset(source, trimmed);
+            Fault::at(message, start..start + trimmed.len())
+        })?;
         Ok(expr)
     }
 
-    fn store(&mut self, word: &str, source: &str, line: usize) -> Result<(), String> {
+    /// A declaration or assignment; a fault's span is in `source`.
+    fn store(&mut self, word: &str, source: &str, line: usize) -> Result<(), Fault> {
         let (binding, value) = source
             .split_once('=')
             .ok_or("expected an assignment with '='")?;
+        let value_at = |fault: Fault| fault.within(source, value);
         let binding = binding.trim();
+        let binding_at = |message: String, part: &str| {
+            let start = offset(source, part);
+            Fault::at(message, start..start + part.len())
+        };
         if word == "set" {
             let (index, kind) = self.lookup(binding).ok_or_else(|| {
-                format!("'{binding}' must be declared with let before assignment")
+                binding_at(
+                    format!("'{binding}' must be declared with let before assignment"),
+                    binding,
+                )
             })?;
-            let expr = self.expression(value, kind)?;
+            let expr = self.expression(value, kind).map_err(value_at)?;
             self.push(line, Op::Store(index, expr));
             return Ok(());
         }
@@ -178,23 +213,22 @@ impl Builder {
             .ok_or("expected 'let name: type = expression'")?;
         let name = name.trim();
         if !valid_name(name) {
-            return Err("expected a variable name of up to 32 ASCII letters, digits or underscores, starting with a letter or underscore".into());
+            return Err(binding_at("expected a variable name of up to 32 ASCII letters, digits or underscores, starting with a letter or underscore".into(), name));
         }
-        if keyword(name)
-            || matches!(
+        if keyword(name) || super::RESERVED.contains(&name) || self.lookup(name).is_some() {
+            return Err(binding_at(
+                format!("variable '{name}' is reserved or already declared"),
                 name,
-                "limit" | "int" | "bool" | "text" | "true" | "false" | "known" | "stale"
-            )
-            || self.lookup(name).is_some()
-        {
-            return Err(format!("variable '{name}' is reserved or already declared"));
+            ));
         }
-        let kind = Kind::parse(kind.trim()).ok_or("expected type int, bool or text")?;
+        let kind_text = kind.trim();
+        let kind = Kind::parse(kind_text)
+            .ok_or_else(|| binding_at("expected type int, bool or text".into(), kind_text))?;
         let index = self.variables.len();
         if index == MAX_VARIABLES {
-            return Err(format!("at most {MAX_VARIABLES} variables can be declared"));
+            return Err(format!("at most {MAX_VARIABLES} variables can be declared").into());
         }
-        let expr = self.expression(value, kind)?;
+        let expr = self.expression(value, kind).map_err(value_at)?;
         self.variables.push(Variable {
             name: name.into(),
             kind,

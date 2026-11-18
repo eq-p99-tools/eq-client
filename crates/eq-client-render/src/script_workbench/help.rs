@@ -97,13 +97,14 @@ pub(super) fn draw(commands: &mut Commands, parent: Entity, page: usize, mono: &
         return;
     };
     let mut code = false;
+    let symbols = super::syntax::Symbols::scan(page.source);
     for line in page.source.lines() {
         if line.starts_with("```") {
             code = !code;
             continue;
         }
         if code {
-            view::source_line(commands, parent, line, None, false, mono);
+            view::source_line(commands, parent, line, &symbols, None, false, mono);
             continue;
         }
         if line.is_empty() {

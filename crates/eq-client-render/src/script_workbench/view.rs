@@ -79,7 +79,7 @@ pub(super) struct Cache {
     document_revision: Option<u64>,
     run: Option<(Option<usize>, Phase, String)>,
     help_page: Option<usize>,
-    validation: Option<(String, Option<std::path::PathBuf>, String)>,
+    validation: Option<(u64, String)>,
 }
 
 pub(super) fn font(mono: &Mono, size: f32) -> TextFont {
@@ -448,7 +448,7 @@ fn phase_text(phase: Phase) -> &'static str {
 )]
 pub(super) fn refresh(
     mut commands: Commands,
-    state: Res<Workbench>,
+    mut state: ResMut<Workbench>,
     status: Res<RunStatus>,
     shown: Res<Shown>,
     mono: Res<Mono>,
@@ -519,32 +519,24 @@ pub(super) fn refresh(
         }
     }
     let (done, total) = status.progress();
+    let line_count = state.document.text.lines().count();
+    let check = state.bypass_change_detection().document.check();
     if previous
         .validation
         .as_ref()
-        .is_none_or(|(text, path, _)| *text != state.document.text || *path != state.document.path)
+        .is_none_or(|(generation, _)| *generation != check.generation)
     {
-        let result = match state.document.program() {
-            Ok(program) => format!(
-                "{} statements  ·  {} actions  ·  {} lines",
-                program.statement_count(),
-                program.instructions().len(),
-                state.document.text.lines().count()
-            ),
-            Err(error) => {
-                let count = crate::script::Program::diagnostics(
-                    &state.document.text,
-                    std::path::Path::new("."),
-                )
-                .len();
-                format!("{count} error(s) · {error} · Hover an underlined line for details")
+        let result = match (check.counts, check.errors.first()) {
+            (Some((statements, actions)), _) => {
+                format!("{statements} statements  ·  {actions} actions  ·  {line_count} lines")
             }
+            (None, Some(error)) => format!(
+                "{} error(s) · {error} · Listed under the editor",
+                check.errors.len()
+            ),
+            (None, None) => String::new(),
         };
-        previous.validation = Some((
-            state.document.text.clone(),
-            state.document.path.clone(),
-            result,
-        ));
+        previous.validation = Some((check.generation, result));
     }
     for (mut text, is_status, message, history, validation, flow_text) in &mut texts {
         let value = if is_status {
@@ -595,7 +587,7 @@ pub(super) fn refresh(
             previous
                 .validation
                 .as_ref()
-                .map_or_else(String::new, |(_, _, result)| result.clone())
+                .map_or_else(String::new, |(_, result)| result.clone())
         } else {
             continue;
         };
@@ -650,11 +642,13 @@ pub(super) fn refresh(
             commands.entity(parent).despawn_children();
             let current = status.line().unwrap_or(1);
             let start = current.saturating_sub(6);
+            let symbols = syntax::Symbols::scan(status.source());
             for (index, line) in status.source().lines().enumerate().skip(start).take(14) {
                 source_line(
                     &mut commands,
                     parent,
                     line,
+                    &symbols,
                     Some(index + 1),
                     status.line() == Some(index + 1),
                     &mono,
@@ -702,6 +696,7 @@ pub(super) fn source_line(
     commands: &mut Commands,
     parent: Entity,
     source: &str,
+    symbols: &syntax::Symbols,
     line: Option<usize>,
     active: bool,
     mono: &Mono,
@@ -731,7 +726,7 @@ pub(super) fn source_line(
             TextLayout::no_wrap(),
         ))
         .id();
-    for (token, kind) in syntax::tokens(source) {
+    for (token, kind) in syntax::tokens(source, symbols) {
         let color = kind.color();
         let span = commands
             .spawn((TextSpan::new(token), font(mono, 13.0), TextColor(color)))
