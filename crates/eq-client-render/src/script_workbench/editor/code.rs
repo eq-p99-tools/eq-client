@@ -161,6 +161,12 @@ pub(super) fn show(
         .mul_add(glyph, 18.0)
         .ceil()
         .min(120.0) as i8;
+    let margin = Margin {
+        left: gutter,
+        right: 8,
+        top: 2,
+        bottom: 2,
+    };
     let jump = memory.jump.take();
     let mut output = None;
     egui::ScrollArea::both()
@@ -190,13 +196,10 @@ pub(super) fn show(
                 .lock_focus(true)
                 .desired_rows(ROWS)
                 .desired_width(f32::INFINITY)
-                .frame(egui::Frame::NONE)
-                .margin(Margin {
-                    left: gutter,
-                    right: 8,
-                    top: 2,
-                    bottom: 2,
-                })
+                // A custom frame replaces the margin, so the frame carries
+                // the gutter; the margin still sizes the wrap width.
+                .frame(egui::Frame::NONE.inner_margin(margin))
+                .margin(margin)
                 .layouter(&mut layouter)
                 .show(ui);
             if let Some(line) = jump {
@@ -402,6 +405,24 @@ mod tests {
         assert_eq!(line_start(text, 2), 2);
         assert_eq!(line_start(text, 4), 6);
         assert_eq!(line_start(text, 9), 0);
+    }
+
+    #[test]
+    fn the_text_starts_right_of_the_gutter() {
+        let ctx = egui::Context::default();
+        let mut text = String::from("wait 1\npres I\n");
+        let mut memory = Memory::default();
+        let mut placed = None;
+        for _ in 0..2 {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let shown = show(ui, &mut text, &[], &mut memory);
+                placed = Some((shown.output.response.rect.left(), shown.output.galley_pos.x));
+            });
+            output.textures_delta.clear();
+        }
+        let (left, text_left) = placed.unwrap();
+        // The line numbers and their padding sit left of the text, not over it.
+        assert!(text_left - left > 18.0, "{left} {text_left}");
     }
 
     #[test]
