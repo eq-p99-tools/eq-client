@@ -27,7 +27,7 @@ fn inward_zoom_enters_first_person_and_outward_zoom_keeps_the_view_heading() {
     let yaw = camera.yaw;
     let body = head_only(2.4);
     let first = camera.attached_view(TITANIUM, 0.0, 100.0, None, body, 0.016);
-    assert!(matches!(camera.view, View::FirstPerson { .. }));
+    assert!(matches!(camera.view, View::FirstPerson));
     assert!(
         first
             .translation
@@ -231,7 +231,7 @@ fn ordinary_wheel_steps_snap_in_early_and_need_more_than_one_step_to_reenter() {
             assert_eq!(
                 matches!(
                     app.world().get::<OrbitCamera>(camera).unwrap().view,
-                    View::FirstPerson { .. }
+                    View::FirstPerson
                 ),
                 first_person,
                 "after drag {pixels}, then wheel turn {lines}"
@@ -269,7 +269,7 @@ fn wheel_moves_toward_the_first_person_eye_without_rotating_chase() {
         wheel(&mut app, window, 100.0);
         assert!(matches!(
             app.world().get::<OrbitCamera>(camera).unwrap().view,
-            View::FirstPerson { .. }
+            View::FirstPerson
         ));
         let eye = app.world().get::<Transform>(camera).unwrap().translation;
         let to_eye = eye - initial.translation;
@@ -289,7 +289,7 @@ fn ordinary_look_reaches_both_vertical_directions_after_snapping_in() {
         wheel(&mut app, window, 1.0);
         assert!(matches!(
             app.world().get::<OrbitCamera>(camera).unwrap().view,
-            View::FirstPerson { .. }
+            View::FirstPerson
         ));
 
         start_look(&mut app);
@@ -444,7 +444,7 @@ fn zoom_out_restores_the_existing_body_and_gear_on_the_first_frame() {
     wheel(&mut app, window, 100.0);
     assert!(matches!(
         app.world().get::<OrbitCamera>(camera).unwrap().view,
-        View::FirstPerson { .. }
+        View::FirstPerson
     ));
     assert_eq!(
         *app.world().get::<Visibility>(player).unwrap(),
@@ -516,7 +516,7 @@ fn ui_owned_wheel_and_disabled_or_unfocused_zoom_do_not_change_modes() {
     wheel(&mut app, window, 100.0);
     assert!(matches!(
         app.world().get::<OrbitCamera>(camera).unwrap().view,
-        View::FirstPerson { .. }
+        View::FirstPerson
     ));
     app.world_mut()
         .get_mut::<OrbitCamera>(camera)

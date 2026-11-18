@@ -6156,7 +6156,10 @@ pub(super) mod tests {
         let level = swim_speed(6.0) * span;
         assert!(moved <= level + 0.001, "{moved} > {level}");
         // Forward and up together, half and half.
-        assert!((up - level * std::f32::consts::FRAC_1_SQRT_2).abs() < 0.001, "{up}");
+        assert!(
+            (up - level * std::f32::consts::FRAC_1_SQRT_2).abs() < 0.001,
+            "{up}"
+        );
 
         let mut controls = Controls::default();
         let start = Instant::now();
