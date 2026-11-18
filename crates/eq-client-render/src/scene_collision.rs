@@ -184,6 +184,21 @@ pub enum SpotVerdict {
     NoMainIsland,
 }
 
+impl SpotVerdict {
+    /// Whether the check flags the spot: an unreachable floor unless its
+    /// row is kept, and no floor whatever the row says, since the preview
+    /// then falls back to the zone's centre. A mesh with no floor is
+    /// unknown, not flagged.
+    #[must_use]
+    pub const fn flagged(self, kept: bool) -> bool {
+        match self {
+            Self::Reachable | Self::NoMainIsland => false,
+            Self::Unreachable { .. } => !kept,
+            Self::NoFloor => true,
+        }
+    }
+}
+
 /// Whether the floor the preview stands a spot on can be walked to, and the
 /// main island it was weighed against.
 #[must_use]

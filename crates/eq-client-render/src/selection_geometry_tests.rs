@@ -156,6 +156,11 @@ fn a_spot_on_a_top_no_walk_reaches_is_flagged_and_one_on_the_floor_passes() {
     // Beside the floor's edge nothing stands the character.
     let (off, _) = check_select_spot(&zone, &spot_at(400.0, 0.0, 0.0), &mesh);
     assert_eq!(off, SpotVerdict::NoFloor);
+    // A kept row excuses an unreachable floor, never a missing one.
+    assert!(on_top.flagged(false) && !on_top.flagged(true));
+    assert!(off.flagged(false) && off.flagged(true));
+    assert!(!on_floor.flagged(false));
+    assert!(!SpotVerdict::NoMainIsland.flagged(false));
     // The proposal stands on the floor a walk reaches.
     let spot = propose_select_spot(&zone, &mesh).unwrap();
     assert!(spot.loc[2].abs() < 0.01, "{spot:?}");

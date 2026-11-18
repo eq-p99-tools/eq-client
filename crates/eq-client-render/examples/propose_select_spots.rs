@@ -24,7 +24,7 @@
 //!
 //! `--check` prints one line a listed zone: `reachable`, `NOT REACHABLE`,
 //! `NO FLOOR` (the preview falls back), `kept` (the row's `# kept: reason`
-//! comment keeps it whatever the check finds) or `unknown` (no mesh to
+//! comment excuses NOT REACHABLE, never NO FLOOR) or `unknown` (no mesh to
 //! weigh; never a pass). A zone whose main island isn't clearly the main
 //! one (under half the floor, or the next island at least half its size)
 //! says `main island unclear` and wants a look even when it passes. It
@@ -203,11 +203,10 @@ fn check_spots(
         if main.is_some_and(|main| !main.clear()) {
             unclear.push(zone.clone());
         }
-        match verdict {
-            SpotVerdict::Reachable => {}
-            SpotVerdict::NoMainIsland => unknown.push(zone),
-            _ if kept.is_some() => {}
-            _ => flagged.push(zone),
+        if verdict == SpotVerdict::NoMainIsland {
+            unknown.push(zone);
+        } else if verdict.flagged(kept.is_some()) {
+            flagged.push(zone);
         }
     }
     writeln!(stdout, "flagged ({}): {}", flagged.len(), flagged.join(" "))?;
