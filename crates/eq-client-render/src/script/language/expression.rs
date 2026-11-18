@@ -1,8 +1,8 @@
 //! Typed expression trees, with bounded parsing and checked evaluation.
 
-use std::sync::Arc;
+use std::{ops::Range, sync::Arc};
 
-use super::{Kind, Value, observe::Field};
+use super::{Fault, Kind, Value, observe::Field};
 
 const MAX_TOKENS: usize = 96;
 const MAX_TEXT_BYTES: usize = 120;
@@ -146,78 +146,93 @@ enum Token<'a> {
     Operator(Binary),
 }
 
-fn lex(mut source: &str) -> Result<Vec<Token<'_>>, String> {
+/// A token and its byte range in the expression source.
+#[derive(Clone, Debug)]
+struct Spanned<'a> {
+    token: Token<'a>,
+    span: Range<usize>,
+}
+
+fn lex(whole: &str) -> Result<Vec<Spanned<'_>>, Fault> {
     let mut tokens = Vec::new();
+    let mut source = whole;
     loop {
         source = source.trim_start();
+        let start = whole.len() - source.len();
         let Some(ch) = source.chars().next() else {
             return Ok(tokens);
         };
         if tokens.len() == MAX_TOKENS {
-            return Err(format!(
-                "an expression may have at most {MAX_TOKENS} tokens"
+            return Err(Fault::at(
+                format!("an expression may have at most {MAX_TOKENS} tokens"),
+                start..whole.len(),
             ));
         }
-        let token = match ch {
+        let (token, width) = match ch {
             '0'..='9' => {
                 let len = source.bytes().take_while(u8::is_ascii_digit).count();
-                let (number, rest) = source.split_at(len);
-                source = rest;
-                Token::Number(
-                    number
-                        .parse()
-                        .map_err(|_| "integer literal is out of range")?,
-                )
+                let number = source[..len].parse().map_err(|_| {
+                    Fault::at("integer literal is out of range", start..start + len)
+                })?;
+                (Token::Number(number), len)
             }
             'a'..='z' | 'A'..='Z' | '_' => {
                 let len = source
                     .bytes()
                     .take_while(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'_' | b'.'))
                     .count();
-                let (word, rest) = source.split_at(len);
-                source = rest;
-                Token::Word(word)
+                (Token::Word(&source[..len]), len)
             }
             '"' => {
-                let (text, rest) = text_literal(&source[1..])?;
-                source = rest;
-                Token::Text(text.into())
+                let (text, width) = text_literal(&source[1..])
+                    .map_err(|(message, end)| Fault::at(message, start..start + 1 + end))?;
+                (Token::Text(text.into()), 1 + width)
             }
-            _ => {
-                let (token, width) = operator(source)?;
-                source = &source[width..];
-                token
-            }
+            _ => operator(source)
+                .map_err(|message| Fault::at(message, start..start + ch.len_utf8()))?,
         };
-        tokens.push(token);
+        source = &source[width..];
+        tokens.push(Spanned {
+            token,
+            span: start..start + width,
+        });
     }
 }
 
-fn text_literal(source: &str) -> Result<(String, &str), String> {
+/// The literal after its opening quote and the bytes it used, including the
+/// closing quote, or a message and the byte where the literal stops being valid.
+fn text_literal(source: &str) -> Result<(String, usize), (String, usize)> {
     let mut text = String::new();
     let mut chars = source.char_indices();
     while let Some((index, ch)) = chars.next() {
+        let end = index + ch.len_utf8();
         match ch {
-            '"' => return Ok((text, &source[index + 1..])),
+            '"' => return Ok((text, end)),
             '\\' => match chars.next() {
                 Some((_, escaped @ ('\\' | '"'))) => text.push(escaped),
-                _ => return Err("text escapes are limited to \\\" and \\\\".into()),
+                next => {
+                    return Err((
+                        "text escapes are limited to \\\" and \\\\".into(),
+                        next.map_or(end, |(index, ch)| index + ch.len_utf8()),
+                    ));
+                }
             },
             ch if ch.is_control() => {
-                return Err("control characters are unavailable in text".into());
+                return Err(("control characters are unavailable in text".into(), end));
             }
             ch => text.push(ch),
         }
         if text.len() > MAX_TEXT_BYTES {
-            return Err(format!(
-                "text literals are limited to {MAX_TEXT_BYTES} bytes"
+            return Err((
+                format!("text literals are limited to {MAX_TEXT_BYTES} bytes"),
+                end,
             ));
         }
     }
-    Err("unterminated text literal".into())
+    Err(("unterminated text literal".into(), source.len()))
 }
 
-fn operator(source: &str) -> Result<(Token<'_>, usize), String> {
+fn operator(source: &str) -> Result<(Token<'_>, usize), &'static str> {
     use Binary::{
         Add, And, Divide, Equal, Greater, GreaterEqual, Less, LessEqual, Multiply, NotEqual, Or,
         Remainder, Subtract,
@@ -245,23 +260,28 @@ fn operator(source: &str) -> Result<(Token<'_>, usize), String> {
         b'(' => Token::Open,
         b')' => Token::Close,
         b'!' => Token::Bang,
-        _ => return Err("unexpected symbol in expression".into()),
+        _ => return Err("unexpected symbol in expression"),
     };
     Ok((token, 1))
+}
+
+/// The bytes from the first to the last of these tokens.
+fn covering(tokens: &[Spanned<'_>]) -> Option<Range<usize>> {
+    Some(tokens.first()?.span.start..tokens.last()?.span.end)
 }
 
 pub(super) fn parse(
     source: &str,
     lookup: impl Fn(&str) -> Option<(usize, Kind)>,
-) -> Result<Expr, String> {
+) -> Result<Expr, Fault> {
     let tokens = lex(source)?;
     let mut parser = Parser {
         remaining: &tokens,
         lookup,
     };
     let value = parser.binary(1)?;
-    if !parser.remaining.is_empty() {
-        return Err("unexpected token after expression".into());
+    if let Some(span) = covering(parser.remaining) {
+        return Err(Fault::at("unexpected token after expression", span));
     }
     Ok(value)
 }
@@ -269,7 +289,7 @@ pub(super) fn parse(
 pub(super) fn limited_condition(
     source: &str,
     lookup: impl Fn(&str) -> Option<(usize, Kind)>,
-) -> Result<(Expr, u64), String> {
+) -> Result<(Expr, u64), Fault> {
     let tokens = lex(source)?;
     let mut parser = Parser {
         remaining: &tokens,
@@ -277,26 +297,42 @@ pub(super) fn limited_condition(
     };
     let condition = parser.binary(1)?;
     match parser.remaining {
-        [Token::Word("limit"), Token::Number(limit)] => Ok((condition, *limit)),
-        _ => Err("expected 'while <bool expression> limit <integer literal>'".into()),
+        [
+            Spanned {
+                token: Token::Word("limit"),
+                ..
+            },
+            Spanned {
+                token: Token::Number(limit),
+                ..
+            },
+        ] => Ok((condition, *limit)),
+        rest => Err(Fault {
+            message: "expected 'while <bool expression> limit <integer literal>'".into(),
+            span: covering(rest),
+        }),
     }
 }
 
 struct Parser<'a, 'source, Lookup> {
-    remaining: &'a [Token<'source>],
+    remaining: &'a [Spanned<'source>],
     lookup: Lookup,
 }
 
-impl<Lookup: Fn(&str) -> Option<(usize, Kind)>> Parser<'_, '_, Lookup> {
-    fn take(&mut self) -> Option<Token<'_>> {
+impl<'source, Lookup: Fn(&str) -> Option<(usize, Kind)>> Parser<'_, 'source, Lookup> {
+    fn take(&mut self) -> Option<Spanned<'source>> {
         let (token, rest) = self.remaining.split_first()?;
         self.remaining = rest;
         Some(token.clone())
     }
 
-    fn binary(&mut self, minimum: u8) -> Result<Expr, String> {
+    fn binary(&mut self, minimum: u8) -> Result<Expr, Fault> {
         let mut left = self.prefix()?;
-        while let Some(Token::Operator(op)) = self.remaining.first().cloned() {
+        while let Some(Spanned {
+            token: Token::Operator(op),
+            span,
+        }) = self.remaining.first().cloned()
+        {
             let precedence = op.precedence();
             if precedence < minimum {
                 break;
@@ -304,42 +340,47 @@ impl<Lookup: Fn(&str) -> Option<(usize, Kind)>> Parser<'_, '_, Lookup> {
             self.take();
             let right = self.binary(precedence + 1)?;
             left = Expr {
-                kind: op.result(left.kind, right.kind)?,
+                kind: op
+                    .result(left.kind, right.kind)
+                    .map_err(|message| Fault::at(message, span))?,
                 node: Node::Binary(op, Box::new(left), Box::new(right)),
             };
         }
         Ok(left)
     }
 
-    fn prefix(&mut self) -> Result<Expr, String> {
-        // Keep the token's source borrow independent of mutable parser access.
-        let (token, rest) = self
-            .remaining
-            .split_first()
-            .ok_or("expected an expression")?;
-        self.remaining = rest;
+    fn prefix(&mut self) -> Result<Expr, Fault> {
+        let Spanned { token, span } = self.take().ok_or("expected an expression")?;
         let (kind, node) = match token {
             Token::Number(value) => (
                 Kind::Int,
                 Node::Literal(Value::Int(
-                    i64::try_from(*value).map_err(|_| "integer literal is out of range")?,
+                    i64::try_from(value)
+                        .map_err(|_| Fault::at("integer literal is out of range", span))?,
                 )),
             ),
-            Token::Text(value) => (Kind::Text, Node::Literal(Value::Text(value.clone()))),
-            Token::Word("true" | "false") => (
-                Kind::Bool,
-                Node::Literal(Value::Bool(*token == Token::Word("true"))),
-            ),
-            Token::Word("known" | "stale") => {
-                let op = if *token == Token::Word("known") {
+            Token::Text(value) => (Kind::Text, Node::Literal(Value::Text(value))),
+            Token::Word(word @ ("true" | "false")) => {
+                (Kind::Bool, Node::Literal(Value::Bool(word == "true")))
+            }
+            Token::Word(word @ ("known" | "stale")) => {
+                let op = if word == "known" {
                     Unary::Known
                 } else {
                     Unary::Stale
                 };
-                if self.take() != Some(Token::Open) {
-                    return Err("expected parentheses around the availability test".into());
-                }
-                return self.group().map(|child| Expr {
+                let Some(
+                    open @ Spanned {
+                        token: Token::Open, ..
+                    },
+                ) = self.take()
+                else {
+                    return Err(Fault::at(
+                        "expected parentheses around the availability test",
+                        span,
+                    ));
+                };
+                return self.group(open.span).map(|child| Expr {
                     kind: Kind::Bool,
                     node: Node::Unary(op, Box::new(child)),
                 });
@@ -350,43 +391,55 @@ impl<Lookup: Fn(&str) -> Option<(usize, Kind)>> Parser<'_, '_, Lookup> {
                 } else if let Some(field) = Field::parse(word) {
                     (field.kind(), Node::Field(field))
                 } else {
-                    return Err(format!("unknown variable or client field '{word}'"));
+                    return Err(Fault::at(
+                        format!("unknown variable or client field '{word}'"),
+                        span,
+                    ));
                 }
             }
-            Token::Open => return self.group(),
+            Token::Open => return self.group(span),
             Token::Operator(Binary::Subtract)
-                if self.remaining.first() == Some(&Token::Number(i64::MIN.unsigned_abs())) =>
+                if self.remaining.first().map(|next| &next.token)
+                    == Some(&Token::Number(i64::MIN.unsigned_abs())) =>
             {
                 self.take();
                 (Kind::Int, Node::Literal(Value::Int(i64::MIN)))
             }
             Token::Bang | Token::Operator(Binary::Subtract) => {
-                let (kind, op) = if *token == Token::Bang {
+                let (kind, op) = if token == Token::Bang {
                     (Kind::Bool, Unary::Not)
                 } else {
                     (Kind::Int, Unary::Negate)
                 };
                 let child = self.prefix()?;
                 if child.kind != kind {
-                    return Err(format!("unary operator requires a {kind} operand"));
+                    return Err(Fault::at(
+                        format!("unary operator requires a {kind} operand"),
+                        span,
+                    ));
                 }
                 (kind, Node::Unary(op, Box::new(child)))
             }
             _ => {
-                return Err(
-                    "expected a literal, variable, client field or parenthesized expression".into(),
-                );
+                return Err(Fault::at(
+                    "expected a literal, variable, client field or parenthesized expression",
+                    span,
+                ));
             }
         };
         Ok(Expr { kind, node })
     }
 
-    fn group(&mut self) -> Result<Expr, String> {
+    /// The rest of a group whose opening parenthesis is at `open`.
+    fn group(&mut self, open: Range<usize>) -> Result<Expr, Fault> {
         let value = self.binary(1)?;
-        if self.take() != Some(Token::Close) {
-            return Err("expected closing parenthesis".into());
+        match self.take() {
+            Some(Spanned {
+                token: Token::Close,
+                ..
+            }) => Ok(value),
+            _ => Err(Fault::at("expected closing parenthesis", open)),
         }
-        Ok(value)
     }
 }
 

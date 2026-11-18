@@ -8,6 +8,15 @@
 - Debug logs name what stopped a movement proposal that resolved short: the
   zone, a door id or a carrier spawn id, with the contact normal and no world
   coordinates. Diagnostic only; movement is unchanged.
+- Script editor: one highlighter, driven by the parser's own command list,
+  colours the editor, the Execution view and help examples alike, now
+  including statement keywords, types, quoted text, client fields and
+  declared variables. Errors are checked as you type and underlined under
+  the exact word, with every error (whole-script limits too) listed under
+  the editor; click one to jump to its line. Unknown commands and
+  malformed steps now have separate messages. The Vim plugin knows every
+  command.
+
 - Recall sent chat lines with Shift+Up and Shift+Down while typing, as the
   Titanium program does (read R34): 40 lines per chat window, kept at submit,
   never the newest line twice, an empty line or the installed password

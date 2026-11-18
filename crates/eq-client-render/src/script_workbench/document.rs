@@ -19,6 +19,24 @@ pub(super) struct Document {
     disk: Option<String>,
     /// The file came with Windows newlines, which a save writes back.
     crlf: bool,
+    check: Option<Check>,
+}
+
+/// Check generations, unique across documents so a replaced one never matches.
+static CHECKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The parser's verdict on one exact buffer and path. The editor's marks and
+/// the status line share it; Run still compiles the buffer it runs.
+#[derive(Debug)]
+pub(super) struct Check {
+    text: String,
+    path: Option<PathBuf>,
+    /// Statements and actions of a valid program.
+    pub counts: Option<(usize, usize)>,
+    /// Every error, in source order.
+    pub errors: Vec<ParseError>,
+    /// Unique to each recomputation, across documents.
+    pub generation: u64,
 }
 
 impl Default for Document {
@@ -35,6 +53,7 @@ impl Document {
             path,
             disk: None,
             crlf: false,
+            check: None,
         }
     }
 
@@ -42,15 +61,43 @@ impl Document {
         self.text != self.saved
     }
 
+    /// Screenshot paths are relative to the document's folder.
+    fn base(&self) -> &Path {
+        self.path
+            .as_deref()
+            .and_then(Path::parent)
+            .unwrap_or(Path::new("."))
+    }
+
     /// Compile the buffer without changing the current executor or disk snapshot.
     pub fn program(&self) -> Result<Program, ParseError> {
-        Program::parse(
-            &self.text,
-            self.path
-                .as_deref()
-                .and_then(Path::parent)
-                .unwrap_or(Path::new(".")),
-        )
+        Program::parse(&self.text, self.base())
+    }
+
+    /// The verdict for the current text and path, compiled once per change.
+    pub fn check(&mut self) -> &Check {
+        let current = self
+            .check
+            .as_ref()
+            .is_some_and(|check| check.text == self.text && check.path == self.path);
+        if !current {
+            let (counts, errors) = match Program::check(&self.text, self.base()) {
+                Ok(program) => (
+                    Some((program.statement_count(), program.instructions().len())),
+                    Vec::new(),
+                ),
+                Err(errors) => (None, errors),
+            };
+            let generation = CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.check = Some(Check {
+                text: self.text.clone(),
+                path: self.path.clone(),
+                counts,
+                errors,
+                generation,
+            });
+        }
+        self.check.as_ref().expect("checked above")
     }
 
     /// Prepare a save against the snapshot of this path, or a new-file save.
@@ -81,6 +128,7 @@ impl Document {
             path: Some(path),
             disk: Some(raw),
             crlf,
+            check: None,
         }
     }
 
@@ -191,6 +239,24 @@ fn temporary(path: &Path) -> Result<(PathBuf, fs::File), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_check_compiles_once_per_text_and_path() {
+        use crate::script::COMPILES;
+        let mut doc = Document::new("wait 1\npres I\n".into(), None);
+        let before = COMPILES.get();
+        assert_eq!(doc.check().errors.len(), 1);
+        let generation = doc.check().generation;
+        assert_eq!(doc.check().errors[0].line, Some(2));
+        assert_eq!(COMPILES.get(), before + 1);
+        doc.text = "wait 1\n".into();
+        assert_eq!(doc.check().counts, Some((1, 1)));
+        assert_ne!(doc.check().generation, generation);
+        assert_eq!(COMPILES.get(), before + 2);
+        doc.path = Some("scenarios/demo.eqscript".into());
+        doc.check();
+        assert_eq!(COMPILES.get(), before + 3);
+    }
 
     #[test]
     fn saves_preserve_newer_buffer_edits() {

@@ -20,6 +20,7 @@ pub(super) use input::install as install_input;
 pub(crate) use input::world::WorldInput;
 pub(super) use input::world::apply as world_input;
 pub(crate) mod language;
+pub(crate) use parse::COMMANDS;
 mod parse;
 pub(crate) mod pointer;
 mod program;
@@ -31,6 +32,8 @@ use execution::RunMode;
 pub use execution::{Phase, RunEvent, RunStatus};
 pub(crate) use execution::{Request, RunControl};
 use program::AppendError;
+#[cfg(test)]
+pub(crate) use program::COMPILES;
 pub use program::{Instruction, MAX_SOURCE_BYTES, ParseError, Program};
 mod source;
 pub use source::read_source;

@@ -608,6 +608,56 @@ fn parse_camera(arguments: &[&str]) -> Result<Step, String> {
     })
 }
 
+/// Every action word `parse_step` accepts, for the editor's highlighter and
+/// the unknown-command diagnostic. A test keeps it in step with the grammar.
+pub(crate) const COMMANDS: &[&str] = &[
+    "login",
+    "wait_servers",
+    "server",
+    "wait_select",
+    "select",
+    "delete",
+    "create",
+    "create_refused",
+    "wait_online",
+    "wait_zone",
+    "wait_relocation",
+    "wait_dead",
+    "slash",
+    "boat",
+    "social",
+    "gm",
+    "chat",
+    "drag",
+    "press",
+    "hold",
+    "wheel",
+    "look",
+    "wait",
+    "camera",
+    "trace",
+    "face",
+    "move",
+    "approach",
+    "chase",
+    "walk",
+    "give",
+    "interact",
+    "popup",
+    "inspect_player",
+    "inspect_link",
+    "compose_link",
+    "compose_owned_link",
+    "click",
+    "right_click",
+    "hover",
+    "hold_click",
+    "report",
+    "sound",
+    "screenshot",
+    "quit",
+];
+
 #[allow(
     clippy::too_many_lines,
     reason = "one exhaustive command grammar keeps unknown-command rejection explicit"
@@ -774,7 +824,12 @@ pub(super) fn parse_step(line: &str) -> Result<Step, String> {
             Step::Screenshot(PathBuf::from(name))
         }
         ("quit", []) => Step::Quit,
-        _ => return Err("unknown or malformed step".into()),
+        _ if COMMANDS.contains(&command) => {
+            return Err(format!(
+                "malformed '{command}' step; see the command reference"
+            ));
+        }
+        _ => return Err(format!("unknown command '{command}'")),
     })
 }
 
@@ -1631,6 +1686,31 @@ pub(super) fn typed(key: KeyCode, shift: bool, chorded: bool) -> (Key, Option<St
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn listed_commands_are_known_and_every_other_word_is_unknown() {
+        for command in super::COMMANDS {
+            // A bare word is valid or malformed, never unknown.
+            if let Err(error) = super::parse_step(command) {
+                assert!(!error.starts_with("unknown command"), "{command}: {error}");
+            }
+        }
+        for word in ["pres", "Press", "let", "fn", "wait_", "x"] {
+            assert_eq!(
+                super::parse_step(&format!("{word} 1")).unwrap_err(),
+                format!("unknown command '{word}'")
+            );
+        }
+        // The Vim plugin colours the same commands.
+        let vim = include_str!("../../../../contrib/vim/syntax/eqscript.vim");
+        let list = vim
+            .lines()
+            .find_map(|line| line.strip_prefix(r"syntax match eqscriptCommand /^\s*\zs\%("))
+            .and_then(|line| line.split_once(r"\)\>/"))
+            .map(|(list, _)| list.split(r"\|").collect::<Vec<_>>())
+            .unwrap();
+        assert_eq!(list, super::COMMANDS);
+    }
+
     #[test]
     fn documented_boat_steps_use_the_slash_path_and_reject_other_actions() {
         let base = Path::new("private");
