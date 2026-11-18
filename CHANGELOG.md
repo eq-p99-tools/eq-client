@@ -9,7 +9,7 @@
   (0, 0, 25) in the frame, and answers once; a floor that is not that boat's
   counts as none. Movement is held until the session places the player, and
   the boat's collider loads wherever the player seems to be. Script movement
-  reports carry the arrival. Uses eq-network 73ed052e (boat riding).
+  reports carry the arrival. Uses eq-network bb17371f (boat riding, the boat save checksum and the safe point after a refused carry-on).
 - Doors of open type 54, 55 and 56 are no longer clicked on Titanium: the
   program's click routine returns at once for them, sending and saying
   nothing (read R37). They stay solid at their placed pose, as before.
