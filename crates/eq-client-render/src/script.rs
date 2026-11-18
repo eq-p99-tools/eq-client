@@ -4431,6 +4431,83 @@ mod tests {
     }
 
     #[test]
+    fn mixed_enter_events_attribute_submission_to_the_actual_submitting_key() {
+        for scripted_first in [false, true] {
+            let mut app = scripted_keyboard();
+            let command = [
+                KeyCode::Slash,
+                KeyCode::KeyS,
+                KeyCode::KeyO,
+                KeyCode::KeyC,
+                KeyCode::KeyI,
+                KeyCode::KeyA,
+                KeyCode::KeyL,
+                KeyCode::Space,
+                KeyCode::KeyC,
+                KeyCode::KeyA,
+                KeyCode::KeyN,
+                KeyCode::KeyC,
+                KeyCode::KeyE,
+                KeyCode::KeyL,
+            ];
+            let keys: Vec<_> = command
+                .into_iter()
+                .flat_map(|key| [(key, true), (key, false)])
+                .collect();
+            run_keys(&mut app, &keys);
+            run_keys(
+                &mut app,
+                &[(KeyCode::Escape, true), (KeyCode::Escape, false)],
+            );
+            assert_eq!(
+                app.world().resource::<crate::chat::ChatState>().draft(),
+                "/social cancel"
+            );
+            assert!(!app.world().resource::<crate::keys::Typing>().composing);
+            app.init_resource::<AuthoredInput>().add_systems(
+                Update,
+                (move |mut keyboard: Keyboard, mut ran: Local<bool>| {
+                    if std::mem::replace(&mut *ran, true) {
+                        return;
+                    }
+                    for scripted in [scripted_first, !scripted_first] {
+                        if scripted {
+                            keyboard.press(KeyCode::Enter);
+                            keyboard.release(KeyCode::Enter);
+                        } else {
+                            for state in [
+                                bevy::input::ButtonState::Pressed,
+                                bevy::input::ButtonState::Released,
+                            ] {
+                                keyboard.typed.write(bevy::input::keyboard::KeyboardInput {
+                                    key_code: KeyCode::Enter,
+                                    logical_key: bevy::input::keyboard::Key::Enter,
+                                    state,
+                                    text: None,
+                                    repeat: false,
+                                    window: Entity::PLACEHOLDER,
+                                });
+                            }
+                        }
+                    }
+                })
+                .before(crate::chat::input),
+            );
+            app.update();
+            let chat = app.world().resource::<crate::chat::ChatState>();
+            let native_cancel =
+                chat.socials.request.as_ref().is_some_and(|queued| {
+                    matches!(queued.request, crate::socials::Request::Cancel)
+                });
+            assert_eq!(native_cancel, scripted_first);
+            assert_eq!(
+                app.world().resource::<crate::keys::Typing>().composing,
+                !scripted_first
+            );
+        }
+    }
+
+    #[test]
     fn chat_input_report_observes_scripted_enter_and_escape_results() {
         let mut app = scripted_keyboard();
         let report = |app: &App| {

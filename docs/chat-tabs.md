@@ -22,5 +22,10 @@ Click an input line or select a tab to choose where Enter opens the shared
 draft. Plain text uses that window's selected channel. Slash commands still
 choose channels explicitly.
 
+Enter sends the current line and returns keyboard input to the game. Keys
+pressed after Enter start from that new state, including a slash opening a
+new command. Holding Enter does not repeatedly send or reopen the line.
+Escape leaves composition while keeping the draft for the next Enter.
+
 Tab membership, order, selection and window placement are saved with the
 character's window layout.

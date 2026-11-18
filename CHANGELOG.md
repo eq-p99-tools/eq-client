@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Submit chat at each Enter event before routing later keys in the frame,
+  retaining main/detached channel ownership and suppressing held Enter repeats.
+
 - Level swimming can cross into known air above continuous water and use
   ordinary falling to reenter, preserving unknown-region and dry-gap guards.
 
