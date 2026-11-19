@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Jump onto what the floor sweep reaches as the Titanium client does: a
+  standing jump or fall that meets an edge whose top is within 3.375 of
+  its feet (for a human of size 6) now lands on it instead of stopping and
+  dropping, so a running jump from the Erud's Crossing planks lands on a
+  docked ship's deck. A standing jump mounts a ledge up to its rise plus
+  that reach, about 8.3 for a human, where before it mounted nothing it
+  couldn't walk up. The landing leaves no vertical speed, as the
+  program's put-back does (read R42; inferred bound, checklist 6.484).
+  Ducking, wet feet and the Mac-era generation are unchanged, and the
+  landing sample stays inside the session's guard.
 - Walk onto low edges as the Titanium client does: a standing walk now
   climbs anything it runs into up to 1.25 above the body's origin, so a
   human of size 6 steps over Erudin's pier-end rail and onto its posts

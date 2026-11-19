@@ -34,6 +34,17 @@ under a floor. The tallest edge the official client climbs is
 unmeasured, so a taller one stops here even where it might not there. The
 body's width is unchanged (recording checklist 6.482).
 
+A standing Titanium jump or fall passes over an edge whose top the floor
+sweep reaches, 3.375 above the feet for a human of size 6, and lands on
+it with no vertical speed left. A running jump from the Erud's Crossing
+planks clears the docked ship's side and lands on its deck, and a
+standing jump mounts a ledge up to its own rise plus that reach, about
+8.3 for a human. The program sweeps the air with the same raised body as
+the walk and has no test below it (read R42). Using the floor sweep's
+reach rather than the origin is the stricter reading (recording
+checklist 6.484). Ducking, wet feet and the Mac-era generation keep the
+old behaviour, where an edge at the body stops it.
+
 A local movement proposal completes when the worker returns a result for
 its admission and request stamp. That result describes the worker's
 working position. A pending proposal can defer a due air or lava check
