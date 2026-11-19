@@ -231,9 +231,15 @@ fn background_script_types_in_both_book_fields_until_native_input_reclaims_owner
     click(&mut app, "SpellSets_Toggle");
     let (window, search) = install_background_book_script(
         &mut app,
-        "click button spellbook SpellSets_Name\npress b\npress enter\n\
-         click button spellbook SpellSets_Save\nclick button spellbook Spellbook_Search\n\
-         hold w 160\npress enter\nclick button spellbook Spellbook_Search\nwait 2000",
+        "click(\"button\", \"spellbook\", \"SpellSets_Name\")\n\
+         press(\"b\")\n\
+         press(\"enter\")\n\
+         click(\"button\", \"spellbook\", \"SpellSets_Save\")\n\
+         click(\"button\", \"spellbook\", \"Spellbook_Search\")\n\
+         hold(\"w\", 160)\n\
+         press(\"enter\")\n\
+         click(\"button\", \"spellbook\", \"Spellbook_Search\")\n\
+         wait(2000)",
     );
     let mut passed_enter = false;
     let mut saw_text = false;
@@ -320,8 +326,11 @@ fn scripted_search_and_clear_filter_the_received_book_in_place() {
     world.resource_mut::<BookView>().spread = 2;
     let (_, field) = install_background_book_script(
         &mut app,
-        "click button spellbook Spellbook_Search\npress w\npress enter\nwait 400\n\
-         click button spellbook Spellbook_SearchClear",
+        "click(\"button\", \"spellbook\", \"Spellbook_Search\")\n\
+         press(\"w\")\n\
+         press(\"enter\")\n\
+         wait(400)\n\
+         click(\"button\", \"spellbook\", \"Spellbook_SearchClear\")",
     );
 
     let mut filtered = false;

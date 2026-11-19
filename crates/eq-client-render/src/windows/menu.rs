@@ -490,8 +490,8 @@ mod tests {
     #[test]
     fn consecutive_scripted_window_clicks_reopen_the_menu_after_the_previous_release() {
         for source in [
-            "click window spellbook\nclick window options\n",
-            "hold_click 1 window spellbook\nclick window options\n",
+            "click(\"window\", \"spellbook\")\nclick(\"window\", \"options\")\n",
+            "hold_click(1, \"window\", \"spellbook\")\nclick(\"window\", \"options\")\n",
         ] {
             let (mut app, window, _) = scripted_menu();
             let program = crate::script::Program::parse(source, std::path::Path::new(".")).unwrap();

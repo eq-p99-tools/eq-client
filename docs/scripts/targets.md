@@ -4,7 +4,7 @@
 [Command reference](reference.md)
 [Examples](examples.md)
 
-Use these targets after `click`, `right_click` or `hover`. For a held click, put the duration first: `hold_click 500 hot_button 1`. A syntactically valid target still needs its window and control to exist. Slots use the client's protocol slot numbering; other ordinals are noted below.
+Use these targets after `click`, `right_click` or `hover`. Each word of a target is one argument, so the target `slot 22` is written `click("slot", 22)`. For a held click, put the duration first: `hold_click(500, "hot_button", 1)`. A syntactically valid target still needs its window and control to exist. Slots use the client's protocol slot numbering; other ordinals are noted below.
 
 ## Inventory, spells and money
 
@@ -22,7 +22,7 @@ Use these targets after `click`, `right_click` or `hover`. For a held click, put
 - `spell_gem gem`: a gem from 1 to 8. `click` casts its spell and
   `right_click` forgets it.
 - `button spellbook Spellbook_Search`: focus the Search field in either
-  spellbook. Use `press` to type and `press enter` to finish. Filtered entries
+  spellbook. Use `press` to type and `press("enter")` to finish. Filtered entries
   retain their received book slots. Use `button spellbook Spellbook_SearchClear`
   to clear the query and restore the ordinary page.
 - `button spellbook SpellSets_Toggle`: open the saved layouts panel. While it is
@@ -59,14 +59,14 @@ merchant action.
 
 ## Windows and lists
 
-- `window key`: click a window toggle, such as `inventory`, `spellbook`, `options` or `scripts`. The toggles live in the EQ menu; while it is closed the step first clicks the menu's own button (`button selector EQButton`), waits for the menu to open (up to a second), then clicks the entry; the script ends if the menu stays closed. Keyboard shortcuts such as the map's starting `press M` do not require the menu; saved bindings still apply.
+- `window key`: click a window toggle, such as `inventory`, `spellbook`, `options` or `scripts`. The toggles live in the EQ menu; while it is closed the step first clicks the menu's own button (`button selector EQButton`), waits for the menu to open (up to a second), then clicks the entry; the script ends if the menu stays closed. Keyboard shortcuts such as the map's starting `press("M")` do not require the menu; saved bindings still apply.
 - `close_box key` or `minimize_box key`: the window's titlebar control.
 - `done key`: a window's Done button.
 - `button key ScreenID`: a named button in the installed skin's window.
 - `scroll_up key` or `scroll_down key`: a window's scrollbar.
 - `tab number`: an options tab counted from 1.
 - `option name`: an option toggle by its settings-file name.
-- `slider name percent` sets a slider by its position from 0 to 100 percent. Names include `clip_plane`, `max_fps`, `mouse_sensitivity`, `ui_scale`, `run_boost`, `sound_volume`, and `quantity`. On the QoL page, `click slider run_boost 50` selects 1.20x and `click slider run_boost 100` selects 1.40x.
+- `slider name percent` sets a slider by its position from 0 to 100 percent. Names include `clip_plane`, `max_fps`, `mouse_sensitivity`, `ui_scale`, `run_boost`, `sound_volume`, and `quantity`. On the QoL page, `click("slider", "run_boost", 50)` selects 1.20x and `click("slider", "run_boost", 100)` selects 1.40x.
 - `dropdown key_filter`: the options key-binding filter.
 - `choice number`: a dropdown choice counted from 1.
 - `chat_tab label`: a chat tab by its displayed label, ignoring case.
@@ -92,7 +92,7 @@ merchant action.
   request. An unavailable row is refused. `report` includes `training_languages`
   as `(id, received_value, cap)`; a missing value remains unknown.
 - `train` or `training_done`: the training window's buttons. Use
-  `interact admission spawn revision` with the selected guildmaster's
+  `interact(admission, spawn, revision)` with the selected guildmaster's
   current `target_interaction` tuple to open training. On P99, opening the
   same trainer or submitting another practice requires a fresh admission.
 - `tracking row`: a track window row counted from 1, in the server's order.

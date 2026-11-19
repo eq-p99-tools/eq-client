@@ -1,11 +1,11 @@
 # Vim and Neovim
 
-Highlighting covers action commands, keys, and expression syntax in typed assignments and control flow.
+Highlighting covers action calls, keys, keywords, types, text and client fields.
 
 [Help home](README.md)
 [Language reference](reference.md)
 
-The repository includes an MIT-licensed syntax plugin in `contrib/vim`. It recognizes `.eqscript` files and colors commands, numbers, key chords, and `#` comments. It supplies comment and indentation settings for this file type only. Highlighting is presentation, not validation; the client parser still checks whether an action is valid.
+The repository includes an MIT-licensed syntax plugin in `contrib/vim`. It recognizes `.eqscript` files and colors action calls, keywords, numbers, quoted text, key chords and `#` comments. It indents four spaces after a line ending in `:`, lines `elif` and `else` up with their `if`, and sets comment settings for this file type only. Highlighting is presentation, not validation; the client parser still checks whether an action is valid.
 
 ## Install
 
@@ -16,7 +16,7 @@ Copy the entire `contrib/vim` folder into your editor's package directory, namin
 - Neovim on Linux/macOS: `~/.local/share/nvim/site/pack/eq-client/start/eqscript`
 - Neovim on Windows: `~/AppData/Local/nvim-data/site/pack/eq-client/start/eqscript`
 
-The `ftdetect`, `ftplugin`, and `syntax` directories should sit directly inside `eqscript`. Use a Vim version with native package support (Vim 8 or newer), or Neovim. Restart the editor after installing.
+The `ftdetect`, `ftplugin`, `indent` and `syntax` directories should sit directly inside `eqscript`. Use a Vim version with native package support (Vim 8 or newer), or Neovim. Restart the editor after installing.
 
 If you have disabled automatic file types or highlighting, enable them in your configuration:
 

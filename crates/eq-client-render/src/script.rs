@@ -20,7 +20,7 @@ pub(super) use input::install as install_input;
 pub(crate) use input::world::WorldInput;
 pub(super) use input::world::apply as world_input;
 pub(crate) mod language;
-pub(crate) use parse::COMMANDS;
+pub(crate) use parse::{COMMANDS, FREE_TEXT};
 mod parse;
 pub(crate) mod pointer;
 mod program;
@@ -4748,7 +4748,7 @@ mod tests {
     fn a_stun_fixture_keeps_both_local_session_gates() {
         use eq_client_core::{ClientCommand, OutboundChat};
         let world = eq_client_core::world::ClientWorld::default();
-        let program = Program::parse("gm stun 8000", std::path::Path::new(".")).unwrap();
+        let program = Program::parse("gm(\"stun 8000\")", std::path::Path::new(".")).unwrap();
         assert_eq!(
             program.instructions()[0].step(),
             &Step::Gm("stun 8000".into())
@@ -4767,7 +4767,8 @@ mod tests {
         use crate::online::{OnlineState, testing as session};
         use eq_client_core::{ClientCommand, GameDialect, OutboundChat};
         let command = "setlanguage 5 20";
-        let program = Program::parse(&format!("gm {command}"), std::path::Path::new(".")).unwrap();
+        let program =
+            Program::parse(&format!("gm(\"{command}\")"), std::path::Path::new(".")).unwrap();
         assert!(program.check_local_commands(false).is_err());
         assert!(program.check_local_commands(true).is_ok());
         let mut online = OnlineState::new(true);
@@ -4790,7 +4791,8 @@ mod tests {
         use eq_client_core::{ClientCommand, GameDialect, OutboundChat};
 
         let command = "traindisc 55 52";
-        let program = Program::parse(&format!("gm {command}"), std::path::Path::new(".")).unwrap();
+        let program =
+            Program::parse(&format!("gm(\"{command}\")"), std::path::Path::new(".")).unwrap();
         assert!(program.check_local_commands(false).is_err());
         assert!(program.check_local_commands(true).is_ok());
 
@@ -4820,7 +4822,7 @@ mod tests {
             "guild set Example 0",
         ] {
             let program =
-                Program::parse(&format!("gm {command}"), std::path::Path::new(".")).unwrap();
+                Program::parse(&format!("gm(\"{command}\")"), std::path::Path::new(".")).unwrap();
             assert!(program.check_local_commands(false).is_err());
             assert!(program.check_local_commands(true).is_ok());
             assert!(gm_request(command, false, online.world()).is_err());
@@ -5605,7 +5607,7 @@ mod tests {
                     ..default()
                 };
                 let run = Script::for_viewer(
-                    Program::parse("wait 10", Path::new(".")).unwrap(),
+                    Program::parse("wait(10)", Path::new(".")).unwrap(),
                     &config,
                     online,
                 );
@@ -5728,7 +5730,7 @@ mod tests {
     #[test]
     fn a_source_error_retains_its_line_after_the_executor_is_removed() {
         let mut app = pointing(Vec::new());
-        let program = Program::parse("# needs a target\n\nface\n", Path::new(".")).unwrap();
+        let program = Program::parse("# needs a target\n\nface()\n", Path::new(".")).unwrap();
         app.insert_resource(Script::from_program(program).offline_preview(true));
         frame_at(&mut app, 0);
         assert_eq!(
@@ -5761,7 +5763,7 @@ mod tests {
             .single(app.world())
             .unwrap();
         set_focus(&mut app, window, true);
-        let program = Program::parse("give\nreport after give\n", Path::new(".")).unwrap();
+        let program = Program::parse("give()\nreport(\"after give\")\n", Path::new(".")).unwrap();
         let mut online = OnlineState::new(true);
         session::admit(&mut online, 9, session::player(7));
         session::spawns(&mut online, vec![session::pet(GIVE_TARGET, 99)]);
@@ -5974,7 +5976,7 @@ mod tests {
         assert_eq!(online.world().session_id(), Some(9));
         assert!(!online.world().can(capability));
         let program = Program::parse(
-            "click slider run_boost 100\nreport after click\n",
+            "click(\"slider\", \"run_boost\", 100)\nreport(\"after click\")\n",
             Path::new("."),
         )
         .unwrap();
@@ -6624,11 +6626,11 @@ mod tests {
     fn following_queues_only_complete_appended_lines() {
         let path =
             std::env::temp_dir().join(format!("eq-client-follow-{}.txt", std::process::id()));
-        std::fs::write(&path, "wait 10\n").unwrap();
+        std::fs::write(&path, "wait(10)\n").unwrap();
         let mut script = Script::following(Vec::new(), path.clone(), 8);
         script.poll(Duration::ZERO);
         assert!(script.steps.is_empty());
-        std::fs::write(&path, "wait 10\nreport a\nwait 2").unwrap();
+        std::fs::write(&path, "wait(10)\nreport(\"a\")\nwait(2)").unwrap();
         script.poll(Duration::from_secs(1));
         assert_eq!(
             script.steps.front().map(|queued| &queued.step),
@@ -6636,10 +6638,10 @@ mod tests {
         );
         assert_eq!(script.steps.front().unwrap().line, Some(2));
         // An invalid batch is skipped whole; later batches still run.
-        std::fs::write(&path, "wait 10\nreport a\nwait 20\nbogus\n").unwrap();
+        std::fs::write(&path, "wait(10)\nreport(\"a\")\nwait(20)\nbogus\n").unwrap();
         script.poll(Duration::from_secs(2));
         assert_eq!(script.steps.len(), 1);
-        std::fs::write(&path, "wait 10\nreport a\nwait 20\nbogus\nquit\n").unwrap();
+        std::fs::write(&path, "wait(10)\nreport(\"a\")\nwait(20)\nbogus\nquit()\n").unwrap();
         script.poll(Duration::from_secs(3));
         assert_eq!(
             script.steps.back().map(|queued| &queued.step),
@@ -6662,7 +6664,7 @@ mod tests {
     #[test]
     fn structured_runs_dispatch_only_the_taken_branch_and_pace_repeated_actions() {
         let mut app = structured_preview(
-            "let n: int = 0\nrepeat 2\n  set n = n + 1\n  if n == 1\n    press A\n  else\n    press B\n  end\nend\n",
+            "n: int = 0\nfor _ in range(2):\n    n = n + 1\n    if n == 1:\n        press(\"A\")\n    else:\n        press(\"B\")\n",
         );
         for ms in [0, 10, 20, 30, 40] {
             frame_at(&mut app, ms);
@@ -6703,7 +6705,8 @@ mod tests {
 
     #[test]
     fn a_loop_without_actions_can_pause_step_and_stop() {
-        let mut app = structured_preview("while true limit 100\n  repeat 100\n  end\nend\n");
+        let mut app =
+            structured_preview("while True, limit=100:\n    for _ in range(100):\n        pass\n");
         frame_at(&mut app, 0);
         app.world_mut()
             .resource_mut::<RunControl>()
@@ -6736,7 +6739,7 @@ mod tests {
     #[test]
     fn a_condition_with_unknown_state_stops_on_its_line() {
         let mut app = structured_preview(
-            "# offline\nif player.mana == 0\n  report empty\nelse\n  report present\nend",
+            "# offline\nif player.mana == 0:\n    report(\"empty\")\nelse:\n    report(\"present\")",
         );
         frame_at(&mut app, 0);
         let status = app.world().resource::<RunStatus>();
@@ -6757,13 +6760,13 @@ mod tests {
     fn follow_rejects_a_structured_append_before_any_branch_action_can_escape() {
         let path =
             std::env::temp_dir().join(format!("eq-client-flow-follow-{}.txt", std::process::id()));
-        std::fs::write(&path, "wait 10\nif false\n").unwrap();
+        std::fs::write(&path, "wait(10)\nif False:\n").unwrap();
         let mut script = Script::following(Vec::new(), path.clone(), 8);
         script.poll(Duration::ZERO);
         assert_eq!(script.status().phase(), Phase::Failed);
         assert_eq!(script.status().line(), Some(2));
         assert!(script.steps.is_empty());
-        std::fs::write(&path, "wait 10\nif false\nquit\nend\n").unwrap();
+        std::fs::write(&path, "wait(10)\nif False:\n    quit()\n").unwrap();
         script.poll(Duration::from_secs(1));
         assert!(script.steps.is_empty());
         let _ = std::fs::remove_file(&path);
@@ -6775,8 +6778,8 @@ mod tests {
             "eq-client-bom-flow-follow-{}.txt",
             std::process::id()
         ));
-        let prefix = "wait 10\n";
-        let header = "\u{feff}\u{feff}if false";
+        let prefix = "wait(10)\n";
+        let header = "\u{feff}\u{feff}if False:";
         std::fs::write(&path, format!("{prefix}{header}")).unwrap();
         let mut script = Script::following(Vec::new(), path.clone(), prefix.len());
         script.poll(Duration::ZERO);
@@ -6789,7 +6792,7 @@ mod tests {
         assert_eq!(script.status().line(), Some(2));
         assert!(script.follow.is_none());
 
-        std::fs::write(&path, format!("{prefix}{header}\nquit\n")).unwrap();
+        std::fs::write(&path, format!("{prefix}{header}\n    quit()\n")).unwrap();
         script.poll(Duration::from_secs(2));
         assert!(script.steps.is_empty());
         let _ = std::fs::remove_file(&path);

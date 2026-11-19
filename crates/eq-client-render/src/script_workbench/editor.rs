@@ -190,7 +190,7 @@ mod tests {
 
     #[test]
     fn editor_renders_and_reports_multiple_errors_without_a_window() {
-        let (mut app, ctx) = app("# note\nwait nope\npress UNKNOWN\nreport café\n");
+        let (mut app, ctx) = app("# note\nwait(nope)\npress(\"UNKNOWN\")\nreport(\"café\")\n");
         let output = frame(
             &mut app,
             &ctx,
@@ -215,26 +215,26 @@ mod tests {
             marks.iter().map(|mark| mark.line).collect::<Vec<_>>(),
             [Some(2), Some(3)]
         );
-        // "nope" and "UNKNOWN": the arguments, in characters.
+        // The variable given as an argument, and the call's argument list, in characters.
         assert_eq!(
             marks
                 .iter()
                 .map(|mark| mark.chars.clone())
                 .collect::<Vec<_>>(),
-            [Some(12..16), Some(23..30)]
+            [Some(12..16), Some(24..33)]
         );
         assert!(
             app.world()
                 .resource::<Workbench>()
                 .document
                 .text
-                .ends_with("report café\n")
+                .ends_with("report(\"café\")\n")
         );
     }
 
     #[test]
     fn document_level_errors_are_listed_without_a_line() {
-        let (mut app, ctx) = app("wait 1\n");
+        let (mut app, ctx) = app("wait(1)\n");
         frame(&mut app, &ctx, Vec::new());
         assert_eq!(app.world().resource::<State>().marks, []);
         app.world_mut().resource_mut::<Workbench>().document.text =
@@ -248,13 +248,13 @@ mod tests {
 
     #[test]
     fn choosing_a_problem_moves_the_caret_to_its_line() {
-        let (mut app, ctx) = app("wait 1\nwait 2\npres I\n");
+        let (mut app, ctx) = app("wait(1)\nwait(2)\npres(\"I\")\n");
         frame(&mut app, &ctx, Vec::new());
         app.world_mut().resource_mut::<State>().code.jump = Some(3);
         frame(&mut app, &ctx, Vec::new());
         let state = egui::text_edit::TextEditState::load(&ctx, code::id()).unwrap();
         let cursor = state.cursor.char_range().unwrap();
-        assert_eq!(cursor.primary.index.0, 14);
+        assert_eq!(cursor.primary.index.0, 16);
         assert!(ctx.memory(|memory| memory.has_focus(code::id())));
         assert!(app.world().resource::<State>().code.jump.is_none());
     }

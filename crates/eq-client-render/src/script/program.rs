@@ -5,7 +5,7 @@ use std::{fmt, ops::Range, path::Path, sync::Arc};
 use super::{
     Step,
     language::{self, Builder, Code},
-    parse::{COMMANDS, MAX_STEPS, parse_step},
+    parse::{MAX_STEPS, parse_words},
     source::without_bom,
 };
 
@@ -96,51 +96,57 @@ impl Program {
         let text = without_bom(text);
         // Spans count bytes of the line as given, before a leading BOM is dropped.
         let bom = source.len() - text.len();
+        let shift = |line: usize, span: Range<usize>| {
+            let bom = if line == 1 { bom } else { 0 };
+            Some(span.start + bom..span.end + bom)
+        };
         let mut instructions = Vec::new();
         let mut errors = Vec::new();
-        let mut flow = Builder::default();
+        let mut flow = Builder::new();
         let mut statements = 0;
         for (index, raw) in text.lines().enumerate() {
-            let line = raw[..language::comment(raw)].trim();
-            if line.is_empty() {
+            let line = index + 1;
+            let code = raw[..language::comment(raw)].trim();
+            if code.is_empty() {
                 continue;
             }
-            let start = language::offset(raw, line) + if index == 0 { bom } else { 0 };
-            let at = |span: Range<usize>| Some(start + span.start..start + span.end);
+            let start = language::offset(raw, code);
             statements += 1;
             if statements > MAX_STEPS {
                 return Err(vec![ParseError::document(format!(
                     "script has more than {MAX_STEPS} statements"
                 ))]);
             }
-            match flow.statement(line, index + 1) {
-                Ok(false) => (),
-                Ok(true) => continue,
-                Err(fault) => {
-                    errors.push(ParseError {
-                        line: Some(index + 1),
-                        span: at(fault.span.unwrap_or(0..line.len())),
-                        message: fault.message,
-                    });
-                    continue;
+            let mut fail = |span: Range<usize>, message: String| {
+                errors.push(ParseError {
+                    line: Some(line),
+                    span: shift(line, span),
+                    message,
+                });
+            };
+            let step = match flow.statement(raw, line) {
+                Ok(None) => continue,
+                Ok(Some(call)) => {
+                    let words = call.words.iter().map(String::as_str).collect::<Vec<_>>();
+                    match parse_words(call.command, &words) {
+                        Ok(step) => step,
+                        Err(message) => {
+                            // The argument list, or its parentheses when empty.
+                            let span = if call.arguments.is_empty() {
+                                call.arguments.start - 1..call.arguments.end + 1
+                            } else {
+                                call.arguments
+                            };
+                            fail(span, message);
+                            continue;
+                        }
+                    }
                 }
-            }
-            let step = match parse_step(line) {
-                Ok(step) => step,
-                Err(message) => {
-                    // An unknown command marks its word; a malformed one, its arguments.
-                    let word = line.find(char::is_whitespace).unwrap_or(line.len());
-                    let arguments = line[word..].trim_start();
-                    let span = if COMMANDS.contains(&&line[..word]) && !arguments.is_empty() {
-                        line.len() - arguments.len()..line.len()
-                    } else {
-                        0..word
-                    };
-                    errors.push(ParseError {
-                        line: Some(index + 1),
-                        span: at(span),
-                        message,
-                    });
+                Err(fault) => {
+                    fail(
+                        fault.span.unwrap_or(start..start + code.len()),
+                        fault.message,
+                    );
                     continue;
                 }
             };
@@ -148,20 +154,18 @@ impl Program {
                 Step::Screenshot(path) => Step::Screenshot(base.join(path)),
                 step => step,
             };
-            flow.action(instructions.len(), index + 1);
-            instructions.push(Instruction {
-                line: index + 1,
-                step,
-            });
+            flow.action(instructions.len(), line);
+            instructions.push(Instruction { line, step });
         }
-        errors.extend(flow.unclosed().map(|line| ParseError {
-            line: Some(line),
-            span: text.lines().nth(line - 1).map(|raw| {
-                let code = raw.trim_start();
-                let start = raw.len() - code.len() + if line == 1 { bom } else { 0 };
-                start..start + code.find(char::is_whitespace).unwrap_or(code.len())
-            }),
-            message: "block needs a matching end".into(),
+        errors.extend(flow.end_of_source().into_iter().map(|deferred| {
+            ParseError {
+                line: Some(deferred.line),
+                span: deferred
+                    .fault
+                    .span
+                    .and_then(|span| shift(deferred.line, span)),
+                message: deferred.fault.message,
+            }
         }));
         if !errors.is_empty() {
             errors.sort_by_key(|error| error.line);
@@ -223,7 +227,7 @@ impl Program {
         Ok(())
     }
 
-    /// Converts a linear program to the legacy action list.
+    /// Converts a linear program to its action list.
     ///
     /// # Errors
     /// Structured programs need the executor to evaluate their control flow.
@@ -296,8 +300,7 @@ mod tests {
 
     #[test]
     fn execution_locations_keep_comments_and_blank_lines() {
-        let source =
-            "\u{feff}# a scenario\r\n\r\nreport first\r\n# another comment\r\nreport second\r\n";
+        let source = "\u{feff}# a scenario\r\n\r\nreport(\"first\")\r\n# another comment\r\nreport(\"second\")\r\n";
         let program = Program::parse(source, Path::new("scripts")).unwrap();
         assert_eq!(
             program
@@ -316,14 +319,15 @@ mod tests {
 
     #[test]
     fn errors_point_to_the_source_instead_of_the_step_index() {
-        let error = Program::parse("# scenario\n\nnot_a_command\n", Path::new(".")).unwrap_err();
+        let error = Program::parse("# scenario\n\nnot_a_command()\n", Path::new(".")).unwrap_err();
         assert_eq!(error.line, Some(3));
         assert!(error.to_string().starts_with("script line 3: "));
     }
 
     #[test]
     fn diagnostics_find_every_bad_line_and_keep_execution_atomic() {
-        let source = "# note\nwait invalid\nreport valid\npress UNKNOWN\n\nno_command\n";
+        let source =
+            "# note\nwait(\"invalid\")\nreport(\"valid\")\npress(\"UNKNOWN\")\n\nno_command()\n";
         let errors = Program::diagnostics(source, Path::new("."));
         assert_eq!(
             errors.iter().map(|error| error.line).collect::<Vec<_>>(),
@@ -333,7 +337,7 @@ mod tests {
             Program::parse(source, Path::new(".")).unwrap_err(),
             errors[0]
         );
-        assert_eq!(Program::diagnostics("wait 1\n", Path::new(".")), []);
+        assert_eq!(Program::diagnostics("wait(1)\n", Path::new(".")), []);
     }
 
     /// The text each error's span covers, by line.
@@ -351,26 +355,44 @@ mod tests {
     #[test]
     fn errors_point_at_the_words_they_are_about() {
         let source = concat!(
-            "  pres I # typo\n",
-            "\twait soon\n",
-            "let n: int = 1 + \"é\"\n",
-            "let m: int = missing * 2\n",
-            "let t: text = \"open\n",
-            "set nope = 1\n",
-            "let 9x: int = 0\n",
-            "let k: number = 0\n",
-            "let flag: bool = 5\n",
-            "if (true\n",
-            "end\n",
-            "else\n",
-            "end now\n",
-            "while true limit\n",
-            "end\n",
-            "if !3 # é\n",
-            "end\n",
-            "if n == 1 n\n",
-            "end\n",
-            "  repeat 2\n",
+            "pres(\"I\") # typo\n",
+            "wait(soon)\n",
+            "n: int = 1 + \"é\"\n",
+            "m: int = missing * 2\n",
+            "t: text = \"open\n",
+            "nope = 1\n",
+            "9x: int = 0\n",
+            "k: number = 0\n",
+            "flag: bool = 5\n",
+            "if (True:\n",
+            // The body of a header that failed is read without an indent
+            // error, and its else pairs with it.
+            "    pass\n",
+            "else:\n",
+            "    pass\n",
+            "while True limit 5:\n",
+            "    pass\n",
+            "if not 3:\n",
+            "    pass\n",
+            "if n == 1 n:\n",
+            "    pass\n",
+            "for _ in range(2)\n",
+            "var q: int = 0\n",
+            "loop(2)\n",
+            "press I\n",
+            "if True && False:\n",
+            "    break\n",
+            "continue\n",
+            "wait = 1\n",
+            "chta(\"hi\")\n",
+            "def f():\n",
+            "if True:\n",
+            "pass\n",
+            "for i in range(3):\n",
+            "    i = 2\n",
+            "  pass\n",
+            "if True:\n",
+            "\tpass\n",
         );
         assert_eq!(
             spans(source),
@@ -385,25 +407,32 @@ mod tests {
                 (8, "number"),
                 (9, "5"),
                 (10, "("),
-                // A header that fails opens no block, so its end has none.
-                (11, "end"),
-                (12, "else"),
-                (13, "now"),
-                (14, "limit"),
-                (15, "end"),
-                (16, "!"),
-                (17, "end"),
+                (14, "limit 5"),
+                (16, "not"),
                 (18, "n"),
-                (19, "end"),
-                (20, "repeat"),
+                (20, "for"),
+                (21, "var"),
+                (22, "loop"),
+                (23, "press"),
+                (24, "&"),
+                (25, "break"),
+                (26, "continue"),
+                (27, "wait"),
+                (28, "chta"),
+                (29, "def"),
+                (30, "if"),
+                (33, "i"),
+                (34, "  "),
+                (35, "if"),
+                (36, "\t"),
             ]
         );
     }
 
     #[test]
     fn spans_count_bytes_of_the_line_as_given_with_a_bom() {
-        let errors = Program::diagnostics("\u{feff}  pres I\r\nwait x\r\n", Path::new("."));
-        assert_eq!(errors[0].span, Some(5..9));
+        let errors = Program::diagnostics("\u{feff}pres(\"I\")\r\nwait(x)\r\n", Path::new("."));
+        assert_eq!(errors[0].span, Some(3..7));
         assert_eq!(errors[1].span, Some(5..6));
         assert_eq!(
             errors[0].to_string(),
@@ -411,21 +440,140 @@ mod tests {
         );
     }
 
+    /// Each error as (line, message).
+    fn errors(source: &str) -> Vec<(Option<usize>, String)> {
+        Program::diagnostics(source, Path::new("."))
+            .into_iter()
+            .map(|error| (error.line, error.message))
+            .collect()
+    }
+
+    #[test]
+    fn a_failed_header_keeps_its_body_without_errors_of_its_own() {
+        // Nested headers in the body of a failed one.
+        assert_eq!(
+            errors("if nope:\n    if True:\n        if True:\n            pass\nreport(\"x\")\n"),
+            [(Some(1), "unknown variable or client field 'nope'".into())]
+        );
+        assert_eq!(
+            errors("if nope:\n    if True:\n        pass\nreport(\"x\")\n"),
+            [(Some(1), "unknown variable or client field 'nope'".into())]
+        );
+        // A failed loop still holds its break and its variable.
+        assert_eq!(
+            errors("while nope, limit=3:\n    break\n"),
+            [(Some(1), "unknown variable or client field 'nope'".into())]
+        );
+        assert_eq!(
+            errors("for i in range(nope):\n    if i == 1:\n        continue\n"),
+            [(Some(1), "unknown variable or client field 'nope'".into())]
+        );
+        // A failed if still takes its elif and else.
+        assert_eq!(
+            errors("if nope:\n    pass\nelif True:\n    pass\nelse:\n    pass\n"),
+            [(Some(1), "unknown variable or client field 'nope'".into())]
+        );
+        // A failed header with no body has one error, not two.
+        assert_eq!(
+            errors("if nope:\nreport(\"x\")\n"),
+            [(Some(1), "unknown variable or client field 'nope'".into())]
+        );
+    }
+
+    #[test]
+    fn every_prefix_of_a_script_is_checked_without_panicking() {
+        let scripts = [
+            "if nope:\n    if True:\n        if True:\n            pass\nreport(\"x\")\n",
+            "n: int = 0\nwhile n < 3, limit=5:\n    n += 1\n    if n == 2:\n        continue\n    elif n == 9:\n        break\n    else:\n        wait(1)\nfor i in range(2):\n    press(\"I\")\n",
+            "for _ in range(2):\n    report(\"a\")\n    else:\n        pass\n\tif True:\n  pass\n",
+            "if True:\n    if (False:\n        for x in rang(2):\n            while x, limit=:\n                pass\n        else\n    elif:\n",
+        ];
+        for script in scripts {
+            for end in (0..=script.len()).filter(|end| script.is_char_boundary(*end)) {
+                let _ = Program::diagnostics(&script[..end], Path::new("."));
+            }
+        }
+    }
+
+    #[test]
+    fn misplaced_else_needs_an_if_and_quotes_escape_both_ways() {
+        assert_eq!(
+            errors("for _ in range(2):\n    report(\"a\")\n    else:\n        pass\n"),
+            [(Some(3), "this needs an 'if' at the same indentation".into())]
+        );
+        assert_eq!(
+            errors(
+                "if True:\n    if True:\n        pass\n    else:\n        pass\n    else:\n        pass\n"
+            ),
+            [(Some(6), "else requires an open if without an else".into())]
+        );
+        assert_eq!(
+            errors("t: text = 'it\\'s'\nu: text = \"say \\\"hi\\\"\"\nv: text = \"it\\'s\"\n"),
+            Vec::new()
+        );
+        assert_eq!(
+            errors("press(\"I\") extra\n"),
+            [(Some(1), "unexpected text after the call".into())]
+        );
+    }
+
+    #[test]
+    fn loops_in_sequence_share_their_variable_slot() {
+        let source = "for i in range(1):\n    wait(1)\n".repeat(40);
+        let program = Program::parse(&source, Path::new(".")).unwrap();
+        assert_eq!(program.code.unwrap().variable_count(), 1);
+    }
+
+    #[test]
+    fn lines_outside_the_grammar_are_errors_on_their_line() {
+        for (source, line, message) in [
+            (
+                "if True\n    pass\n",
+                1,
+                "expected ':' at the end of the line",
+            ),
+            (
+                "if True:\n    pass\nelse\n    pass\n",
+                3,
+                "expected ':' at the end of the line",
+            ),
+            (
+                "while True:\n    pass\n",
+                1,
+                "expected 'while <bool expression>, limit=<integer literal>:'",
+            ),
+            (
+                "if !False:\n    pass\n",
+                1,
+                "unexpected symbol in expression",
+            ),
+            (
+                "press A\n",
+                1,
+                "call press with parentheses, such as press(...)",
+            ),
+        ] {
+            let errors = Program::diagnostics(source, Path::new("."));
+            assert_eq!(errors[0].line, Some(line), "{source}");
+            assert_eq!(errors[0].message, message, "{source}");
+            assert!(errors[0].span.is_some(), "{source}");
+        }
+    }
+
     #[test]
     fn declarations_conditions_and_blocks_have_source_diagnostics() {
         let errors = Program::diagnostics(
-            "let n: int = 0\nset n = true\nif n == 0\n  let scoped: bool = false\n  report allowed\n",
+            "n: int = 0\nn = True\nif n == 0:\n    scoped: bool = False\n    report(\"allowed\")\n",
             Path::new("."),
         );
         assert_eq!(
             errors.iter().map(|error| error.line).collect::<Vec<_>>(),
-            [Some(2), Some(3), Some(4)]
+            [Some(2), Some(4)]
         );
         assert!(errors[0].message.contains("expected int"));
-        assert!(errors[1].message.contains("matching end"));
-        assert!(errors[2].message.contains("top level"));
+        assert!(errors[1].message.contains("top level"));
         assert_eq!(
-            Program::parse("while true limit 0\nend", Path::new("."))
+            Program::parse("while True, limit=0:\n    pass\n", Path::new("."))
                 .unwrap_err()
                 .line,
             Some(1)
@@ -434,7 +582,7 @@ mod tests {
 
     #[test]
     fn restricted_actions_in_skipped_branches_keep_their_gate() {
-        let source = "if false\n  gm heal\nelse\n  report safe\nend\n";
+        let source = "if False:\n    gm(\"heal\")\nelse:\n    report(\"safe\")\n";
         let program = Program::parse(source, Path::new(".")).unwrap();
         assert_eq!(
             program.check_local_commands(false).unwrap_err().line,
@@ -446,7 +594,8 @@ mod tests {
 
     #[test]
     fn a_gm_show_query_needs_a_local_session() {
-        let program = Program::parse("report before\ngm show buffs\n", Path::new(".")).unwrap();
+        let program =
+            Program::parse("report(\"before\")\ngm(\"show buffs\")\n", Path::new(".")).unwrap();
         assert_eq!(
             program.check_local_commands(false).unwrap_err().line,
             Some(2)
@@ -457,14 +606,15 @@ mod tests {
     #[test]
     fn emote_and_random_steps_need_a_local_session_but_listing_steps_do_not() {
         for (source, line) in [
-            ("slash afk\nslash emote waves\n", Some(2)),
-            ("slash assist\nslash random 1 6\n", Some(2)),
+            ("slash(\"afk\")\nslash(\"emote waves\")\n", Some(2)),
+            ("slash(\"assist\")\nslash(\"random 1 6\")\n", Some(2)),
         ] {
             let program = Program::parse(source, Path::new(".")).unwrap();
             assert_eq!(program.check_local_commands(false).unwrap_err().line, line);
             assert!(program.check_local_commands(true).is_ok());
         }
-        let program = Program::parse("slash afk\nslash assist\n", Path::new(".")).unwrap();
+        let program =
+            Program::parse("slash(\"afk\")\nslash(\"assist\")\n", Path::new(".")).unwrap();
         assert!(program.check_local_commands(false).is_ok());
         for command in ["/emote waves", "/EM waves", " /random 1 6", "/Random"] {
             assert!(crate::chat::broadcasts_to_others(command), "{command}");
@@ -476,8 +626,8 @@ mod tests {
 
     #[test]
     fn quoted_hashes_only_change_comment_handling_in_expressions() {
-        let source = r#"let name: text = "example # one" # comment
-report example # trailing"#;
+        let source = r#"name: text = "example # one" # comment
+report("example") # trailing"#;
         let program = Program::parse(source, Path::new(".")).unwrap();
         assert_eq!(program.statement_count(), 2);
         assert_eq!(
@@ -489,11 +639,30 @@ report example # trailing"#;
     #[test]
     fn follow_append_keeps_linear_bom_support_and_rejects_structured_batches() {
         let base = Path::new(".");
-        let instructions = Program::parse_append("\u{feff}report if # comment\n", base).unwrap();
+        let instructions =
+            Program::parse_append("\u{feff}report(\"if\") # comment\n", base).unwrap();
         assert_eq!(instructions[0].step(), &Step::Report("if".into()));
+        for statement in [
+            "\u{feff}\u{feff}n: int = 0\nquit()\n",
+            "n = 1\n",
+            "n += 1\n",
+            "if True:\n",
+            "for _ in range(2):\n",
+            "pass\n",
+            "    wait(1)\n",
+        ] {
+            assert!(
+                matches!(
+                    Program::parse_append(statement, base),
+                    Err(AppendError::Structured(Some(1)))
+                ),
+                "{statement}"
+            );
+        }
+        // A command without its call is an error in the batch, not a statement.
         assert!(matches!(
-            Program::parse_append("\u{feff}\u{feff}let n: int = 0\nquit\n", base),
-            Err(AppendError::Structured(Some(1)))
+            Program::parse_append("press A\n", base),
+            Err(AppendError::Invalid(error)) if error.message.starts_with("call press")
         ));
     }
 
