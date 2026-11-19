@@ -1,6 +1,7 @@
 //! Static zone geometry and region adapters shared by movement and navigation.
 use bevy::prelude::*;
 use eq_client_assets::{ZoneAsset, ZonePrimitive};
+use eq_client_core::movement::navmesh::{MainIsland, NavMesh};
 #[derive(Resource)]
 pub(super) struct TerrainSurface(pub(super) Vec<[Vec3; 3]>);
 
@@ -102,12 +103,144 @@ pub fn zone_collision(zone: &ZoneAsset) -> Option<eq_client_core::movement::Coll
     build_collision(zone)
 }
 
+/// The zone's navigation mesh as zone entry builds it (the same triangles,
+/// world and settings, so one cache serves both), read from or kept in the
+/// cache under `settings_directory` when one is given. For the select spot
+/// tools; nothing opens a window.
+///
+/// # Errors
+/// Says why no mesh could be built.
+pub fn select_spot_mesh(
+    settings_directory: Option<&std::path::Path>,
+    zone_name: &str,
+    zone: &ZoneAsset,
+) -> Result<NavMesh, String> {
+    let triangles = collision_triangles(zone);
+    let world = collision_world(zone, triangles.clone(), None);
+    eq_client_core::movement::navmesh::cache::load_or_build(
+        settings_directory,
+        zone_name,
+        &triangles,
+        world.as_ref(),
+        &eq_client_core::movement::navmesh::Settings::sized(crate::zone_navmesh::walker_sizes()),
+        eq_client_core::movement::navmesh::build_threads(),
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+    .map(|loaded| loaded.mesh)
+    .ok_or_else(|| "the navigation mesh build stopped".to_owned())
+}
+
+/// The zone's main walkable area on `mesh`, its dry floor weighed as the
+/// zone's regions mark water and lava ([`NavMesh::main_island`]). Our rule
+/// for "where players walk".
+#[must_use]
+pub fn select_spot_main_island(zone: &ZoneAsset, mesh: &NavMesh) -> Option<MainIsland> {
+    mesh.main_island(|at| zone.regions.liquid_at(at.to_array()).is_none())
+}
+
+/// How large an island must be, as a share of the main island's dry floor,
+/// to count as walked: the mesh splits floors a player walks as one at
+/// doors, lifts and pads, and can split one floor into islands of like
+/// size. Ours.
+const WALKED_SHARE: f32 = 0.5;
+
+/// The islands a player walks on `mesh`: the main island and those near
+/// its size ([`NavMesh::walked_islands`]).
+fn walked_islands(zone: &ZoneAsset, mesh: &NavMesh) -> Vec<u32> {
+    mesh.walked_islands(
+        |at| zone.regions.liquid_at(at.to_array()).is_none(),
+        WALKED_SHARE,
+    )
+}
+
+/// Whether a player can walk to the floor under `feet` (the renderer's
+/// frame): it lies on a walked island, or a walked island's drops lead
+/// down to it. A floor the mesh doesn't cover (no collision under it) can't
+/// be walked to.
+fn walked_to(mesh: &NavMesh, walked: &[u32], feet: Vec3) -> bool {
+    mesh.locate(feet).is_some_and(|(polygon, _)| {
+        let island = mesh.island_of(polygon);
+        walked
+            .iter()
+            .any(|&from| mesh.island_reaches(from, island, true))
+    })
+}
+
+/// What [`check_select_spot`] finds for one spot.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SpotVerdict {
+    /// The preview stands on a floor a player can walk to.
+    Reachable,
+    /// The preview stands on a floor no walk from a walked island reaches.
+    Unreachable {
+        /// The floor's height, as the server's z.
+        z: f32,
+        /// Its island's floor area across, or None off the mesh.
+        island_area: Option<f32>,
+    },
+    /// No floor under the spot: the preview uses the fallback.
+    NoFloor,
+    /// The mesh has no floor at all to weigh.
+    NoMainIsland,
+}
+
+impl SpotVerdict {
+    /// Whether the check flags the spot: an unreachable floor unless its
+    /// row is kept, and no floor whatever the row says, since the preview
+    /// then falls back to the zone's centre. A mesh with no floor is
+    /// unknown, not flagged.
+    #[must_use]
+    pub const fn flagged(self, kept: bool) -> bool {
+        match self {
+            Self::Reachable | Self::NoMainIsland => false,
+            Self::Unreachable { .. } => !kept,
+            Self::NoFloor => true,
+        }
+    }
+}
+
+/// Whether the floor the preview stands a spot on can be walked to, and the
+/// main island it was weighed against.
+#[must_use]
+pub fn check_select_spot(
+    zone: &ZoneAsset,
+    spot: &eq_client_core::select_spots::Spot,
+    mesh: &NavMesh,
+) -> (SpotVerdict, Option<MainIsland>) {
+    let main = select_spot_main_island(zone, mesh);
+    let walked = walked_islands(zone, mesh);
+    let terrain = TerrainSurface::from_primitives(&zone.primitives);
+    let verdict = match (terrain.spot_feet(spot), main) {
+        (None, _) => SpotVerdict::NoFloor,
+        (Some(_), None) => SpotVerdict::NoMainIsland,
+        (Some(feet), Some(_)) if walked_to(mesh, &walked, feet) => SpotVerdict::Reachable,
+        (Some(feet), Some(_)) => SpotVerdict::Unreachable {
+            z: eq_client_core::axes::to_world(feet).z,
+            island_area: mesh
+                .locate(feet)
+                .map(|(polygon, _)| mesh.island_area(mesh.island_of(polygon))),
+        },
+    };
+    (verdict, main)
+}
+
 /// Proposes a selection spot using the same drawn terrain that stands the
 /// preview, while retaining solid boundaries and objects for clearance.
 /// Collision-only shells cannot stand a preview; passable liquid surfaces
-/// can, and must therefore participate in the floor and liquid tests.
+/// can, and must therefore participate in the floor and liquid tests. Only
+/// floors a player can walk to on `mesh` (the zone's, as
+/// [`select_spot_mesh`] builds it) are weighed: on the main island or one
+/// near its size, or reached from one by drops. None where the mesh has no
+/// floor.
 #[must_use]
-pub fn propose_select_spot(zone: &ZoneAsset) -> Option<eq_client_core::select_spots::Spot> {
+pub fn propose_select_spot(
+    zone: &ZoneAsset,
+    mesh: &NavMesh,
+) -> Option<eq_client_core::select_spots::Spot> {
+    let walked = walked_islands(zone, mesh);
+    if walked.is_empty() {
+        return None;
+    }
     let world = zone_collision(zone)?;
     let surfaces = eq_client_core::movement::CollisionWorld::new(
         TerrainSurface::from_primitives(&zone.primitives)
@@ -125,6 +258,7 @@ pub fn propose_select_spot(zone: &ZoneAsset) -> Option<eq_client_core::select_sp
         &floors,
         (Vec3::from_array(min), Vec3::from_array(max)),
         |point| zone.regions.liquid_at(point.to_array()).is_some(),
+        |feet| walked_to(mesh, &walked, feet),
     )
 }
 
@@ -230,6 +364,19 @@ impl TerrainSurface {
             })
             .collect();
         Self(triangles)
+    }
+
+    /// Where the character select preview stands a spot's character, in
+    /// the renderer's frame: on the first drawn floor at or below the
+    /// spot's height and a little above it. None with no floor there.
+    pub(super) fn spot_feet(&self, spot: &eq_client_core::select_spots::Spot) -> Option<Vec3> {
+        let point = Vec3::from_array(eq_client_core::render_position(spot.position()));
+        let floor = self.height_below(
+            point.x,
+            point.z,
+            point.y + eq_client_core::select_spots::ABOVE_FLOOR,
+        )?;
+        Some(Vec3::new(point.x, floor, point.z))
     }
 
     pub(super) fn height_below(&self, x: f32, z: f32, ceiling: f32) -> Option<f32> {

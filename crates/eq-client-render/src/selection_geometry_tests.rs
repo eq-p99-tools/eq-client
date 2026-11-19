@@ -13,15 +13,25 @@ fn words(values: &[u32]) -> Vec<u8> {
 /// and a downward ceiling. Deliberately misleading shading normals must not
 /// decide which side of the loaded geometry can nominate a selection floor.
 fn world() -> Vec<u8> {
+    squares(&[
+        (0, 128, true, true),
+        (32, 128, true, false),
+        (64, 128, false, false),
+    ])
+}
+
+/// A WLD of level squares centred on the origin: each its height, half its
+/// side, whether it faces up and whether it faces both ways.
+fn squares(squares: &[(i16, i16, bool, bool)]) -> Vec<u8> {
     let mut positions = Vec::<[i16; 3]>::new();
     let mut faces = Vec::<[u16; 3]>::new();
-    for (height, upward, both) in [(0_i16, true, true), (32, true, false), (64, false, false)] {
+    for &(height, half, upward, both) in squares {
         let base = u16::try_from(positions.len()).unwrap();
         positions.extend([
-            [-128, -128, height],
-            [128, -128, height],
-            [128, 128, height],
-            [-128, 128, height],
+            [-half, -half, height],
+            [half, -half, height],
+            [half, half, height],
+            [-half, half, height],
         ]);
         let up = [[base, base + 2, base + 1], [base, base + 3, base + 2]];
         let down = [[base, base + 1, base + 2], [base, base + 2, base + 3]];
@@ -90,13 +100,13 @@ fn world() -> Vec<u8> {
     bytes
 }
 
-#[test]
-fn nomination_follows_loaded_wld_winding_without_filtering_placement_or_collision() {
+/// The zone a WLD makes, loaded through the real asset loader.
+fn load(name: &str, wld: &[u8]) -> ZoneAsset {
     let directory =
-        std::env::temp_dir().join(format!("eq-selection-winding-{}", std::process::id()));
+        std::env::temp_dir().join(format!("eq-selection-{name}-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     let mut archive = libeq::pfs::PfsWriter::create(Cursor::new(Vec::new())).unwrap();
-    archive.insert("test.wld", world().as_slice()).unwrap();
+    archive.insert("test.wld", wld).unwrap();
     std::fs::write(
         directory.join("test.s3d"),
         archive.finish().unwrap().into_inner(),
@@ -104,7 +114,61 @@ fn nomination_follows_loaded_wld_winding_without_filtering_placement_or_collisio
     .unwrap();
     let loaded = eq_client_assets::load_zone(&directory, "test");
     std::fs::remove_dir_all(directory).unwrap();
-    let zone = loaded.unwrap();
+    loaded.unwrap()
+}
+
+/// A spot at the server's `x`, `y` and `z`.
+fn spot_at(x: f32, y: f32, z: f32) -> eq_client_core::select_spots::Spot {
+    eq_client_core::select_spots::Spot {
+        loc: [y, x, z],
+        heading: 0.0,
+        distance: 25.0,
+        pitch: 10.0,
+        reviewed: false,
+    }
+}
+
+#[test]
+fn a_spot_on_a_top_no_walk_reaches_is_flagged_and_one_on_the_floor_passes() {
+    // A wide floor, and a small flat top 32 above its middle with no way up:
+    // dropping off the top reaches the floor, but nothing on the floor
+    // reaches the top.
+    let zone = load(
+        "reach",
+        &squares(&[(0, 128, true, false), (32, 16, true, false)]),
+    );
+    let mesh = select_spot_mesh(None, "test", &zone).unwrap();
+    let main = select_spot_main_island(&zone, &mesh).unwrap();
+    assert!(main.dry && main.clear(), "{main:?}");
+    let (on_floor, _) = check_select_spot(&zone, &spot_at(80.0, 80.0, 0.0), &mesh);
+    assert_eq!(on_floor, SpotVerdict::Reachable);
+    // The preview stands this one on the top, the first floor at or below
+    // z + 5.
+    let (on_top, _) = check_select_spot(&zone, &spot_at(0.0, 0.0, 33.0), &mesh);
+    let SpotVerdict::Unreachable { z, island_area } = on_top else {
+        panic!("{on_top:?}");
+    };
+    assert!((z - 32.0).abs() < 0.01, "{z}");
+    assert!(
+        island_area.is_some_and(|area| area < main.area),
+        "{island_area:?}"
+    );
+    // Beside the floor's edge nothing stands the character.
+    let (off, _) = check_select_spot(&zone, &spot_at(400.0, 0.0, 0.0), &mesh);
+    assert_eq!(off, SpotVerdict::NoFloor);
+    // A kept row excuses an unreachable floor, never a missing one.
+    assert!(on_top.flagged(false) && !on_top.flagged(true));
+    assert!(off.flagged(false) && off.flagged(true));
+    assert!(!on_floor.flagged(false));
+    assert!(!SpotVerdict::NoMainIsland.flagged(false));
+    // The proposal stands on the floor a walk reaches.
+    let spot = propose_select_spot(&zone, &mesh).unwrap();
+    assert!(spot.loc[2].abs() < 0.01, "{spot:?}");
+}
+
+#[test]
+fn nomination_follows_loaded_wld_winding_without_filtering_placement_or_collision() {
+    let zone = load("winding", &world());
     // These explicit coordinates verify the WLD (x,y,z) -> render (x,z,-y)
     // conversion actually ran through the loader rather than a test-only path.
     assert!(
@@ -138,7 +202,8 @@ fn nomination_follows_loaded_wld_winding_without_filtering_placement_or_collisio
             .ground(Vec3::new(0.0, 64.0, 0.0), 0.1, 0.1)
             .is_some()
     );
-    let spot = propose_select_spot(&zone).unwrap();
+    let mesh = select_spot_mesh(None, "test", &zone).unwrap();
+    let spot = propose_select_spot(&zone, &mesh).unwrap();
     assert!(
         [0.0_f32, 32.0]
             .iter()

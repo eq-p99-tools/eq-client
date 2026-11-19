@@ -62,16 +62,8 @@ impl PreparedEntry {
                 (Vec3::from_array(min), Vec3::from_array(max))
             });
         let centre = (min + max) * 0.5;
-        let on_spot = spot.and_then(|spot| {
-            let position = spot.position();
-            let point = Vec3::from_array(render_position(position));
-            let floor = self.terrain.height_below(
-                point.x,
-                point.z,
-                point.y + eq_client_core::select_spots::ABOVE_FLOOR,
-            )?;
-            Some((Vec3::new(point.x, floor, point.z), position.heading))
-        });
+        let on_spot =
+            spot.and_then(|spot| Some((self.terrain.spot_feet(spot)?, spot.position().heading)));
         let (feet, heading) = on_spot.unwrap_or_else(|| {
             let floor = self
                 .terrain
