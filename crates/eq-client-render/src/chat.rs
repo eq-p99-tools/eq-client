@@ -139,6 +139,8 @@ pub(super) struct ChatState {
     pub(crate) slash: Option<super::slash::Asked>,
     /// A `/doability`'s words, waiting for the Actions window's buttons.
     pub(crate) doability: Option<String>,
+    /// A `/memspellset`'s words, waiting for the spell sets.
+    pub(crate) spell_set_asked: Option<String>,
     /// A `/log`, waiting to turn the chat log on or off.
     pub log_toggle: bool,
     /// A `/shownames`, waiting to set how much of players' names shows.
@@ -2030,6 +2032,15 @@ pub(super) fn client_request_in_scope(
         name.eq_ignore_ascii_case("doability").then_some(words)
     }) {
         state.doability = Some(words.to_owned());
+        return Some(Ok(()));
+    }
+    if let Some(words) = input.strip_prefix('/').and_then(|command| {
+        let (name, words) = command
+            .split_once(char::is_whitespace)
+            .unwrap_or((command, ""));
+        name.eq_ignore_ascii_case("memspellset").then_some(words)
+    }) {
+        state.spell_set_asked = Some(words.to_owned());
         return Some(Ok(()));
     }
     if let Some(request) = zone_who_request(input) {

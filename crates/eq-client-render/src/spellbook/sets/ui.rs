@@ -22,7 +22,14 @@ pub(super) struct Panel {
     selected: Option<String>,
     draft: String,
     confirm_delete: bool,
+    /// A set `/memspellset` chose, to apply once the book shows.
+    typed: bool,
 }
+
+/// `/memspellset`'s line when nothing matches (0x472fd0, read R45b).
+const NO_SUCH_SET: u32 = 0xd0e;
+/// How many sets the program numbers (its table of 10 at 0x984828).
+const NUMBERED_SETS: usize = 10;
 
 #[derive(Component)]
 pub(crate) struct NameField;
@@ -40,6 +47,32 @@ impl Sets {
         if let Some(active) = self.active.as_mut() {
             active.stop(reason);
         }
+    }
+
+    /// The set `/memspellset` names (0x472fd0, read R45b), in the order the
+    /// panel lists them: a number 1-10 is that set, read as the program's
+    /// `atoi` reads it; other words are compared, letter case aside, with
+    /// the start of each name, and the first that starts so wins. None when
+    /// nothing matches or no words were given.
+    pub(super) fn typed(&self, words: &str) -> Option<String> {
+        let words = words.trim();
+        if words.is_empty() {
+            return None;
+        }
+        let digits = words
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(words.len());
+        if let Ok(number @ 1..=NUMBERED_SETS) = words[..digits].parse::<usize>() {
+            return self.saved.keys().nth(number - 1).cloned();
+        }
+        self.saved
+            .keys()
+            .find(|name| {
+                name.len() >= words.len()
+                    && name.is_char_boundary(words.len())
+                    && name[..words.len()].eq_ignore_ascii_case(words)
+            })
+            .cloned()
     }
 
     fn select(&mut self, name: Option<String>) {
@@ -331,7 +364,11 @@ pub(crate) fn input(
         Res<crate::ViewerSettings>,
         Res<super::super::SpellNames>,
     ),
-    (shown, frames): (Res<Shown>, Query<(&WindowId, &Frame)>),
+    (mut shown, frames, messages): (
+        ResMut<Shown>,
+        Query<(&WindowId, &Frame)>,
+        Option<Res<crate::hud::messages::Messages>>,
+    ),
     (keys, clicks, closes): (
         crate::keys::Keys,
         crate::clicks::Clicks<Action>,
@@ -348,6 +385,12 @@ pub(crate) fn input(
     let clicked = (open && keys.window_focused())
         .then(|| clicks.iter().copied().find(|action| action.enabled(&sets)))
         .flatten();
+    // A set already being applied is the program's busy state, where
+    // `/memspellset` returns silently (its gate 0x4167e2, inferred, 6.487).
+    let typed = chat
+        .spell_set_asked
+        .take()
+        .filter(|_| sets.active.is_none());
     if let Some(active) = sets.active.as_mut() {
         if !open {
             active.stop("Spellbook closed or minimized.");
@@ -364,6 +407,23 @@ pub(crate) fn input(
         }
         return;
     }
+    if let Some(words) = typed {
+        if let Some(name) = sets.typed(&words) {
+            // The book opens for the set, as a click on the panel's Apply
+            // needs it open; the program's own book handling for the
+            // command is unread (recording checklist 6.487).
+            sets.select(Some(name));
+            sets.panel.typed = true;
+            if !open {
+                shown.open(WindowId::Spellbook);
+                return;
+            }
+        } else {
+            let empty = crate::hud::messages::Messages::default();
+            let messages = messages.as_deref().unwrap_or(&empty);
+            chat.refuse(messages.said_text(NO_SUCH_SET, "No spell set has that name or number."));
+        }
+    }
     if !open {
         if std::mem::take(&mut sets.panel.confirm_delete) {
             sets.status.clear();
@@ -374,6 +434,15 @@ pub(crate) fn input(
         || !super::eligible(world, settings.0.installed_client)
         || outbox.peek(world).is_none()
     {
+        sets.panel.typed = false;
+        return;
+    }
+    if std::mem::take(&mut sets.panel.typed) {
+        // The same start, and so the same refusals, as the Apply button.
+        if let Err(error) = start(&mut sets, world, &outbox) {
+            chat.refuse(error.to_string());
+            sets.status = error.to_string();
+        }
         return;
     }
     if let Some(action) = clicked.filter(|action| sets.panel.expanded || *action == Action::Toggle)
