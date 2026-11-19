@@ -68,6 +68,9 @@ pub(crate) struct FlowStatus {
     pub(super) branch: Option<(usize, bool)>,
     pub(super) loops: Vec<(usize, u16, u16)>,
     pub(super) variables: Vec<String>,
+    /// Each call in progress, outermost first: its function and the line
+    /// it has reached.
+    pub(super) calls: Vec<(String, usize)>,
 }
 
 impl FlowStatus {
@@ -85,6 +88,10 @@ impl FlowStatus {
 
     pub(crate) fn variables(&self) -> &[String] {
         &self.variables
+    }
+
+    pub(crate) fn calls(&self) -> &[(String, usize)] {
+        &self.calls
     }
 }
 
@@ -206,8 +213,12 @@ impl RunStatus {
 pub(crate) enum Request {
     Pause,
     Resume,
+    /// Run one statement; a call runs to its return.
     Step,
-    /// Run until the innermost block around the paused statement is left.
+    /// Run one statement; a call stops at the function's first statement.
+    StepInto,
+    /// Run until the call returns, or the innermost block around the paused
+    /// statement is left.
     StepOut,
     /// Resume until this statement line, once.
     RunTo(usize),

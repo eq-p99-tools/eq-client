@@ -9,6 +9,10 @@ use super::{
 };
 
 const MAX_VARIABLES: usize = 32;
+const MAX_FUNCTIONS: usize = 32;
+const MAX_PARAMETERS: usize = 8;
+/// Parameters included.
+const MAX_LOCALS: usize = 32;
 const MAX_NAME_BYTES: usize = 32;
 const MAX_NESTING: usize = 16;
 pub(super) const MAX_ITERATIONS: i64 = 100;
@@ -22,18 +26,37 @@ pub(in crate::script) struct Code {
     pub(super) else_edges: Vec<(usize, usize)>,
     /// The ops of every block, header included, for stepping out of one.
     pub(super) blocks: Vec<Range<usize>>,
+    pub(super) functions: Vec<Function>,
+    /// The end of the top level: function bodies follow it, entered only
+    /// by calls.
+    pub(super) end: usize,
+}
+
+/// A compiled `def`: its body's first op and the slots each call owns.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Function {
+    pub(super) name: String,
+    /// The `def` line.
+    pub(super) line: usize,
+    pub(super) entry: usize,
+    /// The parameters' slots, in order.
+    pub(super) parameters: Vec<usize>,
+    /// Every slot local to a call, parameters included.
+    pub(super) locals: Vec<usize>,
 }
 
 impl Code {
     /// The lines a breakpoint can pause on: every statement that runs as an
-    /// op, and every `else` entered by an edge. Internal jumps carry a line
-    /// but never run as a statement.
+    /// op, every `else` entered by an edge, and every `def`, entered by a
+    /// call. Internal jumps and a body's implicit return carry a line but
+    /// never run as a statement.
     pub(in crate::script) fn statement_lines(&self) -> impl Iterator<Item = usize> + '_ {
         self.ops
             .iter()
-            .filter(|located| !matches!(located.op, Op::Jump(_)))
+            .filter(|located| !matches!(located.op, Op::Jump(_) | Op::Return { explicit: false }))
             .map(|located| located.line)
             .chain(self.else_edges.iter().map(|(_, line)| *line))
+            .chain(self.functions.iter().map(|function| function.line))
     }
 }
 
@@ -51,6 +74,8 @@ pub(super) struct Variable {
     pub(super) kind: Kind,
     /// A `for` variable: assigned only by its loop.
     pub(super) loop_counter: bool,
+    /// The function whose calls own this slot; `None` for a global.
+    pub(super) function: Option<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -82,6 +107,15 @@ pub(super) enum Op {
     Break(usize),
     /// Go back to the loop header here.
     Continue(usize),
+    /// Call a function with these arguments, evaluated in the caller.
+    Call {
+        function: usize,
+        arguments: Vec<Expr>,
+    },
+    /// Leave the function: a `return` line, or the end of its body.
+    Return {
+        explicit: bool,
+    },
     Jump(usize),
 }
 
@@ -100,6 +134,8 @@ enum Block {
         start: usize,
         variable: Option<usize>,
     },
+    /// A function body, below every other block. Its end returns.
+    Function,
     /// A header that failed. It emits no ops, but its body is read by the
     /// ordinary rules, so errors inside it are its own: a loop's `break`
     /// still has a loop, its variable is still known, and an `if` still
@@ -147,6 +183,22 @@ pub(in crate::script) struct Call<'a> {
     pub(in crate::script) arguments: Range<usize>,
 }
 
+/// A function as the pre-pass reads its header.
+struct Signature {
+    name: String,
+    line: usize,
+    parameters: Vec<Parameter>,
+    entry: Option<usize>,
+    slots: Vec<usize>,
+}
+
+struct Parameter {
+    name: String,
+    kind: Kind,
+    /// The name's bytes in the `def` line.
+    span: Range<usize>,
+}
+
 /// An error on another line than the one being read.
 pub(in crate::script) struct Deferred {
     pub(in crate::script) line: usize,
@@ -163,6 +215,11 @@ pub(in crate::script) struct Builder {
     indent: Option<char>,
     stray: Option<(usize, Range<usize>)>,
     deferred: Vec<Deferred>,
+    functions: Vec<Signature>,
+    /// The function whose body is being compiled.
+    current: Option<usize>,
+    /// Where the top level ended, once the first body starts.
+    end: Option<usize>,
 }
 
 impl Builder {
@@ -177,6 +234,9 @@ impl Builder {
             indent: None,
             stray: None,
             deferred: Vec::new(),
+            functions: Vec::new(),
+            current: None,
+            end: None,
         }
     }
 
@@ -191,6 +251,18 @@ impl Builder {
         let indent = &code[..code.len() - code.trim_start().len()];
         let code = &code[indent.len()..];
         let start = indent.len();
+        // A `def` here is misplaced: its error is the only one, so its
+        // indentation is taken as it stands.
+        if let Shape::Keyword("def") = shape(code) {
+            let stray = self.stray.clone();
+            let _ = self.indentation(indent, code, line);
+            self.stray = stray;
+            self.used = true;
+            return Err(Fault::at(
+                "def is allowed only at the start of a line, outside any block",
+                start..start + 3,
+            ));
+        }
         if let Err(fault) = self.indentation(indent, code, line) {
             // A misplaced header still holds its body, so the body's lines
             // are read without an indent error each.
@@ -237,10 +309,21 @@ impl Builder {
                 format!("call {word} with parentheses, such as {word}(...)"),
                 0..word.len(),
             ))),
-            Shape::Unknown(word) => Err(at(Fault::at(
-                format!("unknown command '{word}'"),
-                0..word.len(),
-            ))),
+            Shape::Unknown(word) => {
+                let rest = code[word.len()..].trim_start();
+                if let Some(function) = self.function(word)
+                    && rest.starts_with('(')
+                {
+                    self.used = true;
+                    self.call(function, code, offset(code, rest), line)
+                        .map_err(at)?;
+                    return Ok(None);
+                }
+                Err(at(Fault::at(
+                    format!("unknown command '{word}'"),
+                    0..word.len(),
+                )))
+            }
         }
     }
 
@@ -525,10 +608,12 @@ impl Builder {
                     ));
                 }
                 if word != "pass" {
+                    // A loop outside the function this line is in never counts.
                     let header = self
                         .blocks
                         .iter()
                         .rev()
+                        .take_while(|open| !matches!(open.block, Block::Function))
                         .find_map(|open| match open.block {
                             Block::Loop { start, .. } => Some(Some(start)),
                             Block::Failed { looping: true, .. } => Some(None),
@@ -549,11 +634,19 @@ impl Builder {
                     }
                 }
             }
-            "def" | "return" => {
-                return Err(Fault::at(
-                    "functions are not available yet; 'def' and 'return' are reserved",
-                    keyword,
-                ));
+            "def" => unreachable!("a def line is read before its keyword"),
+            "return" => {
+                if !rest.is_empty() {
+                    let start = offset(code, rest);
+                    return Err(Fault::at(
+                        "return values are not available yet; use return alone",
+                        start..start + rest.len(),
+                    ));
+                }
+                if self.current.is_none() {
+                    return Err(Fault::at("'return' outside a function", keyword));
+                }
+                self.push(line, Op::Return { explicit: true });
             }
             _ => return Err(Fault::at(format!("unknown command '{word}'"), keyword)),
         }
@@ -576,9 +669,9 @@ impl Builder {
                     start..start + kind_text.len(),
                 )
             })?;
-            if !self.blocks.is_empty() {
+            if self.depth() > 0 {
                 return Err(name_at(
-                    "declare variables at the top level, then assign them inside blocks".into(),
+                    "declare variables at the top level of the script or of a function, then assign them inside blocks".into(),
                 ));
             }
             // The value cannot read the variable it declares.
@@ -620,9 +713,9 @@ impl Builder {
         self.push(line, Op::Action(index));
     }
 
-    /// Close every block at the end of the source and report what
-    /// only the whole source shows.
-    pub(in crate::script) fn end_of_source(&mut self) -> Vec<Deferred> {
+    /// Close every open block, as the end of the source or of a function
+    /// body does.
+    pub(in crate::script) fn close_all(&mut self) {
         while let Some(top) = self.blocks.last() {
             let (line, keyword) = (top.line, top.keyword.clone());
             if top.body.is_none() {
@@ -631,6 +724,189 @@ impl Builder {
                 self.close(line).expect("the block is open");
             }
         }
+    }
+
+    /// Read a column-0 `def name(param: type, ...):` header, before any
+    /// line compiles, so calls before and after it both resolve. Spans are
+    /// in `code`, the line without its comment. Gives the function's index.
+    pub(in crate::script) fn declare_function(
+        &mut self,
+        code: &str,
+        line: usize,
+    ) -> Result<usize, Fault> {
+        self.used = true;
+        let def_span = 0..3;
+        let rest = code[3..].trim_start();
+        let name_start = offset(code, rest);
+        let name_length = rest
+            .bytes()
+            .take_while(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+            .count();
+        let name = &rest[..name_length];
+        let name_span = name_start..name_start + name.len().max(1);
+        if name.is_empty() {
+            return Err(Fault::at("expected 'def name(...):'", def_span));
+        }
+        if !valid_name(name) {
+            return Err(Fault::at(
+                "expected a function name of up to 32 ASCII letters, digits or underscores, starting with a letter or underscore",
+                name_span,
+            ));
+        }
+        if keyword(name)
+            || super::RESERVED.contains(&name)
+            || crate::script::COMMANDS.contains(&name)
+        {
+            return Err(Fault::at(
+                format!("'{name}' is reserved and can't name a function"),
+                name_span,
+            ));
+        }
+        if self.function(name).is_some() {
+            return Err(Fault::at(
+                format!("function '{name}' is already defined"),
+                name_span,
+            ));
+        }
+        let after = rest[name_length..].trim_start();
+        let open = offset(code, after);
+        if !after.starts_with('(') {
+            return Err(Fault::at(
+                "expected '(' after the function name",
+                open..open + after.len().max(1),
+            ));
+        }
+        let Some(close) = after.find(')') else {
+            return Err(Fault::at(
+                "expected ')' to close the parameters",
+                open..open + after.len(),
+            ));
+        };
+        let tail = after[close + 1..].trim();
+        if tail != ":" {
+            if tail.starts_with("->") {
+                let start = offset(code, tail);
+                return Err(Fault::at(
+                    "return values are not available yet",
+                    start..start + tail.len(),
+                ));
+            }
+            return Err(Fault::at("expected ':' at the end of the line", def_span));
+        }
+        let parameters = parameters(code, &after[1..close])?;
+        if self.functions.len() == MAX_FUNCTIONS {
+            return Err(Fault::at(
+                format!("at most {MAX_FUNCTIONS} functions can be defined"),
+                name_span,
+            ));
+        }
+        self.functions.push(Signature {
+            name: name.into(),
+            line,
+            parameters,
+            entry: None,
+            slots: Vec::new(),
+        });
+        Ok(self.functions.len() - 1)
+    }
+
+    /// A function's `def` line.
+    pub(in crate::script) const fn function_count(&self) -> usize {
+        self.functions.len()
+    }
+
+    pub(in crate::script) fn function_line(&self, function: usize) -> usize {
+        self.functions[function].line
+    }
+
+    /// Start compiling a function's body, after every top-level line. Gives
+    /// the errors on its `def` line, such as a parameter named like a global.
+    pub(in crate::script) fn begin_function(&mut self, function: usize) -> Vec<Fault> {
+        self.close_all();
+        self.end.get_or_insert(self.ops.len());
+        self.current = Some(function);
+        let line = self.functions[function].line;
+        self.functions[function].entry = Some(self.ops.len());
+        self.blocks.push(Open {
+            block: Block::Function,
+            line,
+            first: self.ops.len(),
+            header: 0,
+            body: None,
+            keyword: 0..3,
+        });
+        let parameters = self.functions[function]
+            .parameters
+            .iter()
+            .map(|parameter| {
+                (
+                    parameter.name.clone(),
+                    parameter.kind,
+                    parameter.span.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut faults = Vec::new();
+        for (name, kind, span) in parameters {
+            if let Err(message) = self.declare(&name, kind, false) {
+                faults.push(Fault::at(message, span));
+            }
+        }
+        faults
+    }
+
+    /// End the body being compiled: its open blocks close and it returns.
+    pub(in crate::script) fn end_function(&mut self) {
+        self.close_all();
+        self.current = None;
+    }
+
+    /// `name(arguments)` for a declared function; spans are in `code`, and
+    /// the parenthesis is at `open`. Arguments are expressions.
+    fn call(&mut self, function: usize, code: &str, open: usize, line: usize) -> Result<(), Fault> {
+        let (pieces, inside) = call_arguments(code, open)?;
+        let signature = &self.functions[function];
+        let name = signature.name.clone();
+        let kinds = signature
+            .parameters
+            .iter()
+            .map(|parameter| parameter.kind)
+            .collect::<Vec<_>>();
+        if pieces.len() != kinds.len() {
+            let span = if inside.is_empty() {
+                inside.start - 1..inside.end + 1
+            } else {
+                inside
+            };
+            let given = pieces.len();
+            let takes = kinds.len();
+            let plural = if takes == 1 { "" } else { "s" };
+            return Err(Fault::at(
+                format!("{name} takes {takes} argument{plural}, given {given}"),
+                span,
+            ));
+        }
+        let mut arguments = Vec::with_capacity(pieces.len());
+        for (range, kind) in pieces.into_iter().zip(kinds) {
+            let source = &code[range.clone()];
+            let expr = self
+                .expression(source, kind)
+                .map_err(|fault| fault.within(code, source))?;
+            arguments.push(expr);
+        }
+        self.push(
+            line,
+            Op::Call {
+                function,
+                arguments,
+            },
+        );
+        Ok(())
+    }
+
+    /// Report what only the whole source shows.
+    pub(in crate::script) fn end_of_source(&mut self) -> Vec<Deferred> {
+        self.close_all();
         if self.used
             && let Some((line, span)) = self.stray.take()
         {
@@ -643,12 +919,40 @@ impl Builder {
     }
 
     pub(in crate::script) fn finish(self) -> Option<Code> {
+        let functions = self
+            .functions
+            .into_iter()
+            .map(|signature| Function {
+                name: signature.name,
+                line: signature.line,
+                entry: signature.entry.expect("every function body is compiled"),
+                parameters: signature.slots[..signature.parameters.len()].to_vec(),
+                locals: signature.slots,
+            })
+            .collect();
+        let end = self.end.unwrap_or(self.ops.len());
         self.used.then_some(Code {
             ops: self.ops,
             variables: self.variables,
             else_edges: self.else_edges,
             blocks: self.ranges,
+            functions,
+            end,
         })
+    }
+
+    /// Open blocks in the current function body, or at the top level.
+    fn depth(&self) -> usize {
+        self.blocks
+            .iter()
+            .filter(|open| !matches!(open.block, Block::Function))
+            .count()
+    }
+
+    fn function(&self, name: &str) -> Option<usize> {
+        self.functions
+            .iter()
+            .position(|function| function.name == name)
     }
 
     fn lookup(&self, name: &str) -> Option<(usize, Kind)> {
@@ -660,22 +964,36 @@ impl Builder {
             .map(|(index, variable)| (index, variable.kind))
     }
 
-    /// A loop variable is visible only inside its own open loop.
+    /// A global is visible everywhere, a local only in its own function, and
+    /// a loop variable only inside its own open loop.
     fn visible(&self, index: usize) -> bool {
-        !self.variables[index].loop_counter
-            || self.blocks.iter().any(|open| {
-                matches!(
-                    open.block,
-                    Block::Loop { variable: Some(variable), .. }
-                        | Block::Failed { variable: Some(variable), .. }
-                        if variable == index
-                )
-            })
+        let variable = &self.variables[index];
+        (variable.function.is_none() || variable.function == self.current)
+            && (!variable.loop_counter
+                || self.blocks.iter().any(|open| {
+                    matches!(
+                        open.block,
+                        Block::Loop { variable: Some(variable), .. }
+                            | Block::Failed { variable: Some(variable), .. }
+                            if variable == index
+                    )
+                }))
     }
 
     fn declare(&mut self, name: &str, kind: Kind, loop_counter: bool) -> Result<usize, String> {
         if !valid_name(name) {
             return Err("expected a variable name of up to 32 ASCII letters, digits or underscores, starting with a letter or underscore".into());
+        }
+        if self.function(name).is_some() {
+            return Err(format!("'{name}' is a function and can't be a variable"));
+        }
+        if let Some((index, _)) = self.lookup(name)
+            && self.current.is_some()
+            && self.variables[index].function.is_none()
+        {
+            return Err(format!(
+                "'{name}' is a global variable; a function's variable can't reuse its name"
+            ));
         }
         if keyword(name)
             || super::RESERVED.contains(&name)
@@ -684,24 +1002,45 @@ impl Builder {
         {
             return Err(format!("variable '{name}' is reserved or already declared"));
         }
+        let owner = self.current;
         // A finished loop's variable of the same name takes the new loop, so
         // loops in sequence share one slot.
         if loop_counter
             && let Some(index) = self.variables.iter().position(|variable| {
-                variable.name == name && variable.loop_counter && variable.kind == kind
+                variable.name == name
+                    && variable.loop_counter
+                    && variable.kind == kind
+                    && variable.function == owner
             })
         {
             return Ok(index);
         }
-        let index = self.variables.len();
-        if index == MAX_VARIABLES {
-            return Err(format!("at most {MAX_VARIABLES} variables can be declared"));
+        let declared = self
+            .variables
+            .iter()
+            .filter(|variable| variable.function == owner)
+            .count();
+        match owner {
+            None if declared == MAX_VARIABLES => {
+                return Err(format!("at most {MAX_VARIABLES} variables can be declared"));
+            }
+            Some(_) if declared == MAX_LOCALS => {
+                return Err(format!(
+                    "a function has at most {MAX_LOCALS} variables, parameters included"
+                ));
+            }
+            _ => (),
         }
+        let index = self.variables.len();
         self.variables.push(Variable {
             name: name.into(),
             kind,
             loop_counter,
+            function: owner,
         });
+        if let Some(function) = owner {
+            self.functions[function].slots.push(index);
+        }
         Ok(index)
     }
 
@@ -733,7 +1072,7 @@ impl Builder {
     }
 
     fn nesting(&self) -> Result<(), String> {
-        if self.blocks.len() == MAX_NESTING {
+        if self.depth() == MAX_NESTING {
             return Err(format!("blocks may be nested at most {MAX_NESTING} levels"));
         }
         Ok(())
@@ -819,13 +1158,17 @@ impl Builder {
         if let Block::Loop { start, .. } = open.block {
             self.push(line, Op::Jump(start));
         }
+        if let Block::Function = open.block {
+            self.push(line, Op::Return { explicit: false });
+            return Ok(());
+        }
         let after = self.ops.len();
         self.ranges.push(open.first..after);
         let (header, jumps) = match open.block {
             Block::If { start, jumps } => (start, jumps),
             Block::Else { jump, jumps } => (jump, jumps),
             Block::Loop { start, .. } => (start, Vec::new()),
-            Block::Failed { .. } => return Ok(()),
+            Block::Failed { .. } | Block::Function => return Ok(()),
         };
         for jump in jumps {
             self.ops[jump].op = Op::Jump(after);
@@ -924,6 +1267,75 @@ fn arguments(command: &str, call: &str) -> Result<(Vec<String>, Range<usize>), F
     Ok((words, inside))
 }
 
+/// A function call's arguments, from its opening parenthesis at `open` in
+/// `code`: each argument's bytes, split at commas outside quotes and
+/// parentheses, and the bytes inside the call's parentheses.
+fn call_arguments(code: &str, open: usize) -> Result<(Vec<Range<usize>>, Range<usize>), Fault> {
+    let mut depth = 0usize;
+    let mut quote = None;
+    let mut escaped = false;
+    let mut start = open + 1;
+    let mut pieces = Vec::new();
+    let mut close = None;
+    for (index, ch) in code[open..].char_indices().map(|(at, ch)| (open + at, ch)) {
+        if let Some(mark) = quote {
+            if std::mem::take(&mut escaped) {
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+            } else if ch == mark {
+                quote = None;
+            }
+            continue;
+        }
+        match ch {
+            '"' | '\'' => quote = Some(ch),
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    pieces.push(start..index);
+                    close = Some(index);
+                    break;
+                }
+            }
+            ',' if depth == 1 => {
+                pieces.push(start..index);
+                start = index + 1;
+            }
+            _ => (),
+        }
+    }
+    let Some(close) = close else {
+        return Err(Fault::at(
+            "expected ')' to close the call on the same line",
+            open..code.len(),
+        ));
+    };
+    let after = code[close + 1..].trim();
+    if !after.is_empty() {
+        let at = offset(code, after);
+        return Err(Fault::at(
+            "unexpected text after the call",
+            at..at + after.len(),
+        ));
+    }
+    let inside = open + 1..close;
+    if code[inside.clone()].trim().is_empty() {
+        return Ok((Vec::new(), inside));
+    }
+    for piece in &pieces {
+        let text = &code[piece.clone()];
+        if text.trim().is_empty() {
+            // The next character: the comma or parenthesis after the gap.
+            let at = piece.start + text.len();
+            return Err(Fault::at("expected an argument", at..at + 1));
+        }
+    }
+    Ok((pieces, inside))
+}
+
 /// A bare argument: a decimal number, signed, with an optional fraction or exponent.
 fn number(token: &str) -> bool {
     let digits = token.strip_prefix(['+', '-']).unwrap_or(token);
@@ -946,6 +1358,59 @@ fn number(token: &str) -> bool {
 /// A header's text between its keyword and its closing colon.
 fn inside_header(rest: &str) -> &str {
     rest.strip_suffix(':').unwrap_or(rest).trim()
+}
+
+/// The parameters between a `def` header's parentheses, `inside`, with spans
+/// in `code`.
+fn parameters(code: &str, inside: &str) -> Result<Vec<Parameter>, Fault> {
+    let mut parameters: Vec<Parameter> = Vec::new();
+    if !inside.trim().is_empty() {
+        for piece in inside.split(',') {
+            let trimmed = piece.trim();
+            let start = offset(code, piece) + (piece.len() - piece.trim_start().len());
+            let span = start..start + trimmed.len().max(1);
+            let Some((name, kind)) = trimmed.split_once(':') else {
+                return Err(Fault::at("expected 'name: type' for each parameter", span));
+            };
+            let (name, kind_text) = (name.trim(), kind.trim());
+            let name_span = start..start + name.len().max(1);
+            let kind = Kind::parse(kind_text).ok_or_else(|| {
+                let at = offset(code, kind_text);
+                Fault::at(
+                    "expected type int, bool or text",
+                    at..at + kind_text.len().max(1),
+                )
+            })?;
+            if !valid_name(name)
+                || keyword(name)
+                || super::RESERVED.contains(&name)
+                || crate::script::COMMANDS.contains(&name)
+            {
+                return Err(Fault::at(
+                    format!("'{name}' can't name a parameter"),
+                    name_span,
+                ));
+            }
+            if parameters.iter().any(|parameter| parameter.name == name) {
+                return Err(Fault::at(
+                    format!("parameter '{name}' is given twice"),
+                    name_span,
+                ));
+            }
+            if parameters.len() == MAX_PARAMETERS {
+                return Err(Fault::at(
+                    format!("a function takes at most {MAX_PARAMETERS} parameters"),
+                    span,
+                ));
+            }
+            parameters.push(Parameter {
+                name: name.into(),
+                kind,
+                span: name_span,
+            });
+        }
+    }
+    Ok(parameters)
 }
 
 fn empty(keyword: Range<usize>) -> Fault {

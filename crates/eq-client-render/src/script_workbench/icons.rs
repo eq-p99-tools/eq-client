@@ -1,6 +1,6 @@
 //! The run controls' icons, drawn in code so they need no asset files and no
 //! glyphs the bundled font lacks: ▶ run, ▶I run to cursor, ‖ pause,
-//! |▶ resume, ▶| step, ↑ step out, ■ stop.
+//! |▶ resume, ▶| step over, ↓ step into, ↑ step out, ■ stop.
 
 use bevy::prelude::*;
 
@@ -89,6 +89,7 @@ pub(super) enum Icon {
     Pause,
     Resume,
     Step,
+    StepInto,
     StepOut,
     Stop,
 }
@@ -153,6 +154,7 @@ impl Icon {
                     bottom: 0.88,
                 },
             ],
+            Self::StepInto => &[Piece::Arrow { up: false }],
             Self::StepOut => &[Piece::Arrow { up: true }],
             Self::Stop => &[Piece::Square],
         }
@@ -163,7 +165,9 @@ impl Icon {
         match self {
             Self::Run | Self::RunToCursor | Self::Resume => Color::srgb(0.55, 0.87, 0.49),
             Self::Stop => Color::srgb(1.0, 0.45, 0.42),
-            Self::Pause | Self::Step | Self::StepOut => Color::srgb(0.92, 0.93, 0.95),
+            Self::Pause | Self::Step | Self::StepInto | Self::StepOut => {
+                Color::srgb(0.92, 0.93, 0.95)
+            }
         }
     }
 
@@ -224,6 +228,7 @@ mod tests {
             Icon::Pause,
             Icon::Resume,
             Icon::Step,
+            Icon::StepInto,
             Icon::StepOut,
             Icon::Stop,
         ] {
@@ -249,6 +254,10 @@ mod tests {
         assert_eq!(alpha(Icon::StepOut, 8, 14), 255);
         assert_eq!(alpha(Icon::StepOut, 8, 24), 0);
         assert_eq!(alpha(Icon::StepOut, middle, 24), 255);
+        // Step into's points down.
+        assert_eq!(alpha(Icon::StepInto, 8, 17), 255);
+        assert_eq!(alpha(Icon::StepInto, 8, 7), 0);
+        assert_eq!(alpha(Icon::StepInto, middle, 7), 255);
         // Run to cursor ends in a cursor with a serif at its top.
         assert_eq!(alpha(Icon::RunToCursor, 25, 12), 255);
         assert_eq!(alpha(Icon::RunToCursor, 28, 5), 255);

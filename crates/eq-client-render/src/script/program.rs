@@ -12,6 +12,15 @@ use super::{
 /// Maximum UTF-8 source size accepted by the script loader and editor.
 pub const MAX_SOURCE_BYTES: usize = 128 * 1024;
 
+/// Which pass compiles a line: the top level, a function's body, or none,
+/// under a `def` header that failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Owner {
+    Top,
+    Function(usize),
+    Skipped,
+}
+
 /// An executable step and its one-based line in the original source.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Instruction {
@@ -84,6 +93,10 @@ impl Program {
             .map_err(|error| AppendError::Structured(error.line))
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one pass over the lines: owners, then each owner's statements"
+    )]
     fn compile(text: &str, base: &Path) -> Result<Self, Vec<ParseError>> {
         #[cfg(test)]
         COMPILES.set(COMPILES.get() + 1);
@@ -100,62 +113,126 @@ impl Program {
             let bom = if line == 1 { bom } else { 0 };
             Some(span.start + bom..span.end + bom)
         };
+        let lines = text.lines().collect::<Vec<_>>();
         let mut instructions = Vec::new();
         let mut errors = Vec::new();
         let mut flow = Builder::new();
         let mut statements = 0;
-        for (index, raw) in text.lines().enumerate() {
+        let error = |line: usize, span: Range<usize>, message: String| ParseError {
+            line: Some(line),
+            span: shift(line, span),
+            message,
+        };
+        // Every column-0 `def` header is read first, so a call resolves
+        // before or after its function. Each line is the top level's, a
+        // function's body, or skipped under a header that failed.
+        let mut owner = vec![Owner::Top; lines.len()];
+        let mut current = Owner::Top;
+        for (index, raw) in lines.iter().enumerate() {
             let line = index + 1;
-            let code = raw[..language::comment(raw)].trim();
-            if code.is_empty() {
+            let code = raw[..language::comment(raw)].trim_end();
+            if code.trim().is_empty() {
+                owner[index] = current;
                 continue;
             }
-            let start = language::offset(raw, code);
             statements += 1;
             if statements > MAX_STEPS {
                 return Err(vec![ParseError::document(format!(
                     "script has more than {MAX_STEPS} statements"
                 ))]);
             }
-            let mut fail = |span: Range<usize>, message: String| {
-                errors.push(ParseError {
-                    line: Some(line),
-                    span: shift(line, span),
-                    message,
-                });
-            };
-            let step = match flow.statement(raw, line) {
-                Ok(None) => continue,
-                Ok(Some(call)) => {
-                    let words = call.words.iter().map(String::as_str).collect::<Vec<_>>();
-                    match parse_words(call.command, &words) {
-                        Ok(step) => step,
-                        Err(message) => {
-                            // The argument list, or its parentheses when empty.
-                            let span = if call.arguments.is_empty() {
-                                call.arguments.start - 1..call.arguments.end + 1
-                            } else {
-                                call.arguments
-                            };
-                            fail(span, message);
-                            continue;
-                        }
+            if code.starts_with(char::is_whitespace) {
+                owner[index] = current;
+                continue;
+            }
+            current = Owner::Top;
+            if matches!(language::shape(code), language::Shape::Keyword("def")) {
+                current = match flow.declare_function(code, line) {
+                    Ok(function) => Owner::Function(function),
+                    Err(fault) => {
+                        errors.push(error(
+                            line,
+                            fault.span.unwrap_or(0..code.len()),
+                            fault.message,
+                        ));
+                        Owner::Skipped
                     }
-                }
-                Err(fault) => {
-                    fail(
-                        fault.span.unwrap_or(start..start + code.len()),
-                        fault.message,
-                    );
+                };
+                // The header line belongs to neither pass.
+                owner[index] = Owner::Skipped;
+                continue;
+            }
+            owner[index] = Owner::Top;
+        }
+        let mut compile = |flow: &mut Builder, errors: &mut Vec<ParseError>, owned: Owner| {
+            // Lines under a misplaced `def`, deeper than it, are skipped.
+            let mut under: Option<usize> = None;
+            for (index, raw) in lines.iter().enumerate() {
+                if owner[index] != owned {
                     continue;
                 }
-            };
-            let step = match step {
-                Step::Screenshot(path) => Step::Screenshot(base.join(path)),
-                step => step,
-            };
-            flow.action(instructions.len(), line);
-            instructions.push(Instruction { line, step });
+                let line = index + 1;
+                let code = raw[..language::comment(raw)].trim();
+                if code.is_empty() {
+                    continue;
+                }
+                let indent = raw.len() - raw.trim_start().len();
+                if let Some(depth) = under {
+                    if indent > depth {
+                        continue;
+                    }
+                    under = None;
+                }
+                let start = language::offset(raw, code);
+                if matches!(language::shape(code), language::Shape::Keyword("def")) {
+                    under = Some(indent);
+                }
+                let step = match flow.statement(raw, line) {
+                    Ok(None) => continue,
+                    Ok(Some(call)) => {
+                        let words = call.words.iter().map(String::as_str).collect::<Vec<_>>();
+                        match parse_words(call.command, &words) {
+                            Ok(step) => step,
+                            Err(message) => {
+                                // The argument list, or its parentheses when empty.
+                                let span = if call.arguments.is_empty() {
+                                    call.arguments.start - 1..call.arguments.end + 1
+                                } else {
+                                    call.arguments
+                                };
+                                errors.push(error(line, span, message));
+                                continue;
+                            }
+                        }
+                    }
+                    Err(fault) => {
+                        errors.push(error(
+                            line,
+                            fault.span.unwrap_or(start..start + code.len()),
+                            fault.message,
+                        ));
+                        continue;
+                    }
+                };
+                let step = match step {
+                    Step::Screenshot(path) => Step::Screenshot(base.join(path)),
+                    step => step,
+                };
+                flow.action(instructions.len(), line);
+                instructions.push(Instruction { line, step });
+            }
+        };
+        compile(&mut flow, &mut errors, Owner::Top);
+        // Function bodies compile after the top level, so their ops follow
+        // it; one with no body line still opens, and its empty body is an
+        // error on its header.
+        for function in 0..flow.function_count() {
+            let line = flow.function_line(function);
+            for fault in flow.begin_function(function) {
+                errors.push(error(line, fault.span.unwrap_or(0..3), fault.message));
+            }
+            compile(&mut flow, &mut errors, Owner::Function(function));
+            flow.end_function();
         }
         errors.extend(flow.end_of_source().into_iter().map(|deferred| {
             ParseError {
@@ -307,6 +384,8 @@ impl std::error::Error for ParseError {}
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write as _;
+
     use super::*;
 
     #[test]
@@ -535,6 +614,253 @@ mod tests {
         assert_eq!(
             program.statement_lines().into_iter().collect::<Vec<_>>(),
             [3, 4, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16]
+        );
+    }
+
+    /// Each error as (line, the text its span marks, message).
+    fn marked(source: &str) -> Vec<(usize, String, String)> {
+        Program::diagnostics(source, Path::new("."))
+            .into_iter()
+            .map(|error| {
+                let line = error.line.unwrap();
+                let text = source.lines().nth(line - 1).unwrap();
+                let span = error.span.clone().map_or_else(String::new, |span| {
+                    text.get(span).unwrap_or_default().to_owned()
+                });
+                (line, span, error.message)
+            })
+            .collect()
+    }
+
+    fn one(line: usize, span: &str, message: &str) -> Vec<(usize, String, String)> {
+        vec![(line, span.to_owned(), message.to_owned())]
+    }
+
+    #[test]
+    fn calls_are_checked_against_their_function() {
+        let def = "def heal(threshold: int, loud: bool):\n    pass\n";
+        assert_eq!(
+            marked(&format!("{def}heal()\n")),
+            one(3, "()", "heal takes 2 arguments, given 0")
+        );
+        assert_eq!(
+            marked(&format!("{def}heal(1, True, 3)\n")),
+            one(3, "1, True, 3", "heal takes 2 arguments, given 3")
+        );
+        assert_eq!(
+            marked(&format!("{def}heal(1, 2)\n")),
+            one(3, "2", "expected bool, found int")
+        );
+        assert_eq!(
+            marked(&format!("{def}heal(nope, True)\n")),
+            one(3, "nope", "unknown variable or client field 'nope'")
+        );
+        assert_eq!(
+            marked(&format!("{def}heal(1, True) extra\n")),
+            one(3, "extra", "unexpected text after the call")
+        );
+        assert_eq!(
+            marked(&format!("{def}heal(1, )\n")),
+            one(3, ")", "expected an argument")
+        );
+        assert_eq!(
+            marked("heel(1)\n"),
+            one(1, "heel", "unknown command 'heel'")
+        );
+        // A call reads text arguments with commas and parentheses inside.
+        assert_eq!(
+            marked("def say(t: text):\n    pass\nsay(\"a, (b\")\n"),
+            Vec::new()
+        );
+    }
+
+    #[test]
+    fn definitions_are_checked_once_each() {
+        assert_eq!(
+            marked("def f(a: int, a: int):\n    pass\n"),
+            one(1, "a", "parameter 'a' is given twice")
+        );
+        assert_eq!(
+            marked("def f(a: number):\n    pass\n"),
+            one(1, "number", "expected type int, bool or text")
+        );
+        // A duplicate or malformed header skips its body.
+        assert_eq!(
+            marked("def f():\n    pass\ndef f():\n    nope = 1\n"),
+            one(3, "f", "function 'f' is already defined")
+        );
+        assert_eq!(
+            marked("def f(:\n    nope = 1\n"),
+            one(1, "(:", "expected ')' to close the parameters")
+        );
+        assert_eq!(
+            marked("def press():\n    pass\n"),
+            one(1, "press", "'press' is reserved and can't name a function")
+        );
+        assert_eq!(
+            marked("def f() -> int:\n    pass\n"),
+            one(1, "-> int:", "return values are not available yet")
+        );
+        // A def that isn't at column 0 is one error, with nothing for its body.
+        assert_eq!(
+            marked("if True:\n    def g():\n        nope = 1\n    pass\n"),
+            one(
+                2,
+                "def",
+                "def is allowed only at the start of a line, outside any block"
+            )
+        );
+        assert_eq!(
+            marked("  def g():\n      nope = 1\nwait(1)\n"),
+            one(
+                1,
+                "def",
+                "def is allowed only at the start of a line, outside any block"
+            )
+        );
+        assert_eq!(
+            marked("def f():\n# only a comment\nwait(1)\n"),
+            one(
+                1,
+                "def",
+                "expected an indented block; use pass for an empty one"
+            )
+        );
+    }
+
+    #[test]
+    fn names_are_checked_across_the_whole_program() {
+        assert_eq!(
+            marked("x: int = 0\ndef x():\n    pass\n"),
+            one(1, "x", "'x' is a function and can't be a variable")
+        );
+        assert_eq!(
+            marked("g: int = 0\ndef f():\n    g: int = 1\n"),
+            one(
+                3,
+                "g",
+                "'g' is a global variable; a function's variable can't reuse its name"
+            )
+        );
+        // A global declared after the function, too.
+        assert_eq!(
+            marked("def f():\n    x: int = 1\nx: int = 2\n"),
+            one(
+                2,
+                "x",
+                "'x' is a global variable; a function's variable can't reuse its name"
+            )
+        );
+        assert_eq!(
+            marked("n: int = 0\ndef f(n: int):\n    pass\n"),
+            one(
+                2,
+                "n",
+                "'n' is a global variable; a function's variable can't reuse its name"
+            )
+        );
+        assert_eq!(
+            marked("def f(n: int):\n    n: int = 1\n"),
+            one(2, "n", "variable 'n' is reserved or already declared")
+        );
+        // Locals stay in their function.
+        assert_eq!(
+            marked("def f():\n    x: int = 1\nf()\ny: int = x\n"),
+            one(4, "x", "unknown variable or client field 'x'")
+        );
+        assert_eq!(
+            marked("def f():\n    x: int = 1\ndef g():\n    x = 2\n"),
+            one(
+                4,
+                "x",
+                "'x' must be declared with a type first, such as 'x: int = 0'"
+            )
+        );
+        // Two functions may each have a local of the same name.
+        assert_eq!(
+            marked("def f():\n    x: int = 1\ndef g():\n    x: int = 2\n"),
+            Vec::new()
+        );
+        assert_eq!(
+            marked("def f():\n    if True:\n        x: int = 1\n"),
+            one(
+                3,
+                "x",
+                "declare variables at the top level of the script or of a function, then assign them inside blocks"
+            )
+        );
+    }
+
+    #[test]
+    fn return_break_and_continue_stay_inside_their_function() {
+        assert_eq!(
+            marked("return\n"),
+            one(1, "return", "'return' outside a function")
+        );
+        assert_eq!(
+            marked("def f():\n    return 1\n"),
+            one(
+                2,
+                "1",
+                "return values are not available yet; use return alone"
+            )
+        );
+        assert_eq!(
+            marked("for i in range(2):\n    f()\ndef f():\n    break\n"),
+            one(4, "break", "'break' outside a loop")
+        );
+        assert_eq!(
+            marked("def f():\n    for i in range(2):\n        continue\n    return\n"),
+            Vec::new()
+        );
+    }
+
+    #[test]
+    fn functions_have_limits_and_their_actions_are_checked_uncalled() {
+        let mut many = String::new();
+        for k in 0..33 {
+            write!(many, "def f{k}():\n    pass\n").unwrap();
+        }
+        assert_eq!(
+            marked(&many),
+            one(65, "f32", "at most 32 functions can be defined")
+        );
+        assert_eq!(
+            marked(
+                "def f(a: int, b: int, c: int, d: int, e: int, f2: int, g: int, h: int, i: int):\n    pass\n"
+            ),
+            one(1, "i: int", "a function takes at most 8 parameters")
+        );
+        let mut locals = "def f():\n".to_owned();
+        for k in 0..33 {
+            writeln!(locals, "    v{k}: int = 0").unwrap();
+        }
+        assert_eq!(
+            marked(&locals),
+            one(
+                34,
+                "v32",
+                "a function has at most 32 variables, parameters included"
+            )
+        );
+        // Nesting counts within the body.
+        let mut deep = "def f():\n".to_owned();
+        for level in 0..16 {
+            writeln!(deep, "{}if True:", "    ".repeat(level + 1)).unwrap();
+        }
+        writeln!(deep, "{}pass", "    ".repeat(17)).unwrap();
+        assert!(marked(&deep).is_empty(), "{:?}", marked(&deep));
+        // An action inside a function is checked even if nothing calls it.
+        assert_eq!(
+            marked("def f():\n    press(\"Nope\")\n"),
+            one(2, "\"Nope\"", "unknown key")
+        );
+        // A script with a function is structured.
+        let program = Program::parse("def f():\n    press(\"I\")\nf()\n", Path::new(".")).unwrap();
+        assert!(program.code.is_some());
+        assert_eq!(
+            program.statement_lines().into_iter().collect::<Vec<_>>(),
+            [1, 2, 3]
         );
     }
 

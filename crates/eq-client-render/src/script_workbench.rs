@@ -286,6 +286,9 @@ fn controls(
             Action::Pause if script.is_some() => control.request(Request::Pause),
             Action::Resume if status.phase() == Phase::Paused => control.request(Request::Resume),
             Action::Step if status.phase() == Phase::Paused => control.request(Request::Step),
+            Action::StepInto if status.phase() == Phase::Paused => {
+                control.request(Request::StepInto);
+            }
             Action::StepOut if status.phase() == Phase::Paused => {
                 control.request(Request::StepOut);
             }
@@ -366,7 +369,12 @@ fn controls(
                 }
                 Err(error) => state.message = error.to_string(),
             },
-            Action::Pause | Action::Resume | Action::Step | Action::StepOut | Action::Stop => (),
+            Action::Pause
+            | Action::Resume
+            | Action::Step
+            | Action::StepInto
+            | Action::StepOut
+            | Action::Stop => (),
         }
     }
 }
@@ -469,10 +477,12 @@ mod tests {
                 "Run",
                 "Run to cursor",
                 "Run to cursor",
-                "Step",
-                "Step",
+                "Step into",
+                "Step into",
                 "Step out",
                 "Step out",
+                "Step over",
+                "Step over",
                 "Stop",
                 "Stop",
             ]

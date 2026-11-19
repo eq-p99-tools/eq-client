@@ -41,6 +41,7 @@ pub(super) enum Action {
     Pause,
     Resume,
     Step,
+    StepInto,
     StepOut,
     Stop,
     Discard,
@@ -61,7 +62,7 @@ impl Action {
             // Before a run it starts one; while paused it resumes to the line.
             Self::RunToCursor => (!active && !busy) || phase == Phase::Paused,
             Self::Pause => active && phase != Phase::Paused,
-            Self::Resume | Self::Step | Self::StepOut => phase == Phase::Paused,
+            Self::Resume | Self::Step | Self::StepInto | Self::StepOut => phase == Phase::Paused,
             Self::Stop => active,
             _ => true,
         }
@@ -213,7 +214,8 @@ fn run_controls(commands: &mut Commands, images: &mut Assets<Image>) -> Entity {
         ),
         (icons::Icon::Pause, "Pause", Action::Pause),
         (icons::Icon::Resume, "Resume", Action::Resume),
-        (icons::Icon::Step, "Step", Action::Step),
+        (icons::Icon::Step, "Step over", Action::Step),
+        (icons::Icon::StepInto, "Step into", Action::StepInto),
         (icons::Icon::StepOut, "Step out", Action::StepOut),
         (icons::Icon::Stop, "Stop", Action::Stop),
     ]
@@ -838,6 +840,14 @@ fn flow_summary(status: &RunStatus) -> String {
     for (line, iteration, limit) in flow.loops() {
         lines.push(format!("Loop L{line} · {iteration}/{limit}"));
     }
+    if !flow.calls().is_empty() {
+        lines.push(String::new());
+        lines.push("Calls".into());
+        // Innermost first, as a call stack reads.
+        for (name, line) in flow.calls().iter().rev() {
+            lines.push(format!("{name} · L{line}"));
+        }
+    }
     lines.push(String::new());
     lines.push("Variables".into());
     // A loop's variable that has not run yet holds an empty line.
@@ -1006,20 +1016,21 @@ mod tests {
             Action::Pause,
             Action::Resume,
             Action::Step,
+            Action::StepInto,
             Action::StepOut,
             Action::Stop,
         ];
         let usable = |phase, busy| controls.map(|action| action.usable(phase, busy));
-        // Run, run to cursor, pause, resume, step, step out, stop.
+        // Run, run to cursor, pause, resume, step over, into, out, stop.
         let (t, f) = (true, false);
-        assert_eq!(usable(Phase::Idle, false), [t, t, f, f, f, f, f]);
-        assert_eq!(usable(Phase::Idle, true), [false; 7]);
-        assert_eq!(usable(Phase::Running, false), [f, f, t, f, f, f, t]);
-        assert_eq!(usable(Phase::Pausing, false), [f, f, t, f, f, f, t]);
+        assert_eq!(usable(Phase::Idle, false), [t, t, f, f, f, f, f, f]);
+        assert_eq!(usable(Phase::Idle, true), [false; 8]);
+        assert_eq!(usable(Phase::Running, false), [f, f, t, f, f, f, f, t]);
+        assert_eq!(usable(Phase::Pausing, false), [f, f, t, f, f, f, f, t]);
         // While paused, run to cursor resumes to the line asked for.
-        assert_eq!(usable(Phase::Paused, false), [f, t, f, t, t, t, t]);
+        assert_eq!(usable(Phase::Paused, false), [f, t, f, t, t, t, t, t]);
         for done in [Phase::Completed, Phase::Stopped, Phase::Failed] {
-            assert_eq!(usable(done, false), [t, t, f, f, f, f, f]);
+            assert_eq!(usable(done, false), [t, t, f, f, f, f, f, f]);
         }
     }
 }

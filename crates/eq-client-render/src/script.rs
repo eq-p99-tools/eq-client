@@ -183,8 +183,28 @@ struct Debugging {
     skip: Option<usize>,
     /// A one-time stop, from Run to cursor.
     run_to: Option<usize>,
-    /// Step out: pause at the first statement outside these ops.
-    out: Option<std::ops::Range<usize>>,
+    /// Step out: where the run pauses next.
+    out: Option<Out>,
+    /// Step over a call: pause at the next statement at its depth or
+    /// shallower, once it has started.
+    over: Option<Over>,
+}
+
+/// A Step over under way.
+#[derive(Clone, Copy)]
+struct Over {
+    /// The call depth the call was made at.
+    depth: usize,
+    /// Whether the call has started, so a return to `depth` ends it.
+    entered: bool,
+}
+
+/// Where Step out pauses.
+enum Out {
+    /// The first statement outside these ops, at this call depth.
+    Block(std::ops::Range<usize>, usize),
+    /// The first statement after the call at this depth returns.
+    Call(usize),
 }
 
 /// Login and offline scripts need no admission; admitted runs end with the session.
@@ -614,10 +634,10 @@ impl Script {
         self.progress.phase = Phase::Running;
     }
 
-    /// Pause before the next statement when a breakpoint, Run to cursor or
-    /// Step out asks for it. Linear and structured runs share this check:
-    /// the next statement is the queued action's line, or the program's.
-    /// Every caller has released input.
+    /// Pause before the next statement when a breakpoint, Run to cursor,
+    /// Step out or Step over asks for it. Linear and structured runs share
+    /// this check: the next statement is the queued action's line, or the
+    /// program's. Every caller has released input.
     fn breakpoint(&mut self, now: Duration) -> bool {
         // A menu entry that waits for its menu has already passed the check.
         if self.menu_opening.is_some() {
@@ -629,16 +649,39 @@ impl Script {
             None => self.language.as_ref().and_then(language::Run::next_line),
         };
         let skip = self.debug.skip.take();
-        let left = self.debug.out.as_ref().is_some_and(|range| {
-            self.language
-                .as_ref()
-                .is_some_and(|run| !range.contains(&run.position()))
+        let depth = self.language.as_ref().map_or(0, language::Run::depth);
+        let left = self.debug.out.as_ref().is_some_and(|out| match out {
+            Out::Block(range, at) => {
+                depth < *at
+                    || (depth == *at
+                        && self
+                            .language
+                            .as_ref()
+                            .is_some_and(|run| !range.contains(&run.position())))
+            }
+            Out::Call(at) => depth < *at,
         });
+        // Step over waits for its call to start, then for it to return.
+        if let Some(over) = &mut self.debug.over
+            && depth > over.depth
+        {
+            over.entered = true;
+        }
+        let over = self
+            .debug
+            .over
+            .is_some_and(|over| over.entered && depth <= over.depth);
+        let left_reason = match self.debug.out {
+            Some(Out::Call(_)) => "Stepped out of call",
+            _ => "Stepped out of block",
+        };
         let (line, reason) =
             if let Some(line) = edge.filter(|line| self.progress.breakpoints.contains(line)) {
                 (line, "Paused at breakpoint")
             } else if let Some(line) = next.filter(|_| left) {
-                (line, "Stepped out of block")
+                (line, left_reason)
+            } else if let Some(line) = next.filter(|_| over) {
+                (line, "Stepped over call")
             } else if let Some(line) = next.filter(|line| self.debug.run_to == Some(*line)) {
                 self.debug.run_to = None;
                 (line, "Paused at cursor")
@@ -649,8 +692,9 @@ impl Script {
             } else {
                 return false;
             };
-        // Any pause ends a Step out that was under way.
+        // Any pause ends a Step out or over that was under way.
         self.debug.out = None;
+        self.debug.over = None;
         self.debug.skip = Some(line);
         self.mode = RunMode::Paused(now);
         self.progress.phase = Phase::Paused;
@@ -659,14 +703,35 @@ impl Script {
         true
     }
 
-    /// Run until the innermost block around the next statement is left. With
-    /// no block around it, run on to the end or the next breakpoint.
+    /// Inside a call, run until it returns to its caller. Otherwise run until
+    /// the innermost block around the next statement is left; with no block
+    /// around it, run on to the end or the next breakpoint.
     fn step_out(&mut self, now: Duration) {
-        self.debug.out = self
+        self.debug.out = self.language.as_ref().and_then(|run| match run.depth() {
+            0 => run.innermost_block().map(|range| Out::Block(range, 0)),
+            depth => Some(Out::Call(depth)),
+        });
+        self.resume(now, RunMode::Continuous);
+    }
+
+    /// Run one statement; a call runs to its return, pausing at the next
+    /// statement after it unless a breakpoint inside comes first.
+    fn step_over(&mut self, now: Duration) {
+        let depth = self
             .language
             .as_ref()
-            .and_then(language::Run::innermost_block);
-        self.resume(now, RunMode::Continuous);
+            .filter(|run| self.steps.is_empty() && run.calls_next())
+            .map(language::Run::depth);
+        match depth {
+            Some(depth) => {
+                self.debug.over = Some(Over {
+                    depth,
+                    entered: false,
+                });
+                self.resume(now, RunMode::Continuous);
+            }
+            None => self.resume(now, RunMode::OneStep),
+        }
     }
 
     /// Returns whether another action may start; every caller has released input.
@@ -677,9 +742,40 @@ impl Script {
                 self.mode = RunMode::PauseRequested;
                 true
             }
+            // With nothing left to run, the run finishes instead of pausing.
+            RunMode::PauseRequested
+                if self.steps.is_empty()
+                    && self.language.as_ref().is_none_or(language::Run::done) =>
+            {
+                self.mode = RunMode::Continuous;
+                true
+            }
+            // A call's implicit return is no statement: pause after it, at
+            // the caller's next one.
+            RunMode::PauseRequested
+                if self.steps.is_empty()
+                    && self
+                        .language
+                        .as_ref()
+                        .is_some_and(|run| run.next_line().is_none()) =>
+            {
+                true
+            }
             RunMode::PauseRequested => {
                 self.mode = RunMode::Paused(now);
                 self.progress.phase = Phase::Paused;
+                // The paused view marks the statement that runs next. An
+                // else or def entered on the way is passed already.
+                let next = match self.steps.front() {
+                    Some(step) => step.line,
+                    None => self.language.as_mut().and_then(|run| {
+                        run.take_edge();
+                        run.next_line()
+                    }),
+                };
+                if next.is_some() {
+                    self.progress.line = next;
+                }
                 self.progress.event("Paused between actions");
                 false
             }
@@ -1113,6 +1209,9 @@ pub(super) fn drive(
             }
             Request::Resume => script.resume(now, RunMode::Continuous),
             Request::Step if matches!(script.mode, RunMode::Paused(_)) => {
+                script.step_over(now);
+            }
+            Request::StepInto if matches!(script.mode, RunMode::Paused(_)) => {
                 script.resume(now, RunMode::OneStep);
             }
             Request::StepOut if matches!(script.mode, RunMode::Paused(_)) => {
@@ -1122,7 +1221,7 @@ pub(super) fn drive(
                 script.debug.run_to = Some(line);
                 script.resume(now, RunMode::Continuous);
             }
-            Request::Step | Request::StepOut | Request::RunTo(_) => (),
+            Request::Step | Request::StepInto | Request::StepOut | Request::RunTo(_) => (),
         }
     }
     // Check the same world used by this dispatch, before restoring any held
@@ -6903,8 +7002,8 @@ mod tests {
                 Request::Resume
             }
         });
-        // The pause between actions shows the line that just ran.
-        assert_eq!(lines(&found), [3, 3]);
+        // The pause between actions shows the statement that runs next.
+        assert_eq!(lines(&found), [3, 4]);
         assert_eq!(found[1].1, "Paused between actions");
     }
 
@@ -6940,6 +7039,89 @@ mod tests {
         let source = "wait(1)\nwait(1)\nwait(1)\n";
         let mut app = debugging(source, &[1], None);
         assert_eq!(lines(&pauses(&mut app, |_| Request::StepOut)), [1]);
+    }
+
+    const CALLS: &str = "def inner():\n    wait(1)\n    wait(1)\ndef outer():\n    inner()\n    wait(1)\nouter()\nwait(1)\n";
+
+    #[test]
+    fn step_over_into_and_out_follow_calls() {
+        // Step over a call runs all of it and pauses after it.
+        let mut app = debugging(CALLS, &[7], None);
+        let found = pauses(&mut app, |_| Request::Step);
+        assert_eq!(lines(&found), [7, 8]);
+        assert_eq!(found[1].1, "Stepped over call, line 8");
+        // Step into goes through every statement, into each call and back.
+        let mut app = debugging(CALLS, &[7], None);
+        assert_eq!(
+            lines(&pauses(&mut app, |_| Request::StepInto)),
+            [7, 5, 2, 3, 6, 8]
+        );
+        // Step out from inside a call pauses back in its caller, a level at
+        // a time, and at the top level runs on to the end.
+        let mut app = debugging(CALLS, &[2], None);
+        let found = pauses(&mut app, |_| Request::StepOut);
+        assert_eq!(lines(&found), [2, 6, 8]);
+        assert_eq!(found[1].1, "Stepped out of call, line 6");
+        // A breakpoint inside a call stepped over still pauses there.
+        let mut app = debugging(CALLS, &[3, 5], None);
+        let found = pauses(&mut app, |count| {
+            if count == 1 {
+                Request::Step
+            } else {
+                Request::Resume
+            }
+        });
+        assert_eq!(lines(&found), [5, 3]);
+    }
+
+    #[test]
+    fn a_dot_on_a_def_line_pauses_on_every_call_and_shows_the_call_stack() {
+        let source = "def inner():\n    wait(1)\ndef outer():\n    inner()\n    inner()\nouter()\n";
+        let mut app = debugging(source, &[1], None);
+        let mut stacks = Vec::new();
+        for ms in 0..2_000 {
+            frame_at(&mut app, ms * 10);
+            if !app.world().contains_resource::<Script>() {
+                break;
+            }
+            let status = app.world().resource::<RunStatus>();
+            if status.phase() == Phase::Paused {
+                stacks.push((status.line(), status.flow().unwrap().calls().to_vec()));
+                app.world_mut()
+                    .resource_mut::<RunControl>()
+                    .request(Request::Resume);
+            }
+        }
+        let call = |name: &str, line: usize| (name.to_owned(), line);
+        assert_eq!(
+            stacks,
+            [
+                (Some(1), vec![call("outer", 4), call("inner", 2)]),
+                (Some(1), vec![call("outer", 5), call("inner", 2)]),
+            ]
+        );
+        assert_eq!(
+            app.world().resource::<RunStatus>().phase(),
+            Phase::Completed
+        );
+    }
+
+    #[test]
+    fn recursive_calls_step_over_and_out_by_depth() {
+        let source = "def tour(n: int):\n    if n > 0:\n        tour(n - 1)\n    wait(1)\ntour(2)\nwait(1)\n";
+        // Over the outermost recursive call: the inner ones run inside it.
+        let mut app = debugging(source, &[5], None);
+        assert_eq!(lines(&pauses(&mut app, |_| Request::Step)), [5, 6]);
+        // Out of the deepest call returns one level, to the wait after the
+        // call in the call above.
+        let mut app = debugging(source, &[], Some(4));
+        let found = pauses(&mut app, |_| Request::StepOut);
+        assert_eq!(lines(&found), [4, 4, 4, 6]);
+        assert!(
+            found[1..3]
+                .iter()
+                .all(|(_, why)| why.starts_with("Stepped out of call"))
+        );
     }
 
     #[test]

@@ -26,6 +26,8 @@ pub(super) enum Kind {
     Builtin,
     /// A name this document declares.
     Variable,
+    /// A function this document defines, where defined and where called.
+    Function,
     Operator,
     /// A key chord given to `press` or `hold`.
     Key,
@@ -45,6 +47,7 @@ impl Kind {
             Self::String => [140, 222, 125],
             Self::Field => [128, 226, 200],
             Self::Variable => [235, 236, 240],
+            Self::Function => [242, 140, 205],
             Self::Operator => [175, 190, 205],
             Self::Key => [255, 214, 102],
             Self::Argument => [184, 191, 196],
@@ -58,21 +61,37 @@ impl Kind {
     }
 }
 
-/// Names the document declares, so later uses colour as variables. User
-/// functions and their parameters belong here too when the language has them.
+/// Names the document declares, so later uses colour as variables and
+/// functions. A function's parameters count as variables.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct Symbols {
     variables: Vec<String>,
+    functions: Vec<String>,
 }
 
 impl Symbols {
     /// Every declared name in the source, before or after a use: each
-    /// `name: type = value` and each `for name in ...`.
+    /// `name: type = value`, each `for name in ...` and each
+    /// `def name(parameter: type, ...):` with its parameters.
     pub(super) fn scan(source: &str) -> Self {
         let mut variables = Vec::new();
+        let mut functions = Vec::new();
+        let add = |list: &mut Vec<String>, name: &str| {
+            if !name.is_empty() && name != "_" && !list.iter().any(|known| known == name) {
+                list.push(name.to_owned());
+            }
+        };
         for line in source.lines() {
             let code = line[..language::comment(line)]
                 .trim_start_matches(|ch: char| ch.is_whitespace() || ch == '\u{feff}');
+            if let Some((name, parameters)) = definition(code) {
+                add(&mut functions, name);
+                for parameter in parameters.split(',') {
+                    let name = parameter.split(':').next().unwrap_or_default().trim();
+                    add(&mut variables, name);
+                }
+                continue;
+            }
             let name = if let Some(rest) = code.strip_prefix("for")
                 && rest.starts_with(char::is_whitespace)
             {
@@ -85,20 +104,36 @@ impl Symbols {
             } else {
                 None
             };
-            if let Some(name) = name
-                && !name.is_empty()
-                && name != "_"
-                && !variables.iter().any(|known| known == name)
-            {
-                variables.push(name.to_owned());
+            if let Some(name) = name {
+                add(&mut variables, name);
             }
         }
-        Self { variables }
+        Self {
+            variables,
+            functions,
+        }
     }
 
     fn variable(&self, word: &str) -> bool {
         self.variables.iter().any(|name| name == word)
     }
+
+    fn function(&self, word: &str) -> bool {
+        self.functions.iter().any(|name| name == word)
+    }
+}
+
+/// `def name(parameters):` as its name and the text between its parentheses.
+fn definition(code: &str) -> Option<(&str, &str)> {
+    let rest = code.strip_prefix("def")?;
+    if !rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    let (name, parameters) = rest.trim_start().split_once('(')?;
+    let parameters = parameters
+        .split_once(')')
+        .map_or(parameters, |(inside, _)| inside);
+    Some((name.trim(), parameters))
 }
 
 /// Keep every byte, including whitespace, while styling a line of the DSL.
@@ -157,6 +192,7 @@ fn code_tokens<'a>(mut code: &'a str, symbols: &Symbols) -> Vec<(&'a str, Kind)>
                         language::Shape::Action(..) => Kind::Command,
                         language::Shape::Keyword(_) => Kind::Keyword,
                         language::Shape::Assignment(_) => Kind::Variable,
+                        language::Shape::Unknown(name) if symbols.function(name) => Kind::Function,
                         language::Shape::CommandName(_)
                         | language::Shape::Uncalled(_)
                         | language::Shape::Unknown(_) => Kind::Unknown,
@@ -191,6 +227,7 @@ fn word(word: &str, symbols: &Symbols) -> Kind {
         _ if language::field(word) => Kind::Field,
         _ if word.contains('.') => Kind::Unknown,
         _ if symbols.variable(word) => Kind::Variable,
+        _ if symbols.function(word) => Kind::Function,
         _ => Kind::Argument,
     }
 }
@@ -295,6 +332,32 @@ mod tests {
         ] {
             assert!(all.contains(&expected), "{expected:?}");
         }
+    }
+
+    #[test]
+    fn functions_colour_where_defined_and_called_and_their_parameters_are_variables() {
+        let source = "greet(2)\ndef greet(times: int, loud: bool):\n    if loud:\n        return\n";
+        let symbols = Symbols::scan(source);
+        assert_eq!(symbols.functions, ["greet"]);
+        assert_eq!(symbols.variables, ["times", "loud"]);
+        let all = source
+            .lines()
+            .flat_map(|line| kinds(line, &symbols))
+            .filter(|(text, _)| !text.trim().is_empty())
+            .collect::<Vec<_>>();
+        for expected in [
+            ("greet", Kind::Function),
+            ("def", Kind::Keyword),
+            ("times", Kind::Variable),
+            ("int", Kind::Type),
+            ("loud", Kind::Variable),
+            ("return", Kind::Keyword),
+        ] {
+            assert!(all.contains(&expected), "{expected:?}");
+        }
+        assert!(!all.contains(&("greet", Kind::Unknown)));
+        // An undefined call stays unknown.
+        assert_eq!(kinds("wave(1)", &symbols)[0], ("wave", Kind::Unknown));
     }
 
     #[test]
