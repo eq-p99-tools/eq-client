@@ -93,9 +93,11 @@ Key names are case-insensitive. Combine them with `+`, such as `alt+1`. Supporte
 - `face heading`: turn the character to an absolute heading at the ordinary turn rate, waiting up to 5 seconds for server confirmation.
 - `move command milliseconds`: hold `forward`, `back`, `camera_forward`,
   `camera_back`, `strafe_left`, `strafe_right`, `turn_left` or `turn_right`,
-  independent of key bindings. In mapped water on Titanium EQEmu, a negative
-  camera pitch makes `camera_forward` dive and `camera_back` rise. Set pitch
-  to zero for level movement.
+  independent of key bindings. In mapped water on Titanium, strokes follow
+  the character's look pitch, not the camera's: hold the Look Up or Look Down
+  key (`PageUp`, `PageDown`) to tilt it, and Center View in first person
+  levels it. Holding `space` strokes up. The `camera` command's pitch moves
+  only the camera.
 - `approach range milliseconds`: approach the current target.
 - `approach object kind range milliseconds`: approach a tradeskill container type.
 - `walk range milliseconds`: follow a searched path toward the target.

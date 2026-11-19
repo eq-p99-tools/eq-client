@@ -513,6 +513,7 @@ mod tests {
                 pitch: 0.0,
                 pulled: None,
                 view: default(),
+                look: 0.0,
             },
         ));
         // The gnoll stands behind a wall; everyone else in the open.

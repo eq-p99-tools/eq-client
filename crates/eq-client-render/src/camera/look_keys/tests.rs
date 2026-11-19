@@ -1,4 +1,5 @@
 use super::*;
+use crate::camera::attached::View;
 use crate::camera::orbit_transform;
 
 const FRAME: f32 = 1.0 / 60.0;
@@ -30,7 +31,7 @@ fn a_fresh_press_takes_the_view_and_restarts_the_ramp() {
     assert!((units(hold.tilt(1.0).unwrap()) - 240.0).abs() < 1e-3);
 }
 
-fn app(view: View) -> App {
+fn app(view: View, look: f32) -> App {
     let mut app = App::new();
     crate::keys::testing::install(&mut app);
     let mut time = Time::<()>::default();
@@ -57,6 +58,7 @@ fn app(view: View) -> App {
         pitch: -0.6,
         pulled: None,
         view,
+        look,
     };
     app.world_mut().spawn((orbit_transform(&orbit), orbit));
     app
@@ -83,7 +85,7 @@ fn hold(app: &mut App, key: Option<KeyCode>, frames: usize) {
 
 #[test]
 fn the_look_keys_tilt_the_first_person_view_within_straight_up_and_down() {
-    let mut app = app(View::FirstPerson { pitch: 0.0 });
+    let mut app = app(View::FirstPerson, 0.0);
     hold(&mut app, Some(KeyCode::PageUp), 1);
     assert!((units(camera(&mut app).view_pitch()) - 20.0 * FRAME).abs() < 1e-3);
     hold(&mut app, Some(KeyCode::PageUp), 120);
@@ -106,21 +108,53 @@ fn the_look_keys_tilt_the_first_person_view_within_straight_up_and_down() {
 }
 
 #[test]
-fn the_chase_view_ignores_the_tilt_and_center_view_brings_it_back_behind() {
-    let mut app = app(View::Chase);
+fn in_the_chase_view_the_keys_tilt_the_character_not_the_camera() {
+    let mut app = app(View::Chase, 0.0);
     hold(&mut app, Some(KeyCode::PageUp), 30);
-    assert!((camera(&mut app).pitch + 0.6).abs() < 1e-6);
+    let orbit = camera(&mut app);
+    // The camera keeps its pitch; the character looks up (read R13 d).
+    assert!((orbit.pitch + 0.6).abs() < 1e-6);
+    assert!((orbit.view_pitch() + 0.6).abs() < 1e-6);
+    let up = orbit.look_pitch();
+    assert!(up > 0.1, "{up}");
+    // Center View brings the camera back behind and leaves the character's
+    // pitch, as the program levels it only in first person.
     hold(&mut app, None, 1);
     hold(&mut app, Some(KeyCode::Numpad5), 1);
     let orbit = camera(&mut app);
     assert!((orbit.pitch - CHASE_PITCH).abs() < 1e-6);
     assert!((orbit.yaw - super::super::behind(0.5)).abs() < 1e-5);
     assert!(matches!(orbit.view, View::Chase));
+    assert!((orbit.look_pitch() - up).abs() < 1e-6);
+    // Look Spring levels only the first-person view.
+    app.world_mut()
+        .resource_mut::<options::OptionsState>()
+        .options
+        .look_spring = true;
+    hold(&mut app, None, 30);
+    assert!((camera(&mut app).look_pitch() - up).abs() < 1e-6);
+    // Looking down passes level and keeps going.
+    hold(&mut app, Some(KeyCode::PageDown), 240);
+    assert!((camera(&mut app).look_pitch() + FRAC_PI_2).abs() < 1e-5);
+}
+
+#[test]
+fn a_view_reset_keeps_the_characters_pitch_and_a_zone_entry_levels_it() {
+    let mut app = app(View::FirstPerson, 0.0);
+    hold(&mut app, Some(KeyCode::PageUp), 30);
+    let up = camera(&mut app).look_pitch();
+    assert!(up > 0.1, "{up}");
+    // A script camera step or the top-down view resets the view only.
+    camera(&mut app).reset_view();
+    assert!((camera(&mut app).look_pitch() - up).abs() < 1e-6);
+    // The zone entry also levels it.
+    camera(&mut app).level_look();
+    assert!(camera(&mut app).look_pitch().abs() < 1e-6);
 }
 
 #[test]
 fn look_spring_levels_the_first_person_view_unless_a_look_holds_it() {
-    let mut app = app(View::FirstPerson { pitch: 0.5 });
+    let mut app = app(View::FirstPerson, 0.5);
     app.world_mut()
         .resource_mut::<options::OptionsState>()
         .options

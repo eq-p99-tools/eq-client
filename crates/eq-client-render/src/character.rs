@@ -41,9 +41,10 @@ pub(super) struct AnimatedCharacter {
     elapsed: f32,
     since_pose: f32,
     moving_for: f32,
-    /// Where it stood when last posed; none before its first pose, so a
-    /// character newly drawn at its place is not taken for moving there.
-    previous_position: Option<Vec3>,
+    /// Where it stood when last posed, and the boat it stood on then; none
+    /// before its first pose, so a character newly drawn at its place is not
+    /// taken for moving there.
+    previous_position: Option<Footing>,
     clip: (&'static str, bool),
     /// While it stands up from sitting: the time in the sitting clip it is
     /// drawn at, running back towards the clip's start. See [`rising`].
@@ -517,10 +518,20 @@ pub(super) fn animate(
                 .flatten()
         });
         let posture = id.and_then(|id| world.posture(id));
+        let footing = Footing {
+            at: transform.translation,
+            carrier: own
+                .then(|| {
+                    controls
+                        .as_deref()
+                        .and_then(super::motion::Controls::drawn_carrier)
+                })
+                .flatten(),
+        };
         let moving = character
             .previous_position
-            .is_some_and(|previous| transform.translation.distance_squared(previous) > 0.0001);
-        character.previous_position = Some(transform.translation);
+            .is_some_and(|previous| moved(previous, footing) > 0.0001);
+        character.previous_position = Some(footing);
         let dt = time.delta_secs().min(0.1);
         // The latest of the spawn's swing and its completed cast, which
         // plays its spell's casting gesture.
@@ -1035,6 +1046,41 @@ fn played_clip(action: u16, has: impl Fn(&str) -> bool) -> Option<&'static str> 
         _ => return None,
     };
     kin.filter_map(action_clip).find(|clip| has(clip))
+}
+
+/// Where a drawn character stands: its root, and for the player the boat
+/// it is drawn on with that boat's drawn pose.
+#[derive(Clone, Copy, Debug)]
+struct Footing {
+    at: Vec3,
+    carrier: Option<(
+        eq_client_core::movement::CarrierSample,
+        eq_client_core::WorldPosition,
+    )>,
+}
+
+/// How far, squared, a character moved itself between two footings: across
+/// the boat it stood on both times (the same spawn incarnation, whichever
+/// report drew it), so a boat carrying a still rider is not
+/// the rider walking; else across the world. A still rider stands while the
+/// boat moves: the program picks moving or idle from the spawn's own
+/// velocity, which for a rider leaves out the boat's (0x44fa8f, 0x4bf9b2,
+/// read R38).
+fn moved(previous: Footing, now: Footing) -> f32 {
+    let local = |at: Vec3, pose| {
+        let world = eq_client_core::world_position(at.to_array(), 0.0);
+        Vec3::from_array(eq_client_core::render_position(
+            eq_client_core::movement::carrier_local(pose, world),
+        ))
+    };
+    match (previous.carrier, now.carrier) {
+        (Some((was, then)), Some((is, pose)))
+            if was.spawn_id == is.spawn_id && was.incarnation == is.incarnation =>
+        {
+            local(previous.at, then).distance_squared(local(now.at, pose))
+        }
+        _ => previous.at.distance_squared(now.at),
+    }
 }
 
 /// The clip a character plays at its pace ([`paced_clip`]); a change into
@@ -1617,6 +1663,105 @@ mod tests {
         // Standing and the other clips are left as they are.
         assert_eq!(paced_clip(("P01", false), true, neither), ("P01", false));
         assert_eq!(paced_clip(("C05", true), true, full), ("C05", true));
+    }
+
+    /// Two reports of boat `id` from the network's carrier tracker, the
+    /// second a later position report of the same spawn.
+    fn boat_reports(
+        id: u16,
+    ) -> (
+        eq_client_core::movement::CarrierSample,
+        eq_client_core::movement::CarrierSample,
+    ) {
+        use eq_client_core::{SpawnKind, SpawnState, WorldEvent};
+        let mut carriers = eq_client_core::movement::Carriers::default();
+        let start = std::time::Instant::now();
+        carriers.observe(
+            &WorldEvent::Spawns(vec![SpawnState {
+                spawn_id: id,
+                race: 72,
+                kind: SpawnKind::Npc,
+                position: eq_client_core::WorldPosition::default(),
+                class: None,
+                name: String::new(),
+                gender: 2,
+                velocity: [0.0; 3],
+                forward: 0.0,
+                walk_speed: 0.0,
+                run_speed: 0.0,
+                size: 1.0,
+                invisible: false,
+                appearance: eq_client_core::outfit::Appearance::default(),
+                level: 1,
+                listing: eq_client_core::listing::Listing::default(),
+                pet_owner: None,
+                hp_percent: None,
+                posture: None,
+                name_parts: eq_client_core::names::NameParts::default(),
+            }]),
+            eq_client_core::GameDialect::Titanium,
+            start,
+        );
+        let first = carriers.latest(id).unwrap().sample();
+        carriers.observe(
+            &WorldEvent::Position {
+                spawn_id: id,
+                position: eq_client_core::WorldPosition {
+                    x: 5.0,
+                    ..eq_client_core::WorldPosition::default()
+                },
+                velocity: [0.0; 3],
+                forward: 0.0,
+            },
+            eq_client_core::GameDialect::Titanium,
+            start + std::time::Duration::from_millis(250),
+        );
+        (first, carriers.latest(id).unwrap().sample())
+    }
+
+    #[test]
+    fn a_rider_the_boat_carries_is_not_moving_but_one_walking_its_deck_is() {
+        let pose = |x: f32, heading: f32| eq_client_core::WorldPosition {
+            x,
+            y: 0.0,
+            z: 0.0,
+            heading,
+        };
+        let on = |boat, pose, local: [f32; 3]| {
+            let world = eq_client_core::movement::carrier_world(
+                pose,
+                eq_client_core::WorldPosition {
+                    x: local[0],
+                    y: local[1],
+                    z: local[2],
+                    heading: 0.0,
+                },
+            );
+            Footing {
+                at: Vec3::from_array(eq_client_core::render_position(world)),
+                carrier: Some((boat, pose)),
+            }
+        };
+        let (first, later) = boat_reports(50);
+        // Each boat report is a new sample of the same boat.
+        assert_ne!(first, later);
+        // The boat moves 5 and turns while the rider stands on its deck.
+        let before = on(first, pose(0.0, 0.0), [3.0, 4.0, 2.0]);
+        let still = on(later, pose(5.0, 20.0), [3.0, 4.0, 2.0]);
+        assert!(before.at.distance_squared(still.at) > 1.0);
+        assert!(moved(before, still) < 0.0001);
+        // The rider walks one across the deck.
+        let walked = on(later, pose(5.0, 20.0), [4.0, 4.0, 2.0]);
+        assert!((moved(before, walked) - 1.0).abs() < 0.001);
+        // Onto another boat, or off it, the world decides.
+        let (other, _) = boat_reports(51);
+        let across = on(other, pose(5.0, 20.0), [3.0, 4.0, 2.0]);
+        assert!(moved(before, across) > 1.0);
+        let off = Footing {
+            carrier: None,
+            ..still
+        };
+        assert!(moved(before, off) > 1.0);
     }
 
     #[test]

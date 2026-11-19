@@ -154,6 +154,8 @@ pub(super) struct Controls {
     stunned: bool,
     /// The actual stun also blocks jump and flight's voluntary height changes.
     stun_active: bool,
+    /// When the last jump in water began its up stroke (read R39 B).
+    water_jump: Option<Instant>,
     /// Explicit departures; the session checks the same choices independently.
     movement_options: eq_client_core::movement::MovementOptions,
     /// The group member the player follows on foot (`/follow`).
@@ -271,6 +273,7 @@ impl Default for Controls {
             stun_revision: None,
             stunned: false,
             stun_active: false,
+            water_jump: None,
             movement_options: eq_client_core::movement::MovementOptions::default(),
             following: None,
         }
@@ -1004,6 +1007,35 @@ impl Controls {
         }
     }
 
+    /// The boat the drawn player stands on and the pose it was last drawn
+    /// at, which the player's drawn root moved with.
+    pub(crate) fn drawn_carrier(
+        &self,
+    ) -> Option<(
+        eq_client_core::movement::CarrierSample,
+        eq_client_core::WorldPosition,
+    )> {
+        self.visual_boat.map(|frame| (frame.sample, frame.pose))
+    }
+
+    /// Whether a jump in water strokes up this frame, given whether the jump
+    /// key is `held` now. The program strokes up for 500 ms from a jump
+    /// request in water (0x4ac9f3-0x4acbac, read R39 B); a key still held
+    /// when that runs out starts another. The rate is this client's: the
+    /// program adds 0.5 to vz each frame under the water's damping, here the
+    /// stroke takes a unit up within the swim budget (both inferred,
+    /// recording checklist 6.480).
+    fn water_jump(&mut self, held: bool, now: Instant) -> bool {
+        if self
+            .water_jump
+            .is_some_and(|since| now.saturating_duration_since(since) < WATER_JUMP)
+        {
+            return true;
+        }
+        self.water_jump = held.then_some(now);
+        held
+    }
+
     /// Accepted local carrier basis, for explicit script diagnostics.
     pub(crate) fn carrier_support(
         &self,
@@ -1221,6 +1253,15 @@ fn sample_keys(keys: &ButtonInput<KeyCode>, map: &KeyMap) -> ButtonInput<KeyCode
     sampled
 }
 
+/// How long a jump in water strokes up (0x4acbac, read R39 B).
+const WATER_JUMP: Duration = Duration::from_millis(500);
+
+/// A swim stroke along `direction`, pitched by the character's look pitch,
+/// and whether it is a forward stroke looking up (the shoreline boost's
+/// cue). The program keeps the full horizontal input and adds sin(pitch) x
+/// speed upward (0x4bfe0f, read R39 C); here the stroke is one unit long
+/// so the session's three-axis swim budget holds it, never faster than the
+/// program on any axis (inferred, recording checklist 6.390).
 fn swim_stroke(
     direction: Vec3,
     mode: MovementMode,
@@ -1232,23 +1273,20 @@ fn swim_stroke(
     let held = map.holding(&keys, scripted);
     let camera_forward = held.held(Act::CameraForward);
     let camera_back = held.held(Act::CameraBack);
-    let pitched = camera.is_first_person()
-        || look.is_some_and(|look| look.held)
-        || camera_forward != camera_back;
     let longitudinal = mode == MovementMode::Backward
         || held.held(Act::Forward) != held.held(Act::Back)
         || autorun
         || camera_forward != camera_back
         || look.is_some_and(|look| look.held && look.left);
-    if !pitched || !longitudinal || mode == MovementMode::Strafe || direction == Vec3::ZERO {
+    // The character's look pitch, which the look keys move in every view
+    // and the mouse only in first person; a chase view's mouse look and
+    // camera keys move only the camera (reads R13 d, R33, R39 A).
+    let pitch = camera.look_pitch();
+    if pitch == 0.0 || !longitudinal || mode == MovementMode::Strafe || direction == Vec3::ZERO {
         return (direction, false);
     }
     let backing = mode == MovementMode::Backward || camera_back && !camera_forward;
-    let pitch = if backing {
-        -camera.view_pitch()
-    } else {
-        camera.view_pitch()
-    };
+    let pitch = if backing { -pitch } else { pitch };
     (
         (direction * pitch.cos() + Vec3::Y * pitch.sin()).normalize_or_zero(),
         !backing && pitch > 0.0,
@@ -1931,7 +1969,15 @@ pub(super) fn input(
                 controls.autorun,
             )
             .0;
+            // A jump in water is an up stroke (read R39 B), held within the
+            // same three-axis budget as every stroke.
+            let jumping = map.holding(&sampled, scripted).held(Act::Jump);
+            if controls.water_jump(jumping, now) {
+                direction = (direction + Vec3::Y).normalize_or_zero();
+            }
         }
+    } else {
+        controls.water_jump = None;
     }
     if let Some(step) = follow_step {
         // Stop within one frame of reach at the selected movement rate.
@@ -5128,6 +5174,7 @@ pub(super) mod tests {
             pitch: 1.0,
             pulled: None,
             view: default(),
+            look: 0.0,
         });
         app.world_mut().spawn((
             Window {
@@ -5137,6 +5184,17 @@ pub(super) mod tests {
             bevy::window::PrimaryWindow,
         ));
         (app, receiver)
+    }
+
+    /// Tilts the character's look by `pitch` radians, upward positive, as
+    /// the look keys do.
+    fn look_up(app: &mut App, pitch: f32) {
+        let world = app.world_mut();
+        world
+            .query::<&mut OrbitCamera>()
+            .single_mut(world)
+            .unwrap()
+            .look = pitch;
     }
 
     fn stationary_airborne_app() -> (App, mpsc::Receiver<ClientCommand>) {
@@ -6000,6 +6058,7 @@ pub(super) mod tests {
     fn a_water_correction_uses_the_swim_grant_and_a_dry_correction_leaves_it() {
         let (mut app, receiver) = app();
         app.insert_resource(Collision(Some(liquid_pool(Liquid::Water))));
+        look_up(&mut app, 1.0);
         let placed = world_position([0.0, -4.0, 0.0], 0.0);
         online::testing::place(
             &mut app.world_mut().resource_mut::<online::OnlineState>(),
@@ -6012,7 +6071,7 @@ pub(super) mod tests {
         assert_eq!(swim.mode, MovementMode::Swim);
         assert!(
             swim.position.z > placed.z,
-            "camera pitch should raise a forward stroke"
+            "the look pitch should raise a forward stroke"
         );
         assert!(swim.position.z - placed.z < 0.1);
         assert!(receiver.try_recv().is_err());
@@ -6035,6 +6094,85 @@ pub(super) mod tests {
             panic!("expected ordinary motion after the new placement");
         };
         assert_eq!(ordinary.mode, MovementMode::Forward);
+    }
+
+    /// One stroke from deep water in the default chase view: the distance
+    /// moved, how much of it rose, and the span it covered.
+    fn one_stroke(app: &mut App, receiver: &mpsc::Receiver<ClientCommand>) -> (f32, f32, f32) {
+        app.insert_resource(Collision(Some(liquid_pool(Liquid::Water))));
+        let placed = world_position([0.0, -4.0, 0.0], 0.0);
+        online::testing::place(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            placed,
+        );
+        app.update();
+        let ClientCommand::Move(swim) = receiver.try_recv().unwrap() else {
+            panic!("expected a swim proposal");
+        };
+        assert_eq!(swim.mode, MovementMode::Swim);
+        let moved = Vec3::from_array(eq_client_core::render_position(swim.position))
+            - Vec3::from_array(eq_client_core::render_position(placed));
+        let span = app.world().resource::<Controls>().sent_span;
+        (moved.length(), moved.y, span)
+    }
+
+    #[test]
+    fn the_look_keys_steer_a_swimmer_in_the_chase_view_within_the_level_speed() {
+        for (pitch, rises) in [
+            (0.0_f32, false),
+            (std::f32::consts::FRAC_PI_4, true),
+            (std::f32::consts::FRAC_PI_2, true),
+            (-std::f32::consts::FRAC_PI_4, false),
+        ] {
+            let (mut app, receiver) = app();
+            look_up(&mut app, pitch);
+            let (moved, up, span) = one_stroke(&mut app, &receiver);
+            let level = swim_speed(6.0) * span;
+            // Never past the level stroke's reach on any pitch (6.390).
+            assert!(moved <= level + 0.001, "{pitch}: {moved} > {level}");
+            assert!((up - level * pitch.sin()).abs() < 0.001, "{pitch}: {up}");
+            assert_eq!(up > 0.001, rises, "{pitch}");
+        }
+    }
+
+    #[test]
+    fn a_chase_views_camera_pitch_and_mouse_look_leave_a_stroke_level() {
+        // The chase camera looks down on the player and the mouse look is
+        // held, but only the character's pitch steers (read R39 A).
+        let (mut app, receiver) = app();
+        app.insert_resource(crate::camera::MouseLook {
+            held: true,
+            ..default()
+        });
+        let (_, up, _) = one_stroke(&mut app, &receiver);
+        assert!(up.abs() < 0.001, "{up}");
+    }
+
+    #[test]
+    fn a_jump_in_water_strokes_up_for_half_a_second() {
+        let (mut app, receiver) = app();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::Space);
+        let (moved, up, span) = one_stroke(&mut app, &receiver);
+        let level = swim_speed(6.0) * span;
+        assert!(moved <= level + 0.001, "{moved} > {level}");
+        // Forward and up together, half and half.
+        assert!(
+            (up - level * std::f32::consts::FRAC_1_SQRT_2).abs() < 0.001,
+            "{up}"
+        );
+
+        let mut controls = Controls::default();
+        let start = Instant::now();
+        assert!(!controls.water_jump(false, start));
+        assert!(controls.water_jump(true, start));
+        // A tap strokes for 500 ms after the press.
+        assert!(controls.water_jump(false, start + Duration::from_millis(499)));
+        assert!(!controls.water_jump(false, start + Duration::from_millis(500)));
+        // A held key starts the next.
+        assert!(controls.water_jump(true, start + Duration::from_millis(600)));
+        assert!(controls.water_jump(true, start + Duration::from_millis(1100)));
     }
 
     #[test]

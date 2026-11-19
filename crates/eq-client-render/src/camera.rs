@@ -22,6 +22,11 @@ pub(super) struct OrbitCamera {
     /// `radius`; None once it is back out at the chosen zoom.
     pub(super) pulled: Option<f32>,
     pub(super) view: attached::View,
+    /// The character's look pitch in radians, upward positive: the
+    /// program's spawn +0x5c (read R13 d), which Look Up and Look Down move
+    /// in every view, the first-person view shows, and a swim stroke
+    /// follows (R33, R37 d). The chase view does not show it (6.422).
+    pub(super) look: f32,
 }
 
 /// A detached view. Its transform is the camera's alone; the orbit keeps
@@ -338,6 +343,7 @@ pub(super) fn spawn_camera(
         pitch: CHASE_PITCH,
         pulled: None,
         view: default(),
+        look: 0.0,
     };
     // The first zone is entered before this camera exists, so it starts
     // behind the player here; later entries turn it in `Scene::enter`.
@@ -947,6 +953,7 @@ mod tests {
             pitch: -0.35,
             pulled: None,
             view: default(),
+            look: 0.0,
         };
         let camera = app.world_mut().spawn((orbit_transform(&orbit), orbit)).id();
         (app, camera, player)
@@ -1241,6 +1248,7 @@ mod tests {
             pitch: -0.2,
             pulled: None,
             view: default(),
+            look: 0.0,
         };
         // Within the limits, nothing moves.
         let (height, distance) = height_and_distance(&camera);
@@ -1288,6 +1296,7 @@ mod tests {
             pitch: -0.2,
             pulled: None,
             view: default(),
+            look: 0.0,
         };
         chase(&mut camera, limits, 0.0, 1_000.0);
         for (tilt, height) in [(-1000.0, 0.0), (1000.0, 3_000.0)] {

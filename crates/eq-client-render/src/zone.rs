@@ -229,6 +229,7 @@ impl Scene<'_, '_> {
     pub(super) fn forget(&mut self, reason: Reset, commands: &mut Commands) {
         for (_, mut camera) in &mut self.cameras {
             camera.reset_view();
+            camera.level_look();
         }
         let gone = matches!(
             reason,
@@ -354,6 +355,7 @@ impl Scene<'_, '_> {
         // its pitch and zoom stay as chosen. Inferred, item 6.240.
         for (_, mut camera) in &mut self.cameras {
             camera.reset_view();
+            camera.level_look();
             super::start_behind(&mut camera, &placed);
         }
         player
