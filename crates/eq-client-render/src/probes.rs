@@ -3043,7 +3043,7 @@ fn the_erud_crossing_ship_at_its_dock_stop() {
     println!("hull_band triangles={band} low={band_low:?} high={band_high:?}");
     for (name, world) in [("dock", &dock), ("boarded", &boarded)] {
         for y in [-1781.0_f32, -1771.8] {
-            for takeoff in [600.0_f32, 656.0, 660.0] {
+            for takeoff in [600.0_f32, 652.0, 654.0, 656.0, 658.0, 660.0] {
                 let mut feet = Vec3::from_array(eq_client_core::render_position(
                     eq_client_core::WorldPosition {
                         x: 700.0,
@@ -3060,7 +3060,9 @@ fn the_erud_crossing_ship_at_its_dock_stop() {
                     if jump {
                         jumped = Some(at);
                     }
-                    feet = motion::fall_step(
+                    // With water on, as the online walk steps (a step
+                    // into liquid isn't refused).
+                    feet = motion::fall_step_with_water(
                         &mut airborne,
                         world,
                         physics,
@@ -3070,6 +3072,7 @@ fn the_erud_crossing_ship_at_its_dock_stop() {
                         0.05,
                         human.height,
                         jump,
+                        true,
                     );
                 }
                 let end = eq_client_core::axes::to_world(feet);

@@ -2615,7 +2615,7 @@ pub(super) fn fall_step(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn fall_step_with_water(
+pub(super) fn fall_step_with_water(
     airborne: &mut AirborneController,
     world: &CollisionWorld,
     physics: VerticalPhysics,
