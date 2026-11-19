@@ -287,7 +287,7 @@ fn lootnodrop_sets_the_choice_its_word_names_and_lists_them_otherwise() {
         assert_eq!(crate::chat::client_request(typed, &mut chat), Some(Ok(())));
         app.update();
     };
-    ask(&mut app, "/lootnodrop always");
+    ask(&mut app, "/lootnodrop never");
     assert_eq!(
         app.world().resource::<OptionsState>().options.loot_no_drop,
         LootNoDrop::Take

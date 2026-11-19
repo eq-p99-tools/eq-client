@@ -482,10 +482,10 @@ character settings when available. Note import reads profiles up to 256 KiB.
 Considering, hailing, auto-attack and class abilities use the target and session
 rules. Loot lists received corpse contents; Loot all takes items sequentially.
 On Titanium servers a click on a NO DROP item asks before looting it, as the
-original does, unless the corpse is your own. `/lootnodrop never` always asks
+original does, unless the corpse is your own. `/lootnodrop always` always asks
 (the default when the installed `eqclient.ini` keeps no `LootNoDrop`),
 `/lootnodrop sometimes` asks only about items your class or race can't use,
-and `/lootnodrop always` never asks. The installed client's own words for
+and `/lootnodrop never` never asks. The installed client's own words for
 these choices work too. A question left unanswered for 20 seconds loots
 nothing. Loot all leaves an item that would ask for its own click.
 Merchants support selection and buy/sell requests. Giving to NPCs and trading

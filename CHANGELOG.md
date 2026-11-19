@@ -25,11 +25,11 @@
   item from a corpse that isn't yours now opens the confirmation dialog, and
   only Yes loots it. A question left 20 seconds loots nothing. `/lootnodrop`
   picks when it asks, by the words of the installed client's three lines or
-  this client's `never` (always asks), `sometimes` (asks only about an item
-  your class or race can't use) and `always` (never asks); with no word, or
+  this client's `always` (always asks), `sometimes` (asks only about an item
+  your class or race can't use) and `never` (never asks); with no word, or
   a word that names none, it lists the three. The choice is saved with this
   client's options for the character. It starts from the installed
-  `eqclient.ini`'s `LootNoDrop`, and where there is none from `never`, which
+  `eqclient.ini`'s `LootNoDrop`, and where there is none from `always`, which
   the program read doesn't give (inferred, checklist 6.487). Loot all takes
   what doesn't ask and leaves the rest for their own clicks. Whether the
   item is NO DROP is read from its flag, and whether the corpse is yours

@@ -54,17 +54,18 @@ impl LootNoDrop {
 
     /// The line `/lootnodrop` prints for it, which also names the word that
     /// picks it (0x32bb to 0x32bd, in that order as far as is known, checklist
-    /// 6.487). The words are this client's where the installation lacks the
-    /// string.
+    /// 6.487; an installation's lines were seen to name how often it asks,
+    /// in this order). The words are this client's where the installation
+    /// lacks the string.
     #[must_use]
     pub const fn line(self) -> (u32, &'static str) {
         match self {
-            Self::Ask => (0x32bb, "never: ask before looting any NO DROP item."),
+            Self::Ask => (0x32bb, "always: ask before looting any NO DROP item."),
             Self::AskUnusable => (
                 0x32bc,
                 "sometimes: ask before looting a NO DROP item you can't use.",
             ),
-            Self::Take => (0x32bd, "always: loot NO DROP items without asking."),
+            Self::Take => (0x32bd, "never: loot NO DROP items without asking."),
         }
     }
 
@@ -109,12 +110,12 @@ mod tests {
     #[test]
     fn a_word_picks_the_line_it_starts_or_is() {
         let ours = |choice: LootNoDrop| choice.line().1.to_owned();
-        assert_eq!(LootNoDrop::typed("NEVER", ours), Some(LootNoDrop::Ask));
+        assert_eq!(LootNoDrop::typed("ALWAYS", ours), Some(LootNoDrop::Ask));
         assert_eq!(
             LootNoDrop::typed(" sometimes ", ours),
             Some(LootNoDrop::AskUnusable)
         );
-        assert_eq!(LootNoDrop::typed("always", ours), Some(LootNoDrop::Take));
+        assert_eq!(LootNoDrop::typed("never", ours), Some(LootNoDrop::Take));
         assert_eq!(LootNoDrop::typed("", ours), None);
         assert_eq!(LootNoDrop::typed("2", ours), None);
         let installed =
