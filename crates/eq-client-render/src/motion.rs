@@ -6011,7 +6011,7 @@ pub(super) mod tests {
         }
     }
 
-    fn liquid_pool(liquid: Liquid) -> CollisionWorld {
+    pub(crate) fn liquid_pool(liquid: Liquid) -> CollisionWorld {
         CollisionWorld::new(flat_surface(-12.0))
             .unwrap()
             .with_liquids(Pool { top: 0.0, liquid })

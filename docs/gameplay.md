@@ -87,7 +87,10 @@ does: velocity carries from frame to frame, the water damps it, and gravity
 still pulls, so **an idle swimmer slowly sinks**, about two thirds of a unit
 a second, until they rest on the bottom. Once the head goes under, Air
 Remaining counts down and a character who can't breathe water drowns;
-**Gills for Days** is the switch for those who don't want to. Wade or fall
+**Gills for Days** is the switch for those who don't want to. Characters
+in water swim when they move across it and tread water otherwise, sinking,
+still or resting on the bottom, as the original does; a swim or tread
+carries on while wading out with the body above the water. Wade or fall
 into water, move in any horizontal direction, and swim up or down by your
 character's look pitch with forward or backward input: the pitch adds a
 climb or a dive without taking anything from forward speed. Look Up and
