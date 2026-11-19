@@ -362,15 +362,21 @@ mod tests {
             repeat: false,
             modifiers: egui::Modifiers::NONE,
         };
-        frame(
-            &mut app,
-            &ctx,
-            vec![
-                egui::Event::Text("x".into()),
-                key(egui::Key::Backspace),
-                key(egui::Key::F9),
-            ],
-        );
+        // Each edit in a frame of its own, so a later one can't undo an
+        // earlier one and hide it.
+        for event in [
+            egui::Event::Text("x".into()),
+            key(egui::Key::Backspace),
+            key(egui::Key::Delete),
+            egui::Event::Paste("y".into()),
+        ] {
+            frame(&mut app, &ctx, vec![event]);
+            assert_eq!(app.world().resource::<Workbench>().document.text, source);
+        }
+        // A refused Backspace still moves egui's caret back a character.
+        app.world_mut().resource_mut::<State>().code.jump = Some(2);
+        frame(&mut app, &ctx, Vec::new());
+        frame(&mut app, &ctx, vec![key(egui::Key::F9)]);
         let workbench = app.world().resource::<Workbench>();
         assert_eq!(workbench.document.text, source);
         assert_eq!(workbench.caret_line, Some(2));
