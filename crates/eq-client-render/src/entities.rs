@@ -90,7 +90,7 @@ pub(super) struct RemoteEntity {
 impl RemoteEntity {
     /// A spawn not yet placed, whose model's soles hang `feet` under its
     /// reported position (None for a marker), drawn by `size`.
-    const fn new(id: u16, feet: Option<f32>, size: f32) -> Self {
+    pub(crate) const fn new(id: u16, feet: Option<f32>, size: f32) -> Self {
         Self {
             id,
             seen: None,

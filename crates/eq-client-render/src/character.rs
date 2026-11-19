@@ -1096,14 +1096,15 @@ fn moved(previous: Footing, now: Footing) -> f32 {
 /// tick.
 const REPORTED_MOVING: f32 = 0.1 * 20.0;
 
-/// Whether another spawn's latest report says it moves itself: forward
-/// input, or a horizontal velocity of at least [`REPORTED_MOVING`]. The
-/// program turns the input into the velocity it tests, so either one moves
-/// it (read R38; servers that send no deltas move their spawns on the input
-/// alone). A rider's report leaves out the boat it stands on, so one
-/// standing on a moving ferry stands. Velocity straight up or down alone is
-/// the program's fall pose, not drawn here, so it stands (inferred,
-/// recording checklist 6.481).
+/// Whether another spawn's latest report says it moves itself: a
+/// horizontal velocity of at least [`REPORTED_MOVING`] (read R38), or
+/// forward input. The picker reads only the velocity (R38); the movement
+/// step turns a spawn's input speed into that velocity (0x4bfe0f, read R39
+/// C), and servers that send no deltas move their spawns on the input alone,
+/// so the input counts too (inferred, recording checklist 6.481). A rider's
+/// report leaves out the boat it stands on, so one standing on a moving
+/// ferry stands. Velocity straight up or down alone is the program's fall
+/// pose, not drawn here, so it stands (inferred, 6.481).
 fn reports_moving(state: &eq_client_core::SpawnState) -> bool {
     let [x, y, _] = state.velocity;
     state.forward != 0.0 || x.hypot(y) >= REPORTED_MOVING
@@ -1367,6 +1368,70 @@ mod tests {
         assert!(turned.rotation.angle_between(rest.rotation) > 0.1);
         assert_eq!(turned.translation, rest.translation);
         assert_eq!(positions(&app), before);
+    }
+
+    #[test]
+    fn another_spawn_walks_by_its_report_and_the_player_by_its_drawn_motion() {
+        use crate::online::{OnlineState, testing as session};
+        use eq_client_core::WorldEvent;
+        use std::time::Duration;
+
+        let mut app = crate::testing::app();
+        testing::stores(app.world_mut());
+        app.add_systems(Update, animate);
+        {
+            let mut online = app.world_mut().resource_mut::<OnlineState>();
+            session::admit(&mut online, 1, session::player(7));
+            session::spawns(&mut online, vec![session::pet(5, 7)]);
+        }
+        let prepared = testing::prepared(app.world_mut());
+        let other = testing::drawn(app.world_mut(), &prepared);
+        app.world_mut()
+            .entity_mut(other)
+            .insert(crate::entities::RemoteEntity::new(5, None, 6.0));
+        let own = testing::drawn(app.world_mut(), &prepared);
+        app.world_mut().entity_mut(own).insert(crate::Player);
+        // Each frame carries both roots 5 units, as a boat or a lift would.
+        let frame = |app: &mut App, carry: bool| {
+            if carry {
+                for root in [other, own] {
+                    app.world_mut()
+                        .get_mut::<Transform>(root)
+                        .unwrap()
+                        .translation
+                        .x += 5.0;
+                }
+            }
+            app.world_mut()
+                .resource_mut::<Time>()
+                .advance_by(Duration::from_millis(100));
+            app.update();
+        };
+        let clip = |app: &App, root| app.world().get::<AnimatedCharacter>(root).unwrap().clip.0;
+        let walking = |clip: &str| matches!(clip, "L01" | "L02");
+        frame(&mut app, false);
+        for _ in 0..3 {
+            frame(&mut app, true);
+        }
+        // The other spawn reports no motion of its own, so it stands while
+        // carried; the player still goes by its drawn motion (#536).
+        assert_eq!(clip(&app, other), STANDING_CLIP);
+        assert!(walking(clip(&app, own)), "{}", clip(&app, own));
+        // Forward input in its report walks it, drawn still or not.
+        session::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [WorldEvent::Position {
+                spawn_id: 5,
+                position: eq_client_core::WorldPosition::default(),
+                velocity: [0.0; 3],
+                forward: 0.7,
+            }],
+        );
+        for _ in 0..3 {
+            frame(&mut app, false);
+        }
+        assert!(walking(clip(&app, other)), "{}", clip(&app, other));
+        assert_eq!(clip(&app, own), STANDING_CLIP);
     }
 
     #[test]
