@@ -1062,7 +1062,7 @@ mod tests {
             .resource_mut::<ButtonInput<MouseButton>>()
             .reset_all();
         assert!(commands.try_recv().is_err());
-        assert!(app.world().resource::<Outbox>().take_refused().is_empty());
+        assert_eq!(app.world().resource::<Outbox>().take_refused(), []);
         assert_eq!(said(&app), lines);
 
         // Target Next passes over it: from the guard it stays on the guard,
