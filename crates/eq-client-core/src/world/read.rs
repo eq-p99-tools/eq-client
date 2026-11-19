@@ -567,6 +567,17 @@ impl ClientWorld {
             .is_none_or(|rules| rules.interacts(spawn.body_type))
     }
 
+    /// Whether this generation's program hides a spawn by its body type, so
+    /// it is neither drawn nor named (program read R44, 0x480409; whether
+    /// the model is drawn is inferred, recording checklist 6.486). Apart
+    /// from invisibility: no See Invisible reveals it.
+    #[must_use]
+    pub fn hides_by_body(&self, spawn: &crate::SpawnState) -> bool {
+        self.generation()
+            .targeting()
+            .is_some_and(|rules| rules.hides(spawn.body_type))
+    }
+
     /// The player's target.
     #[must_use]
     pub const fn target(&self) -> &Target {

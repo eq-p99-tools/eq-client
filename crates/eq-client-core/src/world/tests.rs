@@ -2115,6 +2115,34 @@ fn target_changed(
 }
 
 #[test]
+fn a_server_target_of_a_refused_or_hidden_body_type_is_kept() {
+    let mut world = admitted();
+    let mut controller = spawn(6);
+    controller.body_type = Some(65);
+    game(&mut world, WorldEvent::Spawns(vec![controller]));
+    let state = world.spawn(6).unwrap().state.clone();
+    assert!(world.refuses_target(&state) && world.hides_by_body(&state));
+    // Hidden by its body type apart from invisibility (R44, 0x480409), so
+    // See Invisible does not reveal it and can_see keeps it.
+    game(
+        &mut world,
+        WorldEvent::ObserverSight {
+            session_id: 1,
+            sees_invisible: true,
+        },
+    );
+    assert!(world.can_see(&state) && world.hides_by_body(&state));
+    // R44 (e): nothing drops a target the program holds by its body type.
+    game(&mut world, target_changed(1, 0, 1, Some(6), true));
+    assert_eq!(world.target().selected, Some(6));
+    assert!(!world.target_stale());
+    // The Mac-era generation hides and refuses nothing by body type.
+    world.carry_as(crate::GameDialect::EqMac);
+    assert!(!world.refuses_target(&state) && !world.hides_by_body(&state));
+    assert!(world.interacts_with(&state));
+}
+
+#[test]
 fn server_targets_and_clears_project_without_becoming_local_requests() {
     let mut world = admitted();
     game(&mut world, WorldEvent::Spawns(vec![spawn(6)]));

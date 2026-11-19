@@ -11,8 +11,11 @@
   for a spawn that isn't there (inferred for these paths until their
   handlers are read; checklist 6.486). There is no interaction with body
   types 11, 65 and 67. A target the server sets is kept whatever its body
-  type. The Mac-era servers target as before. Networking pinned to d0333db
-  (eq-network #317).
+  type. Body types above 64 are neither drawn nor named, as the original's
+  per-spawn update skips them; See Invisible doesn't reveal them, and only
+  the QoL Show Invisible Entities does (whether the original draws their
+  model is inferred, 6.486). The Mac-era servers target as before.
+  Networking pinned to d0333db (eq-network #317).
 
 - Swim as the Titanium client does (reads R33, R33b, R39, R41). Water now
   keeps the body's velocity from frame to frame and damps it, gravity still
