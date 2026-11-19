@@ -2896,7 +2896,7 @@ fn the_erudin_pier_rail_and_its_posts_are_climbed() {
                 &mut airborne,
                 &world,
                 physics,
-                Some(physics.climb),
+                Some(physics.reach()),
                 feet,
                 south * 12.8 * 0.1,
                 0.1,
@@ -2904,7 +2904,7 @@ fn the_erudin_pier_rail_and_its_posts_are_climbed() {
                 false,
             );
             assert!(
-                next.y - feet.y <= climb_reach(physics.climb, program_steps(0.1)) + 0.001,
+                next.y - feet.y <= climb_reach(physics.reach(), program_steps(0.1)) + 0.001,
                 "{name}: {feet} to {next}"
             );
             feet = next;

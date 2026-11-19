@@ -1985,9 +1985,9 @@ pub(super) fn input(
         // limit rather than replacing an already limited land speed.
         speed = speed.min((step.beyond + speed / 60.0) / span.max(f32::EPSILON));
     }
-    // A ducking body is swept at its origin (L = 0, 0x489a32), so only the
-    // floor sweep's climb holds; standing, the walk climbs edges (6.482).
-    let raised = posture != Some(eq_client_core::PostureState::Ducking);
+    // A ducking or wet body is swept at its origin (L = 0, 0x489a32), so
+    // only the floor sweep's climb holds; else the walk climbs edges (6.482).
+    let raised = raised_walk(world, feet, posture);
     let physics = walking(
         physics(client, online.world().zone_gravity()),
         client,
@@ -2007,9 +2007,9 @@ pub(super) fn input(
         && controls.airborne.is_some()
         && client.falls().is_some()
         && let Some(session) = online.world().session_id()
-        && controls.climb_sent != Some((session, physics.climb))
+        && controls.climb_sent != Some((session, physics.reach()))
     {
-        let per_step = physics.climb;
+        let per_step = physics.reach();
         if let Err(reason) = outbox.post(online.world(), |stamp| ClientCommand::ClimbReach {
             session_id: stamp.session_id,
             per_step,
@@ -2205,7 +2205,7 @@ pub(super) fn input(
                     controller,
                     world,
                     physics,
-                    client.falls().map(|_| physics.climb),
+                    client.falls().map(|_| physics.reach()),
                     feet,
                     displacement,
                     span,
@@ -2269,7 +2269,7 @@ pub(super) fn input(
                     airborne,
                     world,
                     physics,
-                    client.falls().map(|_| physics.climb),
+                    client.falls().map(|_| physics.reach()),
                     feet,
                     delta,
                     span,
@@ -2704,6 +2704,7 @@ pub(super) fn physics(client: InstalledClient, zone_gravity: Option<f32>) -> Ver
             air_factor: falls.air_factor,
             ground_tolerance: falls.ground_tolerance,
             climb: eq_client_core::movement::MAX_GROUNDED_STEP,
+            edge_climb: None,
             steers_in_air: false,
         }
     })
@@ -2725,10 +2726,12 @@ pub(super) fn climbing(
     })
 }
 
-/// `physics` for the player's own walking body: [`climbing`], raised to the
-/// climb the generation's horizontal move gives an edge it runs into
-/// (`ClientFalls::walk_climb`) unless `raised` is false (ducking). The
-/// session's guard hears the same value (`ClimbReach`), so the walk and the
+/// `physics` for the player's own walking body: [`climbing`] for the floor
+/// sweep, which a falling, alighting or placed body keeps, and for the walk
+/// on the ground the climb the generation's horizontal move gives an edge it
+/// runs into (`ClientFalls::walk_climb`) unless `raised` is false
+/// ([`raised_walk`]). The session's guard hears the higher of the two
+/// (`VerticalPhysics::reach`, sent as `ClimbReach`), so the walk and the
 /// guard read one climb.
 pub(super) fn walking(
     physics: VerticalPhysics,
@@ -2736,13 +2739,24 @@ pub(super) fn walking(
     body: &PlayerBody,
     raised: bool,
 ) -> VerticalPhysics {
-    if !raised {
-        return climbing(physics, client, body);
-    }
+    let physics = climbing(physics, client, body);
     client.falls().map_or(physics, |falls| VerticalPhysics {
-        climb: falls.walk_climb(body.feet_offset, body.size, true),
+        edge_climb: Some(falls.walk_climb(body.feet_offset, body.size, raised)),
         ..physics
     })
+}
+
+/// Whether the player's walk is swept raised over the origin, so it climbs
+/// edges ([`walking`]): not while ducking, nor with the feet in liquid, where
+/// the program sweeps at the origin itself (L = 0 in 0x489a32; its deep
+/// liquid threshold, +0xad of 5 or more, isn't mapped here, so any liquid
+/// at the feet counts).
+pub(super) fn raised_walk(
+    world: &eq_client_core::movement::CollisionWorld,
+    feet: Vec3,
+    posture: Option<eq_client_core::PostureState>,
+) -> bool {
+    posture != Some(eq_client_core::PostureState::Ducking) && !world.in_liquid(feet)
 }
 
 /// Asks the session to change the player's stance.
@@ -4442,7 +4456,7 @@ pub(super) mod tests {
                 &mut airborne,
                 &world,
                 physics,
-                Some(physics.climb),
+                Some(physics.reach()),
                 feet,
                 Vec3::Z * speed * 0.1,
                 0.1,
@@ -4450,7 +4464,7 @@ pub(super) mod tests {
                 false,
             );
             assert!(
-                next.y - feet.y <= climb_reach(physics.climb, program_steps(0.1)) + 0.001,
+                next.y - feet.y <= climb_reach(physics.reach(), program_steps(0.1)) + 0.001,
                 "{feet} to {next}"
             );
             feet = next;
@@ -4491,6 +4505,35 @@ pub(super) mod tests {
                 "{name}: {stopped}"
             );
         }
+    }
+
+    #[test]
+    fn a_wading_walk_keeps_the_floor_sweeps_climb_at_a_block_4_high() {
+        use eq_client_core::movement::CollisionWorld;
+        // With the feet in liquid the program sweeps the walk at the origin
+        // (L = 0 in 0x489a32), so wading keeps the floor sweep's 3.375 and
+        // a block 4 high stops it; on dry ground beside the pool it climbs.
+        let dry = CollisionWorld::new(flat_surface(0.0)).unwrap();
+        let wet = CollisionWorld::new(flat_surface(0.0))
+            .unwrap()
+            .with_liquids(Pool {
+                top: 1.5,
+                liquid: Liquid::Water,
+            });
+        let feet = Vec3::ZERO;
+        assert!(raised_walk(&dry, feet, None));
+        assert!(raised_walk(&wet, feet + Vec3::Y * 2.0, None));
+        assert!(!raised_walk(&wet, feet, None));
+        assert!(!raised_walk(
+            &dry,
+            feet,
+            Some(eq_client_core::PostureState::Ducking)
+        ));
+        let block = solid_box(Vec3::new(-20.0, 0.0, 4.0), Vec3::new(20.0, 4.0, 6.0));
+        let wading = run_into(block.clone(), &HUMAN, raised_walk(&wet, feet, None), 32.0);
+        assert!(wading.z < 4.0 && wading.y.abs() < 0.001, "{wading}");
+        let dry_run = run_into(block, &HUMAN, raised_walk(&dry, feet, None), 32.0);
+        assert!(dry_run.z > 4.5, "{dry_run}");
     }
 
     #[test]
@@ -5779,6 +5822,20 @@ pub(super) mod tests {
         assert_eq!(online.world().player().unwrap().position, placed);
     }
 
+    /// The next command after any climb the step told the session first: a
+    /// step whose feet enter or leave liquid changes the walk's reach
+    /// ([`raised_walk`]) and says so before its sample.
+    fn past_climb(
+        receiver: &std::sync::mpsc::Receiver<ClientCommand>,
+    ) -> Result<ClientCommand, std::sync::mpsc::TryRecvError> {
+        loop {
+            match receiver.try_recv()? {
+                ClientCommand::ClimbReach { .. } => {}
+                command => return Ok(command),
+            }
+        }
+    }
+
     struct Pool {
         top: f32,
         liquid: Liquid,
@@ -5898,7 +5955,7 @@ pub(super) mod tests {
                 .unwrap()
                 .position;
             app.update();
-            let ClientCommand::Move(request) = receiver.try_recv().expect("follow sample") else {
+            let ClientCommand::Move(request) = past_climb(&receiver).expect("follow sample") else {
                 panic!("follow must use ordinary movement proposals");
             };
             saw_land |= request.mode == MovementMode::Forward;
@@ -5973,7 +6030,7 @@ pub(super) mod tests {
             let mut previous = origin;
             for _ in 0..12 {
                 app.update();
-                let ClientCommand::Move(request) = receiver.try_recv().expect("surface sample")
+                let ClientCommand::Move(request) = past_climb(&receiver).expect("surface sample")
                 else {
                     panic!("surface traversal uses existing movement modes");
                 };
@@ -6238,7 +6295,7 @@ pub(super) mod tests {
         let mut previous = surface.z;
         for _ in 0..2 {
             app.update();
-            let ClientCommand::Move(up) = receiver.try_recv().expect("ascending flight sample")
+            let ClientCommand::Move(up) = past_climb(&receiver).expect("ascending flight sample")
             else {
                 panic!("expected flight without a jump command");
             };
@@ -6410,7 +6467,7 @@ pub(super) mod tests {
         };
         let next_move = |app: &mut App, session| {
             app.update();
-            let ClientCommand::Move(proposal) = receiver.try_recv().unwrap() else {
+            let ClientCommand::Move(proposal) = past_climb(&receiver).unwrap() else {
                 panic!("expected a movement proposal");
             };
             assert_eq!(proposal.session_id, session);

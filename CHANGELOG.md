@@ -8,8 +8,8 @@
   (5 high) like stairs instead of stopping dead, as the official client was
   seen to on 11-19. The horizontal move sweeps the body raised over its
   origin (read R40); the bound is the measured height, scaled to each
-  body's origin (inferred, checklist 6.482). A ducking walk keeps the floor
-  sweep's climb. The session's guard hears the same climb. The Mac-era
+  body's origin (inferred, checklist 6.482). A ducking or wading walk, and
+  feet that fall or are placed under a floor, keep the floor sweep's climb. The session's guard hears the same climb. The Mac-era
   generation is unchanged.
 - Swim up and down as the Titanium program does (reads R13, R33, R39): Look
   Up and Look Down now tilt the character's pitch in every camera view, and a

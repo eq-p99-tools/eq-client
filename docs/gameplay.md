@@ -28,8 +28,9 @@ outgoing requests; corrections replace the predicted position.
 
 A standing Titanium walk climbs onto an edge it runs into up to 1.25 above
 the body's origin, 5 units for a human of size 6, as the official client was
-seen to climb a pier rail and its posts. A ducking walk climbs only what the
-floor sweep reaches. The tallest edge the official client climbs is
+seen to climb a pier rail and its posts. A ducking or wading walk climbs only
+what the floor sweep reaches, and so do feet that land, fall or are placed
+under a floor. The tallest edge the official client climbs is
 unmeasured, so a taller one stops here even where it might not there. The
 body's width is unchanged (recording checklist 6.482).
 
