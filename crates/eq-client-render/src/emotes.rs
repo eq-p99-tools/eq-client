@@ -194,9 +194,9 @@ pub(crate) fn run(
     }
 }
 
-/// Sends an emote's text (the session puts back the space the program
-/// starts it with), then prints the player's line and sends and plays the
-/// animation, in the worker's order.
+/// Sends an emote's text as the program built it, spaces kept (the session
+/// echoes nothing, as this prints the line), then prints the player's line
+/// and sends and plays the animation, in the worker's order.
 fn say(
     chat: &mut ChatState,
     online: &mut OnlineState,
@@ -204,10 +204,9 @@ fn say(
     spoken: &Spoken,
     animation: Option<u8>,
 ) {
-    let text = spoken.sent.strip_prefix(' ').unwrap_or(&spoken.sent);
-    let sent = outbox.post(online.world(), |stamp| ClientCommand::Emote {
+    let sent = outbox.post(online.world(), |stamp| ClientCommand::SocialEmote {
         session_id: stamp.session_id,
-        text: text.to_owned(),
+        text: spoken.sent.clone(),
     });
     if sent.is_err() {
         return;

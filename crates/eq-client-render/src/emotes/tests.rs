@@ -215,12 +215,15 @@ fn said_emotes_send_their_text_then_their_animation_in_order() {
     let sent: Vec<_> = rx.try_iter().collect();
     assert!(
         matches!(&sent[..], [
-            ClientCommand::Emote { text: first, .. },
+            ClientCommand::SocialEmote { text: first, .. },
             ClientCommand::EmoteAnimation { animation: 0x1d, .. },
-            ClientCommand::Emote { text: second, .. },
-        ] if first == "uses /wave." && second == "uses /grin on Gnome."),
+            ClientCommand::SocialEmote { text: second, .. },
+        ] if first == " uses /wave." && second == " uses /grin on Gnome."),
         "{sent:?}"
     );
+    // One line each, printed here: a social emote is sent as
+    // `SocialEmote`, which the session never echoes, so the line is not
+    // doubled; the text keeps the space the program starts it with.
     let chat = app.world().resource::<ChatState>();
     let lines: Vec<_> = chat
         .history

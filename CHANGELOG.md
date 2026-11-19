@@ -30,8 +30,9 @@
   for that.", "Your class has no disciplines.", "NAME can be used again in
   Mm Ss." (with hours, "Hh Mm Ss"), "You can't use that discipline right
   now." The Mac-era client keeps its earlier answers. Networking pinned to
-  46f0932 (eq-network #319, #320, #321), which also settles a destroyed item
-  on servers that confirm by silence. A social may now run `/target`,
+  2865334 (eq-network #319, #320, #321, #322), which also settles a
+  destroyed item on servers that confirm by silence; an emote goes out as
+  the program built it, spaces kept, and its own line prints once. A social may now run `/target`,
   `/assist`, `/camp` and `/quit`, as the original's socials do; `/exit` and
   `/social` stay refused inside one.
 
