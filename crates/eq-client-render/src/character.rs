@@ -69,6 +69,9 @@ pub(super) struct AnimatedCharacter {
     /// How fast its clip plays, times its own speed: the swim clip's goes
     /// with the swimmer's speed ([`swim_rate`]).
     rate: f32,
+    /// How much longer it counts as moving across for the swim, as
+    /// `moving_for` holds the walk ([`held_swim`]).
+    swimming_for: f32,
     /// When its soles were last logged while it stood still.
     measured: Option<std::time::Instant>,
 }
@@ -470,6 +473,7 @@ fn hang(
             moving_for: 0.0,
             feet: feet_offset,
             rate: 1.0,
+            swimming_for: 0.0,
             previous_position: None,
             clip: (STANDING_CLIP, false),
             rise: None,
@@ -539,9 +543,10 @@ pub(super) fn animate(
         let drawn_moving = character
             .previous_position
             .is_some_and(|previous| moved(previous, footing) > 0.0001);
+        let dt = time.delta_secs().min(0.1);
         let drawn_horizontal = character.previous_position.map_or(0.0, |previous| {
             let step = footing.at - previous.at;
-            step.x.hypot(step.z) / time.delta_secs().max(f32::EPSILON)
+            step.x.hypot(step.z) / dt.max(f32::EPSILON)
         });
         character.previous_position = Some(footing);
         // Another spawn moves or stands by its latest report, as the program
@@ -551,7 +556,25 @@ pub(super) fn animate(
             Some(spawn) if !own => reports_moving(&spawn.state),
             _ => drawn_moving,
         };
-        let dt = time.delta_secs().min(0.1);
+        // How fast it moves across, for the swim: another spawn's report;
+        // the player's own wet velocity where the water step runs, as the
+        // program reads the actor's own velocity (read R43), else its drawn
+        // step.
+        let swimming_speed = match remote.and_then(|remote| world.spawn(remote.id)) {
+            Some(spawn) if !own => {
+                let [x, y, _] = spawn.state.velocity;
+                let speed = x.hypot(y);
+                if spawn.state.forward == 0.0 {
+                    speed
+                } else {
+                    speed.max(REPORTED_MOVING)
+                }
+            }
+            _ => controls
+                .as_deref()
+                .and_then(super::motion::Controls::wet_speed)
+                .unwrap_or(drawn_horizontal),
+        };
         // The latest of the spawn's swing and its completed cast, which
         // plays its spell's casting gesture.
         let latest = id.and_then(|id| {
@@ -582,6 +605,8 @@ pub(super) fn animate(
         } else {
             (character.moving_for - dt).max(0.0)
         };
+        let (swimming_for, swim_choice) = held_swim(character.swimming_for, swimming_speed, dt);
+        character.swimming_for = swimming_for;
         // A corpse seen dying falls from its death; one that arrived dead
         // lies in the death clip's last frame.
         let lying = corpse.map(|corpse| corpse.lying(now)).or_else(|| {
@@ -616,18 +641,6 @@ pub(super) fn animate(
         let step = std::mem::take(&mut character.since_pose);
         let (selected, pinned) = character.next_clip(lying, posture, gesture, step);
         // In water the program swims or treads (0x44fa8f; read R43).
-        let swimming_speed = match remote.and_then(|remote| world.spawn(remote.id)) {
-            Some(spawn) if !own => {
-                let [x, y, _] = spawn.state.velocity;
-                let speed = x.hypot(y);
-                if spawn.state.forward == 0.0 {
-                    speed
-                } else {
-                    speed.max(REPORTED_MOVING)
-                }
-            }
-            _ => drawn_horizontal,
-        };
         let race = if own {
             world.player().map(|player| player.race)
         } else {
@@ -648,7 +661,7 @@ pub(super) fn animate(
                 });
             wet_clip(
                 selected,
-                (water, swimming_speed, race),
+                (water, swim_choice, race),
                 character.clip,
                 |clip| character.asset.clip_seconds(clip).is_some(),
             )
@@ -1273,7 +1286,7 @@ fn paced_clip(
 }
 
 /// The program's swim (its animation 0x25), the clip `EQEmu` numbers 37
-/// (inferred, recording checklist 6.484: R43 reads the program's ids, and
+/// (inferred, recording checklist 6.485: R43 reads the program's ids, and
 /// its 0x11-0x19 run as `EQEmu`'s 17-25, L01-L09).
 const SWIM_CLIP: &str = "P06";
 
@@ -1321,6 +1334,28 @@ fn water_at(
     }
 }
 
+/// How long a swimmer counts as moving across after its speed last
+/// reached [`REPORTED_MOVING`], as the walk's `moving_for` holds, so one
+/// frame whose drawn step is zero doesn't restart the swim.
+const SWIM_HOLD: f32 = 0.15;
+
+/// The swim hold left after `dt` seconds at `speed` units a second across,
+/// and the speed the swim choice goes by: at least [`REPORTED_MOVING`]
+/// while the hold lasts.
+fn held_swim(left: f32, speed: f32, dt: f32) -> (f32, f32) {
+    let left = if speed >= REPORTED_MOVING {
+        SWIM_HOLD
+    } else {
+        (left - dt).max(0.0)
+    };
+    let choice = if left > 0.0 {
+        speed.max(REPORTED_MOVING)
+    } else {
+        speed
+    };
+    (left, choice)
+}
+
 /// The swim clip's play rate at `speed` horizontal units a second: the
 /// program's `sqrt(vx² + vy²) x 0.5 + 1` in units a tick (0x44fa8f, read
 /// R43).
@@ -1336,14 +1371,17 @@ fn swim_rate(speed: f32) -> f32 {
 ///   the bottom): treading water, except that three races stand and a
 ///   ducked body ducks (the program ducks on the bottom and treads ducked
 ///   mid-water; here a ducked body still in water ducks anywhere,
-///   inferred, 6.484);
+///   inferred, 6.485);
 /// - origin dry with wet soles (wading): a swim or tread already playing
 ///   goes on, else the dry choice;
 /// - dry: the dry choice.
 ///
 /// Only the stance and moving clips give way; sitting, lying, looting,
 /// gestures and the dead keep theirs. A model without the clip keeps the
-/// dry choice (the engine's own fallback is unread).
+/// dry choice (the engine's own fallback is unread). Inferred (6.485): the
+/// three races stand while sinking too, where the program treads on
+/// motion straight up or down; and the Mac-era clients are assumed to pick
+/// the same, unread.
 fn wet_clip(
     chosen: (&'static str, bool),
     (water, speed, race): (Water, f32, Option<u32>),
@@ -2335,6 +2373,41 @@ mod tests {
         // The swim plays faster the faster it goes: x 1.5 at a unit a tick.
         assert!((swim_rate(0.0) - 1.0).abs() < 1e-6);
         assert!((swim_rate(20.0) - 1.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_swim_holds_through_a_still_frame_and_treads_once_slow_past_the_hold() {
+        let all = |_: &str| true;
+        let dt = 1.0 / 60.0;
+        let mut left = 0.0;
+        let mut shown = (STANDING_CLIP, false);
+        let mut restarts = 0;
+        let frame = |speed: f32, left: &mut f32, shown: &mut (&'static str, bool)| {
+            let (hold, choice) = held_swim(*left, speed, dt);
+            *left = hold;
+            let next = wet_clip(
+                ("L01", false),
+                (Water::Swimming, choice, Some(1)),
+                *shown,
+                all,
+            );
+            let changed = next != *shown;
+            *shown = next;
+            changed
+        };
+        // Moving, one still frame, moving again: the swim plays on unbroken.
+        for speed in [13.0, 13.0, 0.0, 13.0, 13.0] {
+            if frame(speed, &mut left, &mut shown) {
+                restarts += 1;
+            }
+        }
+        assert_eq!(shown, (SWIM_CLIP, false));
+        assert_eq!(restarts, 1, "only the first frame changes the clip");
+        // Slow for longer than the hold: the tread.
+        for _ in 0..10 {
+            frame(1.0, &mut left, &mut shown);
+        }
+        assert_eq!(shown, (TREAD_CLIP, false));
     }
 
     #[test]

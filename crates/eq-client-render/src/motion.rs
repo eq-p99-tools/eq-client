@@ -940,6 +940,16 @@ impl Controls {
         }
     }
 
+    /// How fast the player's water step moves it across, in units a
+    /// second, where the water step runs (a grant with swim inputs); none
+    /// otherwise.
+    pub(crate) fn wet_speed(&self) -> Option<f32> {
+        self.swim.map(|_| {
+            let ([x, z], _) = self.wet.units_per_second();
+            x.hypot(z)
+        })
+    }
+
     /// The speeds of a grant, and nothing else.
     fn set_speeds(&mut self, grant: eq_client_core::world::MotionGrant) {
         self.speed = grant.units_per_second;

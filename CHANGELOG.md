@@ -14,7 +14,7 @@
   as in the original. Gills for Days still turns the air counter off.
   Characters in water now swim when moving and tread water when still,
   sinking or on the bottom, instead of walking and standing (read R43;
-  checklist 6.484). Needs eq-network's per-axis swim bound.
+  checklist 6.485). Needs eq-network's per-axis swim bound.
 
 - Walk onto low edges as the Titanium client does: a standing walk now
   climbs anything it runs into up to 1.25 above the body's origin, so a
