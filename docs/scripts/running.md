@@ -18,7 +18,23 @@ a script runs.
 
 The current line is highlighted in the running source snapshot. Linear scripts show completed and total actions. Structured scripts show how many statements ran and how many actions finished, since the path depends on observations and loop counts. The Execution state panel shows the last branch result, current loop iterations and initialized variables. Scroll that panel for more bindings. Recent events and the final outcome remain after execution, including the source line that failed. The event list retains the most recent 64 entries.
 
-Pause waits for a statement boundary. A long wait, held key or navigation action finishes before the pause takes effect. Stop is immediate and releases synthetic input. Step runs one complete action, assignment, condition or loop header before pausing again. Explicit pause time does not count toward the overall run limit.
+Pause waits for a statement boundary. A long wait, held key or navigation action finishes before the pause takes effect. Stop is immediate and releases synthetic input. Step over runs one complete action, assignment, condition or loop header before pausing again. Explicit pause time does not count toward the overall run limit.
+
+## Breakpoints and stepping
+
+Click a line number in the editor to put a breakpoint dot on that line, and click again to remove it. A dot on a comment, a blank line or `pass` moves to the next statement below. A run pauses before a statement with a dot every time it reaches it: on each pass of a loop, at an `elif` or `else` only when the branches before it were false, and on a `def` line at every call of that function. Dots stay on their lines while you edit and when you reload the file; opening another file clears them. The Execution view shows the same dots.
+
+The controls at the top right of the editor and of the Execution view, from left to right:
+
+- **Run** starts the script.
+- **Run to cursor** starts it, or resumes a paused run, and pauses once before the statement at the caret's line.
+- **Pause** and **Resume** pause between statements and continue.
+- **Step over** runs one statement and pauses before the next; a call runs to its end first.
+- **Step into** runs one statement and pauses before the next, stepping into a function it calls.
+- **Step out** runs to the end of the current function call, or out of the innermost loop or branch at the top level, and pauses there.
+- **Stop** ends the run.
+
+A breakpoint met on the way still pauses there and ends a Step over or Step out; Run to cursor still pauses at its line when the run gets there.
 
 If the connection ends after a run has entered the world, the run fails with `Session ended` and releases its synthetic input. A normal zone handoff does not end the run; use `wait_zone` before actions that require the destination zone.
 
