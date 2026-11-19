@@ -197,6 +197,15 @@ impl SpotVerdict {
             Self::NoFloor => true,
         }
     }
+
+    /// Whether the check's line says "main island unclear": only on a
+    /// flagged spot whose main island isn't clearly the main one. Most
+    /// zones' meshes are split that way, so the words help only where a
+    /// spot is in question.
+    #[must_use]
+    pub fn says_unclear(self, kept: bool, main: Option<MainIsland>) -> bool {
+        self.flagged(kept) && main.is_some_and(|main| !main.clear())
+    }
 }
 
 /// Whether the floor the preview stands a spot on can be walked to, and the
