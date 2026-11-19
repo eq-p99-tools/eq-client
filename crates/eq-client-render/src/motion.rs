@@ -2615,7 +2615,7 @@ pub(super) fn fall_step(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn fall_step_with_water(
+pub(super) fn fall_step_with_water(
     airborne: &mut AirborneController,
     world: &CollisionWorld,
     physics: VerticalPhysics,
@@ -2705,6 +2705,7 @@ pub(super) fn physics(client: InstalledClient, zone_gravity: Option<f32>) -> Ver
             ground_tolerance: falls.ground_tolerance,
             climb: eq_client_core::movement::MAX_GROUNDED_STEP,
             edge_climb: None,
+            airborne_clear: 0.0,
             steers_in_air: false,
         }
     })
@@ -2742,6 +2743,13 @@ pub(super) fn walking(
     let physics = climbing(physics, client, body);
     client.falls().map_or(physics, |falls| VerticalPhysics {
         edge_climb: Some(falls.walk_climb(body.feet_offset, body.size, raised)),
+        // A raised jump or fall passes over an edge its floor sweep reaches
+        // and lands on it (R42, 6.484); where the walk climbs edges at all.
+        airborne_clear: if raised && falls.edge_climb.is_some() {
+            physics.climb
+        } else {
+            0.0
+        },
         ..physics
     })
 }
@@ -4534,6 +4542,341 @@ pub(super) mod tests {
         assert!(wading.z < 4.0 && wading.y.abs() < 0.001, "{wading}");
         let dry_run = run_into(block, &HUMAN, raised_walk(&dry, feet, None), 32.0);
         assert!(dry_run.z > 4.5, "{dry_run}");
+    }
+
+    /// Steps `body` from `start` over `triangles` (render frame) in 50 ms
+    /// steps by `client`'s walking physics, each step's horizontal move and
+    /// jump from `input(step, feet)`; returns where the feet end and the
+    /// landings taken.
+    fn airborne_run(
+        triangles: Vec<[[f32; 3]; 3]>,
+        body: &super::PlayerBody,
+        (client, raised): (InstalledClient, bool),
+        start: Vec3,
+        steps: usize,
+        input: impl Fn(usize, Vec3) -> (Vec3, bool),
+    ) -> (Vec3, Vec<eq_client_core::movement::Landing>) {
+        use eq_client_core::movement::{AirborneController, CollisionWorld};
+        let physics = walking(physics(client, None), client, body, raised);
+        let world = CollisionWorld::new(triangles).unwrap();
+        let mut airborne = AirborneController::default();
+        let mut feet = start;
+        let mut landings = Vec::new();
+        for step in 0..steps {
+            let (horizontal, jump) = input(step, feet);
+            let next = fall_step(
+                &mut airborne,
+                &world,
+                physics,
+                client.falls().map(|_| physics.reach()),
+                feet,
+                horizontal,
+                0.05,
+                body.height,
+                jump,
+            );
+            feet = next;
+            landings.extend(airborne.take_landing());
+        }
+        (feet, landings)
+    }
+
+    /// The plank end at z 0 over a floor at y 0, open water (a deep floor at
+    /// y -30) for `gap`, then a deck at y 4.4 behind a side rising to `side`.
+    fn ship_dock(gap: f32, side: f32) -> Vec<[[f32; 3]; 3]> {
+        let mut triangles = solid_box(Vec3::new(-20.0, -1.0, -40.0), Vec3::new(20.0, 0.0, 0.0));
+        triangles.extend(solid_box(
+            Vec3::new(-20.0, -31.0, -40.0),
+            Vec3::new(20.0, -30.0, 200.0),
+        ));
+        triangles.extend(solid_box(
+            Vec3::new(-20.0, -30.0, gap),
+            Vec3::new(20.0, side, gap + 0.5),
+        ));
+        triangles.extend(solid_box(
+            Vec3::new(-20.0, -30.0, gap + 0.5),
+            Vec3::new(20.0, 4.4, 200.0),
+        ));
+        triangles
+    }
+
+    /// A run at 32 a second along +Z from z -20 that jumps once the feet
+    /// pass `takeoff` (never, for None).
+    fn run_and_jump(takeoff: Option<f32>) -> impl Fn(usize, Vec3) -> (Vec3, bool) {
+        let jumped = std::cell::Cell::new(false);
+        move |_, feet| {
+            let jump = !jumped.get() && takeoff.is_some_and(|at| feet.z >= at);
+            jumped.set(jumped.get() || jump);
+            (Vec3::Z * 32.0 * 0.05, jump)
+        }
+    }
+
+    #[test]
+    fn a_titanium_running_jump_lands_on_a_deck_across_the_water_as_the_program_does() {
+        // Erud's Crossing (11-19 probe): the ship's deck 4.4 over the planks
+        // and 10 to 13 across open water, behind a side 5 high. The program
+        // sweeps a jump with the walk's raised sphere and has no lower
+        // test, so the side doesn't stop it, and the floor refresh stands
+        // it on the deck (R42; 6.484).
+        let start = Vec3::new(0.0, 0.0, -20.0);
+        let (feet, landings) = airborne_run(
+            ship_dock(12.0, 5.0),
+            &HUMAN,
+            (InstalledClient::Titanium, true),
+            start,
+            60,
+            run_and_jump(Some(-1.0)),
+        );
+        assert!(feet.z > 13.0 && (feet.y - 4.4).abs() < 0.01, "{feet}");
+        // It lands once, on the deck, at the speed it came at.
+        let deck = landings.last().unwrap();
+        assert!(deck.fall_distance < 3.0, "{landings:?}");
+    }
+
+    #[test]
+    fn a_jump_still_stops_at_a_taller_side_and_a_walk_off_still_falls() {
+        let start = Vec3::new(0.0, 0.0, -20.0);
+        let titanium = (InstalledClient::Titanium, true);
+        for (name, side, takeoff, raised) in [
+            // A side 9 high reaches past the soles' rise (about 4.95)
+            // plus 3.375.
+            ("a side 9 high", 9.0, Some(-1.0), titanium),
+            // Off the end with no jump, the soles are far under the side's
+            // top less the reach when they meet it.
+            ("a walk off the end", 5.0, None, titanium),
+            // Ducking (or wet feet), the program sweeps at the origin
+            // itself (L = 0): today's sweep stays.
+            (
+                "a ducking jump",
+                5.0,
+                Some(-0.5),
+                (InstalledClient::Titanium, false),
+            ),
+            // The Mac-era client has no raised sweep here.
+            (
+                "a Mac-era jump",
+                5.0,
+                Some(-0.5),
+                (InstalledClient::EqMac, true),
+            ),
+        ] {
+            let (feet, _) = airborne_run(
+                ship_dock(10.0, side),
+                &HUMAN,
+                raised,
+                start,
+                60,
+                run_and_jump(takeoff),
+            );
+            assert!(feet.y < -10.0 && feet.z < 10.0, "{name}: {feet}");
+        }
+    }
+
+    #[test]
+    fn a_jump_mounts_a_ledge_up_to_its_rise_plus_the_floor_sweeps_reach() {
+        // What a standing jump against a ledge reaches: its own rise over
+        // flat ground plus the floor sweep's 3.375 (6.484). Today it
+        // mounted nothing it couldn't walk up.
+        let floor = solid_box(Vec3::new(-20.0, -1.0, -40.0), Vec3::new(20.0, 0.0, 200.0));
+        let press = |step, _| (Vec3::Z * 32.0 * 0.05, step == 0);
+        let mut peak = 0.0_f32;
+        {
+            let physics = walking(
+                physics(InstalledClient::Titanium, None),
+                InstalledClient::Titanium,
+                &HUMAN,
+                true,
+            );
+            let world = eq_client_core::movement::CollisionWorld::new(floor.clone()).unwrap();
+            let mut airborne = eq_client_core::movement::AirborneController::default();
+            let mut feet = Vec3::ZERO;
+            for step in 0..30 {
+                feet = fall_step(
+                    &mut airborne,
+                    &world,
+                    physics,
+                    Some(physics.reach()),
+                    feet,
+                    Vec3::ZERO,
+                    0.05,
+                    HUMAN.height,
+                    step == 0,
+                );
+                peak = peak.max(feet.y);
+            }
+        }
+        let reach = peak + 3.375;
+        for (top, mounts) in [(reach - 0.3, true), (reach + 0.3, false)] {
+            let mut triangles = floor.clone();
+            triangles.extend(solid_box(
+                Vec3::new(-20.0, 0.0, 1.0),
+                Vec3::new(20.0, top, 200.0),
+            ));
+            let (feet, _) = airborne_run(
+                triangles,
+                &HUMAN,
+                (InstalledClient::Titanium, true),
+                Vec3::new(0.0, 0.0, 0.5),
+                40,
+                press,
+            );
+            assert_eq!(
+                (feet.y - top).abs() < 0.01,
+                mounts,
+                "a ledge {top} (rise {peak}): {feet}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fast_fall_steered_onto_a_ledge_takes_the_landing_its_speed_earns() {
+        // No dodge: a run off a platform 12 up, which the air doesn't steer,
+        // meets a ledge's face with the feet just under its top. They stand
+        // on the top with the fall's speed, as a landing onto it would.
+        let mut triangles = solid_box(Vec3::new(-20.0, 11.0, -40.0), Vec3::new(20.0, 12.0, 0.0));
+        triangles.extend(solid_box(
+            Vec3::new(-20.0, -61.0, -40.0),
+            Vec3::new(20.0, -60.0, 200.0),
+        ));
+        triangles.extend(solid_box(
+            Vec3::new(-20.0, -60.0, 14.5),
+            Vec3::new(20.0, 0.0, 200.0),
+        ));
+        let (feet, landings) = airborne_run(
+            triangles,
+            &HUMAN,
+            (InstalledClient::Titanium, true),
+            Vec3::new(0.0, 12.0, -3.0),
+            14,
+            |_, _| (Vec3::Z * 32.0 * 0.05, false),
+        );
+        assert!(feet.y.abs() < 0.01 && feet.z > 14.5, "{feet}");
+        let landing = landings.first().unwrap();
+        assert!(
+            landing.fall_distance > 11.0 && landing.impact_speed > 50.0,
+            "{landings:?}"
+        );
+    }
+
+    #[test]
+    fn a_wall_thinner_than_a_stride_never_boosts_a_jump() {
+        // A standing jump pressed at run speed into a wall at z 1: where the
+        // move ends past the top, nothing lifts the body onto it, and a lift
+        // never keeps upward speed, so the feet never rise past the wall's
+        // top or the plain jump's apex (reviewer F1; 6.484).
+        let floor = solid_box(Vec3::new(-20.0, -1.0, -40.0), Vec3::new(20.0, 0.0, 200.0));
+        let highest = |triangles: Vec<[[f32; 3]; 3]>| {
+            let peak = std::cell::Cell::new(0.0_f32);
+            let (feet, _) = airborne_run(
+                triangles,
+                &HUMAN,
+                (InstalledClient::Titanium, true),
+                Vec3::new(0.0, 0.0, 0.5),
+                40,
+                |step, feet: Vec3| {
+                    peak.set(peak.get().max(feet.y));
+                    (Vec3::Z * 32.0 * 0.05, step == 0)
+                },
+            );
+            peak.get().max(feet.y)
+        };
+        let apex = highest(floor.clone());
+        assert!((apex - 4.95).abs() < 0.1, "{apex}");
+        for top in [3.0, 6.0, 8.0] {
+            for thick in [0.1, 0.3] {
+                let mut triangles = floor.clone();
+                triangles.extend(solid_box(
+                    Vec3::new(-20.0, 0.0, 1.0),
+                    Vec3::new(20.0, top, 1.0 + thick),
+                ));
+                let peak = highest(triangles);
+                assert!(
+                    peak <= apex.max(top) + 0.01,
+                    "a wall {top} high, {thick} thick: {peak} (apex {apex})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_jump_lifted_onto_a_deck_or_ledge_stays_inside_the_session_guard() {
+        use eq_client_core::movement::{AirborneController, CollisionWorld, MAX_GROUNDED_STEP};
+        use eq_network_game::movement::{MovementGuard, MovementMode, MovementRequest};
+
+        // Each 50 ms step goes out as the walk sends it: Jump before the
+        // sample that leaves the ground, Fall while coming down or after
+        // a drop of more than a riser, else Forward. The guard hears the
+        // walk's reach, the jump and the run speed, as a session does.
+        let physics = walking(
+            physics(InstalledClient::Titanium, None),
+            InstalledClient::Titanium,
+            &HUMAN,
+            true,
+        );
+        let floor = solid_box(Vec3::new(-20.0, -1.0, -40.0), Vec3::new(20.0, 0.0, 200.0));
+        let mut ledge = floor;
+        // Just under what a standing jump mounts (about 4.95 + 3.375).
+        ledge.extend(solid_box(
+            Vec3::new(-20.0, 0.0, 1.0),
+            Vec3::new(20.0, 8.0, 200.0),
+        ));
+        for (name, triangles, start, takeoff, top) in [
+            ("the deck", ship_dock(12.0, 5.0), -20.0, -1.0, 4.4),
+            ("a ledge 8 high", ledge, 0.5, 0.5, 8.0),
+        ] {
+            let world = CollisionWorld::new(triangles).unwrap();
+            let begin = Instant::now();
+            let at = |step: usize| begin + Duration::from_millis(50 * step as u64);
+            let origin = |feet: Vec3| {
+                eq_client_core::world_position((feet + Vec3::Y * HUMAN.feet_offset).to_array(), 0.0)
+            };
+            let mut feet = Vec3::new(0.0, 0.0, start);
+            let mut guard = MovementGuard::new(12, origin(feet), at(0));
+            guard.set_speed(Some(32.0), at(0));
+            guard.set_climb(physics.reach());
+            guard.set_jump(physics.jump_speed, physics.gravity);
+            guard.set_fall_speed(physics.terminal_speed);
+            let mut airborne = AirborneController::default();
+            let mut jumped = false;
+            let mut lifted = 0;
+            for step in 1..=40 {
+                let jump = !jumped && feet.z >= takeoff;
+                jumped |= jump;
+                let rising = airborne.velocity() > 0.0;
+                let next = fall_step(
+                    &mut airborne,
+                    &world,
+                    physics,
+                    Some(physics.reach()),
+                    feet,
+                    Vec3::Z * 32.0 * 0.05,
+                    0.05,
+                    HUMAN.height,
+                    jump,
+                );
+                if !rising && airborne.velocity() > 0.0 {
+                    guard.jumped();
+                }
+                let mode = if airborne.velocity() < 0.0 || feet.y - next.y > MAX_GROUNDED_STEP {
+                    MovementMode::Fall
+                } else {
+                    MovementMode::Forward
+                };
+                // The step that stands it on the top, higher than the
+                // arc alone took it, goes out grounded.
+                if (next.y - top).abs() < 0.01 && feet.y < top - 0.01 {
+                    lifted += 1;
+                    assert_eq!(mode, MovementMode::Forward, "{name}: {feet} -> {next}");
+                }
+                let request = MovementRequest::new(mode, 12, origin(next), at(step));
+                assert!(
+                    guard.accept(&request, at(step)).is_ok(),
+                    "{name}: step {step} {mode:?} {feet} -> {next}"
+                );
+                feet = next;
+            }
+            assert!(lifted == 1 && (feet.y - top).abs() < 0.01, "{name}: {feet}");
+        }
     }
 
     #[test]
