@@ -487,8 +487,8 @@ fn terrain_material(
     result.animation = Some(TextureAnimation {
         frames,
         frame_millis,
-        // The WLD readers at EQGfx_Dx8.dll 0x1001a280 (Titanium) and
-        // eqgfx_dx8.dll 0x1002b4e0 (EQMac) pass bit6 to the sprite's skip flag.
+        // The Titanium and EQMac graphics libraries' WLD texture readers
+        // pass bit6 to the sprite's skip flag (program read).
         skip_frames: flags & 0x40 != 0,
     });
     Ok(result)
