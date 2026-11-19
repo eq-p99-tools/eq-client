@@ -2852,3 +2852,67 @@ fn inspect_zone_heights() {
     }
     println!("far_objects={listed}");
 }
+
+/// Erudin's pier end (erudnext): a human of size 6 runs south from the dock
+/// into the solid rail across the pier's end (4 over the dock floor) and,
+/// along the same line at its corner, into a post 5 high. The official
+/// client climbs both like stairs (attended look, 11-19; checklist 6.482);
+/// the walk here must too, and every sample stays inside the guard's reach.
+#[test]
+#[ignore = "requires EQ_PROBE_INSTALL, a user-owned client installation"]
+fn the_erudin_pier_rail_and_its_posts_are_climbed() {
+    use eq_client_assets::ui::InstalledClient;
+    use eq_client_core::movement::{AirborneController, climb_reach, program_steps};
+    const HUMAN: PlayerBody = PlayerBody {
+        feet_offset: 3.75,
+        height: 6.0,
+        size: 6.0,
+    };
+    let install = PathBuf::from(std::env::var("EQ_PROBE_INSTALL").unwrap());
+    let zone = eq_client_assets::load_zone(&install, "erudnext").unwrap();
+    let world = build_collision(&zone).unwrap();
+    let physics = motion::walking(
+        motion::physics(InstalledClient::Titanium, None),
+        InstalledClient::Titanium,
+        &HUMAN,
+        true,
+    );
+    let south = Vec3::from_array(eq_client_core::render_vector([0.0, -1.0, 0.0]));
+    // World X, Y of the starts on the dock floor (z 20), the rail's span
+    // and the east corner post, each 8 north of the rail's face.
+    for (name, x, rises_to) in [("rail", -344.0_f32, 24.0_f32), ("post", -320.875, 25.0)] {
+        let start = eq_client_core::render_position(eq_client_core::WorldPosition {
+            x,
+            y: 74.0,
+            z: 20.0,
+            heading: 0.0,
+        });
+        let mut feet = Vec3::from_array(start);
+        let mut airborne = AirborneController::default();
+        let mut highest = feet.y;
+        let mut south_most = f32::MAX;
+        for _ in 0..12 {
+            let next = motion::fall_step(
+                &mut airborne,
+                &world,
+                physics,
+                Some(physics.climb),
+                feet,
+                south * 12.8 * 0.1,
+                0.1,
+                HUMAN.height,
+                false,
+            );
+            assert!(
+                next.y - feet.y <= climb_reach(physics.climb, program_steps(0.1)) + 0.001,
+                "{name}: {feet} to {next}"
+            );
+            feet = next;
+            highest = highest.max(feet.y);
+            south_most = south_most.min(world_position(feet.to_array(), 0.0).y);
+        }
+        println!("{name}: highest={highest} south_most_y={south_most}");
+        assert!(highest >= rises_to - 0.01, "{name}: highest {highest}");
+        assert!(south_most < 65.0, "{name}: stopped at y {south_most}");
+    }
+}
