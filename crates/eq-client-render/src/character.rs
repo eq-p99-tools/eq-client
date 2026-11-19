@@ -528,10 +528,17 @@ pub(super) fn animate(
                 })
                 .flatten(),
         };
-        let moving = character
+        let drawn_moving = character
             .previous_position
             .is_some_and(|previous| moved(previous, footing) > 0.0001);
         character.previous_position = Some(footing);
+        // Another spawn moves or stands by its latest report, as the program
+        // picks from the spawn's own velocity (read R38); one the world has
+        // no record of goes by its drawn motion.
+        let moving = match remote.and_then(|remote| world.spawn(remote.id)) {
+            Some(spawn) if !own => reports_moving(&spawn.state),
+            _ => drawn_moving,
+        };
         let dt = time.delta_secs().min(0.1);
         // The latest of the spawn's swing and its completed cast, which
         // plays its spell's casting gesture.
@@ -1083,6 +1090,26 @@ fn moved(previous: Footing, now: Footing) -> f32 {
     }
 }
 
+/// The least horizontal speed, in units a second, at which another spawn's
+/// report says it moves: the program's moving test is a squared speed of
+/// 0.01 in units a 50 ms tick (0x44fa8f, 0x435b36, read R38), so 0.1 a
+/// tick.
+const REPORTED_MOVING: f32 = 0.1 * 20.0;
+
+/// Whether another spawn's latest report says it moves itself: a
+/// horizontal velocity of at least [`REPORTED_MOVING`] (read R38), or
+/// forward input. The picker reads only the velocity (R38); the movement
+/// step turns a spawn's input speed into that velocity (0x4bfe0f, read R39
+/// C), and servers that send no deltas move their spawns on the input alone,
+/// so the input counts too (inferred, recording checklist 6.481). A rider's
+/// report leaves out the boat it stands on, so one standing on a moving
+/// ferry stands. Velocity straight up or down alone is the program's fall
+/// pose, not drawn here, so it stands (inferred, 6.481).
+fn reports_moving(state: &eq_client_core::SpawnState) -> bool {
+    let [x, y, _] = state.velocity;
+    state.forward != 0.0 || x.hypot(y) >= REPORTED_MOVING
+}
+
 /// The clip a character plays at its pace ([`paced_clip`]); a change into
 /// the walk or the run logs the pace it was chosen by.
 fn paced(
@@ -1341,6 +1368,70 @@ mod tests {
         assert!(turned.rotation.angle_between(rest.rotation) > 0.1);
         assert_eq!(turned.translation, rest.translation);
         assert_eq!(positions(&app), before);
+    }
+
+    #[test]
+    fn another_spawn_walks_by_its_report_and_the_player_by_its_drawn_motion() {
+        use crate::online::{OnlineState, testing as session};
+        use eq_client_core::WorldEvent;
+        use std::time::Duration;
+
+        let mut app = crate::testing::app();
+        testing::stores(app.world_mut());
+        app.add_systems(Update, animate);
+        {
+            let mut online = app.world_mut().resource_mut::<OnlineState>();
+            session::admit(&mut online, 1, session::player(7));
+            session::spawns(&mut online, vec![session::pet(5, 7)]);
+        }
+        let prepared = testing::prepared(app.world_mut());
+        let other = testing::drawn(app.world_mut(), &prepared);
+        app.world_mut()
+            .entity_mut(other)
+            .insert(crate::entities::RemoteEntity::new(5, None, 6.0));
+        let own = testing::drawn(app.world_mut(), &prepared);
+        app.world_mut().entity_mut(own).insert(crate::Player);
+        // Each frame carries both roots 5 units, as a boat or a lift would.
+        let frame = |app: &mut App, carry: bool| {
+            if carry {
+                for root in [other, own] {
+                    app.world_mut()
+                        .get_mut::<Transform>(root)
+                        .unwrap()
+                        .translation
+                        .x += 5.0;
+                }
+            }
+            app.world_mut()
+                .resource_mut::<Time>()
+                .advance_by(Duration::from_millis(100));
+            app.update();
+        };
+        let clip = |app: &App, root| app.world().get::<AnimatedCharacter>(root).unwrap().clip.0;
+        let walking = |clip: &str| matches!(clip, "L01" | "L02");
+        frame(&mut app, false);
+        for _ in 0..3 {
+            frame(&mut app, true);
+        }
+        // The other spawn reports no motion of its own, so it stands while
+        // carried; the player still goes by its drawn motion (#536).
+        assert_eq!(clip(&app, other), STANDING_CLIP);
+        assert!(walking(clip(&app, own)), "{}", clip(&app, own));
+        // Forward input in its report walks it, drawn still or not.
+        session::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [WorldEvent::Position {
+                spawn_id: 5,
+                position: eq_client_core::WorldPosition::default(),
+                velocity: [0.0; 3],
+                forward: 0.7,
+            }],
+        );
+        for _ in 0..3 {
+            frame(&mut app, false);
+        }
+        assert!(walking(clip(&app, other)), "{}", clip(&app, other));
+        assert_eq!(clip(&app, own), STANDING_CLIP);
     }
 
     #[test]
@@ -1717,6 +1808,42 @@ mod tests {
             start + std::time::Duration::from_millis(250),
         );
         (first, carriers.latest(id).unwrap().sample())
+    }
+
+    #[test]
+    fn another_spawn_moves_by_its_report_not_by_where_it_is_drawn() {
+        let report = |velocity: [f32; 3], forward: f32| eq_client_core::SpawnState {
+            spawn_id: 9,
+            race: 1,
+            kind: eq_client_core::SpawnKind::Player,
+            position: eq_client_core::WorldPosition::default(),
+            class: None,
+            name: String::new(),
+            gender: 0,
+            velocity,
+            forward,
+            walk_speed: 0.0,
+            run_speed: 0.0,
+            size: 6.0,
+            invisible: false,
+            appearance: eq_client_core::outfit::Appearance::default(),
+            level: 1,
+            listing: eq_client_core::listing::Listing::default(),
+            pet_owner: None,
+            hp_percent: None,
+            posture: None,
+            name_parts: eq_client_core::names::NameParts::default(),
+        };
+        // A rider standing on a moving ferry reports no motion of its own.
+        assert!(!reports_moving(&report([0.0; 3], 0.0)));
+        // Servers that send no deltas move their spawns on the input alone.
+        assert!(reports_moving(&report([0.0; 3], 0.7)));
+        assert!(reports_moving(&report([0.0; 3], -0.7)));
+        // The program's 0.1 a tick, 2 units a second, across.
+        assert!(reports_moving(&report([1.5, 1.5, 0.0], 0.0)));
+        assert!(!reports_moving(&report([1.4, 1.4, 0.0], 0.0)));
+        // Straight up or down alone is the fall pose, not a walk.
+        assert!(!reports_moving(&report([0.0, 0.0, -30.0], 0.0)));
     }
 
     #[test]

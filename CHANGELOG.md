@@ -22,6 +22,12 @@
   Strokes stay within the level swim budget. The character's pitch levels at
   each zone entry and on a wheel change of view (partly inferred, checklist
   6.480). Script reports carry `look_pitch`. Nothing new is sent.
+- Other players and NPCs walk, run or stand by their latest report (its
+  forward input or its velocity), as the Titanium program picks from the
+  spawn's own velocity (read R38), not by how far they are drawn moving. A
+  player standing on a moving ferry now stands; one the world has no record
+  of still goes by its drawn motion. A report moving only up or down stands
+  (inferred, checklist 6.481).
 - A player standing still on a moving boat stands, rather than playing the
   run: the animation measures the player's own motion across the boat it is
   drawn on, not the boat carrying it (read R38).
