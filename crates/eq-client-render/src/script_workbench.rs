@@ -397,6 +397,14 @@ mod tests {
                 "{} is drawn as an icon",
                 tooltip.0
             );
+            // Its icon is bright only while it can be pressed.
+            let icon = app
+                .world()
+                .get::<view::IconOf>(children[0])
+                .copied()
+                .unwrap();
+            let shown = app.world().get::<ImageNode>(children[0]).unwrap().color;
+            assert_eq!(shown, icon.tint(usable), "{}", tooltip.0);
             seen.push(tooltip.0.clone());
         }
         seen.sort();

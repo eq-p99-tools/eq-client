@@ -64,6 +64,21 @@ impl Action {
     }
 }
 
+/// A run control's icon: tinted while its action can happen, dimmed while not.
+#[derive(Component, Clone, Copy)]
+pub(super) struct IconOf(Action, icons::Icon);
+
+impl IconOf {
+    /// The colour its icon shows with, usable or not.
+    pub(super) fn tint(self, usable: bool) -> Color {
+        if usable {
+            self.1.tint()
+        } else {
+            self.1.dimmed()
+        }
+    }
+}
+
 #[derive(Component)]
 pub(super) struct Page(Tab);
 #[derive(Component)]
@@ -95,7 +110,7 @@ pub(super) struct Mono(Handle<Font>);
 #[derive(Default)]
 pub(super) struct Cache {
     document_revision: Option<u64>,
-    run: Option<(Option<usize>, Phase, String)>,
+    run: Option<(Option<usize>, Phase, String, usize)>,
     help_page: Option<usize>,
     validation: Option<(u64, String)>,
 }
@@ -155,6 +170,7 @@ fn icon_button(
 ) -> Entity {
     let image = commands
         .spawn((
+            IconOf(action, icon),
             ImageNode::new(images.add(icon.image())).with_color(icon.tint()),
             Node {
                 width: px(14),
@@ -214,6 +230,10 @@ fn with_run_controls(
         .spawn(Node {
             width: percent(100),
             column_gap: px(8),
+            row_gap: px(5),
+            // In a narrow window the icons wrap below the file buttons,
+            // still at the right.
+            flex_wrap: FlexWrap::Wrap,
             align_items: AlignItems::Center,
             ..default()
         })
@@ -444,6 +464,9 @@ pub(super) fn spawn(
             width: percent(100),
             column_gap: px(8),
             flex_grow: 1.0,
+            // Its height comes from the window, never from the rows shown,
+            // which follow the height.
+            flex_basis: px(0),
             min_height: px(0),
             ..default()
         })
@@ -597,7 +620,8 @@ pub(super) fn refresh(
     focus: Res<bevy::input_focus::InputFocus>,
     field_ids: Query<(Entity, &Field)>,
     mut buttons: Query<(&Action, &Interaction, &mut BackgroundColor)>,
-    lines: Query<Entity, With<SourceLines>>,
+    mut icons: Query<(&IconOf, &mut ImageNode)>,
+    lines: Query<(Entity, Option<&ComputedNode>), With<SourceLines>>,
     help_body: Query<(Entity, Has<Breadcrumbs>), Or<(With<HelpBody>, With<Breadcrumbs>)>>,
     mut previous: Local<Cache>,
 ) {
@@ -730,16 +754,37 @@ pub(super) fn refresh(
             || matches!(action, Action::ToggleLibrary) && !state.library_collapsed;
         *color = BackgroundColor(theme::button(usable, on, *interaction));
     }
-    // Rebuild at action boundaries, not at frame rate or every elapsed-time tick.
-    if previous.run.as_ref().is_none_or(|(line, phase, source)| {
-        *line != status.line() || *phase != status.phase() || source != status.source()
-    }) {
-        if let Ok(parent) = lines.single() {
+    for (icon, mut image) in &mut icons {
+        let tint = icon.tint(icon.0.usable(status.phase(), state.busy()));
+        if image.color != tint {
+            image.color = tint;
+        }
+    }
+    // As many source rows as the pane's laid-out height holds.
+    let rows = lines
+        .single()
+        .ok()
+        .and_then(|(_, node)| node)
+        .map_or(DEFAULT_ROWS, |node| {
+            visible_rows(node.size().y * node.inverse_scale_factor())
+        });
+    // Rebuild at action boundaries or a new height, not at frame rate or
+    // every elapsed-time tick.
+    if previous
+        .run
+        .as_ref()
+        .is_none_or(|(line, phase, source, shown)| {
+            *line != status.line()
+                || *phase != status.phase()
+                || source != status.source()
+                || *shown != rows
+        })
+    {
+        if let Ok((parent, _)) = lines.single() {
             commands.entity(parent).despawn_children();
-            let current = status.line().unwrap_or(1);
-            let start = current.saturating_sub(6);
+            let start = first_row(status.line().unwrap_or(1), rows);
             let symbols = syntax::Symbols::scan(status.source());
-            for (index, line) in status.source().lines().enumerate().skip(start).take(14) {
+            for (index, line) in status.source().lines().enumerate().skip(start).take(rows) {
                 source_line(
                     &mut commands,
                     parent,
@@ -751,7 +796,12 @@ pub(super) fn refresh(
                 );
             }
         }
-        previous.run = Some((status.line(), status.phase(), status.source().to_owned()));
+        previous.run = Some((
+            status.line(),
+            status.phase(),
+            status.source().to_owned(),
+            rows,
+        ));
     }
     if previous.help_page != Some(state.help_page) {
         for (parent, breadcrumbs) in &help_body {
@@ -790,6 +840,32 @@ fn flow_summary(status: &RunStatus) -> String {
 }
 
 /// A read-only source line with stable syntax colors and an execution marker.
+/// One source row's height, and the pane's padding above and below.
+const ROW: f32 = 18.0;
+const PANE_PADDING: f32 = 8.0;
+/// Rows shown before the pane has been laid out.
+const DEFAULT_ROWS: usize = 14;
+
+/// How many whole rows fit a source pane this tall, at least three.
+fn visible_rows(height: f32) -> usize {
+    if height <= 0.0 || !height.is_finite() {
+        return DEFAULT_ROWS;
+    }
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "a finite, positive pane height in rows"
+    )]
+    let rows = ((height - 2.0 * PANE_PADDING) / ROW).floor().max(0.0) as usize;
+    rows.max(3)
+}
+
+/// The first row index shown: the current line, counted from 1, sits
+/// after about three sevenths of the rows, as it sat 7th of 14.
+const fn first_row(current: usize, rows: usize) -> usize {
+    current.saturating_sub(rows * 3 / 7)
+}
+
 pub(super) fn source_line(
     commands: &mut Commands,
     parent: Entity,
@@ -803,7 +879,7 @@ pub(super) fn source_line(
         .spawn((
             Node {
                 width: percent(100),
-                min_height: px(18),
+                height: px(ROW),
                 flex_shrink: 0.0,
                 ..default()
             },
@@ -885,6 +961,20 @@ pub(super) fn scroll(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_execution_source_shows_as_many_rows_as_its_pane_holds() {
+        assert_eq!(visible_rows(0.0), DEFAULT_ROWS);
+        assert_eq!(visible_rows(f32::NAN), DEFAULT_ROWS);
+        assert_eq!(visible_rows(2.0f32.mul_add(PANE_PADDING, 14.0 * ROW)), 14);
+        assert_eq!(visible_rows(2.0f32.mul_add(PANE_PADDING, 40.5 * ROW)), 40);
+        assert_eq!(visible_rows(30.0), 3);
+        // Line 7 of 14 rows starts the view at line 1; later lines scroll.
+        assert_eq!(first_row(7, 14), 1);
+        assert_eq!(first_row(1, 14), 0);
+        assert_eq!(first_row(100, 40), 83);
+        assert!((first_row(100, 40)..first_row(100, 40) + 40).contains(&99));
+    }
 
     #[test]
     fn run_controls_are_usable_exactly_when_their_action_can_happen() {

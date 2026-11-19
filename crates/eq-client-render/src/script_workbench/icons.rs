@@ -104,6 +104,12 @@ impl Icon {
         }
     }
 
+    /// The tint while the control can't be pressed: faint, so it reads as
+    /// off on its greyed button.
+    pub(super) fn dimmed(self) -> Color {
+        self.tint().with_alpha(0.3)
+    }
+
     /// White coverage in alpha; the node's colour tints it.
     pub(super) fn image(self) -> Image {
         let pieces = self.pieces();
