@@ -184,7 +184,7 @@ fn check_spots(
         };
         let kept = listed.kept(&zone);
         let flag = verdict.flagged(kept.is_some());
-        let unclear_flag = flag && main.is_some_and(|main| !main.clear());
+        let unclear_flag = verdict.says_unclear(kept.is_some(), main);
         let main_said = main.map_or_else(String::new, |main| {
             format!(
                 "; main island {:.0} of {:.0}, next {:.0}{}{}",

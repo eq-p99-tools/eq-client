@@ -161,6 +161,17 @@ fn a_spot_on_a_top_no_walk_reaches_is_flagged_and_one_on_the_floor_passes() {
     assert!(off.flagged(false) && off.flagged(true));
     assert!(!on_floor.flagged(false));
     assert!(!SpotVerdict::NoMainIsland.flagged(false));
+    // "Main island unclear" is said only on a flagged spot.
+    let unclear = MainIsland {
+        runner_up: main.area,
+        ..main
+    };
+    assert!(!unclear.clear());
+    assert!(on_top.says_unclear(false, Some(unclear)));
+    assert!(!on_top.says_unclear(true, Some(unclear)));
+    assert!(!on_top.says_unclear(false, Some(main)));
+    assert!(!on_floor.says_unclear(false, Some(unclear)));
+    assert!(!on_top.says_unclear(false, None));
     // The proposal stands on the floor a walk reaches.
     let spot = propose_select_spot(&zone, &mesh).unwrap();
     assert!(spot.loc[2].abs() < 0.01, "{spot:?}");
