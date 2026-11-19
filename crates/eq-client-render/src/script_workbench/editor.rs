@@ -77,6 +77,10 @@ fn draw(
     mut workbench: ResMut<Workbench>,
     mut focus: ResMut<bevy::input_focus::InputFocus>,
     surfaces: Query<(), With<Surface>>,
+    (script, mut control): (
+        Option<Res<crate::script::Script>>,
+        Option<ResMut<crate::script::RunControl>>,
+    ),
 ) {
     let Ok(mut context) = contexts.single_mut() else {
         return;
@@ -117,9 +121,11 @@ fn draw(
             refresh_marks(state, &mut workbench);
             let statements = workbench.document.check().statements.clone();
             let dots = std::mem::take(&mut workbench.document.breakpoints);
+            let before = dots.clone();
+            let running = script.is_some();
             let shown = code::show(
                 ui,
-                &mut buffer::Bounded(&mut workbench.document.text),
+                &mut buffer::Bounded(&mut workbench.document.text, !running),
                 &state.marks,
                 &mut state.code,
                 &code::Dots {
@@ -129,6 +135,21 @@ fn draw(
             );
             workbench.document.breakpoints = dots;
             breakpoints(state, &mut workbench, &shown, ctx);
+            // A paused run takes the dots changed here when it continues.
+            if running
+                && workbench.document.breakpoints != before
+                && let Some(control) = control.as_mut()
+                && let Some(statements) = &statements
+            {
+                control.set_breakpoints(
+                    workbench
+                        .document
+                        .breakpoints
+                        .intersection(statements)
+                        .copied()
+                        .collect(),
+                );
+            }
             // Escape releases the native keyboard gate along with egui's caret,
             // including a host click that focused only the gutter or scrollbar.
             // Choosing a problem moves the caret instead, keeping the keyboard.
@@ -307,5 +328,44 @@ mod tests {
         assert_eq!(cursor.primary.index.0, 16);
         assert!(ctx.memory(|memory| memory.has_focus(code::id())));
         assert!(app.world().resource::<State>().code.jump.is_none());
+    }
+
+    #[test]
+    fn a_runs_source_is_read_only_and_its_dots_go_to_the_run() {
+        let source = "wait(1)\nwait(2)\n";
+        let (mut app, ctx) = app(source);
+        app.insert_resource(crate::script::Script::from_program(
+            crate::script::Program::parse(source, std::path::Path::new(".")).unwrap(),
+        ))
+        .init_resource::<crate::script::RunControl>();
+        frame(&mut app, &ctx, Vec::new());
+        app.world_mut().resource_mut::<State>().code.jump = Some(2);
+        frame(&mut app, &ctx, Vec::new());
+        let key = |key| egui::Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(
+            &mut app,
+            &ctx,
+            vec![
+                egui::Event::Text("x".into()),
+                key(egui::Key::Backspace),
+                key(egui::Key::F9),
+            ],
+        );
+        let workbench = app.world().resource::<Workbench>();
+        assert_eq!(workbench.document.text, source);
+        assert_eq!(workbench.caret_line, Some(2));
+        assert_eq!(workbench.document.breakpoints, [2].into());
+        assert_eq!(
+            app.world()
+                .resource::<crate::script::RunControl>()
+                .pending_breakpoints(),
+            Some(&[2].into())
+        );
     }
 }

@@ -140,15 +140,18 @@ struct Drawn {
     source: String,
     rows: usize,
     target: Option<usize>,
+    /// The first row shown, counted from 0.
+    start: usize,
 }
 
 impl Drawn {
-    fn shows(&self, status: &RunStatus, rows: usize, target: Option<usize>) -> bool {
+    fn shows(&self, status: &RunStatus, rows: usize, target: Option<usize>, start: usize) -> bool {
         self.line == status.line()
             && self.phase == status.phase()
             && self.source == status.source()
             && self.rows == rows
             && self.target == target
+            && self.start == start
     }
 }
 
@@ -466,6 +469,7 @@ pub(super) fn spawn(
     let lines = commands
         .spawn((
             SourceLines,
+            TakesWheel,
             Node {
                 min_height: px(120),
                 min_width: px(0),
@@ -679,7 +683,6 @@ pub(super) fn refresh(
     help_body: Query<(Entity, Has<Breadcrumbs>), Or<(With<HelpBody>, With<Breadcrumbs>)>>,
     mut previous: Local<Cache>,
 ) {
-    let active = status.phase().active();
     for (mut node, page, root, confirmation, library, flow_pane) in &mut nodes {
         let visible = if root {
             shown.displayed(WindowId::Scripts)
@@ -690,7 +693,7 @@ pub(super) fn refresh(
         } else if flow_pane {
             status.flow().is_some()
         } else if let Some(Page(tab)) = page {
-            *tab == state.tab && (*tab != Tab::Editor || !active)
+            *tab == state.tab
         } else {
             continue;
         };
@@ -825,14 +828,36 @@ pub(super) fn refresh(
     // Rebuild at action boundaries or a new height, not at frame rate or
     // every elapsed-time tick.
     let target = state.run_target;
+    // The rows follow the next line; the wheel looks away from it until the
+    // run moves on.
     if previous
         .run
         .as_ref()
-        .is_none_or(|drawn| !drawn.shows(&status, rows, target))
+        .is_some_and(|drawn| drawn.line != status.line() || drawn.phase != status.phase())
+    {
+        state.source_scroll = 0;
+    }
+    let total = status.source().lines().count();
+    let follow = first_row(status.line().unwrap_or(1), rows);
+    let start = follow
+        .saturating_add_signed(state.source_scroll)
+        .min(total.saturating_sub(rows));
+    // Scrolling past either end does not build up turns to undo.
+    #[allow(
+        clippy::cast_possible_wrap,
+        reason = "row counts are far below isize::MAX"
+    )]
+    let scrolled = start as isize - follow as isize;
+    if state.source_scroll != scrolled {
+        state.source_scroll = scrolled;
+    }
+    if previous
+        .run
+        .as_ref()
+        .is_none_or(|drawn| !drawn.shows(&status, rows, target, start))
     {
         if let Ok((parent, _)) = lines.single() {
             commands.entity(parent).despawn_children();
-            let start = first_row(status.line().unwrap_or(1), rows);
             let symbols = syntax::Symbols::scan(status.source());
             for (index, line) in status.source().lines().enumerate().skip(start).take(rows) {
                 source_line(
@@ -857,6 +882,7 @@ pub(super) fn refresh(
             source: status.source().to_owned(),
             rows,
             target,
+            start,
         });
     }
     if previous.help_page != Some(state.help_page) {
@@ -1044,7 +1070,8 @@ pub(super) fn source_line(
 )]
 pub(super) fn scroll(
     wheel: Res<Wheel>,
-    state: Res<Workbench>,
+    mut state: ResMut<Workbench>,
+    source: Query<Entity, With<SourceLines>>,
     mut page: Local<Option<usize>>,
     mut panels: Query<
         (Entity, &ComputedNode, &mut ScrollPosition, Has<HelpScroll>),
@@ -1069,6 +1096,24 @@ pub(super) fn scroll(
         }
     }
     *page = Some(state.help_page);
+    // The Execution source moves by whole rows, up for a wheel turned up.
+    if let Ok(entity) = source.single()
+        && wheel.surface == Some(entity)
+    {
+        // At least one row per turn, however small its pixels.
+        let rows = (wheel.pixels.abs() / ROW).round().clamp(1.0, 100.0);
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "clamped to 1..=100 rows"
+        )]
+        let rows = rows as isize;
+        if wheel.pixels > 0.0 {
+            state.source_scroll = (state.source_scroll - rows).max(-10_000);
+        } else if wheel.pixels < 0.0 {
+            state.source_scroll = (state.source_scroll + rows).min(10_000);
+        }
+    }
     for (entity, node, text, mut scroll) in &mut editors {
         if wheel.surface == Some(entity) {
             let maximum = (text.size.y - node.content_box().height()).max(0.0);

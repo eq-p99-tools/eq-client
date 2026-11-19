@@ -1214,6 +1214,13 @@ pub(super) fn drive(
         script.retire(&mut commands);
         return;
     }
+    // Dots set or cleared in the editor while paused apply from the next check.
+    if let Some(lines) = control
+        .as_mut()
+        .and_then(|control| control.take_breakpoints())
+    {
+        script.progress.breakpoints = std::sync::Arc::new(lines);
+    }
     if let Some(request) = control.as_mut().and_then(|control| control.take()) {
         match request {
             Request::Stop => {
@@ -7179,6 +7186,34 @@ mod tests {
             status.elapsed() < Duration::from_secs(1),
             "{:?}",
             status.elapsed()
+        );
+    }
+
+    #[test]
+    fn dots_changed_while_paused_apply_when_the_run_continues() {
+        let source = "for i in range(3):\n    wait(1)\n    wait(1)\n";
+        let mut app = debugging(source, &[2], None);
+        let mut found = Vec::new();
+        for ms in 0..2_000 {
+            frame_at(&mut app, ms * 10);
+            if !app.world().contains_resource::<Script>() {
+                break;
+            }
+            let status = app.world().resource::<RunStatus>();
+            if status.phase() == Phase::Paused {
+                found.push(status.line().unwrap());
+                let mut control = app.world_mut().resource_mut::<RunControl>();
+                if found.len() == 1 {
+                    // The dot moved from line 2 to line 3 in the editor.
+                    control.set_breakpoints([3].into());
+                }
+                control.request(Request::Resume);
+            }
+        }
+        assert_eq!(found, [2, 3, 3, 3]);
+        assert_eq!(
+            app.world().resource::<RunStatus>().breakpoints(),
+            &[3].into()
         );
     }
 

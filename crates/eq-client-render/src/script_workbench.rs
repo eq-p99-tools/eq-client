@@ -61,6 +61,9 @@ struct Workbench {
     /// Run to cursor goes there instead of the caret. Each run starts
     /// without one.
     run_target: Option<usize>,
+    /// Rows the Execution source is scrolled from following the next line,
+    /// negative towards the top; the run's next step returns it to 0.
+    source_scroll: isize,
 }
 
 impl Workbench {
@@ -293,10 +296,8 @@ fn controls(
     for action in buttons.iter() {
         use view::Action;
         match action {
-            Action::Tab(Tab::Editor) if script.is_some() => {
-                state.tab = Tab::Execution;
-                state.message = "Stop the current run before editing its source.".into();
-            }
+            // During a run the editor shows the run's source read-only;
+            // while paused its caret and dots work.
             Action::Tab(tab) => state.tab = *tab,
             Action::ToggleLibrary => state.library_collapsed = !state.library_collapsed,
             Action::Help(page) => {
@@ -594,6 +595,80 @@ mod tests {
             app.world().get::<BackgroundColor>(picked).unwrap().0,
             crate::theme::READY
         );
+    }
+
+    #[test]
+    fn a_run_shows_the_editor_and_the_wheel_scrolls_the_execution_source() {
+        let source = "wait(1)\n".repeat(60);
+        let mut app = crate::testing::app();
+        app.init_resource::<Workbench>()
+            .init_resource::<InputFocus>()
+            .init_resource::<Assets<Font>>()
+            .init_resource::<Assets<Image>>()
+            .insert_resource(RunStatus::paused_at(&source, 30))
+            .init_resource::<RunControl>()
+            .init_resource::<crate::escape::Escape>()
+            .init_resource::<crate::windows::pointer::Wheel>()
+            .add_systems(Startup, view::spawn)
+            .add_systems(
+                Update,
+                (crate::skinned::close, controls, view::refresh, view::scroll).chain(),
+            );
+        app.world_mut().resource_mut::<Workbench>().document.text = source.clone();
+        app.world_mut().resource_mut::<Workbench>().tab = Tab::Execution;
+        app.world_mut()
+            .resource_mut::<Shown>()
+            .open(WindowId::Scripts);
+        app.update();
+        app.update();
+        let shown = |app: &mut App| {
+            app.world_mut()
+                .query::<&view::PickLine>()
+                .iter(app.world())
+                .map(|pick| pick.0)
+                .min()
+                .unwrap()
+        };
+        let following = shown(&mut app);
+        assert!(following > 1 && following <= 30, "{following}");
+        // A wheel turned up over the source shows earlier lines.
+        let surface = app
+            .world_mut()
+            .query_filtered::<Entity, With<view::SourceLines>>()
+            .single(app.world())
+            .unwrap();
+        *app.world_mut()
+            .resource_mut::<crate::windows::pointer::Wheel>() = crate::windows::pointer::Wheel {
+            pixels: 54.0,
+            lines: 3.0,
+            surface: Some(surface),
+        };
+        app.update();
+        *app.world_mut()
+            .resource_mut::<crate::windows::pointer::Wheel>() =
+            crate::windows::pointer::Wheel::default();
+        app.update();
+        assert_eq!(shown(&mut app), following - 3);
+        // The next step follows the run again.
+        app.world_mut()
+            .insert_resource(RunStatus::paused_at(&source, 31));
+        app.update();
+        app.update();
+        assert_eq!(shown(&mut app), following + 1);
+        // The Editor tab opens during the run.
+        let editor = app
+            .world_mut()
+            .query::<(Entity, &view::Action)>()
+            .iter(app.world())
+            .find_map(|(entity, action)| {
+                matches!(action, view::Action::Tab(Tab::Editor)).then_some(entity)
+            })
+            .unwrap();
+        app.insert_resource(Script::from_program(
+            crate::script::Program::parse(&source, std::path::Path::new(".")).unwrap(),
+        ));
+        crate::clicks::testing::click(&mut app, editor);
+        assert_eq!(app.world().resource::<Workbench>().tab, Tab::Editor);
     }
 
     #[test]

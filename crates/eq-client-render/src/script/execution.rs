@@ -246,25 +246,44 @@ pub(super) enum RunMode {
     OneStep,
 }
 
-/// The UI's pending request. A stop takes precedence over another pending request.
+/// The UI's pending request. A stop takes precedence over another pending
+/// request. Breakpoint dots changed while paused wait beside it.
 #[derive(Default, Resource)]
-pub(crate) struct RunControl(Option<Request>);
+pub(crate) struct RunControl {
+    request: Option<Request>,
+    breakpoints: Option<std::collections::BTreeSet<usize>>,
+}
 
 impl RunControl {
     pub(crate) fn request(&mut self, request: Request) {
-        if self.0 != Some(Request::Stop) {
-            self.0 = Some(request);
+        if self.request != Some(Request::Stop) {
+            self.request = Some(request);
         }
     }
 
     pub(super) fn take(&mut self) -> Option<Request> {
-        self.0.take()
+        self.request.take()
+    }
+
+    /// The statement lines the run pauses at from now on.
+    pub(crate) fn set_breakpoints(&mut self, lines: std::collections::BTreeSet<usize>) {
+        self.breakpoints = Some(lines);
+    }
+
+    pub(super) fn take_breakpoints(&mut self) -> Option<std::collections::BTreeSet<usize>> {
+        self.breakpoints.take()
     }
 
     /// The request waiting for the run, for the editor's tests.
     #[cfg(test)]
     pub(crate) const fn pending(&self) -> Option<Request> {
-        self.0
+        self.request
+    }
+
+    /// The dots waiting for the run, for the editor's tests.
+    #[cfg(test)]
+    pub(crate) const fn pending_breakpoints(&self) -> Option<&std::collections::BTreeSet<usize>> {
+        self.breakpoints.as_ref()
     }
 }
 

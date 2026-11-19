@@ -22,7 +22,7 @@ Pause waits for a statement boundary. A long wait, held key or navigation action
 
 ## Breakpoints and stepping
 
-Click a line number in the editor to put a breakpoint dot on that line, and click again to remove it. A dot on a comment, a blank line or `pass` moves to the next statement below. A run pauses before a statement with a dot every time it reaches it: on each pass of a loop, at an `elif` or `else` only when the branches before it were false, and on a `def` line at every call of that function. Dots stay on their lines while you edit and when you reload the file; opening another file clears them. The Execution view shows the same dots. A run uses the dots it started with: they are fixed for the length of the run.
+Click a line number in the editor to put a breakpoint dot on that line, and click again to remove it. A dot on a comment, a blank line or `pass` moves to the next statement below. A run pauses before a statement with a dot every time it reaches it: on each pass of a loop, at an `elif` or `else` only when the branches before it were false, and on a `def` line at every call of that function. Dots stay on their lines while you edit and when you reload the file; opening another file clears them. The Execution view shows the same dots; scroll its source with the mouse wheel, and it returns to the next line when the run moves on. During a run the Editor tab shows the script read-only. While the run is paused you can move the caret there for Run to cursor and add or remove dots, and the run uses the new dots when it continues.
 
 The controls at the top right of the editor and of the Execution view, from left to right:
 

@@ -2,14 +2,15 @@
 use crate::script::MAX_SOURCE_BYTES;
 use bevy_egui::egui::{TextBuffer, text::CharIndex};
 
-pub(super) struct Bounded<'a>(pub &'a mut String);
+/// The source text, and whether it may change: a run's source is read-only.
+pub(super) struct Bounded<'a>(pub &'a mut String, pub bool);
 
 impl TextBuffer for Bounded<'_> {
     fn type_id(&self) -> std::any::TypeId {
         std::any::TypeId::of::<Bounded<'static>>()
     }
     fn is_mutable(&self) -> bool {
-        true
+        self.1
     }
     fn as_str(&self) -> &str {
         self.0
@@ -31,12 +32,15 @@ mod tests {
     #[test]
     fn unicode_insertions_respect_bytes_and_character_positions() {
         let mut text = "é!".to_owned();
-        assert_eq!(Bounded(&mut text).insert_text("中\r\n", CharIndex(1)), 2);
+        assert_eq!(
+            Bounded(&mut text, true).insert_text("中\r\n", CharIndex(1)),
+            2
+        );
         assert_eq!(text, "é中\n!");
-        Bounded(&mut text).delete_char_range(CharIndex(1)..CharIndex(2));
+        Bounded(&mut text, true).delete_char_range(CharIndex(1)..CharIndex(2));
         assert_eq!(text, "é\n!");
         let mut text = "x".repeat(MAX_SOURCE_BYTES - 1);
-        assert_eq!(Bounded(&mut text).insert_text("é", CharIndex(0)), 0);
+        assert_eq!(Bounded(&mut text, true).insert_text("é", CharIndex(0)), 0);
         assert_eq!(text.len(), MAX_SOURCE_BYTES - 1);
     }
 }

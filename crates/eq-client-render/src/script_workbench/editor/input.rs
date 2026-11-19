@@ -86,9 +86,13 @@ fn pointer(
     };
     state.visible = shown.displayed(WindowId::Scripts)
         && workbench.tab == Tab::Editor
-        && script.is_none()
         && !frames.iter().any(windows::Frame::minimized);
-    let enabled = state.visible && !workbench.busy() && window.focused;
+    // A running script's keys never reach its own source; a paused run's
+    // source takes the pointer and keys, read-only, for its caret and dots.
+    let enabled = state.visible
+        && !workbench.busy()
+        && window.focused
+        && script.is_none_or(|script| script.status().phase() == crate::script::Phase::Paused);
     let modifiers = modifiers([
         keys.pressed(Key::Control),
         keys.pressed(Key::Shift),
@@ -131,6 +135,9 @@ fn pointer(
         }
         state.focused = false;
         state.pointer.captured = false;
+        if native_focus.get() == Some(host) {
+            native_focus.clear();
+        }
     }
     for event in events.read() {
         match event {
