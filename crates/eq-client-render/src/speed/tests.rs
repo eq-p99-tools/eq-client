@@ -1007,6 +1007,7 @@ fn receipt(command: &ClientCommand, granted: bool) -> eq_client_core::SpeedInput
 
 fn motion_state(speed: Option<f32>) -> WorldEvent {
     WorldEvent::MotionState {
+        swim: None,
         diagonal: eq_client_core::DiagonalRates::default(),
         session_id: 1,
         units_per_second: speed,

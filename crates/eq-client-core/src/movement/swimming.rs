@@ -1,6 +1,18 @@
 use super::{CollisionWorld, Liquid, liquids::SOLES};
 use glam::Vec3;
 
+/// How far past the surface a rising wet stroke may carry the origin in
+/// one sample, in world units: inside one program frame at the fastest rise.
+const SURFACE_CROSSING: f64 = 0.05;
+
+/// Which strokes may cross the water's surface into known air.
+#[derive(Clone, Copy)]
+enum Exit {
+    None,
+    Level,
+    Any,
+}
+
 /// The local collision body's relationship to known water.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SwimDepth {
@@ -197,6 +209,29 @@ impl CollisionWorld {
     /// case hands off to ordinary gravity on the next sample.
     #[must_use]
     pub fn swim_step(&self, feet: Vec3, delta: Vec3, height: f32) -> Vec3 {
+        self.stroke(
+            feet,
+            delta,
+            height,
+            if delta.y == 0.0 {
+                Exit::Level
+            } else {
+                Exit::None
+            },
+        )
+    }
+
+    /// Sweeps one sample of the program's wet step (0x4bfe0f). As
+    /// [`Self::swim_step`], except that any stroke may cross into known air
+    /// above the same water while the soles stay continuously wet, rising
+    /// level or sinking: when the origin's region is dry the program's next step is
+    /// ordinary falling (reads R33 and R41), which the caller carries on.
+    #[must_use]
+    pub fn wet_step(&self, feet: Vec3, delta: Vec3, height: f32) -> Vec3 {
+        self.stroke(feet, delta, height, Exit::Any)
+    }
+
+    fn stroke(&self, feet: Vec3, delta: Vec3, height: f32, level: Exit) -> Vec3 {
         if !self.in_swimmable_water(feet, height)
             || !delta.is_finite()
             || delta.length_squared() <= 1e-10
@@ -206,7 +241,6 @@ impl CollisionWorld {
         let Some((contact, normal)) = self.swim_sweep(feet, delta, height) else {
             return feet;
         };
-        let level = delta.y == 0.0;
         let position = self.limit_swim(feet, contact, height, level);
         if !self.in_swimmable_water(position, height) {
             return position;
@@ -241,7 +275,7 @@ impl CollisionWorld {
 
     /// Clips before the first break in water or lava, even if the stroke
     /// would end in water. A bank hands off at the water boundary.
-    fn limit_swim(&self, from: Vec3, to: Vec3, height: f32, level: bool) -> Vec3 {
+    fn limit_swim(&self, from: Vec3, to: Vec3, height: f32, level: Exit) -> Vec3 {
         let Some(liquids) = &self.liquids else {
             return from;
         };
@@ -251,26 +285,45 @@ impl CollisionWorld {
         // The native frame integrates from the previous region, resolves
         // collision, then refreshes the origin's region (Titanium 0x445243,
         // 0x48ba76, 0x489b0a). Known air above the same water can therefore
-        // take ordinary gravity next frame. Keep a conservative subset:
-        // only a level stroke with continuously wet soles, never a dry gap,
-        // unknown medium, or an upward launch. No surface height is invented.
-        if level
-            && to.y - from.y == 0.0
-            && liquids.water_surface_exit(from + probe, to + probe)
-            && liquids.liquid_at(from + soles) == Some(Liquid::Water)
-            && liquids.liquid_at(to + soles) == Some(Liquid::Water)
-            && liquids.water_surface_exit(to + soles, to + probe)
-            && liquids
-                .first_outside(from + soles, to + soles, Liquid::Water)
-                .is_none()
-        {
-            return to;
+        // take ordinary gravity next frame. The kinematic stroke keeps a
+        // conservative subset, a level stroke only; the wet step crosses
+        // in any direction. Both need continuously wet soles, never a dry
+        // gap or unknown medium. No surface height is invented.
+        let exits = match level {
+            Exit::None => false,
+            Exit::Level => to.y - from.y == 0.0,
+            Exit::Any => true,
+        };
+        let surfaces = |at: Vec3| {
+            liquids.water_surface_exit(from + probe, at + probe)
+                && liquids.liquid_at(from + soles) == Some(Liquid::Water)
+                && liquids.liquid_at(at + soles) == Some(Liquid::Water)
+                && liquids.water_surface_exit(at + soles, at + probe)
+                && liquids
+                    .first_outside(from + soles, at + soles, Liquid::Water)
+                    .is_none()
+        };
+        let at = |fraction| from.as_dvec3().lerp(to.as_dvec3(), fraction).as_vec3();
+        let gap = liquids.first_outside(from + probe, to + probe, Liquid::Water);
+        // A rising wet stroke stops just past the surface: the program moves
+        // a frame's worth (about half a unit at the fastest rise) before its
+        // next step finds the origin dry and falls (0x4bfe0f; reads R33 and
+        // R41). A sample spans several frames, so the stroke goes no further
+        // than the program's first dry frame starts from, and the caller's
+        // fall carries the velocity on.
+        let crossing = gap.as_ref().and_then(|gap| {
+            let length = f64::from(from.distance(to));
+            (matches!(level, Exit::Any) && to.y > from.y && length > 0.0 && !gap.is_empty())
+                .then(|| at((gap.start + SURFACE_CROSSING / length).min(1.0)))
+                .filter(|&past| surfaces(past))
+        });
+        if exits && surfaces(to) {
+            return crossing.unwrap_or(to);
         }
-        let to = if let Some(gap) = liquids.first_outside(from + probe, to + probe, Liquid::Water) {
+        let to = if let Some(gap) = gap {
             if gap.is_empty() {
                 return from;
             }
-            let at = |fraction| from.as_dvec3().lerp(to.as_dvec3(), fraction).as_vec3();
             let edge = at(gap.start);
             let horizontal = (to.x - from.x).hypot(to.z - from.z);
             if horizontal > 1e-5
@@ -279,6 +332,9 @@ impl CollisionWorld {
                 && !lava(shore)
             {
                 return shore;
+            }
+            if let Some(past) = crossing {
+                return past;
             }
             edge
         } else if self.in_swimmable_water(to, height) && !lava(to) {

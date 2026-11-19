@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Swim as the Titanium client does (reads R33, R33b, R39, R41). Water now
+  keeps the body's velocity from frame to frame and damps it, gravity still
+  pulls in water so an idle swimmer slowly sinks (about 0.67 units a
+  second), and the Swimming skill adds to swim speed: at run 0.7, level
+  swimming goes from 4.7 units a second to 7 untrained and 17 at skill 100.
+  Looking up or down adds a climb or a dive without slowing forward travel,
+  a held jump pushes up at the original's rate, and rising out of the water
+  falls back in as an ordinary fall. Water is stepped at a fixed 60 times a
+  second (checklist 6.483). In thegrey a head out of water can't breathe,
+  as in the original. Gills for Days still turns the air counter off.
+  Characters in water now swim when moving and tread water when still,
+  sinking or on the bottom, instead of walking and standing (read R43;
+  checklist 6.485). Needs eq-network's per-axis swim bound.
+
 - Walk onto low edges as the Titanium client does: a standing walk now
   climbs anything it runs into up to 1.25 above the body's origin, so a
   human of size 6 steps over Erudin's pier-end rail and onto its posts

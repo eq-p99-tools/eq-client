@@ -63,8 +63,9 @@ enum Support {
 struct LavaContact;
 
 pub use eq_network_game::movement::{
-    Carried, EQMAC_FALL_SPEED, MAX_FALL_SPEED, MAX_GROUNDED_STEP, PROGRAM_STEP_SECONDS, ZBetween,
-    between_reports, carry, climb_reach, program_steps, swim_speed,
+    Carried, EQMAC_FALL_SPEED, MAX_FALL_SPEED, MAX_GROUNDED_STEP, PROGRAM_STEP_SECONDS,
+    SwimCalibration, ZBetween, between_reports, carry, climb_reach, program_steps, swim_speed,
+    water,
 };
 use glam::Vec3;
 use parry3d::{
