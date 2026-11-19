@@ -112,6 +112,7 @@ mod sheets;
 mod skills;
 mod skin;
 mod skinned;
+mod slash;
 mod socials;
 mod sounds;
 mod speed;

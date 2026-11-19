@@ -135,6 +135,8 @@ pub(super) struct ChatState {
     pub zone_who: Option<eq_client_core::who::WhoFilter>,
     /// A `/loc` or `/time`, waiting to be answered.
     pub asked: Option<super::whereabouts::Asked>,
+    /// A `/yell` or `/stopcast` waiting for its line and send.
+    pub(crate) slash: Option<super::slash::Asked>,
     /// A `/log`, waiting to turn the chat log on or off.
     pub log_toggle: bool,
     /// A `/shownames`, waiting to set how much of players' names shows.
@@ -2013,6 +2015,10 @@ pub(super) fn client_request_in_scope(
     }
     if let Some(asked) = super::whereabouts::Asked::typed(input) {
         state.asked = Some(asked);
+        return Some(Ok(()));
+    }
+    if let Some(asked) = super::slash::Asked::typed(input) {
+        state.slash = Some(asked);
         return Some(Ok(()));
     }
     if let Some(request) = zone_who_request(input) {
