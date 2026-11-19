@@ -137,6 +137,8 @@ pub(super) struct ChatState {
     pub asked: Option<super::whereabouts::Asked>,
     /// A `/yell` or `/stopcast` waiting for its line and send.
     pub(crate) slash: Option<super::slash::Asked>,
+    /// A `/doability`'s words, waiting for the Actions window's buttons.
+    pub(crate) doability: Option<String>,
     /// A `/log`, waiting to turn the chat log on or off.
     pub log_toggle: bool,
     /// A `/shownames`, waiting to set how much of players' names shows.
@@ -2019,6 +2021,15 @@ pub(super) fn client_request_in_scope(
     }
     if let Some(asked) = super::slash::Asked::typed(input) {
         state.slash = Some(asked);
+        return Some(Ok(()));
+    }
+    if let Some(words) = input.strip_prefix('/').and_then(|command| {
+        let (name, words) = command
+            .split_once(char::is_whitespace)
+            .unwrap_or((command, ""));
+        name.eq_ignore_ascii_case("doability").then_some(words)
+    }) {
+        state.doability = Some(words.to_owned());
         return Some(Ok(()));
     }
     if let Some(request) = zone_who_request(input) {
