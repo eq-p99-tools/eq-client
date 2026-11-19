@@ -489,7 +489,7 @@ fn prepare_p99_surface(app: &mut App) -> (eq_client_core::WorldPosition, u64) {
         .query::<&mut OrbitCamera>()
         .single_mut(world)
         .unwrap()
-        .pitch = -1.0;
+        .look = -1.0;
 
     let basis = head::reference("[Example]", "Example").unwrap();
     let mut online = world.resource_mut::<OnlineState>();

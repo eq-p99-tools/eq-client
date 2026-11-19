@@ -56,6 +56,7 @@ fn scene(
             pitch: 0.0,
             pulled: None,
             view: default(),
+            look: 0.0,
         },
     ));
     let wall = materials.add(StandardMaterial {

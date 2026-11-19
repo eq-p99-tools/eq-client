@@ -44,6 +44,7 @@ fn fixture(steps: Vec<Step>) -> (App, Entity, Entity) {
                 pitch: crate::camera::CHASE_PITCH,
                 pulled: None,
                 view: default(),
+                look: 0.0,
             },
             Transform::default(),
         ))

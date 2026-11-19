@@ -1164,6 +1164,7 @@ mod tests {
                 pitch: 0.0,
                 pulled: None,
                 view: default(),
+                look: 0.0,
             },
         ));
     }
