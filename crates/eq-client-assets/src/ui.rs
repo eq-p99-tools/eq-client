@@ -714,6 +714,24 @@ impl InstalledClient {
         matches!(self, Self::Titanium)
     }
 
+    /// Whether the social emote commands (`/smile`, `/bow` and the rest)
+    /// run as Titanium's worker runs them (0x49e0c1, reads R47 to R47c).
+    /// The Mac-era client's are unread, so they keep this client's earlier
+    /// answer there.
+    #[must_use]
+    pub const fn runs_social_emotes(self) -> bool {
+        matches!(self, Self::Titanium)
+    }
+
+    /// Whether disciplines are used as Titanium's 0x4bb39d uses them, by
+    /// the spell records the installed spell file gives (reads R48 to
+    /// R48c). The Mac-era spell file has no discipline fields, so it keeps
+    /// this client's earlier answer there.
+    #[must_use]
+    pub const fn runs_disciplines(self) -> bool {
+        matches!(self, Self::Titanium)
+    }
+
     /// How this client asks the player about a translocate cast on them,
     /// using the installed client's string IDs. The zone session decides
     /// whether the server offers translocate and owns the answer window.

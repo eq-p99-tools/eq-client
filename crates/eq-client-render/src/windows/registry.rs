@@ -85,6 +85,10 @@ pub(crate) enum WindowId {
     /// The skin's Skills window: the player's skills and their values,
     /// opened from the inventory's Skills button.
     Skills,
+    /// The disciplines the player knows, each used by a click, as the
+    /// official client's Combat Abilities window uses them (read R48 c).
+    /// Drawn by this client: the skin's own is not read yet.
+    CombatAbilities,
     /// The skin's confirmation dialog: a question to answer Yes or No, such
     /// as a resurrection's.
     Confirmation,
@@ -371,7 +375,7 @@ impl WindowId {
     /// Every singleton window, in the order the selector lists the toggled ones.
     /// Bags are left out: there is one for each slot that can hold a bag
     /// (see [`WindowId::bags`]), and none of them is toggled.
-    pub(crate) const ALL: [Self; 40] = [
+    pub(crate) const ALL: [Self; 41] = [
         Self::Status,
         Self::Target,
         Self::Player,
@@ -401,6 +405,7 @@ impl WindowId {
         Self::Tracking,
         Self::SkillSelect,
         Self::Skills,
+        Self::CombatAbilities,
         Self::Confirmation,
         Self::ServerDialog,
         Self::PlayerInspection,
@@ -463,6 +468,7 @@ impl WindowId {
             Self::Status
             | Self::Scripts
             | Self::Runbook
+            | Self::CombatAbilities
             | Self::ServerDialog
             | Self::PlayerInspection => None,
         }
@@ -527,6 +533,7 @@ impl WindowId {
             Self::Tracking => "tracking",
             Self::SkillSelect => "skill-select",
             Self::Skills => "skills",
+            Self::CombatAbilities => "combat-abilities",
             Self::Confirmation => "confirmation",
             Self::ServerDialog => "server-dialog",
             Self::PlayerInspection => "player-inspection",
@@ -731,6 +738,17 @@ impl WindowId {
             // Where the skin places it, over the chat; the inventory's
             // Skills button opens it too.
             Self::Skills => floating("SKILLS", Placement::TopLeft(120.0, 445.0), true, &[]),
+            // Where the official client opens it is not read; here, right of
+            // the Actions window's place.
+            Self::CombatAbilities => Description {
+                opening: Opening::Own,
+                ..floating(
+                    "COMBAT ABILITIES",
+                    Placement::TopLeft(740.0, 292.0),
+                    true,
+                    &[],
+                )
+            },
             // Where the skin places it, above the other windows until it is
             // answered; Escape leaves the question open.
             Self::Confirmation => Description {

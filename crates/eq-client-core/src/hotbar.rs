@@ -36,8 +36,9 @@ pub enum Binding {
     Ability(Ability),
     /// Uses the knight class ability.
     KnightAbility(KnightAbility),
-    /// Uses a supported Titanium discipline.
-    Discipline(Discipline),
+    /// Uses the discipline with this spell, as the Combat Abilities
+    /// window's hotbuttons do (Titanium 0x51415b, read R48 c).
+    Discipline(u32),
     /// Turns melee auto-attack on or off, as the Actions window's Melee
     /// Attack does.
     Attack,
@@ -81,7 +82,7 @@ impl Binding {
             Self::Stand => "stand".to_owned(),
             Self::Ability(ability) => format!("ability {}", ability.skill()),
             Self::KnightAbility(ability) => format!("knight {}", ability.key()),
-            Self::Discipline(discipline) => format!("discipline {}", discipline.key()),
+            Self::Discipline(spell) => format!("discipline {spell}"),
             Self::Attack => "attack".to_owned(),
             Self::RangedAttack => "ranged".to_owned(),
             Self::Camp => "camp".to_owned(),
@@ -107,7 +108,14 @@ impl Binding {
             ["stand"] => Self::Stand,
             ["ability", skill] => Self::Ability(Ability::from_skill(skill.parse().ok()?)?),
             ["knight", name] => Self::KnightAbility(KnightAbility::named(name)?),
-            ["discipline", name] => Self::Discipline(Discipline::named(name)?),
+            // A spell, or the name an older file kept a Warrior's two by.
+            ["discipline", spell] => Self::Discipline(
+                spell
+                    .parse::<u32>()
+                    .ok()
+                    .or_else(|| Discipline::named(spell).map(Discipline::spell))
+                    .filter(|spell| *spell != 0)?,
+            ),
             ["attack"] => Self::Attack,
             ["ranged"] => Self::RangedAttack,
             ["camp"] => Self::Camp,
@@ -218,7 +226,7 @@ mod tests {
         hotbar.0[3] = Some(Binding::Ability(Ability::Kick));
         hotbar.0[5] = Some(Binding::RangedAttack);
         hotbar.0[6] = Some(Binding::KnightAbility(KnightAbility::LayOnHands));
-        hotbar.0[7] = Some(Binding::Discipline(Discipline::Defensive));
+        hotbar.0[7] = Some(Binding::Discipline(Discipline::Defensive.spell()));
         hotbar.0[8] = Some(Binding::Social(42));
         hotbar.0[4] = Some(Binding::Item {
             slot: InventorySlot(23),
@@ -231,10 +239,13 @@ mod tests {
         assert!(text.contains("slot_5 = item 23 13027\n"));
         assert!(text.contains("slot_6 = ranged\n"));
         assert!(text.contains("slot_7 = knight layonhands\n"));
-        assert!(text.contains("slot_8 = discipline defensive\n"));
+        assert!(text.contains("slot_8 = discipline 4499\n"));
         assert!(text.contains("slot_9 = social 42\n"));
         assert!(text.contains("slot_1 = gem 1\n") && text.contains("slot_10 = stand\n"));
         assert_eq!(Hotbar::read(&text, Hotbar::default()), hotbar);
+        // An older file's Warrior discipline by name reads as its spell.
+        let older = text.replace("discipline 4499", "discipline defensive");
+        assert_eq!(Hotbar::read(&older, Hotbar::default()), hotbar);
         // Unknown slots, kinds and numbers keep the defaults.
         let odd =
             "slot_0 = sit\nslot_11 = sit\nslot_2 = gem 9\nslot_6 = ability 999\nslot_7 = dance\n";

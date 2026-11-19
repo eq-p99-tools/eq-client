@@ -9,12 +9,7 @@
 use crate::{online::OnlineState, outbox::Outbox, theme};
 use bevy::prelude::*;
 use eq_client_core::{
-    ClientCommand,
-    abilities::Ability,
-    disciplines::{Active, Discipline},
-    hotbar::Binding,
-    knights::KnightAbility,
-    world::ClientWorld,
+    ClientCommand, abilities::Ability, hotbar::Binding, knights::KnightAbility, world::ClientWorld,
 };
 
 /// A page of the Actions window that holds ability buttons.
@@ -46,42 +41,6 @@ pub(crate) use choices::{Choices, assigned};
 pub(crate) fn knight(world: &ClientWorld) -> Option<KnightAbility> {
     let player = world.player()?;
     KnightAbility::for_player(player.class, player.level)
-}
-
-/// Whether the character learned this exact discipline and can use its level.
-pub(crate) fn knows_discipline(world: &ClientWorld, discipline: Discipline) -> bool {
-    world.player().is_some_and(|player| {
-        discipline.learned(player.class, player.level, player.disciplines.as_deref())
-    })
-}
-
-/// The discipline button and ordinary command share the same request path.
-pub(super) fn discipline_command(
-    discipline: Discipline,
-    world: &ClientWorld,
-    stamp: crate::outbox::Stamp,
-) -> Result<ClientCommand, String> {
-    if !knows_discipline(world, discipline) {
-        return Err("The discipline is unavailable to your character".into());
-    }
-    Ok(ClientCommand::UseDiscipline {
-        session_id: stamp.session_id,
-        discipline,
-        created: stamp.created,
-    })
-}
-
-/// Whether the discipline buttons wait on received reuse or an active slot.
-pub(crate) fn discipline_waits(
-    world: &ClientWorld,
-    discipline: Discipline,
-    now: std::time::Instant,
-) -> bool {
-    matches!(world.casting().active_discipline(), Active::Titanium(_))
-        || world
-            .casting()
-            .discipline_wait(discipline.timer(), now)
-            .is_some_and(|wait| !wait.is_zero())
 }
 
 /// Build the same request from a button, hotbar or a named command.
@@ -189,23 +148,20 @@ fn press(
         Some(Binding::Ability(ability)) => {
             use_ability(ability, online, outbox, in_liquid);
         }
-        Some(binding @ (Binding::KnightAbility(_) | Binding::Discipline(_))) => {
+        Some(Binding::KnightAbility(ability)) => {
             let Ok(stamp) = outbox.stamp(online.world()) else {
                 return;
             };
-            let command = match binding {
-                Binding::KnightAbility(ability) => knight_command(ability, online.world(), stamp),
-                Binding::Discipline(discipline) => {
-                    discipline_command(discipline, online.world(), stamp)
-                }
-                _ => unreachable!("the action was matched above"),
-            };
-            match command {
+            match knight_command(ability, online.world(), stamp) {
                 Ok(command) => {
                     let _ = outbox.send(online.world(), command);
                 }
                 Err(reason) => chat.refuse(reason),
             }
+        }
+        // The same use as `/discipline` and the Combat Abilities window.
+        Some(Binding::Discipline(spell)) => {
+            chat.disciplines.push(crate::disciplines::Asked::Use(spell));
         }
         _ => (),
     }
@@ -255,14 +211,15 @@ pub(crate) fn input(
 pub(crate) fn present(
     online: Res<OnlineState>,
     choices: Res<Choices>,
+    names: Res<crate::spellbook::SpellNames>,
     mut labels: Query<(&AbilityLabel, &mut Text, &mut TextColor)>,
 ) {
     let now = std::time::Instant::now();
     for (AbilityLabel(button), mut text, mut color) in &mut labels {
         let binding = assigned(online.world(), &choices, *button);
-        let wanted = choices::caption(online.world(), &choices, *button);
+        let wanted = choices::caption(online.world(), &choices, &names, *button);
         if text.0 != wanted {
-            wanted.clone_into(&mut text.0);
+            text.0 = wanted.into_owned();
         }
         // Dim while its timer runs; one the server does not offer is veiled
         // instead (see `needs`).
@@ -273,8 +230,8 @@ pub(crate) fn present(
                 .casting()
                 .knight_wait(now)
                 .is_some_and(|wait| !wait.is_zero()),
-            Some(Binding::Discipline(discipline)) => {
-                discipline_waits(online.world(), discipline, now)
+            Some(Binding::Discipline(spell)) => {
+                crate::disciplines::waits(online.world(), &names, spell, now)
             }
             _ => false,
         };

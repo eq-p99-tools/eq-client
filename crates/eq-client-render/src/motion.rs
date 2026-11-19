@@ -940,6 +940,12 @@ impl Controls {
         }
     }
 
+    /// Whether the player moved in the latest pass: the emotes' stand-in
+    /// for the program's own spawn speed (+0x48, recording checklist 6.488).
+    pub(crate) const fn moving(&self) -> bool {
+        self.moving
+    }
+
     /// How fast the player's water step moves it across, in units a
     /// second, where the water step runs (a grant with swim inputs); none
     /// otherwise.

@@ -143,6 +143,12 @@ pub(super) struct ChatState {
     pub(crate) spell_set_asked: Option<String>,
     /// A `/lootnodrop`'s words, waiting to set or list the choices.
     pub(crate) loot_no_drop: Option<String>,
+    /// Social emotes, by case number, with the words after the command,
+    /// waiting in order to be said.
+    pub(crate) emotes: Vec<(u8, String)>,
+    /// Disciplines asked for, by `/discipline` or by a button or hotkey,
+    /// waiting in order to be used.
+    pub(crate) disciplines: Vec<super::disciplines::Asked>,
     /// A `/log`, waiting to turn the chat log on or off.
     pub log_toggle: bool,
     /// A `/shownames`, waiting to set how much of players' names shows.
@@ -2039,6 +2045,16 @@ pub(super) fn client_request_in_scope(
         state.loot_no_drop = Some(words.to_owned());
         return Some(Ok(()));
     }
+    if let Some(words) = command_words(input, "discipline") {
+        state
+            .disciplines
+            .push(super::disciplines::Asked::Typed(words.to_owned()));
+        return Some(Ok(()));
+    }
+    if let Some((emote, words)) = emote_words(input) {
+        state.emotes.push((emote.case, words.to_owned()));
+        return Some(Ok(()));
+    }
     if let Some(request) = zone_who_request(input) {
         return Some(request.map(|filter| state.zone_who = Some(filter)));
     }
@@ -2066,6 +2082,19 @@ pub(super) fn client_request_in_scope(
         return Some(Ok(()));
     }
     None
+}
+
+/// The social emote a line runs, by its command's name as the command
+/// table spells it, and the words after it.
+fn emote_words(input: &str) -> Option<(&'static eq_client_core::emotes::Emote, &str)> {
+    let command = input.strip_prefix('/')?;
+    let (typed, words) = command
+        .split_once(char::is_whitespace)
+        .unwrap_or((command, ""));
+    Some((
+        eq_client_core::emotes::named(&typed.to_ascii_lowercase())?,
+        words,
+    ))
 }
 
 /// The words after `/NAME` when the line is that command, in any case.
@@ -2218,7 +2247,8 @@ pub(super) fn zone_who_request(
 }
 
 /// Whether a slash command broadcasts text or a roll to the players around
-/// the character (`/emote` and the words that resolve to it, `/random`): chat-like, so a script may send
+/// the character (`/emote` and the words that resolve to it, `/random`,
+/// and the social emotes): chat-like, so a script may send
 /// it only in a network-enforced local test session.
 pub(super) fn broadcasts_to_others(input: &str) -> bool {
     let Some(command) = input.trim_start().strip_prefix('/') else {
@@ -2228,10 +2258,12 @@ pub(super) fn broadcasts_to_others(input: &str) -> bool {
         .split(char::is_whitespace)
         .next()
         .unwrap_or_default();
-    matches!(
-        crate::commands::resolve(name),
-        crate::commands::Resolved::Official("emote" | "random")
-    )
+    match crate::commands::resolve(name) {
+        crate::commands::Resolved::Official(name) => {
+            matches!(name, "emote" | "random") || eq_client_core::emotes::named(name).is_some()
+        }
+        _ => false,
+    }
 }
 
 /// Slash commands about the player and those around them: how `/who`
@@ -2508,15 +2540,6 @@ fn class_command(
     stamp: &dyn Fn() -> Result<crate::outbox::Stamp, String>,
 ) -> Option<Result<ClientCommand, String>> {
     Some(match name {
-        "discipline" => {
-            if let Some(discipline) = eq_client_core::disciplines::Discipline::named(words.trim()) {
-                stamp().and_then(|stamp| {
-                    super::abilities::discipline_command(discipline, world, stamp)
-                })
-            } else {
-                Err("Use /discipline evasive or /discipline defensive".into())
-            }
-        }
         "harmtouch" | "layonhands" => {
             let ability = eq_client_core::knights::KnightAbility::named(name)?;
             if words.is_empty() {

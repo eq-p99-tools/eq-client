@@ -11,6 +11,7 @@ pub mod classes;
 pub mod contacts;
 pub mod daylight;
 pub mod doors;
+pub mod emotes;
 pub mod entities;
 pub mod environment;
 pub mod ground;

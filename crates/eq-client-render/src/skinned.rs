@@ -111,6 +111,7 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::Status
         | WindowId::Scripts
         | WindowId::Runbook
+        | WindowId::CombatAbilities
         | WindowId::ServerDialog
         | WindowId::PlayerInspection => return None,
     };

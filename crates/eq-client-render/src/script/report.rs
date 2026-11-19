@@ -152,7 +152,10 @@ pub(super) fn state(
         })
         .collect();
     if let (Some(choices), Some(picker)) = (observed.15.0.as_deref(), observed.15.1.as_deref()) {
-        let (buttons, rows) = crate::abilities::choices::report(online.world(), choices, picker);
+        let empty = crate::spellbook::SpellNames::default();
+        let names = observed.8.as_deref().unwrap_or(&empty);
+        let (buttons, rows) =
+            crate::abilities::choices::report(online.world(), choices, picker, names);
         info!(
             label,
             kept = choices.kept(),

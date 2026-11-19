@@ -624,6 +624,10 @@ pub(super) fn actions(
     if let Some(hotbar::Action::Ability(ability)) = bar_action {
         super::abilities::use_ability(ability, &online, &outbox, liquid.feet_in(online.world()));
     }
+    // The same use as `/discipline` and the Combat Abilities window.
+    if let Some(hotbar::Action::Discipline(spell)) = bar_action {
+        chat.disciplines.push(super::disciplines::Asked::Use(spell));
+    }
     // Sit, Stand, Camp and the group's kinds run what their Actions window
     // buttons run; melee attack toggles in `combat::input`.
     let player_id = player.spawn_id;
