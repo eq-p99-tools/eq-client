@@ -872,23 +872,25 @@ pub(super) fn refresh(
     }
 }
 
+/// The state panel's text, in the monospace font, so ASCII only: that
+/// font has no `·`.
 fn flow_summary(status: &RunStatus) -> String {
     let Some(flow) = status.flow() else {
         return String::new();
     };
     let mut lines = vec!["Execution state".into()];
     if let Some((line, taken)) = flow.branch() {
-        lines.push(format!("If L{line} · {taken}"));
+        lines.push(format!("If L{line}: {taken}"));
     }
     for (line, iteration, limit) in flow.loops() {
-        lines.push(format!("Loop L{line} · {iteration}/{limit}"));
+        lines.push(format!("Loop L{line}: {iteration}/{limit}"));
     }
     if !flow.calls().is_empty() {
         lines.push(String::new());
         lines.push("Calls".into());
         // Innermost first, as a call stack reads.
         for (name, line) in flow.calls().iter().rev() {
-            lines.push(format!("{name} · L{line}"));
+            lines.push(format!("{name}: L{line}"));
         }
     }
     lines.push(String::new());
