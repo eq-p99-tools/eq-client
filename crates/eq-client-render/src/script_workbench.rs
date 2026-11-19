@@ -41,6 +41,9 @@ enum FileResult {
     Save(Result<(PathBuf, String), String>),
 }
 
+/// Why Run to cursor and dots leave alone a run started elsewhere.
+const FOREIGN_RUN: &str = "This run was not started from the editor's script; Run to cursor and dots apply only to runs started here.";
+
 #[derive(Resource, Default)]
 struct Workbench {
     library: library::Library,
@@ -69,6 +72,13 @@ struct Workbench {
 impl Workbench {
     fn busy(&self) -> bool {
         self.job.pending(Some(self.generation))
+    }
+
+    /// Whether the run shows this document's text, so the document's
+    /// statement lines, caret and dots describe it. A run started from the
+    /// command line or the control protocol has a source of its own.
+    fn describes(&self, status: &RunStatus) -> bool {
+        status.source() == self.document.text
     }
 
     fn replace(&mut self, action: Replace) {
@@ -278,10 +288,14 @@ fn controls(
     online: Res<crate::online::OnlineState>,
     mut focus: ResMut<InputFocus>,
 ) {
-    // The editor is locked while a run lasts, so its check describes the
-    // source the Execution view shows.
+    // The editor is read-only while a run lasts, so for a run started from
+    // it the check describes the source the Execution view shows.
     for view::PickLine(line) in picks.iter() {
         if status.phase() != Phase::Paused {
+            continue;
+        }
+        if !state.describes(&status) {
+            state.message = FOREIGN_RUN.into();
             continue;
         }
         let statements = state.document.check().statements.clone();
@@ -313,8 +327,11 @@ fn controls(
             Action::StepOut if status.phase() == Phase::Paused => {
                 control.request(Request::StepOut);
             }
-            // The editor is locked while a run lasts, so its caret and check
-            // still describe the run's snapshot.
+            // The editor is read-only while a run lasts, so for a run started
+            // from it the caret and check still describe the run's snapshot.
+            Action::RunToCursor if status.phase() == Phase::Paused && !state.describes(&status) => {
+                state.message = FOREIGN_RUN.into();
+            }
             Action::RunToCursor if status.phase() == Phase::Paused => {
                 let statements = state.document.check().statements.clone();
                 match state
@@ -595,6 +612,103 @@ mod tests {
             app.world().get::<BackgroundColor>(picked).unwrap().0,
             crate::theme::READY
         );
+    }
+
+    #[test]
+    fn a_run_started_elsewhere_takes_no_line_from_the_editor() {
+        let source = "wait(1)\n\nwait(1)\nwait(1)\n";
+        let mut app = crate::testing::app();
+        app.init_resource::<Workbench>()
+            .init_resource::<InputFocus>()
+            .init_resource::<Assets<Font>>()
+            .init_resource::<Assets<Image>>()
+            .insert_resource(RunStatus::paused_at(source, 1))
+            .init_resource::<RunControl>()
+            .init_resource::<crate::escape::Escape>()
+            .add_systems(Startup, view::spawn)
+            .add_systems(
+                Update,
+                (crate::skinned::close, controls, view::refresh, view::scroll).chain(),
+            );
+        // The document holds other text than the run's.
+        app.world_mut().resource_mut::<Workbench>().document.text = "wait(2)\nwait(2)\n".into();
+        app.world_mut().resource_mut::<Workbench>().caret_line = Some(2);
+        app.world_mut().resource_mut::<Workbench>().tab = Tab::Execution;
+        app.world_mut()
+            .resource_mut::<Shown>()
+            .open(WindowId::Scripts);
+        app.update();
+        app.update();
+        let blank = app
+            .world_mut()
+            .query::<(Entity, &view::PickLine)>()
+            .iter(app.world())
+            .find_map(|(entity, pick)| (pick.0 == 2).then_some(entity))
+            .unwrap();
+        crate::clicks::testing::click(&mut app, blank);
+        let state = app.world().resource::<Workbench>();
+        assert_eq!(state.run_target, None);
+        assert_eq!(state.message, FOREIGN_RUN);
+        app.world_mut().resource_mut::<Workbench>().message.clear();
+        let run_to = app
+            .world_mut()
+            .query::<(Entity, &view::Action)>()
+            .iter(app.world())
+            .find_map(|(entity, action)| {
+                matches!(action, view::Action::RunToCursor).then_some(entity)
+            })
+            .unwrap();
+        crate::clicks::testing::click(&mut app, run_to);
+        assert_eq!(app.world().resource::<RunControl>().pending(), None);
+        assert_eq!(app.world().resource::<Workbench>().message, FOREIGN_RUN);
+    }
+
+    #[test]
+    fn dots_changed_while_paused_redraw_the_execution_source() {
+        let source = "wait(1)\nwait(1)\n";
+        let mut app = crate::testing::app();
+        app.init_resource::<Workbench>()
+            .init_resource::<InputFocus>()
+            .init_resource::<Assets<Font>>()
+            .init_resource::<Assets<Image>>()
+            .insert_resource(RunStatus::paused_at(source, 1))
+            .init_resource::<RunControl>()
+            .init_resource::<crate::escape::Escape>()
+            .add_systems(Startup, view::spawn)
+            .add_systems(
+                Update,
+                (crate::skinned::close, controls, view::refresh, view::scroll).chain(),
+            );
+        app.world_mut().resource_mut::<Workbench>().document.text = source.into();
+        app.world_mut().resource_mut::<Workbench>().tab = Tab::Execution;
+        app.world_mut()
+            .resource_mut::<Shown>()
+            .open(WindowId::Scripts);
+        app.update();
+        app.update();
+        let markers = |app: &mut App, line: usize| {
+            let row = app
+                .world_mut()
+                .query::<(Entity, &view::PickLine)>()
+                .iter(app.world())
+                .find_map(|(entity, pick)| (pick.0 == line).then_some(entity))
+                .unwrap();
+            app.world()
+                .get::<Children>(row)
+                .map(|children| {
+                    children
+                        .iter()
+                        .filter_map(|child| app.world().get::<icons::Marker>(child).copied())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default()
+        };
+        assert_eq!(markers(&mut app, 2), []);
+        // Same line, same phase: only the dots differ.
+        app.world_mut()
+            .insert_resource(RunStatus::paused_at(source, 1).with_breakpoints(&[2]));
+        app.update();
+        assert_eq!(markers(&mut app, 2), [icons::Marker::Dot]);
     }
 
     #[test]

@@ -130,6 +130,13 @@ impl RunStatus {
         }
     }
 
+    /// The same status with these dots, for the editor's tests.
+    #[cfg(test)]
+    pub(crate) fn with_breakpoints(mut self, lines: &[usize]) -> Self {
+        self.breakpoints = Arc::new(lines.iter().copied().collect());
+        self
+    }
+
     pub(super) fn queued(total: usize, source: Arc<str>) -> Self {
         Self {
             total,

@@ -142,6 +142,8 @@ struct Drawn {
     target: Option<usize>,
     /// The first row shown, counted from 0.
     start: usize,
+    /// The dots, which change while paused from the Editor tab.
+    dots: std::collections::BTreeSet<usize>,
 }
 
 impl Drawn {
@@ -152,6 +154,7 @@ impl Drawn {
             && self.rows == rows
             && self.target == target
             && self.start == start
+            && &self.dots == status.breakpoints()
     }
 }
 
@@ -883,6 +886,7 @@ pub(super) fn refresh(
             rows,
             target,
             start,
+            dots: status.breakpoints().clone(),
         });
     }
     if previous.help_page != Some(state.help_page) {

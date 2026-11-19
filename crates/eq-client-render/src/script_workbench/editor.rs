@@ -69,6 +69,14 @@ pub(super) fn install(app: &mut App) {
     input::install(app);
 }
 
+/// The run the editor's source may describe: the script, its control and
+/// its status.
+type Run<'w> = (
+    Option<Res<'w, crate::script::Script>>,
+    Option<ResMut<'w, crate::script::RunControl>>,
+    Option<Res<'w, crate::script::RunStatus>>,
+);
+
 /// The editor renders once; the parser's marks annotate its own geometry.
 #[allow(clippy::needless_pass_by_value)]
 fn draw(
@@ -77,10 +85,7 @@ fn draw(
     mut workbench: ResMut<Workbench>,
     mut focus: ResMut<bevy::input_focus::InputFocus>,
     surfaces: Query<(), With<Surface>>,
-    (script, mut control): (
-        Option<Res<crate::script::Script>>,
-        Option<ResMut<crate::script::RunControl>>,
-    ),
+    (script, mut control, status): Run,
 ) {
     let Ok(mut context) = contexts.single_mut() else {
         return;
@@ -137,6 +142,9 @@ fn draw(
             breakpoints(state, &mut workbench, &shown, ctx);
             // A paused run takes the dots changed here when it continues.
             if running
+                && status
+                    .as_deref()
+                    .is_some_and(|status| workbench.describes(status))
                 && workbench.document.breakpoints != before
                 && let Some(control) = control.as_mut()
                 && let Some(statements) = &statements
@@ -193,6 +201,11 @@ fn breakpoints(
             .count()
     });
     if caret.is_some() {
+        // A caret moved after a line was picked in the Execution view is
+        // the later choice for Run to cursor.
+        if workbench.caret_line.is_some() && workbench.caret_line != caret {
+            workbench.run_target = None;
+        }
         workbench.caret_line = caret;
     }
     // The check of the text as it is now, after this frame's edit.
@@ -337,6 +350,7 @@ mod tests {
         app.insert_resource(crate::script::Script::from_program(
             crate::script::Program::parse(source, std::path::Path::new(".")).unwrap(),
         ))
+        .insert_resource(crate::script::RunStatus::paused_at(source, 1))
         .init_resource::<crate::script::RunControl>();
         frame(&mut app, &ctx, Vec::new());
         app.world_mut().resource_mut::<State>().code.jump = Some(2);
@@ -367,5 +381,60 @@ mod tests {
                 .pending_breakpoints(),
             Some(&[2].into())
         );
+    }
+
+    fn f9() -> egui::Event {
+        egui::Event::Key {
+            key: egui::Key::F9,
+            physical_key: Some(egui::Key::F9),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn dots_set_during_a_run_started_elsewhere_stay_in_the_editor() {
+        let source = "wait(1)\nwait(2)\n";
+        let (mut app, ctx) = app(source);
+        // A run from the command line, whose source is not the document.
+        let foreign = "wait(3)\nwait(4)\n";
+        app.insert_resource(crate::script::Script::from_program(
+            crate::script::Program::parse(foreign, std::path::Path::new(".")).unwrap(),
+        ))
+        .insert_resource(crate::script::RunStatus::paused_at(foreign, 1))
+        .init_resource::<crate::script::RunControl>();
+        frame(&mut app, &ctx, Vec::new());
+        app.world_mut().resource_mut::<State>().code.jump = Some(2);
+        frame(&mut app, &ctx, Vec::new());
+        frame(&mut app, &ctx, vec![f9()]);
+        assert_eq!(
+            app.world().resource::<Workbench>().document.breakpoints,
+            [2].into()
+        );
+        assert_eq!(
+            app.world()
+                .resource::<crate::script::RunControl>()
+                .pending_breakpoints(),
+            None
+        );
+    }
+
+    #[test]
+    fn moving_the_caret_drops_a_line_picked_in_the_execution_view() {
+        let (mut app, ctx) = app("wait(1)\nwait(2)\nwait(3)\n");
+        frame(&mut app, &ctx, Vec::new());
+        app.world_mut().resource_mut::<State>().code.jump = Some(1);
+        frame(&mut app, &ctx, Vec::new());
+        assert_eq!(app.world().resource::<Workbench>().caret_line, Some(1));
+        app.world_mut().resource_mut::<Workbench>().run_target = Some(3);
+        // A frame without a caret move keeps the pick.
+        frame(&mut app, &ctx, Vec::new());
+        assert_eq!(app.world().resource::<Workbench>().run_target, Some(3));
+        app.world_mut().resource_mut::<State>().code.jump = Some(2);
+        frame(&mut app, &ctx, Vec::new());
+        let workbench = app.world().resource::<Workbench>();
+        assert_eq!(workbench.caret_line, Some(2));
+        assert_eq!(workbench.run_target, None);
     }
 }
