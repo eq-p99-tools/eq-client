@@ -1289,6 +1289,7 @@ pub(crate) mod testing {
     /// the origin, owned by this spawn.
     pub(crate) fn pet(spawn_id: u16, owner: u16) -> SpawnState {
         SpawnState {
+            body_type: None,
             class: Some(1),
             spawn_id,
             name: "Gabober000".into(),
@@ -1924,6 +1925,7 @@ mod tests {
             posture: None,
         };
         let spawn = eq_client_core::SpawnState {
+            body_type: None,
             class: None,
             spawn_id: 5,
             name: "a_rat".into(),

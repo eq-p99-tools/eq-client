@@ -151,6 +151,11 @@ pub(super) fn input(
         return;
     }
     let ids = targetable(nearby.rendered.keys().copied(), &online);
+    // A click meets every drawn spawn it could target, and also the ones the
+    // program's target setter refuses by body type, which then keep the
+    // current target (program read R44: the pick 0x494ac5 takes them, and
+    // 0x4a6f0e puts the previous target back).
+    let clickable = clickable(nearby.rendered.keys().copied(), &online);
     let own_id = online.world().player().map(|player| player.spawn_id);
     // A target lasts until its spawn despawns, is replaced or turns invisible, however
     // far away it goes; drawing range only limits what can be clicked or cycled.
@@ -241,7 +246,7 @@ pub(super) fn input(
             .map_or_else(InstalledClient::default, |s| s.0.installed_client);
         let rule = client.spawn_pick();
         let shown = |point: Vec3| camera.world_to_viewport(camera_transform, point).ok();
-        let spawns: Vec<Candidate> = ids
+        let spawns: Vec<Candidate> = clickable
             .iter()
             .map(|id| {
                 let pick = picker.pick(nearby.rendered[id], ray);
@@ -301,11 +306,17 @@ pub(super) fn input(
                         chat.history.push(super::chat::system_line(line));
                     }
                 }
+                // A spawn the program will not interact with by its body
+                // type: nothing at all (R44, 0x4a7356).
+                Choice::Spawn(id, _) if !interacts(&online, id) => {}
                 Choice::Spawn(id, _) if mouse.just_pressed(MouseButton::Right) => {
                     // Use the clicked entity without changing the current
                     // target. The trade path falls back to consideration.
                     trade.right_click(online.world(), id);
                 }
+                // One the target setter refuses by body type keeps the
+                // current target, with no line and nothing sent (R44).
+                Choice::Spawn(id, _) if refused_by_body(&online, id) => {}
                 Choice::Spawn(id, _) => {
                     // An NPC clicked with an item on the cursor is asked to
                     // take it, as well as targeted.
@@ -516,6 +527,40 @@ fn targetable(rendered: impl Iterator<Item = u16>, online: &OnlineState) -> Vec<
         .collect()
 }
 
+/// Drawn spawns a click may meet: the targetable ones and the ones the
+/// program's target setter refuses by body type.
+fn clickable(rendered: impl Iterator<Item = u16>, online: &OnlineState) -> Vec<u16> {
+    rendered
+        .filter(|id| match unavailable(online, *id) {
+            None => true,
+            Some(reason) => reason == REFUSED_BY_BODY,
+        })
+        .collect()
+}
+
+/// Whether the program's target setter refuses this spawn by its body type.
+fn refused_by_body(online: &OnlineState, id: u16) -> bool {
+    online
+        .world()
+        .spawn(id)
+        .is_some_and(|spawn| online.world().refuses_target(&spawn.state))
+}
+
+/// Whether the program interacts with this spawn at all, by its body type.
+fn interacts(online: &OnlineState, id: u16) -> bool {
+    online
+        .world()
+        .spawn(id)
+        .is_none_or(|spawn| online.world().interacts_with(&spawn.state))
+}
+
+/// Why a spawn the program's target setter refuses by its body type cannot
+/// be chosen: only this client's own windows, such as the map's Target
+/// button, say it. The program's paths refuse in silence (program read R44),
+/// and so do this client's click, cycle and `/target` (the last two
+/// inferred until their handlers are read, recording checklist 6.486).
+pub(crate) const REFUSED_BY_BODY: &str = "This entity cannot be targeted";
+
 /// Why a known entity cannot be newly selected from a local interface. Map
 /// visibility does not grant targeting through invisibility or past the clip.
 pub(crate) fn unavailable(online: &OnlineState, id: u16) -> Option<&'static str> {
@@ -549,6 +594,11 @@ pub(crate) fn unavailable(online: &OnlineState, id: u16) -> Option<&'static str>
         })
     {
         return Some("Beyond the zone's targeting range");
+    }
+    // Last, so that a refused spawn a click may still meet is otherwise
+    // targetable ([`clickable`]).
+    if world.refuses_target(&spawn.state) {
+        return Some(REFUSED_BY_BODY);
     }
     None
 }
@@ -737,6 +787,7 @@ mod tests {
                 &mut online,
                 id,
                 SpawnState {
+                    body_type: None,
                     class: None,
                     spawn_id: id,
                     name: name.into(),
@@ -795,6 +846,7 @@ mod tests {
                 &mut online,
                 id,
                 SpawnState {
+                    body_type: None,
                     class: None,
                     spawn_id: id,
                     name: name.into(),
@@ -849,6 +901,7 @@ mod tests {
                     &mut online,
                     id,
                     SpawnState {
+                        body_type: None,
                         class: None,
                         spawn_id: id,
                         name: "a_bat".into(),
@@ -881,6 +934,160 @@ mod tests {
         assert_eq!(targetable([2, 3].into_iter(), &zone(Some(100.0))), [2]);
     }
 
+    /// A zone of the given generation holding NPCs 2 to 8 with no body
+    /// type, then body types 1, 11, 60, 65, 67 and 64.
+    fn body_type_zone(generation: eq_client_core::GameDialect) -> OnlineState {
+        use crate::online::testing as session;
+        let mut online = OnlineState::new(true);
+        session::generation(&mut online, generation);
+        session::enter(&mut online, 1, session::player(1), None);
+        for (id, body_type) in [
+            (2, None),
+            (3, Some(1)),
+            (4, Some(11)),
+            (5, Some(60)),
+            (6, Some(65)),
+            (7, Some(67)),
+            (8, Some(64)),
+        ] {
+            let mut spawn = session::pet(id, 99);
+            spawn.pet_owner = None;
+            spawn.body_type = body_type;
+            session::spawn_entry(&mut online, id, spawn);
+        }
+        online
+    }
+
+    #[test]
+    fn titanium_refuses_the_body_types_its_target_setter_does_and_a_click_still_meets_them() {
+        let online = body_type_zone(eq_client_core::GameDialect::Titanium);
+        assert_eq!(targetable(2..=8, &online), [2, 3, 8]);
+        assert_eq!(clickable(2..=8, &online), [2, 3, 4, 5, 6, 7, 8]);
+        for id in 4..=7 {
+            assert_eq!(unavailable(&online, id), Some(REFUSED_BY_BODY), "{id}");
+            assert!(refused_by_body(&online, id), "{id}");
+        }
+        assert!(!refused_by_body(&online, 2) && !refused_by_body(&online, 8));
+        // Interaction 0x4a7356 passes over 11, 65 and 67 only.
+        assert_eq!(
+            (2..=8)
+                .filter(|id| !interacts(&online, *id))
+                .collect::<Vec<_>>(),
+            [4, 6, 7]
+        );
+    }
+
+    #[test]
+    fn eqmac_and_an_unknown_body_type_target_as_before() {
+        let online = body_type_zone(eq_client_core::GameDialect::EqMac);
+        assert_eq!(targetable(2..=8, &online), [2, 3, 4, 5, 6, 7, 8]);
+        assert!((2..=8).all(|id| interacts(&online, id) && !refused_by_body(&online, id)));
+        let titanium = body_type_zone(eq_client_core::GameDialect::Titanium);
+        assert_eq!(unavailable(&titanium, 2), None);
+    }
+
+    #[test]
+    fn a_refused_spawn_keeps_the_target_by_click_cycle_or_name_with_nothing_sent_or_said() {
+        use crate::online::testing as session;
+        const GUARD: u16 = 41;
+        const CONTROLLER: u16 = 42;
+        let (mut app, commands, ..) = target_app();
+        scene_camera(&mut app);
+        let mut meshes = Assets::<Mesh>::default();
+        // The controller is drawn under the cursor; the guard, far to the
+        // side, has nothing a click could meet.
+        let body = app
+            .world_mut()
+            .spawn((
+                Transform::default(),
+                Mesh3d(meshes.add(Cuboid::new(2.0, 2.0, 2.0))),
+            ))
+            .id();
+        let guard = app
+            .world_mut()
+            .spawn(Transform::from_xyz(500.0, 0.0, 0.0))
+            .id();
+        app.insert_resource(meshes);
+        {
+            let mut nearby = app.world_mut().resource_mut::<NearbyEntities>();
+            nearby.rendered.insert(CONTROLLER, body);
+            nearby.rendered.insert(GUARD, guard);
+        }
+        {
+            let mut online = app.world_mut().resource_mut::<OnlineState>();
+            let mut controller = session::pet(CONTROLLER, 99);
+            controller.pet_owner = None;
+            controller.name = "zone_controller".into();
+            controller.body_type = Some(11);
+            let mut npc = session::pet(GUARD, 99);
+            npc.pet_owner = None;
+            npc.name = "Guard_Synthetic".into();
+            npc.body_type = Some(1);
+            session::spawns(&mut online, vec![controller, npc]);
+            online.select_target(Some(GUARD));
+        }
+        let mut windows = app
+            .world_mut()
+            .query_filtered::<&mut Window, With<PrimaryWindow>>();
+        windows
+            .single_mut(app.world_mut())
+            .unwrap()
+            .set_cursor_position(Some(Vec2::new(400.0, 300.0)));
+        let selected = |app: &App| {
+            app.world()
+                .resource::<OnlineState>()
+                .world()
+                .target()
+                .selected
+        };
+        let said = |app: &App| {
+            app.world()
+                .resource::<super::super::chat::ChatState>()
+                .history
+                .lines(eq_client_core::chat::ChatTab::All)
+                .len()
+        };
+        let lines = said(&app);
+
+        // A left or right click on the controller in front: the target stays,
+        // nothing is sent, nothing is said.
+        for button in [MouseButton::Left, MouseButton::Right] {
+            let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
+            mouse.reset_all();
+            mouse.press(button);
+            app.update();
+            assert_eq!(selected(&app), Some(GUARD), "{button:?}");
+        }
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .reset_all();
+        assert!(commands.try_recv().is_err());
+        assert!(app.world().resource::<Outbox>().take_refused().is_empty());
+        assert_eq!(said(&app), lines);
+
+        // Target Next passes over it: from the guard it stays on the guard,
+        // so nothing is sent again.
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.reset_all();
+            keys.press(KeyCode::Tab);
+        }
+        app.update();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        assert_eq!(selected(&app), Some(GUARD));
+        assert!(commands.try_recv().is_err());
+
+        // `/target` by its name finds no target, as for a spawn not there.
+        app.world_mut()
+            .resource_mut::<super::super::chat::ChatState>()
+            .requested_target = Some("zone controller".into());
+        app.update();
+        assert_eq!(selected(&app), Some(GUARD));
+        assert!(commands.try_recv().is_err());
+    }
+
     #[test]
     #[allow(
         clippy::too_many_lines,
@@ -904,6 +1111,7 @@ mod tests {
                     &mut online,
                     id,
                     SpawnState {
+                        body_type: None,
                         class: None,
                         spawn_id: id,
                         name: format!("Synthetic {id}"),

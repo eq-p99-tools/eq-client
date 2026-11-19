@@ -55,6 +55,7 @@ fn player(spawn_id: u16) -> PlayerState {
 
 fn spawn(spawn_id: u16) -> SpawnState {
     SpawnState {
+        body_type: None,
         class: None,
         spawn_id,
         name: "a_rat".into(),
@@ -658,6 +659,7 @@ fn a_death_in_view_names_who_died_and_who_killed_them() {
     use crate::world::Party;
     let mut world = admitted();
     let named = |spawn_id, name: &str| SpawnState {
+        body_type: None,
         name: name.into(),
         ..spawn(spawn_id)
     };
@@ -2376,6 +2378,7 @@ fn classic_npc_consider_uses_current_levels_without_overwriting_the_reply() {
     let mut world = admitted();
     world.consider_npcs_by_level(true);
     let guard = SpawnState {
+        body_type: None,
         name: "a_guard".into(),
         level: 20,
         ..spawn(5)
@@ -3865,6 +3868,7 @@ fn the_zone_who_lists_the_zone_players_as_they_are_listed() {
     use crate::who::WhoFilter;
     let mut world = admitted();
     let other = |spawn_id, name: &str, class, level| SpawnState {
+        body_type: None,
         class: Some(class),
         name: name.into(),
         kind: SpawnKind::Player,
@@ -3877,6 +3881,7 @@ fn the_zone_who_lists_the_zone_players_as_they_are_listed() {
             other(6, "Zed", 12, 50),
             other(7, "Ann", 2, 20),
             SpawnState {
+                body_type: None,
                 kind: SpawnKind::PlayerCorpse,
                 ..other(8, "Gone", 1, 5)
             },
@@ -4074,6 +4079,7 @@ fn the_player_has_the_pet_they_own_and_its_buffs() {
     game(
         &mut world,
         WorldEvent::Spawns(vec![SpawnState {
+            body_type: None,
             pet_owner: Some(9),
             hp_percent: Some(100),
             ..spawn(6)
@@ -4140,6 +4146,7 @@ fn pet_buffs_and_command_identity_follow_ownership_and_incarnation() {
         slots: vec![None],
     });
     let pet = || SpawnState {
+        body_type: None,
         pet_owner: Some(9),
         ..spawn(5)
     };
@@ -4201,6 +4208,7 @@ fn last_names_change_by_the_name_spawned_with() {
         &mut world,
         WorldEvent::Spawns(vec![
             SpawnState {
+                body_type: None,
                 name: "Examplar".into(),
                 kind: SpawnKind::Player,
                 ..spawn(6)

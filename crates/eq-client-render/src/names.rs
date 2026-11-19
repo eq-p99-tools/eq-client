@@ -294,6 +294,7 @@ mod tests {
     /// A spawn of this kind, named as the server names it, in this guild.
     fn spawn(spawn_id: u16, name: &str, kind: SpawnKind, guild: Option<u32>) -> SpawnState {
         SpawnState {
+            body_type: None,
             name: name.into(),
             kind,
             listing: eq_client_core::listing::Listing { guild, ..default() },
