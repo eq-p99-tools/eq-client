@@ -541,11 +541,11 @@ fn native_takeover_cancels_a_background_scripts_social() {
 }
 
 #[test]
-fn an_unsafe_social_definition_never_queues_a_target_change_or_followup() {
+fn a_refused_social_definition_never_queues_its_lines() {
     let (mut app, rx) = socials_app();
     let _ = select_service(&mut app, SpawnKind::Npc, 41, 10.0);
     let result = crate::chat::client_request(
-        "/social set Unsafe | /target Missing | /ranged",
+        "/social set Unsafe | /exit | /ranged",
         &mut app.world_mut().resource_mut::<ChatState>(),
     )
     .unwrap();

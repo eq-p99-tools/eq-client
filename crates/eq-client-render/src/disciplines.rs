@@ -252,7 +252,10 @@ pub(crate) fn run(
     outbox: Res<Outbox>,
     names: Res<SpellNames>,
     messages: Option<Res<Messages>>,
-    settings: Option<Res<crate::ViewerSettings>>,
+    (settings, map): (
+        Option<Res<crate::ViewerSettings>>,
+        Option<Res<crate::keys::KeyMap>>,
+    ),
 ) {
     if chat.disciplines.is_empty() {
         return;
@@ -279,6 +282,13 @@ pub(crate) fn run(
                 target_id,
                 timed_self,
             } => {
+                // Then the ordinary cast start's refusals, as a gem's.
+                let no_keys = crate::keys::KeyMap::default();
+                let map = map.as_deref().unwrap_or(&no_keys);
+                if let Some(refusal) = crate::hud::requests::busy(online.world(), map) {
+                    chat.refuse(refusal);
+                    continue;
+                }
                 // The outbox shows why a cast did not go.
                 let _ = outbox.post(online.world(), |stamp| ClientCommand::UseDiscipline {
                     session_id: stamp.session_id,

@@ -3,7 +3,7 @@
 pub(super) mod action_bar;
 pub(crate) mod hotbar;
 pub(crate) mod messages;
-mod requests;
+pub(crate) mod requests;
 #[cfg(test)]
 mod tests;
 

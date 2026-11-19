@@ -99,11 +99,13 @@ fn command(text: &str) -> Result<(&str, &str), String> {
 fn action(text: &str) -> Result<String, String> {
     use crate::commands::{Resolved, resolve};
     let (name, _) = command(text)?;
-    // Both resolve asynchronously and may leave the old target selected.
+    // `/target`, `/assist`, `/camp` and `/quit` run as the original's
+    // socials run them (Adam 11-19): a later line acts on whatever target
+    // the earlier one leaves, and a departure stops the social. `/exit`
+    // stays refused, as the choice named only those four.
     if matches!(
         resolve(name),
-        Resolved::Official("target" | "assist" | "camp" | "exit" | "quit")
-            | Resolved::Ours("pause" | "social")
+        Resolved::Official("exit") | Resolved::Ours("pause" | "social")
     ) {
         return Err(format!("/{name} cannot be run inside a social"));
     }
@@ -432,8 +434,7 @@ mod tests {
             "/pause 1,",
             "/pause 1,/pause 2",
             "/social play Loop",
-            "/quit",
-            "/camp",
+            "/exit",
             "hello",
         ] {
             assert!(Line::parse(text).is_err(), "{text}");
@@ -441,14 +442,17 @@ mod tests {
     }
 
     #[test]
-    fn a_deferred_target_change_cannot_leave_later_lines_aimed_at_an_old_target() {
+    fn targets_and_departures_run_in_a_social_as_the_originals_do() {
         for text in [
-            "/social set Unsafe | /target Missing | /ranged",
-            "/social set Unsafe | /pause 1,/TARGET Missing | /harmtouch",
-            "/social set Unsafe | /assist Friend | /layonhands",
+            "/social set Pull | /target Missing | /ranged",
+            "/social set Pull | /pause 1,/TARGET Missing | /harmtouch",
+            "/social set Pull | /assist Friend | /layonhands",
+            "/social set Out | /camp",
+            "/social set Out | /quit",
         ] {
-            assert!(Request::parse(text).unwrap().is_err(), "{text}");
+            assert!(Request::parse(text).unwrap().is_ok(), "{text}");
         }
+        assert!(Request::parse("/social set Out | /exit").unwrap().is_err());
         assert!(
             Request::parse("/social set Safe | /ranged")
                 .unwrap()

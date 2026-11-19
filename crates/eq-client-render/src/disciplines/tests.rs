@@ -324,3 +324,88 @@ fn the_installed_lines_take_the_name_and_the_parts_in_order() {
     let line = time_line(&messages, "Evasive", Duration::from_secs(65));
     assert_eq!(line.words.text, "Evasive m1 s5");
 }
+
+/// An app running the discipline system for this world, sending to `tx`.
+fn running(online: OnlineState) -> (App, std::sync::mpsc::Receiver<ClientCommand>) {
+    let (tx, rx) = std::sync::mpsc::sync_channel(8);
+    let mut app = App::new();
+    app.insert_resource(online)
+        .insert_resource(Outbox::new(Some(tx)))
+        .insert_resource(names())
+        .init_resource::<crate::ViewerSettings>()
+        .init_resource::<ChatState>()
+        .add_systems(Update, run);
+    (app, rx)
+}
+
+fn ask(app: &mut App, asked: Asked) -> Vec<String> {
+    app.world_mut()
+        .resource_mut::<ChatState>()
+        .disciplines
+        .push(asked);
+    app.update();
+    app.world()
+        .resource::<ChatState>()
+        .history
+        .lines(eq_client_core::chat::ChatTab::All)
+        .into_iter()
+        .map(|(_, line)| line.message.text.clone())
+        .collect()
+}
+
+#[test]
+fn a_discipline_meets_the_gem_casts_refusals_while_a_cast_is_under_way() {
+    // Casting: refused with the gem's words, nothing sent.
+    let mut online = warrior(60, &[4585]);
+    testing::spell(
+        &mut online,
+        eq_client_core::SpellUpdate::Began {
+            caster_id: 7,
+            spell_id: 200,
+            duration_ms: 3000,
+        },
+    );
+    let (mut app, rx) = running(online);
+    let lines = ask(&mut app, Asked::Use(4585));
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.starts_with("Already casting:")),
+        "{lines:?}"
+    );
+    assert!(rx.try_recv().is_err());
+    // A request the server hasn't answered: refused the same way.
+    let mut online = warrior(60, &[4585]);
+    testing::pending_cast(&mut online, Some(200));
+    let (mut app, rx) = running(online);
+    let lines = ask(&mut app, Asked::Typed("fell".into()));
+    assert!(
+        lines.contains(&"Waiting for the server to acknowledge the cast".to_owned()),
+        "{lines:?}"
+    );
+    assert!(rx.try_recv().is_err());
+    // Neither: it goes.
+    let (mut app, rx) = running(warrior(60, &[4585]));
+    ask(&mut app, Asked::Use(4585));
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(ClientCommand::UseDiscipline {
+            spell_id: 4585,
+            target_id: 0,
+            timed_self: false,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn the_mac_era_client_keeps_this_clients_answer() {
+    let (mut app, rx) = running(warrior(60, &[4585]));
+    app.insert_resource(crate::ViewerSettings(crate::ViewerConfig {
+        installed_client: eq_client_assets::ui::InstalledClient::EqMac,
+        ..default()
+    }));
+    let lines = ask(&mut app, Asked::Typed(String::new()));
+    assert!(lines.contains(&"This client does not take disciplines yet.".to_owned()));
+    assert!(rx.try_recv().is_err());
+}

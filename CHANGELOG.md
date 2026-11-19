@@ -13,14 +13,15 @@
   words after the target replace the emote's own words. `/discipline` (and
   `/disc`) with no word lists the known disciplines whose timers run; with a
   word it uses the first known discipline the word begins. The new Combat
-  Abilities window lists the known disciplines with their time left: a click
+  Abilities window, opened from the EQ menu, lists the known disciplines with their time left: a click
   uses one, and a hold or Ctrl and a number puts it on the action bar. The
   typed command, the window, a hotkey and an Actions window button share one
   use: a discipline you don't know, can't use at your level or class, or
   that isn't flagged in the spell file is refused silently; one on its timer
   prints the time left; a timed self discipline while one is running prints
   its line; otherwise the cast goes out from slot 10 at the current target,
-  or none. Any discipline the server lists works, not only Evasive and
+  or none, and like a gem cast it waits while a cast is under way or not yet
+  acknowledged. Any discipline the server lists works, not only Evasive and
   Defensive. The Actions window's picker no longer offers disciplines, which
   have their own window now; a button that held one keeps it. Inferred parts
   are under checklist 6.488. This client's words where the installation has
@@ -30,7 +31,9 @@
   Mm Ss." (with hours, "Hh Mm Ss"), "You can't use that discipline right
   now." The Mac-era client keeps its earlier answers. Networking pinned to
   46f0932 (eq-network #319, #320, #321), which also settles a destroyed item
-  on servers that confirm by silence.
+  on servers that confirm by silence. A social may now run `/target`,
+  `/assist`, `/camp` and `/quit`, as the original's socials do; `/exit` and
+  `/social` stay refused inside one.
 
 - Take the Titanium slash forms socials and hotbuttons use (reads R45,
   R45b). Social lines run a tenth of a second apart, as the original's
