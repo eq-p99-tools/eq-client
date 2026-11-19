@@ -29,6 +29,7 @@ fn fixture() -> OnlineState {
     testing::spawns(
         &mut online,
         vec![eq_client_core::SpawnState {
+            body_type: None,
             spawn_id: player.spawn_id,
             class: player.class.map(|class| u8::try_from(class).unwrap()),
             name: player.name,

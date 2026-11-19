@@ -4593,6 +4593,7 @@ mod tests {
         };
         let (mut app, tx) = received_chat_app();
         let guard = eq_client_core::SpawnState {
+            body_type: None,
             name: "a_guard".into(),
             level: 20,
             pet_owner: None,

@@ -1955,6 +1955,7 @@ mod tests {
         let start = std::time::Instant::now();
         carriers.observe(
             &WorldEvent::Spawns(vec![SpawnState {
+                body_type: None,
                 spawn_id: id,
                 race: 72,
                 kind: SpawnKind::Npc,
@@ -1999,6 +2000,7 @@ mod tests {
     #[test]
     fn another_spawn_moves_by_its_report_not_by_where_it_is_drawn() {
         let report = |velocity: [f32; 3], forward: f32| eq_client_core::SpawnState {
+            body_type: None,
             spawn_id: 9,
             race: 1,
             kind: eq_client_core::SpawnKind::Player,

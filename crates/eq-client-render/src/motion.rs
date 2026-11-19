@@ -6048,6 +6048,7 @@ pub(super) mod tests {
                 &mut online,
                 5,
                 SpawnState {
+                    body_type: None,
                     name: "Friend".into(),
                     kind: SpawnKind::Player,
                     race: 1,
@@ -8617,6 +8618,7 @@ pub(super) mod tests {
         let mut carriers = eq_client_core::movement::Carriers::default();
         let spawned = carriers.observe(
             &WorldEvent::Spawns(vec![SpawnState {
+                body_type: None,
                 spawn_id: 8,
                 race: 72,
                 kind: SpawnKind::Npc,
