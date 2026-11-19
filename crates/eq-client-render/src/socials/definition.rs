@@ -150,6 +150,28 @@ impl Catalog {
         Ok(())
     }
 
+    /// Writes `/hotbutton`'s social: into the one of the same name, letter
+    /// case aside, its first line only, as the program writes only line 1
+    /// there; or else into a new one. Gives the social's ID.
+    pub(super) fn hot_button(&mut self, asked: &HotButton) -> Result<u32, HotButtonRefusal> {
+        let invalid = HotButtonRefusal::Invalid;
+        validate_name(&asked.name).map_err(invalid)?;
+        let line = Line::parse(&asked.text).map_err(invalid)?;
+        if let Some(id) = self.named(&asked.name) {
+            let entry = self.entries.get_mut(&id).expect("named gives a held ID");
+            entry.lines[0].clone_from(&asked.text);
+            entry.program[0] = line;
+            return Ok(id);
+        }
+        if self.entries.len() >= MAX_SOCIALS {
+            return Err(HotButtonRefusal::Full);
+        }
+        let social =
+            Definition::new(&asked.name, std::iter::once(asked.text.clone())).map_err(invalid)?;
+        self.set(social).map_err(invalid)?;
+        Ok(self.named(&asked.name).expect("the social was just set"))
+    }
+
     /// A malformed file is rejected as a unit so a future save cannot silently
     /// drop an entry. Tab separators are reserved by the command validation.
     pub(super) fn read(text: &str) -> Result<Self, String> {
@@ -195,11 +217,71 @@ impl Catalog {
     }
 }
 
+/// What `/hotbutton NAME [COLOUR] TEXT` writes (0x4735cc and 0x46bc70,
+/// read R45 and R45b): the name, cut to the program's 15 characters, and
+/// the first line. An all-digit word after the name is the colour, which
+/// this client's socials don't keep or draw (recording checklist 6.487).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct HotButton {
+    pub(super) name: String,
+    pub(super) text: String,
+}
+
+/// The program's longest social name (the entry's 16-byte name field).
+const HOT_BUTTON_NAME: usize = 15;
+/// The program's longest social line (its 256-byte field).
+const HOT_BUTTON_TEXT: usize = 255;
+
+impl HotButton {
+    /// None when no name is given, for the help lines.
+    fn parse(words: &str) -> Option<Self> {
+        let words = words.trim();
+        let (name, rest) = words.split_once(char::is_whitespace).unwrap_or((words, ""));
+        if name.is_empty() {
+            return None;
+        }
+        let rest = rest.trim_start();
+        let (colour, after) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+        let text = if !colour.is_empty() && colour.bytes().all(|byte| byte.is_ascii_digit()) {
+            after.trim_start()
+        } else {
+            rest
+        };
+        Some(Self {
+            name: name.chars().take(HOT_BUTTON_NAME).collect(),
+            text: cut(text, HOT_BUTTON_TEXT).to_owned(),
+        })
+    }
+}
+
+/// The longest start of a text within a number of bytes.
+fn cut(text: &str, bytes: usize) -> &str {
+    let mut end = text.len().min(bytes);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
+/// Why `/hotbutton` wrote nothing.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum HotButtonRefusal {
+    /// All 120 socials are taken: the program's line.
+    Full,
+    /// This client's socials can't hold the name or the line.
+    Invalid(String),
+}
+
 pub(crate) enum Request {
+    /// `/hotbutton`, or with no name its help.
+    HotButton(Option<HotButton>),
     List,
     Show(String),
     Set(Definition),
-    Bind { slot: usize, name: String },
+    Bind {
+        slot: usize,
+        name: String,
+    },
     Play(String),
     Delete(String),
     Cancel,
@@ -208,6 +290,9 @@ pub(crate) enum Request {
 impl Request {
     pub(crate) fn parse(text: &str) -> Option<Result<Self, String>> {
         let (name, words) = command(text).ok()?;
+        if name.eq_ignore_ascii_case("hotbutton") {
+            return Some(Ok(Self::HotButton(HotButton::parse(words))));
+        }
         name.eq_ignore_ascii_case("social")
             .then(|| Self::operation(words))
     }
@@ -266,6 +351,60 @@ mod tests {
             panic!("expected a definition");
         };
         catalog.set(entry).unwrap();
+    }
+
+    #[test]
+    fn hotbutton_takes_a_name_an_optional_colour_and_the_rest_as_its_line() {
+        let parsed = |words: &str| HotButton::parse(words);
+        assert_eq!(parsed(""), None);
+        assert_eq!(parsed("   "), None);
+        assert_eq!(
+            parsed("Heal 3 /cast 1"),
+            Some(HotButton {
+                name: "Heal".into(),
+                text: "/cast 1".into(),
+            })
+        );
+        // A word that isn't all digits starts the line.
+        assert_eq!(parsed("Heal 3x /cast 1").unwrap().text, "3x /cast 1");
+        assert_eq!(parsed("Sit /sit").unwrap().text, "/sit");
+        // The name is cut to 15 characters, the line to 255 bytes.
+        let long = parsed(&format!("ABCDEFGHIJKLMNOPQRS /say {}", "x".repeat(300))).unwrap();
+        assert_eq!(long.name, "ABCDEFGHIJKLMNO");
+        assert_eq!(long.text.len(), 255);
+        assert_eq!(parsed("Name").unwrap().text, "");
+    }
+
+    #[test]
+    fn hotbutton_rewrites_line_one_of_the_same_name_or_takes_a_new_social() {
+        let mut catalog = Catalog::default();
+        set(&mut catalog, "/social set Heal | /cast 1 | /sit");
+        let id = catalog.named("Heal").unwrap();
+        let asked = |name: &str, text: &str| HotButton {
+            name: name.into(),
+            text: text.into(),
+        };
+        assert_eq!(catalog.hot_button(&asked("HEAL", "/cast 2")), Ok(id));
+        let entry = &catalog.entries[&id];
+        assert_eq!(entry.name, "Heal");
+        assert_eq!(entry.lines, ["/cast 2", "/sit"]);
+        assert_eq!(entry.program[0].command.as_deref(), Some("/cast 2"));
+        let new = catalog.hot_button(&asked("Rest", "/sit")).unwrap();
+        assert_ne!(new, id);
+        assert_eq!(catalog.entries[&new].lines, ["/sit"]);
+        assert!(matches!(
+            catalog.hot_button(&asked("Bad", "say hi")),
+            Err(HotButtonRefusal::Invalid(_))
+        ));
+        // All 120 taken: the program's full table; the same name still writes.
+        for index in catalog.entries.len()..MAX_SOCIALS {
+            set(&mut catalog, &format!("/social set S{index} | /sit"));
+        }
+        assert_eq!(
+            catalog.hot_button(&asked("Another", "/sit")),
+            Err(HotButtonRefusal::Full)
+        );
+        assert_eq!(catalog.hot_button(&asked("rest", "/stand")), Ok(new));
     }
 
     #[test]
