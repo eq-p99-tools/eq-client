@@ -16,6 +16,8 @@ use crate::script::ParseError;
 
 pub(super) const FONT_SIZE: f32 = 14.0;
 const ROWS: usize = 14;
+/// Pixels between the gutter's rule and the start of the text.
+const TEXT_GAP: i8 = 3;
 const PROBLEM_ROWS: usize = 4;
 pub(super) const BACKGROUND: Color32 = Color32::from_rgb(15, 20, 25);
 const GUTTER_INK: Color32 = Color32::from_rgb(92, 103, 115);
@@ -163,7 +165,8 @@ pub(super) fn show(
         .ceil()
         .min(120.0) as i8;
     let margin = Margin {
-        left: gutter,
+        // A few pixels of air between the gutter's rule and the text.
+        left: gutter + TEXT_GAP,
         right: 8,
         top: 2,
         bottom: 2,
@@ -433,8 +436,11 @@ mod tests {
             output.textures_delta.clear();
         }
         let (left, text_left) = placed.unwrap();
-        // The line numbers and their padding sit left of the text, not over it.
-        assert!(text_left - left > 18.0, "{left} {text_left}");
+        // The line numbers, their rule and a gap sit left of the text.
+        assert!(
+            text_left - left > 18.0 + f32::from(TEXT_GAP),
+            "{left} {text_left}"
+        );
     }
 
     #[test]
