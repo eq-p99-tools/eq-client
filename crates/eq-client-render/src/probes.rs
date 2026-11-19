@@ -3019,41 +3019,81 @@ fn the_erud_crossing_ship_at_its_dock_stop() {
         true,
     );
     let west = Vec3::from_array(eq_client_core::render_vector([-1.0, 0.0, 0.0]));
-    for y in [-1781.0_f32, -1771.8] {
-        for takeoff in [652.0_f32, 654.0, 656.0, 658.0, 660.0, 664.0] {
-            let mut feet = Vec3::from_array(eq_client_core::render_position(
-                eq_client_core::WorldPosition {
-                    x: 700.0,
-                    y,
-                    z: 0.0,
-                    heading: 0.0,
-                },
-            ));
-            let mut airborne = eq_client_core::movement::AirborneController::default();
-            let mut jumped = None;
-            for _ in 0..60 {
-                let world = eq_client_core::axes::to_world(feet);
-                let jump = jumped.is_none() && world.x <= takeoff;
-                if jump {
-                    jumped = Some(world);
+    // The hull's triangles that reach the band a walker on the planks sweeps
+    // (world z -1 to 8, x past 644): the part, if any, that can stop it.
+    let mut band = 0;
+    let (mut band_low, mut band_high) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+    for triangle in &actor.model.collision {
+        let points = triangle.map(|point| {
+            eq_client_core::axes::to_world(
+                translation + rotation * (Vec3::from_array(point) * scale),
+            )
+        });
+        if points
+            .iter()
+            .any(|p| p.x > 644.0 && p.z > -1.0 && p.z < 8.0)
+        {
+            band += 1;
+            for p in points {
+                band_low = band_low.min(p);
+                band_high = band_high.max(p);
+            }
+        }
+    }
+    println!("hull_band triangles={band} low={band_low:?} high={band_high:?}");
+    for (name, world) in [("dock", &dock), ("boarded", &boarded)] {
+        for y in [-1781.0_f32, -1771.8] {
+            for takeoff in [600.0_f32, 656.0, 660.0] {
+                let mut feet = Vec3::from_array(eq_client_core::render_position(
+                    eq_client_core::WorldPosition {
+                        x: 700.0,
+                        y,
+                        z: 0.0,
+                        heading: 0.0,
+                    },
+                ));
+                let mut airborne = eq_client_core::movement::AirborneController::default();
+                let mut jumped = None;
+                for _ in 0..60 {
+                    let at = eq_client_core::axes::to_world(feet);
+                    let jump = jumped.is_none() && at.x <= takeoff;
+                    if jump {
+                        jumped = Some(at);
+                    }
+                    feet = motion::fall_step(
+                        &mut airborne,
+                        world,
+                        physics,
+                        Some(physics.reach()),
+                        feet,
+                        west * 32.0 * 0.05,
+                        0.05,
+                        human.height,
+                        jump,
+                    );
                 }
-                feet = motion::fall_step(
-                    &mut airborne,
-                    &boarded,
-                    physics,
-                    Some(physics.reach()),
-                    feet,
-                    west * 32.0 * 0.05,
-                    0.05,
-                    human.height,
-                    jump,
+                let end = eq_client_core::axes::to_world(feet);
+                println!(
+                    "run_jump world={name} y={y} takeoff={takeoff} jumped_at={jumped:?} end={end:?} aboard={}",
+                    end.z > 3.0
                 );
             }
-            let end = eq_client_core::axes::to_world(feet);
-            println!(
-                "run_jump y={y} takeoff={takeoff} jumped_at={jumped:?} end={end:?} aboard={}",
-                end.z > 3.0
-            );
+            // What lies west of the plank end at each height over the feet.
+            let from = |z: f32| {
+                Vec3::from_array(eq_client_core::render_position(
+                    eq_client_core::WorldPosition {
+                        x: 660.0,
+                        y,
+                        z,
+                        heading: 0.0,
+                    },
+                ))
+            };
+            let hits: Vec<_> = [0.5_f32, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0]
+                .into_iter()
+                .map(|z| (z, world.ray_distance(from(z), west, 30.0)))
+                .collect();
+            println!("west_rays world={name} y={y}: {hits:?}");
         }
     }
 }
