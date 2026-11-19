@@ -205,14 +205,26 @@ pub(crate) fn install(app: &mut App) {
 fn release_running_editor(
     script: Option<Res<Script>>,
     state: Res<Workbench>,
-    fields: Query<(), With<view::Field>>,
+    fields: Query<&view::Field>,
     mut focus: ResMut<InputFocus>,
 ) {
-    if (script.is_some() || state.busy())
-        && focus.get().is_some_and(|entity| fields.contains(entity))
+    if focus
+        .get()
+        .and_then(|entity| fields.get(entity).ok())
+        .is_some_and(|field| !keeps_keyboard(field, script.as_deref(), state.busy()))
     {
         focus.clear();
     }
+}
+
+/// Whether a field may hold the keyboard. During a run only a paused run's
+/// source does: read-only, for its caret and dots, and it still keeps the
+/// keys from movement and the game's bindings.
+fn keeps_keyboard(field: &view::Field, script: Option<&Script>, busy: bool) -> bool {
+    !busy
+        && script.is_none_or(|script| {
+            matches!(field, view::Field::Source) && script.status().phase() == Phase::Paused
+        })
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -261,7 +273,11 @@ fn claim_keyboard(
         && !fields
             .iter()
             .any(|(_, interaction)| *interaction == Interaction::Pressed);
-    if ours && (hidden || outside || script.is_some() || state.busy()) {
+    let usable = focus
+        .get()
+        .and_then(|entity| fields.get(entity).ok())
+        .is_none_or(|(field, _)| keeps_keyboard(field, script.as_deref(), state.busy()));
+    if ours && (hidden || outside || !usable) {
         focus.clear();
     }
     typing.editing_script = focus.get().is_some_and(|entity| fields.contains(entity));
@@ -942,6 +958,42 @@ mod tests {
         app.update();
         assert!(!app.world().resource::<crate::keys::Typing>().editing_script);
         assert!(app.world().resource::<InputFocus>().get().is_none());
+    }
+
+    #[test]
+    fn a_paused_runs_source_keeps_the_keyboard_from_the_game() {
+        let mut app = crate::testing::app();
+        app.init_resource::<Workbench>()
+            .init_resource::<InputFocus>()
+            .insert_resource(
+                Script::new(vec![Step::Wait(std::time::Duration::from_secs(1))]).paused(),
+            )
+            .add_systems(Update, (release_running_editor, claim_keyboard).chain());
+        app.world_mut()
+            .resource_mut::<Shown>()
+            .open(WindowId::Scripts);
+        let source = app
+            .world_mut()
+            .spawn((view::Field::Source, Interaction::None))
+            .id();
+        let path = app
+            .world_mut()
+            .spawn((view::Field::Path, Interaction::None))
+            .id();
+        app.world_mut()
+            .resource_mut::<InputFocus>()
+            .set(source, FocusCause::Pressed);
+        app.update();
+        // The read-only source keeps the keys, so Backspace can't open the map.
+        assert_eq!(app.world().resource::<InputFocus>().get(), Some(source));
+        assert!(app.world().resource::<crate::keys::Typing>().editing_script);
+        // The name field is not the run's, so it never takes them.
+        app.world_mut()
+            .resource_mut::<InputFocus>()
+            .set(path, FocusCause::Pressed);
+        app.update();
+        assert!(app.world().resource::<InputFocus>().get().is_none());
+        assert!(!app.world().resource::<crate::keys::Typing>().editing_script);
     }
 
     #[test]

@@ -344,6 +344,13 @@ impl Script {
         &self.progress
     }
 
+    /// The same script shown paused at its first line, for the editor's tests.
+    #[cfg(test)]
+    pub(crate) fn paused(mut self) -> Self {
+        self.progress = RunStatus::paused_at(self.progress.source(), 1);
+        self
+    }
+
     /// Queues validated steps, then keeps reading complete lines appended to `path`
     /// after the first `offset` bytes.
     #[must_use]
