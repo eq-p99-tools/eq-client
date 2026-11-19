@@ -394,6 +394,12 @@ impl OnlineState {
     }
 
     /// The player closed the give window.
+    /// Plays a motion the client starts itself on a spawn in view, at
+    /// normal speed.
+    pub(super) fn play_motion(&mut self, spawn_id: u16, action: u16) {
+        self.world.play_motion(spawn_id, action, 1.0);
+    }
+
     pub(super) fn close_trade(&mut self) {
         self.world.close_trade();
     }

@@ -14,6 +14,29 @@ pub(super) struct Request {
     pub linked_timer: Option<u32>,
 }
 
+/// Why a cast can't start now because one is under way: casting, or a
+/// request the server hasn't answered. A gem press and a discipline meet
+/// the same refusal, as both go to the program's one cast start (0x411f3d).
+pub(crate) fn busy(
+    world: &eq_client_core::world::ClientWorld,
+    map: &crate::keys::KeyMap,
+) -> Option<crate::chat::Said> {
+    if world.casting().cast.is_some() {
+        return Some(
+            format!(
+                "Already casting: {} to interrupt",
+                map.named(crate::keys::Act::Duck, "duck")
+            )
+            .into(),
+        );
+    }
+    world
+        .casting()
+        .pending
+        .is_some()
+        .then(|| "Waiting for the server to acknowledge the cast".into())
+}
+
 /// The gem's spell, if the request can go now; otherwise why not, in the
 /// player's words. Like the official client, a cast refuses locally when the
 /// server-reported mana is short (P99 otherwise answers with a generic
@@ -38,15 +61,8 @@ pub(super) fn check(
         .copied()
         .flatten()
         .ok_or_else(|| crate::chat::Said::own(super::empty_gem(gem, map)))?;
-    if world.casting().cast.is_some() {
-        return Err(format!(
-            "Already casting: {} to interrupt",
-            map.named(crate::keys::Act::Duck, "duck")
-        )
-        .into());
-    }
-    if world.casting().pending.is_some() {
-        return Err("Waiting for the server to acknowledge the cast".into());
+    if let Some(refusal) = busy(world, map) {
+        return Err(refusal);
     }
     if forgetting {
         return Ok(spell_id);
