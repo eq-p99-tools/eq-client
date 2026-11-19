@@ -23,6 +23,11 @@ pub(super) struct Root;
 #[derive(Component)]
 pub(super) struct LibraryPane;
 
+/// An Execution source row: clicked while paused, its line becomes the
+/// Run to cursor target.
+#[derive(Component, Clone, Copy)]
+pub(super) struct PickLine(pub(super) usize);
+
 #[derive(Component)]
 pub(super) enum Field {
     Path,
@@ -37,9 +42,12 @@ pub(super) enum Action {
     Reload,
     Save,
     Run,
+    RunToCursor,
     Pause,
     Resume,
     Step,
+    StepInto,
+    StepOut,
     Stop,
     Discard,
     Cancel,
@@ -56,8 +64,10 @@ impl Action {
             Self::Run | Self::New | Self::Open | Self::Save | Self::Reload | Self::Discard => {
                 !active && !busy
             }
+            // Before a run it starts one; while paused it resumes to the line.
+            Self::RunToCursor => (!active && !busy) || phase == Phase::Paused,
             Self::Pause => active && phase != Phase::Paused,
-            Self::Resume | Self::Step => phase == Phase::Paused,
+            Self::Resume | Self::Step | Self::StepInto | Self::StepOut => phase == Phase::Paused,
             Self::Stop => active,
             _ => true,
         }
@@ -106,11 +116,53 @@ pub(super) struct Validation;
 #[derive(Resource)]
 pub(super) struct Mono(Handle<Font>);
 
+/// The Execution source's markers, drawn in code: the font has neither
+/// glyph.
+#[derive(Resource)]
+pub(super) struct Markers {
+    next: Handle<Image>,
+    dot: Handle<Image>,
+}
+
+impl Markers {
+    fn new(images: &mut Assets<Image>) -> Self {
+        Self {
+            next: images.add(icons::Marker::Next.image()),
+            dot: images.add(icons::Marker::Dot.image()),
+        }
+    }
+}
+
+/// What the Execution source rows were last drawn for.
+struct Drawn {
+    line: Option<usize>,
+    phase: Phase,
+    source: String,
+    rows: usize,
+    target: Option<usize>,
+    /// The first row shown, counted from 0.
+    start: usize,
+    /// The dots, which change while paused from the Editor tab.
+    dots: std::collections::BTreeSet<usize>,
+}
+
+impl Drawn {
+    fn shows(&self, status: &RunStatus, rows: usize, target: Option<usize>, start: usize) -> bool {
+        self.line == status.line()
+            && self.phase == status.phase()
+            && self.source == status.source()
+            && self.rows == rows
+            && self.target == target
+            && self.start == start
+            && &self.dots == status.breakpoints()
+    }
+}
+
 /// Cached source-derived views; elapsed-time updates do not reparse a document.
 #[derive(Default)]
 pub(super) struct Cache {
     document_revision: Option<u64>,
-    run: Option<(Option<usize>, Phase, String, usize)>,
+    run: Option<Drawn>,
     help_page: Option<usize>,
     validation: Option<(u64, String)>,
 }
@@ -197,14 +249,21 @@ fn icon_button(
         .id()
 }
 
-/// Run, pause, resume, step and stop as icons, for the right end of the
-/// row above a page's script area.
+/// The run and debugging controls as icons, for the right end of the row
+/// above a page's script area.
 fn run_controls(commands: &mut Commands, images: &mut Assets<Image>) -> Entity {
     let children = [
         (icons::Icon::Run, "Run", Action::Run),
+        (
+            icons::Icon::RunToCursor,
+            "Run to cursor",
+            Action::RunToCursor,
+        ),
         (icons::Icon::Pause, "Pause", Action::Pause),
         (icons::Icon::Resume, "Resume", Action::Resume),
-        (icons::Icon::Step, "Step", Action::Step),
+        (icons::Icon::Step, "Step over", Action::Step),
+        (icons::Icon::StepInto, "Step into", Action::StepInto),
+        (icons::Icon::StepOut, "Step out", Action::StepOut),
         (icons::Icon::Stop, "Stop", Action::Stop),
     ]
     .map(|(icon, title, action)| icon_button(commands, images, icon, title, action));
@@ -413,6 +472,7 @@ pub(super) fn spawn(
     let lines = commands
         .spawn((
             SourceLines,
+            TakesWheel,
             Node {
                 min_height: px(120),
                 min_width: px(0),
@@ -551,6 +611,7 @@ pub(super) fn spawn(
     ]);
     commands.entity(frame).add_child(body);
     commands.insert_resource(mono);
+    commands.insert_resource(Markers::new(&mut images));
 }
 
 fn phase_text(phase: Phase) -> &'static str {
@@ -581,7 +642,7 @@ pub(super) fn refresh(
     mut state: ResMut<Workbench>,
     status: Res<RunStatus>,
     shown: Res<Shown>,
-    mono: Res<Mono>,
+    (mono, markers): (Res<Mono>, Res<Markers>),
     mut nodes: Query<
         (
             &mut Node,
@@ -625,7 +686,6 @@ pub(super) fn refresh(
     help_body: Query<(Entity, Has<Breadcrumbs>), Or<(With<HelpBody>, With<Breadcrumbs>)>>,
     mut previous: Local<Cache>,
 ) {
-    let active = status.phase().active();
     for (mut node, page, root, confirmation, library, flow_pane) in &mut nodes {
         let visible = if root {
             shown.displayed(WindowId::Scripts)
@@ -636,7 +696,7 @@ pub(super) fn refresh(
         } else if flow_pane {
             status.flow().is_some()
         } else if let Some(Page(tab)) = page {
-            *tab == state.tab && (*tab != Tab::Editor || !active)
+            *tab == state.tab
         } else {
             continue;
         };
@@ -770,19 +830,37 @@ pub(super) fn refresh(
         });
     // Rebuild at action boundaries or a new height, not at frame rate or
     // every elapsed-time tick.
+    let target = state.run_target;
+    // The rows follow the next line; the wheel looks away from it until the
+    // run moves on.
     if previous
         .run
         .as_ref()
-        .is_none_or(|(line, phase, source, shown)| {
-            *line != status.line()
-                || *phase != status.phase()
-                || source != status.source()
-                || *shown != rows
-        })
+        .is_some_and(|drawn| drawn.line != status.line() || drawn.phase != status.phase())
+    {
+        state.source_scroll = 0;
+    }
+    let total = status.source().lines().count();
+    let follow = first_row(status.line().unwrap_or(1), rows);
+    let start = follow
+        .saturating_add_signed(state.source_scroll)
+        .min(total.saturating_sub(rows));
+    // Scrolling past either end does not build up turns to undo.
+    #[allow(
+        clippy::cast_possible_wrap,
+        reason = "row counts are far below isize::MAX"
+    )]
+    let scrolled = start as isize - follow as isize;
+    if state.source_scroll != scrolled {
+        state.source_scroll = scrolled;
+    }
+    if previous
+        .run
+        .as_ref()
+        .is_none_or(|drawn| !drawn.shows(&status, rows, target, start))
     {
         if let Ok((parent, _)) = lines.single() {
             commands.entity(parent).despawn_children();
-            let start = first_row(status.line().unwrap_or(1), rows);
             let symbols = syntax::Symbols::scan(status.source());
             for (index, line) in status.source().lines().enumerate().skip(start).take(rows) {
                 source_line(
@@ -791,17 +869,25 @@ pub(super) fn refresh(
                     line,
                     Some(&symbols),
                     Some(index + 1),
-                    status.line() == Some(index + 1),
+                    Row {
+                        active: status.line() == Some(index + 1),
+                        dot: status.breakpoints().contains(&(index + 1)),
+                        target: state.run_target == Some(index + 1),
+                    },
+                    Some(&markers),
                     &mono,
                 );
             }
         }
-        previous.run = Some((
-            status.line(),
-            status.phase(),
-            status.source().to_owned(),
+        previous.run = Some(Drawn {
+            line: status.line(),
+            phase: status.phase(),
+            source: status.source().to_owned(),
             rows,
-        ));
+            target,
+            start,
+            dots: status.breakpoints().clone(),
+        });
     }
     if previous.help_page != Some(state.help_page) {
         for (parent, breadcrumbs) in &help_body {
@@ -816,16 +902,26 @@ pub(super) fn refresh(
     }
 }
 
+/// The state panel's text, in the monospace font, so ASCII only: that
+/// font has no `·`.
 fn flow_summary(status: &RunStatus) -> String {
     let Some(flow) = status.flow() else {
         return String::new();
     };
     let mut lines = vec!["Execution state".into()];
     if let Some((line, taken)) = flow.branch() {
-        lines.push(format!("If L{line} · {taken}"));
+        lines.push(format!("If L{line}: {taken}"));
     }
     for (line, iteration, limit) in flow.loops() {
-        lines.push(format!("Loop L{line} · {iteration}/{limit}"));
+        lines.push(format!("Loop L{line}: {iteration}/{limit}"));
+    }
+    if !flow.calls().is_empty() {
+        lines.push(String::new());
+        lines.push("Calls".into());
+        // Innermost first, as a call stack reads.
+        for (name, line) in flow.calls().iter().rev() {
+            lines.push(format!("{name}: L{line}"));
+        }
     }
     lines.push(String::new());
     lines.push("Variables".into());
@@ -842,6 +938,8 @@ fn flow_summary(status: &RunStatus) -> String {
 /// One source row's height, and the pane's padding above and below.
 const ROW: f32 = 18.0;
 const PANE_PADDING: f32 = 8.0;
+/// A marker's square, beside a source row's number.
+const MARKER: f32 = 12.0;
 /// Rows shown before the pane has been laid out.
 const DEFAULT_ROWS: usize = 14;
 
@@ -865,14 +963,40 @@ const fn first_row(current: usize, rows: usize) -> usize {
     current.saturating_sub(rows * 3 / 7)
 }
 
-/// A read-only source line with stable syntax colors and an execution marker.
+/// How one source row is marked.
+#[derive(Clone, Copy, Default)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "one row's independent presentation facts"
+)]
+pub(super) struct Row {
+    /// The line that runs next.
+    pub(super) active: bool,
+    /// A breakpoint is on it.
+    pub(super) dot: bool,
+    /// Run to cursor goes to it.
+    pub(super) target: bool,
+}
+
+/// A read-only source line with stable syntax colors and, given `markers`,
+/// columns for the next line's marker and a breakpoint dot. A numbered line
+/// can be picked as the Run to cursor target.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one row's source, place and presentation"
+)]
 pub(super) fn source_line(
     commands: &mut Commands,
     parent: Entity,
     source: &str,
     symbols: Option<&syntax::Symbols>,
     line: Option<usize>,
-    active: bool,
+    Row {
+        active,
+        dot,
+        target,
+    }: Row,
+    markers: Option<&Markers>,
     mono: &Mono,
 ) {
     let row = commands
@@ -885,16 +1009,42 @@ pub(super) fn source_line(
             },
             BackgroundColor(if active {
                 theme::BUTTON_ON
+            } else if target {
+                theme::READY
             } else {
                 Color::NONE
             }),
         ))
         .id();
+    if let Some(line) = line {
+        commands.entity(row).insert((Button, PickLine(line)));
+    }
+    if let Some(markers) = markers {
+        for (shown, image, marker) in [
+            (active, &markers.next, icons::Marker::Next),
+            (dot, &markers.dot, icons::Marker::Dot),
+        ] {
+            let cell = commands
+                .spawn(Node {
+                    width: px(MARKER),
+                    height: px(MARKER),
+                    margin: UiRect::top(px((ROW - MARKER) / 2.0)),
+                    flex_shrink: 0.0,
+                    ..default()
+                })
+                .id();
+            if shown {
+                commands.entity(cell).insert((
+                    ImageNode::new(image.clone()).with_color(marker.tint()),
+                    marker,
+                ));
+            }
+            commands.entity(row).add_child(cell);
+        }
+    }
     let text = commands
         .spawn((
-            Text::new(line.map_or_else(String::new, |line| {
-                format!("{}{line:>4}  ", if active { "▶" } else { " " })
-            })),
+            Text::new(line.map_or_else(String::new, |line| format!("{line:>4}  "))),
             font(mono, 13.0),
             TextColor(theme::INK_DIM),
             TextLayout::no_wrap(),
@@ -924,7 +1074,8 @@ pub(super) fn source_line(
 )]
 pub(super) fn scroll(
     wheel: Res<Wheel>,
-    state: Res<Workbench>,
+    mut state: ResMut<Workbench>,
+    source: Query<Entity, With<SourceLines>>,
     mut page: Local<Option<usize>>,
     mut panels: Query<
         (Entity, &ComputedNode, &mut ScrollPosition, Has<HelpScroll>),
@@ -949,6 +1100,24 @@ pub(super) fn scroll(
         }
     }
     *page = Some(state.help_page);
+    // The Execution source moves by whole rows, up for a wheel turned up.
+    if let Ok(entity) = source.single()
+        && wheel.surface == Some(entity)
+    {
+        // At least one row per turn, however small its pixels.
+        let rows = (wheel.pixels.abs() / ROW).round().clamp(1.0, 100.0);
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "clamped to 1..=100 rows"
+        )]
+        let rows = rows as isize;
+        if wheel.pixels > 0.0 {
+            state.source_scroll = (state.source_scroll - rows).max(-10_000);
+        } else if wheel.pixels < 0.0 {
+            state.source_scroll = (state.source_scroll + rows).min(10_000);
+        }
+    }
     for (entity, node, text, mut scroll) in &mut editors {
         if wheel.surface == Some(entity) {
             let maximum = (text.size.y - node.content_box().height()).max(0.0);
@@ -980,32 +1149,25 @@ mod tests {
     fn run_controls_are_usable_exactly_when_their_action_can_happen() {
         let controls = [
             Action::Run,
+            Action::RunToCursor,
             Action::Pause,
             Action::Resume,
             Action::Step,
+            Action::StepInto,
+            Action::StepOut,
             Action::Stop,
         ];
         let usable = |phase, busy| controls.map(|action| action.usable(phase, busy));
-        // Run, pause, resume, step, stop.
-        assert_eq!(
-            usable(Phase::Idle, false),
-            [true, false, false, false, false]
-        );
-        assert_eq!(usable(Phase::Idle, true), [false; 5]);
-        assert_eq!(
-            usable(Phase::Running, false),
-            [false, true, false, false, true]
-        );
-        assert_eq!(
-            usable(Phase::Pausing, false),
-            [false, true, false, false, true]
-        );
-        assert_eq!(
-            usable(Phase::Paused, false),
-            [false, false, true, true, true]
-        );
+        // Run, run to cursor, pause, resume, step over, into, out, stop.
+        let (t, f) = (true, false);
+        assert_eq!(usable(Phase::Idle, false), [t, t, f, f, f, f, f, f]);
+        assert_eq!(usable(Phase::Idle, true), [false; 8]);
+        assert_eq!(usable(Phase::Running, false), [f, f, t, f, f, f, f, t]);
+        assert_eq!(usable(Phase::Pausing, false), [f, f, t, f, f, f, f, t]);
+        // While paused, run to cursor resumes to the line asked for.
+        assert_eq!(usable(Phase::Paused, false), [f, t, f, t, t, t, t, t]);
         for done in [Phase::Completed, Phase::Stopped, Phase::Failed] {
-            assert_eq!(usable(done, false), [true, false, false, false, false]);
+            assert_eq!(usable(done, false), [t, t, f, f, f, f, f, f]);
         }
     }
 }

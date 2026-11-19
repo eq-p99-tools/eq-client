@@ -68,6 +68,9 @@ pub(crate) struct FlowStatus {
     pub(super) branch: Option<(usize, bool)>,
     pub(super) loops: Vec<(usize, u16, u16)>,
     pub(super) variables: Vec<String>,
+    /// Each call in progress, outermost first: its function and the line
+    /// it has reached.
+    pub(super) calls: Vec<(String, usize)>,
 }
 
 impl FlowStatus {
@@ -85,6 +88,10 @@ impl FlowStatus {
 
     pub(crate) fn variables(&self) -> &[String] {
         &self.variables
+    }
+
+    pub(crate) fn calls(&self) -> &[(String, usize)] {
+        &self.calls
     }
 }
 
@@ -107,9 +114,29 @@ pub struct RunStatus {
     pub(super) revision: u64,
     /// An immediate action also stays active until the next frame settles it.
     pub(super) step_pending: bool,
+    /// Lines this run pauses before, every time they are reached.
+    pub(super) breakpoints: Arc<std::collections::BTreeSet<usize>>,
 }
 
 impl RunStatus {
+    /// A run paused at `line` of `source`, for the editor's tests.
+    #[cfg(test)]
+    pub(crate) fn paused_at(source: &str, line: usize) -> Self {
+        Self {
+            source: source.into(),
+            phase: Phase::Paused,
+            line: Some(line),
+            ..Self::default()
+        }
+    }
+
+    /// The same status with these dots, for the editor's tests.
+    #[cfg(test)]
+    pub(crate) fn with_breakpoints(mut self, lines: &[usize]) -> Self {
+        self.breakpoints = Arc::new(lines.iter().copied().collect());
+        self
+    }
+
     pub(super) fn queued(total: usize, source: Arc<str>) -> Self {
         Self {
             total,
@@ -143,6 +170,12 @@ impl RunStatus {
     #[must_use]
     pub const fn progress(&self) -> (usize, usize) {
         (self.completed_steps, self.total)
+    }
+
+    /// The lines this run pauses before.
+    #[must_use]
+    pub fn breakpoints(&self) -> &std::collections::BTreeSet<usize> {
+        &self.breakpoints
     }
 
     pub(crate) const fn flow(&self) -> Option<&FlowStatus> {
@@ -198,7 +231,15 @@ impl RunStatus {
 pub(crate) enum Request {
     Pause,
     Resume,
+    /// Run one statement; a call runs to its return.
     Step,
+    /// Run one statement; a call stops at the function's first statement.
+    StepInto,
+    /// Run until the call returns, or the innermost block around the paused
+    /// statement is left.
+    StepOut,
+    /// Resume until this statement line, once.
+    RunTo(usize),
     Stop,
 }
 
@@ -212,19 +253,44 @@ pub(super) enum RunMode {
     OneStep,
 }
 
-/// The UI's pending request. A stop takes precedence over another pending request.
+/// The UI's pending request. A stop takes precedence over another pending
+/// request. Breakpoint dots changed while paused wait beside it.
 #[derive(Default, Resource)]
-pub(crate) struct RunControl(Option<Request>);
+pub(crate) struct RunControl {
+    request: Option<Request>,
+    breakpoints: Option<std::collections::BTreeSet<usize>>,
+}
 
 impl RunControl {
     pub(crate) fn request(&mut self, request: Request) {
-        if self.0 != Some(Request::Stop) {
-            self.0 = Some(request);
+        if self.request != Some(Request::Stop) {
+            self.request = Some(request);
         }
     }
 
     pub(super) fn take(&mut self) -> Option<Request> {
-        self.0.take()
+        self.request.take()
+    }
+
+    /// The statement lines the run pauses at from now on.
+    pub(crate) fn set_breakpoints(&mut self, lines: std::collections::BTreeSet<usize>) {
+        self.breakpoints = Some(lines);
+    }
+
+    pub(super) fn take_breakpoints(&mut self) -> Option<std::collections::BTreeSet<usize>> {
+        self.breakpoints.take()
+    }
+
+    /// The request waiting for the run, for the editor's tests.
+    #[cfg(test)]
+    pub(crate) const fn pending(&self) -> Option<Request> {
+        self.request
+    }
+
+    /// The dots waiting for the run, for the editor's tests.
+    #[cfg(test)]
+    pub(crate) const fn pending_breakpoints(&self) -> Option<&std::collections::BTreeSet<usize>> {
+        self.breakpoints.as_ref()
     }
 }
 

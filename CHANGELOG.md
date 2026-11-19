@@ -10,10 +10,25 @@
   `if`, `elif`, `else`, `for i in range(n):` and `while c, limit=n:` headers,
   with `break`, `continue` and `pass`; conditions use `and`, `or`, `not`,
   `True` and `False`, and text takes single or double quotes with `\"`,
-  `\'` and `\\` escapes. `def` and `return` are reserved for functions.
+  `\'` and `\\` escapes.
   Help, the editor highlighter and the Vim plugin (now with indenting after
   `:`) follow the new syntax, and a thin line divides the editor's line
   numbers from the text.
+- Script editor: breakpoints and stepping. Click a line number to set a
+  dot; a run pauses before that statement each time it reaches it, and
+  dots follow their lines through edits. Run to cursor, Step over, Step
+  into and Step out join Run, Pause, Resume and Stop as icons above the
+  script; while paused, a click on a line of the Execution source chooses
+  where Run to cursor stops. The Execution source scrolls with the wheel,
+  and during a run the Editor tab shows the script read-only; while paused,
+  its caret and dots work and the run takes the new dots. See Run controls
+  and troubleshooting in Help.
+- Script functions: `def name(parameter: type, ...):` defines one, called
+  as `name(arguments)` before or after its definition, with `return` to
+  leave early. Parameters and inner variables belong to each call; top-level
+  variables are shared. Up to 32 functions, 8 parameters, 32 variables each
+  and calls 8 deep. The Execution tab lists the calls in progress, and the
+  editor, Help and the Vim plugin colour functions. See Functions in Help.
 - Scripts window: it resizes from any edge or corner and remembers its size,
   and the editor, the Execution source and Help grow with it. Run, Pause,
   Resume, Step and Stop are icons at the right end of the row above the
