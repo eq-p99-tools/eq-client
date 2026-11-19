@@ -2916,3 +2916,89 @@ fn the_erudin_pier_rail_and_its_posts_are_climbed() {
         assert!(south_most < 65.0, "{name}: stopped at y {south_most}");
     }
 }
+
+/// Erud's Crossing: where the ships' last reports leave them at the dock,
+/// (612, -1781) at heading 0 (a local server, 11-18), against the planks. Places
+/// the race-72 actor's collision as the carrier renderer does and prints its
+/// world bounds and the floor along lines from the hull to the planks, with
+/// and without the hull, so the gap between them can be read off.
+/// `EQ_PROBE_SIZE` (default 0) and `EQ_PROBE_GENDER` (default 2) pick the
+/// drawn size and actor.
+#[test]
+#[ignore = "requires EQ_PROBE_INSTALL"]
+fn the_erud_crossing_ship_at_its_dock_stop() {
+    use eq_client_assets::ui::InstalledClient;
+    use eq_client_core::movement::{CollisionInstance, CollisionMesh};
+    let install = PathBuf::from(std::env::var("EQ_PROBE_INSTALL").unwrap());
+    let size: f32 = std::env::var("EQ_PROBE_SIZE").map_or(0.0, |size| size.parse().unwrap());
+    let gender: u32 = std::env::var("EQ_PROBE_GENDER").map_or(2, |gender| gender.parse().unwrap());
+    let zone = eq_client_assets::load_zone(&install, "erudsxing").unwrap();
+    let dock = build_collision(&zone).unwrap();
+    let tag = eq_client_core::races::carrier_actor(72, gender).unwrap();
+    let actor = eq_client_assets::actors::load_installed_actor(&install, "erudsxing", tag).unwrap();
+    let drawn = crate::entities::Drawn::by(InstalledClient::Titanium, None, (72, gender, size));
+    let pose = eq_client_core::WorldPosition {
+        x: 612.0,
+        y: -1781.0,
+        z: -17.25,
+        heading: 0.0,
+    };
+    let translation = Vec3::from_array(eq_client_core::render_position(pose));
+    let rotation = Quat::from_rotation_y(eq_client_core::static_yaw(pose.heading));
+    let scale = Vec3::splat(drawn.scale);
+    let (mut low, mut high) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+    for point in actor.model.collision.iter().flatten() {
+        let placed = translation + rotation * (Vec3::from_array(*point) * scale);
+        let world = eq_client_core::axes::to_world(placed);
+        low = low.min(world);
+        high = high.max(world);
+    }
+    println!(
+        "actor={tag} scale={} triangles={} world_low={low:?} world_high={high:?}",
+        drawn.scale,
+        actor.model.collision.len()
+    );
+    let mesh = CollisionMesh::new(
+        actor
+            .model
+            .collision
+            .iter()
+            .map(|triangle| triangle.map(|point| (Vec3::from_array(point) * scale).to_array())),
+    )
+    .unwrap();
+    let mut boarded = build_collision(&zone).unwrap();
+    boarded.set_spawn_instances(vec![(
+        96,
+        CollisionInstance::new(std::sync::Arc::new(mesh), translation, rotation).unwrap(),
+    )]);
+    let floor = |world: &eq_client_core::movement::CollisionWorld, x: f32, y: f32| {
+        let feet = Vec3::from_array(eq_client_core::render_position(
+            eq_client_core::WorldPosition {
+                x,
+                y,
+                z: 15.0,
+                heading: 0.0,
+            },
+        ));
+        world.ground(feet, 0.0, 40.0)
+    };
+    for y in [-1800.0_f32, -1790.0, -1781.0, -1771.8, -1765.0] {
+        let mut line = format!("y={y}:");
+        let mut x = 596.0_f32;
+        while x <= 724.0 {
+            let dock_floor = floor(&dock, x, y);
+            let any_floor = floor(&boarded, x, y);
+            let mark = match (dock_floor, any_floor) {
+                (_, None) => "-".to_owned(),
+                (Some(d), Some(a)) if (d - a).abs() < 0.01 => format!("D{a:.1}"),
+                (_, Some(a)) => format!("S{a:.1}"),
+            };
+            line.push(' ');
+            line.push_str(&x.to_string());
+            line.push(':');
+            line.push_str(&mark);
+            x += 4.0;
+        }
+        println!("{line}");
+    }
+}
