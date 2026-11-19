@@ -34,9 +34,9 @@ impl TerrainAnimation {
             return None;
         }
         let interval = u128::from(self.frame_millis.get());
-        // The terrain material tick at EQGfx_Dx8.dll 0x10040270 (Titanium)
-        // and eqgfx_dx8.dll 0x100508d0 (EQMac) advances once unless the
-        // texture permits skipping. The deadline comparison is strict.
+        // The Titanium and EQMac graphics libraries' terrain material tick
+        // advances once unless the texture permits skipping (program read).
+        // The deadline comparison is strict.
         let steps = if self.skip_frames {
             let late = now - self.next_frame_millis;
             let steps = if late > interval * 16 {

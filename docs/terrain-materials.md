@@ -44,13 +44,11 @@ materials stay two-sided. Collision and object animation are unchanged.
   `e0e5a4e65c170272035a8beb65bda048f7a60a01`,
   `material_def.rs` (`MaterialFlags::is_two_sided`) and
   `simple_sprite_def.rs` (`frame_references`, `sleep`).
-- Program reads of the WLD material loaders at Titanium `EQGfx_Dx8.dll`
-  `0x1001d810` and EQMac `eqgfx_dx8.dll` `0x1002fc90` confirm that bit0 selects
-  the material's two-sided state.
-- The texture loaders at Titanium `EQGfx_Dx8.dll` `0x1001a280` and EQMac
-  `eqgfx_dx8.dll` `0x1002b4e0` read the skip permission from bit6. Their terrain
-  material ticks at `0x10040270` and `0x100508d0`, respectively, require time
-  strictly beyond the deadline. Without skip permission they advance once and
+- Program reads of the WLD material loaders in the Titanium `EQGfx_Dx8.dll` and
+  EQMac `eqgfx_dx8.dll` graphics libraries confirm that bit0 selects the
+  material's two-sided state.
+- The same libraries' texture loaders read the skip permission from bit6. Their
+  terrain material ticks require time strictly beyond the deadline. Without skip permission they advance once and
   schedule the next deadline from that update; the skip path catches up against
   the previous deadline. The code uses this raw flag rather than the pinned
   parser's differently named convenience bit.
