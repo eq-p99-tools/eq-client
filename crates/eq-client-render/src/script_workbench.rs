@@ -322,7 +322,12 @@ fn controls(
                     .zip(statements)
                     .and_then(|(line, statements)| breakpoints::statement_at(line, &statements))
                 {
-                    Some(line) => control.request(Request::RunTo(line)),
+                    Some(line) => {
+                        // The run holds the line from here; the pick is used.
+                        state.run_target = None;
+                        state.message.clear();
+                        control.request(Request::RunTo(line));
+                    }
                     None => {
                         state.message =
                             "Click a source line above to choose where Run to cursor stops.".into();
@@ -578,6 +583,16 @@ mod tests {
         assert_eq!(
             app.world().resource::<RunControl>().pending(),
             Some(Request::RunTo(3))
+        );
+        // The run holds the line now, so the shading and the note go.
+        app.update();
+        let state = app.world().resource::<Workbench>();
+        assert_eq!(state.run_target, None);
+        assert_eq!(state.message, "");
+        let picked = row(&mut app, 3);
+        assert_ne!(
+            app.world().get::<BackgroundColor>(picked).unwrap().0,
+            crate::theme::READY
         );
     }
 

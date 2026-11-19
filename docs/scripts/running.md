@@ -27,7 +27,7 @@ Click a line number in the editor to put a breakpoint dot on that line, and clic
 The controls at the top right of the editor and of the Execution view, from left to right:
 
 - **Run** starts the script.
-- **Run to cursor** starts the script and pauses once before the statement at the caret's line. While a run is paused, click a line in the Execution view's source to choose where it stops instead; the chosen line is shaded, and Run to cursor resumes to it. On the line the run is paused at, it runs until that line comes round again.
+- **Run to cursor** starts the script and pauses once before the statement at the caret's line. While a run is paused, click a line in the Execution view's source to choose where it stops instead; the chosen line is shaded until Run to cursor resumes to it. On the line the run is paused at, it runs until that line comes round again.
 - **Pause** and **Resume** pause between statements and continue.
 - **Step over** runs one statement and pauses before the next; a call runs to its end first.
 - **Step into** runs one statement and pauses before the next, stepping into a function it calls.
