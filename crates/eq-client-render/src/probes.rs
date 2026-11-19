@@ -2926,6 +2926,10 @@ fn the_erudin_pier_rail_and_its_posts_are_climbed() {
 /// drawn size and actor.
 #[test]
 #[ignore = "requires EQ_PROBE_INSTALL"]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one placement, its floor map and its jumps"
+)]
 fn the_erud_crossing_ship_at_its_dock_stop() {
     use eq_client_assets::ui::InstalledClient;
     use eq_client_core::movement::{CollisionInstance, CollisionMesh};
@@ -3000,5 +3004,56 @@ fn the_erud_crossing_ship_at_its_dock_stop() {
             x += 4.0;
         }
         println!("{line}");
+    }
+    // A human of size 6 running west off the planks at y -1781 and -1771.8,
+    // jumping once its feet pass `takeoff`, by this client's Titanium falls.
+    let human = PlayerBody {
+        feet_offset: 3.75,
+        height: 6.0,
+        size: 6.0,
+    };
+    let physics = motion::walking(
+        motion::physics(InstalledClient::Titanium, None),
+        InstalledClient::Titanium,
+        &human,
+        true,
+    );
+    let west = Vec3::from_array(eq_client_core::render_vector([-1.0, 0.0, 0.0]));
+    for y in [-1781.0_f32, -1771.8] {
+        for takeoff in [652.0_f32, 654.0, 656.0, 658.0, 660.0, 664.0] {
+            let mut feet = Vec3::from_array(eq_client_core::render_position(
+                eq_client_core::WorldPosition {
+                    x: 700.0,
+                    y,
+                    z: 0.0,
+                    heading: 0.0,
+                },
+            ));
+            let mut airborne = eq_client_core::movement::AirborneController::default();
+            let mut jumped = None;
+            for _ in 0..60 {
+                let world = eq_client_core::axes::to_world(feet);
+                let jump = jumped.is_none() && world.x <= takeoff;
+                if jump {
+                    jumped = Some(world);
+                }
+                feet = motion::fall_step(
+                    &mut airborne,
+                    &boarded,
+                    physics,
+                    Some(physics.reach()),
+                    feet,
+                    west * 32.0 * 0.05,
+                    0.05,
+                    human.height,
+                    jump,
+                );
+            }
+            let end = eq_client_core::axes::to_world(feet);
+            println!(
+                "run_jump y={y} takeoff={takeoff} jumped_at={jumped:?} end={end:?} aboard={}",
+                end.z > 3.0
+            );
+        }
     }
 }
