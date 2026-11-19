@@ -6,6 +6,12 @@ const HEADER: &str = "# eq-client socials v1";
 const MAX_SOCIALS: usize = 120;
 const MAX_LINES: usize = 5;
 const MAX_LINE_BYTES: usize = 512;
+/// The runner's step (char tick 0x422198, read R45b): it runs at most every
+/// ~100 ms, and an ordinary line waits one step, so lines go about 100 ms
+/// apart.
+pub(super) const STEP: Duration = Duration::from_millis(100);
+/// `/pause N` waits N steps, clamped to 1-600 (R45b).
+const PAUSE_STEPS: std::ops::RangeInclusive<i64> = 1..=600;
 
 #[derive(Default)]
 pub(super) struct Catalog {
@@ -45,7 +51,9 @@ impl Definition {
 }
 
 impl Line {
-    /// A leading pause plus comma delays after the accompanying command.
+    /// An ordinary line waits one step before the next. `/pause N` waits N
+    /// steps, clamped to 1-600, and a command after its comma runs at once,
+    /// before the wait (R45b).
     fn parse(text: &str) -> Result<Self, String> {
         if text.len() > MAX_LINE_BYTES || text.chars().any(char::is_control) {
             return Err("A social line contains invalid text".into());
@@ -54,7 +62,7 @@ impl Line {
         if !name.eq_ignore_ascii_case("pause") {
             return Ok(Self {
                 command: Some(action(text)?),
-                pause: Duration::ZERO,
+                pause: STEP,
             });
         }
         let (number, inline) = rest
@@ -62,16 +70,15 @@ impl Line {
             .map_or((rest, None), |(number, inline)| {
                 (number, Some(inline.trim()))
             });
-        let tenths = number
+        let steps = number
             .trim()
-            .parse::<u64>()
-            .ok()
-            .filter(|number| (1..=600).contains(number))
-            .ok_or("Use /pause 1 through 600 (tenths of a second)")?;
+            .parse::<i64>()
+            .map_err(|_| "Use /pause and a number of tenths of a second, 1 to 600")?
+            .clamp(*PAUSE_STEPS.start(), *PAUSE_STEPS.end());
         let command = inline.map(action).transpose()?;
         Ok(Self {
             command,
-            pause: Duration::from_millis(tenths * 100),
+            pause: STEP * u32::try_from(steps).expect("the clamp keeps it within 1-600"),
         })
     }
 }
@@ -269,9 +276,20 @@ mod tests {
         let alone = Line::parse("/pause 600").unwrap();
         assert!(alone.command.is_none());
         assert_eq!(alone.pause, Duration::from_secs(60));
+        // The program clamps the count to 1-600 rather than refusing it.
+        for (text, pause) in [
+            ("/pause 0", STEP),
+            ("/pause -3", STEP),
+            ("/pause 601", Duration::from_secs(60)),
+            ("/pause 99999999999", Duration::from_secs(60)),
+        ] {
+            assert_eq!(Line::parse(text).unwrap().pause, pause, "{text}");
+        }
+        // An ordinary line waits one step.
+        assert_eq!(Line::parse("/sit").unwrap().pause, STEP);
         for text in [
-            "/pause 0",
-            "/pause 601",
+            "/pause",
+            "/pause soon",
             "/pause 1,",
             "/pause 1,/pause 2",
             "/social play Loop",

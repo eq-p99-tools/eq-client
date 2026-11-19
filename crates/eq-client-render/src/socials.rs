@@ -116,7 +116,9 @@ impl State {
     }
 
     /// Runs at most one due line. A pause starts after submission and never
-    /// stands for the result of the command. Refusals end the run.
+    /// stands for the result of the command; an ordinary line waits one
+    /// step (about 100 ms) before the next, as the program's runner does.
+    /// Refusals end the run.
     fn tick(
         &mut self,
         admission: Option<u64>,
@@ -144,7 +146,8 @@ impl State {
         }
         run.next += 1;
         run.due = now + line.pause;
-        if run.next == run.lines.len() && line.pause.is_zero() {
+        // A last line's one step leaves nothing to wait for.
+        if run.next == run.lines.len() && line.pause <= definition::STEP {
             self.cancel("completed");
         }
         None
@@ -341,8 +344,10 @@ pub(super) fn update(
     (outbox, options): (Res<Outbox>, Res<crate::options::OptionsState>),
     script: Option<Res<crate::script::Script>>,
     authored: Option<Res<crate::script::AuthoredInput>>,
+    time: Res<Time<Real>>,
 ) {
-    let now = Instant::now();
+    // The frame's own instant, so that the runner's steps follow frames.
+    let now = time.last_update().unwrap_or_else(Instant::now);
     state.retire_script(script.as_deref(), &online);
     let admission = online
         .world()
@@ -453,6 +458,31 @@ mod tests {
         assert_eq!(state.last, Some("completed"));
     }
 
+    /// R45b: lines run about 100 ms apart, and `/pause 5, /sit` sits at once
+    /// and runs the next line after the wait.
+    #[test]
+    fn ordinary_lines_run_a_step_apart_and_a_pause_comma_runs_first() {
+        let (mut state, id) = with_social("/social set Test | /stand | /pause 5, /sit | /say next");
+        let now = Instant::now();
+        state.start(id, 1, now, None).unwrap();
+        let mut sent = Vec::new();
+        for ms in [0, 0, 50, 99, 100, 101, 599, 600, 700] {
+            state.tick(Some(1), now + Duration::from_millis(ms), |line| {
+                sent.push((ms, line.to_owned()));
+                Ok(())
+            });
+        }
+        assert_eq!(
+            sent,
+            [
+                (0, "/stand".into()),
+                (100, "/sit".into()),
+                (600, "/say next".into()),
+            ]
+        );
+        assert!(state.run.is_none());
+    }
+
     #[test]
     fn a_bound_social_dispatches_ordinary_posture_and_chat_requests() {
         use eq_client_core::{ClientCommand, OutboundChat, Posture};
@@ -483,10 +513,11 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::sync_channel(4);
         let outbox = Outbox::new(Some(tx));
         state.start(id, 1, now, None).unwrap();
-        for _ in 0..2 {
+        // Lines run one step apart.
+        for step in [now, now + definition::STEP] {
             assert!(
                 state
-                    .tick(Some(1), now, |command| {
+                    .tick(Some(1), step, |command| {
                         crate::chat::submit_social_line(
                             command,
                             &mut chat,
