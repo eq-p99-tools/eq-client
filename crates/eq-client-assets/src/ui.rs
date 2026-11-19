@@ -706,6 +706,14 @@ impl InstalledClient {
         }
     }
 
+    /// Whether this client's loot click asks before taking a NO DROP item,
+    /// as `/lootnodrop` sets: Titanium's does (0x52b9d5, read R45b); the
+    /// Mac-era client's is unread, so it takes at once as before.
+    #[must_use]
+    pub const fn asks_before_no_drop_loot(self) -> bool {
+        matches!(self, Self::Titanium)
+    }
+
     /// How this client asks the player about a translocate cast on them,
     /// using the installed client's string IDs. The zone session decides
     /// whether the server offers translocate and owns the answer window.
@@ -1157,6 +1165,11 @@ pub struct OfficialOptions {
     /// Whether the first-person view springs back level: `LookSpring` in
     /// `[Options]` (Titanium 0x4af32c).
     pub look_spring: Option<bool>,
+    /// When a loot click on a NO DROP item asks first, as `/lootnodrop`
+    /// sets it: `LootNoDrop`, read by the same options loader (Titanium
+    /// 0x4af32c), unclamped here. The section it sits in is unread, so
+    /// `[Defaults]` is tried before `[Options]` (checklist 6.487).
+    pub loot_no_drop: Option<i64>,
 }
 
 fn options_from_ini(text: &str) -> OfficialOptions {
@@ -1184,6 +1197,9 @@ fn options_from_ini(text: &str) -> OfficialOptions {
         mouse_sensitivity: ini_value(text, "Options", "MouseSensitivity")
             .and_then(|v| v.trim().parse().ok()),
         look_spring: flag("Options", "LookSpring"),
+        loot_no_drop: ini_value(text, "Defaults", "LootNoDrop")
+            .or_else(|| ini_value(text, "Options", "LootNoDrop"))
+            .and_then(|v| v.trim().parse().ok()),
     }
 }
 
@@ -2041,9 +2057,14 @@ LookSpring=1
                 max_fps: Some(100),
                 mouse_sensitivity: Some(4),
                 look_spring: Some(true),
+                loot_no_drop: None,
             }
         );
         assert_eq!(options_from_ini(""), OfficialOptions::default());
+        let loot = |text| options_from_ini(text).loot_no_drop;
+        assert_eq!(loot("[Defaults]\nLootNoDrop=1\n"), Some(1));
+        assert_eq!(loot("[Options]\nLootNoDrop=2\n"), Some(2));
+        assert_eq!(loot("[Defaults]\nLootNoDrop=x\n"), None);
     }
 
     #[test]

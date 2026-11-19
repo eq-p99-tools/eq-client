@@ -51,11 +51,24 @@ pub(crate) enum Question {
     /// Whether to join a guild, or take a higher rank in it, as the player
     /// was invited ([`crate::guild::Invitations`] holds the words).
     GuildInvite,
+    /// Whether to loot a NO DROP item from this place on this corpse
+    /// ([`crate::trade::no_drop`]).
+    LootNoDrop {
+        session_id: u64,
+        corpse_id: u16,
+        place: u16,
+        item_id: u32,
+    },
 }
 
 impl Question {
     /// What the dialog says, in the client's own words.
-    fn text(self, names: &crate::spellbook::SpellNames, online: &OnlineState) -> String {
+    fn text(
+        self,
+        names: &crate::spellbook::SpellNames,
+        online: &OnlineState,
+        messages: Option<&crate::hud::messages::Messages>,
+    ) -> String {
         match self {
             Self::DeleteCharacter { .. } => online.deletion.prompt().filter(|request| crate::character_delete::question(request) == self).map_or_else(String::new, |request| format!("Delete character {}? This may permanently remove the character. Choose Yes to confirm this exact name, or No to cancel.", request.name())),
             Self::DestroyItem { session_id, revision, item_id } => {
@@ -82,6 +95,7 @@ impl Question {
             }
             // The invitation's own words; see [`show`].
             Self::GuildInvite => String::new(),
+            Self::LootNoDrop { .. } => crate::trade::no_drop::text(online.world(), self, messages),
         }
     }
 }
@@ -120,6 +134,14 @@ impl Asked {
     /// Takes back the waiting question, unanswered.
     pub(crate) fn withdraw(&mut self) {
         self.question = None;
+    }
+
+    /// Answers the waiting question as Yes or No would.
+    #[cfg(test)]
+    pub(crate) fn give(&mut self, yes: bool) {
+        if let Some(question) = self.question.take() {
+            self.answer = Some((question, yes));
+        }
     }
 
     /// Takes the answer to the question, once given: Yes (true) or No.
@@ -237,7 +259,7 @@ pub(crate) fn show(
                 .map(|invitations| invitations.question())
                 .unwrap_or_default(),
             question => question
-                .map(|question| question.text(&names, &online))
+                .map(|question| question.text(&names, &online, messages.as_deref()))
                 .unwrap_or_default(),
         },
     };

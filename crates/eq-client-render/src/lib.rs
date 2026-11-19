@@ -112,6 +112,7 @@ mod sheets;
 mod skills;
 mod skin;
 mod skinned;
+mod slash;
 mod socials;
 mod sounds;
 mod speed;
@@ -345,6 +346,9 @@ fn seed_official_options(
             .and_then(eq_client_core::names::ShowNames::from_level)
         {
             option_defaults.show_names = level;
+        }
+        if let Some(level) = official.loot_no_drop {
+            option_defaults.loot_no_drop = eq_client_core::no_drop::LootNoDrop::from_level(level);
         }
         seed_levels(option_defaults, &official);
     }
