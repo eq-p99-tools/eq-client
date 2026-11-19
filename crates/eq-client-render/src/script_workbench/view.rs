@@ -839,7 +839,6 @@ fn flow_summary(status: &RunStatus) -> String {
     lines.join("\n")
 }
 
-/// A read-only source line with stable syntax colors and an execution marker.
 /// One source row's height, and the pane's padding above and below.
 const ROW: f32 = 18.0;
 const PANE_PADDING: f32 = 8.0;
@@ -866,6 +865,7 @@ const fn first_row(current: usize, rows: usize) -> usize {
     current.saturating_sub(rows * 3 / 7)
 }
 
+/// A read-only source line with stable syntax colors and an execution marker.
 pub(super) fn source_line(
     commands: &mut Commands,
     parent: Entity,
