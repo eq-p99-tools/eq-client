@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+- Take the Titanium slash forms socials and hotbuttons use (reads R45,
+  R45b). Social lines run a tenth of a second apart, as the original's
+  runner steps them, and `/pause` takes 1 to 600 tenths, larger or smaller
+  numbers clamped. New commands, in a social or the chat: `/yell` (sends the
+  empty 0x61ef and says "You yell for help."), `/stopcast` (sends the empty
+  0x4839, as `/stopsong` does; refused while mounted, where any buff with
+  the summon-mount effect, or with effects the spell data can't name, stands
+  in for the program's own mount test), `/doability 1` to `10` (the Actions
+  window's buttons, 1 to 6 Abilities and 7 to 10 Combat), `/memspellset`
+  (a saved set by number or name start; it opens the Spellbook) and
+  `/hotbutton NAME [COLOUR] TEXT` (writes the social and puts it on the
+  cursor; the name is cut to 15 characters). The inferred parts are under
+  checklist 6.487. Lines the installation has no string for are in this
+  client's words: "You yell for help.", "You can't stop casting now.",
+  "Use /doability 1 through 10.", "No spell set has that name or number.",
+  "Made hotbutton NAME.", "Every hotbutton is taken." and the four
+  `/hotbutton` help lines. Networking pinned to 57a87f6 (eq-network #318).
+
+- Ask before looting a NO DROP item, as the Titanium client does (read
+  R45b). This is a visible change to everyday looting: a click on a NO DROP
+  item from a corpse that isn't yours now opens the confirmation dialog, and
+  only Yes loots it. A question left 20 seconds loots nothing. `/lootnodrop`
+  picks when it asks, by the words of the installed client's three lines or
+  this client's `never` (always asks), `sometimes` (asks only about an item
+  your class or race can't use) and `always` (never asks); with no word, or
+  a word that names none, it lists the three. The choice is saved with this
+  client's options for the character. It starts from the installed
+  `eqclient.ini`'s `LootNoDrop`, and where there is none from `never`, which
+  the program read doesn't give (inferred, checklist 6.487). Loot all takes
+  what doesn't ask and leaves the rest for their own clicks. Whether the
+  item is NO DROP is read from its flag, and whether the corpse is yours
+  from its name, where the program's own tests are unread (6.487). The
+Mac-era servers loot as before, as that client's loot click is unread.
+
 - Refuse untargetable spawns as the Titanium client does (read R44). On
   EQEmu and P99, a spawn whose body type the original's target setter
   refuses (11, 60, 65 and 67: EQEmu's zone controller and other utility

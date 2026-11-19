@@ -347,6 +347,9 @@ fn seed_official_options(
         {
             option_defaults.show_names = level;
         }
+        if let Some(level) = official.loot_no_drop {
+            option_defaults.loot_no_drop = eq_client_core::no_drop::LootNoDrop::from_level(level);
+        }
         seed_levels(option_defaults, &official);
     }
 }

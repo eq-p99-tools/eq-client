@@ -355,7 +355,7 @@ fn row(parent: &mut ChildSpawnerCommands, children: impl FnOnce(&mut ChildSpawne
         .with_children(children);
 }
 
-#[allow(clippy::needless_pass_by_value)]
+#[allow(clippy::needless_pass_by_value, clippy::type_complexity)]
 pub(crate) fn input(
     mut sets: ResMut<Sets>,
     (online, outbox, settings, names): (

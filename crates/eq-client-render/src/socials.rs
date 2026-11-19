@@ -401,7 +401,11 @@ fn hot_button(
 
 /// Consume an explicit editor request or a normal hotbutton activation,
 /// then submit one due command through the same path as typed input.
-#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+#[allow(
+    clippy::needless_pass_by_value,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
 pub(super) fn update(
     mut state: ResMut<State>,
     mut bindings: ResMut<Bindings>,
