@@ -5,8 +5,9 @@ endif
 
 syntax case match
 syntax match eqscriptCommand /^\s*\zs\%(login\|wait_servers\|server\|wait_select\|select\|delete\|create\|create_refused\|wait_online\|wait_zone\|wait_relocation\|wait_dead\|slash\|boat\|social\|gm\|chat\|drag\|press\|hold\|wheel\|look\|wait\|camera\|trace\|face\|move\|approach\|chase\|walk\|give\|interact\|popup\|inspect_player\|inspect_link\|compose_link\|compose_owned_link\|click\|right_click\|hover\|hold_click\|report\|sound\|screenshot\|quit\)\>\ze\s*(/
-syntax keyword eqscriptKeyword if elif else for in while break continue pass and or not
-syntax keyword eqscriptReserved def return
+syntax keyword eqscriptKeyword if elif else for in while break continue pass and or not def return
+" The name a def line gives its function.
+syntax match eqscriptDefinition /\%(^def\s\+\)\@<=\h\w*/
 syntax match eqscriptKeyword /\<limit\ze\s*=/
 syntax keyword eqscriptType int bool text
 syntax keyword eqscriptConstant True False
@@ -23,7 +24,7 @@ syntax keyword eqscriptTodo TODO FIXME NOTE XXX contained
 
 highlight default link eqscriptCommand Function
 highlight default link eqscriptKeyword Statement
-highlight default link eqscriptReserved Error
+highlight default link eqscriptDefinition Function
 highlight default link eqscriptType Type
 highlight default link eqscriptConstant Constant
 highlight default link eqscriptBuiltin Function

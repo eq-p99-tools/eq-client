@@ -95,19 +95,25 @@ impl Binary {
     }
 }
 
+/// A variable read before its declaration ran. The runner replaces this
+/// with a message naming the variable.
+pub(super) const UNSET: &str = "a variable is read before it is set";
+
 fn checked(value: Option<i64>) -> Result<Value, &'static str> {
     value.map(Value::Int).ok_or("integer overflow")
 }
 
 impl Expr {
+    /// Evaluate with each variable's value, or `None` for one that has not
+    /// been set yet: that is [`UNSET`], which the runner names.
     pub(super) fn evaluate(
         &self,
-        variables: &[Value],
+        variables: &[Option<Value>],
         read: &impl Fn(Field) -> Value,
     ) -> Result<Value, &'static str> {
         match &self.node {
             Node::Literal(value) => Ok(value.clone()),
-            Node::Variable(index) => Ok(variables[*index].clone()),
+            Node::Variable(index) => variables[*index].clone().ok_or(UNSET),
             Node::Field(field) => Ok(read(*field)),
             Node::Unary(op, child) => {
                 let value = child.evaluate(variables, read)?;
@@ -346,6 +352,19 @@ pub(super) fn limited_condition(
 
 impl Expr {
     /// `variable op= value`, typed and checked as the long form would be.
+    /// The variables this expression reads, in order.
+    pub(super) fn reads(&self, into: &mut Vec<usize>) {
+        match &self.node {
+            Node::Variable(index) => into.push(*index),
+            Node::Literal(_) | Node::Field(_) => (),
+            Node::Unary(_, child) => child.reads(into),
+            Node::Binary(_, left, right) => {
+                left.reads(into);
+                right.reads(into);
+            }
+        }
+    }
+
     pub(super) fn compound(
         variable: usize,
         kind: Kind,

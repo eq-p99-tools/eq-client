@@ -1,5 +1,8 @@
 //! The run controls' icons, drawn in code so they need no asset files and no
-//! glyphs the bundled font lacks: ▶ run, ‖ pause, |▶ resume, ▶| step, ■ stop.
+//! glyphs the bundled font lacks: ▶ run, ▶I run to cursor, ‖ pause,
+//! |▶ resume, ▶| step over, ↓ step into, ↑ step out, ■ stop. The Execution
+//! source's markers, the next line's ▶ and a breakpoint's dot, are drawn the
+//! same way.
 
 use bevy::prelude::*;
 
@@ -21,12 +24,36 @@ enum Piece {
         right: f32,
     },
     Square,
+    /// A disc around the middle.
+    Disc,
+    /// An arrow pointing up (`up`) or down, its head in the half it points
+    /// to and its stem in the other.
+    Arrow {
+        up: bool,
+    },
+    /// A rectangle in unit coordinates, for an arrow's base or a cursor's
+    /// serifs.
+    Block {
+        left: f32,
+        right: f32,
+        top: f32,
+        bottom: f32,
+    },
 }
 
 impl Piece {
     fn contains(self, x: f32, y: f32) -> bool {
         const TOP: f32 = 0.16;
         const BOTTOM: f32 = 0.84;
+        if let Self::Block {
+            left,
+            right,
+            top,
+            bottom,
+        } = self
+        {
+            return (left..=right).contains(&x) && (top..=bottom).contains(&y);
+        }
         if !(TOP..=BOTTOM).contains(&y) {
             return false;
         }
@@ -40,6 +67,21 @@ impl Piece {
                 x >= left && x <= right - (right - left) * from_middle
             }
             Self::Square => (0.2..=0.8).contains(&x) && (0.2..=0.8).contains(&y),
+            Self::Disc => (x - 0.5).hypot(y - 0.5) <= 0.3,
+            Self::Arrow { up } => {
+                // Distance from the tip, 0 at the tip and 1 at the far end.
+                let along = if up {
+                    (y - TOP) / (BOTTOM - TOP)
+                } else {
+                    (BOTTOM - y) / (BOTTOM - TOP)
+                };
+                if along <= 0.55 {
+                    (x - 0.5).abs() <= 0.34 * along / 0.55
+                } else {
+                    (x - 0.5).abs() <= 0.1
+                }
+            }
+            Self::Block { .. } => unreachable!("handled above"),
         }
     }
 }
@@ -48,9 +90,12 @@ impl Piece {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Icon {
     Run,
+    RunToCursor,
     Pause,
     Resume,
     Step,
+    StepInto,
+    StepOut,
     Stop,
 }
 
@@ -91,6 +136,31 @@ impl Icon {
                     right: 0.86,
                 },
             ],
+            Self::RunToCursor => &[
+                Piece::Play {
+                    left: 0.1,
+                    right: 0.58,
+                },
+                // A text cursor: a thin stem with serifs.
+                Piece::Bar {
+                    left: 0.75,
+                    right: 0.83,
+                },
+                Piece::Block {
+                    left: 0.66,
+                    right: 0.92,
+                    top: 0.12,
+                    bottom: 0.2,
+                },
+                Piece::Block {
+                    left: 0.66,
+                    right: 0.92,
+                    top: 0.8,
+                    bottom: 0.88,
+                },
+            ],
+            Self::StepInto => &[Piece::Arrow { up: false }],
+            Self::StepOut => &[Piece::Arrow { up: true }],
             Self::Stop => &[Piece::Square],
         }
     }
@@ -98,9 +168,11 @@ impl Icon {
     /// The icon's colour, so run and stop read at a glance.
     pub(super) const fn tint(self) -> Color {
         match self {
-            Self::Run | Self::Resume => Color::srgb(0.55, 0.87, 0.49),
+            Self::Run | Self::RunToCursor | Self::Resume => Color::srgb(0.55, 0.87, 0.49),
             Self::Stop => Color::srgb(1.0, 0.45, 0.42),
-            Self::Pause | Self::Step => Color::srgb(0.92, 0.93, 0.95),
+            Self::Pause | Self::Step | Self::StepInto | Self::StepOut => {
+                Color::srgb(0.92, 0.93, 0.95)
+            }
         }
     }
 
@@ -112,34 +184,72 @@ impl Icon {
 
     /// White coverage in alpha; the node's colour tints it.
     pub(super) fn image(self) -> Image {
-        let pieces = self.pieces();
-        let mut pixels = image::RgbaImage::new(SIZE, SIZE);
-        #[allow(
-            clippy::cast_precision_loss,
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "small texel counts and a coverage in 0..=255"
-        )]
-        for (x, y, pixel) in pixels.enumerate_pixels_mut() {
-            let mut covered = 0;
-            for sub_y in 0..SAMPLES {
-                for sub_x in 0..SAMPLES {
-                    let at = |texel: u32, sub: u32| {
-                        ((texel * SAMPLES + sub) as f32 + 0.5) / (SIZE * SAMPLES) as f32
-                    };
-                    let (u, v) = (at(x, sub_x), at(y, sub_y));
-                    if pieces.iter().any(|piece| piece.contains(u, v)) {
-                        covered += 1;
-                    }
+        draw(self.pieces())
+    }
+}
+
+/// A mark beside an Execution source line.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Marker {
+    /// The line that runs next.
+    Next,
+    /// A breakpoint.
+    Dot,
+}
+
+impl Marker {
+    const fn pieces(self) -> &'static [Piece] {
+        match self {
+            Self::Next => &[Piece::Play {
+                left: 0.2,
+                right: 0.8,
+            }],
+            Self::Dot => &[Piece::Disc],
+        }
+    }
+
+    /// The mark's colour: the editor's breakpoint red for a dot.
+    pub(super) const fn tint(self) -> Color {
+        match self {
+            Self::Next => Color::srgb(1.0, 0.8, 0.4),
+            Self::Dot => Color::srgb_u8(229, 83, 75),
+        }
+    }
+
+    /// White coverage in alpha; the node's colour tints it.
+    pub(super) fn image(self) -> Image {
+        draw(self.pieces())
+    }
+}
+
+/// White coverage of `pieces` in alpha.
+fn draw(pieces: &[Piece]) -> Image {
+    let mut pixels = image::RgbaImage::new(SIZE, SIZE);
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "small texel counts and a coverage in 0..=255"
+    )]
+    for (x, y, pixel) in pixels.enumerate_pixels_mut() {
+        let mut covered = 0;
+        for sub_y in 0..SAMPLES {
+            for sub_x in 0..SAMPLES {
+                let at = |texel: u32, sub: u32| {
+                    ((texel * SAMPLES + sub) as f32 + 0.5) / (SIZE * SAMPLES) as f32
+                };
+                let (u, v) = (at(x, sub_x), at(y, sub_y));
+                if pieces.iter().any(|piece| piece.contains(u, v)) {
+                    covered += 1;
                 }
             }
-            let alpha = (covered * 255 / (SAMPLES * SAMPLES)) as u8;
-            *pixel = image::Rgba([255, 255, 255, alpha]);
         }
-        let mut texture = crate::sheets::image(pixels);
-        texture.sampler = bevy::image::ImageSampler::linear();
-        texture
+        let alpha = (covered * 255 / (SAMPLES * SAMPLES)) as u8;
+        *pixel = image::Rgba([255, 255, 255, alpha]);
     }
+    let mut texture = crate::sheets::image(pixels);
+    texture.sampler = bevy::image::ImageSampler::linear();
+    texture
 }
 
 #[cfg(test)]
@@ -153,9 +263,30 @@ mod tests {
     }
 
     #[test]
+    fn markers_cover_their_middle_and_leave_their_corners_clear() {
+        for marker in [Marker::Next, Marker::Dot] {
+            let image = marker.image();
+            let pixels = image.data.as_ref().expect("pixels");
+            let alpha = |x: u32, y: u32| pixels[((y * SIZE + x) * 4 + 3) as usize];
+            assert_eq!(alpha(SIZE / 2 - 2, SIZE / 2), 255, "{marker:?}");
+            assert_eq!(alpha(1, 1), 0, "{marker:?}");
+            assert_eq!(alpha(SIZE - 2, SIZE - 2), 0, "{marker:?}");
+        }
+    }
+
+    #[test]
     fn icons_cover_their_shapes_and_leave_their_margins_clear() {
         let middle = SIZE / 2;
-        for icon in [Icon::Run, Icon::Pause, Icon::Resume, Icon::Step, Icon::Stop] {
+        for icon in [
+            Icon::Run,
+            Icon::RunToCursor,
+            Icon::Pause,
+            Icon::Resume,
+            Icon::Step,
+            Icon::StepInto,
+            Icon::StepOut,
+            Icon::Stop,
+        ] {
             assert_eq!(alpha(icon, 0, 0), 0, "{icon:?}");
             assert_eq!(alpha(icon, SIZE - 1, SIZE - 1), 0, "{icon:?}");
         }
@@ -174,5 +305,17 @@ mod tests {
         assert_eq!(alpha(Icon::Step, 4, middle), 255);
         assert_eq!(alpha(Icon::Step, 25, 7), 255);
         assert_eq!(alpha(Icon::Stop, middle, middle), 255);
+        // Step out's arrow points up: wide near the top, a stem below.
+        assert_eq!(alpha(Icon::StepOut, 8, 14), 255);
+        assert_eq!(alpha(Icon::StepOut, 8, 24), 0);
+        assert_eq!(alpha(Icon::StepOut, middle, 24), 255);
+        // Step into's points down.
+        assert_eq!(alpha(Icon::StepInto, 8, 17), 255);
+        assert_eq!(alpha(Icon::StepInto, 8, 7), 0);
+        assert_eq!(alpha(Icon::StepInto, middle, 7), 255);
+        // Run to cursor ends in a cursor with a serif at its top.
+        assert_eq!(alpha(Icon::RunToCursor, 25, 12), 255);
+        assert_eq!(alpha(Icon::RunToCursor, 28, 5), 255);
+        assert_eq!(alpha(Icon::RunToCursor, 28, 12), 0);
     }
 }

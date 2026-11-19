@@ -34,6 +34,8 @@ struct State {
     marked: Option<u64>,
     marks: Vec<code::Mark>,
     code: code::Memory,
+    /// The text the breakpoint dots were last placed against.
+    shadow: String,
 }
 
 #[derive(Default)]
@@ -67,6 +69,14 @@ pub(super) fn install(app: &mut App) {
     input::install(app);
 }
 
+/// The run the editor's source may describe: the script, its control and
+/// its status.
+type Run<'w> = (
+    Option<Res<'w, crate::script::Script>>,
+    Option<ResMut<'w, crate::script::RunControl>>,
+    Option<Res<'w, crate::script::RunStatus>>,
+);
+
 /// The editor renders once; the parser's marks annotate its own geometry.
 #[allow(clippy::needless_pass_by_value)]
 fn draw(
@@ -75,6 +85,7 @@ fn draw(
     mut workbench: ResMut<Workbench>,
     mut focus: ResMut<bevy::input_focus::InputFocus>,
     surfaces: Query<(), With<Surface>>,
+    (script, mut control, status): Run,
 ) {
     let Ok(mut context) = contexts.single_mut() else {
         return;
@@ -95,6 +106,7 @@ fn draw(
         ctx.data_mut(egui::util::IdTypeMap::clear);
         state.revision = Some(revision);
         state.code.jump = None;
+        state.shadow.clone_from(&workbench.document.text);
     }
     let mut viewport = egui::Ui::new(
         ctx.clone(),
@@ -112,12 +124,40 @@ fn draw(
             visuals.extreme_bg_color = code::BACKGROUND;
             visuals.text_cursor.stroke.color = egui::Color32::from_rgb(255, 204, 102);
             refresh_marks(state, &mut workbench);
+            let statements = workbench.document.check().statements.clone();
+            let dots = std::mem::take(&mut workbench.document.breakpoints);
+            let before = dots.clone();
+            let running = script.is_some();
             let shown = code::show(
                 ui,
-                &mut buffer::Bounded(&mut workbench.document.text),
+                &mut buffer::Bounded(&mut workbench.document.text, !running),
                 &state.marks,
                 &mut state.code,
+                &code::Dots {
+                    lines: &dots,
+                    statements: statements.as_ref(),
+                },
             );
+            workbench.document.breakpoints = dots;
+            breakpoints(state, &mut workbench, &shown, ctx);
+            // A paused run takes the dots changed here when it continues.
+            if running
+                && status
+                    .as_deref()
+                    .is_some_and(|status| workbench.describes(status))
+                && workbench.document.breakpoints != before
+                && let Some(control) = control.as_mut()
+                && let Some(statements) = &statements
+            {
+                control.set_breakpoints(
+                    workbench
+                        .document
+                        .breakpoints
+                        .intersection(statements)
+                        .copied()
+                        .collect(),
+                );
+            }
             // Escape releases the native keyboard gate along with egui's caret,
             // including a host click that focused only the gutter or scrollbar.
             // Choosing a problem moves the caret instead, keeping the keyboard.
@@ -134,6 +174,50 @@ fn draw(
             // Typing this frame is marked this frame, from the same cached check.
             refresh_marks(state, &mut workbench);
         });
+}
+
+/// Keep the dots with their lines through this frame's edit, toggle one for a
+/// click on a line number or F9 on the caret's line, and note the caret's
+/// line for Run to cursor.
+fn breakpoints(
+    state: &mut State,
+    workbench: &mut Workbench,
+    shown: &code::Shown,
+    ctx: &egui::Context,
+) {
+    let document = &mut workbench.document;
+    if state.shadow != document.text {
+        document.breakpoints =
+            super::breakpoints::follow(&document.breakpoints, &state.shadow, &document.text);
+        state.shadow.clone_from(&document.text);
+    }
+    let caret = shown.output.cursor_range.map(|range| {
+        let index = range.primary.index.0;
+        1 + document
+            .text
+            .chars()
+            .take(index)
+            .filter(|ch| *ch == '\n')
+            .count()
+    });
+    if caret.is_some() {
+        // A caret moved after a line was picked in the Execution view is
+        // the later choice for Run to cursor.
+        if workbench.caret_line.is_some() && workbench.caret_line != caret {
+            workbench.run_target = None;
+        }
+        workbench.caret_line = caret;
+    }
+    // The check of the text as it is now, after this frame's edit.
+    let statements = document.check().statements.clone();
+    let line = shown.clicked.or_else(|| {
+        (shown.output.response.has_focus() && ctx.input(|input| input.key_pressed(egui::Key::F9)))
+            .then_some(caret)
+            .flatten()
+    });
+    if let Some(line) = line {
+        super::breakpoints::toggle(&mut document.breakpoints, line, statements.as_ref());
+    }
 }
 
 /// Rebuild the character marks only when the document's check changes.
@@ -257,5 +341,106 @@ mod tests {
         assert_eq!(cursor.primary.index.0, 16);
         assert!(ctx.memory(|memory| memory.has_focus(code::id())));
         assert!(app.world().resource::<State>().code.jump.is_none());
+    }
+
+    #[test]
+    fn a_runs_source_is_read_only_and_its_dots_go_to_the_run() {
+        let source = "wait(1)\nwait(2)\n";
+        let (mut app, ctx) = app(source);
+        app.insert_resource(crate::script::Script::from_program(
+            crate::script::Program::parse(source, std::path::Path::new(".")).unwrap(),
+        ))
+        .insert_resource(crate::script::RunStatus::paused_at(source, 1))
+        .init_resource::<crate::script::RunControl>();
+        frame(&mut app, &ctx, Vec::new());
+        app.world_mut().resource_mut::<State>().code.jump = Some(2);
+        frame(&mut app, &ctx, Vec::new());
+        let key = |key| egui::Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        // Each edit in a frame of its own, so a later one can't undo an
+        // earlier one and hide it.
+        for event in [
+            egui::Event::Text("x".into()),
+            key(egui::Key::Backspace),
+            key(egui::Key::Delete),
+            egui::Event::Paste("y".into()),
+        ] {
+            frame(&mut app, &ctx, vec![event]);
+            assert_eq!(app.world().resource::<Workbench>().document.text, source);
+        }
+        // A refused Backspace still moves egui's caret back a character.
+        app.world_mut().resource_mut::<State>().code.jump = Some(2);
+        frame(&mut app, &ctx, Vec::new());
+        frame(&mut app, &ctx, vec![key(egui::Key::F9)]);
+        let workbench = app.world().resource::<Workbench>();
+        assert_eq!(workbench.document.text, source);
+        assert_eq!(workbench.caret_line, Some(2));
+        assert_eq!(workbench.document.breakpoints, [2].into());
+        assert_eq!(
+            app.world()
+                .resource::<crate::script::RunControl>()
+                .pending_breakpoints(),
+            Some(&[2].into())
+        );
+    }
+
+    fn f9() -> egui::Event {
+        egui::Event::Key {
+            key: egui::Key::F9,
+            physical_key: Some(egui::Key::F9),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn dots_set_during_a_run_started_elsewhere_stay_in_the_editor() {
+        let source = "wait(1)\nwait(2)\n";
+        let (mut app, ctx) = app(source);
+        // A run from the command line, whose source is not the document.
+        let foreign = "wait(3)\nwait(4)\n";
+        app.insert_resource(crate::script::Script::from_program(
+            crate::script::Program::parse(foreign, std::path::Path::new(".")).unwrap(),
+        ))
+        .insert_resource(crate::script::RunStatus::paused_at(foreign, 1))
+        .init_resource::<crate::script::RunControl>();
+        frame(&mut app, &ctx, Vec::new());
+        app.world_mut().resource_mut::<State>().code.jump = Some(2);
+        frame(&mut app, &ctx, Vec::new());
+        frame(&mut app, &ctx, vec![f9()]);
+        assert_eq!(
+            app.world().resource::<Workbench>().document.breakpoints,
+            [2].into()
+        );
+        assert_eq!(
+            app.world()
+                .resource::<crate::script::RunControl>()
+                .pending_breakpoints(),
+            None
+        );
+    }
+
+    #[test]
+    fn moving_the_caret_drops_a_line_picked_in_the_execution_view() {
+        let (mut app, ctx) = app("wait(1)\nwait(2)\nwait(3)\n");
+        frame(&mut app, &ctx, Vec::new());
+        app.world_mut().resource_mut::<State>().code.jump = Some(1);
+        frame(&mut app, &ctx, Vec::new());
+        assert_eq!(app.world().resource::<Workbench>().caret_line, Some(1));
+        app.world_mut().resource_mut::<Workbench>().run_target = Some(3);
+        // A frame without a caret move keeps the pick.
+        frame(&mut app, &ctx, Vec::new());
+        assert_eq!(app.world().resource::<Workbench>().run_target, Some(3));
+        app.world_mut().resource_mut::<State>().code.jump = Some(2);
+        frame(&mut app, &ctx, Vec::new());
+        let workbench = app.world().resource::<Workbench>();
+        assert_eq!(workbench.caret_line, Some(2));
+        assert_eq!(workbench.run_target, None);
     }
 }

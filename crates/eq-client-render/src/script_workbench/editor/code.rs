@@ -23,6 +23,9 @@ pub(super) const BACKGROUND: Color32 = Color32::from_rgb(15, 20, 25);
 const GUTTER_INK: Color32 = Color32::from_rgb(92, 103, 115);
 const GUTTER_RULE: Color32 = Color32::from_rgb(52, 60, 68);
 pub(super) const ERROR: Color32 = Color32::from_rgb(255, 105, 100);
+const BREAKPOINT: Color32 = Color32::from_rgb(229, 83, 75);
+/// A dot on a line that holds no statement now: kept, but not used.
+const BREAKPOINT_UNUSED: Color32 = Color32::from_rgb(110, 116, 124);
 
 pub(super) fn id() -> egui::Id {
     egui::Id::new("eqscript-source")
@@ -138,6 +141,15 @@ pub(super) struct Shown {
     pub output: TextEditOutput,
     /// A problem was chosen this frame; the editor keeps the keyboard.
     pub chose: bool,
+    /// The line whose number was clicked this frame, to toggle its dot.
+    pub clicked: Option<usize>,
+}
+
+/// The breakpoint dots and the lines they can pause on, when the script is
+/// valid.
+pub(super) struct Dots<'a> {
+    pub lines: &'a std::collections::BTreeSet<usize>,
+    pub statements: Option<&'a std::collections::BTreeSet<usize>>,
 }
 
 /// Draw the editor and its problems list into `ui`.
@@ -146,6 +158,7 @@ pub(super) fn show(
     text: &mut dyn TextBuffer,
     marks: &[Mark],
     memory: &mut Memory,
+    dots: &Dots<'_>,
 ) -> Shown {
     let row = ui.fonts_mut(|fonts| fonts.row_height(&font()));
     let strip = if marks.is_empty() {
@@ -173,6 +186,7 @@ pub(super) fn show(
     };
     let jump = memory.jump.take();
     let mut output = None;
+    let mut clicked = None;
     egui::ScrollArea::both()
         .id_salt("eqscript-scroll")
         .auto_shrink([false, false])
@@ -217,24 +231,28 @@ pub(super) fn show(
                     .translate(shown.galley_pos.to_vec2());
                 ui.scroll_to_rect(rect, Some(Align::Center));
             }
-            gutter_and_marks(ui, &shown, f32::from(gutter), glyph, marks);
+            clicked = gutter_and_marks(ui, &shown, f32::from(gutter), glyph, marks, dots);
             output = Some(shown);
         });
     let chose = problems(ui, marks, memory);
     Shown {
         output: output.expect("the scroll area always shows its contents"),
         chose,
+        clicked,
     }
 }
 
-/// Line numbers, error markers and wavy underlines, for visible rows only.
+/// Line numbers, breakpoint dots, error markers and wavy underlines, for
+/// visible rows only. A click on a line number gives that line.
 fn gutter_and_marks(
     ui: &egui::Ui,
     output: &TextEditOutput,
     gutter: f32,
     glyph: f32,
     marks: &[Mark],
-) {
+    dots: &Dots<'_>,
+) -> Option<usize> {
+    let mut clicked = None;
     let clip = ui.clip_rect();
     let painter = ui.painter().with_clip_rect(clip);
     let left = output.response.rect.left();
@@ -264,16 +282,28 @@ fn gutter_and_marks(
                 font(),
                 ink,
             );
+            let dot = Pos2::new(left + 6.0, rect.center().y);
+            if dots.lines.contains(&line) {
+                let used = dots
+                    .statements
+                    .is_none_or(|statements| statements.contains(&line));
+                let ink = if used { BREAKPOINT } else { BREAKPOINT_UNUSED };
+                painter.circle_filled(dot, 4.0, ink);
+            } else if !errors.is_empty() {
+                painter.circle_filled(dot, 2.5, ERROR);
+            }
+            let marker = Rect::from_x_y_ranges(left..=left + gutter - 4.0, rect.y_range());
+            let response = ui.interact(marker, ui.id().with(("gutter", line)), Sense::click());
+            if response.clicked() {
+                clicked = Some(line);
+            }
             if !errors.is_empty() {
-                painter.circle_filled(Pos2::new(left + 5.0, rect.center().y), 2.5, ERROR);
-                let marker = Rect::from_x_y_ranges(left..=left + gutter - 4.0, rect.y_range());
                 let text = errors
                     .iter()
                     .map(|mark| mark.message.as_str())
                     .collect::<Vec<_>>()
                     .join("\n");
-                ui.interact(marker, ui.id().with(("gutter", line)), Sense::hover())
-                    .on_hover_text(text);
+                response.on_hover_text(text);
             }
         }
         if placed.ends_with_newline {
@@ -308,6 +338,7 @@ fn gutter_and_marks(
         ui.interact(area, ui.id().with(("mark", index)), Sense::hover())
             .on_hover_text(&mark.message);
     }
+    clicked
 }
 
 fn squiggle(painter: &egui::Painter, left: f32, right: f32, bottom: f32) {
@@ -430,7 +461,17 @@ mod tests {
         let mut placed = None;
         for _ in 0..2 {
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-                let shown = show(ui, &mut text, &[], &mut memory);
+                let none = std::collections::BTreeSet::new();
+                let shown = show(
+                    ui,
+                    &mut text,
+                    &[],
+                    &mut memory,
+                    &Dots {
+                        lines: &none,
+                        statements: None,
+                    },
+                );
                 placed = Some((shown.output.response.rect.left(), shown.output.galley_pos.x));
             });
             output.textures_delta.clear();
@@ -456,7 +497,17 @@ mod tests {
             };
             let mut output = ctx.run_ui(input, |ui| {
                 let bottom = ui.max_rect().bottom();
-                let shown = show(ui, &mut text, &[], &mut memory);
+                let none = std::collections::BTreeSet::new();
+                let shown = show(
+                    ui,
+                    &mut text,
+                    &[],
+                    &mut memory,
+                    &Dots {
+                        lines: &none,
+                        statements: None,
+                    },
+                );
                 sizes = Some((shown.output.response.rect.bottom(), bottom));
             });
             output.textures_delta.clear();

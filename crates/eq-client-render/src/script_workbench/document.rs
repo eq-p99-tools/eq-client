@@ -20,6 +20,8 @@ pub(super) struct Document {
     /// The file came with Windows newlines, which a save writes back.
     crlf: bool,
     check: Option<Check>,
+    /// Breakpoint dots, kept with their lines as the text changes.
+    pub breakpoints: super::breakpoints::Dots,
 }
 
 /// Check generations, unique across documents so a replaced one never matches.
@@ -35,6 +37,8 @@ pub(super) struct Check {
     pub counts: Option<(usize, usize)>,
     /// Every error, in source order.
     pub errors: Vec<ParseError>,
+    /// The lines a breakpoint can pause on, for a valid program.
+    pub statements: Option<std::collections::BTreeSet<usize>>,
     /// Unique to each recomputation, across documents.
     pub generation: u64,
 }
@@ -54,6 +58,7 @@ impl Document {
             disk: None,
             crlf: false,
             check: None,
+            breakpoints: super::breakpoints::Dots::new(),
         }
     }
 
@@ -81,12 +86,13 @@ impl Document {
             .as_ref()
             .is_some_and(|check| check.text == self.text && check.path == self.path);
         if !current {
-            let (counts, errors) = match Program::check(&self.text, self.base()) {
+            let (counts, errors, statements) = match Program::check(&self.text, self.base()) {
                 Ok(program) => (
                     Some((program.statement_count(), program.instructions().len())),
                     Vec::new(),
+                    Some(program.statement_lines()),
                 ),
-                Err(errors) => (None, errors),
+                Err(errors) => (None, errors, None),
             };
             let generation = CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             self.check = Some(Check {
@@ -94,6 +100,7 @@ impl Document {
                 path: self.path.clone(),
                 counts,
                 errors,
+                statements,
                 generation,
             });
         }
@@ -129,6 +136,7 @@ impl Document {
             disk: Some(raw),
             crlf,
             check: None,
+            breakpoints: super::breakpoints::Dots::new(),
         }
     }
 

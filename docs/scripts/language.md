@@ -68,4 +68,25 @@ for i in range(3):
     wait(500)
 ```
 
-Blocks can nest up to 16 levels. `def` and `return` are reserved for functions in a later release. Execution advances one statement per frame or waits for its current action. Stop remains available during loops. The Execution tab shows which branch was taken, active iteration counts, and the latest values assigned to variables.
+Blocks can nest up to 16 levels. Execution advances one statement per frame or waits for its current action. Stop remains available during loops. The Execution tab shows which branch was taken, active iteration counts, and the latest values assigned to variables.
+
+## Functions
+
+`def name(parameter: type, ...):` at the start of a line, outside any block, defines a function; its indented body runs when a line calls it as `name(arguments)`. A function can be called before or after its definition, and from other functions, including itself. Each parameter has a type, `int`, `bool` or `text`, and each call passes one value of that type per parameter.
+
+```eqscript
+def open_bags(times: int, quiet: bool):
+    for _ in range(times):
+        press("CTRL+B")
+        wait(250)
+    if not quiet:
+        report("bags_toggled")
+
+open_bags(2, False)
+```
+
+Parameters and variables declared inside a function belong to that call: each call starts them fresh, and the caller's values are back when it returns. Variables declared at the top level are shared, and a function can read and assign them once their declaration has run, and doing either sooner stops the run with an error; a function's own variable can't reuse a top-level name or a function's name. `return` leaves the call at once, from inside any of its loops; functions give no values back yet, so `return` stands alone. `break` and `continue` stay inside the function's own loops.
+
+A script holds up to 32 functions with up to 8 parameters and 32 variables each, and calls nest at most 8 deep. A call counts as one statement. An error inside a function names it and the line that called it, such as `(in open_bags, called from line 8)`.
+
+In the editor, a breakpoint on a `def` line pauses each time the function is called. Step over runs a call to its end, Step into pauses on the first line inside it, and Step out runs to the end of the current call. The Execution tab lists the calls in progress, innermost first, with the function's own variables above the shared ones.

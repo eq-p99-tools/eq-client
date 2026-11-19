@@ -86,9 +86,13 @@ fn pointer(
     };
     state.visible = shown.displayed(WindowId::Scripts)
         && workbench.tab == Tab::Editor
-        && script.is_none()
         && !frames.iter().any(windows::Frame::minimized);
-    let enabled = state.visible && !workbench.busy() && window.focused;
+    // A running script's keys never reach its own source; a paused run's
+    // source takes the pointer and keys, read-only, for its caret and dots.
+    let enabled = state.visible
+        && !workbench.busy()
+        && window.focused
+        && script.is_none_or(|script| script.status().phase() == crate::script::Phase::Paused);
     let modifiers = modifiers([
         keys.pressed(Key::Control),
         keys.pressed(Key::Shift),
@@ -131,6 +135,9 @@ fn pointer(
         }
         state.focused = false;
         state.pointer.captured = false;
+        if native_focus.get() == Some(host) {
+            native_focus.clear();
+        }
     }
     for event in events.read() {
         match event {
@@ -434,6 +441,70 @@ mod tests {
                 .read(app.world().resource::<Messages<EguiInputEvent>>())
                 .count(),
             0
+        );
+    }
+
+    #[test]
+    fn a_running_scripts_keys_never_reach_the_editor() {
+        let mut app = App::new();
+        app.init_resource::<State>()
+            .init_resource::<Workbench>()
+            .init_resource::<Shown>()
+            .init_resource::<InputFocus>()
+            .init_resource::<EguiClipboard>()
+            .init_resource::<ButtonInput<Key>>()
+            .add_message::<WindowEvent>()
+            .add_message::<KeyboardInput>()
+            .add_message::<EguiInputEvent>()
+            .add_systems(Update, (pointer, keyboard).chain());
+        app.world_mut().spawn((
+            Window {
+                focused: true,
+                ..default()
+            },
+            PrimaryWindow,
+        ));
+        app.world_mut().spawn(EditorCamera);
+        let host = app
+            .world_mut()
+            .spawn((
+                Surface,
+                Node::default(),
+                ComputedNode {
+                    size: Vec2::splat(100.0),
+                    inverse_scale_factor: 1.0,
+                    ..default()
+                },
+            ))
+            .id();
+        app.world_mut()
+            .resource_mut::<Shown>()
+            .open(WindowId::Scripts);
+        app.world_mut().resource_mut::<Workbench>().tab = Tab::Editor;
+        // The editor had the keys when the run started.
+        app.world_mut()
+            .resource_mut::<InputFocus>()
+            .set(host, FocusCause::Pressed);
+        app.world_mut().resource_mut::<State>().focused = true;
+        let source = "press(\"F9\")\n";
+        let script = crate::script::Script::from_program(
+            crate::script::Program::parse(source, std::path::Path::new(".")).unwrap(),
+        );
+        assert_eq!(script.status().phase(), crate::script::Phase::Running);
+        app.insert_resource(script);
+        app.world_mut().write_message(KeyboardInput {
+            key_code: KeyCode::F9,
+            ..event(Key::F9, ButtonState::Pressed, None)
+        });
+        app.update();
+        let state = app.world().resource::<State>();
+        assert!(state.visible && !state.focused);
+        assert!(app.world().resource::<InputFocus>().get().is_none());
+        let mut cursor = MessageCursor::<EguiInputEvent>::default();
+        assert!(
+            !cursor
+                .read(app.world().resource::<Messages<EguiInputEvent>>())
+                .any(|event| matches!(event.event, egui::Event::Key { .. }))
         );
     }
 }
