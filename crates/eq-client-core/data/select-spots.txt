@@ -37,7 +37,8 @@
 # 2026-11-19: --check over all 207 rows flagged 68. Fifteen were looked at
 # (close, 120-unit and 170-unit renders): six moved to the reachability
 # rule's proposal (beholder crushbone mistmoore mmcc neriakc paludal), five
-# kept with the way in named, and four wait for a second look: halas,
+# kept with the way in named (two, cauldron and kerraridge, on zone
+# knowledge of the route, which the mesh doesn't show), and four wait for a second look: halas,
 # kedge and sirens (still flagged) and erudnint (passes the check, but its
 # renders show an open plane with no walls). The other flagged rows wait
 # for a look.
