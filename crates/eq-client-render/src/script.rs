@@ -827,6 +827,10 @@ pub(super) fn observe(script: Option<Res<Script>>, mut status: ResMut<RunStatus>
             status.phase = script.progress.phase;
             status.elapsed = script.progress.elapsed;
             status.total = script.progress.total;
+            // Dots changed from the editor while paused show at once.
+            if !std::sync::Arc::ptr_eq(&status.breakpoints, &script.progress.breakpoints) {
+                status.breakpoints = script.progress.breakpoints.clone();
+            }
         }
     }
 }
@@ -7222,6 +7226,25 @@ mod tests {
             app.world().resource::<RunStatus>().breakpoints(),
             &[3].into()
         );
+    }
+
+    #[test]
+    fn dots_changed_while_paused_show_before_the_run_continues() {
+        let source = "wait(1)\nwait(1)\nwait(1)\n";
+        let mut app = debugging(source, &[1], None);
+        let mut ms = 0;
+        while app.world().resource::<RunStatus>().phase() != Phase::Paused {
+            frame_at(&mut app, ms);
+            ms += 10;
+            assert!(ms < 20_000, "never paused");
+        }
+        app.world_mut()
+            .resource_mut::<RunControl>()
+            .set_breakpoints([1, 3].into());
+        frame_at(&mut app, ms);
+        let status = app.world().resource::<RunStatus>();
+        assert_eq!(status.phase(), Phase::Paused);
+        assert_eq!(status.breakpoints(), &[1, 3].into());
     }
 
     #[test]
