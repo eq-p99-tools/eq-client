@@ -30,9 +30,8 @@ actions have been handled. Leaving character selection returns to login, not
 the world list: the original login session has ended and the password is not
 retained. Login failures leave their reason visible for another attempt.
 
-The character list only previews a dressed model where the server policy exposes
-appearance data (currently EQEmu and TAKP). A dark background on P99 or Quarm is
-not a failed login.
+Character selection previews the chosen character's dressed model standing in
+its zone, on every server type the client supports.
 
 ## Create a character
 
