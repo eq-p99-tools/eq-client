@@ -62,6 +62,11 @@ pub struct ClientFalls {
     /// The landing rule counts the carried weight in whole units, cut
     /// toward zero, as an integer field holds it; else as the weight is.
     pub whole_weight: bool,
+    /// How far above the origin a walk climbs onto an edge it runs into,
+    /// in units, where known: the horizontal move's own climb, which can
+    /// reach past the floor sweep's ([`Self::walk_climb`]). None keeps the
+    /// floor sweep's climb.
+    pub edge_climb: Option<f32>,
     /// Where a spawn other than the player's that falls under the zone with
     /// no floor beneath it is put back.
     pub underworld_return: UnderworldReturn,
@@ -173,6 +178,29 @@ impl ClientFalls {
         }
     }
 
+    /// How far one step can lift the feet of a walking body whose origin
+    /// stands `stand_height` above them, at `size`, in units: the floor
+    /// sweep's climb ([`Self::climb_per_step`]), or higher where the
+    /// generation's horizontal move climbs edges ([`Self::edge_climb`]),
+    /// never past [`EDGE_LIFT_FLOOR`] above the origin. `raised` is false
+    /// where the program sweeps the body at the origin itself (L = 0 in
+    /// 0x489a32: ducking, among others), and the floor sweep's climb holds.
+    #[must_use]
+    pub fn walk_climb(&self, stand_height: f32, size: f32, raised: bool) -> f32 {
+        let floor = self.climb_per_step(stand_height, size);
+        match self.edge_climb {
+            Some(above) if raised => {
+                let edge = stand_height + above.clamp(0.0, EDGE_LIFT_FLOOR);
+                if edge.is_finite() {
+                    edge.max(floor)
+                } else {
+                    floor
+                }
+            }
+            _ => floor,
+        }
+    }
+
     /// What a landing costs: with the speed past the gate in units a step,
     /// T = carried weight / 100 + (speed − 2.5) − 1.5, the weight whole
     /// where [`Self::whole_weight`] says so. None at T ≤ 0, a
@@ -261,6 +289,8 @@ pub const EQMAC: ClientFalls = ClientFalls {
     sweep_radius: FloorSweepRadius::SpawnSize(0.25),
     // W is the weight routine's float (R3, 0x4bbb78).
     whole_weight: false,
+    // The Mac-era horizontal move is unread: the floor sweep's climb holds.
+    edge_climb: None,
     // Titanium's (below), taken as the Mac-era program's until read (6.362).
     underworld_return: TITANIUM_UNDERWORLD_RETURN,
 };
@@ -305,9 +335,26 @@ pub const TITANIUM: ClientFalls = ClientFalls {
     // read); that it holds the carried weight cut toward zero is inferred
     // with the field itself (6.303).
     whole_weight: true,
+    edge_climb: Some(TITANIUM_EDGE_CLIMB),
     underworld_return: TITANIUM_UNDERWORLD_RETURN,
     ..EQMAC
 };
+
+/// The least height above the origin at which the Titanium program sweeps
+/// a walking body sideways: L = max(1.9, the model's radius) (0x489a32,
+/// read R40). A walk never climbs an edge past it here.
+pub const EDGE_LIFT_FLOOR: f32 = 1.9;
+
+/// How far above the origin the Titanium client's walk climbs an edge, as
+/// measured: a human of size 6 (origin 3.75 above the soles, R40b) walked
+/// into a solid rail 4 high and onto its posts 5.000 high and climbed both
+/// like stairs (attended, local server, 11-19). The move sweeps the body
+/// sideways from the origin raised by L (0x48acef, R40), and the engine's
+/// contact response, unread, slides it up; that the bound sits at the
+/// measured 5.000 for that body, and scales with the origin for others, is
+/// inferred (recording checklist 6.482): the tallest edge it climbs is
+/// unmeasured, so this keeps to what was seen.
+const TITANIUM_EDGE_CLIMB: f32 = 5.0 - 3.75;
 
 #[cfg(test)]
 mod tests {
@@ -393,6 +440,22 @@ mod tests {
         assert!((TITANIUM.climb_per_step(1.875, 3.0) - 1.6875).abs() < 1e-5);
         assert!(TITANIUM.climb_per_step(f32::NAN, 6.0).abs() < f32::EPSILON);
         assert!(TITANIUM.climb_per_step(-0.1, 6.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn a_titanium_walk_climbs_an_edge_to_the_measured_height_over_the_origin() {
+        // A human of size 6: the posts it was seen to climb, 5 over the floor.
+        assert!((TITANIUM.walk_climb(3.75, 6.0, true) - 5.0).abs() < 1e-5);
+        // Ducking, the body is swept at the origin: the floor sweep's climb.
+        assert!((TITANIUM.walk_climb(3.75, 6.0, false) - 3.375).abs() < 1e-5);
+        // Other bodies keep the same reach over their own origin.
+        assert!((TITANIUM.walk_climb(1.875, 3.0, true) - 3.125).abs() < 1e-5);
+        assert!((TITANIUM.walk_climb(5.0, 8.0, true) - 6.25).abs() < 1e-5);
+        // Never past the sweep's least lift over the origin.
+        const { assert!(TITANIUM_EDGE_CLIMB <= EDGE_LIFT_FLOOR) };
+        // The Mac-era move is unread: the floor sweep's climb, raised or not.
+        assert!((EQMAC.walk_climb(3.75, 6.0, true) - 2.75).abs() < 1e-5);
+        assert!((TITANIUM.walk_climb(f32::NAN, 6.0, true)).abs() < f32::EPSILON);
     }
 
     #[test]

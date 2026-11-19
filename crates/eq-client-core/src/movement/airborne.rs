@@ -25,12 +25,29 @@ pub struct VerticalPhysics {
     /// in world units: the player's own reach in the programs (the floor
     /// sweep from the origin, read 6.344), a riser where unread.
     pub climb: f32,
+    /// How far one step walking on the ground may lift the feet onto an edge
+    /// it runs into, in world units, where that reaches past [`Self::climb`]:
+    /// the horizontal move's own climb (Titanium, checklist 6.482). The floor
+    /// sweep under a falling, alighting or placed body keeps `climb`. None
+    /// walks by `climb`.
+    pub edge_climb: Option<f32>,
     /// Whether the walk's input still moves the body in the air. Neither
     /// program's does: off the ground a step adds no input and keeps the air
     /// factor's share of the take-off speed (Titanium 0x4c0462-0x4c04ba,
     /// TAKP R1). The provisional physics keep steering, which makes no
     /// claim about either program.
     pub steers_in_air: bool,
+}
+
+impl VerticalPhysics {
+    /// The most one step on the ground lifts the feet: the walk's climb onto
+    /// an edge, or the floor sweep's where that is higher or no edge climb is
+    /// set. The session's guard counts a grounded climb by this.
+    #[must_use]
+    pub fn reach(&self) -> f32 {
+        self.edge_climb
+            .map_or(self.climb, |edge| edge.max(self.climb))
+    }
 }
 
 /// Provisional tuning shared by the offline preview, online falls and path search.
@@ -44,6 +61,7 @@ pub const PROVISIONAL_PHYSICS: VerticalPhysics = VerticalPhysics {
     air_factor: 1.0,
     ground_tolerance: super::MAX_GROUNDED_STEP,
     climb: super::MAX_GROUNDED_STEP,
+    edge_climb: None,
     steers_in_air: true,
 };
 
@@ -231,6 +249,9 @@ impl AirborneController {
             || !(physics.air_factor > 0.0 && physics.air_factor <= 1.0)
             || !(physics.ground_tolerance.is_finite() && physics.ground_tolerance >= 0.0)
             || !(physics.climb.is_finite() && physics.climb >= 0.0)
+            || !physics
+                .edge_climb
+                .is_none_or(|edge| edge.is_finite() && edge >= 0.0)
         {
             return feet;
         }
@@ -252,7 +273,7 @@ impl AirborneController {
         // more than its climb from where it started. Its move goes as far
         // up as that allows (inferred, checklist 6.366: the program's
         // horizontal sphere against the face is unread).
-        let climb = (physics.climb - (feet.y - start.y)).max(0.0);
+        let climb = (physics.reach() - (feet.y - start.y)).max(0.0);
         let floor = world.support(feet);
         let grounded = self.velocity <= 0.0 && floor.is_some();
         if grounded {
@@ -464,6 +485,7 @@ mod tests {
         air_factor: 1.0,
         ground_tolerance: crate::movement::MAX_GROUNDED_STEP,
         climb: crate::movement::MAX_GROUNDED_STEP,
+        edge_climb: None,
         steers_in_air: true,
     };
     fn tick(
@@ -541,6 +563,7 @@ mod tests {
             air_factor: 1.0,
             ground_tolerance: crate::movement::MAX_GROUNDED_STEP,
             climb: crate::movement::MAX_GROUNDED_STEP,
+            edge_climb: None,
             steers_in_air: true,
         };
         let mut state = AirborneController::default();
@@ -587,6 +610,7 @@ mod tests {
         air_factor: 0.99,
         ground_tolerance: 0.501,
         climb: 3.15,
+        edge_climb: None,
         steers_in_air: false,
     };
 
@@ -852,6 +876,7 @@ mod tests {
             air_factor: 1.0,
             ground_tolerance: crate::movement::MAX_GROUNDED_STEP,
             climb: crate::movement::MAX_GROUNDED_STEP,
+            edge_climb: None,
             steers_in_air: true,
         };
         let input = MotionStep {
@@ -1104,6 +1129,88 @@ mod tests {
             feet = state.step(&world, feet, PROGRAM, run);
         }
         assert!(feet.y <= surface - 3.5 + 0.001, "{feet}");
+    }
+
+    /// A ledge whose top is at y `top` for x >= 0, and a deep floor at y -50
+    /// under everything, so feet beside the ledge with its top in their
+    /// footprint have nothing under them but the deep floor.
+    fn ledge(top: f32) -> CollisionWorld {
+        CollisionWorld::new([
+            [[0.0, top, -20.0], [20.0, top, -20.0], [20.0, top, 20.0]],
+            [[0.0, top, -20.0], [20.0, top, 20.0], [0.0, top, 20.0]],
+            [
+                [0.0, top - 10.0, -20.0],
+                [0.0, top, -20.0],
+                [0.0, top, 20.0],
+            ],
+            [
+                [0.0, top - 10.0, -20.0],
+                [0.0, top, 20.0],
+                [0.0, top - 10.0, 20.0],
+            ],
+            [
+                [-20.0, -50.0, -20.0],
+                [20.0, -50.0, -20.0],
+                [20.0, -50.0, 20.0],
+            ],
+            [
+                [-20.0, -50.0, -20.0],
+                [20.0, -50.0, 20.0],
+                [-20.0, -50.0, 20.0],
+            ],
+        ])
+        .unwrap()
+    }
+
+    #[test]
+    fn the_walks_edge_climb_leaves_the_floor_sweep_under_placed_and_falling_feet() {
+        // The Titanium walk's climb onto an edge (6.482) reaches 5 over the
+        // feet for a human, past the floor sweep's 3.375 (6.344). It is the
+        // grounded walk's alone: feet a server put, or a fall carried, under
+        // a floor stand on it only within the floor sweep's reach, exactly as
+        // with no edge climb.
+        let sweep = VerticalPhysics {
+            climb: 3.375,
+            ..PROGRAM
+        };
+        let raised = VerticalPhysics {
+            edge_climb: Some(5.0),
+            ..sweep
+        };
+        assert!((raised.reach() - 5.0).abs() < 0.001);
+        let still = MotionStep {
+            horizontal: Vec3::ZERO,
+            jump: false,
+            seconds: 0.05,
+            height: 6.0,
+        };
+        for (under, stands) in [(3.0_f32, true), (4.5, false)] {
+            for falling in [false, true] {
+                let world = ledge(under);
+                let run = |physics: VerticalPhysics| {
+                    let mut state = AirborneController::default();
+                    if falling {
+                        state.velocity = -20.0;
+                    }
+                    let mut feet = Vec3::new(-0.2, 0.0, 0.0);
+                    let mut path = Vec::new();
+                    for _ in 0..10 {
+                        feet = state.step(&world, feet, physics, still);
+                        path.push(feet);
+                    }
+                    path
+                };
+                let case = format!("{under} under, falling {falling}");
+                let path = run(raised);
+                assert_eq!(path, run(sweep), "{case}");
+                let feet = path[path.len() - 1];
+                if stands {
+                    assert!((feet.y - under).abs() < 0.001, "{case}: {feet}");
+                } else {
+                    assert!(feet.y < -0.5, "{case}: {feet}");
+                }
+            }
+        }
     }
 
     #[test]

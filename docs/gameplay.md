@@ -26,6 +26,14 @@ steps. The display interpolates accepted movement instead of waiting for each
 remote position update. Speed, elapsed time and admission checks constrain the
 outgoing requests; corrections replace the predicted position.
 
+A standing Titanium walk climbs onto an edge it runs into up to 1.25 above
+the body's origin, 5 units for a human of size 6, as the official client was
+seen to climb a pier rail and its posts. A ducking or wading walk climbs only
+what the floor sweep reaches, and so do feet that land, fall or are placed
+under a floor. The tallest edge the official client climbs is
+unmeasured, so a taller one stops here even where it might not there. The
+body's width is unchanged (recording checklist 6.482).
+
 A local movement proposal completes when the worker returns a result for
 its admission and request stamp. That result describes the worker's
 working position. A pending proposal can defer a due air or lava check

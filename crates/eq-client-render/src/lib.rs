@@ -1084,6 +1084,7 @@ fn move_player(
         air_factor: 1.0,
         ground_tolerance: eq_client_core::movement::MAX_GROUNDED_STEP,
         climb: eq_client_core::movement::MAX_GROUNDED_STEP,
+        edge_climb: None,
         steers_in_air: true,
     };
     player.translation = airborne.step(

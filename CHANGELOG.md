@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Walk onto low edges as the Titanium client does: a standing walk now
+  climbs anything it runs into up to 1.25 above the body's origin, so a
+  human of size 6 steps over Erudin's pier-end rail and onto its posts
+  (5 high) like stairs instead of stopping dead, as the official client was
+  seen to on 11-19. The horizontal move sweeps the body raised over its
+  origin (read R40); the bound is the measured height, scaled to each
+  body's origin (inferred, checklist 6.482). A ducking or wading walk, and
+  feet that fall or are placed under a floor, keep the floor sweep's climb.
+  The session's guard hears the same climb. The Mac-era generation is
+  unchanged.
 - Scripts now use a Python-style syntax, and only that syntax. Every action
   is a call with literal arguments, such as `press("I")`, `wait(500)` or
   `click("slot", 22)`; free-text commands such as `report`, `slash` and `gm`
