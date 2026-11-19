@@ -142,11 +142,20 @@ pub(super) fn draw(commands: &mut Commands, parent: Entity, page: usize, mono: &
         match block {
             Block::Fence => continue,
             Block::Script => {
-                view::source_line(commands, parent, line, Some(&symbols), None, false, mono);
+                view::source_line(
+                    commands,
+                    parent,
+                    line,
+                    Some(&symbols),
+                    None,
+                    false,
+                    false,
+                    mono,
+                );
                 continue;
             }
             Block::Other => {
-                view::source_line(commands, parent, line, None, None, false, mono);
+                view::source_line(commands, parent, line, None, None, false, false, mono);
                 continue;
             }
             Block::Prose => (),

@@ -172,6 +172,19 @@ pub struct Script {
     /// to finish, then for the menu's state after the local release. A
     /// release does not establish that the menu's handler opened it.
     menu_opening: Option<MenuOpening>,
+    /// Breakpoint state beyond the lines themselves, which the run status holds.
+    debug: Debugging,
+}
+
+/// What the run pauses for besides an ordinary Pause.
+#[derive(Default)]
+struct Debugging {
+    /// The line a breakpoint just paused before: the next check lets it run.
+    skip: Option<usize>,
+    /// A one-time stop, from Run to cursor.
+    run_to: Option<usize>,
+    /// Step out: pause at the first statement outside these ops.
+    out: Option<std::ops::Range<usize>>,
 }
 
 /// Login and offline scripts need no admission; admitted runs end with the session.
@@ -253,7 +266,21 @@ impl Script {
             created_before: None,
             deleting: None,
             menu_opening: None,
+            debug: Debugging::default(),
         }
+    }
+
+    /// Pauses before each of these source lines runs, every time, and once at
+    /// `run_to`. Lines without a statement are never reached.
+    #[must_use]
+    pub fn with_breakpoints(
+        mut self,
+        lines: std::collections::BTreeSet<usize>,
+        run_to: Option<usize>,
+    ) -> Self {
+        self.progress.breakpoints = std::sync::Arc::new(lines);
+        self.debug.run_to = run_to;
+        self
     }
 
     /// Queues a source snapshot, retaining line numbers for progress and errors.
@@ -585,6 +612,61 @@ impl Script {
         }
         self.mode = mode;
         self.progress.phase = Phase::Running;
+    }
+
+    /// Pause before the next statement when a breakpoint, Run to cursor or
+    /// Step out asks for it. Linear and structured runs share this check:
+    /// the next statement is the queued action's line, or the program's.
+    /// Every caller has released input.
+    fn breakpoint(&mut self, now: Duration) -> bool {
+        // A menu entry that waits for its menu has already passed the check.
+        if self.menu_opening.is_some() {
+            return false;
+        }
+        let edge = self.language.as_mut().and_then(language::Run::take_edge);
+        let next = match self.steps.front() {
+            Some(step) => step.line,
+            None => self.language.as_ref().and_then(language::Run::next_line),
+        };
+        let skip = self.debug.skip.take();
+        let left = self.debug.out.as_ref().is_some_and(|range| {
+            self.language
+                .as_ref()
+                .is_some_and(|run| !range.contains(&run.position()))
+        });
+        let (line, reason) =
+            if let Some(line) = edge.filter(|line| self.progress.breakpoints.contains(line)) {
+                (line, "Paused at breakpoint")
+            } else if let Some(line) = next.filter(|_| left) {
+                (line, "Stepped out of block")
+            } else if let Some(line) = next.filter(|line| self.debug.run_to == Some(*line)) {
+                self.debug.run_to = None;
+                (line, "Paused at cursor")
+            } else if let Some(line) =
+                next.filter(|line| skip != Some(*line) && self.progress.breakpoints.contains(line))
+            {
+                (line, "Paused at breakpoint")
+            } else {
+                return false;
+            };
+        // Any pause ends a Step out that was under way.
+        self.debug.out = None;
+        self.debug.skip = Some(line);
+        self.mode = RunMode::Paused(now);
+        self.progress.phase = Phase::Paused;
+        self.progress.line = Some(line);
+        self.progress.event(format!("{reason}, line {line}"));
+        true
+    }
+
+    /// Run until the innermost block around the next statement is left. With
+    /// no block around it, run on to the end or the next breakpoint.
+    fn step_out(&mut self, now: Duration) {
+        self.debug.out = self
+            .language
+            .as_ref()
+            .and_then(language::Run::innermost_block);
+        self.resume(now, RunMode::Continuous);
     }
 
     /// Returns whether another action may start; every caller has released input.
@@ -1033,7 +1115,14 @@ pub(super) fn drive(
             Request::Step if matches!(script.mode, RunMode::Paused(_)) => {
                 script.resume(now, RunMode::OneStep);
             }
-            Request::Step => (),
+            Request::StepOut if matches!(script.mode, RunMode::Paused(_)) => {
+                script.step_out(now);
+            }
+            Request::RunTo(line) if matches!(script.mode, RunMode::Paused(_)) => {
+                script.debug.run_to = Some(line);
+                script.resume(now, RunMode::Continuous);
+            }
+            Request::Step | Request::StepOut | Request::RunTo(_) => (),
         }
     }
     // Check the same world used by this dispatch, before restoring any held
@@ -1847,7 +1936,7 @@ pub(super) fn drive(
     {
         return;
     }
-    if !script.advance(now) {
+    if !script.advance(now) || script.breakpoint(now) {
         return;
     }
     if let Err(reason) = script.queue_statement(online.world(), now) {
@@ -6701,6 +6790,192 @@ mod tests {
         assert_eq!(flow.branch(), Some((4, false)));
         assert_eq!(flow.variables(), ["n: int = 2"]);
         assert_eq!(flow.loops(), []);
+    }
+
+    fn debugging(source: &str, dots: &[usize], run_to: Option<usize>) -> App {
+        let program = Program::parse(source, std::path::Path::new(".")).unwrap();
+        let statements = program.statement_lines();
+        for dot in dots {
+            assert!(statements.contains(dot), "line {dot} takes no dot");
+        }
+        let mut app = pointing(Vec::new());
+        app.insert_resource(
+            Script::from_program(program)
+                .offline_preview(true)
+                .with_breakpoints(dots.iter().copied().collect(), run_to),
+        )
+        .init_resource::<RunControl>()
+        .init_resource::<RunStatus>()
+        .add_systems(Update, observe.after(drive));
+        app
+    }
+
+    /// Runs to the end, answering each pause with `answer`, and gives each
+    /// pause's line and why it paused.
+    fn pauses(app: &mut App, mut answer: impl FnMut(usize) -> Request) -> Vec<(usize, String)> {
+        let mut found = Vec::new();
+        for ms in 0..2_000 {
+            frame_at(app, ms * 10);
+            if !app.world().contains_resource::<Script>() {
+                assert_eq!(
+                    app.world().resource::<RunStatus>().phase(),
+                    Phase::Completed
+                );
+                return found;
+            }
+            let status = app.world().resource::<RunStatus>();
+            if status.phase() == Phase::Paused {
+                let line = status.line().unwrap();
+                let why = status.events().back().unwrap().message.clone();
+                found.push((line, why));
+                let request = answer(found.len());
+                app.world_mut()
+                    .resource_mut::<RunControl>()
+                    .request(request);
+            }
+        }
+        panic!("the run did not finish: {found:?}");
+    }
+
+    fn lines(found: &[(usize, String)]) -> Vec<usize> {
+        found.iter().map(|(line, _)| *line).collect()
+    }
+
+    #[test]
+    fn breakpoints_pause_before_each_kind_of_statement_every_time_it_is_reached() {
+        let source = "n: int = 0\n\
+            for i in range(2):\n\
+            \x20   if i == 0:\n\
+            \x20       n += 1\n\
+            \x20   elif n == 9:\n\
+            \x20       pass\n\
+            \x20   else:\n\
+            \x20       n += 2\n\
+            while n < 5, limit=10:\n\
+            \x20   n += 1\n\
+            \x20   if n == 5:\n\
+            \x20       break\n\
+            \x20   continue\n\
+            report(\"done\")\n";
+        let mut app = debugging(source, &[1, 2, 3, 5, 7, 9, 12, 13, 14], None);
+        let found = pauses(&mut app, |_| Request::Resume);
+        // The for header pauses on each pass and on the check that ends it.
+        // elif and else pause only when the branches before them were false.
+        assert_eq!(lines(&found), [1, 2, 3, 2, 3, 5, 7, 2, 9, 13, 9, 12, 14]);
+        assert!(
+            found
+                .iter()
+                .all(|(_, why)| why.starts_with("Paused at breakpoint, line"))
+        );
+    }
+
+    #[test]
+    fn an_else_pauses_once_on_entry_even_when_its_branch_starts_with_a_loop() {
+        let source = "if False:\n    pass\nelse:\n    for _ in range(3):\n        wait(1)\n";
+        let mut app = debugging(source, &[3], None);
+        assert_eq!(lines(&pauses(&mut app, |_| Request::Resume)), [3]);
+        // An else that holds only pass takes a dot too.
+        let source = "if False:\n    wait(1)\nelse:\n    pass\nwait(1)\n";
+        let mut app = debugging(source, &[3], None);
+        assert_eq!(lines(&pauses(&mut app, |_| Request::Resume)), [3]);
+        // A taken if never enters its else.
+        let source = "if True:\n    wait(1)\nelse:\n    pass\n";
+        let mut app = debugging(source, &[3], None);
+        assert_eq!(
+            lines(&pauses(&mut app, |_| Request::Resume)),
+            Vec::<usize>::new()
+        );
+    }
+
+    #[test]
+    fn breakpoints_in_an_action_only_script_pause_on_their_lines() {
+        let source = "wait(1)\n# a comment\npress(\"A\")\nwait(1)\n";
+        let program = Program::parse(source, std::path::Path::new(".")).unwrap();
+        assert_eq!(program.statement_lines(), [1, 3, 4].into_iter().collect());
+        let mut app = debugging(source, &[3, 4], None);
+        assert_eq!(lines(&pauses(&mut app, |_| Request::Resume)), [3, 4]);
+        // Step from a breakpoint runs that line and pauses before the next.
+        let mut app = debugging(source, &[3], None);
+        let found = pauses(&mut app, |count| {
+            if count == 1 {
+                Request::Step
+            } else {
+                Request::Resume
+            }
+        });
+        // The pause between actions shows the line that just ran.
+        assert_eq!(lines(&found), [3, 3]);
+        assert_eq!(found[1].1, "Paused between actions");
+    }
+
+    #[test]
+    fn step_out_leaves_the_innermost_block_by_any_way_out() {
+        // From an if branch, then from the loop around it.
+        let source = "for i in range(3):\n    if i == 0:\n        wait(1)\n        wait(1)\n    wait(1)\nreport(\"after\")\n";
+        let mut app = debugging(source, &[3], None);
+        let found = pauses(&mut app, |_| Request::StepOut);
+        assert_eq!(lines(&found), [3, 5, 6]);
+        assert_eq!(found[1].1, "Stepped out of block, line 5");
+        // A break leaves both the if and the loop without the if's own end.
+        let source =
+            "for i in range(3):\n    if i == 1:\n        break\n    wait(1)\nreport(\"after\")\n";
+        let mut app = debugging(source, &[3], None);
+        assert_eq!(lines(&pauses(&mut app, |_| Request::StepOut)), [3, 5]);
+        // A while nested in a for: out of the while only.
+        let source = "n: int = 0\nfor i in range(2):\n    while n < 2, limit=5:\n        n += 1\n    wait(1)\n";
+        let mut app = debugging(source, &[], Some(4));
+        assert_eq!(lines(&pauses(&mut app, |_| Request::StepOut)), [4, 5]);
+        // A breakpoint met on the way out pauses there and ends the Step out.
+        let source = "for i in range(2):\n    wait(1)\n    wait(1)\nwait(1)\n";
+        let mut app = debugging(source, &[2], None);
+        let found = pauses(&mut app, |count| {
+            if count == 1 {
+                Request::StepOut
+            } else {
+                Request::Resume
+            }
+        });
+        assert_eq!(lines(&found), [2, 2]);
+        // With no block around it, Step out runs to the end.
+        let source = "wait(1)\nwait(1)\nwait(1)\n";
+        let mut app = debugging(source, &[1], None);
+        assert_eq!(lines(&pauses(&mut app, |_| Request::StepOut)), [1]);
+    }
+
+    #[test]
+    fn run_to_cursor_pauses_once_and_time_paused_is_not_counted() {
+        let source = "for i in range(3):\n    wait(1)\n    wait(1)\n";
+        let mut app = debugging(source, &[], Some(3));
+        let found = pauses(&mut app, |_| Request::Resume);
+        assert_eq!(found, [(3, "Paused at cursor, line 3".to_owned())]);
+        // From a pause, Run to cursor resumes to the line asked for.
+        let mut app = debugging(source, &[2], None);
+        let found = pauses(&mut app, |count| {
+            if count == 1 {
+                Request::RunTo(3)
+            } else {
+                Request::Resume
+            }
+        });
+        assert_eq!(lines(&found), [2, 3, 2, 2]);
+
+        let mut app = debugging("wait(1)\nwait(1)\n", &[2], None);
+        frame_at(&mut app, 0);
+        frame_at(&mut app, 10);
+        frame_at(&mut app, 20);
+        assert_eq!(app.world().resource::<RunStatus>().phase(), Phase::Paused);
+        frame_at(&mut app, 600_000);
+        app.world_mut()
+            .resource_mut::<RunControl>()
+            .request(Request::Resume);
+        frame_at(&mut app, 600_010);
+        frame_at(&mut app, 600_020);
+        let status = app.world().resource::<RunStatus>();
+        assert!(
+            status.elapsed() < Duration::from_secs(1),
+            "{:?}",
+            status.elapsed()
+        );
     }
 
     #[test]

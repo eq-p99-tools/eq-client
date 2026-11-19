@@ -107,6 +107,8 @@ pub struct RunStatus {
     pub(super) revision: u64,
     /// An immediate action also stays active until the next frame settles it.
     pub(super) step_pending: bool,
+    /// Lines this run pauses before, every time they are reached.
+    pub(super) breakpoints: Arc<std::collections::BTreeSet<usize>>,
 }
 
 impl RunStatus {
@@ -143,6 +145,12 @@ impl RunStatus {
     #[must_use]
     pub const fn progress(&self) -> (usize, usize) {
         (self.completed_steps, self.total)
+    }
+
+    /// The lines this run pauses before.
+    #[must_use]
+    pub fn breakpoints(&self) -> &std::collections::BTreeSet<usize> {
+        &self.breakpoints
     }
 
     pub(crate) const fn flow(&self) -> Option<&FlowStatus> {
@@ -199,6 +207,10 @@ pub(crate) enum Request {
     Pause,
     Resume,
     Step,
+    /// Run until the innermost block around the paused statement is left.
+    StepOut,
+    /// Resume until this statement line, once.
+    RunTo(usize),
     Stop,
 }
 

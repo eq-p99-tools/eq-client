@@ -37,9 +37,11 @@ pub(super) enum Action {
     Reload,
     Save,
     Run,
+    RunToCursor,
     Pause,
     Resume,
     Step,
+    StepOut,
     Stop,
     Discard,
     Cancel,
@@ -56,8 +58,10 @@ impl Action {
             Self::Run | Self::New | Self::Open | Self::Save | Self::Reload | Self::Discard => {
                 !active && !busy
             }
+            // Before a run it starts one; while paused it resumes to the line.
+            Self::RunToCursor => (!active && !busy) || phase == Phase::Paused,
             Self::Pause => active && phase != Phase::Paused,
-            Self::Resume | Self::Step => phase == Phase::Paused,
+            Self::Resume | Self::Step | Self::StepOut => phase == Phase::Paused,
             Self::Stop => active,
             _ => true,
         }
@@ -197,14 +201,20 @@ fn icon_button(
         .id()
 }
 
-/// Run, pause, resume, step and stop as icons, for the right end of the
-/// row above a page's script area.
+/// The run and debugging controls as icons, for the right end of the row
+/// above a page's script area.
 fn run_controls(commands: &mut Commands, images: &mut Assets<Image>) -> Entity {
     let children = [
         (icons::Icon::Run, "Run", Action::Run),
+        (
+            icons::Icon::RunToCursor,
+            "Run to cursor",
+            Action::RunToCursor,
+        ),
         (icons::Icon::Pause, "Pause", Action::Pause),
         (icons::Icon::Resume, "Resume", Action::Resume),
         (icons::Icon::Step, "Step", Action::Step),
+        (icons::Icon::StepOut, "Step out", Action::StepOut),
         (icons::Icon::Stop, "Stop", Action::Stop),
     ]
     .map(|(icon, title, action)| icon_button(commands, images, icon, title, action));
@@ -792,6 +802,7 @@ pub(super) fn refresh(
                     Some(&symbols),
                     Some(index + 1),
                     status.line() == Some(index + 1),
+                    status.breakpoints().contains(&(index + 1)),
                     &mono,
                 );
             }
@@ -865,7 +876,13 @@ const fn first_row(current: usize, rows: usize) -> usize {
     current.saturating_sub(rows * 3 / 7)
 }
 
-/// A read-only source line with stable syntax colors and an execution marker.
+/// A read-only source line with stable syntax colors, an execution marker
+/// and a breakpoint dot.
+#[allow(
+    clippy::too_many_arguments,
+    clippy::fn_params_excessive_bools,
+    reason = "one row's independent presentation facts"
+)]
 pub(super) fn source_line(
     commands: &mut Commands,
     parent: Entity,
@@ -873,6 +890,7 @@ pub(super) fn source_line(
     symbols: Option<&syntax::Symbols>,
     line: Option<usize>,
     active: bool,
+    dot: bool,
     mono: &Mono,
 ) {
     let row = commands
@@ -893,7 +911,11 @@ pub(super) fn source_line(
     let text = commands
         .spawn((
             Text::new(line.map_or_else(String::new, |line| {
-                format!("{}{line:>4}  ", if active { "▶" } else { " " })
+                format!(
+                    "{}{}{line:>4}  ",
+                    if active { "▶" } else { " " },
+                    if dot { "●" } else { " " }
+                )
             })),
             font(mono, 13.0),
             TextColor(theme::INK_DIM),
@@ -980,32 +1002,24 @@ mod tests {
     fn run_controls_are_usable_exactly_when_their_action_can_happen() {
         let controls = [
             Action::Run,
+            Action::RunToCursor,
             Action::Pause,
             Action::Resume,
             Action::Step,
+            Action::StepOut,
             Action::Stop,
         ];
         let usable = |phase, busy| controls.map(|action| action.usable(phase, busy));
-        // Run, pause, resume, step, stop.
-        assert_eq!(
-            usable(Phase::Idle, false),
-            [true, false, false, false, false]
-        );
-        assert_eq!(usable(Phase::Idle, true), [false; 5]);
-        assert_eq!(
-            usable(Phase::Running, false),
-            [false, true, false, false, true]
-        );
-        assert_eq!(
-            usable(Phase::Pausing, false),
-            [false, true, false, false, true]
-        );
-        assert_eq!(
-            usable(Phase::Paused, false),
-            [false, false, true, true, true]
-        );
+        // Run, run to cursor, pause, resume, step, step out, stop.
+        let (t, f) = (true, false);
+        assert_eq!(usable(Phase::Idle, false), [t, t, f, f, f, f, f]);
+        assert_eq!(usable(Phase::Idle, true), [false; 7]);
+        assert_eq!(usable(Phase::Running, false), [f, f, t, f, f, f, t]);
+        assert_eq!(usable(Phase::Pausing, false), [f, f, t, f, f, f, t]);
+        // While paused, run to cursor resumes to the line asked for.
+        assert_eq!(usable(Phase::Paused, false), [f, t, f, t, t, t, t]);
         for done in [Phase::Completed, Phase::Stopped, Phase::Failed] {
-            assert_eq!(usable(done, false), [true, false, false, false, false]);
+            assert_eq!(usable(done, false), [t, t, f, f, f, f, f]);
         }
     }
 }

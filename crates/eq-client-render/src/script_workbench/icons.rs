@@ -1,5 +1,6 @@
 //! The run controls' icons, drawn in code so they need no asset files and no
-//! glyphs the bundled font lacks: ▶ run, ‖ pause, |▶ resume, ▶| step, ■ stop.
+//! glyphs the bundled font lacks: ▶ run, ▶I run to cursor, ‖ pause,
+//! |▶ resume, ▶| step, ↑ step out, ■ stop.
 
 use bevy::prelude::*;
 
@@ -21,12 +22,34 @@ enum Piece {
         right: f32,
     },
     Square,
+    /// An arrow pointing up (`up`) or down, its head in the half it points
+    /// to and its stem in the other.
+    Arrow {
+        up: bool,
+    },
+    /// A rectangle in unit coordinates, for an arrow's base or a cursor's
+    /// serifs.
+    Block {
+        left: f32,
+        right: f32,
+        top: f32,
+        bottom: f32,
+    },
 }
 
 impl Piece {
     fn contains(self, x: f32, y: f32) -> bool {
         const TOP: f32 = 0.16;
         const BOTTOM: f32 = 0.84;
+        if let Self::Block {
+            left,
+            right,
+            top,
+            bottom,
+        } = self
+        {
+            return (left..=right).contains(&x) && (top..=bottom).contains(&y);
+        }
         if !(TOP..=BOTTOM).contains(&y) {
             return false;
         }
@@ -40,6 +63,20 @@ impl Piece {
                 x >= left && x <= right - (right - left) * from_middle
             }
             Self::Square => (0.2..=0.8).contains(&x) && (0.2..=0.8).contains(&y),
+            Self::Arrow { up } => {
+                // Distance from the tip, 0 at the tip and 1 at the far end.
+                let along = if up {
+                    (y - TOP) / (BOTTOM - TOP)
+                } else {
+                    (BOTTOM - y) / (BOTTOM - TOP)
+                };
+                if along <= 0.55 {
+                    (x - 0.5).abs() <= 0.34 * along / 0.55
+                } else {
+                    (x - 0.5).abs() <= 0.1
+                }
+            }
+            Self::Block { .. } => unreachable!("handled above"),
         }
     }
 }
@@ -48,9 +85,11 @@ impl Piece {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Icon {
     Run,
+    RunToCursor,
     Pause,
     Resume,
     Step,
+    StepOut,
     Stop,
 }
 
@@ -91,6 +130,30 @@ impl Icon {
                     right: 0.86,
                 },
             ],
+            Self::RunToCursor => &[
+                Piece::Play {
+                    left: 0.1,
+                    right: 0.58,
+                },
+                // A text cursor: a thin stem with serifs.
+                Piece::Bar {
+                    left: 0.75,
+                    right: 0.83,
+                },
+                Piece::Block {
+                    left: 0.66,
+                    right: 0.92,
+                    top: 0.12,
+                    bottom: 0.2,
+                },
+                Piece::Block {
+                    left: 0.66,
+                    right: 0.92,
+                    top: 0.8,
+                    bottom: 0.88,
+                },
+            ],
+            Self::StepOut => &[Piece::Arrow { up: true }],
             Self::Stop => &[Piece::Square],
         }
     }
@@ -98,9 +161,9 @@ impl Icon {
     /// The icon's colour, so run and stop read at a glance.
     pub(super) const fn tint(self) -> Color {
         match self {
-            Self::Run | Self::Resume => Color::srgb(0.55, 0.87, 0.49),
+            Self::Run | Self::RunToCursor | Self::Resume => Color::srgb(0.55, 0.87, 0.49),
             Self::Stop => Color::srgb(1.0, 0.45, 0.42),
-            Self::Pause | Self::Step => Color::srgb(0.92, 0.93, 0.95),
+            Self::Pause | Self::Step | Self::StepOut => Color::srgb(0.92, 0.93, 0.95),
         }
     }
 
@@ -155,7 +218,15 @@ mod tests {
     #[test]
     fn icons_cover_their_shapes_and_leave_their_margins_clear() {
         let middle = SIZE / 2;
-        for icon in [Icon::Run, Icon::Pause, Icon::Resume, Icon::Step, Icon::Stop] {
+        for icon in [
+            Icon::Run,
+            Icon::RunToCursor,
+            Icon::Pause,
+            Icon::Resume,
+            Icon::Step,
+            Icon::StepOut,
+            Icon::Stop,
+        ] {
             assert_eq!(alpha(icon, 0, 0), 0, "{icon:?}");
             assert_eq!(alpha(icon, SIZE - 1, SIZE - 1), 0, "{icon:?}");
         }
@@ -174,5 +245,13 @@ mod tests {
         assert_eq!(alpha(Icon::Step, 4, middle), 255);
         assert_eq!(alpha(Icon::Step, 25, 7), 255);
         assert_eq!(alpha(Icon::Stop, middle, middle), 255);
+        // Step out's arrow points up: wide near the top, a stem below.
+        assert_eq!(alpha(Icon::StepOut, 8, 14), 255);
+        assert_eq!(alpha(Icon::StepOut, 8, 24), 0);
+        assert_eq!(alpha(Icon::StepOut, middle, 24), 255);
+        // Run to cursor ends in a cursor with a serif at its top.
+        assert_eq!(alpha(Icon::RunToCursor, 25, 12), 255);
+        assert_eq!(alpha(Icon::RunToCursor, 28, 5), 255);
+        assert_eq!(alpha(Icon::RunToCursor, 28, 12), 0);
     }
 }

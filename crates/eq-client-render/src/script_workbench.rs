@@ -1,6 +1,7 @@
 //! The in-client scenario workbench. Documents, execution and presentation stay
 //! separate; the command-line runner and this window use the same `Script`.
 
+mod breakpoints;
 mod document;
 mod editor;
 mod help;
@@ -54,6 +55,8 @@ struct Workbench {
     generation: u64,
     /// Replaces the widgets only when the document itself was loaded or reset.
     revision: u64,
+    /// The editor caret's line, for Run to cursor.
+    caret_line: Option<usize>,
 }
 
 impl Workbench {
@@ -283,6 +286,22 @@ fn controls(
             Action::Pause if script.is_some() => control.request(Request::Pause),
             Action::Resume if status.phase() == Phase::Paused => control.request(Request::Resume),
             Action::Step if status.phase() == Phase::Paused => control.request(Request::Step),
+            Action::StepOut if status.phase() == Phase::Paused => {
+                control.request(Request::StepOut);
+            }
+            // The editor is locked while a run lasts, so its caret and check
+            // still describe the run's snapshot.
+            Action::RunToCursor if status.phase() == Phase::Paused => {
+                let statements = state.document.check().statements.clone();
+                match state
+                    .caret_line
+                    .zip(statements)
+                    .and_then(|(line, statements)| breakpoints::statement_at(line, &statements))
+                {
+                    Some(line) => control.request(Request::RunTo(line)),
+                    None => state.message = "Place the caret on or above a statement.".into(),
+                }
+            }
             Action::Stop if script.is_some() => control.request(Request::Stop),
             Action::Cancel => {
                 state.confirm = None;
@@ -307,7 +326,7 @@ fn controls(
                 }
             }
             Action::Save => state.save(),
-            Action::Run => match state.document.program() {
+            Action::Run | Action::RunToCursor => match state.document.program() {
                 Ok(program) if program.statement_count() == 0 => {
                     state.message = "Add a statement before running.".into();
                 }
@@ -316,7 +335,28 @@ fn controls(
                         state.message = error.to_string();
                         continue;
                     }
-                    let script = Script::for_viewer(program, &settings.0, online.enabled);
+                    // Dots on lines without a statement are kept but not used.
+                    let statements = program.statement_lines();
+                    let dots = state
+                        .document
+                        .breakpoints
+                        .intersection(&statements)
+                        .copied()
+                        .collect();
+                    let run_to = if matches!(action, Action::RunToCursor) {
+                        let Some(line) = state
+                            .caret_line
+                            .and_then(|line| breakpoints::statement_at(line, &statements))
+                        else {
+                            state.message = "Place the caret on or above a statement.".into();
+                            continue;
+                        };
+                        Some(line)
+                    } else {
+                        None
+                    };
+                    let script = Script::for_viewer(program, &settings.0, online.enabled)
+                        .with_breakpoints(dots, run_to);
                     commands.insert_resource(script.status().clone());
                     commands.insert_resource(RunControl::default());
                     commands.insert_resource(script);
@@ -326,7 +366,7 @@ fn controls(
                 }
                 Err(error) => state.message = error.to_string(),
             },
-            Action::Pause | Action::Resume | Action::Step | Action::Stop => (),
+            Action::Pause | Action::Resume | Action::Step | Action::StepOut | Action::Stop => (),
         }
     }
 }
@@ -340,7 +380,16 @@ fn poll(mut state: ResMut<Workbench>) {
     match result {
         FileResult::Open(Ok((path, text))) => {
             state.path = state.library.relative(&path);
-            state.document = Document::loaded(path, text);
+            let reloaded = state.document.path.as_ref() == Some(&path);
+            let previous = std::mem::replace(&mut state.document, Document::loaded(path, text));
+            // Reload keeps the dots on their lines; another file starts clean.
+            if reloaded {
+                state.document.breakpoints = breakpoints::follow(
+                    &previous.breakpoints,
+                    &previous.text,
+                    &state.document.text,
+                );
+            }
             state.revision = state.revision.wrapping_add(1);
             state.message = "Loaded. Run starts the scenario.".into();
         }
@@ -383,7 +432,7 @@ mod tests {
         )>();
         let mut seen = Vec::new();
         for (action, tooltip, color, children) in buttons.iter(app.world()) {
-            let usable = matches!(action, view::Action::Run);
+            let usable = matches!(action, view::Action::Run | view::Action::RunToCursor);
             assert_eq!(
                 color.0,
                 crate::theme::button(usable, false, Interaction::None),
@@ -412,7 +461,20 @@ mod tests {
         assert_eq!(
             seen,
             [
-                "Pause", "Pause", "Resume", "Resume", "Run", "Run", "Step", "Step", "Stop", "Stop"
+                "Pause",
+                "Pause",
+                "Resume",
+                "Resume",
+                "Run",
+                "Run",
+                "Run to cursor",
+                "Run to cursor",
+                "Step",
+                "Step",
+                "Step out",
+                "Step out",
+                "Stop",
+                "Stop",
             ]
         );
     }

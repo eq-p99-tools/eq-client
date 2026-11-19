@@ -17,6 +17,24 @@ pub(super) const MAX_ITERATIONS: i64 = 100;
 pub(in crate::script) struct Code {
     pub(super) ops: Vec<Located>,
     pub(super) variables: Vec<Variable>,
+    /// Each `if` or `elif` header whose false branch enters an `else`, and
+    /// that `else`'s line: entering it is an edge, not an op of its own.
+    pub(super) else_edges: Vec<(usize, usize)>,
+    /// The ops of every block, header included, for stepping out of one.
+    pub(super) blocks: Vec<Range<usize>>,
+}
+
+impl Code {
+    /// The lines a breakpoint can pause on: every statement that runs as an
+    /// op, and every `else` entered by an edge. Internal jumps carry a line
+    /// but never run as a statement.
+    pub(in crate::script) fn statement_lines(&self) -> impl Iterator<Item = usize> + '_ {
+        self.ops
+            .iter()
+            .filter(|located| !matches!(located.op, Op::Jump(_)))
+            .map(|located| located.line)
+            .chain(self.else_edges.iter().map(|(_, line)| *line))
+    }
 }
 
 impl Code {
@@ -111,6 +129,8 @@ impl Block {
 struct Open {
     block: Block,
     line: usize,
+    /// The block's first op: its header.
+    first: usize,
     /// The header's indent width.
     header: usize,
     /// The body's indent width, once its first line is seen.
@@ -136,6 +156,8 @@ pub(in crate::script) struct Deferred {
 pub(in crate::script) struct Builder {
     ops: Vec<Located>,
     variables: Vec<Variable>,
+    else_edges: Vec<(usize, usize)>,
+    ranges: Vec<Range<usize>>,
     blocks: Vec<Open>,
     used: bool,
     indent: Option<char>,
@@ -148,6 +170,8 @@ impl Builder {
         Self {
             ops: Vec::new(),
             variables: Vec::new(),
+            else_edges: Vec::new(),
+            ranges: Vec::new(),
             blocks: Vec::new(),
             used: false,
             indent: None,
@@ -351,6 +375,7 @@ impl Builder {
         self.blocks.push(Open {
             block,
             line,
+            first: self.ops.len(),
             header: indent,
             body: None,
             keyword,
@@ -379,6 +404,7 @@ impl Builder {
             builder.blocks.push(Open {
                 block,
                 line,
+                first: builder.ops.len() - 1,
                 header: indent,
                 body: None,
                 keyword: indent..indent + word.len(),
@@ -620,6 +646,8 @@ impl Builder {
         self.used.then_some(Code {
             ops: self.ops,
             variables: self.variables,
+            else_edges: self.else_edges,
+            blocks: self.ranges,
         })
     }
 
@@ -770,6 +798,7 @@ impl Builder {
             return Err("else requires an open if without an else".into());
         };
         let jump = self.ops.len();
+        self.else_edges.push((*start, line));
         let Op::If { otherwise, .. } = &mut self.ops[*start].op else {
             unreachable!("if blocks point to their header");
         };
@@ -791,6 +820,7 @@ impl Builder {
             self.push(line, Op::Jump(start));
         }
         let after = self.ops.len();
+        self.ranges.push(open.first..after);
         let (header, jumps) = match open.block {
             Block::If { start, jumps } => (start, jumps),
             Block::Else { jump, jumps } => (jump, jumps),

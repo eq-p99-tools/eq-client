@@ -191,6 +191,17 @@ impl Program {
         &self.instructions
     }
 
+    /// The lines a breakpoint can pause on, in order: every action and
+    /// statement that runs, and every `else`. Comments, blank lines and
+    /// `pass` have none.
+    #[must_use]
+    pub fn statement_lines(&self) -> std::collections::BTreeSet<usize> {
+        self.code.as_ref().map_or_else(
+            || self.instructions.iter().map(Instruction::line).collect(),
+            |code| code.statement_lines().collect(),
+        )
+    }
+
     /// Nonempty source statements, including block delimiters.
     #[must_use]
     pub const fn statement_count(&self) -> usize {
@@ -514,6 +525,16 @@ mod tests {
         assert_eq!(
             errors("press(\"I\") extra\n"),
             [(Some(1), "unexpected text after the call".into())]
+        );
+    }
+
+    #[test]
+    fn breakpoints_take_every_statement_line_but_not_pass_comments_or_blanks() {
+        let source = "# a comment\n\nn: int = 0\nif n == 0:\n    pass\nelif n == 1:\n    n += 1\nelse:\n    pass\nfor i in range(2):\n    if i == 1:\n        break\n    continue\nwhile n < 2, limit=3:\n    n += 1\npress(\"I\")\n";
+        let program = Program::parse(source, Path::new(".")).unwrap();
+        assert_eq!(
+            program.statement_lines().into_iter().collect::<Vec<_>>(),
+            [3, 4, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16]
         );
     }
 

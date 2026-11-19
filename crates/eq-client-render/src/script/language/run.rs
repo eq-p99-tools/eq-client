@@ -28,6 +28,9 @@ pub(in crate::script) struct Run {
     pc: usize,
     next_action: Duration,
     yielded_actions: usize,
+    /// The `else` line just entered by a false condition, until the driver
+    /// checks it for a breakpoint.
+    edge: Option<usize>,
 }
 
 struct Iteration {
@@ -39,7 +42,7 @@ struct Iteration {
 impl Run {
     pub(in crate::script) fn new(code: Code, actions: Vec<Instruction>) -> Self {
         let values = vec![Value::Unknown; code.variables.len()];
-        Self {
+        let mut run = Self {
             code,
             actions,
             values,
@@ -47,6 +50,44 @@ impl Run {
             pc: 0,
             next_action: Duration::ZERO,
             yielded_actions: 0,
+            edge: None,
+        };
+        run.skip_jumps();
+        run
+    }
+
+    /// The line of the statement that runs next, if any.
+    pub(in crate::script) fn next_line(&self) -> Option<usize> {
+        self.code.ops.get(self.pc).map(|located| located.line)
+    }
+
+    /// The `else` entered since the last check, once.
+    pub(in crate::script) const fn take_edge(&mut self) -> Option<usize> {
+        self.edge.take()
+    }
+
+    /// The op that runs next; the end of the program when done.
+    pub(in crate::script) const fn position(&self) -> usize {
+        self.pc
+    }
+
+    /// The ops of the innermost block around the next statement, its header
+    /// included.
+    pub(in crate::script) fn innermost_block(&self) -> Option<std::ops::Range<usize>> {
+        self.code
+            .blocks
+            .iter()
+            .filter(|range| range.contains(&self.pc))
+            .min_by_key(|range| range.len())
+            .cloned()
+    }
+
+    /// Internal jumps carry no statement; the runner never rests on one.
+    fn skip_jumps(&mut self) {
+        while let Some(Op::Jump(destination)) =
+            self.code.ops.get(self.pc).map(|located| &located.op)
+        {
+            self.pc = *destination;
         }
     }
 
@@ -134,6 +175,12 @@ impl Run {
                 flow.branch = Some((located.line, take));
                 if !take {
                     self.pc = *otherwise;
+                    self.edge = self
+                        .code
+                        .else_edges
+                        .iter()
+                        .find(|(entry, _)| *entry == header)
+                        .map(|(_, line)| *line);
                 }
                 progress.event(format!("If condition is {take}"));
                 Tick::Logic
@@ -208,11 +255,7 @@ impl Run {
         };
         // Forward skips and the loop backedge do not use a step or run any code.
         // Every backedge lands on a visible loop header, so chains are bounded.
-        while let Some(Op::Jump(destination)) =
-            self.code.ops.get(self.pc).map(|located| &located.op)
-        {
-            self.pc = *destination;
-        }
+        self.skip_jumps();
         Ok(tick)
     }
 

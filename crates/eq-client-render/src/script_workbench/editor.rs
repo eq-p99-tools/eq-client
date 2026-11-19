@@ -34,6 +34,8 @@ struct State {
     marked: Option<u64>,
     marks: Vec<code::Mark>,
     code: code::Memory,
+    /// The text the breakpoint dots were last placed against.
+    shadow: String,
 }
 
 #[derive(Default)]
@@ -95,6 +97,7 @@ fn draw(
         ctx.data_mut(egui::util::IdTypeMap::clear);
         state.revision = Some(revision);
         state.code.jump = None;
+        state.shadow.clone_from(&workbench.document.text);
     }
     let mut viewport = egui::Ui::new(
         ctx.clone(),
@@ -112,12 +115,20 @@ fn draw(
             visuals.extreme_bg_color = code::BACKGROUND;
             visuals.text_cursor.stroke.color = egui::Color32::from_rgb(255, 204, 102);
             refresh_marks(state, &mut workbench);
+            let statements = workbench.document.check().statements.clone();
+            let dots = std::mem::take(&mut workbench.document.breakpoints);
             let shown = code::show(
                 ui,
                 &mut buffer::Bounded(&mut workbench.document.text),
                 &state.marks,
                 &mut state.code,
+                &code::Dots {
+                    lines: &dots,
+                    statements: statements.as_ref(),
+                },
             );
+            workbench.document.breakpoints = dots;
+            breakpoints(state, &mut workbench, &shown, ctx);
             // Escape releases the native keyboard gate along with egui's caret,
             // including a host click that focused only the gutter or scrollbar.
             // Choosing a problem moves the caret instead, keeping the keyboard.
@@ -134,6 +145,45 @@ fn draw(
             // Typing this frame is marked this frame, from the same cached check.
             refresh_marks(state, &mut workbench);
         });
+}
+
+/// Keep the dots with their lines through this frame's edit, toggle one for a
+/// click on a line number or F9 on the caret's line, and note the caret's
+/// line for Run to cursor.
+fn breakpoints(
+    state: &mut State,
+    workbench: &mut Workbench,
+    shown: &code::Shown,
+    ctx: &egui::Context,
+) {
+    let document = &mut workbench.document;
+    if state.shadow != document.text {
+        document.breakpoints =
+            super::breakpoints::follow(&document.breakpoints, &state.shadow, &document.text);
+        state.shadow.clone_from(&document.text);
+    }
+    let caret = shown.output.cursor_range.map(|range| {
+        let index = range.primary.index.0;
+        1 + document
+            .text
+            .chars()
+            .take(index)
+            .filter(|ch| *ch == '\n')
+            .count()
+    });
+    if caret.is_some() {
+        workbench.caret_line = caret;
+    }
+    // The check of the text as it is now, after this frame's edit.
+    let statements = document.check().statements.clone();
+    let line = shown.clicked.or_else(|| {
+        (shown.output.response.has_focus() && ctx.input(|input| input.key_pressed(egui::Key::F9)))
+            .then_some(caret)
+            .flatten()
+    });
+    if let Some(line) = line {
+        super::breakpoints::toggle(&mut document.breakpoints, line, statements.as_ref());
+    }
 }
 
 /// Rebuild the character marks only when the document's check changes.
