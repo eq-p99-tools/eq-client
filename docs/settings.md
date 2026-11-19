@@ -135,7 +135,9 @@ are hidden, so turning the setting off shows the current weather.
 On Titanium, Air Remaining shows while a resolved head probe is submerged and
 the client knows the inputs to count air. The next one-second breath check
 refills the reserve if the character has surfaced or can breathe underwater.
-With **Gills for Days** enabled, the client skips the air calculation. Turning
+In thegrey, whose air can't be breathed, Air Remaining counts even with the
+head out of water unless the character breathes water. With **Gills for
+Days** enabled, the client skips the air calculation. Turning
 it off starts with a fresh reserve. Because skipping the counter withholds the
 drowning reports a local EQEmu session takes, the setting needs the session's
 gameplay departures like Fly and Jesus Mode. Titanium `eqgame.exe` checks

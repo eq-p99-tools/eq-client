@@ -197,9 +197,18 @@ fn observe_head(
         Ok(medium) => medium,
         Err(reason) => return (None, Err(reason)),
     };
+    // In a zone with no breathable air a head out of water doesn't breathe
+    // either: only a water-breathing race or effect 14 does (0x41a753 /
+    // 0x5f6c40, zone flag 0x4000; read R41 d).
+    let airless = online
+        .world()
+        .generation()
+        .water()
+        .zip(online.world().zone_number())
+        .is_some_and(|(water, zone)| water.airless(zone));
     let sample = match medium {
-        Medium::Air => Ok((Sample::CanBreathe, None)),
-        Medium::Water | Medium::Lava | Medium::OtherSubmerging => {
+        Medium::Air if !airless => Ok((Sample::CanBreathe, None)),
+        Medium::Air | Medium::Water | Medium::Lava | Medium::OtherSubmerging => {
             submerged(online.world(), spells, player)
         }
     };

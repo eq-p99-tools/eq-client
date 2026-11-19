@@ -192,6 +192,9 @@ pub struct MotionGrant {
     /// water's share applies; 0 backs up not at all. None backs up in water
     /// as any swim stroke.
     pub swim_backward_units_per_second: Option<f32>,
+    /// Swimming as the generation's program moves it: the swimmer's inputs
+    /// and the zone's water set, where the session reads them (Titanium).
+    pub swim: Option<crate::movement::SwimCalibration>,
     /// Lateral rates when holding longitudinal input in the calibrated ground mode.
     pub diagonal: crate::DiagonalRates,
     /// Whether the session sends falling samples.
@@ -285,6 +288,8 @@ pub struct ClientWorld {
     /// turn it on.
     choices: Vec<crate::Capability>,
     zone_name: String,
+    /// The zone's number, as the server gave it at entry.
+    zone_number: Option<u16>,
     far_clip: Option<f32>,
     /// The zone header's minimum clip, once this admission's header came.
     min_clip: Option<f32>,
@@ -779,6 +784,7 @@ impl ClientWorld {
                 strafe_units_per_second,
                 strafe_walk_units_per_second,
                 swim_backward_units_per_second,
+                swim,
                 diagonal,
                 falls,
                 jump_factor,
@@ -791,6 +797,7 @@ impl ClientWorld {
                     strafe_units_per_second: *strafe_units_per_second,
                     strafe_walk_units_per_second: *strafe_walk_units_per_second,
                     swim_backward_units_per_second: *swim_backward_units_per_second,
+                    swim: *swim,
                     diagonal: *diagonal,
                     falls: *falls,
                     jump_factor: *jump_factor,
