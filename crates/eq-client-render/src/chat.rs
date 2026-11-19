@@ -2027,30 +2027,15 @@ pub(super) fn client_request_in_scope(
         state.slash = Some(asked);
         return Some(Ok(()));
     }
-    if let Some(words) = input.strip_prefix('/').and_then(|command| {
-        let (name, words) = command
-            .split_once(char::is_whitespace)
-            .unwrap_or((command, ""));
-        name.eq_ignore_ascii_case("doability").then_some(words)
-    }) {
+    if let Some(words) = command_words(input, "doability") {
         state.doability = Some(words.to_owned());
         return Some(Ok(()));
     }
-    if let Some(words) = input.strip_prefix('/').and_then(|command| {
-        let (name, words) = command
-            .split_once(char::is_whitespace)
-            .unwrap_or((command, ""));
-        name.eq_ignore_ascii_case("memspellset").then_some(words)
-    }) {
+    if let Some(words) = command_words(input, "memspellset") {
         state.spell_set_asked = Some(words.to_owned());
         return Some(Ok(()));
     }
-    if let Some(words) = input.strip_prefix('/').and_then(|command| {
-        let (name, words) = command
-            .split_once(char::is_whitespace)
-            .unwrap_or((command, ""));
-        name.eq_ignore_ascii_case("lootnodrop").then_some(words)
-    }) {
+    if let Some(words) = command_words(input, "lootnodrop") {
         state.loot_no_drop = Some(words.to_owned());
         return Some(Ok(()));
     }
@@ -2081,6 +2066,15 @@ pub(super) fn client_request_in_scope(
         return Some(Ok(()));
     }
     None
+}
+
+/// The words after `/NAME` when the line is that command, in any case.
+fn command_words<'a>(input: &'a str, name: &str) -> Option<&'a str> {
+    let command = input.strip_prefix('/')?;
+    let (typed, words) = command
+        .split_once(char::is_whitespace)
+        .unwrap_or((command, ""));
+    typed.eq_ignore_ascii_case(name).then_some(words)
 }
 
 /// The name in a `/target Name` command; underscores match spaces as in spawn names.

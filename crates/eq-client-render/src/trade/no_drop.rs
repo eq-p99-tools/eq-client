@@ -198,16 +198,24 @@ fn take(trade: &mut TradeState, world: &ClientWorld, outbox: &Outbox, question: 
 
 /// Answers a `/lootnodrop`: a word sets the choice and says it; no word,
 /// or one that names no choice, lists the three (checklist 6.487 for the
-/// latter).
+/// latter). A client whose loot click never asks keeps today's answer.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn command(
     mut chat: ResMut<ChatState>,
     mut options: ResMut<OptionsState>,
     messages: Option<Res<Messages>>,
+    settings: Option<Res<crate::ViewerSettings>>,
 ) {
     let Some(words) = chat.loot_no_drop.take() else {
         return;
     };
+    let client = settings.map_or_else(Default::default, |settings| settings.0.installed_client);
+    if !client.asks_before_no_drop_loot() {
+        chat.refuse(crate::chat::Said::own(
+            "This client does not take /lootnodrop that way yet.",
+        ));
+        return;
+    }
     let empty = Messages::default();
     let messages = messages.as_deref().unwrap_or(&empty);
     let line = |choice: LootNoDrop| {

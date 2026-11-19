@@ -34,7 +34,8 @@
   what doesn't ask and leaves the rest for their own clicks. Whether the
   item is NO DROP is read from its flag, and whether the corpse is yours
   from its name, where the program's own tests are unread (6.487). The
-Mac-era servers loot as before, as that client's loot click is unread.
+Mac-era servers loot as before, as that client's loot click is unread, and
+  `/lootnodrop` answers there as it did.
 
 - Refuse untargetable spawns as the Titanium client does (read R44). On
   EQEmu and P99, a spawn whose body type the original's target setter

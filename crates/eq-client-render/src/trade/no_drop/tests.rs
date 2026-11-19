@@ -236,6 +236,29 @@ fn the_mac_era_client_takes_at_once_as_before() {
 }
 
 #[test]
+fn the_mac_era_client_answers_lootnodrop_as_before() {
+    let (mut app, _sent) = app(item(false, true), LootNoDrop::Ask);
+    app.world_mut()
+        .resource_mut::<crate::ViewerSettings>()
+        .0
+        .installed_client = eq_client_assets::ui::InstalledClient::EqMac;
+    let mut chat = app.world_mut().resource_mut::<ChatState>();
+    assert_eq!(
+        crate::chat::client_request("/lootnodrop always", &mut chat),
+        Some(Ok(()))
+    );
+    app.update();
+    assert_eq!(
+        app.world().resource::<OptionsState>().options.loot_no_drop,
+        LootNoDrop::Ask
+    );
+    assert_eq!(
+        app.world().resource::<ChatState>().newest(),
+        "This client does not take /lootnodrop that way yet."
+    );
+}
+
+#[test]
 fn taking_all_leaves_an_item_that_asks_and_keeps_the_window() {
     let (mut app, sent) = app(item(true, false), LootNoDrop::AskUnusable);
     click(&mut app, Action::TakeAll);
