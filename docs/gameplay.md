@@ -36,7 +36,9 @@ body's width is unchanged (recording checklist 6.482).
 
 A standing Titanium jump or fall passes over an edge whose top the floor
 sweep reaches, 3.375 above the feet for a human of size 6, and lands on
-it with no vertical speed left. A running jump from the Erud's Crossing
+it with no vertical speed left, where the move ends on that top. A
+rail thinner than a stride still stops the jump, and an edge never adds
+height to it. A running jump from the Erud's Crossing
 planks clears the docked ship's side and lands on its deck, and a
 standing jump mounts a ledge up to its own rise plus that reach, about
 8.3 for a human. The program sweeps the air with the same raised body as

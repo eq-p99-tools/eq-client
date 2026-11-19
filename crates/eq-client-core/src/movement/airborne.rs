@@ -342,6 +342,11 @@ impl AirborneController {
             self.finish_landing(floor, (-self.velocity).max(0.0));
             return Vec3::new(position.x, floor, position.z);
         }
+        // A lift whose walk went on past the top keeps no upward speed, so
+        // an edge never boosts a jump (inferred, 6.484).
+        if lifted {
+            self.velocity = self.velocity.min(0.0);
+        }
         self.peak = Some(self.peak.unwrap_or(feet.y).max(position.y));
         if !stepped {
             return position;

@@ -4759,6 +4759,46 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_wall_thinner_than_a_stride_never_boosts_a_jump() {
+        // A standing jump pressed at run speed into a wall at z 1: where the
+        // move ends past the top, nothing lifts the body onto it, and a lift
+        // never keeps upward speed, so the feet never rise past the wall's
+        // top or the plain jump's apex (reviewer F1; 6.484).
+        let floor = solid_box(Vec3::new(-20.0, -1.0, -40.0), Vec3::new(20.0, 0.0, 200.0));
+        let highest = |triangles: Vec<[[f32; 3]; 3]>| {
+            let peak = std::cell::Cell::new(0.0_f32);
+            let (feet, _) = airborne_run(
+                triangles,
+                &HUMAN,
+                (InstalledClient::Titanium, true),
+                Vec3::new(0.0, 0.0, 0.5),
+                40,
+                |step, feet: Vec3| {
+                    peak.set(peak.get().max(feet.y));
+                    (Vec3::Z * 32.0 * 0.05, step == 0)
+                },
+            );
+            peak.get().max(feet.y)
+        };
+        let apex = highest(floor.clone());
+        assert!((apex - 4.95).abs() < 0.1, "{apex}");
+        for top in [3.0, 6.0, 8.0] {
+            for thick in [0.1, 0.3] {
+                let mut triangles = floor.clone();
+                triangles.extend(solid_box(
+                    Vec3::new(-20.0, 0.0, 1.0),
+                    Vec3::new(20.0, top, 1.0 + thick),
+                ));
+                let peak = highest(triangles);
+                assert!(
+                    peak <= apex.max(top) + 0.01,
+                    "a wall {top} high, {thick} thick: {peak} (apex {apex})"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn a_jump_lifted_onto_a_deck_or_ledge_stays_inside_the_session_guard() {
         use eq_client_core::movement::{AirborneController, CollisionWorld, MAX_GROUNDED_STEP};
         use eq_network_game::movement::{MovementGuard, MovementMode, MovementRequest};

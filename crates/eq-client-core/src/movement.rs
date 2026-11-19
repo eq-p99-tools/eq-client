@@ -881,24 +881,14 @@ impl CollisionWorld {
                 }
                 Ok(Some(hit)) => {
                     // In the air, an edge whose top is within the clearance
-                    // is passed over and stood on.
-                    // Its top is the highest floor within the clearance where
-                    // the body meets it or where the move ends.
-                    let met = position
-                        + delta * hit.time_of_impact.clamp(0.0, 1.0)
-                        + Vec3::new(delta.x, 0.0, delta.z).normalize_or_zero() * 0.5;
+                    // is passed over and stood on where the move ends on it,
+                    // as the program's floor refresh under the end point
+                    // finds it. A top the move passes beyond (a thin rail)
+                    // lifts nothing: the face stops the body as before.
                     if let Support::Airborne { clear } = support
                         && clear > 0.0
-                        && let Some(top) = [met, target]
-                            .into_iter()
-                            .filter_map(|point| {
-                                self.support_height(
-                                    Vec3::new(point.x, position.y, point.z),
-                                    clear,
-                                    0.0,
-                                )
-                            })
-                            .max_by(f32::total_cmp)
+                        && let Some(top) = self
+                            .support_height(Vec3::new(target.x, position.y, target.z), clear, 0.0)
                             .filter(|top| *top > position.y + 0.001)
                     {
                         let onto = Vec3::new(target.x, top, target.z);
