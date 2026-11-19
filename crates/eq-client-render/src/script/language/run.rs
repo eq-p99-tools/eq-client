@@ -260,9 +260,14 @@ impl Run {
                     line: Some(action.line),
                 })
             }
-            Op::Store(index, expression) => {
-                let value = self.evaluate(expression, read)?;
+            Op::Store(index, expression) | Op::Assign(index, expression) => {
                 let name = self.code.variables[*index].name.clone();
+                // A function can assign a global only once its declaration
+                // has run, as it can read one.
+                if matches!(located.op, Op::Assign(..)) && self.values[*index].is_none() {
+                    return Err(format!("'{name}' is assigned before its declaration ran"));
+                }
+                let value = self.evaluate(expression, read)?;
                 self.store(*index, value);
                 progress.event(format!("Set {name}"));
                 Tick::Logic
@@ -620,6 +625,15 @@ mod tests {
                 .unwrap_err()
                 .starts_with("'g' is read before")
         );
+        // Assigning it is the same error, and the declaration's value is
+        // never overwritten by an earlier call.
+        let assigned = "set()\ng: int = 1\ndef set():\n    g = 5\n";
+        assert_eq!(
+            reports(assigned).unwrap_err(),
+            "'g' is assigned before its declaration ran (in set, called from line 1)"
+        );
+        let compound = "set()\ng: int = 1\ndef set():\n    g += 5\n";
+        assert_eq!(reports(compound), reports(assigned));
         let late = "g: int = 1\nshow()\ndef show():\n    if g == 1:\n        report(\"set\")\n";
         assert_eq!(reports(late).unwrap(), ["set"]);
     }

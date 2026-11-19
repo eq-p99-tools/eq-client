@@ -22,16 +22,16 @@ Pause waits for a statement boundary. A long wait, held key or navigation action
 
 ## Breakpoints and stepping
 
-Click a line number in the editor to put a breakpoint dot on that line, and click again to remove it. A dot on a comment, a blank line or `pass` moves to the next statement below. A run pauses before a statement with a dot every time it reaches it: on each pass of a loop, at an `elif` or `else` only when the branches before it were false, and on a `def` line at every call of that function. Dots stay on their lines while you edit and when you reload the file; opening another file clears them. The Execution view shows the same dots.
+Click a line number in the editor to put a breakpoint dot on that line, and click again to remove it. A dot on a comment, a blank line or `pass` moves to the next statement below. A run pauses before a statement with a dot every time it reaches it: on each pass of a loop, at an `elif` or `else` only when the branches before it were false, and on a `def` line at every call of that function. Dots stay on their lines while you edit and when you reload the file; opening another file clears them. The Execution view shows the same dots. A run uses the dots it started with: they are fixed for the length of the run.
 
 The controls at the top right of the editor and of the Execution view, from left to right:
 
 - **Run** starts the script.
-- **Run to cursor** starts it, or resumes a paused run, and pauses once before the statement at the caret's line.
+- **Run to cursor** starts the script and pauses once before the statement at the caret's line. While a run is paused, click a line in the Execution view's source to choose where it stops instead; the chosen line is shaded, and Run to cursor resumes to it. On the line the run is paused at, it runs until that line comes round again.
 - **Pause** and **Resume** pause between statements and continue.
 - **Step over** runs one statement and pauses before the next; a call runs to its end first.
 - **Step into** runs one statement and pauses before the next, stepping into a function it calls.
-- **Step out** runs to the end of the current function call, or out of the innermost loop or branch at the top level, and pauses there.
+- **Step out** runs to the end of the current function call, or out of the innermost loop or branch at the top level, and pauses there. Inside a function it leaves the call even from inside a loop or branch.
 - **Stop** ends the run.
 
 A breakpoint met on the way still pauses there and ends a Step over or Step out; Run to cursor still pauses at its line when the run gets there.

@@ -169,6 +169,17 @@ impl Program {
             let mut under: Option<usize> = None;
             for (index, raw) in lines.iter().enumerate() {
                 if owner[index] != owned {
+                    // A column-0 def ends every open top-level block, so an
+                    // else after it has no if to join.
+                    if owned == Owner::Top
+                        && !raw.starts_with(char::is_whitespace)
+                        && matches!(
+                            language::shape(raw[..language::comment(raw)].trim_end()),
+                            language::Shape::Keyword("def")
+                        )
+                    {
+                        flow.close_all();
+                    }
                     continue;
                 }
                 let line = index + 1;
@@ -683,6 +694,41 @@ mod tests {
         assert_eq!(
             marked("def f(a: number):\n    pass\n"),
             one(1, "number", "expected type int, bool or text")
+        );
+        // A call to a function whose header failed is accepted unchecked,
+        // before or after it, so the header has the only error.
+        assert_eq!(
+            marked("f(1, 2)\ndef f(a: number):\n    pass\nf(1)\n"),
+            one(2, "number", "expected type int, bool or text")
+        );
+        assert_eq!(
+            marked("def f(a: int, a: int):\n    pass\nf(1, 2)\n"),
+            one(1, "a", "parameter 'a' is given twice")
+        );
+        // Without parentheses, a function name is told how to call it.
+        assert_eq!(
+            marked("def f():\n    pass\nf\n"),
+            one(3, "f", "call f with parentheses, such as f(...)")
+        );
+        assert_eq!(
+            marked("def f(a: number):\n    pass\nf\n"),
+            [
+                (
+                    1,
+                    "number".to_owned(),
+                    "expected type int, bool or text".to_owned()
+                ),
+                (
+                    3,
+                    "f".to_owned(),
+                    "call f with parentheses, such as f(...)".to_owned()
+                ),
+            ]
+        );
+        // A def ends every top-level block open before it.
+        assert_eq!(
+            errors("if True:\n    wait(1)\ndef f():\n    pass\nelse:\n    wait(2)\n"),
+            [(Some(5), "else requires an open if without an else".into())]
         );
         // A duplicate or malformed header skips its body.
         assert_eq!(

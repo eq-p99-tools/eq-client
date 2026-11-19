@@ -1,6 +1,8 @@
 //! The run controls' icons, drawn in code so they need no asset files and no
 //! glyphs the bundled font lacks: ▶ run, ▶I run to cursor, ‖ pause,
-//! |▶ resume, ▶| step over, ↓ step into, ↑ step out, ■ stop.
+//! |▶ resume, ▶| step over, ↓ step into, ↑ step out, ■ stop. The Execution
+//! source's markers, the next line's ▶ and a breakpoint's dot, are drawn the
+//! same way.
 
 use bevy::prelude::*;
 
@@ -22,6 +24,8 @@ enum Piece {
         right: f32,
     },
     Square,
+    /// A disc around the middle.
+    Disc,
     /// An arrow pointing up (`up`) or down, its head in the half it points
     /// to and its stem in the other.
     Arrow {
@@ -63,6 +67,7 @@ impl Piece {
                 x >= left && x <= right - (right - left) * from_middle
             }
             Self::Square => (0.2..=0.8).contains(&x) && (0.2..=0.8).contains(&y),
+            Self::Disc => (x - 0.5).hypot(y - 0.5) <= 0.3,
             Self::Arrow { up } => {
                 // Distance from the tip, 0 at the tip and 1 at the far end.
                 let along = if up {
@@ -179,34 +184,72 @@ impl Icon {
 
     /// White coverage in alpha; the node's colour tints it.
     pub(super) fn image(self) -> Image {
-        let pieces = self.pieces();
-        let mut pixels = image::RgbaImage::new(SIZE, SIZE);
-        #[allow(
-            clippy::cast_precision_loss,
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            reason = "small texel counts and a coverage in 0..=255"
-        )]
-        for (x, y, pixel) in pixels.enumerate_pixels_mut() {
-            let mut covered = 0;
-            for sub_y in 0..SAMPLES {
-                for sub_x in 0..SAMPLES {
-                    let at = |texel: u32, sub: u32| {
-                        ((texel * SAMPLES + sub) as f32 + 0.5) / (SIZE * SAMPLES) as f32
-                    };
-                    let (u, v) = (at(x, sub_x), at(y, sub_y));
-                    if pieces.iter().any(|piece| piece.contains(u, v)) {
-                        covered += 1;
-                    }
+        draw(self.pieces())
+    }
+}
+
+/// A mark beside an Execution source line.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Marker {
+    /// The line that runs next.
+    Next,
+    /// A breakpoint.
+    Dot,
+}
+
+impl Marker {
+    const fn pieces(self) -> &'static [Piece] {
+        match self {
+            Self::Next => &[Piece::Play {
+                left: 0.2,
+                right: 0.8,
+            }],
+            Self::Dot => &[Piece::Disc],
+        }
+    }
+
+    /// The mark's colour: the editor's breakpoint red for a dot.
+    pub(super) const fn tint(self) -> Color {
+        match self {
+            Self::Next => Color::srgb(1.0, 0.8, 0.4),
+            Self::Dot => Color::srgb_u8(229, 83, 75),
+        }
+    }
+
+    /// White coverage in alpha; the node's colour tints it.
+    pub(super) fn image(self) -> Image {
+        draw(self.pieces())
+    }
+}
+
+/// White coverage of `pieces` in alpha.
+fn draw(pieces: &[Piece]) -> Image {
+    let mut pixels = image::RgbaImage::new(SIZE, SIZE);
+    #[allow(
+        clippy::cast_precision_loss,
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "small texel counts and a coverage in 0..=255"
+    )]
+    for (x, y, pixel) in pixels.enumerate_pixels_mut() {
+        let mut covered = 0;
+        for sub_y in 0..SAMPLES {
+            for sub_x in 0..SAMPLES {
+                let at = |texel: u32, sub: u32| {
+                    ((texel * SAMPLES + sub) as f32 + 0.5) / (SIZE * SAMPLES) as f32
+                };
+                let (u, v) = (at(x, sub_x), at(y, sub_y));
+                if pieces.iter().any(|piece| piece.contains(u, v)) {
+                    covered += 1;
                 }
             }
-            let alpha = (covered * 255 / (SAMPLES * SAMPLES)) as u8;
-            *pixel = image::Rgba([255, 255, 255, alpha]);
         }
-        let mut texture = crate::sheets::image(pixels);
-        texture.sampler = bevy::image::ImageSampler::linear();
-        texture
+        let alpha = (covered * 255 / (SAMPLES * SAMPLES)) as u8;
+        *pixel = image::Rgba([255, 255, 255, alpha]);
     }
+    let mut texture = crate::sheets::image(pixels);
+    texture.sampler = bevy::image::ImageSampler::linear();
+    texture
 }
 
 #[cfg(test)]
@@ -217,6 +260,18 @@ mod tests {
         let image = icon.image();
         let index = ((y * SIZE + x) * 4 + 3) as usize;
         image.data.as_ref().expect("pixels")[index]
+    }
+
+    #[test]
+    fn markers_cover_their_middle_and_leave_their_corners_clear() {
+        for marker in [Marker::Next, Marker::Dot] {
+            let image = marker.image();
+            let pixels = image.data.as_ref().expect("pixels");
+            let alpha = |x: u32, y: u32| pixels[((y * SIZE + x) * 4 + 3) as usize];
+            assert_eq!(alpha(SIZE / 2 - 2, SIZE / 2), 255, "{marker:?}");
+            assert_eq!(alpha(1, 1), 0, "{marker:?}");
+            assert_eq!(alpha(SIZE - 2, SIZE - 2), 0, "{marker:?}");
+        }
     }
 
     #[test]

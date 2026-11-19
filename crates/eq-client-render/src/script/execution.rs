@@ -119,6 +119,17 @@ pub struct RunStatus {
 }
 
 impl RunStatus {
+    /// A run paused at `line` of `source`, for the editor's tests.
+    #[cfg(test)]
+    pub(crate) fn paused_at(source: &str, line: usize) -> Self {
+        Self {
+            source: source.into(),
+            phase: Phase::Paused,
+            line: Some(line),
+            ..Self::default()
+        }
+    }
+
     pub(super) fn queued(total: usize, source: Arc<str>) -> Self {
         Self {
             total,
@@ -248,6 +259,12 @@ impl RunControl {
 
     pub(super) fn take(&mut self) -> Option<Request> {
         self.0.take()
+    }
+
+    /// The request waiting for the run, for the editor's tests.
+    #[cfg(test)]
+    pub(crate) const fn pending(&self) -> Option<Request> {
+        self.0
     }
 }
 

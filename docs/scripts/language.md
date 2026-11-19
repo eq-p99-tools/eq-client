@@ -85,7 +85,7 @@ def open_bags(times: int, quiet: bool):
 open_bags(2, False)
 ```
 
-Parameters and variables declared inside a function belong to that call: each call starts them fresh, and the caller's values are back when it returns. Variables declared at the top level are shared, and a function can read and assign them once their declaration has run; a function's own variable can't reuse a top-level name or a function's name. `return` leaves the call at once, from inside any of its loops; functions give no values back yet, so `return` stands alone. `break` and `continue` stay inside the function's own loops.
+Parameters and variables declared inside a function belong to that call: each call starts them fresh, and the caller's values are back when it returns. Variables declared at the top level are shared, and a function can read and assign them once their declaration has run, and doing either sooner stops the run with an error; a function's own variable can't reuse a top-level name or a function's name. `return` leaves the call at once, from inside any of its loops; functions give no values back yet, so `return` stands alone. `break` and `continue` stay inside the function's own loops.
 
 A script holds up to 32 functions with up to 8 parameters and 32 variables each, and calls nest at most 8 deep. A call counts as one statement. An error inside a function names it and the line that called it, such as `(in open_bags, called from line 8)`.
 

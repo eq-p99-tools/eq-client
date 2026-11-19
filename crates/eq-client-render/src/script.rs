@@ -682,7 +682,13 @@ impl Script {
                 (line, left_reason)
             } else if let Some(line) = next.filter(|_| over) {
                 (line, "Stepped over call")
-            } else if let Some(line) = next.filter(|line| self.debug.run_to == Some(*line)) {
+            } else if let Some(line) = [edge, next]
+                .into_iter()
+                .flatten()
+                .find(|line| skip != Some(*line) && self.debug.run_to == Some(*line))
+            {
+                // An else or def line is reached by its edge; any other line
+                // as the next statement. The line paused at is left first.
                 self.debug.run_to = None;
                 (line, "Paused at cursor")
             } else if let Some(line) =
@@ -698,9 +704,23 @@ impl Script {
         self.debug.skip = Some(line);
         self.mode = RunMode::Paused(now);
         self.progress.phase = Phase::Paused;
-        self.progress.line = Some(line);
+        self.paused_line(line);
         self.progress.event(format!("{reason}, line {line}"));
         true
+    }
+
+    /// Mark the paused line. The innermost call shows it too, so the call
+    /// stack and the source marker agree, also on a def line.
+    fn paused_line(&mut self, line: usize) {
+        self.progress.line = Some(line);
+        if let Some((_, at)) = self
+            .progress
+            .flow
+            .as_mut()
+            .and_then(|flow| flow.calls.last_mut())
+        {
+            *at = line;
+        }
     }
 
     /// Inside a call, run until it returns to its caller. Otherwise run until
@@ -773,9 +793,11 @@ impl Script {
                         run.next_line()
                     }),
                 };
-                if next.is_some() {
-                    self.progress.line = next;
+                if let Some(line) = next {
+                    self.paused_line(line);
                 }
+                // As after a breakpoint, the line paused at runs on resume.
+                self.debug.skip = next;
                 self.progress.event("Paused between actions");
                 false
             }
@@ -7096,8 +7118,8 @@ mod tests {
         assert_eq!(
             stacks,
             [
-                (Some(1), vec![call("outer", 4), call("inner", 2)]),
-                (Some(1), vec![call("outer", 5), call("inner", 2)]),
+                (Some(1), vec![call("outer", 4), call("inner", 1)]),
+                (Some(1), vec![call("outer", 5), call("inner", 1)]),
             ]
         );
         assert_eq!(
@@ -7157,6 +7179,68 @@ mod tests {
             status.elapsed() < Duration::from_secs(1),
             "{:?}",
             status.elapsed()
+        );
+    }
+
+    #[test]
+    fn run_to_cursor_pauses_on_else_and_def_lines() {
+        // An else line is entered by its edge.
+        let source = "if False:\n    wait(1)\nelse:\n    wait(1)\nwait(1)\n";
+        let mut app = debugging(source, &[], Some(3));
+        let found = pauses(&mut app, |_| Request::Resume);
+        assert_eq!(found, [(3, "Paused at cursor, line 3".to_owned())]);
+        // So is a def line, on its call.
+        let source = "def f():\n    wait(1)\nf()\nwait(1)\n";
+        let mut app = debugging(source, &[], Some(1));
+        let found = pauses(&mut app, |_| Request::Resume);
+        assert_eq!(found, [(1, "Paused at cursor, line 1".to_owned())]);
+        // From a pause too, and only once.
+        let source = "def f():\n    wait(1)\nf()\nf()\n";
+        let mut app = debugging(source, &[3], None);
+        let found = pauses(&mut app, |count| {
+            if count == 1 {
+                Request::RunTo(1)
+            } else {
+                Request::Resume
+            }
+        });
+        assert_eq!(lines(&found), [3, 1]);
+    }
+
+    #[test]
+    fn run_to_cursor_on_the_paused_line_runs_until_it_comes_round_again() {
+        let source = "for i in range(2):\n    wait(1)\nwait(1)\n";
+        let mut app = debugging(source, &[2], None);
+        let found = pauses(&mut app, |count| {
+            if count == 1 {
+                Request::RunTo(2)
+            } else {
+                Request::Resume
+            }
+        });
+        assert_eq!(
+            found,
+            [
+                (2, "Paused at breakpoint, line 2".to_owned()),
+                (2, "Paused at cursor, line 2".to_owned()),
+            ]
+        );
+        // The same after a pause between actions, from Step.
+        let source = "for i in range(2):\n    wait(1)\n    wait(1)\n";
+        let mut app = debugging(source, &[2], None);
+        let found = pauses(&mut app, |count| match count {
+            1 => Request::Step,
+            2 => Request::RunTo(3),
+            _ => Request::Resume,
+        });
+        assert_eq!(
+            found,
+            [
+                (2, "Paused at breakpoint, line 2".to_owned()),
+                (3, "Paused between actions".to_owned()),
+                (2, "Paused at breakpoint, line 2".to_owned()),
+                (3, "Paused at cursor, line 3".to_owned()),
+            ]
         );
     }
 

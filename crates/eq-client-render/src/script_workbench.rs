@@ -57,6 +57,10 @@ struct Workbench {
     revision: u64,
     /// The editor caret's line, for Run to cursor.
     caret_line: Option<usize>,
+    /// The statement line picked in the Execution source while paused;
+    /// Run to cursor goes there instead of the caret. Each run starts
+    /// without one.
+    run_target: Option<usize>,
 }
 
 impl Workbench {
@@ -263,6 +267,7 @@ fn claim_keyboard(
 fn controls(
     mut commands: Commands,
     buttons: crate::clicks::Clicks<view::Action>,
+    picks: crate::clicks::Clicks<view::PickLine>,
     mut state: ResMut<Workbench>,
     (status, mut control): (Res<RunStatus>, ResMut<RunControl>),
     script: Option<Res<Script>>,
@@ -270,6 +275,21 @@ fn controls(
     online: Res<crate::online::OnlineState>,
     mut focus: ResMut<InputFocus>,
 ) {
+    // The editor is locked while a run lasts, so its check describes the
+    // source the Execution view shows.
+    for view::PickLine(line) in picks.iter() {
+        if status.phase() != Phase::Paused {
+            continue;
+        }
+        let statements = state.document.check().statements.clone();
+        match statements.and_then(|statements| breakpoints::statement_at(*line, &statements)) {
+            Some(target) => {
+                state.run_target = Some(target);
+                state.message = format!("Run to cursor goes to line {target}.");
+            }
+            None => state.message = "No statement on or below that line.".into(),
+        }
+    }
     for action in buttons.iter() {
         use view::Action;
         match action {
@@ -297,12 +317,16 @@ fn controls(
             Action::RunToCursor if status.phase() == Phase::Paused => {
                 let statements = state.document.check().statements.clone();
                 match state
-                    .caret_line
+                    .run_target
+                    .or(state.caret_line)
                     .zip(statements)
                     .and_then(|(line, statements)| breakpoints::statement_at(line, &statements))
                 {
                     Some(line) => control.request(Request::RunTo(line)),
-                    None => state.message = "Place the caret on or above a statement.".into(),
+                    None => {
+                        state.message =
+                            "Click a source line above to choose where Run to cursor stops.".into();
+                    }
                 }
             }
             Action::Stop if script.is_some() => control.request(Request::Stop),
@@ -358,6 +382,7 @@ fn controls(
                     } else {
                         None
                     };
+                    state.run_target = None;
                     let script = Script::for_viewer(program, &settings.0, online.enabled)
                         .with_breakpoints(dots, run_to);
                     commands.insert_resource(script.status().clone());
@@ -486,6 +511,73 @@ mod tests {
                 "Stop",
                 "Stop",
             ]
+        );
+    }
+
+    #[test]
+    fn a_paused_run_takes_its_run_to_cursor_line_from_a_click_on_the_execution_source() {
+        let source = "wait(1)\n\nwait(1)\nwait(1)\n";
+        let mut app = crate::testing::app();
+        app.init_resource::<Workbench>()
+            .init_resource::<InputFocus>()
+            .init_resource::<Assets<Font>>()
+            .init_resource::<Assets<Image>>()
+            .insert_resource(RunStatus::paused_at(source, 1))
+            .init_resource::<RunControl>()
+            .init_resource::<crate::escape::Escape>()
+            .add_systems(Startup, view::spawn)
+            .add_systems(
+                Update,
+                (crate::skinned::close, controls, view::refresh, view::scroll).chain(),
+            );
+        app.world_mut().resource_mut::<Workbench>().document.text = source.into();
+        app.world_mut().resource_mut::<Workbench>().tab = Tab::Execution;
+        app.world_mut()
+            .resource_mut::<Shown>()
+            .open(WindowId::Scripts);
+        app.update();
+        app.update();
+        let row = |app: &mut App, line: usize| {
+            app.world_mut()
+                .query::<(Entity, &view::PickLine)>()
+                .iter(app.world())
+                .find_map(|(entity, pick)| (pick.0 == line).then_some(entity))
+                .unwrap()
+        };
+        // The next line's marker is drawn, not a glyph the font lacks.
+        let first = row(&mut app, 1);
+        let marked = app
+            .world()
+            .get::<Children>(first)
+            .unwrap()
+            .iter()
+            .filter_map(|child| app.world().get::<icons::Marker>(child).copied())
+            .collect::<Vec<_>>();
+        assert_eq!(marked, [icons::Marker::Next]);
+        // The blank line 2 picks the statement after it.
+        let blank = row(&mut app, 2);
+        crate::clicks::testing::click(&mut app, blank);
+        let state = app.world().resource::<Workbench>();
+        assert_eq!(state.run_target, Some(3));
+        assert_eq!(state.message, "Run to cursor goes to line 3.");
+        app.update();
+        let picked = row(&mut app, 3);
+        assert_eq!(
+            app.world().get::<BackgroundColor>(picked).unwrap().0,
+            crate::theme::READY
+        );
+        let run_to = app
+            .world_mut()
+            .query::<(Entity, &view::Action)>()
+            .iter(app.world())
+            .find_map(|(entity, action)| {
+                matches!(action, view::Action::RunToCursor).then_some(entity)
+            })
+            .unwrap();
+        crate::clicks::testing::click(&mut app, run_to);
+        assert_eq!(
+            app.world().resource::<RunControl>().pending(),
+            Some(Request::RunTo(3))
         );
     }
 

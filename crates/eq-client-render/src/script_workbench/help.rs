@@ -148,14 +148,23 @@ pub(super) fn draw(commands: &mut Commands, parent: Entity, page: usize, mono: &
                     line,
                     Some(&symbols),
                     None,
-                    false,
-                    false,
+                    view::Row::default(),
+                    None,
                     mono,
                 );
                 continue;
             }
             Block::Other => {
-                view::source_line(commands, parent, line, None, None, false, false, mono);
+                view::source_line(
+                    commands,
+                    parent,
+                    line,
+                    None,
+                    None,
+                    view::Row::default(),
+                    None,
+                    mono,
+                );
                 continue;
             }
             Block::Prose => (),

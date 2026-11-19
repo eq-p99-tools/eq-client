@@ -23,6 +23,11 @@ pub(super) struct Root;
 #[derive(Component)]
 pub(super) struct LibraryPane;
 
+/// An Execution source row: clicked while paused, its line becomes the
+/// Run to cursor target.
+#[derive(Component, Clone, Copy)]
+pub(super) struct PickLine(pub(super) usize);
+
 #[derive(Component)]
 pub(super) enum Field {
     Path,
@@ -111,11 +116,47 @@ pub(super) struct Validation;
 #[derive(Resource)]
 pub(super) struct Mono(Handle<Font>);
 
+/// The Execution source's markers, drawn in code: the font has neither
+/// glyph.
+#[derive(Resource)]
+pub(super) struct Markers {
+    next: Handle<Image>,
+    dot: Handle<Image>,
+}
+
+impl Markers {
+    fn new(images: &mut Assets<Image>) -> Self {
+        Self {
+            next: images.add(icons::Marker::Next.image()),
+            dot: images.add(icons::Marker::Dot.image()),
+        }
+    }
+}
+
+/// What the Execution source rows were last drawn for.
+struct Drawn {
+    line: Option<usize>,
+    phase: Phase,
+    source: String,
+    rows: usize,
+    target: Option<usize>,
+}
+
+impl Drawn {
+    fn shows(&self, status: &RunStatus, rows: usize, target: Option<usize>) -> bool {
+        self.line == status.line()
+            && self.phase == status.phase()
+            && self.source == status.source()
+            && self.rows == rows
+            && self.target == target
+    }
+}
+
 /// Cached source-derived views; elapsed-time updates do not reparse a document.
 #[derive(Default)]
 pub(super) struct Cache {
     document_revision: Option<u64>,
-    run: Option<(Option<usize>, Phase, String, usize)>,
+    run: Option<Drawn>,
     help_page: Option<usize>,
     validation: Option<(u64, String)>,
 }
@@ -563,6 +604,7 @@ pub(super) fn spawn(
     ]);
     commands.entity(frame).add_child(body);
     commands.insert_resource(mono);
+    commands.insert_resource(Markers::new(&mut images));
 }
 
 fn phase_text(phase: Phase) -> &'static str {
@@ -593,7 +635,7 @@ pub(super) fn refresh(
     mut state: ResMut<Workbench>,
     status: Res<RunStatus>,
     shown: Res<Shown>,
-    mono: Res<Mono>,
+    (mono, markers): (Res<Mono>, Res<Markers>),
     mut nodes: Query<
         (
             &mut Node,
@@ -782,15 +824,11 @@ pub(super) fn refresh(
         });
     // Rebuild at action boundaries or a new height, not at frame rate or
     // every elapsed-time tick.
+    let target = state.run_target;
     if previous
         .run
         .as_ref()
-        .is_none_or(|(line, phase, source, shown)| {
-            *line != status.line()
-                || *phase != status.phase()
-                || source != status.source()
-                || *shown != rows
-        })
+        .is_none_or(|drawn| !drawn.shows(&status, rows, target))
     {
         if let Ok((parent, _)) = lines.single() {
             commands.entity(parent).despawn_children();
@@ -803,18 +841,23 @@ pub(super) fn refresh(
                     line,
                     Some(&symbols),
                     Some(index + 1),
-                    status.line() == Some(index + 1),
-                    status.breakpoints().contains(&(index + 1)),
+                    Row {
+                        active: status.line() == Some(index + 1),
+                        dot: status.breakpoints().contains(&(index + 1)),
+                        target: state.run_target == Some(index + 1),
+                    },
+                    Some(&markers),
                     &mono,
                 );
             }
         }
-        previous.run = Some((
-            status.line(),
-            status.phase(),
-            status.source().to_owned(),
+        previous.run = Some(Drawn {
+            line: status.line(),
+            phase: status.phase(),
+            source: status.source().to_owned(),
             rows,
-        ));
+            target,
+        });
     }
     if previous.help_page != Some(state.help_page) {
         for (parent, breadcrumbs) in &help_body {
@@ -863,6 +906,8 @@ fn flow_summary(status: &RunStatus) -> String {
 /// One source row's height, and the pane's padding above and below.
 const ROW: f32 = 18.0;
 const PANE_PADDING: f32 = 8.0;
+/// A marker's square, beside a source row's number.
+const MARKER: f32 = 12.0;
 /// Rows shown before the pane has been laid out.
 const DEFAULT_ROWS: usize = 14;
 
@@ -886,12 +931,27 @@ const fn first_row(current: usize, rows: usize) -> usize {
     current.saturating_sub(rows * 3 / 7)
 }
 
-/// A read-only source line with stable syntax colors, an execution marker
-/// and a breakpoint dot.
+/// How one source row is marked.
+#[derive(Clone, Copy, Default)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "one row's independent presentation facts"
+)]
+pub(super) struct Row {
+    /// The line that runs next.
+    pub(super) active: bool,
+    /// A breakpoint is on it.
+    pub(super) dot: bool,
+    /// Run to cursor goes to it.
+    pub(super) target: bool,
+}
+
+/// A read-only source line with stable syntax colors and, given `markers`,
+/// columns for the next line's marker and a breakpoint dot. A numbered line
+/// can be picked as the Run to cursor target.
 #[allow(
     clippy::too_many_arguments,
-    clippy::fn_params_excessive_bools,
-    reason = "one row's independent presentation facts"
+    reason = "one row's source, place and presentation"
 )]
 pub(super) fn source_line(
     commands: &mut Commands,
@@ -899,8 +959,12 @@ pub(super) fn source_line(
     source: &str,
     symbols: Option<&syntax::Symbols>,
     line: Option<usize>,
-    active: bool,
-    dot: bool,
+    Row {
+        active,
+        dot,
+        target,
+    }: Row,
+    markers: Option<&Markers>,
     mono: &Mono,
 ) {
     let row = commands
@@ -913,20 +977,42 @@ pub(super) fn source_line(
             },
             BackgroundColor(if active {
                 theme::BUTTON_ON
+            } else if target {
+                theme::READY
             } else {
                 Color::NONE
             }),
         ))
         .id();
+    if let Some(line) = line {
+        commands.entity(row).insert((Button, PickLine(line)));
+    }
+    if let Some(markers) = markers {
+        for (shown, image, marker) in [
+            (active, &markers.next, icons::Marker::Next),
+            (dot, &markers.dot, icons::Marker::Dot),
+        ] {
+            let cell = commands
+                .spawn(Node {
+                    width: px(MARKER),
+                    height: px(MARKER),
+                    margin: UiRect::top(px((ROW - MARKER) / 2.0)),
+                    flex_shrink: 0.0,
+                    ..default()
+                })
+                .id();
+            if shown {
+                commands.entity(cell).insert((
+                    ImageNode::new(image.clone()).with_color(marker.tint()),
+                    marker,
+                ));
+            }
+            commands.entity(row).add_child(cell);
+        }
+    }
     let text = commands
         .spawn((
-            Text::new(line.map_or_else(String::new, |line| {
-                format!(
-                    "{}{}{line:>4}  ",
-                    if active { "▶" } else { " " },
-                    if dot { "●" } else { " " }
-                )
-            })),
+            Text::new(line.map_or_else(String::new, |line| format!("{line:>4}  "))),
             font(mono, 13.0),
             TextColor(theme::INK_DIM),
             TextLayout::no_wrap(),

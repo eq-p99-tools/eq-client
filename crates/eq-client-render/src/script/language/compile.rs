@@ -87,7 +87,10 @@ pub(super) struct Located {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Op {
     Action(usize),
+    /// A declaration: the first value of this slot.
     Store(usize, Expr),
+    /// An assignment to a declared slot, whose declaration must have run.
+    Assign(usize, Expr),
     If {
         condition: Expr,
         otherwise: usize,
@@ -216,6 +219,9 @@ pub(in crate::script) struct Builder {
     stray: Option<(usize, Range<usize>)>,
     deferred: Vec<Deferred>,
     functions: Vec<Signature>,
+    /// Names of `def` headers that failed after their name: a call to one
+    /// is accepted unchecked, so the header's error is the only one.
+    failed_functions: Vec<String>,
     /// The function whose body is being compiled.
     current: Option<usize>,
     /// Where the top level ended, once the first body starts.
@@ -235,6 +241,7 @@ impl Builder {
             stray: None,
             deferred: Vec::new(),
             functions: Vec::new(),
+            failed_functions: Vec::new(),
             current: None,
             end: None,
         }
@@ -318,6 +325,17 @@ impl Builder {
                     self.call(function, code, offset(code, rest), line)
                         .map_err(at)?;
                     return Ok(None);
+                }
+                let failed = self.failed_functions.iter().any(|name| name == word);
+                if failed && rest.starts_with('(') {
+                    self.used = true;
+                    return Ok(None);
+                }
+                if failed || self.function(word).is_some() {
+                    return Err(at(Fault::at(
+                        format!("call {word} with parentheses, such as {word}(...)"),
+                        0..word.len(),
+                    )));
                 }
                 Err(at(Fault::at(
                     format!("unknown command '{word}'"),
@@ -705,7 +723,7 @@ impl Builder {
                 Fault::at(message, start..start + 2)
             })?
         };
-        self.push(line, Op::Store(index, expr));
+        self.push(line, Op::Assign(index, expr));
         Ok(())
     }
 
@@ -768,7 +786,31 @@ impl Builder {
                 name_span,
             ));
         }
-        let after = rest[name_length..].trim_start();
+        let parameters = Self::signature(code, &rest[name_length..], def_span)
+            .and_then(|parameters| {
+                if self.functions.len() == MAX_FUNCTIONS {
+                    return Err(Fault::at(
+                        format!("at most {MAX_FUNCTIONS} functions can be defined"),
+                        name_span,
+                    ));
+                }
+                Ok(parameters)
+            })
+            .inspect_err(|_| self.failed_functions.push(name.into()))?;
+        self.functions.push(Signature {
+            name: name.into(),
+            line,
+            parameters,
+            entry: None,
+            slots: Vec::new(),
+        });
+        Ok(self.functions.len() - 1)
+    }
+
+    /// The parameters of a `def` header from just after its name, up to and
+    /// including the closing `:`.
+    fn signature(code: &str, after: &str, def_span: Range<usize>) -> Result<Vec<Parameter>, Fault> {
+        let after = after.trim_start();
         let open = offset(code, after);
         if !after.starts_with('(') {
             return Err(Fault::at(
@@ -793,21 +835,7 @@ impl Builder {
             }
             return Err(Fault::at("expected ':' at the end of the line", def_span));
         }
-        let parameters = parameters(code, &after[1..close])?;
-        if self.functions.len() == MAX_FUNCTIONS {
-            return Err(Fault::at(
-                format!("at most {MAX_FUNCTIONS} functions can be defined"),
-                name_span,
-            ));
-        }
-        self.functions.push(Signature {
-            name: name.into(),
-            line,
-            parameters,
-            entry: None,
-            slots: Vec::new(),
-        });
-        Ok(self.functions.len() - 1)
+        parameters(code, &after[1..close])
     }
 
     /// A function's `def` line.

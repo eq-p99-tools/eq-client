@@ -18,7 +18,8 @@
   dot; a run pauses before that statement each time it reaches it, and
   dots follow their lines through edits. Run to cursor, Step over, Step
   into and Step out join Run, Pause, Resume and Stop as icons above the
-  script. See Run controls and troubleshooting in Help.
+  script; while paused, a click on a line of the Execution source chooses
+  where Run to cursor stops. See Run controls and troubleshooting in Help.
 - Script functions: `def name(parameter: type, ...):` defines one, called
   as `name(arguments)` before or after its definition, with `return` to
   leave early. Parameters and inner variables belong to each call; top-level
