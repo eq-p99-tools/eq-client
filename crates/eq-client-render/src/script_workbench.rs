@@ -4,6 +4,7 @@
 mod document;
 mod editor;
 mod help;
+mod icons;
 mod input;
 mod library;
 mod syntax;
@@ -359,11 +360,62 @@ mod tests {
     use bevy::input_focus::FocusCause;
 
     #[test]
+    fn run_controls_are_icons_named_by_tooltip_above_both_script_areas() {
+        let mut app = crate::testing::app();
+        app.init_resource::<Workbench>()
+            .init_resource::<InputFocus>()
+            .init_resource::<Assets<Font>>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<RunStatus>()
+            .init_resource::<RunControl>()
+            .init_resource::<crate::escape::Escape>()
+            .add_systems(Startup, view::spawn)
+            .add_systems(Update, view::refresh);
+        app.world_mut()
+            .resource_mut::<Shown>()
+            .open(WindowId::Scripts);
+        app.update();
+        let mut buttons = app.world_mut().query::<(
+            &view::Action,
+            &crate::tooltip::Tooltip,
+            &BackgroundColor,
+            &Children,
+        )>();
+        let mut seen = Vec::new();
+        for (action, tooltip, color, children) in buttons.iter(app.world()) {
+            let usable = matches!(action, view::Action::Run);
+            assert_eq!(
+                color.0,
+                crate::theme::button(usable, false, Interaction::None),
+                "{}",
+                tooltip.0
+            );
+            assert!(
+                children
+                    .iter()
+                    .all(|child| app.world().get::<ImageNode>(child).is_some()),
+                "{} is drawn as an icon",
+                tooltip.0
+            );
+            seen.push(tooltip.0.clone());
+        }
+        seen.sort();
+        // One set over the editor's script and one over the run's source.
+        assert_eq!(
+            seen,
+            [
+                "Pause", "Pause", "Resume", "Resume", "Run", "Run", "Step", "Step", "Stop", "Stop"
+            ]
+        );
+    }
+
+    #[test]
     fn views_build_and_run_uses_an_immutable_buffer_snapshot() {
         let mut app = crate::testing::app();
         app.init_resource::<Workbench>()
             .init_resource::<InputFocus>()
             .init_resource::<Assets<Font>>()
+            .init_resource::<Assets<Image>>()
             .init_resource::<RunStatus>()
             .init_resource::<RunControl>()
             .init_resource::<crate::escape::Escape>()

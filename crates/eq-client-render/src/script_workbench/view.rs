@@ -6,10 +6,11 @@ use bevy::{
     ui::widget::TextScroll,
 };
 
-use super::{Tab, Workbench, help, syntax};
+use super::{Tab, Workbench, help, icons, syntax};
 use crate::{
     script::{Phase, RunStatus},
     theme,
+    tooltip::Tooltip,
     windows::{
         self, Shown, WindowId,
         pointer::{TakesWheel, Wheel},
@@ -44,6 +45,23 @@ pub(super) enum Action {
     Cancel,
     Tab(Tab),
     Help(usize),
+}
+
+impl Action {
+    /// Whether the control can be pressed now: an icon and a text button
+    /// for one action always agree.
+    pub(super) fn usable(self, phase: Phase, busy: bool) -> bool {
+        let active = phase.active();
+        match self {
+            Self::Run | Self::New | Self::Open | Self::Save | Self::Reload | Self::Discard => {
+                !active && !busy
+            }
+            Self::Pause => active && phase != Phase::Paused,
+            Self::Resume | Self::Step => phase == Phase::Paused,
+            Self::Stop => active,
+            _ => true,
+        }
+    }
 }
 
 #[derive(Component)]
@@ -127,6 +145,86 @@ pub(super) fn button(commands: &mut Commands, title: &str, action: Action) -> En
         .id()
 }
 
+/// A run control drawn as an icon; its name shows as the tooltip.
+fn icon_button(
+    commands: &mut Commands,
+    images: &mut Assets<Image>,
+    icon: icons::Icon,
+    title: &str,
+    action: Action,
+) -> Entity {
+    let image = commands
+        .spawn((
+            ImageNode::new(images.add(icon.image())).with_color(icon.tint()),
+            Node {
+                width: px(14),
+                height: px(14),
+                ..default()
+            },
+        ))
+        .id();
+    commands
+        .spawn((
+            Button,
+            action,
+            Tooltip(title.to_owned()),
+            Node {
+                padding: UiRect::axes(px(7), px(6)),
+                border: UiRect::all(px(1)),
+                flex_shrink: 0.0,
+                ..default()
+            },
+            BackgroundColor(theme::BUTTON),
+            BorderColor::all(theme::EDGE),
+        ))
+        .add_child(image)
+        .id()
+}
+
+/// Run, pause, resume, step and stop as icons, for the right end of the
+/// row above a page's script area.
+fn run_controls(commands: &mut Commands, images: &mut Assets<Image>) -> Entity {
+    let children = [
+        (icons::Icon::Run, "Run", Action::Run),
+        (icons::Icon::Pause, "Pause", Action::Pause),
+        (icons::Icon::Resume, "Resume", Action::Resume),
+        (icons::Icon::Step, "Step", Action::Step),
+        (icons::Icon::Stop, "Stop", Action::Stop),
+    ]
+    .map(|(icon, title, action)| icon_button(commands, images, icon, title, action));
+    commands
+        .spawn(Node {
+            column_gap: px(4),
+            flex_shrink: 0.0,
+            margin: UiRect::left(Val::Auto),
+            ..default()
+        })
+        .add_children(&children)
+        .id()
+}
+
+/// A row holding `left` and the run controls at its right end.
+fn with_run_controls(
+    commands: &mut Commands,
+    images: &mut Assets<Image>,
+    left: Option<Entity>,
+) -> Entity {
+    let controls = run_controls(commands, images);
+    let row = commands
+        .spawn(Node {
+            width: percent(100),
+            column_gap: px(8),
+            align_items: AlignItems::Center,
+            ..default()
+        })
+        .id();
+    if let Some(left) = left {
+        commands.entity(row).add_child(left);
+    }
+    commands.entity(row).add_child(controls);
+    row
+}
+
 fn row(commands: &mut Commands, actions: &[(&str, Action)]) -> Entity {
     let children: Vec<_> = actions
         .iter()
@@ -148,6 +246,7 @@ fn row(commands: &mut Commands, actions: &[(&str, Action)]) -> Entity {
 pub(super) fn spawn(
     mut commands: Commands,
     mut fonts: ResMut<Assets<Font>>,
+    mut images: ResMut<Assets<Image>>,
     state: Res<Workbench>,
 ) {
     let mono = Mono(fonts.add(Font::from_bytes(bevy::text::DEFAULT_FONT_DATA.to_vec())));
@@ -193,16 +292,6 @@ pub(super) fn spawn(
     );
     let status = label(&mut commands, "Ready", 13.0, theme::FOCUS);
     commands.entity(status).insert(Status);
-    let controls = row(
-        &mut commands,
-        &[
-            ("Run", Action::Run),
-            ("Pause", Action::Pause),
-            ("Resume", Action::Resume),
-            ("Step", Action::Step),
-            ("Stop", Action::Stop),
-        ],
-    );
     let editor = commands
         .spawn((
             Page(Tab::Editor),
@@ -244,7 +333,7 @@ pub(super) fn spawn(
         12.0,
         theme::INK_DIM,
     );
-    let file_controls = row(
+    let file_buttons = row(
         &mut commands,
         &[
             ("Files", Action::ToggleLibrary),
@@ -254,6 +343,7 @@ pub(super) fn spawn(
             ("Reload", Action::Reload),
         ],
     );
+    let file_controls = with_run_controls(&mut commands, &mut images, Some(file_buttons));
     let source = commands
         .spawn((
             Field::Source,
@@ -359,9 +449,10 @@ pub(super) fn spawn(
         })
         .add_children(&[lines, flow_pane])
         .id();
+    let execution_controls = with_run_controls(&mut commands, &mut images, None);
     commands
         .entity(execution)
-        .add_children(&[source_row, history]);
+        .add_children(&[execution_controls, source_row, history]);
     let help_page = commands
         .spawn((
             Page(Tab::Help),
@@ -429,7 +520,6 @@ pub(super) fn spawn(
     commands.entity(body).add_children(&[
         tabs,
         status,
-        controls,
         editor,
         execution,
         help_page,
@@ -634,18 +724,7 @@ pub(super) fn refresh(
     }
     previous.document_revision = Some(state.revision);
     for (action, interaction, mut color) in &mut buttons {
-        let usable = match action {
-            Action::Run
-            | Action::New
-            | Action::Open
-            | Action::Save
-            | Action::Reload
-            | Action::Discard => !active && !state.busy(),
-            Action::Pause => active && status.phase() != Phase::Paused,
-            Action::Resume | Action::Step => status.phase() == Phase::Paused,
-            Action::Stop => active,
-            _ => true,
-        };
+        let usable = action.usable(status.phase(), state.busy());
         let on = matches!(action, Action::Tab(tab) if *tab == state.tab)
             || matches!(action, Action::Help(page) if *page == state.help_page)
             || matches!(action, Action::ToggleLibrary) && !state.library_collapsed;
@@ -799,6 +878,44 @@ pub(super) fn scroll(
             let maximum = (text.size.y - node.content_box().height()).max(0.0);
             scroll.0.y =
                 (scroll.0.y - wheel.pixels / node.inverse_scale_factor()).clamp(0.0, maximum);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn run_controls_are_usable_exactly_when_their_action_can_happen() {
+        let controls = [
+            Action::Run,
+            Action::Pause,
+            Action::Resume,
+            Action::Step,
+            Action::Stop,
+        ];
+        let usable = |phase, busy| controls.map(|action| action.usable(phase, busy));
+        // Run, pause, resume, step, stop.
+        assert_eq!(
+            usable(Phase::Idle, false),
+            [true, false, false, false, false]
+        );
+        assert_eq!(usable(Phase::Idle, true), [false; 5]);
+        assert_eq!(
+            usable(Phase::Running, false),
+            [false, true, false, false, true]
+        );
+        assert_eq!(
+            usable(Phase::Pausing, false),
+            [false, true, false, false, true]
+        );
+        assert_eq!(
+            usable(Phase::Paused, false),
+            [false, false, true, true, true]
+        );
+        for done in [Phase::Completed, Phase::Stopped, Phase::Failed] {
+            assert_eq!(usable(done, false), [true, false, false, false, false]);
         }
     }
 }
