@@ -75,8 +75,15 @@ when those data cannot be read. Project 1999 and Titanium EQEmu sessions
 offer bounded swimming in classic water marked by the installed zone.
 Wet movement starts when the character's body origin enters that region.
 Wade or fall into water, move in any
-horizontal direction, and use first-person or mouse-look pitch to swim up or
-down with forward or backward input. A level stroke can cross into known air
+horizontal direction, and swim up or down by your character's look pitch with
+forward or backward input. Look Up and Look Down (Page Up and Page Down by
+default) tilt that pitch in every camera view, and first-person mouse look moves
+it too; in the chase views the mouse moves only the camera, as in the original
+client. The chase view does not show the pitch, so after Look Up a later stroke
+still rises: Center View levels it in first person, and each zone entry or
+mouse-wheel change between first person and the chase view levels it too.
+Jump strokes up for half a second, and holding it keeps rising. A stroke never
+covers more than a level stroke would, whatever the pitch. A level stroke can cross into known air
 above the same continuous water while the feet stay wet; ordinary gravity then
 returns the body origin to the water. Unknown regions and dry gaps still hold
 the stroke. A supported bank returns the swimmer to ordinary movement. At the

@@ -430,7 +430,9 @@ mod tests {
             let mut camera = world.query::<&mut OrbitCamera>();
             let mut camera = camera.single_mut(world).unwrap();
             camera.yaw = crate::camera::behind(eq_client_core::render_heading(0.0));
-            camera.pitch = pitch;
+            // The look keys set the character's pitch; the chase camera
+            // keeps its own (read R13 d).
+            camera.look = pitch;
         };
         {
             let world = app.world_mut();

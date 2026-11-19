@@ -1063,8 +1063,9 @@ struct Footing {
 /// the boat it stood on both times (the same spawn incarnation, whichever
 /// report drew it), so a boat carrying a still rider is not
 /// the rider walking; else across the world. A still rider stands while the
-/// boat moves. Inferred, recording checklist 6.479: the program's choice is
-/// unread.
+/// boat moves: the program picks moving or idle from the spawn's own
+/// velocity, which for a rider leaves out the boat's (0x44fa8f, 0x4bf9b2,
+/// read R38).
 fn moved(previous: Footing, now: Footing) -> f32 {
     let local = |at: Vec3, pose| {
         let world = eq_client_core::world_position(at.to_array(), 0.0);

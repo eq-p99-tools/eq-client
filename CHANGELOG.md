@@ -14,9 +14,17 @@
   Help, the editor highlighter and the Vim plugin (now with indenting after
   `:`) follow the new syntax, and a thin line divides the editor's line
   numbers from the text.
+- Swim up and down as the Titanium program does (reads R13, R33, R39): Look
+  Up and Look Down now tilt the character's pitch in every camera view, and a
+  swim stroke follows that pitch instead of the camera's. In the chase views
+  the mouse moves only the camera, so chase mouse look no longer steers a
+  swimmer. Jump in water strokes up for 500 ms, and a held jump keeps rising.
+  Strokes stay within the level swim budget. The character's pitch levels at
+  each zone entry and on a wheel change of view (partly inferred, checklist
+  6.480). Script reports carry `look_pitch`. Nothing new is sent.
 - A player standing still on a moving boat stands, rather than playing the
   run: the animation measures the player's own motion across the boat it is
-  drawn on, not the boat carrying it (inferred, checklist 6.479).
+  drawn on, not the boat carrying it (read R38).
 - Uses eq-network 0d9570be: a rider arriving aboard is restored where the
   program's profile loader puts them (read R36c).
 - Arrive aboard a boat as the Titanium program does (read R36): when the
