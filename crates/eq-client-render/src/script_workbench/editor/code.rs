@@ -174,7 +174,7 @@ pub(super) fn show(
         .id_salt("eqscript-scroll")
         .auto_shrink([false, false])
         .max_height((ui.available_height() - strip).max(row))
-        .show(ui, |ui| {
+        .show_viewport(ui, |ui, viewport| {
             if let Some(line) = jump {
                 let at = CCursor::new(line_start(text.as_str(), line));
                 let mut state = TextEditState::load(ui.ctx(), id()).unwrap_or_default();
@@ -197,6 +197,9 @@ pub(super) fn show(
                 .lock_focus(true)
                 .desired_rows(ROWS)
                 .desired_width(f32::INFINITY)
+                // Fill the view, so the gutter rule reaches its bottom and a
+                // click below the last line still lands in the editor.
+                .min_size(egui::vec2(0.0, viewport.height()))
                 // A custom frame replaces the margin, so the frame carries
                 // the gutter; the margin still sizes the wrap width.
                 .frame(egui::Frame::NONE.inner_margin(margin))
@@ -432,6 +435,29 @@ mod tests {
         let (left, text_left) = placed.unwrap();
         // The line numbers and their padding sit left of the text, not over it.
         assert!(text_left - left > 18.0, "{left} {text_left}");
+    }
+
+    #[test]
+    fn a_short_script_still_fills_the_editor_to_its_bottom() {
+        let ctx = egui::Context::default();
+        let mut text = String::from("wait(1)\n");
+        let mut memory = Memory::default();
+        let mut sizes = None;
+        for _ in 0..2 {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 900.0))),
+                ..egui::RawInput::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                let bottom = ui.max_rect().bottom();
+                let shown = show(ui, &mut text, &[], &mut memory);
+                sizes = Some((shown.output.response.rect.bottom(), bottom));
+            });
+            output.textures_delta.clear();
+        }
+        let (text_bottom, bottom) = sizes.unwrap();
+        // The text box, and so its gutter rule, runs to the foot of the view.
+        assert!((bottom - text_bottom).abs() < 1.0, "{text_bottom} {bottom}");
     }
 
     #[test]
