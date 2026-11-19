@@ -643,10 +643,7 @@ fn memspellset_applies_the_set_as_the_apply_button_does_and_opens_the_book() {
         })
     ));
     // While it applies, another is dropped without a line.
-    let before = app
-        .world()
-        .resource::<crate::chat::ChatState>()
-        .newest();
+    let before = app.world().resource::<crate::chat::ChatState>().newest();
     app.world_mut()
         .resource_mut::<crate::chat::ChatState>()
         .spell_set_asked = Some("1".into());
