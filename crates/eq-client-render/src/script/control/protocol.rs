@@ -193,10 +193,10 @@ mod tests {
 
     #[test]
     fn starts_are_inline_and_stops_name_a_run_without_replacement_options() {
-        let start = br#"{"version":1,"instance":"one","id":2,"op":"start","source":"wait 1\n"}"#;
+        let start = br#"{"version":1,"instance":"one","id":2,"op":"start","source":"wait(1)\n"}"#;
         assert_eq!(
             parse(start).unwrap().operation,
-            Operation::Start("wait 1\n".into())
+            Operation::Start("wait(1)\n".into())
         );
         let path = br#"{"version":1,"instance":"one","id":2,"op":"start","path":"unread"}"#;
         assert!(parse(path).is_err());
@@ -216,7 +216,7 @@ mod tests {
 
     #[test]
     fn world_scope_is_optional_but_requires_both_identifiers_only_on_start() {
-        let start = json!({"version":1,"instance":"one","id":1,"op":"start","source":"wait 1\n"});
+        let start = json!({"version":1,"instance":"one","id":1,"op":"start","source":"wait(1)\n"});
         assert!(
             parse(&serde_json::to_vec(&start).unwrap())
                 .unwrap()

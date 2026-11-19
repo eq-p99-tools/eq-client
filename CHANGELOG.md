@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Scripts now use a Python-style syntax, and only that syntax. Every action
+  is a call with literal arguments, such as `press("I")`, `wait(500)` or
+  `click("slot", 22)`; free-text commands such as `report`, `slash` and `gm`
+  take one quoted string. Variables are declared `name: int = 0` and
+  assigned `name = 1`, `+=`, `-=` or `*=`. Blocks follow indentation under
+  `if`, `elif`, `else`, `for i in range(n):` and `while c, limit=n:` headers,
+  with `break`, `continue` and `pass`; conditions use `and`, `or`, `not`,
+  `True` and `False`, and text takes single or double quotes with `\"`,
+  `\'` and `\\` escapes. `def` and `return` are reserved for functions.
+  Help, the editor highlighter and the Vim plugin (now with indenting after
+  `:`) follow the new syntax, and a thin line divides the editor's line
+  numbers from the text.
+- Scripts window: it resizes from any edge or corner and remembers its size,
+  and the editor, the Execution source and Help grow with it. Run, Pause,
+  Resume, Step and Stop are icons at the right end of the row above the
+  script, on the Editor and Execution tabs, named by their tooltips. The
+  gutter's line reaches the bottom of the editor, with a little more room
+  before the text, and a click below the last line lands in the editor.
 - Swim up and down as the Titanium program does (reads R13, R33, R39): Look
   Up and Look Down now tilt the character's pitch in every camera view, and a
   swim stroke follows that pitch instead of the camera's. In the chase views

@@ -8,7 +8,7 @@ use std::{
 
 use crate::script::{MAX_SOURCE_BYTES, ParseError, Program};
 
-pub(super) const EXAMPLE: &str = "# Run in your current game session\n# I uses your current key bindings\npress I\nwait 1000\npress I\n";
+pub(super) const EXAMPLE: &str = "# Run in your current game session\n# I uses your current key bindings\npress(\"I\")\nwait(1000)\npress(\"I\")\n";
 
 /// The editable buffer and the exact disk snapshot it was loaded from.
 #[derive(Debug)]
@@ -243,13 +243,13 @@ mod tests {
     #[test]
     fn a_check_compiles_once_per_text_and_path() {
         use crate::script::COMPILES;
-        let mut doc = Document::new("wait 1\npres I\n".into(), None);
+        let mut doc = Document::new("wait(1)\npres(\"I\")\n".into(), None);
         let before = COMPILES.get();
         assert_eq!(doc.check().errors.len(), 1);
         let generation = doc.check().generation;
         assert_eq!(doc.check().errors[0].line, Some(2));
         assert_eq!(COMPILES.get(), before + 1);
-        doc.text = "wait 1\n".into();
+        doc.text = "wait(1)\n".into();
         assert_eq!(doc.check().counts, Some((1, 1)));
         assert_ne!(doc.check().generation, generation);
         assert_eq!(COMPILES.get(), before + 2);
@@ -260,28 +260,28 @@ mod tests {
 
     #[test]
     fn saves_preserve_newer_buffer_edits() {
-        let mut doc = Document::loaded("sample.eqscript".into(), "wait 10\n".into());
-        doc.text = "wait 20\n".into();
-        doc.saved("sample.eqscript".into(), "wait 15\n".into());
+        let mut doc = Document::loaded("sample.eqscript".into(), "wait(10)\n".into());
+        doc.text = "wait(20)\n".into();
+        doc.saved("sample.eqscript".into(), "wait(15)\n".into());
         assert!(doc.dirty());
-        assert_eq!(doc.text, "wait 20\n");
+        assert_eq!(doc.text, "wait(20)\n");
     }
 
     #[test]
     fn external_changes_and_unread_existing_files_are_never_overwritten() {
         let path =
             std::env::temp_dir().join(format!("script-conflict-{}.eqscript", std::process::id()));
-        fs::write(&path, "wait 10\n").unwrap();
+        fs::write(&path, "wait(10)\n").unwrap();
         let mut doc = Document::loaded(path.clone(), read(&path).unwrap());
-        doc.text = "wait 20\n".into();
-        fs::write(&path, "wait 30\n").unwrap();
+        doc.text = "wait(20)\n".into();
+        fs::write(&path, "wait(30)\n").unwrap();
         assert!(doc.save(path.clone()).write().is_err());
         assert!(Document::default().save(path.clone()).write().is_err());
-        assert_eq!(read(&path).unwrap(), "wait 30\n");
+        assert_eq!(read(&path).unwrap(), "wait(30)\n");
         let mut doc = Document::loaded(path.clone(), read(&path).unwrap());
-        doc.text = "wait 40\n".into();
+        doc.text = "wait(40)\n".into();
         doc.save(path.clone()).write().unwrap();
-        assert_eq!(read(&path).unwrap(), "wait 40\n");
+        assert_eq!(read(&path).unwrap(), "wait(40)\n");
         fs::remove_file(path).unwrap();
     }
 
@@ -289,7 +289,7 @@ mod tests {
     fn bom_and_relative_screenshot_paths_survive_loading() {
         let doc = Document::loaded(
             "scenarios/demo.eqscript".into(),
-            "\u{feff}# note\nscreenshot look.png\n".into(),
+            "\u{feff}# note\nscreenshot(\"look.png\")\n".into(),
         );
         assert!(!doc.dirty());
         let program = doc.program().unwrap();
@@ -302,9 +302,9 @@ mod tests {
 
     #[test]
     fn windows_newlines_display_once_and_keep_the_original_disk_snapshot() {
-        let raw = "\u{feff}report first\r\nwait 1\r\n";
+        let raw = "\u{feff}report(\"first\")\r\nwait(1)\r\n";
         let doc = Document::loaded("windows.eqscript".into(), raw.into());
-        assert_eq!(doc.text, "report first\nwait 1\n");
+        assert_eq!(doc.text, "report(\"first\")\nwait(1)\n");
         assert!(!doc.dirty());
         assert_eq!(
             doc.save("windows.eqscript".into()).expected.as_deref(),
@@ -322,20 +322,20 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ));
-        fs::write(&path, "wait 1\r\nwait 2\r\n").unwrap();
+        fs::write(&path, "wait(1)\r\nwait(2)\r\n").unwrap();
         let mut doc = Document::loaded(path.clone(), read(&path).unwrap());
-        assert_eq!(doc.text, "wait 1\nwait 2\n");
-        doc.text.push_str("wait 3\n");
+        assert_eq!(doc.text, "wait(1)\nwait(2)\n");
+        doc.text.push_str("wait(3)\n");
         let (saved_path, text) = doc.save(path.clone()).write().unwrap();
         doc.saved(saved_path, text);
-        assert_eq!(read(&path).unwrap(), "wait 1\r\nwait 2\r\nwait 3\r\n");
+        assert_eq!(read(&path).unwrap(), "wait(1)\r\nwait(2)\r\nwait(3)\r\n");
         assert!(!doc.dirty());
         // The snapshot matches the disk, so the next save sees no outside change.
-        doc.text.push_str("wait 4\n");
+        doc.text.push_str("wait(4)\n");
         doc.save(path.clone()).write().unwrap();
         assert_eq!(
             read(&path).unwrap(),
-            "wait 1\r\nwait 2\r\nwait 3\r\nwait 4\r\n"
+            "wait(1)\r\nwait(2)\r\nwait(3)\r\nwait(4)\r\n"
         );
         fs::remove_file(path).unwrap();
     }

@@ -40,7 +40,7 @@ You may focus the client and hover the physical pointer to watch a background ru
 
 A background run can minimize and restore the Runbook through its ordinary window controls; dragging and resizing still need real window focus.
 
-Bounded `wheel world` and `look world` gestures use the script's drawn pointer
+Bounded `wheel("world", …)` and `look("world", …)` gestures use the script's drawn pointer
 and the ordinary world camera path. While one is active, native mouse motion
 also cancels it if the client has focus. Motion while using another app does
 not reclaim the background gesture. See the [command reference](reference.md).
@@ -51,7 +51,7 @@ Background mode does not enable `gm` or `chat`, change the selected server, or i
 
 - Source: at most 128 KiB of UTF-8 text.
 - Source statements may occupy up to 500 nonblank, noncomment lines, including block delimiters and accepted follow appends.
-- Structured snapshots can execute up to 5,000 statements and 500 actions. Structured actions start at least 100 ms apart when handed to the driver. Legacy linear scripts keep their usual cadence.
+- Structured snapshots can execute up to 5,000 statements and 500 actions. Structured actions start at least 100 ms apart when handed to the driver. Scripts without variables or blocks keep their usual cadence.
 - Run: at most 15 minutes, excluding explicit pauses.
 - Key holds and traces: at most 10 seconds each.
 - Ordinary waits and pointer waits: at most 2 minutes each.

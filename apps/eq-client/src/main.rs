@@ -947,8 +947,8 @@ mod tests {
         .unwrap();
         assert!(background.script_background);
         // Input ownership grants no local-server or command permission.
-        let allowed = Program::parse("face", Path::new(".")).unwrap();
-        let restricted = Program::parse("gm summon", Path::new(".")).unwrap();
+        let allowed = Program::parse("face()", Path::new(".")).unwrap();
+        let restricted = Program::parse("gm(\"summon\")", Path::new(".")).unwrap();
         for provider in [ServerProtocol::Project1999, ServerProtocol::Quarm] {
             assert!(!script_session(Some(&allowed), false, Some(provider)).unwrap());
             assert!(script_session(Some(&restricted), false, Some(provider)).is_err());
@@ -1070,10 +1070,10 @@ mod tests {
             .unwrap();
             mode(&arguments, script)
         };
-        let login = Program::parse("login\nwait_servers", Path::new(".")).unwrap();
-        let legacy = Program::parse("face", Path::new(".")).unwrap();
+        let login = Program::parse("login()\nwait_servers()", Path::new(".")).unwrap();
+        let linear = Program::parse("face()", Path::new(".")).unwrap();
         let structured =
-            Program::parse("if false\n  if true\n    login\n  end\nend", Path::new(".")).unwrap();
+            Program::parse("if False:\n    if True:\n        login()", Path::new(".")).unwrap();
         assert_eq!(run(&[], None), Ok(Mode::Login));
         assert_eq!(run(&[], Some(&login)), Ok(Mode::Login));
         assert_eq!(run(&["--online"], None), Ok(Mode::Online));
@@ -1086,7 +1086,7 @@ mod tests {
             assert_eq!(run(offline, None), Ok(Mode::Offline), "{offline:?}");
         }
         // Scripts written before the login screen still open the viewer.
-        assert_eq!(run(&[], Some(&legacy)), Ok(Mode::Offline));
+        assert_eq!(run(&[], Some(&linear)), Ok(Mode::Offline));
         // A login step needs the screen it types into.
         assert!(run(&["--online"], Some(&login)).is_err());
         assert!(run(&["--offline"], Some(&login)).is_err());
@@ -1173,9 +1173,13 @@ mod tests {
     #[test]
     fn script_syntax_check_parses_unterminated_lines_and_redacts_failures() {
         let path = std::env::temp_dir().join(format!("eq-client-check-{}.txt", std::process::id()));
-        std::fs::write(&path, "gm damage 1\nboat acquire").unwrap();
+        std::fs::write(&path, "gm(\"damage 1\")\nboat(\"acquire\")").unwrap();
         assert_eq!(check_script(&path), Ok(2));
-        std::fs::write(&path, "report private_marker\nboat steer private_value").unwrap();
+        std::fs::write(
+            &path,
+            "report(\"private_marker\")\nboat(\"steer\", \"private_value\")",
+        )
+        .unwrap();
         assert_eq!(
             check_script(&path),
             Err("Invalid script syntax at line 2".into())
@@ -1190,28 +1194,32 @@ mod tests {
     #[test]
     fn scripts_skip_a_byte_order_mark_and_followed_ones_a_partial_last_line() {
         let path = std::env::temp_dir().join(format!("eq-client-load-{}.txt", std::process::id()));
-        std::fs::write(&path, "\u{feff}wait 10\nhold W 15").unwrap();
+        std::fs::write(&path, "\u{feff}wait(10)\nhold(\"W\", 15)").unwrap();
         let (followed, read) = load_script(&path, true);
-        std::fs::write(&path, "\u{feff}wait 10\n").unwrap();
+        std::fs::write(&path, "\u{feff}wait(10)\n").unwrap();
         let (whole, _) = load_script(&path, false);
-        let initial = "\u{feff}repeat 2\nreport sample\nend\n";
+        let initial = "\u{feff}for _ in range(2):\n    report(\"sample\")\n";
         std::fs::write(&path, format!("{initial}quit")).unwrap();
         let (structured, structured_read) = load_script(&path, true);
         std::fs::remove_file(&path).unwrap();
         assert_eq!(
             (followed.instructions().len(), read),
-            (1, "\u{feff}wait 10\n".len())
+            (1, "\u{feff}wait(10)\n".len())
         );
         assert_eq!(whole.instructions().len(), 1);
         assert_eq!(structured_read, initial.len());
-        assert_eq!(structured.statement_count(), 3);
+        assert_eq!(structured.statement_count(), 2);
         assert!(structured.into_steps().is_err());
     }
 
     #[test]
     fn gm_chat_and_social_steps_are_refused_outside_a_local_session() {
-        for action in ["gm summon", "chat say Hail", "social play Example"] {
-            let source = format!("if false\n  repeat 1\n    {action}\n  end\nend");
+        for action in [
+            "gm(\"summon\")",
+            "chat(\"say Hail\")",
+            "social(\"play Example\")",
+        ] {
+            let source = format!("if False:\n    for _ in range(1):\n        {action}\n");
             let program = Program::parse(&source, Path::new(".")).unwrap();
             let error = script_session(Some(&program), false, Some(ServerProtocol::Project1999))
                 .unwrap_err();

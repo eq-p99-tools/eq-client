@@ -8,17 +8,17 @@
 
 ## Language
 
-One statement per line. Blank lines are ignored. `#` begins a comment, including after an action. Action commands are lowercase and their arguments use whitespace and command-specific names. Expressions in typed assignments and control flow accept quoted text. See [Variables, conditions and loops](language.md) for that syntax.
+One statement per line. Blank lines are ignored. `#` begins a comment, including after an action. Every action is a call with literal arguments separated by commas, such as `hold("CTRL+I", 500)`: quote text and leave numbers bare. The forms below name each argument; a quoted word must be written as shown, square brackets mark an optional argument, and `target...` stands for the words of a [UI target](targets.md), each quoted. Commands that carry free text, such as `report`, `slash` and `gm`, take one quoted string. See [Variables, conditions and loops](language.md) for variables, blocks and the rest of the syntax.
 
 Durations are milliseconds. Headings use EQ's 0 to 512 units; positions and distances use EQ world units unless described as screen pixels. The first invalid line prevents the entire buffer from running.
 
 ## Boat acquire/release
 
-`boat acquire` and `boat release` use the same deferred actions as `/boat acquire`
+`boat("acquire")` and `boat("release")` use the same deferred actions as `/boat acquire`
 and `/boat release`. EQEmu offers this first slice for a supported race-141
 vessel under the player's current accepted floor link. There is no steering
 command. P99 and EQMac are unverified gaps. Script step completion means input
-submission; inspect `report [label]`'s movement `boat_control` for correlated state and
+submission; inspect `report([label])`'s movement `boat_control` for correlated state and
 `boat_control_notice` for the separate raw received packet. An unresolved acquisition needs an observed release echo before a same-ID
 retry; a completed ordered release permits ordinary reacquisition. Walk-off, camp and admission changes withdraw local control. An unanswered
 floor-link withdrawal is retried until the worker reports changed state; queue
@@ -28,25 +28,25 @@ acceptance alone does not settle it.
 
 Run a script from the workbench while logged in to act on your current character. Commands use your existing target and UI state. Login and character-selection commands are unnecessary for this workflow.
 
-- `wait_zone shortname`: wait for admission to the named zone.
-- `wait_dead milliseconds`: wait for the targeted NPC to die or leave.
-- `wait milliseconds`: wait without sending input.
+- `wait_zone(shortname)`: wait for admission to the named zone.
+- `wait_dead(milliseconds)`: wait for the targeted NPC to die or leave.
+- `wait(milliseconds)`: wait without sending input.
 
 ## Keys and UI
 
-- `press keys`: press a key or chord for one frame, such as `I` or `CTRL+I`.
-- `hold keys milliseconds`: hold a key or chord, then release it.
-- `click target`: left-click a named control.
-- `right_click target`: right-click a named control.
-- `hover target`: rest the synthetic pointer over a control.
-- `hold_click milliseconds target`: hold the left button on a control.
-- `drag window x y`: move a named window to logical screen pixels.
-- `wheel world lines`: turn the wheel over visible world space, from -64 to
+- `press(keys)`: press a key or chord for one frame, such as `I` or `CTRL+I`.
+- `hold(keys, milliseconds)`: hold a key or chord, then release it.
+- `click(target...)`: left-click a named control.
+- `right_click(target...)`: right-click a named control.
+- `hover(target...)`: rest the synthetic pointer over a control.
+- `hold_click(milliseconds, target...)`: hold the left button on a control.
+- `drag(window, x, y)`: move a named window to logical screen pixels.
+- `wheel("world", lines)`: turn the wheel over visible world space, from -64 to
   64 lines; positive zooms inward, negative outward.
-- `look world dx dy milliseconds`: hold right over visible world space and
+- `look("world", dx, dy, milliseconds)`: hold right over visible world space and
   spread this relative mouse displacement over 1 to 10000 milliseconds, then
   release after the final input frame. Each axis is limited to +/-4096 physical
-  pixels. `look world 0 0 500` holds the view still for half a second.
+  pixels. `look("world", 0, 0, 500)` holds the view still for half a second.
 
 World gestures require `--script-background` and an attached camera with a
 player present. The drawn script pointer chooses an uncovered world point;
@@ -66,21 +66,21 @@ controllers should still supply the current `expected_world` for the whole run.
 Script gesture results establish semantic input behavior; physical mouse
 hit-testing, capture and feel need their own attended observation.
 
-Click targets include `slot 22`, `spell_gem 1`, `hot_button 1`, and `character 1`. They refer to controls, not arbitrary desktop coordinates. An invalid target produces a source-line error.
+Click targets include `click("slot", 22)`, `click("spell_gem", 1)`, `click("hot_button", 1)` and `click("character", 1)`. They refer to controls, not arbitrary desktop coordinates. An invalid target produces a source-line error.
 
-`click destroy` selects the whole cursor item or stack for destruction on P99
-and Titanium EQEmu. It opens the ordinary confirmation; `click answer yes`
+`click("destroy")` selects the whole cursor item or stack for destruction on P99
+and Titanium EQEmu. It opens the ordinary confirmation; `click("answer", "yes")`
 confirms that exact admission, inventory revision, item and quantity, while
-`click answer no` cancels. Any inventory change cancels consent. This first
+`click("answer", "no")` cancels. Any inventory change cancels consent. This first
 slice refuses populated containers, queued cursor items and unresolved inventory
 predictions. A sent destruction remains a local prediction until received
 inventory evidence arrives; scripts must not repeat it on an uncertain result.
 Coin destruction has no script action.
 
-`click drop` selects an eligible whole cursor item or stack in Inventory
+`click("drop")` selects an eligible whole cursor item or stack in Inventory
 on local-only Titanium EQEmu. It opens the ordinary drop confirmation.
-`click answer yes` on that question submits the exact selection, while
-`click answer no` cancels. The cursor stays held until a fresh received
+`click("answer", "yes")` on that question submits the exact selection, while
+`click("answer", "no")` cancels. The cursor stays held until a fresh received
 inventory snapshot. Treat submission and any ground-object appearance as
 separate from inventory confirmation.
 
@@ -88,28 +88,28 @@ Key names are case-insensitive. Combine them with `+`, such as `alt+1`. Supporte
 
 ## Camera and movement
 
-- `camera heading pitch [distance]`: position the camera; pitch is -89 to 0 degrees. Use `camera player offset pitch [distance]` for an offset from the player's heading.
-- `face`: turn the camera toward the target.
-- `face heading`: turn the character to an absolute heading at the ordinary turn rate, waiting up to 5 seconds for server confirmation.
-- `move command milliseconds`: hold `forward`, `back`, `camera_forward`,
+- `camera(heading, pitch[, distance])`: position the camera; pitch is -89 to 0 degrees. Use `camera("player", offset, pitch[, distance])` for an offset from the player's heading.
+- `face()`: turn the camera toward the target.
+- `face(heading)`: turn the character to an absolute heading at the ordinary turn rate, waiting up to 5 seconds for server confirmation.
+- `move(command, milliseconds)`: hold `forward`, `back`, `camera_forward`,
   `camera_back`, `strafe_left`, `strafe_right`, `turn_left` or `turn_right`,
   independent of key bindings. In mapped water on Titanium, strokes follow
   the character's look pitch, not the camera's: hold the Look Up or Look Down
-  key (`PageUp`, `PageDown`) to tilt it, and Center View in first person
-  levels it. Holding `space` strokes up. The `camera` command's pitch moves
-  only the camera.
-- `approach range milliseconds`: approach the current target.
-- `approach object kind range milliseconds`: approach a tradeskill container type.
-- `walk range milliseconds`: follow a searched path toward the target.
-- `walk object kind range milliseconds`: path toward a tradeskill container type.
-- `chase range milliseconds`: follow the target until it dies, leaves or times out.
-- `give`: queue an offer of the cursor item or coins to the current NPC or
+  key (`PageUp`, `PageDown`, such as `hold("PageUp", 500)`) to tilt it, and
+  Center View in first person levels it. Holding `space` strokes up. The `camera` command's
+  pitch moves only the camera.
+- `approach(range, milliseconds)`: approach the current target.
+- `approach("object", kind, range, milliseconds)`: approach a tradeskill container type.
+- `walk(range, milliseconds)`: follow a searched path toward the target.
+- `walk("object", kind, range, milliseconds)`: path toward a tradeskill container type.
+- `chase(range, milliseconds)`: follow the target until it dies, leaves or times out.
+- `give()`: queue an offer of the cursor item or coins to the current NPC or
   player target. The run stops at this line if the offer cannot be queued,
   including when the cursor is empty, the target is unsuitable, or an exchange
   is already pending or open. The script result carries the local refusal.
   The step completes when the local queue accepts the offer. The server's
   answer separately determines whether an exchange opens.
-- `interact admission spawn revision` opens the service of the exact selected
+- `interact(admission, spawn, revision)` opens the service of the exact selected
   merchant, banker, guildmaster or corpse. Copy the `target_interaction` tuple from a fresh
   `report`. A stale target, a known reach or capability refusal, or another
   open or pending transaction stops the run. The bank opens locally. For
@@ -120,7 +120,7 @@ Movement uses the client's ordinary movement and collision behavior. It is not a
 
 Approach, walk and chase hold the camera-relative forward command, independent of key bindings. Object commands choose the nearest matching tradeskill container when they start. Missing targets, unreachable routes and timeouts stop the run. `wait_dead` only recognizes NPC corpses or a target leaving the zone; a player's death does not satisfy it while their corpse remains.
 
-After walking through a server-driven pad, `wait_relocation 1500` waits for
+After walking through a server-driven pad, `wait_relocation(1500)` waits for
 a received same-zone movement instruction. Each observation is consumed once.
 It distinguishes this instruction from ordinary position samples, and
 the report labels its source `same_zone_relocation`. The instruction does not
@@ -132,20 +132,20 @@ reported separately.
 
 ## Diagnostics and commands
 
-Use `popup <admission> <serial> <ok|yes|no|close>` for the matching server
-dialog and `inspect_player <admission> <spawn> <target_revision>` to request
-the selected player's equipment report. Use the values from `report [label]`.
+Use `popup(admission, serial, "ok"|"yes"|"no"|"close")` for the matching server
+dialog and `inspect_player(admission, spawn, target_revision)` to request
+the selected player's equipment report. Use the values from `report([label])`.
 A queued step records submission to the client queue. A later report
 includes the inspection spawn and slot count when received.
 
-The projectile line from `report [label]` includes the current admission, the
+The projectile line from `report([label])` includes the current admission, the
 number of received flight records since the last world reset, the flights still
 tracked, the number of scene spawns queued, and the scene instances from the
 latest completed projectile update, normally the preceding frame. Missing assets or unsupported flight
 types can produce a receipt without a model. Scene instances may be off-camera
 or occluded. The counters are independent of damage and inventory.
 
-- `report [label]` logs a state summary with an optional label. Its `option_levels` field includes slider settings, with `run_boost` in hundredths of ordinary running speed. For a selected target, `considered` shows the decoded received color and `display_con_color` shows the presentation color. The report includes `selected_target_level` and `own_level` when known.
+- `report([label])` logs a state summary with an optional label. Its `option_levels` field includes slider settings, with `run_boost` in hundredths of ordinary running speed. For a selected target, `considered` shows the decoded received color and `display_con_color` shows the presentation color. The report includes `selected_target_level` and `own_level` when known.
   `guild_state` is a read-only JSON snapshot of the known guild ID/name/rank
   and last-received member fields. `members: null` means no retained list;
   `members: []` means a received empty list. A member's `note: null` remains
@@ -236,46 +236,46 @@ or occluded. The counters are independent of damage and inventory.
   solid client collision leaves the segment from the session origin to the
   spawn's reported origin clear. Server spell range, line of sight, and
   acceptance require separate evidence.
-- `trace milliseconds`: log movement and frame timing for a bounded duration.
-- `screenshot filename.png`: capture beside the script; the argument must be a filename.
-- `sound filename.wav` or `sound filename.mp3` plays a named cue from the installed game assets. Use the basename with its extension.
-- `inspect_link admission message ordinal` opens an item link using the
+- `trace(milliseconds)`: log movement and frame timing for a bounded duration.
+- `screenshot("filename.png")`: capture beside the script; the argument must be a filename.
+- `sound("filename.wav")` or `sound("filename.mp3")` plays a named cue from the installed game assets. Use the basename with its extension.
+- `inspect_link(admission, message, ordinal)` opens an item link using the
   `admission` and `(message, ordinal, label)` from the current `Script item
   links` report. Ordinals start at zero. The report lists up to 32 links
   from 16 recent received messages in the admission. The run stops if the
   link is unavailable or another inspection is pending. The `inspection`
   tuple gives the selected item ID and whether a received definition is
   available, including a definition already cached in the admission.
-- `slash command [arguments]`: run one of the supported game slash commands, without a leading slash.
-  `slash follow` queues the ordinary local follow request for the targeted group
+- `slash("command [arguments]")`: run one of the supported game slash commands, without a leading slash.
+  `slash("follow")` queues the ordinary local follow request for the targeted group
   member. Its deferred request keeps the script's expected admission and zone;
   a changed world withdraws it before movement handles it. Completion of the
   step does not establish movement. The ordinary standing, movement and group
   checks still apply, and a movement key ends following.
-  `slash ranged` requests one shot or throw against the current target on Titanium.
-  `slash layonhands` and `slash harmtouch` request the class ability against the
+  `slash("ranged")` requests one shot or throw against the current target on Titanium.
+  `slash("layonhands")` and `slash("harmtouch")` request the class ability against the
   settled selection. Select yourself before using Lay on Hands on yourself.
-  `slash discipline evasive` and `slash discipline defensive` use the learned
+  `slash("discipline evasive")` and `slash("discipline defensive")` use the learned
   Warrior discipline on yourself, with the same reuse checks as its button.
   Watch the server's combat and inventory updates for the result.
-  `slash pet target` selects your visible pet. Pet orders complete the script
+  `slash("pet target")` selects your visible pet. Pet orders complete the script
   step when queued. Read subsequent server observations to check their effects.
-  `slash camp desktop` uses the ordinary camp destination and current QoL exit choice.
-  `slash guildinvite [Name] [o]`, `slash guildremove [Name]`,
-  `slash guildmotd [text]` and `slash getguildmotd` use the existing typed guild
+  `slash("camp desktop")` uses the ordinary camp destination and current QoL exit choice.
+  `slash("guildinvite [Name] [o]")`, `slash("guildremove [Name]")`,
+  `slash("guildmotd [text]")` and `slash("getguildmotd")` use the existing typed guild
   handlers. Omit a name to use the current target; `o` offers officer rank.
   Names contain at most 63 ASCII letters. MOTD text is below 512 UTF-8 bytes
   and contains no control characters;
   an empty MOTD requests clearing it. Membership, rank and listed-member checks
   remain with the ordinary handlers and session. Queueing a step proves no
   invitation acceptance, roster change or MOTD update; check received evidence.
-  `slash stopsong` queues the Bard's stop request on Titanium EQEmu.
+  `slash("stopsong")` queues the Bard's stop request on Titanium EQEmu.
   The immediate disconnect aliases typed in chat are not script slash commands.
-  `slash emote` and `slash random` reach everyone nearby, so like `chat` they
+  `slash("emote")` and `slash("random")` reach everyone nearby, so like `chat` they
   run only in a network-constrained local test session.
-- `gm command [arguments]`: an allowed GM command on a network-constrained local test session only.
-  Local Titanium EQEmu also supports `gm guild create CHARACTER_ID_OR_NAME GUILD_NAME`,
-  `gm guild delete GUILD_ID` and `gm guild set CHARACTER_ID_OR_NAME GUILD_ID`.
+- `gm("command [arguments]")`: an allowed GM command on a network-constrained local test session only.
+  Local Titanium EQEmu also supports `gm("guild create CHARACTER_ID_OR_NAME GUILD_NAME")`,
+  `gm("guild delete GUILD_ID")` and `gm("guild set CHARACTER_ID_OR_NAME GUILD_ID")`.
   These are narrowly bounded fixture setup/cleanup forms: character names use
   ASCII letters, IDs use unsigned decimal, and guild names contain at most
   63 ASCII letters/digits/spaces. Create/delete IDs must be positive; `set`
@@ -283,65 +283,65 @@ or occluded. The counters are independent of damage and inventory.
   refused. Use the guild ID actually returned by the server for cleanup;
   request submission alone does not establish fixture creation or deletion.
   Other GM guild subcommands are unavailable to scripts.
-  On local EQEmu, `gm setlanguage ID VALUE` uses the supported SetLanguage
+  On local EQEmu, `gm("setlanguage ID VALUE")` uses the supported SetLanguage
   alias for a staged fixture: language ID 0..27 and proficiency 0..100.
-  It retains the local-session and Titanium gates. General `gm set` commands
+  It retains the local-session and Titanium gates. General `gm("set …")` commands
   remain unavailable. Training itself permits only offered IDs 0..25.
-  On local EQEmu, `gm traindisc MAX [MIN]` requests all eligible disciplines
+  On local EQEmu, `gm("traindisc MAX [MIN]")` requests all eligible disciplines
   in that inclusive level range for a disposable fixture. Each level is a number
   from 1 to 126 written with up to three decimal digits. Give MAX first. MIN
-  defaults to 1. For example, `gm traindisc 52 52` requests only level 52.
+  defaults to 1. For example, `gm("traindisc 52 52")` requests only level 52.
   In GM mode, EQEmu can apply the command to the selected player. Check the
   received learned disciplines before using them.
-  `gm stun 8000` requests an 8,000-millisecond server stun for a local fixture.
+  `gm("stun 8000")` requests an 8,000-millisecond server stun for a local fixture.
   Check received `own_stun` state; command submission alone does not establish the effect.
   On local EQEmu, use
-  `gm spawn NAME RACE LEVEL TEXTURE HEALTH GENDER CLASS PRIMARY_MODEL SECONDARY_MODEL 0 BODY_TYPE`
+  `gm("spawn NAME RACE LEVEL TEXTURE HEALTH GENDER CLASS PRIMARY_MODEL SECONDARY_MODEL 0 BODY_TYPE")`
   for a temporary NPC with explicit health and body type. Use a fresh alphabetic
   name, positive health, and decimal fields. The merchant ID is fixed at zero.
-  The short `gm spawn NAME [RACE [LEVEL [TEXTURE]]]` form uses server defaults
+  The short `gm("spawn NAME [RACE [LEVEL [TEXTURE]]]")` form uses server defaults
   for the remaining fields.
   To remove a temporary NPC, confirm that its current incarnation is selected
-  and run `gm depop` without arguments. The zone worker rechecks the same
+  and run `gm("depop")` without arguments. The zone worker rechecks the same
   admission and target revision before sending. Keep that NPC selected until
   its removal is observed, since EQEmu acts on its current target and starts
   no respawn timer. A queued command does not establish creation or removal.
-  `gm show` reads the server's own view of the target (or the GM) and changes
-  nothing. The parser takes exactly `gm show buffs`, `gm show currencies`,
-  `gm show timers`, `gm show distance` and `gm show line_of_sight` (these two
-  need a target other than yourself), and `gm show inventory SCOPE` with SCOPE
+  `gm("show")` reads the server's own view of the target (or the GM) and changes
+  nothing. The parser takes exactly `gm("show buffs")`, `gm("show currencies")`,
+  `gm("show timers")`, `gm("show distance")` and `gm("show line_of_sight")` (these two
+  need a target other than yourself), and `gm("show inventory SCOPE")` with SCOPE
   one of `all`, `allbank`, `bank`, `cursor`, `curlimbo`, `equip`, `gen`,
   `limbo`, `poss`, `shbank`, `trade`, `trib` or `world`. Words are matched
   exactly, in lower case; every other subcommand, scope or extra word is
   refused when the script is read. What these print names characters and
   items, so their output stays in private run notes and never goes into the
   repository, a pull request or a published page.
-- `chat channel message`: chat on a network-constrained local test session only.
-- `quit`: close the client.
+- `chat("channel message")`: chat on a network-constrained local test session only.
+- `quit()`: close the client.
 
 The typed parser and normal client capability checks decide which commands and controls are available. A valid action can still fail at runtime when its target, session or expected result is unavailable.
 
-- `compose_link admission message ordinal` inserts a recent received item link
+- `compose_link(admission, message, ordinal)` inserts a recent received item link
   using the IDs from the item-link report. It edits the normal draft without
   changing keyboard focus. Use the usual chat input to edit or send the
   draft. An expired, mismatched or unknown link stops the script.
-- `compose_owned_link admission slot` inserts a link for the displayed Titanium
+- `compose_owned_link(admission, slot)` inserts a link for the displayed Titanium
   item at the given protocol slot. Use the current admission
   and slot from a report. The action edits the draft without changing focus
   or sending chat. A stale admission, empty slot or incomplete item metadata
   stops the script.
 
-- `social set Name | /command | /pause 10,/command`, `social bind 1 Name`,
-  `social play Name` and `social cancel` use the same social controls as
-  chat on a local session. `social list`, `social show Name` and
-  `social delete Name` also use the ordinary editor. Use the named step
+- `social("set Name | /command | /pause 10,/command")`, `social("bind 1 Name")`,
+  `social("play Name")` and `social("cancel")` use the same social controls as
+  chat on a local session. `social("list")`, `social("show Name")` and
+  `social("delete Name")` also use the ordinary editor. Use the named step
   for scripts. Synthetic chat submission and hotbar activation refuse socials.
   A step queues the control request. Keep the script running with a wait if
   the social has more lines to dispatch. Stop, failure, completion, pause,
   or loss of script input ownership cancels its unsent lines. The controller's
   single-step action applies a named social control once. A single-stepped play
   processes its first line and retires the rest. A manually started social
-  has independent ownership. Use a later `report [label]`
+  has independent ownership. Use a later `report([label])`
   to observe the social
   runner's current admission, definition ID, progress and remaining delay.
   The report describes dispatch and scheduling, independently of server results.
@@ -350,29 +350,29 @@ The typed parser and normal client capability checks decide which commands and c
 
 These commands support scripts that deliberately start before world entry. They are separate from the usual workflow of editing and running scripts while playing.
 
-- `login`: use the configured environment credentials at the login screen.
-- `wait_servers`: wait for the world-server list.
-- `server name`: choose a listed server by its full name.
-- `wait_select`: wait for character selection.
-- `select name`: choose a character and enter the world.
-- `create name race class gender deity start_zone primary_stat`: request character creation from selection where the server policy supports it, using numeric identifiers; the final stat receives the free stat points. `start_zone` is the city's Titanium choice number (1 Qeynos, 2 Halas, and so on); a generation that sends its own value for the same city, such as the Mac-era start-zone IDs, has it translated before sending. This command is not restricted to local servers by the script parser.
-- `create_refused name race class gender deity start_zone primary_stat`: the same request where the server is expected to refuse it (a name already taken, for one); the step passes on the refusal and ends the script if the character is created.
-- `delete NAME confirm NAME`: request deletion of the exact listed character,
+- `login()`: use the configured environment credentials at the login screen.
+- `wait_servers()`: wait for the world-server list.
+- `server("name")`: choose a listed server by its full name.
+- `wait_select()`: wait for character selection.
+- `select(name)`: choose a character and enter the world.
+- `create(name, race, class, gender, deity, start_zone, primary_stat)`: request character creation from selection where the server policy supports it, using numeric identifiers; the final stat receives the free stat points. `start_zone` is the city's Titanium choice number (1 Qeynos, 2 Halas, and so on); a generation that sends its own value for the same city, such as the Mac-era start-zone IDs, has it translated before sending. This command is not restricted to local servers by the script parser.
+- `create_refused(name, race, class, gender, deity, start_zone, primary_stat)`: the same request where the server is expected to refuse it (a name already taken, for one); the step passes on the refusal and ends the script if the character is created.
+- `delete(name, "confirm", name)`: request deletion of the exact listed character,
   repeating its spelling and case. It uses the ordinary named confirmation/sender
   and never chooses a character by row position. The step waits for an explicit
   absence observation in the current connection's refreshed list. A refusal,
   unconfirmed outcome, session change or bounded timeout stops the script before
-  following actions, including `quit`; it never retries or disconnects by itself.
+  following actions, including `quit()`; it never retries or disconnects by itself.
   Ordinary Back / Disconnect remains available. Absence is not a server deletion
   acknowledgment or proof of database purge.
-- `wait_online`: wait for a zone admission and player before continuing.
+- `wait_online()`: wait for a zone admission and player before continuing.
 
 ## Recovery consent reports
 
 On a server that offers resurrection or translocate, including P99 for
 supported offers, wait for
 `consent_presented` to match the current offer before using
-`click answer yes` or `click answer no`. These actions use the ordinary
+`click("answer", "yes")` or `click("answer", "no")`. These actions use the ordinary
 confirmation buttons. `resurrection_consent` reports the offer token and
 milliseconds remaining. `translocate_consent` also reports the spell and
 offered zone IDs. Each token includes the admission, kind and sequence.

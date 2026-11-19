@@ -16,9 +16,12 @@ use crate::script::ParseError;
 
 pub(super) const FONT_SIZE: f32 = 14.0;
 const ROWS: usize = 14;
+/// Pixels between the gutter's rule and the start of the text.
+const TEXT_GAP: i8 = 3;
 const PROBLEM_ROWS: usize = 4;
 pub(super) const BACKGROUND: Color32 = Color32::from_rgb(15, 20, 25);
 const GUTTER_INK: Color32 = Color32::from_rgb(92, 103, 115);
+const GUTTER_RULE: Color32 = Color32::from_rgb(52, 60, 68);
 pub(super) const ERROR: Color32 = Color32::from_rgb(255, 105, 100);
 
 pub(super) fn id() -> egui::Id {
@@ -162,7 +165,8 @@ pub(super) fn show(
         .ceil()
         .min(120.0) as i8;
     let margin = Margin {
-        left: gutter,
+        // A few pixels of air between the gutter's rule and the text.
+        left: gutter + TEXT_GAP,
         right: 8,
         top: 2,
         bottom: 2,
@@ -173,7 +177,7 @@ pub(super) fn show(
         .id_salt("eqscript-scroll")
         .auto_shrink([false, false])
         .max_height((ui.available_height() - strip).max(row))
-        .show(ui, |ui| {
+        .show_viewport(ui, |ui, viewport| {
             if let Some(line) = jump {
                 let at = CCursor::new(line_start(text.as_str(), line));
                 let mut state = TextEditState::load(ui.ctx(), id()).unwrap_or_default();
@@ -196,6 +200,9 @@ pub(super) fn show(
                 .lock_focus(true)
                 .desired_rows(ROWS)
                 .desired_width(f32::INFINITY)
+                // Fill the view, so the gutter rule reaches its bottom and a
+                // click below the last line still lands in the editor.
+                .min_size(egui::vec2(0.0, viewport.height()))
                 // A custom frame replaces the margin, so the frame carries
                 // the gutter; the margin still sizes the wrap width.
                 .frame(egui::Frame::NONE.inner_margin(margin))
@@ -233,6 +240,14 @@ fn gutter_and_marks(
     let left = output.response.rect.left();
     let galley: &Galley = &output.galley;
     let origin = output.galley_pos.to_vec2();
+    // A thin rule between the line numbers and the text.
+    let rule = left + gutter - 4.0;
+    let span = output.response.rect.y_range();
+    painter.vline(
+        rule,
+        span.min.max(clip.top())..=span.max.min(clip.bottom()),
+        Stroke::new(1.0, GUTTER_RULE),
+    );
     let mut line = 1;
     for placed in &galley.rows {
         let rect = placed.rect().translate(origin);
@@ -384,7 +399,7 @@ mod tests {
 
     #[test]
     fn a_leading_bom_and_windows_newlines_line_up_with_the_parser() {
-        let text = "\u{feff}pres I\r\nlet x: int = nope\r\n";
+        let text = "\u{feff}pres(\"I\")\r\nx: int = nope\r\n";
         let errors = crate::script::Program::diagnostics(text, std::path::Path::new("."));
         let found = marks(text, &errors)
             .into_iter()
@@ -410,7 +425,7 @@ mod tests {
     #[test]
     fn the_text_starts_right_of_the_gutter() {
         let ctx = egui::Context::default();
-        let mut text = String::from("wait 1\npres I\n");
+        let mut text = String::from("wait(1)\npres(\"I\")\n");
         let mut memory = Memory::default();
         let mut placed = None;
         for _ in 0..2 {
@@ -421,13 +436,39 @@ mod tests {
             output.textures_delta.clear();
         }
         let (left, text_left) = placed.unwrap();
-        // The line numbers and their padding sit left of the text, not over it.
-        assert!(text_left - left > 18.0, "{left} {text_left}");
+        // The line numbers, their rule and a gap sit left of the text.
+        assert!(
+            text_left - left > 18.0 + f32::from(TEXT_GAP),
+            "{left} {text_left}"
+        );
+    }
+
+    #[test]
+    fn a_short_script_still_fills_the_editor_to_its_bottom() {
+        let ctx = egui::Context::default();
+        let mut text = String::from("wait(1)\n");
+        let mut memory = Memory::default();
+        let mut sizes = None;
+        for _ in 0..2 {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 900.0))),
+                ..egui::RawInput::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                let bottom = ui.max_rect().bottom();
+                let shown = show(ui, &mut text, &[], &mut memory);
+                sizes = Some((shown.output.response.rect.bottom(), bottom));
+            });
+            output.textures_delta.clear();
+        }
+        let (text_bottom, bottom) = sizes.unwrap();
+        // The text box, and so its gutter rule, runs to the foot of the view.
+        assert!((bottom - text_bottom).abs() < 1.0, "{text_bottom} {bottom}");
     }
 
     #[test]
     fn layout_keeps_every_byte() {
-        let text = "let n: int = 1 # é\r\n\tpress CTRL+I\n\n";
+        let text = "n: int = 1 # é\r\n\tpress(\"CTRL+I\")\n\n";
         assert_eq!(layout(text).text, text);
     }
 }

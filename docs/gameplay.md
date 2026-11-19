@@ -141,7 +141,7 @@ installed geometry offers no way down. A different received location gets
 its own check. A later collision probe can release the hold when it finds a route.
 A server using different zone geometry can cause this conflict. On P99,
 supported same-zone pads use installed boundary geometry and the current
-zone-point table where required. `report [label]` exposes the local crossing
+zone-point table where required. `report("label")` exposes the local crossing
 as `last_local_pad`. On local EQEmu, ordinary movement can enter a server-owned
 same-zone pad. A received reposition supplies the absolute landing and resets
 movement there. The received relocation report is separate from the local

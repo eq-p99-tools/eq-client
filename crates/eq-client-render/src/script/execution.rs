@@ -243,7 +243,7 @@ mod tests {
 
     #[test]
     fn completing_an_action_twice_does_not_advance_progress_twice() {
-        let mut status = RunStatus::queued(2, Arc::from("# note\nreport sample\n"));
+        let mut status = RunStatus::queued(2, Arc::from("# note\nreport(\"sample\")\n"));
         status.begin(Some(2));
         status.complete_step();
         status.complete_step();

@@ -81,7 +81,7 @@ fn background_control_reports_native_ownership_wait_before_taking_input() {
             repeat: false,
             window,
         });
-    assert_eq!(start(&mut app, 1, "press A\n").outcome, "accepted");
+    assert_eq!(start(&mut app, 1, "press(\"A\")\n").outcome, "accepted");
     let status: Value =
         serde_json::from_slice(&app.world().resource::<Bridge>().snapshot()).unwrap();
     assert_eq!(status["run"]["phase"], "waiting_for_input");
@@ -113,7 +113,7 @@ fn background_control_can_be_passively_watched_through_selection_and_report() {
             }
         }
         assert_eq!(
-            start(&mut app, 1, "wait_select\nreport observed\n").outcome,
+            start(&mut app, 1, "wait_select()\nreport(\"observed\")\n").outcome,
             "accepted"
         );
         let status: Value =
@@ -149,7 +149,10 @@ fn explicit_control_recovery_preserves_background_mode_without_replaying_failed_
         *app.world().resource::<super::super::InputMode>(),
         super::super::InputMode::Background
     );
-    assert_eq!(start(&mut app, 1, "hold W 1000\npress B\n").run_id, Some(1));
+    assert_eq!(
+        start(&mut app, 1, "hold(\"W\", 1000)\npress(\"B\")\n").run_id,
+        Some(1)
+    );
     let failed_identity = app.world().resource::<Script>().status().identity.clone();
     assert!(
         app.world()
@@ -171,7 +174,7 @@ fn explicit_control_recovery_preserves_background_mode_without_replaying_failed_
             .pressed(KeyCode::KeyB)
     );
 
-    assert_eq!(start(&mut app, 2, "press A\n").run_id, Some(2));
+    assert_eq!(start(&mut app, 2, "press(\"A\")\n").run_id, Some(2));
     let recovered = app.world().resource::<Script>();
     assert_eq!(recovered.input_mode, super::super::InputMode::Background);
     assert!(!recovered.local && !recovered.offline);
@@ -252,12 +255,12 @@ fn start(app: &mut App, id: u64, source: &str) -> Receipt {
 #[test]
 fn duplicate_and_rejected_requests_cannot_start_another_run_after_retirement() {
     let mut app = app();
-    let first = start(&mut app, 1, "wait 100\n");
+    let first = start(&mut app, 1, "wait(100)\n");
     assert_eq!((first.outcome, first.run_id), ("accepted", Some(1)));
-    let duplicate = start(&mut app, 1, "wait 100\n");
+    let duplicate = start(&mut app, 1, "wait(100)\n");
     assert_eq!(duplicate, first);
-    assert_eq!(start(&mut app, 1, "press A\n").code, "id_conflict");
-    assert_eq!(start(&mut app, 2, "press A\n").code, "busy");
+    assert_eq!(start(&mut app, 1, "press(\"A\")\n").code, "id_conflict");
+    assert_eq!(start(&mut app, 2, "press(\"A\")\n").code, "busy");
     assert!(
         !app.world()
             .resource::<ButtonInput<KeyCode>>()
@@ -266,10 +269,10 @@ fn duplicate_and_rejected_requests_cannot_start_another_run_after_retirement() {
     frame(&mut app, 100);
     frame(&mut app, 101);
     assert!(!app.world().contains_resource::<Script>());
-    assert_eq!(start(&mut app, 2, "press A\n").code, "busy");
+    assert_eq!(start(&mut app, 2, "press(\"A\")\n").code, "busy");
     assert!(!app.world().contains_resource::<Script>());
-    assert_eq!(start(&mut app, 1, "wait 100\n").code, "stale_id");
-    assert_eq!(start(&mut app, 3, "wait 1\n").run_id, Some(2));
+    assert_eq!(start(&mut app, 1, "wait(100)\n").code, "stale_id");
+    assert_eq!(start(&mut app, 3, "wait(1)\n").run_id, Some(2));
 }
 
 #[test]
@@ -280,13 +283,13 @@ fn invalid_source_keeps_its_line_and_does_not_consume_a_run_identity() {
     assert_eq!(receipt.line, Some(3));
     assert!(!app.world().contains_resource::<Script>());
     assert_eq!(start(&mut app, 2, "# empty\n").code, "invalid_program");
-    assert_eq!(start(&mut app, 3, "wait 1\n").run_id, Some(1));
+    assert_eq!(start(&mut app, 3, "wait(1)\n").run_id, Some(1));
 }
 
 #[test]
 fn wrong_instance_requests_cannot_consume_ids_or_stop_the_current_run() {
     let mut app = app();
-    start(&mut app, 1, "wait 100\n");
+    start(&mut app, 1, "wait(100)\n");
     let response = request(
         &mut app,
         99,
@@ -323,7 +326,7 @@ fn wrong_instance_requests_cannot_consume_ids_or_stop_the_current_run() {
 #[test]
 fn an_explicitly_paused_run_still_owns_the_executor_until_stop() {
     let mut app = app();
-    start(&mut app, 1, "wait 1\nwait 100\n");
+    start(&mut app, 1, "wait(1)\nwait(100)\n");
     app.world_mut()
         .resource_mut::<RunControl>()
         .request(Request::Pause);
@@ -333,7 +336,7 @@ fn an_explicitly_paused_run_still_owns_the_executor_until_stop() {
         app.world().resource::<Script>().status().phase(),
         Phase::Paused
     );
-    assert_eq!(start(&mut app, 2, "press A\n").code, "busy");
+    assert_eq!(start(&mut app, 2, "press(\"A\")\n").code, "busy");
     request(&mut app, 3, json!({"op":"stop","run_id":1}));
     assert_eq!(app.world().resource::<RunStatus>().phase(), Phase::Stopped);
 }
@@ -341,14 +344,14 @@ fn an_explicitly_paused_run_still_owns_the_executor_until_stop() {
 #[test]
 fn the_existing_local_command_and_program_limits_are_preserved() {
     let mut app = app();
-    for (id, source) in [(1, "gm level 1\n"), (2, "chat say synthetic\n")] {
+    for (id, source) in [(1, "gm(\"level 1\")\n"), (2, "chat(\"say synthetic\")\n")] {
         let receipt = start(&mut app, id, source);
         assert_eq!(receipt.code, "invalid_program");
         assert_eq!(receipt.line, Some(1));
         assert!(!app.world().contains_resource::<Script>());
     }
     assert_eq!(
-        start(&mut app, 3, &"wait 1\n".repeat(501)).code,
+        start(&mut app, 3, &"wait(1)\n".repeat(501)).code,
         "invalid_program"
     );
     assert_eq!(
@@ -364,7 +367,7 @@ fn the_existing_local_command_and_program_limits_are_preserved() {
         .resource_mut::<crate::ViewerSettings>()
         .0
         .local_session = true;
-    let program = prepare("gm level 1\n", std::path::Path::new("."), true).unwrap();
+    let program = prepare("gm(\"level 1\")\n", std::path::Path::new("."), true).unwrap();
     let runner = Script::for_viewer(
         program,
         &app.world().resource::<crate::ViewerSettings>().0,
@@ -376,7 +379,7 @@ fn the_existing_local_command_and_program_limits_are_preserved() {
 #[test]
 fn explicit_stop_releases_held_input_cancels_the_click_and_never_starts_rejected_gameplay() {
     let mut app = app();
-    let first = start(&mut app, 1, "hold W 1000\npress A\n");
+    let first = start(&mut app, 1, "hold(\"W\", 1000)\npress(\"A\")\n");
     assert_eq!(first.run_id, Some(1));
     assert!(
         app.world()
@@ -403,7 +406,7 @@ fn explicit_stop_releases_held_input_cancels_the_click_and_never_starts_rejected
     app.world_mut()
         .resource_mut::<ButtonInput<MouseButton>>()
         .clear();
-    assert_eq!(start(&mut app, 2, "press A\n").code, "busy");
+    assert_eq!(start(&mut app, 2, "press(\"A\")\n").code, "busy");
     let stop = request(&mut app, 3, json!({"op":"stop","run_id":1}));
     assert_eq!(stop.outcome, "stop_requested");
     assert_eq!(app.world().resource::<RunStatus>().phase(), Phase::Stopped);
@@ -426,7 +429,7 @@ fn explicit_stop_releases_held_input_cancels_the_click_and_never_starts_rejected
     );
     frame(&mut app, 1001);
     assert!(!app.world().contains_resource::<Script>());
-    assert_eq!(start(&mut app, 4, "wait 100\n").run_id, Some(2));
+    assert_eq!(start(&mut app, 4, "wait(100)\n").run_id, Some(2));
     assert_eq!(
         request(&mut app, 5, json!({"op":"stop","run_id":1})).code,
         "run_changed"
@@ -438,7 +441,7 @@ fn explicit_stop_releases_held_input_cancels_the_click_and_never_starts_rejected
 fn runtime_failure_retires_and_an_explicit_recovery_preserves_the_failed_source_line() {
     let mut app = app();
     assert_eq!(
-        start(&mut app, 1, "# requires target\n\nface\n").outcome,
+        start(&mut app, 1, "# requires target\n\nface()\n").outcome,
         "accepted"
     );
     frame(&mut app, 1);
@@ -450,7 +453,7 @@ fn runtime_failure_retires_and_an_explicit_recovery_preserves_the_failed_source_
     );
     assert!(failed.message.as_ref().unwrap().contains("target"));
     assert!(!app.world().contains_resource::<Script>());
-    assert_eq!(start(&mut app, 2, "wait 10\n").run_id, Some(2));
+    assert_eq!(start(&mut app, 2, "wait(10)\n").run_id, Some(2));
     assert_eq!(
         app.world().resource::<Bridge>().history.back().unwrap().id,
         1
@@ -470,7 +473,7 @@ fn runtime_limit_and_session_end_require_distinct_new_runs_without_client_exit()
                 .0
                 .local_session = true;
         }
-        start(&mut app, 1, "wait 1000\n");
+        start(&mut app, 1, "wait(1000)\n");
         if ended {
             session::link(
                 &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
@@ -490,7 +493,7 @@ fn runtime_limit_and_session_end_require_distinct_new_runs_without_client_exit()
             "maximum runtime"
         }));
         assert!(app.world().resource::<Messages<AppExit>>().is_empty());
-        assert_eq!(start(&mut app, 2, "wait 100\n").run_id, Some(2));
+        assert_eq!(start(&mut app, 2, "wait(100)\n").run_id, Some(2));
     }
 }
 
@@ -498,14 +501,14 @@ fn runtime_limit_and_session_end_require_distinct_new_runs_without_client_exit()
 fn a_failed_camp_wait_remains_an_error_and_never_reaches_quit() {
     let mut app = app();
     // No character list arrives. The existing wait must fail before Quit.
-    start(&mut app, 1, "wait_select\nquit\n");
+    start(&mut app, 1, "wait_select()\nquit()\n");
     frame(&mut app, 180_001);
     frame(&mut app, 180_002);
     assert_eq!(app.world().resource::<RunStatus>().phase(), Phase::Failed);
     assert_eq!(app.world().resource::<RunStatus>().line(), Some(1));
     assert!(app.world().resource::<Messages<AppExit>>().is_empty());
     assert!(!app.world().contains_resource::<Script>());
-    assert_eq!(start(&mut app, 2, "wait 100\n").outcome, "accepted");
+    assert_eq!(start(&mut app, 2, "wait(100)\n").outcome, "accepted");
 }
 
 #[test]
@@ -513,9 +516,9 @@ fn a_followed_run_still_accepts_complete_appended_lines_but_rejects_replacement(
     let root = temporary();
     fs::create_dir(&root).unwrap();
     let source = root.join("follow.eqscript");
-    fs::write(&source, b"wait 1\n").unwrap();
+    fs::write(&source, b"wait(1)\n").unwrap();
     let mut app = app();
-    let program = Program::parse("wait 1\n", &root).unwrap();
+    let program = Program::parse("wait(1)\n", &root).unwrap();
     app.insert_resource(
         Script::from_program(program)
             .offline_preview(true)
@@ -536,8 +539,8 @@ fn a_followed_run_still_accepts_complete_appended_lines_but_rejects_replacement(
         .unwrap()
         .snapshot
         .id;
-    assert_eq!(start(&mut app, 1, "press A\n").code, "busy");
-    fs::write(&source, b"wait 1\nwait 100\nwait ").unwrap();
+    assert_eq!(start(&mut app, 1, "press(\"A\")\n").code, "busy");
+    fs::write(&source, b"wait(1)\nwait(100)\nwait(").unwrap();
     frame(&mut app, 252);
     assert_eq!(
         app.world()
@@ -573,7 +576,7 @@ fn a_followed_run_still_accepts_complete_appended_lines_but_rejects_replacement(
         request(&mut app, 2, json!({"op":"stop","run_id":run_id})).outcome,
         "stop_requested"
     );
-    assert_eq!(start(&mut app, 3, "wait 1\n").outcome, "accepted");
+    assert_eq!(start(&mut app, 3, "wait(1)\n").outcome, "accepted");
     clean(&root);
 }
 
@@ -589,7 +592,7 @@ fn public_control_runs_use_the_existing_focus_gate_and_stop_without_focus() {
         .single(app.world())
         .unwrap();
     app.world_mut().get_mut::<Window>(window).unwrap().focused = false;
-    start(&mut app, 1, "press W\n");
+    start(&mut app, 1, "press(\"W\")\n");
     assert_eq!(
         app.world().resource::<Script>().status().phase(),
         Phase::WaitingForFocus
@@ -608,7 +611,11 @@ fn status_history_is_bounded_and_does_not_serialize_script_source() {
     let mut bridge = Bridge::new("synthetic".into(), "instance".into());
     for _ in 0..20 {
         let mut status = Script::from_program(
-            Program::parse("wait 1\n# private source marker", std::path::Path::new(".")).unwrap(),
+            Program::parse(
+                "wait(1)\n# private source marker",
+                std::path::Path::new("."),
+            )
+            .unwrap(),
         )
         .progress;
         bridge.bind(&status, "control").unwrap();
@@ -634,8 +641,11 @@ fn status_history_is_bounded_and_does_not_serialize_script_source() {
 #[test]
 fn structured_status_separates_source_actions_from_executed_work() {
     let mut app = app();
-    let program =
-        Program::parse("repeat 3\nreport sample\nend", std::path::Path::new(".")).unwrap();
+    let program = Program::parse(
+        "for _ in range(3):\n    report(\"sample\")",
+        std::path::Path::new("."),
+    )
+    .unwrap();
     app.insert_resource(Script::from_program(program).offline_preview(true));
     for ms in (0..=700).step_by(100) {
         frame(&mut app, ms);
@@ -660,7 +670,7 @@ fn file_control_publishes_receipts_and_shutdown_without_claiming_run_completion(
     fs::write(
         root.join("request.pending"),
         serde_json::to_vec(&json!({
-            "version":1,"instance":"test-1","id":1,"op":"start","source":"wait 120000\n"
+            "version":1,"instance":"test-1","id":1,"op":"start","source":"wait(120000)\n"
         }))
         .unwrap(),
     )
@@ -709,7 +719,7 @@ fn temporary() -> PathBuf {
 
 #[test]
 fn repeated_program_snapshots_have_distinct_run_identity_and_terminal_outcomes() {
-    let program = Program::parse("wait 1\n", std::path::Path::new(".")).unwrap();
+    let program = Program::parse("wait(1)\n", std::path::Path::new(".")).unwrap();
     let mut first = Script::from_program(program.clone());
     let second = Script::from_program(program);
     assert!(Arc::ptr_eq(&first.progress.source, &second.progress.source));

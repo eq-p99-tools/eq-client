@@ -37,7 +37,7 @@ for its receipt before replacing the inbox.
 To start an immutable source snapshot:
 
 ```json
-{"version":1,"instance":"copy-from-status","id":1,"op":"start","source":"report ready\nscreenshot ready.png\n"}
+{"version":1,"instance":"copy-from-status","id":1,"op":"start","source":"report(\"ready\")\nscreenshot(\"ready.png\")\n"}
 ```
 
 `source` is inline UTF-8 script text. Screenshot filenames are relative to the
@@ -51,7 +51,7 @@ For actions that must stay in one observed world, copy both identifiers from
 `status.world` into the optional `expected_world` field on a start request:
 
 ```json
-{"version":1,"instance":"copy-from-status","id":10,"op":"start","expected_world":{"admission_id":42,"zone":"samplezone"},"source":"wait 1000\npress W\n"}
+{"version":1,"instance":"copy-from-status","id":10,"op":"start","expected_world":{"admission_id":42,"zone":"samplezone"},"source":"wait(1000)\npress(\"W\")\n"}
 ```
 
 The executor checks both values together before dispatching input or an action,
@@ -283,9 +283,9 @@ scenario without restarting the client or rewriting an earlier script. For an
 ordinary camp request, use the normal commands and wait for the character list:
 
 ```eqscript
-slash camp
-wait_select
-report after_camp
+slash("camp")
+wait_select()
+report("after_camp")
 ```
 
 Failure remains an error requiring attention. The bridge adds no automatic

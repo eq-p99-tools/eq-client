@@ -6,10 +6,11 @@ use bevy::{
     ui::widget::TextScroll,
 };
 
-use super::{Tab, Workbench, help, syntax};
+use super::{Tab, Workbench, help, icons, syntax};
 use crate::{
     script::{Phase, RunStatus},
     theme,
+    tooltip::Tooltip,
     windows::{
         self, Shown, WindowId,
         pointer::{TakesWheel, Wheel},
@@ -46,6 +47,38 @@ pub(super) enum Action {
     Help(usize),
 }
 
+impl Action {
+    /// Whether the control can be pressed now: an icon and a text button
+    /// for one action always agree.
+    pub(super) fn usable(self, phase: Phase, busy: bool) -> bool {
+        let active = phase.active();
+        match self {
+            Self::Run | Self::New | Self::Open | Self::Save | Self::Reload | Self::Discard => {
+                !active && !busy
+            }
+            Self::Pause => active && phase != Phase::Paused,
+            Self::Resume | Self::Step => phase == Phase::Paused,
+            Self::Stop => active,
+            _ => true,
+        }
+    }
+}
+
+/// A run control's icon: tinted while its action can happen, dimmed while not.
+#[derive(Component, Clone, Copy)]
+pub(super) struct IconOf(Action, icons::Icon);
+
+impl IconOf {
+    /// The colour its icon shows with, usable or not.
+    pub(super) fn tint(self, usable: bool) -> Color {
+        if usable {
+            self.1.tint()
+        } else {
+            self.1.dimmed()
+        }
+    }
+}
+
 #[derive(Component)]
 pub(super) struct Page(Tab);
 #[derive(Component)]
@@ -77,7 +110,7 @@ pub(super) struct Mono(Handle<Font>);
 #[derive(Default)]
 pub(super) struct Cache {
     document_revision: Option<u64>,
-    run: Option<(Option<usize>, Phase, String)>,
+    run: Option<(Option<usize>, Phase, String, usize)>,
     help_page: Option<usize>,
     validation: Option<(u64, String)>,
 }
@@ -127,6 +160,91 @@ pub(super) fn button(commands: &mut Commands, title: &str, action: Action) -> En
         .id()
 }
 
+/// A run control drawn as an icon; its name shows as the tooltip.
+fn icon_button(
+    commands: &mut Commands,
+    images: &mut Assets<Image>,
+    icon: icons::Icon,
+    title: &str,
+    action: Action,
+) -> Entity {
+    let image = commands
+        .spawn((
+            IconOf(action, icon),
+            ImageNode::new(images.add(icon.image())).with_color(icon.tint()),
+            Node {
+                width: px(14),
+                height: px(14),
+                ..default()
+            },
+        ))
+        .id();
+    commands
+        .spawn((
+            Button,
+            action,
+            Tooltip(title.to_owned()),
+            Node {
+                padding: UiRect::axes(px(7), px(6)),
+                border: UiRect::all(px(1)),
+                flex_shrink: 0.0,
+                ..default()
+            },
+            BackgroundColor(theme::BUTTON),
+            BorderColor::all(theme::EDGE),
+        ))
+        .add_child(image)
+        .id()
+}
+
+/// Run, pause, resume, step and stop as icons, for the right end of the
+/// row above a page's script area.
+fn run_controls(commands: &mut Commands, images: &mut Assets<Image>) -> Entity {
+    let children = [
+        (icons::Icon::Run, "Run", Action::Run),
+        (icons::Icon::Pause, "Pause", Action::Pause),
+        (icons::Icon::Resume, "Resume", Action::Resume),
+        (icons::Icon::Step, "Step", Action::Step),
+        (icons::Icon::Stop, "Stop", Action::Stop),
+    ]
+    .map(|(icon, title, action)| icon_button(commands, images, icon, title, action));
+    commands
+        .spawn(Node {
+            column_gap: px(4),
+            flex_shrink: 0.0,
+            margin: UiRect::left(Val::Auto),
+            ..default()
+        })
+        .add_children(&children)
+        .id()
+}
+
+/// A row holding `left` and the run controls at its right end.
+fn with_run_controls(
+    commands: &mut Commands,
+    images: &mut Assets<Image>,
+    left: Option<Entity>,
+) -> Entity {
+    let controls = run_controls(commands, images);
+    let row = commands
+        .spawn(Node {
+            width: percent(100),
+            column_gap: px(8),
+            row_gap: px(5),
+            // In a narrow window the icons wrap below the file buttons,
+            // still at the right.
+            flex_wrap: FlexWrap::Wrap,
+            align_items: AlignItems::Center,
+            ..default()
+        })
+        .id();
+    if let Some(left) = left {
+        commands.entity(row).add_child(left);
+    }
+    commands.entity(row).add_child(controls);
+    row
+}
+
 fn row(commands: &mut Commands, actions: &[(&str, Action)]) -> Entity {
     let children: Vec<_> = actions
         .iter()
@@ -148,20 +266,27 @@ fn row(commands: &mut Commands, actions: &[(&str, Action)]) -> Entity {
 pub(super) fn spawn(
     mut commands: Commands,
     mut fonts: ResMut<Assets<Font>>,
+    mut images: ResMut<Assets<Image>>,
     state: Res<Workbench>,
 ) {
     let mono = Mono(fonts.add(Font::from_bytes(bevy::text::DEFAULT_FONT_DATA.to_vec())));
-    let frame = windows::frame(
+    // Resizable from any edge; the script and source areas take the room.
+    let frame = windows::resizable_frame(
         &mut commands,
         WindowId::Scripts,
         Node {
             display: Display::None,
-            width: px(1040),
+            min_width: px(520),
+            min_height: px(360),
+            // A small game window still shows the whole frame; a larger
+            // saved size comes back when the screen has room for it.
             max_width: percent(94),
             max_height: percent(92),
             flex_direction: FlexDirection::Column,
             ..default()
         },
+        Vec2::new(1040.0, 620.0),
+        u64::from_be_bytes(*b"scripts1"),
     );
     commands.entity(frame).insert(Root);
     let body = commands
@@ -170,6 +295,7 @@ pub(super) fn spawn(
                 padding: UiRect::all(px(12)),
                 row_gap: px(8),
                 flex_direction: FlexDirection::Column,
+                flex_grow: 1.0,
                 min_height: px(0),
                 ..default()
             },
@@ -186,21 +312,13 @@ pub(super) fn spawn(
     );
     let status = label(&mut commands, "Ready", 13.0, theme::FOCUS);
     commands.entity(status).insert(Status);
-    let controls = row(
-        &mut commands,
-        &[
-            ("Run", Action::Run),
-            ("Pause", Action::Pause),
-            ("Resume", Action::Resume),
-            ("Step", Action::Step),
-            ("Stop", Action::Stop),
-        ],
-    );
     let editor = commands
         .spawn((
             Page(Tab::Editor),
             Node {
                 column_gap: px(10),
+                flex_grow: 1.0,
+                min_height: px(0),
                 ..default()
             },
         ))
@@ -235,7 +353,7 @@ pub(super) fn spawn(
         12.0,
         theme::INK_DIM,
     );
-    let file_controls = row(
+    let file_buttons = row(
         &mut commands,
         &[
             ("Files", Action::ToggleLibrary),
@@ -245,6 +363,7 @@ pub(super) fn spawn(
             ("Reload", Action::Reload),
         ],
     );
+    let file_controls = with_run_controls(&mut commands, &mut images, Some(file_buttons));
     let source = commands
         .spawn((
             Field::Source,
@@ -253,7 +372,8 @@ pub(super) fn spawn(
             TakesWheel,
             super::editor::Surface,
             Node {
-                height: px(280),
+                flex_grow: 1.0,
+                min_height: px(120),
                 width: percent(100),
                 border: UiRect::all(px(1)),
                 ..default()
@@ -269,6 +389,7 @@ pub(super) fn spawn(
             flex_direction: FlexDirection::Column,
             row_gap: px(8),
             min_width: px(0),
+            min_height: px(0),
             flex_grow: 1.0,
             ..default()
         })
@@ -283,6 +404,8 @@ pub(super) fn spawn(
             Node {
                 flex_direction: FlexDirection::Column,
                 row_gap: px(8),
+                flex_grow: 1.0,
+                min_height: px(0),
                 ..default()
             },
         ))
@@ -291,7 +414,7 @@ pub(super) fn spawn(
         .spawn((
             SourceLines,
             Node {
-                height: px(280),
+                min_height: px(120),
                 min_width: px(0),
                 flex_grow: 1.0,
                 padding: UiRect::all(px(8)),
@@ -325,7 +448,6 @@ pub(super) fn spawn(
             ScrollPosition::default(),
             Node {
                 display: Display::None,
-                height: px(280),
                 width: percent(32),
                 min_width: px(120),
                 padding: UiRect::all(px(8)),
@@ -341,19 +463,27 @@ pub(super) fn spawn(
         .spawn(Node {
             width: percent(100),
             column_gap: px(8),
+            flex_grow: 1.0,
+            // Its height comes from the window, never from the rows shown,
+            // which follow the height.
+            flex_basis: px(0),
+            min_height: px(0),
             ..default()
         })
         .add_children(&[lines, flow_pane])
         .id();
+    let execution_controls = with_run_controls(&mut commands, &mut images, None);
     commands
         .entity(execution)
-        .add_children(&[source_row, history]);
+        .add_children(&[execution_controls, source_row, history]);
     let help_page = commands
         .spawn((
             Page(Tab::Help),
             Node {
                 flex_direction: FlexDirection::Column,
                 row_gap: px(8),
+                flex_grow: 1.0,
+                min_height: px(0),
                 ..default()
             },
         ))
@@ -376,7 +506,8 @@ pub(super) fn spawn(
             TakesWheel,
             ScrollPosition::default(),
             Node {
-                height: px(380),
+                flex_grow: 1.0,
+                min_height: px(0),
                 overflow: Overflow::scroll_y(),
                 flex_direction: FlexDirection::Column,
                 ..default()
@@ -412,7 +543,6 @@ pub(super) fn spawn(
     commands.entity(body).add_children(&[
         tabs,
         status,
-        controls,
         editor,
         execution,
         help_page,
@@ -490,7 +620,8 @@ pub(super) fn refresh(
     focus: Res<bevy::input_focus::InputFocus>,
     field_ids: Query<(Entity, &Field)>,
     mut buttons: Query<(&Action, &Interaction, &mut BackgroundColor)>,
-    lines: Query<Entity, With<SourceLines>>,
+    mut icons: Query<(&IconOf, &mut ImageNode)>,
+    lines: Query<(Entity, Option<&ComputedNode>), With<SourceLines>>,
     help_body: Query<(Entity, Has<Breadcrumbs>), Or<(With<HelpBody>, With<Breadcrumbs>)>>,
     mut previous: Local<Cache>,
 ) {
@@ -617,33 +748,43 @@ pub(super) fn refresh(
     }
     previous.document_revision = Some(state.revision);
     for (action, interaction, mut color) in &mut buttons {
-        let usable = match action {
-            Action::Run
-            | Action::New
-            | Action::Open
-            | Action::Save
-            | Action::Reload
-            | Action::Discard => !active && !state.busy(),
-            Action::Pause => active && status.phase() != Phase::Paused,
-            Action::Resume | Action::Step => status.phase() == Phase::Paused,
-            Action::Stop => active,
-            _ => true,
-        };
+        let usable = action.usable(status.phase(), state.busy());
         let on = matches!(action, Action::Tab(tab) if *tab == state.tab)
             || matches!(action, Action::Help(page) if *page == state.help_page)
             || matches!(action, Action::ToggleLibrary) && !state.library_collapsed;
         *color = BackgroundColor(theme::button(usable, on, *interaction));
     }
-    // Rebuild at action boundaries, not at frame rate or every elapsed-time tick.
-    if previous.run.as_ref().is_none_or(|(line, phase, source)| {
-        *line != status.line() || *phase != status.phase() || source != status.source()
-    }) {
-        if let Ok(parent) = lines.single() {
+    for (icon, mut image) in &mut icons {
+        let tint = icon.tint(icon.0.usable(status.phase(), state.busy()));
+        if image.color != tint {
+            image.color = tint;
+        }
+    }
+    // As many source rows as the pane's laid-out height holds.
+    let rows = lines
+        .single()
+        .ok()
+        .and_then(|(_, node)| node)
+        .map_or(DEFAULT_ROWS, |node| {
+            visible_rows(node.size().y * node.inverse_scale_factor())
+        });
+    // Rebuild at action boundaries or a new height, not at frame rate or
+    // every elapsed-time tick.
+    if previous
+        .run
+        .as_ref()
+        .is_none_or(|(line, phase, source, shown)| {
+            *line != status.line()
+                || *phase != status.phase()
+                || source != status.source()
+                || *shown != rows
+        })
+    {
+        if let Ok((parent, _)) = lines.single() {
             commands.entity(parent).despawn_children();
-            let current = status.line().unwrap_or(1);
-            let start = current.saturating_sub(6);
+            let start = first_row(status.line().unwrap_or(1), rows);
             let symbols = syntax::Symbols::scan(status.source());
-            for (index, line) in status.source().lines().enumerate().skip(start).take(14) {
+            for (index, line) in status.source().lines().enumerate().skip(start).take(rows) {
                 source_line(
                     &mut commands,
                     parent,
@@ -655,7 +796,12 @@ pub(super) fn refresh(
                 );
             }
         }
-        previous.run = Some((status.line(), status.phase(), status.source().to_owned()));
+        previous.run = Some((
+            status.line(),
+            status.phase(),
+            status.source().to_owned(),
+            rows,
+        ));
     }
     if previous.help_page != Some(state.help_page) {
         for (parent, breadcrumbs) in &help_body {
@@ -683,12 +829,40 @@ fn flow_summary(status: &RunStatus) -> String {
     }
     lines.push(String::new());
     lines.push("Variables".into());
-    if flow.variables().is_empty() {
+    // A loop's variable that has not run yet holds an empty line.
+    let variables = flow.variables().iter().filter(|line| !line.is_empty());
+    if variables.clone().next().is_none() {
         lines.push("None initialized".into());
     } else {
-        lines.extend(flow.variables().iter().cloned());
+        lines.extend(variables.cloned());
     }
     lines.join("\n")
+}
+
+/// One source row's height, and the pane's padding above and below.
+const ROW: f32 = 18.0;
+const PANE_PADDING: f32 = 8.0;
+/// Rows shown before the pane has been laid out.
+const DEFAULT_ROWS: usize = 14;
+
+/// How many whole rows fit a source pane this tall, at least three.
+fn visible_rows(height: f32) -> usize {
+    if height <= 0.0 || !height.is_finite() {
+        return DEFAULT_ROWS;
+    }
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "a finite, positive pane height in rows"
+    )]
+    let rows = ((height - 2.0 * PANE_PADDING) / ROW).floor().max(0.0) as usize;
+    rows.max(3)
+}
+
+/// The first row index shown: the current line, counted from 1, sits
+/// after about three sevenths of the rows, as it sat 7th of 14.
+const fn first_row(current: usize, rows: usize) -> usize {
+    current.saturating_sub(rows * 3 / 7)
 }
 
 /// A read-only source line with stable syntax colors and an execution marker.
@@ -705,7 +879,7 @@ pub(super) fn source_line(
         .spawn((
             Node {
                 width: percent(100),
-                min_height: px(18),
+                height: px(ROW),
                 flex_shrink: 0.0,
                 ..default()
             },
@@ -780,6 +954,58 @@ pub(super) fn scroll(
             let maximum = (text.size.y - node.content_box().height()).max(0.0);
             scroll.0.y =
                 (scroll.0.y - wheel.pixels / node.inverse_scale_factor()).clamp(0.0, maximum);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_execution_source_shows_as_many_rows_as_its_pane_holds() {
+        assert_eq!(visible_rows(0.0), DEFAULT_ROWS);
+        assert_eq!(visible_rows(f32::NAN), DEFAULT_ROWS);
+        assert_eq!(visible_rows(2.0f32.mul_add(PANE_PADDING, 14.0 * ROW)), 14);
+        assert_eq!(visible_rows(2.0f32.mul_add(PANE_PADDING, 40.5 * ROW)), 40);
+        assert_eq!(visible_rows(30.0), 3);
+        // Line 7 of 14 rows starts the view at line 1; later lines scroll.
+        assert_eq!(first_row(7, 14), 1);
+        assert_eq!(first_row(1, 14), 0);
+        assert_eq!(first_row(100, 40), 83);
+        assert!((first_row(100, 40)..first_row(100, 40) + 40).contains(&99));
+    }
+
+    #[test]
+    fn run_controls_are_usable_exactly_when_their_action_can_happen() {
+        let controls = [
+            Action::Run,
+            Action::Pause,
+            Action::Resume,
+            Action::Step,
+            Action::Stop,
+        ];
+        let usable = |phase, busy| controls.map(|action| action.usable(phase, busy));
+        // Run, pause, resume, step, stop.
+        assert_eq!(
+            usable(Phase::Idle, false),
+            [true, false, false, false, false]
+        );
+        assert_eq!(usable(Phase::Idle, true), [false; 5]);
+        assert_eq!(
+            usable(Phase::Running, false),
+            [false, true, false, false, true]
+        );
+        assert_eq!(
+            usable(Phase::Pausing, false),
+            [false, true, false, false, true]
+        );
+        assert_eq!(
+            usable(Phase::Paused, false),
+            [false, false, true, true, true]
+        );
+        for done in [Phase::Completed, Phase::Stopped, Phase::Failed] {
+            assert_eq!(usable(done, false), [true, false, false, false, false]);
         }
     }
 }

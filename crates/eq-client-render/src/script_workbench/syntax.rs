@@ -2,29 +2,32 @@
 //! source views. Validation belongs to `script::Program`; this module only
 //! colours words the parser's own vocabulary names.
 
-use crate::script::{COMMANDS, language};
+use crate::script::language;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Kind {
-    /// `let`, `set`, `if`, `else`, `end`, `repeat`, `while` and `limit`.
+    /// Statement words such as `if`, `for` and `while`, `and`/`or`/`not`
+    /// and `limit`.
     Keyword,
-    /// A known action command.
+    /// A known action command, called.
     Command,
-    /// A leading word that is no command, or a dotted name that is no field.
+    /// A leading word that is no statement or command, or a dotted name
+    /// that is no field.
     Unknown,
     /// `int`, `bool` and `text`.
     Type,
     Number,
     String,
-    /// `true` and `false`.
+    /// `True` and `False`.
     Constant,
     /// A client field such as `zone.name`.
     Field,
-    /// `known(...)` and `stale(...)`.
+    /// `known(...)`, `stale(...)` and `range(...)`.
     Builtin,
-    /// A name a `let` in this document declares.
+    /// A name this document declares.
     Variable,
     Operator,
+    /// A key chord given to `press` or `hold`.
     Key,
     Argument,
     Comment,
@@ -63,20 +66,31 @@ pub(super) struct Symbols {
 }
 
 impl Symbols {
-    /// Every `let` name in the source, declared before or after a use.
+    /// Every declared name in the source, before or after a use: each
+    /// `name: type = value` and each `for name in ...`.
     pub(super) fn scan(source: &str) -> Self {
         let mut variables = Vec::new();
         for line in source.lines() {
             let code = line[..language::comment(line)]
                 .trim_start_matches(|ch: char| ch.is_whitespace() || ch == '\u{feff}');
-            if let Some(rest) = code.strip_prefix("let")
+            let name = if let Some(rest) = code.strip_prefix("for")
                 && rest.starts_with(char::is_whitespace)
-                && let Some((name, _)) = rest.split_once(':')
             {
-                let name = name.trim();
-                if !name.is_empty() && !variables.iter().any(|known| known == name) {
-                    variables.push(name.to_owned());
-                }
+                rest.split_once(" in ").map(|(name, _)| name.trim())
+            } else if let language::Shape::Assignment(name) = language::shape(code) {
+                code[name.len()..]
+                    .trim_start()
+                    .starts_with(':')
+                    .then_some(name)
+            } else {
+                None
+            };
+            if let Some(name) = name
+                && !name.is_empty()
+                && name != "_"
+                && !variables.iter().any(|known| known == name)
+            {
+                variables.push(name.to_owned());
             }
         }
         Self { variables }
@@ -90,72 +104,76 @@ impl Symbols {
 /// Keep every byte, including whitespace, while styling a line of the DSL.
 pub(super) fn tokens<'a>(line: &'a str, symbols: &Symbols) -> Vec<(&'a str, Kind)> {
     let (code, comment) = line.split_at(language::comment(line));
-    let mut result = if code
-        .split_whitespace()
-        .next()
-        .is_some_and(language::keyword)
-    {
-        flow_tokens(code, symbols)
-    } else {
-        action_tokens(code)
-    };
+    let mut result = code_tokens(code, symbols);
     if !comment.is_empty() {
         result.push((comment, Kind::Comment));
     }
     result
 }
 
-fn action_tokens(code: &str) -> Vec<(&str, Kind)> {
+fn code_tokens<'a>(mut code: &'a str, symbols: &Symbols) -> Vec<(&'a str, Kind)> {
+    let leading = language::shape(code);
+    let keys = matches!(leading, language::Shape::Action("press" | "hold", _));
     let mut first = true;
-    let mut result = Vec::new();
-    for token in code.split_inclusive(char::is_whitespace) {
-        let word = token.trim();
-        let kind = if word.is_empty() {
-            Kind::Argument
-        } else if first {
-            first = false;
-            if COMMANDS.contains(&word) {
-                Kind::Command
-            } else {
-                Kind::Unknown
-            }
-        } else if word.parse::<f64>().is_ok() {
-            Kind::Number
-        } else if word.chars().any(char::is_alphabetic)
-            && word
-                .chars()
-                .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '+')
-        {
-            Kind::Key
-        } else {
-            Kind::Argument
-        };
-        result.push((token, kind));
-    }
-    result
-}
-
-fn flow_tokens<'a>(mut code: &'a str, symbols: &Symbols) -> Vec<(&'a str, Kind)> {
     let mut result = Vec::new();
     while let Some(ch) = code.chars().next() {
         let (end, kind) = match ch {
-            '"' => (string_end(code), Kind::String),
-            '0'..='9' => (
-                code.bytes().take_while(u8::is_ascii_digit).count(),
-                Kind::Number,
+            ch if ch.is_whitespace() || ch == '\u{feff}' => (
+                code.find(|ch: char| !ch.is_whitespace() && ch != '\u{feff}')
+                    .unwrap_or(code.len()),
+                Kind::Argument,
             ),
+            '"' | '\'' => {
+                let end = string_end(code, ch);
+                let inner = code[1..end].trim_end_matches(ch);
+                let key = keys
+                    && inner.chars().any(char::is_alphabetic)
+                    && inner
+                        .chars()
+                        .all(|ch| ch.is_ascii_alphanumeric() || ch == '+');
+                (end, if key { Kind::Key } else { Kind::String })
+            }
+            '0'..='9' | '.'
+                if code
+                    .as_bytes()
+                    .get(usize::from(ch == '.'))
+                    .is_some_and(u8::is_ascii_digit) =>
+            {
+                (
+                    code.bytes()
+                        .take_while(|byte| byte.is_ascii_digit() || *byte == b'.')
+                        .count(),
+                    Kind::Number,
+                )
+            }
             'a'..='z' | 'A'..='Z' | '_' => {
                 let end = code
                     .bytes()
                     .take_while(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'_' | b'.'))
                     .count();
-                (end, word(&code[..end], symbols))
+                let text = &code[..end];
+                let kind = if first {
+                    match leading {
+                        language::Shape::Action(..) => Kind::Command,
+                        language::Shape::Keyword(_) => Kind::Keyword,
+                        language::Shape::Assignment(_) => Kind::Variable,
+                        language::Shape::CommandName(_)
+                        | language::Shape::Uncalled(_)
+                        | language::Shape::Unknown(_) => Kind::Unknown,
+                        language::Shape::Blank => Kind::Argument,
+                    }
+                } else {
+                    word(text, symbols)
+                };
+                (end, kind)
             }
-            '(' | ')' | ':' | '=' | '<' | '>' | '!' | '+' | '-' | '*' | '/' | '%' | '&' | '|' => {
-                (1, Kind::Operator)
-            }
+            '(' | ')' | ':' | '=' | '<' | '>' | '!' | '+' | '-' | '*' | '/' | '%' | '&' | '|'
+            | ',' => (1, Kind::Operator),
             _ => (ch.len_utf8(), Kind::Argument),
         };
+        if kind != Kind::Argument || !code[..end].trim().is_empty() {
+            first = false;
+        }
         let (token, rest) = code.split_at(end);
         result.push((token, kind));
         code = rest;
@@ -165,10 +183,11 @@ fn flow_tokens<'a>(mut code: &'a str, symbols: &Symbols) -> Vec<(&'a str, Kind)>
 
 fn word(word: &str, symbols: &Symbols) -> Kind {
     match word {
-        _ if language::keyword(word) || word == "limit" => Kind::Keyword,
+        "and" | "or" | "not" | "limit" => Kind::Keyword,
+        _ if language::keyword(word) => Kind::Keyword,
         "int" | "bool" | "text" => Kind::Type,
-        "true" | "false" => Kind::Constant,
-        "known" | "stale" => Kind::Builtin,
+        "True" | "False" => Kind::Constant,
+        "known" | "stale" | "range" => Kind::Builtin,
         _ if language::field(word) => Kind::Field,
         _ if word.contains('.') => Kind::Unknown,
         _ if symbols.variable(word) => Kind::Variable,
@@ -176,7 +195,8 @@ fn word(word: &str, symbols: &Symbols) -> Kind {
     }
 }
 
-fn string_end(code: &str) -> usize {
+/// The end of the text literal that opens `code` with `quote`, or the line's end.
+fn string_end(code: &str, quote: char) -> usize {
     let mut escaped = false;
     for (index, ch) in code.char_indices().skip(1) {
         if std::mem::take(&mut escaped) {
@@ -184,7 +204,7 @@ fn string_end(code: &str) -> usize {
         }
         match ch {
             '\\' => escaped = true,
-            '"' => return index + 1,
+            ch if ch == quote => return index + 1,
             _ => {}
         }
     }
@@ -206,36 +226,47 @@ mod tests {
 
     #[test]
     fn flow_highlighting_preserves_source_and_quoted_hashes() {
-        let tokens = kinds(r##"  if zone.name=="cat\"#1" # note"##, &Symbols::default());
+        let tokens = kinds(
+            r##"  if zone.name=="cat\"#1" and not False: # note"##,
+            &Symbols::default(),
+        );
         assert!(tokens.contains(&("if", Kind::Keyword)));
         assert!(tokens.contains(&("zone.name", Kind::Field)));
         assert!(tokens.contains(&("=", Kind::Operator)));
         assert!(tokens.contains(&(r##""cat\"#1""##, Kind::String)));
+        assert!(tokens.contains(&("and", Kind::Keyword)));
+        assert!(tokens.contains(&("not", Kind::Keyword)));
+        assert!(tokens.contains(&("False", Kind::Constant)));
         assert!(tokens.contains(&("# note", Kind::Comment)));
+        let single = kinds("report('it''s # not a comment')", &Symbols::default());
+        assert!(single.contains(&("'it'", Kind::String)));
     }
 
     #[test]
     fn highlighting_preserves_source_and_recognizes_comments_and_numbers() {
-        let tokens = kinds("  hold CTRL+W 250 # café\r", &Symbols::default());
-        assert!(tokens.contains(&("hold ", Kind::Command)));
-        assert!(tokens.contains(&("CTRL+W ", Kind::Key)));
-        assert!(tokens.contains(&("250 ", Kind::Number)));
+        let tokens = kinds("  hold(\"CTRL+W\", 250) # café\r", &Symbols::default());
+        assert!(tokens.contains(&("hold", Kind::Command)));
+        assert!(tokens.contains(&("\"CTRL+W\"", Kind::Key)));
+        assert!(tokens.contains(&("250", Kind::Number)));
         assert!(tokens.contains(&("# café\r", Kind::Comment)));
+        let tokens = kinds("wheel(\"world\", -1.5)", &Symbols::default());
+        assert!(tokens.contains(&("\"world\"", Kind::String)));
+        assert!(tokens.contains(&("1.5", Kind::Number)));
     }
 
     #[test]
     fn every_parser_command_and_flow_word_has_its_own_class() {
-        for command in COMMANDS {
+        for command in crate::script::COMMANDS {
+            let call = format!("{command}()");
             assert_eq!(
-                kinds(command, &Symbols::default()),
-                [(*command, Kind::Command)]
+                kinds(&call, &Symbols::default())[0],
+                (*command, Kind::Command)
             );
         }
-        assert_eq!(
-            kinds("pres I", &Symbols::default())[0],
-            ("pres ", Kind::Unknown)
-        );
-        let source = "let tries: int = 0\n\twhile !known(target.nam) && tries < 3 limit 5\nset tries = tries + 1\nif true\nelse\nend";
+        for bad in ["pres(\"I\")", "press I", "wait = 1"] {
+            assert_eq!(kinds(bad, &Symbols::default())[0].1, Kind::Unknown, "{bad}");
+        }
+        let source = "tries: int = 0\nwhile not known(target.nam) and tries < 3, limit=5:\n    tries += 1\n    for i in range(2):\n        continue\nif True:\n    pass\nelif False:\n    break\nelse:\n    pass";
         let symbols = Symbols::scan(source);
         let all = source
             .lines()
@@ -243,18 +274,24 @@ mod tests {
             .filter(|(text, _)| !text.trim().is_empty())
             .collect::<Vec<_>>();
         for expected in [
-            ("let", Kind::Keyword),
             ("tries", Kind::Variable),
             ("int", Kind::Type),
             ("0", Kind::Number),
             ("while", Kind::Keyword),
+            ("not", Kind::Keyword),
             ("known", Kind::Builtin),
             ("target.nam", Kind::Unknown),
             ("limit", Kind::Keyword),
-            ("set", Kind::Keyword),
-            ("true", Kind::Constant),
+            ("for", Kind::Keyword),
+            ("i", Kind::Variable),
+            ("in", Kind::Keyword),
+            ("range", Kind::Builtin),
+            ("continue", Kind::Keyword),
+            ("True", Kind::Constant),
+            ("elif", Kind::Keyword),
+            ("break", Kind::Keyword),
             ("else", Kind::Keyword),
-            ("end", Kind::Keyword),
+            ("pass", Kind::Keyword),
         ] {
             assert!(all.contains(&expected), "{expected:?}");
         }
@@ -262,10 +299,10 @@ mod tests {
 
     #[test]
     fn a_variable_is_known_before_and_after_its_declaration() {
-        let source = "if ready\nend\nlet ready: bool = client.ready # let other: int = 1\n";
+        let source = "if ready:\n    pass\nready: bool = client.ready # other: int = 1\nfor _ in range(2):\n    pass\n";
         let symbols = Symbols::scan(source);
         assert_eq!(symbols.variables, ["ready"]);
-        assert!(kinds("if ready", &symbols).contains(&("ready", Kind::Variable)));
-        assert!(kinds("if other", &symbols).contains(&("other", Kind::Argument)));
+        assert!(kinds("if ready:", &symbols).contains(&("ready", Kind::Variable)));
+        assert!(kinds("if other:", &symbols).contains(&("other", Kind::Argument)));
     }
 }
