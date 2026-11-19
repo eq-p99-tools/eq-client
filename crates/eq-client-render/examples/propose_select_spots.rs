@@ -25,10 +25,12 @@
 //! `--check` prints one line a listed zone: `reachable`, `NOT REACHABLE`,
 //! `NO FLOOR` (the preview falls back), `kept` (the row's `# kept: reason`
 //! comment excuses NOT REACHABLE, never NO FLOOR) or `unknown` (no mesh to
-//! weigh; never a pass). A zone whose main island isn't clearly the main
-//! one (under half the floor, or the next island at least half its size)
-//! says `main island unclear` and wants a look even when it passes. It
-//! exits 1 when any zone is flagged or unknown.
+//! weigh; never a pass). Each line gives the main island's numbers; a
+//! flagged zone whose main island isn't clearly the main one (under half
+//! the floor, or the next island at least half its size) also says `main
+//! island unclear`, since most zones' meshes are split that way and the
+//! words help only where a spot is in question. It exits 1 when any zone is
+//! flagged or unknown.
 use anyhow::{Context, Result, bail};
 use eq_client_core::select_spots::{BUILT_IN, Spots, rewrite_proposals};
 use eq_client_render::SpotVerdict;
@@ -180,6 +182,9 @@ fn check_spots(
             SpotVerdict::NoFloor => "NO FLOOR (the preview falls back)".to_owned(),
             SpotVerdict::NoMainIsland => "unknown (the mesh has no floor)".to_owned(),
         };
+        let kept = listed.kept(&zone);
+        let flag = verdict.flagged(kept.is_some());
+        let unclear_flag = flag && main.is_some_and(|main| !main.clear());
         let main_said = main.map_or_else(String::new, |main| {
             format!(
                 "; main island {:.0} of {:.0}, next {:.0}{}{}",
@@ -187,25 +192,24 @@ fn check_spots(
                 main.total,
                 main.runner_up,
                 if main.dry { "" } else { ", no dry floor" },
-                if main.clear() {
-                    ""
-                } else {
+                if unclear_flag {
                     ", main island unclear"
+                } else {
+                    ""
                 }
             )
         });
-        let kept = listed.kept(&zone);
         let line = match kept {
             Some(reason) => format!("kept ({reason}); check: {said}"),
             None => said,
         };
         writeln!(stdout, "{zone}: {line}{main_said} [{seconds:.1} s]")?;
-        if main.is_some_and(|main| !main.clear()) {
+        if unclear_flag {
             unclear.push(zone.clone());
         }
         if verdict == SpotVerdict::NoMainIsland {
             unknown.push(zone);
-        } else if verdict.flagged(kept.is_some()) {
+        } else if flag {
             flagged.push(zone);
         }
     }
@@ -213,7 +217,7 @@ fn check_spots(
     writeln!(stdout, "unknown ({}): {}", unknown.len(), unknown.join(" "))?;
     writeln!(
         stdout,
-        "main island unclear ({}): {}",
+        "flagged, main island unclear ({}): {}",
         unclear.len(),
         unclear.join(" ")
     )?;

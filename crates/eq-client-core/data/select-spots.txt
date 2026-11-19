@@ -34,6 +34,15 @@
 # the old and new spot looked at). The first --check run flagged rows that wait
 # for a look before any is moved or kept.
 #
+# 2026-11-19: --check over all 207 rows flagged 68. Fifteen were looked at
+# (close, 120-unit and 170-unit renders): six moved to the reachability
+# rule's proposal (beholder crushbone mistmoore mmcc neriakc paludal), five
+# kept with the way in named (two, cauldron and kerraridge, on zone
+# knowledge of the route, which the mesh doesn't show), and four wait for a second look: halas,
+# kedge and sirens (still flagged) and erudnint (passes the check, but its
+# renders show an open plane with no walls). The other flagged rows wait
+# for a look.
+#
 # zone          y         x         z       heading  distance  pitch  state
 acrylia        -576.54    -41.42    -18.50    256.0      25.0   10.0  reviewed
 airplane        -72.06    -17.59     -0.97    128.0      25.0   10.0  reviewed
@@ -42,19 +51,19 @@ akheva           48.00      5.67      0.00    256.0      25.0   10.0  reviewed
 arena           -20.78    502.20     19.06    384.0      25.0   10.0  reviewed
 barindu         544.47   -531.52     37.50      0.0      25.0   10.0  reviewed
 befallen       -479.01    -73.78    -69.97    320.0      25.0   10.0  reviewed
-beholder        522.61   -551.87    -74.75    192.0      25.0   10.0  reviewed
+beholder        197.96     16.28      9.65      0.0      25.0   10.0  reviewed
 blackburrow     -41.72   -110.85      0.00    384.0      25.0   10.0  reviewed
 bothunder       416.09    208.22    699.00      0.0      25.0   10.0  reviewed
 burningwood    1137.74    -61.50   -381.22     64.0      25.0   10.0  reviewed
 butcher        -510.97    464.85     -3.41    224.0      25.0   10.0  reviewed
-cauldron        486.82     -8.01     92.52     64.0      25.0   10.0  reviewed
+cauldron        486.82     -8.01     92.52     64.0      25.0   10.0  reviewed  # kept: lakeside rock spur, reached along the ridge from the hillside camp; the mesh cuts it off at the steep slope
 cazicthule      937.98   -269.32    132.94    320.0      25.0   10.0  reviewed
 chardok        -301.75    -24.38    -69.97    384.0      25.0   10.0  reviewed
 citymist        493.66     28.12     -0.00     96.0      25.0   10.0  reviewed
 cobaltscar    -1125.06   -723.76    293.78    448.0      25.0   10.0  reviewed
 codecay           1.24      8.22   -294.00    128.0      25.0   10.0  reviewed
 commons          72.13   1087.23    -15.56     96.0      25.0   10.0  reviewed
-crushbone      -120.20    185.17     84.97    320.0      25.0   10.0  reviewed
+crushbone      -340.11    322.61      0.00    416.0      25.0   10.0  reviewed
 crystal         -56.42    593.30   -373.84    160.0      25.0   10.0  reviewed
 dalnir          104.21   -425.82      0.00    384.0      25.0   10.0  reviewed
 dreadlands      715.43  -2924.66     23.06    256.0      25.0   10.0  reviewed
@@ -105,7 +114,7 @@ hohonorb       -406.56    835.69    393.00    320.0      25.0   10.0  reviewed
 iceclad         117.87   2455.93    -34.50    448.0      25.0   10.0  reviewed
 ikkinz         -103.91    288.20     -5.00    288.0      25.0   10.0  reviewed
 inktuta        -499.78    399.59     -6.00    448.0      25.0   10.0  reviewed
-innothule      -285.10    905.99    -24.95    192.0      25.0   10.0  reviewed
+innothule      -285.10    905.99    -24.95    192.0      25.0   10.0  reviewed  # kept: swamp ground open on all sides; the mesh splits the swamp at its water channels
 kael            832.16   1281.99     -0.00    416.0      25.0   10.0  reviewed
 kaesora         -19.15   -399.67   -103.97    160.0      25.0   10.0  reviewed
 kaladima         84.21    231.38     16.00    352.0      25.0   10.0  reviewed
@@ -113,14 +122,14 @@ kaladimb        691.72    145.72      0.00    256.0      25.0   10.0  reviewed
 karnor           30.38    -88.13      0.00    384.0      25.0   10.0  reviewed
 katta            95.46   -520.46     20.00     32.0      25.0   10.0  reviewed
 kedge           -22.73    127.69    -24.61    128.0      25.0   10.0  unreviewed
-kerraridge      -18.87    -45.87      0.00    256.0      25.0   10.0  reviewed
+kerraridge      -18.87    -45.87      0.00    256.0      25.0   10.0  reviewed  # kept: village beach on Kerra Isle, open sand; the mesh splits the isle from the mainland at the water channel
 kithicor        517.54   1468.48    187.06    224.0      25.0   10.0  reviewed
 kodtaz          180.23   1089.02   -432.00     32.0      25.0   10.0  reviewed
 kurn             -5.10     -4.81     41.97    384.0      25.0   10.0  reviewed
 lakeofillomen   1788.29   -123.33    155.10     96.0      25.0   10.0  reviewed
 lakerathe      -985.36    127.55    172.50    256.0      25.0   10.0  reviewed
 lavastorm      -264.77   -309.14    122.26    352.0      25.0   10.0  reviewed
-lfaydark       1401.75   -322.51     20.37    448.0      25.0   10.0  reviewed
+lfaydark       1401.75   -322.51     20.37    448.0      25.0   10.0  reviewed  # kept: open forest floor, walkable on all sides; the mesh has no floor under this one spot
 load              1.50   -311.37      5.00      0.0      25.0   10.0  reviewed
 load2           317.72   -810.51    544.00    448.0      25.0   10.0  reviewed
 mira            461.44    696.17   -120.00    256.0      25.0   10.0  reviewed
@@ -134,11 +143,11 @@ mirh           -233.92    588.47      0.00    256.0      25.0   10.0  reviewed
 miri            305.74   -523.76      1.00    480.0      25.0   10.0  reviewed
 mirj           -167.18   -268.07      1.00     32.0      25.0   10.0  reviewed
 mischiefplane  -1256.23   -513.09     90.97    288.0      25.0   10.0  reviewed
-mistmoore       -71.72     29.74    -83.97    352.0      25.0   10.0  reviewed
+mistmoore        85.72    379.60   -238.91    256.0      25.0   10.0  reviewed
 misty          -252.89   -606.41     -2.66    288.0      25.0   10.0  reviewed
 mmca           -230.00    242.00     -6.31    128.0      25.0   10.0  reviewed
 mmcb            623.46    361.42     -7.83    256.0      25.0   10.0  reviewed
-mmcc            372.97    351.59      9.63    320.0      20.8   10.0  reviewed
+mmcc             -6.41     86.03      2.13    128.0      25.0   10.0  reviewed
 mmcd           -303.25    -33.25     -3.00      0.0      25.0   10.0  reviewed
 mmce           -129.80   -110.80     -3.00      0.0      25.0   10.0  reviewed
 mmcf           -250.28     79.84     16.50    384.0      25.0   10.0  reviewed
@@ -152,7 +161,7 @@ necropolis      532.51   -380.60   -259.91    256.0      25.0   10.0  reviewed
 nektulos        228.92    272.04     11.45    160.0      25.0   10.0  reviewed
 neriaka         -39.39    -45.64     41.97    192.0      25.0   10.0  reviewed
 neriakb          40.23   -991.86      4.00    384.0      25.0   10.0  reviewed
-neriakc        1243.18  -1352.79    -97.97    256.0      25.0   10.0  reviewed
+neriakc         719.54  -1274.66    -41.97    128.0      25.0   10.0  reviewed
 netherbian      410.33     21.67      0.00    256.0      25.0   10.0  reviewed
 nexus          -472.67    100.00    -63.00    256.0      25.0   10.0  reviewed
 northkarana    -970.30    946.05    -11.25     64.0      25.0   10.0  reviewed
@@ -162,7 +171,7 @@ oasis         -1573.41   1047.20      2.41    256.0      25.0   10.0  reviewed
 oggok           191.02    532.04    118.94    224.0      25.0   10.0  reviewed
 oot            1106.76  -5630.96    118.66    160.0      25.0   10.0  reviewed
 overthere       630.45   -606.03    -48.24    416.0      25.0   10.0  reviewed
-paludal        -932.25    345.25   -240.00     96.0      25.0   10.0  reviewed
+paludal         -69.25    776.75   -299.34    480.0      25.0   10.0  reviewed
 paw            1160.86    147.29     -1.42     32.0      25.0   10.0  reviewed
 permafrost      857.92   -222.34      0.00    224.0      25.0   10.0  reviewed
 poeartha       -605.21   -325.79     32.00    416.0      25.0   10.0  reviewed
@@ -206,7 +215,7 @@ soldungc       -138.31    314.06     -6.00      0.0      23.4   10.0  reviewed
 solrotower     -754.00   1844.00    312.00    256.0      25.0   10.0  reviewed
 soltemple       442.95     40.85      0.00    128.0      25.0   10.0  reviewed
 southkarana   -2527.55   -312.05     -3.78    256.0      25.0   10.0  reviewed
-sro            -213.72    203.77    -29.03    480.0      25.0   10.0  reviewed
+sro            -213.72    203.77    -29.03    480.0      25.0   10.0  reviewed  # kept: open dunes, walkable on all sides; the mesh has no floor under this one spot
 sseru          1225.33     21.33     56.00    256.0      25.0   10.0  reviewed
 ssratemple      377.06    236.72   -119.00      0.0      25.0   10.0  reviewed
 steamfont       261.39   -285.43    -25.11    448.0      25.0   10.0  reviewed
