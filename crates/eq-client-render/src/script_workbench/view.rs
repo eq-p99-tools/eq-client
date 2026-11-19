@@ -151,17 +151,23 @@ pub(super) fn spawn(
     state: Res<Workbench>,
 ) {
     let mono = Mono(fonts.add(Font::from_bytes(bevy::text::DEFAULT_FONT_DATA.to_vec())));
-    let frame = windows::frame(
+    // Resizable from any edge; the script and source areas take the room.
+    let frame = windows::resizable_frame(
         &mut commands,
         WindowId::Scripts,
         Node {
             display: Display::None,
-            width: px(1040),
+            min_width: px(520),
+            min_height: px(360),
+            // A small game window still shows the whole frame; a larger
+            // saved size comes back when the screen has room for it.
             max_width: percent(94),
             max_height: percent(92),
             flex_direction: FlexDirection::Column,
             ..default()
         },
+        Vec2::new(1040.0, 620.0),
+        u64::from_be_bytes(*b"scripts1"),
     );
     commands.entity(frame).insert(Root);
     let body = commands
@@ -170,6 +176,7 @@ pub(super) fn spawn(
                 padding: UiRect::all(px(12)),
                 row_gap: px(8),
                 flex_direction: FlexDirection::Column,
+                flex_grow: 1.0,
                 min_height: px(0),
                 ..default()
             },
@@ -201,6 +208,8 @@ pub(super) fn spawn(
             Page(Tab::Editor),
             Node {
                 column_gap: px(10),
+                flex_grow: 1.0,
+                min_height: px(0),
                 ..default()
             },
         ))
@@ -253,7 +262,8 @@ pub(super) fn spawn(
             TakesWheel,
             super::editor::Surface,
             Node {
-                height: px(280),
+                flex_grow: 1.0,
+                min_height: px(120),
                 width: percent(100),
                 border: UiRect::all(px(1)),
                 ..default()
@@ -269,6 +279,7 @@ pub(super) fn spawn(
             flex_direction: FlexDirection::Column,
             row_gap: px(8),
             min_width: px(0),
+            min_height: px(0),
             flex_grow: 1.0,
             ..default()
         })
@@ -283,6 +294,8 @@ pub(super) fn spawn(
             Node {
                 flex_direction: FlexDirection::Column,
                 row_gap: px(8),
+                flex_grow: 1.0,
+                min_height: px(0),
                 ..default()
             },
         ))
@@ -291,7 +304,7 @@ pub(super) fn spawn(
         .spawn((
             SourceLines,
             Node {
-                height: px(280),
+                min_height: px(120),
                 min_width: px(0),
                 flex_grow: 1.0,
                 padding: UiRect::all(px(8)),
@@ -325,7 +338,6 @@ pub(super) fn spawn(
             ScrollPosition::default(),
             Node {
                 display: Display::None,
-                height: px(280),
                 width: percent(32),
                 min_width: px(120),
                 padding: UiRect::all(px(8)),
@@ -341,6 +353,8 @@ pub(super) fn spawn(
         .spawn(Node {
             width: percent(100),
             column_gap: px(8),
+            flex_grow: 1.0,
+            min_height: px(0),
             ..default()
         })
         .add_children(&[lines, flow_pane])
@@ -354,6 +368,8 @@ pub(super) fn spawn(
             Node {
                 flex_direction: FlexDirection::Column,
                 row_gap: px(8),
+                flex_grow: 1.0,
+                min_height: px(0),
                 ..default()
             },
         ))
@@ -376,7 +392,8 @@ pub(super) fn spawn(
             TakesWheel,
             ScrollPosition::default(),
             Node {
-                height: px(380),
+                flex_grow: 1.0,
+                min_height: px(0),
                 overflow: Overflow::scroll_y(),
                 flex_direction: FlexDirection::Column,
                 ..default()
