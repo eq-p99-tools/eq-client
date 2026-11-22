@@ -487,8 +487,11 @@ impl ChatState {
         let world = online.world();
         active_link_admission(world)?;
         let generation = world.generation();
-        if generation != eq_client_core::GameDialect::Titanium {
-            return Err("Inventory item links are unavailable on this server".into());
+        match generation {
+            eq_client_core::GameDialect::Titanium => {}
+            eq_client_core::GameDialect::EqMac => {
+                return Err("Inventory item links are unavailable on this server".into());
+            }
         }
         let item = world
             .inventory()

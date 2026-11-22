@@ -1575,8 +1575,11 @@ pub(super) fn input(
     }
     let now = Instant::now();
     controls.settle(now);
-    let water_enabled =
-        client == InstalledClient::Titanium && !flying && online.world().can(Capability::Swimming);
+    let water_enabled = match client {
+        InstalledClient::Titanium => true,
+        InstalledClient::EqMac => false,
+    } && !flying
+        && online.world().can(Capability::Swimming);
     if !water_enabled || !focused || controls.stun_active {
         controls.shoreline.reset();
     }
@@ -1740,8 +1743,10 @@ pub(super) fn input(
         controls.held = Some(Held::NoBody);
         return;
     };
-    let placement_blocked = client == InstalledClient::Titanium
-        && !flying
+    let placement_blocked = match client {
+        InstalledClient::Titanium => true,
+        InstalledClient::EqMac => false,
+    } && !flying
         && controls.airborne.is_some()
         && controls.placement.holds(
             online.server_placement(),

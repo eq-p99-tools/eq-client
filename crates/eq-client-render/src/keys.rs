@@ -445,9 +445,11 @@ impl KeyMap {
     /// The selected installation's keyboard seed, before this client's edits.
     pub(super) fn for_settings(settings: &super::ViewerConfig) -> Self {
         let mut map = Self::for_client(settings.installed_client);
-        if settings.installed_client == eq_client_assets::ui::InstalledClient::Titanium
-            && let Some(directory) = settings.eq_directory.as_deref()
-        {
+        let imports = match settings.installed_client {
+            eq_client_assets::ui::InstalledClient::Titanium => true,
+            eq_client_assets::ui::InstalledClient::EqMac => false,
+        };
+        if imports && let Some(directory) = settings.eq_directory.as_deref() {
             map.import_titanium_movement(directory);
         }
         map

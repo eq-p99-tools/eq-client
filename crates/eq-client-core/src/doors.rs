@@ -53,7 +53,6 @@ impl DoorTable {
     }
 
     /// Applies the selected generation's definition/action and local motion rules.
-    /// Unknown generations keep definitions without offering interaction.
     pub fn apply_for(&mut self, update: &DoorUpdate, now: Instant, generation: GameDialect) {
         if self.generation != generation {
             self.closing.clear();
@@ -62,12 +61,12 @@ impl DoorTable {
             self.generation = generation;
         }
         self.doors.apply(update);
-        if generation == GameDialect::EqMac {
-            self.apply_hinges(update, now);
-            return;
-        }
-        if generation != GameDialect::Titanium {
-            return;
+        match generation {
+            GameDialect::Titanium => {}
+            GameDialect::EqMac => {
+                self.apply_hinges(update, now);
+                return;
+            }
         }
         match update {
             DoorUpdate::RemoveAll => {
@@ -132,7 +131,6 @@ impl DoorTable {
                 // types 54-56: nothing is sent or said (0x4906c5, read R37 a).
                 GameDialect::Titanium => id != u8::MAX && !(54..=56).contains(&door.open_type),
                 GameDialect::EqMac => eqmac::ordinary(door),
-                _ => false,
             })
     }
 
@@ -153,7 +151,6 @@ impl DoorTable {
                 }
                 eq_network_game::reach::EQMAC.doors
             }
-            _ => return None,
         };
         let door = self.doors.entries().get(&id)?;
         // A door is reached at its origin where it stands now, within 20, as

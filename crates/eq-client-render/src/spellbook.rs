@@ -1153,8 +1153,9 @@ fn prepare_scribe(
     let online = online.ok_or_else(|| own("Connect to scribe a scroll"))?;
     let stamp = stamp.ok_or_else(|| own("Connect to scribe a scroll"))?;
     let world = online.world();
-    if world.generation() == eq_client_core::GameDialect::Titanium {
-        titanium_press(world, book, place, names)?;
+    match world.generation() {
+        eq_client_core::GameDialect::Titanium => titanium_press(world, book, place, names)?,
+        eq_client_core::GameDialect::EqMac => {}
     }
     if world.inventory_moves_pending() {
         return Err(own("Wait for queued item moves before scribing"));

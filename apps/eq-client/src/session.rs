@@ -167,7 +167,11 @@ impl SessionWorker {
             options.reconnect = false;
             let result = (|| {
                 // A Titanium login sends what the installation's files hold.
-                let sight = protocol.is_titanium().then(|| {
+                let titanium = match eq_client_core::GameDialect::from(protocol) {
+                    eq_client_core::GameDialect::Titanium => true,
+                    eq_client_core::GameDialect::EqMac => false,
+                };
+                let sight = titanium.then(|| {
                     Arc::new(eq_client_render::SightProvider::from_definitions(
                         spell_provider,
                         spell_definitions,
@@ -412,7 +416,11 @@ fn client(login: Login, options: &SessionOptions) -> Result<Client> {
     // when it is due and dated by the last one this client or the installed
     // client remembers. Which worlds hear it is the server type's to say
     // (`sends_system_info`).
-    if login.protocol.is_titanium() {
+    let titanium = match eq_client_core::GameDialect::from(login.protocol) {
+        eq_client_core::GameDialect::Titanium => true,
+        eq_client_core::GameDialect::EqMac => false,
+    };
+    if titanium {
         config.sysinfo = Some(Arc::new(machine::HostMachine::new(
             crate::logins::installed_client(login.protocol),
             options.install.clone(),

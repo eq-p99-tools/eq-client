@@ -2854,7 +2854,10 @@ fn gm_request(
     let command = parse::gm_command(&words)?;
     let depop = command == "depop";
     let full_spawn = words.first() == Some(&"spawn") && words.len() > 5;
-    let titanium = world.generation() == eq_client_core::GameDialect::Titanium;
+    let titanium = match world.generation() {
+        eq_client_core::GameDialect::Titanium => true,
+        eq_client_core::GameDialect::EqMac => false,
+    };
     if (depop || full_spawn) && !titanium {
         return Err("Full fixture spawn and depop require local EQEmu".into());
     }

@@ -123,7 +123,11 @@ impl SkillRules {
     #[must_use]
     pub fn presence(&self, skill: u32, raw: u32, inputs: SkillInputs) -> Presence {
         if skill >= 100
-            || (self.client == InstalledClient::Titanium && skill == 57 && inputs.race != 12)
+            || (match self.client {
+                InstalledClient::Titanium => true,
+                InstalledClient::EqMac => false,
+            } && skill == 57
+                && inputs.race != 12)
         {
             return Presence::Hidden;
         }
@@ -168,7 +172,10 @@ impl SkillRules {
                 50
             }
             (128, 50) => 100,
-            (330, 50) if matches!(self.client, InstalledClient::Titanium) => 125,
+            (330, 50) => match self.client {
+                InstalledClient::Titanium => 125,
+                InstalledClient::EqMac => 0,
+            },
             _ => 0,
         }
     }
@@ -235,8 +242,11 @@ impl SkillRules {
     }
 
     fn rank(&self, value: i32, language: bool) -> RankText {
-        if value < 0 && self.client == InstalledClient::EqMac {
-            return RankText::String(0xc98);
+        if value < 0 {
+            match self.client {
+                InstalledClient::Titanium => {}
+                InstalledClient::EqMac => return RankText::String(0xc98),
+            }
         }
         u32::try_from(value)
             .ok()

@@ -513,10 +513,12 @@ impl Needs {
                 offered(world, Capability::UsingDisciplines)
                     && super::disciplines::knows(world, spell)
             }
-            Self::TitaniumBreath => {
-                world.generation() == eq_client_core::GameDialect::Titanium
-                    && offered(world, Capability::GameplayDepartures)
-            }
+            Self::TitaniumBreath => match world.generation() {
+                eq_client_core::GameDialect::Titanium => {
+                    offered(world, Capability::GameplayDepartures)
+                }
+                eq_client_core::GameDialect::EqMac => false,
+            },
             Self::Nothing => true,
             Self::Missing => false,
         }

@@ -34,8 +34,8 @@ impl LootContinuation {
     pub(super) const fn of(generation: crate::GameDialect) -> Self {
         match generation {
             crate::GameDialect::Titanium => Self::TakenReply,
-            // Unknown generations have no established automatic boundary.
-            _ => Self::Manual,
+            // `EQMac` has no established automatic boundary.
+            crate::GameDialect::EqMac => Self::Manual,
         }
     }
 

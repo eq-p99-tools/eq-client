@@ -8,6 +8,9 @@ The client reads your own installation at runtime: S3D/WLD zone geometry,
 materials, placed objects, character/equipment archives, UI layouts and icons,
 string tables, spells and supported audio. It does not bundle these files.
 Keep archives, extracted assets, derived caches and screenshots outside Git.
+Every archive is found by its role (a zone, its objects, character and
+equipment archives) in `eq-client-assets/src/archives.rs`; only S3D archives
+are read so far.
 
 Classic model rendering includes animation, face/armor textures, robes, helmets
 and held-item attachments where installed data and the model support them.

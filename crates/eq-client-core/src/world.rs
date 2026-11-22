@@ -1217,7 +1217,10 @@ impl ClientWorld {
             WorldEvent::Disciplines(list) => self.disciplines_news(list, news),
             WorldEvent::AlternateAdvancement { session_id, updates } => {
                 if self.session_id == Some(*session_id) && !self.ended && self.player.is_some()
-                    && self.generation == crate::GameDialect::Titanium {
+                    && match self.generation {
+                        crate::GameDialect::Titanium => true,
+                        crate::GameDialect::EqMac => false,
+                    } {
                     for update in updates { self.environmental_aa.apply(update); }
                 } else {
                     news.ignored = true;
@@ -1642,8 +1645,10 @@ impl ClientWorld {
             } => self.cast_refused((*session_id, *spell_id), (reason, *string_id), news),
             WorldEvent::BuffSnapshot(buffs) => self.buff_snapshot(buffs, now),
             WorldEvent::Buff(update) => {
-                if self.generation == crate::GameDialect::Titanium
-                    && let Some(player) = self.player.as_ref()
+                if match self.generation {
+                    crate::GameDialect::Titanium => true,
+                    crate::GameDialect::EqMac => false,
+                } && let Some(player) = self.player.as_ref()
                 {
                     self.casting.active_discipline.observe_titanium(player.spawn_id, update);
                 }

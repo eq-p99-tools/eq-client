@@ -327,9 +327,9 @@ pub enum InstalledClient {
 pub enum Detected {
     /// Only one generation's marker files are there.
     Clear(InstalledClient),
-    /// Marker files of both generations are there.
+    /// Marker files of more than one generation are there.
     Ambiguous,
-    /// Neither generation's marker files are there.
+    /// No generation's marker files are there.
     Unclassified,
 }
 
@@ -347,6 +347,10 @@ pub struct GemDraw {
 }
 
 impl InstalledClient {
+    /// Every generation this client knows, in the order detection checks
+    /// them.
+    pub const ALL: [Self; 2] = [Self::Titanium, Self::EqMac];
+
     /// Whether this generation gives a player class a spellbook and gems.
     /// The class checks are Titanium 0x417daf and Mac-era 0x4b8ea1; neither
     /// reads mana, the book contents, memorized slots or the player's level.
@@ -382,8 +386,8 @@ impl InstalledClient {
 
     /// Which official client the installation in `eq_directory` holds, from
     /// its own top-level files: clear when only one generation's markers are
-    /// there, ambiguous with both, unclassified with neither or when the
-    /// folder can't be listed.
+    /// there, ambiguous with more than one, unclassified with none or when
+    /// the folder can't be listed.
     #[must_use]
     pub fn detect(eq_directory: &Path) -> Detected {
         let Ok(entries) = std::fs::read_dir(eq_directory) else {
@@ -405,11 +409,14 @@ impl InstalledClient {
                     })
             })
         };
-        match (marked(Self::Titanium), marked(Self::EqMac)) {
-            (true, false) => Detected::Clear(Self::Titanium),
-            (false, true) => Detected::Clear(Self::EqMac),
-            (true, true) => Detected::Ambiguous,
-            (false, false) => Detected::Unclassified,
+        let found: Vec<Self> = Self::ALL
+            .into_iter()
+            .filter(|&client| marked(client))
+            .collect();
+        match found.as_slice() {
+            [only] => Detected::Clear(*only),
+            [] => Detected::Unclassified,
+            [..] => Detected::Ambiguous,
         }
     }
 
@@ -438,14 +445,20 @@ impl InstalledClient {
     /// other short buffs; unchecked for the Mac-era client.
     #[must_use]
     pub const fn short_effects(self) -> bool {
-        matches!(self, Self::Titanium)
+        match self {
+            Self::Titanium => true,
+            Self::EqMac => false,
+        }
     }
 
     /// Whether this client shows casts in its own casting window;
     /// unchecked for the Mac-era client.
     #[must_use]
     pub const fn casting_window(self) -> bool {
-        matches!(self, Self::Titanium)
+        match self {
+            Self::Titanium => true,
+            Self::EqMac => false,
+        }
     }
 
     /// The file in the installation that holds this client's string table,
@@ -711,7 +724,10 @@ impl InstalledClient {
     /// Mac-era client's is unread, so it takes at once as before.
     #[must_use]
     pub const fn asks_before_no_drop_loot(self) -> bool {
-        matches!(self, Self::Titanium)
+        match self {
+            Self::Titanium => true,
+            Self::EqMac => false,
+        }
     }
 
     /// Whether the social emote commands (`/smile`, `/bow` and the rest)
@@ -720,7 +736,10 @@ impl InstalledClient {
     /// answer there.
     #[must_use]
     pub const fn runs_social_emotes(self) -> bool {
-        matches!(self, Self::Titanium)
+        match self {
+            Self::Titanium => true,
+            Self::EqMac => false,
+        }
     }
 
     /// Whether disciplines are used as Titanium's 0x4bb39d uses them, by
@@ -729,7 +748,10 @@ impl InstalledClient {
     /// this client's earlier answer there.
     #[must_use]
     pub const fn runs_disciplines(self) -> bool {
-        matches!(self, Self::Titanium)
+        match self {
+            Self::Titanium => true,
+            Self::EqMac => false,
+        }
     }
 
     /// How this client asks the player about a translocate cast on them,
@@ -1848,6 +1870,22 @@ mod tests {
                 Detected::Unclassified,
             ]
         );
+    }
+
+    #[test]
+    fn every_generation_is_listed_once_for_detection() {
+        // A new generation fails to compile here until it is named, and
+        // then fails until `ALL` lists it, so detection checks its markers.
+        let listed = |client: InstalledClient| match client {
+            InstalledClient::Titanium | InstalledClient::EqMac => InstalledClient::ALL
+                .iter()
+                .filter(|&&c| c == client)
+                .count(),
+        };
+        for client in [InstalledClient::Titanium, InstalledClient::EqMac] {
+            assert_eq!(listed(client), 1, "{client:?}");
+        }
+        assert_eq!(InstalledClient::ALL.len(), 2);
     }
 
     use super::*;

@@ -123,7 +123,11 @@ fn rows(
             .and_then(|name| messages.argument_free(name));
         // The unmapped EQMac selector establishes no name for this row.
         // Withhold its presentation while retaining the received proficiency.
-        if client == InstalledClient::EqMac && language == 0 && name.is_none() {
+        let unmapped = match client {
+            InstalledClient::Titanium => false,
+            InstalledClient::EqMac => language == 0 && name.is_none(),
+        };
+        if unmapped {
             continue;
         }
         let name = name.map_or_else(|| format!("Language {language}"), str::to_owned);

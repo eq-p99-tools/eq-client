@@ -110,12 +110,15 @@ impl Entry {
                 }
             }
         });
-        let native_head =
-            if client == eq_client_assets::ui::InstalledClient::Titanium && character.is_some() {
-                super::breath::head::Basis::load(directory, player, model)
-            } else {
-                None
-            };
+        let native_head = if match client {
+            eq_client_assets::ui::InstalledClient::Titanium => true,
+            eq_client_assets::ui::InstalledClient::EqMac => false,
+        } && character.is_some()
+        {
+            super::breath::head::Basis::load(directory, player, model)
+        } else {
+            None
+        };
         let height = character.as_ref().map_or(6.0, CharacterAsset::height);
         // Use the model's estimated standing offset to project feet.
         // A fresh server placement can still need a collision step to stand.

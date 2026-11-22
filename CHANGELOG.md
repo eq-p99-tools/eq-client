@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Make every client-generation decision exhaustive, so adding a third
+  generation (RoF2 is planned) breaks each place that must decide what it
+  does instead of taking another generation's branch. The 31 one-variant
+  checks on `InstalledClient` and `GameDialect` are `match`es naming every
+  variant, and a test refuses new ones. Installation detection checks every
+  generation in `InstalledClient::ALL`, and every installed archive is found
+  through one module (`eq-client-assets/src/archives.rs`), still S3D only.
+  Repins eq-network for its exhaustive `GameDialect` and `ServerProtocol`.
+  No behaviour changes.
+
 - Take the 88 social emotes and disciplines as the Titanium client does
   (reads R47 to R48c). An emote's first word picks its target: any spawn
   whose name it begins, the shortest name winning, or the current target
