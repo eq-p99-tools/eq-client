@@ -72,12 +72,13 @@ pub fn installation_check(
         )),
         Detected::Clear(_) => Ok(None),
         Detected::Ambiguous => Ok(Some(format!(
-            "{folder} has files of both the Titanium and the TAKP client; \
-             reading it as the {needs}'s"
+            "{folder} has files of both the {}; reading it as the {needs}'s",
+            client_names(" and the ")
         ))),
         Detected::Unclassified => Ok(Some(format!(
-            "{folder} has none of the files that mark a Titanium or TAKP client \
-             installation; reading it as the {needs}'s"
+            "{folder} has none of the files that mark a {} installation; \
+             reading it as the {needs}'s",
+            client_names(" or ")
         ))),
     }
 }
@@ -91,6 +92,12 @@ fn holder<'a>(presets: &'a Presets, launch: usize, directory: &Path) -> Option<&
         .get(launch)
         .filter(names)
         .or_else(|| presets.list.iter().find(names))
+}
+
+/// Every generation's installation name, in detection order, joined by
+/// `between`.
+fn client_names(between: &str) -> String {
+    InstalledClient::ALL.map(client_name).join(between)
 }
 
 /// What the login screen calls a client's installation.

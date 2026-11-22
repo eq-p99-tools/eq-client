@@ -218,18 +218,21 @@ impl SkillRules {
         };
         let class = inputs.class.and_then(|class| self.class_rule(id, class));
         let rank = match self.client {
-            InstalledClient::EqMac if value == 254 => class.map_or(RankText::Unknown, |class| {
-                RankText::TrainableAt(class.train_level)
-            }),
-            // The fixed decimal level argument at 0x5fe49c is 66.
-            InstalledClient::EqMac if value == 255 => RankText::TrainableAt(66),
+            InstalledClient::EqMac => match value {
+                254 => class.map_or(RankText::Unknown, |class| {
+                    RankText::TrainableAt(class.train_level)
+                }),
+                // The fixed decimal level argument at 0x5fe49c is 66.
+                255 => RankText::TrainableAt(66),
+                _ => self.rank(value, language),
+            },
             InstalledClient::Titanium if !language && value == 0 => class
                 .filter(|class| class.usable() && class.train_level > inputs.level)
                 .map_or_else(
                     || self.rank(value, language),
                     |class| RankText::TrainableAt(class.train_level),
                 ),
-            _ => self.rank(value, language),
+            InstalledClient::Titanium => self.rank(value, language),
         };
         let numeric = match self.client {
             InstalledClient::EqMac => (value < 254).then_some(value),

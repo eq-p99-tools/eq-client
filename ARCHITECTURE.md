@@ -238,7 +238,9 @@ For a new generation, in order:
 2. The `InstalledClient` variant, listed in `InstalledClient::ALL`, with its
    marker files in `markers()`. Markers come from a listing of a real
    installation, and must not match another generation's folder (Titanium's
-   `.eqg` marker will need narrowing for RoF2).
+   `.eqg` marker will need narrowing for RoF2). The login screen's
+   installation warnings name every generation from that list; their wording
+   ("both") needs rewording for a third, and a test in `logins.rs` pins it.
 3. Follow the compiler through every `match`.
 4. Archives: every archive is found through
    `eq-client-assets/src/archives.rs`. A newer format (EQG) gets its reader

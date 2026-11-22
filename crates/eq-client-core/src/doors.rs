@@ -189,9 +189,15 @@ impl DoorTable {
     /// read (recording checklist 6.425).
     #[must_use]
     pub fn solidity(&self, id: u8) -> Solidity {
-        match (self.generation, self.doors.entries().get(&id)) {
-            (GameDialect::Titanium, Some(door)) => Solidity::of(door.open_type, self.zone_id),
-            _ => Solidity::BOTH,
+        match self.generation {
+            GameDialect::Titanium => self
+                .doors
+                .entries()
+                .get(&id)
+                .map_or(Solidity::BOTH, |door| {
+                    Solidity::of(door.open_type, self.zone_id)
+                }),
+            GameDialect::EqMac => Solidity::BOTH,
         }
     }
 

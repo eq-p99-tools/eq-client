@@ -1873,19 +1873,20 @@ mod tests {
     }
 
     #[test]
-    fn every_generation_is_listed_once_for_detection() {
-        // A new generation fails to compile here until it is named, and
-        // then fails until `ALL` lists it, so detection checks its markers.
-        let listed = |client: InstalledClient| match client {
-            InstalledClient::Titanium | InstalledClient::EqMac => InstalledClient::ALL
-                .iter()
-                .filter(|&&c| c == client)
-                .count(),
+    fn every_generation_has_its_place_in_detection_order() {
+        // A new generation fails to compile here until it has its own place,
+        // and then fails until `ALL` holds it there, so detection checks its
+        // markers.
+        let place = |client: InstalledClient| match client {
+            InstalledClient::Titanium => 0,
+            InstalledClient::EqMac => 1,
         };
-        for client in [InstalledClient::Titanium, InstalledClient::EqMac] {
-            assert_eq!(listed(client), 1, "{client:?}");
+        for (index, client) in InstalledClient::ALL.into_iter().enumerate() {
+            assert_eq!(place(client), index, "{client:?}");
         }
-        assert_eq!(InstalledClient::ALL.len(), 2);
+        for client in [InstalledClient::Titanium, InstalledClient::EqMac] {
+            assert_eq!(InstalledClient::ALL.get(place(client)), Some(&client));
+        }
     }
 
     use super::*;
