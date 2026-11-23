@@ -127,6 +127,10 @@ type Arrows<'w, 's> = crate::clicks::Clicks<'w, 's, TurnsPages>;
 /// the chosen spell, asking first where the player wants that, only while
 /// no box takes the keyboard.
 #[allow(clippy::needless_pass_by_value, clippy::too_many_lines)]
+#[expect(
+    clippy::match_same_arms,
+    reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
+)]
 pub(crate) fn clicks(
     (keys, mouse): (crate::keys::Keys, Res<ButtonInput<MouseButton>>),
     (shown, skinned): (Res<crate::windows::Shown>, Res<crate::skinned::Skinned>),
@@ -251,6 +255,8 @@ pub(crate) fn clicks(
     // unread, so another item there leaves the book as it is.
     let titanium = match online.world().generation() {
         eq_client_core::GameDialect::Titanium => true,
+        // Titanium's, inferred for RoF2 (6.489).
+        eq_client_core::GameDialect::Rof2 => true,
         eq_client_core::GameDialect::EqMac => false,
     };
     match (cursor, in_place) {
@@ -594,6 +600,10 @@ fn answer(
 
 /// Scribes the scroll on the cursor into this empty place of the book; what
 /// the chat says if it does not.
+#[expect(
+    clippy::match_same_arms,
+    reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
+)]
 fn scribe(
     (online, outbox): (&crate::online::OnlineState, &crate::outbox::Outbox),
     (slot, in_place, scroll): (usize, Option<u32>, Option<u32>),
@@ -606,6 +616,8 @@ fn scribe(
     // `prepare_scribe`; the Mac-era press keeps this client's earlier order.
     match world.generation() {
         eq_client_core::GameDialect::Titanium => {}
+        // Titanium's, inferred for RoF2 (6.489).
+        eq_client_core::GameDialect::Rof2 => {}
         eq_client_core::GameDialect::EqMac => {
             let scroll = scroll?;
             if in_place.is_some() {

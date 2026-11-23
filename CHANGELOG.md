@@ -145,6 +145,16 @@
   nothing; a server that takes no assist keeps its earlier answers. The
   Mac-era client keeps its earlier answers. Inferred parts are
   under checklist 6.490. Networking pinned to 126b2c7 (eq-network #324).
+- Add RoF2 as a placeholder generation, following eq-network's
+  (`GameDialect::Rof2`, `ServerProtocol::EqEmuRof2`). `InstalledClient::Rof2`
+  is in `InstalledClient::ALL` but has no marker files, so no folder is ever
+  detected as it, and the installation warnings name only generations with
+  markers, as before. No preset offers or names `EqEmuRof2`, and eq-network
+  refuses a configuration naming it. Each rule without a read of RoF2's
+  program is absent, or Titanium's on its own arm marked
+  `inferred for RoF2 (6.489)`. The skill rules read through a private
+  `Program` (Titanium, `EQMac`). Repins eq-network for the placeholder.
+  Nothing a player can reach changes.
 
 - Make every client-generation decision exhaustive, so adding a third
   generation (RoF2 is planned) breaks each place that must decide what it

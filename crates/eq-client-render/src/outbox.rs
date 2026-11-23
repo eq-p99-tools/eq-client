@@ -519,7 +519,8 @@ impl Needs {
                 eq_client_core::GameDialect::Titanium => {
                     offered(world, Capability::GameplayDepartures)
                 }
-                eq_client_core::GameDialect::EqMac => false,
+                // Titanium's departure alone.
+                eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => false,
             },
             Self::Nothing => true,
             Self::Missing => false,

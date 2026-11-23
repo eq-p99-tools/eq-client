@@ -1,4 +1,4 @@
-use crate::ui::InstalledClient;
+use super::Program;
 
 /// One class's unmodified numeric constructor data for a skill.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -58,14 +58,14 @@ pub enum SkillTableError {
 }
 
 impl SkillTable {
-    pub(super) fn parse(client: InstalledClient, text: &str) -> Result<Self, SkillTableError> {
+    pub(super) fn parse(client: Program, text: &str) -> Result<Self, SkillTableError> {
         let mut lines = text
             .lines()
             .enumerate()
             .filter(|(_, line)| !line.starts_with('#') && !line.trim().is_empty());
         let header = match client {
-            InstalledClient::Titanium => "skill,class,train_level,class_usable,name_eqstr",
-            InstalledClient::EqMac => "skill,class,train_level,class_cap,name_eqstr",
+            Program::Titanium => "skill,class,train_level,class_usable,name_eqstr",
+            Program::EqMac => "skill,class,train_level,class_cap,name_eqstr",
         };
         if lines.next().map(|(_, line)| line) != Some(header) {
             return Err(SkillTableError::Columns);

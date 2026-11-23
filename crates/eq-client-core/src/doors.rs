@@ -53,6 +53,10 @@ impl DoorTable {
     }
 
     /// Applies the selected generation's definition/action and local motion rules.
+    #[expect(
+        clippy::match_same_arms,
+        reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
+    )]
     pub fn apply_for(&mut self, update: &DoorUpdate, now: Instant, generation: GameDialect) {
         if self.generation != generation {
             self.closing.clear();
@@ -63,6 +67,8 @@ impl DoorTable {
         self.doors.apply(update);
         match generation {
             GameDialect::Titanium => {}
+            // Titanium's, inferred for RoF2 (6.489).
+            GameDialect::Rof2 => {}
             GameDialect::EqMac => {
                 self.apply_hinges(update, now);
                 return;
@@ -131,6 +137,7 @@ impl DoorTable {
                 // types 54-56: nothing is sent or said (0x4906c5, read R37 a).
                 GameDialect::Titanium => id != u8::MAX && !(54..=56).contains(&door.open_type),
                 GameDialect::EqMac => eqmac::ordinary(door),
+                // RoF2 has no use path yet.
                 GameDialect::Rof2 => false,
             })
     }
@@ -144,6 +151,8 @@ impl DoorTable {
         }
         let reach = match self.generation {
             GameDialect::Titanium => eq_network_game::reach::TITANIUM.doors,
+            // RoF2 has no use path yet (`supports_use`).
+            GameDialect::Rof2 => return None,
             GameDialect::EqMac => {
                 let mut hinge = self.hinges.get(&id)?.clone();
                 hinge.tick(now);
@@ -188,7 +197,7 @@ impl DoorTable {
 
     /// Whether door `id` holds the player up and stops them walking: the
     /// program's rule on Titanium, and both on a generation whose rule is not
-    /// read (recording checklist 6.425).
+    /// read (`EQMac`, recording checklist 6.425, and `RoF2`).
     #[must_use]
     pub fn solidity(&self, id: u8) -> Solidity {
         match self.generation {
@@ -199,7 +208,7 @@ impl DoorTable {
                 .map_or(Solidity::BOTH, |door| {
                     Solidity::of(door.open_type, self.zone_id)
                 }),
-            GameDialect::EqMac => Solidity::BOTH,
+            GameDialect::EqMac | GameDialect::Rof2 => Solidity::BOTH,
         }
     }
 

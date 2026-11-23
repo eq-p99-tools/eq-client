@@ -58,6 +58,10 @@ pub(crate) const RESET: u32 = 254;
 
 /// Rows established by the known class/profile inputs. A row dependent on
 /// an unknown look-ahead bound stays withheld until that fact is supplied.
+#[expect(
+    clippy::match_same_arms,
+    reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
+)]
 fn rows(
     world: &ClientWorld,
     client: InstalledClient,
@@ -105,7 +109,8 @@ fn rows(
         InstalledClient::Titanium => world
             .language_zero_selector()
             .map(eq_client_core::rules::LanguageZeroSelector::alternate_name),
-        InstalledClient::EqMac => None,
+        // RoF2's selector is not read yet.
+        InstalledClient::EqMac | InstalledClient::Rof2 => None,
     };
     for (index, raw) in player
         .languages
@@ -125,6 +130,8 @@ fn rows(
         // Withhold its presentation while retaining the received proficiency.
         let unmapped = match client {
             InstalledClient::Titanium => false,
+            // Titanium's, inferred for RoF2 (6.489).
+            InstalledClient::Rof2 => false,
             InstalledClient::EqMac => language == 0 && name.is_none(),
         };
         if unmapped {
@@ -498,7 +505,9 @@ mod tests {
         ];
         body[..4].copy_from_slice(&raw.to_le_bytes());
         eq_client_core::WorldEvent::Rules(match client {
-            InstalledClient::Titanium => eq_client_core::rules::titanium_rules(&body).unwrap(),
+            InstalledClient::Titanium | InstalledClient::Rof2 => {
+                eq_client_core::rules::titanium_rules(&body).unwrap()
+            }
             InstalledClient::EqMac => eq_client_core::rules::eqmac_rules(&body).unwrap(),
         })
     }
@@ -514,7 +523,7 @@ mod tests {
                     Some("Alternate speech"),
                     Some("Changed"),
                 ],
-                InstalledClient::EqMac => [None; 3],
+                InstalledClient::EqMac | InstalledClient::Rof2 => [None; 3],
             };
             assert_eq!(
                 language_name(&app, list),

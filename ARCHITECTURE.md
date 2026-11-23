@@ -221,8 +221,9 @@ installation: its files, and the program rules the renderer applies. One
 mapping joins them: `logins::installed_client` takes a server type's
 generation from the wire it speaks.
 
-Both enums are exhaustive, so adding a generation (RoF2 is planned) breaks
-every `match` on them, and each break is a decision the new generation needs.
+Both enums are exhaustive, so adding a generation (RoF2 is a placeholder; see
+below) breaks every `match` on them, and each break is a decision the new
+generation needs.
 Decisions are exhaustive `match`es or named accessors whose bodies are;
 `crates/eq-client-assets/tests/exhaustive_checks.rs` refuses a comparison on
 one variant (`==`, `!=`, `matches!`, `if let`) in production code, for
@@ -245,6 +246,26 @@ For a new generation, in order:
 4. Archives: every archive is found through
    `eq-client-assets/src/archives.rs`. A newer format (EQG) gets its reader
    and is chosen there, by the files the installation holds.
+
+### RoF2 status: placeholder
+
+`InstalledClient::Rof2` and eq-network's `GameDialect::Rof2` and
+`ServerProtocol::EqEmuRof2` exist so each decision above has an answer, and
+nothing of RoF2 is built:
+
+- `markers()` gives RoF2 no files, so `detect()` never finds it
+  (`detectable()` is false), and the installation warnings name only the
+  generations that have markers. Their bytes stay as they were, and the
+  `logins.rs` test keeps pinning them until RoF2 gets markers.
+- No preset offers or names `EqEmuRof2` (`seed_name` and `type_name` answer
+  `None`), and eq-network's `FromStr` has no name for it, so neither
+  `EQ_PROTOCOL` nor a presets file can choose it. eq-network refuses a
+  configuration naming it before anything is sent.
+- Each rule without a read of RoF2's program is absent (`None`, or off), or
+  Titanium's on an arm of its own commented `inferred for RoF2 (6.489)`.
+  Recording checklist item 6.489 is the list of those reads: grep the token.
+  Where a function carries `#[expect(clippy::match_same_arms)]` for its RoF2
+  arms, the expectation fails once no arm matches Titanium's any more.
 
 ## Errors and compatibility
 

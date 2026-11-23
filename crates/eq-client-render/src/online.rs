@@ -1064,7 +1064,9 @@ fn start_entry(
         );
         let titanium_swimming = match drawn_by.0 {
             eq_client_assets::ui::InstalledClient::Titanium => true,
-            eq_client_assets::ui::InstalledClient::EqMac => false,
+            // RoF2's water is not read yet.
+            eq_client_assets::ui::InstalledClient::EqMac
+            | eq_client_assets::ui::InstalledClient::Rof2 => false,
         } && state.world.can(eq_client_core::Capability::Swimming);
         state.loading.start(id, move || {
             let loading = std::time::Instant::now();

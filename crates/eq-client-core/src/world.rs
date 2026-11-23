@@ -1735,7 +1735,8 @@ impl ClientWorld {
             WorldEvent::Buff(update) => {
                 if match self.generation {
                     crate::GameDialect::Titanium => true,
-                    crate::GameDialect::EqMac => false,
+                    // Not built for RoF2.
+                    crate::GameDialect::EqMac | crate::GameDialect::Rof2 => false,
                 } && let Some(player) = self.player.as_ref()
                 {
                     self.casting.active_discipline.observe_titanium(player.spawn_id, update);

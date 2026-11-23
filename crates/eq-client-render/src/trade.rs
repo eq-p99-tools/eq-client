@@ -303,6 +303,10 @@ impl TradeState {
 /// How far the installed generation's program reaches a merchant, where
 /// it is read: TAKP's 3-D 20 (eq-network's reach table); Titanium's is
 /// unread (6.312), and the server alone decides.
+#[expect(
+    clippy::match_same_arms,
+    reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
+)]
 const fn merchant_reach(
     client: eq_client_assets::ui::InstalledClient,
 ) -> Option<eq_client_core::reach::Reach> {
@@ -310,6 +314,8 @@ const fn merchant_reach(
     use eq_client_core::reach;
     match client {
         InstalledClient::Titanium => reach::TITANIUM.merchants,
+        // Titanium's, inferred for RoF2 (6.489).
+        InstalledClient::Rof2 => reach::TITANIUM.merchants,
         InstalledClient::EqMac => reach::EQMAC.merchants,
     }
 }
@@ -408,6 +414,10 @@ pub(crate) const fn needs(action: Action) -> eq_client_core::Capability {
     clippy::needless_pass_by_value,
     clippy::too_many_arguments,
     clippy::too_many_lines
+)]
+#[expect(
+    clippy::match_same_arms,
+    reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
 )]
 pub(super) fn input(
     keys: super::keys::Keys,
@@ -586,6 +596,8 @@ pub(super) fn input(
     for action in clicked {
         if match settings.0.installed_client {
             eq_client_assets::ui::InstalledClient::Titanium => true,
+            // Titanium's, inferred for RoF2 (6.489).
+            eq_client_assets::ui::InstalledClient::Rof2 => true,
             eq_client_assets::ui::InstalledClient::EqMac => false,
         } && matches!(
             action,
