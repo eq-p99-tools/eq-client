@@ -490,7 +490,6 @@ pub(super) fn schedule(app: &mut App) {
                 spell_effects::update,
                 sounds::update,
                 zone_audio::update,
-                zone_audio::combat_music_typed,
                 target::marker::update,
                 (names::request, names::update).chain(),
                 (combat_text::update, crate::marquee::present),
@@ -603,6 +602,7 @@ pub(super) fn install_overlays(app: &mut App) {
             .before(Stage::Scene),
     );
     skin::register(app);
+    crate::local_settings::register(app);
     skinned::register_border_pixels(app);
     app.add_systems(PostUpdate, chat::scroll.after(bevy::ui::UiSystems::Layout));
 }

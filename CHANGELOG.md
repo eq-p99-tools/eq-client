@@ -11,6 +11,29 @@
   - The Mac-era client's `/surname` isn't read (R49-10d). Quarm's and TAKP's handlers say the client refuses under 20 and cuts to 19, so the same flow runs there (inferred), with the first use attended. Project 1999 stays unoffered.
   - A quoted surname's spaces go as typed, and an answer word other than 0 shows as taken, as the program shows it (eq-network #409, on main's pin).
 
+- Seven local-settings slash commands work as the Titanium program's do (checklist 6.525, read R49-22c). They change only this client: nothing goes to a server, on any server type, and scripts can run each with `slash()`.
+  - `/clearchat` clears the active chat window's view, silently. The history keeps its lines, so scripts, the log and other windows still have them.
+  - `/showspelleffects` and `/combatmusic`: "off" turns the option off and any other word turns it on; with no word they give their usage. Each ends by saying where the option stands. `/combatmusic` now takes the read's words instead of toggling, and says the installation's lines. This client plays no combat music yet, so it changes nothing audible.
+  - `/particledensity` takes 0 to 3, or a word starting OFF, LOW, MED or HIG, for the session only. This client draws spell particles fully or not at all, so level 0 hides them and 1 to 3 show them. It is its own flag: `/showspelleffects` still says what it said.
+  - `/mousespeed N` keeps and reports the pointer speed as typed. This client leaves the pointer to the system, so it moves nothing.
+  - `/chatfontsize 0` to `6` sets the chat's font. Labelled departure: the program sets only the active chat window's size, and this client sets one size for the whole chat. `/usercolor <kind> <red> <green> <blue>` sets a text colour (a word that is not a number keeps that channel), `/usercolor <kind> reset` puts it back, and `/usercolor help` or `page1` to `page7` list the kinds.
+  - Lines with string ids come from the installation, with this client's words where it lacks them. The program's English-only lines are in this client's words. Choices are saved in this client's per-character settings, never in `eqclient.ini` or the UI ini.
+- A Bard's song holds nothing back, as the Titanium program's doesn't (read R49-21; gap 3.5, checklist 6.442, 6.542). This repins eq-network to 33057d9 (#413, and #407's server filters), on P99 and Titanium EQEmu. The session now tells the client which song a Bard is singing (`WorldEvent::Singing`), and the client's own gates follow it:
+  - **A gem press while singing** goes to the session, whatever the gem's timer or the mana, and the session stops the song and casts nothing, as the program's gem click does. A forget goes too.
+  - **An item use while singing** isn't refused by the client; the session lets it go alongside the song.
+  - **Memorizing while singing** isn't held back by the song ([I], read R49-48 a).
+  - Any other cast holds as before, including an item cast started alongside the song.
+  - The gem timers the program resets when a song stops are not reset yet (a labelled follow-up).
+- The four new server filter kinds from eq-network #407 get this client's words on the filters page: Item speech, Strikethrough, Stuns and Swarm pet deaths. The rest of #407's client side comes with #624.
+
+- Answer `/played` as the Titanium program does (read R49-8 a, checklist
+  6.490b): the account's entitled time in years (line 0xe24), when the
+  character was made (0x32a8) and its played days, hours and minutes
+  (0x32af), from the profile's fields (eq-network #410), adding a minute
+  each minute after the profile as the program does. The creation time's
+  wording follows the program's `%#c` in the C locale (inferred). The
+  Mac-era and RoF2 clients' `/played` is unread, so it's refused there
+  for now.
 - A Bard's item use now carries the song test from the installed spell data (gap 3.5, checklist 6.542, read R49-21b): the item's spell counts as the class's when the player's class level for it is neither 0 nor 255. The session uses it to choose, for an item's song it keeps, between sending the stop and ending it here. Without installed spell data, or without that spell's class levels, the session keeps its memorized test as before. Labelled: the program also needs the spell's byte +0x1c4 to be clear. That byte isn't mapped to a spells file field yet (read R49-48c), so a class spell with it set counts as a song here and not in the program.
 - Show the session's chat pace (checklist 6.523, eq-network c951420). Its
   refusal, "You are sending chat too fast. Wait N seconds.", is printed as
@@ -373,16 +396,17 @@ Mac-era servers loot as before, as that client's loot click is unread, and
   - **Emitters** follow the Titanium program's loader (read R49-7 first pass and its engine follow-up). `eq-client-assets` reads `<zone>_sounds.eff`'s 84-byte records:
     - one emitter for a type-2 record or matching day and night fields, else a day one and a night one, each with its own type, sound, delay and volume;
     - a radius below 0 reaches 10,000;
+    - positions are in the files' own frame, whose x and y are the server's y and x (inferred from the local look, where qeytoqrg's regions met the ground only swapped);
     - a delay above 0 repeats after delay + 500 plus a random share;
     - a positive volume is a millibel attenuation (2000 is a tenth, above 10000 silent); otherwise 0.2 for type 0 and 1.0 for the rest.
-    - a music record's track is its id negated (engine follow-up, 0x44b502); the step from track to sequence is inferred and labelled.
+    - a music record's sound number of 0 or more is the `<zone>.xmi` sequence it plays, counted from 0 (read on the music sign: 0x44bc19 to 0x4c6a99). A negative number names an `mp3index.txt` entry, which this client does not play yet; it is logged once a zone.
   - **The bank.** `<zone>_sndbnk.eff`'s EMIT list is numbered from 1 and LOOP from 162, with CR and spaces stripped. Inferred and labelled: the linear falloff, a bank name's `.wav`, the ms unit, a delay of 0 looping, and ids 32 to 161.
   - **Voices.** Emitters play on at most eight voices of their own, so cues always keep theirs.
-  - **Music.** The music region the player stands in plays through `rustysynth` 1.3.8 (MIT) on a SoundFont the player names with `--soundfont`. There is no music without one, a stated departure. How regions choose among themselves, fade and switch music is this client's estimate; the follow-up read covers only the fade value's clamp.
+  - **Music.** The music region the player stands in plays through `rustysynth` 1.3.8 (MIT) on a SoundFont the player names with `--soundfont`. There is no music without one, a stated departure. The `.sf2` files an installation may ship are refused by `rustysynth` as they stand, so the player names another. Regions follow the program's chooser (read on zone music tracks): the smallest sphere the player is in wins, night is the hour below 5 or above 18, a switch fades over 1500 ms and leaving every region over the record's +0x44 / +0x48 (at most 20000 ms), and EnvSounds off silences music regions too. A new track's fade-in (+0x4c) is inferred and not applied.
   - **Options.** New per-character options: Music, Music Volume (wired to the skin's slider), Environment Sounds and Combat Music. A character without its own choice seeds them from `eqclient.ini`'s `Music` (0 is off), `EnvSounds` and `CombatMusic`.
   - `/combatmusic` toggles and saves combat music, saying in this client's words that it plays none yet.
   - A `nosound.txt` in the installation turns all sound off.
-  - Unknown record types and music ids of 0 or more are logged once a zone and not played. Everything stops on a zone change, camp, logout or lost connection.
+  - Unknown record types and negative (mp3-list) music ids are logged once a zone and not played. Everything stops on a zone change, camp, logout or lost connection.
 
 
 - Scripts can click spawns, ground objects and doors in the world by id (checklist 6.587), since a script may do whatever the player can (Adam, 11-23). `click("spawn", admission, id, revision)` targets a spawn (two of one name included), `right_click` loots, trades, boards or considers it without changing the target, `click("object", admission, drop_id)` picks up an item or opens a world container, and `click("door", admission, id)` makes a door's two clicks. Each click goes through the scene's own pick, with the script's pointer as the cursor: it acts only where the pick names that same thing right now, so a thing behind a wall, off screen or under a window is refused and nothing is sent. The report's surroundings line gives the admission and each nearby spawn's click tuple. A run that stops mid-click hands the scene back the real pointer the next frame.
