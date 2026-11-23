@@ -337,7 +337,34 @@ fn lfg_takes_alone_on_or_off_and_refuses_any_other_word() {
         Asked::typed("/lfg on now"),
         Some(Asked::Lfg(LfgWords::Other))
     );
-    let online = admitted(vec![Capability::LookingForGroup]);
+    // On Titanium, on and off say the program's line as they send, and
+    // anything else is its usage line (read R49-6i).
+    let titanium = admitted(vec![Capability::LookingForGroup]);
+    let messages = Messages::parse("EQST0002\n0 3\n13134 On.\n13135 Off.\n13136 Usage.\n");
+    let said = |words| answer(Asked::Lfg(words), titanium.world(), None, &messages);
+    assert_eq!(
+        said(LfgWords::On),
+        Ok((
+            Some(Said::official("On.").typed(0x111)),
+            Some(Sent::Looking(Some(true)))
+        ))
+    );
+    assert_eq!(
+        said(LfgWords::Off),
+        Ok((
+            Some(Said::official("Off.").typed(0x111)),
+            Some(Sent::Looking(Some(false)))
+        ))
+    );
+    for words in [LfgWords::None, LfgWords::Other] {
+        assert_eq!(
+            said(words),
+            Ok((Some(Said::official("Usage.").typed(0x111)), None))
+        );
+    }
+    // Elsewhere this client's forms stand.
+    let mut online = admitted(vec![Capability::LookingForGroup]);
+    testing::generation(&mut online, eq_client_core::GameDialect::EqMac);
     let lfg = |words| {
         answer(
             Asked::Lfg(words),

@@ -82,7 +82,7 @@ fn answer(
 ) -> Result<Vec<Said>, String> {
     let player = world.player().ok_or("Enter the world first")?;
     Ok(match asked {
-        Asked::CharInfo => vec![bound_in(world)],
+        Asked::CharInfo => vec![bound_in(world, messages)],
         Asked::GuildStatus(_) if clock == eq_client_assets::clock::EQMAC => {
             return Err("/guildstatus on the Mac client waits for its program read".to_owned());
         }
@@ -125,10 +125,11 @@ fn answer(
     })
 }
 
-/// Where the player is bound, in this client's words (pending R49-6m):
-/// the zone's long name, its short name where the list has no long one,
-/// and its number where it has neither.
-fn bound_in(world: &ClientWorld) -> Said {
+/// Where the player is bound: on Titanium in the program's line 0x32a7,
+/// elsewhere in this client's words. The zone is named by its long name,
+/// its short name where the list has no long one, and its number where it
+/// has neither.
+fn bound_in(world: &ClientWorld, messages: &Messages) -> Said {
     let Some(zone) = world.bound_in() else {
         return Said::own("Your bind point is not known yet.");
     };
@@ -141,8 +142,21 @@ fn bound_in(world: &ClientWorld) -> Said {
                 .to_owned()
         },
     );
-    Said::own(format!("Your bind point is in {name}."))
+    let fallback = format!("Your bind point is in {name}.");
+    // The Titanium program's line names the primary bind's zone, colour
+    // 0x111 (read R49-6m, 0x46f6ec). That it also follows a bind effect
+    // landing, without a new profile, is a follow-up.
+    if super::slash::reads_r49_6(world.generation()) {
+        messages
+            .said_or(BOUND_IN, std::slice::from_ref(&name), &fallback)
+            .typed(0x111)
+    } else {
+        Said::own(fallback)
+    }
 }
+
+/// `/charinfo`'s line, with the bind zone's name (read R49-6m).
+const BOUND_IN: u32 = 0x32a7;
 
 /// The program's guild status line (read R49-6k, 0x466970), in the
 /// installed client's words: 12256 to 12258 by rank with the name and the
@@ -222,15 +236,17 @@ mod tests {
         let long = eq_client_core::zones::long_name(short).unwrap();
         assert_eq!(
             said(&state),
-            Ok(vec![Said::own(format!("Your bind point is in {long}."))])
+            Ok(vec![
+                Said::own(format!("Your bind point is in {long}.")).typed(0x111)
+            ])
         );
         // A zone the list doesn't know is named by its number.
         testing::news(&mut state, [WorldEvent::BoundIn { zone_id: 65_000 }]);
         assert_eq!(
             said(&state),
-            Ok(vec![Said::own(
-                "Your bind point is in an unknown zone (65000)."
-            )])
+            Ok(vec![
+                Said::own("Your bind point is in an unknown zone (65000).").typed(0x111)
+            ])
         );
         // The next admission waits for its own profile.
         testing::admit(&mut state, 2, testing::player(7));

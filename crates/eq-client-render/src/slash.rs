@@ -19,6 +19,13 @@ use eq_client_core::{Capability, ClientCommand, world::ClientWorld};
 const YELLED: u32 = 0x331f;
 /// `/stopcast`'s refusal without the player's spawn or on a mount (0x46a75a).
 const CANNOT_STOP: u32 = 0xde6;
+/// `/lfg on`'s line (read R49-6i).
+const LFG_ON: u32 = 0x334e;
+/// `/lfg off`'s line.
+const LFG_OFF: u32 = 0x334f;
+/// `/lfg`'s usage line, for any other word or none, where the program
+/// would open its LFG window if it had one.
+const LFG_USAGE: u32 = 0x3350;
 /// The summon-mount effect. A buff with it stands in for the program's own
 /// mount test, which is unread (recording checklist 6.487).
 const SUMMON_MOUNT: u32 = 113;
@@ -143,10 +150,10 @@ fn challenged(world: &ClientWorld) -> Option<u16> {
         .map(|_| id)
 }
 
-/// Whether a generation's `/duel` is the Titanium program's: the target as
-/// it stands, every test the session's (read R49-6h). The others are
-/// unread and keep this client's checks.
-const fn takes_duel_target(dialect: eq_client_core::GameDialect) -> bool {
+/// Whether a generation's `/duel`, `/lfg`, `/motd` and `/charinfo` are the
+/// Titanium program's as read R49-6 (h, i, j and m) found them. The others
+/// are unread and keep this client's checks and lines.
+pub(crate) const fn reads_r49_6(dialect: eq_client_core::GameDialect) -> bool {
     match dialect {
         eq_client_core::GameDialect::Titanium => true,
         eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => false,
@@ -180,7 +187,7 @@ fn answer(
         // The Titanium program reads no words and takes the target, whoever
         // it is (read R49-6h, 0x472a67): its session words every outcome
         // as the program's line.
-        Asked::Duel { .. } if takes_duel_target(world.generation()) => (
+        Asked::Duel { .. } if reads_r49_6(world.generation()) => (
             None,
             Some(Sent::Duel {
                 target: world.target().selected.unwrap_or(0),
@@ -193,8 +200,27 @@ fn answer(
                 "This client does not take a name after /duel yet; target the player and type /duel.",
             ));
         }
-        // The session tells the change, and says nothing for a state the
-        // player is in already.
+        // The Titanium program says on or off as it sends, and anything
+        // else is its usage line, as this client has no LFG window to open
+        // (read R49-6i, 0x468694), all in colour 0x111.
+        Asked::Lfg(words) if reads_r49_6(world.generation()) => {
+            let line = |id, fallback| Some(messages.said_text(id, fallback).typed(0x111));
+            match words {
+                LfgWords::On => (
+                    line(LFG_ON, "You are now looking for a group."),
+                    Some(Sent::Looking(Some(true))),
+                ),
+                LfgWords::Off => (
+                    line(LFG_OFF, "You are no longer looking for a group."),
+                    Some(Sent::Looking(Some(false))),
+                ),
+                LfgWords::None | LfgWords::Other => {
+                    (line(LFG_USAGE, "Usage: /lfg on or /lfg off"), None)
+                }
+            }
+        }
+        // Elsewhere the session tells the change, and says nothing for a
+        // state the player is in already.
         Asked::Lfg(words) => match words {
             LfgWords::None => (None, Some(Sent::Looking(None))),
             LfgWords::On => (None, Some(Sent::Looking(Some(true)))),

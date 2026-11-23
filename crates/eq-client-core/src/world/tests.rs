@@ -424,7 +424,10 @@ fn a_sound_the_server_names_is_sound_news() {
     assert_eq!(game(&mut world, shake).sounds, Vec::<Cue>::new());
     // EQEmu's fixed record is a reward of nothing to the Titanium program,
     // which plays its reward sound (read R49-6g).
-    assert_eq!(game(&mut world, WorldEvent::Ding).sounds, [Cue::Number(0x8d)]);
+    assert_eq!(
+        game(&mut world, WorldEvent::Ding).sounds,
+        [Cue::Number(0x8d)]
+    );
 }
 
 #[test]
