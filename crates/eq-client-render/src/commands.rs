@@ -434,7 +434,7 @@ pub(crate) fn game_masters(line: &str) -> bool {
 /// program runs that one; its handlers are game master tools this client
 /// hasn't built, so it passes over without a line [I] (a GM's `#` line
 /// reaches the server instead). Titanium's line only: the Mac program's
-/// answer is unread, so a Mac-era or RoF2 session stays silent as before.
+/// answer is unread, so a Mac-era or `RoF2` session stays silent as before.
 pub(crate) fn unknown(line: &str, world: &eq_client_core::world::ClientWorld) -> bool {
     let titanium = matches!(world.generation(), eq_client_core::GameDialect::Titanium);
     let gm = world.player().is_some_and(crate::languages::game_master);
@@ -520,7 +520,7 @@ mod tests {
         let world = |gm: bool, generation| {
             let mut online = OnlineState::new(true);
             let mut player = session::player(7);
-            player.appearance.titanium_gm = Some(u8::from(gm));
+            player.appearance.titanium_gm = Some(u32::from(gm));
             session::admit(&mut online, 1, player);
             session::generation(&mut online, generation);
             online
