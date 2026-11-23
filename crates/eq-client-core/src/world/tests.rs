@@ -1375,6 +1375,49 @@ fn a_song_stop_for_this_admission_resets_the_gems_with_no_recast() {
 }
 
 #[test]
+fn only_a_bard_where_the_session_offers_it_refreshes_with_no_recovery() {
+    let refreshed = |class, capabilities: Vec<crate::Capability>| {
+        let mut world = ClientWorld::default();
+        let mut caster = player(9);
+        caster.class = Some(class);
+        caster.memorized_spells[0] = Some(42);
+        let now = Instant::now();
+        world.apply(
+            &WorldUpdate::Game(WorldEvent::Entered {
+                capabilities,
+                choices: Vec::new(),
+                session_id: 1,
+                zone: "qeytoqrg".into(),
+                player: Box::new(caster),
+                far_clip: None,
+                spell_landing_flag: None,
+                zone_id: 0,
+            }),
+            now,
+            &SongFortyTwo,
+        );
+        connection(&mut world, true, false);
+        world.apply(
+            &WorldUpdate::Game(WorldEvent::Spell(SpellUpdate::BarRefresh {
+                slot: 0,
+                spell_id: 42,
+                reduction_ms: 0,
+            })),
+            now,
+            &SongFortyTwo,
+        );
+        world.tick(now, &SongFortyTwo);
+        // Spell 43 is in no gem here: only the shared recovery holds it.
+        world.casting().cooldowns.remaining(43, now)
+    };
+    let offered = vec![crate::Capability::BardRefreshTimers];
+    let recovery = std::time::Duration::from_millis(1500);
+    assert!(refreshed(8, offered.clone()).is_zero());
+    assert_eq!(refreshed(2, offered), recovery);
+    assert_eq!(refreshed(8, Vec::new()), recovery);
+}
+
+#[test]
 fn an_idle_song_stop_or_an_old_admission_cannot_release_a_new_cast() {
     let mut world = admitted();
     game(
