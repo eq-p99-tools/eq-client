@@ -308,7 +308,7 @@ mod tests {
         let (mut app, receiver) = seated_app();
         let mut settings = Options::default();
         settings.qol.set(Fix::ReadWhileStanding, true);
-        app.insert_resource(OptionsState::new(settings));
+        app.insert_resource(OptionsState::new(&settings));
         report(&mut app, PostureState::Standing);
         app.update();
         open(&mut app, true);
@@ -327,7 +327,7 @@ mod tests {
         app.update();
         let mut settings = Options::default();
         settings.qol.set(Fix::ReadWhileStanding, false);
-        app.insert_resource(OptionsState::new(settings));
+        app.insert_resource(OptionsState::new(&settings));
         app.update();
         assert_eq!(sent(&receiver), [(7, Posture::Sitting)]);
         open(&mut app, false);
