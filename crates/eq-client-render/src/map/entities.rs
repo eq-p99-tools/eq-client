@@ -318,7 +318,10 @@ pub(crate) fn update(
     let world = online.world();
     let arrow =
         arrow.get_or_insert_with(|| images.add(super::arrow_picture([255; 4], [0, 0, 0, 255])));
-    let mac = settings.0.installed_client == eq_client_assets::ui::InstalledClient::EqMac;
+    let mac = match settings.0.installed_client {
+        eq_client_assets::ui::InstalledClient::Titanium => false,
+        eq_client_assets::ui::InstalledClient::EqMac => true,
+    };
     let selected = selected(world, &view).map(|entity| entity.shown(world, &motion));
     if selected.is_none() {
         view.selected = None;

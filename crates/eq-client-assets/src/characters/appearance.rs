@@ -106,14 +106,14 @@ pub fn load_creation_character(
             _ => format!("global{}_chr", model.to_ascii_lowercase()),
         };
         let donors = [
-            "globalelm_chr.s3d",
-            "globalelf_chr.s3d",
-            "globalhum_chr.s3d",
-            "globalhuf_chr.s3d",
+            "globalelm_chr",
+            "globalelf_chr",
+            "globalhum_chr",
+            "globalhuf_chr",
         ]
-        .map(|name| directory.join(name));
+        .map(|stem| crate::archives::path(directory, stem));
         super::load_with_source(
-            &directory.join(format!("{stem}.s3d")),
+            &crate::archives::path(directory, &stem),
             model,
             &donors,
             &DonorArchives::default(),
@@ -255,7 +255,7 @@ fn apply_eyes(
     } else {
         "lgequip"
     };
-    let path = directory.join(format!("{stem}.s3d"));
+    let path = crate::archives::path(directory, stem);
     let (mut archive, bytes) = super::open_world(&path)?;
     let (_, world) = crate::parse_wld(&bytes, stem)?;
     let replacements: Vec<_> = world
@@ -375,8 +375,10 @@ fn apply_attachments(
         }
         let id = base + look.gender * 30 + [1000, 2000][slot] + u32::from(style);
         let item_name = format!("IT{id}");
-        let mut item = super::load_character(&directory.join("lgequip.s3d"), &item_name)
-            .or_else(|_| super::load_character(&directory.join("lgequip2.s3d"), &item_name))?;
+        let [first, second] =
+            crate::archives::EQUIPMENT.map(|stem| crate::archives::path(directory, stem));
+        let mut item = super::load_character(&first, &item_name)
+            .or_else(|_| super::load_character(&second, &item_name))?;
         if look.race != 130 {
             let colors = if let Some(colors) = palette {
                 colors

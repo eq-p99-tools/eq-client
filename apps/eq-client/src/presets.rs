@@ -308,9 +308,12 @@ fn seed_endpoint(protocol: ServerProtocol) -> (Option<&'static str>, u16) {
     ((!protocol.is_stock()).then_some(host), port)
 }
 
-/// The name a first run gives a server type's preset; none for a type a
-/// later eq-network adds, which this client offers no preset of until it is
-/// checked here.
+/// The name a first run gives a server type's preset; none for a server type
+/// this client offers no preset of.
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "a server type still being built answers None, so no preset offers it"
+)]
 pub const fn seed_name(protocol: ServerProtocol) -> Option<&'static str> {
     match protocol {
         ServerProtocol::Project1999 => Some("Project 1999"),
@@ -322,8 +325,11 @@ pub const fn seed_name(protocol: ServerProtocol) -> Option<&'static str> {
 }
 
 /// A server type's name in the file, which `EQ_PROTOCOL` also takes; none
-/// for a type a later eq-network adds, which this client cannot name until
-/// it is checked here.
+/// for a server type this client cannot name.
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "a server type still being built answers None, so no preset names it"
+)]
 const fn type_name(protocol: ServerProtocol) -> Option<&'static str> {
     match protocol {
         ServerProtocol::Project1999 => Some("p99"),

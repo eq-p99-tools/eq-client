@@ -1062,8 +1062,10 @@ fn start_entry(
             settings.installed_client,
             state.world.classic_model_scale_flag(),
         );
-        let titanium_swimming = drawn_by.0 == eq_client_assets::ui::InstalledClient::Titanium
-            && state.world.can(eq_client_core::Capability::Swimming);
+        let titanium_swimming = match drawn_by.0 {
+            eq_client_assets::ui::InstalledClient::Titanium => true,
+            eq_client_assets::ui::InstalledClient::EqMac => false,
+        } && state.world.can(eq_client_core::Capability::Swimming);
         state.loading.start(id, move || {
             let loading = std::time::Instant::now();
             let entry = super::zone::Entry::admission(&zone, &player, drawn_by, &directory)

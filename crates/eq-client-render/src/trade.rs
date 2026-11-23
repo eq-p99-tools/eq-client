@@ -584,12 +584,13 @@ pub(super) fn input(
         chat.refuse(reason.to_owned());
     }
     for action in clicked {
-        if settings.0.installed_client == eq_client_assets::ui::InstalledClient::Titanium
-            && matches!(
-                action,
-                Action::Buy(_) | Action::Sell(_) | Action::BuyChosen | Action::SellChosen
-            )
-        {
+        if match settings.0.installed_client {
+            eq_client_assets::ui::InstalledClient::Titanium => true,
+            eq_client_assets::ui::InstalledClient::EqMac => false,
+        } && matches!(
+            action,
+            Action::Buy(_) | Action::Sell(_) | Action::BuyChosen | Action::SellChosen
+        ) {
             if closing {
                 continue;
             }

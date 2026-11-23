@@ -254,7 +254,11 @@ fn slide_pose(
     previous: Option<f32>,
     seconds: f32,
 ) -> (f32, Vec3) {
-    let Some(slide) = (generation == GameDialect::Titanium)
+    let slides = match generation {
+        GameDialect::Titanium => true,
+        GameDialect::EqMac => false,
+    };
+    let Some(slide) = slides
         .then(|| eq_client_core::doors::Slide::of(door))
         .flatten()
     else {

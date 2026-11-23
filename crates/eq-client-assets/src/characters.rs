@@ -62,8 +62,8 @@ pub fn load_installed_character(
     donors: &DonorArchives,
 ) -> Result<CharacterAsset, LoadError> {
     let zone = crate::zone_name(zone)?;
-    let mut archives = vec![format!("{zone}_chr.s3d")];
-    archives.extend(global_archives());
+    let mut archives = vec![crate::archives::zone_characters(zone)];
+    archives.extend(crate::archives::global_characters());
     load_from(directory, archives, model, donors)
 }
 
@@ -78,16 +78,16 @@ pub fn load_global_character(
     model: &str,
     donors: &DonorArchives,
 ) -> Result<CharacterAsset, LoadError> {
-    load_from(directory, global_archives().collect(), model, donors)
+    load_from(
+        directory,
+        crate::archives::global_characters().collect(),
+        model,
+        donors,
+    )
 }
 
-fn global_archives() -> impl Iterator<Item = String> {
-    std::iter::once("global_chr.s3d".to_owned())
-        .chain((2..=7).map(|i| format!("global{i}_chr.s3d")))
-}
-
-/// The model from the first of `archives` under `directory` that supplies a
-/// usable one, borrowing movements from the others.
+/// The model from the first of `archives` (by stem) under `directory` that
+/// supplies a usable one, borrowing movements from the others.
 fn load_from(
     directory: &Path,
     archives: Vec<String>,
@@ -96,7 +96,7 @@ fn load_from(
 ) -> Result<CharacterAsset, LoadError> {
     let archives: Vec<_> = archives
         .into_iter()
-        .map(|archive| directory.join(archive))
+        .map(|archive| crate::archives::path(directory, &archive))
         .collect();
     let mut last_error = None;
     for (index, archive) in archives.iter().enumerate() {

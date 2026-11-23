@@ -44,7 +44,7 @@ impl ClientWorld {
                 crate::GameDialect::EqMac => {
                     crate::abilities::eqmac::known(*ability, skills, player.race, player.class)
                 }
-                _ => ability.known(skills, player.race),
+                crate::GameDialect::Titanium => ability.known(skills, player.race),
             })
             .collect()
     }
@@ -69,9 +69,9 @@ impl ClientWorld {
     /// cannot release unrelated abilities. A reset does not imply success.
     pub(super) fn skill_ready(&mut self, skill: u32) {
         if let Some(recovery) = Ability::from_skill(skill)
-            .filter(|ability| {
-                self.generation != crate::GameDialect::EqMac
-                    || crate::abilities::eqmac::SUPPORTED.contains(ability)
+            .filter(|ability| match self.generation {
+                crate::GameDialect::Titanium => true,
+                crate::GameDialect::EqMac => crate::abilities::eqmac::SUPPORTED.contains(ability),
             })
             .and_then(Ability::recovery)
         {

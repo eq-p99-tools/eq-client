@@ -53,7 +53,6 @@ impl DoorTable {
     }
 
     /// Applies the selected generation's definition/action and local motion rules.
-    /// Unknown generations keep definitions without offering interaction.
     pub fn apply_for(&mut self, update: &DoorUpdate, now: Instant, generation: GameDialect) {
         if self.generation != generation {
             self.closing.clear();
@@ -62,12 +61,12 @@ impl DoorTable {
             self.generation = generation;
         }
         self.doors.apply(update);
-        if generation == GameDialect::EqMac {
-            self.apply_hinges(update, now);
-            return;
-        }
-        if generation != GameDialect::Titanium {
-            return;
+        match generation {
+            GameDialect::Titanium => {}
+            GameDialect::EqMac => {
+                self.apply_hinges(update, now);
+                return;
+            }
         }
         match update {
             DoorUpdate::RemoveAll => {
@@ -192,9 +191,15 @@ impl DoorTable {
     /// read (recording checklist 6.425).
     #[must_use]
     pub fn solidity(&self, id: u8) -> Solidity {
-        match (self.generation, self.doors.entries().get(&id)) {
-            (GameDialect::Titanium, Some(door)) => Solidity::of(door.open_type, self.zone_id),
-            _ => Solidity::BOTH,
+        match self.generation {
+            GameDialect::Titanium => self
+                .doors
+                .entries()
+                .get(&id)
+                .map_or(Solidity::BOTH, |door| {
+                    Solidity::of(door.open_type, self.zone_id)
+                }),
+            GameDialect::EqMac => Solidity::BOTH,
         }
     }
 

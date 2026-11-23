@@ -1733,8 +1733,10 @@ impl ClientWorld {
             } => self.cast_refused((*session_id, *spell_id), (reason, *string_id), news),
             WorldEvent::BuffSnapshot(buffs) => self.buff_snapshot(buffs, now),
             WorldEvent::Buff(update) => {
-                if self.generation == crate::GameDialect::Titanium
-                    && let Some(player) = self.player.as_ref()
+                if match self.generation {
+                    crate::GameDialect::Titanium => true,
+                    crate::GameDialect::EqMac => false,
+                } && let Some(player) = self.player.as_ref()
                 {
                     self.casting.active_discipline.observe_titanium(player.spawn_id, update);
                 }

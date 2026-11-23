@@ -27,7 +27,8 @@ pub struct Installation {
     pub client: InstalledClient,
 }
 
-/// The official client a server type's players install.
+/// The official client a server type's players install: the one whose
+/// packets the server type speaks.
 pub fn installed_client(protocol: eq_network::client::ServerProtocol) -> InstalledClient {
     if speaks_titanium(protocol) {
         InstalledClient::Titanium
@@ -82,12 +83,13 @@ pub fn installation_check(
         )),
         Detected::Clear(_) => Ok(None),
         Detected::Ambiguous => Ok(Some(format!(
-            "{folder} has files of both the Titanium and the TAKP client; \
-             reading it as the {needs}'s"
+            "{folder} has files of both the {}; reading it as the {needs}'s",
+            client_names(" and the ")
         ))),
         Detected::Unclassified => Ok(Some(format!(
-            "{folder} has none of the files that mark a Titanium or TAKP client \
-             installation; reading it as the {needs}'s"
+            "{folder} has none of the files that mark a {} installation; \
+             reading it as the {needs}'s",
+            client_names(" or ")
         ))),
     }
 }
@@ -101,6 +103,12 @@ fn holder<'a>(presets: &'a Presets, launch: usize, directory: &Path) -> Option<&
         .get(launch)
         .filter(names)
         .or_else(|| presets.list.iter().find(names))
+}
+
+/// Every generation's installation name, in detection order, joined by
+/// `between`.
+fn client_names(between: &str) -> String {
+    InstalledClient::ALL.map(client_name).join(between)
 }
 
 /// What the login screen calls a client's installation.
@@ -460,6 +468,49 @@ mod tests {
             preset.host.get_or_insert_with(|| "127.0.0.1".into());
         }
         presets
+    }
+
+    #[test]
+    fn the_installation_lines_name_the_two_generations_as_before() {
+        let root = std::env::temp_dir().join(format!("installation-lines-{}", std::process::id()));
+        let folder = |name: &str, files: &[&str]| {
+            let folder = root.join(name);
+            std::fs::create_dir_all(&folder).unwrap();
+            for file in files {
+                std::fs::write(folder.join(file), b"").unwrap();
+            }
+            folder
+        };
+        let mac = folder("mac", &["eqmac.exe"]);
+        let both = folder("both", &["spells_us.txt", "eqmac.exe"]);
+        let neither = folder("neither", &["eqhost.txt"]);
+        let lines = [
+            installation_check(&mac, InstalledClient::Titanium),
+            installation_check(&both, InstalledClient::Titanium),
+            installation_check(&neither, InstalledClient::EqMac),
+            installation_check(&mac, InstalledClient::EqMac),
+        ];
+        std::fs::remove_dir_all(&root).unwrap();
+        let (mac, both, neither) = (mac.display(), both.display(), neither.display());
+        assert_eq!(
+            lines,
+            [
+                Err(format!(
+                    "{mac} holds the TAKP client installation, but this server needs the \
+                     Titanium's: point the preset's installation (or --eq-dir) at the \
+                     Titanium folder"
+                )),
+                Ok(Some(format!(
+                    "{both} has files of both the Titanium and the TAKP client; reading it \
+                     as the Titanium's"
+                ))),
+                Ok(Some(format!(
+                    "{neither} has none of the files that mark a Titanium or TAKP client \
+                     installation; reading it as the TAKP client's"
+                ))),
+                Ok(None),
+            ]
+        );
     }
 
     fn launcher(installation: Installation) -> Launcher {

@@ -249,7 +249,10 @@ pub(crate) fn clicks(
     // The Titanium program's press takes any item on the cursor and refuses
     // one that is not a usable scroll (R27 check 4); the Mac-era program is
     // unread, so another item there leaves the book as it is.
-    let titanium = online.world().generation() == eq_client_core::GameDialect::Titanium;
+    let titanium = match online.world().generation() {
+        eq_client_core::GameDialect::Titanium => true,
+        eq_client_core::GameDialect::EqMac => false,
+    };
     match (cursor, in_place) {
         (Some(item), _) if item.scroll_spell.is_some() || titanium => {
             let refusal = scribe(
@@ -601,16 +604,19 @@ fn scribe(
     let book = world.spell_book();
     // Titanium's press tests these in its own order (R27), in
     // `prepare_scribe`; the Mac-era press keeps this client's earlier order.
-    if world.generation() != eq_client_core::GameDialect::Titanium {
-        let scroll = scroll?;
-        if in_place.is_some() {
-            return ScribeRefusal::PlaceTaken.said(messages);
-        }
-        if book.is_some_and(|book| book.slots().contains(&Some(scroll))) {
-            return ScribeRefusal::AlreadyScribed(names.label(scroll)).said(messages);
-        }
-        if action_pending(world) {
-            return Some(Said::own(ScribeRefusal::Busy.to_string()));
+    match world.generation() {
+        eq_client_core::GameDialect::Titanium => {}
+        eq_client_core::GameDialect::EqMac => {
+            let scroll = scroll?;
+            if in_place.is_some() {
+                return ScribeRefusal::PlaceTaken.said(messages);
+            }
+            if book.is_some_and(|book| book.slots().contains(&Some(scroll))) {
+                return ScribeRefusal::AlreadyScribed(names.label(scroll)).said(messages);
+            }
+            if action_pending(world) {
+                return Some(Said::own(ScribeRefusal::Busy.to_string()));
+            }
         }
     }
     // The outbox says why a scribe it holds back did not go.

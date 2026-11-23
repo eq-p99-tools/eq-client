@@ -40,7 +40,10 @@ pub(super) fn interior(
     clearly: bool,
 ) -> bool {
     !clearly
-        && settings.0.installed_client == InstalledClient::Titanium
+        && match settings.0.installed_client {
+            InstalledClient::Titanium => true,
+            InstalledClient::EqMac => false,
+        }
         && world.connected()
         && world.session_id().is_some()
         && world.pending_transfer().is_none()

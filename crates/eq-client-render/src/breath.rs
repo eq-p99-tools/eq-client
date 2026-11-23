@@ -92,7 +92,12 @@ impl AirState {
         sample: impl FnOnce(&PlayerState) -> Observation,
     ) -> Option<u32> {
         let scope = world.session_id().zip(world.player()).filter(|_| {
-            !world.ended() && !world.is_dead() && world.generation() == GameDialect::Titanium
+            !world.ended()
+                && !world.is_dead()
+                && match world.generation() {
+                    GameDialect::Titanium => true,
+                    GameDialect::EqMac => false,
+                }
         });
         // Skipping the counter withholds the drowning reports a local EQEmu
         // session takes, so the departure gate applies as it does elsewhere.
