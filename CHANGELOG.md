@@ -46,6 +46,8 @@
   EQEmu sends its own. Task words appear in the window only, never in the
   logs.
 
+- Scripts may chat, emote, roll, run socials and send `gm` lines on any server (checklist 6.579), since a script may do whatever the player can (Adam, 11-23). `chat(...)`, `slash("emote ...")`, `slash("random ...")`, `social(...)` and plain `gm(...)` steps no longer need a local test session: a `gm` line goes as a typed `#` line would. They still need a character in the world, and the session's chat pace holds whatever sends a line. Only the `gm` fixture forms (spawn, depop, guild, stun, setlanguage, traindisc) keep the local test session. A synthetic chat submission or hotbar press of a social still points to the named `social` step.
+
 - Repin eq-network to b631816, keeping today's behaviour (checklist 6.572). The repin brings the bandolier sets, the swap and belt use (all unoffered), and augments read from Titanium item records (6.570).
   - **Augments:** an augmented item no longer makes the inventory unreadable. `InventoryItem::augments` is filled in every literal.
   - **Weight:** the session's new `WeightUnavailable::Augments` reads exactly as `Container` does: an unknown load, never a lighter one. A worn augmented item makes equipped stats unconfirmed, so the speed inputs stay unproven.
