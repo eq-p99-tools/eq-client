@@ -95,6 +95,9 @@ pub(crate) enum WindowId {
     /// The tasks an NPC offers: this client's own window until the skin's
     /// task select window (`TaskSelectWnd`) is listed (6.560).
     TaskOffer,
+    /// The Quest Journal: this client's own window until the skin's task
+    /// window (`TaskWnd`) is listed (T4).
+    TaskJournal,
     /// The skin's note window: a note or scroll being read.
     Note,
     /// The skin's book window: a book being read, two pages at a time.
@@ -374,7 +377,7 @@ impl WindowId {
     /// Every singleton window, in the order the selector lists the toggled ones.
     /// Bags are left out: there is one for each slot that can hold a bag
     /// (see [`WindowId::bags`]), and none of them is toggled.
-    pub(crate) const ALL: [Self; 41] = [
+    pub(crate) const ALL: [Self; 42] = [
         Self::Status,
         Self::Target,
         Self::Player,
@@ -408,6 +411,7 @@ impl WindowId {
         Self::ServerDialog,
         Self::PlayerInspection,
         Self::TaskOffer,
+        Self::TaskJournal,
         Self::Note,
         Self::Book,
         Self::WorldContainer,
@@ -470,7 +474,8 @@ impl WindowId {
             | Self::ServerDialog
             | Self::PlayerInspection
             // Ours until the skin's names are listed.
-            | Self::TaskOffer => None,
+            | Self::TaskOffer
+            | Self::TaskJournal => None,
         }
     }
 
@@ -537,6 +542,7 @@ impl WindowId {
             Self::ServerDialog => "server-dialog",
             Self::PlayerInspection => "player-inspection",
             Self::TaskOffer => "task-offer",
+            Self::TaskJournal => "task-journal",
             Self::Note => "note",
             Self::Book => "book",
             Self::WorldContainer => "world-container",
@@ -786,6 +792,11 @@ impl WindowId {
                     &[],
                 )
             },
+            // Ours; the EQ menu opens it, and so does the server on taking
+            // a task.
+            Self::TaskJournal => {
+                floating("QUEST JOURNAL", Placement::TopLeft(140.0, 90.0), true, &[])
+            }
             // Where the skin places them; they open with a text to read.
             Self::Note => floating("", Placement::TopLeft(100.0, 80.0), false, &[]),
             Self::Book => floating("", Placement::TopLeft(120.0, 20.0), false, &[]),
