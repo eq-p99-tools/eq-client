@@ -52,6 +52,38 @@ pub fn track_color(yours: u8, theirs: u8) -> ConColor {
     }
 }
 
+/// The Tracking skill (53).
+const TRACKING_SKILL: u32 = 53;
+
+/// The most entries the Mac-era program's list holds (TAKP read 10c).
+const EQMAC_MOST_TRACKED: usize = 1000;
+
+/// The races the Mac-era program leaves off its list (TAKP read 10c):
+/// 0x8f, 0x8d, 0x48, 0x49, 0x72 and 0x8e.
+const EQMAC_UNTRACKED_RACES: [u32; 6] = [0x8f, 0x8d, 0x48, 0x49, 0x72, 0x8e];
+
+/// How far the Mac-era program tracks (TAKP read 10c), in units, from the
+/// Tracking skill and the zone header's time type (`OP_NewZone` +424,
+/// [0x79892c]; read 10f): zone types 1, 2 and 5 take skill × 10 + 500,
+/// others skill / 2 + 500 (whole units); above 100, (skill − 100) × 10 or
+/// × 4 is added. The read gives the above-100 term as added to the same
+/// formula, which is how it is taken here.
+#[must_use]
+pub fn eqmac_track_range(skill: u32, time_type: u8) -> f32 {
+    let above = skill.saturating_sub(100);
+    let range = if matches!(time_type, 1 | 2 | 5) {
+        skill * 10 + 500 + above * 10
+    } else {
+        skill / 2 + 500 + above * 4
+    };
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a skill's range is far below f32's exact integers"
+    )]
+    let range = range as f32;
+    range
+}
+
 /// A line's arguments with the spawn named first as players see names; the
 /// rest, such as a side word's string number, as the session gave them.
 fn shown(arguments: &[String]) -> Vec<String> {
@@ -86,13 +118,95 @@ impl ClientWorld {
         self.zone.tracking.open = false;
     }
 
-    /// The press reached the server: the window opens, emptied until the
-    /// list comes.
+    /// The press reached the server: the window opens. On Titanium it is
+    /// emptied until the server's list comes; the Mac-era program builds its
+    /// list itself (TAKP read 10c), and no Mac server sends one.
     pub(super) fn tracking_pressed(&mut self) {
+        let built = match self.generation {
+            crate::GameDialect::EqMac => Some(self.eqmac_track_list()),
+            // RoF2's is Titanium's, inferred (6.489).
+            crate::GameDialect::Titanium | crate::GameDialect::Rof2 => None,
+        };
         let tracking = &mut self.zone.tracking;
         tracking.open = true;
-        tracking.entries.clear();
+        if let Some(entries) = built {
+            let listed = |id: &u16| entries.iter().any(|entry| entry.spawn_id == *id);
+            tracking.selected = tracking.selected.filter(listed);
+            tracking.entries = entries;
+        } else {
+            tracking.entries.clear();
+        }
         tracking.revision += 1;
+    }
+
+    /// The Mac-era program's list on a press (TAKP read 10c, 0x4bdf2f): the
+    /// player's group members in the zone first, at any range, then every
+    /// other spawn within [`eqmac_track_range`] but the player, corpses, the
+    /// untracked races and invisible spawns, up to 1000 entries.
+    ///
+    /// Inferred, and labelled: the distance (0x4b1f80, unread) is taken as
+    /// the straight line between the two places; the program's visibility
+    /// test 0x4afa90 as the spawn's invisible flag; the spawn list's order as
+    /// the spawn IDs' (the window sorts, which is unread). The program also
+    /// skips a spawn whose actor +0x198 is set, which is unread and not
+    /// modelled.
+    fn eqmac_track_list(&self) -> Vec<Tracked> {
+        let Some(player) = self.player.as_ref() else {
+            return Vec::new();
+        };
+        let skill = super::character::skill_value(player, TRACKING_SKILL).unwrap_or_default();
+        // Before a zone header has told the time type, the smaller range
+        // (a type outside 1, 2 and 5), never the larger: the program's own
+        // default of 1 comes with a header this session would have read.
+        let time_type = self.zone.sky.map_or(0, |sky| sky.time_type);
+        let range = eqmac_track_range(skill, time_type);
+        let own = player.position;
+        let distance = |at: crate::WorldPosition| {
+            ((at.x - own.x).powi(2) + (at.y - own.y).powi(2) + (at.z - own.z).powi(2)).sqrt()
+        };
+        let mut listed: Vec<Tracked> = self
+            .group()
+            .into_iter()
+            .flat_map(|group| &group.members)
+            .filter_map(|name| {
+                self.zone
+                    .spawns
+                    .iter()
+                    .find(|(id, spawn)| {
+                        **id != player.spawn_id
+                            && spawn.state.kind == crate::SpawnKind::Player
+                            && spawn.state.name.eq_ignore_ascii_case(name)
+                    })
+                    .map(|(id, spawn)| Tracked {
+                        spawn_id: *id,
+                        distance: distance(spawn.state.position),
+                    })
+            })
+            .take(5)
+            .collect();
+        let grouped = listed.len();
+        for (id, spawn) in &self.zone.spawns {
+            if listed.len() >= EQMAC_MOST_TRACKED {
+                break;
+            }
+            let state = &spawn.state;
+            if *id == player.spawn_id
+                || !matches!(state.kind, crate::SpawnKind::Player | crate::SpawnKind::Npc)
+                || EQMAC_UNTRACKED_RACES.contains(&state.race)
+                || state.invisible
+                || listed[..grouped].iter().any(|entry| entry.spawn_id == *id)
+            {
+                continue;
+            }
+            let away = distance(state.position);
+            if away <= range {
+                listed.push(Tracked {
+                    spawn_id: *id,
+                    distance: away,
+                });
+            }
+        }
+        listed
     }
 
     /// What the session said of tracking.
