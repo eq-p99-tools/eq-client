@@ -4,6 +4,28 @@
 
 - `/loadskin <name>` switches the UI skin in game (checklist 6.605), as the official client's command does. The windows redraw from the new skin at once, and the choice stays the character's for later runs. A name matches the installation's `uifiles` folder whatever its letter case. A skin that isn't installed changes nothing and says so, and an unreadable line gives the usage. The official client's trailing `0` or `1` is accepted, and this client keeps window placements either way. The choice is saved in this client's settings folder, not in the installation's files. A skin loaded in game wins over `--ui-skin` until the player camps or plays another character or world, when `--ui-skin` applies again. What the official client says in reply isn't read, so the replies are this client's own words. Why: the Velious skin's inventory shows the bags alone, with no paperdoll, statistics or hit point and mana numbers, and its equipment sits in Hot Button window 1. `/loadskin default` brings the full inventory back without restarting.
 
+- Destroy the coins on the cursor (gap 3.8, checklist 6.512), as the
+  Titanium program's Destroy button does (read R49-11). With coins on the
+  cursor and no item, **Destroy cursor item** asks first, with the
+  installation's own question (string 0x80d), or our words where the
+  installation lacks it. With no answer in 10 s the question closes as a No.
+  On Yes it sends one `DestroyCoins` (eq-network #342) for the first kind on
+  the cursor, the most valuable first, whole, as the program sends one move.
+  - **Departure, labelled (6.512c):** the program then clears every kind on
+    its cursor, including kinds it never told the server about. This client
+    keeps those shown, as the server still holds them. Its own coin controls
+    hold one kind on the cursor at a time, so two kinds come only from what
+    the server says the cursor holds.
+  - The program skips the question when its ini `Destroy` key is set. That
+    option is row 6.512b, not built here.
+  - Where the session doesn't offer `Capability::DestroyingCoins` (all but
+    stock EQEmu for now) it says "This server does not take destroying
+    coins." and asks nothing. An item on the cursor is destroyed as before;
+    its question in the program's own string (0x7fb) and timeout is row
+    6.512d.
+  - Any change to the cursor's coins cancels the question. Scripts click the
+    same control and dialog, so they destroy coins as they destroy items,
+    and a script that answers nothing gets the timeout's No.
 - Drowning and lava now hurt on every Titanium server, public EQEmu and
   P99 included, as the Titanium program reports them on any server
   (eq-network's liquid change; read R25). **Characters on public servers
