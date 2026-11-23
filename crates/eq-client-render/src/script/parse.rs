@@ -869,12 +869,13 @@ fn parse_slash(words: &[&str]) -> Result<Step, String> {
         ["boat", intent @ ("acquire" | "release")] => Step::Slash(format!("/boat {intent}")),
         ["shownames", level] => Step::Slash(format!("/shownames {level}")),
         // Corpses summoned or dragged; groups joined, left, disbanded or
-        // declined; where and when the player is, which the client answers
-        // itself; and how `/who` lists the player.
+        // declined; where and when the player is, and the server's message
+        // of the day said again, which the client answers itself; and how
+        // `/who` lists the player.
         [
             command @ ("corpse" | "corpsedrag" | "corpsedrop" | "follow" | "disband" | "loc"
-            | "time" | "afk" | "anonymous" | "roleplay" | "raidaccept" | "raiddecline"
-            | "raiddisband" | "raidwindow"),
+            | "time" | "motd" | "afk" | "anonymous" | "roleplay" | "raidaccept"
+            | "raiddecline" | "raiddisband" | "raidwindow"),
         ] => Step::Slash(format!("/{command}")),
         // The raid's lead, handed on by name or to the target.
         ["makeraidleader", name @ ..] if name.len() <= 1 => Step::Slash(
@@ -2651,6 +2652,13 @@ mod tests {
         assert!(parse("slash(\"duel\")\n", base).is_err());
         // Nor a listing change other players see (checklist 6.515).
         assert!(parse("slash(\"lfg\")\n", base).is_err());
+        // The message of the day said again sends nothing (6.520); words
+        // after it are no form a script needs.
+        assert_eq!(
+            parse("slash(\"motd\")\n", base).unwrap(),
+            [Step::Slash("/motd".into())]
+        );
+        assert!(parse("slash(\"motd now\")\n", base).is_err());
     }
 
     #[test]

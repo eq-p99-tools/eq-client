@@ -207,6 +207,7 @@ pub(super) fn schedule(app: &mut App) {
             (
                 who::zone_list,
                 whereabouts::answers,
+                crate::motd::answers,
                 crate::slash::answers,
                 (contacts::answers, contacts::persist).chain(),
                 abilities::choices::persist,

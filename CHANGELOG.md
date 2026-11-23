@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Say the server's message of the day again with `/motd` (checklist
+  6.520). The message the world sent on this connection is said again as it
+  came, to the same tab and colour, and is not kept as a new one; a new
+  connection, to the same server or another, never says the old one.
+  Without one, this client's line says "There is no message of the day."
+  It sends nothing, on any server. The program's handler (0x46f698) is
+  unread, so that it says the world's message and not the guild's, and
+  that words after it are ignored, is inferred (pending R49-6j). A script
+  may run `slash("motd")`, as it may `/loc` and `/time`.
+
 - Say the player looks for a group with `/lfg` (checklist 6.515), where
   the session offers it (stock `EQEmu`, eq-network #344). Bare `/lfg`
   turns the flag over; `/lfg on` and `/lfg off` set it. Those two words

@@ -166,6 +166,12 @@ pub(super) struct ChatState {
     pub(crate) contacts: super::contacts::Book,
     /// The guild's message of the day as last received, shown or not.
     guild_motd: Option<String>,
+    /// The server's message of the day as it came on this connection
+    /// (`OP_MOTD`), for `/motd` to say again (checklist 6.520); a new
+    /// connection, to this server or another, never says the old one.
+    server_motd: Option<(u64, ChatLine)>,
+    /// A `/motd`, waiting for [`super::motd::answers`].
+    pub(crate) motd_asked: bool,
     /// A guild command typed, for [`super::guild::commands`] to run.
     pub(crate) guild_asked: Option<super::guild::Command>,
     /// A sharing command typed, for [`super::sharing::commands`] to run.
@@ -307,7 +313,31 @@ impl ChatState {
             }
         } else if line.channel == ChannelName::GuildMotdReply {
             self.guild_motd = Some(line.message.text.clone());
+        } else if line.channel == ChannelName::Motd && line.source == Source::Server {
+            self.server_motd = Some((online.connection_revision, line.clone()));
         }
+        self.deliver(line, online);
+    }
+
+    /// Says the server's message of the day again, as it came on this
+    /// connection, the way it was said then; false when none came. The
+    /// line said again is not kept as a new one.
+    pub(super) fn say_motd_again(&mut self, online: &OnlineState) -> bool {
+        let Some((_, line)) = self
+            .server_motd
+            .as_ref()
+            .filter(|(connection, _)| *connection == online.connection_revision)
+        else {
+            return false;
+        };
+        let line = line.clone();
+        self.deliver(line, online);
+        true
+    }
+
+    /// Puts a received line in the chat: the ignore list's say, the reply
+    /// list, and its item links.
+    fn deliver(&mut self, line: ChatLine, online: &OnlineState) {
         if line.source == Source::Server
             && let Some(sender) = line.sender.as_deref().filter(|sender| !sender.is_empty())
         {
@@ -2026,6 +2056,10 @@ pub(super) fn client_request_in_scope(
     if super::motion::FollowAsked::typed(input) {
         state.script_requests.follow = scope;
         state.follow_asked = Some(super::motion::FollowAsked);
+        return Some(Ok(()));
+    }
+    if super::motd::typed(input) {
+        state.motd_asked = true;
         return Some(Ok(()));
     }
     if let Some(asked) = super::whereabouts::Asked::typed(input) {
