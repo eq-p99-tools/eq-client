@@ -2536,13 +2536,17 @@ pub(super) fn input(
     // room over the floor than its posture needs (0x48bb83 in 0x48acef, read
     // R1d). Its gate, the engine's vtable +0x4c, returns a byte its
     // constructor sets and eqgame never clears, so the test always runs
-    // (engine read 1). It has no water test, so a swimming body is tested
-    // too (read R49-9 b). A frame with no move of its own, as a lift's
-    // carry, is left alone, and so is Fly. A refused move keeps the frame's
-    // start: the feet, the airborne state and no jump; a swimmer stays a
-    // swimmer. The program's auto-stand (AllowAutoStand, R49-9 e) is its
-    // own row, 6.496c, not built here.
+    // (engine read 1). It has no water test, so the program tests a
+    // swimming body too (read R49-9 b), but a swimmer is left alone here:
+    // the live look refused a swim through Kedge Keep's entry passage,
+    // which players swim, so the swimmer test stays out until an attended
+    // look at the official client (reviewer condition H1, checklist 6.496).
+    // A frame with no move of its own, as a lift's carry, is left alone,
+    // and so is Fly. A refused move keeps the frame's start: the feet, the
+    // airborne state and no jump. The program's auto-stand (AllowAutoStand,
+    // R49-9 e) is its own row, 6.496c, not built here.
     let refused = !flying
+        && !swimming
         && !placement_blocked
         && lacks_headroom(
             client,
@@ -2557,9 +2561,7 @@ pub(super) fn input(
     controls.headroom_refused = refused;
     let (landing, jumped) = if refused {
         controls.airborne.clone_from(&previous_airborne);
-        if !swimming {
-            mode = MovementMode::Forward;
-        }
+        mode = MovementMode::Forward;
         (feet, false)
     } else {
         (landing, jumped)
@@ -7560,10 +7562,11 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_swim_under_a_low_ceiling_is_refused_and_stays_a_swim() {
+    fn a_swim_under_a_low_ceiling_goes_until_the_official_look() {
         use eq_client_core::movement::CollisionWorld;
-        // The test has no water test (R49-9 b): under water, a standing
-        // S = 3.75 needs room past 8.0 over the floor as on land.
+        // The program has no water test (R49-9 b), but the swimmer test is
+        // held out until an attended official look (H1): a swim under a
+        // ceiling 6 over the floor goes, and stays a swim.
         let swim = |ceiling: f32| {
             let (mut app, receiver) = app();
             let mut triangles = flat_surface(-12.0).to_vec();
@@ -7604,19 +7607,11 @@ pub(super) mod tests {
             }
             moves
         };
-        // A ceiling 6 over the floor: no move away from the start, and
-        // every move sent stays a swim.
         let moves = swim(-6.0);
         assert!(
             moves.iter().all(|m| m.mode == MovementMode::Swim),
             "{moves:?}"
         );
-        assert!(
-            moves.iter().all(|m| m.position.x.abs() < 0.001),
-            "{moves:?}"
-        );
-        // Room past 8.0: the same swim goes.
-        let moves = swim(-3.5);
         assert!(moves.iter().any(|m| m.position.x < -0.01), "{moves:?}");
     }
 
