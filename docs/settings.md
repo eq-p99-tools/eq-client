@@ -61,6 +61,35 @@ file name in the installation root or its `sounds` folder. Cues play once,
 with limits on pending requests, concurrent voices, and playback time. World
 resets clear pending cues and stop their playback.
 
+Zone music and ambient sound come from each zone's own files in the
+installation: `<zone>_sounds.eff` places the sound emitters and music regions,
+`<zone>_sndbnk.eff` names their sounds, and `<zone>.xmi` holds the music.
+Emitters near you loop or repeat and grow quieter with distance; the music
+region you stand in plays its day or night sequence and fades out when you
+leave it. How the original program places, chooses and fades these is not yet
+read, so those rules are this client's estimate (item 6.503).
+
+Music plays through a synthesizer on a SoundFont (`.sf2`) that you name with
+`--soundfont <file>` or `EQ_CLIENT_SOUNDFONT`. The installation ships no
+SoundFont, so this is a stated departure: the instruments are your file's, not
+the original program's. Without one, or with a file that is missing,
+unreadable or larger than 512 MB, music is silent and the log says why once.
+
+Three options are saved for each character, under Options → General where the
+skin has the controls:
+
+- **Music** (`music`, on): plays the zone's music.
+- **Music Volume** (`music_volume`, 100): the music's own volume, separate
+  from Sound Volume.
+- **Environment Sounds** (`environment_sounds`, on): plays the zone's ambient
+  emitters at the Sound Volume.
+
+Turning **Sound** off silences the emitters along with every other sound; music
+follows its own Music option. The emitters use at most eight voices of their
+own, nearest first, so they never take a voice from a spell, combat or
+interface sound. A zone change, a camp, a logout or a lost connection stops
+all of them. Combat music is not built yet.
+
 ## Quality of life
 
 Options → QoL stores these choices per character. Availability can depend on the

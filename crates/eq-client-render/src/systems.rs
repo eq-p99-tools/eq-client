@@ -8,7 +8,7 @@ use crate::{
     orbit_camera, outbox, outfit, paperdoll, pet, profile_files, projectiles, raid, reading,
     resources, schedule_screenshot, select_preview, sharing, sheets, skills, skin, skinned, sounds,
     speed, spell_effects, spell_icons, spellbook, target, tooltip, tracking, trade, tradeskills,
-    training, translocate, update_hud, weather, whereabouts, who, windows,
+    training, translocate, update_hud, weather, whereabouts, who, windows, zone_audio,
 };
 use bevy::prelude::*;
 /// Starts the presentation state (HUD, windows, chat, targeting, inventory,
@@ -26,6 +26,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .insert_resource(keys);
     app.init_resource::<spell_effects::SpellParticles>()
         .init_resource::<sounds::Sounds>()
+        .init_resource::<zone_audio::ZoneAudio>()
         .init_resource::<crate::marquee::Banners>()
         .init_resource::<doors::Hinges>()
         .init_resource::<doors::LiftReach>()
@@ -456,6 +457,7 @@ pub(super) fn schedule(app: &mut App) {
                 character::animate,
                 spell_effects::update,
                 sounds::update,
+                zone_audio::update,
                 target::marker::update,
                 (names::request, names::update).chain(),
                 (combat_text::update, crate::marquee::present),

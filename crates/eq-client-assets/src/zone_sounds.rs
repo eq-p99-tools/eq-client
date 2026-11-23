@@ -188,16 +188,14 @@ impl Emitter {
 /// # Errors
 /// Refuses a file that is not whole records.
 pub fn read_emitters(bytes: &[u8]) -> Result<Vec<Emitter>, ZoneSoundError> {
-    if bytes.len() % RECORD != 0 || bytes.len() / RECORD > MAX_RECORDS {
+    if !bytes.len().is_multiple_of(RECORD) || bytes.len() / RECORD > MAX_RECORDS {
         return Err(ZoneSoundError::Length(bytes.len()));
     }
     Ok(bytes
-        .chunks_exact(RECORD)
-        .map(|chunk| {
-            let mut record = [0; RECORD];
-            record.copy_from_slice(chunk);
-            Emitter::read(&record)
-        })
+        .as_chunks::<RECORD>()
+        .0
+        .iter()
+        .map(Emitter::read)
         .collect())
 }
 
@@ -408,10 +406,10 @@ mod tests {
         assert!(emitters[1].kind.is_music());
         assert_eq!(EmitterKind::from_byte(9), EmitterKind::Unknown(9));
         assert!(matches!(
-            read_emitters(&bytes[..RECORD + 1]),
+            read_emitters(&bytes[..=RECORD]),
             Err(ZoneSoundError::Length(85))
         ));
-        assert!(read_emitters(&[]).unwrap().is_empty());
+        assert_eq!(read_emitters(&[]).unwrap().len(), 0);
         assert!(matches!(
             read_emitters(&vec![0; RECORD * (MAX_RECORDS + 1)]),
             Err(ZoneSoundError::Length(_))
@@ -439,7 +437,7 @@ mod tests {
         let bank = ZoneBank::parse("EMIT\r\nwater1.wav\nbird.wav\n\nLOOP\nwind.wav\nRAND\nx.wav\n");
         assert_eq!(bank.section("emit"), ["water1.wav", "bird.wav"]);
         assert_eq!(bank.section("RAND"), ["x.wav"]);
-        assert!(bank.section("NONE").is_empty());
+        assert_eq!(bank.section("NONE").len(), 0);
         let numbers = SoundNumbers::parse("100^thunder.wav\n");
         assert_eq!(sound_name(0, &bank, &numbers), SoundRef::None);
         assert_eq!(
