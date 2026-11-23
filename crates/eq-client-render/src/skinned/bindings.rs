@@ -367,8 +367,9 @@ pub(super) fn own_button(id: &str, owner: WindowId) -> Option<Does> {
         WindowId::Spellbook => spellbook_button(id),
         WindowId::CharacterSelect => Some(character_button(id)),
         WindowId::Selector => Some(selector_button(id).map_or(Does::Nothing, Does::Toggles)),
-        // The Ranger's sort, filters and players choice are not read closely
-        // enough to act on (6.446): greyed, as Nothing draws them.
+        // The Ranger's sort, filters and players choice work by their typed
+        // commands (6.638); the skin's controls for them wait on a read of
+        // their names (6.446): greyed, as Nothing draws them.
         WindowId::Tracking => Some(match id {
             "TRW_TrackButton" => Does::Tracks,
             _ => Does::Nothing,

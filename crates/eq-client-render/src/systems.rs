@@ -370,7 +370,7 @@ pub(super) fn schedule(app: &mut App) {
                     (
                         training::window,
                         tracking::window,
-                        tracking::say_rangers_only,
+                        tracking::answer_option,
                         pet::say_pet_target,
                     ),
                     (translocate::decline_unasked, confirm::window).chain(),

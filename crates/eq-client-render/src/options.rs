@@ -31,6 +31,10 @@ pub(crate) struct OptionsState {
     /// The server filters given at the character list for the character
     /// entering, which its first admission starts from.
     chosen: Option<eq_client_core::filters::ServerFilters>,
+    /// The colours a Ranger's track list hides this session: the
+    /// character's saved mask when their options load, then as
+    /// `/trackfilter` toggles it, never saved (read R49-30 e).
+    pub(crate) track_filter: eq_client_core::track_options::TrackFilter,
 }
 
 impl Default for OptionsState {
@@ -50,6 +54,7 @@ impl OptionsState {
             helm: None,
             filters: None,
             chosen: None,
+            track_filter: defaults.track_filter,
         }
     }
 
@@ -249,6 +254,7 @@ pub(crate) fn persist(
         .or_else(|| state.store.read(SHARED))
         .unwrap_or_default();
     state.options = Options::read(&text, state.defaults);
+    state.track_filter = state.options.track_filter;
     state.store.loaded_text(state.options.text());
 }
 

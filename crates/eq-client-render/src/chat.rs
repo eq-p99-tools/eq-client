@@ -247,8 +247,8 @@ pub(super) struct ChatState {
     /// `/follow` typed or pressed, for [`super::motion::input`] to start.
     pub(crate) follow_asked: Option<super::motion::FollowAsked>,
     /// A Ranger's tracking option typed by another class, for
-    /// [`super::tracking::say_rangers_only`] to answer.
-    pub(crate) rangers_only: Option<super::tracking::RangersOnly>,
+    /// [`super::tracking::answer_option`] to answer.
+    pub(crate) track_option: Option<super::tracking::TrackOption>,
     /// A `/loadskin` typed, for [`super::skin`] to load and answer.
     pub(crate) load_skin: Option<super::skin::LoadSkin>,
     /// A `/pet target`'s outcome, for [`super::pet::say_pet_target`] to say.
@@ -563,7 +563,7 @@ impl ChatState {
             boat_asked,
             boat_interacted,
             follow_asked,
-            rangers_only,
+            track_option,
             load_skin,
             pet_targeted,
             local_setting,
@@ -627,7 +627,7 @@ impl ChatState {
         *boat_asked = None;
         *boat_interacted = None;
         *follow_asked = None;
-        *rangers_only = None;
+        *track_option = None;
         *load_skin = None;
         *pet_targeted = None;
         *local_setting = None;
@@ -2096,8 +2096,8 @@ fn submit_line(
         state.follow_asked = Some(super::motion::FollowAsked);
         return Ok(());
     }
-    if super::tracking::rangers_only(&command, online.world()) {
-        state.rangers_only = Some(super::tracking::RangersOnly);
+    if let Some(option) = super::tracking::TrackOption::typed(&command) {
+        state.track_option = Some(option);
         return Ok(());
     }
     if let Some(request) = departure_request(&command) {
@@ -2297,8 +2297,8 @@ pub(super) fn run_game_command(
         chat.follow_asked = Some(super::motion::FollowAsked);
         return;
     }
-    if super::tracking::rangers_only(command, online.world()) {
-        chat.rangers_only = Some(super::tracking::RangersOnly);
+    if let Some(option) = super::tracking::TrackOption::typed(command) {
+        chat.track_option = Some(option);
         return;
     }
     if let Some(result) = super::pet::target_command(command, online, outbox) {
@@ -5386,7 +5386,7 @@ mod tests {
         chat.boat_asked = Some(eq_client_core::boats::Intent::Acquire);
         chat.boat_interacted = Some(8);
         chat.follow_asked = Some(super::super::motion::FollowAsked);
-        chat.rangers_only = Some(super::super::tracking::RangersOnly);
+        chat.track_option = Some(super::super::tracking::TrackOption::Sort("d".into()));
         chat.pet_targeted = Some(super::super::pet::PetTargeted::Found);
         chat.local_setting = Some((
             super::super::local_settings::LocalSetting::ClearChat,
@@ -5405,7 +5405,7 @@ mod tests {
             && chat.boat_asked.is_none()
             && chat.boat_interacted.is_none()
             && chat.follow_asked.is_none()
-            && chat.rangers_only.is_none()
+            && chat.track_option.is_none()
             && chat.pet_targeted.is_none()
             && chat.local_setting.is_none()
             && chat.contacts.asked.is_none()
