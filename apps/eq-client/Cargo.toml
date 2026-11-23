@@ -9,6 +9,8 @@ rust-version.workspace = true
 
 [dependencies]
 serde_json.workspace = true
+serde.workspace = true
+jiff.workspace = true
 anyhow.workspace = true
 eq-network.workspace = true
 clap.workspace = true

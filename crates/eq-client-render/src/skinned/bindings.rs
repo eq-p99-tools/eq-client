@@ -109,6 +109,9 @@ pub(super) enum Does {
     Buff(EffectWindow, u32),
     /// Turns an option on or off, and shows which.
     Option(eq_client_core::options::Toggle),
+    /// Steps the mode of one kind of server filter, on this client's
+    /// Filters page.
+    Filter(eq_client_core::filters::FilterCategory),
     /// Practices the skill chosen in the Training window.
     Trains,
     /// Follows the spawn chosen in the track window.
@@ -289,6 +292,9 @@ pub(super) fn does(id: &str, owner: WindowId) -> Option<Does> {
         return None;
     }
     if owner == WindowId::Options {
+        if let Some(category) = super::filters::filter_button(id) {
+            return Some(Does::Filter(category));
+        }
         return Some(option_checkbox(id).map_or(Does::Nothing, Does::Option));
     }
     Some(match id {

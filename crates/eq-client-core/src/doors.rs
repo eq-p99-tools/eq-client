@@ -59,7 +59,10 @@ impl DoorTable {
     }
 
     /// Applies the selected generation's definition/action and local motion rules.
-    /// Unknown generations keep definitions without offering interaction.
+    #[expect(
+        clippy::match_same_arms,
+        reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
+    )]
     pub fn apply_for(&mut self, update: &DoorUpdate, now: Instant, generation: GameDialect) {
         if self.generation != generation {
             self.closing.clear();
@@ -68,12 +71,14 @@ impl DoorTable {
             self.generation = generation;
         }
         self.doors.apply(update);
-        if generation == GameDialect::EqMac {
-            self.apply_hinges(update, now);
-            return;
-        }
-        if generation != GameDialect::Titanium {
-            return;
+        match generation {
+            GameDialect::Titanium => {}
+            // Titanium's, inferred for RoF2 (6.489).
+            GameDialect::Rof2 => {}
+            GameDialect::EqMac => {
+                self.apply_hinges(update, now);
+                return;
+            }
         }
         match update {
             DoorUpdate::RemoveAll => {
@@ -138,6 +143,7 @@ impl DoorTable {
                 // types 54-56: nothing is sent or said (0x4906c5, read R37 a).
                 GameDialect::Titanium => id != u8::MAX && !(54..=56).contains(&door.open_type),
                 GameDialect::EqMac => eqmac::ordinary(door),
+                // RoF2 has no use path yet.
                 GameDialect::Rof2 => false,
             })
     }
@@ -151,6 +157,8 @@ impl DoorTable {
         }
         let reach = match self.generation {
             GameDialect::Titanium => eq_network_game::reach::TITANIUM.doors,
+            // RoF2 has no use path yet (`supports_use`).
+            GameDialect::Rof2 => return None,
             GameDialect::EqMac => {
                 let mut hinge = self.hinges.get(&id)?.clone();
                 hinge.tick(now);
@@ -159,13 +167,13 @@ impl DoorTable {
                 }
                 eq_network_game::reach::EQMAC.doors
             }
-            GameDialect::Rof2 => return None,
         };
         let door = self.doors.entries().get(&id)?;
         // A door is reached at its origin where it stands now, within 20, as
-        // the session checks: short of the program, which measures from the
-        // clicked point on the door as drawn, within the player's size and
-        // 20 (read R16b, R16e; recording checklist 6.436).
+        // the session checks a click with no point: the Use key's, a
+        // script's. A mouse click names the point it hit and the session
+        // measures from it, within the player's size and 20, as the program
+        // does (read R16b, R16e; checklist 6.530); this is stricter.
         let at = WorldPosition {
             z: door.position.z + self.lifts.offset(id, now).unwrap_or(0.0),
             ..door.position
@@ -195,12 +203,18 @@ impl DoorTable {
 
     /// Whether door `id` holds the player up and stops them walking: the
     /// program's rule on Titanium, and both on a generation whose rule is not
-    /// read (recording checklist 6.425).
+    /// read (`EQMac`, recording checklist 6.425, and `RoF2`).
     #[must_use]
     pub fn solidity(&self, id: u8) -> Solidity {
-        match (self.generation, self.doors.entries().get(&id)) {
-            (GameDialect::Titanium, Some(door)) => Solidity::of(door.open_type, self.zone_id),
-            _ => Solidity::BOTH,
+        match self.generation {
+            GameDialect::Titanium => self
+                .doors
+                .entries()
+                .get(&id)
+                .map_or(Solidity::BOTH, |door| {
+                    Solidity::of(door.open_type, self.zone_id)
+                }),
+            GameDialect::EqMac | GameDialect::Rof2 => Solidity::BOTH,
         }
     }
 
@@ -659,10 +673,9 @@ mod tests {
             &DoorUpdate::Spawn(vec![lift(4, 90), door(5, 0, 0), sinking]),
             start,
         );
-        // A type 59 lift is both; a hinged door and a type 120 platform are
-        // walls nobody stands on; types 60-77 are walls but no floor: every
-        // Titanium door is a wall through the filter 0x42cdb1 (eq-network
-        // #406, 6.607), and 0x490370 picks the floors.
+        // A type 59 lift is both; a hinged door, a type 120 platform and
+        // types 60-77 are walls nobody stands on (eqgame.exe 0x490370; the
+        // wall filter 0x42cdb1 takes every door, eq-network #406, 6.607).
         assert_eq!(table.solidity(4), Solidity::BOTH);
         assert!(!table.solidity(5).floor && table.solidity(5).wall);
         assert!(!table.solidity(6).floor && table.solidity(6).wall);

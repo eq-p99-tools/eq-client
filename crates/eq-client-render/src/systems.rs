@@ -8,7 +8,7 @@ use crate::{
     orbit_camera, outbox, outfit, paperdoll, pet, profile_files, projectiles, raid, reading,
     resources, schedule_screenshot, select_preview, sharing, sheets, skills, skin, skinned, sounds,
     speed, spell_effects, spell_icons, spellbook, target, tooltip, tracking, trade, tradeskills,
-    training, translocate, update_hud, weather, whereabouts, who, windows,
+    training, translocate, update_hud, weather, whereabouts, who, windows, zone_audio,
 };
 use bevy::prelude::*;
 /// Starts the presentation state (HUD, windows, chat, targeting, inventory,
@@ -26,6 +26,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .insert_resource(keys);
     app.init_resource::<spell_effects::SpellParticles>()
         .init_resource::<sounds::Sounds>()
+        .init_resource::<zone_audio::ZoneAudio>()
         .init_resource::<crate::marquee::Banners>()
         .init_resource::<doors::Hinges>()
         .init_resource::<doors::LiftReach>()
@@ -38,6 +39,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<buffs::BuffPress>()
         .init_resource::<hud::action_bar::ActionRequests>()
         .init_resource::<combat::CombatState>()
+        .init_resource::<crate::corpses::HiddenCorpses>()
         .init_resource::<combat_text::CombatText>()
         .init_resource::<weather::Field>()
         .init_resource::<crate::breath::State>()
@@ -208,6 +210,19 @@ pub(super) fn schedule(app: &mut App) {
             (
                 who::zone_list,
                 whereabouts::answers,
+                crate::motd::answers,
+                crate::fastdrop::answers,
+                crate::slash::answers,
+                crate::slash::assist_named,
+                crate::corpses::run,
+                inventory::auto::run,
+                crate::chat_channels::answers,
+                (
+                    crate::languages::command,
+                    crate::languages::speak,
+                    crate::languages::away,
+                )
+                    .chain(),
                 (contacts::answers, contacts::persist).chain(),
                 abilities::choices::persist,
                 (guild::invitations, guild::commands, sharing::commands),
@@ -216,7 +231,15 @@ pub(super) fn schedule(app: &mut App) {
                 raid::window,
             ),
             (combat::input, combat::idle_swings).chain(),
-            (trade::input, speed::report).chain(),
+            (
+                trade::input,
+                trade::no_drop::confirm,
+                trade::no_drop::command,
+                crate::emotes::run,
+                crate::disciplines::run,
+                speed::report,
+            )
+                .chain(),
             (
                 give::buttons,
                 give::inspect_theirs,
@@ -242,6 +265,7 @@ pub(super) fn schedule(app: &mut App) {
                 (
                     abilities::picker::right_click,
                     abilities::input,
+                    crate::combat_abilities::input,
                     abilities::picker::choose,
                     abilities::picker::window,
                 )
@@ -291,6 +315,7 @@ pub(super) fn schedule(app: &mut App) {
                 crate::camera::turn,
                 move_player,
                 options::toggle,
+                options::step_filters,
                 liquid_and_movement(),
                 spellbook::sets::ui::input,
             )
@@ -382,6 +407,7 @@ pub(super) fn schedule(app: &mut App) {
                     tracking::frame,
                     abilities::picker::frame,
                     guild::roster::window,
+                    crate::combat_abilities::window,
                 ),
                 (
                     chat::reconcile,
@@ -409,19 +435,20 @@ pub(super) fn schedule(app: &mut App) {
                         spellbook::sets::ui::present,
                     ),
                     skinned::tabs,
-                    abilities::present,
+                    (abilities::present, crate::combat_abilities::present),
                     (
                         skinned::slide,
                         skinned::drop_downs,
                         skinned::light_choices,
                         skinned::show_sliders,
+                        options::show_filters,
                         skinned::show_amount,
                         skinned::show_choices,
                         skinned::fill_lists,
                         (training::fill, tracking::fill, abilities::picker::fill),
                         skills::fill,
                         raid::fill,
-                        guild::roster::fill,
+                        (guild::roster::fill, crate::combat_abilities::fill),
                         confirm::show,
                         reading::show,
                         tradeskills::show,
@@ -456,6 +483,8 @@ pub(super) fn schedule(app: &mut App) {
                 character::animate,
                 spell_effects::update,
                 sounds::update,
+                zone_audio::update,
+                zone_audio::combat_music_typed,
                 target::marker::update,
                 (names::request, names::update).chain(),
                 (combat_text::update, crate::marquee::present),

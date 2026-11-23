@@ -26,6 +26,7 @@ use crate::{
 fn player(spawn_id: u16) -> PlayerState {
     PlayerState {
         name: "Example".into(),
+        intoxication: None,
         titanium_environment: None,
         base_attributes: None,
         deity: None,
@@ -40,7 +41,6 @@ fn player(spawn_id: u16) -> PlayerState {
         skills: None,
         practice_points: None,
         languages: None,
-        intoxication: None,
         disciplines: None,
         spell_refresh_ms: None,
         memorized_spells: [None; 8],
@@ -57,11 +57,11 @@ fn player(spawn_id: u16) -> PlayerState {
 
 fn spawn(spawn_id: u16) -> SpawnState {
     SpawnState {
+        body_type: None,
         class: None,
         spawn_id,
         name: "a_rat".into(),
         kind: SpawnKind::Npc,
-        body_type: None,
         race: 1,
         gender: 0,
         position: WorldPosition::default(),
@@ -422,7 +422,12 @@ fn a_sound_the_server_names_is_sound_news() {
         intensity: 1.0,
     });
     assert_eq!(game(&mut world, shake).sounds, Vec::<Cue>::new());
-    assert_eq!(game(&mut world, WorldEvent::Ding).sounds, Vec::<Cue>::new());
+    // EQEmu's fixed record is a reward of nothing to the Titanium program,
+    // which plays its reward sound (read R49-6g).
+    assert_eq!(
+        game(&mut world, WorldEvent::Ding).sounds,
+        [Cue::Number(0x8d)]
+    );
 }
 
 #[test]
@@ -661,6 +666,7 @@ fn a_death_in_view_names_who_died_and_who_killed_them() {
     use crate::world::Party;
     let mut world = admitted();
     let named = |spawn_id, name: &str| SpawnState {
+        body_type: None,
         name: name.into(),
         ..spawn(spawn_id)
     };
@@ -857,6 +863,7 @@ fn input_acceptance_is_current_and_never_supplies_movement_permission() {
     game(
         &mut world,
         WorldEvent::MotionState {
+            swim: None,
             diagonal: crate::DiagonalRates::default(),
             session_id: 1,
             units_per_second: None,
@@ -865,7 +872,6 @@ fn input_acceptance_is_current_and_never_supplies_movement_permission() {
             strafe_units_per_second: None,
             strafe_walk_units_per_second: None,
             swim_backward_units_per_second: None,
-            swim: None,
             falls: true,
             jump_factor: 1.0,
         },
@@ -2117,6 +2123,34 @@ fn target_changed(
 }
 
 #[test]
+fn a_server_target_of_a_refused_or_hidden_body_type_is_kept() {
+    let mut world = admitted();
+    let mut controller = spawn(6);
+    controller.body_type = Some(65);
+    game(&mut world, WorldEvent::Spawns(vec![controller]));
+    let state = world.spawn(6).unwrap().state.clone();
+    assert!(world.refuses_target(&state) && world.hides_by_body(&state));
+    // Hidden by its body type apart from invisibility (R44, 0x480409), so
+    // See Invisible does not reveal it and can_see keeps it.
+    game(
+        &mut world,
+        WorldEvent::ObserverSight {
+            session_id: 1,
+            sees_invisible: true,
+        },
+    );
+    assert!(world.can_see(&state) && world.hides_by_body(&state));
+    // R44 (e): nothing drops a target the program holds by its body type.
+    game(&mut world, target_changed(1, 0, 1, Some(6), true));
+    assert_eq!(world.target().selected, Some(6));
+    assert!(!world.target_stale());
+    // The Mac-era generation hides and refuses nothing by body type.
+    world.carry_as(crate::GameDialect::EqMac);
+    assert!(!world.refuses_target(&state) && !world.hides_by_body(&state));
+    assert!(world.interacts_with(&state));
+}
+
+#[test]
 fn server_targets_and_clears_project_without_becoming_local_requests() {
     let mut world = admitted();
     game(&mut world, WorldEvent::Spawns(vec![spawn(6)]));
@@ -2380,6 +2414,7 @@ fn classic_npc_consider_uses_current_levels_without_overwriting_the_reply() {
     let mut world = admitted();
     world.consider_npcs_by_level(true);
     let guard = SpawnState {
+        body_type: None,
         name: "a_guard".into(),
         level: 20,
         ..spawn(5)
@@ -3733,6 +3768,7 @@ fn the_session_grants_motion_until_any_reset() {
         walk: None,
     };
     let grant = |session_id| WorldEvent::MotionState {
+        swim: None,
         diagonal,
         session_id,
         units_per_second: Some(20.0),
@@ -3741,7 +3777,6 @@ fn the_session_grants_motion_until_any_reset() {
         strafe_units_per_second: None,
         strafe_walk_units_per_second: None,
         swim_backward_units_per_second: None,
-        swim: None,
         falls: true,
         jump_factor: 1.0,
     };
@@ -3869,6 +3904,7 @@ fn the_zone_who_lists_the_zone_players_as_they_are_listed() {
     use crate::who::WhoFilter;
     let mut world = admitted();
     let other = |spawn_id, name: &str, class, level| SpawnState {
+        body_type: None,
         class: Some(class),
         name: name.into(),
         kind: SpawnKind::Player,
@@ -3881,6 +3917,7 @@ fn the_zone_who_lists_the_zone_players_as_they_are_listed() {
             other(6, "Zed", 12, 50),
             other(7, "Ann", 2, 20),
             SpawnState {
+                body_type: None,
                 kind: SpawnKind::PlayerCorpse,
                 ..other(8, "Gone", 1, 5)
             },
@@ -4078,6 +4115,7 @@ fn the_player_has_the_pet_they_own_and_its_buffs() {
     game(
         &mut world,
         WorldEvent::Spawns(vec![SpawnState {
+            body_type: None,
             pet_owner: Some(9),
             hp_percent: Some(100),
             ..spawn(6)
@@ -4144,6 +4182,7 @@ fn pet_buffs_and_command_identity_follow_ownership_and_incarnation() {
         slots: vec![None],
     });
     let pet = || SpawnState {
+        body_type: None,
         pet_owner: Some(9),
         ..spawn(5)
     };
@@ -4205,6 +4244,7 @@ fn last_names_change_by_the_name_spawned_with() {
         &mut world,
         WorldEvent::Spawns(vec![
             SpawnState {
+                body_type: None,
                 name: "Examplar".into(),
                 kind: SpawnKind::Player,
                 ..spawn(6)
@@ -5631,7 +5671,7 @@ fn the_zone_keeps_how_spawns_show_their_names_and_where_corpses_lie() {
 #[test]
 fn what_other_players_ask_of_the_player_changes_nothing_yet() {
     use eq_network_game::popups::Popup;
-    use eq_network_game::socials::{DuelRefusal, DuelUpdate, VoiceKind, VoiceMacro};
+    use eq_network_game::socials::{VoiceKind, VoiceMacro};
     let mut world = admitted();
     let spawns = world.spawns().len();
     let events = [
@@ -5643,7 +5683,6 @@ fn what_other_players_ask_of_the_player_changes_nothing_yet() {
             popup_id: 1,
             negative_id: 0,
         }),
-        WorldEvent::YellForHelp { spawn_id: 5 },
         WorldEvent::VoiceMacro(VoiceMacro {
             from: "Example".into(),
             kind: VoiceKind::Group,
@@ -5654,21 +5693,394 @@ fn what_other_players_ask_of_the_player_changes_nothing_yet() {
             target_id: 7,
             inspector_id: 5,
         },
-        WorldEvent::Duel(DuelUpdate::Challenge { from: 5 }),
-        WorldEvent::Duel(DuelUpdate::Accepted {
-            challenger: 5,
-            accepter: 9,
-        }),
-        WorldEvent::Duel(DuelUpdate::Refused {
-            from: 5,
-            reason: DuelRefusal::Declined,
-        }),
     ];
     for event in events {
-        assert_eq!(game(&mut world, event), Changes::default());
+        // Nothing changes; the news only counts in the session's gap file.
+        let unshown = crate::gaps::variant_name(&event);
+        assert!(unshown.is_some());
+        assert_eq!(
+            game(&mut world, event),
+            Changes {
+                unshown,
+                ..Changes::default()
+            }
+        );
     }
     assert_eq!(world.spawns().len(), spawns);
     assert!(world.player().is_some());
+}
+
+#[test]
+fn duel_news_tells_the_player_of_their_own_duels() {
+    use eq_network_game::socials::{DuelRefusal, DuelUpdate};
+    let mut world = admitted();
+    let duel = |world: &mut ClientWorld, update| game(world, WorldEvent::Duel(update)).notices;
+    // With no question to answer, a challenge is told; one the server
+    // passes back naming the player is not.
+    assert_eq!(
+        duel(&mut world, DuelUpdate::Challenge { from: 5 }),
+        [Notice::Duel(DuelNotice::Challenged("a rat".into()))]
+    );
+    assert_eq!(
+        duel(&mut world, DuelUpdate::Challenge { from: 9 }),
+        Vec::<Notice>::new()
+    );
+    // The Titanium program has no case for an incoming acceptance (read
+    // R49-6); its session tells the duel's start, and the program's own
+    // refusal, as DuelNews.
+    let titanium = duel(
+        &mut world,
+        DuelUpdate::Accepted {
+            challenger: 9,
+            accepter: 5,
+        },
+    );
+    assert_eq!(titanium, Vec::<Notice>::new());
+    assert_eq!(
+        duel(
+            &mut world,
+            DuelUpdate::AutoDeclined {
+                by: 5,
+                reason: None
+            }
+        ),
+        Vec::<Notice>::new()
+    );
+    // Elsewhere a duel begins with the player in it, either side; others
+    // say nothing.
+    world.carry_as(crate::GameDialect::EqMac);
+    for (challenger, accepter) in [(9, 5), (5, 9)] {
+        assert_eq!(
+            duel(
+                &mut world,
+                DuelUpdate::Accepted {
+                    challenger,
+                    accepter
+                }
+            ),
+            [Notice::Duel(DuelNotice::Begun("a rat".into()))]
+        );
+    }
+    assert_eq!(
+        duel(
+            &mut world,
+            DuelUpdate::Accepted {
+                challenger: 5,
+                accepter: 44
+            }
+        ),
+        Vec::<Notice>::new()
+    );
+    // A challenger not in the spawn list is someone.
+    assert_eq!(
+        duel(
+            &mut world,
+            DuelUpdate::Refused {
+                from: 44,
+                reason: DuelRefusal::Considering
+            }
+        ),
+        [Notice::Duel(DuelNotice::Refused {
+            from: "Someone".into(),
+            reason: DuelRefusal::Considering
+        })]
+    );
+}
+
+#[test]
+fn the_titanium_sessions_duel_news_is_told_with_the_names_it_takes() {
+    use eq_network_game::socials::{DuelAutoDecline, DuelNews};
+    let mut world = admitted();
+    let told = |world: &mut ClientWorld, news| game(world, WorldEvent::DuelNews(news)).notices;
+    let cases = [
+        (
+            DuelNews::Challenged { by: 5 },
+            DuelNotice::Challenged("a rat".into()),
+        ),
+        (
+            DuelNews::Begun { with: 5 },
+            DuelNotice::Begun("a rat".into()),
+        ),
+        (
+            DuelNews::Challenging { target: 5 },
+            DuelNotice::Challenging("a rat".into()),
+        ),
+        (
+            DuelNews::Accepting { challenger: 44 },
+            DuelNotice::Accepting("Someone".into()),
+        ),
+        (DuelNews::NoPlayerTarget, DuelNotice::NoPlayerTarget),
+        (DuelNews::NotYourself, DuelNotice::NotYourself),
+        (
+            DuelNews::AlreadyDueling { at_opponent: true },
+            DuelNotice::AlreadyDueling { at_opponent: true },
+        ),
+        (DuelNews::ConsideringAnother, DuelNotice::ConsideringAnother),
+        (
+            DuelNews::Won { over: 5 },
+            DuelNotice::Won {
+                own: "Example".into(),
+                over: "a rat".into(),
+            },
+        ),
+        (
+            DuelNews::Ended { opponent: 5 },
+            DuelNotice::Ended("a rat".into()),
+        ),
+        (
+            DuelNews::TurnedDown {
+                by: 5,
+                reason: Some(DuelAutoDecline::Dueling),
+            },
+            DuelNotice::TurnedDown {
+                by: "a rat".into(),
+                reason: Some(DuelAutoDecline::Dueling),
+            },
+        ),
+        (
+            DuelNews::Lapsed { target: 5 },
+            DuelNotice::Lapsed("a rat".into()),
+        ),
+        (
+            DuelNews::Forfeited { opponent: 5 },
+            DuelNotice::Forfeited {
+                own: "Example".into(),
+                opponent: "a rat".into(),
+            },
+        ),
+    ];
+    for (news, notice) in cases {
+        assert_eq!(told(&mut world, news), [Notice::Duel(notice)]);
+    }
+    // Out of the world, nothing is told.
+    let mut outside = ClientWorld::default();
+    assert!(game(&mut outside, WorldEvent::DuelNews(DuelNews::NotYourself)).ignored);
+}
+
+#[test]
+fn a_duel_question_follows_its_admission_and_closes_once() {
+    use crate::confirmations::{ConsentClosure, ConsentId, ConsentKind};
+    use eq_network_game::socials::{DuelQuestion, DuelUpdate};
+    let mut world = admitted();
+    let id = |session_id, sequence| ConsentId {
+        session_id,
+        kind: ConsentKind::Duel,
+        sequence,
+    };
+    // Another admission's question is not this one's.
+    assert!(
+        game(
+            &mut world,
+            WorldEvent::DuelOffer(DuelQuestion {
+                id: id(2, 1),
+                challenger: 5
+            })
+        )
+        .ignored
+    );
+    assert!(world.duel().is_none());
+    game(
+        &mut world,
+        WorldEvent::DuelOffer(DuelQuestion {
+            id: id(1, 1),
+            challenger: 5,
+        }),
+    );
+    assert_eq!(world.duel().map(|question| question.challenger), Some(5));
+    // Where the session asks, the challenge's own news says nothing more.
+    world.capabilities = vec![crate::Capability::Dueling];
+    assert_eq!(
+        game(
+            &mut world,
+            WorldEvent::Duel(DuelUpdate::Challenge { from: 5 })
+        )
+        .notices,
+        Vec::<Notice>::new()
+    );
+    // An older question's closing leaves it; its own closes it.
+    game(
+        &mut world,
+        WorldEvent::ConsentClosed {
+            id: id(1, 0),
+            closure: ConsentClosure::Interrupted,
+        },
+    );
+    assert!(world.duel().is_some());
+    game(
+        &mut world,
+        WorldEvent::ConsentClosed {
+            id: id(1, 1),
+            closure: ConsentClosure::Interrupted,
+        },
+    );
+    assert!(world.duel().is_none());
+    // A refused answer is told.
+    let refused = game(
+        &mut world,
+        WorldEvent::DuelRefused {
+            offer_id: id(1, 1),
+            session_id: 1,
+            reason: "gone".into(),
+        },
+    );
+    assert_eq!(
+        refused.notices,
+        [Notice::Duel(DuelNotice::AnswerRefused("gone".into()))]
+    );
+}
+
+#[test]
+fn a_yell_stats_and_coins_are_told_as_they_come() {
+    use crate::{Coins, stats::StatIncrease};
+    use eq_network_game::rewards::Reward;
+    let mut world = admitted();
+    assert_eq!(
+        game(&mut world, WorldEvent::YellForHelp { spawn_id: 5 }).notices,
+        [Notice::YellForHelp {
+            name: "a rat".into(),
+            bearing: Some(crate::world::YellBearing::Ahead)
+        }]
+    );
+    // Someone the player cannot name says nothing.
+    assert_eq!(
+        game(&mut world, WorldEvent::YellForHelp { spawn_id: 44 }).notices,
+        Vec::<Notice>::new()
+    );
+    // Another spawn's increase is told with a line that names no one; the
+    // player's own says nothing (read R49-6f).
+    let increase = |spawn_id, amount| {
+        WorldEvent::StatsChanged(StatIncrease {
+            spawn_id,
+            stat: 1,
+            amount,
+        })
+    };
+    assert_eq!(
+        game(&mut world, increase(5, -2)).notices,
+        [Notice::OthersStatChanged { lowered: true }]
+    );
+    assert_eq!(
+        game(&mut world, increase(5, 3)).notices,
+        [Notice::OthersStatChanged { lowered: false }]
+    );
+    let own = game(&mut world, increase(9, 3));
+    assert_eq!(own.notices, []);
+    assert!(!own.ignored);
+    let coins = Coins {
+        platinum: 1,
+        gold: 0,
+        silver: 3,
+        copper: 0,
+    };
+    let reward = |coins| {
+        WorldEvent::Reward(Reward {
+            giver_id: Some(5),
+            coins,
+            experience: 0,
+            items: vec![],
+        })
+    };
+    // On Titanium each coin is said with the giver's name, and the sound
+    // always plays (read R49-6g).
+    let given = game(&mut world, reward(coins));
+    assert_eq!(
+        given.notices,
+        [Notice::QuestReward {
+            coins,
+            giver: "a rat".into()
+        }]
+    );
+    assert_eq!(given.sounds, [crate::effects::Cue::Number(0x8d)]);
+    // A reward of items or experience alone has its own server lines.
+    let nothing = game(&mut world, reward(Coins::default()));
+    assert_eq!(nothing.notices, Vec::<Notice>::new());
+    assert_eq!(nothing.sounds, [crate::effects::Cue::Number(0x8d)]);
+    // So does EQEmu's fixed sound record, a reward of nothing to the program.
+    assert_eq!(
+        game(&mut world, WorldEvent::Ding).sounds,
+        [crate::effects::Cue::Number(0x8d)]
+    );
+    // Elsewhere the coins alone are told, with no sound, and a yell has no
+    // bearing.
+    world.carry_as(crate::GameDialect::EqMac);
+    let mac = game(&mut world, reward(coins));
+    assert_eq!(mac.notices, [Notice::Reward(coins)]);
+    assert_eq!(mac.sounds, []);
+    assert_eq!(game(&mut world, WorldEvent::Ding).sounds, []);
+    assert_eq!(
+        game(&mut world, WorldEvent::YellForHelp { spawn_id: 5 }).notices,
+        [Notice::YellForHelp {
+            name: "a rat".into(),
+            bearing: None
+        }]
+    );
+}
+
+#[test]
+fn a_yellers_band_is_the_angle_from_the_players_heading_folded() {
+    use crate::world::YellBearing;
+    let at = |x, y, heading| WorldPosition {
+        x,
+        y,
+        z: 0.0,
+        heading,
+    };
+    // Facing heading 0, which steps along +Y.
+    let own = at(0.0, 0.0, 0.0);
+    let cases = [
+        (at(0.0, 10.0, 0.0), YellBearing::Ahead),
+        (at(10.0, 10.0, 0.0), YellBearing::AheadAside),
+        (at(-10.0, 10.0, 0.0), YellBearing::AheadAside),
+        (at(10.0, 0.0, 0.0), YellBearing::Aside),
+        (at(-10.0, 0.0, 0.0), YellBearing::Aside),
+        (at(10.0, -10.0, 0.0), YellBearing::BehindAside),
+        (at(0.0, -10.0, 0.0), YellBearing::Behind),
+    ];
+    for (yeller, band) in cases {
+        assert_eq!(YellBearing::between(own, yeller), band, "{yeller:?}");
+    }
+    // Turned to face the yeller, they are ahead, wherever they stand.
+    assert_eq!(
+        YellBearing::between(at(0.0, 0.0, 256.0), at(0.0, -10.0, 0.0)),
+        YellBearing::Ahead
+    );
+    assert_eq!(
+        YellBearing::between(at(0.0, 0.0, 128.0), at(10.0, 0.0, 0.0)),
+        YellBearing::Ahead
+    );
+    assert_eq!(YellBearing::Ahead.string_id(), 0x326b);
+    assert_eq!(YellBearing::Behind.string_id(), 0x326c);
+}
+
+#[test]
+fn a_level_lost_is_said_and_one_gained_plays_its_sound_on_titanium() {
+    let mut world = admitted();
+    let level = |world: &mut ClientWorld, current| {
+        game(
+            world,
+            WorldEvent::Level {
+                current,
+                previous: 0,
+                experience: 0,
+            },
+        )
+    };
+    let gained = level(&mut world, 5);
+    assert_eq!(gained.notices, []);
+    assert_eq!(gained.sounds, [crate::effects::Cue::Number(0x8b)]);
+    assert_eq!(
+        level(&mut world, 4).notices,
+        [Notice::LevelLost { lost: 1, level: 4 }]
+    );
+    assert_eq!(
+        level(&mut world, 1).notices,
+        [Notice::LevelLost { lost: 3, level: 1 }]
+    );
+    let same = level(&mut world, 1);
+    assert_eq!((same.notices, same.sounds), (vec![], vec![]));
+    world.carry_as(crate::GameDialect::EqMac);
+    let mac = level(&mut world, 2);
+    assert_eq!((mac.notices, mac.sounds), (vec![], vec![]));
 }
 
 #[test]
@@ -6041,7 +6453,16 @@ fn new_titles_and_game_masters_notices_change_nothing_yet() {
         WorldEvent::Gm(GmNotice::Petition(None)),
     ];
     for event in events {
-        assert_eq!(game(&mut world, event), Changes::default());
+        // Nothing changes; the news only counts in the session's gap file.
+        let unshown = crate::gaps::variant_name(&event);
+        assert!(unshown.is_some());
+        assert_eq!(
+            game(&mut world, event),
+            Changes {
+                unshown,
+                ..Changes::default()
+            }
+        );
     }
     assert_eq!(world.spawns().len(), spawns);
     assert!(world.player().is_some());
@@ -6679,6 +7100,202 @@ fn the_players_posture_changes_are_counted_but_not_a_first_standing() {
     let mut world = admitted();
     assert_eq!(posture(&mut world, PostureState::Sitting), 1);
     assert_eq!(posture(&mut world, PostureState::Standing), 2);
+}
+
+#[test]
+fn news_the_world_does_not_show_is_named_for_the_gap_file() {
+    let mut world = admitted();
+    // A ding has its own line since read R49-6 (#622).
+    assert_eq!(game(&mut world, WorldEvent::Ding).unshown, None);
+    assert_eq!(game(&mut world, WorldEvent::Spun).unshown, Some("Spun"));
+    assert_eq!(
+        game(&mut world, WorldEvent::HideAndSneakEnded).unshown,
+        Some("HideAndSneakEnded")
+    );
+}
+
+#[test]
+fn chat_channel_lines_take_their_slot_from_the_last_joined_list() {
+    use eq_network_game::chat_server::{ChannelEvent, ChannelLink, LinkLoss};
+    let mut world = admitted();
+    let message = |channel: &str| {
+        WorldEvent::Channel(ChannelEvent::Message {
+            channel: channel.into(),
+            sender: "Other".into(),
+            text: "hi".into(),
+        })
+    };
+    let slot_of = |changes: &Changes| match &changes.notices[..] {
+        [Notice::Channel(ChannelLine::Message { slot, text, .. })] => {
+            assert_eq!(text.text, "hi");
+            *slot
+        }
+        other => panic!("{other:?}"),
+    };
+    // Before a list names it, the channel has no slot.
+    assert_eq!(slot_of(&game(&mut world, message("trade"))), None);
+    let listed = game(
+        &mut world,
+        WorldEvent::Channel(ChannelEvent::Joined {
+            channels: vec!["general".into(), "Trade".into()],
+        }),
+    );
+    assert_eq!(listed.notices, []);
+    assert_eq!(world.chat_channels(), ["general", "Trade"]);
+    assert_eq!(slot_of(&game(&mut world, message("trade"))), Some(2));
+    // A zone change keeps the list.
+    game(&mut world, entered(2));
+    assert_eq!(slot_of(&game(&mut world, message("general"))), Some(1));
+    // A lost link says so once and forgets the list.
+    let lost = game(
+        &mut world,
+        WorldEvent::ChannelLink(ChannelLink::Lost {
+            reason: LinkLoss::Dropped,
+        }),
+    );
+    assert_eq!(lost.notices, [Notice::Channel(ChannelLine::Lost)]);
+    assert_eq!(world.chat_channels().len(), 0);
+    // A refusal for this admission is told; one for another is not.
+    let refused = game(
+        &mut world,
+        WorldEvent::ChatChannelRefused {
+            session_id: 2,
+            reason: "The chat server link has ended".into(),
+        },
+    );
+    assert_eq!(
+        refused.notices,
+        [Notice::ChannelRefused {
+            reason: "The chat server link has ended".into()
+        }]
+    );
+    assert!(
+        game(
+            &mut world,
+            WorldEvent::ChatChannelRefused {
+                session_id: 1,
+                reason: "old".into(),
+            },
+        )
+        .ignored
+    );
+}
+
+#[test]
+fn chat_channel_names_print_without_control_characters_or_link_markers() {
+    use eq_network_game::chat_server::ChannelEvent;
+    let mut world = admitted();
+    let message = game(
+        &mut world,
+        WorldEvent::Channel(ChannelEvent::Message {
+            channel: "tra\u{12}de".into(),
+            sender: "Ot\u{7}her\u{12}0001".into(),
+            text: "hi".into(),
+        }),
+    );
+    match &message.notices[..] {
+        [
+            Notice::Channel(ChannelLine::Message {
+                channel, sender, ..
+            }),
+        ] => {
+            assert_eq!(channel, "trade");
+            assert_eq!(sender, "Other0001");
+        }
+        other => panic!("{other:?}"),
+    }
+    let joined = game(
+        &mut world,
+        WorldEvent::Channel(ChannelEvent::MemberJoined {
+            channel: "trade\r\n".into(),
+            name: "\u{12}Some\u{1b}one\u{12}".into(),
+        }),
+    );
+    assert_eq!(
+        joined.notices,
+        [Notice::Channel(ChannelLine::Member {
+            channel: "trade".into(),
+            name: "Someone".into(),
+            joined: true,
+        })]
+    );
+}
+
+/// An admission whose session offers one capability.
+fn offering(session_id: u64, capability: crate::Capability) -> WorldEvent {
+    let WorldEvent::Entered {
+        choices,
+        zone,
+        player,
+        far_clip,
+        spell_landing_flag,
+        zone_id,
+        ..
+    } = entered(session_id)
+    else {
+        unreachable!("an admission")
+    };
+    WorldEvent::Entered {
+        capabilities: vec![capability],
+        choices,
+        session_id,
+        zone,
+        player,
+        far_clip,
+        spell_landing_flag,
+        zone_id,
+    }
+}
+
+#[test]
+fn the_latest_title_list_is_kept_where_offered_until_the_zone_changes() {
+    use eq_network_game::names::TitleChoice;
+    let list = |prefix: &str| {
+        WorldEvent::TitleList(vec![TitleChoice {
+            id: 7,
+            prefix: prefix.into(),
+            suffix: String::new(),
+        }])
+    };
+    // Where the session does not offer titles, a list changes nothing.
+    let mut world = admitted();
+    assert!(game(&mut world, list("Lord")).ignored);
+    assert!(world.titles().is_none());
+
+    let mut world = ClientWorld::default();
+    game(&mut world, offering(1, crate::Capability::Titling));
+    connection(&mut world, true, false);
+    assert!(world.titles().is_none());
+    let changes = game(&mut world, list("Lord"));
+    assert!(!changes.ignored && changes.notices.is_empty());
+    // The latest list replaces the one before.
+    game(&mut world, list("Lady"));
+    assert_eq!(
+        world.titles().map(|titles| titles[0].prefix.as_str()),
+        Some("Lady")
+    );
+    // A new zone forgets it.
+    game(&mut world, offering(2, crate::Capability::Titling));
+    connection(&mut world, true, false);
+    assert!(world.titles().is_none());
+}
+
+#[test]
+fn the_chat_pace_holding_a_line_is_said_to_this_admission_only() {
+    let mut world = admitted();
+    let refused = |session_id| WorldEvent::ChatRefused {
+        session_id,
+        reason: "You are sending chat too fast. Wait 3 seconds.".into(),
+    };
+    assert_eq!(
+        game(&mut world, refused(1)).notices,
+        [Notice::ChatRefused {
+            reason: "You are sending chat too fast. Wait 3 seconds.".into()
+        }]
+    );
+    let stale = game(&mut world, refused(9));
+    assert!(stale.ignored);
+    assert_eq!(stale.notices, []);
 }
 
 #[test]
