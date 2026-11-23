@@ -771,7 +771,7 @@ pub(crate) fn item_actions(
             (&online, &spells),
             &sender,
             online.world().target().selected,
-            online.world().casting().cast.is_some() || online.world().casting().pending.is_some(),
+            online.world().casting().holds_actions(),
             || {
                 crate::invisibility::drop_before_cast(
                     online.world(),
