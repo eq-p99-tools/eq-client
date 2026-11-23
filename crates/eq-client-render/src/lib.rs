@@ -102,6 +102,7 @@ mod profile_files;
 mod projectiles;
 mod raid;
 mod reading;
+mod reports;
 mod resources;
 mod resurrection;
 pub mod script;

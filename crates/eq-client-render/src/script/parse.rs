@@ -1797,6 +1797,22 @@ mod tests {
     }
 
     #[test]
+    fn a_script_never_sends_a_report_to_the_staff() {
+        // A person reads each report, so only a typed line sends one (6.511).
+        let base = Path::new("private");
+        for bad in [
+            "slash(\"petition I am stuck\")",
+            "slash(\"bugreport pathing: the guard\")",
+            "slash(\"bug the guard\")",
+            "slash(\"feedback a note\")",
+        ] {
+            let source = format!("report(\"before\")\n{bad}\nreport(\"after\")\n");
+            let error = super::super::Program::parse(&source, base).unwrap_err();
+            assert_eq!(error.line, Some(2), "{bad}");
+        }
+    }
+
+    #[test]
     fn language_fixture_recipe_uses_only_bounded_supported_gm_commands() {
         let base = Path::new("private");
         for command in [

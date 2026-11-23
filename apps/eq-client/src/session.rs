@@ -209,6 +209,13 @@ impl SessionWorker {
                             tracing::info!("{message}");
                             None
                         }
+                        // A server message the session left unread
+                        // (eq-network's gap log); the log keeps it, as it
+                        // did the diagnostic that told of it before.
+                        ClientEvent::Gap(gap) => {
+                            tracing::info!("Unread server message: {gap:?}");
+                            None
+                        }
                         // A reconnect is a fresh login; this viewer asks for
                         // none, but says so if one comes.
                         ClientEvent::Reconnecting {

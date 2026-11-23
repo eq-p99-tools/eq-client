@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Send petitions, bug reports and feedback from a typed line (gap list 3.6,
+  recording checklist 6.511). `/petition`, `/bugreport` (also `/bug`) and
+  `/feedback` with their words send `SendPetition`, `ReportBug` and
+  `SendFeedback` where the session offers them, which today is stock EQEmu
+  for petitions and bug reports. A bug report's leading `word:` names its
+  category where it is one, else the line is the text under Other; it
+  carries the player's place and heading and the selected entity. Only a
+  typed line sends a report: socials, hotbuttons, buttons and script steps
+  answer as before, and a script's `slash()` refuses the three commands.
+  Stock EQEmu says nothing on success, so this client's own line says the
+  petition or bug report was sent; feedback gets none. Refusals from the
+  session show in chat. Repins eq-network to 66900af (#339), which also
+  brings the duel offer and `/surname` answers (not shown yet), and logs
+  each server message the session could not read.
+
 - Keep server filters per character and give them to the session (parity
   item 6, recording checklist 6.494). Options gains a Filters page with one
   row per kind the generation's packet has a word for (24 on Titanium, 16 on
