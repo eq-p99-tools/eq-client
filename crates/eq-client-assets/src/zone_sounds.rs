@@ -140,12 +140,11 @@ pub struct Emitter {
     /// The day and night volume values (+0x3c, +0x40): positive is an
     /// attenuation in millibels, otherwise the type's own volume.
     pub volumes: [i32; 2],
-    /// The day value at +0x44, which the program keeps as the emitter's
-    /// +0x1c and, for music, clamps to 20000 and passes with 1500 to the
-    /// music start (engine follow-up to R49-7); the music half takes it as
-    /// a switch's fade-out in ms [I: the engine follow-up's section 2 reads
-    /// the clamp and the 1500 but not what the music start does with them].
-    pub fade_out_ms: i32,
+    /// The day and night values at +0x44 / +0x48: for music, the node's
+    /// fade-out in ms when the player leaves every region, clamped to 20000
+    /// (read on zone music tracks, the node's +0x2c); for other types the
+    /// emitter's +0x1c.
+    pub fade_out_ms: [i32; 2],
     /// The whole record. The pair at +0x4c is a distance setting the
     /// program combines with the type (engine follow-up to R49-7); how the
     /// per-frame falloff uses it is unread.
@@ -209,7 +208,7 @@ impl Emitter {
             kind: EmitterKind::from_byte(record[0x38]),
             kinds: [record[0x38], record[0x39]],
             volumes: [word(record, 0x3c), word(record, 0x40)],
-            fade_out_ms: word(record, 0x44),
+            fade_out_ms: [word(record, 0x44), word(record, 0x48)],
             raw: *record,
         }
     }
@@ -525,7 +524,7 @@ mod tests {
         assert_eq!(first.id(true), 4);
         assert_eq!(first.kind, EmitterKind::StaticEffect);
         assert_eq!(first.kinds, [2, 2]);
-        assert_eq!(first.fade_out_ms, 2500);
+        assert_eq!(first.fade_out_ms[0], 2500);
         assert!(emitters[1].kind.is_music());
         assert_eq!(EmitterKind::from_byte(9), EmitterKind::Unknown(9));
         assert!(matches!(
