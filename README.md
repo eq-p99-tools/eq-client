@@ -222,7 +222,9 @@ workflow runs on demand, so a green Format check is not a full test run.
 
 Original code is available under the [MIT License](LICENSE). The asset loader
 uses a pinned [eq-p99-tools/libeq fork](https://github.com/eq-p99-tools/libeq) of
-[cjab/libeq](https://github.com/cjab/libeq). Dependency licenses and the rights
+[cjab/libeq](https://github.com/cjab/libeq). EQG zones are read with David Henry's
+`libeq_eqg` crate from his [djhenry/libeq fork](https://github.com/djhenry/libeq), pinned
+to commit `686b74a`. Dependency licenses and the rights
 to your installed game data are separate. Include the
 [third-party notices](THIRD-PARTY-NOTICES.md) with binary distributions.
 
