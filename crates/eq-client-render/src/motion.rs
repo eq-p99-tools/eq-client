@@ -1215,20 +1215,19 @@ const TURN_RATE: f32 = 240.0;
 /// units a second (0x4a1d74).
 const TURN_STEP: f32 = 20.0;
 
-/// How often the turn ramp steps. The program steps it once a frame, so
-/// this is taken as 60 a second, which never ramps faster than the program
-/// at 60 frames a second (inferred, recording checklist 6.416).
-const TURN_STEPS_PER_SECOND: f32 = 60.0;
+/// How often the turn ramp steps. The program steps it once a frame with no
+/// time scale (R49-24 c, R49-24b), so this is the frame rate taken for its
+/// once-a-frame steps, 60 a second (inferred, recording checklist 6.416).
+const TURN_STEPS_PER_SECOND: f32 = eq_client_assets::falls::PROGRAM_FRAME_RATE;
 
-/// The most steps the turn ramp takes (0x4a1d74): 12 (240 units a second),
-/// 8 while walking, and 3 for race 141.
-fn turn_cap(walking: bool, race: u32) -> f32 {
-    if race == 141 {
-        3.0
-    } else if walking {
-        8.0
-    } else {
-        12.0
+/// The most steps the turn ramp takes for the controlled spawn's `race`
+/// (0x4a1d74, read R49-24b): 8 for races 216 and 472 (0x47bfd0), 3 for race
+/// 141, else 12 (240 units a second). Walking or running doesn't change it.
+fn turn_cap(race: u32) -> f32 {
+    match race {
+        216 | 472 => 8.0,
+        141 => 3.0,
+        _ => 12.0,
     }
 }
 
@@ -1696,10 +1695,7 @@ pub(super) fn input(
     } else {
         0.0
     };
-    let cap = turn_cap(
-        controls.walking,
-        online.world().player().map_or(0, |player| player.race),
-    );
+    let cap = turn_cap(online.world().player().map_or(0, |player| player.race));
     controls.observe_turn(
         turning,
         now,
@@ -2522,10 +2518,7 @@ pub(super) fn input(
     } else if mouse_steering {
         steered_heading
     } else if Vec2::new(direction.x, direction.z) == Vec2::ZERO || preserve_facing {
-        let cap = turn_cap(
-            controls.walking,
-            online.world().player().map_or(0, |player| player.race),
-        );
+        let cap = turn_cap(online.world().player().map_or(0, |player| player.race));
         // The frame a key goes down already turns at the first step.
         let held = controls.turn_held.map_or(0.0, |(_, since)| {
             now.saturating_duration_since(since).as_secs_f32() + 1.0 / TURN_STEPS_PER_SECOND
@@ -2906,6 +2899,7 @@ pub(super) fn physics(client: InstalledClient, zone_gravity: Option<f32>) -> Ver
             terminal_speed: falls.terminal_under(gravity),
             jump_speed: falls.jump_speed,
             air_factor: falls.air_factor,
+            frames_per_step: falls.frames_per_step,
             ground_tolerance: falls.ground_tolerance,
             climb: eq_client_core::movement::MAX_GROUNDED_STEP,
             edge_climb: None,
@@ -4850,7 +4844,7 @@ pub(super) mod tests {
         let start = Vec3::new(0.0, 0.0, -20.0);
         let titanium = (InstalledClient::Titanium, true);
         for (name, side, takeoff, raised) in [
-            // A side 9 high reaches past the soles' rise (about 4.95)
+            // A side 9 high reaches past the soles' rise (about 5.25)
             // plus 3.375.
             ("a side 9 high", 9.0, Some(-1.0), titanium),
             // Off the end with no jump, the soles are far under the side's
@@ -4993,7 +4987,7 @@ pub(super) mod tests {
             peak.get().max(feet.y)
         };
         let apex = highest(floor.clone());
-        assert!((apex - 4.95).abs() < 0.1, "{apex}");
+        assert!((apex - 5.25).abs() < 0.1, "{apex}");
         for top in [3.0, 6.0, 8.0] {
             for thick in [0.1, 0.3] {
                 let mut triangles = floor.clone();
@@ -5027,7 +5021,7 @@ pub(super) mod tests {
         );
         let floor = solid_box(Vec3::new(-20.0, -1.0, -40.0), Vec3::new(20.0, 0.0, 200.0));
         let mut ledge = floor;
-        // Just under what a standing jump mounts (about 4.95 + 3.375).
+        // Under what a standing jump mounts (about 5.25 + 3.375).
         ledge.extend(solid_box(
             Vec3::new(-20.0, 0.0, 1.0),
             Vec3::new(20.0, 8.0, 200.0),
@@ -5087,7 +5081,9 @@ pub(super) mod tests {
                 );
                 feet = next;
             }
-            assert!(lifted == 1 && (feet.y - top).abs() < 0.01, "{name}: {feet}");
+            // The deck is low enough that the arc alone may land on it; the
+            // ledge needs the lift.
+            assert!(lifted <= 1 && (feet.y - top).abs() < 0.01, "{name}: {feet}");
         }
     }
 
@@ -5339,12 +5335,10 @@ pub(super) mod tests {
             &HUMAN,
         );
         assert!((mac.gravity - 160.0).abs() < 0.001, "{}", mac.gravity);
-        // The session's motion guard lets the program's fastest fall through.
-        assert!(
-            (mac.terminal_speed - eq_client_core::movement::EQMAC_FALL_SPEED).abs() < 0.01,
-            "{}",
-            mac.terminal_speed
-        );
+        // Three frames a step slow the fall to 13.2 units a step (R49-24 b),
+        // well inside the session's motion guard.
+        assert!((mac.terminal_speed - 264.0).abs() < 0.01, "{}", mac.terminal_speed);
+        assert!(mac.terminal_speed <= eq_client_core::movement::EQMAC_FALL_SPEED);
         // The zone header's gravity, a step at a time; none pulls nothing.
         let heavy = climbing(
             physics(InstalledClient::EqMac, Some(0.8)),
@@ -5392,10 +5386,13 @@ pub(super) mod tests {
             ramped_turn(1.0 / 60.0, 2.0 / 60.0, 12.0),
             40.0 / 60.0
         ));
-        // Running reaches 240 a second after 11 steps, walking 160 after 7.
-        assert!(close(ramped_turn(1.0, 2.0, 12.0), 240.0));
-        assert!(close(ramped_turn(1.0, 2.0, turn_cap(true, 1)), 160.0));
-        assert!(close(ramped_turn(1.0, 2.0, turn_cap(false, 141)), 60.0));
+        // A human reaches 240 a second after 11 steps, walking or running;
+        // races 216 and 472 160 after 7, and race 141 60 (R49-24b).
+        assert!(close(ramped_turn(1.0, 2.0, turn_cap(1)), 240.0));
+        for race in [216, 472] {
+            assert!(close(ramped_turn(1.0, 2.0, turn_cap(race)), 160.0));
+        }
+        assert!(close(ramped_turn(1.0, 2.0, turn_cap(141)), 60.0));
         // The whole ramp to full speed turns 20 x (1 + ... + 11) / 60.
         assert!(close(ramped_turn(0.0, 11.0 / 60.0, 12.0), 22.0));
         // A span that starts before the key was held counts from the press.
@@ -5723,16 +5720,20 @@ pub(super) mod tests {
     #[test]
     fn a_running_drop_off_a_ledge_at_the_live_cadence_lands_at_the_read_steps_speed() {
         use eq_client_assets::falls::{FallLanding, TITANIUM};
-        // Live's local EQEmu drops (11-01): a run off a ledge this high,
-        // the impact the client logged, and the damage for a carried weight
-        // of 0, of 16.5 (what the four drops fit) and of 18 (the inventory
-        // window two hours earlier): T = whole weight / 100 + v - 4.
-        for (height, impact, damages) in [
-            (30.2, 90.0, [2, 4, 4]),
-            (50.2, 110.8, [23, 28, 29]),
-            (80.2, 144.2, [103, 113, 114]),
-            (100.2, 157.1, [148, 161, 162]),
-        ] {
+        // The heights of live's local EQEmu drops (11-01): a run off a
+        // ledge this high, the impact under the per-frame fall (R49-24 b;
+        // the 11-01 impacts were the old once-a-step fall's: 90, 110.8,
+        // 144.2 and 157.1, costing 2, 23, 103 and 148 unladen), at the 60
+        // frames a second taken (inferred, 6.419), and the damage for a
+        // carried weight of 0, 16.5 and 18: T = whole weight / 100 + v - 4.
+        let expected = [
+            (30.2, 80.15, [0, 0, 0]),
+            (50.2, 105.88, [16, 21, 21]),
+            (80.2, 128.0, [57, 65, 66]),
+            (100.2, 139.77, [89, 99, 100]),
+        ];
+        let mut got = Vec::new();
+        for (height, _, _) in expected {
             let ledge = |x0: f32, x1: f32, y: f32| {
                 [
                     [[x0, y, -20.0], [x1, y, -20.0], [x1, y, 20.0]],
@@ -5770,20 +5771,22 @@ pub(super) mod tests {
                 })
                 .expect("the run lands");
             assert!(feet.y.abs() < 0.01, "{height}: {feet}");
-            assert!(
-                (landing.impact_speed - impact).abs() < 0.06,
-                "{height}: {landing:?}"
-            );
-            for (weight, damage) in [0.0, 16.5, 18.0].into_iter().zip(damages) {
-                let cost = TITANIUM.landing_cost(FallLanding {
-                    impact_speed: landing.impact_speed,
-                    carried_weight: weight,
-                    safe_fall: 0,
-                    safe_fall_ranks: 0,
-                    zone: 1,
-                });
-                assert_eq!(cost.damage, damage, "{height} at {weight}: {landing:?}");
-            }
+            let damages = [0.0, 16.5, 18.0].map(|weight| {
+                TITANIUM
+                    .landing_cost(FallLanding {
+                        impact_speed: landing.impact_speed,
+                        carried_weight: weight,
+                        safe_fall: 0,
+                        safe_fall_ranks: 0,
+                        zone: 1,
+                    })
+                    .damage
+            });
+            got.push((height, landing.impact_speed, damages));
+        }
+        for ((height, impact, damages), (_, landed, cost)) in expected.iter().zip(&got) {
+            assert!((landed - impact).abs() < 0.06, "{height}: {got:?}");
+            assert_eq!(cost, damages, "{height}: {got:?}");
         }
     }
 
@@ -10426,13 +10429,13 @@ pub(super) mod tests {
         let all = eq_client_core::Capability::ALL.to_vec();
         // Safe Fall is announced where the player has it.
         for (safe_fall, amount, used) in [
-            // 7.855 units a step at touchdown, the read step's from 100
-            // units up: trunc(10 × 3.855²).
-            (None, 148, false),
-            (Some(0), 148, false),
+            // About 7 units a step at touchdown, the per-frame fall's from
+            // 100 units up (R49-24 b): trunc(10 × (v − 4)²).
+            (None, 89, false),
+            (Some(0), 89, false),
             // The skill takes off all of it, and is still announced.
             (Some(200), 0, true),
-            (Some(254), 148, false),
+            (Some(254), 89, false),
         ] {
             let (mut app, receiver) = landing(safe_fall, all.clone());
             assert_eq!(
@@ -10460,7 +10463,7 @@ pub(super) mod tests {
         use eq_client_core::inventory::{InventorySlot, InventoryUpdate};
 
         for (updates, uncertain_purse, amount) in [
-            (vec![], false, Some(276)),
+            (vec![], false, Some(191)),
             (vec![], true, None),
             (
                 vec![
@@ -10468,7 +10471,7 @@ pub(super) mod tests {
                     InventoryUpdate::Remove(InventorySlot::CURSOR),
                 ],
                 false,
-                Some(276),
+                Some(191),
             ),
             (vec![InventoryUpdate::Invalidated], false, None),
         ] {
@@ -10635,6 +10638,7 @@ pub(super) mod tests {
             gravity: 100.0,
             jump_speed: 25.0,
             air_factor: 1.0,
+            frames_per_step: 1,
             ground_tolerance: 0.0,
             ..physics(InstalledClient::Titanium, None)
         };
@@ -10865,7 +10869,7 @@ pub(super) mod tests {
         assert_eq!(
             app.world().resource::<Controls>().unreported,
             Some(FallCost {
-                damage: 148,
+                damage: 89,
                 safe_fall: false
             })
         );
@@ -10884,7 +10888,7 @@ pub(super) mod tests {
             Some(ClientCommand::EnvironmentalDamage {
                 session_id: 11,
                 hazard: Hazard::Falling,
-                amount: 148,
+                amount: 89,
                 safe_fall: false,
             })
         );

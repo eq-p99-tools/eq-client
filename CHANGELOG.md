@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Follow program reads R49-24 and R49-24b on Titanium for the per-frame steps (checklists 6.416, 6.418, 6.419).
+  - **Falls and jumps:** the air slows a body once a program frame, three frames each 50 ms step at the 60 frames a second taken (inferred), with gravity and the move in each frame's share. Falls now reach about a third of the old top speed, and a jump rises about 5.25 rather than 4.95, as the official client does at 60 frames a second. The program has no frame cap by default, so the official client on a present-day PC falls no faster than this. A fall's damage follows the slower landing. The first fall on P99 or Quarm with this build is attended.
+  - **Turn keys:** the ramp's cap is a race rule: 12 steps (240 heading units a second) for most races, 8 for races 216 and 472, and 3 for race 141. Walking no longer lowers it to 8.
+  - **Mouse look:** sensitivity takes the program's eight steps, shown 1 to 8 on the slider. The default is its 4 (s = 1.143), and a saved 50, the old default, reads as 4. Races 216 and 472 turn at most 8 heading units a step by mouse, and race 141 3. The program's dead zone waits on a read, so a straight up-and-down drag still looks fully up and down.
 - A Bard's `/melody`, as the Titanium program's (0x472156, read R49-33 c; gap 3.5, plan approved with Y1 to Y4). It is offered where the session offers `Capability::Melody`, on P99 (by Adam's word) and Titanium EQEmu. Elsewhere it answers as an unknown game command does.
   - **`/melody 1 3 2`** clears the list, then, unless a song is sung, plays gems 1, 3 and 2 in turn. It presses the first at once through the same gem press as a click, with the same refusals and lines.
   - **Each refresh of the player's own gem** sends the song stop, then presses the next gem, cycling. Nothing else moves the melody (no timer, no retry), so with no refresh after a refused press it stalls ([I]; read R49-48 f is filed for the program's index on a refusal).

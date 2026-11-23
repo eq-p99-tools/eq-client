@@ -92,7 +92,13 @@ policies. P99 jump notices are capture-backed; Quarm's movement and transfers
 reuse the source-checked EQMac path. New public-server scenarios still need live
 verification. Physics uses installed-client
 rules and zone gravity where available, with an explicit provisional fallback
-when those data cannot be read. Project 1999 and Titanium EQEmu sessions
+when those data cannot be read. The original client slows a body in the air,
+and ramps the turn keys, once a rendered frame with no frame cap by default,
+so its falls and turns depend on the machine's frame rate. This client takes
+60 frames a second for both whatever its own frame rate, three of the
+program's frames in each 50 ms step (inferred, checklists 6.416 and 6.419):
+its falls and jumps go as the original's at 60, the same for every player,
+and never gentler than the original running faster. Project 1999 and Titanium EQEmu sessions
 offer bounded swimming in classic water marked by the installed zone.
 Wet movement starts when the character's body origin enters that region.
 On Titanium, water moves the body as the original client's own water step
