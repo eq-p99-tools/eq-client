@@ -130,6 +130,15 @@ The script pointer glides to the thing's middle on screen, and the click acts on
 - `map zoom_in`, `map zoom_out`, `map reset` or `map labels`: a map toolbar button.
 - `map up`, `map down`, `map left` or `map right`: pan the map.
 
-The map is available on every server and can show known entities without local map files. Search, watches and the inspector are interactive controls; they do not yet have dedicated named script targets. Map inspection is local, while its explicit Target button uses the ordinary gameplay capability and range checks.
+- `map_search names` or `map_search landmark`: focus the name search or the landmark box. Then `press(...)` types into it, as for any box.
+- `map_watch clear`, `map_watch track`, `map_watch track_selected` or `map_watch list`: clear the search, track the searched name, track (or stop tracking) the inspected entity's name, or open the watch list.
+- `map_watch remove NAME`: the remove control of the watch row showing NAME. A name of several words is given as several arguments, such as `click("map_watch", "remove", "a", "rare", "guard")`.
+- `map_marker admission id revision`: a spawn's marker, which pins it in the inspector. The report's surroundings line lists the tuple for the 64 nearest spawns as `map_markers` (with how many there are), and the map shows every known spawn. A stale admission or revision is refused, as for a click in the world. A marker that isn't drawn can't be clicked.
+- `map_inspector clear`: the inspector's Clear.
+- `map_target`: the inspector's Target button. It uses the ordinary target capability and range checks, and its refusal is the chat line a person gets.
+- `map_landmarks toggle`, `map_landmarks save` or `map_landmarks remove`, and `map_landmarks locate NAME`: the landmark controls and a landmark's row.
+- `map_style less`, `map_style more`, `map_style style`, `map_style lock` or `map_style outlines`: the presentation controls.
+
+The map is available on every server and can show known entities without local map files. Map inspection is local, while its explicit Target button uses the ordinary gameplay capability and range checks. Watches and landmarks are saved per character, and presentation beside the window placements, so these clicks change saved settings as a person's do.
 
 Targets are resolved through the normal client UI and session capabilities. No target bypasses a server's unsupported feature or conjures a closed merchant, bag or spellbook into existence.
