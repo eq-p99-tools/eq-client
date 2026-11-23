@@ -58,7 +58,7 @@ either way. The choice is kept per character in this client's settings folder
 (`skin.v2-…txt`), never in the installation's `UI_<character>_<world>.ini`.
 It applies each time that character enters the world, unless `--ui-skin`
 names another skin for that run. A skin loaded in game wins over `--ui-skin`
-until the character next enters the world.
+until the player camps or plays another character or world.
 Skins differ in what they show. The Velious skin's inventory holds the bags
 alone: its equipment sits in Hot Button window 1, and it shows no statistics or
 hit point and mana numbers anywhere. The default skin's inventory shows all of
@@ -150,19 +150,24 @@ the client knows the inputs to count air. The next one-second breath check
 refills the reserve if the character has surfaced or can breathe underwater.
 With **Gills for Days** enabled, the client skips the air calculation. Turning
 it off starts with a fresh reserve. Because skipping the counter withholds the
-drowning reports a local EQEmu session takes, the setting needs the session's
+drowning reports every Titanium session takes, the setting needs the session's
 gameplay departures like Fly and Jesus Mode. Titanium `eqgame.exe` checks
 breath at 0x4bdb3c, heat at 0x41d4ba and the head region at 0x489b0a.
 Unsupported geometry and unresolved character inputs withhold the
 applicable calculation.
 
-Local-only EQEmu sessions offer drowning and lava heat reports. Actual body
-contact with lava drives the heat check independently of the air counter.
-**Take Environmental Damage** controls all supported reports, including falls.
-Turning it off departs from the original client's reporting.
-Server health and combat updates remain authoritative. Project 1999 retains
-fall reporting and the local Titanium meter. Liquid reports await validation
-on the deployed server.
+Every Titanium session, EQEmu and Project 1999 alike, takes drowning and lava
+heat reports, as the Titanium program sends them on any server it plays on.
+Characters on public servers can drown and burn. Actual body contact with lava
+drives the heat check independently of the air counter.
+**Take Environmental Damage** controls all supported reports, including falls,
+and is on by default. Turning it off departs from the original client's
+reporting. Server health and combat updates remain authoritative. The amounts,
+their timing and the chat lines after each report follow the Titanium
+program (reads R49-3 and R49-3b). Project 1999's handling of the liquid
+reports and their damage records is not yet checked live. With the setting
+off, nothing is reported and no line prints for the player's own reports; a
+record the server sends, such as a trap's, still prints its line.
 
 The two spellbook choices are independent. Enable both to read and memorize
 through the book UI while remaining standing.

@@ -2,7 +2,46 @@
 
 ## Unreleased
 
-- `/loadskin <name>` switches the UI skin in game (Adam, 11-23), as the official client's command does. The windows redraw from the new skin at once, and the choice stays the character's for later runs. A name matches the installation's `uifiles` folder whatever its letter case. A skin that isn't installed changes nothing and says so, and an unreadable line gives the usage. The official client's trailing `0` or `1` is accepted, and this client keeps window placements either way. The choice is saved in this client's settings folder, not in the installation's files. A skin loaded in game wins over `--ui-skin` until the character next enters the world, when `--ui-skin` applies again. What the official client says in reply isn't read, so the replies are this client's own words. Why: the Velious skin's inventory shows the bags alone, with no paperdoll, statistics or hit point and mana numbers, and its equipment sits in Hot Button window 1. `/loadskin default` brings the full inventory back without restarting.
+- `/loadskin <name>` switches the UI skin in game (checklist 6.605), as the official client's command does. The windows redraw from the new skin at once, and the choice stays the character's for later runs. A name matches the installation's `uifiles` folder whatever its letter case. A skin that isn't installed changes nothing and says so, and an unreadable line gives the usage. The official client's trailing `0` or `1` is accepted, and this client keeps window placements either way. The choice is saved in this client's settings folder, not in the installation's files. A skin loaded in game wins over `--ui-skin` until the player camps or plays another character or world, when `--ui-skin` applies again. What the official client says in reply isn't read, so the replies are this client's own words. Why: the Velious skin's inventory shows the bags alone, with no paperdoll, statistics or hit point and mana numbers, and its equipment sits in Hot Button window 1. `/loadskin default` brings the full inventory back without restarting.
+
+- Drowning and lava now hurt on every Titanium server, public EQEmu and
+  P99 included, as the Titanium program reports them on any server
+  (eq-network's liquid change; read R25). **Characters on public servers
+  can now drown and burn with this client.** Take Environmental Damage,
+  on by default, still withholds every report; a test shows a P99-style
+  session reports neither liquid with it off. `docs/settings.md` says so.
+  Inferred parts are under checklist 6.491.
+  - **The program's lines (reads R49-3 e and R49-3b).** After each of its
+    own reports on a Titanium session, the client prints the program's
+    amount line, then the record's own line for the type, in the
+    program's colours: falls, drowning, lava, zone 200's lava and cold.
+    The death path sends no record, so it prints the amount line alone.
+  - **A record the server sends** for the player (a trap's, or `EQEmu`'s
+    echo of the player's own non-fall record) prints the program's line
+    for its type in place of a melee line. A trap's line is chosen by the
+    record's spell field, as the program does. `EQEmu`'s echo prints the
+    line a second time, as the official client does there, so log
+    parsers read the same lines.
+  - **Departure, labelled (6.491f):** the program takes an echoed
+    record's amount off its local HP a second time. This client keeps HP
+    the server's, so it does not.
+  - **A drowning record from the server empties the air counter** while
+    the head is under, as the program's does.
+  - **The tick** runs strictly more than a second after the last, as the
+    program's `> 1000 ms` (read R49-3 a).
+  - **Lava takes any resist,** a negative one included, as the program's
+    arithmetic does. Zone 200's type-244 heat and cold (type 246) have
+    their formulas in `environment` but nothing samples them: zone 200
+    needs disease resistance, and cold's regions wait on read R49-26.
+  - Other players' environmental lines, which the program builds with
+    their name under chat filter 0x11, are row 6.491g, not built here.
+  - Repin eq-network to c52bc91, its main with #326 merged. It brings
+    `WorldEvent::HazardReported` and `TRAP_DAMAGE_KIND`.
+- `/guildstatus` is offered, as read R49-6k reads it (checklist 6.575).
+  - The Titanium program answers it itself and sends nothing: for the player a typed name finds (`/guildstatus Name`, ignoring case), or else for the target.
+  - Lines 12256, 12257 and 12258 give the rank (member, officer, leader) with the name and the guild. 12259 gives the name alone for any other rank, and 12260 refuses a missing spawn, one that isn't a player, or a game master. All come in message type 0x111.
+  - A player in no guild gets this client's own words, because the program's are its own and not in the strings.
+  - Still inferred: that +0x256 is the GM flag (read R49-4 takes it so), and the name lookup's exact rule. Anonymity isn't tested, so an anonymous player's guild shows as the server sent it. The Mac client's answer wasn't read, so it is refused there for now.
 
 - Scripts can use the map's own controls (checklist 6.589), since a script may do whatever the player can (Adam, 11-23): the search boxes, the watch controls and rows, a spawn's marker, the inspector's Clear and Target, the landmarks and the presentation controls, as `map_search`, `map_watch`, `map_marker`, `map_inspector`, `map_target`, `map_landmarks` and `map_style` targets. Each click runs the map's own handler, so the Target button keeps its capability and range checks. A marker takes the spawn's admission, id and revision, which the report's new `map_markers` field lists for the 64 nearest spawns; a stale one is refused. Watches, landmarks and presentation are saved settings, and these clicks change them as a person's do.
 

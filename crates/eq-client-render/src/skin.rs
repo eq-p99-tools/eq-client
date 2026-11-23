@@ -49,8 +49,10 @@ impl LoadSkin {
 #[derive(Resource, Default)]
 pub(super) struct Loaded {
     files: crate::profile_files::Store,
-    /// Loaded since the character entered the world: it wins over the
-    /// command line until they next enter.
+    /// Loaded in game for the character playing: it wins over the command
+    /// line until the profile changes, as when the player camps or plays
+    /// another character or world. A zone change or a reconnect to the
+    /// same character keeps it.
     session: Option<String>,
     /// The character's last loaded skin, from their file.
     saved: Option<String>,
