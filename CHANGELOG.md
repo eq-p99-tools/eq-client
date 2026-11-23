@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Buffs landing on the player take the slot the Titanium program's whole slot finder gives them (checklist 6.612, read R49-22e, repin to eq-network #417). That includes step 4's replace in place, worked out from each effect's base, formula and max as 0x40f339 does, and step 6's eviction. The facts come from the installed spell data: effects, the Bard level and the band, with each held buff's stored level from its record.
+  - A buff the program removes for the landing is dropped as a prediction. If the server's word still holds it afterwards (a record for it, or the next zone-in's table), its word stands, and the disagreement is logged with the rule and both spells (6.612 T1).
+  - A value the client can't work out still leaves the landing unslotted. That covers a random formula, one that reads hit points, or one that needs a level we don't know. The old guess for a possible step-4 replace is gone.
 - Seven local-settings slash commands work as the Titanium program's do (checklist 6.525, read R49-22c). They change only this client: nothing goes to a server, on any server type, and scripts can run each with `slash()`.
   - `/clearchat` clears the active chat window's view, silently. The history keeps its lines, so scripts, the log and other windows still have them.
   - `/showspelleffects` and `/combatmusic`: "off" turns the option off and any other word turns it on; with no word they give their usage. Each ends by saying where the option stands. `/combatmusic` now takes the read's words instead of toggling, and says the installation's lines. This client plays no combat music yet, so it changes nothing audible.
@@ -38,7 +41,9 @@
     its choice's index; an index outside the row's choices gives its
     default. They stay per character, this client's choice (the original
     keeps one set per install). The `filter_<kind>` lines of the first
-    filters change are no longer read.
+    filters change are no longer read, so **every saved filter choice
+    falls back to its default once** after this update; set them again on
+    the Filters page.
   - **`/filter`** shows the Options window on the Filters page, reading no
     words and sending nothing, as the program does.
   - **At once on Titanium:** a change goes to the server at once on EQEmu
@@ -51,7 +56,7 @@
   - A hidden row hides only where the server honours it; the program's own
     local hiding (stuns, others' environmental lines, spell and damage
     lines) is the next change.
-  - Repins eq-network to a061666 (#407).
+  - Uses main's eq-network pin, which carries #407; no repin of its own.
 - Hide locally what the Titanium program hides by its filters, for the lines
   this client prints (read R49-2 d, checklist 6.494, C2). With **Missed me**
   hidden, another's melee attack on the player that does not land is not
