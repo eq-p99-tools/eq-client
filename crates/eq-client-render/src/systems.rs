@@ -135,6 +135,7 @@ pub(super) fn schedule(app: &mut App) {
                 receive_world(),
                 online::leave,
                 online::report_bleed_out,
+                crate::poison_wait::report,
                 login::watch,
                 online::tick,
                 daylight::update,
@@ -211,6 +212,7 @@ pub(super) fn schedule(app: &mut App) {
                 who::zone_list,
                 whereabouts::answers,
                 crate::motd::answers,
+                crate::reports::say,
                 crate::fastdrop::answers,
                 crate::slash::answers,
                 crate::slash::assist_named,
@@ -273,6 +275,7 @@ pub(super) fn schedule(app: &mut App) {
                 skinned::slash,
             ),
             hud::actions,
+            hud::melody::melody.after(hud::actions),
             (
                 hud::hotbar::update,
                 crate::socials::update
@@ -369,6 +372,7 @@ pub(super) fn schedule(app: &mut App) {
                         training::window,
                         tracking::window,
                         tracking::say_rangers_only,
+                        pet::say_pet_target,
                     ),
                     (translocate::decline_unasked, confirm::window).chain(),
                     reading::window,
@@ -434,7 +438,7 @@ pub(super) fn schedule(app: &mut App) {
                         spellbook::search::present,
                         spellbook::sets::ui::present,
                     ),
-                    skinned::tabs,
+                    (skinned::open_filters, skinned::tabs).chain(),
                     (abilities::present, crate::combat_abilities::present),
                     (
                         skinned::slide,
@@ -484,7 +488,6 @@ pub(super) fn schedule(app: &mut App) {
                 spell_effects::update,
                 sounds::update,
                 zone_audio::update,
-                zone_audio::combat_music_typed,
                 target::marker::update,
                 (names::request, names::update).chain(),
                 (combat_text::update, crate::marquee::present),
@@ -597,6 +600,7 @@ pub(super) fn install_overlays(app: &mut App) {
             .before(Stage::Scene),
     );
     skin::register(app);
+    crate::local_settings::register(app);
     skinned::register_border_pixels(app);
     app.add_systems(PostUpdate, chat::scroll.after(bevy::ui::UiSystems::Layout));
 }

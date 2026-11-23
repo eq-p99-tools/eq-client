@@ -87,6 +87,7 @@ mod languages;
 mod lighting;
 mod list_cells;
 mod loading;
+mod local_settings;
 mod login;
 mod logs;
 mod map;
@@ -104,6 +105,7 @@ mod outfit;
 mod paperdoll;
 mod pet;
 mod piloting;
+mod poison_wait;
 mod preview;
 #[cfg(test)]
 mod probes;
@@ -144,13 +146,14 @@ mod window_size;
 mod windows;
 mod zone;
 mod zone_audio;
+mod zone_light;
 mod zone_navmesh;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Captured, Screenshot, save_to_disk};
-use eq_client_assets::ZoneAsset;
 use eq_client_assets::characters::CharacterAsset;
+use eq_client_assets::{MaterialMode, ZoneAsset};
 use eq_client_core::{WorldPosition, render_position, world_position};
 
 /// The projection used by the top-down camera.
@@ -519,7 +522,7 @@ pub fn run(
     .insert_resource(online::Updates(std::sync::Mutex::new(updates)))
     .insert_resource(outbox);
     init_presentation(&mut app);
-    app.insert_resource(options::OptionsState::new(option_defaults));
+    app.insert_resource(options::OptionsState::new(&option_defaults));
     app.add_plugins(
         DefaultPlugins
             .set(WindowPlugin {
@@ -868,7 +871,32 @@ fn spawn_static_zone(
     materials: &mut Assets<StandardMaterial>,
 ) {
     let texture_images = create_texture_images(zone.textures, images);
-    let mut lights = lighting::SceneLights::new(zone.short_name, zone.point_lights);
+    let mut lights = lighting::SceneLights::new(
+        zone.short_name,
+        zone.point_lights,
+        zone.day_ambient.as_ref(),
+    );
+    // Each drawn terrain primitive's vertices and baked light, in the order
+    // the draws come back.
+    let lit_terrain: Vec<_> = zone
+        .primitives
+        .iter()
+        .filter(|primitive| gpu_assets::drawn(primitive))
+        .map(|primitive| {
+            let count = primitive.positions.len();
+            let light = if primitive.light.len() == count {
+                primitive.light.clone()
+            } else {
+                vec![static_batch::NO_LIGHT; count]
+            };
+            (
+                light,
+                primitive.positions.clone(),
+                primitive.normals.clone(),
+                primitive.material_mode == MaterialMode::Additive,
+            )
+        })
+        .collect();
     let terrain = gpu_assets::create_terrain_primitives(
         zone.primitives,
         &zone.terrain_materials,
@@ -876,8 +904,14 @@ fn spawn_static_zone(
         meshes,
         materials,
     );
-    for draw in terrain {
-        lights.surfaces.push(draw.material.clone());
+    for (draw, (light, positions, normals, additive)) in terrain.into_iter().zip(lit_terrain) {
+        let placed_at = (normals.len() == positions.len()).then_some((positions, normals));
+        lights.meshes.push(lighting::LitMesh {
+            mesh: draw.mesh.clone(),
+            light,
+            placed_at,
+            additive,
+        });
         let mut entity = commands.spawn((
             SceneEntity,
             Mesh3d(draw.mesh),
@@ -914,8 +948,24 @@ fn spawn_static_zone(
                 meshes,
                 materials,
                 true,
-                RenderAssetUsages::RENDER_WORLD,
+                // Kept in the main world too, where the zone light colours
+                // their vertices.
+                RenderAssetUsages::default(),
             );
+            // A model's meshes are shared by its doors and the placements
+            // drawn apart without a light of their own: the base pass alone.
+            for ((mesh, _), source) in primitives.iter().zip(&drawn) {
+                lights.meshes.push(lighting::LitMesh {
+                    mesh: mesh.clone(),
+                    light: if source.light.len() == source.positions.len() {
+                        source.light.clone()
+                    } else {
+                        vec![static_batch::NO_LIGHT; source.positions.len()]
+                    },
+                    placed_at: None,
+                    additive: source.material_mode == MaterialMode::Additive,
+                });
+            }
             door_models.0.insert(
                 doors::model_key(&model.name),
                 doors::Model {
@@ -924,9 +974,6 @@ fn spawn_static_zone(
                     pick,
                 },
             );
-            lights
-                .surfaces
-                .extend(primitives.iter().map(|(_, material)| material.clone()));
             drawn_models.push(drawn);
             primitives
         })
@@ -939,10 +986,27 @@ fn spawn_static_zone(
             .into_iter()
             .map(|batch| {
                 let material = models[batch.model][batch.primitive].1.clone();
+                let lit = (
+                    batch.geometry.light.clone(),
+                    batch.geometry.positions.clone(),
+                    batch.geometry.normals.clone(),
+                );
                 let mesh = meshes.add(gpu_assets::create_mesh(
                     batch.geometry,
-                    RenderAssetUsages::RENDER_WORLD,
+                    RenderAssetUsages::default(),
                 ));
+                let (light, positions, normals) = lit;
+                let placed_at = (normals.len() == positions.len()
+                    && light.len() == positions.len())
+                .then_some((positions, normals));
+                if placed_at.is_some() {
+                    lights.meshes.push(lighting::LitMesh {
+                        mesh: mesh.clone(),
+                        light,
+                        placed_at,
+                        additive: false,
+                    });
+                }
                 (SceneEntity, Mesh3d(mesh), MeshMaterial3d(material))
             })
             .collect::<Vec<_>>(),
@@ -954,8 +1018,43 @@ fn spawn_static_zone(
             .into_iter()
             .map(|(object, primitive)| {
                 let object = &zone.objects[object];
-                let (mesh, material) = models[object.model][primitive].clone();
+                let (mut mesh, material) = models[object.model][primitive].clone();
                 let transform = object_transform(object);
+                // A placement with a light of its own gets its own mesh, so
+                // its colours are its own.
+                let source = &drawn_models[object.model][primitive];
+                if object
+                    .light
+                    .as_ref()
+                    .is_some_and(|light| light.len() == source.positions.len())
+                {
+                    let matrix = transform.to_matrix();
+                    let positions = source
+                        .positions
+                        .iter()
+                        .map(|point| matrix.transform_point3(Vec3::from_array(*point)).to_array())
+                        .collect();
+                    let normals = source
+                        .normals
+                        .iter()
+                        .map(|normal| {
+                            (transform.rotation * Vec3::from_array(*normal))
+                                .normalize_or_zero()
+                                .to_array()
+                        })
+                        .collect::<Vec<_>>();
+                    mesh = meshes.add(gpu_assets::create_mesh(
+                        source.clone(),
+                        RenderAssetUsages::default(),
+                    ));
+                    lights.meshes.push(lighting::LitMesh {
+                        mesh: mesh.clone(),
+                        light: static_batch::placement_light(object, source),
+                        placed_at: (normals.len() == source.positions.len())
+                            .then_some((positions, normals)),
+                        additive: source.material_mode == MaterialMode::Additive,
+                    });
+                }
                 let material = if transform.to_matrix().determinant() < 0.0 {
                     gpu_assets::mirrored_material(&material, materials, &mut mirrored_materials)
                 } else {
@@ -970,7 +1069,6 @@ fn spawn_static_zone(
             })
             .collect::<Vec<_>>(),
     );
-    lights.surfaces.extend(mirrored_materials.into_values());
     commands.insert_resource(lights);
 }
 
@@ -1218,7 +1316,10 @@ fn update_hud(
     online: Res<online::OnlineState>,
     players: Query<&Transform, With<Player>>,
     mut labels: Query<(&mut Text, &mut Visibility), With<HudText>>,
-    free: Query<(), With<camera::FreeCamera>>,
+    (free, options): (
+        Query<(), With<camera::FreeCamera>>,
+        Option<Res<options::OptionsState>>,
+    ),
 ) {
     let (Ok(player), Ok((mut label, mut visibility))) = (players.single(), labels.single_mut())
     else {
@@ -1229,7 +1330,10 @@ fn update_hud(
         lines.push(map.named(keys::Act::FreeCamera, "Free camera - return to character"));
     }
     let nearest = interact::nearest(&online);
-    lines.push(match nearest {
+    // Where the key casts the centre ray, the nearest thing is not what it
+    // uses, so it is not offered (the program shows no such hint).
+    let by_ray = interact::by_ray(&online, &interact::qol(options.as_deref()));
+    lines.push(match nearest.as_ref().filter(|_| !by_ray) {
         Some(interact::Use::Door(..)) => map.help(&[(keys::Act::Use, "use the door")]),
         Some(interact::Use::Object(_)) => {
             map.help(&[(keys::Act::Use, "pick up or open what is here")])
@@ -1706,11 +1810,13 @@ mod tests {
                     primitives: Vec::new(),
                     terrain_materials: Vec::new(),
                     point_lights: Vec::new(),
+                    day_ambient: None,
                     textures: Vec::new(),
                     models: Vec::new(),
                     objects: Vec::new(),
                     objects_unplaced: 0,
                     object_skins_skipped: 0,
+                    object_lights_skipped: 0,
                     collision: Vec::new(),
                 };
                 scene.enter(

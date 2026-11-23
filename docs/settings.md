@@ -41,29 +41,56 @@ window-layout file.
 
 ## Server filters
 
-Options → Filters lists the kinds of message the server can be asked not to
-send: one button per kind that steps through the modes the server takes for
-it (show, hide, and for some kinds mine only or group only), and a label that
-says the current mode. A kind the generation's packet has no word for has no
-row, so Titanium lists 24 kinds and Mac-era servers 16. The kinds, their
-words and the page are this client's own: which official options set each
-kind, the ini keys the original keeps them under and its `/filter` forms are
-unread (recording checklist 6.494a to c), so `/filter` answers that this
-client does not take it that way yet.
+Options → Filters lists the original Titanium client's filter rows, in its
+order: the chat channels, bad words, players' and creatures' spells, bard
+songs, critical hits, spell damage, misses and hits, damage shields, damage
+over time, pets, focus effects, heals over time, item speech, strikethrough
+and stuns (read in the program, recording checklist 6.494b). Each row's
+button steps through that row's choices in the original's order (show and
+hide, and for some rows mine only or group only), and a label says the
+current one. A row the generation's packet has no word for is hidden, so
+Mac-era servers list 16. The row and choice words are this client's own.
+`/filter` shows the Options window on this page, as the original's does; it
+reads no words and sends nothing.
 
-The modes are kept per character in `options-<world>-<character>.txt`, one
-`filter_<kind> = <mode>` line per kind (`show`, `hide`, `mine` or `group`),
-seeded from `options.txt` like the other options. A line naming a mode no
-generation can say is not read, so that kind keeps its default; the defaults
-are the packet the client sent before filters could be set.
+The rows are kept under the original's `eqclient.ini` `[Options]` keys
+(`Channel00` to `Channel09`, `BadWord`, `PCSpells`, `NPCSpells`,
+`BardSongs`, `CriticalSpells`, `CriticalMelee`, `SpellDamage`,
+`HideDamageShield`, `DotDamage`, `PetAttacks`, `PetMisses`, `FocusEffects`,
+`PetSpells`, `HealOverTimeSpells`, `ItemSpeech`, `Strikethrough`, `Stun`,
+`SwarmPetDeath`), each the index of its choice, with the original's
+defaults: every row shown but bad words, whose filter starts on. An index
+outside a row's choices gives the row's default. **Per character, this
+client's choice:** the original keeps one set per install in
+`eqclient.ini`; this client keeps them in `options-<world>-<character>.txt`,
+seeded from `options.txt` like the other options. Swarm pets' deaths have no
+row in the original's window either; the file keeps the key and the packet
+sends it.
 
 Choosing a character at the character list gives the session that
-character's saved modes, so its first zone-in carries them on every server
-type. A change made in play reaches the server at once where the session
-offers it (EQEmu); elsewhere (P99, Quarm, TAKP) it goes with the next
-zone-in. The page's note says which applies to the current server. A
-character entered automatically at connect starts from the defaults until
-its saved modes are sent after it enters.
+character's saved rows, so its first zone-in carries them on every server
+type. On Titanium servers (EQEmu and P99) a change is sent at once, as the
+original sends it again on every change; on Mac-era servers it goes with the
+next zone-in, as the page's note says. A character entered automatically at
+connect starts from the defaults until its saved rows are sent after it
+enters.
+
+**What a hidden row does today:** it asks the server not to send those
+lines, so it hides them only where the server honours that row (stock EQEmu
+sends some lines, such as creatures' shouts, without checking). On Titanium
+the original also hides some kinds itself, and so does this client for the
+lines it prints: with **Missed me** hidden, another's melee attack on you
+that does not land (a miss, block, parry, riposte, dodge, invulnerable or
+rune) is not shown, whatever the server sends. Which of those outcomes the
+original's test covers is inferred. Its other local tests cover lines this
+client does not print yet (stuns, other players' environmental damage,
+others' fights, others' spells), and apply when they are added. Mac-era
+servers hide nothing locally: that program is unread. The packet's
+first word, an ini-only switch, is sent as 0, the original's default.
+
+Scripts read a row with `filter.<kind>` (`show`, `hide`, `mine` or `group`)
+and step it with `click("filter", "<kind>")`, by the kind's stable name
+(`ooc`, `shouts`, `bard_songs` and the rest).
 
 ## Display and audio
 
@@ -110,6 +137,9 @@ read R49-7 first pass and its engine follow-up):
   sound that plays day and night. Any other record is a day sound and a night
   sound, each with its own sound, type, delay and volume.
 - A radius below 0 reaches 10,000 units; a radius of 0 is heard nowhere.
+- The files place their sounds with x and y the other way round from the
+  server's coordinates (`/loc`); the client swaps them (an estimate from a
+  local look).
 - A delay above 0 repeats the sound after the delay plus 500 and up to the
   record's random extra. A positive volume is an attenuation in millibels:
   2,000 is a tenth of full volume, and above 10,000 is silent. Otherwise a
@@ -121,13 +151,22 @@ Still this client's estimate until a later read: that loudness falls in a
 line from the centre to the radius, that delays are in milliseconds, that a
 delay of 0 loops, that a bank name without a dot ends in `.wav`, that the
 numbers between the two lists (32 to 161) name the installation's numbered
-sounds, and how music regions choose, fade and switch.
+sounds, and that a new track starts at once rather than fading in.
 
 Music plays through a synthesizer on a SoundFont (`.sf2`) that you name with
-`--soundfont <file>` or `EQ_CLIENT_SOUNDFONT`. The installation ships no
-SoundFont, so this is a stated departure: the instruments are your file's, not
-the original program's. Without one, or with a file that is missing,
-unreadable or larger than 512 MB, music is silent and the log says why once.
+`--soundfont <file>` or `EQ_CLIENT_SOUNDFONT`, a stated departure: the
+instruments are your file's, and how the original program plays its music is
+unread. An installation may ship `.sf2` files of its own, but this client's
+synthesizer refuses them as they stand, so name another, such as a General
+MIDI SoundFont. Without one, or with a file that is missing, unreadable,
+refused or larger than 512 MB, music is silent and the log says why once.
+A music region plays its zone's sequence by number, counted from 0, as the
+original program does. Where regions overlap, the smallest one you stand in
+plays; outside every region no zone music plays. Night (hours before 5 AM
+and after 6 PM) takes a region's night track where it has one. A change of
+track fades the old one over 1.5 seconds, and leaving every region fades it
+over the region's own time, at most 20 seconds. A region that names an
+entry of the installation's mp3 list (a negative number) plays nothing yet.
 
 These options are saved for each character, under Options → General where the
 skin has the controls. A character with no choice of their own starts from the
@@ -139,7 +178,8 @@ installation's `eqclient.ini` `[Defaults]`, where it has the key:
 - **Music Volume** (`music_volume`, 100): the music's own volume, separate
   from Sound Volume.
 - **Environment Sounds** (`environment_sounds`, on): plays the zone's ambient
-  emitters at the Sound Volume. `EnvSounds` in `eqclient.ini` is read as TRUE
+  emitters at the Sound Volume. As in the original client, turning it off
+  also silences the zone's music regions. `EnvSounds` in `eqclient.ini` is read as TRUE
   or FALSE, which is this client's estimate; its reader is unread.
 - **Combat Music** (`combat_music`, on): `CombatMusic` in `eqclient.ini`, and
   `/combatmusic` turns it on or off. This client plays no combat music yet.
@@ -191,6 +231,8 @@ from 50 to 200) or `/uiscale` alone for 100% when the slider is hard to reach.
 | Show Invisible Entities | `show_invisible` | Off | Draws known invisible spawns with parenthesized names; targeting rules remain unchanged |
 | Answer List Presence Polls | `answer_list_polls` | Off | Answers supported P99 presence polls after a local delay; does not join a list or answer numeric challenges |
 | Duel Answer Card | `duel_answer_card` | On | Asks Yes or No when another player challenges you to a duel; Yes accepts as `/duel` does and No sends nothing. The original client has no card and takes only `/duel`; turn it off to play that way |
+| Use Picks Nearest | `use_picks_nearest` | Off | Lets the Use key use the nearest door, item on the ground or world container within reach, wherever you face, as this client used to. The original client uses only what lies at the centre of the view: the first character there, else a door (read R49-19) |
+| Typed Reports | `typed_reports` | On | A departure: sends `/bugreport` and `/feedback` from the words typed after them. The original client ignores those words and opens its report windows, which this client does not have yet; on until they are built, then off. Off, the words are ignored as the original ignores them |
 
 These choices take effect in the current session. Controls are unavailable where
 their required session feature is absent. Walk While Winded, Move While
