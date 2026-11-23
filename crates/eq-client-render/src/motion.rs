@@ -5353,14 +5353,19 @@ pub(super) mod tests {
             &HUMAN,
         );
         assert!((heavy.gravity - 320.0).abs() < 0.01, "{}", heavy.gravity);
-        assert!((heavy.terminal_speed - mac.terminal_speed).abs() < 0.01);
+        // A frame's share of a heavier pull meets the air higher: 26.4 a step.
+        assert!(
+            (heavy.terminal_speed - 528.0).abs() < 0.01,
+            "{}",
+            heavy.terminal_speed
+        );
         let light = climbing(
             physics(InstalledClient::EqMac, Some(0.2)),
             InstalledClient::EqMac,
             &HUMAN,
         );
         assert!(
-            (light.terminal_speed - 396.0).abs() < 0.01,
+            (light.terminal_speed - 132.0).abs() < 0.01,
             "{}",
             light.terminal_speed
         );
