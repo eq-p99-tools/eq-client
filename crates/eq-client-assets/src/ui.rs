@@ -319,6 +319,11 @@ pub enum InstalledClient {
     Titanium,
     /// The Mac-era client Project Quarm and TAKP servers expect.
     EqMac,
+    /// The `RoF2` client, a placeholder. It has no marker files yet, so no
+    /// folder is ever detected as it, and no server type a player can choose
+    /// expects it; each of its rules without a read is absent or Titanium's,
+    /// inferred (recording checklist 6.489).
+    Rof2,
 }
 
 /// What an installation's own files say about which official client it
@@ -327,9 +332,9 @@ pub enum InstalledClient {
 pub enum Detected {
     /// Only one generation's marker files are there.
     Clear(InstalledClient),
-    /// Marker files of both generations are there.
+    /// Marker files of more than one generation are there.
     Ambiguous,
-    /// Neither generation's marker files are there.
+    /// No generation's marker files are there.
     Unclassified,
 }
 
@@ -347,6 +352,10 @@ pub struct GemDraw {
 }
 
 impl InstalledClient {
+    /// Every generation this client knows, in the order detection checks
+    /// them.
+    pub const ALL: [Self; 3] = [Self::Titanium, Self::EqMac, Self::Rof2];
+
     /// Whether this generation gives a player class a spellbook and gems.
     /// The class checks are Titanium 0x417daf and Mac-era 0x4b8ea1; neither
     /// reads mana, the book contents, memorized slots or the player's level.
@@ -357,6 +366,8 @@ impl InstalledClient {
     pub const fn spellbook_class(self, class: u32) -> bool {
         match self {
             Self::Titanium | Self::EqMac => matches!(class, 2..=6 | 8 | 10..=15),
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.spellbook_class(class),
         }
     }
 
@@ -377,13 +388,24 @@ impl InstalledClient {
         match self {
             Self::Titanium => (&["spells_us.txt"], Some("eqg")),
             Self::EqMac => (&["eqmac.exe", "eqgame.dll"], None),
+            // Needs a listing of a real installation; until then nothing
+            // marks it.
+            Self::Rof2 => (&[], None),
         }
+    }
+
+    /// Whether any file marks this generation's installation, so detection
+    /// can find it.
+    #[must_use]
+    pub const fn detectable(self) -> bool {
+        let (files, extension) = self.markers();
+        !files.is_empty() || extension.is_some()
     }
 
     /// Which official client the installation in `eq_directory` holds, from
     /// its own top-level files: clear when only one generation's markers are
-    /// there, ambiguous with both, unclassified with neither or when the
-    /// folder can't be listed.
+    /// there, ambiguous with more than one, unclassified with none or when
+    /// the folder can't be listed.
     #[must_use]
     pub fn detect(eq_directory: &Path) -> Detected {
         let Ok(entries) = std::fs::read_dir(eq_directory) else {
@@ -405,11 +427,14 @@ impl InstalledClient {
                     })
             })
         };
-        match (marked(Self::Titanium), marked(Self::EqMac)) {
-            (true, false) => Detected::Clear(Self::Titanium),
-            (false, true) => Detected::Clear(Self::EqMac),
-            (true, true) => Detected::Ambiguous,
-            (false, false) => Detected::Unclassified,
+        let found: Vec<Self> = Self::ALL
+            .into_iter()
+            .filter(|&client| marked(client))
+            .collect();
+        match found.as_slice() {
+            [only] => Detected::Clear(*only),
+            [] => Detected::Unclassified,
+            [..] => Detected::Ambiguous,
         }
     }
 
@@ -422,6 +447,8 @@ impl InstalledClient {
     pub const fn gem_draw(self) -> Option<GemDraw> {
         match self {
             Self::Titanium | Self::EqMac => Some(GemDraw { hover: 0x0020_2020 }),
+            // Not read for RoF2.
+            Self::Rof2 => None,
         }
     }
 
@@ -431,6 +458,8 @@ impl InstalledClient {
         match self {
             Self::Titanium => crate::spells::Layout::TITANIUM,
             Self::EqMac => crate::spells::Layout::EQMAC,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.spell_file(),
         }
     }
 
@@ -438,14 +467,24 @@ impl InstalledClient {
     /// other short buffs; unchecked for the Mac-era client.
     #[must_use]
     pub const fn short_effects(self) -> bool {
-        matches!(self, Self::Titanium)
+        match self {
+            Self::Titanium => true,
+            Self::EqMac => false,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.short_effects(),
+        }
     }
 
     /// Whether this client shows casts in its own casting window;
     /// unchecked for the Mac-era client.
     #[must_use]
     pub const fn casting_window(self) -> bool {
-        matches!(self, Self::Titanium)
+        match self {
+            Self::Titanium => true,
+            Self::EqMac => false,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.casting_window(),
+        }
     }
 
     /// The file in the installation that holds this client's database
@@ -457,6 +496,8 @@ impl InstalledClient {
         match self {
             Self::Titanium => Some("dbstr_us.txt"),
             Self::EqMac => None,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.db_string_file(),
         }
     }
 
@@ -471,6 +512,8 @@ impl InstalledClient {
         match self {
             Self::Titanium => "eqstr_us.txt",
             Self::EqMac => "eqstr_en.txt",
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.string_file(),
         }
     }
 
@@ -483,6 +526,8 @@ impl InstalledClient {
     pub const fn font_file(self) -> Option<&'static str> {
         match self {
             Self::Titanium | Self::EqMac => Some("arial.ttf"),
+            // Not read for RoF2.
+            Self::Rof2 => None,
         }
     }
 
@@ -496,7 +541,8 @@ impl InstalledClient {
                 picture: &["Resources", "loadscreen.jpg"],
                 status: 12387,
             }),
-            Self::EqMac => None,
+            // Not read for RoF2.
+            Self::EqMac | Self::Rof2 => None,
         }
     }
 
@@ -512,7 +558,8 @@ impl InstalledClient {
             Self::Titanium => Some(crate::spells::effects::SpellEffects::read_titanium(
                 eq_directory,
             )),
-            Self::EqMac => None,
+            // Not read for RoF2.
+            Self::EqMac | Self::Rof2 => None,
         }
     }
 
@@ -526,7 +573,8 @@ impl InstalledClient {
                 folders: &["sounds"],
                 numbers: "SoundAssets.txt",
             }),
-            Self::EqMac => None,
+            // Not read for RoF2.
+            Self::EqMac | Self::Rof2 => None,
         }
     }
 
@@ -537,6 +585,8 @@ impl InstalledClient {
         match self {
             Self::Titanium => crate::clock::TITANIUM,
             Self::EqMac => crate::clock::EQMAC,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.clock(),
         }
     }
 
@@ -547,6 +597,8 @@ impl InstalledClient {
         match self {
             Self::Titanium => Some(crate::falls::TITANIUM),
             Self::EqMac => Some(crate::falls::EQMAC),
+            // Not read for RoF2.
+            Self::Rof2 => None,
         }
     }
 
@@ -561,6 +613,8 @@ impl InstalledClient {
     pub const fn jump_spacing(self) -> Option<std::time::Duration> {
         match self {
             Self::Titanium | Self::EqMac => Some(std::time::Duration::from_millis(1500)),
+            // Not read for RoF2.
+            Self::Rof2 => None,
         }
     }
 
@@ -573,6 +627,8 @@ impl InstalledClient {
     pub const fn standing_jump_crouch(self) -> Option<std::time::Duration> {
         match self {
             Self::Titanium | Self::EqMac => Some(std::time::Duration::from_millis(500)),
+            // Not read for RoF2.
+            Self::Rof2 => None,
         }
     }
 
@@ -582,6 +638,8 @@ impl InstalledClient {
         match self {
             Self::Titanium => GiveAtOpen::FirstFree,
             Self::EqMac => GiveAtOpen::StackFirst,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.give_at_open(),
         }
     }
 
@@ -591,6 +649,8 @@ impl InstalledClient {
         match self {
             Self::Titanium => TargetByName::Nearest,
             Self::EqMac => TargetByName::Shortest,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.target_by_name(),
         }
     }
 
@@ -601,6 +661,8 @@ impl InstalledClient {
     pub const fn spawn_pick(self) -> SpawnPick {
         match self {
             Self::Titanium | Self::EqMac => SpawnPick::TrianglesThenPosedBox,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.spawn_pick(),
         }
     }
 
@@ -614,6 +676,8 @@ impl InstalledClient {
     pub const fn click_miss(self) -> ClickMiss {
         match self {
             Self::Titanium | Self::EqMac => ClickMiss::KeepTarget,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.click_miss(),
         }
     }
 
@@ -627,7 +691,8 @@ impl InstalledClient {
     #[must_use]
     pub const fn invisibility_drop(self) -> Option<&'static [u32]> {
         match self {
-            Self::Titanium => None,
+            // Not read for RoF2.
+            Self::Titanium | Self::Rof2 => None,
             Self::EqMac => Some(&[94, 12, 28, 29]),
         }
     }
@@ -639,6 +704,8 @@ impl InstalledClient {
         match self {
             Self::Titanium => crate::scale::TITANIUM,
             Self::EqMac => crate::scale::EQMAC,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.model_scale(),
         }
     }
 
@@ -651,6 +718,8 @@ impl InstalledClient {
         match self {
             Self::Titanium => Some(crate::keys::TITANIUM),
             Self::EqMac => Some(crate::keys::EQMAC),
+            // Not read for RoF2.
+            Self::Rof2 => None,
         }
     }
 
@@ -663,6 +732,8 @@ impl InstalledClient {
         match self {
             Self::Titanium => crate::names::TITANIUM,
             Self::EqMac => crate::names::EQMAC,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.name_colours(),
         }
     }
 
@@ -674,6 +745,8 @@ impl InstalledClient {
         match self {
             Self::Titanium => crate::camera::TITANIUM,
             Self::EqMac => crate::camera::EQMAC,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.camera_limits(),
         }
     }
 
@@ -704,6 +777,8 @@ impl InstalledClient {
                 ..shared
             },
             Self::EqMac => shared,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.attack_toggle(),
         }
     }
 
@@ -713,8 +788,64 @@ impl InstalledClient {
     #[must_use]
     pub const fn merchant_prices(self) -> Option<crate::merchants::MerchantPrices> {
         match self {
-            Self::Titanium => None,
+            // Not read for either.
+            Self::Titanium | Self::Rof2 => None,
             Self::EqMac => Some(crate::merchants::EQMAC),
+        }
+    }
+
+    /// Whether this client's loot click asks before taking a NO DROP item,
+    /// as `/lootnodrop` sets: Titanium's does (0x52b9d5, read R45b); the
+    /// Mac-era client's is unread, so it takes at once as before.
+    #[must_use]
+    pub const fn asks_before_no_drop_loot(self) -> bool {
+        match self {
+            Self::Titanium => true,
+            Self::EqMac => false,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.asks_before_no_drop_loot(),
+        }
+    }
+
+    /// Whether `/autoinventory`, `/hidecorpses` and plain `/assist`'s
+    /// lines run as Titanium's handlers do (read R46: 0x47477f and
+    /// 0x4bcf0b, 0x469b01, 0x46abc4). The Mac-era handlers are unread, so
+    /// that client keeps this client's earlier answers.
+    #[must_use]
+    pub const fn runs_r46_forms(self) -> bool {
+        match self {
+            Self::Titanium => true,
+            Self::EqMac => false,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.runs_r46_forms(),
+        }
+    }
+
+    /// Whether the social emote commands (`/smile`, `/bow` and the rest)
+    /// run as Titanium's worker runs them (0x49e0c1, reads R47 to R47c).
+    /// The Mac-era client's are unread, so they keep this client's earlier
+    /// answer there.
+    #[must_use]
+    pub const fn runs_social_emotes(self) -> bool {
+        match self {
+            Self::Titanium => true,
+            Self::EqMac => false,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.runs_social_emotes(),
+        }
+    }
+
+    /// Whether disciplines are used as Titanium's 0x4bb39d uses them, by
+    /// the spell records the installed spell file gives (reads R48 to
+    /// R48c). The Mac-era spell file has no discipline fields, so it keeps
+    /// this client's earlier answer there.
+    #[must_use]
+    pub const fn runs_disciplines(self) -> bool {
+        match self {
+            Self::Titanium => true,
+            Self::EqMac => false,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.runs_disciplines(),
         }
     }
 
@@ -728,6 +859,8 @@ impl InstalledClient {
         let (named, to_bind, declined, declines_when_busy) = match self {
             Self::Titanium => (9063, 9062, None, false),
             Self::EqMac => (10017, 10016, Some(10018), true),
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => return Self::Titanium.translocate_offer(),
         };
         TranslocateQuestion {
             named,
@@ -738,11 +871,25 @@ impl InstalledClient {
         }
     }
 
+    /// The installed client's string for its question about another
+    /// player's challenge to a duel (`%1` the challenger), where it is
+    /// read; None asks in this client's words. Not read for any generation
+    /// yet (checklist 6.492, pending R49-6a).
+    #[must_use]
+    pub const fn duel_offer(self) -> Option<u32> {
+        match self {
+            Self::Titanium | Self::EqMac => None,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.duel_offer(),
+        }
+    }
+
     /// The settings files of this client, installed in `eq_directory`.
     pub fn settings(self, eq_directory: &Path) -> Box<dyn OfficialSettings + '_> {
         match self {
             Self::Titanium => Box::new(Titanium(eq_directory)),
-            Self::EqMac => Box::new(Unchecked),
+            // Not read for RoF2.
+            Self::EqMac | Self::Rof2 => Box::new(Unchecked),
         }
     }
 }
@@ -1146,6 +1293,15 @@ pub struct OfficialOptions {
     pub log: Option<bool>,
     /// Whether sounds play: `Sound` in `[Defaults]`.
     pub sound: Option<bool>,
+    /// The music volume: `Music` in `[Defaults]` (read R49-7 c); its scale
+    /// is unread, so only 0 is taken, as silent \[I\].
+    pub music: Option<u32>,
+    /// Whether the zone's ambient sounds play: `EnvSounds` in `[Defaults]`,
+    /// taken as TRUE or FALSE [I: its reader is unread].
+    pub env_sounds: Option<bool>,
+    /// Whether combat music plays: `CombatMusic` in `[Defaults]` (read
+    /// R49-7 c), TRUE when missing.
+    pub combat_music: Option<bool>,
     /// Whether spell-effect particles play: `ShowSpellEffects` in
     /// `[Defaults]`, or a non-zero `SpellParticleDensity` where that is the
     /// key the installation carries.
@@ -1169,7 +1325,57 @@ pub struct OfficialOptions {
     /// Whether the first-person view springs back level: `LookSpring` in
     /// `[Options]` (Titanium 0x4af32c).
     pub look_spring: Option<bool>,
+    /// When a loot click on a NO DROP item asks first, as `/lootnodrop`
+    /// sets it: `LootNoDrop`, read by the same options loader (Titanium
+    /// 0x4af32c), unclamped here. The section it sits in is unread, so
+    /// `[Defaults]` is tried before `[Options]` (checklist 6.487).
+    pub loot_no_drop: Option<i64>,
+    /// Whether each player race and gender draws with its Luclin model, in
+    /// the order of [`LUCLIN_MODEL_KEYS`].
+    pub luclin_models: [Option<bool>; LUCLIN_MODEL_KEYS.len()],
+    /// Whether an assist's answer starts auto attack: `AttackOnAssist` in
+    /// `[Defaults]` (Titanium setup 0x4a3341, read R49-8 d).
+    pub attack_on_assist: Option<bool>,
 }
+
+/// The `[Defaults]` keys this client takes the official client's Luclin
+/// model choice from, with the race and gender (0 male, 1 female) each
+/// chooses for. Inferred, unread (R49-44a): the names are recalled as
+/// `UseLuclin<Race><Gender>`, not read from the program, so no key is
+/// trusted to exist; where none is set every model stays classic. The table
+/// is the one place to rename them once the read lands.
+pub const LUCLIN_MODEL_KEYS: [(&str, u32, u32); 30] = [
+    ("UseLuclinHumanMale", 1, 0),
+    ("UseLuclinHumanFemale", 1, 1),
+    ("UseLuclinBarbarianMale", 2, 0),
+    ("UseLuclinBarbarianFemale", 2, 1),
+    ("UseLuclinEruditeMale", 3, 0),
+    ("UseLuclinEruditeFemale", 3, 1),
+    ("UseLuclinWoodElfMale", 4, 0),
+    ("UseLuclinWoodElfFemale", 4, 1),
+    ("UseLuclinHighElfMale", 5, 0),
+    ("UseLuclinHighElfFemale", 5, 1),
+    ("UseLuclinDarkElfMale", 6, 0),
+    ("UseLuclinDarkElfFemale", 6, 1),
+    ("UseLuclinHalfElfMale", 7, 0),
+    ("UseLuclinHalfElfFemale", 7, 1),
+    ("UseLuclinDwarfMale", 8, 0),
+    ("UseLuclinDwarfFemale", 8, 1),
+    ("UseLuclinTrollMale", 9, 0),
+    ("UseLuclinTrollFemale", 9, 1),
+    ("UseLuclinOgreMale", 10, 0),
+    ("UseLuclinOgreFemale", 10, 1),
+    ("UseLuclinHalflingMale", 11, 0),
+    ("UseLuclinHalflingFemale", 11, 1),
+    ("UseLuclinGnomeMale", 12, 0),
+    ("UseLuclinGnomeFemale", 12, 1),
+    ("UseLuclinIksarMale", 128, 0),
+    ("UseLuclinIksarFemale", 128, 1),
+    ("UseLuclinVahShirMale", 130, 0),
+    ("UseLuclinVahShirFemale", 130, 1),
+    ("UseLuclinFroglokMale", 330, 0),
+    ("UseLuclinFroglokFemale", 330, 1),
+];
 
 fn options_from_ini(text: &str) -> OfficialOptions {
     let flag = |section, key| match ini_value(text, section, key)?.to_ascii_uppercase().as_str() {
@@ -1180,6 +1386,9 @@ fn options_from_ini(text: &str) -> OfficialOptions {
     OfficialOptions {
         log: flag("Defaults", "Log"),
         sound: flag("Defaults", "Sound"),
+        music: ini_value(text, "Defaults", "Music").and_then(|v| v.trim().parse().ok()),
+        env_sounds: flag("Defaults", "EnvSounds"),
+        combat_music: flag("Defaults", "CombatMusic"),
         spell_effects: flag("Defaults", "ShowSpellEffects").or_else(|| {
             // Some installations carry the choice as the particles page's
             // density instead; zero density means the same "off".
@@ -1196,6 +1405,11 @@ fn options_from_ini(text: &str) -> OfficialOptions {
         mouse_sensitivity: ini_value(text, "Options", "MouseSensitivity")
             .and_then(|v| v.trim().parse().ok()),
         look_spring: flag("Options", "LookSpring"),
+        loot_no_drop: ini_value(text, "Defaults", "LootNoDrop")
+            .or_else(|| ini_value(text, "Options", "LootNoDrop"))
+            .and_then(|v| v.trim().parse().ok()),
+        luclin_models: LUCLIN_MODEL_KEYS.map(|(key, _, _)| flag("Defaults", key)),
+        attack_on_assist: flag("Defaults", "AttackOnAssist"),
     }
 }
 
@@ -1828,6 +2042,50 @@ mod tests {
         );
     }
 
+    #[test]
+    fn no_folder_is_ever_detected_as_rof2() {
+        assert!(InstalledClient::Titanium.detectable());
+        assert!(InstalledClient::EqMac.detectable());
+        assert!(!InstalledClient::Rof2.detectable());
+        let root = std::env::temp_dir().join(format!("install-rof2-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        // Files an RoF2 installation is likely to carry, none of them a marker.
+        for file in [
+            "eqgame.exe",
+            "spells_en.txt",
+            "eqstr_en.txt",
+            "eqhost.txt",
+            "dbstr_us.txt",
+        ] {
+            std::fs::write(root.join(file), b"").unwrap();
+        }
+        let detected = InstalledClient::detect(&root);
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(detected, Detected::Unclassified);
+    }
+
+    #[test]
+    fn every_generation_has_its_place_in_detection_order() {
+        // A new generation fails to compile here until it has its own place,
+        // and then fails until `ALL` holds it there, so detection checks its
+        // markers.
+        let place = |client: InstalledClient| match client {
+            InstalledClient::Titanium => 0,
+            InstalledClient::EqMac => 1,
+            InstalledClient::Rof2 => 2,
+        };
+        for (index, client) in InstalledClient::ALL.into_iter().enumerate() {
+            assert_eq!(place(client), index, "{client:?}");
+        }
+        for client in [
+            InstalledClient::Titanium,
+            InstalledClient::EqMac,
+            InstalledClient::Rof2,
+        ] {
+            assert_eq!(InstalledClient::ALL.get(place(client)), Some(&client));
+        }
+    }
+
     use super::*;
 
     #[test]
@@ -2020,6 +2278,20 @@ Log=maybe
     }
 
     #[test]
+    fn eqclient_ini_says_whether_music_ambient_and_combat_music_play() {
+        let read = options_from_ini("[Defaults]\nMusic=0\nEnvSounds=FALSE\nCombatMusic=TRUE\n");
+        assert_eq!(
+            (read.music, read.env_sounds, read.combat_music),
+            (Some(0), Some(false), Some(true))
+        );
+        let missing = options_from_ini("[Defaults]\nSound=TRUE\n");
+        assert_eq!(
+            (missing.music, missing.env_sounds, missing.combat_music),
+            (None, None, None)
+        );
+    }
+
+    #[test]
     fn eqclient_ini_says_whether_sounds_play() {
         let sound = |text| options_from_ini(text).sound;
         assert_eq!(sound("[Defaults]\nSound=TRUE\nSoundVolume=0\n"), Some(true));
@@ -2045,6 +2317,9 @@ LookSpring=1
             OfficialOptions {
                 log: None,
                 sound: None,
+                music: None,
+                env_sounds: None,
+                combat_music: None,
                 spell_effects: None,
                 pc_names: Some(true),
                 npc_names: Some(false),
@@ -2053,9 +2328,46 @@ LookSpring=1
                 max_fps: Some(100),
                 mouse_sensitivity: Some(4),
                 look_spring: Some(true),
+                loot_no_drop: None,
+                luclin_models: [None; 30],
+                attack_on_assist: None,
             }
         );
         assert_eq!(options_from_ini(""), OfficialOptions::default());
+        assert_eq!(
+            options_from_ini("[Defaults]\nAttackOnAssist=1\n").attack_on_assist,
+            Some(true)
+        );
+        let loot = |text| options_from_ini(text).loot_no_drop;
+        assert_eq!(loot("[Defaults]\nLootNoDrop=1\n"), Some(1));
+        assert_eq!(loot("[Options]\nLootNoDrop=2\n"), Some(2));
+        assert_eq!(loot("[Defaults]\nLootNoDrop=x\n"), None);
+    }
+
+    #[test]
+    fn eqclient_ini_seeds_only_the_luclin_models_it_names() {
+        let read = options_from_ini(
+            "[Defaults]\nUseLuclinHumanMale=TRUE\nUseLuclinDarkElfFemale=FALSE\nUseLuclinGnomeMale=maybe\n",
+        );
+        let said = |race, gender| {
+            LUCLIN_MODEL_KEYS
+                .iter()
+                .position(|&(_, r, g)| (r, g) == (race, gender))
+                .and_then(|index| read.luclin_models[index])
+        };
+        assert_eq!(said(1, 0), Some(true));
+        assert_eq!(said(6, 1), Some(false));
+        // A word that is neither, and every key not there, says nothing.
+        assert_eq!(said(12, 0), None);
+        assert_eq!(said(1, 1), None);
+        assert_eq!(read.luclin_models.iter().flatten().count(), 2);
+        // In another section, the keys are not the choice.
+        assert!(
+            options_from_ini("[Options]\nUseLuclinHumanMale=TRUE\n")
+                .luclin_models
+                .iter()
+                .all(Option::is_none)
+        );
     }
 
     #[test]

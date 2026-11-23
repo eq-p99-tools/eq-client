@@ -130,6 +130,7 @@ impl ClientWorld {
             news.ignored = true;
             return;
         }
+        let program = super::prints_r49_6_lines(self.generation);
         let Some(player) = self.player.as_mut() else {
             return;
         };
@@ -138,6 +139,10 @@ impl ClientWorld {
         relist(change, &mut player.level, &mut player.listing);
         let notice = match change {
             ListingChange::Away(away) => Some(ListingNotice::Away(away)),
+            // The Titanium program says its line as `/lfg` goes (read
+            // R49-6i), so the change itself says nothing there.
+            ListingChange::Looking(_) if program => None,
+            ListingChange::Looking(looking) => Some(ListingNotice::Looking(looking)),
             ListingChange::Anonymity(after) => anonymity_notice(before, after),
             _ => None,
         };

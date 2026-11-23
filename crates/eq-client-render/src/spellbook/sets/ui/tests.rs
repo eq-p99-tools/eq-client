@@ -587,3 +587,121 @@ fn confirming_gems_in_a_reset_batch_keep_the_old_count_and_the_right_panel() {
         assert!(matches!(sent.try_recv(), Err(mpsc::TryRecvError::Empty)));
     }
 }
+
+#[test]
+fn memspellset_takes_a_number_or_the_first_name_its_words_start() {
+    let mut sets = Sets::default();
+    for name in ["Buffs", "buff extra", "Travel", "Twelve"] {
+        sets.saved.insert(name.into(), [None; 8]);
+    }
+    // In the panel's order: Buffs, Travel, Twelve, buff extra.
+    assert_eq!(sets.typed("1").as_deref(), Some("Buffs"));
+    assert_eq!(sets.typed("3").as_deref(), Some("Twelve"));
+    assert_eq!(sets.typed("4 and more").as_deref(), Some("buff extra"));
+    assert_eq!(sets.typed("5"), None);
+    assert_eq!(sets.typed("BUFF").as_deref(), Some("Buffs"));
+    assert_eq!(sets.typed("buff e").as_deref(), Some("buff extra"));
+    assert_eq!(sets.typed(" t ").as_deref(), Some("Travel"));
+    assert_eq!(sets.typed("tw").as_deref(), Some("Twelve"));
+    for words in ["", "  ", "x", "Travels", "0"] {
+        assert_eq!(sets.typed(words), None, "{words}");
+    }
+    // Only 1-10 are numbers; 11 is a name, which none starts.
+    for index in 0..10 {
+        sets.saved.insert(format!("Z{index}"), [None; 8]);
+    }
+    assert_eq!(sets.typed("11"), None);
+}
+
+#[test]
+fn memspellset_applies_the_set_as_the_apply_button_does_and_opens_the_book() {
+    let folder = Folder::new();
+    let (mut app, sent) = test_app(&folder, 2);
+    app.world_mut()
+        .resource_mut::<Sets>()
+        .saved
+        .insert("Travel".into(), [None; 8]);
+    // With the book closed, the command opens it and then applies the set.
+    app.world_mut()
+        .resource_mut::<Shown>()
+        .close(WindowId::Spellbook);
+    app.update();
+    app.world_mut()
+        .resource_mut::<crate::chat::ChatState>()
+        .spell_set_asked = Some("tra".into());
+    app.update();
+    assert!(app.world().resource::<Shown>().is_open(WindowId::Spellbook));
+    for _ in 0..3 {
+        app.update();
+    }
+    assert!(matches!(
+        sent.try_recv(),
+        Ok(ClientCommand::ForgetSpell {
+            gem: 0,
+            spell_id: 42,
+            ..
+        })
+    ));
+    // While it applies, another is dropped without a line.
+    let before = app.world().resource::<crate::chat::ChatState>().newest();
+    app.world_mut()
+        .resource_mut::<crate::chat::ChatState>()
+        .spell_set_asked = Some("1".into());
+    app.update();
+    assert_eq!(
+        app.world()
+            .resource::<crate::chat::ChatState>()
+            .spell_set_asked,
+        None
+    );
+    assert_eq!(
+        app.world().resource::<crate::chat::ChatState>().newest(),
+        before
+    );
+}
+
+#[test]
+fn memspellset_with_no_match_says_the_programs_line_and_sends_nothing() {
+    let folder = Folder::new();
+    let (mut app, sent) = test_app(&folder, 2);
+    app.world_mut()
+        .resource_mut::<Sets>()
+        .saved
+        .insert("Travel".into(), [None; 8]);
+    for words in ["", "nothing", "2"] {
+        app.world_mut()
+            .resource_mut::<crate::chat::ChatState>()
+            .spell_set_asked = Some(words.into());
+        app.update();
+        assert_eq!(
+            app.world().resource::<crate::chat::ChatState>().newest(),
+            "No spell set has that name or number."
+        );
+    }
+    app.update();
+    assert!(matches!(sent.try_recv(), Err(mpsc::TryRecvError::Empty)));
+}
+
+#[test]
+fn a_typed_or_scripted_memspellset_line_with_no_match_gets_the_programs_line() {
+    // The line both a typed `/memspellset` and a script's slash step hand
+    // the chat (checklist 6.505) reaches this handler.
+    let folder = Folder::new();
+    let (mut app, sent) = test_app(&folder, 2);
+    app.world_mut()
+        .resource_mut::<Sets>()
+        .saved
+        .insert("Travel".into(), [None; 8]);
+    let queued = crate::chat::client_request_in_scope(
+        "/memspellset nothing",
+        &mut app.world_mut().resource_mut::<crate::chat::ChatState>(),
+        None,
+    );
+    assert_eq!(queued, Some(Ok(())));
+    app.update();
+    assert_eq!(
+        app.world().resource::<crate::chat::ChatState>().newest(),
+        "No spell set has that name or number."
+    );
+    assert!(matches!(sent.try_recv(), Err(mpsc::TryRecvError::Empty)));
+}
