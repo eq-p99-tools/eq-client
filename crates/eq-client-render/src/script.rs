@@ -42,8 +42,8 @@ mod source;
 pub use source::read_source;
 
 pub use parse::{
-    AbilityPage, BookEdit, CharacterClick, ClickTarget, PickButton, RaidClick, SliderClick, Step, TradeClick,
-    TrainingClick, parse,
+    AbilityPage, BookEdit, CharacterClick, ClickTarget, PickButton, RaidClick, SliderClick, Step,
+    TradeClick, TrainingClick, parse,
 };
 pub(crate) use pointer::ScriptPointer;
 
@@ -854,7 +854,10 @@ type Buttons<'w, 's> = Query<
         (
             Option<&'static super::spellbook::BookEntry>,
             Option<&'static super::spellbook::BookPlace>,
-            Option<&'static super::spellbook::TurnsPages>,
+            (
+                Option<&'static super::spellbook::TurnsPages>,
+                Option<&'static super::book_delete::Action>,
+            ),
             Option<&'static super::hud::SpellGem>,
             Option<&'static super::hud::hotbar::Slot>,
         ),
@@ -906,7 +909,6 @@ type Buttons<'w, 's> = Query<
                         Has<super::tracking::TrackButton>,
                         Option<&'static super::abilities::picker::PickRow>,
                     ),
-                    Option<&'static super::book_delete::Action>,
                 ),
             ),
         ),
@@ -3021,6 +3023,26 @@ fn tracking_control(
     }
 }
 
+/// Whether a spellbook control is the one a click names: a list row, a
+/// skin place, a page arrow or an ordering button.
+fn book_control(
+    target: ClickTarget,
+    (row, place, turns, edit): (
+        Option<&super::spellbook::BookEntry>,
+        Option<&super::spellbook::BookPlace>,
+        Option<&super::spellbook::TurnsPages>,
+        Option<&super::book_delete::Action>,
+    ),
+) -> bool {
+    match target {
+        ClickTarget::BookRow(number) => row.is_some_and(|row| row.0 == number),
+        ClickTarget::BookPlace(number) => place.is_some_and(|place| place.0 == number),
+        ClickTarget::BookPage(forward) => turns.is_some_and(|turns| turns.0 == forward),
+        ClickTarget::BookEdit(wanted) => edit.is_some_and(|action| *action == book(wanted)),
+        _ => false,
+    }
+}
+
 /// The spellbook button a scripted `book_edit` names.
 const fn book(edit: BookEdit) -> super::book_delete::Action {
     use super::book_delete::Action;
@@ -3082,17 +3104,16 @@ fn reach(
 ) -> Result<Entity, String> {
     let entity = find(target, buttons, layout).ok_or("click target is not visible")?;
     match (target, needs.get(entity)) {
-        (ClickTarget::Button(..), Ok(needs)) if !needs.offered(world) => {
+        // A spellbook edit needs the session to offer moving or deleting;
+        // P99 holds deletion back, and the script is told so, as the
+        // greyed button tells a person.
+        (ClickTarget::Button(..) | ClickTarget::BookEdit(_), Ok(needs))
+            if !needs.offered(world) =>
+        {
             Err(format!("that button is greyed out: {}", needs.reason()))
         }
         (ClickTarget::Slider(..), Ok(needs)) if !needs.offered(world) => {
             Err(format!("that slider is greyed out: {}", needs.reason()))
-        }
-        // Moving and deleting need the session to offer them; P99 holds
-        // deletion back, and the script is told so, as the greyed button
-        // tells a person.
-        (ClickTarget::BookEdit(_), Ok(needs)) if !needs.offered(world) => {
-            Err(format!("that button is greyed out: {}", needs.reason()))
         }
         _ => Ok(entity),
     }
@@ -3111,7 +3132,7 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
         slot,
         scribe,
         (store, destroy, drop),
-        (row, place, turns, spell_gem, hot_button),
+        (row, place, (turns, book_edit), spell_gem, hot_button),
         gem,
         trade,
         tint,
@@ -3122,13 +3143,7 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
             slider,
             drop_down,
             choice,
-            (
-                dialog,
-                page,
-                combine,
-                map,
-                (raid_row, raid_action, shows, skin_id, tracking, book_edit),
-            ),
+            (dialog, page, combine, map, (raid_row, raid_action, shows, skin_id, tracking)),
         ),
     ) in buttons
     {
@@ -3182,10 +3197,10 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
             ClickTarget::Store => store,
             ClickTarget::Destroy => destroy == Some(&super::inventory::destruction::Action::Select),
             ClickTarget::Drop => drop,
-            ClickTarget::BookRow(number) => row.is_some_and(|row| row.0 == number),
-            ClickTarget::BookPlace(number) => place.is_some_and(|place| place.0 == number),
-            ClickTarget::BookPage(forward) => turns.is_some_and(|turns| turns.0 == forward),
-            ClickTarget::BookEdit(edit) => book_edit.is_some_and(|action| *action == book(edit)),
+            ClickTarget::BookRow(_)
+            | ClickTarget::BookPlace(_)
+            | ClickTarget::BookPage(_)
+            | ClickTarget::BookEdit(_) => book_control(target, (row, place, turns, book_edit)),
             ClickTarget::SpellGem(number) => spell_gem.is_some_and(|gem| gem.0 == number),
             ClickTarget::HotButton(number) => hot_button.is_some_and(|slot| slot.0 == number),
             ClickTarget::MemorizeGem(number) => gem.is_some_and(|gem| gem.0 == number),

@@ -1071,15 +1071,20 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ),
         ["book_page", "next"] => ClickTarget::BookPage(true),
         ["book_page", "back"] => ClickTarget::BookPage(false),
-        ["book_edit", action] => ClickTarget::BookEdit(match *action {
-            "earlier" => BookEdit::Earlier,
-            "later" => BookEdit::Later,
-            "delete" => BookEdit::Delete,
-            "confirm" => BookEdit::Confirm,
-            "cancel" => BookEdit::Cancel,
-            _ => return Err("book_edit takes earlier, later, delete, confirm or cancel".into()),
-        }),
+        ["book_edit", action] => ClickTarget::BookEdit(book_edit(action)?),
         _ => return Err("unknown or malformed step".into()),
+    })
+}
+
+/// A spellbook ordering or deletion button by its word.
+fn book_edit(word: &str) -> Result<BookEdit, String> {
+    Ok(match word {
+        "earlier" => BookEdit::Earlier,
+        "later" => BookEdit::Later,
+        "delete" => BookEdit::Delete,
+        "confirm" => BookEdit::Confirm,
+        "cancel" => BookEdit::Cancel,
+        _ => return Err("book_edit takes earlier, later, delete, confirm or cancel".into()),
     })
 }
 
