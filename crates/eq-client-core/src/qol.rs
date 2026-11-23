@@ -313,6 +313,10 @@ impl Fix {
 
     /// What its checkbox says on hover.
     #[must_use]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "a table: one arm per fix, each its words"
+    )]
     pub const fn tooltip(self) -> &'static str {
         match self {
             Self::SkipModifiedFood => {

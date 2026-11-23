@@ -7390,4 +7390,3 @@ fn the_players_own_report_prints_its_amount_then_its_record_line() {
         []
     );
 }
-
