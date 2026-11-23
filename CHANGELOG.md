@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Mouse look in the chase view tilts as far as straight up or straight down again, at any zoom (Adam, 11-23). The chase camera had kept the Titanium program's height model, from eye level to 30 units above the eyes, which at the ordinary zoom tilts only about 15 degrees and never looks up.
+  - **Free Chase Tilt**, a new quality-of-life setting, on by default: a drag turns the chase camera around the eyes up to 89 degrees above or below level, and the wheel moves it along its sightline. Looking up, the camera swings below the eyes, never under the feet, and floors and walls still pull it in. An almost overhead view still zooms before it snaps into first person, and the far plane follows the camera out.
+  - Turned off, the chase camera keeps the program's height model as before. In the Titanium program (read of 11-23, checklists 6.348 and 6.422), mouse look Y in that camera only zooms or moves its height, only the orbit cameras tilt, from about 45 degrees up to 84 down, and no third-person camera follows the character's look pitch. Straight up or down in every view is Adam's choice. First person looks straight up or down either way.
+  - A script's `camera` step takes a pitch from -89 to 89 degrees, so a script can look up as a player can.
+
 - `/guildstatus` is offered, as read R49-6k reads it (checklist 6.575).
   - The Titanium program answers it itself and sends nothing: for the player a typed name finds (`/guildstatus Name`, ignoring case), or else for the target.
   - Lines 12256, 12257 and 12258 give the rank (member, officer, leader) with the name and the guild. 12259 gives the name alone for any other rank, and 12260 refuses a missing spawn, one that isn't a player, or a game master. All come in message type 0x111.
