@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Languages train on TAKP and Quarm as the `EQMac` program does (checklist 6.597; repin to eq-network c3cf6c8, #427, which also brings #424 event saves and #418 cold water). The program keeps its language minimum levels inside itself, so the client reads them from the installed program at its addresses, checks their shape, and hands them to the session. Without a table that passes, Mac language training stays shut. No table values are kept in this repository.
+  - The training window lists only the languages the player already speaks. The program's gate runs before anything is sent, and each refusal says the program's line: too young for the language, no practice points, already mastered (naming the language), or at the guildmaster's limit. A purse short of the program's figure gets its coin line, in its colour.
+  - A practice resolves at once, as the program does, since neither server answers it. The program's line for a first point or a further one names the guildmaster and the language, in its colour. The next profile replaces the prediction either way.
+  - Scripts use the same practice command and meet the same gate.
+  - Source-derived, not live. The first public use is attended.
+
 - `/pet target` and unknown `/pet` words, as read R49-22a reads the Titanium program (checklist 6.610, gap 3.5).
   - **`/pet target`** stays local and sends no pet order.
     - It targets the player's pet through the same selection a click on the pet uses.

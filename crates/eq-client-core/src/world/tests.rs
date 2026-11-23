@@ -4415,11 +4415,72 @@ fn training_opens_raises_skills_with_a_line_and_closes() {
         WorldEvent::TrainingRefused {
             session_id: 1,
             reason: "No practice points".into(),
+            string_id: Some(0x327d),
+            arguments: Vec::new(),
         },
     );
     assert_eq!(
         changes.notices,
-        [Notice::TrainingRefused("No practice points".into())]
+        [Notice::TrainingRefused {
+            reason: "No practice points".into(),
+            string_id: Some(0x327d),
+            arguments: Vec::new(),
+            common_alternate: None,
+        }]
+    );
+}
+
+#[test]
+fn a_mac_language_practice_says_the_programs_line_naming_the_guildmaster() {
+    use crate::training::{TrainingOffer, TrainingUpdate};
+    let mut world = trainee_with_skills_and_languages();
+    world.carry_as(crate::GameDialect::EqMac);
+    let mut guildmaster = spawn(42);
+    guildmaster.name = "Guildmaster".into();
+    game(&mut world, WorldEvent::Spawns(vec![guildmaster]));
+    game(
+        &mut world,
+        WorldEvent::Training(TrainingUpdate::Offered(TrainingOffer {
+            trainer: 42,
+            caps: vec![0; 100],
+            language_caps: vec![201; 26],
+            price_scale: None,
+        })),
+    );
+    for (value, first) in [(1, true), (2, false)] {
+        let changes = game(
+            &mut world,
+            WorldEvent::Training(TrainingUpdate::Trained {
+                skill: 105,
+                value,
+                cost: 0,
+            }),
+        );
+        assert_eq!(
+            changes.notices,
+            [Notice::LanguagePracticed {
+                trainer: "Guildmaster".into(),
+                language: 5,
+                first,
+                common_alternate: None,
+            }]
+        );
+    }
+    // A skill practice says only its skill-up.
+    let changes = game(
+        &mut world,
+        WorldEvent::Training(TrainingUpdate::Trained {
+            skill: 30,
+            value: 1,
+            cost: 0,
+        }),
+    );
+    assert_eq!(
+        changes.notices,
+        [Notice::SkillUp {
+            skill: 30,
+            value: 1
+        }]
     );
 }
 

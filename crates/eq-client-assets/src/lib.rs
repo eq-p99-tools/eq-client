@@ -15,6 +15,7 @@ pub mod lighting;
 pub mod maps;
 pub mod merchants;
 pub mod names;
+pub mod program;
 pub mod regions;
 pub mod scale;
 pub mod sidl;

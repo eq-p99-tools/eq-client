@@ -1877,9 +1877,21 @@ impl ClientWorld {
             }
             // Training at a guildmaster, and the practice points it spends.
             WorldEvent::Training(update) => self.training_news(update, news),
-            WorldEvent::TrainingRefused { session_id, reason } => {
+            WorldEvent::TrainingRefused {
+                session_id,
+                reason,
+                string_id,
+                arguments,
+            } => {
                 if self.session_id == Some(*session_id) {
-                    news.notices.push(Notice::TrainingRefused(reason.clone()));
+                    news.notices.push(Notice::TrainingRefused {
+                        reason: reason.clone(),
+                        string_id: *string_id,
+                        arguments: arguments.clone(),
+                        common_alternate: self
+                            .language_zero_selector
+                            .map(crate::rules::LanguageZeroSelector::alternate_name),
+                    });
                 } else {
                     news.ignored = true;
                 }

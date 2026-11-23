@@ -483,50 +483,19 @@ fn read_palette(directory: &Path) -> Result<[[u8; 3]; 24], LoadError> {
 }
 
 fn palette_from_pe(bytes: &[u8]) -> Option<[[u8; 3]; 24]> {
-    let word = |at: usize| {
-        Some(u16::from_le_bytes(
-            bytes.get(at..at.checked_add(2)?)?.try_into().ok()?,
-        ))
-    };
-    let dword = |at: usize| {
-        Some(u32::from_le_bytes(
-            bytes.get(at..at.checked_add(4)?)?.try_into().ok()?,
-        ))
-    };
-    if bytes.get(..2)? != b"MZ" {
-        return None;
-    }
-    let pe = usize::try_from(dword(0x3c)?).ok()?;
-    if bytes.get(pe..pe.checked_add(4)?)? != b"PE\0\0" || word(pe + 24)? != 0x10b {
-        return None;
-    }
-    let base = dword(pe + 52)?;
-    let sections = pe.checked_add(24 + usize::from(word(pe + 20)?))?;
-    for address in [0x0069_89a0_u32, 0x0060_2850] {
-        let Some(rva) = address.checked_sub(base) else {
-            continue;
-        };
-        for i in 0..usize::from(word(pe + 6)?) {
-            let section = sections.checked_add(i.checked_mul(40)?)?;
-            let Some(offset) = rva.checked_sub(dword(section + 12)?) else {
-                continue;
-            };
-            if offset.checked_add(96)? > dword(section + 16)? {
-                continue;
-            }
-            let at = usize::try_from(dword(section + 20)?.checked_add(offset)?).ok()?;
-            let data = bytes.get(at..at.checked_add(96)?)?;
+    [0x0069_89a0_u32, 0x0060_2850]
+        .into_iter()
+        .find_map(|address| {
+            let data = crate::program::at(bytes, address, 96)?;
             if data.as_chunks::<4>().0.iter().any(|color| color[3] != 0)
                 || data.get(48..51)? != [255, 255, 255]
             {
-                continue;
+                return None;
             }
-            return Some(std::array::from_fn(|i| {
+            Some(std::array::from_fn(|i| {
                 [data[i * 4 + 2], data[i * 4 + 1], data[i * 4]]
-            }));
-        }
-    }
-    None
+            }))
+        })
 }
 
 #[cfg(test)]
