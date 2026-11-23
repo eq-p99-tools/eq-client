@@ -857,8 +857,8 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
     };
     let feedback = |app: &App| app.world().resource::<ChatState>().newest();
     // A submitted request blocks another click even before a server Begin notification.
-    // The program's gem click says nothing for it (read R49-34 h); a
-    // forget still says why.
+    // The program's gem click and right click say nothing for it (reads
+    // R49-34 d, h).
     testing::pending_cast(&mut online(&mut app), Some(73));
     let said = feedback(&app);
     press(&mut app);
@@ -866,9 +866,9 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
     assert_eq!(feedback(&app), said);
     forget(&mut app);
     assert!(rx.try_recv().is_err());
+    assert_eq!(feedback(&app), said);
     testing::pending_cast(&mut online(&mut app), None);
-    assert!(feedback(&app).contains("acknowledge"));
-    // A server-confirmed cast blocks further gem actions, but never predicts a new slot.
+    // A server-confirmed cast blocks a cast, but never predicts a new slot.
     testing::spell(
         &mut online(&mut app),
         SpellUpdate::Began {
@@ -877,12 +877,20 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
             duration_ms: 2000,
         },
     );
+    // A left click clears a melody even when its cast is refused (0x47e8e0
+    // before 0x4ecb56, read R49-34 d).
+    assert_eq!(online(&mut app).start_melody(vec![0, 1]), Some(0));
     press(&mut app);
     assert!(rx.try_recv().is_err());
     assert!(feedback(&app).contains("Already casting"));
+    assert_eq!(world(&app).casting().melody.gems(), &[] as &[u8]);
+    // A right click forgets at once all the same: the program tests only
+    // for a pending request (read R49-34 d).
     forget(&mut app);
-    assert!(rx.try_recv().is_err());
-    assert!(feedback(&app).contains("Already casting"));
+    assert!(matches!(
+        rx.try_recv().unwrap(),
+        ClientCommand::ForgetSpell { spell_id: 73, .. }
+    ));
     // While the session says a Bard sings that song, a press goes to it:
     // the session stops the song (read R49-21c).
     testing::news(

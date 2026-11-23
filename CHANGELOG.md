@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- The scribe press and the gems follow the Titanium program further (reads
+  R49-34 a, d and i, slice G, G2 and G4, checklist 6.639). A scroll skips
+  the race mask, as the program's usability test does, so a scroll no race
+  may use still scribes for its class. Lines 0x2f0f (your class can't) and
+  0x2f12 (already in your book) name the cursor item, as R49-34 i reads,
+  where they named nothing and the spell. A left click on a gem clears the
+  melody before its cast, whatever comes of the cast; a gem key clears it
+  only while singing, as before. A right click forgets a filled gem at once
+  even mid-cast, and does nothing and says nothing while a request is
+  pending, where it was refused with this client's words. Not built yet,
+  labelled: the deity and level tests of the usability check (the item
+  fields aren't decoded here), a modified left click picking the gem up
+  (ours keeps its hold), and the popup menu on an empty gem.
 - A gem cast meets the Titanium program's own checks before it goes, in its
   order (reads R49-34 e and h-j, slice G, checklist 6.639; audit table in
   the PR). The gem click comes first (0x4ecb56): while a cast is under way
