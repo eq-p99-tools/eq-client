@@ -41,7 +41,6 @@ fn player(spawn_id: u16) -> PlayerState {
         skills: None,
         practice_points: None,
         languages: None,
-        intoxication: None,
         disciplines: None,
         spell_refresh_ms: None,
         memorized_spells: [None; 8],
