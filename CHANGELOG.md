@@ -383,16 +383,17 @@ Mac-era servers loot as before, as that client's loot click is unread, and
   - **Emitters** follow the Titanium program's loader (read R49-7 first pass and its engine follow-up). `eq-client-assets` reads `<zone>_sounds.eff`'s 84-byte records:
     - one emitter for a type-2 record or matching day and night fields, else a day one and a night one, each with its own type, sound, delay and volume;
     - a radius below 0 reaches 10,000;
+    - positions are in the files' own frame, whose x and y are the server's y and x (inferred from the local look, where qeytoqrg's regions met the ground only swapped);
     - a delay above 0 repeats after delay + 500 plus a random share;
     - a positive volume is a millibel attenuation (2000 is a tenth, above 10000 silent); otherwise 0.2 for type 0 and 1.0 for the rest.
-    - a music record's track is its id negated (engine follow-up, 0x44b502); the step from track to sequence is inferred and labelled.
+    - a music record's sound number of 0 or more is the `<zone>.xmi` sequence it plays, counted from 0 (read on the music sign: 0x44bc19 to 0x4c6a99). A negative number names an `mp3index.txt` entry, which this client does not play yet; it is logged once a zone.
   - **The bank.** `<zone>_sndbnk.eff`'s EMIT list is numbered from 1 and LOOP from 162, with CR and spaces stripped. Inferred and labelled: the linear falloff, a bank name's `.wav`, the ms unit, a delay of 0 looping, and ids 32 to 161.
   - **Voices.** Emitters play on at most eight voices of their own, so cues always keep theirs.
-  - **Music.** The music region the player stands in plays through `rustysynth` 1.3.8 (MIT) on a SoundFont the player names with `--soundfont`. There is no music without one, a stated departure. How regions choose among themselves, fade and switch music is this client's estimate; the follow-up read covers only the fade value's clamp.
+  - **Music.** The music region the player stands in plays through `rustysynth` 1.3.8 (MIT) on a SoundFont the player names with `--soundfont`. There is no music without one, a stated departure. The `.sf2` files an installation may ship are refused by `rustysynth` as they stand, so the player names another. Regions follow the program's chooser (read on zone music tracks): the smallest sphere the player is in wins, night is the hour below 5 or above 18, a switch fades over 1500 ms and leaving every region over the record's +0x44 / +0x48 (at most 20000 ms), and EnvSounds off silences music regions too. A new track's fade-in (+0x4c) is inferred and not applied.
   - **Options.** New per-character options: Music, Music Volume (wired to the skin's slider), Environment Sounds and Combat Music. A character without its own choice seeds them from `eqclient.ini`'s `Music` (0 is off), `EnvSounds` and `CombatMusic`.
   - `/combatmusic` toggles and saves combat music, saying in this client's words that it plays none yet.
   - A `nosound.txt` in the installation turns all sound off.
-  - Unknown record types and music ids of 0 or more are logged once a zone and not played. Everything stops on a zone change, camp, logout or lost connection.
+  - Unknown record types and negative (mp3-list) music ids are logged once a zone and not played. Everything stops on a zone change, camp, logout or lost connection.
 
 
 - Scripts can click spawns, ground objects and doors in the world by id (checklist 6.587), since a script may do whatever the player can (Adam, 11-23). `click("spawn", admission, id, revision)` targets a spawn (two of one name included), `right_click` loots, trades, boards or considers it without changing the target, `click("object", admission, drop_id)` picks up an item or opens a world container, and `click("door", admission, id)` makes a door's two clicks. Each click goes through the scene's own pick, with the script's pointer as the cursor: it acts only where the pick names that same thing right now, so a thing behind a wall, off screen or under a window is refused and nothing is sent. The report's surroundings line gives the admission and each nearby spawn's click tuple. A run that stops mid-click hands the scene back the real pointer the next frame.
