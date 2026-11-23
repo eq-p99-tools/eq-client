@@ -1,5 +1,7 @@
 //! Builds S3D archives and the WLD files inside them byte by byte for tests,
 //! laid out as the formats lay them out, so no test needs game files.
+//! Other crates' tests reach a few of them through [`crate::testing`].
+#![cfg_attr(not(test), allow(dead_code))]
 
 use std::io::Cursor;
 use std::path::Path;
@@ -165,7 +167,15 @@ pub(crate) fn coloured_triangle(
     coordinates: &Coordinates,
     colours: &[u32],
 ) -> Vec<u8> {
-    triangle_of(name, palette, coordinates, 1, &[], colours, (0x0001_8003, 0))
+    triangle_of(
+        name,
+        palette,
+        coordinates,
+        1,
+        &[],
+        colours,
+        (0x0001_8003, 0),
+    )
 }
 
 fn triangle_of(
@@ -246,8 +256,21 @@ pub(crate) fn mesh(
     groups: &[(u16, u16)],
     skin: &[(u16, u16)],
 ) -> Vec<u8> {
+    mesh_with_flags(name, palette, positions, faces, groups, skin, 0x0001_8003)
+}
+
+/// [`mesh`] with the mesh's own 0x36 flags; its +0x14 reference is empty.
+pub(crate) fn mesh_with_flags(
+    name: i32,
+    palette: i32,
+    positions: &[[i16; 3]],
+    faces: &[[u16; 3]],
+    groups: &[(u16, u16)],
+    skin: &[(u16, u16)],
+    flags: u32,
+) -> Vec<u8> {
     let count = |n: usize| u16::try_from(n).unwrap();
-    let mut body = words(&[name.cast_unsigned(), 0x0001_8003, palette.cast_unsigned()]);
+    let mut body = words(&[name.cast_unsigned(), flags, palette.cast_unsigned()]);
     body.extend([0_u8; 12 + 12 + 12 + 4 + 24]);
     let vertices = count(positions.len());
     for n in [

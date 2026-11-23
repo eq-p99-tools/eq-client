@@ -10,10 +10,11 @@
 //! whether the loader makes it solid throughout (read F4b's named case):
 //! `cargo run -p eq-client-assets --example inspect_door_models -- <EQ dir> --doors <list>`
 //!
-//! Every object mesh in every installed `<zone>_obj.s3d` whose passable faces
-//! either case of read F4b would make solid, placed objects and doors alike,
-//! with whether the loader applies it (`named`; F4b's unreferenced case is
-//! held, see `object_solid_faces`):
+//! Every object mesh in every installed `<zone>_obj.s3d` whose walking faces
+//! the loader's two rules change, placed objects and doors alike: `named`
+//! (read F4b: passable faces made solid) or `no-hit` (read R49-49c: every
+//! face dropped), and how many named meshes are in the no-hit case, which
+//! should be none:
 //! `cargo run -p eq-client-assets --example inspect_door_models -- <EQ dir> --changed`
 //!
 //! Where a zone places the objects built on those meshes, in server axes,
@@ -109,13 +110,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 struct MeshFacts {
     /// Whether the loader keeps every face as solid (a named mesh).
     solid_throughout: bool,
-    /// Read F4b's other case: no 0x10000 flag and no +0x14 reference. The
-    /// loader does not apply it.
+    /// Read R49-49c's no-hit case: no 0x10000 flag and no +0x14 reference.
+    /// The loader gives such a mesh no walking faces.
     unreferenced: bool,
     flags: u32,
     referenced: bool,
     faces: usize,
     passable: usize,
+}
+
+impl MeshFacts {
+    /// Which of the loader's rules changes this mesh's walking faces: the
+    /// no-hit case drops every face it met before, and the named case makes
+    /// the passable ones solid.
+    fn rule(&self) -> Option<&'static str> {
+        if self.unreferenced {
+            (self.faces > self.passable).then_some("no-hit")
+        } else {
+            (self.solid_throughout && self.passable > 0).then_some("named")
+        }
+    }
 }
 
 /// The meshes of a zone's object archive, by name.
@@ -227,7 +241,7 @@ fn named(name: &str) -> bool {
         || name == "PORT1414_DMSPRITEDEF"
 }
 
-/// Every object mesh with passable faces that the rule makes solid.
+/// Every object mesh whose walking faces a rule of the loader changes.
 fn changed(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let mut zones: Vec<String> = std::fs::read_dir(directory)?
         .filter_map(|entry| {
@@ -240,26 +254,27 @@ fn changed(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         })
         .collect();
     zones.sort();
-    let (mut read, mut count, mut applied) = (0, 0, 0);
-    println!("zone\tmesh\tflags\treferenced\tfaces\tpassable\tapplied");
+    let (mut read, mut count, mut named_no_hit) = (0, 0, 0);
+    println!("zone\tmesh\tflags\treferenced\tfaces\tpassable\trule");
     for zone in &zones {
         let Some(facts) = mesh_facts(directory, zone) else {
             continue;
         };
         read += 1;
         for (mesh, fact) in &facts {
-            if fact.passable > 0 && (fact.solid_throughout || fact.unreferenced) {
+            let rule = fact.rule();
+            named_no_hit += usize::from(fact.unreferenced && fact.solid_throughout);
+            if let Some(rule) = rule {
                 count += 1;
-                applied += usize::from(fact.solid_throughout);
                 println!(
-                    "{zone}\t{mesh}\t{:#x}\t{}\t{}\t{}\t{}",
-                    fact.flags, fact.referenced, fact.faces, fact.passable, fact.solid_throughout
+                    "{zone}\t{mesh}\t{:#x}\t{}\t{}\t{}\t{rule}",
+                    fact.flags, fact.referenced, fact.faces, fact.passable
                 );
             }
         }
     }
     println!(
-        "# object archives {}, read {read}; meshes either case covers {count}, applied (named) {applied}",
+        "# object archives {}, read {read}; meshes a rule changes {count}; named meshes in the no-hit case {named_no_hit}",
         zones.len()
     );
     Ok(())
@@ -319,11 +334,7 @@ fn places(directory: &Path, zone: &str) -> Result<(), Box<dyn std::error::Error>
             .get(&model.name)
             .into_iter()
             .flatten()
-            .filter(|mesh| {
-                facts
-                    .get(*mesh)
-                    .is_some_and(|fact| fact.passable > 0 && fact.solid_throughout)
-            })
+            .filter(|mesh| facts.get(*mesh).is_some_and(|fact| fact.rule().is_some()))
             .map(|mesh| mesh.trim_end_matches("_DMSPRITEDEF"))
             .collect();
         if meshes.is_empty() {
@@ -350,11 +361,9 @@ fn places(directory: &Path, zone: &str) -> Result<(), Box<dyn std::error::Error>
     let drawing: Vec<&String> = actors
         .iter()
         .filter(|(_, meshes)| {
-            meshes.iter().any(|mesh| {
-                facts
-                    .get(mesh)
-                    .is_some_and(|fact| fact.passable > 0 && fact.solid_throughout)
-            })
+            meshes
+                .iter()
+                .any(|mesh| facts.get(mesh).is_some_and(|fact| fact.rule().is_some()))
         })
         .map(|(actor, _)| actor)
         .collect();

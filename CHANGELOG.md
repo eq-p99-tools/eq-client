@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **A walker passes through trees, plants and grass, trunks included, as the engine's walking sweep does** (read R49-49c). The sweep (EQGraphicsDX9.dll 0x10192400) returns no hit at once for an object mesh whose 0x36 flags lack 0x10000 and whose +0x14 reference is empty (read F4g). In the installed files that is every tree, plant and grass mesh (both pines' trunks among them) and a few props such as Firiona's rotisserie. Every building, rock, statue, ladder and the Neriak bars are referenced and stay solid.
+  - That the sweep is the walking test is inferred. Before, this client stood a walker on a tree's trunk faces, which let a walker climb a Firiona swamp tree.
+  - Labelled departure: the engine's ray tests still see those meshes, but this client's camera shares the walking world, so it passes through them too (follow-up row).
 - **The Use key now uses what is at the centre of the view, not the nearest door** (read R49-19, checklist 6.609). On Titanium (and RoF2, inferred) it casts the program's ray from the camera through the centre of the 3D view, the same pick a mouse click makes:
   - The first character the ray hits becomes the target. An NPC, or one the target setter refuses while no target stands, also gets what a right click on it does (a merchant, banker or guildmaster opens, a boat asks to pilot, else it is considered; no hail). A player or corpse that becomes the target is only targeted, as the program's key handler reads (0x462519).
   - With no character, a door on the same ray gets one click at the point the ray met it, and the session judges its reach from there, as for a mouse click. Nothing else is reached: an item on the ground or a world container opens only by its own click (read).

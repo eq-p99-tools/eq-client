@@ -26,8 +26,10 @@ pub mod spells;
 pub mod strings;
 #[cfg(test)]
 mod terrain_material_tests;
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 mod test_world;
+#[cfg(feature = "testing")]
+pub mod testing;
 pub mod ui;
 pub mod xmi;
 pub mod zone_sounds;
@@ -113,9 +115,11 @@ pub struct ZoneModel {
     pub primitives: Vec<ZonePrimitive>,
     /// Authored draw flags, in the order of `primitives`.
     pub materials: Vec<ObjectMaterial>,
-    /// Solid triangles, including invisible collision surfaces. A face
-    /// flagged passable is left out unless the engine makes its mesh solid
-    /// throughout (the five model names of EQGraphicsDX9.dll 0x10193510).
+    /// Solid triangles a walker meets, including invisible collision
+    /// surfaces. A face flagged passable is left out unless the engine makes
+    /// its mesh solid throughout (the five model names of EQGraphicsDX9.dll
+    /// 0x10193510), and an object mesh in the engine's no-hit case (read
+    /// R49-49c: trees, plants and grass) gives none.
     pub collision: Vec<[[f32; 3]; 3]>,
     /// How many vertices the model's one mesh has, which a placement's
     /// colour track must match; None for a model built on a skeleton.
@@ -720,6 +724,7 @@ fn load_object_models(
     let mut models = Vec::new();
     let mut model_indices = HashMap::new();
     let mut report = ObjectReport::default();
+    let fragments = mesh_fragments(&doc);
     for model in world.models() {
         let (Some(name), Some(mesh)) = (model.name(), model.mesh()) else {
             continue;
@@ -743,7 +748,10 @@ fn load_object_models(
             name: name.to_owned(),
             primitives: realized.primitives,
             materials: realized.materials,
-            collision: object_collision(&mesh),
+            collision: object_collision(
+                &mesh,
+                mesh.name().and_then(|name| fragments.get(name).copied()),
+            ),
             vertex_count: Some(vertex_count),
         });
     }
@@ -942,7 +950,9 @@ fn pose_hierarchy(
     };
     // Each posed mesh's drawn primitives, its vertices and its solid faces.
     let mut posed: Vec<PosedMesh> = Vec::new();
-    let mut pose = |mesh: &libeq::wld::Mesh<'_>, joint_of: &dyn Fn(usize) -> Mat4| {
+    let mut pose = |mesh: &libeq::wld::Mesh<'_>,
+                    raw: &libeq::wld::parser::DmSpriteDef2,
+                    joint_of: &dyn Fn(usize) -> Mat4| {
         let mut staged = stage_mesh(mesh, &[]);
         for primitive in &mut staged {
             for (index, (position, normal)) in primitive
@@ -974,16 +984,16 @@ fn pose_hierarchy(
         posed.push(PosedMesh {
             staged,
             solids,
-            indices: object_solid_faces(mesh),
+            indices: object_solid_faces(mesh, Some(raw)),
         });
     };
     for (index, dag) in definition.dags.iter().enumerate() {
         if dag.mesh_or_sprite_reference == 0 {
             continue;
         }
-        if let Some((mesh, _)) = mesh_of(dag.mesh_or_sprite_reference) {
+        if let Some((mesh, raw)) = mesh_of(dag.mesh_or_sprite_reference) {
             let joint = joints[index];
-            pose(mesh, &|_| joint);
+            pose(mesh, raw, &|_| joint);
         }
     }
     let mut skipped = 0;
@@ -1005,7 +1015,7 @@ fn pose_hierarchy(
             skipped += 1;
             continue;
         }
-        pose(mesh, &|vertex| joints[owners[vertex]]);
+        pose(mesh, raw, &|vertex| joints[owners[vertex]]);
     }
     let mut collision = Vec::new();
     let mut by_material: Vec<StagedPrimitive> = Vec::new();
@@ -1187,37 +1197,74 @@ fn mesh_collision(mesh: &libeq::wld::Mesh<'_>) -> Vec<[[f32; 3]; 3]> {
     solid_triangles(&positions, &mesh.collision_indices())
 }
 
+/// Each mesh fragment of an object archive by name, the first where two
+/// share one, for the engine's no-hit case.
+fn mesh_fragments(
+    doc: &libeq::wld::parser::WldDoc,
+) -> HashMap<&str, &libeq::wld::parser::DmSpriteDef2> {
+    let mut fragments = HashMap::new();
+    for raw in doc.fragment_iter::<libeq::wld::parser::DmSpriteDef2>() {
+        if let Some(name) = doc.get_string(raw.name_reference) {
+            fragments.entry(name).or_insert(raw);
+        }
+    }
+    fragments
+}
+
 /// A placed object's or door's solid triangles, by [`object_solid_faces`].
-fn object_collision(mesh: &libeq::wld::Mesh<'_>) -> Vec<[[f32; 3]; 3]> {
+fn object_collision(
+    mesh: &libeq::wld::Mesh<'_>,
+    raw: Option<&libeq::wld::parser::DmSpriteDef2>,
+) -> Vec<[[f32; 3]; 3]> {
     let center = mesh.center();
     let positions: Vec<[f32; 3]> = mesh
         .positions()
         .into_iter()
         .map(|p| [p[0] + center.0, p[1] + center.1, p[2] + center.2])
         .collect();
-    solid_triangles(&positions, &object_solid_faces(mesh))
+    solid_triangles(&positions, &object_solid_faces(mesh, raw))
 }
 
 /// The vertices of the faces a placed actor (a door or an object) collides
-/// with: the one place the engine's rule lives. The engine skips a face
-/// flagged passable (WLD 0x10) unless it has made the whole mesh solid
-/// (EQGraphicsDX9.dll 0x10193510, read F4b). Every face of a mesh
-/// [`SOLID_THROUGHOUT`] names is solid.
+/// with when walking: the one place the engine's rule lives.
 ///
-/// Read F4b gives 0x10193510 a second case: a mesh whose 0x36 flags lack
-/// 0x10000 and whose reference at +0x14 is empty. Read that way it covers
-/// the trees, plants and grass of the object archives (their leaves and
-/// blades are flagged passable), and in the original client a player walks
-/// through those leaves and grass. So that case is not applied until a read
-/// settles why it does not reach them (inferred, read F4d). Zone terrain
-/// keeps [`mesh_collision`]'s skip (its own test is unread), and boats and
-/// EQG models are unchanged.
-fn object_solid_faces(mesh: &libeq::wld::Mesh<'_>) -> Vec<u32> {
-    if mesh.name().is_some_and(solid_by_name) {
+/// - **No hit** (read R49-49c): the engine's moving-sphere sweep
+///   (EQGraphicsDX9.dll 0x10192400) returns no hit at once for a mesh whose
+///   switch +0x5c is set (0x10192406), and the switch is set for an S3D
+///   mesh whose 0x36 flags lack 0x10000 and whose reference at +0x14 is
+///   empty (0x101885e0, 0x10193d70; read F4g). That is every tree, plant
+///   and grass mesh of the object archives, trunks included, so a walker
+///   passes through them; it has no faces here. That the sweep is the
+///   walking test is inferred. The engine's ray tests see every face of
+///   such a mesh; this client's camera shares the walking world and passes
+///   through them too, a labelled departure.
+/// - **Named** (read F4b): every face of a mesh [`SOLID_THROUGHOUT`] names
+///   is solid (0x10193510 marks it).
+/// - **Otherwise** a face flagged passable (WLD 0x10) is skipped.
+///
+/// Zone terrain keeps [`mesh_collision`]'s skip, and boats and EQG models
+/// are unchanged (the EQG loader sets no switch).
+fn object_solid_faces(
+    mesh: &libeq::wld::Mesh<'_>,
+    raw: Option<&libeq::wld::parser::DmSpriteDef2>,
+) -> Vec<u32> {
+    if raw.is_some_and(no_hit) {
+        Vec::new()
+    } else if mesh.name().is_some_and(solid_by_name) {
         mesh.indices()
     } else {
         mesh.collision_indices()
     }
+}
+
+/// Read R49-49c's no-hit case: an S3D mesh whose 0x36 flags lack 0x10000
+/// and whose reference at +0x14 is empty (read F4g).
+fn no_hit(raw: &libeq::wld::parser::DmSpriteDef2) -> bool {
+    raw.flags & 0x1_0000 == 0
+        && matches!(
+            raw.fragment4,
+            libeq::wld::parser::FragmentRef::Name(libeq::wld::parser::StringReference(0), _)
+        )
 }
 
 /// How [`SOLID_THROUGHOUT`] compares a mesh's name with one of its entries.
@@ -1705,13 +1752,18 @@ mod tests {
             );
         };
         actor(&mut objects, "OBJ_ACTORDEF", tri_sprite);
-        // The same triangle, its one face flagged passable (0x10): an object
-        // mesh as most are (flags with 0x10000), the bars the engine names,
-        // and a mesh with neither 0x10000 nor a +0x14 reference.
-        for (actor_name, mesh_name, mesh_flags) in [
-            ("PASS_ACTORDEF", "PASS_DMSPRITEDEF", 0x0001_4003),
-            ("HHCELL_ACTORDEF", "HHCELL_DMSPRITEDEF", 0x0001_4003),
-            ("BARE_ACTORDEF", "BARE_DMSPRITEDEF", 0x4003),
+        // The same triangle, its one face flagged passable (0x10) or not:
+        // an object mesh as most are (flags with 0x10000), the bars the
+        // engine names, and meshes with neither 0x10000 nor a +0x14
+        // reference (read R49-49c's no-hit case, as every installed tree
+        // is), one of them under a name the engine makes solid.
+        for (actor_name, mesh_name, mesh_flags, face_flags) in [
+            ("PASS_ACTORDEF", "PASS_DMSPRITEDEF", 0x0001_4003, 0x10),
+            ("WALL_ACTORDEF", "WALL_DMSPRITEDEF", 0x0001_4003, 0),
+            ("HHCELL_ACTORDEF", "HHCELL_DMSPRITEDEF", 0x0001_4003, 0x10),
+            ("BARE_ACTORDEF", "BARE_DMSPRITEDEF", 0x4003, 0x10),
+            ("TRUNK_ACTORDEF", "TRUNK_DMSPRITEDEF", 0x4003, 0),
+            ("LADDER9_ACTORDEF", "LADDER9_DMSPRITEDEF", 0x4003, 0),
         ] {
             let mesh = objects.name(mesh_name);
             let mesh = objects.fragment(
@@ -1722,7 +1774,7 @@ mod tests {
                     &coordinates,
                     1,
                     &[],
-                    (mesh_flags, 0x10),
+                    (mesh_flags, face_flags),
                 ),
             );
             let sprite = objects.fragment(0x2d, words(&[0, mesh.cast_unsigned(), 0]));
@@ -1917,7 +1969,7 @@ mod tests {
     }
 
     #[test]
-    fn a_passable_face_is_walked_through_unless_the_engine_makes_its_mesh_solid() {
+    fn a_walker_meets_an_object_face_as_the_engines_sweep_does() {
         let zone = load_hierarchical_zone("passable-face");
         let solid = |name: &str| {
             zone.models
@@ -1933,13 +1985,20 @@ mod tests {
             [0.0, 0.0, 1.0],
         ])];
         let none = Vec::<[[f32; 3]; 3]>::new();
-        // Skipped as passable (0x10192400 and its kin), drawn as ever.
+        // Skipped as passable (0x10192400 and its kin), drawn as ever; a
+        // face not flagged is met.
         assert_eq!(solid("PASS_ACTORDEF"), none);
-        // Neither 0x10000 nor a +0x14 reference, like a tree's leaves: still
-        // walked through, as in the original (F4b's second case unapplied).
-        assert_eq!(solid("BARE_ACTORDEF"), none);
+        assert_eq!(solid("WALL_ACTORDEF"), face);
         // Made solid throughout by 0x10193510 by its name.
         assert_eq!(solid("HHCELL_ACTORDEF"), face);
+        // No 0x10000 and no +0x14 reference: the sweep skips the whole mesh
+        // (read R49-49c), leaves and trunks alike.
+        assert_eq!(solid("BARE_ACTORDEF"), none);
+        assert_eq!(solid("TRUNK_ACTORDEF"), none);
+        // Even under a name the engine makes solid: the sweep's exit comes
+        // first. No installed named mesh is no-hit (the bars and ladders
+        // are referenced), so this pins the order only.
+        assert_eq!(solid("LADDER9_ACTORDEF"), none);
     }
 
     #[test]
