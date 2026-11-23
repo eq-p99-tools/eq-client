@@ -375,6 +375,7 @@ pub(super) fn schedule(app: &mut App) {
                         training::window,
                         tracking::window,
                         tracking::say_rangers_only,
+                        pet::say_pet_target,
                     ),
                     (translocate::decline_unasked, confirm::window).chain(),
                     reading::window,
@@ -440,7 +441,7 @@ pub(super) fn schedule(app: &mut App) {
                         spellbook::search::present,
                         spellbook::sets::ui::present,
                     ),
-                    skinned::tabs,
+                    (skinned::open_filters, skinned::tabs).chain(),
                     (abilities::present, crate::combat_abilities::present),
                     (
                         skinned::slide,

@@ -178,6 +178,12 @@ pub enum Notice {
     /// finder, for the first time in this zone visit: a diagnostic, not a
     /// message the official client gives.
     BuffSlotMismatch,
+    /// The server still holds a buff the program's slot finder removes for
+    /// a landing (step 4's replace or step 6's eviction, read R49-22e): the
+    /// client's prediction was wrong, and the server's word stands. A
+    /// diagnostic for the gap log (6.612 T1), not a message the official
+    /// client gives.
+    BuffPredictionContradicted(crate::buffs::Disagreement),
     /// Where the connection stands.
     Connection {
         /// Where it stands now.
