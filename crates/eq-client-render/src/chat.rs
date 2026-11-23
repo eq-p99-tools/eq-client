@@ -180,9 +180,9 @@ pub(super) struct ChatState {
     pub(crate) assist_words: Option<String>,
     /// An `/autoinventory` waiting to put the cursor item away.
     pub(crate) autoinventory: Option<crate::inventory::auto::Asked>,
-    /// Chat server channel commands, as the chat server's words, waiting
-    /// to be sent (checklist 6.509).
-    pub(crate) channel_asked: Vec<String>,
+    /// Chat server channel commands waiting to be sent, and `/autojoin`
+    /// lists waiting to be kept (checklists 6.509, 6.616).
+    pub(crate) channel_asked: Vec<super::chat_channels::Asked>,
     /// A `/doability`'s words, waiting for the Actions window's buttons.
     pub(crate) doability: Option<String>,
     /// A `/memspellset`'s words, waiting for the spell sets.
@@ -2294,7 +2294,11 @@ pub(super) fn run_game_command(
     if let Some(asked) = super::chat_channels::typed(command) {
         match asked {
             Ok(words) => chat.channel_asked.push(words),
-            Err(reason) => chat.refuse(reason),
+            // This client's usage words, in the program's colour for its
+            // own (R49-12 e).
+            Err(reason) => chat.refuse(
+                Said::own(reason).typed(super::chat_channels::PLAIN_COLOUR),
+            ),
         }
         return;
     }

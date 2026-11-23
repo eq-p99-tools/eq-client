@@ -530,13 +530,22 @@ link to it when the world offers one, and these commands go to it:
 
 - `/join channel` joins a channel. Several can be given with commas, and a
   channel can take a password as `channel:password`.
-- `/leave channel` and `/leaveall` leave one channel or all of them.
+- `/leave channel` and `/leaveall` leave one channel or all of them. `/leave`
+  alone goes to the chat server as it is.
 - `/list` lists the channels you are on, and `/list channel` lists who is on
   a channel.
 - `/announce` (or `/announce on` and `/announce off`) asks to be told when
   someone joins or leaves a channel.
 - `/1` to `/10` followed by text say it on the channel in that slot. The
   first channel joined is `/1`.
+- `/autojoin channel` (with commas and passwords as for `/join`) keeps the
+  channels to join each time you log in, and sends nothing now. Each time the
+  chat server takes the login, the client says "Autojoining channels: ..."
+  and joins them. The list is the one you set here, kept with your character's
+  options; else your character's `ChannelAutoJoin` in the official client's
+  own file for them (`[ChatManager]`); else `eqclient.ini`'s `[Defaults]`
+  one. `NONE`, the official default, joins nothing. This client never writes
+  the official client's files.
 - `/chat words` sends the chat server's own channel words as typed: `join`,
   `leave`, `leaveall`, `list`, `listall`, `announce`, and the owner and
   moderator words (`setowner`, `oplist`, `invite`, `grant`, `moderate`,
@@ -559,14 +568,25 @@ the chat server's own lines print as it sends them. The client remembers the
 joined list across zones, and forgets it when the link ends or you camp.
 
 When the server offers no chat server, or the link has not come up, a command
-says "You are not connected to the chat server." and nothing is sent. When
-the link ends, the chat says "The chat server link has ended." There is no
-reconnect: a new link only comes from the world's next offer. `/autojoin`,
-the list the official client joins at login, is not kept yet.
+says "You are not connected to the chat server." and nothing is sent. The
+official client says nothing then; the line is this client's, always on. The
+link ends after more than 30 seconds in which the chat server sent nothing,
+as the official client's does. When the link ends, the chat says "The chat
+server link has ended." There is no reconnect: a new link only comes from
+the world's next offer.
 
-These lines show in the System tab and are not a chat filter of their own. Every
-wording, colour and slot form above is this client's and is inferred; the
-official client's are pending read R49-12 (recording checklist 6.509).
+The commands go to the chat server as the Titanium program sends them (read
+R49-12, recording checklist 6.616): `/join`, `/leave`, `/leaveall` and
+`/list` as typed, slash and all, and `/N text` as `;N text`. The program
+checks nothing else first. Its usage lines are its own text, not its string
+table, so the usage lines here are this client's words, in the colour the
+program uses for its own. Which of the official client's files for a
+character keeps `[ChatManager]` is inferred.
+
+These lines show in the System tab and are not a chat filter of their own.
+How the official client prints channel lines, joins and leaves is still
+unread (R49-12 b), so those wordings, colours and slot forms are this
+client's and are inferred.
 Project 1999, Quarm and TAKP open no link: on P99, chat channels are withheld
 until there has been an attended session there.
 

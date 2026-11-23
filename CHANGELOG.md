@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Chat server channel commands follow the Titanium program** (read R49-12, checklist 6.616).
+  - `/join`, `/leave`, `/leaveall` and `/list` go to the chat server as typed, slash and all, and `/leave` alone goes as it is. `/1` to `/10` go as `;N text`.
+  - **`/autojoin channel, ...`** keeps the channels to join at each login in your character's options and sends nothing now. Each time the chat server takes the login, the client says so and sends `/join` with the list. The list is yours, else the official client's `[ChatManager]` `ChannelAutoJoin` for the character, else `eqclient.ini`'s `[Defaults]` one; `NONE` joins nothing. The official client's files are only read.
+  - Usage lines for `/join` and `/N` with nothing after them are this client's words, in the program's colour for its own lines.
+  - "You are not connected to the chat server." stays: the program says nothing then, so it is an always-on, labelled departure.
+  - The link now ends after 30 seconds of silence and logs in with the program's language tag (eq-network #422).
+
 - A Bard's song stop says the Titanium program's line (0x40f06d, read R49-21), from eq-network #421's `WorldEvent::SongStopped`. It shows in the program's colour 0x108, in the installation's words (string 0x318f), or this client's where the installation lacks them. A gem click that stops the song now shows that line, not a cast refusal. As read, the program hides the line when the Bard songs filter is "mine only" (filter 9 holding 1), and so does this client, through the local filter gate (`chat_filters::hidden_locally`). Read R49-48 e asks to confirm that compare. On Titanium, where the program's line is the only one, this client's own "Song stop requested" and "Song stop unconfirmed" lines no longer show beside it. The Mac-era servers, which send no program line, keep them.
 - A Bard's `/melody`, as the Titanium program's (0x472156, read R49-33 c; gap 3.5, plan approved with Y1 to Y4). It is offered where the session offers `Capability::Melody`, on P99 (by Adam's word) and Titanium EQEmu. Elsewhere it answers as an unknown game command does.
   - **`/melody 1 3 2`** clears the list, then, unless a song is sung, plays gems 1, 3 and 2 in turn. It presses the first at once through the same gem press as a click, with the same refusals and lines.

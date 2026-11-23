@@ -26,6 +26,8 @@ const LUCLIN_MODELS: &str = "luclin_models";
 
 /// The name a file keeps [`Options::attack_on_assist`] under.
 const ATTACK_ON_ASSIST: &str = "attack_on_assist";
+/// The name a file keeps [`Options::channel_autojoin`] under.
+const CHANNEL_AUTOJOIN: &str = "channel_autojoin";
 
 /// An option the player turns on or off.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -367,6 +369,43 @@ impl Level {
     }
 }
 
+/// The chat server channels `/autojoin` keeps: the words after it, as
+/// typed, such as `general, trade:secret`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AutoJoin {
+    bytes: [u8; AutoJoin::MAX],
+    len: u8,
+}
+
+impl AutoJoin {
+    /// The longest list kept: this client's own bound, since the program's
+    /// is unread (inferred).
+    pub const MAX: usize = 255;
+
+    /// The list, trimmed; None when it is empty, longer than [`Self::MAX`],
+    /// or holds a line break, which an options file could not keep.
+    #[must_use]
+    pub fn new(list: &str) -> Option<Self> {
+        let list = list.trim();
+        if list.is_empty() || list.len() > Self::MAX || list.contains(['\n', '\r']) {
+            return None;
+        }
+        let mut bytes = [0; Self::MAX];
+        bytes[..list.len()].copy_from_slice(list.as_bytes());
+        Some(Self {
+            bytes,
+            len: u8::try_from(list.len()).ok()?,
+        })
+    }
+
+    /// The list as typed.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        // Built only from a whole `&str`, so always whole characters.
+        std::str::from_utf8(&self.bytes[..usize::from(self.len)]).unwrap_or_default()
+    }
+}
+
 /// Every option the client keeps.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[allow(
@@ -421,6 +460,13 @@ pub struct Options {
     /// default there is unread, so it starts off (inferred, checklist
     /// 6.490).
     pub attack_on_assist: bool,
+    /// The chat server channels joined at each login, as `/autojoin` sets
+    /// them (read R49-12 c, checklist 6.616). The official client writes
+    /// `[ChatManager]` `ChannelAutoJoin` to the character's own ini; this
+    /// client keeps it here, per character, and never writes that file.
+    /// None until the player sets it, when the installation's keys are the
+    /// defaults.
+    pub channel_autojoin: Option<AutoJoin>,
     /// See [`Level::ClipPlane`].
     pub clip_plane: u16,
     /// See [`Level::MaxFps`].
@@ -499,6 +545,7 @@ impl Default for Options {
             show_names: ShowNames::Everything,
             loot_no_drop: LootNoDrop::Ask,
             attack_on_assist: false,
+            channel_autojoin: None,
             clip_plane: 100,
             max_fps: if qol.on(Fix::FrameCap) { 60 } else { 0 },
             mouse_sensitivity: 50,
@@ -697,6 +744,10 @@ impl Options {
                 }
                 continue;
             }
+            if key.trim() == CHANNEL_AUTOJOIN {
+                options.channel_autojoin = AutoJoin::new(value);
+                continue;
+            }
             if key.trim() == ATTACK_ON_ASSIST {
                 if let Ok(on) = value.trim().parse() {
                     options.attack_on_assist = on;
@@ -781,6 +832,11 @@ impl Options {
         for part in [ATTACK_ON_ASSIST, " = ", &attack_on_assist, "\n"] {
             text.push_str(part);
         }
+        if let Some(list) = &self.channel_autojoin {
+            for part in [CHANNEL_AUTOJOIN, " = ", list.as_str(), "\n"] {
+                text.push_str(part);
+            }
+        }
         for level in Level::ALL {
             for part in [level.key(), " = ", &self.level(level).to_string(), "\n"] {
                 text.push_str(part);
@@ -823,6 +879,7 @@ mod tests {
             eq_network_game::filters::FilterMode::Hide,
         );
         options.attack_on_assist = true;
+        options.channel_autojoin = AutoJoin::new(" general, trade:secret ");
         let text = options.text();
         assert!(text.contains("luclin_models = DAF\n"));
         assert!(text.starts_with(HEADER));
@@ -834,7 +891,14 @@ mod tests {
         assert!(text.contains("loot_no_drop = 1\n"));
         assert!(text.contains("Channel04 = 0\n"));
         assert!(text.contains("attack_on_assist = true\n"));
+        assert!(text.contains("channel_autojoin = general, trade:secret\n"));
         assert_eq!(Options::read(&text, Options::default()), options);
+        // Not set, it isn't written, and the installation's keys stay the
+        // defaults (6.616 H2).
+        assert!(!Options::default().text().contains("channel_autojoin"));
+        assert_eq!(AutoJoin::new("  "), None);
+        assert_eq!(AutoJoin::new(&"a".repeat(AutoJoin::MAX + 1)), None);
+        assert_eq!(AutoJoin::new("a\nb"), None);
         // A file from before the QoL page keeps its choices there.
         let before = Options::read(
             "# eq-client options v1\nskip_modified_food = false\nhidden_windows = true\n",

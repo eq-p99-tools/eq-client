@@ -1,13 +1,35 @@
 //! The Titanium program's chat server channel commands (recording checklist
-//! 6.509): `/join`, `/leave`, `/leaveall`, `/list`, `/announce`, `/1` to
-//! `/10` and `/chat`. Each goes to the chat server as the words it takes,
-//! on a server whose session offers chat channels; the server judges them.
-//! `/chat` takes only the channel words ([`CHANNEL_WORDS`]): the chat
-//! server's same handler also sends mail and keeps friends and ignore
-//! lists, which this client does not reach. What the program itself checks
-//! or says before it sends is pending read R49-12 e, so every refusal here
-//! is this client's own wording, and `/autojoin`, a list the program keeps,
-//! is not built.
+//! 6.509, read R49-12, 6.616): `/join`, `/leave`, `/leaveall`, `/list`,
+//! `/announce`, `/1` to `/10`, `/chat` and `/autojoin`, on a server whose
+//! session offers chat channels; the server judges them.
+//!
+//! - `/join`, `/leave`, `/leaveall` and `/list` go as typed, slash and all,
+//!   as 0x491438 sends them (R49-12 e); `/leave` alone goes as `/leave`.
+//! - `/N message` goes as `;N message` (0x46cb65). The program first runs
+//!   its stage-1 garble at skill 100, which leaves only its bad-word mask;
+//!   this client has no such mask for any chat (see [`eq_client_core::tongues`]),
+//!   so the words go as typed.
+//! - The program checks nothing else before it sends: the chat server
+//!   enforces channel counts, names and lengths.
+//! - `/join` with no channel and `/N` with no message send nothing and say
+//!   how to use them. The program's usage lines are plain text in it, not
+//!   its string table, so these are this client's own words, in colour
+//!   0x111 as the program prints its own.
+//! - `/autojoin list` keeps the channels to join at each login, in this
+//!   client's own per-character options (reviewer H2), and sends nothing
+//!   now. At each login to the chat server the list is this client's,
+//!   else the character's `[ChatManager]` `ChannelAutoJoin`, else
+//!   `eqclient.ini`'s `[Defaults]` one, else `NONE`; any list but `NONE`
+//!   is said (colour 0x122) and sent as `/join list` (R49-12 c).
+//! - `/announce` keeps its words without the slash: its handler (0x46cb10)
+//!   is unread.
+//! - `/chat` takes only the channel words ([`CHANNEL_WORDS`]): the chat
+//!   server's same handler also sends mail and keeps friends and ignore
+//!   lists, which this client does not reach.
+//! - With no chat server link the program drops every command silently
+//!   (R49-12 d). This client says "You are not connected to the chat
+//!   server." instead: an always-on quality-of-life departure that only adds
+//!   what the player would otherwise have to guess (reviewer Q3).
 use super::chat::{ChatState, Said};
 use crate::outbox::{self, Outbox};
 use bevy::prelude::*;
@@ -43,32 +65,51 @@ pub(crate) const CHANNEL_WORDS: [&str; 15] = [
     "toggleinvites",
 ];
 
-/// What a typed line, spelled out, asks of the chat server: its words, or
-/// this client's refusal. None for a line that is none of these commands.
-pub(crate) fn typed(input: &str) -> Option<Result<String, String>> {
+/// What a chat channel command asks for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Asked {
+    /// These words go to the chat server.
+    Send(String),
+    /// `/autojoin`: keep this list for the logins to come.
+    AutoJoin(String),
+}
+
+/// The colour the program prints its own channel lines in, the usage and
+/// `/autojoin`'s confirmation (R49-12 c, e).
+pub(crate) const PLAIN_COLOUR: u32 = 0x111;
+/// The colour of the program's autojoining line at login (R49-12 c).
+const AUTOJOINING_COLOUR: u32 = 0x122;
+
+/// What a typed line, spelled out, asks for: its words, or this client's
+/// refusal. None for a line that is none of these commands.
+pub(crate) fn typed(input: &str) -> Option<Result<Asked, String>> {
     let command = input.strip_prefix('/')?;
     let (name, rest) = command.split_once(' ').unwrap_or((command, ""));
     let rest = rest.trim();
     let name = name.to_ascii_lowercase();
-    let needs = |words: &str, usage: &str| {
+    let needs = |words: String, usage: &str| {
         if rest.is_empty() {
             Err(usage.to_owned())
         } else {
-            Ok(format!("{words} {rest}"))
+            Ok(Asked::Send(format!("{words} {rest}")))
         }
     };
     let maybe = |words: &str| {
-        Ok(if rest.is_empty() {
+        Ok(Asked::Send(if rest.is_empty() {
             words.to_owned()
         } else {
             format!("{words} {rest}")
-        })
+        }))
     };
     Some(match name.as_str() {
-        "join" => needs("join", "Use /join channel, or channel:password"),
-        "leave" => needs("leave", "Use /leave channel"),
-        "leaveall" => Ok("leaveall".to_owned()),
-        "list" => maybe("list"),
+        "join" => needs(
+            "/join".into(),
+            "Use /join channel, /join channel:password, or several of them with commas between.",
+        ),
+        "leave" => maybe("/leave"),
+        "leaveall" => Ok(Asked::Send("/leaveall".to_owned())),
+        "list" => maybe("/list"),
+        // Its handler (0x46cb10) is unread, so its words stay as before.
         "announce" => maybe("announce"),
         "chat" if rest.is_empty() => Err("Use /chat followed by the chat server's command".into()),
         "chat" => {
@@ -77,40 +118,65 @@ pub(crate) fn typed(input: &str) -> Option<Result<String, String>> {
                 .iter()
                 .any(|channel| channel.eq_ignore_ascii_case(word))
             {
-                Ok(rest.to_owned())
+                Ok(Asked::Send(rest.to_owned()))
             } else {
                 Err(format!("/chat does not send {word} to the chat server."))
             }
         }
-        "autojoin" => Err("This client does not keep /autojoin channels yet.".into()),
+        "autojoin" if rest.is_empty() => Err(
+            "Use /autojoin channel, /autojoin channel:password, or several of them with commas between, to join them each time you log in."
+                .into(),
+        ),
+        "autojoin" => Ok(Asked::AutoJoin(rest.to_owned())),
         slot => {
             let slot = slot
                 .parse::<u8>()
                 .ok()
                 .filter(|n| (1..=SLOTS).contains(n))?;
-            needs(
-                &slot.to_string(),
-                "Type a message after the channel command",
-            )
+            needs(format!(";{slot}"), "Type a message after the channel command.")
         }
     })
 }
 
-/// Sends the chat channel commands the chat noted, or says why not.
+/// Sends the chat channel commands the chat noted, or says why not, and
+/// keeps an `/autojoin` list.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(super) fn answers(
     mut chat: ResMut<ChatState>,
     online: Res<super::online::OnlineState>,
     outbox: Res<Outbox>,
+    mut options: Option<ResMut<crate::options::OptionsState>>,
 ) {
     if chat.channel_asked.is_empty() {
         return;
     }
     let world = online.world();
-    for text in std::mem::take(&mut chat.channel_asked) {
+    for asked in std::mem::take(&mut chat.channel_asked) {
+        let text = match asked {
+            Asked::Send(text) => text,
+            Asked::AutoJoin(list) => {
+                // Kept for the logins to come; nothing is sent now (R49-12 c).
+                match eq_client_core::options::AutoJoin::new(&list) {
+                    Some(kept) => {
+                        if let Some(options) = options.as_mut() {
+                            options.options.channel_autojoin = Some(kept);
+                        }
+                        chat.history.push(super::chat::system_line(
+                            Said::own(format!(
+                                "You will join {} each time you log in.",
+                                kept.as_str()
+                            ))
+                            .typed(PLAIN_COLOUR),
+                        ));
+                    }
+                    None => chat.refuse(Said::own("That autojoin list is too long to keep.")),
+                }
+                continue;
+            }
+        };
         if !outbox::offered(world, Capability::ChatChannels) {
-            // This client's words; the program's own line is unread
-            // (R49-12 d).
+            // The program drops it silently (R49-12 d); saying so is this
+            // client's always-on departure (reviewer Q3).
             chat.refuse(Said::own("You are not connected to the chat server."));
             continue;
         }
@@ -120,6 +186,74 @@ pub(super) fn answers(
             created: stamp.created,
         });
     }
+}
+
+/// The channels to join at a login to the chat server (R49-12 c): this
+/// client's own list, else the character's in the installation, else the
+/// installation's default, as given; none when the list found is `NONE`
+/// (the program's default, compared regardless of case, inferred) or empty.
+fn autojoin_list(
+    ours: Option<&str>,
+    character: Option<String>,
+    defaults: Option<String>,
+) -> Option<String> {
+    let list = ours
+        .map(str::to_owned)
+        .or(character)
+        .or(defaults)?
+        .trim()
+        .to_owned();
+    (!list.is_empty() && !list.eq_ignore_ascii_case("NONE")).then_some(list)
+}
+
+/// Joins the autojoin channels once each time a chat server link takes the
+/// login: the program's "autojoining" line, then `/join list` (R49-12 c).
+/// Titanium only: only its installation's files are read, and only its
+/// session opens a link.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(super) fn autojoin(
+    mut chat: ResMut<ChatState>,
+    online: Res<super::online::OnlineState>,
+    outbox: Res<Outbox>,
+    profile: Res<crate::profile_files::Profile>,
+    (settings, options): (
+        Option<Res<crate::ViewerSettings>>,
+        Option<Res<crate::options::OptionsState>>,
+    ),
+    mut seen: Local<u64>,
+) {
+    let world = online.world();
+    let ups = world.chat_links_up();
+    if ups == *seen {
+        return;
+    }
+    *seen = ups;
+    if ups == 0 {
+        return;
+    }
+    let official = settings
+        .as_ref()
+        .and_then(|settings| settings.0.official_settings());
+    let character = official.as_ref().and_then(|official| {
+        let (character, server) = profile.names()?;
+        official.channel_autojoin(character, server)
+    });
+    let defaults = official.and_then(|official| official.options().channel_autojoin);
+    let ours = options
+        .as_ref()
+        .and_then(|options| options.options.channel_autojoin);
+    let Some(list) = autojoin_list(ours.as_ref().map(|list| list.as_str()), character, defaults)
+    else {
+        return;
+    };
+    chat.history.push(super::chat::system_line(
+        Said::own(format!("Autojoining channels: {list}")).typed(AUTOJOINING_COLOUR),
+    ));
+    let _ = outbox.post(world, |stamp| ClientCommand::ChatChannel {
+        session_id: stamp.session_id,
+        text: format!("/join {list}"),
+        created: stamp.created,
+    });
 }
 
 #[cfg(test)]
@@ -148,31 +282,40 @@ mod tests {
     }
 
     #[test]
-    fn each_command_goes_as_the_chat_servers_words() {
+    fn each_command_goes_as_the_program_sends_it() {
+        // Slash and all for the channel commands, `;N` for a channel's
+        // message (read R49-12 e).
         for (typed_line, words) in [
-            ("/join general, trade:secret", "join general, trade:secret"),
-            ("/leave general", "leave general"),
-            ("/leaveall", "leaveall"),
-            ("/list", "list"),
-            ("/list general", "list general"),
+            ("/join general, trade:secret", "/join general, trade:secret"),
+            ("/leave general", "/leave general"),
+            ("/leave", "/leave"),
+            ("/leave ", "/leave"),
+            ("/leaveall", "/leaveall"),
+            ("/list", "/list"),
+            ("/list general", "/list general"),
             ("/announce", "announce"),
             ("/announce on", "announce on"),
-            ("/1 hello there", "1 hello there"),
-            ("/10 last slot", "10 last slot"),
+            ("/1 hello there", ";1 hello there"),
+            ("/10 last slot", ";10 last slot"),
             ("/chat password general secret", "password general secret"),
-            ("/JOIN Loud", "join Loud"),
+            ("/JOIN Loud", "/join Loud"),
         ] {
             assert_eq!(
                 typed(typed_line),
-                Some(Ok(words.to_owned())),
+                Some(Ok(Asked::Send(words.to_owned()))),
                 "{typed_line}"
             );
         }
+        // `/autojoin` keeps its list and sends nothing.
+        assert_eq!(
+            typed("/autojoin general, trade:secret"),
+            Some(Ok(Asked::AutoJoin("general, trade:secret".into())))
+        );
     }
 
     #[test]
     fn what_needs_words_asks_for_them_and_the_rest_is_not_these_commands() {
-        for line in ["/join", "/leave ", "/3", "/chat"] {
+        for line in ["/join", "/3", "/3 ", "/chat", "/autojoin"] {
             assert!(matches!(typed(line), Some(Err(_))), "{line}");
         }
         // Only the channel words go: mail, friends, ignore and saved
@@ -200,13 +343,7 @@ mod tests {
         }
         assert_eq!(
             typed("/chat KICK general Someone"),
-            Some(Ok("KICK general Someone".into()))
-        );
-        assert_eq!(
-            typed("/autojoin general"),
-            Some(Err(
-                "This client does not keep /autojoin channels yet.".into()
-            ))
+            Some(Ok(Asked::Send("KICK general Someone".into())))
         );
         for line in ["/11 hi", "/0 hi", "/say hi", "hello", "/joinx a"] {
             assert_eq!(typed(line), None, "{line}");
@@ -272,14 +409,14 @@ mod tests {
         app.world_mut()
             .resource_mut::<ChatState>()
             .channel_asked
-            .push("join general".into());
+            .push(Asked::Send("/join general".into()));
         app.update();
         match received.try_recv().unwrap() {
             ClientCommand::ChatChannel {
                 session_id, text, ..
             } => {
                 assert_eq!(session_id, 5);
-                assert_eq!(text, "join general");
+                assert_eq!(text, "/join general");
             }
             other => panic!("{other:?}"),
         }
@@ -290,12 +427,112 @@ mod tests {
         app.world_mut()
             .resource_mut::<ChatState>()
             .channel_asked
-            .push("1 hello".into());
+            .push(Asked::Send(";1 hello".into()));
         app.update();
         assert!(received.try_recv().is_err());
+        // The program says nothing here; this line is the labelled,
+        // always-on departure (reviewer Q3).
         assert_eq!(
             app.world().resource::<ChatState>().newest(),
             "You are not connected to the chat server."
         );
+    }
+
+    #[test]
+    fn the_autojoin_list_is_ours_then_the_characters_then_the_installations() {
+        let some = |text: &str| Some(text.to_owned());
+        assert_eq!(
+            autojoin_list(Some("ours"), some("character"), some("default")),
+            some("ours")
+        );
+        assert_eq!(
+            autojoin_list(None, some(" character "), some("default")),
+            some("character")
+        );
+        assert_eq!(autojoin_list(None, None, some("default")), some("default"));
+        // `NONE`, the program's default, joins nothing, whoever set it; so
+        // does nothing set at all.
+        assert_eq!(autojoin_list(None, some("none"), some("default")), None);
+        assert_eq!(autojoin_list(Some("NONE"), some("character"), None), None);
+        assert_eq!(autojoin_list(None, None, None), None);
+    }
+
+    /// An app with the channel systems, a session with a link offered,
+    /// and what it sends.
+    fn channel_app() -> (App, std::sync::mpsc::Receiver<ClientCommand>) {
+        let mut app = App::new();
+        let (queue, received) = std::sync::mpsc::sync_channel(4);
+        app.insert_resource(admitted(vec![Capability::ChatChannels]))
+            .insert_resource(Outbox::new(Some(queue)))
+            .init_resource::<ChatState>()
+            .init_resource::<crate::profile_files::Profile>()
+            .insert_resource(crate::options::OptionsState::default())
+            .add_systems(Update, (answers, autojoin).chain());
+        (app, received)
+    }
+
+    #[test]
+    fn autojoin_keeps_the_list_in_our_options_and_sends_nothing_now() {
+        let (mut app, received) = channel_app();
+        app.world_mut()
+            .resource_mut::<ChatState>()
+            .channel_asked
+            .push(Asked::AutoJoin("general, trade:secret".into()));
+        app.update();
+        assert!(received.try_recv().is_err());
+        assert_eq!(
+            app.world()
+                .resource::<crate::options::OptionsState>()
+                .options
+                .channel_autojoin
+                .map(|list| list.as_str().to_owned())
+                .as_deref(),
+            Some("general, trade:secret")
+        );
+        assert_eq!(
+            app.world().resource::<ChatState>().newest(),
+            "You will join general, trade:secret each time you log in."
+        );
+    }
+
+    #[test]
+    fn each_login_to_the_chat_server_joins_the_autojoin_list_once() {
+        let (mut app, received) = channel_app();
+        app.world_mut()
+            .resource_mut::<crate::options::OptionsState>()
+            .options
+            .channel_autojoin = eq_client_core::options::AutoJoin::new("general");
+        app.update();
+        // Nothing before the link takes the login.
+        assert!(received.try_recv().is_err());
+        let up = || {
+            WorldEvent::ChannelLink(eq_network_game::chat_server::ChannelLink::Up)
+        };
+        testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [up()],
+        );
+        app.update();
+        app.update();
+        match received.try_recv().unwrap() {
+            ClientCommand::ChatChannel { text, .. } => assert_eq!(text, "/join general"),
+            other => panic!("{other:?}"),
+        }
+        assert!(received.try_recv().is_err());
+        assert_eq!(
+            app.world().resource::<ChatState>().newest(),
+            "Autojoining channels: general"
+        );
+        // A later link, after a loss, joins again, once.
+        testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [up()],
+        );
+        app.update();
+        assert!(matches!(
+            received.try_recv().unwrap(),
+            ClientCommand::ChatChannel { .. }
+        ));
+        assert!(received.try_recv().is_err());
     }
 }

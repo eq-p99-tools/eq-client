@@ -355,6 +355,9 @@ pub struct ClientWorld {
     /// chat server's last list named them; kept across zones until the link
     /// ends or the character leaves the world.
     chat_channels: Vec<String>,
+    /// How many times a chat server link has taken the login, so the
+    /// autojoin goes once for each (read R49-12 c, checklist 6.616).
+    chat_links_up: u64,
     /// The book or note open to read.
     reading: Option<crate::books::BookText>,
     /// The tradeskill container whose combine waits for the server.
@@ -659,6 +662,13 @@ impl ClientWorld {
     /// first is `/1`.
     pub fn chat_channels(&self) -> &[String] {
         &self.chat_channels
+    }
+
+    /// How many times a chat server link has taken the login: a change says
+    /// a link has just come up.
+    #[must_use]
+    pub const fn chat_links_up(&self) -> u64 {
+        self.chat_links_up
     }
 
     /// Puts away the received equipment report.
@@ -1579,7 +1589,9 @@ impl ClientWorld {
             // The chat server's channels (recording checklist 6.509).
             WorldEvent::Channel(event) => self.channel_event(event, news),
             WorldEvent::ChannelLink(link) => match link {
-                eq_network_game::chat_server::ChannelLink::Up => {}
+                eq_network_game::chat_server::ChannelLink::Up => {
+                    self.chat_links_up = self.chat_links_up.wrapping_add(1);
+                }
                 eq_network_game::chat_server::ChannelLink::Lost { .. } => {
                     self.chat_channels.clear();
                     news.notices.push(Notice::Channel(ChannelLine::Lost));

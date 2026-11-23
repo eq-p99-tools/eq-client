@@ -1080,6 +1080,14 @@ pub trait OfficialSettings {
         None
     }
 
+    /// The chat server channels the official client joins for a character
+    /// at login: `ChannelAutoJoin` in `[ChatManager]` of the character's
+    /// own ini (read R49-12 c), as written. Which of the character's files
+    /// the program means is inferred: the one that keeps its inspect text.
+    fn channel_autojoin(&self, _character: &str, _world: &str) -> Option<String> {
+        None
+    }
+
     /// The account and world the official login screen last used.
     fn login(&self) -> LoginMemory {
         LoginMemory::default()
@@ -1239,6 +1247,19 @@ impl OfficialSettings for Titanium<'_> {
         .ok()
     }
 
+    fn channel_autojoin(&self, character: &str, world: &str) -> Option<String> {
+        if !plain_name(character) || !plain_name(world) {
+            return None;
+        }
+        let bytes = std::fs::read(self.0.join(format!("{character}_{world}.ini"))).ok()?;
+        ini_value(
+            &String::from_utf8_lossy(&bytes),
+            "ChatManager",
+            "ChannelAutoJoin",
+        )
+        .map(|list| list.trim().to_owned())
+    }
+
     fn inspect_text(&self, character: &str, world: &str) -> Option<String> {
         if !plain_name(character) || !plain_name(world) {
             return None;
@@ -1336,6 +1357,10 @@ pub struct OfficialOptions {
     /// Whether an assist's answer starts auto attack: `AttackOnAssist` in
     /// `[Defaults]` (Titanium setup 0x4a3341, read R49-8 d).
     pub attack_on_assist: Option<bool>,
+    /// The chat server channels joined at login for a character that keeps
+    /// none of its own: `ChannelAutoJoin` in `[Defaults]` (read R49-12 c),
+    /// as written. The program's default is `NONE`.
+    pub channel_autojoin: Option<String>,
 }
 
 /// The `[Defaults]` keys this client takes the official client's Luclin
@@ -1410,6 +1435,8 @@ fn options_from_ini(text: &str) -> OfficialOptions {
             .and_then(|v| v.trim().parse().ok()),
         luclin_models: LUCLIN_MODEL_KEYS.map(|(key, _, _)| flag("Defaults", key)),
         attack_on_assist: flag("Defaults", "AttackOnAssist"),
+        channel_autojoin: ini_value(text, "Defaults", "ChannelAutoJoin")
+            .map(|list| list.trim().to_owned()),
     }
 }
 
@@ -2331,9 +2358,16 @@ LookSpring=1
                 loot_no_drop: None,
                 luclin_models: [None; 30],
                 attack_on_assist: None,
+                channel_autojoin: None,
             }
         );
         assert_eq!(options_from_ini(""), OfficialOptions::default());
+        assert_eq!(
+            options_from_ini("[Defaults]\nChannelAutoJoin= general, trade \n")
+                .channel_autojoin
+                .as_deref(),
+            Some("general, trade")
+        );
         assert_eq!(
             options_from_ini("[Defaults]\nAttackOnAssist=1\n").attack_on_assist,
             Some(true)
@@ -2753,6 +2787,25 @@ LookSpring=1
         std::fs::remove_dir_all(&install).unwrap();
         assert_eq!(chosen.as_deref(), Some("velious"));
         assert_eq!((unsafe_skin, missing, escaping), (None, None, None));
+    }
+
+    #[test]
+    fn a_characters_autojoin_list_is_read_from_its_own_ini_only() {
+        let install =
+            std::env::temp_dir().join(format!("eq-autojoin-profile-{}", std::process::id()));
+        std::fs::create_dir_all(&install).unwrap();
+        std::fs::write(
+            install.join("Example_One.ini"),
+            "[ChatManager]\r\nChannelAutoJoin= general, trade \r\n",
+        )
+        .unwrap();
+        let settings = InstalledClient::Titanium.settings(&install);
+        let read = settings.channel_autojoin("Example", "One");
+        let other = settings.channel_autojoin("Example", "Two");
+        let escaping = settings.channel_autojoin("../Example", "One");
+        std::fs::remove_dir_all(&install).unwrap();
+        assert_eq!(read.as_deref(), Some("general, trade"));
+        assert_eq!((other, escaping), (None, None));
     }
 
     #[test]
