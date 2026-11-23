@@ -27,6 +27,8 @@ mod terrain_material_tests;
 #[cfg(test)]
 mod test_world;
 pub mod ui;
+pub mod xmi;
+pub mod zone_sounds;
 
 use std::collections::HashMap;
 use std::fs::File;
