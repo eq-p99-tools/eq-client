@@ -24,8 +24,9 @@
   - Kept with each character's options, seeded once from an installed
     `eqclient.ini` (`TrackSortType`, `TrackFilterType`, `TrackPlayers` in
     `[Defaults]`); labelled departure: the program keeps them per
-    installation. The skin's controls for them stay greyed until their
-    names are read.
+    installation. The skin's controls for them (its sort and players
+    combo boxes and six colour checkboxes) stay greyed for now; wiring
+    them is a follow-up.
 - Zones without a sky are lit as the original lights them, so the Erudin palace and other interiors are no longer too dark (Adam, 11-23). See [Zone lighting](docs/zone-lighting.md).
   - **Baked light:** each terrain vertex's colour from the zone file, and each placed object's colour track, is now drawn. Before, both were dropped at load.
   - **The engine's single-pass formula:** each vertex sums the ambient by its alpha past the 0.12 offset, its own light at full weight, and up to three point lights. The sum saturates once, then multiplies the texture.
