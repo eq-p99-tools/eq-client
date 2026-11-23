@@ -14,6 +14,17 @@
     so the earlier session-only switch that stopped answering is gone.
   - Scripts can run it with `slash()`, and their reports list
     `inspect_others` with the other options.
+- `/ttell` and `/whotarget` as the Titanium program takes them (read R49-18,
+  checklist 6.528). `/ttell` says nothing with no words or no target; a
+  target is taken by the name the server sent, refused (line 0x3322) when
+  it has a `#` or `_` unless it is a creature's corpse, and cut at its
+  apostrophe, so a player's corpse's tell goes to its owner; a tell to
+  yourself or your own corpse gets line 0x3023 and is not sent.
+  `/whotarget` lists any target as a typed `/who` of its name, ignoring any
+  words, and says nothing with no target. Labelled: the program counts a
+  creature that dies in view as a player's corpse and refuses it, where
+  this client sends the tell. Mac-era and RoF2 keep this client's own
+  rules. The code moves to `targeted.rs`.
 - `/shield` follows the Titanium program's handler (checklist 6.517, read R49-22d). A Warrior of level 30 or more can name the player to shield, as `/shield Name`: the name is matched as `/assist Name` matches it, the shortest name it begins winning, and the target is left as it is. A name that matches no one says nothing. With no name, the target is shielded. The lines for another class or a lower level, for no target, and for naming or targeting yourself are the installation's own (strings 0xfc1, 0xfbf and 0xfc2, 0xcce and 0xfbe), with this client's words where the installation lacks them. As in the program, the client checks no distance, kind or recast; the server answers those. The Mac-era client's handler is unread there, so it keeps the earlier checks and words. The program's general "can act" test and its silence while a trade or certain windows are open are not modelled yet (row 6.517a), as for `/assist`.
 - **The Use key now uses what is at the centre of the view, not the nearest door** (read R49-19, checklist 6.609). On Titanium (and RoF2, inferred) it casts the program's ray from the camera through the centre of the 3D view, the same pick a mouse click makes:
   - The first character the ray hits becomes the target. An NPC, or one the target setter refuses while no target stands, also gets what a right click on it does (a merchant, banker or guildmaster opens, a boat asks to pilot, else it is considered; no hail). A player or corpse that becomes the target is only targeted, as the program's key handler reads (0x462519).
@@ -137,12 +148,13 @@
   spells, the bad-word mask): each is a named TODO at
   `chat_filters::hidden_locally`. Mac-era and RoF2 programs are unread and
   hide nothing locally.
-- Show the session's chat pace (checklist 6.523, eq-network c951420). Its
+- Show the session's chat pace (checklist 6.523, eq-network #354). Its
   refusal, "You are sending chat too fast. Wait N seconds.", is printed as
-  the player's own line, and a script whose chat or social step the pace
-  holds fails at that step's line with those words. The repin's other news
-  (titles, the bind zone, the chat server's channels) is passed over until
-  each one's own client work lands.
+  the player's own line. A script fails at a step's line with those words
+  when the pace holds chat that step sent: a `chat`, `social` or `gm` step,
+  or a `slash` step whose typed line sent chat (`say`, `ooc` and the rest).
+  The pace is this client's own: the Titanium program paces no chat (read
+  R49-17), so it is a departure, not parity.
 - Follow program read R49-6 on Titanium (checklist 6.492). Each duel outcome the session tells is the program's line in its colour, and `/duel` sends the target as it stands, with the session wording the result. The **Duel Answer Card** is a quality-of-life setting, on by default: Yes accepts as `/duel` does, No sends nothing, and off there is no card, as in the program. Scripts can answer it. A quest's coins are said one line per coin with the giver's name, then the reward sound plays (also for EQEmu's fixed sound record). A yell for help names where the yeller stands from your heading. A level lost is said, and a level gained plays its sound. Another spawn's stat increase has the program's line. `/lfg on` and `off` say the program's lines, and any other form is its usage line. `/motd` says the kept message in the program's line, and `/charinfo` names the bind zone in it. The Mac-era and RoF2 programs are unread and keep this client's words. Repins eq-network to bf7a4db.
 - The Interface scale slider on the QoL page no longer swings between its ends while dragged.
   - **Cause:** each frame of a drag set the scale, which moved the Options window and the slider under a pointer that held still. The pointer then read near one end and then the other, so the scale flipped back and forth and could not be set back to 100%.
