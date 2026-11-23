@@ -1134,18 +1134,20 @@ pub(super) enum ScribeRefusal {
     /// while a memorization or scribe is in progress (R27 check 2); the
     /// cast test here is ours, kept silent the same way.
     Busy,
-    /// Not a scroll, or one the player's class or race cannot use (R27
-    /// check 4, 181; that 0x4192aa is the class and race test is inferred).
+    /// Not a scroll, or one the player's class cannot use (R27 check 4,
+    /// 181). The usability test 0x4192aa skips the race mask for a scroll
+    /// (read R49-34 a); its deity and level tests need item fields this
+    /// client doesn't have yet.
     NotUsable,
     /// The place clicked holds a spell (R27 check 5, 12051).
     PlaceTaken,
-    /// The book holds the spell (R27 check 6, 12050). The string's own
-    /// placeholders take what they name of the spell's name; one with none
-    /// takes nothing.
+    /// The book holds the spell (R27 check 6, 12050), naming the cursor
+    /// item (read R49-34 i, which corrects R27's spell name).
     AlreadyScribed(String),
     /// The player's class has no level for the spell, 255 (R27 check 7,
-    /// 12047, no arguments).
-    NoClassLevel,
+    /// 12047), naming the cursor item (read R49-34 i, which corrects R27's
+    /// "no arguments").
+    NoClassLevel(String),
     /// The spell's level for the player's class is above the player's
     /// (R27 check 7, 12048: the level, then the spell's name).
     Level { required: u8, spell: String },
@@ -1165,7 +1167,7 @@ impl std::fmt::Display for ScribeRefusal {
                 formatter.write_str("That place in the book holds a spell already.")
             }
             Self::AlreadyScribed(_) => formatter.write_str("The book has that spell already."),
-            Self::NoClassLevel => formatter.write_str("Your class cannot scribe that spell."),
+            Self::NoClassLevel(_) => formatter.write_str("Your class cannot scribe that spell."),
             Self::Level { required, spell } => {
                 write!(formatter, "You need level {required} to scribe {spell}.")
             }
@@ -1189,10 +1191,12 @@ impl ScribeRefusal {
             Self::Busy => return None,
             Self::NotUsable => messages.said_text(181, &fallback),
             Self::PlaceTaken => messages.said_text(12051, &fallback),
-            Self::AlreadyScribed(spell) => {
-                messages.said_or(12050, std::slice::from_ref(spell), &fallback)
+            Self::AlreadyScribed(item) => {
+                messages.said_or(12050, std::slice::from_ref(item), &fallback)
             }
-            Self::NoClassLevel => messages.said_text(12047, &fallback),
+            Self::NoClassLevel(item) => {
+                messages.said_or(12047, std::slice::from_ref(item), &fallback)
+            }
             Self::Level { required, spell } => {
                 messages.said_or(12048, &[required.to_string(), spell.clone()], &fallback)
             }
@@ -1283,9 +1287,12 @@ fn titanium_press(
         return Ok(());
     };
     let player = world.player().filter(|player| player.level > 0);
+    // The program's usability test skips the race mask for a scroll (read
+    // R49-34 a), so only the class mask counts here.
     let usable = player
-        .and_then(|player| player.class.zip(Some(player.race)))
-        .and_then(|(class, race)| eq_client_core::resources::usable_by(&item.details, class, race));
+        .and_then(|player| player.class)
+        .filter(|class| (1..=16).contains(class))
+        .map(|class| item.details.classes & (1 << (class - 1)) != 0);
     if item.rules.item_type != SCROLL_ITEM_TYPE || usable == Some(false) {
         return Err(ScribeRefusal::NotUsable);
     }
@@ -1299,7 +1306,7 @@ fn titanium_press(
             return Err(ScribeRefusal::PlaceTaken);
         }
         if book.slots().contains(&Some(spell_id)) {
-            return Err(ScribeRefusal::AlreadyScribed(names.label(spell_id)));
+            return Err(ScribeRefusal::AlreadyScribed(item.details.name.clone()));
         }
     }
     // The spell's level for the player's class against the player's level,
@@ -1311,7 +1318,7 @@ fn titanium_press(
             .and_then(|class| names.installed_scribe_level(spell_id, class))
     {
         if level == u8::MAX {
-            return Err(ScribeRefusal::NoClassLevel);
+            return Err(ScribeRefusal::NoClassLevel(item.details.name.clone()));
         }
         if level > player.level {
             return Err(ScribeRefusal::Level {
@@ -1477,7 +1484,9 @@ mod tests {
             weight_tenths: 1,
             slots: 0,
             classes: 1,
-            races: 1,
+            // No race may use it: a scroll skips the race mask (read R49-34
+            // a), so it still scribes.
+            races: 0,
             flags: Vec::new(),
             stats: Vec::new(),
             price: None,
@@ -1517,7 +1526,10 @@ mod tests {
                     spell: "Spell 73".into(),
                 },
             ),
-            ("255", super::ScribeRefusal::NoClassLevel),
+            (
+                "255",
+                super::ScribeRefusal::NoClassLevel("Synthetic scroll".into()),
+            ),
         ] {
             fields[104] = level;
             let names = super::SpellNames::parse(&fields.join("^"));
