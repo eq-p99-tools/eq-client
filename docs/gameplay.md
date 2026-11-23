@@ -466,8 +466,8 @@ left counts from the server's start time on this computer's clock, to the
 minute, and the server decides when the task ends. A step not yet open
 shows only `???`. The **Finished** page lists the tasks you have finished.
 Choosing one asks the server for its steps, once in each zone. **Cancel**
-asks again in the journal itself, and only **Yes** sends the cancel. Only
-your own clicks do this: scripts, socials and hotbuttons can't. On servers
+asks again in the journal itself, and only **Yes** sends the cancel. A
+script can cancel with `cancel_task`, which asks nothing. On servers
 that don't take task requests, the journal is read only. The journal's
 words, the reward lines and the time left are the client's own until the
 original client's are read (inferred). The reward item's link isn't shown

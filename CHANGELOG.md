@@ -16,8 +16,8 @@
   - The Finished page lists the finished tasks. Choosing one posts
     `AskTaskHistory` once per entry per admission, and the reply's steps
     show under it.
-  - Cancel asks Yes or No inside the journal. The shared confirmation
-    dialog isn't used, because a script's click can answer it. Yes rechecks
+  - Cancel asks Yes or No inside the journal, and a script cancels with
+    `cancel_task` (from #589) without a question. Yes rechecks
     `Capability::Tasks`, the admission, the slot and the task before
     `CancelTask` goes. A new admission drops the question.
   - Without `Capability::Tasks` the journal is read only.

@@ -4,10 +4,9 @@
 //! until the skin's task window (`TaskWnd`) is listed; its words and the
 //! time left are ours (inferred, R49-38).
 //!
-//! Cancel asks again inside this window, Yes or No, so that only the
-//! player's own clicks reach it: the shared confirmation dialog can be
-//! answered by a script's click, this window's buttons can't, and no
-//! script, social or hotbutton reaches Cancel. Where the admission doesn't
+//! Cancel asks again inside this window, Yes or No. A script cancels with
+//! `cancel_task` and asks for a finished task's steps with `task_history`,
+//! since a script may do whatever the player can. Where the admission doesn't
 //! offer [`Capability::Tasks`] the journal is read only. The task's words
 //! are shown here only, never logged.
 use crate::{
