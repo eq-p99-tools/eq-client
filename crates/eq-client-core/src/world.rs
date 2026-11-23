@@ -272,6 +272,9 @@ pub struct ClientWorld {
     creation: Option<Creation>,
     name_suggestion: Option<NameSuggestion>,
     name_generator: Option<bool>,
+    /// Whether the world turns the petition window on (Titanium's
+    /// log-server byte), for [`eq_network_game::reports::petition_form`].
+    petition_window: Option<bool>,
     /// The world's expansion mask, when it reported one.
     expansions: Option<crate::rules::Expansions>,
     /// The last revision given to a spawn, which never repeats.
@@ -1025,6 +1028,9 @@ impl ClientWorld {
                     self.skills_revision = self.skills_revision.wrapping_add(1);
                 }
                 if let Some(enabled) = rules.name_generator { self.name_generator = Some(enabled); }
+                if let Some(on) = rules.petition_window {
+                    self.petition_window = Some(on);
+                }
                 if let Some(on) = rules.listener_garble.or(rules.gibberish) {
                     self.listener_garble = Some(on);
                 }

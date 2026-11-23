@@ -211,6 +211,7 @@ pub(super) fn schedule(app: &mut App) {
                 who::zone_list,
                 whereabouts::answers,
                 crate::motd::answers,
+                crate::reports::say,
                 crate::fastdrop::answers,
                 crate::slash::answers,
                 crate::slash::assist_named,

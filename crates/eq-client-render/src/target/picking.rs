@@ -422,6 +422,7 @@ mod tests {
             indices: vec![0, 1, 2],
             texture: None,
             material_mode: eq_client_assets::MaterialMode::Opaque,
+            light: Vec::new(),
         };
         let held = crate::create_render_primitives(
             vec![primitive],
