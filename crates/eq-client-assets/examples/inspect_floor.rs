@@ -10,6 +10,7 @@ use eq_client_axes::{from_world, to_world, wld_to_world};
 use glam::Vec3;
 use libeq::pfs::PfsReader;
 use libeq::wld::parser::{DmSpriteDef2, MaterialDef, MaterialPalette, WldDoc};
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -138,12 +139,20 @@ fn regions_along(asset: &eq_client_assets::ZoneAsset, at_x: f32, at_y: f32, radi
                     .map_or_else(|| "none".to_owned(), |medium| format!("{medium:?}"))
             })
             .collect();
-        let line = HEIGHTS.iter().any(|&z| {
-            asset
-                .regions
-                .zone_line_at(from_world(Vec3::new(step, at_y, z)).to_array())
-                .is_some()
-        });
+        let lines: BTreeSet<String> = HEIGHTS
+            .iter()
+            .filter_map(|&z| {
+                asset
+                    .regions
+                    .zone_line_at(from_world(Vec3::new(step, at_y, z)).to_array())
+            })
+            .map(|line| format!("{line:?}"))
+            .collect();
+        let line = if lines.is_empty() {
+            "none".to_owned()
+        } else {
+            lines.into_iter().collect::<Vec<_>>().join(";")
+        };
         println!("{step:.1}\t{at_y:.1}\t{}\t{line}", media.join(","));
         step += 1.0;
     }
