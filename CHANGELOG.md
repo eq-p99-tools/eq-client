@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- `/toggleinspect` and the Inspect Others option as the Titanium program
+  keeps them (read R49-16, checklist 6.574). `/toggleinspect on` and `off`
+  set it; any other word or none says the usage lines 0x339a and 0x339b;
+  each ends with 0x339c or 0x339d, in colour 0x111. Nothing is sent. The
+  option is on by default and seeded from `InspectOthers` in `eqclient.ini`
+  (first letter t, T or 1; missing is on), then kept per character, which
+  is this client's choice (the original keeps one per installation).
+  - **Inspections are always answered now.** The option gates only the
+    player's own right-click inspects (6.644, next), not answering others,
+    so the earlier session-only switch that stopped answering is gone.
+  - Scripts can run it with `slash()`, and their reports list
+    `inspect_others` with the other options.
 - Zones without a sky are lit as the original lights them, so the Erudin palace and other interiors are no longer too dark (Adam, 11-23). See [Zone lighting](docs/zone-lighting.md).
   - **Baked light:** each terrain vertex's colour from the zone file, and each placed object's colour track, is now drawn. Before, both were dropped at load.
   - **The engine's single-pass formula:** each vertex sums the ambient by its alpha past the 0.12 offset, its own light at full weight, and up to three point lights. The sum saturates once, then multiplies the texture.
