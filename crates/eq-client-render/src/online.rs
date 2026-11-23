@@ -1269,6 +1269,7 @@ pub(crate) mod testing {
             skills: None,
             practice_points: None,
             languages: None,
+            intoxication: None,
             disciplines: None,
             spell_refresh_ms: None,
             memorized_spells: [None; 8],
@@ -1361,11 +1362,29 @@ pub(crate) mod testing {
         player: PlayerState,
         far_clip: Option<f32>,
     ) {
+        enter_with(
+            state,
+            session_id,
+            player,
+            far_clip,
+            eq_client_core::Capability::ALL.to_vec(),
+        );
+    }
+
+    /// Admits this player in this session, connected, with the capabilities
+    /// a server type's session lists.
+    pub(crate) fn enter_with(
+        state: &mut OnlineState,
+        session_id: u64,
+        player: PlayerState,
+        far_clip: Option<f32>,
+        capabilities: Vec<eq_client_core::Capability>,
+    ) {
         state.plan_inventory_as(Some(eq_client_core::inventory::MoveRules::EqEmu));
         news(
             state,
             [WorldEvent::Entered {
-                capabilities: eq_client_core::Capability::ALL.to_vec(),
+                capabilities,
                 choices: Vec::new(),
                 session_id,
                 zone: "qeytoqrg".into(),
@@ -1910,6 +1929,7 @@ mod tests {
             skills: None,
             practice_points: None,
             languages: None,
+            intoxication: None,
             disciplines: None,
             spell_refresh_ms: None,
             memorized_spells: [None; 8],
@@ -2452,6 +2472,7 @@ mod tests {
             skills: Some(vec![0; 100]),
             practice_points: None,
             languages: None,
+            intoxication: None,
             disciplines: None,
             spell_refresh_ms: None,
             memorized_spells: [None; 8],

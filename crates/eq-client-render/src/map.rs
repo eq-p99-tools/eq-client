@@ -32,6 +32,8 @@ pub(crate) use presentation::{
 pub(crate) use target::{input as target_input, show as show_target};
 pub(crate) use watch::{WatchState, alert as watch_alert, persist as persist_watches};
 pub(crate) use window::{FallbackMap, ensure_window};
+#[cfg(test)]
+pub(crate) use {controls::Control, entities::Action as MarkerAction};
 
 use crate::online::OnlineState;
 use bevy::{
@@ -88,6 +90,119 @@ pub enum MapButton {
     Labels,
     /// Shows or hides one of the layers, 1 to 3.
     Layer(u8),
+}
+
+/// One of the map's own controls, as a script names it (checklist 6.589):
+/// its click runs the map's own handler, as a person's does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MapControl {
+    /// The name search box, or the landmark box when true: a click focuses it.
+    Search(bool),
+    /// Clears the name search.
+    ClearSearch,
+    /// Tracks the searched name.
+    Track,
+    /// Tracks the inspected entity's name, or stops tracking it.
+    TrackSelected,
+    /// Opens or closes the watch list.
+    WatchList,
+    /// The remove control of the watch row with this name.
+    RemoveWatch(&'static str),
+    /// The marker of a spawn, by the ids a report gives; its click pins it.
+    Marker {
+        /// The admission it was reported in.
+        admission: u64,
+        /// Its spawn id.
+        id: u16,
+        /// Its revision, so a reused id is refused.
+        revision: u64,
+    },
+    /// The inspector's Clear.
+    ClearInspector,
+    /// The inspector's Target button.
+    Target,
+    /// Opens or closes the landmarks.
+    Landmarks,
+    /// Saves the landmark box's entry.
+    SaveLandmark,
+    /// Removes the selected landmark.
+    RemoveLandmark,
+    /// The landmark row with this name: its click locates it.
+    Locate(&'static str),
+    /// Lowers the background's opacity.
+    Less,
+    /// Raises the background's opacity.
+    More,
+    /// Switches the map's style.
+    Style,
+    /// Locks or unlocks the map window.
+    Lock,
+    /// Turns the tracked outlines on or off.
+    Outlines,
+}
+
+/// What of the map's controls a node is, for [`MapControl::names`].
+pub(crate) type MapParts = (
+    Option<&'static controls::Control>,
+    Option<&'static controls::SearchBox>,
+    Option<&'static entities::Action>,
+    Has<target::TargetButton>,
+    Option<&'static landmarks::Action>,
+    Option<&'static presentation::Action>,
+);
+
+/// One node's [`MapParts`], as a query gives them.
+pub(crate) type MapPartsOf<'a> = (
+    Option<&'a controls::Control>,
+    Option<&'a controls::SearchBox>,
+    Option<&'a entities::Action>,
+    bool,
+    Option<&'a landmarks::Action>,
+    Option<&'a presentation::Action>,
+);
+
+impl MapControl {
+    /// Whether a node with these parts is this control.
+    pub(crate) fn names(
+        self,
+        (control, search, marker, target, landmark, style): MapPartsOf<'_>,
+    ) -> bool {
+        use controls::Control;
+        use presentation::Action as Style;
+        match self {
+            Self::Search(landmark) => search.is_some_and(|search| {
+                *search
+                    == if landmark {
+                        controls::SearchBox::Landmark
+                    } else {
+                        controls::SearchBox::Names
+                    }
+            }),
+            Self::ClearSearch => matches!(control, Some(Control::ClearSearch)),
+            Self::Track => matches!(control, Some(Control::WatchQuery)),
+            Self::TrackSelected => matches!(control, Some(Control::WatchSelected)),
+            Self::WatchList => matches!(control, Some(Control::ToggleList)),
+            Self::RemoveWatch(wanted) => {
+                matches!(control, Some(Control::Remove(name)) if name == wanted)
+            }
+            Self::Marker { id, .. } => {
+                matches!(marker, Some(entities::Action::Select(marker)) if *marker == id)
+            }
+            Self::ClearInspector => matches!(marker, Some(entities::Action::Clear)),
+            Self::Target => target,
+            Self::Landmarks => matches!(landmark, Some(landmarks::Action::Toggle)),
+            Self::SaveLandmark => matches!(landmark, Some(landmarks::Action::Save)),
+            Self::RemoveLandmark => matches!(landmark, Some(landmarks::Action::Remove)),
+            Self::Locate(wanted) => {
+                matches!(landmark, Some(landmarks::Action::Locate(name)) if name == wanted)
+            }
+            Self::Less => matches!(style, Some(Style::Less)),
+            Self::More => matches!(style, Some(Style::More)),
+            Self::Style => matches!(style, Some(Style::Style)),
+            Self::Lock => matches!(style, Some(Style::Lock)),
+            Self::Outlines => matches!(style, Some(Style::Outlines)),
+        }
+    }
 }
 
 impl MapButton {

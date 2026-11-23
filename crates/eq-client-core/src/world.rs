@@ -230,6 +230,10 @@ pub struct ClientWorld {
     /// it outlasts every zone, so a reader sees each change even when
     /// several come between two looks.
     player_posture_changes: u32,
+    /// How many drowning records aimed at the player the server sent,
+    /// wrapping: the program empties the air counter for each while the
+    /// player's head is under (read R49-3b), which the breath sampler does.
+    drowning_records: u32,
 
     // The connection to the servers.
     connected: bool,
@@ -694,6 +698,17 @@ impl ClientWorld {
                     self.liquid_hazards.revision = Some(*revision);
                 }
             }
+            // Poison news (eq-network #402, 6.493) waits on the client's
+            // poison change (eq-client #556); it answers nothing asked here.
+            WorldEvent::PoisonStarted { .. } | WorldEvent::PoisonInterrupted { .. } => {
+                news.ignored = true;
+            }
+            WorldEvent::HazardReported {
+                session_id,
+                hazard,
+                amount,
+                record,
+            } => self.hazard_reported(*session_id, *hazard, *amount, *record, news),
             // The connection, the characters on offer and the admission.
             WorldEvent::WorldName { short_name } => {
                 if self.world_name.as_deref() != Some(short_name.as_str()) {
@@ -996,6 +1011,7 @@ impl ClientWorld {
             // A duel's question and refusal: the duel slice (6.492).
             | WorldEvent::DuelOffer(_)
             | WorldEvent::DuelRefused { .. }
+            | WorldEvent::DuelNews(_)
             // The Bazaar search: its client slice (6.550).
             | WorldEvent::Bazaar(_)
             | WorldEvent::BazaarRefused { .. }

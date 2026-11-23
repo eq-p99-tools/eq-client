@@ -89,6 +89,20 @@ pub enum Notice {
         /// The defender's server name, when known.
         target: Option<String>,
     },
+    /// Environmental damage the player took, in the lines the Titanium
+    /// program prints for it (reads R49-3 e and R49-3b): after its own
+    /// report the amount line, then, as for a record the server sends, the
+    /// record's line.
+    EnvironmentalDamage {
+        /// The amount of the player's own report, whose line
+        /// ([`crate::environment::REPORT_LINE`]) comes first; None for a
+        /// record the server sent.
+        reported: Option<u32>,
+        /// The record's line and chat colour
+        /// ([`crate::environment::record_line`]); None where no record went
+        /// with the report, as on the program's death path.
+        record: Option<(u32, u32)>,
+    },
     /// Camping began, was abandoned or refused, or the logout began.
     Camp(CampStatus),
     /// The corpse handed over coins.
