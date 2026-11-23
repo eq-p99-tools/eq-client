@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Another player's helm follows their own Show My Helm (gap 3.10, checklist
+  6.513), as their spawn record and each appearance kind 43 change tell of
+  it, where the session offers `Capability::ShowingHelm` (stock EQEmu).
+  Elsewhere, and for NPCs and corpses, every helm shows as before. Inferred,
+  pending program read R49-13.
 - Add RoF2 as a placeholder generation, following eq-network's
   (`GameDialect::Rof2`, `ServerProtocol::EqEmuRof2`). `InstalledClient::Rof2`
   is in `InstalledClient::ALL` but has no marker files, so no folder is ever
