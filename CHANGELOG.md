@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Scripts can use the map's own controls (checklist 6.589), since a script may do whatever the player can (Adam, 11-23): the search boxes, the watch controls and rows, a spawn's marker, the inspector's Clear and Target, the landmarks and the presentation controls, as `map_search`, `map_watch`, `map_marker`, `map_inspector`, `map_target`, `map_landmarks` and `map_style` targets. Each click runs the map's own handler, so the Target button keeps its capability and range checks. A marker takes the spawn's admission, id and revision, which the report's new `map_markers` field lists for the 64 nearest spawns; a stale one is refused. Watches, landmarks and presentation are saved settings, and these clicks change them as a person's do.
+
 - The player chooses how long a script run may go, on every server (checklist 6.594; Adam, 11-23: "If people want to script indefinitely, let them").
   - **Choices:** the default keeps today's bounds (15 minutes, 5,000 statements, 500 actions, loops of 100). A number of minutes from 1 to 1440 caps the time and lifts those counts, and no limit lifts them all.
   - **Where it's set:** only the workbench's length selector, which starts at the default on each launch, and the new `--script-run-length=default|MINUTES|none`. No statement or file line can set or raise it.

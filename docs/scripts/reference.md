@@ -108,6 +108,8 @@ on local-only Titanium EQEmu. It opens the ordinary drop confirmation.
 inventory snapshot. Treat submission and any ground-object appearance as
 separate from inventory confirmation.
 
+The map's controls are targets too (see [Map controls](targets.md#map-controls)). Watches and landmarks are saved per character, and the map's presentation beside the window placements, so a script's clicks on them change saved settings, as a person's do. The script does not put them back.
+
 Key names are case-insensitive. Combine them with `+`, such as `alt+1`. Supported names include letters, digits, `f1` to `f12`, `space`, `escape`, `enter`, `backspace`, `delete`, `tab`, `slash`, `up`, `down`, `left`, `right`, `shift`, `ctrl`, `alt`, `numlock`, `insert`, `home`, `end`, `pageup`, `pagedown`, `numpad0` to `numpad9`, `numpad_add`, `numpad_subtract`, `numpad_multiply`, `numpad_divide`, `numpad_decimal` and `numpad_enter`.
 
 ## Camera and movement

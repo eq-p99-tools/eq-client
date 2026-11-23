@@ -492,6 +492,9 @@ pub enum ClickTarget {
     Combine(i32),
     /// A button of the map's toolbar.
     Map(crate::map::MapButton),
+    /// One of the map's search, watch, inspector, landmark or presentation
+    /// controls (checklist 6.589).
+    MapControl(crate::map::MapControl),
     /// A place on the skin's spellbook's open pages, from zero
     /// (`SBW_Spell0` to `SBW_Spell15`).
     BookPlace(u8),
@@ -1052,6 +1055,7 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["page", way @ ("next" | "back")] => ClickTarget::Page(*way == "next"),
         ["combine", slot] => ClickTarget::Combine(number(slot, "a pack slot number")?),
         ["map", action] => ClickTarget::Map(map_button(action)?),
+        [kind, ..] if kind.starts_with("map_") => ClickTarget::MapControl(map_control(words)?),
         ["slider", name, percent] => ClickTarget::Slider(
             slider(name)?,
             percent
@@ -1415,6 +1419,62 @@ fn window_key(key: &str) -> Result<&'static str, String> {
             _ => None,
         })
         .ok_or_else(|| "expected a window, by its key such as skills".into())
+}
+
+/// One of the map's own controls by its words (checklist 6.589).
+fn map_control(words: &[&str]) -> Result<crate::map::MapControl, String> {
+    use crate::map::MapControl;
+    Ok(match words {
+        ["map_search", "names"] => MapControl::Search(false),
+        ["map_search", "landmark"] => MapControl::Search(true),
+        ["map_watch", "clear"] => MapControl::ClearSearch,
+        ["map_watch", "track"] => MapControl::Track,
+        ["map_watch", "track_selected"] => MapControl::TrackSelected,
+        ["map_watch", "list"] => MapControl::WatchList,
+        ["map_watch", "remove", name @ ..] => MapControl::RemoveWatch(shown_name(name)?),
+        ["map_marker", admission, id, revision] => MapControl::Marker {
+            admission: admission.parse().map_err(|_| "expected an admission ID")?,
+            id: id.parse().map_err(|_| "expected a spawn ID")?,
+            revision: revision.parse().map_err(|_| "expected a spawn revision")?,
+        },
+        ["map_inspector", "clear"] => MapControl::ClearInspector,
+        ["map_target"] => MapControl::Target,
+        ["map_landmarks", "toggle"] => MapControl::Landmarks,
+        ["map_landmarks", "save"] => MapControl::SaveLandmark,
+        ["map_landmarks", "remove"] => MapControl::RemoveLandmark,
+        ["map_landmarks", "locate", name @ ..] => MapControl::Locate(shown_name(name)?),
+        ["map_style", "less"] => MapControl::Less,
+        ["map_style", "more"] => MapControl::More,
+        ["map_style", "style"] => MapControl::Style,
+        ["map_style", "lock"] => MapControl::Lock,
+        ["map_style", "outlines"] => MapControl::Outlines,
+        _ => return Err(concat!(
+            "expected map_search names|landmark, map_watch clear|track|track_selected|list|remove NAME, ",
+            "map_marker ADMISSION ID REVISION, map_inspector clear, map_target, ",
+            "map_landmarks toggle|save|remove|locate NAME, or map_style less|more|style|lock|outlines"
+        ).into()),
+    })
+}
+
+/// A name a map row shows, as a script gives it in words joined by single
+/// spaces: printable, 1 to 64 bytes. Kept for the run, once per name, as
+/// [`screen_id`] keeps its names.
+fn shown_name(words: &[&str]) -> Result<&'static str, String> {
+    static NAMES: std::sync::Mutex<std::collections::BTreeSet<&'static str>> =
+        std::sync::Mutex::new(std::collections::BTreeSet::new());
+    let name = words.join(" ");
+    if name.is_empty() || name.len() > 64 || name.chars().any(char::is_control) {
+        return Err("expected a name as the map shows it, up to 64 bytes".into());
+    }
+    let mut names = NAMES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(kept) = names.get(name.as_str()) {
+        return Ok(kept);
+    }
+    let kept: &'static str = Box::leak(name.into_boxed_str());
+    names.insert(kept);
+    Ok(kept)
 }
 
 /// A skin button's `ScreenID` as a script names it: letters, digits and
@@ -2202,6 +2262,81 @@ mod tests {
             parse("slash(\"discipline defensive\")\n", base).unwrap(),
             [Step::Slash("/discipline defensive".into())]
         );
+    }
+
+    #[test]
+    fn map_controls_name_the_maps_own_buttons_and_rows() {
+        use crate::map::MapControl;
+        let base = std::path::Path::new(".");
+        for (line, control) in [
+            (
+                "click(\"map_search\", \"names\")",
+                MapControl::Search(false),
+            ),
+            (
+                "click(\"map_search\", \"landmark\")",
+                MapControl::Search(true),
+            ),
+            ("click(\"map_watch\", \"clear\")", MapControl::ClearSearch),
+            ("click(\"map_watch\", \"track\")", MapControl::Track),
+            (
+                "click(\"map_watch\", \"track_selected\")",
+                MapControl::TrackSelected,
+            ),
+            ("click(\"map_watch\", \"list\")", MapControl::WatchList),
+            (
+                "click(\"map_watch\", \"remove\", \"a\", \"rare\", \"guard\")",
+                MapControl::RemoveWatch("a rare guard"),
+            ),
+            (
+                "click(\"map_marker\", 5, 42, 3)",
+                MapControl::Marker {
+                    admission: 5,
+                    id: 42,
+                    revision: 3,
+                },
+            ),
+            (
+                "click(\"map_inspector\", \"clear\")",
+                MapControl::ClearInspector,
+            ),
+            ("click(\"map_target\")", MapControl::Target),
+            (
+                "click(\"map_landmarks\", \"toggle\")",
+                MapControl::Landmarks,
+            ),
+            (
+                "click(\"map_landmarks\", \"save\")",
+                MapControl::SaveLandmark,
+            ),
+            (
+                "click(\"map_landmarks\", \"remove\")",
+                MapControl::RemoveLandmark,
+            ),
+            (
+                "click(\"map_landmarks\", \"locate\", \"Bank\")",
+                MapControl::Locate("Bank"),
+            ),
+            ("click(\"map_style\", \"less\")", MapControl::Less),
+            ("click(\"map_style\", \"more\")", MapControl::More),
+            ("click(\"map_style\", \"style\")", MapControl::Style),
+            ("click(\"map_style\", \"lock\")", MapControl::Lock),
+            ("click(\"map_style\", \"outlines\")", MapControl::Outlines),
+        ] {
+            assert_eq!(
+                parse(&format!("{line}\n"), base).unwrap(),
+                [Step::Click(ClickTarget::MapControl(control))],
+                "{line}"
+            );
+        }
+        for line in [
+            "click(\"map_search\", \"items\")",
+            "click(\"map_watch\", \"remove\")",
+            "click(\"map_marker\", 5, 42)",
+            "click(\"map_style\", \"bright\")",
+        ] {
+            assert!(parse(&format!("{line}\n"), base).is_err(), "{line}");
+        }
     }
 
     #[test]

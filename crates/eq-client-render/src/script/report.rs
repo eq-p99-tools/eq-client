@@ -698,9 +698,50 @@ pub(super) fn surroundings(online: &crate::online::OnlineState, (_, _, _, combat
         coins = ?online.world().coins(),
         trade = crate::trade::summary(online.world()),
         auto_attack = combat.auto_attack,
+        map_markers = ?map_markers(online, origin),
         "Script surroundings"
     );
 }
+
+/// How many spawns the map can show a marker for, and what
+/// `click("map_marker", admission, id, revision)` names for the nearest
+/// [`MARKERS_LISTED`] of them (checklist 6.589). The map shows every known
+/// spawn, however far, so this reaches past the nearby list.
+fn map_markers(
+    online: &crate::online::OnlineState,
+    origin: Option<Vec3>,
+) -> (usize, Vec<(u64, u16, u64)>) {
+    let world = online.world();
+    let Some(admission) = world.session_id().filter(|_| online.in_world()) else {
+        return (0, Vec::new());
+    };
+    let mut markers: Vec<(f32, u16, u64)> = world
+        .spawns()
+        .iter()
+        .filter(|(id, spawn)| {
+            !spawn.state.invisible && world.player().is_none_or(|player| player.spawn_id != **id)
+        })
+        .map(|(id, spawn)| {
+            let at = Vec3::from_array(eq_client_core::render_position(spawn.state.position));
+            (
+                origin.map_or(0.0, |origin| at.distance(origin)),
+                *id,
+                spawn.revision,
+            )
+        })
+        .collect();
+    markers.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    let count = markers.len();
+    let listed = markers
+        .into_iter()
+        .take(MARKERS_LISTED)
+        .map(|(_, id, revision)| (admission, id, revision))
+        .collect();
+    (count, listed)
+}
+
+/// How many map markers a report lists, nearest first.
+const MARKERS_LISTED: usize = 64;
 
 /// The doors near the player with how they move and hold the player, for
 /// checking each lift and door against the program's rules on a live run.
