@@ -8,6 +8,7 @@
   - The confirmation and the autojoining line are this client's words: the program prints plain lines there whose text isn't read. They show each channel's name but never a password after a colon, which still goes to the chat server with the `/join`.
   - Usage lines for `/join` and `/N` with nothing after them are this client's words, in the program's colour for its own lines.
   - "You are not connected to the chat server." stays: the program says nothing then, so it is an always-on, labelled departure.
+  - `/announce` and `/chat words` go after a `/` too (`/announce on`, `/kick general Someone`): their handlers aren't fully read, and the chat server skips a command's first byte, so this is the form it takes.
   - The link now ends after 30 seconds of silence and logs in with the program's language tag (eq-network #422).
 
 - Zones without a sky are lit as the original lights them, so the Erudin palace and other interiors are no longer too dark (Adam, 11-23). See [Zone lighting](docs/zone-lighting.md).

@@ -578,7 +578,8 @@ link to it when the world offers one, and these commands go to it:
   one. `NONE`, the official default, joins nothing. This client never writes
   the official client's files. Its lines about the list show each channel's
   name but never a password.
-- `/chat words` sends the chat server's own channel words as typed: `join`,
+- `/chat words` sends the chat server's own channel words, after a `/` as
+  the other commands go: `join`,
   `leave`, `leaveall`, `list`, `listall`, `announce`, and the owner and
   moderator words (`setowner`, `oplist`, `invite`, `grant`, `moderate`,
   `voice`, `kick`, `password`, `toggleinvites`), which are passed through
