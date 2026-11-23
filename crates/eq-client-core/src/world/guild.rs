@@ -50,6 +50,14 @@ impl ClientWorld {
     pub const fn auto_split(&self) -> Option<bool> {
         self.auto_split
     }
+
+    /// `/played`'s fields from the latest Titanium profile, and when the
+    /// profile came: the program adds a played minute each minute after it
+    /// (0x422526, read R49-8 a).
+    #[must_use]
+    pub const fn played(&self) -> Option<(crate::played::PlayedTime, std::time::Instant)> {
+        self.played
+    }
 }
 
 /// The listed member of this name.
