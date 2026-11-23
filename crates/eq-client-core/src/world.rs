@@ -49,7 +49,7 @@ pub use target::Target;
 pub use tracking::{TrackWindow, track_color};
 pub use trade::{Asker, Exchange, Loot, LootContinuation, Merchant};
 pub use vitals::{ReportedHp, Vitals};
-pub use who::ZonePlayer;
+pub use who::{GuildStatus, ZonePlayer};
 
 use crate::{
     BookActionStatus, CharacterChoice, Death, PlayerState, PostureState, SpawnState, SpellBook,
@@ -1036,9 +1036,15 @@ impl ClientWorld {
             // titles slices (titles 6.516).
             | WorldEvent::SurnameAnswer { .. }
             | WorldEvent::TitleList(_)
-            // The bandolier sets and potion belt: their window's slice (6.559).
+            // The bandolier sets and potion belt, unknown sets and the
+            // session's refusals: their windows' slice (6.559, 6.573).
             | WorldEvent::Bandoliers(_)
             | WorldEvent::PotionBelt(_)
+            | WorldEvent::BandoliersUnknown
+            | WorldEvent::BandolierRefused { .. }
+            // The guild bank as EQEmu tells it: the gap log thread's guild
+            // bank slices (6.563).
+            | WorldEvent::GuildBank(_)
             // The machine's weekly account left for the world; the session
             // host keeps the date it went (the installed client's own
             // `LastSysInfoDate` stamp). Nothing about the world changed.
