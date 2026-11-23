@@ -216,7 +216,6 @@ impl SessionWorker {
                             tracing::info!("{message}");
                             None
                         }
-
                         // A reconnect is a fresh login; this viewer asks for
                         // none, but says so if one comes.
                         ClientEvent::Reconnecting {
