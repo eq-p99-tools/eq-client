@@ -1028,8 +1028,6 @@ impl ClientWorld {
             | WorldEvent::Channel(_)
             | WorldEvent::ChannelLink(_)
             | WorldEvent::ChatChannelRefused { .. }
-            // A chat line the pace held: the chat pace slice (6.523).
-            | WorldEvent::ChatRefused { .. }
             // A last name's answer and the title list: the surname and
             // titles slices (titles 6.516).
             | WorldEvent::SurnameAnswer { .. }
@@ -1197,6 +1195,16 @@ impl ClientWorld {
             } => {
                 if self.session_id == Some(*session_id) {
                     news.notices.push(Notice::ReportSent(*report));
+                } else {
+                    news.ignored = true;
+                }
+            }
+            // The session's chat pace held a line (6.523).
+            WorldEvent::ChatRefused { session_id, reason } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices.push(Notice::ChatRefused {
+                        reason: reason.clone(),
+                    });
                 } else {
                     news.ignored = true;
                 }

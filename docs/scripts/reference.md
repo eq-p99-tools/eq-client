@@ -351,7 +351,10 @@ or occluded. The counters are independent of damage and inventory.
   items, so their output stays in private run notes and never goes into the
   repository, a pull request or a published page.
 - `chat("channel message")`: chat on any server, under the session's chat pace,
-  with a character in the world.
+  with a character in the world. The pace is this client's own, not the
+  original's (which paces no chat): 10 lines in any 5 seconds, 12 far-reaching
+  ones in any minute. A line it holds fails the run at that `chat` or `social`
+  step's line, with the session's wait.
 - `quit()`: close the client.
 
 The typed parser and normal client capability checks decide which commands and controls are available. A valid action can still fail at runtime when its target, session or expected result is unavailable.

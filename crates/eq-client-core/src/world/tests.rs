@@ -6773,3 +6773,21 @@ fn the_players_own_report_prints_its_amount_then_its_record_line() {
         []
     );
 }
+
+#[test]
+fn the_chat_pace_holding_a_line_is_said_to_this_admission_only() {
+    let mut world = admitted();
+    let refused = |session_id| WorldEvent::ChatRefused {
+        session_id,
+        reason: "You are sending chat too fast. Wait 3 seconds.".into(),
+    };
+    assert_eq!(
+        game(&mut world, refused(1)).notices,
+        [Notice::ChatRefused {
+            reason: "You are sending chat too fast. Wait 3 seconds.".into()
+        }]
+    );
+    let stale = game(&mut world, refused(9));
+    assert!(stale.ignored);
+    assert_eq!(stale.notices, []);
+}

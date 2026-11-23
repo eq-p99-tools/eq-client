@@ -326,6 +326,13 @@ pub enum Notice {
         /// Why, in the session's words.
         reason: String,
     },
+    /// A line of chat was not sent because the session's chat pace held it
+    /// (recording checklist 6.523), and how long to wait, in the session's
+    /// words, which never repeat the line.
+    ChatRefused {
+        /// Why, in the session's words.
+        reason: String,
+    },
     /// A roll, emote or assist was not sent, and why, worded as
     /// [`Notice::ConsumeRefused`].
     SocialRefused {
