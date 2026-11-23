@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- `/toggleinspect` and the Inspect Others option as the Titanium program
+  keeps them (read R49-16, checklist 6.574). `/toggleinspect on` and `off`
+  set it; any other word or none says the usage lines 0x339a and 0x339b;
+  each ends with 0x339c or 0x339d, in colour 0x111. Nothing is sent. The
+  option is on by default and seeded from `InspectOthers` in `eqclient.ini`
+  (first letter t, T or 1; missing is on), then kept per character, which
+  is this client's choice (the original keeps one per installation).
+  - **Inspections are always answered now.** The option gates only the
+    player's own right-click inspects (6.644, next), not answering others,
+    so the earlier session-only switch that stopped answering is gone.
+  - Scripts can run it with `slash()`, and their reports list
+    `inspect_others` with the other options.
 - `/ttell` and `/whotarget` as the Titanium program takes them (read R49-18,
   checklist 6.528). `/ttell` says nothing with no words or no target; a
   target is taken by the name the server sent, refused (line 0x3322) when

@@ -390,6 +390,7 @@ fn seed_official_options(
             (Toggle::Sound, official.sound),
             (Toggle::EnvironmentSounds, official.env_sounds),
             (Toggle::CombatMusic, official.combat_music),
+            (Toggle::InspectOthers, official.inspect_others),
             // A music volume of 0 is silent; another value leaves music on,
             // its scale unread [I].
             (

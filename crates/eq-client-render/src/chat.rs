@@ -207,9 +207,6 @@ pub(super) struct ChatState {
     pub(crate) disciplines: Vec<super::disciplines::Asked>,
     /// A `/log`, waiting to turn the chat log on or off.
     pub log_toggle: bool,
-    /// A `/toggleinspect`, waiting to turn letting others inspect the
-    /// player on or off; only once the command is offered (checklist 6.574).
-    pub inspect_toggled: Option<super::dialogs::InspectToggle>,
     /// A `/shownames`, waiting to set how much of players' names shows.
     pub show_names: Option<eq_client_core::names::ShowNames>,
     /// A `/shownames` the client could not read, answered with the usage
@@ -615,7 +612,6 @@ impl ChatState {
             views: _,
             hovered: _,
             log_toggle: _,
-            inspect_toggled: _,
             show_names: _,
             show_names_usage: _,
             ui_scale: _,
@@ -2465,10 +2461,6 @@ pub(super) fn client_request_in_scope(
     }
     if let Some(request) = zone_who_request(input) {
         return Some(request.map(|filter| state.zone_who = Some(filter)));
-    }
-    if super::dialogs::toggle_inspect_typed(input, super::dialogs::TOGGLE_INSPECT_READ) {
-        state.inspect_toggled = Some(super::dialogs::InspectToggle);
-        return Some(Ok(()));
     }
     // `/filter` reads no words and sends nothing: it shows the Options
     // window on its filter page (eqgame.exe 0x46a245, read R49-2a).
