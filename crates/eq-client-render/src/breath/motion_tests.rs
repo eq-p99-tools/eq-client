@@ -446,7 +446,7 @@ fn due(app: &mut App, placement: u64) {
         .air
         .observe(started, (11, 7), placement, wet, Some(80));
     state.air.observe(
-        started + Duration::from_secs(1),
+        started + Duration::from_millis(1_001),
         (11, 7),
         placement,
         wet,

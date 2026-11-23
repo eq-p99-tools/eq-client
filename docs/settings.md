@@ -194,19 +194,24 @@ In thegrey, whose air can't be breathed, Air Remaining counts even with the
 head out of water unless the character breathes water. With **Gills for
 Days** enabled, the client skips the air calculation. Turning
 it off starts with a fresh reserve. Because skipping the counter withholds the
-drowning reports a local EQEmu session takes, the setting needs the session's
+drowning reports every Titanium session takes, the setting needs the session's
 gameplay departures like Fly and Jesus Mode. Titanium `eqgame.exe` checks
 breath at 0x4bdb3c, heat at 0x41d4ba and the head region at 0x489b0a.
 Unsupported geometry and unresolved character inputs withhold the
 applicable calculation.
 
-Local-only EQEmu sessions offer drowning and lava heat reports. Actual body
-contact with lava drives the heat check independently of the air counter.
-**Take Environmental Damage** controls all supported reports, including falls.
-Turning it off departs from the original client's reporting.
-Server health and combat updates remain authoritative. Project 1999 retains
-fall reporting and the local Titanium meter. Liquid reports await validation
-on the deployed server.
+Every Titanium session, EQEmu and Project 1999 alike, takes drowning and lava
+heat reports, as the Titanium program sends them on any server it plays on.
+Characters on public servers can drown and burn. Actual body contact with lava
+drives the heat check independently of the air counter.
+**Take Environmental Damage** controls all supported reports, including falls,
+and is on by default. Turning it off departs from the original client's
+reporting. Server health and combat updates remain authoritative. The amounts,
+their timing and the chat lines after each report follow the Titanium
+program (reads R49-3 and R49-3b). Project 1999's handling of the liquid
+reports and their damage records is not yet checked live. With the setting
+off, nothing is reported and no line prints for the player's own reports; a
+record the server sends, such as a trap's, still prints its line.
 
 The two spellbook choices are independent. Enable both to read and memorize
 through the book UI while remaining standing.

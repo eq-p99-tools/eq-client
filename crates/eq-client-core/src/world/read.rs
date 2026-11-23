@@ -719,6 +719,15 @@ impl ClientWorld {
         self.player_posture_changes
     }
 
+    /// How many drowning records aimed at the player the server has sent,
+    /// wrapping. The Titanium program empties the air counter for each
+    /// while the player's head is under (read R49-3b); a reader that looks
+    /// once a frame sees each new one.
+    #[must_use]
+    pub const fn drowning_records(&self) -> u32 {
+        self.drowning_records
+    }
+
     /// Whether the player holds a Feign Death standing (Move While Feigned,
     /// 6.454), as the session last said: a jump then goes without its
     /// crouch's posture reports, which would end the feign (6.600).

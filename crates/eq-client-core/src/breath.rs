@@ -91,6 +91,18 @@ impl Breath {
         self.air = None;
     }
 
+    /// A drowning record aimed at the player came: the Titanium program
+    /// empties the air counter for one while the head is in any region
+    /// but open air (`eqgame.exe` 0x4a56e3, read R49-3b). This counter
+    /// runs only while the head is under, so a sample under is the
+    /// program's head check. With the head in air nothing changes.
+    pub fn empty(&mut self) {
+        if let Some(air) = self.air.as_mut() {
+            air.remaining = 0;
+            self.remaining = Some(0);
+        }
+    }
+
     /// Samples the present state and, at most once per elapsed second,
     /// consumes air or proposes a damage amount. Late frames never replay
     /// missed ticks. The first empty tick follows the last depletion tick.
@@ -137,6 +149,32 @@ mod tests {
     use std::time::Duration;
 
     #[test]
+    fn a_drowning_record_empties_air_only_while_the_head_is_under() {
+        let start = Instant::now();
+        let at = |seconds| start + Duration::from_secs(seconds);
+        let under = Sample::Submerged(NonZeroU32::new(5).unwrap());
+        let mut breath = Breath::default();
+        assert_eq!(breath.sample(at(0), under, Some(80)), None);
+        assert_eq!(breath.air().unwrap().remaining, 5);
+        breath.empty();
+        assert_eq!(breath.air().unwrap().remaining, 0);
+        // The next tick under is an empty one, and it hurts.
+        assert_eq!(breath.sample(at(2), under, Some(80)), Some(10));
+
+        // With the head in air, a record leaves the full counter alone.
+        let mut breath = Breath::default();
+        assert_eq!(breath.sample(at(0), Sample::CanBreathe, Some(80)), None);
+        breath.empty();
+        assert_eq!(breath.air(), None);
+        assert_eq!(breath.sample(at(2), under, Some(80)), None);
+        assert_eq!(
+            breath.air().unwrap().remaining,
+            4,
+            "one tick spent, none emptied"
+        );
+    }
+
+    #[test]
     fn titanium_breath_uses_stamina_percent_caps_and_racial_reserves() {
         let ticks = |race, sta, percent| titanium_capacity(race, sta, percent).map(NonZeroU32::get);
         assert_eq!(ticks(1, Some(75), 0), Some(45));
@@ -153,7 +191,8 @@ mod tests {
     fn breath_refills_and_proposes_one_damage_tick_only_after_depletion() {
         let mut breath = Breath::default();
         let start = Instant::now();
-        let at = |seconds| start + Duration::from_secs(seconds);
+        // The program's tick runs strictly more than a second apart.
+        let at = |seconds: u64| start + Duration::from_millis(seconds * 1_001);
         let wet = Sample::Submerged(NonZeroU32::MIN.saturating_add(1));
         assert_eq!(breath.sample(at(0), wet, Some(103)), None);
         assert_eq!(breath.sample(at(1), wet, Some(103)), None);
@@ -177,7 +216,7 @@ mod tests {
         let start = Instant::now();
         let at = |millis| start + Duration::from_millis(millis);
         let wet = Sample::Submerged(NonZeroU32::MIN.saturating_add(1));
-        for millis in [0, 1_000, 2_000] {
+        for millis in [0, 1_001, 2_002] {
             assert_eq!(breath.sample(at(millis), wet, Some(80)), None);
         }
         // Air and a breathing effect both supply CanBreathe. The first
@@ -186,9 +225,9 @@ mod tests {
         assert!(breath.air().is_none());
         breath.sample(at(2_600), wet, Some(80));
         assert_eq!(breath.air().unwrap().remaining, 0);
-        assert_eq!(breath.sample(at(3_000), wet, Some(80)), Some(10));
+        assert_eq!(breath.sample(at(3_003), wet, Some(80)), Some(10));
         breath.sample(at(3_300), Sample::CanBreathe, Some(80));
-        breath.sample(at(4_000), Sample::CanBreathe, Some(80));
+        breath.sample(at(4_100), Sample::CanBreathe, Some(80));
         breath.sample(at(4_200), wet, Some(80));
         assert_eq!(breath.air().unwrap().remaining, 2);
     }
@@ -197,7 +236,8 @@ mod tests {
     fn unknown_water_and_corrections_break_timing_without_refilling() {
         let mut breath = Breath::default();
         let start = Instant::now();
-        let at = |seconds| start + Duration::from_secs(seconds);
+        // The program's tick runs strictly more than a second apart.
+        let at = |seconds: u64| start + Duration::from_millis(seconds * 1_001);
         let wet = Sample::Submerged(NonZeroU32::MIN);
         breath.sample(at(0), wet, Some(80));
         breath.sample(at(1), wet, Some(80));
