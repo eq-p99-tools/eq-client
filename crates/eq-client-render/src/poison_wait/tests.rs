@@ -285,9 +285,6 @@ fn no_script_or_typed_line_can_post_the_total() {
         crate::commands::resolve("poisonwait"),
         crate::commands::Resolved::Nothing
     );
-    let errors = crate::script::Program::diagnostics(
-        "poison_wait(0)\n",
-        std::path::Path::new("."),
-    );
-    assert!(!errors.is_empty());
+    let errors = crate::script::Program::diagnostics("poison_wait(0)\n", std::path::Path::new("."));
+    assert!(!errors.is_empty(), "{errors:?}");
 }

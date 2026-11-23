@@ -47,7 +47,10 @@ fn spell_total(effects: Option<Vec<Effect>>, caster_level: u16, instrument: u32)
 /// A slotted buff's share: its spell's effect 234 at the record's caster
 /// level, negated for a type-4 record as 0x41002f does; a type-0 record
 /// that carries the effect is not one this client can place, so None.
-fn buff_total(buff: &eq_client_core::Buff, mechanics: &impl Fn(u32) -> Option<Vec<Effect>>) -> Option<i64> {
+fn buff_total(
+    buff: &eq_client_core::Buff,
+    mechanics: &impl Fn(u32) -> Option<Vec<Effect>>,
+) -> Option<i64> {
     let total = spell_total(
         mechanics(buff.spell_id),
         u16::from(buff.caster_level),
@@ -139,7 +142,9 @@ pub(super) fn report(
         return;
     }
     let total_ms = total(world, player, |id| {
-        spells.mechanics(id).map(|mechanics| mechanics.effects.to_vec())
+        spells
+            .mechanics(id)
+            .map(|mechanics| mechanics.effects.to_vec())
     });
     if told.0 == Some((session_id, total_ms)) {
         return;
