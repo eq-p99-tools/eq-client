@@ -635,7 +635,7 @@ impl Panels<'_> {
                 Reply::LootTaken { place, accepted } => self.trade.taken(*place, *accepted),
                 Reply::LootReceived { place } => self.trade.received(*place),
                 // A crossing without a transfer releases the movement hold.
-                Reply::ZoneLineRefused | Reply::SameZoneBoundary => self.motion.crossing_resolved(),
+                Reply::ZoneLineRefused => self.motion.crossing_resolved(),
                 Reply::MotionRefused { created, reason } => {
                     self.motion
                         .move_refused(state.world().session_id(), *created, reason);
