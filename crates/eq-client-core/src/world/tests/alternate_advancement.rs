@@ -50,7 +50,7 @@ fn selected(ids: &[u32]) -> Update {
 
 fn effects(world: &ClientWorld) -> Option<Vec<Effect>> {
     world
-        .environmental_aa()
+        .alternate_advancement()
         .effects(1, 1)
         .map(|effects| effects.into_iter().copied().collect())
 }
@@ -221,9 +221,12 @@ fn aa_observations_belong_to_one_live_admission() {
     };
     game(&mut world, aa(1, selections.clone()));
     game(&mut world, aa(1, definition.clone()));
-    assert_eq!(world.environmental_aa().effects(1, 1).unwrap().len(), 1);
+    assert_eq!(
+        world.alternate_advancement().effects(1, 1).unwrap().len(),
+        1
+    );
     game(&mut world, entered(2));
-    assert!(world.environmental_aa().effects(1, 1).is_none());
+    assert!(world.alternate_advancement().effects(1, 1).is_none());
     assert!(
         game(
             &mut world,
@@ -235,11 +238,14 @@ fn aa_observations_belong_to_one_live_admission() {
         .ignored
     );
     game(&mut world, aa(2, selections));
-    assert!(world.environmental_aa().effects(1, 1).is_none());
+    assert!(world.alternate_advancement().effects(1, 1).is_none());
     game(&mut world, aa(2, definition.clone()));
-    assert_eq!(world.environmental_aa().effects(1, 1).unwrap().len(), 1);
+    assert_eq!(
+        world.alternate_advancement().effects(1, 1).unwrap().len(),
+        1
+    );
     connection(&mut world, false, true);
-    assert!(world.environmental_aa().effects(1, 1).is_none());
+    assert!(world.alternate_advancement().effects(1, 1).is_none());
     assert!(
         game(
             &mut world,
@@ -250,4 +256,57 @@ fn aa_observations_belong_to_one_live_admission() {
         )
         .ignored
     );
+}
+
+#[test]
+fn eqmac_aa_facts_are_kept_and_rof2_sends_none_yet() {
+    use crate::alternate_advancement::{MacPoints, MacRank};
+    let points = Update::MacPoints(Some(MacPoints {
+        aapoints: 2,
+        exp_aa: 0,
+        per_aa: 0,
+    }));
+    let mut world = admitted();
+    world.carry_as(crate::GameDialect::EqMac);
+    game(&mut world, aa(1, points.clone()));
+    game(
+        &mut world,
+        aa(
+            1,
+            Update::MacSelections(Some(vec![MacRank { id: 12, value: 16 }])),
+        ),
+    );
+    let facts = world.alternate_advancement();
+    assert_eq!(facts.mac_points().map(|points| points.aapoints), Some(2));
+    assert_eq!(facts.mac_selections().map(<[_]>::len), Some(1));
+    // A new admission forgets them.
+    game(&mut world, entered(2));
+    assert_eq!(world.alternate_advancement().mac_points(), None);
+
+    let mut world = admitted();
+    world.carry_as(crate::GameDialect::Rof2);
+    assert!(game(&mut world, aa(1, points)).ignored);
+    assert_eq!(world.alternate_advancement().mac_points(), None);
+}
+
+#[test]
+fn an_aa_refusal_is_this_sessions_news_only() {
+    use crate::alternate_advancement::Refusal;
+    let mut world = admitted();
+    let refused = |session_id| WorldEvent::AlternateAdvancementRefused {
+        session_id,
+        reason: "Not offered.".into(),
+        refusal: Some(Refusal::NotOffered),
+    };
+    let changes = game(&mut world, refused(1));
+    assert_eq!(
+        changes.notices,
+        [Notice::AlternateAdvancementRefused {
+            reason: "Not offered.".into(),
+            refusal: Some(Refusal::NotOffered),
+        }]
+    );
+    let changes = game(&mut world, refused(2));
+    assert!(changes.ignored);
+    assert_eq!(changes.notices.len(), 0);
 }
