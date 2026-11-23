@@ -6872,34 +6872,109 @@ pub(super) mod tests {
         assert!(highest < 1.0, "origin rose to {highest}: {seen:?}");
     }
 
-    #[test]
-    fn a_body_surfacing_under_a_deck_drops_back_into_the_water() {
-        // Temple of Life's north deck (local look, 11-23): a swimmer that
-        // came up under a deck over the water, its origin just out of the
-        // water and its head in the deck's underside, must not freeze.
-        let quad = |a, b, c, d| [[a, b, c], [a, c, d]];
-        let mut triangles = Vec::from(flat_surface(-16.0));
-        for y in [3.0, 5.0] {
-            triangles.extend(quad(
-                [-20.0, y, 2.0],
-                [20.0, y, 2.0],
-                [20.0, y, 20.0],
-                [-20.0, y, 20.0],
-            ));
-        }
-        let world = CollisionWorld::new(triangles)
+    /// The ramp at Temple of Life's north deck (North Qeynos), down into
+    /// the pool, and the deck's face above it: the triangles the installed
+    /// zone's collision has within 6 of where a swimmer froze (local look,
+    /// 11-23), in the renderer's frame, with the pool's floor and water.
+    fn temple_ramp() -> CollisionWorld {
+        let mut triangles = vec![
+            [
+                [-167.9375, 1.0, 314.125],
+                [-153.9375, 7.96875, 335.875],
+                [-167.9375, 7.96875, 335.875],
+            ],
+            [
+                [-153.9375, 7.96875, 335.875],
+                [-167.9375, 1.0, 314.125],
+                [-167.9375, 0.0, 311.0],
+            ],
+            [
+                [-153.9375, 1.0, 314.125],
+                [-167.9375, 0.0, 311.0],
+                [-153.9375, 0.0, 311.0],
+            ],
+            [
+                [-167.9375, 0.0, 311.0],
+                [-153.9375, 1.0, 314.125],
+                [-153.9375, 7.96875, 335.875],
+            ],
+            [
+                [-167.9375, 1.0, 314.125],
+                [-167.9375, 10.0, 335.875],
+                [-167.9375, 1.0, 307.875],
+            ],
+            [
+                [-167.9375, 10.0, 335.875],
+                [-167.9375, 1.0, 314.125],
+                [-167.9375, 7.96875, 335.875],
+            ],
+            [
+                [-167.9375, 1.0, 314.125],
+                [-167.9375, 0.0, 307.875],
+                [-167.9375, 0.0, 311.0],
+            ],
+            [
+                [-167.9375, 0.0, 307.875],
+                [-167.9375, 1.0, 314.125],
+                [-167.9375, 1.0, 307.875],
+            ],
+            [
+                [-153.9375, -1.0, 307.875],
+                [-167.9375, 0.0, 311.0],
+                [-167.9375, -1.0, 307.875],
+            ],
+            [
+                [-167.9375, 0.0, 311.0],
+                [-153.9375, -1.0, 307.875],
+                [-153.9375, 0.0, 311.0],
+            ],
+            [
+                [-167.9375, 0.0, 311.0],
+                [-167.9375, 0.0, 307.875],
+                [-167.9375, -1.0, 307.875],
+            ],
+        ];
+        triangles.extend([
+            [
+                [-200.0, -16.0, 280.0],
+                [-120.0, -16.0, 280.0],
+                [-120.0, -16.0, 360.0],
+            ],
+            [
+                [-200.0, -16.0, 280.0],
+                [-120.0, -16.0, 360.0],
+                [-200.0, -16.0, 360.0],
+            ],
+        ]);
+        CollisionWorld::new(triangles)
             .unwrap()
             .with_liquids(Pool {
-                top: 0.0,
+                top: -2.0,
                 liquid: Liquid::Water,
             })
-            .with_swim_origin(3.75);
-        let feet = Vec3::new(0.0, -3.35, 8.0);
-        let seen = swim_from(world, feet, 0.0, (Some(WET_SWIMMER), 0.0), 20).unwrap();
-        assert!(
-            seen.iter().any(|(_, at, _)| at.distance(feet) > 0.1),
-            "frozen: {seen:?}"
-        );
+            .with_swim_origin(3.75)
+    }
+
+    #[test]
+    fn a_body_surfacing_under_a_ramp_drops_back_into_the_water() {
+        // Where the swimmer froze: its origin just out of the water, its
+        // head in the ramp's underside. It must not freeze.
+        for origin in [
+            Vec3::new(-166.45, -1.6, 314.15),
+            Vec3::new(-166.38, -1.5, 314.12),
+        ] {
+            let feet = origin - Vec3::Y * 3.75;
+            let seen = swim_from(temple_ramp(), feet, 0.0, (Some(WET_SWIMMER), 0.0), 20).unwrap();
+            assert!(
+                seen.iter().any(|(_, at, _)| at.distance(feet) > 0.1),
+                "frozen at {origin}: {seen:?}"
+            );
+            // It drops back in and swims on.
+            assert!(
+                seen.iter().any(|(mode, _, _)| *mode == MovementMode::Swim),
+                "{seen:?}"
+            );
+        }
     }
 
     /// The live look's three Temple of Life spots (North Qeynos), swum

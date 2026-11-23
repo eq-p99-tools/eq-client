@@ -60,7 +60,10 @@ so a pool's rim up to about 3.3 above the water, as at Temple of Life in
 North Qeynos, lands the swimmer on it (recording checklists 6.483b and
 6.483c; the jump strength's value and the pitch the test reads are
 inferred). A body that falls back into the water keeps the speed it fell
-with, so a wall that stopped it doesn't stop the stroke.
+with, so a wall that stopped it doesn't stop the stroke. A swimmer that
+surfaces under a ramp or deck over the water, its head inside it, drops
+back into the water: a fall straight down is led by the lower body when
+the whole body's sweep is refused where it starts (ours).
 
 A local movement proposal completes when the worker returns a result for
 its admission and request stamp. That result describes the worker's
