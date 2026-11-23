@@ -70,7 +70,7 @@ pub use eq_network_game::movement::{
 use glam::Vec3;
 use parry3d::{
     math::{Pose, Vector},
-    query::{Ray, RayCast, ShapeCastOptions, cast_shapes, contact},
+    query::{Ray, RayCast, ShapeCastOptions, cast_shapes, contact, intersection_test},
     shape::{Capsule, TriMesh},
 };
 use std::sync::Arc;
@@ -406,11 +406,14 @@ impl CollisionWorld {
             return None;
         }
         let (pose, capsule) = body(feet, height);
+        // Inside a closed door, or crossing a thin one's faces (a
+        // portcullis's bars, one plane, come down through the body).
         let inside = |mesh: &CollisionMesh| {
             contact(&pose, &capsule, &Pose::IDENTITY, &mesh.mesh, 0.0)
                 .ok()
                 .flatten()
                 .is_some_and(|contact| contact.dist < 0.0)
+                || intersection_test(&pose, &capsule, &Pose::IDENTITY, &mesh.mesh).unwrap_or(false)
         };
         let mut released = false;
         let obstacles = self
@@ -1229,6 +1232,40 @@ mod tests {
             Solidity::BOTH,
         )]);
         assert!(deck.releasing_overlapped_doors(Vec3::Y, 6.0).is_none());
+    }
+
+    #[test]
+    fn a_portcullis_coming_down_on_a_player_under_it_lets_them_walk_out_either_way() {
+        // Bars of one plane across x = 0, every face a wall (a door's
+        // passable faces too), come down around a player standing in the
+        // gateway: they may step out on either side, and once clear the bars
+        // stop them again (reviewer W2, recording checklist 6.439).
+        let bars = Arc::new(
+            CollisionMesh::new(vec![
+                [[0.0, 0.0, -5.0], [0.0, 0.0, 5.0], [0.0, 10.0, 5.0]],
+                [[0.0, 0.0, -5.0], [0.0, 10.0, 5.0], [0.0, 10.0, -5.0]],
+            ])
+            .unwrap(),
+        );
+        let mut world = CollisionWorld::new(floor(0.0)).unwrap();
+        world.set_door_obstacles_with(vec![(
+            1,
+            bars,
+            Solidity {
+                floor: false,
+                wall: true,
+            },
+        )]);
+        // Unreleased, the one-sided plane would hold them on its back side.
+        assert!(world.step(Vec3::ZERO, Vec3::X * 3.0, 6.0).x < 0.01);
+        let released = world.releasing_overlapped_doors(Vec3::ZERO, 6.0).unwrap();
+        for direction in [Vec3::X, -Vec3::X] {
+            let out = released.step(Vec3::ZERO, direction * 3.0, 6.0);
+            assert!(out.distance(direction * 3.0) < 0.01, "stepped out to {out}");
+        }
+        let clear = Vec3::new(3.0, 0.0, 0.0);
+        assert!(world.releasing_overlapped_doors(clear, 6.0).is_none());
+        assert!(world.step(clear, -Vec3::X * 6.0, 6.0).x > 0.0);
     }
 
     #[test]
