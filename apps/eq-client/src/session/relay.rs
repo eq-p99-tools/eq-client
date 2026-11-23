@@ -24,7 +24,10 @@ use std::{
     time::Instant,
 };
 
-/// How many updates the window's own queue holds.
+/// How many updates the window's own queue holds. The queue allocates
+/// every slot when the session starts: an update and its slot's stamp,
+/// 224 bytes, so 14 MiB for the session's life. A test keeps it under
+/// 16 MiB as updates grow.
 pub(super) const WINDOW_QUEUE: usize = 65_536;
 
 /// How many updates may wait beyond the window's queue before the session
@@ -243,6 +246,16 @@ mod tests {
             assert!(Instant::now() < deadline, "the session was never cancelled");
             thread::yield_now();
         }
+    }
+
+    #[test]
+    fn the_window_queue_stays_under_16_mib() {
+        let slot = std::mem::size_of::<WorldUpdate>() + std::mem::size_of::<usize>();
+        assert!(
+            slot * WINDOW_QUEUE <= 16 << 20,
+            "{slot}-byte slots make the window's queue {} bytes",
+            slot * WINDOW_QUEUE
+        );
     }
 
     #[test]
