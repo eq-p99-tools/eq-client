@@ -1274,9 +1274,14 @@ fn object_solid_faces(mesh: &libeq::wld::Mesh<'_>) -> Vec<u32> {
 /// no hit at once for a mesh whose switch +0x5c is set (0x10192406), which
 /// this case sets (0x101885e0, 0x10193d70). That is every tree, plant and
 /// grass mesh of the object archives, trunks included, so a walker passes
-/// through them where the zone places them. That the sweep is the walking
-/// test is inferred; read R49-49d finds a WLD placement always takes the
-/// model test. The engine's ray tests see every face of such a mesh; this
+/// through them where the zone places them. Read R49-49d finds a WLD
+/// placement always takes the model test, and read R49-49e follows the
+/// player's wall sweep call by call to it: the item's test 0x1003e970,
+/// 0x1003eb92, item vt+0x4c 0x10049a10, then the model wrapper's slot
+/// +0x9c, which for a placement without an LOD list is 0x1004aa70, a jump
+/// to 0x10192400. One step is still inferred: a placement with an LOD list
+/// forwards (0x1004e3e0) to its current model's slot +0x9c, taken to be the
+/// same wrapper. The engine's ray tests see every face of such a mesh; this
 /// client's camera shares the walking world and passes through them too, a
 /// labelled departure. Zone terrain, boats and EQG models are unchanged
 /// (the EQG loader sets no switch).
