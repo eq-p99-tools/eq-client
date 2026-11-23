@@ -6984,6 +6984,57 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_swim_under_a_low_ceiling_keeps_todays_behaviour() {
+        use eq_client_core::movement::CollisionWorld;
+        // Reviewer W1: whether the program tests a swimmer is unread
+        // (R49-9), so a swim under 6, which a standing S = 3.75 would be
+        // refused, still goes (checklist 6.496).
+        let (mut app, receiver) = app();
+        let mut triangles = flat_surface(-12.0).to_vec();
+        triangles.extend(flat_surface(-6.0));
+        {
+            let world = app.world_mut();
+            let mut body = world.query::<&mut PlayerBody>().single_mut(world).unwrap();
+            body.feet_offset = 3.75;
+        }
+        online::testing::place(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            world_position([0.0, -9.0, 0.0], 0.0),
+        );
+        app.insert_resource(Collision(Some(
+            CollisionWorld::new(triangles).unwrap().with_liquids(Pool {
+                top: 0.0,
+                liquid: Liquid::Water,
+            }),
+        )));
+        app.world_mut().resource_mut::<Controls>().airborne = Some(AirborneController::default());
+        let mut moves = Vec::new();
+        for _ in 0..6 {
+            {
+                let mut controls = app.world_mut().resource_mut::<Controls>();
+                controls.last_accepted = Instant::now()
+                    .checked_sub(Duration::from_millis(250))
+                    .unwrap();
+                controls.last_sent = None;
+            }
+            app.update();
+            while let Ok(command) = past_climb(&receiver) {
+                if let ClientCommand::Move(proposal) = command {
+                    accept(&mut app, &proposal);
+                    moves.push(proposal);
+                }
+            }
+        }
+        // A refusal sends Forward from the frame's start; every move here
+        // stays a swim and goes forward.
+        assert!(
+            moves.iter().all(|m| m.mode == MovementMode::Swim),
+            "{moves:?}"
+        );
+        assert!(moves.iter().any(|m| m.position.x < -0.01), "{moves:?}");
+    }
+
+    #[test]
     fn jesus_mode_moves_over_lava_with_an_ordinary_sample() {
         let (mut app, receiver) = app();
         app.insert_resource(Collision(Some(liquid_pool(

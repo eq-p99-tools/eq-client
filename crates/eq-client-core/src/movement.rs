@@ -1079,6 +1079,10 @@ mod tests {
         assert!(!room(Some(11.2), 11.25));
         assert!(room(Some(11.3), 11.25));
         assert!(room(None, 11.25));
+        // Mid-jump the measure is still floor to ceiling, so a high ceiling
+        // never refuses a jump or a fall.
+        let high = CollisionWorld::new([floor(0.0), floor(20.0)].concat()).unwrap();
+        assert!(high.headroom(Vec3::new(0.0, 9.0, 0.0), 7.5));
         // No floor under the origin: nothing to measure, so the move stands.
         let ceiling_only = CollisionWorld::new(floor(7.0)).unwrap();
         assert!(ceiling_only.headroom(Vec3::new(0.0, 3.75, 0.0), 7.5));
