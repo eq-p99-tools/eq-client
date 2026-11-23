@@ -26,7 +26,7 @@
 use super::chat::{ChatState, Said};
 use super::hud::messages::Messages;
 use bevy::prelude::*;
-use eq_client_assets::clock::ClientClock;
+use eq_client_assets::ui::InstalledClient;
 use eq_client_core::{whereabouts, world::ClientWorld};
 
 /// Which the player asked.
@@ -78,6 +78,16 @@ impl Asked {
     }
 }
 
+/// Whether the installed client's own answers to `/played` and
+/// `/guildstatus` have been read from its program, so they can be given as
+/// it gives them; one arm for each generation, so a new one is decided here.
+const fn read_answers(installed: InstalledClient) -> bool {
+    match installed {
+        InstalledClient::Titanium => true,
+        InstalledClient::EqMac => false,
+    }
+}
+
 /// The lines that answer what the player asked, the time as the installed
 /// client tells it; a refusal before they are in the world.
 fn answer(
@@ -85,17 +95,18 @@ fn answer(
     world: &ClientWorld,
     earth: jiff::civil::DateTime,
     messages: &Messages,
-    clock: ClientClock,
+    installed: InstalledClient,
 ) -> Result<Vec<Said>, String> {
     let player = world.player().ok_or("Enter the world first")?;
+    let clock = installed.clock();
     Ok(match asked {
-        Asked::GuildStatus(_) if clock == eq_client_assets::clock::EQMAC => {
+        Asked::GuildStatus(_) if !read_answers(installed) => {
             return Err("/guildstatus on the Mac client waits for its program read".to_owned());
         }
         Asked::GuildStatus(named) => guild_status(world, named.as_deref(), messages)
             .into_iter()
             .collect(),
-        Asked::Played if clock == eq_client_assets::clock::EQMAC => {
+        Asked::Played if !read_answers(installed) => {
             return Err("/played on the Mac client waits for its program read".to_owned());
         }
         Asked::Played => {
@@ -223,8 +234,13 @@ pub(super) fn answers(
     let empty = Messages::default();
     let messages = messages.as_deref().unwrap_or(&empty);
     let now = jiff::Zoned::now().datetime();
-    let clock = settings.0.installed_client.clock();
-    match answer(asked, online.world(), now, messages, clock) {
+    match answer(
+        asked,
+        online.world(),
+        now,
+        messages,
+        settings.0.installed_client,
+    ) {
         Ok(lines) => {
             for line in lines {
                 chat.history.push(super::chat::system_line(line));
@@ -238,7 +254,7 @@ pub(super) fn answers(
 mod tests {
     use super::*;
     use crate::online::{OnlineState, testing};
-    use eq_client_assets::clock::{EQMAC, TITANIUM};
+    use eq_client_assets::ui::InstalledClient::{EqMac as EQMAC, Titanium as TITANIUM};
     use eq_client_core::WorldEvent;
 
     #[test]
