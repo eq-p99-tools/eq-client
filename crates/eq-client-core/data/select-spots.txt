@@ -3,18 +3,21 @@
 # database's).
 #
 # frame: y x z as /loc prints them (EQ world units, the server's y first);
-#   the character stands on the first floor at or below z + 5. heading: the
-#   way the character faces, in the server's 0-512 units. distance: the
-#   camera's distance from the character, in world units. pitch: how far the
-#   camera looks down at the character, in degrees.
+#   the character stands on the first floor at or below z + 5 (or at z,
+#   afloat). heading: the way the character faces, in the server's 0-512
+#   units. distance: the camera's distance from the character, in world
+#   units. pitch: how far the camera looks down at the character, in
+#   degrees.
 #
 # One zone a line: short name, y, x, z, heading, distance, pitch, and
 # "reviewed" once a render of the spot has been looked at, "unreviewed"
-# while it is the tool's untouched proposal. Anything after "#" is a
-# comment; a row's comment "# kept: <reason>" keeps the row although the
-# reachability check flags it (a door, lift or teleport pad joins floors
-# the navigation mesh can't). A zone without a line uses the fallback: the
-# highest surface at the centre of the zone's bounds.
+# while it is the tool's untouched proposal, and then "afloat" where a
+# spot picked by hand is in open water: the character stays at the spot's
+# own height, feet at z, instead of standing on a floor. Anything after
+# "#" is a comment; a row's comment "# kept: <reason>" keeps the row
+# although the reachability check flags it (a door, lift or teleport pad
+# joins floors the navigation mesh can't). A zone without a line uses the
+# fallback: the highest surface at the centre of the zone's bounds.
 #
 # Reachable (our rule, not the program's): the floor the preview stands on
 # lies on the zone's main island (the largest by dry floor area on its
@@ -52,11 +55,12 @@
 #
 # 2026-11-23: the last nine (erudnint halas kedge sirens airplane barindu
 # lakerathe neriakb qvic) were looked at live, in our client on a local
-# server, with the person who reviews them walking the character. Eight
-# moved to a position picked by hand during that look. --check flags seven
-# of them (the mesh splits those floors off); each is kept with what the
-# look showed. kedge stays on its old unreviewed row: the spot picked there
-# has no floor near it, so the preview stood the character 370 units down.
+# server, with the person who reviews them walking the character. All nine
+# moved to a position picked by hand during that look. --check flags eight
+# of them (the mesh splits seven floors off, and kedge's spot is in open
+# water); each is kept with what the look showed. kedge is "afloat": the
+# character stays at the spot's height instead of standing on the floor 370
+# units below. Only qrg stays unreviewed. To do: swim at an afloat spot.
 #
 # zone          y         x         z       heading  distance  pitch  state
 acrylia        -576.54    -41.42    -18.50    256.0      25.0   10.0  reviewed
@@ -136,7 +140,7 @@ kaladima         43.64      8.26      0.00     64.0      20.7   10.0  reviewed
 kaladimb        691.72    145.72      0.00    256.0      25.0   10.0  reviewed
 karnor           30.38    -88.13      0.00    384.0      25.0   10.0  reviewed
 katta           -23.71   -222.54      1.00    128.0      25.0   10.0  reviewed
-kedge           -22.73    127.69    -24.61    128.0      25.0   10.0  unreviewed
+kedge             1.46     -1.04    313.94    148.0      25.0   10.0  reviewed afloat  # kept: open water inside the keep, picked live 2026-11-23; afloat, so no floor is walked to
 kerraridge      -18.87    -45.87      0.00    256.0      25.0   10.0  reviewed  # kept: village beach on Kerra Isle, open sand; the mesh splits the isle from the mainland at the water channel
 kithicor        517.54   1468.48    187.06    224.0      25.0   10.0  reviewed
 kodtaz          180.23   1089.02   -432.00     32.0      25.0   10.0  reviewed  # kept: open plain beside the paved road to the temples, on a large mesh island; where the mesh splits is not visible

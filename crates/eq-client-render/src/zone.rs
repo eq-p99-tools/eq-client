@@ -50,7 +50,8 @@ impl PreparedEntry {
     }
 
     /// Stands the character on the floor at a character select spot: the
-    /// first floor at or below the spot's height and a little above it, or
+    /// first floor at or below the spot's height and a little above it (at
+    /// the spot's own height for a spot afloat in open water), or
     /// without a spot (or a floor under it) the highest surface at the
     /// centre of the zone's bounds, as the offline viewer starts.
     pub(super) fn stand(&mut self, spot: Option<&eq_client_core::select_spots::Spot>) {
