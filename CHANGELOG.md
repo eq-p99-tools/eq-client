@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- The Interface scale slider on the QoL page no longer swings between its ends while dragged.
+  - **Cause:** each frame of a drag set the scale, which moved the Options window and the slider under a pointer that held still. The pointer then read near one end and then the other, so the scale flipped back and forth and could not be set back to 100%.
+  - **Fix:** a setting that rescales the layout (`Level::rescales_layout`, the interface scale alone) is held on its slider while pressed. The thumb and value label show the held size, and the setting changes once as the press ends, by the mouse's release or a script's one-frame press. Closing the window mid-drag discards the held size. The other sliders still set as they move.
+  - **Recovery:** right-click the slider for 100%, or type `/uiscale` (100%) or `/uiscale N` with N a 5% step from 50 to 200. Scripts can use `slash("uiscale 100")` or the slider as before. The options file's `ui_scale` key still works too.
+
 - Mouse look in the chase view tilts as far as straight up or straight down again, at any zoom (checklist 6.606, Adam 11-23). The chase camera had kept the Titanium program's height model, from eye level to 30 units above the eyes, which at the ordinary zoom tilts only about 15 degrees and never looks up.
   - **Free Chase Tilt**, a new quality-of-life setting, on by default: a drag turns the chase camera around the eyes up to 89 degrees above or below level, and the wheel moves it along its sightline. Looking up, the camera swings below the eyes, never under the feet, and floors and walls still pull it in. An almost overhead view still zooms before it snaps into first person, and the far plane follows the camera out.
   - Turned off, the chase camera keeps the program's height model as before. In the Titanium program (read of 11-23, checklists 6.348 and 6.422), mouse look Y in that camera only zooms or moves its height, only the orbit cameras tilt, from about 45 degrees up to 84 down, and no third-person camera follows the character's look pitch. Straight up or down in every view is Adam's choice. First person looks straight up or down either way.

@@ -78,7 +78,10 @@ resets clear pending cues and stop their playback.
 
 Options → QoL stores these choices per character. Availability can depend on the
 session; a setting does not manufacture an unoffered server capability.
-The Interface scale slider appears with the ordinary settings.
+The Interface scale slider appears with the ordinary settings. A drag on it
+shows the size it chooses, and the windows take that size when you let go.
+Right-click the slider to return to 100%, or type `/uiscale 150` (any 5% step
+from 50 to 200) or `/uiscale` alone for 100% when the slider is hard to reach.
 
 | Setting | File key | Default | Effect |
 | --- | --- | --- | --- |
