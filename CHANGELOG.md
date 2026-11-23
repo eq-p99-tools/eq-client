@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- `/pet target` and unknown `/pet` words, as read R49-22a reads the Titanium program (checklist 6.610, gap 3.5).
+  - **`/pet target`** stays local and sends no pet order.
+    - It targets the player's pet through the same selection a click on the pet uses.
+    - It then says the program's line (string 0x3330). With no pet it says string 0x3323.
+    - Both lines come from the installation, in this client's own words where the installation lacks them.
+    - Before, no pet gave a refusal in our words. That the word is "target" is inferred (row 22a-iii).
+  - **A `/pet` word that names no order** sends nothing and says nothing, as the program's sender skips it (0x49975b). Before, this client said "Unknown pet command".
+  - **The Pet Info window:** the Options window's Pet Window Popup already decides whether a new pet shows the window (default on). That matches the program's auto setting; its default is row 22a-iv.
+  - The network side, which sends an order with no pet, is eq-network #411. This client has no pet refusal of its own.
+
 - `/loadskin <name>` switches the UI skin in game (checklist 6.605), as the official client's command does. The windows redraw from the new skin at once, and the choice stays the character's for later runs. A name matches the installation's `uifiles` folder whatever its letter case. A skin that isn't installed changes nothing and says so, and an unreadable line gives the usage. The official client's trailing `0` or `1` is accepted, and this client keeps window placements either way. The choice is saved in this client's settings folder, not in the installation's files. A skin loaded in game wins over `--ui-skin` until the player camps or plays another character or world, when `--ui-skin` applies again. What the official client says in reply isn't read, so the replies are this client's own words. Why: the Velious skin's inventory shows the bags alone, with no paperdoll, statistics or hit point and mana numbers, and its equipment sits in Hot Button window 1. `/loadskin default` brings the full inventory back without restarting.
 
 - Destroy the coins on the cursor (gap 3.8, checklist 6.512), as the

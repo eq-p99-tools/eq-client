@@ -5,12 +5,30 @@
 use super::windows::{Shown, WindowId};
 use bevy::prelude::*;
 
-/// Routes /pet target through the ordinary selection path.
+/// The program's line on targeting the player's pet (eqgame.exe 0x49975b,
+/// command 0xf, read R49-22a).
+const TARGETED_PET: u32 = 0x3330;
+/// Its line when the player has no pet to target.
+const NO_PET: u32 = 0x3323;
+
+/// What `/pet target` found, for [`say_pet_target`] to answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PetTargeted {
+    /// The pet is the target now.
+    Found,
+    /// The player has no pet to target.
+    None,
+}
+
+/// Routes /pet target through the ordinary selection path. The program
+/// keeps this order local: it targets the spawn the player owns and says
+/// so, or says there is none, and sends no pet order (command 0xf, read
+/// R49-22a). That the word is "target" is inferred (row 22a-iii).
 pub(super) fn target_command(
     input: &str,
     online: &mut super::online::OnlineState,
     outbox: &super::outbox::Outbox,
-) -> Option<Result<(), String>> {
+) -> Option<Result<PetTargeted, String>> {
     let mut words = input.split_whitespace();
     if !words.next()?.eq_ignore_ascii_case("/pet") || !words.next()?.eq_ignore_ascii_case("target")
     {
@@ -21,14 +39,38 @@ pub(super) fn target_command(
             return Err("Use /pet target without arguments".into());
         }
         let world = online.world();
-        let pet = world
+        let Some(pet) = world
             .pet()
             .filter(|pet| world.can_see(&pet.state))
             .and(world.pet_intent())
-            .ok_or("No visible pet to target")?;
+        else {
+            return Ok(PetTargeted::None);
+        };
         super::target::try_select(online, outbox, Some(pet.spawn_id), Some(pet))
+            .map(|()| PetTargeted::Found)
             .map_err(|refusal| refusal.text().to_owned())
     })())
+}
+
+/// Says the program's line for a `/pet target`: the installation's words,
+/// or this client's own where the installation lacks them.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(crate) fn say_pet_target(
+    mut chat: ResMut<crate::chat::ChatState>,
+    messages: Option<Res<crate::hud::messages::Messages>>,
+) {
+    let Some(targeted) = chat.pet_targeted.take() else {
+        return;
+    };
+    let (id, fallback) = match targeted {
+        PetTargeted::Found => (TARGETED_PET, "You target your pet."),
+        PetTargeted::None => (NO_PET, "You do not have a pet."),
+    };
+    let said = messages.as_deref().map_or_else(
+        || crate::chat::Said::own(fallback),
+        |messages| messages.said_or(id, &[], fallback),
+    );
+    chat.history.push(crate::chat::system_line(said));
 }
 
 /// Opens the pet window for a new pet, shown as the Pet Window Popup option
@@ -79,7 +121,12 @@ mod tests {
         let target_pet = |online: &mut OnlineState| {
             crate::chat::submit_game_command("/PeT  TaRgEt", online, &outbox, &qol)
         };
-        assert!(target_pet(&mut online).is_err());
+        // With no pet the program says so (0x3323) and sends nothing.
+        assert_eq!(
+            super::target_command("/PeT  TaRgEt", &mut online, &outbox),
+            Some(Ok(super::PetTargeted::None))
+        );
+        target_pet(&mut online).unwrap();
         assert!(receiver.try_recv().is_err());
 
         testing::spawn_entry(&mut online, 8, testing::pet(8, 7));
@@ -108,8 +155,36 @@ mod tests {
                 state: eq_client_core::vision::Invisibility::Titanium(1),
             }],
         );
-        assert!(target_pet(&mut online).is_err());
+        assert_eq!(
+            super::target_command("/pet target", &mut online, &outbox),
+            Some(Ok(super::PetTargeted::None))
+        );
         assert!(receiver.try_recv().is_err());
+    }
+
+    /// A `/pet target` answers with the program's line, in this client's
+    /// own words where the installation has no string table (read R49-22a).
+    #[test]
+    fn pet_target_says_the_programs_line() {
+        for (targeted, fallback) in [
+            (super::PetTargeted::Found, "You target your pet."),
+            (super::PetTargeted::None, "You do not have a pet."),
+        ] {
+            let mut app = App::new();
+            app.init_resource::<crate::chat::ChatState>();
+            app.add_systems(Update, super::say_pet_target);
+            app.world_mut()
+                .resource_mut::<crate::chat::ChatState>()
+                .pet_targeted = Some(targeted);
+            app.update();
+            let chat = app.world().resource::<crate::chat::ChatState>();
+            assert!(chat.pet_targeted.is_none());
+            let said = format!(
+                "{:?}",
+                chat.history.lines(eq_client_core::chat::ChatTab::All)
+            );
+            assert!(said.contains(fallback), "{said}");
+        }
     }
 
     fn pet_frames(app: &mut App) -> usize {
