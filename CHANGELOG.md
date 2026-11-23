@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Scripts can order and delete spellbook entries (checklist 6.588): `click("book_edit", "earlier" | "later" | "delete" | "confirm" | "cancel")` presses the spellbook's own buttons for the chosen row. A button the session doesn't offer (deletion on P99) is refused with the greyed button's reason, and nothing is sent.
+
 - Scripts can read more of what the player sees (checklist 6.592, O1), since a script may do whatever the player can (Adam, 11-23).
   - The new fields are `player.hp_percent`, `player.posture`, `player.casting`, `player.stunned`, `player.loc_x`, `player.loc_y` and `player.loc_z` (as `/loc` gives them), `player.exp_percent`, and the purse's `player.platinum`, `player.gold`, `player.silver` and `player.copper`.
   - The target adds `target.hp_percent`, `target.kind` and `target.con` (after a consider), and the pet adds `pet.present`, `pet.name` and `pet.hp_percent`.

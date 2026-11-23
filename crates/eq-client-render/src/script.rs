@@ -42,8 +42,8 @@ mod source;
 pub use source::read_source;
 
 pub use parse::{
-    AbilityPage, CharacterClick, ClickTarget, PickButton, RaidClick, SliderClick, Step, TradeClick,
-    TrainingClick, parse,
+    AbilityPage, BookEdit, CharacterClick, ClickTarget, PickButton, RaidClick, SliderClick, Step,
+    TradeClick, TrainingClick, parse,
 };
 pub(crate) use pointer::ScriptPointer;
 
@@ -859,7 +859,10 @@ type Buttons<'w, 's> = Query<
         (
             Option<&'static super::spellbook::BookEntry>,
             Option<&'static super::spellbook::BookPlace>,
-            Option<&'static super::spellbook::TurnsPages>,
+            (
+                Option<&'static super::spellbook::TurnsPages>,
+                Option<&'static super::book_delete::Action>,
+            ),
             Option<&'static super::hud::SpellGem>,
             Option<&'static super::hud::hotbar::Slot>,
         ),
@@ -3053,6 +3056,38 @@ fn tracking_control(
     }
 }
 
+/// Whether a spellbook control is the one a click names: a list row, a
+/// skin place, a page arrow or an ordering button.
+fn book_control(
+    target: ClickTarget,
+    (row, place, turns, edit): (
+        Option<&super::spellbook::BookEntry>,
+        Option<&super::spellbook::BookPlace>,
+        Option<&super::spellbook::TurnsPages>,
+        Option<&super::book_delete::Action>,
+    ),
+) -> bool {
+    match target {
+        ClickTarget::BookRow(number) => row.is_some_and(|row| row.0 == number),
+        ClickTarget::BookPlace(number) => place.is_some_and(|place| place.0 == number),
+        ClickTarget::BookPage(forward) => turns.is_some_and(|turns| turns.0 == forward),
+        ClickTarget::BookEdit(wanted) => edit.is_some_and(|action| *action == book(wanted)),
+        _ => false,
+    }
+}
+
+/// The spellbook button a scripted `book_edit` names.
+const fn book(edit: BookEdit) -> super::book_delete::Action {
+    use super::book_delete::Action;
+    match edit {
+        BookEdit::Earlier => Action::Earlier,
+        BookEdit::Later => Action::Later,
+        BookEdit::Delete => Action::Select,
+        BookEdit::Confirm => Action::Confirm,
+        BookEdit::Cancel => Action::Cancel,
+    }
+}
+
 /// The loot or merchant window's action a scripted click names.
 const fn trading(click: TradeClick) -> super::trade::Action {
     use super::trade::Action;
@@ -3102,7 +3137,12 @@ fn reach(
 ) -> Result<Entity, String> {
     let entity = find(target, buttons, layout).ok_or("click target is not visible")?;
     match (target, needs.get(entity)) {
-        (ClickTarget::Button(..), Ok(needs)) if !needs.offered(world) => {
+        // A spellbook edit needs the session to offer moving or deleting;
+        // P99 holds deletion back, and the script is told so, as the
+        // greyed button tells a person.
+        (ClickTarget::Button(..) | ClickTarget::BookEdit(_), Ok(needs))
+            if !needs.offered(world) =>
+        {
             Err(format!("that button is greyed out: {}", needs.reason()))
         }
         (ClickTarget::Slider(..), Ok(needs)) if !needs.offered(world) => {
@@ -3125,7 +3165,7 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
         slot,
         scribe,
         (store, destroy, drop),
-        (row, place, turns, spell_gem, hot_button),
+        (row, place, (turns, book_edit), spell_gem, hot_button),
         gem,
         trade,
         tint,
@@ -3190,9 +3230,10 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
             ClickTarget::Store => store,
             ClickTarget::Destroy => destroy == Some(&super::inventory::destruction::Action::Select),
             ClickTarget::Drop => drop,
-            ClickTarget::BookRow(number) => row.is_some_and(|row| row.0 == number),
-            ClickTarget::BookPlace(number) => place.is_some_and(|place| place.0 == number),
-            ClickTarget::BookPage(forward) => turns.is_some_and(|turns| turns.0 == forward),
+            ClickTarget::BookRow(_)
+            | ClickTarget::BookPlace(_)
+            | ClickTarget::BookPage(_)
+            | ClickTarget::BookEdit(_) => book_control(target, (row, place, turns, book_edit)),
             ClickTarget::SpellGem(number) => spell_gem.is_some_and(|gem| gem.0 == number),
             ClickTarget::HotButton(number) => hot_button.is_some_and(|slot| slot.0 == number),
             ClickTarget::MemorizeGem(number) => gem.is_some_and(|gem| gem.0 == number),
@@ -4989,6 +5030,78 @@ mod tests {
         // No such button, or none in that window.
         assert_eq!(reached[2], Err("click target is not visible".into()));
         assert_eq!(reached[3], Err("click target is not visible".into()));
+    }
+
+    #[test]
+    fn a_spellbook_edit_button_is_pressed_by_its_action_unless_it_is_greyed() {
+        use crate::book_delete::Action;
+        use crate::outbox::Needs;
+        #[derive(Resource, Default)]
+        struct Reached(Vec<Result<Action, String>>);
+        let mut app = App::new();
+        app.init_resource::<Reached>();
+        for (action, needs) in [
+            (Action::Earlier, Needs::Nothing),
+            (Action::Later, Needs::Nothing),
+            (Action::Confirm, Needs::Nothing),
+            (Action::Cancel, Needs::Nothing),
+            // Withheld, as P99 withholds deleting spells.
+            (Action::Select, Needs::Missing),
+        ] {
+            app.world_mut().spawn((
+                Node::default(),
+                Button,
+                InheritedVisibility::VISIBLE,
+                action,
+                needs,
+            ));
+        }
+        app.add_systems(
+            Update,
+            |buttons: Buttons,
+             layout: Layout,
+             needs: Query<&Needs>,
+             actions: Query<&Action>,
+             mut reached: ResMut<Reached>| {
+                let world = crate::online::OnlineState::new(true);
+                for edit in [
+                    BookEdit::Earlier,
+                    BookEdit::Later,
+                    BookEdit::Confirm,
+                    BookEdit::Cancel,
+                    BookEdit::Delete,
+                ] {
+                    let found = reach(
+                        ClickTarget::BookEdit(edit),
+                        &buttons,
+                        &layout,
+                        &needs,
+                        world.world(),
+                    );
+                    reached
+                        .0
+                        .push(found.map(|entity| *actions.get(entity).unwrap()));
+                }
+            },
+        );
+        app.update();
+        let reached = &app.world().resource::<Reached>().0;
+        assert_eq!(
+            reached[..4],
+            [
+                Ok(Action::Earlier),
+                Ok(Action::Later),
+                Ok(Action::Confirm),
+                Ok(Action::Cancel)
+            ]
+        );
+        assert_eq!(
+            reached[4],
+            Err(format!(
+                "that button is greyed out: {}",
+                crate::outbox::MISSING
+            ))
+        );
     }
 
     /// A zone with the player (7) and three gnolls (9 to 11) in it, and a
