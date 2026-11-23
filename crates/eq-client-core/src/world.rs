@@ -1963,10 +1963,20 @@ impl ClientWorld {
                 arguments,
             } => {
                 if self.session_id == Some(*session_id) {
+                    // The coin line (0x2f21) names the guildmaster, shown
+                    // as the program shows a spawn's name.
+                    let arguments = if *string_id == Some(0x2f21) {
+                        arguments
+                            .iter()
+                            .map(|name| crate::entities::display_name(name))
+                            .collect()
+                    } else {
+                        arguments.clone()
+                    };
                     news.notices.push(Notice::TrainingRefused {
                         reason: reason.clone(),
                         string_id: *string_id,
-                        arguments: arguments.clone(),
+                        arguments,
                         common_alternate: self
                             .language_zero_selector
                             .map(crate::rules::LanguageZeroSelector::alternate_name),

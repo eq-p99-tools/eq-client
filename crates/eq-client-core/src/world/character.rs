@@ -123,7 +123,7 @@ impl ClientWorld {
                         .training
                         .as_ref()
                         .and_then(|offer| self.zone.spawns.get(&offer.trainer))
-                        .map(|spawn| spawn.state.name.clone())
+                        .map(|spawn| crate::entities::display_name(&spawn.state.name))
                         .unwrap_or_default();
                     changes.notices.push(super::Notice::LanguagePracticed {
                         trainer,

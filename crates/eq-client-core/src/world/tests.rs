@@ -4516,12 +4516,12 @@ fn training_opens_raises_skills_with_a_line_and_closes() {
 }
 
 #[test]
-fn a_mac_language_practice_says_the_programs_line_naming_the_guildmaster() {
+fn a_mac_language_practice_says_the_programs_line_naming_the_guildmaster_as_shown() {
     use crate::training::{TrainingOffer, TrainingUpdate};
     let mut world = trainee_with_skills_and_languages();
     world.carry_as(crate::GameDialect::EqMac);
     let mut guildmaster = spawn(42);
-    guildmaster.name = "Guildmaster".into();
+    guildmaster.name = "Guildmaster_Synthetic000".into();
     game(&mut world, WorldEvent::Spawns(vec![guildmaster]));
     game(
         &mut world,
@@ -4544,13 +4544,32 @@ fn a_mac_language_practice_says_the_programs_line_naming_the_guildmaster() {
         assert_eq!(
             changes.notices,
             [Notice::LanguagePracticed {
-                trainer: "Guildmaster".into(),
+                trainer: "Guildmaster Synthetic".into(),
                 language: 5,
                 first,
                 common_alternate: None,
             }]
         );
     }
+    // The coin refusal names the guildmaster the same way.
+    let changes = game(
+        &mut world,
+        WorldEvent::TrainingRefused {
+            session_id: 1,
+            reason: "own words".into(),
+            string_id: Some(0x2f21),
+            arguments: vec!["Guildmaster_Synthetic000".into()],
+        },
+    );
+    assert_eq!(
+        changes.notices,
+        [Notice::TrainingRefused {
+            reason: "own words".into(),
+            string_id: Some(0x2f21),
+            arguments: vec!["Guildmaster Synthetic".into()],
+            common_alternate: None,
+        }]
+    );
     // A skill practice says only its skill-up.
     let changes = game(
         &mut world,
