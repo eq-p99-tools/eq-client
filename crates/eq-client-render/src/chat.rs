@@ -170,6 +170,11 @@ pub(super) struct ChatState {
     /// When the session's chat pace last held a line, and its words
     /// (6.523): a running script that sent chat before then fails.
     pub(crate) paced: Option<(std::time::Instant, String)>,
+    /// The line to print once the session says the typed report went
+    /// (read R49-23): the program's echo.
+    pub(crate) report_echo: Option<super::reports::ReportLine>,
+    /// Lines a report command prints at once, for [`super::reports::say`].
+    pub(crate) report_lines: Vec<super::reports::ReportLine>,
     /// A `/loc` or `/time`, waiting to be answered.
     pub asked: Option<super::whereabouts::Asked>,
     /// A `/yell` or `/stopcast` waiting for its line and send.
@@ -187,6 +192,8 @@ pub(super) struct ChatState {
     pub(crate) doability: Option<String>,
     /// A `/memspellset`'s words, waiting for the spell sets.
     pub(crate) spell_set_asked: Option<String>,
+    /// A `/melody`'s words, waiting for the gem press path (read R49-33 c).
+    pub(crate) melody_asked: Option<String>,
     /// A `/lootnodrop`'s words, waiting to set or list the choices.
     pub(crate) loot_no_drop: Option<String>,
     /// Social emotes, by case number, with the words after the command,
@@ -244,6 +251,8 @@ pub(super) struct ChatState {
     pub(crate) rangers_only: Option<super::tracking::RangersOnly>,
     /// A `/loadskin` typed, for [`super::skin`] to load and answer.
     pub(crate) load_skin: Option<super::skin::LoadSkin>,
+    /// A `/pet target`'s outcome, for [`super::pet::say_pet_target`] to say.
+    pub(crate) pet_targeted: Option<super::pet::PetTargeted>,
     /// A local-settings command typed, with the chat tab it was typed in,
     /// for [`super::local_settings::apply`] to run and answer.
     pub(crate) local_setting: Option<(super::local_settings::LocalSetting, ChatTab)>,
@@ -556,6 +565,7 @@ impl ChatState {
             follow_asked,
             rangers_only,
             load_skin,
+            pet_targeted,
             local_setting,
             contacts,
             language_asked,
@@ -566,12 +576,14 @@ impl ChatState {
             channel_asked,
             doability,
             spell_set_asked,
+            melody_asked,
             loot_no_drop,
             emotes,
             disciplines,
             motd_asked,
             fastdrop_asked,
             assist_words,
+            report_echo,
             // Cleared elsewhere: the link scope, the message of the day and
             // recall by `end_session`, the social inbox at every reset, and
             // the departure by `login::depart`.
@@ -586,6 +598,9 @@ impl ChatState {
             // connection it came on.
             paced: _,
             server_motd: _,
+            // Kept: lines a report command printed, which the next frame
+            // shows.
+            report_lines: _,
             // Kept: the player's own chat setup and what the screen shows.
             history: _,
             received_links: _,
@@ -614,6 +629,7 @@ impl ChatState {
         *follow_asked = None;
         *rangers_only = None;
         *load_skin = None;
+        *pet_targeted = None;
         *local_setting = None;
         contacts.asked = None;
         *language_asked = None;
@@ -624,12 +640,15 @@ impl ChatState {
         channel_asked.clear();
         *doability = None;
         *spell_set_asked = None;
+        *melody_asked = None;
         *loot_no_drop = None;
         emotes.clear();
         disciplines.clear();
         *motd_asked = None;
         *fastdrop_asked = None;
         *assist_words = None;
+        // An echo waits on the ended session's answer.
+        *report_echo = None;
     }
 
     /// Links can follow a known profile through zoning on the same connection.
@@ -2020,12 +2039,19 @@ fn typed_report(
     asked: &super::reports::Asked,
     online: &super::online::OnlineState,
     outbox: &crate::outbox::Outbox,
+    (state, qol): (&mut ChatState, &Settings),
 ) -> Result<(), Unsent> {
+    use super::reports::Answer;
     let world = online.world();
-    super::reports::offered(asked, world)?;
     let stamp = outbox.stamp(world)?;
-    let command = super::reports::command(asked, world, stamp)?;
-    outbox.send(world, command)?;
+    match super::reports::answer(asked, world, stamp, qol.on(Fix::TypedReports))? {
+        Answer::Send(command, echo) => {
+            outbox.send(world, *command)?;
+            state.report_echo = echo;
+        }
+        Answer::Say(line) => state.report_lines.push(line),
+        Answer::Nothing => {}
+    }
     Ok(())
 }
 
@@ -2045,7 +2071,7 @@ fn submit_line(
     // A report to the staff goes from a typed line, whoever types it: the
     // keyboard, a social or a script's `slash` step (6.511).
     if let Some(asked) = super::reports::Asked::typed(&command) {
-        return typed_report(&asked, online, outbox);
+        return typed_report(&asked, online, outbox, (state, qol));
     }
     match targeted(&command, online.world()) {
         Some(Targeted::Tell(line)) => {
@@ -2085,7 +2111,8 @@ fn submit_line(
         return Ok(request?);
     }
     if let Some(result) = super::pet::target_command(&command, online, outbox) {
-        return Ok(result?);
+        state.pet_targeted = Some(result?);
+        return Ok(());
     }
     if let Some(commands) = game_commands(&command, online, outbox, qol) {
         for command in commands? {
@@ -2207,8 +2234,9 @@ pub(super) fn submit_game_command(
         return Ok(());
     };
     let input = input.as_ref();
+    // Scripts and buttons say the line through [`run_game_command`].
     if let Some(result) = super::pet::target_command(input, online, outbox) {
-        return result;
+        return result.map(|_| ());
     }
     let commands = game_commands(input, online, outbox, qol)
         .ok_or_else(|| format!("{input} is not a game command"))??;
@@ -2273,6 +2301,13 @@ pub(super) fn run_game_command(
         chat.rangers_only = Some(super::tracking::RangersOnly);
         return;
     }
+    if let Some(result) = super::pet::target_command(command, online, outbox) {
+        match result {
+            Ok(targeted) => chat.pet_targeted = Some(targeted),
+            Err(reason) => chat.refuse(reason),
+        }
+        return;
+    }
     // A chat channel command on a button goes as typed (checklist 6.509).
     if let Some(asked) = super::chat_channels::typed(command) {
         match asked {
@@ -2314,6 +2349,10 @@ fn word_asked(input: &str, state: &mut ChatState) -> bool {
     }
     if let Some(words) = command_words(input, "memspellset") {
         state.spell_set_asked = Some(words.to_owned());
+        return true;
+    }
+    if let Some(words) = command_words(input, "melody") {
+        state.melody_asked = Some(words.to_owned());
         return true;
     }
     if let Some(words) = command_words(input, "lootnodrop") {
@@ -2872,6 +2911,9 @@ fn game_commands(
             }]
         }),
         // A command to the player's pet, aimed at the target where it takes one.
+        // A word that names no order sends nothing and says nothing, as the
+        // program's sender skips it (0x49975b, read R49-22a).
+        "pet" if eq_client_core::pet::command(words).is_none() => Ok(Vec::new()),
         "pet" => pet_order(words, online.world(), stamp).map(|command| vec![command]),
         // The ordinary camp sits and prepares first. Immediate exit is an
         // explicit opt-in, still completed by the session's logout reply.
@@ -4250,7 +4292,8 @@ mod tests {
             game_commands("/corpsedrag", &online, &outbox, &Settings::default()).unwrap(),
             Err("You must first target a corpse.".into())
         );
-        // A pet command aims at the target; unknown words say so.
+        // A pet command aims at the target; a word that names no order
+        // sends nothing and says nothing, as the program's sender (0x49975b).
         assert!(matches!(
             game_commands("/pet back off", &online, &outbox, &Settings::default())
                 .unwrap()
@@ -4261,10 +4304,12 @@ mod tests {
                 ..
             }]
         ));
-        assert_eq!(
-            game_commands("/pet dance", &online, &outbox, &Settings::default()).unwrap(),
-            Err("Unknown pet command: dance".into())
-        );
+        for silent in ["/pet dance", "/pet"] {
+            assert_eq!(
+                game_commands(silent, &online, &outbox, &Settings::default()).unwrap(),
+                Ok(Vec::new())
+            );
+        }
         assert!(matches!(
             game_commands("/corpsedrop", &online, &outbox, &Settings::default())
                 .unwrap()
@@ -4850,14 +4895,6 @@ mod tests {
     fn a_typed_line_sends_a_report_to_the_staff() {
         use eq_client_core::reports::BugCategory;
         let (mut app, receiver) = slash_app(true);
-        let last_line = |app: &App| {
-            app.world()
-                .resource::<ChatState>()
-                .history
-                .lines(ChatTab::All)
-                .last()
-                .map(|(_, line)| line.message.text.clone())
-        };
         send_typed(&mut app, "/petition  I am stuck in the wall. ");
         assert!(matches!(
             receiver.try_recv(),
@@ -4877,14 +4914,34 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
-        // A line with nothing to say sends nothing.
-        for line in ["/petition", "/petition   ", "/bugreport pathing:"] {
+        // The program's echo waits for the session to say the report went.
+        assert!(app.world().resource::<ChatState>().report_echo.is_some());
+        // A line with nothing to say sends nothing, and the Titanium
+        // program's line for it is queued, in this client's words where the
+        // installation lacks it. Empty feedback says nothing.
+        for line in [
+            "/petition",
+            "/guidehelp   ",
+            "/bugreport pathing:",
+            "/feedback",
+        ] {
             send_typed(&mut app, line);
             assert!(receiver.try_recv().is_err(), "{line}");
         }
+        let queued: Vec<_> = app
+            .world()
+            .resource::<ChatState>()
+            .report_lines
+            .iter()
+            .map(|line| line.said(None).words.text)
+            .collect();
         assert_eq!(
-            last_line(&app).as_deref(),
-            Some("Use /bugreport with what to say.")
+            queued,
+            [
+                "Use /petition with what to say.",
+                "Use /guidehelp with what to say.",
+                "Say what the bug report is about.",
+            ]
         );
 
         // A social's line and a script's `slash` step run the typed line,
@@ -5330,6 +5387,7 @@ mod tests {
         chat.boat_interacted = Some(8);
         chat.follow_asked = Some(super::super::motion::FollowAsked);
         chat.rangers_only = Some(super::super::tracking::RangersOnly);
+        chat.pet_targeted = Some(super::super::pet::PetTargeted::Found);
         chat.local_setting = Some((
             super::super::local_settings::LocalSetting::ClearChat,
             ChatTab::All,
@@ -5348,6 +5406,7 @@ mod tests {
             && chat.boat_interacted.is_none()
             && chat.follow_asked.is_none()
             && chat.rangers_only.is_none()
+            && chat.pet_targeted.is_none()
             && chat.local_setting.is_none()
             && chat.contacts.asked.is_none()
     }
