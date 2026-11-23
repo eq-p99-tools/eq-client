@@ -61,10 +61,7 @@ impl Asked {
             .next()
             .is_some_and(|name| name.eq_ignore_ascii_case("charinfo"))
         {
-            // Words after it are ignored: no form with words is known
-            // (pending R49-6m). A script's `slash("charinfo ...")` is
-            // refused at parse instead: the stricter side for scripts, on
-            // purpose, so the two are not to be made to match.
+            // No words are read (R49-6m, 0x46f6ec).
             Some(Self::CharInfo)
         } else {
             // The program takes the first word after the command as a name.

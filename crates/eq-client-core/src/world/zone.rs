@@ -355,7 +355,7 @@ impl super::ClientWorld {
     /// the combat line (recording checklist 6.491g).
     fn environmental_record(&mut self, damage: &crate::combat::Damage) -> Option<(u32, u32)> {
         let player = self.player.as_ref()?.spawn_id;
-        if self.generation != crate::GameDialect::Titanium
+        if !prints_hazard_lines(self.generation)
             || damage.target_id != player
             || damage.source_id == player
         {
@@ -385,7 +385,7 @@ impl super::ClientWorld {
         record: bool,
         changes: &mut super::Changes,
     ) {
-        if self.session_id != Some(session_id) || self.generation != crate::GameDialect::Titanium {
+        if self.session_id != Some(session_id) || !prints_hazard_lines(self.generation) {
             changes.ignored = true;
             return;
         }
@@ -623,5 +623,15 @@ impl super::ClientWorld {
             }
             _ => changes.ignored = true,
         }
+    }
+}
+
+/// Whether a generation's program prints the environmental damage lines
+/// this client follows: the Titanium program's (reads R49-3 e and R49-3b).
+/// The Mac-era and `RoF2` programs' are unread.
+const fn prints_hazard_lines(dialect: crate::GameDialect) -> bool {
+    match dialect {
+        crate::GameDialect::Titanium => true,
+        crate::GameDialect::EqMac | crate::GameDialect::Rof2 => false,
     }
 }

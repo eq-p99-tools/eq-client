@@ -5720,7 +5720,30 @@ fn duel_news_tells_the_player_of_their_own_duels() {
         duel(&mut world, DuelUpdate::Challenge { from: 9 }),
         Vec::<Notice>::new()
     );
-    // A duel begins with the player in it, either side; others say nothing.
+    // The Titanium program has no case for an incoming acceptance (read
+    // R49-6); its session tells the duel's start, and the program's own
+    // refusal, as DuelNews.
+    let titanium = duel(
+        &mut world,
+        DuelUpdate::Accepted {
+            challenger: 9,
+            accepter: 5,
+        },
+    );
+    assert_eq!(titanium, Vec::<Notice>::new());
+    assert_eq!(
+        duel(
+            &mut world,
+            DuelUpdate::AutoDeclined {
+                by: 5,
+                reason: None
+            }
+        ),
+        Vec::<Notice>::new()
+    );
+    // Elsewhere a duel begins with the player in it, either side; others
+    // say nothing.
+    world.carry_as(crate::GameDialect::EqMac);
     for (challenger, accepter) in [(9, 5), (5, 9)] {
         assert_eq!(
             duel(
@@ -5833,7 +5856,7 @@ fn a_duel_question_follows_its_admission_and_closes_once() {
 
 #[test]
 fn a_yell_stats_and_coins_are_told_as_they_come() {
-    use crate::{Coins, stats::StatChange};
+    use crate::{Coins, stats::StatIncrease};
     use eq_network_game::rewards::Reward;
     let mut world = admitted();
     assert_eq!(
@@ -5845,15 +5868,26 @@ fn a_yell_stats_and_coins_are_told_as_they_come() {
         game(&mut world, WorldEvent::YellForHelp { spawn_id: 44 }).notices,
         Vec::<Notice>::new()
     );
-    let change = StatChange {
-        strength: 5,
-        wisdom: 2,
-        ..StatChange::default()
+    // Another spawn's increase is told with a line that names no one; the
+    // player's own says nothing (read R49-6f).
+    let increase = |spawn_id, amount| {
+        WorldEvent::StatsChanged(StatIncrease {
+            spawn_id,
+            stat: 1,
+            amount,
+        })
     };
     assert_eq!(
-        game(&mut world, WorldEvent::StatsChanged(change)).notices,
-        [Notice::StatsChanged(change)]
+        game(&mut world, increase(5, -2)).notices,
+        [Notice::OthersStatChanged { lowered: true }]
     );
+    assert_eq!(
+        game(&mut world, increase(5, 3)).notices,
+        [Notice::OthersStatChanged { lowered: false }]
+    );
+    let own = game(&mut world, increase(9, 3));
+    assert_eq!(own.notices, []);
+    assert!(!own.ignored);
     let coins = Coins {
         platinum: 1,
         gold: 0,

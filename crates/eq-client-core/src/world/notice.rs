@@ -391,11 +391,14 @@ pub enum Notice {
     /// on); this client's words stand until the official client's are read
     /// (checklist 6.492, pending R49-6d).
     YellForHelp(String),
-    /// A quest changed the player's base stats: each nonzero stat changed.
-    /// The record does not say whether its number is the new value or the
-    /// rise (`EQEmu` sends both in the same record, from `Client::SetStats`
-    /// and `Client::IncStats`), so no number is told (pending R49-6f).
-    StatsChanged(crate::stats::StatChange),
+    /// A stat increase named another spawn, which the Titanium program tells
+    /// with a line that names no one, as it does (read R49-6f, 0x455fff:
+    /// 0x3273 when the amount is below zero, else 0x3274, colour 15). One
+    /// for the player's own spawn says nothing.
+    OthersStatChanged {
+        /// Whether the amount was below zero.
+        lowered: bool,
+    },
     /// A quest or task gave the player these coins, which the server added
     /// to the purse with no line of its own (`Client::QuestReward`,
     /// `Client::CashReward`); never all zero (pending R49-6g).

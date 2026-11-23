@@ -376,11 +376,11 @@ impl Scene<'_, '_> {
     fn pick(&self, online: &OnlineState, cursor: Vec2, with_doors: bool) -> Option<Picked> {
         let (camera, camera_transform) = self.cameras.single().ok()?;
         let ray = camera.viewport_to_world(camera_transform, cursor).ok()?;
-        // A click meets every drawn spawn it could target, and also the ones the
-        // program's target setter refuses by body type, which then keep the
-        // current target (program read R44: the pick 0x494ac5 takes them, and
-        // 0x4a6f0e puts the previous target back).
-        let ids = clickable(self.nearby.rendered.keys().copied(), online);
+        // A click meets every drawn spawn it could target, and also the ones
+        // the program's target setter refuses by body type, which then keep
+        // the current target (program read R44: the pick 0x494ac5 takes
+        // them, and 0x4a6f0e puts the previous target back).
+        let clickable = clickable(self.nearby.rendered.keys().copied(), online);
         let blocked = |distance: f32, ignore_door: Option<u8>| {
             self.collision
                 .as_ref()
@@ -397,7 +397,7 @@ impl Scene<'_, '_> {
         };
         let rule = self.client().spawn_pick();
         let shown = |point: Vec3| camera.world_to_viewport(camera_transform, point).ok();
-        let spawns: Vec<Candidate> = ids
+        let spawns: Vec<Candidate> = clickable
             .iter()
             .map(|id| {
                 let pick = self.picker.pick(self.nearby.rendered[id], ray);

@@ -1042,9 +1042,6 @@ impl ClientWorld {
             | WorldEvent::Gm(_)
             // Pinned past these before their front ends land (repin 6.561);
             // each waits for the client slice named.
-            // A duel's news (read R49-6): the session tells it; the world
-            // arm says nothing.
-            | WorldEvent::DuelNews(_)
             // The Bazaar search: its client slice (6.550).
             | WorldEvent::Bazaar(_)
             | WorldEvent::BazaarRefused { .. }
@@ -1078,7 +1075,8 @@ impl ClientWorld {
                 // Each still counts in the session's gap file, by kind.
                 news.unshown = crate::gaps::variant_name(unshown);
             }
-
+            // The Titanium session's duel news: the duel slice (R49-6).
+            WorldEvent::DuelNews(_) => (),
             // The zone and what is in it.
             WorldEvent::BoatControl(packet) => {
                 if self.in_world() { self.zone.boat_notice = Some(*packet); }
@@ -1772,13 +1770,19 @@ impl ClientWorld {
                     _ => news.ignored = true,
                 }
             }
-            WorldEvent::StatsChanged(change) => {
-                if self.in_world() {
-                    news.notices.push(Notice::StatsChanged(*change));
-                } else {
-                    news.ignored = true;
+            // The program adds the player's own rise to the base stat with
+            // no line, which this client does not keep apart from the
+            // profile yet (a follow-up to read R49-6f); another spawn's is
+            // told with a line that names no one.
+            WorldEvent::StatsChanged(change) => match u16::try_from(change.spawn_id) {
+                Ok(id) if self.in_world() && !self.is_player(id) => {
+                    news.notices.push(Notice::OthersStatChanged {
+                        lowered: change.amount < 0,
+                    });
                 }
-            }
+                Ok(id) if self.in_world() && self.is_player(id) => {}
+                _ => news.ignored = true,
+            },
             WorldEvent::Reward(reward) => {
                 // Only the coins: the items and the experience come with
                 // the server's own lines.
@@ -1981,9 +1985,12 @@ impl ClientWorld {
             {
                 DuelNotice::Challenged(name(self, from))
             }
-            // An auto-decline is told by the session's duel news (read
-            // R49-6): nothing here.
+            // A Titanium session tells what the program makes of its own
+            // refusal ([`WorldEvent::DuelNews`]).
             DuelUpdate::Challenge { .. } | DuelUpdate::AutoDeclined { .. } => return,
+            // The Titanium program has no case for an incoming 0x1b09 (read
+            // R49-6); its session tells the duel's start.
+            DuelUpdate::Accepted { .. } if !tells_duel_accepted(self.generation) => return,
             DuelUpdate::Accepted {
                 challenger,
                 accepter,
@@ -2253,4 +2260,14 @@ mod tests;
 /// prints as words and can start no link.
 fn plain(name: &str) -> String {
     name.chars().filter(|c| !c.is_control()).collect()
+}
+
+/// Whether a generation's program tells an incoming duel acceptance. The
+/// Titanium program has no case for 0x1b09 (read R49-6); the others are
+/// unread and keep this client's line.
+const fn tells_duel_accepted(dialect: crate::GameDialect) -> bool {
+    match dialect {
+        crate::GameDialect::Titanium => false,
+        crate::GameDialect::EqMac | crate::GameDialect::Rof2 => true,
+    }
 }
