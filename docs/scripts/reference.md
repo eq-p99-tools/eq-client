@@ -32,7 +32,14 @@ These three steps are this client's own words, not the official client's. The of
 - `activate_aa(rank_id)`: asks to use an owned rank's ability. It takes no target.
 - `aa_split(percent)`: asks to send this share of experience, from 0 (off) to 100, to AAs.
 
-Each step posts one request for the current admission and moves on. It never waits for the server and never tries again. The client checks nothing about the rank, the points or the level: the session alone decides, and when it refuses, the reason is said in chat. Every server type still refuses these as not offered until the AA live rows pass (checklist 6.569). The steps need a character in the world.
+Each step posts one request for the current admission and moves on. It never waits for the server and never tries again. The client checks nothing about the rank, the points or the level: the session alone decides, and when it refuses, the reason is said in chat. Only a local EQEmu or local TAKP session takes them until the AA live rows pass (checklist 6.581). Every other server type refuses them as not offered, and on the Mac-era client only `aa_split` goes for now. The steps need a character in the world.
+
+`report([label])` also logs a "Script alternate advancement report" line with an `alternate_advancement` object (checklist 6.582). It holds numbers only, as the server sent them:
+
+- `titanium`: the count of `definitions`; the `selections` ids; the `trainable` ranks as `{id, cost}`; the `activatable` rank ids; the profile's `points`; the latest `progress`; `unspent`; and the `timers` as `{ability, begin, end}`.
+- `mac`: the `ranks` from `OP_RespondAA` as `{id, value}` with `spent`; the profile's `selections`; `points`; `progress`; and `timers`.
+
+A fact not yet received is `null`. Each list is `{count, listed}`, with at most 64 entries listed. Trainable and activatable are for reading only: the session judges every request again.
 
 ## Tasks
 

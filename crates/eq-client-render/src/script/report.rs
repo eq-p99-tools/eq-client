@@ -1,4 +1,5 @@
 //! State a script logs for later review.
+mod alternate_advancement;
 mod buffs;
 mod economy;
 mod guild;
@@ -134,6 +135,13 @@ pub(super) fn state(
         })
     });
     info!(label, state = %economy::state(online.world(), trade), "Script economy report");
+    info!(
+        label,
+        alternate_advancement = %alternate_advancement::state(
+            online.world().alternate_advancement()
+        ),
+        "Script alternate advancement report"
+    );
     let track = online.world().track_window();
     let yours = online.world().player().map(|player| player.level);
     let tracked: Vec<_> = track
