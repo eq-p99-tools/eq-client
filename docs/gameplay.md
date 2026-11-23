@@ -238,6 +238,17 @@ remain disabled. Coin moves use a local ledger because ordinary transfers have
 no acceptance reply; compare authoritative balances after re-admission when
 uncertain, rather than resending a transfer.
 
+### Apply Poison
+
+Right-click a carried poison (item type 42) to apply it: the client sends the
+server's Apply Poison request at once with the slot the poison sits in, one
+request at a time. The server decides whether it takes (class, skill, weapon)
+and removes the poison either way. "You apply the poison." and "You failed to
+apply the poison." are this client's own wording. Whether the original client
+starts it this way, and how long it waits before sending, is not yet read, so
+it may be faster than the original (inferred, recording checklist 6.493).
+Alt+right-click and hotkeys keep their ordinary item use.
+
 ## Spells, buffs and the hotbar
 
 The spellbook supports scribing from a cursor scroll, memorizing into eight gems,
