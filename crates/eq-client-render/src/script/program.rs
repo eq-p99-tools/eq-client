@@ -1009,11 +1009,29 @@ mod tests {
         let program =
             Program::parse("slash(\"afk\")\nslash(\"assist\")\n", Path::new(".")).unwrap();
         assert!(program.check_local_commands(false).is_ok());
-        for command in ["/emote waves", "/EM waves", " /random 1 6", "/Random"] {
+        for command in [
+            "/emote waves",
+            "/EM waves",
+            " /random 1 6",
+            "/Random",
+            "/ttell hi",
+            "/tt hi",
+        ] {
             assert!(crate::chat::broadcasts_to_others(command), "{command}");
         }
-        for command in ["/emoted", "/afk", "/assist", "emote waves", "/randomize"] {
+        for command in [
+            "/emoted",
+            "/afk",
+            "/assist",
+            "emote waves",
+            "/randomize",
+            "/whotarget",
+        ] {
             assert!(!crate::chat::broadcasts_to_others(command), "{command}");
+        }
+        // A script has no /ttell step: its tell() is the one way it tells.
+        for source in ["slash(\"ttell hi\")\n", "slash(\"tt hi\")\n"] {
+            assert!(Program::parse(source, Path::new(".")).is_err(), "{source}");
         }
     }
 
