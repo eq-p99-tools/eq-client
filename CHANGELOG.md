@@ -24,6 +24,21 @@
   The step-done, completed and failed lines wait for that read, since
   EQEmu sends its own. Task words appear in the window only, never in the
   logs.
+
+- Repin eq-network to b631816, keeping today's behaviour (checklist 6.572). The repin brings the bandolier sets, the swap and belt use (all unoffered), and augments read from Titanium item records (6.570).
+  - **Augments:** an augmented item no longer makes the inventory unreadable. `InventoryItem::augments` is filled in every literal.
+  - **Weight:** the session's new `WeightUnavailable::Augments` reads exactly as `Container` does: an unknown load, never a lighter one. A worn augmented item makes equipped stats unconfirmed, so the speed inputs stay unproven.
+  - **Ignored for now:** `WorldEvent::BandoliersUnknown` and `BandolierRefused` go in the ignore arm with the bandolier sets, whose windows are parked (P99 and Quarm features first).
+
+- `/toggleinspect` built, held for read (checklist 6.574).
+  - The client keeps an InspectOthers option, on by default, which is today's behaviour: it answers others' inspections whenever the character's note is known.
+  - While the option is off, the session is told no note, so it answers no one. eq-network already treats that as no answer.
+  - The command stays unoffered behind `TOGGLE_INSPECT_READ`, so it answers "This client does not take /toggleinspect that way yet" as before. Read R49-16 gives its lines, its words and where the official client keeps the option, and nothing is saved until then. `/inspect` (LDoN's treasure inspect) is post-era and not built.
+- `/guildstatus` built, held for read (checklist 6.575).
+  - Titanium's patch maps no `OP_GuildStatus`, so the client answers from its target. It uses EQEmu's `Handle_OP_GuildStatus` lines in the installed client's strings: 12260 (target a player), 12259 (no guild), and 12258, 12257 or 12256 (leader, officer, member, with the guild's name from the world's list).
+  - It gives no line for an anonymous target, for a guild the list doesn't name, for a rank not yet known, or for a string the installation lacks.
+  - That the program answers locally, from its target, and in these strings is inferred. The command stays unoffered behind `GUILD_STATUS_READ` until read R49-6k. `/sheathe` and `/aggressive` have no EQEmu handler and wait for R49-6n.
+
 - Scripts can ask for AA requests (checklist 6.569). The new steps are `train_aa(RANK_ID)`, `activate_aa(RANK_ID)` and `aa_split(PERCENT)`, in this client's own words: the official `/alternateadv` subwords are unread (R49-40b), so they wait.
   - Each step posts one `TrainAlternateAdvancement`, `ActivateAlternateAdvancement` (no target) or `SetAlternateAdvancementSplit` command for the current admission, then moves on. It never waits for the server and never retries.
   - The client checks nothing about the rank or the points: the session decides, and its refusal is said in chat.
