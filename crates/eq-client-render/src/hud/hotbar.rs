@@ -780,7 +780,7 @@ pub(crate) fn item_actions(
     } else {
         inventory.activate_shortcut(
             slot,
-            &online,
+            (&online, &spells),
             &sender,
             online.world().target().selected,
             online.world().casting().cast.is_some() || online.world().casting().pending.is_some(),

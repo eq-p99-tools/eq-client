@@ -161,7 +161,7 @@ impl InventoryState {
     pub(super) fn use_slot(
         &mut self,
         slot: InventorySlot,
-        online: &OnlineState,
+        (online, spells): (&OnlineState, &crate::spellbook::SpellNames),
         sender: &Outbox,
         target: Option<u16>,
         casting: bool,
@@ -211,9 +211,16 @@ impl InventoryState {
                 revision: inventory.revision(),
                 slot,
                 target_id,
-                // The memorized test, as before, until the Bard song slice
-                // passes the installed word.
-                installed_class_spell: None,
+                // Read R49-21b's song test from the installed spell data,
+                // for the item's own spell (6.542).
+                installed_class_spell: inventory
+                    .items()
+                    .get(&slot)
+                    .and_then(|item| item.activation.effect.as_ref())
+                    .zip(player.class)
+                    .and_then(|(effect, class)| {
+                        spells.installed_class_spell(effect.spell_id, class)
+                    }),
                 created: now,
             };
             let available = target_id == player.spawn_id
@@ -881,6 +888,49 @@ mod tests {
     }
 
     #[test]
+    fn an_item_use_carries_the_song_test_for_its_spell_and_the_players_class() {
+        use eq_client_core::inventory::{ClickEffect, ClickKind, ItemActivation};
+        let mut fields = [""; 120];
+        fields[0] = "73";
+        // The test player is a Warrior: field 104.
+        for (level, class_spell) in [("1", Some(true)), ("255", Some(false)), ("", None)] {
+            let mut bench = Bench::demo(9);
+            let mut item = bench.data().items().values().next().unwrap().clone();
+            item.slot = InventorySlot(13);
+            item.activation = ItemActivation {
+                effect: Some(ClickEffect {
+                    spell_id: 73,
+                    kind: ClickKind::Click,
+                    required_level: 1,
+                    effect_level: 1,
+                    cast_time_ms: 3000,
+                    recast_delay_seconds: 0,
+                    recast_type: 0,
+                }),
+                ..ItemActivation::default()
+            };
+            bench.tell(InventoryUpdate::Snapshot(vec![item]));
+            let Bench { state, online } = &mut bench;
+            let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+            let sender = crate::outbox::Outbox::new(Some(sender));
+            fields[104] = level;
+            let spells = crate::spellbook::SpellNames::parse(&fields.join("^"));
+            state.use_slot(
+                InventorySlot(13),
+                (online, &spells),
+                &sender,
+                None,
+                false,
+                Vec::new,
+            );
+            let ClientCommand::UseItem(request) = receiver.try_recv().unwrap() else {
+                panic!("expected item use")
+            };
+            assert_eq!(request.installed_class_spell, class_spell, "{level:?}");
+        }
+    }
+
+    #[test]
     fn item_use_queues_current_instance_without_consuming_it_and_rejects_duplicate_or_busy_actions()
     {
         use eq_client_core::inventory::{ClickEffect, ClickKind, ItemActivation};
@@ -906,18 +956,22 @@ mod tests {
         let own_id = online.world().player().unwrap().spawn_id;
         let (sender, receiver) = std::sync::mpsc::sync_channel(2);
         let sender = crate::outbox::Outbox::new(Some(sender));
-        state.use_slot(InventorySlot(13), online, &sender, None, true, Vec::new);
+        let spells = crate::spellbook::SpellNames::default();
+        let used = |state: &mut InventoryState, online: &OnlineState, target, casting| {
+            state.use_slot(
+                InventorySlot(13),
+                (online, &spells),
+                &sender,
+                target,
+                casting,
+                Vec::new,
+            );
+        };
+        used(state, online, None, true);
         assert!(receiver.try_recv().is_err());
-        state.use_slot(
-            InventorySlot(13),
-            online,
-            &sender,
-            Some(65500),
-            false,
-            Vec::new,
-        );
+        used(state, online, Some(65500), false);
         assert!(receiver.try_recv().is_err());
-        state.use_slot(InventorySlot(13), online, &sender, None, false, Vec::new);
+        used(state, online, None, false);
         let ClientCommand::UseItem(request) = receiver.try_recv().unwrap() else {
             panic!("expected item use")
         };
@@ -926,16 +980,16 @@ mod tests {
         assert_eq!(request.revision, before.revision());
         assert_eq!(request.target_id, own_id);
         assert_eq!(online.world().inventory(), &before);
-        state.use_slot(InventorySlot(13), online, &sender, None, false, Vec::new);
+        used(state, online, None, false);
         assert!(receiver.try_recv().is_err());
         // Elapsing the rate limit cannot replace a request awaiting worker feedback.
         state.actions.last_use = Instant::now().checked_sub(std::time::Duration::from_secs(2));
-        state.use_slot(InventorySlot(13), online, &sender, None, false, Vec::new);
+        used(state, online, None, false);
         assert!(receiver.try_recv().is_err());
         assert_eq!(state.actions.pending_use, Some((9, request.request_id)));
         state.item_use_result(8, request.request_id, None, true);
         state.item_use_result(9, request.request_id + 1, None, true);
-        state.use_slot(InventorySlot(13), online, &sender, None, false, Vec::new);
+        used(state, online, None, false);
         assert!(receiver.try_recv().is_err());
         state.item_use_result(
             9,
@@ -943,7 +997,7 @@ mod tests {
             Some("Synthetic rejection".into()),
             true,
         );
-        state.use_slot(InventorySlot(13), online, &sender, None, false, Vec::new);
+        used(state, online, None, false);
         let ClientCommand::UseItem(next) = receiver.try_recv().unwrap() else {
             panic!("expected a fresh manual item-use request")
         };
@@ -951,7 +1005,7 @@ mod tests {
         state.cancel_actions();
         state.use_slot(
             InventorySlot(13),
-            online,
+            (online, &spells),
             &crate::outbox::Outbox::new(None),
             None,
             false,
@@ -959,7 +1013,7 @@ mod tests {
         );
         assert!(state.actions.last_use.is_none());
         testing::connect(online, false);
-        state.use_slot(InventorySlot(13), online, &sender, None, false, Vec::new);
+        used(state, online, None, false);
         assert!(receiver.try_recv().is_err());
         assert_eq!(online.world().inventory(), &before);
     }

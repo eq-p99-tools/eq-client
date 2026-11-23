@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- A Bard's item use now carries the song test from the installed spell data (gap 3.5, checklist 6.542, read R49-21b): the item's spell counts as the class's when the player's class level for it is neither 0 nor 255. The session uses it to choose, for an item's song it keeps, between sending the stop and ending it here. Without installed spell data, or without that spell's class levels, the session keeps its memorized test as before. Labelled: the program also needs the spell's byte +0x1c4 to be clear. That byte isn't mapped to a spells file field yet (read R49-48c), so a class spell with it set counts as a song here and not in the program.
+
 - `/loadskin <name>` switches the UI skin in game (checklist 6.605), as the official client's command does. The windows redraw from the new skin at once, and the choice stays the character's for later runs. A name matches the installation's `uifiles` folder whatever its letter case. A skin that isn't installed changes nothing and says so, and an unreadable line gives the usage. The official client's trailing `0` or `1` is accepted, and this client keeps window placements either way. The choice is saved in this client's settings folder, not in the installation's files. A skin loaded in game wins over `--ui-skin` until the player camps or plays another character or world, when `--ui-skin` applies again. What the official client says in reply isn't read, so the replies are this client's own words. Why: the Velious skin's inventory shows the bags alone, with no paperdoll, statistics or hit point and mana numbers, and its equipment sits in Hot Button window 1. `/loadskin default` brings the full inventory back without restarting.
 
 - Destroy the coins on the cursor (gap 3.8, checklist 6.512), as the

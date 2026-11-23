@@ -247,6 +247,28 @@ impl SpellNames {
         self.spell(id)?.class_levels.get(index).copied().flatten()
     }
 
+    /// Read R49-21b's song test for an item's spell, from the installed
+    /// spell data: the player's class has a level for it that is neither 0
+    /// nor 255. `None` without installed definitions or without this
+    /// spell's class levels in them, where the session falls back to its
+    /// memorized test (6.542).
+    ///
+    /// Labelled: the program also needs the spell's byte +0x1c4 to be 0.
+    /// That byte isn't mapped to a spells file field yet (read R49-48c), so
+    /// a spell of the class's with it set counts as a song here and not in
+    /// the program.
+    pub(crate) fn installed_class_spell(&self, id: u32, class: u32) -> Option<bool> {
+        if !matches!(
+            self.0.readiness(),
+            crate::spell_provider::Readiness::Installed
+        ) {
+            return None;
+        }
+        let index = usize::try_from(class.checked_sub(1)?).ok()?;
+        let level = (*self.spell(id)?.class_levels.get(index)?)?;
+        Some(level != 0 && level != u8::MAX)
+    }
+
     /// Group from an installed definition. Replayed definitions have no
     /// verified mapping for this field.
     pub(super) fn linked_timer(&self, id: u32) -> Option<u32> {
@@ -1430,6 +1452,40 @@ mod tests {
         crate::online::testing::connect(&mut online, false);
         assert!(request_scribe(Some(&online), Some(&book), Some(&sender), &names).is_err());
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn the_song_test_reads_the_classs_level_neither_0_nor_255() {
+        use eq_client_core::spell_tables::{Binding, Policy};
+        const BARD: u32 = 8;
+        let mut fields = [""; 120];
+        fields[0] = "73";
+        // Fields 104 to 119 are the class levels, Warrior first.
+        let bard = 104 + usize::try_from(BARD - 1).unwrap();
+        for (level, class_spell) in [("10", true), ("1", true), ("255", false), ("0", false)] {
+            fields[bard] = level;
+            let names = super::SpellNames::parse(&fields.join("^"));
+            assert_eq!(
+                names.installed_class_spell(73, BARD),
+                Some(class_spell),
+                "{level}"
+            );
+        }
+        // Another class's spell: the Bard level is 255.
+        fields[104] = "1";
+        fields[bard] = "255";
+        let mut names = super::SpellNames::parse(&fields.join("^"));
+        assert_eq!(names.installed_class_spell(73, 1), Some(true));
+        assert_eq!(names.installed_class_spell(73, BARD), Some(false));
+        // No record, no class, or no installed definitions: no word.
+        assert_eq!(names.installed_class_spell(74, BARD), None);
+        assert_eq!(names.installed_class_spell(73, 0), None);
+        assert_eq!(
+            super::SpellNames::default().installed_class_spell(73, BARD),
+            None
+        );
+        names.bind(Binding::new(Policy::Project1999));
+        assert_eq!(names.installed_class_spell(73, 1), None);
     }
 
     #[test]
