@@ -140,6 +140,7 @@ mod who;
 mod window_size;
 mod windows;
 mod zone;
+mod zone_audio;
 mod zone_navmesh;
 
 use bevy::asset::RenderAssetUsages;
@@ -266,6 +267,10 @@ pub struct ViewerConfig {
     /// Where the window keeps what it knows of the display and adapter,
     /// for the sessions' machine report.
     pub display: eq_client_core::machine::DisplaySnapshot,
+    /// The sound font the zones' music plays on; None leaves music silent.
+    /// The program's own instruments are not used (a stated departure,
+    /// item 6.503).
+    pub music_soundfont: Option<PathBuf>,
 }
 
 impl ViewerConfig {
@@ -466,6 +471,11 @@ pub fn run(
                 ..default()
             }),
     );
+    // The zones' music plays through a synthesizer on the player's SoundFont.
+    {
+        use bevy::audio::AddAudioSource as _;
+        app.add_audio_source::<zone_audio::MidiMusic>();
+    }
     if let Some(build) = app.world().resource::<ViewerSettings>().0.build_identity {
         info!(build, "Client build identity");
     }

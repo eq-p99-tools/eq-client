@@ -21,7 +21,7 @@ pub(super) const RUN_SPEED_VALUE: &str = "EQC_QoL_RunSpeedValueLabel";
 
 /// The Options window's sliders this client keeps settings for, with the
 /// labels that show their values, by screen ID.
-const LEVEL_SLIDERS: [(&str, &str, Level); 6] = [
+const LEVEL_SLIDERS: [(&str, &str, Level); 7] = [
     (
         "ODP_ClipPlaneSlider",
         "ODP_ClipPlaneValueLabel",
@@ -43,6 +43,11 @@ const LEVEL_SLIDERS: [(&str, &str, Level); 6] = [
         "OGP_SoundVolumeSlider",
         "OGP_SoundVolumeValueLabel",
         Level::SoundVolume,
+    ),
+    (
+        "OGP_MusicVolumeSlider",
+        "OGP_MusicVolumeValueLabel",
+        Level::MusicVolume,
     ),
 ];
 
@@ -1221,10 +1226,9 @@ mod tests {
             slider_sets(Some("OGP_SoundVolumeSlider"), WindowId::Options),
             Some(Sets::Level(Level::SoundVolume))
         );
-        // Music and sound realism keep nothing yet.
         assert_eq!(
             slider_sets(Some("OGP_MusicVolumeSlider"), WindowId::Options),
-            None
+            Some(Sets::Level(Level::MusicVolume))
         );
         assert_eq!(
             slider_sets(Some("ODP_GammaSlider"), WindowId::Options),

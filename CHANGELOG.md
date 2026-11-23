@@ -228,6 +228,20 @@
   stays unhandled until R49-6e. Repins eq-network to c7ac7ea (#328); its
   Apply Poison and server filter events are ignored here until eq-client
   #556 and #560 take them, and outgoing chat names `Tongue::COMMON`.
+- Play each zone's music and ambient sound from the installation's own
+  files (item 6.503; how the original program does it is pending read
+  R49-7). `eq-client-assets` reads `<zone>_sounds.eff` emitters (84-byte
+  records, layout inferred), the `<zone>_sndbnk.eff` EMIT and LOOP lists, and
+  converts `<zone>.xmi` sequences to standard MIDI, all bounded and tested
+  with inputs built in code. The render crate plays emitters by distance and
+  day or night on at most eight voices of their own, so cues always keep
+  theirs, and plays the music region the player stands in through
+  `rustysynth` 1.3.8 (MIT) on a SoundFont the player names with
+  `--soundfont`; there is no music without one (a stated departure). New
+  per-character options Music, Music Volume (wired to the skin's slider) and
+  Environment Sounds. Unknown record kinds and negative music ids are logged
+  once a zone and not played. Everything stops on a zone change, camp,
+  logout or lost connection. Combat music is not built.
 
 - Add RoF2 as a placeholder generation, following eq-network's
   (`GameDialect::Rof2`, `ServerProtocol::EqEmuRof2`). `InstalledClient::Rof2`

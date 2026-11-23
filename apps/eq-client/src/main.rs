@@ -242,6 +242,12 @@ struct Arguments {
     #[arg(long)]
     ui_skin: Option<String>,
 
+    /// A sound font (`.sf2`) for the zones' music, which the installation
+    /// plays as MIDI sequences; without one music is silent. The
+    /// installation's own instruments are not used (a stated departure).
+    #[arg(long, env = "EQ_CLIENT_SOUNDFONT")]
+    soundfont: Option<PathBuf>,
+
     /// Directory for this client's own settings, such as window positions.
     /// Defaults to `eq-client` in the per-user settings directory.
     #[arg(long, env = "EQ_CLIENT_SETTINGS_DIR")]
@@ -778,6 +784,7 @@ fn viewer_config(
         debug_overlay: arguments.debug_overlay,
         navmesh: !arguments.no_navmesh,
         display,
+        music_soundfont: arguments.soundfont,
     }
 }
 

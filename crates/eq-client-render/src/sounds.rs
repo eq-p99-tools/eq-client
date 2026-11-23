@@ -202,6 +202,47 @@ impl Sounds {
         }
     }
 
+    /// Each sound's file name by its number, as the installation's numbers
+    /// file gives them; empty until the bank is open.
+    pub(super) const fn numbers(&self) -> &SoundNumbers {
+        &self.numbers
+    }
+
+    /// A sound file ready to play on another voice than a cue's, such as a
+    /// zone's emitter (`super::zone_audio`); None while it is read, when it
+    /// cannot be, or when no bank is open. It is read off the frame, only
+    /// while no cue waits for a read and a read slot is free, so a cue never
+    /// waits behind it (reviewer M1). Once the cache holds
+    /// `CACHE_ENTRIES` files no new file is read here: an emitter then
+    /// waits until a cue's play evicts the least recently played, which
+    /// keeps the cues' own cache rule the only one.
+    pub(super) fn source(&mut self, name: &str) -> Option<Handle<AudioSource>> {
+        let key = name.to_ascii_lowercase();
+        if let Some(Clip::Ready { source, played, .. }) = self.clips.get_mut(&key) {
+            self.plays += 1;
+            *played = self.plays;
+            return Some(source.clone());
+        }
+        let bank = self.bank.clone()?;
+        let reading = self
+            .clips
+            .values()
+            .filter(|clip| matches!(clip, Clip::Reading(_)))
+            .count();
+        if !self.clips.contains_key(&key)
+            && self.asked.is_empty()
+            && reading < READS
+            && self.clips.len() < CACHE_ENTRIES
+            && !self.no_output
+        {
+            let mut job = Background::default();
+            let file = key.clone();
+            job.start(0, move || read(&bank, &file));
+            self.clips.insert(key, Clip::Reading(job));
+        }
+        None
+    }
+
     /// Collect completed reads and count the jobs still using read slots.
     fn poll_reads(&mut self, sources: &mut Assets<AudioSource>) -> usize {
         let mut ready = 0;
@@ -704,6 +745,67 @@ mod tests {
         assert_eq!(active.len(), 1);
         assert!(active[0].mp3);
         std::fs::remove_dir_all(&folder).unwrap();
+    }
+
+    /// Emitters keep their own voices: with every emitter voice in use a
+    /// cue still plays, and an emitter's file waits for a read slot while a
+    /// cue waits for one (reviewer M1).
+    #[test]
+    fn a_cue_plays_with_every_emitter_voice_in_use() {
+        let empty =
+            std::env::temp_dir().join(format!("eq-render-cue-first-{}", std::process::id()));
+        std::fs::create_dir_all(&empty).unwrap();
+        let files = eq_client_assets::sounds::SoundFiles {
+            archive_stem: "snd",
+            folders: &[],
+            numbers: "SoundAssets.txt",
+        };
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .init_asset::<AudioSource>()
+            .init_resource::<super::super::options::OptionsState>()
+            .add_systems(Update, update);
+        let source = app
+            .world_mut()
+            .resource_mut::<Assets<AudioSource>>()
+            .add(AudioSource {
+                bytes: wav(1).into(),
+            });
+        let mut sounds = Sounds {
+            bank: Some(Arc::new(Mutex::new(
+                SoundBank::open(&empty, files).unwrap(),
+            ))),
+            ..Sounds::default()
+        };
+        sounds.clips.insert(
+            "swing.wav".to_owned(),
+            Clip::Ready {
+                source: source.clone(),
+                bytes: 4,
+                seconds: 1.0,
+                played: 0,
+            },
+        );
+        for emitter in 0..super::super::zone_audio::EMITTER_VOICES {
+            app.world_mut().spawn((
+                super::super::zone_audio::ZoneVoice::looping(emitter),
+                AudioPlayer::new(source.clone()),
+            ));
+        }
+        sounds.play("Swing.wav", None);
+        // A cue waits, so an emitter's file is not read yet.
+        assert_eq!(sounds.source("brook.wav"), None);
+        assert!(!sounds.clips.contains_key("brook.wav"));
+        app.insert_resource(sounds);
+        app.update();
+        let mut playing = app.world_mut().query::<&Playing>();
+        assert_eq!(playing.iter(app.world()).count(), 1);
+        // With no cue waiting, the emitter's file is read.
+        let mut sounds = app.world_mut().resource_mut::<Sounds>();
+        assert_eq!(sounds.source("brook.wav"), None);
+        assert!(sounds.clips.contains_key("brook.wav"));
+        assert_eq!(sounds.source("SWING.WAV"), Some(source));
+        std::fs::remove_dir_all(&empty).unwrap();
     }
 
     #[test]
