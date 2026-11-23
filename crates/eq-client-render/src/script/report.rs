@@ -276,6 +276,7 @@ pub(super) fn state(
             (question.id, question.offer.spell_id, question.offer.zone_id,
                 question.expires_at.saturating_duration_since(now).as_millis())
         }),
+        duel_consent = ?online.world().duel().map(|question| (question.id, question.challenger)),
         consent_presented = ?observed.10.as_deref().and_then(crate::confirm::Asked::presented),
         consent_closure = ?online.world().last_consent_close(),
         consent_refusal = ?online.world().last_consent_refusal(),

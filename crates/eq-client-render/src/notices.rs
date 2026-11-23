@@ -434,6 +434,8 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
             chat(match kind {
                 ConsentKind::Resurrection => "The resurrection offer expired.".into(),
                 ConsentKind::Translocate => "The translocate offer expired.".into(),
+                // A duel's question has no local deadline; worded all the same.
+                ConsentKind::Duel => "The challenge to a duel expired.".into(),
             })
         }
         // eqstr 1406, where the installation has it.
@@ -535,7 +537,69 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         }
         Notice::Roll(roll) => in_chat(roll_lines(roll, messages)),
         Notice::Raid(notice) => in_chat(raid_lines(notice, messages)),
+        Notice::Duel(notice) => chat(Said::own(duel_line(notice))),
+        Notice::YellForHelp(name) => chat(Said::own(format!("{name} yells for help!"))),
+        Notice::StatsChanged(change) => in_chat(stat_lines(*change)),
+        Notice::Reward(coins) => chat(Said::own(reward_line(*coins))),
     }
+}
+
+/// News of a duel, in this client's words: the official client's strings
+/// and colours for these are not read (checklist 6.492, pending R49-6a).
+fn duel_line(notice: &eq_client_core::world::DuelNotice) -> String {
+    use eq_client_core::{socials::DuelRefusal, world::DuelNotice};
+    match notice {
+        DuelNotice::Challenged(name) => format!("{name} challenges you to a duel."),
+        DuelNotice::Begun(name) => format!("Your duel with {name} begins."),
+        DuelNotice::Refused { from, reason } => match reason {
+            DuelRefusal::Declined => format!("{from} declined your challenge."),
+            DuelRefusal::Dueling => format!("{from} is already dueling."),
+            DuelRefusal::Considering => format!("{from} is considering another challenge."),
+            DuelRefusal::Other(_) => format!("{from} turned your challenge down."),
+        },
+        DuelNotice::AnswerRefused(reason) => format!("No answer was sent: {reason}"),
+    }
+}
+
+/// A quest's change to the player's base stats: a line for each stat it
+/// named, with no number, since the record does not say whether it is the
+/// new value or the rise. This client's words (checklist 6.492, pending
+/// R49-6f).
+fn stat_lines(change: eq_client_core::stats::StatChange) -> Vec<Said> {
+    [
+        ("Strength", change.strength),
+        ("Stamina", change.stamina),
+        ("Agility", change.agility),
+        ("Dexterity", change.dexterity),
+        ("Intelligence", change.intelligence),
+        ("Wisdom", change.wisdom),
+        ("Charisma", change.charisma),
+    ]
+    .into_iter()
+    .filter(|(_, value)| *value != 0)
+    .map(|(stat, _)| Said::own(format!("Your {stat} has changed.")))
+    .collect()
+}
+
+/// The coins a quest or task gave, largest first, naming only those it
+/// gave. This client's words (checklist 6.492, pending R49-6g).
+fn reward_line(coins: eq_client_core::Coins) -> String {
+    let parts: Vec<String> = [
+        (coins.platinum, "platinum"),
+        (coins.gold, "gold"),
+        (coins.silver, "silver"),
+        (coins.copper, "copper"),
+    ]
+    .into_iter()
+    .filter(|(count, _)| *count != 0)
+    .map(|(count, coin)| format!("{count} {coin}"))
+    .collect();
+    let listed = match parts.as_slice() {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    };
+    format!("You receive {listed}.")
 }
 
 /// News of the player's raid, in the installed client's strings for it:
@@ -1216,6 +1280,61 @@ mod tests {
         assert_eq!(
             lines(GroupNotice::Disbanded, Some(&messages)),
             [Said::own("The group has disbanded.")]
+        );
+    }
+
+    #[test]
+    fn duel_yell_stat_and_coin_news_read_in_this_clients_words() {
+        use eq_client_core::{Coins, socials::DuelRefusal, stats::StatChange, world::DuelNotice};
+        let said = |notice: Notice| {
+            wording(&notice, None)
+                .into_iter()
+                .map(|(_, said)| said)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            said(Notice::Duel(DuelNotice::Challenged("Friend".into()))),
+            [Said::own("Friend challenges you to a duel.")]
+        );
+        assert_eq!(
+            said(Notice::Duel(DuelNotice::Begun("Friend".into()))),
+            [Said::own("Your duel with Friend begins.")]
+        );
+        assert_eq!(
+            said(Notice::Duel(DuelNotice::Refused {
+                from: "Friend".into(),
+                reason: DuelRefusal::Dueling
+            })),
+            [Said::own("Friend is already dueling.")]
+        );
+        assert_eq!(
+            said(Notice::YellForHelp("Friend".into())),
+            [Said::own("Friend yells for help!")]
+        );
+        assert_eq!(
+            said(Notice::StatsChanged(StatChange {
+                strength: 5,
+                charisma: 1,
+                ..StatChange::default()
+            })),
+            [
+                Said::own("Your Strength has changed."),
+                Said::own("Your Charisma has changed.")
+            ]
+        );
+        let coins = |platinum, gold, silver, copper| Coins {
+            platinum,
+            gold,
+            silver,
+            copper,
+        };
+        assert_eq!(
+            said(Notice::Reward(coins(0, 0, 0, 7))),
+            [Said::own("You receive 7 copper.")]
+        );
+        assert_eq!(
+            said(Notice::Reward(coins(2, 0, 4, 1))),
+            [Said::own("You receive 2 platinum, 4 silver and 1 copper.")]
         );
     }
 

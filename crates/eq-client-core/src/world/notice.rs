@@ -20,6 +20,29 @@ pub enum ListingNotice {
     Roleplaying(bool),
 }
 
+/// News of a duel the player is part of. The server sends no line with
+/// any of it on `EQEmu` (its own refusal text excepted), so this client
+/// words it itself; the official client's strings and colours for these
+/// are not read (checklist 6.492, pending R49-6a).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DuelNotice {
+    /// Another player challenged the player, with no question to answer:
+    /// the server type does not answer duels yet.
+    Challenged(String),
+    /// The player's duel with this player began.
+    Begun(String),
+    /// The player this names turned the player's duel down, and why
+    /// (TAKP's clients' own answer).
+    Refused {
+        /// Who.
+        from: String,
+        /// Why.
+        reason: crate::socials::DuelRefusal,
+    },
+    /// An answer to a challenge was not sent, and why.
+    AnswerRefused(String),
+}
+
 /// Who took part in a death the player saw, or in news of their group or
 /// raid.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -321,6 +344,22 @@ pub enum Notice {
     },
     /// Looted coins are now shared with the group (true) or kept.
     AutoSplit(bool),
+    /// News of a duel the player is part of.
+    Duel(DuelNotice),
+    /// A player near the player yelled for help, by name. The server sends
+    /// no line with it (`Client::Handle_OP_YellForHelp` passes the record
+    /// on); this client's words stand until the official client's are read
+    /// (checklist 6.492, pending R49-6d).
+    YellForHelp(String),
+    /// A quest changed the player's base stats: each nonzero stat changed.
+    /// The record does not say whether its number is the new value or the
+    /// rise (`EQEmu` sends both in the same record, from `Client::SetStats`
+    /// and `Client::IncStats`), so no number is told (pending R49-6f).
+    StatsChanged(crate::stats::StatChange),
+    /// A quest or task gave the player these coins, which the server added
+    /// to the purse with no line of its own (`Client::QuestReward`,
+    /// `Client::CashReward`); never all zero (pending R49-6g).
+    Reward(Coins),
     /// A guild request was not sent, and why, worded as
     /// [`Notice::ConsumeRefused`].
     GuildRefused {

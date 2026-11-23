@@ -1,7 +1,8 @@
 //! The skin's confirmation dialog, asking one Yes-or-No question at a time:
 //! a resurrection the server offers first, then a translocate where the
-//! installed client asks about one (`translocate`), since the server waits
-//! for their answers, then a question of the client's own before something
+//! installed client asks about one (`translocate`), then another player's
+//! challenge to a duel (`duel`), since the server waits for their answers,
+//! then a question of the client's own before something
 //! that cannot be undone, as Ask Before Deleting Spells asks before a spell
 //! leaves the book. Whoever asked acts on the answer.
 use crate::{
@@ -159,6 +160,7 @@ fn current_consent(online: &OnlineState) -> Option<ConsentId> {
         .resurrection()
         .map(|question| question.id)
         .or_else(|| online.world().translocate().map(|question| question.id))
+        .or_else(|| online.world().duel().map(|question| question.id))
 }
 
 /// Keeps the confirmation dialog open while a question waits for an answer.
@@ -195,11 +197,11 @@ pub(crate) fn buttons(
     if current != asked.presented {
         return;
     }
-    match current {
-        Some(id) if id.kind == ConsentKind::Resurrection => {
+    match current.map(|id| (id, id.kind)) {
+        Some((id, ConsentKind::Resurrection)) => {
             super::resurrection::answer(&mut online, &outbox, id, yes);
         }
-        Some(id) => {
+        Some((id, ConsentKind::Translocate)) => {
             let rules = settings.0.installed_client.translocate_offer();
             let declined = rules.declined.zip(messages.as_deref());
             if let Some(line) = super::translocate::answer(&mut online, &outbox, id, yes, declined)
@@ -207,6 +209,7 @@ pub(crate) fn buttons(
                 chat.history.push(line);
             }
         }
+        Some((id, ConsentKind::Duel)) => super::duel::answer(&mut online, &outbox, id, yes),
         None => {
             if let Some(question) = asked.question.take() {
                 asked.answer = Some((question, yes));
@@ -245,13 +248,18 @@ pub(crate) fn show(
     if texts.is_empty() {
         return;
     }
-    let wanted = match current {
-        Some(id) if id.kind == ConsentKind::Resurrection => {
+    let wanted = match current.map(|id| id.kind) {
+        Some(ConsentKind::Resurrection) => {
             super::resurrection::question(online.world(), messages.as_deref())
         }
-        Some(_) => super::translocate::question(
+        Some(ConsentKind::Translocate) => super::translocate::question(
             online.world(),
             settings.0.installed_client.translocate_offer(),
+            messages.as_deref(),
+        ),
+        Some(ConsentKind::Duel) => super::duel::question(
+            online.world(),
+            settings.0.installed_client.duel_offer(),
             messages.as_deref(),
         ),
         None => match asked.question {

@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- Answer another player's challenge to a duel, and tell the news the
+  client used to drop (checklist 6.492). Where the session asks (stock
+  `EQEmu`, eq-network #328), the skin's confirmation dialog asks "<name>
+  challenges you to a duel. Do you accept?" after a resurrection and a
+  translocate. Only its Yes or No answers: no script, setting or key does.
+  The question has no local deadline. A challenger not in the spawn list is
+  "Someone". `InstalledClient::duel_offer()` names the installed client's
+  string where it is read; it is None for every generation until R49-6a.
+  The chat now tells, in this client's words until the program's strings
+  and colours are read (pending R49-6a, 6d, 6f and 6g):
+  - a challenge with no question to answer;
+  - the player's own duel beginning;
+  - a TAKP client turning the player's challenge down;
+  - a nearby player's yell for help;
+  - each stat a quest changed, with no number, since the record does not
+    say whether it is the new value or the rise;
+  - the coins a quest or task gave.
+  The server sends no line of its own for any of these. Becoming a corpse
+  stays unhandled until R49-6e.
+
 - Add RoF2 as a placeholder generation, following eq-network's
   (`GameDialect::Rof2`, `ServerProtocol::EqEmuRof2`). `InstalledClient::Rof2`
   is in `InstalledClient::ALL` but has no marker files, so no folder is ever

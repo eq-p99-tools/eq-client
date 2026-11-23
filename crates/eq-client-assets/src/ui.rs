@@ -843,6 +843,19 @@ impl InstalledClient {
         }
     }
 
+    /// The installed client's string for its question about another
+    /// player's challenge to a duel (`%1` the challenger), where it is
+    /// read; None asks in this client's words. Not read for any generation
+    /// yet (checklist 6.492, pending R49-6a).
+    #[must_use]
+    pub const fn duel_offer(self) -> Option<u32> {
+        match self {
+            Self::Titanium | Self::EqMac => None,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.duel_offer(),
+        }
+    }
+
     /// The settings files of this client, installed in `eq_directory`.
     pub fn settings(self, eq_directory: &Path) -> Box<dyn OfficialSettings + '_> {
         match self {

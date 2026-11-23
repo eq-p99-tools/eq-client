@@ -63,6 +63,7 @@ mod dialogs;
 mod disciplines;
 mod display_report;
 mod doors;
+mod duel;
 mod emotes;
 mod entities;
 mod escape;
