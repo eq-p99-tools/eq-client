@@ -110,19 +110,6 @@ pub(super) fn hit(
         .min_by(f32::total_cmp)
 }
 
-/// What a door collides with: every face of its model, the ones flagged
-/// passable too. The official client stops the player at a shut door whose
-/// faces are all flagged passable (the Neriak Commons bars, HHCELL), where a
-/// placed object's passable faces are walked through. Inferred until the
-/// engine's per-face test is read (portcullis follow-up read, F4).
-pub(super) fn door_collision(
-    mut solid: Vec<[[f32; 3]; 3]>,
-    passable: Vec<[[f32; 3]; 3]>,
-) -> Vec<[[f32; 3]; 3]> {
-    solid.extend(passable);
-    solid
-}
-
 /// Rebuilds only this small obstacle when its rendered pose changes.
 fn collider(model: &Model, transform: &Transform) -> Option<Arc<CollisionMesh>> {
     if model.collision.is_empty() {
@@ -548,36 +535,6 @@ pub(super) fn reconcile(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_door_collides_with_its_passable_faces_too() {
-        // A model of bars whose every face is flagged passable, as HHCELL's:
-        // a placed object would be walked through; a door is not.
-        let bars = vec![
-            [[2.0, 0.0, -5.0], [2.0, 0.0, 5.0], [2.0, 10.0, 5.0]],
-            [[2.0, 0.0, -5.0], [2.0, 10.0, 5.0], [2.0, 10.0, -5.0]],
-        ];
-        assert_eq!(
-            door_collision(Vec::new(), Vec::new()),
-            Vec::<[[f32; 3]; 3]>::new()
-        );
-        let collision = door_collision(Vec::new(), bars.clone());
-        assert_eq!(collision, bars);
-        let floor = vec![
-            [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
-            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
-        ];
-        let mut world = eq_client_core::movement::CollisionWorld::new(floor).unwrap();
-        let walked = world.step(Vec3::ZERO, Vec3::X * 5.0, 6.0);
-        assert!(walked.x > 4.9, "nothing in the way yet");
-        world.set_door_obstacles_with(vec![(
-            1,
-            Arc::new(CollisionMesh::new(collision).unwrap()),
-            eq_client_core::doors::Solidity::of(0, 1),
-        )]);
-        let walked = world.step(Vec3::ZERO, Vec3::X * 5.0, 6.0);
-        assert!(walked.x < 2.0, "stopped at the bars, at {walked}");
-    }
     #[test]
     fn door_collision_follows_the_visible_hinge_pose() {
         use eq_client_core::movement::CollisionWorld;

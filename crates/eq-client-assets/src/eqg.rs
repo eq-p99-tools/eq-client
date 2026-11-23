@@ -125,7 +125,6 @@ fn read(eq_directory: &Path, short_name: &str) -> Result<ZoneAsset, LoadError> {
                         .collect(),
                     primitives: staged.primitives,
                     collision: staged.collision,
-                    passable: staged.passable,
                 });
             }
         }
@@ -193,7 +192,6 @@ impl From<mesh::ParseError> for Failure {
 struct Staged {
     primitives: Vec<ZonePrimitive>,
     collision: Vec<[[f32; 3]; 3]>,
-    passable: Vec<[[f32; 3]; 3]>,
 }
 
 impl Staged {
@@ -207,7 +205,6 @@ impl Staged {
             .take(mesh.materials.len())
             .collect();
         let mut collision = Vec::new();
-        let mut passable = Vec::new();
         for triangle in &mesh.triangles {
             // The reader keeps every index within the mesh's vertices.
             let corners = triangle.vertex_indices.map(|index| {
@@ -221,8 +218,6 @@ impl Staged {
             let corners = eq_client_axes::wld_triangle([a, b, c]);
             if triangle.flags & PASSABLE == 0 {
                 collision.push(corners.map(|vertex| render(vertex.position)));
-            } else {
-                passable.push(corners.map(|vertex| render(vertex.position)));
             }
             // A triangle with no material of the mesh's is a solid alone.
             let Some(slot) = usize::try_from(triangle.material_index)
@@ -260,7 +255,6 @@ impl Staged {
         Ok(Self {
             primitives,
             collision,
-            passable,
         })
     }
 }

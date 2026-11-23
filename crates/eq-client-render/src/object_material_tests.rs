@@ -53,7 +53,6 @@ fn placed_object_sidedness_survives_filtering_batching_and_reflection() {
                     ObjectMaterial { double_sided },
                 ],
                 collision: Vec::new(),
-                passable: Vec::new(),
             });
             for scale in [[1.0; 3], [-1.0, 1.0, 1.0], [-1.0, -1.0, 1.0]] {
                 zone.objects.push(ZoneObject {

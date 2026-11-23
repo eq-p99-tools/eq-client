@@ -104,14 +104,10 @@ pub struct ZoneModel {
     pub primitives: Vec<ZonePrimitive>,
     /// Authored draw flags, in the order of `primitives`.
     pub materials: Vec<ObjectMaterial>,
-    /// Solid triangles, including invisible collision surfaces.
+    /// Solid triangles, including invisible collision surfaces. A face
+    /// flagged passable is left out unless the engine makes its mesh solid
+    /// throughout ([`object_solid_faces`]).
     pub collision: Vec<[[f32; 3]; 3]>,
-    /// The faces left out of `collision` for the passable flag, in the same
-    /// frame. A placed object walks through them; a door collides with them
-    /// too, since the official client stops players at doors whose faces are
-    /// all flagged passable (the Neriak Commons bars; inferred until the
-    /// engine's per-face test is read).
-    pub passable: Vec<[[f32; 3]; 3]>,
 }
 
 /// Authored sidedness of a placed-object draw call, independent of its alpha mode.
@@ -654,6 +650,7 @@ fn load_object_models(
     let mut models = Vec::new();
     let mut model_indices = HashMap::new();
     let mut report = ObjectReport::default();
+    let fragments = mesh_fragments(&doc);
     for model in world.models() {
         let (Some(name), Some(mesh)) = (model.name(), model.mesh()) else {
             continue;
@@ -675,8 +672,7 @@ fn load_object_models(
             name: name.to_owned(),
             primitives: realized.primitives,
             materials: realized.materials,
-            collision: mesh_collision(&mesh),
-            passable: mesh_passable(&mesh),
+            collision: object_collision(&mesh, &fragments),
         });
     }
     // Objects built on a skeleton (trees, torches), stood in their rest
@@ -711,7 +707,6 @@ fn load_object_models(
             primitives: realized.primitives,
             materials: realized.materials,
             collision: posed.collision,
-            passable: posed.passable,
         });
     }
 
@@ -775,8 +770,6 @@ fn realize_object(
 struct PosedHierarchy {
     staged: Vec<StagedPrimitive>,
     collision: Vec<[[f32; 3]; 3]>,
-    /// Its faces flagged passable, posed the same way.
-    passable: Vec<[[f32; 3]; 3]>,
     /// Skins left out because their vertices aren't each on one bone of
     /// the skeleton.
     skins_skipped: usize,
@@ -817,8 +810,6 @@ struct PosedMesh {
     solids: Vec<[f32; 3]>,
     /// The vertices of its solid faces.
     indices: Vec<u32>,
-    /// The vertices of its faces flagged passable.
-    passable: Vec<u32>,
 }
 
 /// Stands an actor built on a skeleton in its rest pose: each bone's mesh
@@ -861,7 +852,9 @@ fn pose_hierarchy(
     };
     // Each posed mesh's drawn primitives, its vertices and its solid faces.
     let mut posed: Vec<PosedMesh> = Vec::new();
-    let mut pose = |mesh: &libeq::wld::Mesh<'_>, joint_of: &dyn Fn(usize) -> Mat4| {
+    let mut pose = |mesh: &libeq::wld::Mesh<'_>,
+                    raw: &libeq::wld::parser::DmSpriteDef2,
+                    joint_of: &dyn Fn(usize) -> Mat4| {
         let mut staged = stage_mesh(mesh);
         for primitive in &mut staged {
             for (index, (position, normal)) in primitive
@@ -893,17 +886,16 @@ fn pose_hierarchy(
         posed.push(PosedMesh {
             staged,
             solids,
-            indices: mesh.collision_indices(),
-            passable: passable_indices(mesh),
+            indices: object_solid_faces(mesh, Some(raw)),
         });
     };
     for (index, dag) in definition.dags.iter().enumerate() {
         if dag.mesh_or_sprite_reference == 0 {
             continue;
         }
-        if let Some((mesh, _)) = mesh_of(dag.mesh_or_sprite_reference) {
+        if let Some((mesh, raw)) = mesh_of(dag.mesh_or_sprite_reference) {
             let joint = joints[index];
-            pose(mesh, &|_| joint);
+            pose(mesh, raw, &|_| joint);
         }
     }
     let mut skipped = 0;
@@ -925,21 +917,18 @@ fn pose_hierarchy(
             skipped += 1;
             continue;
         }
-        pose(mesh, &|vertex| joints[owners[vertex]]);
+        pose(mesh, raw, &|vertex| joints[owners[vertex]]);
     }
     let mut collision = Vec::new();
-    let mut passable = Vec::new();
     let mut by_material: Vec<StagedPrimitive> = Vec::new();
     let skins_skipped = skipped;
     for PosedMesh {
         staged,
         solids,
         indices,
-        passable: passable_faces,
     } in posed
     {
         collision.extend(solid_triangles(&solids, &indices));
-        passable.extend(solid_triangles(&solids, &passable_faces));
         for primitive in staged {
             match by_material
                 .iter_mut()
@@ -953,7 +942,6 @@ fn pose_hierarchy(
     PosedHierarchy {
         staged: by_material,
         collision,
-        passable,
         skins_skipped,
     }
 }
@@ -1099,40 +1087,71 @@ fn mesh_collision(mesh: &libeq::wld::Mesh<'_>) -> Vec<[[f32; 3]; 3]> {
     solid_triangles(&positions, &mesh.collision_indices())
 }
 
-/// A mesh's faces flagged passable, as [`mesh_collision`] gives its solid ones.
-fn mesh_passable(mesh: &libeq::wld::Mesh<'_>) -> Vec<[[f32; 3]; 3]> {
+/// Each mesh fragment of an object archive by name, the first where two
+/// share one, for the engine's solid-throughout rule.
+fn mesh_fragments(
+    doc: &libeq::wld::parser::WldDoc,
+) -> HashMap<&str, &libeq::wld::parser::DmSpriteDef2> {
+    let mut fragments = HashMap::new();
+    for raw in doc.fragment_iter::<libeq::wld::parser::DmSpriteDef2>() {
+        if let Some(name) = doc.get_string(raw.name_reference) {
+            fragments.entry(name).or_insert(raw);
+        }
+    }
+    fragments
+}
+
+/// A placed object's or door's solid triangles, by [`object_solid_faces`].
+fn object_collision(
+    mesh: &libeq::wld::Mesh<'_>,
+    fragments: &HashMap<&str, &libeq::wld::parser::DmSpriteDef2>,
+) -> Vec<[[f32; 3]; 3]> {
+    let raw = mesh.name().and_then(|name| fragments.get(name).copied());
     let center = mesh.center();
     let positions: Vec<[f32; 3]> = mesh
         .positions()
         .into_iter()
         .map(|p| [p[0] + center.0, p[1] + center.1, p[2] + center.2])
         .collect();
-    solid_triangles(&positions, &passable_indices(mesh))
+    solid_triangles(&positions, &object_solid_faces(mesh, raw))
 }
 
-/// The vertices of a mesh's faces flagged passable: its faces less its solid
-/// ones. libeq gives the solid faces in the order of all of them, so walking
-/// both lists together splits every face into one or the other.
-fn passable_indices(mesh: &libeq::wld::Mesh<'_>) -> Vec<u32> {
-    split_passable(&mesh.indices(), &mesh.collision_indices())
+/// The vertices of the faces a placed actor (a door or an object) collides
+/// with. The engine skips a face flagged passable (WLD 0x10) unless it has
+/// made the whole mesh solid (EQGraphicsDX9.dll 0x10193510, read F4b): a
+/// mesh whose 0x36 flags lack 0x10000 and whose reference at +0x14 is empty,
+/// or one of five models it names. Every face of such a mesh is solid.
+fn object_solid_faces(
+    mesh: &libeq::wld::Mesh<'_>,
+    raw: Option<&libeq::wld::parser::DmSpriteDef2>,
+) -> Vec<u32> {
+    let unreferenced = raw.is_some_and(|raw| {
+        raw.flags & 0x1_0000 == 0
+            && matches!(
+                raw.fragment4,
+                libeq::wld::parser::FragmentRef::Name(libeq::wld::parser::StringReference(0), _)
+            )
+    });
+    if unreferenced || mesh.name().is_some_and(solid_by_name) {
+        mesh.indices()
+    } else {
+        mesh.collision_indices()
+    }
 }
 
-fn split_passable(all: &[u32], solid: &[u32]) -> Vec<u32> {
-    let mut solid = solid.as_chunks::<3>().0.iter().peekable();
-    all.as_chunks::<3>()
-        .0
-        .iter()
-        .filter(|face| {
-            if solid.peek() == Some(face) {
-                solid.next();
-                false
-            } else {
-                true
-            }
-        })
-        .flatten()
-        .copied()
-        .collect()
+/// The models the engine makes solid throughout by name (0x10193510):
+/// ladders and `IT66` models by prefix in any case, `SBDOOR103_` by its
+/// exact prefix, and the bars `HHCELL` and the portcullis `PORT1414`.
+fn solid_by_name(name: &str) -> bool {
+    let starts = |prefix: &str| {
+        name.get(..prefix.len())
+            .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
+    };
+    starts("LADDER")
+        || starts("IT66")
+        || name.starts_with("SBDOOR103_")
+        || name == "HHCELL_DMSPRITEDEF"
+        || name == "PORT1414_DMSPRITEDEF"
 }
 
 /// Solid triangles over libeq positions, in the renderer's frame with the
@@ -1453,14 +1472,29 @@ mod tests {
             );
         };
         actor(&mut objects, "OBJ_ACTORDEF", tri_sprite);
-        // Bars: the same triangle, its one face flagged passable (0x10).
-        let bars = objects.name("BARS_DMSPRITEDEF");
-        let bars = objects.fragment(
-            0x36,
-            flagged_triangle(bars, object_palette, &coordinates, 1, &[], 0x10),
-        );
-        let bars_sprite = objects.fragment(0x2d, words(&[0, bars.cast_unsigned(), 0]));
-        actor(&mut objects, "BARS_ACTORDEF", bars_sprite);
+        // The same triangle, its one face flagged passable (0x10): an object
+        // mesh as most are (flags with 0x10000), the bars the engine names,
+        // and a mesh with neither 0x10000 nor a +0x14 reference.
+        for (actor_name, mesh_name, mesh_flags) in [
+            ("PASS_ACTORDEF", "PASS_DMSPRITEDEF", 0x0001_4003),
+            ("HHCELL_ACTORDEF", "HHCELL_DMSPRITEDEF", 0x0001_4003),
+            ("BARE_ACTORDEF", "BARE_DMSPRITEDEF", 0x4003),
+        ] {
+            let mesh = objects.name(mesh_name);
+            let mesh = objects.fragment(
+                0x36,
+                flagged_triangle(
+                    mesh,
+                    object_palette,
+                    &coordinates,
+                    1,
+                    &[],
+                    (mesh_flags, 0x10),
+                ),
+            );
+            let sprite = objects.fragment(0x2d, words(&[0, mesh.cast_unsigned(), 0]));
+            actor(&mut objects, actor_name, sprite);
+        }
         // Base tracks of one frame: the root at rest, the arm 10 along the
         // file's x and 5 up its z (2560 / 256, 1280 / 256).
         let mut tracks = Vec::new();
@@ -1642,7 +1676,6 @@ mod tests {
             eq_client_axes::wld_triangle([0, 1, 2])
         );
         assert_eq!(model.collision, vec![rendered(corners)]);
-        assert_eq!(model.passable, Vec::<[[f32; 3]; 3]>::new());
         let placed = zone
             .objects
             .iter()
@@ -1651,31 +1684,54 @@ mod tests {
     }
 
     #[test]
-    fn a_face_flagged_passable_is_kept_apart_from_the_solids() {
+    fn a_passable_face_is_walked_through_unless_the_engine_makes_its_mesh_solid() {
         let zone = load_hierarchical_zone("passable-face");
-        let bars = zone
-            .models
-            .iter()
-            .find(|model| model.name == "BARS_ACTORDEF")
-            .unwrap();
-        let corners = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]];
-        // Drawn as ever, walked through as a placed object, and kept, in
-        // the same frame, for a door to collide with.
-        assert_eq!(bars.primitives.len(), 1);
-        assert_eq!(bars.collision, Vec::<[[f32; 3]; 3]>::new());
-        assert_eq!(bars.passable, vec![rendered(corners)]);
+        let solid = |name: &str| {
+            zone.models
+                .iter()
+                .find(|model| model.name == name)
+                .unwrap()
+                .collision
+                .clone()
+        };
+        let face = vec![rendered([
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ])];
+        // Skipped as passable (0x10192400 and its kin), drawn as ever.
+        assert_eq!(solid("PASS_ACTORDEF"), Vec::<[[f32; 3]; 3]>::new());
+        // Made solid throughout by 0x10193510: by name, and with neither
+        // 0x10000 nor a +0x14 reference.
+        assert_eq!(solid("HHCELL_ACTORDEF"), face);
+        assert_eq!(solid("BARE_ACTORDEF"), face);
     }
 
     #[test]
-    fn faces_split_into_solid_and_passable_in_order_even_when_repeated() {
-        let all = [0, 1, 2, 3, 4, 5, 0, 1, 2, 6, 7, 8];
-        // The second and third faces are passable; the first repeats later.
-        assert_eq!(
-            super::split_passable(&all, &[0, 1, 2, 6, 7, 8]),
-            vec![3, 4, 5, 0, 1, 2]
-        );
-        assert_eq!(super::split_passable(&all, &all), Vec::<u32>::new());
-        assert_eq!(super::split_passable(&all, &[]), all.to_vec());
+    fn the_engine_names_five_models_solid_throughout() {
+        for name in [
+            "LADDER01_DMSPRITEDEF",
+            "ladder_dmspritedef",
+            "IT66_DMSPRITEDEF",
+            "it661_DMSPRITEDEF",
+            "SBDOOR103_DMSPRITEDEF",
+            "HHCELL_DMSPRITEDEF",
+            "PORT1414_DMSPRITEDEF",
+        ] {
+            assert!(super::solid_by_name(name), "{name}");
+        }
+        for name in [
+            "sbdoor103_DMSPRITEDEF",
+            "SBDOOR103",
+            "HHCELL2_DMSPRITEDEF",
+            "hhcell_dmspritedef",
+            "PORT14140_DMSPRITEDEF",
+            "CAMPFIRE_DMSPRITEDEF",
+            "LADDE",
+            "",
+        ] {
+            assert!(!super::solid_by_name(name), "{name}");
+        }
     }
 
     #[test]

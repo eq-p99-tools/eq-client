@@ -133,20 +133,27 @@ pub(crate) fn skinned_triangle(
     grouped_faces: u16,
     skin: &[(u16, u16)],
 ) -> Vec<u8> {
-    flagged_triangle(name, palette, coordinates, grouped_faces, skin, 0)
+    flagged_triangle(
+        name,
+        palette,
+        coordinates,
+        grouped_faces,
+        skin,
+        (0x0001_8003, 0),
+    )
 }
 
-/// [`skinned_triangle`] with its one face's flags, such as 0x10 for a face
-/// the player passes through.
+/// [`skinned_triangle`] with the mesh's own 0x36 flags and its one face's
+/// flags, such as 0x10 for a face the player passes through.
 pub(crate) fn flagged_triangle(
     name: i32,
     palette: i32,
     coordinates: &Coordinates,
     grouped_faces: u16,
     skin: &[(u16, u16)],
-    face_flags: u16,
+    (mesh_flags, face_flags): (u32, u16),
 ) -> Vec<u8> {
-    let mut body = words(&[name.cast_unsigned(), 0x0001_8003, palette.cast_unsigned()]);
+    let mut body = words(&[name.cast_unsigned(), mesh_flags, palette.cast_unsigned()]);
     // Animation, two unknown references, center, three unknowns, radius,
     // minimum and maximum.
     body.extend([0_u8; 12 + 12 + 12 + 4 + 24]);

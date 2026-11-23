@@ -1442,7 +1442,6 @@ mod tests {
             }],
             materials: vec![eq_client_assets::ObjectMaterial { double_sided: true }],
             collision: Vec::new(),
-            passable: Vec::new(),
         };
         let mut models = super::super::doors::Models::default();
         models.0.insert(

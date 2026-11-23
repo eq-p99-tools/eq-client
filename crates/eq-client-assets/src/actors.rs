@@ -1,7 +1,7 @@
 //! Model actors in character archives, including ships and launches.
 use super::{
-    LoadError, ObjectMeshes, Textures, ZoneModel, ZoneTexture, guarded, mesh_collision,
-    mesh_passable, parse_wld, posed_hierarchy, realize_object, stage_mesh, zone_name,
+    LoadError, ObjectMeshes, Textures, ZoneModel, ZoneTexture, guarded, mesh_collision, parse_wld,
+    posed_hierarchy, realize_object, stage_mesh, zone_name,
 };
 use libeq::pfs::PfsReader;
 use std::{collections::HashMap, fs::File, path::Path};
@@ -67,13 +67,9 @@ fn read_actor(path: &Path, stem: &str, tag: &str) -> Result<ActorAsset, LoadErro
             return None;
         }
         let mesh = model.mesh()?;
-        Some((
-            stage_mesh(&mesh),
-            mesh_collision(&mesh),
-            mesh_passable(&mesh),
-        ))
+        Some((stage_mesh(&mesh), mesh_collision(&mesh)))
     });
-    let (staged, collision, passable) = if let Some(geometry) = geometry {
+    let (staged, collision) = if let Some(geometry) = geometry {
         geometry
     } else {
         let meshes = ObjectMeshes::new(&doc, &world);
@@ -89,7 +85,7 @@ fn read_actor(path: &Path, stem: &str, tag: &str) -> Result<ActorAsset, LoadErro
             .ok_or_else(|| {
                 LoadError::ParseWorld(format!("actor {tag} has no complete readable pose"))
             })?;
-        (posed.staged, posed.collision, posed.passable)
+        (posed.staged, posed.collision)
     };
     let mut textures = Vec::new();
     let realized = realize_object(
@@ -107,7 +103,6 @@ fn read_actor(path: &Path, stem: &str, tag: &str) -> Result<ActorAsset, LoadErro
             primitives: realized.primitives,
             materials: realized.materials,
             collision,
-            passable,
         },
         textures,
     })

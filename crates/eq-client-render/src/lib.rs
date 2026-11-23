@@ -835,7 +835,7 @@ fn spawn_static_zone(
                 doors::model_key(&model.name),
                 doors::Model {
                     primitives: primitives.clone(),
-                    collision: doors::door_collision(model.collision, model.passable),
+                    collision: model.collision,
                     pick,
                 },
             );
