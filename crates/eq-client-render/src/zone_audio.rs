@@ -439,39 +439,6 @@ fn wait(emitter: &Emitter, side: usize, salt: u64) -> f32 {
     (cooldown + share * delay) / 1000.0
 }
 
-/// A typed `/combatmusic`, waiting to be carried out.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct CombatMusicTyped;
-
-/// Turns combat music on or off for a typed `/combatmusic`, as the official
-/// client's toggle does (read R49-7 c, 0x4689a2), and keeps the choice with
-/// the character's options. The line is this client's own: the program's
-/// is unread, and this client plays no combat music yet.
-#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
-pub(super) fn combat_music_typed(
-    mut chat: ResMut<super::chat::ChatState>,
-    mut options: ResMut<super::options::OptionsState>,
-) {
-    if chat.combat_music_toggle.take().is_none() {
-        return;
-    }
-    let on = !options.options.combat_music;
-    options.options.combat_music = on;
-    chat.history
-        .push(super::chat::system_line(super::chat::Said::own(
-            combat_music_line(on),
-        )));
-}
-
-/// This client's words for a `/combatmusic`.
-const fn combat_music_line(on: bool) -> &'static str {
-    if on {
-        "Combat music is on. This client does not play combat music yet."
-    } else {
-        "Combat music is off. This client does not play combat music yet."
-    }
-}
-
 /// How loud a fading track plays, from 1 at its start down to 0.
 fn fade(elapsed: f32, length: f32) -> f32 {
     if length <= 0.0 {
@@ -914,50 +881,6 @@ mod tests {
         let night = heard(&split, &names, [50.0, 0.0, 0.0], true);
         assert_eq!((night[0].0, night[0].1), (key(0, 1), "night.wav"));
         assert!((night[0].2 - 0.5).abs() < 1e-6, "{}", night[0].2);
-    }
-
-    #[test]
-    fn combatmusic_toggles_and_keeps_the_choice_saying_it_is_not_built() {
-        let mut app = App::new();
-        app.init_resource::<super::super::chat::ChatState>()
-            .init_resource::<super::super::options::OptionsState>()
-            .add_systems(Update, combat_music_typed);
-        assert!(
-            app.world()
-                .resource::<super::super::options::OptionsState>()
-                .options
-                .combat_music
-        );
-        for on in [false, true] {
-            app.world_mut()
-                .resource_mut::<super::super::chat::ChatState>()
-                .combat_music_toggle = Some(CombatMusicTyped);
-            app.update();
-            assert_eq!(
-                app.world()
-                    .resource::<super::super::options::OptionsState>()
-                    .options
-                    .combat_music,
-                on
-            );
-            let chat = app.world().resource::<super::super::chat::ChatState>();
-            assert!(chat.combat_music_toggle.is_none());
-            let lines = chat.history.lines(eq_client_core::chat::ChatTab::All);
-            assert!(
-                lines
-                    .last()
-                    .is_some_and(|(_, line)| line.message.text.contains(combat_music_line(on))),
-                "{lines:?}"
-            );
-        }
-        // Nothing typed, nothing changes.
-        app.update();
-        assert!(
-            app.world()
-                .resource::<super::super::options::OptionsState>()
-                .options
-                .combat_music
-        );
     }
 
     #[test]

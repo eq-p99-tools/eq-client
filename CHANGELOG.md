@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Seven local-settings slash commands work as the Titanium program's do (checklist 6.525, read R49-22c). They change only this client: nothing goes to a server, on any server type, and scripts can run each with `slash()`.
+  - `/clearchat` clears the active chat window's view, silently. The history keeps its lines, so scripts, the log and other windows still have them.
+  - `/showspelleffects` and `/combatmusic`: "off" turns the option off and any other word turns it on; with no word they give their usage. Each ends by saying where the option stands. `/combatmusic` now takes the read's words instead of toggling, and says the installation's lines. This client plays no combat music yet, so it changes nothing audible.
+  - `/particledensity` takes 0 to 3, or a word starting OFF, LOW, MED or HIG, for the session only. This client draws spell particles fully or not at all, so level 0 hides them and 1 to 3 show them. It is its own flag: `/showspelleffects` still says what it said.
+  - `/mousespeed N` keeps and reports the pointer speed as typed. This client leaves the pointer to the system, so it moves nothing.
+  - `/chatfontsize 0` to `6` sets the chat's font. Labelled departure: the program sets only the active chat window's size, and this client sets one size for the whole chat. `/usercolor <kind> <red> <green> <blue>` sets a text colour (a word that is not a number keeps that channel), `/usercolor <kind> reset` puts it back, and `/usercolor help` or `page1` to `page7` list the kinds.
+  - Lines with string ids come from the installation, with this client's words where it lacks them. The program's English-only lines are in this client's words. Choices are saved in this client's per-character settings, never in `eqclient.ini` or the UI ini.
 - A Bard's song holds nothing back, as the Titanium program's doesn't (read R49-21; gap 3.5, checklist 6.442, 6.542). This repins eq-network to 33057d9 (#413, and #407's server filters), on P99 and Titanium EQEmu. The session now tells the client which song a Bard is singing (`WorldEvent::Singing`), and the client's own gates follow it:
   - **A gem press while singing** goes to the session, whatever the gem's timer or the mana, and the session stops the song and casts nothing, as the program's gem click does. A forget goes too.
   - **An item use while singing** isn't refused by the client; the session lets it go alongside the song.
