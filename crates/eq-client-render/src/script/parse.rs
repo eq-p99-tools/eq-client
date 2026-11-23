@@ -891,126 +891,28 @@ pub(super) fn parse_words(command: &str, rest: &[&str]) -> Result<Step, String> 
     })
 }
 
-/// `slash <command> [words]`: a slash command a script may type, among
-/// those that change nothing beyond the test characters.
+/// `slash <words>`: any line the player could type after a `/`, run as
+/// typing it would, since a script may do whatever the player can (Adam,
+/// 11-23). The typed-line handlers refuse what they would refuse from the
+/// keyboard; only the chat line's own limits apply here.
 fn parse_slash(words: &[&str]) -> Result<Step, String> {
-    Ok(match words {
-        [
-            "guildinvite" | "guildremove" | "guildmotd" | "getguildmotd",
-            ..,
-        ] => Step::Slash(guild_slash(words)?),
-        [command]
-            if matches!(
-                *command,
-                "camp" | "sit" | "stand" | "ranged" | "stopsong" | "harmtouch" | "layonhands"
-            ) =>
-        {
-            Step::Slash(format!("/{command}"))
-        }
-        ["camp", "desktop"] => Step::Slash("/camp desktop".into()),
-        ["discipline", name] if eq_client_core::disciplines::Discipline::named(name).is_some() => {
-            Step::Slash(format!("/discipline {name}"))
-        }
-        ["target", name @ ..] if !name.is_empty() => {
-            Step::Slash(format!("/target {}", name.join(" ")))
-        }
-        // Corpses: consent, summon and drag; a test death leaves one.
-        [command @ ("consent" | "deny"), name] => Step::Slash(format!("/{command} {name}")),
-        ["log"] => Step::Slash("/log".into()),
-        ["boat", intent @ ("acquire" | "release")] => Step::Slash(format!("/boat {intent}")),
-        ["shownames", level] => Step::Slash(format!("/shownames {level}")),
-        // Corpses summoned or dragged; groups joined, left, disbanded or
-        // declined; where and when the player is, which the client answers
-        // itself; and how `/who` lists the player.
-        [
-            command @ ("corpse" | "corpsedrag" | "corpsedrop" | "follow" | "disband" | "loc"
-            | "time" | "afk" | "anonymous" | "roleplay" | "raidaccept" | "raiddecline"
-            | "raiddisband" | "raidwindow"),
-        ] => Step::Slash(format!("/{command}")),
-        // The raid's lead, handed on by name or to the target.
-        ["makeraidleader", name @ ..] if name.len() <= 1 => Step::Slash(
-            ["/makeraidleader"]
-                .iter()
-                .chain(name)
-                .copied()
-                .collect::<Vec<_>>()
-                .join(" "),
-        ),
-        // A die, an emote, or another's target.
-        ["random", numbers @ ..]
-            if numbers.len() <= 2 && numbers.iter().all(|number| number.parse::<u32>().is_ok()) =>
-        {
-            Step::Slash(
-                ["/random"]
-                    .iter()
-                    .chain(numbers)
-                    .copied()
-                    .collect::<Vec<_>>()
-                    .join(" "),
-            )
-        }
-        ["emote", words @ ..] if !words.is_empty() => {
-            Step::Slash(format!("/emote {}", words.join(" ")))
-        }
-        ["assist", name @ ..] if name.len() <= 1 => Step::Slash(
-            ["/assist"]
-                .iter()
-                .chain(name)
-                .copied()
-                .collect::<Vec<_>>()
-                .join(" "),
-        ),
-        // A raid invitation, by name or for the target, and its answers.
-        ["raidinvite", name @ ..] if name.len() <= 1 => Step::Slash(
-            ["/raidinvite"]
-                .iter()
-                .chain(name)
-                .copied()
-                .collect::<Vec<_>>()
-                .join(" "),
-        ),
-        // A group invitation, by name or for the target.
-        ["invite", name @ ..] if name.len() <= 1 => Step::Slash(
-            ["/invite"]
-                .iter()
-                .chain(name)
-                .copied()
-                .collect::<Vec<_>>()
-                .join(" "),
-        ),
-        // A command to the pet, as typed.
-        ["pet", words @ ..] if !words.is_empty() => {
-            Step::Slash(format!("/pet {}", words.join(" ")))
-        }
-        // Asking who is online changes nothing.
-        ["who", words @ ..] => Step::Slash(
-            ["/who"]
-                .iter()
-                .chain(words)
-                .copied()
-                .collect::<Vec<_>>()
-                .join(" "),
-        ),
-        _ => return Err("unknown or malformed slash command".into()),
-    })
-}
-
-/// The existing typed guild handlers, with bounded names and MOTD text.
-/// This does not provide a raw chat or unimplemented guild-command escape.
-fn guild_slash(words: &[&str]) -> Result<String, String> {
-    let valid = match words {
-        ["guildinvite" | "guildremove" | "getguildmotd"] | ["guildinvite", "o"] => true,
-        ["guildinvite" | "guildremove", name] | ["guildinvite", name, "o"] => character_name(name),
-        ["guildmotd", message @ ..] => {
-            let text = message.join(" ");
-            text.len() < 512 && !text.chars().any(char::is_control)
-        }
-        _ => false,
+    let Some(first) = words.first() else {
+        return Err("slash takes a command".into());
     };
-    if !valid {
-        return Err("guild slash takes a character name, optional invite o, or a MOTD below 512 bytes without control characters".into());
+    if first.starts_with('/') {
+        return Err("slash takes a command without its leading slash".into());
     }
-    Ok(format!("/{}", words.join(" ")))
+    let line = format!("/{}", words.join(" "));
+    let longest = crate::chat::MAX_TEXT;
+    if line.len() > longest {
+        return Err(format!(
+            "a slash line is at most {longest} bytes, as the chat line is"
+        ));
+    }
+    if line.chars().any(char::is_control) {
+        return Err("a slash line takes no control characters".into());
+    }
+    Ok(Step::Slash(line))
 }
 
 fn character_name(name: &str) -> bool {
@@ -2173,10 +2075,8 @@ mod tests {
             "click(\"anything\")",
             "click(\"memorize\", 9)",
             "click(\"memorize\", 0)",
-            "slash(\"say hello\")",
             "create(\"lowercase\", 1, 2, 0, 212, 1, 4)",
             "create(\"Testbad\", 1, 17, 0, 212, 1, 4)",
-            "slash(\"ooc\")",
             "walk(8, 90000)",
             "walk(0, 1000)",
             "gm(\"\")",
@@ -2198,14 +2098,45 @@ mod tests {
     }
 
     #[test]
-    fn desktop_camp_uses_the_game_command_owner_and_rejects_other_destinations() {
+    fn a_slash_line_is_taken_as_the_player_would_type_it() {
         let base = Path::new("private");
+        for line in [
+            "camp desktop",
+            "camp server",
+            "say hello",
+            "ooc",
+            "pet",
+            "reply thanks",
+            "friend Example",
+            "quit",
+            "discipline 4499",
+            "harmtouch 12",
+            "ranged 12",
+            "consent",
+            "guildleader Member",
+            "guildmotd Café rendezvous",
+        ] {
+            assert_eq!(
+                parse(&format!("slash(\"{line}\")"), base).unwrap(),
+                [Step::Slash(format!("/{line}"))],
+                "{line}"
+            );
+        }
+        // Only the chat line's own limits apply: its length, counting the
+        // slash, and no control characters.
+        let longest = format!("say {}", "a".repeat(crate::chat::MAX_TEXT - 5));
         assert_eq!(
-            parse("slash(\"camp desktop\")\n", base).unwrap(),
-            [Step::Slash("/camp desktop".into())]
+            parse(&format!("slash(\"{longest}\")"), base).unwrap(),
+            [Step::Slash(format!("/{longest}"))]
         );
-        for bad in ["slash(\"camp server\")", "slash(\"camp desktop now\")"] {
-            assert!(parse(bad, base).is_err(), "{bad}");
+        for bad in [
+            format!("slash(\"{longest}a\")"),
+            "slash(\"guildmotd bad\u{0007}\")".to_owned(),
+            "slash(\"guildmotd bad\u{001b}\")".to_owned(),
+            "slash(\"/say doubled\")".to_owned(),
+            "slash(\"\")".to_owned(),
+        ] {
+            assert!(parse(&bad, base).is_err(), "{bad}");
         }
     }
 
@@ -2227,7 +2158,6 @@ mod tests {
             parse("slash(\"discipline defensive\")\n", base).unwrap(),
             [Step::Slash("/discipline defensive".into())]
         );
-        assert!(parse("slash(\"discipline 4499\")\n", base).is_err());
     }
 
     #[test]
@@ -2258,7 +2188,6 @@ mod tests {
                 Step::Slash("/layonhands".into())
             ]
         );
-        assert!(parse("slash(\"harmtouch 12\")\n", base).is_err());
     }
 
     #[test]
@@ -2268,7 +2197,6 @@ mod tests {
             parse("slash(\"ranged\")\n", base).unwrap(),
             [Step::Slash("/ranged".into())]
         );
-        assert!(parse("slash(\"ranged 12\")\n", base).is_err());
     }
 
     #[test]
@@ -2709,51 +2637,6 @@ mod tests {
     }
 
     #[test]
-    fn guild_slash_steps_use_only_existing_typed_handlers() {
-        let base = Path::new("private");
-        for line in [
-            "guildinvite",
-            "guildinvite Member",
-            "guildinvite Member o",
-            "guildinvite o",
-            "guildremove",
-            "guildremove Member",
-            "guildmotd",
-            "guildmotd Meet at the gate",
-            "guildmotd Café rendezvous",
-            "getguildmotd",
-        ] {
-            assert_eq!(
-                parse(&format!("slash(\"{line}\")"), base).unwrap(),
-                [Step::Slash(format!("/{line}"))]
-            );
-        }
-        for line in [
-            "guildinvite Member officer",
-            "guildinvite Member o extra",
-            "guildinvite M3mber",
-            "guildremove Member extra",
-            "getguildmotd extra",
-            "guildleader Member",
-            "guilddelete",
-            "guildmotd bad\u{0007}",
-            "guildmotd bad\u{001b}",
-        ] {
-            assert!(
-                parse(&format!("slash(\"{line}\")"), base).is_err(),
-                "{line}"
-            );
-        }
-        assert!(parse(&format!("slash(\"guildmotd {}\")", "a".repeat(512)), base).is_err());
-        assert!(parse(&format!("slash(\"guildmotd {}\")", "é".repeat(256)), base).is_err());
-        let maximum = format!("{}a", "é".repeat(255));
-        assert_eq!(
-            parse(&format!("slash(\"guildmotd {maximum}\")"), base).unwrap(),
-            [Step::Slash(format!("/guildmotd {maximum}"))]
-        );
-    }
-
-    #[test]
     fn a_script_may_ask_who_is_online() {
         let base = Path::new("private");
         assert_eq!(
@@ -2770,7 +2653,6 @@ mod tests {
                 Step::Slash("/corpsedrag".into())
             ]
         );
-        assert!(parse("slash(\"consent\")\n", base).is_err());
     }
 
     #[test]
@@ -2866,7 +2748,6 @@ mod tests {
             ))]
         );
         for bad in [
-            "slash(\"pet\")",
             "click(\"pet\")",
             "click(\"pet\", \"dance\")",
             "click(\"option\")",
