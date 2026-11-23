@@ -3054,7 +3054,11 @@ fn gm_request(
 
     let words: Vec<_> = command.split_ascii_whitespace().collect();
     let command = parse::gm_command(&words)?;
-    let titanium = matches!(world.generation(), eq_client_core::GameDialect::Titanium);
+    let titanium = match world.generation() {
+        eq_client_core::GameDialect::Titanium => true,
+        // The fixture helpers are Titanium EQEmu's.
+        eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => false,
+    };
     if local && titanium && parse::gm_fixture(&command) {
         let selection = world
             .session_id()
