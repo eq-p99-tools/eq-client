@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Every other spawn's helm follows its own show-helm flag, as read R49-13 reads the Titanium program (checklist 6.513). This rebuilds #567 on main.
+  - **The flag** comes from the spawn record's byte 139 and appearance kind 43, and the head slot's model is nothing while it is off. Players, NPCs and corpses alike: the program's head code has no distinction. `EQEmu` sends a player's own option, and for an NPC whether its helm texture is set.
+  - **When it shows:** a kind 43 for another spawn only sets the flag, with no redraw, so its helm changes at that spawn's next head wear change (inferred, as the read gives).
+  - **Your own** follows the Show My Helm option at once, as before.
+  - The flag counts only where the session offers Show My Helm (`Capability::ShowingHelm`, stock `EQEmu`). Project 1999's records aren't checked, and `EQMac` and `RoF2` records never say it, so every helm shows there as before.
+
 - Drowning and lava now hurt on every Titanium server, public EQEmu and
   P99 included, as the Titanium program reports them on any server
   (eq-network's liquid change; read R25). **Characters on public servers

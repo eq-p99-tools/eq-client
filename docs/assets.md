@@ -12,6 +12,12 @@ Keep archives, extracted assets, derived caches and screenshots outside Git.
 Classic model rendering includes animation, face/armor textures, robes, helmets
 and held-item attachments where installed data and the model support them.
 Helmet dyes follow the surface drawn, so an exposed face keeps its color.
+Your own helm follows the Show My Helm option, at once. On a server that
+offers that option (stock EQEmu today), every other spawn's helm follows its
+own flag, as the original client draws it (read R49-13): players, NPCs and
+corpses alike, from the spawn and each change of it. A change for another
+spawn shows at its next head wear change, as the original's does (inferred),
+not at once. On other servers every helm shows (checklist 6.513).
 One-shot animations use the received playback rate when it is positive and
 finite, with the authored rate as the fallback.
 
