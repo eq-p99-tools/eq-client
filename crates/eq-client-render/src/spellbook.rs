@@ -171,6 +171,22 @@ impl eq_client_core::world::SpellCatalog for SpellNames {
     }
 }
 
+/// A discipline's spell record, as [`SpellNames::discipline`] reads it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct DisciplineSpell {
+    /// Field 1, the spell's name, which lines and the typed word use.
+    pub(crate) name: String,
+    /// Field 168, the discipline flag (spell +0x1c4).
+    pub(crate) flagged: bool,
+    /// Fields 104-119, the level each class gets it at; 255 for none.
+    pub(crate) class_levels: [Option<u8>; 16],
+    /// Field 167, its reuse timer slot (spell +0x1c0).
+    pub(crate) timer: u32,
+    /// A duration (field 16) and target type 6: such a discipline waits
+    /// for the discipline slot to be free (0x4bb039).
+    pub(crate) timed_self: bool,
+}
+
 /// The installed client's spells, with the client's words for them.
 #[derive(Resource)]
 pub(super) struct SpellNames(super::spell_provider::Provider);
@@ -279,6 +295,27 @@ impl SpellNames {
             return None;
         }
         self.spell(id)?.linked_timer
+    }
+
+    /// What Titanium's 0x4bb39d reads of a discipline's spell record (reads
+    /// R48 and R48b c): its name, flag, class levels, timer slot and whether
+    /// it is timed and self-targeted. Only the installed spell table gives
+    /// these, so a replayed or Mac-era table gives none.
+    pub(crate) fn discipline(&self, id: u32) -> Option<DisciplineSpell> {
+        if !matches!(
+            self.0.readiness(),
+            crate::spell_provider::Readiness::Installed
+        ) {
+            return None;
+        }
+        let spell = self.spell(id)?;
+        Some(DisciplineSpell {
+            name: spell.name.clone()?,
+            flagged: spell.discipline()?,
+            class_levels: spell.class_levels,
+            timer: spell.discipline_timer?,
+            timed_self: spell.timed_self()?,
+        })
     }
 
     pub(super) fn timing(&self, id: u32) -> Option<SpellTiming> {
@@ -1127,6 +1164,10 @@ impl ScribeRefusal {
 /// Shares admission, cursor and book validation between presentation and
 /// submission; the stamp is the one the outbox gives a command made now. The
 /// scroll goes into the book's first empty place, or into the place given.
+#[expect(
+    clippy::match_same_arms,
+    reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
+)]
 fn prepare_scribe(
     online: Option<&super::online::OnlineState>,
     book: Option<&eq_client_core::SpellBook>,
@@ -1138,8 +1179,11 @@ fn prepare_scribe(
     let online = online.ok_or_else(|| own("Connect to scribe a scroll"))?;
     let stamp = stamp.ok_or_else(|| own("Connect to scribe a scroll"))?;
     let world = online.world();
-    if world.generation() == eq_client_core::GameDialect::Titanium {
-        titanium_press(world, book, place, names)?;
+    match world.generation() {
+        eq_client_core::GameDialect::Titanium => titanium_press(world, book, place, names)?,
+        // Titanium's, inferred for RoF2 (6.489).
+        eq_client_core::GameDialect::Rof2 => titanium_press(world, book, place, names)?,
+        eq_client_core::GameDialect::EqMac => {}
     }
     if world.inventory_moves_pending() {
         return Err(own("Wait for queued item moves before scribing"));

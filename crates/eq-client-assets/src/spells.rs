@@ -38,6 +38,9 @@ pub struct Layout {
     buff_band: Option<(usize, usize)>,
     /// The target type (program spell +0x180, R20 (a)).
     target_type: Option<usize>,
+    /// A discipline's reuse timer slot, 0 or more (program spell +0x1c0,
+    /// read R48b c).
+    discipline_timer: Option<usize>,
 }
 
 impl Layout {
@@ -68,6 +71,7 @@ impl Layout {
         // the target type, +0x180, from 98 (R20 (a)).
         buff_band: Some((154, 168)),
         target_type: Some(98),
+        discipline_timer: Some(167),
     };
 
     /// The Mac-era client's `spells_en.txt` (147 fields a row, a few rows
@@ -101,6 +105,7 @@ impl Layout {
         linked_timer: None,
         buff_band: None,
         target_type: None,
+        discipline_timer: None,
     };
 }
 

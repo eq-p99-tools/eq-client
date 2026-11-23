@@ -304,12 +304,6 @@ pub(crate) const fn command(action: Action) -> Option<&'static str> {
         Action::Sit => Some("/sit"),
         Action::Stand => Some("/stand"),
         Action::RangedAttack => Some("/ranged"),
-        Action::Discipline(eq_client_core::disciplines::Discipline::Evasive) => {
-            Some("/discipline evasive")
-        }
-        Action::Discipline(eq_client_core::disciplines::Discipline::Defensive) => {
-            Some("/discipline defensive")
-        }
         Action::KnightAbility(eq_client_core::knights::KnightAbility::HarmTouch) => {
             Some("/harmtouch")
         }
@@ -323,6 +317,7 @@ pub(crate) const fn command(action: Action) -> Option<&'static str> {
         Action::Gem(_)
         | Action::Item { .. }
         | Action::Ability(_)
+        | Action::Discipline(_)
         | Action::Attack
         | Action::Social(_) => None,
     }
@@ -428,8 +423,8 @@ pub(crate) fn presentation(
                 .casting()
                 .knight_wait(now)
                 .is_some_and(|wait| !wait.is_zero()),
-            Some(Action::Discipline(discipline)) => {
-                crate::abilities::discipline_waits(online.world(), discipline, now)
+            Some(Action::Discipline(spell)) => {
+                crate::disciplines::waits(online.world(), &names, spell, now)
             }
             _ => false,
         };
@@ -458,7 +453,7 @@ pub(crate) fn presentation(
     for (mut text, caption, words, hint, page) in &mut labels {
         // Written only when they change, so `fit_words` sees a change.
         let wanted = match (caption, words) {
-            (Some(caption), _) => Some(faces(bindings.0[caption.0], online.world()).0),
+            (Some(caption), _) => Some(faces(bindings.0[caption.0], online.world(), &names).0),
             (_, Some(words)) => {
                 let action = bindings.0[words.0];
                 Some(if let Some(Action::Social(id)) = action {
@@ -468,7 +463,7 @@ pub(crate) fn presentation(
                         .unwrap_or("Social")
                         .to_owned()
                 } else {
-                    faces(action, online.world()).1
+                    faces(action, online.world(), &names).1
                 })
             }
             _ => None,
@@ -498,8 +493,12 @@ pub(crate) fn presentation(
 /// or centred in the button for a kind with no picture. Centred and sized
 /// to fit, as Adam chose (10-20); what the official client draws on such a
 /// hotbutton is not checked.
-fn faces(action: Option<Action>, world: &ClientWorld) -> (String, String) {
-    let words = caption_text(action, world);
+fn faces(
+    action: Option<Action>,
+    world: &ClientWorld,
+    names: &crate::spellbook::SpellNames,
+) -> (String, String) {
+    let words = caption_text(action, world, names);
     match action {
         Some(Action::Gem(_) | Action::Item { .. }) | None => (words, String::new()),
         Some(
@@ -572,7 +571,11 @@ pub(crate) fn fit_words(mut words: SlotWords, areas: Query<&ComputedNode>) {
 
 /// The words a slot's button shows for what it holds, which a hotkey with
 /// no picture shows on the cursor too.
-pub(crate) fn caption_text(action: Option<Action>, world: &ClientWorld) -> String {
+pub(crate) fn caption_text(
+    action: Option<Action>,
+    world: &ClientWorld,
+    names: &crate::spellbook::SpellNames,
+) -> String {
     match action {
         Some(Action::Gem(gem)) if world.gem(usize::from(gem)).is_some() => {
             format!("G{}", gem + 1)
@@ -582,7 +585,7 @@ pub(crate) fn caption_text(action: Option<Action>, world: &ClientWorld) -> Strin
         Some(Action::Item { .. }) => "Item".into(),
         Some(Action::Ability(ability)) => ability.name().into(),
         Some(Action::KnightAbility(ability)) => ability.name().into(),
-        Some(Action::Discipline(discipline)) => discipline.name().into(),
+        Some(Action::Discipline(spell)) => crate::disciplines::name(names, spell),
         Some(Action::Attack) => "Attack".into(),
         Some(Action::RangedAttack) => "Ranged".into(),
         Some(Action::Camp) => "Camp".into(),
@@ -653,22 +656,7 @@ fn hovered_detail(
             Some(_) => format!("{}\nUses the selected target", ability.name()),
             None => format!("{}\nRecovery unknown", ability.name()),
         },
-        Some(Action::Discipline(discipline)) => {
-            use eq_client_core::disciplines::Active;
-            let casting = world.casting();
-            let status = match casting.active_discipline() {
-                Active::Titanium(spell) if spell == discipline.spell() => "Active".into(),
-                Active::Titanium(_) => "Another discipline is active".into(),
-                _ => match casting.discipline_wait(discipline.timer(), now) {
-                    Some(wait) if !wait.is_zero() => {
-                        format!("Shared recovery {:.0}s", wait.as_secs_f32().ceil())
-                    }
-                    Some(_) => "Shared recovery elapsed".into(),
-                    None => "Shared recovery unknown".into(),
-                },
-            };
-            format!("{}\n{status}", discipline.name())
-        }
+        Some(Action::Discipline(spell)) => crate::disciplines::detail(world, names, spell, now),
         Some(Action::Social(_)) => "Social\nRuns the saved command lines".into(),
         Some(Action::Ability(ability)) => match world.ability_wait(ability, now) {
             Some(wait) => format!(
@@ -727,7 +715,7 @@ pub(crate) fn need(action: Option<Action>) -> crate::outbox::Needs {
         Some(Action::Sit | Action::Stand) => Needs::Capability(Capability::Posture),
         Some(Action::Ability(ability)) => Needs::Ability(ability),
         Some(Action::KnightAbility(ability)) => Needs::KnightAbility(ability),
-        Some(Action::Discipline(discipline)) => Needs::Discipline(discipline),
+        Some(Action::Discipline(spell)) => Needs::Discipline(spell),
         Some(Action::Gem(_) | Action::Item { .. }) => Needs::Capability(Capability::Casting),
         Some(Action::Attack) => Needs::Capability(Capability::Combat),
         Some(Action::RangedAttack) => Needs::Capability(Capability::RangedCombat),

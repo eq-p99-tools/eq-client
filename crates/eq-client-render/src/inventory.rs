@@ -1,4 +1,5 @@
 //! Compact inventory drawer with validated slot moves and local item inspection.
+pub(crate) mod auto;
 pub(super) mod colors;
 pub(super) mod cursor;
 pub(crate) mod destruction;
@@ -39,6 +40,13 @@ pub(super) struct InventoryState {
     actions: interaction::Actions,
     destruction: destruction::Destruction,
     ground_drop: ground_drop::State,
+    /// Whether the Drop button puts an item on the ground without asking
+    /// (`/fastdrop`, checklist 6.536, inferred, pending R49-6n). Off at
+    /// start and never saved; a zone change keeps it, and a world entry, a
+    /// camp, a return to login or a lost link turns it off (the same forget
+    /// path as the rest of the admission's inventory), so it never carries
+    /// to another character.
+    pub(crate) fast_drop: bool,
     /// Refusals of the player's actions, on their way to the chat.
     refused: Vec<String>,
     /// What the player's actions said besides, such as a buff's fade, on
@@ -165,6 +173,7 @@ impl InventoryState {
         self.cancel_actions();
         self.destruction = destruction::Destruction::default();
         self.ground_drop = ground_drop::State::default();
+        self.fast_drop = false;
         self.demo_news.clear();
         self.demo = false;
         self.bank_open = false;
@@ -324,6 +333,30 @@ pub(super) fn say_refusals(
     }
 }
 
+/// The put-away button. On a client that runs R46's forms it runs
+/// `/autoinventory`'s routine for an item (0x51881c calls 0x47477f, read
+/// R49-8 b). Its coin path is the window's own (0x517ebb), taken here as the
+/// same purse move (inferred, checklist 6.490). Its sound 0x92 isn't played:
+/// this client has no sound for it yet (6.490). Elsewhere it stores the
+/// cursor item as before.
+fn put_away(
+    state: &mut InventoryState,
+    settings: &crate::ViewerSettings,
+    online: &mut super::online::OnlineState,
+    sender: &crate::outbox::Outbox,
+) {
+    state.actions.split = None;
+    if settings.0.installed_client.runs_r46_forms() {
+        match state.auto_inventory(online, sender) {
+            Ok(true) => (),
+            Ok(false) => state.refuse("There is no room for that item.".into()),
+            Err(error) => state.refuse(crate::outbox::window_line(&error)),
+        }
+    } else {
+        state.actions.auto_store = true;
+    }
+}
+
 /// Left-click chooses a stack quantity or moves through the cursor; right-click inspects.
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(super) fn input(
@@ -404,8 +437,7 @@ pub(super) fn input(
         return;
     }
     if store.any() {
-        state.actions.split = None;
-        state.actions.auto_store = true;
+        put_away(&mut state, &settings, &mut online, &sender);
     }
     state.store_cursor(&mut online, &sender);
     for action in split_buttons.iter() {

@@ -99,6 +99,7 @@ mod tests {
         ChatLine {
             channel,
             message_type: None,
+            tongue: None,
             sender: Some("Examplar".into()),
             target: None,
             message: Message {

@@ -169,7 +169,8 @@ pub(super) fn dress(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     for (mut character, remote, listed) in &mut characters {
-        let ((race, look), helm) = worn(listed, remote, online.world(), options.options.show_helm);
+        let ((race, look), flag) = worn(listed, remote, online.world(), options.options.show_helm);
+        let helm = shown_helm(remote.is_some(), character.dressed.as_ref(), &look, flag);
         if character.dressed == Some((look, helm)) {
             continue;
         }
@@ -177,6 +178,13 @@ pub(super) fn dress(
         let mut ready = hold(&mut commands, &mut character, &look, |name| {
             library.shape(name, directory)
         });
+        if character.asset.luclin() {
+            // A Luclin model keeps its base look: its worn armour, tints and
+            // helms are named by rules not yet probed (Luclin slice L3), so
+            // only its held items change (6.554).
+            character.dressed = ready.then_some((look, helm));
+            continue;
+        }
         let shape = shape_of(&character.asset, race, &look, helm);
         let character = &mut *character;
         for part in &character.parts {
@@ -229,36 +237,73 @@ pub(super) fn dress(
     }
 }
 
+/// Whether the helm shows, given the flag [`worn`] gives and what was last
+/// drawn. Another spawn's kind 43 only sets its flag; the program doesn't
+/// rebuild the model for it (read R49-13 a). The flag shows at that spawn's
+/// next head build, which a head wear change makes (inferred), so until then
+/// its helm stays as drawn. The player's own follows the option at once.
+fn shown_helm(
+    remote: bool,
+    drawn: Option<&(Appearance, bool)>,
+    look: &Appearance,
+    flag: bool,
+) -> bool {
+    let head = outfit::TextureSlot::Head.index();
+    match drawn {
+        Some((drawn, helm))
+            if remote
+                && drawn.materials[head] == look.materials[head]
+                && drawn.tints[head] == look.tints[head] =>
+        {
+            *helm
+        }
+        _ => flag,
+    }
+}
+
 /// What a character wears, by race and appearance, and whether its helm
 /// shows: a character shown at select wears its list's look, other spawns
 /// their spawn record's, and the player (and the paperdoll copy) the
-/// player's. Other characters always show their helms, and so does a
-/// listed one, whose list says nothing of it; the player's own follows the
-/// Show My Helm option.
+/// player's. Every other spawn's helm follows its own show-helm flag, as
+/// the Titanium program draws it (read R49-13, checklist 6.513): the flag
+/// comes from the spawn record (byte 139) and appearance kind 43, and the
+/// head slot's model is nothing while it is off, with no player, NPC or
+/// corpse distinction. `EQEmu` sends a player's own option and, for an NPC,
+/// whether its helm texture is set. The flag counts only where the session
+/// offers Show My Helm (`Capability::ShowingHelm`): elsewhere a record's
+/// flag is unchecked (P99) or never said anything (`EQMac`, whose records
+/// always say shown and where TAKP hides a helm as head material 0, and
+/// `RoF2`), and every helm shows as before. A listed character shows its
+/// helm, as its list says nothing of it; the player's own follows the Show
+/// My Helm option at once. When a changed flag shows is [`dress`]'s.
 fn worn(
     listed: Option<&super::select_preview::Look>,
     remote: Option<&super::entities::RemoteEntity>,
     world: &eq_client_core::world::ClientWorld,
     show_helm: bool,
 ) -> ((u32, Appearance), bool) {
-    let look = match (listed, remote) {
-        (Some(listed), _) => Some((listed.race, listed.appearance)),
-        (None, Some(remote)) => world
-            .spawn(remote.id)
-            .map(|spawn| &spawn.state)
-            .map(|spawn| (spawn.race, spawn.appearance)),
-        (None, None) => world.player().map(|player| {
-            let mut look = player.appearance;
-            for slot in [outfit::TextureSlot::Primary, outfit::TextureSlot::Secondary] {
-                if let Some(estimate) = world.held_model_estimate(slot) {
-                    look.materials[slot.index()] = u32::from(estimate.material());
+    let (look, helm) = match (listed, remote) {
+        (Some(listed), _) => (Some((listed.race, listed.appearance)), true),
+        (None, Some(remote)) => {
+            let spawn = world.spawn(remote.id).map(|spawn| &spawn.state);
+            let flagged = world.can(eq_client_core::Capability::ShowingHelm);
+            let helm = spawn.is_none_or(|spawn| !flagged || spawn.appearance.show_helm);
+            (spawn.map(|spawn| (spawn.race, spawn.appearance)), helm)
+        }
+        (None, None) => (
+            world.player().map(|player| {
+                let mut look = player.appearance;
+                for slot in [outfit::TextureSlot::Primary, outfit::TextureSlot::Secondary] {
+                    if let Some(estimate) = world.held_model_estimate(slot) {
+                        look.materials[slot.index()] = u32::from(estimate.material());
+                    }
                 }
-            }
-            (player.race, look)
-        }),
-    }
-    .unwrap_or_default();
-    (look, remote.is_some() || listed.is_some() || show_helm)
+                (player.race, look)
+            }),
+            show_helm,
+        ),
+    };
+    (look.unwrap_or_default(), helm)
 }
 
 /// Puts the items this appearance holds in the character's hands, replacing
@@ -457,6 +502,133 @@ mod tests {
                 .number,
             10
         );
+    }
+
+    #[test]
+    fn another_spawns_helm_follows_its_flag_only_where_the_session_offers_it() {
+        use crate::online::{OnlineState, testing};
+        use eq_client_core::{Capability, SpawnKind, WorldEvent};
+        let spawn = |spawn_id, kind, show_helm| eq_client_core::SpawnState {
+            body_type: None,
+            class: None,
+            spawn_id,
+            name: format!("Synthetic{spawn_id}"),
+            kind,
+            race: 1,
+            gender: 0,
+            position: default(),
+            velocity: [0.0; 3],
+            forward: 0.0,
+            walk_speed: 0.0,
+            run_speed: 0.0,
+            size: 6.0,
+            invisible: false,
+            appearance: Appearance {
+                show_helm,
+                ..Appearance::default()
+            },
+            level: 0,
+            listing: eq_client_core::listing::Listing::default(),
+            name_parts: eq_client_core::names::NameParts::default(),
+            pet_owner: None,
+            hp_percent: None,
+            posture: None,
+        };
+        let admitted = |capabilities| {
+            let mut online = OnlineState::new(true);
+            testing::news(
+                &mut online,
+                [WorldEvent::Entered {
+                    capabilities,
+                    choices: Vec::new(),
+                    session_id: 1,
+                    zone: "qeytoqrg".into(),
+                    player: Box::new(testing::player(7)),
+                    far_clip: None,
+                    spell_landing_flag: None,
+                    zone_id: 0,
+                }],
+            );
+            testing::connect(&mut online, true);
+            for (id, kind) in [
+                (2, SpawnKind::Player),
+                (3, SpawnKind::Npc),
+                (4, SpawnKind::PlayerCorpse),
+                (5, SpawnKind::NpcCorpse),
+            ] {
+                testing::spawn_entry(&mut online, id, spawn(id, kind, false));
+            }
+            testing::spawn_entry(&mut online, 6, spawn(6, SpawnKind::Player, true));
+            online
+        };
+        let helm = |online: &OnlineState, id| {
+            worn(
+                None,
+                Some(&super::super::entities::RemoteEntity::new(id, None, 6.0)),
+                online.world(),
+                false,
+            )
+            .1
+        };
+        // Where the session offers Show My Helm, every spawn's flag counts,
+        // with no player, NPC or corpse distinction (read R49-13 b).
+        let mut online = admitted(vec![Capability::ShowingHelm]);
+        for id in [2, 3, 4, 5] {
+            assert!(!helm(&online, id), "{id}");
+        }
+        assert!(helm(&online, 6));
+        // A kind 43 change for another player changes the flag at once; when
+        // it shows is `shown_helm`'s.
+        let before = worn(
+            None,
+            Some(&super::super::entities::RemoteEntity::new(2, None, 6.0)),
+            online.world(),
+            false,
+        );
+        testing::news(
+            &mut online,
+            [WorldEvent::Appearance {
+                spawn_id: 2,
+                change: eq_network_game::appearance::AppearanceChange::ShowHelm(true),
+            }],
+        );
+        let after = worn(
+            None,
+            Some(&super::super::entities::RemoteEntity::new(2, None, 6.0)),
+            online.world(),
+            false,
+        );
+        assert_ne!(before, after);
+        assert!(after.1);
+        // Elsewhere (P99 unchecked; EQMac and RoF2 records that never say),
+        // every helm shows as before, a record's default included.
+        let online = admitted(Vec::new());
+        for id in 2..=6 {
+            assert!(helm(&online, id), "{id}");
+        }
+    }
+
+    #[test]
+    fn another_spawns_changed_flag_waits_for_its_next_head_build() {
+        let look = Appearance::default();
+        let drawn = (look, true);
+        // Before anything is drawn, the flag decides.
+        assert!(!shown_helm(true, None, &look, false));
+        // A kind 43 alone doesn't redraw another spawn's helm.
+        assert!(shown_helm(true, Some(&drawn), &look, false));
+        // Its next head wear change does: a new material or tint.
+        let mut helmed = look;
+        helmed.materials[outfit::TextureSlot::Head.index()] = 3;
+        assert!(!shown_helm(true, Some(&drawn), &helmed, false));
+        let mut tinted = look;
+        tinted.tints[outfit::TextureSlot::Head.index()] = Some([1, 2, 3]);
+        assert!(!shown_helm(true, Some(&drawn), &tinted, false));
+        // Another slot's change leaves the head as drawn.
+        let mut chest = look;
+        chest.materials[outfit::TextureSlot::Chest.index()] = 3;
+        assert!(shown_helm(true, Some(&drawn), &chest, false));
+        // The player's own follows the option at once.
+        assert!(!shown_helm(false, Some(&drawn), &look, false));
     }
 
     #[test]

@@ -15,6 +15,7 @@ fn snapshot(pet: u16, spell_id: u32) -> WorldEvent {
 
 fn appears(spawn_id: u16, pet_owner: Option<u16>) -> WorldEvent {
     WorldEvent::Spawns(vec![SpawnState {
+        body_type: None,
         pet_owner,
         ..spawn(spawn_id)
     }])

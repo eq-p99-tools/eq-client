@@ -81,6 +81,7 @@ fn a_run_reading_tells_logs_and_reports_neither() {
         .push(ChatLine {
             channel: ChannelName::Tell,
             message_type: None,
+            tongue: None,
             sender: Some(SENDER.into()),
             target: None,
             message: Message {
