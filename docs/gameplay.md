@@ -442,6 +442,20 @@ to five seconds (inferred, recording checklist 6.400).
 Automatic inspection replies use the known inspect note from the installed
 character settings when available. Note import reads profiles up to 256 KiB.
 
+When an NPC offers tasks, the **Tasks Offered** window lists them and shows
+the chosen task's duration, description and first steps. This is the
+client's own window until the skin's task select window is read. Where step
+text or a duration arrives without the task's own words, the client writes
+them itself (inferred, recording checklist 6.560). On a local stock EQEmu
+server, **Accept** takes the chosen task and **Decline** ends the offer.
+A script can answer the same way with `accept_task` and `decline_tasks`.
+Anywhere else the window is read only and says that the
+offer can't be answered there. An answer, the next offer and a new zone
+each close the window. Escape leaves it open. A task request the session
+won't send is explained in chat. EQEmu says each step's and task's end in
+its own words, so the client adds no line of its own until the original
+client's lines are read.
+
 Considering, hailing, auto-attack and class abilities use the target and session
 rules. Loot lists received corpse contents; Loot all takes items sequentially.
 Merchants support selection and buy/sell requests. Giving to NPCs and trading

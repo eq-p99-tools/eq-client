@@ -330,6 +330,12 @@ pub struct ClientWorld {
     player_inspection: Option<crate::inspection::PlayerInspection>,
     /// The book or note open to read.
     reading: Option<crate::books::BookText>,
+    /// The admission's task journal, as the session tells it.
+    tasks: crate::tasks::TaskJournal,
+    /// The tasks an NPC offers, until the player answers or the zone ends.
+    task_offer: Option<crate::tasks::TaskOffer>,
+    /// Counts the offers heard, so that two alike still differ.
+    task_offer_serial: u64,
     /// The tradeskill container whose combine waits for the server.
     combining: Option<crate::inventory::InventorySlot>,
     /// The player's group, while they are in one. The server lists it again
@@ -605,6 +611,11 @@ impl ClientWorld {
     /// The player closed the book or note they were reading.
     pub fn close_reading(&mut self) {
         self.reading = None;
+    }
+
+    /// The player answered or closed this task offer; a later offer stays.
+    pub fn close_task_offer(&mut self, serial: u64) {
+        let _ = self.task_offer.take_if(|offer| offer.serial == serial);
     }
 
     /// Puts away the received equipment report.
@@ -1031,15 +1042,6 @@ impl ClientWorld {
             | WorldEvent::PotionBelt(_)
             | WorldEvent::BandoliersUnknown
             | WorldEvent::BandolierRefused { .. }
-            // The task journal, offers and history: the tasks slice (6.560).
-            | WorldEvent::TaskDescribed { .. }
-            | WorldEvent::TaskStepUpdated { .. }
-            | WorldEvent::TaskConcluded { .. }
-            | WorldEvent::TaskRemoved { .. }
-            | WorldEvent::CompletedTasks { .. }
-            | WorldEvent::TasksOffered { .. }
-            | WorldEvent::TaskHistory { .. }
-            | WorldEvent::TaskRefused { .. }
             // The guild bank as EQEmu tells it: the gap log thread's guild
             // bank slices (6.563).
             | WorldEvent::GuildBank(_)
@@ -1561,6 +1563,37 @@ impl ClientWorld {
                     news.ignored = true;
                 }
             }
+            WorldEvent::TaskDescribed { session_id, .. }
+            | WorldEvent::TaskStepUpdated { session_id, .. }
+            | WorldEvent::TaskRemoved { session_id, .. }
+            | WorldEvent::CompletedTasks { session_id, .. }
+            | WorldEvent::TaskHistory { session_id, .. } => {
+                if !(self.session_id == Some(*session_id)
+                    && self.tasks.observe(*session_id, event))
+                {
+                    news.ignored = true;
+                }
+            }
+            // `EQEmu` says each step's and task's end in its own words, and
+            // sends the step or the entry's removal after; the program's own
+            // lines wait for their read (R49-38), so none is added here.
+            WorldEvent::TaskConcluded { session_id, .. } => {
+                if self.session_id != Some(*session_id) {
+                    news.ignored = true;
+                }
+            }
+            WorldEvent::TasksOffered { session_id, offers } => {
+                if self.in_world() && self.session_id == Some(*session_id) {
+                    self.task_offer_serial = self.task_offer_serial.wrapping_add(1);
+                    self.task_offer = Some(crate::tasks::TaskOffer {
+                        session_id: *session_id,
+                        serial: self.task_offer_serial,
+                        offers: offers.clone(),
+                    });
+                } else {
+                    news.ignored = true;
+                }
+            }
             WorldEvent::AlternateAdvancementRefused {
                 session_id,
                 reason,
@@ -1571,6 +1604,13 @@ impl ClientWorld {
                         reason: reason.clone(),
                         refusal: *refusal,
                     });
+                } else {
+                    news.ignored = true;
+                }
+            }
+            WorldEvent::TaskRefused { session_id, reason } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices.push(Notice::TaskRefused(reason.clone()));
                 } else {
                     news.ignored = true;
                 }
@@ -1870,6 +1910,7 @@ impl ClientWorld {
         self.target = Target::default();
         self.motion = None;
         self.reading = None;
+        self.task_offer = None;
         self.resurrection = None;
         self.translocate = None;
         self.popup = None;
@@ -1979,6 +2020,7 @@ impl ClientWorld {
         self.same_zone_relocation = None;
         self.last_local_pad = None;
         self.reading = None;
+        self.tasks = crate::tasks::TaskJournal::default();
         self.popup_serial = 0;
         self.combining = None;
         self.group = None;

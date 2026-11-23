@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- Show the tasks an NPC offers, and answer them on a local EQEmu server
+  (checklist 6.560). `eq_client_core::tasks` keeps the admission's task
+  journal (entries by slot with their steps, the finished list and its
+  histories) as the session tells it. A new admission starts the journal
+  empty, and another task in a slot drops that slot's steps. The world
+  keeps the current offer until the player answers, the next offer, or
+  the zone's end. A task request the session refused becomes
+  `Notice::TaskRefused`. The Tasks Offered window (`WindowId::TaskOffer`)
+  is our own until the skin's `TaskSelectWnd` controls are listed. It shows
+  each offered task's title, duration, description and shown steps.
+  Accept and Decline go through the outbox with the current admission
+  where `Capability::Tasks` is offered. Elsewhere the offer is read only.
+  Scripts can make the same requests, since a script may do whatever the
+  player can (Adam, 11-23). `accept_task(TASK_ID)` and `decline_tasks()`
+  answer the current offer and close it, `cancel_task("quest", SLOT)` or
+  `cancel_task("task")` cancels a journal entry without asking, and
+  `task_history(INDEX)` asks for a finished task's steps. Each step posts
+  one request for the current admission, and the session decides. Step words built from a step's type,
+  target and goal, and the duration's words, are ours (inferred, R49-38).
+  The step-done, completed and failed lines wait for that read, since
+  EQEmu sends its own. Task words appear in the window only, never in the
+  logs.
+
 - Scripts can read the AA facts (checklist 6.582). `report([label])` logs a new "Script alternate advancement report" line with an `alternate_advancement` object, numbers only: Titanium's definition count, selections, trainable ranks with their cost, activatable ranks, points, progress, unspent points and timers, and the Mac client's ranks, selections, points, progress and timers. Each list gives at most 64 entries and its full count. The core gains `definition_count`, `selections` and `activatable`, for display only.
 - Repin eq-network to 2c89198, keeping today's behaviour apart from the AA requests (checklist 6.581). A local EQEmu or local TAKP session now offers the AA requests, so `train_aa`, `activate_aa` and `aa_split` go there; everywhere else they are refused as before. On the Mac-era client only the split goes. The repin also brings Quarm giving, groups, listing and translocate from Quarm's own handlers (6.576), TAKP looting from its own corpse handlers (6.577), and the hosts' script holds lifted in the docs (6.578). These add no event: the client already handles each one.
 - Scripts may chat, emote, roll, run socials and send `gm` lines on any server (checklist 6.579), since a script may do whatever the player can (Adam, 11-23). `chat(...)`, `slash("emote ...")`, `slash("random ...")`, `social(...)` and plain `gm(...)` steps no longer need a local test session: a `gm` line goes as a typed `#` line would. They still need a character in the world, and the session's chat pace holds whatever sends a line. Only the `gm` fixture forms (spawn, depop, guild, stun, setlanguage, traindisc) keep the local test session. A synthetic chat submission or hotbar press of a social still points to the named `social` step.

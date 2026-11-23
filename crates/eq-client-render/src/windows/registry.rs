@@ -92,6 +92,9 @@ pub(crate) enum WindowId {
     ServerDialog,
     /// The equipment report received for a player.
     PlayerInspection,
+    /// The tasks an NPC offers: this client's own window until the skin's
+    /// task select window (`TaskSelectWnd`) is listed (6.560).
+    TaskOffer,
     /// The skin's note window: a note or scroll being read.
     Note,
     /// The skin's book window: a book being read, two pages at a time.
@@ -371,7 +374,7 @@ impl WindowId {
     /// Every singleton window, in the order the selector lists the toggled ones.
     /// Bags are left out: there is one for each slot that can hold a bag
     /// (see [`WindowId::bags`]), and none of them is toggled.
-    pub(crate) const ALL: [Self; 40] = [
+    pub(crate) const ALL: [Self; 41] = [
         Self::Status,
         Self::Target,
         Self::Player,
@@ -404,6 +407,7 @@ impl WindowId {
         Self::Confirmation,
         Self::ServerDialog,
         Self::PlayerInspection,
+        Self::TaskOffer,
         Self::Note,
         Self::Book,
         Self::WorldContainer,
@@ -464,7 +468,9 @@ impl WindowId {
             | Self::Scripts
             | Self::Runbook
             | Self::ServerDialog
-            | Self::PlayerInspection => None,
+            | Self::PlayerInspection
+            // Ours until the skin's names are listed.
+            | Self::TaskOffer => None,
         }
     }
 
@@ -530,6 +536,7 @@ impl WindowId {
             Self::Confirmation => "confirmation",
             Self::ServerDialog => "server-dialog",
             Self::PlayerInspection => "player-inspection",
+            Self::TaskOffer => "task-offer",
             Self::Note => "note",
             Self::Book => "book",
             Self::WorldContainer => "world-container",
@@ -760,6 +767,21 @@ impl WindowId {
                 ..floating(
                     "PLAYER INSPECTION",
                     Placement::TopLeft(125.0, 105.0),
+                    false,
+                    &[],
+                )
+            },
+            // Ours: answered only by its buttons, so Escape leaves it open.
+            Self::TaskOffer => Description {
+                layer: Layer::Popup,
+                closes_on_escape: false,
+                persists: false,
+                ..floating(
+                    "TASKS OFFERED",
+                    Placement::TopCentre {
+                        top: 90.0,
+                        width: 520.0,
+                    },
                     false,
                     &[],
                 )

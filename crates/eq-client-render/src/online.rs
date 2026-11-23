@@ -358,6 +358,11 @@ impl OnlineState {
         self.world.close_player_inspection();
     }
 
+    /// The player answered or closed this task offer.
+    pub(super) fn close_task_offer(&mut self, serial: u64) {
+        self.world.close_task_offer(serial);
+    }
+
     /// The track window closed, by its button or `/stoptracking`.
     pub(super) fn close_track_window(&mut self) {
         self.world.close_track_window();

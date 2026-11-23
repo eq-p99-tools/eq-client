@@ -202,6 +202,8 @@ pub enum Notice {
     ConsentExpired(crate::confirmations::ConsentKind),
     /// A request to read was not sent, and why.
     ReadRefused(String),
+    /// A task request was not sent, and why, in the session's words.
+    TaskRefused(String),
     /// An AA request was not sent, and why: the session's words, and its
     /// kind of reason where it names one (none for a request no feature
     /// owns, or from an earlier admission).

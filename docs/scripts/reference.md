@@ -41,6 +41,17 @@ Each step posts one request for the current admission and moves on. It never wai
 
 A fact not yet received is `null`. Each list is `{count, listed}`, with at most 64 entries listed. Trainable and activatable are for reading only: the session judges every request again.
 
+## Tasks
+
+These steps make the same requests as the task windows, in this client's own words. They work only where the server takes task requests, which today means a local stock EQEmu server.
+
+- `accept_task(task_id)`: takes this task from the current offer, and closes the offer.
+- `decline_tasks()`: declines the current offer, and closes it.
+- `cancel_task("quest", slot)` or `cancel_task("task")`: cancels the journal entry in that slot (quests 0 to 18). No question is asked first.
+- `task_history(index)`: asks for the steps of the finished task at this place in the finished list (0 to 49).
+
+Each step posts one request for the current admission and moves on. The session decides whether it goes, and when it refuses, the reason is said in chat. The steps need a character in the world.
+
 ## Your current session
 
 Run a script from the workbench while logged in to act on your current character. Commands use your existing target and UI state. Login and character-selection commands are unnecessary for this workflow.
