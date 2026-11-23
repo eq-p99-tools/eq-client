@@ -1173,6 +1173,8 @@ impl ClientWorld {
                 }
             }
             WorldEvent::LastName { name, last_name } => self.last_name(name, last_name),
+            // The titles the player may choose: kept, latest first, only where
+            // the session offers them, until the zone changes.
             WorldEvent::TitleList(titles) => {
                 if self.in_world() && self.can(crate::Capability::Titling) {
                     self.zone.titles = Some(titles.clone());
