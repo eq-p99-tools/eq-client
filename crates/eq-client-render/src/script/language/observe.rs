@@ -21,6 +21,8 @@ pub(in crate::script) struct Sight<'a> {
     pub now: std::time::Instant,
     /// The chat window's history, for the tells it shows.
     pub chat: Option<&'a crate::chat::ChatState>,
+    /// The Options window's Filters page, for the mode each row shows.
+    pub filters: Option<&'a eq_client_core::chat_filters::ChatFilters>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,6 +71,8 @@ pub(super) enum Field {
     // The last tell the chat window shows. Never logged or reported (O-b).
     LastTell,
     LastTellFrom,
+    // A Filters page row as the Options window shows it (6.494, K3).
+    Filter(eq_client_core::filters::FilterCategory),
 }
 
 /// One part of the time `/time` tells.
@@ -130,7 +134,8 @@ impl Field {
             "buffs.count" => Some(Self::BuffCount),
             "chat.last_tell" => Some(Self::LastTell),
             "chat.last_tell_from" => Some(Self::LastTellFrom),
-            _ => Self::gem(name)
+            _ => Self::filter(name)
+                .or_else(|| Self::gem(name))
                 .or_else(|| Self::member(name))
                 .or_else(|| Self::buff(name)),
         }
@@ -200,7 +205,8 @@ impl Field {
             | Self::GroupName(_)
             | Self::BuffSpell(_)
             | Self::LastTell
-            | Self::LastTellFrom => Kind::Text,
+            | Self::LastTellFrom
+            | Self::Filter(_) => Kind::Text,
             Self::Level
             | Self::ReportedHp
             | Self::ReportedHpMax
@@ -264,7 +270,16 @@ impl Field {
             | Self::GroupHpPercent(_) => self.group(world),
             Self::BuffCount | Self::BuffSpell(_) => self.buff_of(sight),
             Self::LastTell | Self::LastTellFrom => self.tell(sight),
+            Self::Filter(category) => filter_mode(category, sight),
         }
+    }
+
+    /// `filter.ooc` and the rest: a Filters page row by its kind's stable
+    /// name. A kind with no row on the page is no field.
+    fn filter(name: &str) -> Option<Self> {
+        let category =
+            eq_client_core::filters::FilterCategory::from_key(name.strip_prefix("filter.")?)?;
+        eq_client_core::chat_filters::has_row(category).then_some(Self::Filter(category))
     }
 
     /// A gem as the gem bar shows it: its spell's name, unknown when empty,
@@ -493,6 +508,18 @@ impl Field {
 }
 
 /// A posture as a script reads it; none for one the client can't name.
+/// A Filters page row's mode, as its label says it: `show`, `hide`, `mine`
+/// or `group`; unknown where the playing generation's page has no such row.
+fn filter_mode(category: eq_client_core::filters::FilterCategory, sight: &Sight) -> Value {
+    let Some(filters) = sight.filters else {
+        return Value::Unknown;
+    };
+    if category.modes(sight.world.generation()).is_empty() {
+        return Value::Unknown;
+    }
+    Value::Text(filters.get(category).key().into())
+}
+
 const fn posture_word(posture: eq_client_core::PostureState) -> Option<&'static str> {
     use eq_client_core::PostureState;
     Some(match posture {
@@ -564,6 +591,7 @@ mod tests {
                 clock,
                 now: std::time::Instant::now(),
                 chat: None,
+                filters: None,
             })
     }
 
@@ -576,11 +604,47 @@ mod tests {
                 clock: TITANIUM,
                 now: std::time::Instant::now(),
                 chat: Some(chat),
+                filters: None,
             })
     }
 
     fn text(word: &str) -> Value {
         Value::Text(word.into())
+    }
+
+    #[test]
+    fn filter_fields_read_what_the_filters_page_shows() {
+        use eq_client_core::filters::{FilterCategory, FilterMode};
+        let mut online = OnlineState::new(true);
+        session::admit(&mut online, 1, session::player(PLAYER));
+        let mut filters = eq_client_core::chat_filters::ChatFilters::default();
+        filters.set(FilterCategory::Ooc, FilterMode::Hide);
+        filters.set(FilterCategory::BardSongs, FilterMode::GroupOnly);
+        let read = |name: &str, filters| {
+            Field::parse(name)
+                .unwrap_or_else(|| panic!("{name} is a field"))
+                .read(&Sight {
+                    world: online.world(),
+                    spells: None,
+                    clock: TITANIUM,
+                    now: std::time::Instant::now(),
+                    chat: None,
+                    filters,
+                })
+        };
+        assert_eq!(read("filter.ooc", Some(&filters)), text("hide"));
+        assert_eq!(read("filter.bard_songs", Some(&filters)), text("group"));
+        assert_eq!(read("filter.shouts", Some(&filters)), text("show"));
+        // The bad-word filter starts on, as the original's does.
+        assert_eq!(read("filter.bad_words", Some(&filters)), text("hide"));
+        assert_eq!(read("filter.ooc", None), Value::Unknown);
+        assert_eq!(
+            Field::parse("filter.ooc").unwrap().kind(),
+            super::Kind::Text
+        );
+        // Swarm pets' deaths have no row on the page, so no field.
+        assert_eq!(Field::parse("filter.swarm_pet_death"), None);
+        assert_eq!(Field::parse("filter.loud"), None);
     }
 
     #[test]

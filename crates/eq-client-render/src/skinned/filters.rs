@@ -19,6 +19,10 @@ use std::borrow::Cow;
 /// The page's name, which also marks its content as generated.
 pub(super) const PAGE: &str = "EQC_FiltersPage";
 
+/// The Filters page's viewport, which `/filter` shows.
+#[derive(bevy::prelude::Component, Clone, Copy, Debug)]
+pub(crate) struct FiltersPage;
+
 const BUTTON: &str = "EQC_Filter_";
 const VALUE: &str = "ValueLabel";
 const MARGIN: f32 = 10.0;
@@ -67,8 +71,9 @@ fn row_button(template: &Button, category: FilterCategory, area: Area) -> Button
 }
 
 /// The skin's pages, and for the Options window a Filters page after them,
-/// where the skin has a checkbox to cut its buttons from.
-pub(super) fn pages(pages: &[Page], owner: WindowId) -> Cow<'_, [Page]> {
+/// where the skin has a checkbox to cut its buttons from. The page's note
+/// wraps within the page's width, `page_width`.
+pub(super) fn pages(pages: &[Page], owner: WindowId, page_width: f32) -> Cow<'_, [Page]> {
     if owner != WindowId::Options || pages.iter().any(|page| page.name == PAGE) {
         return Cow::Borrowed(pages);
     }
@@ -125,7 +130,7 @@ pub(super) fn pages(pages: &[Page], owner: WindowId) -> Cow<'_, [Page]> {
                 Area {
                     x: MARGIN,
                     y: MARGIN,
-                    width: 2.0 * width + GAP,
+                    width: (2.0 * width + GAP).min(page_width - 2.0 * MARGIN).max(60.0),
                     height: 3.0 * height,
                 },
                 Align::Left,
@@ -133,7 +138,7 @@ pub(super) fn pages(pages: &[Page], owner: WindowId) -> Cow<'_, [Page]> {
         }),
     )];
     let mut y = MARGIN + 3.0 * height + GAP;
-    for category in FilterCategory::ALL {
+    for category in eq_client_core::chat_filters::rows() {
         let area = Area {
             x: MARGIN,
             y,
@@ -187,24 +192,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_page_has_a_row_for_every_kind_and_is_added_once() {
+    fn the_page_has_a_row_for_every_kind_with_one_and_is_added_once() {
         let first = super::super::qol::tests::source();
-        let made = pages(std::slice::from_ref(&first), WindowId::Options);
+        let made = pages(std::slice::from_ref(&first), WindowId::Options, 300.0);
         assert_eq!(made.len(), 2);
         let page = &made[1];
         assert_eq!(page.name, PAGE);
+        // The note wraps within the page (6.494d's look).
+        let note = page.pieces.iter().find(|(id, _)| id == NOTE_ID);
+        match note.map(|(_, element)| element) {
+            Some(Element::Label(label)) => {
+                assert!(label.area.x + label.area.width <= 300.0 - MARGIN);
+                assert!(label.wraps);
+            }
+            other => panic!("{other:?}"),
+        }
         let buttons: Vec<_> = page
             .pieces
             .iter()
             .filter_map(|(id, _)| filter_button(id))
             .collect();
-        assert_eq!(buttons, FilterCategory::ALL);
+        let rows: Vec<_> = FilterCategory::ALL
+            .into_iter()
+            .filter(|category| *category != FilterCategory::SwarmPetDeath)
+            .collect();
+        assert_eq!(buttons, rows);
         let values: Vec<_> = page
             .pieces
             .iter()
             .filter_map(|(id, _)| filter_value(id))
             .collect();
-        assert_eq!(values, FilterCategory::ALL);
+        assert_eq!(values, rows);
         for (id, element) in &page.pieces {
             if let Element::Button(button) = element {
                 assert!(!button.checkbox, "{id}");
@@ -212,9 +230,9 @@ mod tests {
             }
         }
         assert!(content_height(page).unwrap() > 24.0 * 14.0);
-        assert_eq!(pages(&made, WindowId::Options).len(), 2);
+        assert_eq!(pages(&made, WindowId::Options, 300.0).len(), 2);
         assert_eq!(
-            pages(std::slice::from_ref(&first), WindowId::Spellbook).len(),
+            pages(std::slice::from_ref(&first), WindowId::Spellbook, 300.0).len(),
             1
         );
         assert_eq!(filter_button("EQC_Filter_ooc"), Some(FilterCategory::Ooc));

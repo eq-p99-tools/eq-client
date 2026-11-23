@@ -460,6 +460,8 @@ pub enum ClickTarget {
     GroupJoin,
     /// An Options window checkbox, by the option's name in a file.
     Option(eq_client_core::options::Toggle),
+    /// A Filters page row's button, by its kind's stable name (6.494, K3).
+    Filter(eq_client_core::filters::FilterCategory),
     /// A slider, pressed this far along it, in percent.
     Slider(SliderClick, u8),
     /// The Keyboard page's filter drop-down, which opens or closes its list.
@@ -946,6 +948,13 @@ pub(super) fn parse_words(command: &str, rest: &[&str]) -> Result<Step, String> 
 /// typing it would, since a script may do whatever the player can (Adam,
 /// 11-23). The typed-line handlers refuse what they would refuse from the
 /// keyboard; only the chat line's own limits apply here.
+/// A Filters page row by its kind's stable name; a kind with no row is none.
+fn filter_row(name: &str) -> Result<eq_client_core::filters::FilterCategory, &'static str> {
+    eq_client_core::filters::FilterCategory::from_key(name)
+        .filter(|category| eq_client_core::chat_filters::has_row(*category))
+        .ok_or("expected a filter row, by its kind's name, such as ooc")
+}
+
 fn parse_slash(words: &[&str]) -> Result<Step, String> {
     let Some(first) = words.first() else {
         return Err("slash takes a command".into());
@@ -1097,6 +1106,7 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
             *window == "buff",
             u32::try_from(ordinal(button, "a button")?).map_err(|_| "button out of range")?,
         ),
+        ["filter", name] => ClickTarget::Filter(filter_row(name)?),
         ["option", name] => ClickTarget::Option(
             eq_client_core::options::Toggle::all()
                 .find(|toggle| toggle.key() == *name)
@@ -1147,8 +1157,7 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
                 .filter(|place| usize::from(*place) < crate::spellbook::PLACES)
                 .ok_or_else(|| String::from("expected a book place from 0 to 15"))?,
         ),
-        ["book_page", "next"] => ClickTarget::BookPage(true),
-        ["book_page", "back"] => ClickTarget::BookPage(false),
+        ["book_page", way @ ("next" | "back")] => ClickTarget::BookPage(*way == "next"),
         ["book_edit", action] => ClickTarget::BookEdit(book_edit(action)?),
         ["spawn" | "object" | "door", ..] => world_target(words)?,
         _ => return Err("unknown or malformed step".into()),
@@ -3080,6 +3089,19 @@ mod tests {
                 eq_client_core::options::Toggle::TargetRing
             ))]
         );
+        // A Filters page row goes by its kind's stable name (6.494, K3).
+        assert_eq!(
+            parse("click(\"filter\", \"ooc\")\n", base).unwrap(),
+            [Step::Click(ClickTarget::Filter(
+                eq_client_core::filters::FilterCategory::Ooc
+            ))]
+        );
+        for bad in [
+            "click(\"filter\", \"swarm_pet_death\")",
+            "click(\"filter\", \"loud\")",
+        ] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
         // A quality-of-life setting goes by its name in a file too.
         assert_eq!(
             parse("click(\"option\", \"skip_modified_food\")\n", base).unwrap(),

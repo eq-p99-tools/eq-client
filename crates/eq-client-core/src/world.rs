@@ -1024,6 +1024,9 @@ impl ClientWorld {
             | WorldEvent::BuffIcons(_)
             | WorldEvent::ResourcePercent { .. }
             | WorldEvent::ResourcePool { .. }
+            // The program's duel lines (R49-6): the duel slice's client
+            // work shows them.
+            | WorldEvent::DuelNews(_)
             // Chat server channels: the chat channels slice (6.509).
             | WorldEvent::Channel(_)
             | WorldEvent::ChannelLink(_)

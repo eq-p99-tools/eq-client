@@ -605,7 +605,7 @@ mod tests {
         assert!(text.contains("jesus_mode = true\n"));
         assert!(text.contains("hidden_windows = false\n"));
         assert!(text.contains("show_names = 2\n"));
-        assert!(text.contains("filter_auctions = hide\n"));
+        assert!(text.contains("Channel04 = 0\n"));
         assert_eq!(Options::read(&text, Options::default()), options);
         // A file from before the QoL page keeps its choices there.
         let before = Options::read(
