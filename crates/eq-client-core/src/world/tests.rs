@@ -4,6 +4,7 @@ mod buff_cancellation;
 mod carriers;
 mod casting;
 mod guild_roster;
+mod guild_status;
 mod loot_requests;
 mod own_stun;
 mod pet_buffs;
@@ -59,6 +60,7 @@ fn spawn(spawn_id: u16) -> SpawnState {
         spawn_id,
         name: "a_rat".into(),
         kind: SpawnKind::Npc,
+        body_type: None,
         race: 1,
         gender: 0,
         position: WorldPosition::default(),
@@ -862,6 +864,7 @@ fn input_acceptance_is_current_and_never_supplies_movement_permission() {
             strafe_units_per_second: None,
             strafe_walk_units_per_second: None,
             swim_backward_units_per_second: None,
+            swim: None,
             falls: true,
             jump_factor: 1.0,
         },
@@ -1813,6 +1816,7 @@ fn chest() -> crate::inventory::InventoryItem {
         stack_count: None,
         charges: 0,
         bag_slots: 0,
+        augments: Default::default(),
     }
 }
 
@@ -3736,6 +3740,7 @@ fn the_session_grants_motion_until_any_reset() {
         strafe_units_per_second: None,
         strafe_walk_units_per_second: None,
         swim_backward_units_per_second: None,
+        swim: None,
         falls: true,
         jump_factor: 1.0,
     };
@@ -6244,6 +6249,48 @@ fn movement_weight_requires_cursor_receipt_but_never_a_bank_balance() {
         world.movement_weight(),
         Err(crate::SpeedInputUnavailable::Coins)
     );
+}
+
+#[test]
+fn an_augmented_item_makes_the_load_and_worn_stats_unknown_as_a_bad_container_does() {
+    // eq-network 6.570: augments are read but not summed, so the session's
+    // weight is `WeightUnavailable::Augments`, read here exactly as an
+    // unreadable container's (6.572), never as a lighter load.
+    use crate::inventory::InventorySlot;
+    let known = |items: Vec<crate::inventory::InventoryItem>| {
+        let mut world = admitted();
+        game(&mut world, inventory(items));
+        game(&mut world, WorldEvent::Coins(Coins::default()));
+        game(
+            &mut world,
+            WorldEvent::CoinsElsewhere {
+                cursor: Coins::default(),
+                bank: Coins::default(),
+                given: Coins::default(),
+                offered: Coins::default(),
+            },
+        );
+        world
+    };
+    assert!(known(vec![chest()]).movement_weight().is_ok());
+    let mut bad_bag = chest();
+    bad_bag.slot = InventorySlot(22);
+    bad_bag.bag_slots = 4;
+    bad_bag.rules.bag_weight_reduction = 101;
+    let container = known(vec![bad_bag]).movement_weight();
+    assert_eq!(container, Err(crate::SpeedInputUnavailable::Inventory));
+    for slot in [17, 22] {
+        let mut augmented = chest();
+        augmented.slot = InventorySlot(slot);
+        augmented.augments[0] = Some(77);
+        let world = known(vec![augmented]);
+        assert_eq!(world.movement_weight(), container, "{slot}");
+        assert_eq!(
+            world.worker_inventory().equipment_stats_uncertain(),
+            slot == 17,
+            "{slot}"
+        );
+    }
 }
 
 #[test]

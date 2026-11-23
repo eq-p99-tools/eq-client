@@ -133,7 +133,14 @@ impl PointerUi<'_, '_> {
         self.script
             .as_ref()
             .is_some_and(|script| script.background_owns_input())
-            || self.drag.as_ref().is_some_and(|drag| drag.active.is_some())
+            || self.covers(cursor)
+    }
+
+    /// Whether a window or a drag covers this point, whoever points: what a
+    /// script's own scene click checks, since it owns the input it points
+    /// with (checklist 6.587).
+    pub fn covers(&self, cursor: Vec2) -> bool {
+        self.drag.as_ref().is_some_and(|drag| drag.active.is_some())
             || self.top_at(cursor).is_some()
     }
 

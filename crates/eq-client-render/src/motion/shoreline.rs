@@ -462,6 +462,7 @@ mod tests {
         worker
             .calibrate(
                 MotionCalibration {
+                    swim: None,
                     swim_backward_units_per_second: None,
                     units_per_second: 30.0,
                     velocity_scale: 1.0,

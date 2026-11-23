@@ -1,5 +1,7 @@
 //! Calibrated P99 input; no movement is generated without a session grant.
 #[cfg(test)]
+mod belongings_tests;
+#[cfg(test)]
 mod boat_pace_tests;
 mod boats;
 mod follow;
@@ -542,7 +544,10 @@ impl Controls {
             let radians = eq_client_core::render_heading(heading);
             intent.preserve_facing = true;
             if let Some(speed) = self.strafe_speed {
-                intent.mode = MovementMode::Strafe;
+                // A strafe keeps the running pace through the repin (6.561): the
+                // session bounds it as before; the strafe pace slice names
+                // a walking one.
+                intent.mode = MovementMode::Strafe(eq_client_core::Pace::Run);
                 // Titanium strafes on the selected base speed (the R5
                 // audit's S1).
                 intent.speed = if self.walking {
@@ -1282,7 +1287,11 @@ fn swim_stroke(
     // and the mouse only in first person; a chase view's mouse look and
     // camera keys move only the camera (reads R13 d, R33, R39 A).
     let pitch = camera.look_pitch();
-    if pitch == 0.0 || !longitudinal || mode == MovementMode::Strafe || direction == Vec3::ZERO {
+    if pitch == 0.0
+        || !longitudinal
+        || matches!(mode, MovementMode::Strafe(_))
+        || direction == Vec3::ZERO
+    {
         return (direction, false);
     }
     let backing = mode == MovementMode::Backward || camera_back && !camera_forward;
@@ -1925,7 +1934,7 @@ pub(super) fn input(
     // R28b),
     // so it isn't halved again here. Elsewhere the session stands them to move,
     // and the step it stands them on is halved as before.
-    if intent.mode == MovementMode::Strafe
+    if matches!(intent.mode, MovementMode::Strafe(_))
         && !online.world().generation().ducking().moves_ducked
         && online
             .world()
@@ -6627,7 +6636,7 @@ pub(super) mod tests {
             );
             controls.strafe_speed = Some(3.0);
             let right = controls.intent(&keys, &map, &[], true, (0.0, heading), None);
-            assert_eq!(right.mode, MovementMode::Strafe);
+            assert!(matches!(right.mode, MovementMode::Strafe(_)));
             assert!(right.preserve_facing);
             assert_eq!(right.speed, 3.0);
             assert!(right.direction.dot(facing).abs() < 0.0001);
@@ -7326,7 +7335,7 @@ pub(super) mod tests {
             let ClientCommand::Move(request) = receiver.try_recv().unwrap() else {
                 panic!("expected a strafe")
             };
-            assert_eq!(request.mode, MovementMode::Strafe);
+            assert!(matches!(request.mode, MovementMode::Strafe(_)));
             let across = request.position.x.hypot(request.position.y);
             assert!(
                 (across - moved).abs() < 0.001,
@@ -7372,7 +7381,7 @@ pub(super) mod tests {
             let ClientCommand::Move(request) = receiver.try_recv().unwrap() else {
                 panic!("expected a strafe, with no stand before it")
             };
-            assert_eq!(request.mode, MovementMode::Strafe);
+            assert!(matches!(request.mode, MovementMode::Strafe(_)));
             let across = request.position.x.hypot(request.position.y);
             assert!(
                 (across - moved).abs() < 0.001,
@@ -7625,7 +7634,7 @@ pub(super) mod tests {
                 };
                 let position = Vec3::from_array(eq_client_core::render_position(request.position));
                 if world_owns_look {
-                    assert_eq!(request.mode, MovementMode::Strafe);
+                    assert!(matches!(request.mode, MovementMode::Strafe(_)));
                     assert!((position - origin - right * side * 0.3).length() < 0.001);
                     assert!(arc(0.0, request.position.heading).abs() < 0.001);
                     accept(&mut app, &request);
@@ -7715,7 +7724,7 @@ pub(super) mod tests {
         keys.reset_all();
         keys.press(KeyCode::KeyE);
         let explicit = intent(&controls, &keys, &[], true, &looking);
-        assert_eq!(explicit.mode, MovementMode::Strafe);
+        assert!(matches!(explicit.mode, MovementMode::Strafe(_)));
         assert!((explicit.speed - 3.0).abs() < f32::EPSILON);
         assert!(explicit.turn.abs() < f32::EPSILON);
     }
@@ -7895,7 +7904,7 @@ pub(super) mod tests {
         keys.press(KeyCode::KeyS);
         let only_side = controls.intent(&keys, &map, &[], true, (0.0, 0.0), None);
         assert!(only_side.diagonal.is_none());
-        assert_eq!(only_side.mode, MovementMode::Strafe);
+        assert!(matches!(only_side.mode, MovementMode::Strafe(_)));
 
         keys.reset_all();
         keys.press(KeyCode::KeyE);
@@ -8025,6 +8034,7 @@ pub(super) mod tests {
         session
             .calibrate(
                 eq_client_core::MotionCalibration {
+                    swim: None,
                     swim_backward_units_per_second: None,
                     units_per_second: 6.0,
                     velocity_scale: 1.0,
@@ -8319,6 +8329,7 @@ pub(super) mod tests {
         let mut carriers = eq_client_core::movement::Carriers::default();
         let spawned = carriers.observe(
             &WorldEvent::Spawns(vec![SpawnState {
+                body_type: None,
                 spawn_id: 8,
                 race: 72,
                 kind: SpawnKind::Npc,
@@ -8576,6 +8587,7 @@ pub(super) mod tests {
             session
                 .calibrate(
                     eq_client_core::MotionCalibration {
+                        swim: None,
                         swim_backward_units_per_second: None,
                         units_per_second: 6.0,
                         diagonal: DiagonalRates {
@@ -8751,6 +8763,7 @@ pub(super) mod tests {
         session
             .calibrate(
                 eq_client_core::MotionCalibration {
+                    swim: None,
                     swim_backward_units_per_second: None,
                     diagonal: eq_client_core::DiagonalRates::default(),
                     strafe: None,
@@ -9270,6 +9283,7 @@ pub(super) mod tests {
         use eq_network_game::movement::MotionSession;
         let titanium = eq_client_core::GameDialect::Titanium.root();
         let calibration = |units_per_second| eq_client_core::MotionCalibration {
+            swim: None,
             swim_backward_units_per_second: None,
             units_per_second,
             velocity_scale: 1.0,
@@ -9895,6 +9909,7 @@ pub(super) mod tests {
             .init_resource::<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>()
             .add_systems(Update, online::receive);
         let grant = || WorldEvent::MotionState {
+            swim: None,
             session_id: 11,
             units_per_second: Some(30.0),
             backward_units_per_second: None,
@@ -10009,6 +10024,7 @@ pub(super) mod tests {
             controls.unreported = Some(cost);
             sender
                 .send(WorldUpdate::Game(WorldEvent::MotionState {
+                    swim: None,
                     session_id: 11,
                     units_per_second: None,
                     backward_units_per_second: None,

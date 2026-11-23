@@ -2589,6 +2589,7 @@ dependencies = [
  "glam 0.32.1",
  "image",
  "libeq",
+ "libeq_eqg",
  "roxmltree",
  "thiserror 2.0.20",
 ]
@@ -2637,7 +2638,7 @@ dependencies = [
 [[package]]
 name = "eq-network"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?rev=0d9570be3f108f91a9bfedf96d1ca70ebcd65abc#0d9570be3f108f91a9bfedf96d1ca70ebcd65abc"
+source = "git+https://github.com/eq-p99-tools/eq-network?rev=debfe0f04fa92a3aca5d40cc5ddb7efc6be39177#debfe0f04fa92a3aca5d40cc5ddb7efc6be39177"
 dependencies = [
  "anyhow",
  "crc32fast",
@@ -2656,7 +2657,7 @@ dependencies = [
 [[package]]
 name = "eq-network-game"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?rev=0d9570be3f108f91a9bfedf96d1ca70ebcd65abc#0d9570be3f108f91a9bfedf96d1ca70ebcd65abc"
+source = "git+https://github.com/eq-p99-tools/eq-network?rev=debfe0f04fa92a3aca5d40cc5ddb7efc6be39177#debfe0f04fa92a3aca5d40cc5ddb7efc6be39177"
 dependencies = [
  "anyhow",
  "hex",
@@ -2671,7 +2672,7 @@ dependencies = [
 [[package]]
 name = "eq-network-login"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?rev=0d9570be3f108f91a9bfedf96d1ca70ebcd65abc#0d9570be3f108f91a9bfedf96d1ca70ebcd65abc"
+source = "git+https://github.com/eq-p99-tools/eq-network?rev=debfe0f04fa92a3aca5d40cc5ddb7efc6be39177#debfe0f04fa92a3aca5d40cc5ddb7efc6be39177"
 dependencies = [
  "cbc",
  "cipher",
@@ -2684,7 +2685,7 @@ dependencies = [
 [[package]]
 name = "eq-network-transport"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?rev=0d9570be3f108f91a9bfedf96d1ca70ebcd65abc#0d9570be3f108f91a9bfedf96d1ca70ebcd65abc"
+source = "git+https://github.com/eq-p99-tools/eq-network?rev=debfe0f04fa92a3aca5d40cc5ddb7efc6be39177#debfe0f04fa92a3aca5d40cc5ddb7efc6be39177"
 dependencies = [
  "anyhow",
  "crc32fast",
@@ -3698,6 +3699,14 @@ source = "git+https://github.com/eq-p99-tools/libeq?rev=e0e5a4e65c170272035a8beb
 dependencies = [
  "libeq_pfs",
  "libeq_wld",
+]
+
+[[package]]
+name = "libeq_eqg"
+version = "0.5.0"
+source = "git+https://github.com/djhenry/libeq?rev=686b74a1a82e8f4f207958ebbe8c06579046ce04#686b74a1a82e8f4f207958ebbe8c06579046ce04"
+dependencies = [
+ "thiserror 2.0.20",
 ]
 
 [[package]]

@@ -24,6 +24,23 @@ retry; a completed ordered release permits ordinary reacquisition. Walk-off, cam
 floor-link withdrawal is retried until the worker reports changed state; queue
 acceptance alone does not settle it.
 
+## Alternate advancement
+
+These three steps are this client's own words, not the official client's. The official `/alternateadv` subwords haven't been read yet (R49-40b), so no slash form is offered for them.
+
+- `train_aa(rank_id)`: asks to buy the AA rank with this definition id (on the Mac-era client, the Mac AA id from 1 to 226). It spends points, which nothing gives back.
+- `activate_aa(rank_id)`: asks to use an owned rank's ability. It takes no target.
+- `aa_split(percent)`: asks to send this share of experience, from 0 (off) to 100, to AAs.
+
+Each step posts one request for the current admission and moves on. It never waits for the server and never tries again. The client checks nothing about the rank, the points or the level: the session alone decides, and when it refuses, the reason is said in chat. Only a local EQEmu or local TAKP session takes them until the AA live rows pass (checklist 6.581). Every other server type refuses them as not offered, and on the Mac-era client only `aa_split` goes for now. The steps need a character in the world.
+
+`report([label])` also logs a "Script alternate advancement report" line with an `alternate_advancement` object (checklist 6.582). It holds numbers only, as the server sent them:
+
+- `titanium`: the count of `definitions`; the `selections` ids; the `trainable` ranks as `{id, cost}`; the `activatable` rank ids; the profile's `points`; the latest `progress`; `unspent`; and the `timers` as `{ability, begin, end}`.
+- `mac`: the `ranks` from `OP_RespondAA` as `{id, value}` with `spent`; the profile's `selections`; `points`; `progress`; and `timers`.
+
+A fact not yet received is `null`. Each list is `{count, listed}`, with at most 64 entries listed. Trainable and activatable are for reading only: the session judges every request again.
+
 ## Your current session
 
 Run a script from the workbench while logged in to act on your current character. Commands use your existing target and UI state. Login and character-selection commands are unnecessary for this workflow.
@@ -38,7 +55,15 @@ Run a script from the workbench while logged in to act on your current character
 - `hold(keys, milliseconds)`: hold a key or chord, then release it.
 - `click(target...)`: left-click a named control.
 - `right_click(target...)`: right-click a named control.
+- `click_with(keys, target...)` and `right_click_with(keys, target...)`: click a named control with modifier keys held, as a person holds them. `keys` is `"shift"`, `"ctrl"`, `"alt"` or a chord of them such as `"ctrl+shift"`. The keys go down with the button and come up the frame after it, so each window reads them as it reads yours. For example:
+  - `right_click_with("alt", "slot", 22)` uses the item's click effect;
+  - `click_with("shift", "slot", 23)` moves the whole stack, and `click_with("ctrl", "slot", 23)` moves one;
+  - `click_with("shift", "coins", "purse", "platinum")` takes all of that coin;
+  - `right_click_with("ctrl", "slot", 22)` puts the item's link in the chat line.
+
+  A run that stops mid-click lets the keys go.
 - `hover(target...)`: rest the synthetic pointer over a control.
+- `click("spawn", admission, id, revision)`, `click("object", admission, drop_id)` and `click("door", admission, id)`, with `right_click` and `click_with` for a spawn: click a thing in the world, by the ids a fresh `report()` gives. The click obeys what is on screen: it acts only where the scene's own pick names that thing right now, so a thing a person couldn't click from here refuses the step and nothing is sent. A door takes a person's two clicks. See [World](targets.md#world).
 - `hold_click(milliseconds, target...)`: hold the left button on a control.
 - `drag(window, x, y)`: move a named window to logical screen pixels.
 - `wheel("world", lines)`: turn the wheel over visible world space, from -64 to
@@ -246,7 +271,12 @@ or occluded. The counters are independent of damage and inventory.
   link is unavailable or another inspection is pending. The `inspection`
   tuple gives the selected item ID and whether a received definition is
   available, including a definition already cached in the admission.
-- `slash("command [arguments]")`: run one of the supported game slash commands, without a leading slash.
+- `slash("command [arguments]")`: run any line the player could type, without its leading slash,
+  exactly as the chat line runs it: the same abbreviations, handlers, paces and refusals,
+  stamped with the script's admission. Chat words (`say`, `tell`, `ooc`, `shout`, `gsay`,
+  `auction`), `reply`, `friend`, `ignore`, `quit` and `exit` work as typed. The line is at
+  most 512 bytes counting the slash, as the chat line is, and takes no control characters.
+  A social goes through the named `social` step instead.
   `slash("follow")` queues the ordinary local follow request for the targeted group
   member. Its deferred request keeps the script's expected admission and zone;
   a changed world withdraws it before movement handles it. Completion of the
@@ -262,18 +292,19 @@ or occluded. The counters are independent of damage and inventory.
   step when queued. Read subsequent server observations to check their effects.
   `slash("camp desktop")` uses the ordinary camp destination and current QoL exit choice.
   `slash("guildinvite [Name] [o]")`, `slash("guildremove [Name]")`,
-  `slash("guildmotd [text]")` and `slash("getguildmotd")` use the existing typed guild
+  `slash("guildmotd [text]")` and `slash("getguildmotd")` use the typed guild
   handlers. Omit a name to use the current target; `o` offers officer rank.
-  Names contain at most 63 ASCII letters. MOTD text is below 512 UTF-8 bytes
-  and contains no control characters;
-  an empty MOTD requests clearing it. Membership, rank and listed-member checks
+  An empty MOTD requests clearing it. Membership, rank and listed-member checks
   remain with the ordinary handlers and session. Queueing a step proves no
   invitation acceptance, roster change or MOTD update; check received evidence.
   `slash("stopsong")` queues the Bard's stop request on Titanium EQEmu.
-  The immediate disconnect aliases typed in chat are not script slash commands.
-  `slash("emote")` and `slash("random")` reach everyone nearby, so like `chat` they
-  run only in a network-constrained local test session.
-- `gm("command [arguments]")`: an allowed GM command on a network-constrained local test session only.
+  `slash("quit")` and `slash("exit")` leave as typing them does, by the same route;
+  `quit()` closes the client.
+  `slash("emote")` and `slash("random")` reach everyone nearby, and run on any
+  server, as the player's own would.
+- `gm("command [arguments]")`: an allowed GM command, sent as a typed `#` line on any
+  server. Its fixture forms (`spawn`, `depop`, `guild`, `stun`, `setlanguage` and
+  `traindisc`) run only on a network-constrained local test session.
   Local Titanium EQEmu also supports `gm("guild create CHARACTER_ID_OR_NAME GUILD_NAME")`,
   `gm("guild delete GUILD_ID")` and `gm("guild set CHARACTER_ID_OR_NAME GUILD_ID")`.
   These are narrowly bounded fixture setup/cleanup forms: character names use
@@ -316,7 +347,8 @@ or occluded. The counters are independent of damage and inventory.
   refused when the script is read. What these print names characters and
   items, so their output stays in private run notes and never goes into the
   repository, a pull request or a published page.
-- `chat("channel message")`: chat on a network-constrained local test session only.
+- `chat("channel message")`: chat on any server, under the session's chat pace,
+  with a character in the world.
 - `quit()`: close the client.
 
 The typed parser and normal client capability checks decide which commands and controls are available. A valid action can still fail at runtime when its target, session or expected result is unavailable.
@@ -333,7 +365,7 @@ The typed parser and normal client capability checks decide which commands and c
 
 - `social("set Name | /command | /pause 10,/command")`, `social("bind 1 Name")`,
   `social("play Name")` and `social("cancel")` use the same social controls as
-  chat on a local session. `social("list")`, `social("show Name")` and
+  chat, on any server. `social("list")`, `social("show Name")` and
   `social("delete Name")` also use the ordinary editor. Use the named step
   for scripts. Synthetic chat submission and hotbar activation refuse socials.
   A step queues the control request. Keep the script running with a wait if

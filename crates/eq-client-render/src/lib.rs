@@ -221,6 +221,9 @@ pub struct ViewerConfig {
     /// Explicit input ownership for CLI scripts and later opt-in recovery runs.
     /// Background mode requests an initially non-activating window.
     pub script_input_mode: script::InputMode,
+    /// How long the player lets each script run go (`--script-run-length`);
+    /// the workbench's selector starts from it.
+    pub script_run_length: script::RunLength,
     /// Opt-in local script request/status bridge and Runbook checklist.
     /// The path must be a new directory.
     pub script_control: Option<PathBuf>,
@@ -636,10 +639,13 @@ fn install_script(
         .init_resource::<script::RunControl>();
     app.add_systems(
         PreUpdate,
-        script::drive
-            .after(bevy::ui::UiSystems::Focus)
-            .after(items::link_input)
-            .before(clicks::track),
+        (
+            script::drive
+                .after(bevy::ui::UiSystems::Focus)
+                .after(items::link_input)
+                .before(clicks::track),
+            script::lease_scene.after(script::drive),
+        ),
     )
     .add_systems(
         Update,

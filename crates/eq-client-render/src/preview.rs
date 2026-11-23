@@ -573,6 +573,7 @@ fn entities(
 /// One of the synthetic spawns: spawn 2 a player, the rest creatures.
 fn synthetic(id: u16, race: u32, size: f32, position: WorldPosition) -> eq_client_core::SpawnState {
     eq_client_core::SpawnState {
+        body_type: None,
         class: None,
         spawn_id: id,
         name: format!("Synthetic {id}"),
@@ -685,6 +686,7 @@ pub(crate) fn items() -> Vec<InventoryItem> {
             stack_count: count,
             charges: 0,
             bag_slots: bag,
+            augments: Default::default(),
             details: ItemDetails {
                 base_held_model: None,
                 equipment: None,

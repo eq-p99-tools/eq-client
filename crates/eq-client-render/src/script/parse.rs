@@ -113,6 +113,36 @@ const SHOW_INVENTORY_SCOPES: [&str; 13] = [
     "trade", "trib", "world",
 ];
 
+/// A script's AA request (checklist 6.569). The session alone decides
+/// whether it goes; the client checks nothing about the rank or the points.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AaRequest {
+    /// `train_aa(RANK_ID)`: buy the rank with this definition id; on `EQMac`
+    /// the Mac AA id. Spends points, which nothing gives back.
+    Train(u32),
+    /// `activate_aa(RANK_ID)`: use an owned rank's ability, with no target.
+    Activate(u32),
+    /// `aa_split(PERCENT)`: the share of experience that goes to AAs, 0
+    /// (off) to 100.
+    Split(u8),
+}
+
+/// A spellbook ordering or deletion button: move the chosen spell one slot
+/// earlier or later, ask to delete it, or answer that question.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BookEdit {
+    /// Move earlier.
+    Earlier,
+    /// Move later.
+    Later,
+    /// Delete spell, which asks first.
+    Delete,
+    /// Confirm the deletion.
+    Confirm,
+    /// Cancel the deletion.
+    Cancel,
+}
+
 /// One scripted action.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Step {
@@ -152,6 +182,9 @@ pub enum Step {
     WaitDead(Duration),
     /// Runs a game slash command such as `/camp`; chat text is refused.
     Slash(String),
+    /// Asks the session for one AA request, in this client's own script words
+    /// (checklist 6.569): no official slash form is read yet (R49-40b).
+    AlternateAdvancement(AaRequest),
     /// Edit or run a social via the ordinary chat controls in a local session.
     Social(String),
     /// Sends an allowed `#` command, such as `summon`, to a local `EQEmu` server;
@@ -301,6 +334,18 @@ pub enum Step {
     /// Right-clicks one UI control the same way, as a bag is opened or an
     /// item inspected.
     RightClick(ClickTarget),
+    /// Clicks one UI control with modifier keys held, as a person holds
+    /// Shift, Ctrl or Alt while clicking (checklist 6.586): the keys go down
+    /// with the button's press and up the frame after its release, so every
+    /// window reads them as it reads a person's.
+    ClickWith {
+        /// The modifiers held: Shift, Ctrl, Alt or a chord of them.
+        keys: Vec<KeyCode>,
+        /// The control clicked.
+        target: ClickTarget,
+        /// Whether it is the right button.
+        right: bool,
+    },
     /// Rests the pointer on one UI control, found as a click finds it, so
     /// its tooltip shows; it stays hovered until the next click or hover.
     Hover(ClickTarget),
@@ -452,6 +497,32 @@ pub enum ClickTarget {
     BookPlace(u8),
     /// The skin's spellbook's arrow: forward (true) or back.
     BookPage(bool),
+    /// One of the spellbook's ordering and deletion buttons, for the row
+    /// chosen with `book` (checklist 6.588).
+    BookEdit(BookEdit),
+    /// A spawn in the world, clicked where it shows (checklist 6.587).
+    Spawn {
+        /// The admission it was reported in.
+        admission: u64,
+        /// Its spawn id.
+        id: u16,
+        /// Its revision, so a reused id is refused.
+        revision: u64,
+    },
+    /// An object on the ground, clicked where it shows.
+    Object {
+        /// The admission it was reported in.
+        admission: u64,
+        /// Its drop id.
+        drop_id: u32,
+    },
+    /// A door, double-clicked where it shows.
+    Door {
+        /// The admission it was reported in.
+        admission: u64,
+        /// Its door id.
+        id: u8,
+    },
     /// A spell gem of the skin's spell bar, from zero.
     SpellGem(u8),
     /// A hotbutton of the action bar, the client's own or the skin's, from
@@ -625,6 +696,9 @@ pub(crate) const COMMANDS: &[&str] = &[
     "wait_dead",
     "slash",
     "boat",
+    "train_aa",
+    "activate_aa",
+    "aa_split",
     "social",
     "gm",
     "chat",
@@ -650,6 +724,8 @@ pub(crate) const COMMANDS: &[&str] = &[
     "compose_owned_link",
     "click",
     "right_click",
+    "click_with",
+    "right_click_with",
     "hover",
     "hold_click",
     "report",
@@ -685,6 +761,13 @@ pub(super) fn parse_words(command: &str, rest: &[&str]) -> Result<Step, String> 
             .ok_or_else(|| format!("expected a number from {low} to {high}"))
     };
     let chord = |keys: &str| keys_from(keys).ok_or_else(|| String::from("unknown key"));
+    // An AA definition id; 0 names none.
+    let rank_id = |id: &str| {
+        id.parse::<u32>()
+            .ok()
+            .filter(|id| *id != 0)
+            .ok_or("expected an AA rank id from 1")
+    };
     // A world container that combines: a station, not a bag that only holds things.
     let station = |kind: &str| {
         kind.parse::<u8>()
@@ -718,6 +801,15 @@ pub(super) fn parse_words(command: &str, rest: &[&str]) -> Result<Step, String> 
         ("wait_dead", [duration]) => Step::WaitDead(millis(duration, MAX_WAIT)?),
         ("slash", words) => parse_slash(words)?,
         ("boat", [intent @ ("acquire" | "release")]) => Step::Slash(format!("/boat {intent}")),
+        ("train_aa", [id]) => Step::AlternateAdvancement(AaRequest::Train(rank_id(id)?)),
+        ("activate_aa", [id]) => Step::AlternateAdvancement(AaRequest::Activate(rank_id(id)?)),
+        ("aa_split", [percent]) => Step::AlternateAdvancement(AaRequest::Split(
+            percent
+                .parse::<u8>()
+                .ok()
+                .filter(|percent| *percent <= 100)
+                .ok_or("aa_split takes a percent from 0 (off) to 100")?,
+        )),
         ("social", operation) if !operation.is_empty() => {
             Step::Social(format!("/social {}", operation.join(" ")))
         }
@@ -809,11 +901,22 @@ pub(super) fn parse_words(command: &str, rest: &[&str]) -> Result<Step, String> 
             slot: InventorySlot(slot.parse().map_err(|_| "expected an inventory slot")?),
         },
         ("click", target) => Step::Click(parse_click(target)?),
-        ("right_click", target) => Step::RightClick(parse_click(target)?),
-        ("hover", target) => Step::Hover(parse_click(target)?),
-        ("hold_click", [duration, target @ ..]) => {
-            Step::HoldClick(parse_click(target)?, millis(duration, MAX_HOLD)?)
-        }
+        ("right_click", target) => Step::RightClick(right_clicked(parse_click(target)?)?),
+        ("click_with", [keys, target @ ..]) => Step::ClickWith {
+            keys: modifiers(keys)?,
+            target: parse_click(target)?,
+            right: false,
+        },
+        ("right_click_with", [keys, target @ ..]) => Step::ClickWith {
+            keys: modifiers(keys)?,
+            target: right_clicked(parse_click(target)?)?,
+            right: true,
+        },
+        ("hover", target) => Step::Hover(window_control(parse_click(target)?)?),
+        ("hold_click", [duration, target @ ..]) => Step::HoldClick(
+            window_control(parse_click(target)?)?,
+            millis(duration, MAX_HOLD)?,
+        ),
         ("report", label) => Step::Report(label.join(" ")),
         ("sound", [name]) if sound_name(name) => Step::Sound((*name).to_owned()),
         ("screenshot", [name])
@@ -836,126 +939,28 @@ pub(super) fn parse_words(command: &str, rest: &[&str]) -> Result<Step, String> 
     })
 }
 
-/// `slash <command> [words]`: a slash command a script may type, among
-/// those that change nothing beyond the test characters.
+/// `slash <words>`: any line the player could type after a `/`, run as
+/// typing it would, since a script may do whatever the player can (Adam,
+/// 11-23). The typed-line handlers refuse what they would refuse from the
+/// keyboard; only the chat line's own limits apply here.
 fn parse_slash(words: &[&str]) -> Result<Step, String> {
-    Ok(match words {
-        [
-            "guildinvite" | "guildremove" | "guildmotd" | "getguildmotd",
-            ..,
-        ] => Step::Slash(guild_slash(words)?),
-        [command]
-            if matches!(
-                *command,
-                "camp" | "sit" | "stand" | "ranged" | "stopsong" | "harmtouch" | "layonhands"
-            ) =>
-        {
-            Step::Slash(format!("/{command}"))
-        }
-        ["camp", "desktop"] => Step::Slash("/camp desktop".into()),
-        ["discipline", name] if eq_client_core::disciplines::Discipline::named(name).is_some() => {
-            Step::Slash(format!("/discipline {name}"))
-        }
-        ["target", name @ ..] if !name.is_empty() => {
-            Step::Slash(format!("/target {}", name.join(" ")))
-        }
-        // Corpses: consent, summon and drag; a test death leaves one.
-        [command @ ("consent" | "deny"), name] => Step::Slash(format!("/{command} {name}")),
-        ["log"] => Step::Slash("/log".into()),
-        ["boat", intent @ ("acquire" | "release")] => Step::Slash(format!("/boat {intent}")),
-        ["shownames", level] => Step::Slash(format!("/shownames {level}")),
-        // Corpses summoned or dragged; groups joined, left, disbanded or
-        // declined; where and when the player is, which the client answers
-        // itself; and how `/who` lists the player.
-        [
-            command @ ("corpse" | "corpsedrag" | "corpsedrop" | "follow" | "disband" | "loc"
-            | "time" | "afk" | "anonymous" | "roleplay" | "raidaccept" | "raiddecline"
-            | "raiddisband" | "raidwindow"),
-        ] => Step::Slash(format!("/{command}")),
-        // The raid's lead, handed on by name or to the target.
-        ["makeraidleader", name @ ..] if name.len() <= 1 => Step::Slash(
-            ["/makeraidleader"]
-                .iter()
-                .chain(name)
-                .copied()
-                .collect::<Vec<_>>()
-                .join(" "),
-        ),
-        // A die, an emote, or another's target.
-        ["random", numbers @ ..]
-            if numbers.len() <= 2 && numbers.iter().all(|number| number.parse::<u32>().is_ok()) =>
-        {
-            Step::Slash(
-                ["/random"]
-                    .iter()
-                    .chain(numbers)
-                    .copied()
-                    .collect::<Vec<_>>()
-                    .join(" "),
-            )
-        }
-        ["emote", words @ ..] if !words.is_empty() => {
-            Step::Slash(format!("/emote {}", words.join(" ")))
-        }
-        ["assist", name @ ..] if name.len() <= 1 => Step::Slash(
-            ["/assist"]
-                .iter()
-                .chain(name)
-                .copied()
-                .collect::<Vec<_>>()
-                .join(" "),
-        ),
-        // A raid invitation, by name or for the target, and its answers.
-        ["raidinvite", name @ ..] if name.len() <= 1 => Step::Slash(
-            ["/raidinvite"]
-                .iter()
-                .chain(name)
-                .copied()
-                .collect::<Vec<_>>()
-                .join(" "),
-        ),
-        // A group invitation, by name or for the target.
-        ["invite", name @ ..] if name.len() <= 1 => Step::Slash(
-            ["/invite"]
-                .iter()
-                .chain(name)
-                .copied()
-                .collect::<Vec<_>>()
-                .join(" "),
-        ),
-        // A command to the pet, as typed.
-        ["pet", words @ ..] if !words.is_empty() => {
-            Step::Slash(format!("/pet {}", words.join(" ")))
-        }
-        // Asking who is online changes nothing.
-        ["who", words @ ..] => Step::Slash(
-            ["/who"]
-                .iter()
-                .chain(words)
-                .copied()
-                .collect::<Vec<_>>()
-                .join(" "),
-        ),
-        _ => return Err("unknown or malformed slash command".into()),
-    })
-}
-
-/// The existing typed guild handlers, with bounded names and MOTD text.
-/// This does not provide a raw chat or unimplemented guild-command escape.
-fn guild_slash(words: &[&str]) -> Result<String, String> {
-    let valid = match words {
-        ["guildinvite" | "guildremove" | "getguildmotd"] | ["guildinvite", "o"] => true,
-        ["guildinvite" | "guildremove", name] | ["guildinvite", name, "o"] => character_name(name),
-        ["guildmotd", message @ ..] => {
-            let text = message.join(" ");
-            text.len() < 512 && !text.chars().any(char::is_control)
-        }
-        _ => false,
+    let Some(first) = words.first() else {
+        return Err("slash takes a command".into());
     };
-    if !valid {
-        return Err("guild slash takes a character name, optional invite o, or a MOTD below 512 bytes without control characters".into());
+    if first.starts_with('/') {
+        return Err("slash takes a command without its leading slash".into());
     }
-    Ok(format!("/{}", words.join(" ")))
+    let line = format!("/{}", words.join(" "));
+    let longest = crate::chat::MAX_TEXT;
+    if line.len() > longest {
+        return Err(format!(
+            "a slash line is at most {longest} bytes, as the chat line is"
+        ));
+    }
+    if line.chars().any(char::is_control) {
+        return Err("a slash line takes no control characters".into());
+    }
+    Ok(Step::Slash(line))
 }
 
 fn character_name(name: &str) -> bool {
@@ -1018,6 +1023,32 @@ fn number<T: std::str::FromStr>(text: &str, what: &str) -> Result<T, String> {
 
 /// `click <target>` or `right_click <target>`: a slot, spellbook, trade or
 /// bag tint button.
+/// A target a right click takes: a door or a ground object is only left
+/// clicked, as the scene acts on nothing else for them (checklist 6.587).
+fn right_clicked(target: ClickTarget) -> Result<ClickTarget, String> {
+    if matches!(
+        target,
+        ClickTarget::Object { .. } | ClickTarget::Door { .. }
+    ) {
+        Err("an object or door takes click; a right click acts only on a spawn".into())
+    } else {
+        Ok(target)
+    }
+}
+
+/// A target that `hover` and `hold_click` take: a window's control, never
+/// a thing in the scene, which a person only clicks (checklist 6.587).
+fn window_control(target: ClickTarget) -> Result<ClickTarget, String> {
+    if matches!(
+        target,
+        ClickTarget::Spawn { .. } | ClickTarget::Object { .. } | ClickTarget::Door { .. }
+    ) {
+        Err("a spawn, object or door takes click, right_click or click_with".into())
+    } else {
+        Ok(target)
+    }
+}
+
 fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
     if let Some(training) = training_click(words)? {
         return Ok(ClickTarget::Training(training));
@@ -1114,7 +1145,42 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ),
         ["book_page", "next"] => ClickTarget::BookPage(true),
         ["book_page", "back"] => ClickTarget::BookPage(false),
+        ["book_edit", action] => ClickTarget::BookEdit(book_edit(action)?),
+        ["spawn" | "object" | "door", ..] => world_target(words)?,
         _ => return Err("unknown or malformed step".into()),
+    })
+}
+
+/// A thing in the world by the ids `report()` gives (checklist 6.587).
+fn world_target(words: &[&str]) -> Result<ClickTarget, String> {
+    let admission = |word: &str| word.parse().map_err(|_| "expected an admission ID");
+    Ok(match words {
+        ["spawn", reported, id, revision] => ClickTarget::Spawn {
+            admission: admission(reported)?,
+            id: id.parse().map_err(|_| "expected a spawn ID")?,
+            revision: revision.parse().map_err(|_| "expected a spawn revision")?,
+        },
+        ["object", reported, drop_id] => ClickTarget::Object {
+            admission: admission(reported)?,
+            drop_id: drop_id.parse().map_err(|_| "expected a drop ID")?,
+        },
+        ["door", reported, id] => ClickTarget::Door {
+            admission: admission(reported)?,
+            id: id.parse().map_err(|_| "expected a door ID")?,
+        },
+        _ => return Err("unknown or malformed step".into()),
+    })
+}
+
+/// A spellbook ordering or deletion button by its word.
+fn book_edit(word: &str) -> Result<BookEdit, String> {
+    Ok(match word {
+        "earlier" => BookEdit::Earlier,
+        "later" => BookEdit::Later,
+        "delete" => BookEdit::Delete,
+        "confirm" => BookEdit::Confirm,
+        "cancel" => BookEdit::Cancel,
+        _ => return Err("book_edit takes earlier, later, delete, confirm or cancel".into()),
     })
 }
 
@@ -1256,6 +1322,27 @@ fn coin_kind(word: &str) -> Result<eq_client_core::money::Coin, String> {
 /// `gm <command> [arguments]`: an allowed local test command without its `#`.
 fn parse_gm(words: &[&str]) -> Result<Step, String> {
     gm_command(words).map(Step::Gm)
+}
+
+/// The `gm` forms that set up or clean up a test fixture: spawning, depop,
+/// guilds, stuns, languages and disciplines. They run only on a local test
+/// session; every other allowed `gm` line runs on any server, as a typed `#`
+/// line would (Adam, 11-23).
+const GM_FIXTURES: &[&str] = &[
+    "spawn",
+    "depop",
+    "guild",
+    "stun",
+    "setlanguage",
+    "traindisc",
+];
+
+/// Whether a `gm` step's text is a fixture form ([`GM_FIXTURES`]).
+pub(crate) fn gm_fixture(command: &str) -> bool {
+    command
+        .split_ascii_whitespace()
+        .next()
+        .is_some_and(|word| GM_FIXTURES.contains(&word))
 }
 
 /// Validate the text for both parsed and programmatically constructed steps.
@@ -1496,6 +1583,26 @@ fn parse_create(arguments: &[&str]) -> Result<eq_client_core::creation::NewChara
     Ok(character)
 }
 
+/// The modifier keys a modified click holds: Shift, Ctrl and Alt only, each
+/// at most once.
+fn modifiers(text: &str) -> Result<Vec<KeyCode>, String> {
+    let keys = keys_from(text).ok_or("unknown key")?;
+    let modifier = |key: &KeyCode| {
+        matches!(
+            key,
+            KeyCode::ShiftLeft | KeyCode::ControlLeft | KeyCode::AltLeft
+        )
+    };
+    let mut seen = Vec::new();
+    for key in keys {
+        if !modifier(&key) || seen.contains(&key) {
+            return Err("click_with keys must be shift, ctrl or alt, each once".into());
+        }
+        seen.push(key);
+    }
+    Ok(seen)
+}
+
 fn keys_from(text: &str) -> Option<Vec<KeyCode>> {
     text.split('+').map(key).collect()
 }
@@ -1712,6 +1819,39 @@ mod tests {
             .map(|(list, _)| list.split(r"\|").collect::<Vec<_>>())
             .unwrap();
         assert_eq!(list, super::COMMANDS);
+    }
+
+    #[test]
+    fn aa_steps_are_our_own_words_with_bounded_arguments() {
+        use super::AaRequest;
+        let base = Path::new("private");
+        assert_eq!(
+            parse(
+                "train_aa(42)\nactivate_aa(4294967295)\naa_split(0)\naa_split(100)\n",
+                base
+            )
+            .unwrap(),
+            [
+                Step::AlternateAdvancement(AaRequest::Train(42)),
+                Step::AlternateAdvancement(AaRequest::Activate(u32::MAX)),
+                Step::AlternateAdvancement(AaRequest::Split(0)),
+                Step::AlternateAdvancement(AaRequest::Split(100)),
+            ]
+        );
+        for bad in [
+            "train_aa()",
+            "train_aa(0)",
+            "train_aa(-1)",
+            "train_aa(42, 1)",
+            "activate_aa(42, 7)",
+            "activate_aa(\"Fleet\")",
+            "aa_split(101)",
+            "aa_split()",
+        ] {
+            let source = format!("report(\"before\")\n{bad}\nreport(\"after\")\n");
+            let error = super::super::Program::parse(&source, base).unwrap_err();
+            assert_eq!(error.line, Some(2), "{bad}");
+        }
     }
 
     #[test]
@@ -2056,10 +2196,8 @@ mod tests {
             "click(\"anything\")",
             "click(\"memorize\", 9)",
             "click(\"memorize\", 0)",
-            "slash(\"say hello\")",
             "create(\"lowercase\", 1, 2, 0, 212, 1, 4)",
             "create(\"Testbad\", 1, 17, 0, 212, 1, 4)",
-            "slash(\"ooc\")",
             "walk(8, 90000)",
             "walk(0, 1000)",
             "gm(\"\")",
@@ -2081,14 +2219,45 @@ mod tests {
     }
 
     #[test]
-    fn desktop_camp_uses_the_game_command_owner_and_rejects_other_destinations() {
+    fn a_slash_line_is_taken_as_the_player_would_type_it() {
         let base = Path::new("private");
+        for line in [
+            "camp desktop",
+            "camp server",
+            "say hello",
+            "ooc",
+            "pet",
+            "reply thanks",
+            "friend Example",
+            "quit",
+            "discipline 4499",
+            "harmtouch 12",
+            "ranged 12",
+            "consent",
+            "guildleader Member",
+            "guildmotd Café rendezvous",
+        ] {
+            assert_eq!(
+                parse(&format!("slash(\"{line}\")"), base).unwrap(),
+                [Step::Slash(format!("/{line}"))],
+                "{line}"
+            );
+        }
+        // Only the chat line's own limits apply: its length, counting the
+        // slash, and no control characters.
+        let longest = format!("say {}", "a".repeat(crate::chat::MAX_TEXT - 5));
         assert_eq!(
-            parse("slash(\"camp desktop\")\n", base).unwrap(),
-            [Step::Slash("/camp desktop".into())]
+            parse(&format!("slash(\"{longest}\")"), base).unwrap(),
+            [Step::Slash(format!("/{longest}"))]
         );
-        for bad in ["slash(\"camp server\")", "slash(\"camp desktop now\")"] {
-            assert!(parse(bad, base).is_err(), "{bad}");
+        for bad in [
+            format!("slash(\"{longest}a\")"),
+            "slash(\"guildmotd bad\u{0007}\")".to_owned(),
+            "slash(\"guildmotd bad\u{001b}\")".to_owned(),
+            "slash(\"/say doubled\")".to_owned(),
+            "slash(\"\")".to_owned(),
+        ] {
+            assert!(parse(&bad, base).is_err(), "{bad}");
         }
     }
 
@@ -2110,7 +2279,108 @@ mod tests {
             parse("slash(\"discipline defensive\")\n", base).unwrap(),
             [Step::Slash("/discipline defensive".into())]
         );
-        assert!(parse("slash(\"discipline 4499\")\n", base).is_err());
+    }
+
+    #[test]
+    fn book_edit_names_each_spellbook_ordering_button() {
+        let base = std::path::Path::new(".");
+        for (word, edit) in [
+            ("earlier", BookEdit::Earlier),
+            ("later", BookEdit::Later),
+            ("delete", BookEdit::Delete),
+            ("confirm", BookEdit::Confirm),
+            ("cancel", BookEdit::Cancel),
+        ] {
+            assert_eq!(
+                parse(&format!("click(\"book_edit\", \"{word}\")\n"), base).unwrap(),
+                [Step::Click(ClickTarget::BookEdit(edit))]
+            );
+        }
+        assert!(parse("click(\"book_edit\", \"up\")\n", base).is_err());
+    }
+
+    #[test]
+    fn world_targets_name_a_spawn_object_or_door_by_its_reported_ids() {
+        let base = std::path::Path::new(".");
+        assert_eq!(
+            parse(
+                concat!(
+                    "click(\"spawn\", 5, 42, 3)\n",
+                    "right_click(\"spawn\", 5, 42, 3)\n",
+                    "click_with(\"shift\", \"spawn\", 5, 42, 3)\n",
+                    "click(\"object\", 5, 900)\n",
+                    "click(\"door\", 5, 12)\n",
+                ),
+                base
+            )
+            .unwrap(),
+            [
+                Step::Click(ClickTarget::Spawn {
+                    admission: 5,
+                    id: 42,
+                    revision: 3
+                }),
+                Step::RightClick(ClickTarget::Spawn {
+                    admission: 5,
+                    id: 42,
+                    revision: 3
+                }),
+                Step::ClickWith {
+                    keys: vec![KeyCode::ShiftLeft],
+                    target: ClickTarget::Spawn {
+                        admission: 5,
+                        id: 42,
+                        revision: 3
+                    },
+                    right: false,
+                },
+                Step::Click(ClickTarget::Object {
+                    admission: 5,
+                    drop_id: 900
+                }),
+                Step::Click(ClickTarget::Door {
+                    admission: 5,
+                    id: 12
+                }),
+            ]
+        );
+        // A person only clicks them: no hover or held click.
+        assert!(parse("hover(\"spawn\", 5, 42, 3)\n", base).is_err());
+        assert!(parse("hold_click(800, \"door\", 5, 12)\n", base).is_err());
+        assert!(parse("click(\"spawn\", 5, 42)\n", base).is_err());
+        assert!(parse("click(\"door\", 5, 300)\n", base).is_err());
+        // The scene acts on a right click only for a spawn.
+        assert!(parse("right_click(\"door\", 5, 12)\n", base).is_err());
+        assert!(parse("right_click_with(\"alt\", \"object\", 5, 900)\n", base).is_err());
+    }
+
+    #[test]
+    fn a_modified_click_takes_shift_ctrl_and_alt_only() {
+        let base = std::path::Path::new(".");
+        assert_eq!(
+            parse("right_click_with(\"alt\", \"slot\", 22)\n", base).unwrap(),
+            [Step::ClickWith {
+                keys: vec![KeyCode::AltLeft],
+                target: ClickTarget::Slot(22),
+                right: true,
+            }]
+        );
+        assert_eq!(
+            parse("click_with(\"ctrl+shift\", \"slot\", 23)\n", base).unwrap(),
+            [Step::ClickWith {
+                keys: vec![KeyCode::ControlLeft, KeyCode::ShiftLeft],
+                target: ClickTarget::Slot(23),
+                right: false,
+            }]
+        );
+        for refused in [
+            "click_with(\"a\", \"slot\", 22)\n",
+            "click_with(\"shift+shift\", \"slot\", 22)\n",
+            "click_with(\"shift\")\n",
+            "click_with(\"nope\", \"slot\", 22)\n",
+        ] {
+            assert!(parse(refused, base).is_err(), "{refused}");
+        }
     }
 
     #[test]
@@ -2123,7 +2393,6 @@ mod tests {
                 Step::Slash("/layonhands".into())
             ]
         );
-        assert!(parse("slash(\"harmtouch 12\")\n", base).is_err());
     }
 
     #[test]
@@ -2133,7 +2402,6 @@ mod tests {
             parse("slash(\"ranged\")\n", base).unwrap(),
             [Step::Slash("/ranged".into())]
         );
-        assert!(parse("slash(\"ranged 12\")\n", base).is_err());
     }
 
     #[test]
@@ -2574,51 +2842,6 @@ mod tests {
     }
 
     #[test]
-    fn guild_slash_steps_use_only_existing_typed_handlers() {
-        let base = Path::new("private");
-        for line in [
-            "guildinvite",
-            "guildinvite Member",
-            "guildinvite Member o",
-            "guildinvite o",
-            "guildremove",
-            "guildremove Member",
-            "guildmotd",
-            "guildmotd Meet at the gate",
-            "guildmotd Café rendezvous",
-            "getguildmotd",
-        ] {
-            assert_eq!(
-                parse(&format!("slash(\"{line}\")"), base).unwrap(),
-                [Step::Slash(format!("/{line}"))]
-            );
-        }
-        for line in [
-            "guildinvite Member officer",
-            "guildinvite Member o extra",
-            "guildinvite M3mber",
-            "guildremove Member extra",
-            "getguildmotd extra",
-            "guildleader Member",
-            "guilddelete",
-            "guildmotd bad\u{0007}",
-            "guildmotd bad\u{001b}",
-        ] {
-            assert!(
-                parse(&format!("slash(\"{line}\")"), base).is_err(),
-                "{line}"
-            );
-        }
-        assert!(parse(&format!("slash(\"guildmotd {}\")", "a".repeat(512)), base).is_err());
-        assert!(parse(&format!("slash(\"guildmotd {}\")", "é".repeat(256)), base).is_err());
-        let maximum = format!("{}a", "é".repeat(255));
-        assert_eq!(
-            parse(&format!("slash(\"guildmotd {maximum}\")"), base).unwrap(),
-            [Step::Slash(format!("/guildmotd {maximum}"))]
-        );
-    }
-
-    #[test]
     fn a_script_may_ask_who_is_online() {
         let base = Path::new("private");
         assert_eq!(
@@ -2635,7 +2858,6 @@ mod tests {
                 Step::Slash("/corpsedrag".into())
             ]
         );
-        assert!(parse("slash(\"consent\")\n", base).is_err());
     }
 
     #[test]
@@ -2731,7 +2953,6 @@ mod tests {
             ))]
         );
         for bad in [
-            "slash(\"pet\")",
             "click(\"pet\")",
             "click(\"pet\", \"dance\")",
             "click(\"option\")",

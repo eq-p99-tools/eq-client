@@ -1,4 +1,5 @@
 //! State a script logs for later review.
+mod alternate_advancement;
 mod buffs;
 mod economy;
 mod guild;
@@ -134,6 +135,13 @@ pub(super) fn state(
         })
     });
     info!(label, state = %economy::state(online.world(), trade), "Script economy report");
+    info!(
+        label,
+        alternate_advancement = %alternate_advancement::state(
+            online.world().alternate_advancement()
+        ),
+        "Script alternate advancement report"
+    );
     let track = online.world().track_window();
     let yours = online.world().player().map(|player| player.level);
     let tracked: Vec<_> = track
@@ -652,6 +660,16 @@ pub(super) fn surroundings(online: &crate::online::OnlineState, (_, _, _, combat
         .map(|(id, name, kind, _, distance, at)| (*id, name.clone(), kind.clone(), *distance, *at))
         .collect();
     nearby.truncate(12);
+    // What `click("spawn", admission, id, revision)` names, for the nearest
+    // spawns; objects and doors take the admission and their own id
+    // (checklist 6.587).
+    let admission = online.world().session_id().filter(|_| online.in_world());
+    let spawn_clicks: Vec<(u64, u16, u64)> = admission.map_or_else(Vec::new, |admission| {
+        nearby
+            .iter()
+            .filter_map(|entry| Some((admission, entry.0, online.world().spawn(entry.0)?.revision)))
+            .collect()
+    });
     // Doors near the player: id, open type, latest action, distance and position.
     let mut doors: Vec<NearbyDoor> = online
         .world()
@@ -674,7 +692,9 @@ pub(super) fn surroundings(online: &crate::online::OnlineState, (_, _, _, combat
     let (ground, stations) = objects(online, origin);
     let (models, gear) = looks(online, &nearby);
     info!(
+        ?admission,
         ?nearby,
+        ?spawn_clicks,
         ?creatures,
         ?guildmasters,
         ?doors,

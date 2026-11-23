@@ -12,6 +12,7 @@ eq-client-axes.workspace = true
 glam.workspace = true
 image.workspace = true
 libeq.workspace = true
+libeq_eqg.workspace = true
 roxmltree.workspace = true
 thiserror.workspace = true
 

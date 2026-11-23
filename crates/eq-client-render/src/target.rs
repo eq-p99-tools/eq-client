@@ -113,22 +113,13 @@ pub(super) fn centered_line(parent: &mut ChildSpawnerCommands, bounds: Node, tex
     clippy::type_complexity
 )]
 pub(super) fn input(
-    settings: Option<Res<super::ViewerSettings>>,
+    scene: Scene,
+    mut scripted: ResMut<ScenePointer>,
     mut attempted: Local<bool>,
     mut door_clicks: Local<DoorClicks>,
     keys: super::keys::Keys,
     mouse: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<PrimaryWindow>>,
-    // The world camera; the paperdoll's camera films the inventory figure.
-    cameras: Query<(&Camera, &GlobalTransform), With<super::OrbitCamera>>,
-    picker: picking::Picker,
-    (doors, door_models): (
-        Query<(Entity, &super::doors::DoorEntity, &Transform, &Visibility)>,
-        Option<Res<super::doors::Models>>,
-    ),
-    ground: Query<(&super::ground::GroundEntity, &Transform)>,
-    collision: Option<Res<super::Collision>>,
-    nearby: Res<NearbyEntities>,
     mut online: ResMut<OnlineState>,
     mut chat: ResMut<super::chat::ChatState>,
     outbox: Res<Outbox>,
@@ -150,7 +141,8 @@ pub(super) fn input(
         door_clicks.cancel();
         return;
     }
-    let ids = targetable(nearby.rendered.keys().copied(), &online);
+    let settings = scene.settings.as_ref();
+    let ids = targetable(scene.nearby.rendered.keys().copied(), &online);
     let own_id = online.world().player().map(|player| player.spawn_id);
     // A target lasts until its spawn despawns, is replaced or turns invisible, however
     // far away it goes; drawing range only limits what can be clicked or cycled.
@@ -159,7 +151,6 @@ pub(super) fn input(
     let mut proposal = invalid.then_some(None);
     if !*attempted
         && settings
-            .as_ref()
             .is_some_and(|s| s.0.validation == Some(super::ValidationAction::TargetNearestPlayer))
         && let Some(player) = online.world().player()
     {
@@ -182,18 +173,24 @@ pub(super) fn input(
             info!("One-shot target: selecting nearby player spawn {id}");
         }
     }
-    let cursor = windows
-        .single()
-        .ok()
-        .filter(|window| {
-            keys.escape_free()
-                && !presses.taken()
-                && !chat.hovered
-                && window
-                    .physical_cursor_position()
-                    .is_none_or(|cursor| !ui.contains(cursor))
-        })
-        .and_then(Window::cursor_position);
+    // A script's scene click points with the script's pointer, never the
+    // real one; the gates are the same (checklist 6.587).
+    let request = scripted.request;
+    let cursor = windows.single().ok().and_then(|window| {
+        let at = match &request {
+            Some(request) => Some(request.at?),
+            None => window.cursor_position(),
+        }?;
+        let physical = at * window.scale_factor();
+        // The script's pointer is its own input, so only a window over
+        // it blocks it, never the script's ownership of the input.
+        let covered = if request.is_some() {
+            ui.covers(physical)
+        } else {
+            ui.contains(physical)
+        };
+        (keys.escape_free() && !presses.taken() && !chat.hovered && !covered).then_some(at)
+    });
     let door_cursor = cursor.filter(|_| {
         !mouse.pressed(MouseButton::Right)
             && !mouse.just_pressed(MouseButton::Right)
@@ -219,69 +216,19 @@ pub(super) fn input(
         proposal = Some(cycle(&ids, current, act == Act::TargetPrevious));
     } else if let Some(cursor) = cursor
         && (door_release || mouse.any_just_pressed([MouseButton::Left, MouseButton::Right]))
-        && let Ok((camera, camera_transform)) = cameras.single()
-        && let Ok(ray) = camera.viewport_to_world(camera_transform, cursor)
+        && let Some(Picked { choice, spawns }) = scene.pick(&online, cursor, door_cursor.is_some())
     {
-        let blocked = |distance: f32, ignore_door: Option<u8>| {
-            collision
-                .as_ref()
-                .and_then(|collision| collision.0.as_ref())
-                .and_then(|world| match ignore_door {
-                    Some(door) => world.without_doors(&[door]).ray_distance(
-                        ray.origin,
-                        *ray.direction,
-                        distance,
-                    ),
-                    None => world.ray_distance(ray.origin, *ray.direction, distance),
-                })
-                .is_some_and(|obstruction| obstruction + 0.01 < distance)
-        };
-        let client = settings
-            .as_ref()
-            .map_or_else(InstalledClient::default, |s| s.0.installed_client);
-        let rule = client.spawn_pick();
-        let shown = |point: Vec3| camera.world_to_viewport(camera_transform, point).ok();
-        let spawns: Vec<Candidate> = ids
-            .iter()
-            .map(|id| {
-                let pick = picker.pick(nearby.rendered[id], ray);
-                Candidate {
-                    id: *id,
-                    hit: pick.hit.filter(|distance| !blocked(*distance, None)),
-                    posed: pick.posed.and_then(|posed| {
-                        let distance = posed.entry(ray).filter(|d| !blocked(*d, None))?;
-                        let offset = shown(posed.middle())?.distance(cursor);
-                        Some(PosedHit { distance, offset })
-                    }),
-                    shown: pick.posed.and_then(|posed| shown_rect(&posed, shown)),
-                }
-            })
-            .collect();
-        let item = super::ground::hit(
-            ray,
-            ground.iter(),
-            crate::outbox::offered(online.world(), eq_client_core::Capability::WorldContainers),
-        )
-        .filter(|hit| !blocked(hit.1, None));
-        let door = if let Some(models) = door_models.as_ref().filter(|_| door_cursor.is_some()) {
-            doors
-                .iter()
-                .filter_map(|(entity, door, transform, visibility)| {
-                    let distance = super::doors::hit(ray, door, transform, *visibility, models)
-                        .filter(|d| !blocked(*d, Some(door.id)))?;
-                    Some((
-                        Door {
-                            entity,
-                            id: door.id,
-                        },
-                        distance,
-                    ))
-                })
-                .min_by(|a, b| a.1.total_cmp(&b.1).then(a.0.id.cmp(&b.0.id)))
-        } else {
-            None
-        };
-        let choice = choose(rule, &spawns, item, door);
+        let client = scene.client();
+        // A script's click acts only on what it named: anything else the
+        // pick finds there now refuses it, and nothing is done.
+        if let Some(wanted) = request.as_ref().map(|request| request.thing) {
+            if !wanted.is(choice) {
+                scripted.refused = Some(wanted.covered().to_owned());
+                door_clicks.cancel();
+                return;
+            }
+            scripted.acted = true;
+        }
         let picked_door = match choice {
             Choice::Door(door) => Some(door),
             _ => None,
@@ -367,6 +314,233 @@ pub(super) fn try_select(
     // A choice sent says nothing, as in the official client.
     online.select_target(selected);
     Ok(())
+}
+
+/// What the scene's click pick reads besides the cursor: the camera, what
+/// is drawn, and what stands in the way.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(super) struct Scene<'w, 's> {
+    settings: Option<Res<'w, super::ViewerSettings>>,
+    // The world camera; the paperdoll's camera films the inventory figure.
+    cameras: Query<'w, 's, (&'static Camera, &'static GlobalTransform), With<super::OrbitCamera>>,
+    picker: picking::Picker<'w, 's>,
+    doors: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static super::doors::DoorEntity,
+            &'static Transform,
+            &'static Visibility,
+        ),
+    >,
+    door_models: Option<Res<'w, super::doors::Models>>,
+    ground: Query<'w, 's, (&'static super::ground::GroundEntity, &'static Transform)>,
+    collision: Option<Res<'w, super::Collision>>,
+    nearby: Res<'w, NearbyEntities>,
+}
+
+/// What a click at one point of the view picks, and the spawns it weighed.
+struct Picked {
+    choice: Choice,
+    spawns: Vec<Candidate>,
+}
+
+impl Scene<'_, '_> {
+    fn client(&self) -> InstalledClient {
+        self.settings
+            .as_ref()
+            .map_or_else(InstalledClient::default, |s| s.0.installed_client)
+    }
+
+    /// The pick a click at this point of the view makes, the player's or a
+    /// script's alike: the nearest drawn thing the ray reaches with nothing
+    /// solid in front, by the installed generation's rule. None without a
+    /// world camera or a ray through the point.
+    fn pick(&self, online: &OnlineState, cursor: Vec2, with_doors: bool) -> Option<Picked> {
+        let (camera, camera_transform) = self.cameras.single().ok()?;
+        let ray = camera.viewport_to_world(camera_transform, cursor).ok()?;
+        let ids = targetable(self.nearby.rendered.keys().copied(), online);
+        let blocked = |distance: f32, ignore_door: Option<u8>| {
+            self.collision
+                .as_ref()
+                .and_then(|collision| collision.0.as_ref())
+                .and_then(|world| match ignore_door {
+                    Some(door) => world.without_doors(&[door]).ray_distance(
+                        ray.origin,
+                        *ray.direction,
+                        distance,
+                    ),
+                    None => world.ray_distance(ray.origin, *ray.direction, distance),
+                })
+                .is_some_and(|obstruction| obstruction + 0.01 < distance)
+        };
+        let rule = self.client().spawn_pick();
+        let shown = |point: Vec3| camera.world_to_viewport(camera_transform, point).ok();
+        let spawns: Vec<Candidate> = ids
+            .iter()
+            .map(|id| {
+                let pick = self.picker.pick(self.nearby.rendered[id], ray);
+                Candidate {
+                    id: *id,
+                    hit: pick.hit.filter(|distance| !blocked(*distance, None)),
+                    posed: pick.posed.and_then(|posed| {
+                        let distance = posed.entry(ray).filter(|d| !blocked(*d, None))?;
+                        let offset = shown(posed.middle())?.distance(cursor);
+                        Some(PosedHit { distance, offset })
+                    }),
+                    shown: pick.posed.and_then(|posed| shown_rect(&posed, shown)),
+                }
+            })
+            .collect();
+        let item = super::ground::hit(
+            ray,
+            self.ground.iter(),
+            crate::outbox::offered(online.world(), eq_client_core::Capability::WorldContainers),
+        )
+        .filter(|hit| !blocked(hit.1, None));
+        let door = if let Some(models) = self.door_models.as_ref().filter(|_| with_doors) {
+            self.doors
+                .iter()
+                .filter_map(|(entity, door, transform, visibility)| {
+                    let distance = super::doors::hit(ray, door, transform, *visibility, models)
+                        .filter(|d| !blocked(*d, Some(door.id)))?;
+                    Some((
+                        Door {
+                            entity,
+                            id: door.id,
+                        },
+                        distance,
+                    ))
+                })
+                .min_by(|a, b| a.1.total_cmp(&b.1).then(a.0.id.cmp(&b.0.id)))
+        } else {
+            None
+        };
+        Some(Picked {
+            choice: choose(rule, &spawns, item, door),
+            spawns,
+        })
+    }
+
+    /// Where on the view a click would name this thing: the middle of what
+    /// the pick tests of it (a spawn's posed box, an object's pick box, a
+    /// door's pick mesh), projected. None when it isn't drawn or the point
+    /// is behind the camera.
+    fn aim(&self, thing: Thing) -> Option<Vec2> {
+        let (camera, camera_transform) = self.cameras.single().ok()?;
+        let middle = match thing {
+            Thing::Spawn(id) => {
+                let root = *self.nearby.rendered.get(&id)?;
+                let ray = Ray3d::new(Vec3::ZERO, Dir3::Y);
+                self.picker.pick(root, ray).posed?.middle()
+            }
+            Thing::Object(drop_id) => self.ground.iter().find_map(|(entity, transform)| {
+                super::ground::middle(entity, transform, drop_id)
+            })?,
+            Thing::Door(id) => {
+                let models = self.door_models.as_ref()?;
+                self.doors
+                    .iter()
+                    .find_map(|(_, door, transform, visibility)| {
+                        (door.id == id)
+                            .then(|| super::doors::middle(door, transform, *visibility, models))
+                            .flatten()
+                    })?
+            }
+        };
+        camera.world_to_viewport(camera_transform, middle).ok()
+    }
+}
+
+/// A thing in the scene a script names for a click (checklist 6.587).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Thing {
+    Spawn(u16),
+    /// An object on the ground, by its drop id.
+    Object(u32),
+    Door(u8),
+}
+
+impl Thing {
+    /// Whether a click's pick names this thing.
+    const fn is(self, choice: Choice) -> bool {
+        match (self, choice) {
+            (Self::Spawn(wanted), Choice::Spawn(id, _)) => wanted == id,
+            (Self::Object(wanted), Choice::Item(id)) => wanted == id,
+            (Self::Door(wanted), Choice::Door(door)) => wanted == door.id,
+            _ => false,
+        }
+    }
+
+    /// Why a click can't name it from here.
+    pub(crate) const fn covered(self) -> &'static str {
+        match self {
+            Self::Spawn(_) => "that spawn is covered or off screen from here",
+            Self::Object(_) => "that object is covered or off screen from here",
+            Self::Door(_) => "that door is covered or off screen from here",
+        }
+    }
+}
+
+/// A script's scene click this frame: what it names and where its pointer
+/// is. The script sets it every frame of the click and the scene takes it,
+/// so a run that stops leaves the scene its real pointer at once.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SceneRequest {
+    pub(crate) thing: Thing,
+    /// The script pointer, once it is on its way; None while aiming.
+    pub(crate) at: Option<Vec2>,
+}
+
+/// The scene's side of a script's scene click (checklist 6.587).
+#[derive(Resource, Default, Debug)]
+pub(crate) struct ScenePointer {
+    /// This frame's request, which the scene takes.
+    pub(crate) request: Option<SceneRequest>,
+    /// Where the click would land, checked with the scene's own pick, or
+    /// why it can't: written each frame a request names a thing.
+    pub(crate) aim: Option<Result<Vec2, String>>,
+    /// A press whose pick named something else: nothing was done.
+    pub(crate) refused: Option<String>,
+    /// A press whose pick named the thing and acted.
+    pub(crate) acted: bool,
+}
+
+/// Checks where a script's scene click would land: the thing's middle on
+/// the view, under no window, and the pick there naming it. Runs after the
+/// scene's input, which read the pointer, and takes the request.
+#[allow(clippy::needless_pass_by_value)]
+pub(super) fn aim(
+    scene: Scene,
+    online: Res<OnlineState>,
+    mut scripted: ResMut<ScenePointer>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    ui: super::windows::pointer::PointerUi,
+) {
+    let Some(thing) = scripted.request.take().map(|request| request.thing) else {
+        return;
+    };
+    let verdict = scene
+        .aim(thing)
+        .filter(|at| {
+            windows.single().is_ok_and(|window| {
+                let size = window.size();
+                at.x >= 0.0
+                    && at.y >= 0.0
+                    && at.x < size.x
+                    && at.y < size.y
+                    && !ui.covers(*at * window.scale_factor())
+            })
+        })
+        .filter(|at| {
+            let doors = matches!(thing, Thing::Door(_));
+            scene
+                .pick(&online, *at, doors)
+                .is_some_and(|picked| thing.is(picked.choice))
+        })
+        .ok_or_else(|| thing.covered().to_owned());
+    scripted.aim = Some(verdict);
 }
 
 /// What a click's ray meets of one targetable spawn, line of sight
@@ -737,6 +911,7 @@ mod tests {
                 &mut online,
                 id,
                 SpawnState {
+                    body_type: None,
                     class: None,
                     spawn_id: id,
                     name: name.into(),
@@ -795,6 +970,7 @@ mod tests {
                 &mut online,
                 id,
                 SpawnState {
+                    body_type: None,
                     class: None,
                     spawn_id: id,
                     name: name.into(),
@@ -849,6 +1025,7 @@ mod tests {
                     &mut online,
                     id,
                     SpawnState {
+                        body_type: None,
                         class: None,
                         spawn_id: id,
                         name: "a_bat".into(),
@@ -904,6 +1081,7 @@ mod tests {
                     &mut online,
                     id,
                     SpawnState {
+                        body_type: None,
                         class: None,
                         spawn_id: id,
                         name: format!("Synthetic {id}"),
@@ -1132,6 +1310,7 @@ mod tests {
             .init_resource::<super::super::trade::TradeState>()
             .init_resource::<super::super::escape::Escape>()
             .init_resource::<super::super::hud::hotbar::carry::Presses>()
+            .init_resource::<super::ScenePointer>()
             .insert_resource(crate::outbox::Outbox::new(Some(tx)))
             .add_systems(Update, (input, update).chain());
         app.world_mut().spawn((
@@ -1246,12 +1425,8 @@ mod tests {
         );
     }
 
-    #[test]
-    #[allow(clippy::too_many_lines)] // Exercises the scene system and its real picking inputs.
-    fn a_door_uses_two_completed_scene_clicks_and_ignores_drags_and_ui_clicks() {
-        let (mut app, commands, ..) = target_app();
-        let center = Vec2::new(400.0, 300.0);
-        scene_camera(&mut app);
+    /// A door with id 0 in the middle of the view, drawn with its pick mesh.
+    fn door_scene(app: &mut App) {
         app.init_resource::<Time>()
             .init_resource::<super::super::doors::Hinges>()
             .init_resource::<super::super::doors::LiftReach>();
@@ -1290,6 +1465,15 @@ mod tests {
                 .unwrap(),
             std::time::Instant::now(),
         );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // Exercises the scene system and its real picking inputs.
+    fn a_door_uses_two_completed_scene_clicks_and_ignores_drags_and_ui_clicks() {
+        let (mut app, commands, ..) = target_app();
+        let center = Vec2::new(400.0, 300.0);
+        scene_camera(&mut app);
+        door_scene(&mut app);
         app.update();
 
         let frame = |app: &mut App, cursor, pressed| {
@@ -1367,6 +1551,151 @@ mod tests {
         click(&mut app);
         click(&mut app);
         assert!(commands.try_recv().is_err());
+    }
+
+    /// One scene frame with a script's request standing in for the
+    /// pointer (checklist 6.587).
+    fn scripted_frame(app: &mut App, thing: Thing, at: Option<Vec2>, pressed: bool) {
+        app.world_mut().resource_mut::<ScenePointer>().request = Some(SceneRequest { thing, at });
+        let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
+        mouse.clear();
+        if pressed {
+            mouse.reset(MouseButton::Left);
+            mouse.press(MouseButton::Left);
+        } else {
+            mouse.release(MouseButton::Left);
+        }
+        app.update();
+    }
+
+    #[test]
+    fn a_script_click_points_with_its_own_pointer_and_acts_only_on_what_it_names() {
+        use crate::online::testing as session;
+
+        const NPC: u16 = 42;
+        let center = Vec2::new(400.0, 300.0);
+        let (mut app, commands, ..) = target_app();
+        scene_camera(&mut app);
+        app.add_systems(Update, aim.after(input));
+        let mut meshes = Assets::<Mesh>::default();
+        let body = app
+            .world_mut()
+            .spawn((
+                Transform::default(),
+                Mesh3d(meshes.add(Cuboid::new(2.0, 2.0, 2.0))),
+            ))
+            .id();
+        app.insert_resource(meshes);
+        app.world_mut()
+            .resource_mut::<NearbyEntities>()
+            .rendered
+            .insert(NPC, body);
+        session::spawns(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            vec![session::pet(NPC, 99)],
+        );
+        // The real pointer rests over nothing, off in a corner.
+        let mut windows = app
+            .world_mut()
+            .query_filtered::<&mut Window, With<PrimaryWindow>>();
+        windows
+            .single_mut(app.world_mut())
+            .unwrap()
+            .set_cursor_position(Some(Vec2::new(5.0, 5.0)));
+
+        // Aiming: the scene's own pick names the spawn at its middle.
+        scripted_frame(&mut app, Thing::Spawn(NPC), None, false);
+        let aimed = app.world_mut().resource_mut::<ScenePointer>().aim.take();
+        assert!(
+            matches!(aimed, Some(Ok(at)) if at.distance(center) < 1.0),
+            "{aimed:?}"
+        );
+        assert!(app.world().resource::<ScenePointer>().request.is_none());
+        // A spawn the pick doesn't name there is refused, and nothing goes.
+        scripted_frame(&mut app, Thing::Spawn(NPC + 1), None, false);
+        assert_eq!(
+            app.world_mut().resource_mut::<ScenePointer>().aim.take(),
+            Some(Err(
+                "that spawn is covered or off screen from here".to_owned()
+            ))
+        );
+        scripted_frame(&mut app, Thing::Spawn(NPC + 1), Some(center), true);
+        assert_eq!(
+            app.world_mut()
+                .resource_mut::<ScenePointer>()
+                .refused
+                .take()
+                .as_deref(),
+            Some("that spawn is covered or off screen from here")
+        );
+        assert!(!app.world().resource::<ScenePointer>().acted);
+        assert!(commands.try_recv().is_err());
+        // Pressed where it shows, the click targets it as a person's does,
+        // though the real pointer is elsewhere.
+        scripted_frame(&mut app, Thing::Spawn(NPC), Some(center), true);
+        assert!(app.world().resource::<ScenePointer>().acted);
+        assert!(matches!(
+            commands.try_recv().unwrap(),
+            ClientCommand::SelectTarget {
+                spawn_id: Some(NPC),
+                ..
+            }
+        ));
+
+        // Behind a wall the pick names nothing, so the aim refuses.
+        let wall = eq_client_core::movement::CollisionWorld::new([[
+            [-4.0, -4.0, 5.0],
+            [4.0, -4.0, 5.0],
+            [0.0, 4.0, 5.0],
+        ]])
+        .unwrap();
+        app.insert_resource(super::super::Collision(Some(wall)));
+        scripted_frame(&mut app, Thing::Spawn(NPC), None, false);
+        assert!(matches!(
+            app.world_mut().resource_mut::<ScenePointer>().aim.take(),
+            Some(Err(_))
+        ));
+        // Behind the camera it has no point on the view.
+        app.insert_resource(super::super::Collision(None));
+        app.world_mut()
+            .get_mut::<Transform>(body)
+            .unwrap()
+            .translation = Vec3::new(0.0, 0.0, 20.0);
+        scripted_frame(&mut app, Thing::Spawn(NPC), None, false);
+        assert!(matches!(
+            app.world_mut().resource_mut::<ScenePointer>().aim.take(),
+            Some(Err(_))
+        ));
+    }
+
+    #[test]
+    fn a_script_door_click_is_two_real_clicks_on_one_point() {
+        let center = Vec2::new(400.0, 300.0);
+        let (mut app, commands, ..) = target_app();
+        scene_camera(&mut app);
+        door_scene(&mut app);
+        app.add_systems(Update, aim.after(input));
+        app.update();
+        scripted_frame(&mut app, Thing::Door(0), None, false);
+        assert!(matches!(
+            app.world_mut().resource_mut::<ScenePointer>().aim.take(),
+            Some(Ok(_))
+        ));
+        // One completed click opens nothing; the second does, once.
+        scripted_frame(&mut app, Thing::Door(0), Some(center), true);
+        scripted_frame(&mut app, Thing::Door(0), Some(center), false);
+        assert!(commands.try_recv().is_err());
+        scripted_frame(&mut app, Thing::Door(0), Some(center), true);
+        scripted_frame(&mut app, Thing::Door(0), Some(center), false);
+        assert!(matches!(
+            commands.try_recv().unwrap(),
+            ClientCommand::ClickDoor { door_id: 0, .. }
+        ));
+        assert!(commands.try_recv().is_err());
+        assert!(app.world().resource::<ScenePointer>().refused.is_none());
+        // A door the pick doesn't name there is refused on the press.
+        scripted_frame(&mut app, Thing::Door(1), Some(center), true);
+        assert!(app.world().resource::<ScenePointer>().refused.is_some());
     }
 
     #[test]

@@ -379,7 +379,7 @@ pub(super) fn update(
             })
         });
         if synthetic {
-            chat.refuse("Use a named social step in a local script.");
+            chat.refuse("Use a named social step in a script.");
         } else {
             let result = state.require_profile().and_then(|()| {
                 let admission = admission.ok_or("Socials need a character in the world")?;
@@ -403,7 +403,7 @@ pub(super) fn update(
         });
     let dispatch = outbox.for_script(chat_admission);
     if let Some(error) = state.tick(admission, now, |command| {
-        crate::chat::submit_social_line(
+        crate::chat::submit_typed_line(
             command,
             &mut chat,
             &mut online,
@@ -487,7 +487,7 @@ mod tests {
             assert!(
                 state
                     .tick(Some(1), now, |command| {
-                        crate::chat::submit_social_line(
+                        crate::chat::submit_typed_line(
                             command,
                             &mut chat,
                             &mut online,

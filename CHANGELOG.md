@@ -10,6 +10,105 @@
   session reports neither liquid with it off. `docs/settings.md` says so.
   The amounts and timing stay this client's calculation until read R49-3;
   inferred parts are under checklist 6.491.
+- Scripts can click spawns, ground objects and doors in the world by id (checklist 6.587), since a script may do whatever the player can (Adam, 11-23). `click("spawn", admission, id, revision)` targets a spawn (two of one name included), `right_click` loots, trades, boards or considers it without changing the target, `click("object", admission, drop_id)` picks up an item or opens a world container, and `click("door", admission, id)` makes a door's two clicks. Each click goes through the scene's own pick, with the script's pointer as the cursor: it acts only where the pick names that same thing right now, so a thing behind a wall, off screen or under a window is refused and nothing is sent. The report's surroundings line gives the admission and each nearby spawn's click tuple. A run that stops mid-click hands the scene back the real pointer the next frame.
+
+- Scripts can read the group window, the effects window and the last tell (checklist 6.593, O2).
+  - **Group:** `group.present`, `group.count`, and `group.member1.name` to `group.member5.hp_percent`.
+  - **Effects:** `buffs.count`, and `buff1.spell` to `buff50.spell` in the window's order.
+  - **Tells:** `chat.last_tell` and `chat.last_tell_from`. Like every field, each reads only what a window already shows.
+  - **Kept private:** a run that reads the tells writes neither to a log, a `report()` line, its events (which the control status and Runbook export carry) or a gap record, and a test checks it.
+
+- Escape on the login screen quits the game when nothing is logging in, as the official client's does (checklist 6.601, Adam 11-23; the Mac-era client's the same, inferred). Anything else on the screen takes the press first: an open window or the corner menu closes, and a login under way stops. The Escape that brings character select back to the login screen never also quits; the next one does.
+
+- The player chooses how long a script run may go, on every server (checklist 6.594; Adam, 11-23: "If people want to script indefinitely, let them").
+  - **Choices:** the default keeps today's bounds (15 minutes, 5,000 statements, 500 actions, loops of 100). A number of minutes from 1 to 1440 caps the time and lifts those counts, and no limit lifts them all.
+  - **Where it's set:** only the workbench's length selector, which starts at the default on each launch, and the new `--script-run-length=default|MINUTES|none`. No statement or file line can set or raise it.
+  - **What stays:** every length keeps the same action, chat and server paces, per-step waits, input rules and local-only `gm` fixtures. Stop always ends the run on the next frame and releases held input. The history stays at 64 entries.
+  - **Loops:** `while condition:` may leave out `limit=`. Under the default length its 5,000 statements still bound it. `range()` takes counts past 100 under a longer length.
+  - **Execution tab:** the status line shows the time so far and the length chosen.
+
+- Scripts can read the gem bar and the time (checklist 6.592, O1b). `gem1.spell` to `gem8.spell` name each gem's spell, and `gem1.ready` to `gem8.ready` say whether the gem is lit by the gem bar's own rule. `time.hour`, `time.minute`, `time.day`, `time.month` and `time.year` read what `/time` tells, with the installed client's hour, and are unknown where `/time` says the time can't be told.
+
+- Scripts can order and delete spellbook entries (checklist 6.588): `click("book_edit", "earlier" | "later" | "delete" | "confirm" | "cancel")` presses the spellbook's own buttons for the chosen row. A button the session doesn't offer (deletion on P99) is refused with the greyed button's reason, and nothing is sent.
+
+- Scripts can read more of what the player sees (checklist 6.592, O1), since a script may do whatever the player can (Adam, 11-23).
+  - The new fields are `player.hp_percent`, `player.posture`, `player.casting`, `player.stunned`, `player.loc_x`, `player.loc_y` and `player.loc_z` (as `/loc` gives them), `player.exp_percent`, and the purse's `player.platinum`, `player.gold`, `player.silver` and `player.copper`.
+  - The target adds `target.hp_percent`, `target.kind` and `target.con` (after a consider), and the pet adds `pet.present`, `pet.name` and `pet.hp_percent`.
+  - Each field reads only what a window or typed command already shows. A target's distance and level, and the player's weight and heading, have no field, because nothing on screen gives them. Each field keeps the existing unknown and stale rules.
+
+- Scripts can click with Shift, Ctrl or Alt held (checklist 6.586). `click_with(keys, target...)` and `right_click_with(keys, target...)` take `"shift"`, `"ctrl"`, `"alt"` or a chord of them. The keys go down with the button's press and up the frame after its release, through the same input a person's keys use, so every window reads them unchanged. That reaches an item's click effect (Alt + right-click), whole-stack and single-item moves, all-coin moves and link composing, which no script could do before (Adam 11-23: scripts may do whatever a player can). A run stopped mid-click releases the keys.
+
+- A script's `slash(...)` line runs exactly as a typed one (checklist 6.584), since a script may do whatever the player can (Adam, 11-23).
+  - The step takes any line the player could type, up to the chat line's 512 bytes and without control characters, instead of a list of allowed commands.
+  - The line goes through the chat line's own path: abbreviations first, then `/reply`, `/rtarget`, `/friend`, `/ignore`, `/who all friends`, sharing, `/follow`, `/quit` and `/exit`, the client's own commands, the game commands and the chat words. The same rules, paces and refusals apply, and the line carries the script's admission.
+  - A social, however it is spelled, still goes through the named `social` step.
+
+- Scripts can read the AA facts (checklist 6.582). `report([label])` logs a new "Script alternate advancement report" line with an `alternate_advancement` object, numbers only: Titanium's definition count, selections, trainable ranks with their cost, activatable ranks, points, progress, unspent points and timers, and the Mac client's ranks, selections, points, progress and timers. Each list gives at most 64 entries and its full count. The core gains `definition_count`, `selections` and `activatable`, for display only.
+- Repin eq-network to 2c89198, keeping today's behaviour apart from the AA requests (checklist 6.581). A local EQEmu or local TAKP session now offers the AA requests, so `train_aa`, `activate_aa` and `aa_split` go there; everywhere else they are refused as before. On the Mac-era client only the split goes. The repin also brings Quarm giving, groups, listing and translocate from Quarm's own handlers (6.576), TAKP looting from its own corpse handlers (6.577), and the hosts' script holds lifted in the docs (6.578). These add no event: the client already handles each one.
+- Scripts may chat, emote, roll, run socials and send `gm` lines on any server (checklist 6.579), since a script may do whatever the player can (Adam, 11-23). `chat(...)`, `slash("emote ...")`, `slash("random ...")`, `social(...)` and plain `gm(...)` steps no longer need a local test session: a `gm` line goes as a typed `#` line would. They still need a character in the world, and the session's chat pace holds whatever sends a line. Only the `gm` fixture forms (spawn, depop, guild, stun, setlanguage, traindisc) keep the local test session. A synthetic chat submission or hotbar press of a social still points to the named `social` step.
+
+- Repin eq-network to b631816, keeping today's behaviour (checklist 6.572). The repin brings the bandolier sets, the swap and belt use (all unoffered), and augments read from Titanium item records (6.570).
+  - **Augments:** an augmented item no longer makes the inventory unreadable. `InventoryItem::augments` is filled in every literal.
+  - **Weight:** the session's new `WeightUnavailable::Augments` reads exactly as `Container` does: an unknown load, never a lighter one. A worn augmented item makes equipped stats unconfirmed, so the speed inputs stay unproven.
+  - **Ignored for now:** `WorldEvent::BandoliersUnknown` and `BandolierRefused` go in the ignore arm with the bandolier sets, whose windows are parked (P99 and Quarm features first).
+
+- `/toggleinspect` built, held for read (checklist 6.574).
+  - The client keeps an InspectOthers option, on by default, which is today's behaviour: it answers others' inspections whenever the character's note is known.
+  - While the option is off, the session is told no note, so it answers no one. eq-network already treats that as no answer.
+  - The command stays unoffered behind `TOGGLE_INSPECT_READ`, so it answers "This client does not take /toggleinspect that way yet" as before. Read R49-16 gives its lines, its words and where the official client keeps the option, and nothing is saved until then. `/inspect` (LDoN's treasure inspect) is post-era and not built.
+- `/guildstatus` built, held for read (checklist 6.575).
+  - Titanium's patch maps no `OP_GuildStatus`, so the client answers from its target. It uses EQEmu's `Handle_OP_GuildStatus` lines in the installed client's strings: 12260 (target a player), 12259 (no guild), and 12258, 12257 or 12256 (leader, officer, member, with the guild's name from the world's list).
+  - It gives no line for an anonymous target, for a guild the list doesn't name, for a rank not yet known, or for a string the installation lacks.
+  - That the program answers locally, from its target, and in these strings is inferred. The command stays unoffered behind `GUILD_STATUS_READ` until read R49-6k. `/sheathe` and `/aggressive` have no EQEmu handler and wait for R49-6n.
+
+- Scripts can ask for AA requests (checklist 6.569). The new steps are `train_aa(RANK_ID)`, `activate_aa(RANK_ID)` and `aa_split(PERCENT)`, in this client's own words: the official `/alternateadv` subwords are unread (R49-40b), so they wait.
+  - Each step posts one `TrainAlternateAdvancement`, `ActivateAlternateAdvancement` (no target) or `SetAlternateAdvancementSplit` command for the current admission, then moves on. It never waits for the server and never retries.
+  - The client checks nothing about the rank or the points: the session decides, and its refusal is said in chat.
+  - Every server type still refuses them as not offered until the AA live rows pass. Adam said scripts may train.
+
+- Keep every received AA fact for display (checklist 6.565). The client's
+  `alternate_advancement::State` now holds, besides Titanium's selections
+  and definitions, the profile's points, the latest AA experience update,
+  the unspent points from whichever came last, and each reuse timer, and on
+  `EQMac` the `OP_RespondAA` ranks, the profile's AA array and points, the
+  experience update and the reuse timers, all as sent. The world applies
+  them on `EQMac` as on Titanium; RoF2 sends none yet. `owned` and
+  `trainable` read ownership from the table's shape, as eq-network's train
+  gate does, but are for display only: the session alone decides what is
+  sent, and nothing here sends. `ClientWorld::environmental_aa` is renamed
+  `alternate_advancement`.
+- An AA request the session would not send is now news:
+  `Notice::AlternateAdvancementRefused` carries the session's words, shown
+  in chat, and its kind of reason for the AA window to come. A refusal for
+  an earlier admission is ignored. The client sends no AA request yet.
+- Read AA names and descriptions from the installed Titanium client's
+  `dbstr_us.txt`: `eq_client_assets::db_strings::DbStrings` reads the file
+  with a 32 MiB bound and finds a text by its type and id, so a rank's
+  `title_sid` and `desc_sid` name it. The `id^type^text` layout and the
+  types (1 for AA titles, 4 for descriptions) are inferred from `EQEmu`'s
+  string tables until the client is read (checklist 6.565); a missing
+  string is none. The Mac-era client installs no such file. Nothing loads
+  it yet: the AA window comes later.
+- CI: the Lint workflow gains a Docs job, `cargo doc --workspace --no-deps --locked` with `RUSTDOCFLAGS=-D warnings`, on every pull request and push to main beside Format (Adam's yes, 11-23). A broken doc link now fails the PR it lands in.
+- A session that ends leaves no ask for the next (gap 3.11, checklist
+  6.535). The chat state's pending asks (a `/target`, `/who`, `/loc` or
+  `/time`, a guild or split command, a boat take, `/follow`, a Ranger's
+  tracking option, a `/reply` with no tell, and the script scopes for them)
+  were cleared only in part by `/quit` and not at all by a link loss or a
+  camp, so one made just before could act after the next login.
+  `ChatState::forget_admission` clears them all at a link loss, a camp and
+  `/quit`, naming every field so a new one has to be sorted into kept or
+  cleared. A typed ask still survives a zone change within the session, as
+  before, and nothing is said for a cleared one.
+- Read zones in the EQG format newer clients install, for RoF2 later:
+  `eq_client_assets::eqg::load_eqg_zone` turns `<zone>.eqg`'s descriptor,
+  terrain and model meshes, placements and diffuse textures into the same
+  `ZoneAsset` the S3D loader gives. It reads through David Henry's MIT
+  `libeq_eqg` crate (djhenry/libeq at `686b74a`, credited in the
+  third-party notices). The coordinate frame, model file names, triangle
+  flags and texture property are inferred from the format (checklist
+  6.498); regions and lights aren't read. Nothing calls it yet:
+  `load_zone` still reads S3D archives alone.
 
 - Walk onto low edges as the Titanium client does: a standing walk now
   climbs anything it runs into up to 1.25 above the body's origin, so a

@@ -46,13 +46,15 @@ eq-client-axes = { path = "crates/eq-client-axes" }
 eq-client-core = { path = "crates/eq-client-core" }
 eq-client-render = { path = "crates/eq-client-render" }
 anyhow = "1"
-eq-network = { git = "https://github.com/eq-p99-tools/eq-network", rev = "0d9570be3f108f91a9bfedf96d1ca70ebcd65abc" }
-eq-network-game = { git = "https://github.com/eq-p99-tools/eq-network", rev = "0d9570be3f108f91a9bfedf96d1ca70ebcd65abc" }
+eq-network = { git = "https://github.com/eq-p99-tools/eq-network", rev = "debfe0f04fa92a3aca5d40cc5ddb7efc6be39177" }
+eq-network-game = { git = "https://github.com/eq-p99-tools/eq-network", rev = "debfe0f04fa92a3aca5d40cc5ddb7efc6be39177" }
 glam = "0.32.1"
 parry3d = "0.30.2"
 rerecast = { version = "=0.4.0", default-features = false, features = ["std"] }
 image = { version = "0.25", default-features = false, features = ["bmp", "dds", "ico", "jpeg", "png", "tga"] }
 libeq = { git = "https://github.com/eq-p99-tools/libeq", rev = "e0e5a4e65c170272035a8beb65bda048f7a60a01" }
+# David Henry's MIT EQG reader, from his libeq fork; the crate alone, at a merged commit.
+libeq_eqg = { git = "https://github.com/djhenry/libeq", rev = "686b74a1a82e8f4f207958ebbe8c06579046ce04" }
 roxmltree = "0.21.1"
 sysinfo = { version = "0.40", default-features = false, features = ["system"] }
 rodio = { version = "0.22", default-features = false, features = ["hound"] }
