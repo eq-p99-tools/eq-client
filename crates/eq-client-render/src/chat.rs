@@ -246,6 +246,8 @@ pub(super) struct ChatState {
     pub(crate) rangers_only: Option<super::tracking::RangersOnly>,
     /// A `/loadskin` typed, for [`super::skin`] to load and answer.
     pub(crate) load_skin: Option<super::skin::LoadSkin>,
+    /// A `/pet target`'s outcome, for [`super::pet::say_pet_target`] to say.
+    pub(crate) pet_targeted: Option<super::pet::PetTargeted>,
     /// A local-settings command typed, with the chat tab it was typed in,
     /// for [`super::local_settings::apply`] to run and answer.
     pub(crate) local_setting: Option<(super::local_settings::LocalSetting, ChatTab)>,
@@ -558,6 +560,7 @@ impl ChatState {
             follow_asked,
             rangers_only,
             load_skin,
+            pet_targeted,
             local_setting,
             contacts,
             language_asked,
@@ -617,6 +620,7 @@ impl ChatState {
         *follow_asked = None;
         *rangers_only = None;
         *load_skin = None;
+        *pet_targeted = None;
         *local_setting = None;
         contacts.asked = None;
         *language_asked = None;
@@ -2089,7 +2093,8 @@ fn submit_line(
         return Ok(request?);
     }
     if let Some(result) = super::pet::target_command(&command, online, outbox) {
-        return Ok(result?);
+        state.pet_targeted = Some(result?);
+        return Ok(());
     }
     if let Some(commands) = game_commands(&command, online, outbox, qol) {
         for command in commands? {
@@ -2211,8 +2216,9 @@ pub(super) fn submit_game_command(
         return Ok(());
     };
     let input = input.as_ref();
+    // Scripts and buttons say the line through [`run_game_command`].
     if let Some(result) = super::pet::target_command(input, online, outbox) {
-        return result;
+        return result.map(|_| ());
     }
     let commands = game_commands(input, online, outbox, qol)
         .ok_or_else(|| format!("{input} is not a game command"))??;
@@ -2275,6 +2281,13 @@ pub(super) fn run_game_command(
     }
     if super::tracking::rangers_only(command, online.world()) {
         chat.rangers_only = Some(super::tracking::RangersOnly);
+        return;
+    }
+    if let Some(result) = super::pet::target_command(command, online, outbox) {
+        match result {
+            Ok(targeted) => chat.pet_targeted = Some(targeted),
+            Err(reason) => chat.refuse(reason),
+        }
         return;
     }
     // A chat channel command on a button goes as typed (checklist 6.509).
@@ -2880,6 +2893,9 @@ fn game_commands(
             }]
         }),
         // A command to the player's pet, aimed at the target where it takes one.
+        // A word that names no order sends nothing and says nothing, as the
+        // program's sender skips it (0x49975b, read R49-22a).
+        "pet" if eq_client_core::pet::command(words).is_none() => Ok(Vec::new()),
         "pet" => pet_order(words, online.world(), stamp).map(|command| vec![command]),
         // The ordinary camp sits and prepares first. Immediate exit is an
         // explicit opt-in, still completed by the session's logout reply.
@@ -4250,7 +4266,8 @@ mod tests {
             game_commands("/corpsedrag", &online, &outbox, &Settings::default()).unwrap(),
             Err("You must first target a corpse.".into())
         );
-        // A pet command aims at the target; unknown words say so.
+        // A pet command aims at the target; a word that names no order
+        // sends nothing and says nothing, as the program's sender (0x49975b).
         assert!(matches!(
             game_commands("/pet back off", &online, &outbox, &Settings::default())
                 .unwrap()
@@ -4261,10 +4278,12 @@ mod tests {
                 ..
             }]
         ));
-        assert_eq!(
-            game_commands("/pet dance", &online, &outbox, &Settings::default()).unwrap(),
-            Err("Unknown pet command: dance".into())
-        );
+        for silent in ["/pet dance", "/pet"] {
+            assert_eq!(
+                game_commands(silent, &online, &outbox, &Settings::default()).unwrap(),
+                Ok(Vec::new())
+            );
+        }
         assert!(matches!(
             game_commands("/corpsedrop", &online, &outbox, &Settings::default())
                 .unwrap()
@@ -5330,6 +5349,7 @@ mod tests {
         chat.boat_interacted = Some(8);
         chat.follow_asked = Some(super::super::motion::FollowAsked);
         chat.rangers_only = Some(super::super::tracking::RangersOnly);
+        chat.pet_targeted = Some(super::super::pet::PetTargeted::Found);
         chat.local_setting = Some((
             super::super::local_settings::LocalSetting::ClearChat,
             ChatTab::All,
@@ -5348,6 +5368,7 @@ mod tests {
             && chat.boat_interacted.is_none()
             && chat.follow_asked.is_none()
             && chat.rangers_only.is_none()
+            && chat.pet_targeted.is_none()
             && chat.local_setting.is_none()
             && chat.contacts.asked.is_none()
     }
