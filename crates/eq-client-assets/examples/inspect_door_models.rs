@@ -9,6 +9,10 @@
 //! zone the list names, with its mesh's 0x36 flags and +0x14 reference, and
 //! whether the engine's rule makes it solid throughout (read F4b):
 //! `cargo run -p eq-client-assets --example inspect_door_models -- <EQ dir> --doors <list>`
+//!
+//! Every object mesh in every installed `<zone>_obj.s3d` whose passable faces
+//! the rule makes solid, placed objects and doors alike:
+//! `cargo run -p eq-client-assets --example inspect_door_models -- <EQ dir> --changed`
 use libeq::pfs::PfsReader;
 use libeq::wld::parser::{DmSpriteDef2, FragmentRef, StringReference, WldDoc};
 use std::collections::{BTreeMap, BTreeSet};
@@ -18,6 +22,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let directory = PathBuf::from(args.next().ok_or("supply an EQ install directory")?);
     let zone = args.next().ok_or("supply a zone short name or --doors")?;
+    if zone == "--changed" {
+        changed(&directory)?;
+        return Ok(());
+    }
     if zone == "--doors" {
         let list = std::fs::read_to_string(args.next().ok_or("supply the doors list")?)?;
         doors(&directory, &list);
@@ -64,6 +72,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// One mesh's facts the solid-throughout rule reads.
 struct MeshFacts {
+    /// Whether the loader keeps every face as solid.
+    solid_throughout: bool,
     flags: u32,
     referenced: bool,
     faces: usize,
@@ -81,9 +91,11 @@ fn mesh_facts(directory: &Path, zone: &str) -> Option<BTreeMap<String, MeshFacts
         let Some(name) = doc.get_string(raw.name_reference) else {
             continue;
         };
+        let referenced = !matches!(raw.fragment4, FragmentRef::Name(StringReference(0), _));
         facts.entry(name.to_owned()).or_insert_with(|| MeshFacts {
+            solid_throughout: raw.flags & 0x1_0000 == 0 && !referenced || named(name),
             flags: raw.flags,
-            referenced: !matches!(raw.fragment4, FragmentRef::Name(StringReference(0), _)),
+            referenced,
             faces: raw.faces.len(),
             passable: raw
                 .faces
@@ -160,4 +172,55 @@ fn doors(directory: &Path, list: &str) {
         "# zones {}, unloaded {unloaded}; door meshes without passable faces {without}, solid throughout {solid_throughout}, passable kept {kept}, not found {missing}",
         by_zone.len()
     );
+}
+
+/// The five names the loader's table holds (read F4b), repeated here since
+/// the probe reads the archive itself.
+fn named(name: &str) -> bool {
+    let starts = |prefix: &str| {
+        name.get(..prefix.len())
+            .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
+    };
+    starts("LADDER")
+        || starts("IT66")
+        || name.starts_with("SBDOOR103_")
+        || name == "HHCELL_DMSPRITEDEF"
+        || name == "PORT1414_DMSPRITEDEF"
+}
+
+/// Every object mesh with passable faces that the rule makes solid.
+fn changed(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let mut zones: Vec<String> = std::fs::read_dir(directory)?
+        .filter_map(|entry| {
+            let name = entry.ok()?.file_name().into_string().ok()?;
+            let zone = name
+                .to_ascii_lowercase()
+                .strip_suffix("_obj.s3d")?
+                .to_owned();
+            Some(zone)
+        })
+        .collect();
+    zones.sort();
+    let (mut read, mut count) = (0, 0);
+    println!("zone\tmesh\tflags\treferenced\tfaces\tpassable");
+    for zone in &zones {
+        let Some(facts) = mesh_facts(directory, zone) else {
+            continue;
+        };
+        read += 1;
+        for (mesh, fact) in &facts {
+            if fact.passable > 0 && fact.solid_throughout {
+                count += 1;
+                println!(
+                    "{zone}\t{mesh}\t{:#x}\t{}\t{}\t{}",
+                    fact.flags, fact.referenced, fact.faces, fact.passable
+                );
+            }
+        }
+    }
+    println!(
+        "# object archives {}, read {read}; meshes made solid throughout {count}",
+        zones.len()
+    );
+    Ok(())
 }

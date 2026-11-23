@@ -1117,10 +1117,13 @@ fn object_collision(
 }
 
 /// The vertices of the faces a placed actor (a door or an object) collides
-/// with. The engine skips a face flagged passable (WLD 0x10) unless it has
-/// made the whole mesh solid (EQGraphicsDX9.dll 0x10193510, read F4b): a
-/// mesh whose 0x36 flags lack 0x10000 and whose reference at +0x14 is empty,
-/// or one of five models it names. Every face of such a mesh is solid.
+/// with: the one place the engine's rule lives. The engine skips a face
+/// flagged passable (WLD 0x10) unless it has made the whole mesh solid
+/// (EQGraphicsDX9.dll 0x10193510, read F4b): a mesh whose 0x36 flags lack
+/// 0x10000 and whose reference at +0x14 is empty, or one
+/// [`SOLID_THROUGHOUT`] names. Every face of such a mesh is solid. Zone
+/// terrain keeps [`mesh_collision`]'s skip (its own test is unread), and
+/// boats and EQG models are unchanged.
 fn object_solid_faces(
     mesh: &libeq::wld::Mesh<'_>,
     raw: Option<&libeq::wld::parser::DmSpriteDef2>,
@@ -1139,19 +1142,38 @@ fn object_solid_faces(
     }
 }
 
-/// The models the engine makes solid throughout by name (0x10193510):
-/// ladders and `IT66` models by prefix in any case, `SBDOOR103_` by its
-/// exact prefix, and the bars `HHCELL` and the portcullis `PORT1414`.
+/// How [`SOLID_THROUGHOUT`] compares a mesh's name with one of its entries.
+#[derive(Clone, Copy)]
+enum NameMatch {
+    /// The name starts with it, in any case.
+    PrefixAnyCase,
+    /// The name starts with it, case and all.
+    Prefix,
+    /// The name is it exactly.
+    Exact,
+}
+
+/// The models the engine makes solid throughout by their mesh's name,
+/// passable faces and all (EQGraphicsDX9.dll 0x10193510, read F4b): ladders,
+/// the Neriak bars, one door, one portcullis and the `IT66` models. These are
+/// the zone files' model identifiers.
+const SOLID_THROUGHOUT: [(&str, NameMatch); 5] = [
+    ("LADDER", NameMatch::PrefixAnyCase),
+    ("HHCELL_DMSPRITEDEF", NameMatch::Exact),
+    ("SBDOOR103_", NameMatch::Prefix),
+    ("PORT1414_DMSPRITEDEF", NameMatch::Exact),
+    ("IT66", NameMatch::PrefixAnyCase),
+];
+
+/// Whether [`SOLID_THROUGHOUT`] names this mesh.
 fn solid_by_name(name: &str) -> bool {
-    let starts = |prefix: &str| {
-        name.get(..prefix.len())
-            .is_some_and(|start| start.eq_ignore_ascii_case(prefix))
-    };
-    starts("LADDER")
-        || starts("IT66")
-        || name.starts_with("SBDOOR103_")
-        || name == "HHCELL_DMSPRITEDEF"
-        || name == "PORT1414_DMSPRITEDEF"
+    SOLID_THROUGHOUT.iter().any(|&(entry, how)| match how {
+        NameMatch::PrefixAnyCase => name
+            .get(..entry.len())
+            .is_some_and(|start| start.eq_ignore_ascii_case(entry)),
+        NameMatch::Prefix => name.starts_with(entry),
+        NameMatch::Exact => name == entry,
+    })
 }
 
 /// Solid triangles over libeq positions, in the renderer's frame with the
