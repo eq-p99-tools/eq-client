@@ -47,17 +47,31 @@ impl Profile {
 /// only when either changes.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn follow(online: Res<crate::online::OnlineState>, mut profile: ResMut<Profile>) {
-    let current = online
-        .world()
-        .player()
-        .map(|player| player.name.as_str())
-        .zip(online.world().world_name());
+    let current = names(online.world());
     if profile.names() != current {
         profile.0 = current.map(|(character, world)| CharacterProfile {
             world: world.to_owned(),
             character: character.to_owned(),
         });
     }
+}
+
+/// The character playing and their world, by name, as [`follow`] will keep
+/// them.
+fn names(world: &eq_client_core::world::ClientWorld) -> Option<(&str, &str)> {
+    world
+        .player()
+        .map(|player| player.name.as_str())
+        .zip(world.world_name())
+}
+
+/// The profile of the character playing, as [`follow`] will make it: for a
+/// reader that runs before it in the frame an admission comes in.
+pub(crate) fn playing(world: &eq_client_core::world::ClientWorld) -> Option<CharacterProfile> {
+    names(world).map(|(character, world)| CharacterProfile {
+        world: world.to_owned(),
+        character: character.to_owned(),
+    })
 }
 
 /// The shared file's name, or `<prefix>-<world>-<character>.txt` with

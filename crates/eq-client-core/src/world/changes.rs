@@ -163,4 +163,7 @@ pub struct Changes {
     /// The update was for an earlier admission, or came when the world takes
     /// no such news, so nothing changed.
     pub ignored: bool,
+    /// The kind of news the world heard but does not show yet, by its name
+    /// alone, for the session's gap file ([`crate::gaps`]).
+    pub unshown: Option<&'static str>,
 }

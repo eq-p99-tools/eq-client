@@ -16,6 +16,8 @@ use std::{collections::BTreeMap, time::Instant};
 /// The zone's contents, as the server described them.
 #[derive(Default)]
 pub(super) struct Zone {
+    /// The titles and suffixes the latest list in this zone offered.
+    pub(super) titles: Option<Vec<eq_network_game::names::TitleChoice>>,
     pub(super) spawns: BTreeMap<u16, Spawn>,
     pub(super) boat_control: crate::boats::ControlState,
     pub(super) boat_notice: Option<crate::boats::ControlBoat>,
@@ -315,8 +317,15 @@ fn still_if_corpse(state: &mut SpawnState) {
 
 impl super::ClientWorld {
     /// Damage the player dealt or took; only that is theirs to read.
-    pub(super) fn damage(&self, damage: &crate::combat::Damage, changes: &mut super::Changes) {
+    pub(super) fn damage(&mut self, damage: &crate::combat::Damage, changes: &mut super::Changes) {
         changes.damage.push(*damage);
+        if let Some(record) = self.environmental_record(damage) {
+            changes.notices.push(Notice::EnvironmentalDamage {
+                reported: None,
+                record: Some(record),
+            });
+            return;
+        }
         match self.player.as_ref() {
             Some(player)
                 if player.spawn_id == damage.source_id || player.spawn_id == damage.target_id =>
@@ -330,6 +339,68 @@ impl super::ClientWorld {
             }
             _ => changes.ignored = true,
         }
+    }
+
+    /// The line of an environmental record aimed at the player from
+    /// someone else, as the Titanium program's 0x4a56e3 prints it (read
+    /// R49-3b): an environmental record has source 0, and `EQEmu` sends
+    /// the player's own non-fall record back to them. A drowning record
+    /// also counts toward [`Self::drowning_records`]. Departure, labelled
+    /// (recording checklist 6.491f): the program also takes the amount off
+    /// its local HP a second time; this client keeps HP the server's, so it
+    /// does not. A record whose source is the player keeps the combat line,
+    /// where the program prints the type line too: inferred unreached, as
+    /// neither server sends the player such a record (6.491f). Other players'
+    /// records, and the Mac-era program's, whose lines are unread, keep
+    /// the combat line (recording checklist 6.491g).
+    fn environmental_record(&mut self, damage: &crate::combat::Damage) -> Option<(u32, u32)> {
+        let player = self.player.as_ref()?.spawn_id;
+        if !prints_hazard_lines(self.generation)
+            || damage.target_id != player
+            || damage.source_id == player
+        {
+            return None;
+        }
+        let line = crate::environment::record_line(
+            damage.kind,
+            damage.spell_id,
+            self.zone.doors.zone_id(),
+        )?;
+        if damage.kind == 251 {
+            self.drowning_records = self.drowning_records.wrapping_add(1);
+        }
+        Some(line)
+    }
+
+    /// The player's own report went: the Titanium program prints the
+    /// amount line, then the record's line where a record went with it
+    /// (`eqgame.exe` 0x41c905, reads R49-3 e and R49-3b). The Mac-era
+    /// program's fall lines are the motion's own; its other lines are
+    /// unread, so nothing more prints there.
+    pub(super) fn hazard_reported(
+        &self,
+        session_id: u64,
+        hazard: crate::hazards::Hazard,
+        amount: u32,
+        record: bool,
+        changes: &mut super::Changes,
+    ) {
+        if self.session_id != Some(session_id) || !prints_hazard_lines(self.generation) {
+            changes.ignored = true;
+            return;
+        }
+        changes.notices.push(Notice::EnvironmentalDamage {
+            reported: Some(amount),
+            record: record
+                .then(|| {
+                    crate::environment::record_line(
+                        crate::environment::hazard_kind(hazard),
+                        None,
+                        self.zone.doors.zone_id(),
+                    )
+                })
+                .flatten(),
+        });
     }
 
     /// Session authority, scoped to this admission and ordered independently
@@ -552,5 +623,15 @@ impl super::ClientWorld {
             }
             _ => changes.ignored = true,
         }
+    }
+}
+
+/// Whether a generation's program prints the environmental damage lines
+/// this client follows: the Titanium program's (reads R49-3 e and R49-3b).
+/// The Mac-era and `RoF2` programs' are unread.
+const fn prints_hazard_lines(dialect: crate::GameDialect) -> bool {
+    match dialect {
+        crate::GameDialect::Titanium => true,
+        crate::GameDialect::EqMac | crate::GameDialect::Rof2 => false,
     }
 }

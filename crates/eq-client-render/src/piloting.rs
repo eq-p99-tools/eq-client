@@ -50,9 +50,11 @@ fn support(
 
 /// What the program's boat interaction asks (read R35 (b), (c), (f)): only
 /// for the boat the player stands on, taking it, or letting it go when the
-/// player already holds it; for any other boat, nothing, said or sent. The
-/// program's release resets local control at once; here, as for
-/// `/boat release`, control follows the echo.
+/// player already holds it; for any other boat, nothing, said or sent. As
+/// the program's, a release ends local control at once: the session drops
+/// it before sending (R35 (c), 6.477). A take still waiting for its echo is
+/// not held, so a second interaction asks for it again, as the program's
+/// does (6.533).
 fn interaction(boat: u16, standing_on: Option<u16>, held: Option<u16>) -> Option<Intent> {
     if standing_on != Some(boat) {
         return None;
@@ -62,6 +64,16 @@ fn interaction(boat: u16, standing_on: Option<u16>, held: Option<u16>) -> Option
     } else {
         Intent::Acquire
     })
+}
+
+/// The boat the player controls: only one whose take the server echoed. A
+/// take still waiting holds nothing (R35 (e): nothing is set before the
+/// echo).
+const fn held(state: ControlState) -> Option<u16> {
+    match state {
+        ControlState::Acquired(vessel) => Some(vessel.spawn_id),
+        _ => None,
+    }
 }
 
 #[derive(Default)]
@@ -129,10 +141,7 @@ pub(super) fn update(
         );
     }
     if let Some(boat) = chat.boat_interacted.take() {
-        let held = match world.boat_control() {
-            ControlState::Acquired(vessel) => Some(vessel.spawn_id),
-            _ => None,
-        };
+        let held = held(world.boat_control());
         let request = match interaction(boat, support.map(|(sample, _)| sample.spawn_id), held) {
             Some(Intent::Release) => Some(Request::Release),
             Some(Intent::Acquire) => {
@@ -207,6 +216,31 @@ mod tests {
         // Another boat, or none underfoot: nothing at all.
         assert_eq!(interaction(8, Some(9), None), None);
         assert_eq!(interaction(8, None, Some(8)), None);
+    }
+
+    #[test]
+    fn a_second_interaction_while_the_take_waits_asks_for_it_again() {
+        let vessel = Vessel {
+            spawn_id: 8,
+            incarnation: 1,
+        };
+        // Waiting for the echo, the boat is not held: the click is a take,
+        // which the session sends again (6.533).
+        let waiting = held(ControlState::Acquiring { vessel });
+        assert_eq!(waiting, None);
+        assert_eq!(interaction(8, Some(8), waiting), Some(Intent::Acquire));
+        // Once echoed it is held, and the click lets it go.
+        let taken = held(ControlState::Acquired(vessel));
+        assert_eq!(interaction(8, Some(8), taken), Some(Intent::Release));
+        // Releasing, released or unconfirmed hold nothing either.
+        for state in [
+            ControlState::Releasing(vessel),
+            ControlState::Released(vessel),
+            ControlState::Unconfirmed(vessel),
+            ControlState::Unknown,
+        ] {
+            assert_eq!(held(state), None, "{state:?}");
+        }
     }
 
     #[test]
