@@ -6872,6 +6872,36 @@ pub(super) mod tests {
         assert!(highest < 1.0, "origin rose to {highest}: {seen:?}");
     }
 
+    #[test]
+    fn a_body_surfacing_under_a_deck_drops_back_into_the_water() {
+        // Temple of Life's north deck (local look, 11-23): a swimmer that
+        // came up under a deck over the water, its origin just out of the
+        // water and its head in the deck's underside, must not freeze.
+        let quad = |a, b, c, d| [[a, b, c], [a, c, d]];
+        let mut triangles = Vec::from(flat_surface(-16.0));
+        for y in [3.0, 5.0] {
+            triangles.extend(quad(
+                [-20.0, y, 2.0],
+                [20.0, y, 2.0],
+                [20.0, y, 20.0],
+                [-20.0, y, 20.0],
+            ));
+        }
+        let world = CollisionWorld::new(triangles)
+            .unwrap()
+            .with_liquids(Pool {
+                top: 0.0,
+                liquid: Liquid::Water,
+            })
+            .with_swim_origin(3.75);
+        let feet = Vec3::new(0.0, -3.35, 8.0);
+        let seen = swim_from(world, feet, 0.0, (Some(WET_SWIMMER), 0.0), 20).unwrap();
+        assert!(
+            seen.iter().any(|(_, at, _)| at.distance(feet) > 0.1),
+            "frozen: {seen:?}"
+        );
+    }
+
     /// The live look's three Temple of Life spots (North Qeynos), swum
     /// against the installed zone's own collision and water as zone entry
     /// builds them. Prints the floor and water along each spot's heading and
@@ -6902,6 +6932,33 @@ pub(super) mod tests {
             |list| list.split(',').filter_map(|p| p.parse().ok()).collect(),
         );
         let profile = world();
+        // RIM_DUMP=x,y,z,radius prints the collision triangles (renderer
+        // frame) whose every corner lies within the box around that world
+        // point, for a local reproduction.
+        if let Ok(dump) = std::env::var("RIM_DUMP") {
+            let values: Vec<f32> = dump
+                .split(',')
+                .filter_map(|v| v.trim().parse().ok())
+                .collect();
+            if let [x, y, z, radius] = values[..] {
+                let centre = Vec3::from_array(eq_client_core::render_position(
+                    eq_client_core::WorldPosition {
+                        x,
+                        y,
+                        z,
+                        heading: 0.0,
+                    },
+                ));
+                for triangle in crate::scene_collision::collision_triangles(&zone) {
+                    if triangle.iter().any(|corner| {
+                        (Vec3::from_array(*corner) - centre).abs().max_element() <= radius
+                    }) {
+                        println!("tri {triangle:?}");
+                    }
+                }
+                println!("centre {centre}");
+            }
+        }
         // name,x,y,z,heading;... with z empty for the surface.
         let spots: Vec<(String, f32, f32, f32, f32)> = std::env::var("RIM_SPOTS").map_or_else(
             |_| {
