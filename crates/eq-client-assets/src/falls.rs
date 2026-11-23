@@ -356,6 +356,44 @@ pub const EDGE_LIFT_FLOOR: f32 = 1.9;
 /// unmeasured, so this keeps to what was seen.
 const TITANIUM_EDGE_CLIMB: f32 = 5.0 - 3.75;
 
+/// How much room the program wants over the floor at the end of the
+/// player's own move: standing `standing` × S, ducking S + `ducking_extra`,
+/// mounted `mounted` × S, with S the stand height (Titanium 0x48bb83, read
+/// R1d). The program also takes spawn +0x22c over the standing clearance
+/// when it is above 0; its source is unread, so it isn't modelled
+/// (checklist 6.496).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Headroom {
+    /// Multiple of S a standing body needs.
+    pub standing: f32,
+    /// Added to S for a ducking body.
+    pub ducking_extra: f32,
+    /// Multiple of S a mounted body needs.
+    pub mounted: f32,
+}
+
+impl Headroom {
+    /// Titanium's factors (R1d).
+    pub const TITANIUM: Self = Self {
+        standing: 2.0,
+        ducking_extra: 1.0,
+        mounted: 3.0,
+    };
+
+    /// The clearance a body with this stand height needs: mounted first,
+    /// then ducking, else standing.
+    #[must_use]
+    pub fn needed(self, stand_height: f32, ducking: bool, mounted: bool) -> f32 {
+        if mounted {
+            self.mounted * stand_height
+        } else if ducking {
+            stand_height + self.ducking_extra
+        } else {
+            self.standing * stand_height
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -498,5 +536,14 @@ mod tests {
             "{}",
             EQMAC.jump_speed
         );
+    }
+
+    #[test]
+    fn titanium_wants_twice_the_stand_height_standing_one_more_ducking_and_thrice_mounted() {
+        let rule = super::Headroom::TITANIUM;
+        assert!((rule.needed(3.75, false, false) - 7.5).abs() < 1e-6);
+        assert!((rule.needed(3.75, true, false) - 4.75).abs() < 1e-6);
+        assert!((rule.needed(3.75, false, true) - 11.25).abs() < 1e-6);
+        assert!((rule.needed(3.75, true, true) - 11.25).abs() < 1e-6);
     }
 }

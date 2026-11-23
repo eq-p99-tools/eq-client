@@ -644,6 +644,38 @@ impl CollisionWorld {
             .min_by(f32::total_cmp)
     }
 
+    /// Whether the gap from the floor under `origin` to the ceiling above it
+    /// is at least `needed`, as the Titanium program's headroom test takes
+    /// it for the player's own moves (0x48bb83 in 0x48acef; read R1d): the
+    /// floor straight down from the origin (0x48a0fc) and the first wall
+    /// straight up (0x43a0a0, to z = +32767) among the zone and its solid
+    /// doors and objects, never a spawn. No floor, no ceiling, or a
+    /// ceiling at or below the floor is enough. Both are rays here; the
+    /// program sweeps the floor with radius 0.1 × the stand height and the
+    /// ceiling sweep's shape is engine code, unread (checklist 6.496).
+    #[must_use]
+    pub fn headroom(&self, origin: Vec3, needed: f32) -> bool {
+        const REACH: f32 = 32_767.0;
+        if !origin.is_finite() || !needed.is_finite() {
+            return true;
+        }
+        let Some(floor) = self.solid_ground(origin, 0.0, REACH) else {
+            return true;
+        };
+        let up = Ray::new(Vector::from_array(origin.to_array()), Vector::Y);
+        // The world only: a spawn carried overhead never pins the player.
+        let Some(ceiling) = self
+            .labelled_wall_meshes()
+            .filter(|(obstacle, _)| !matches!(obstacle, Obstacle::Carrier(_)))
+            .filter_map(|(_, mesh)| mesh.cast_ray(&up, REACH, false))
+            .min_by(f32::total_cmp)
+            .map(|time| origin.y + time)
+        else {
+            return true;
+        };
+        ceiling <= floor || ceiling - floor >= needed
+    }
+
     /// Sweeps the character capsule and slides along walls without crossing cliffs or steep slopes.
     /// Movement stops rather than attempting automatic jumps, swimming, or falling, and
     /// before deep water or lava where the world knows the zone's liquids.
@@ -1028,6 +1060,30 @@ mod tests {
             [[-20.0, y, -20.0], [20.0, y, 20.0], [-20.0, y, 20.0]],
         ]
     }
+    #[test]
+    fn headroom_measures_the_floor_to_the_first_ceiling_over_the_origin() {
+        // S = 3.75: standing needs 7.5, ducking 4.75, mounted 11.25 (R1d).
+        let room = |ceiling: Option<f32>, needed: f32| {
+            let mut triangles = floor(0.0);
+            if let Some(ceiling) = ceiling {
+                triangles.extend(floor(ceiling));
+            }
+            CollisionWorld::new(triangles)
+                .unwrap()
+                .headroom(Vec3::new(0.0, 3.75, 0.0), needed)
+        };
+        assert!(!room(Some(7.4), 7.5));
+        assert!(room(Some(7.6), 7.5));
+        assert!(!room(Some(4.7), 4.75));
+        assert!(room(Some(4.8), 4.75));
+        assert!(!room(Some(11.2), 11.25));
+        assert!(room(Some(11.3), 11.25));
+        assert!(room(None, 11.25));
+        // No floor under the origin: nothing to measure, so the move stands.
+        let ceiling_only = CollisionWorld::new(floor(7.0)).unwrap();
+        assert!(ceiling_only.headroom(Vec3::new(0.0, 3.75, 0.0), 7.5));
+    }
+
     /// A wall across x = `x`, two units thick, from the floor up.
     fn wall(x: f32) -> Arc<CollisionMesh> {
         let (near, far) = (x, x + 2.0);

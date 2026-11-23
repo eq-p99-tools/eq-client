@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Refuse a move of the player's own body into less headroom than the
+  Titanium program allows (read R1d, 0x48bb83): the gap from the floor to
+  the ceiling at the move's end must be 2 × the stand height standing,
+  the stand height + 1 ducking and 3 × it mounted, or the move stays at
+  its start. A human no longer walks upright under a ceiling 6.85 to 7.5
+  over the floor, where the official client refuses. A swimmer, Fly, a
+  lift's carry and the Mac-era client move as before. Inferred parts are
+  under checklist 6.496; the PR stays draft until the test's engine gate
+  is read or looked at on the official client.
+
 - Swim as the Titanium client does (reads R33, R33b, R39, R41). Water now
   keeps the body's velocity from frame to frame and damps it, gravity still
   pulls in water so an idle swimmer slowly sinks (about 0.67 units a
