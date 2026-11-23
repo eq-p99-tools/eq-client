@@ -175,6 +175,8 @@ pub(super) struct ChatState {
     pub(crate) doability: Option<String>,
     /// A `/memspellset`'s words, waiting for the spell sets.
     pub(crate) spell_set_asked: Option<String>,
+    /// A `/melody`'s words, waiting for the gem press path (read R49-33 c).
+    pub(crate) melody_asked: Option<String>,
     /// A `/lootnodrop`'s words, waiting to set or list the choices.
     pub(crate) loot_no_drop: Option<String>,
     /// Social emotes, by case number, with the words after the command,
@@ -551,6 +553,7 @@ impl ChatState {
             channel_asked,
             doability,
             spell_set_asked,
+            melody_asked,
             loot_no_drop,
             emotes,
             disciplines,
@@ -608,6 +611,7 @@ impl ChatState {
         channel_asked.clear();
         *doability = None;
         *spell_set_asked = None;
+        *melody_asked = None;
         *loot_no_drop = None;
         emotes.clear();
         disciplines.clear();
@@ -2298,6 +2302,10 @@ fn word_asked(input: &str, state: &mut ChatState) -> bool {
     }
     if let Some(words) = command_words(input, "memspellset") {
         state.spell_set_asked = Some(words.to_owned());
+        return true;
+    }
+    if let Some(words) = command_words(input, "melody") {
+        state.melody_asked = Some(words.to_owned());
         return true;
     }
     if let Some(words) = command_words(input, "lootnodrop") {
