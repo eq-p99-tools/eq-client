@@ -5340,7 +5340,11 @@ pub(super) mod tests {
         assert!((mac.gravity - 160.0).abs() < 0.001, "{}", mac.gravity);
         // Three frames a step slow the fall to 13.2 units a step (R49-24 b),
         // well inside the session's motion guard.
-        assert!((mac.terminal_speed - 264.0).abs() < 0.01, "{}", mac.terminal_speed);
+        assert!(
+            (mac.terminal_speed - 264.0).abs() < 0.01,
+            "{}",
+            mac.terminal_speed
+        );
         assert!(mac.terminal_speed <= eq_client_core::movement::EQMAC_FALL_SPEED);
         // The zone header's gravity, a step at a time; none pulls nothing.
         let heavy = climbing(
