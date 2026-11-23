@@ -7,6 +7,11 @@
 //! client doesn't copy, so 6706 stands in there. That `/loc` is worded so is
 //! inferred from what 13177 says; this client's words stand in without the
 //! strings.
+//!
+//! `/guildstatus` is answered here too, once read R49-6k lets it be offered
+//! (checklist 6.575): `EQEmu`'s guild status lines, from the target the
+//! client knows, since Titanium's patch maps no `OP_GuildStatus`. A string
+//! the installation lacks gives no line.
 use super::chat::{ChatState, Said};
 use super::hud::messages::Messages;
 use bevy::prelude::*;
@@ -20,16 +25,30 @@ pub(crate) enum Asked {
     Location,
     /// `/time`: the time in Norrath and on Earth.
     Time,
+    /// `/guildstatus`: the target's guild and rank in it.
+    GuildStatus,
 }
+
+/// Whether `/guildstatus` is offered: false until read R49-6k says whether
+/// the official client answers it itself, from its target, and in which
+/// strings (checklist 6.575). Only tests answer it while it is false.
+const GUILD_STATUS_READ: bool = false;
 
 impl Asked {
     /// What a typed line asks, if it is `/location` or `/time`, spelled out.
     pub(crate) fn typed(input: &str) -> Option<Self> {
+        Self::typed_when(input, GUILD_STATUS_READ)
+    }
+
+    /// As [`Self::typed`], with `/guildstatus` taken only when offered.
+    fn typed_when(input: &str, guild_status: bool) -> Option<Self> {
         let name = input.strip_prefix('/')?.trim();
         if name.eq_ignore_ascii_case("location") {
             Some(Self::Location)
         } else if name.eq_ignore_ascii_case("time") {
             Some(Self::Time)
+        } else if guild_status && name.eq_ignore_ascii_case("guildstatus") {
+            Some(Self::GuildStatus)
         } else {
             None
         }
@@ -47,6 +66,7 @@ fn answer(
 ) -> Result<Vec<Said>, String> {
     let player = world.player().ok_or("Enter the world first")?;
     Ok(match asked {
+        Asked::GuildStatus => guild_status(world, messages).into_iter().collect(),
         Asked::Location => {
             let numbers = whereabouts::location(player.position);
             let fallback = format!("You stand at {}.", numbers.join(", "));
@@ -83,7 +103,23 @@ fn answer(
     })
 }
 
-/// Answers a `/loc` or `/time` the chat noted, in the chat.
+/// `EQEmu`'s guild status line for the target, in the installed client's
+/// words (`Handle_OP_GuildStatus`: 12256 to 12260, inferred to be the
+/// program's own until read R49-6k); none where the installation lacks the
+/// string or the client can't tell.
+fn guild_status(world: &ClientWorld, messages: &Messages) -> Option<Said> {
+    use eq_client_core::world::GuildStatus;
+    let (id, arguments) = match world.guild_status()? {
+        GuildStatus::NoPlayer => (12260, Vec::new()),
+        GuildStatus::NoGuild { name } => (12259, vec![name]),
+        GuildStatus::Member { name, guild } => (12256, vec![name, guild]),
+        GuildStatus::Officer { name, guild } => (12257, vec![name, guild]),
+        GuildStatus::Leader { name, guild } => (12258, vec![name, guild]),
+    };
+    messages.formatted(id, &arguments).map(Said::official)
+}
+
+/// Answers a `/loc`, `/time` or `/guildstatus` the chat noted, in the chat.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(super) fn answers(
     mut chat: ResMut<ChatState>,
@@ -114,6 +150,66 @@ mod tests {
     use crate::online::{OnlineState, testing};
     use eq_client_assets::clock::{EQMAC, TITANIUM};
     use eq_client_core::WorldEvent;
+
+    #[test]
+    fn guild_status_waits_for_its_read_then_answers_in_the_installed_strings_only() {
+        use eq_client_core::listing::{GuildRank, ListingChange};
+        // Not offered until R49-6k: the word passes on as before.
+        assert_eq!(Asked::typed("/guildstatus"), None);
+        assert_eq!(
+            Asked::typed_when("/GuildStatus ", true),
+            Some(Asked::GuildStatus)
+        );
+        let messages = Messages::parse(
+            "EQST0002
+0 3
+12258 %1 leads %2
+12259 %1 has no guild
+12260 Target a player
+",
+        );
+        let earth = jiff::civil::date(2026, 10, 3).at(12, 0, 0, 0);
+        let mut state = OnlineState::new(true);
+        testing::admit(&mut state, 1, testing::player(7));
+        let said = |state: &OnlineState, messages: &Messages| {
+            answer(Asked::GuildStatus, state.world(), earth, messages, TITANIUM).unwrap()
+        };
+        assert_eq!(said(&state, &messages), [Said::official("Target a player")]);
+        state.select_target(Some(7));
+        let name = state.world().player().unwrap().name.clone();
+        assert_eq!(
+            said(&state, &messages),
+            [Said::official(format!("{name} has no guild"))]
+        );
+        testing::news(
+            &mut state,
+            [
+                WorldEvent::GuildNames(vec![(3, "Seekers".into())]),
+                WorldEvent::Listing {
+                    spawn_id: 7,
+                    change: ListingChange::Guild(Some(3)),
+                },
+                WorldEvent::Listing {
+                    spawn_id: 7,
+                    change: ListingChange::GuildRank(GuildRank::Leader),
+                },
+            ],
+        );
+        assert_eq!(
+            said(&state, &messages),
+            [Said::official(format!("{name} leads Seekers"))]
+        );
+        // A string the installation lacks gives no line, never words of ours.
+        testing::news(
+            &mut state,
+            [WorldEvent::Listing {
+                spawn_id: 7,
+                change: ListingChange::GuildRank(GuildRank::Member),
+            }],
+        );
+        assert_eq!(said(&state, &messages), []);
+        assert_eq!(said(&state, &Messages::default()), []);
+    }
 
     #[test]
     fn loc_and_time_answer_in_the_installed_strings() {
