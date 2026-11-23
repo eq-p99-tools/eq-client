@@ -123,7 +123,7 @@ pub fn select_spot_mesh(
         zone_name,
         &triangles,
         world.as_ref(),
-        &crate::zone_navmesh::settings(client),
+        &crate::zone_navmesh::settings(client, eq_client_assets::scale::ZoneScale::default()),
         eq_client_core::movement::navmesh::build_threads(),
         &std::sync::atomic::AtomicBool::new(false),
     )

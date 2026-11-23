@@ -372,7 +372,7 @@ struct Installed {
 impl Installed {
     /// The settings zone entry builds with.
     fn settings(&self) -> Settings {
-        crate::zone_navmesh::settings(self.client)
+        crate::zone_navmesh::settings(self.client, eq_client_assets::scale::ZoneScale::default())
     }
 }
 

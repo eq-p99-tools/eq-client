@@ -26,6 +26,9 @@ pub(super) struct Entry {
     pub native_head: Option<super::breath::head::Basis>,
     /// How many times its authored size the player's model is drawn.
     pub scale: f32,
+    /// What the zone's header says about drawing models, which the mesh's
+    /// headroom follows ([`crate::zone_navmesh::settings`]).
+    pub zone_scale: eq_client_assets::scale::ZoneScale,
 }
 
 /// CPU-heavy scene data prepared before returning to the render thread.
@@ -169,6 +172,9 @@ impl Entry {
                 (player.race, player.gender, player.size),
             )
             .scale,
+            zone_scale: eq_client_assets::scale::ZoneScale {
+                classic_reduced: flag.is_some_and(|flag| flag != 0),
+            },
         })
     }
 
@@ -207,6 +213,7 @@ impl Entry {
             native_head: None,
             // The preview stands the model at its mesh's own size.
             scale: 1.0,
+            zone_scale: eq_client_assets::scale::ZoneScale::default(),
         })
     }
 
@@ -346,6 +353,7 @@ impl Scene<'_, '_> {
             body,
             native_head,
             scale,
+            zone_scale,
         } = entry;
         // A clone shares the world's geometry.
         let world = collision.0.clone();
@@ -375,7 +383,7 @@ impl Scene<'_, '_> {
                 triangles,
                 world,
                 directory,
-                crate::zone_navmesh::settings(client),
+                crate::zone_navmesh::settings(client, zone_scale),
             );
         }
         spawn_static_zone(

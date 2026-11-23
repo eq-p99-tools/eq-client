@@ -158,14 +158,22 @@ pub(super) fn walker_sizes() -> [f32; 3] {
 /// mount, so neither is asked. The mesh asks one cell height more than the
 /// test: a span's headroom is counted in whole cells, so a span the voxel
 /// rounding makes look up to a cell taller still never leads a walker to a
-/// refused move (reviewer N1).
-pub(crate) fn settings(client: eq_client_assets::ui::InstalledClient) -> Settings {
+/// refused move (reviewer N1). In a zone whose header sets the classic model
+/// scale flag, S is 1/1.3 smaller, as the test's is (read R49-9f a); a mesh
+/// built before the header is known (a prebuild, a select spot) asks the
+/// larger room, which never leads a walker to a refused move either.
+pub(crate) fn settings(
+    client: eq_client_assets::ui::InstalledClient,
+    zone: eq_client_assets::scale::ZoneScale,
+) -> Settings {
     let sized = Settings::sized(walker_sizes());
+    let shrink = if zone.classic_reduced { 1.3 } else { 1.0 };
     match client.headroom() {
         Some(rule) => {
             let guard = sized.cell_height;
             sized.with_standing_room(|size| {
-                rule.room(eq_client_core::drawn_feet_offset(size * 0.2), false, false) + guard
+                let stand = eq_client_core::drawn_feet_offset(size * 0.2 / shrink);
+                rule.room(stand, false, false) + guard
             })
         }
         None => sized,
@@ -275,9 +283,16 @@ pub(super) fn report(
 mod tests {
     #[test]
     fn a_titanium_mesh_asks_each_size_for_twice_its_stand_height_and_the_margin() {
-        use eq_client_assets::ui::InstalledClient;
-        let titanium = settings(InstalledClient::Titanium);
-        let eqmac = settings(InstalledClient::EqMac);
+        use eq_client_assets::{scale::ZoneScale, ui::InstalledClient};
+        let titanium = settings(InstalledClient::Titanium, ZoneScale::default());
+        let eqmac = settings(InstalledClient::EqMac, ZoneScale::default());
+        // A zone with the classic model scale flag asks 1/1.3 of S (R49-9f).
+        let reduced = settings(
+            InstalledClient::Titanium,
+            ZoneScale {
+                classic_reduced: true,
+            },
+        );
         let lift = eqmac.lift;
         assert_eq!(titanium.sizes, walker_sizes());
         assert_eq!(eqmac, Settings::sized(walker_sizes()));
@@ -286,6 +301,10 @@ mod tests {
                 2.0 * eq_client_core::drawn_feet_offset(size * 0.2) + 0.5 + titanium.cell_height;
             assert!((titanium.clearance(index) - room.max(size + lift)).abs() < 1e-5);
             assert!((eqmac.clearance(index) - (size + lift)).abs() < 1e-5);
+            let small = 2.0 * eq_client_core::drawn_feet_offset(size * 0.2 / 1.3)
+                + 0.5
+                + titanium.cell_height;
+            assert!((reduced.clearance(index) - small.max(size + lift)).abs() < 1e-5);
         }
     }
 
