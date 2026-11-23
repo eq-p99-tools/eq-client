@@ -687,14 +687,32 @@ fn stopping_before_a_follow_step_does_not_queue_follow() {
 #[test]
 fn a_script_runs_a_chat_channel_command_as_typing_does() {
     // A script may do whatever the player can (6.584): slash() takes the
-    // chat server's commands as the chat line does.
-    for command in ["join general", "1 hello", "leaveall"] {
+    // chat server's commands as the chat line does, and the typed handler
+    // refuses what it refuses from the keyboard, such as the chat server's
+    // mail words.
+    for (command, queued) in [
+        ("join general", 1),
+        ("1 hello", 1),
+        ("leaveall", 1),
+        ("chat mailto Someone hi", 0),
+    ] {
         let mut app = admitted();
         let (queue, _received) = std::sync::mpsc::sync_channel(4);
         app.insert_resource(crate::outbox::Outbox::new(Some(queue)));
         assert_eq!(
             scoped(&mut app, &format!("slash(\"{command}\")\n")).code,
             "start_queued",
+            "{command}"
+        );
+        for ms in 1..10 {
+            frame(&mut app, ms);
+        }
+        assert_eq!(
+            app.world()
+                .resource::<crate::chat::ChatState>()
+                .channel_asked
+                .len(),
+            queued,
             "{command}"
         );
     }

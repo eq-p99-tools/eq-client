@@ -109,34 +109,6 @@
 
 - Scripts can use the map's own controls (checklist 6.589), since a script may do whatever the player can (Adam, 11-23): the search boxes, the watch controls and rows, a spawn's marker, the inspector's Clear and Target, the landmarks and the presentation controls, as `map_search`, `map_watch`, `map_marker`, `map_inspector`, `map_target`, `map_landmarks` and `map_style` targets. Each click runs the map's own handler, so the Target button keeps its capability and range checks. A marker takes the spawn's admission, id and revision, which the report's new `map_markers` field lists for the 64 nearest spawns; a stale one is refused. Watches, landmarks and presentation are saved settings, and these clicks change them as a person's do.
 
-- Drop an item on the ground without the question with `/fastdrop`
-  (checklist 6.536), where ground drop is offered (local `EQEmu` today).
-  Each `/fastdrop` turns it over and says the state it lands in, in this
-  client's words. With it on, **Drop cursor item** sends at once through the
-  same checks and the same one-at-a-time hold as a Yes; a destroy and every
-  other question still ask. It is off at start, never saved, and off again
-  at a world entry, a camp, a return to login or a lost link (a zone change
-  keeps it). Only the player's typing turns it over: a
-  script's `slash("fastdrop")` is refused at parse, and a social or
-  hotbutton line is refused. The program's handler (0x4685ba) is unread, so
-  all of this is inferred (pending R49-6n). It sends nothing itself.
-
-- Send petitions, bug reports and feedback from a typed line (gap list 3.6,
-  recording checklist 6.511). `/petition`, `/bugreport` (also `/bug`) and
-  `/feedback` with their words send `SendPetition`, `ReportBug` and
-  `SendFeedback` where the session offers them, which today is stock EQEmu
-  for petitions and bug reports. A bug report's leading `word:` names its
-  category where it is one, else the line is the text under Other; it
-  carries the player's place and heading and the selected entity. A typed
-  line sends a report, whoever types it: the keyboard, a social's line or a
-  script's `slash()` step, since a script may do whatever the player can
-  (Adam, 11-23). A button's game command answers as before.
-  Stock EQEmu says nothing on success, so this client's own line says the
-  petition or bug report was sent; feedback gets none. Refusals from the
-  session show in chat. Repins eq-network to 66900af (#339), which also
-  brings the duel offer and `/surname` answers and the session's report of
-  each server message it could not read (none of them shown or logged yet).
-
 - Speak and hear languages as the Titanium program does (checklist 6.495, reads R49-4, R49-4b and R49-4m). This replaces the unmerged design of #558.
   - **The choice.** Each chat window speaks a language of its own, an index into the languages the character knows, for the session only. It is never saved, and there is no setting for it (Adam, 11-23).
   - **`/language`.** The installed lines 0x33cc, 0x33cd and 0x33ce, in message type 0x111. The help word lists the languages, nothing says the current one, and a number chooses one. Scripts use `slash("language ...")`.
@@ -557,19 +529,6 @@ Mac-era servers loot as before, as that client's loot click is unread, and
   typed line, and `/hotbutton` as a social step. `/yell` and `/hotbutton` need a
   local test session (checklist 6.505).
 
-- Take `/autoinventory`, `/hidecorpses` and a plain `/assist` as the
-  Titanium handlers do (read R46). `/autoinventory` puts the cursor item in
-  the first place the program's order finds, worn slots first, then the
-  general slots and bags, in one move; with no room it prints the installed
-  line and the item stays. `/hidecorpses` hides the corpses present but
-  yours, or but yours and your group's, once; any other word shows them
-  all again, and a new zone forgets what was hidden. The third word, whose
-  flag is unread, is answered as not taken yet. A hidden corpse isn't
-  drawn or picked by the mouse, and a name still finds it. A plain
-  `/assist` with no target prints the installed two lines and sends
-  nothing; a server that takes no assist keeps its earlier answers. The
-  Mac-era client keeps its earlier answers. Inferred parts are
-  under checklist 6.490. Networking pinned to 126b2c7 (eq-network #324).
 - Drop an item on the ground without the question with `/fastdrop`
   (checklist 6.536), where ground drop is offered (local `EQEmu` today).
   Each `/fastdrop` turns it over and says the state it lands in, in this
