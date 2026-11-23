@@ -34,6 +34,12 @@ pub(crate) enum Question {
         revision: u64,
         item_id: u32,
     },
+    /// The coins on the cursor, in this admission, selected to destroy
+    /// ([`crate::inventory::destruction`]).
+    DestroyCoins {
+        session_id: u64,
+        coins: eq_client_core::Coins,
+    },
     /// The exact cursor item selected for ground drop.
     DropItem {
         session_id: u64,
@@ -54,8 +60,14 @@ pub(crate) enum Question {
 }
 
 impl Question {
-    /// What the dialog says, in the client's own words.
-    fn text(self, names: &crate::spellbook::SpellNames, online: &OnlineState) -> String {
+    /// What the dialog says: the program's words where the installation
+    /// has them and a read names them, else the client's own.
+    pub(crate) fn text(
+        self,
+        names: &crate::spellbook::SpellNames,
+        online: &OnlineState,
+        messages: Option<&crate::hud::messages::Messages>,
+    ) -> String {
         match self {
             Self::DeleteCharacter { .. } => online.deletion.prompt().filter(|request| crate::character_delete::question(request) == self).map_or_else(String::new, |request| format!("Delete character {}? This may permanently remove the character. Choose Yes to confirm this exact name, or No to cancel.", request.name())),
             Self::DestroyItem { session_id, revision, item_id } => {
@@ -65,6 +77,20 @@ impl Question {
                         && inventory.revision() == revision && item.details.id == item_id)
                     .map_or_else(String::new, |item| format!("Destroy all {} of {}? This cannot be undone.",
                         item.stack_count.unwrap_or(1), item.details.name))
+            }
+            Self::DestroyCoins { session_id, coins } => {
+                let world = online.world();
+                if world.session_id() == Some(session_id)
+                    && world.coins_in(eq_client_core::money::CoinPlace::Cursor) == Some(coins)
+                {
+                    // The program asks with its own string (read R49-11 b).
+                    let ours = crate::inventory::destruction::coins_question(coins);
+                    messages.map_or_else(|| ours.clone(), |messages| {
+                        messages.official(crate::inventory::destruction::COINS_QUESTION, &[], &ours)
+                    })
+                } else {
+                    String::new()
+                }
             }
             Self::DropItem { session_id, revision, item_id } => {
                 let inventory = online.world().inventory();
@@ -237,7 +263,7 @@ pub(crate) fn show(
                 .map(|invitations| invitations.question())
                 .unwrap_or_default(),
             question => question
-                .map(|question| question.text(&names, &online))
+                .map(|question| question.text(&names, &online, messages.as_deref()))
                 .unwrap_or_default(),
         },
     };
