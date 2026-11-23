@@ -7,7 +7,8 @@
   - **`/autojoin channel, ...`** keeps the channels to join at each login in your character's options and sends nothing now. Each time the chat server takes the login, the client says so and sends `/join` with the list. The list is yours, else the official client's `[ChatManager]` `ChannelAutoJoin` for the character, else `eqclient.ini`'s `[Defaults]` one; `NONE` joins nothing. The official client's files are only read.
   - The confirmation and the autojoining line are this client's words: the program prints plain lines there whose text isn't read. They show each channel's name but never a password after a colon, which still goes to the chat server with the `/join`.
   - Usage lines for `/join` and `/N` with nothing after them are this client's words, in the program's colour for its own lines.
-  - "You are not connected to the chat server." stays: the program says nothing then, so it is an always-on, labelled departure.
+  - "You are not connected to the chat server." stays: the program says nothing then, so it is an always-on, labelled departure. It is said, and nothing is sent, whenever no link is up: before the chat server takes the login, and after a link ends.
+  - The autojoin waits for the character to be in the world: the chat server can take the login while the character is still entering, and the list is that character's. `/autojoin NONE` says you will join no channels.
   - `/announce` and `/chat words` go after a `/` too (`/announce on`, `/kick general Someone`): their handlers aren't fully read, and the chat server skips a command's first byte, so this is the form it takes.
   - The link now ends after 30 seconds of silence and logs in with the program's language tag (eq-network #422).
 

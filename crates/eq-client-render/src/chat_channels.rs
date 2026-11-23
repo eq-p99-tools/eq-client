@@ -164,12 +164,16 @@ pub(super) fn answers(
                         if let Some(options) = options.as_mut() {
                             options.options.channel_autojoin = Some(kept);
                         }
-                        chat.history.push(super::chat::system_line(
-                            Said::own(format!(
+                        let line = if kept.as_str().trim().eq_ignore_ascii_case("NONE") {
+                            "You will join no channels when you log in.".to_owned()
+                        } else {
+                            format!(
                                 "You will join {} each time you log in.",
                                 shown(kept.as_str())
-                            ))
-                            .typed(PLAIN_COLOUR),
+                            )
+                        };
+                        chat.history.push(super::chat::system_line(
+                            Said::own(line).typed(PLAIN_COLOUR),
                         ));
                     }
                     None => chat.refuse(Said::own("That autojoin list is too long to keep.")),
@@ -177,9 +181,9 @@ pub(super) fn answers(
                 continue;
             }
         };
-        if !outbox::offered(world, Capability::ChatChannels) {
-            // The program drops it silently (R49-12 d); saying so is this
-            // client's always-on departure (reviewer Q3).
+        if !outbox::offered(world, Capability::ChatChannels) || !world.chat_link_up() {
+            // With no link up, the program drops it silently (R49-12 d);
+            // saying so is this client's always-on departure (reviewer Q3).
             chat.refuse(Said::own("You are not connected to the chat server."));
             continue;
         }
@@ -235,7 +239,6 @@ pub(super) fn autojoin(
     mut chat: ResMut<ChatState>,
     online: Res<super::online::OnlineState>,
     outbox: Res<Outbox>,
-    profile: Res<crate::profile_files::Profile>,
     (settings, options): (
         Option<Res<crate::ViewerSettings>>,
         Option<Res<crate::options::OptionsState>>,
@@ -247,21 +250,28 @@ pub(super) fn autojoin(
     if ups == *seen {
         return;
     }
-    *seen = ups;
-    if ups == 0 {
+    // The link can take the login while the character is still entering
+    // the world; the autojoin waits for the admission, whose character it
+    // reads.
+    if world.session_id().is_none() || !world.can(Capability::ChatChannels) {
         return;
     }
+    *seen = ups;
+    if ups == 0 || !world.chat_link_up() {
+        return;
+    }
+    let playing = crate::profile_files::playing(world);
     let official = settings
         .as_ref()
         .and_then(|settings| settings.0.official_settings());
     let character = official.as_ref().and_then(|official| {
-        let (character, server) = profile.names()?;
-        official.channel_autojoin(character, server)
+        let playing = playing.as_ref()?;
+        official.channel_autojoin(&playing.character, &playing.world)
     });
     let defaults = official.and_then(|official| official.options().channel_autojoin);
     let ours = options
         .as_ref()
-        .and_then(|options| options.options.channel_autojoin);
+        .and_then(|options| options.of(playing.as_ref()).channel_autojoin);
     let Some(list) = autojoin_list(
         ours.as_ref().map(eq_client_core::options::AutoJoin::as_str),
         character,
@@ -372,7 +382,7 @@ mod tests {
         }
         assert_eq!(
             typed("/chat KICK general Someone"),
-            Some(Ok(Asked::Send("KICK general Someone".into())))
+            Some(Ok(Asked::Send("/KICK general Someone".into())))
         );
         for line in ["/11 hi", "/0 hi", "/say hi", "hello", "/joinx a"] {
             assert_eq!(typed(line), None, "{line}");
@@ -431,7 +441,14 @@ mod tests {
     fn a_command_goes_only_where_the_session_offers_channels() {
         let mut app = App::new();
         let (queue, received) = std::sync::mpsc::sync_channel(4);
-        app.insert_resource(admitted(vec![Capability::ChatChannels]))
+        let mut online = admitted(vec![Capability::ChatChannels]);
+        testing::news(
+            &mut online,
+            [WorldEvent::ChannelLink(
+                eq_network_game::chat_server::ChannelLink::Up,
+            )],
+        );
+        app.insert_resource(online)
             .insert_resource(Outbox::new(Some(queue)))
             .init_resource::<ChatState>()
             .add_systems(Update, answers);
@@ -525,12 +542,109 @@ mod tests {
     }
 
     #[test]
+    fn a_login_taken_while_entering_the_world_joins_once_the_character_is_in() {
+        // The chat server can take the login before the admission lands:
+        // the autojoin waits for it, then reads that character's options.
+        let (queue, received) = std::sync::mpsc::sync_channel(4);
+        let mut app = App::new();
+        app.insert_resource(OnlineState::new(true))
+            .insert_resource(Outbox::new(Some(queue)))
+            .init_resource::<ChatState>()
+            .insert_resource(crate::options::OptionsState::default())
+            .add_systems(Update, (answers, autojoin).chain());
+        let up = WorldEvent::ChannelLink(eq_network_game::chat_server::ChannelLink::Up);
+        testing::news(&mut app.world_mut().resource_mut::<OnlineState>(), [up]);
+        app.update();
+        app.update();
+        assert!(received.try_recv().is_err());
+        testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [WorldEvent::Entered {
+                capabilities: vec![Capability::ChatChannels],
+                choices: Vec::new(),
+                session_id: 5,
+                zone: "qeytoqrg".into(),
+                player: Box::new(testing::player(7)),
+                far_clip: None,
+                spell_landing_flag: None,
+                zone_id: 0,
+            }],
+        );
+        testing::connect(&mut app.world_mut().resource_mut::<OnlineState>(), true);
+        keeping(&mut app, "general");
+        app.update();
+        match received.try_recv().unwrap() {
+            ClientCommand::ChatChannel { text, .. } => assert_eq!(text, "/join general"),
+            other => panic!("{other:?}"),
+        }
+        app.update();
+        assert!(received.try_recv().is_err());
+    }
+
+    #[test]
+    fn with_no_link_up_a_command_says_not_connected_and_sends_nothing() {
+        let (mut app, received) = channel_app();
+        let link = |link| WorldEvent::ChannelLink(link);
+        for news in [
+            // Before the link takes the login.
+            None,
+            // After it has ended.
+            Some(eq_network_game::chat_server::ChannelLink::Lost {
+                reason: eq_network_game::chat_server::LinkLoss::Dropped,
+            }),
+        ] {
+            if let Some(news) = news {
+                testing::news(
+                    &mut app.world_mut().resource_mut::<OnlineState>(),
+                    [
+                        link(eq_network_game::chat_server::ChannelLink::Up),
+                        link(news),
+                    ],
+                );
+                app.update();
+                while received.try_recv().is_ok() {}
+            }
+            app.world_mut()
+                .resource_mut::<ChatState>()
+                .channel_asked
+                .push(Asked::Send(";1 x".into()));
+            app.update();
+            assert!(received.try_recv().is_err());
+            assert_eq!(
+                app.world().resource::<ChatState>().newest(),
+                "You are not connected to the chat server."
+            );
+        }
+    }
+
+    #[test]
+    fn an_autojoin_of_none_says_no_channels() {
+        let (mut app, _received) = channel_app();
+        app.world_mut()
+            .resource_mut::<ChatState>()
+            .channel_asked
+            .push(Asked::AutoJoin("NONE".into()));
+        app.update();
+        assert_eq!(
+            app.world().resource::<ChatState>().newest(),
+            "You will join no channels when you log in."
+        );
+    }
+
+    /// The character's own options keep `list`, as after their load.
+    fn keeping(app: &mut App, list: &str) {
+        let playing = crate::profile_files::playing(app.world().resource::<OnlineState>().world());
+        let mut options = app
+            .world_mut()
+            .resource_mut::<crate::options::OptionsState>();
+        options.following(playing);
+        options.options.channel_autojoin = eq_client_core::options::AutoJoin::new(list);
+    }
+
+    #[test]
     fn each_login_to_the_chat_server_joins_the_autojoin_list_once() {
         let (mut app, received) = channel_app();
-        app.world_mut()
-            .resource_mut::<crate::options::OptionsState>()
-            .options
-            .channel_autojoin = eq_client_core::options::AutoJoin::new("general, trade:secret");
+        keeping(&mut app, "general, trade:secret");
         app.update();
         // Nothing before the link takes the login.
         assert!(received.try_recv().is_err());

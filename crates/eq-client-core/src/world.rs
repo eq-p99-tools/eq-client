@@ -361,6 +361,8 @@ pub struct ClientWorld {
     /// How many times a chat server link has taken the login, so the
     /// autojoin goes once for each (read R49-12 c, checklist 6.616).
     chat_links_up: u64,
+    /// Whether a chat server link has taken the login and not ended since.
+    chat_link_up: bool,
     /// The book or note open to read.
     reading: Option<crate::books::BookText>,
     /// The tradeskill container whose combine waits for the server.
@@ -672,6 +674,13 @@ impl ClientWorld {
     #[must_use]
     pub const fn chat_links_up(&self) -> u64 {
         self.chat_links_up
+    }
+
+    /// Whether a chat server link is up: it has taken the login and not
+    /// ended since.
+    #[must_use]
+    pub const fn chat_link_up(&self) -> bool {
+        self.chat_link_up
     }
 
     /// Puts away the received equipment report.
@@ -1610,8 +1619,10 @@ impl ClientWorld {
             WorldEvent::ChannelLink(link) => match link {
                 eq_network_game::chat_server::ChannelLink::Up => {
                     self.chat_links_up = self.chat_links_up.wrapping_add(1);
+                    self.chat_link_up = true;
                 }
                 eq_network_game::chat_server::ChannelLink::Lost { .. } => {
+                    self.chat_link_up = false;
                     self.chat_channels.clear();
                     news.notices.push(Notice::Channel(ChannelLine::Lost));
                 }
@@ -2403,6 +2414,7 @@ impl ClientWorld {
                 self.connected = false;
                 // A camp ends the chat server link.
                 self.chat_channels.clear();
+                self.chat_link_up = false;
             }
             Reset::Lost {
                 ended,
@@ -2436,6 +2448,7 @@ impl ClientWorld {
             self.pending_transfer = None;
             self.inventory = Inventory::default();
             self.chat_channels.clear();
+            self.chat_link_up = false;
             self.forget_zone();
         }
     }
