@@ -5,7 +5,7 @@
 - A script's `slash(...)` line runs exactly as a typed one (checklist 6.584), since a script may do whatever the player can (Adam, 11-23).
   - The step takes any line the player could type, up to the chat line's 512 bytes and without control characters, instead of a list of allowed commands.
   - The line goes through the chat line's own path: abbreviations first, then `/reply`, `/rtarget`, `/friend`, `/ignore`, `/who all friends`, sharing, `/follow`, `/quit` and `/exit`, the client's own commands, the game commands and the chat words. The same rules, paces and refusals apply, and the line carries the script's admission.
-  - A social, however abbreviated, still goes through the named `social` step.
+  - A social, however it is spelled, still goes through the named `social` step.
 
 - Scripts may chat, emote, roll, run socials and send `gm` lines on any server (checklist 6.579), since a script may do whatever the player can (Adam, 11-23). `chat(...)`, `slash("emote ...")`, `slash("random ...")`, `social(...)` and plain `gm(...)` steps no longer need a local test session: a `gm` line goes as a typed `#` line would. They still need a character in the world, and the session's chat pace holds whatever sends a line. Only the `gm` fixture forms (spawn, depop, guild, stun, setlanguage, traindisc) keep the local test session. A synthetic chat submission or hotbar press of a social still points to the named `social` step.
 

@@ -2190,7 +2190,7 @@ pub(super) fn drive(
             return;
         }
         Step::Slash(command) => {
-            // A social, however abbreviated, keeps the named step's ownership.
+            // A social, however it is spelled, keeps the named step's ownership.
             let spelled = crate::commands::spelled(command);
             if spelled
                 .as_deref()

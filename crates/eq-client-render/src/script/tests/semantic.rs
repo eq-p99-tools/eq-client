@@ -811,6 +811,20 @@ fn slash_step(line: &str, prepare: impl FnOnce(&mut App)) -> (App, Vec<ClientCom
     let (mut app, rx) = app();
     prepare(&mut app);
     start(&mut app, &format!("slash(\"{line}\")"));
+    // A run started for this admission, as the control inbox starts one.
+    let zone = app
+        .world()
+        .resource::<OnlineState>()
+        .world()
+        .zone()
+        .to_owned();
+    app.world_mut()
+        .resource_mut::<Script>()
+        .progress
+        .expected_world = Some(crate::script::ExpectedWorld {
+        admission_id: ADMISSION,
+        zone,
+    });
     frame_at(&mut app, 0);
     frame_at(&mut app, 10);
     let sent = rx.try_iter().collect();
@@ -875,12 +889,16 @@ fn a_slash_step_runs_its_line_as_typing_would() {
         app.world().resource::<ChatState>().toggled,
         Some(crate::windows::WindowId::Raid)
     );
-    // A word nothing takes is refused as typing refuses it.
-    let (app, sent) = slash_step("notacommand", |_| ());
+    // A word that resolves to nothing is passed over without a line, as
+    // typing passes it over.
+    let (app, sent) = slash_step("zzzz", |_| ());
     assert!(sent.is_empty());
-    assert_eq!(app.world().resource::<RunStatus>().phase(), Phase::Failed);
-    // A social still goes to the named step, however it is abbreviated.
-    for line in ["social play Test", "soc play Test"] {
+    assert_eq!(
+        app.world().resource::<RunStatus>().phase(),
+        Phase::Completed
+    );
+    // A social still goes to the named step, however it is spelled.
+    for line in ["social play Test", "SOCIAL play Test"] {
         let (app, sent) = slash_step(line, |_| ());
         assert!(sent.is_empty());
         refused(&app, 1, "Use a named social step in a script.");
@@ -909,7 +927,7 @@ fn a_slash_departure_takes_the_typed_route_and_never_leaves_sooner() {
             &mut typed,
             &mut online,
             &Outbox::new(None),
-            &crate::qol::Settings::default(),
+            &eq_client_core::qol::Settings::default(),
         )
         .unwrap();
         assert_eq!(typed.departure, chat.departure, "{line}");
