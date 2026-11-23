@@ -252,6 +252,10 @@ pub struct ClientWorld {
     /// The login server's worlds, until the chosen world lists characters.
     servers: Option<ServerList>,
     characters: Option<CharacterList>,
+    /// The creation policy of the last character list, kept past entering
+    /// the world and every zone change, which bring no list: it says whether
+    /// the world may draw Luclin models ([`crate::player_models::allowed_by`]).
+    player_model_rules: Option<crate::creation::Rules>,
     /// The world's answers to the player's character creations, counted, and
     /// the last of them.
     creation: Option<Creation>,
@@ -1853,6 +1857,7 @@ impl ClientWorld {
             self.spell_book = None;
             self.servers = None;
             self.characters = None;
+            self.player_model_rules = None;
             self.pending_transfer = None;
             self.inventory = Inventory::default();
             self.forget_zone();

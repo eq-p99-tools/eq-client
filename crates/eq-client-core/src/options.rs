@@ -8,6 +8,7 @@ use crate::{
     food::AutoEat,
     movement::RunSpeedMultiplier,
     names::ShowNames,
+    player_models::LuclinModels,
     qol::{self, Fix},
 };
 
@@ -16,6 +17,9 @@ pub const HEADER: &str = "# eq-client options v1";
 
 /// The name a file keeps [`Options::show_names`] under.
 const SHOW_NAMES: &str = "show_names";
+
+/// The name a file keeps [`Options::luclin_models`] under.
+const LUCLIN_MODELS: &str = "luclin_models";
 
 /// An option the player turns on or off.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -353,6 +357,10 @@ pub struct Options {
     pub ui_scale: u16,
     /// See [`Level::SoundVolume`].
     pub sound_volume: u16,
+    /// Which player races and genders draw with the Luclin models, as the
+    /// official client's Options window chooses them (inferred, R49-44a);
+    /// none by default.
+    pub luclin_models: LuclinModels,
 }
 
 impl Default for Options {
@@ -387,6 +395,7 @@ impl Default for Options {
             mouse_sensitivity: 50,
             ui_scale: 100,
             sound_volume: 100,
+            luclin_models: LuclinModels::NONE,
         }
     }
 }
@@ -525,6 +534,10 @@ impl Options {
             let Some((key, value)) = line.split_once('=') else {
                 continue;
             };
+            if key.trim() == LUCLIN_MODELS {
+                options.luclin_models = LuclinModels::parse(value);
+                continue;
+            }
             if key.trim() == SHOW_NAMES {
                 if let Some(level) = ShowNames::parse(value) {
                     options.show_names = level;
@@ -572,6 +585,9 @@ impl Options {
                 text.push_str(part);
             }
         }
+        for part in [LUCLIN_MODELS, " = ", &self.luclin_models.words(), "\n"] {
+            text.push_str(part);
+        }
         text
     }
 }
@@ -587,7 +603,9 @@ mod tests {
         options.set(Toggle::Qol(Fix::SkipModifiedFood), false);
         options.set(Toggle::Qol(Fix::JesusMode), true);
         options.show_names = ShowNames::Last;
+        options.luclin_models.set(6, 1, true);
         let text = options.text();
+        assert!(text.contains("luclin_models = DAF\n"));
         assert!(text.starts_with(HEADER));
         assert!(text.contains("invert_y = true\n"));
         assert!(text.contains("skip_modified_food = false\n"));

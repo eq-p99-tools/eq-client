@@ -72,6 +72,7 @@ impl ClientWorld {
         // one reached without a camp-completion event.
         self.forget_guild();
         self.servers = None;
+        self.player_model_rules = creation;
         self.characters = Some(CharacterList {
             connection_id,
             selection_id,

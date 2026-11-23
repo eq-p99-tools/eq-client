@@ -4,8 +4,15 @@ pub(super) mod outline;
 
 use super::{ViewerSettings, character, online::OnlineState};
 use bevy::prelude::*;
-use eq_client_assets::characters::{DonorArchives, load_installed_character};
-use eq_client_core::{SpawnKind, entities::nearby_with_invisible, races, render_position};
+use eq_client_assets::characters::{
+    CharacterAsset, DonorArchives, load_installed_character, load_luclin_character,
+};
+use eq_client_core::{
+    SpawnKind,
+    entities::nearby_with_invisible,
+    player_models::{self, Generation, LuclinModels},
+    races, render_position,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Resource, Default)]
@@ -14,11 +21,19 @@ pub(super) struct NearbyEntities {
     revisions: BTreeMap<u16, u64>,
     /// Which ordinary roots were prepared for a canonical carrier report.
     carrier_roots: BTreeSet<u16>,
-    models: BTreeMap<&'static str, Option<character::PreparedCharacter>>,
+    /// Each model read for this zone, by code and look; None where neither
+    /// look could be read.
+    models: BTreeMap<(&'static str, Generation), Option<character::PreparedCharacter>>,
     loading: Option<(
-        &'static str,
-        super::background::Background<Option<eq_client_assets::characters::CharacterAsset>>,
+        (&'static str, Generation),
+        super::background::Background<Loaded>,
     )>,
+    /// The Luclin models the viewer chose, and whether the server's policy
+    /// allows them, as they were when this zone's first spawn was drawn: a
+    /// change shows from the next zone (inferred, R49-44b).
+    luclin: Option<(LuclinModels, bool)>,
+    /// The Luclin models found missing this run, each said once.
+    luclin_missing: BTreeSet<&'static str>,
     /// The archives this zone's models borrow movements from, each parsed once.
     donors: DonorArchives,
     elapsed: f32,
@@ -40,6 +55,7 @@ impl NearbyEntities {
             commands.entity(entity).despawn();
         }
         self.models.clear();
+        self.luclin = None;
         self.donors = DonorArchives::default();
         self.loading = None;
         self.revisions.clear();
@@ -108,6 +124,38 @@ impl RemoteEntity {
     /// world units; None for a marker.
     pub(super) const fn feet(&self) -> Option<f32> {
         self.feet
+    }
+}
+
+/// A model read in the background, and why its Luclin look could not be
+/// read where that was the one asked for.
+pub(super) struct Loaded {
+    asset: Option<CharacterAsset>,
+    luclin_missing: Option<String>,
+}
+
+/// Reads a spawn's model in the look asked for: the Luclin one where chosen,
+/// else (or where it cannot be read) the classic one.
+fn load_model<E: std::fmt::Display>(
+    generation: Generation,
+    luclin: impl FnOnce() -> Result<CharacterAsset, E>,
+    classic: impl FnOnce() -> Result<CharacterAsset, E>,
+) -> Loaded {
+    let luclin_missing = match generation {
+        Generation::Classic => None,
+        Generation::Luclin => match luclin() {
+            Ok(asset) => {
+                return Loaded {
+                    asset: Some(asset),
+                    luclin_missing: None,
+                };
+            }
+            Err(error) => Some(error.to_string()),
+        },
+    };
+    Loaded {
+        asset: classic().ok(),
+        luclin_missing,
     }
 }
 
@@ -236,17 +284,29 @@ pub(super) fn reconcile(
         return;
     };
     let hurried = loading.is_some_and(|loading| loading.covered());
-    if let Some((code, job)) = &mut nearby_state.loading
-        && let Some(asset) = job.poll(state.world().session_id())
+    if let Some((key, job)) = &mut nearby_state.loading
+        && let Some(Loaded {
+            asset,
+            luclin_missing,
+        }) = job.poll(state.world().session_id())
     {
-        let code = *code;
+        let key = *key;
+        if let Some(error) = luclin_missing
+            && nearby_state.luclin_missing.insert(key.0)
+        {
+            // Said once a run, naming the model alone.
+            warn!(
+                "Luclin model {} unavailable, drawing the classic one: {error}",
+                key.0
+            );
+        }
         let prepared = asset.and_then(|asset| {
             character::prepare(
                 asset,
                 (&mut images, &mut meshes, &mut materials, &mut bindposes),
             )
         });
-        nearby_state.models.insert(code, prepared);
+        nearby_state.models.insert(key, prepared);
         nearby_state.loading = None;
     }
     nearby_state.elapsed += time.delta_secs();
@@ -298,6 +358,10 @@ pub(super) fn reconcile(
             .map_or(reach, |distance| distance.min(reach))
     };
     let world = state.world();
+    let luclin = *nearby_state.luclin.get_or_insert((
+        options.options.luclin_models,
+        player_models::allowed_by(world.player_model_rules()),
+    ));
     let reveal = options
         .options
         .qol
@@ -345,7 +409,7 @@ pub(super) fn reconcile(
             &mut commands,
             &state,
             (directory, settings.0.installed_client),
-            id,
+            (id, luclin),
             &mut nearby_state,
             (&mut meshes, &mut materials),
         ) {
@@ -364,7 +428,7 @@ fn draw(
     commands: &mut Commands,
     state: &OnlineState,
     (directory, client): (&std::path::Path, eq_client_assets::ui::InstalledClient),
-    id: u16,
+    (id, (chosen, allowed)): (u16, (LuclinModels, bool)),
     nearby_state: &mut NearbyEntities,
     (meshes, materials): Stores,
 ) -> bool {
@@ -375,27 +439,44 @@ fn draw(
     } else {
         races::model(spawn.race, spawn.gender)
     };
+    // The look changes only which model is drawn: the size, feet and name
+    // height below come from the race and size as for a classic model.
+    let generation =
+        player_models::generation((spawn.race, spawn.gender, spawn.kind), chosen, allowed);
     if let Some(code) = model
-        && !nearby_state.models.contains_key(code)
+        && !nearby_state.models.contains_key(&(code, generation))
     {
         if nearby_state.loading.is_none() {
             let directory = directory.to_path_buf();
             let zone = state.world().zone().to_owned();
             let donors = nearby_state.donors.clone();
+            let (race, gender) = (spawn.race, spawn.gender);
             let mut job = super::background::Background::default();
             job.start(state.world().session_id().unwrap_or_default(), move || {
-                // Read once per model and zone: a failure draws the marker
-                // for the rest of the zone, so it is said once.
-                load_installed_character(&directory, &zone, code, &donors)
-                    .inspect_err(|error| warn!("Model {code} unavailable in {zone}: {error}"))
-                    .ok()
+                load_model(
+                    generation,
+                    || load_luclin_character(&directory, code, (race, gender), &donors),
+                    || {
+                        // Read once per model and zone: a failure draws the
+                        // marker for the rest of the zone, so it is said once.
+                        load_installed_character(&directory, &zone, code, &donors).inspect_err(
+                            |error| warn!("Model {code} unavailable in {zone}: {error}"),
+                        )
+                    },
+                )
             });
-            nearby_state.loading = Some((code, job));
+            nearby_state.loading = Some(((code, generation), job));
         }
         return false;
     }
     // Cache failures too, avoiding repeated reads for unsupported models.
-    let asset = model.and_then(|code| nearby_state.models.get(code).cloned().flatten());
+    let asset = model.and_then(|code| {
+        nearby_state
+            .models
+            .get(&(code, generation))
+            .cloned()
+            .flatten()
+    });
     let corpse = matches!(spawn.kind, SpawnKind::PlayerCorpse | SpawnKind::NpcCorpse);
     let position = Vec3::from_array(render_position(spawn.position));
     let entity = commands
@@ -773,6 +854,96 @@ mod tests {
             loading_reach(2400.0, None, player).to_bits(),
             2400.0_f32.to_bits()
         );
+    }
+
+    #[test]
+    fn a_model_is_read_in_the_look_asked_for_and_falls_back_to_classic() {
+        let asset = |luclin| {
+            let mut asset = CharacterAsset::testing();
+            asset.set_luclin(luclin);
+            Ok::<_, &str>(asset)
+        };
+        // Classic never tries the Luclin archive.
+        let loaded = load_model(
+            Generation::Classic,
+            || panic!("not asked for"),
+            || asset(false),
+        );
+        assert!(!loaded.asset.unwrap().luclin() && loaded.luclin_missing.is_none());
+        let loaded = load_model(Generation::Luclin, || asset(true), || panic!("not needed"));
+        assert!(loaded.asset.unwrap().luclin() && loaded.luclin_missing.is_none());
+        // A missing Luclin archive draws the classic model, and says why.
+        let loaded = load_model(
+            Generation::Luclin,
+            || Err("no globalhum_chr"),
+            || asset(false),
+        );
+        assert!(!loaded.asset.unwrap().luclin());
+        assert_eq!(loaded.luclin_missing.as_deref(), Some("no globalhum_chr"));
+        let loaded = load_model(Generation::Luclin, || Err("none"), || Err("none"));
+        assert!(loaded.asset.is_none() && loaded.luclin_missing.is_some());
+    }
+
+    #[test]
+    fn a_luclin_player_stands_at_the_size_and_feet_a_classic_one_does() {
+        let directory = std::env::temp_dir().join(format!("luclin-draw-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&directory);
+        let drawn = |luclin: bool| {
+            let mut online = OnlineState::new(true);
+            testing::admit(&mut online, 1, testing::player(7));
+            let mut human = testing::pet(5, 0);
+            (human.kind, human.race, human.gender, human.size) = (SpawnKind::Player, 1, 0, 7.0);
+            human.pet_owner = None;
+            testing::spawns(&mut online, vec![human]);
+            let mut app = App::new();
+            character::testing::stores(app.world_mut());
+            let classic = character::testing::prepared(app.world_mut());
+            // A Luclin model of another height, which must not move it.
+            let mut taller = CharacterAsset::testing();
+            for point in &mut taller.primitives[0].positions {
+                point[1] *= 3.0;
+            }
+            taller.set_luclin(true);
+            let taller = character::testing::prepared_from(app.world_mut(), taller);
+            let mut nearby = NearbyEntities::default();
+            nearby
+                .models
+                .insert(("HUM", Generation::Classic), Some(classic));
+            nearby
+                .models
+                .insert(("HUM", Generation::Luclin), Some(taller));
+            let mut chosen = LuclinModels::NONE;
+            chosen.set(1, 0, luclin);
+            nearby.luclin = Some((chosen, true));
+            nearby.elapsed = 1.0;
+            let config = crate::ViewerConfig {
+                eq_directory: Some(directory.clone()),
+                ..crate::ViewerConfig::default()
+            };
+            app.insert_resource(online)
+                .insert_resource(crate::ViewerSettings(config))
+                .init_resource::<crate::options::OptionsState>()
+                .init_resource::<Time>()
+                .insert_resource(nearby)
+                .add_systems(Update, reconcile);
+            app.update();
+            let root = app.world().resource::<NearbyEntities>().rendered[&5];
+            let character = app
+                .world()
+                .get::<character::AnimatedCharacter>(root)
+                .unwrap();
+            let remote = app.world().get::<RemoteEntity>(root).unwrap();
+            let scale = app.world().get::<Transform>(root).unwrap().scale;
+            (
+                character.asset.luclin(),
+                (remote.feet.map(f32::to_bits), remote.size.to_bits()),
+                scale.to_array().map(f32::to_bits),
+            )
+        };
+        let (classic, luclin) = (drawn(false), drawn(true));
+        let _ = std::fs::remove_dir(&directory);
+        assert!(!classic.0 && luclin.0);
+        assert_eq!((classic.1, classic.2), (luclin.1, luclin.2));
     }
 
     #[test]

@@ -177,6 +177,13 @@ pub(super) fn dress(
         let mut ready = hold(&mut commands, &mut character, &look, |name| {
             library.shape(name, directory)
         });
+        if character.asset.luclin() {
+            // A Luclin model keeps its base look: its worn armour, tints and
+            // helms are named by rules not yet probed (Luclin slice L3), so
+            // only its held items change (6.554).
+            character.dressed = ready.then_some((look, helm));
+            continue;
+        }
         let shape = shape_of(&character.asset, race, &look, helm);
         let character = &mut *character;
         for part in &character.parts {

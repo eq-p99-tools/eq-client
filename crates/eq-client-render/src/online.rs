@@ -785,6 +785,15 @@ pub(super) fn carry_as(settings: Res<ViewerSettings>, mut state: ResMut<OnlineSt
 /// world decides what each update means; this only hands its changes to the
 /// panels, the chat and the scene.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+/// What [`receive`] reads its news by: the viewer's settings, the spell
+/// names, the messages and the options.
+type Definitions<'w> = (
+    Res<'w, ViewerSettings>,
+    Option<ResMut<'w, super::spellbook::SpellNames>>,
+    Option<Res<'w, hud::messages::Messages>>,
+    Option<Res<'w, super::options::OptionsState>>,
+);
+
 #[allow(
     clippy::too_many_lines,
     reason = "keep ordered world reduction, panel resets and zone loading together"
@@ -796,17 +805,13 @@ pub(super) fn receive(
         Option<Res<super::login::FrontEnd>>,
         Option<Res<super::outbox::Outbox>>,
     ),
-    definitions: (
-        Res<ViewerSettings>,
-        Option<ResMut<super::spellbook::SpellNames>>,
-        Option<Res<hud::messages::Messages>>,
-    ),
+    definitions: Definitions<'_>,
     mut state: ResMut<OnlineState>,
     mut panels: Panels,
     mut chat: ResMut<super::chat::ChatState>,
     (mut scene, loading): (super::zone::Scene, Option<Res<super::loading::Loading>>),
 ) {
-    let (settings, mut spell_names, messages) = definitions;
+    let (settings, mut spell_names, messages, options) = definitions;
     let Ok(receiver) = updates.0.lock() else {
         return;
     };
@@ -895,7 +900,15 @@ pub(super) fn receive(
             // The session is this zone's even if its assets fail to load, so
             // nothing of the previous zone stays on screen either.
             scene.leave(&mut commands, &mut state.regions);
-            start_entry(&mut state, &settings.0, directory, &mut chat);
+            let luclin_models = options
+                .as_ref()
+                .map_or_else(Default::default, |options| options.options.luclin_models);
+            start_entry(
+                &mut state,
+                (&settings.0, luclin_models),
+                directory,
+                &mut chat,
+            );
         }
         if let Some(position) = changes.placed {
             let at = |p: eq_client_core::WorldPosition| [p.x, p.y, p.z];
@@ -1043,7 +1056,10 @@ const fn admits(update: &WorldUpdate) -> bool {
 /// frame thread, or says why there is nothing to load.
 fn start_entry(
     state: &mut OnlineState,
-    settings: &crate::ViewerConfig,
+    (settings, luclin_models): (
+        &crate::ViewerConfig,
+        eq_client_core::player_models::LuclinModels,
+    ),
     directory: &std::path::Path,
     chat: &mut super::chat::ChatState,
 ) {
@@ -1054,12 +1070,24 @@ fn start_entry(
             settings.installed_client,
             state.world.classic_model_scale_flag(),
         );
+        // The player's own look, by the same choice as other players'
+        // ([`super::entities`]).
+        let generation = eq_client_core::player_models::generation(
+            (
+                player.race,
+                player.gender,
+                eq_client_core::SpawnKind::Player,
+            ),
+            luclin_models,
+            eq_client_core::player_models::allowed_by(state.world.player_model_rules()),
+        );
         let titanium_swimming = drawn_by.0 == eq_client_assets::ui::InstalledClient::Titanium
             && state.world.can(eq_client_core::Capability::Swimming);
         state.loading.start(id, move || {
             let loading = std::time::Instant::now();
-            let entry = super::zone::Entry::admission(&zone, &player, drawn_by, &directory)
-                .map(|entry| entry.prepare(navmesh, titanium_swimming));
+            let entry =
+                super::zone::Entry::admission(&zone, &player, drawn_by, &directory, generation)
+                    .map(|entry| entry.prepare(navmesh, titanium_swimming));
             if entry.is_ok() {
                 // Read and prepared off the frame thread, behind the
                 // loading screen.

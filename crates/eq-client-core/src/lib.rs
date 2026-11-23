@@ -23,6 +23,7 @@ pub mod names;
 pub mod options;
 pub mod outfit;
 pub mod pet;
+pub mod player_models;
 pub mod qol;
 pub mod races;
 pub mod reading;

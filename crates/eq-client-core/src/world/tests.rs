@@ -5421,6 +5421,33 @@ fn the_login_servers_list_lasts_until_the_chosen_world_lists_characters() {
 }
 
 #[test]
+fn the_lists_creation_policy_outlasts_entering_and_ends_with_the_session() {
+    let mut world = ClientWorld::default();
+    assert_eq!(world.player_model_rules(), None);
+    let list = |connection_id, creation| WorldEvent::CharacterSelection {
+        connection_id,
+        deletion: None,
+        creation,
+        selection_id: 1,
+        characters: Vec::new(),
+    };
+    game(&mut world, list(1, Some(crate::creation::Rules::Classic)));
+    game(&mut world, entered(1));
+    assert_eq!(
+        world.player_model_rules(),
+        Some(crate::creation::Rules::Classic)
+    );
+    // A later list's policy replaces it.
+    game(&mut world, list(2, Some(crate::creation::Rules::Titanium)));
+    assert_eq!(
+        world.player_model_rules(),
+        Some(crate::creation::Rules::Titanium)
+    );
+    connection(&mut world, false, true);
+    assert_eq!(world.player_model_rules(), None);
+}
+
+#[test]
 fn a_session_that_ends_forgets_the_list_and_a_new_one_keeps_only_the_players_choices() {
     use crate::Capability;
     let mut world = ClientWorld::default();

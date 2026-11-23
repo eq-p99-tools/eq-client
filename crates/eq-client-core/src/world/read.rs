@@ -188,6 +188,14 @@ impl ClientWorld {
         self.servers.as_ref()
     }
 
+    /// The creation policy of the last character list, kept while the
+    /// session lasts: whether the world may draw Luclin models
+    /// ([`crate::player_models::allowed_by`]).
+    #[must_use]
+    pub const fn player_model_rules(&self) -> Option<crate::creation::Rules> {
+        self.player_model_rules
+    }
+
     /// The characters the world server offered, until one enters the world.
     #[must_use]
     pub const fn characters(&self) -> Option<&CharacterList> {
