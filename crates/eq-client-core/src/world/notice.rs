@@ -18,6 +18,8 @@ pub enum ListingNotice {
     Anonymous(bool),
     /// Roleplaying, or no longer.
     Roleplaying(bool),
+    /// Looking for a group, or no longer.
+    Looking(bool),
 }
 
 /// News of a duel the player is part of. The server sends no line with

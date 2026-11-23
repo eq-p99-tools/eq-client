@@ -145,6 +145,18 @@
   nothing; a server that takes no assist keeps its earlier answers. The
   Mac-era client keeps its earlier answers. Inferred parts are
   under checklist 6.490. Networking pinned to 126b2c7 (eq-network #324).
+- Say the player looks for a group with `/lfg` (checklist 6.515), where
+  the session offers it (stock `EQEmu`, eq-network #344). Bare `/lfg`
+  turns the flag over; `/lfg on` and `/lfg off` set it. Those two words
+  are this client's forms, inferred until the program's handler is read
+  (R49-6i), and any other word is refused in this client's words with
+  nothing sent. No level range or comment is sent. The session tells each
+  change, and the chat says "You are now looking for a group." or "You
+  are no longer looking for a group." (this client's words, pending
+  R49-6i). A script's `slash()` cannot send it; a social or hotbutton
+  can. Repins eq-network to #344's head; its chat channel events wait in
+  the ignore arm for that thread's PR.
+
 - Challenge the player targeted to a duel with `/duel` (checklist 6.492b),
   where the session offers it (stock `EQEmu`, eq-network #338). It sends
   `ChallengeDuel` only when another player in the zone is targeted, and

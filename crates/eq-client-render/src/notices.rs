@@ -715,6 +715,8 @@ fn roll_lines(roll: &eq_client_core::socials::Roll, messages: Option<&Messages>)
 /// client's words without them. That the official client says these, and
 /// not the copies of the anonymous lines at 12034 and 12035, is inferred.
 /// The roleplaying lines take message type 273's colour (sitting s9l, read).
+/// Looking for a group is told in this client's words: the program's
+/// strings for `/lfg` are not read (checklist 6.515, pending R49-6i).
 fn listing_line(notice: ListingNotice, messages: Option<&Messages>) -> Said {
     let (id, fallback) = match notice {
         ListingNotice::Away(true) => (13199, "You are away from the keyboard now."),
@@ -723,6 +725,10 @@ fn listing_line(notice: ListingNotice, messages: Option<&Messages>) -> Said {
         ListingNotice::Anonymous(false) => (13237, "You show in /who again."),
         ListingNotice::Roleplaying(true) => (13233, "You are in character now."),
         ListingNotice::Roleplaying(false) => (13234, "You are out of character again."),
+        ListingNotice::Looking(true) => return Said::own("You are now looking for a group."),
+        ListingNotice::Looking(false) => {
+            return Said::own("You are no longer looking for a group.");
+        }
     };
     let line = official(Some(id), &[], fallback, messages);
     match notice {
@@ -1421,6 +1427,18 @@ mod tests {
         assert_eq!(
             said(ListingNotice::Away(false)),
             [(Place::Chat, Said::own("You are back at the keyboard."))]
+        );
+        // Looking for a group is always in this client's words (6.515).
+        assert_eq!(
+            said(ListingNotice::Looking(true)),
+            [(Place::Chat, Said::own("You are now looking for a group."))]
+        );
+        assert_eq!(
+            said(ListingNotice::Looking(false)),
+            [(
+                Place::Chat,
+                Said::own("You are no longer looking for a group.")
+            )]
         );
     }
 
