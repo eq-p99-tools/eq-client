@@ -1060,9 +1060,7 @@ impl ClientWorld {
             // The machine's weekly account left for the world; the session
             // host keeps the date it went (the installed client's own
             // `LastSysInfoDate` stamp). Nothing about the world changed.
-            | WorldEvent::SystemInfoReported { .. }
-            // The Titanium session's duel news: the duel slice (R49-6).
-            | WorldEvent::DuelNews(_) => (),
+            | WorldEvent::SystemInfoReported { .. } => (),
 
             // The zone and what is in it.
             WorldEvent::BoatControl(packet) => {
@@ -1683,6 +1681,7 @@ impl ClientWorld {
                 }
             }
             WorldEvent::Duel(update) => self.duel_news(*update, news),
+            WorldEvent::DuelNews(told) => self.duel_told(*told, news),
             WorldEvent::YellForHelp { spawn_id } => {
                 // A spawn the player cannot name says nothing.
                 match self.party(u32::from(*spawn_id)) {
@@ -1929,6 +1928,51 @@ impl ClientWorld {
             DuelUpdate::Refused { from, reason } => DuelNotice::Refused {
                 from: name(self, from),
                 reason,
+            },
+        };
+        news.notices.push(Notice::Duel(notice));
+    }
+
+    /// What a Titanium duel means to the player, as its session tells it
+    /// (read R49-6): each the program's line, with the names it takes.
+    fn duel_told(&self, told: crate::socials::DuelNews, news: &mut Changes) {
+        use crate::socials::DuelNews;
+        if !self.in_world() {
+            news.ignored = true;
+            return;
+        }
+        let name = |id: u16| match self.party(u32::from(id)) {
+            Party::Named(name) => name,
+            Party::Player | Party::Unseen => "Someone".to_owned(),
+        };
+        let own = || {
+            self.player
+                .as_ref()
+                .map(|player| crate::entities::display_name(&player.name))
+                .unwrap_or_default()
+        };
+        let notice = match told {
+            DuelNews::Challenged { by } => DuelNotice::Challenged(name(by)),
+            DuelNews::Begun { with } => DuelNotice::Begun(name(with)),
+            DuelNews::Challenging { target } => DuelNotice::Challenging(name(target)),
+            DuelNews::Accepting { challenger } => DuelNotice::Accepting(name(challenger)),
+            DuelNews::NoPlayerTarget => DuelNotice::NoPlayerTarget,
+            DuelNews::NotYourself => DuelNotice::NotYourself,
+            DuelNews::AlreadyDueling { at_opponent } => DuelNotice::AlreadyDueling { at_opponent },
+            DuelNews::ConsideringAnother => DuelNotice::ConsideringAnother,
+            DuelNews::Won { over } => DuelNotice::Won {
+                own: own(),
+                over: name(over),
+            },
+            DuelNews::Ended { opponent } => DuelNotice::Ended(name(opponent)),
+            DuelNews::TurnedDown { by, reason } => DuelNotice::TurnedDown {
+                by: name(by),
+                reason,
+            },
+            DuelNews::Lapsed { target } => DuelNotice::Lapsed(name(target)),
+            DuelNews::Forfeited { opponent } => DuelNotice::Forfeited {
+                own: own(),
+                opponent: name(opponent),
             },
         };
         news.notices.push(Notice::Duel(notice));

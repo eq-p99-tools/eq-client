@@ -236,7 +236,7 @@ fn the_duel_word_notes_any_words_after_it() {
 }
 
 #[test]
-fn a_duel_challenges_only_another_player_targeted_and_never_by_name() {
+fn a_titanium_duel_sends_the_target_as_it_stands_whatever_follows() {
     let duel = |online: &OnlineState, named| {
         answer(
             Asked::Duel { named },
@@ -245,8 +245,43 @@ fn a_duel_challenges_only_another_player_targeted_and_never_by_name() {
             &Messages::default(),
         )
     };
+    // The program reads no words and tests nothing itself (read R49-6h):
+    // the session words each outcome.
+    for (target, sent) in [
+        (Some(12), 12),
+        (Some(7), 7),
+        (Some(20), 20),
+        (Some(21), 21),
+        (None, 0),
+    ] {
+        let online = targeting(target);
+        for named in [false, true] {
+            assert_eq!(
+                duel(&online, named),
+                Ok((None, Some(Sent::Duel { target: sent }))),
+                "{target:?} {named}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_duel_elsewhere_challenges_only_another_player_targeted_and_never_by_name() {
+    let duel = |online: &OnlineState, named| {
+        answer(
+            Asked::Duel { named },
+            online.world(),
+            None,
+            &Messages::default(),
+        )
+    };
+    let mac = |target| {
+        let mut online = targeting(target);
+        testing::generation(&mut online, eq_client_core::GameDialect::EqMac);
+        online
+    };
     // Another player targeted: sent, with no line of ours.
-    let online = targeting(Some(12));
+    let online = mac(Some(12));
     assert_eq!(
         duel(&online, false),
         Ok((None, Some(Sent::Duel { target: 12 })))
@@ -258,7 +293,7 @@ fn a_duel_challenges_only_another_player_targeted_and_never_by_name() {
     );
     // No target, the player, an NPC, a corpse, or a spawn not in the zone.
     for target in [None, Some(7), Some(20), Some(21), Some(99)] {
-        let online = targeting(target);
+        let online = mac(target);
         assert_eq!(
             duel(&online, false).unwrap_err().words.text,
             "You must first target another player to challenge to a duel.",

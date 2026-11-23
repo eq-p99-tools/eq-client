@@ -5774,6 +5774,76 @@ fn duel_news_tells_the_player_of_their_own_duels() {
 }
 
 #[test]
+fn the_titanium_sessions_duel_news_is_told_with_the_names_it_takes() {
+    use eq_network_game::socials::{DuelAutoDecline, DuelNews};
+    let mut world = admitted();
+    let told = |world: &mut ClientWorld, news| game(world, WorldEvent::DuelNews(news)).notices;
+    let cases = [
+        (
+            DuelNews::Challenged { by: 5 },
+            DuelNotice::Challenged("a rat".into()),
+        ),
+        (
+            DuelNews::Begun { with: 5 },
+            DuelNotice::Begun("a rat".into()),
+        ),
+        (
+            DuelNews::Challenging { target: 5 },
+            DuelNotice::Challenging("a rat".into()),
+        ),
+        (
+            DuelNews::Accepting { challenger: 44 },
+            DuelNotice::Accepting("Someone".into()),
+        ),
+        (DuelNews::NoPlayerTarget, DuelNotice::NoPlayerTarget),
+        (DuelNews::NotYourself, DuelNotice::NotYourself),
+        (
+            DuelNews::AlreadyDueling { at_opponent: true },
+            DuelNotice::AlreadyDueling { at_opponent: true },
+        ),
+        (DuelNews::ConsideringAnother, DuelNotice::ConsideringAnother),
+        (
+            DuelNews::Won { over: 5 },
+            DuelNotice::Won {
+                own: "Example".into(),
+                over: "a rat".into(),
+            },
+        ),
+        (
+            DuelNews::Ended { opponent: 5 },
+            DuelNotice::Ended("a rat".into()),
+        ),
+        (
+            DuelNews::TurnedDown {
+                by: 5,
+                reason: Some(DuelAutoDecline::Dueling),
+            },
+            DuelNotice::TurnedDown {
+                by: "a rat".into(),
+                reason: Some(DuelAutoDecline::Dueling),
+            },
+        ),
+        (
+            DuelNews::Lapsed { target: 5 },
+            DuelNotice::Lapsed("a rat".into()),
+        ),
+        (
+            DuelNews::Forfeited { opponent: 5 },
+            DuelNotice::Forfeited {
+                own: "Example".into(),
+                opponent: "a rat".into(),
+            },
+        ),
+    ];
+    for (news, notice) in cases {
+        assert_eq!(told(&mut world, news), [Notice::Duel(notice)]);
+    }
+    // Out of the world, nothing is told.
+    let mut outside = ClientWorld::default();
+    assert!(game(&mut outside, WorldEvent::DuelNews(DuelNews::NotYourself)).ignored);
+}
+
+#[test]
 fn a_duel_question_follows_its_admission_and_closes_once() {
     use crate::confirmations::{ConsentClosure, ConsentId, ConsentKind};
     use eq_network_game::socials::{DuelQuestion, DuelUpdate};

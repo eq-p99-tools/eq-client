@@ -1,8 +1,9 @@
 //! Slash commands of the Titanium program that players run in socials and
 //! hotbuttons and that the client answers with a line of its own (reads R45
 //! and R45b): `/yell` and `/stopcast`; and `/duel`, a challenge to the
-//! player targeted (checklist 6.492b), whose handler is not read yet
-//! (pending R49-6h), so its lines are this client's; and `/lfg`, looking
+//! player targeted (checklist 6.492b), which on Titanium sends the target
+//! as it stands and the session words as the program does (read R49-6h),
+//! and elsewhere keeps this client's checks and lines; and `/lfg`, looking
 //! for a group (checklist 6.515), whose forms and lines are this client's
 //! until its handler is read (pending R49-6i). Each line is the
 //! installed client's string where it has one; this client's words stand
@@ -142,6 +143,16 @@ fn challenged(world: &ClientWorld) -> Option<u16> {
         .map(|_| id)
 }
 
+/// Whether a generation's `/duel` is the Titanium program's: the target as
+/// it stands, every test the session's (read R49-6h). The others are
+/// unread and keep this client's checks.
+const fn takes_duel_target(dialect: eq_client_core::GameDialect) -> bool {
+    match dialect {
+        eq_client_core::GameDialect::Titanium => true,
+        eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => false,
+    }
+}
+
 /// The lines and the command for what the player asked.
 fn answer(
     asked: Asked,
@@ -166,9 +177,17 @@ fn answer(
             }
             (None, Some(Sent::StopCast))
         }
-        // The program may challenge by name; until its handler is read,
-        // words after `/duel` send nothing rather than challenge whoever is
-        // targeted (pending R49-6h).
+        // The Titanium program reads no words and takes the target, whoever
+        // it is (read R49-6h, 0x472a67): its session words every outcome
+        // as the program's line.
+        Asked::Duel { .. } if takes_duel_target(world.generation()) => (
+            None,
+            Some(Sent::Duel {
+                target: world.target().selected.unwrap_or(0),
+            }),
+        ),
+        // Elsewhere the handler is unread: words after `/duel` send nothing
+        // rather than challenge whoever is targeted.
         Asked::Duel { named: true } => {
             return Err(Said::own(
                 "This client does not take a name after /duel yet; target the player and type /duel.",

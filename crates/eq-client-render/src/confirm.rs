@@ -154,24 +154,53 @@ impl Asked {
 }
 
 /// The server question that takes precedence in the confirmation window.
-fn current_consent(online: &OnlineState) -> Option<ConsentId> {
-    consent_in(online.world())
+fn current_consent(
+    online: &OnlineState,
+    options: Option<&crate::options::OptionsState>,
+) -> Option<ConsentId> {
+    consent_in(online.world(), duel_card(options))
+}
+
+/// Whether a challenge to a duel is asked on a card
+/// ([`eq_client_core::qol::Fix::DuelAnswerCard`]): the setting, or its
+/// default before the options are loaded.
+fn duel_card(options: Option<&crate::options::OptionsState>) -> bool {
+    let fix = eq_client_core::qol::Fix::DuelAnswerCard;
+    options.map_or_else(
+        || eq_client_core::qol::Settings::default().on(fix),
+        |options| options.options.qol.on(fix),
+    )
 }
 
 /// The server question that takes precedence in the confirmation window of
-/// this world: a resurrection, then a translocate, then a duel.
-pub(crate) fn consent_in(world: &eq_client_core::world::ClientWorld) -> Option<ConsentId> {
+/// this world: a resurrection, then a translocate, then a duel where the
+/// duel card is on. With it off, a challenge is only the program's chat
+/// line, answered with `/duel` (read R49-6a).
+pub(crate) fn consent_in(
+    world: &eq_client_core::world::ClientWorld,
+    duel_card: bool,
+) -> Option<ConsentId> {
     world
         .resurrection()
         .map(|question| question.id)
         .or_else(|| world.translocate().map(|question| question.id))
-        .or_else(|| world.duel().map(|question| question.id))
+        .or_else(|| {
+            world
+                .duel()
+                .filter(|_| duel_card)
+                .map(|question| question.id)
+        })
 }
 
 /// Keeps the confirmation dialog open while a question waits for an answer.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
-pub(crate) fn window(online: Res<OnlineState>, asked: Res<Asked>, mut shown: ResMut<Shown>) {
-    let asking = current_consent(&online).is_some() || asked.question.is_some();
+pub(crate) fn window(
+    online: Res<OnlineState>,
+    asked: Res<Asked>,
+    mut shown: ResMut<Shown>,
+    options: Option<Res<crate::options::OptionsState>>,
+) {
+    let asking = current_consent(&online, options.as_deref()).is_some() || asked.question.is_some();
     if asking != shown.is_open(WindowId::Confirmation) {
         if asking {
             shown.open(WindowId::Confirmation);
@@ -191,13 +220,13 @@ pub(crate) fn buttons(
         Option<Res<crate::hud::messages::Messages>>,
         ResMut<crate::chat::ChatState>,
     ),
-    mut asked: ResMut<Asked>,
+    (mut asked, options): (ResMut<Asked>, Option<Res<crate::options::OptionsState>>),
     buttons: crate::clicks::Clicks<AnswerButton>,
 ) {
     let Some(yes) = buttons.iter().next().map(|answer| answer.0) else {
         return;
     };
-    let current = current_consent(&online);
+    let current = current_consent(&online, options.as_deref());
     // A frame may have received a replacement before it draws the question.
     if current != asked.presented {
         return;
@@ -226,7 +255,12 @@ pub(crate) fn buttons(
 /// Shows the dialog's question.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn show(
-    (online, mut asked, settings): (Res<OnlineState>, ResMut<Asked>, Res<crate::ViewerSettings>),
+    (online, mut asked, settings, options): (
+        Res<OnlineState>,
+        ResMut<Asked>,
+        Res<crate::ViewerSettings>,
+        Option<Res<crate::options::OptionsState>>,
+    ),
     (messages, names, invitations): (
         Option<Res<crate::hud::messages::Messages>>,
         Res<crate::spellbook::SpellNames>,
@@ -239,7 +273,7 @@ pub(crate) fn show(
     let current = if texts.is_empty() {
         None
     } else {
-        current_consent(&online)
+        current_consent(&online, options.as_deref())
     };
     if asked.presented != current {
         // A press that began on the old question must not answer a new one.
@@ -286,6 +320,28 @@ pub(crate) fn show(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn with_the_duel_card_off_a_challenge_asks_nothing() {
+        use crate::online::testing;
+        use eq_client_core::{WorldEvent, socials::DuelQuestion};
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        let id = ConsentId {
+            session_id: 1,
+            kind: ConsentKind::Duel,
+            sequence: 1,
+        };
+        testing::news(
+            &mut online,
+            [WorldEvent::DuelOffer(DuelQuestion { id, challenger: 44 })],
+        );
+        // On, the default, the card asks; off, the program's chat line is
+        // all, and /duel answers.
+        assert_eq!(current_consent(&online, None), Some(id));
+        assert_eq!(consent_in(online.world(), true), Some(id));
+        assert_eq!(consent_in(online.world(), false), None);
+    }
 
     #[test]
     fn the_players_click_answers_a_duel() {

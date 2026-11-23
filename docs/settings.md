@@ -84,6 +84,7 @@ The Interface scale slider appears with the ordinary settings.
 | Read the Spellbook Standing | `read_while_standing` | Off | Reads the spellbook without automatic sitting |
 | Show Invisible Entities | `show_invisible` | Off | Draws known invisible spawns with parenthesized names; targeting rules remain unchanged |
 | Answer List Presence Polls | `answer_list_polls` | Off | Answers supported P99 presence polls after a local delay; does not join a list or answer numeric challenges |
+| Duel Answer Card | `duel_answer_card` | On | Asks Yes or No when another player challenges you to a duel; Yes accepts as `/duel` does and No sends nothing. The original client has no card and takes only `/duel`; turn it off to play that way |
 
 These choices take effect in the current session. Controls are unavailable where
 their required session feature is absent. Walk While Winded, Move While

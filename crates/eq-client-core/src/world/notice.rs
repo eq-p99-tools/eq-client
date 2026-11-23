@@ -22,16 +22,15 @@ pub enum ListingNotice {
     Looking(bool),
 }
 
-/// News of a duel the player is part of. The server sends no line with
-/// any of it on `EQEmu` (its own refusal text excepted), so this client
-/// words it itself; the official client's strings and colours for these
-/// are not read (checklist 6.492, pending R49-6a).
+/// News of a duel the player is part of. On Titanium each is one of the
+/// program's lines (read R49-6 a, d, e and h), told by the session as
+/// [`crate::socials::DuelNews`]; elsewhere the server sends no line with it
+/// (its own refusal text excepted), so this client words it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DuelNotice {
-    /// Another player challenged the player, with no question to answer:
-    /// the server type does not answer duels yet.
+    /// Another player challenged the player (0x592, %1 their name).
     Challenged(String),
-    /// The player's duel with this player began.
+    /// The player's duel with this player began (0x590, %1 their name).
     Begun(String),
     /// The player this names turned the player's duel down, and why
     /// (TAKP's clients' own answer).
@@ -43,6 +42,53 @@ pub enum DuelNotice {
     },
     /// An answer to a challenge was not sent, and why.
     AnswerRefused(String),
+    /// `/duel` challenged this player (0x33c6).
+    Challenging(String),
+    /// `/duel` accepted this player's challenge, and the duel began
+    /// (0x33c4).
+    Accepting(String),
+    /// `/duel` with no target, or one that is not a player (0x33c0).
+    NoPlayerTarget,
+    /// `/duel` at the player themselves (0x33c1).
+    NotYourself,
+    /// `/duel` during a duel: at the opponent (0x33c2), or at someone else
+    /// (0x33c3).
+    AlreadyDueling {
+        /// Whether the target is the opponent.
+        at_opponent: bool,
+    },
+    /// `/duel` at one player while another's challenge waits (0x33c5).
+    ConsideringAnother,
+    /// The player won the duel (0x2f44, %1 the player's name, %2 the
+    /// opponent's).
+    Won {
+        /// The player's name.
+        own: String,
+        /// The opponent's.
+        over: String,
+    },
+    /// The duel partner died otherwise (0x2f45, %1 and %2 their name).
+    Ended(String),
+    /// The one the player challenged turned it down on their program's
+    /// own: 0x567 they ignore the player, 0x568 they are dueling, 0x569
+    /// another challenge waits; no line for a reason the program has none
+    /// for.
+    TurnedDown {
+        /// Who.
+        by: String,
+        /// Why.
+        reason: Option<crate::socials::DuelAutoDecline>,
+    },
+    /// The one the player challenged left before accepting (0x581).
+    Lapsed(String),
+    /// The opponent left during the duel, which the player wins (0x580, %1
+    /// the player's name, %2 and %3 theirs).
+    Forfeited {
+        /// The player's name.
+        own: String,
+        /// The opponent's.
+        opponent: String,
+    },
 }
 
 /// Who took part in a death the player saw, or in news of their group or

@@ -292,11 +292,12 @@ fn default_size_wrapped_qol_shows_the_heading_and_a_line_down_the_speed_control(
         };
         let max_scroll = (content + insets.top + insets.bottom - view.height()).max(0.0);
         // At the default size the opening view includes the heading, and
-        // run speed, under the Dangerous checkboxes, is one wheel line down.
+        // run speed, under the Dangerous checkboxes, is two wheel lines down
+        // (one more since the Duel Answer Card's row).
         assert_visible(app.world(), &[heading]);
         *app.world_mut().resource_mut::<Wheel>() = Wheel {
             surface: Some(page),
-            pixels: -LINE_PIXELS,
+            pixels: -2.0 * LINE_PIXELS,
             lines: 0.0,
         };
         app.update();
@@ -304,7 +305,7 @@ fn default_size_wrapped_qol_shows_the_heading_and_a_line_down_the_speed_control(
         app.update();
         assert_visible(app.world(), &[speed]);
         let scroll = app.world().get::<ScrollPosition>(page).unwrap().y;
-        assert!((scroll - max_scroll.min(LINE_PIXELS)).abs() < 0.01);
+        assert!((scroll - max_scroll.min(2.0 * LINE_PIXELS)).abs() < 0.01);
     }
 }
 
