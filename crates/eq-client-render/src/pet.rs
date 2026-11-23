@@ -35,6 +35,8 @@ pub(super) fn target_command(
         return None;
     }
     Some((|| {
+        // This refusal is ours: what the program does with words after
+        // the order is unread (inferred, row 22a-iii).
         if words.next().is_some() {
             return Err("Use /pet target without arguments".into());
         }
