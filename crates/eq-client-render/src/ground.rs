@@ -128,6 +128,16 @@ pub(super) fn hit<'a>(
         .min_by(|a, b| a.1.total_cmp(&b.1))
 }
 
+/// The middle of the box a click on this object tests, in the world, if
+/// it is the object with this drop id and has one.
+pub(super) fn middle(entity: &GroundEntity, transform: &Transform, drop_id: u32) -> Option<Vec3> {
+    if entity.object.drop_id != drop_id {
+        return None;
+    }
+    let (min, max) = entity.pick?;
+    Some(transform.transform_point((min + max) / 2.0))
+}
+
 /// Uses an object: asks to pick an item up, or to open a world container
 /// such as a forge; the session checks the cursor and reach and answers with
 /// the result. The chat line the player reads when they cannot use anything

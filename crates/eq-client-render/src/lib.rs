@@ -639,10 +639,13 @@ fn install_script(
         .init_resource::<script::RunControl>();
     app.add_systems(
         PreUpdate,
-        script::drive
-            .after(bevy::ui::UiSystems::Focus)
-            .after(items::link_input)
-            .before(clicks::track),
+        (
+            script::drive
+                .after(bevy::ui::UiSystems::Focus)
+                .after(items::link_input)
+                .before(clicks::track),
+            script::lease_scene.after(script::drive),
+        ),
     )
     .add_systems(
         Update,

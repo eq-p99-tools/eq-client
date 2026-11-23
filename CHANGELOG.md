@@ -8,6 +8,8 @@
   - A player in no guild gets this client's own words, because the program's are its own and not in the strings.
   - Still inferred: that +0x256 is the GM flag (read R49-4 takes it so), and the name lookup's exact rule. Anonymity isn't tested, so an anonymous player's guild shows as the server sent it. The Mac client's answer wasn't read, so it is refused there for now.
 
+- Scripts can click spawns, ground objects and doors in the world by id (checklist 6.587), since a script may do whatever the player can (Adam, 11-23). `click("spawn", admission, id, revision)` targets a spawn (two of one name included), `right_click` loots, trades, boards or considers it without changing the target, `click("object", admission, drop_id)` picks up an item or opens a world container, and `click("door", admission, id)` makes a door's two clicks. Each click goes through the scene's own pick, with the script's pointer as the cursor: it acts only where the pick names that same thing right now, so a thing behind a wall, off screen or under a window is refused and nothing is sent. The report's surroundings line gives the admission and each nearby spawn's click tuple. A run that stops mid-click hands the scene back the real pointer the next frame.
+
 - Scripts can read the group window, the effects window and the last tell (checklist 6.593, O2).
   - **Group:** `group.present`, `group.count`, and `group.member1.name` to `group.member5.hp_percent`.
   - **Effects:** `buffs.count`, and `buff1.spell` to `buff50.spell` in the window's order.

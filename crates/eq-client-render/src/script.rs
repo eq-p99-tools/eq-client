@@ -107,6 +107,8 @@ pub struct Script {
     /// The control a scripted click pressed, which the pointer is over as
     /// the button is let go.
     pressed: Option<Entity>,
+    /// A click on a thing in the scene under way (checklist 6.587).
+    scene: Option<SceneClick>,
     started: Option<Duration>,
     /// Whether this run has entered a live session that must remain connected.
     session: RunSession,
@@ -265,6 +267,7 @@ impl Script {
             clicked: None,
             world_gesture: None,
             pressed: None,
+            scene: None,
             started: None,
             session: RunSession::BeforeAdmission,
             paused: false,
@@ -590,6 +593,9 @@ impl Script {
         }
         self.acts.clear();
         self.facing = None;
+        // The scene reads the real pointer again from the next frame
+        // (`lease_scene`).
+        self.scene = None;
         self.release_button(keys, mouse);
     }
 
@@ -1202,12 +1208,13 @@ pub(super) fn drive(
     bodies: Query<&super::PlayerBody, With<super::Player>>,
     collision: Option<Res<super::Collision>>,
     mut cameras: Query<&mut super::OrbitCamera>,
-    (mut buttons, layout, mut pointers, needs, mut aim): (
+    (mut buttons, layout, mut pointers, needs, mut aim, mut scene): (
         Buttons,
         Layout,
         Pointers,
         Query<&crate::outbox::Needs>,
         pointer::Aim,
+        Option<ResMut<crate::target::ScenePointer>>,
     ),
     (windows, settings, mut control, detached_camera): DriverContext,
     mut focus: MessageReader<bevy::window::WindowFocused>,
@@ -1419,6 +1426,40 @@ pub(super) fn drive(
         && let Ok((_, mut interaction, ..)) = buttons.get_mut(entity)
     {
         interaction.set_if_neq(Interaction::Hovered);
+    }
+    // A click on a thing in the scene runs frame by frame through the
+    // scene's own pick, until it is done.
+    if script.scene.is_some()
+        && let Some((step, began)) = script.current.clone()
+    {
+        let Some(scene) = scene.as_deref_mut() else {
+            script.stop(&mut keys, &mut mouse, "the scene is not drawn");
+            return;
+        };
+        // The thing must still be the one reported, every frame up to the
+        // last release: an id reused mid-click is refused, not clicked.
+        let named = match &step {
+            Step::Click(target) | Step::RightClick(target) | Step::ClickWith { target, .. } => {
+                scene_thing(*target, online.world())
+            }
+            _ => None,
+        };
+        if let Some(Err(reason)) = named {
+            script.stop(&mut keys, &mut mouse, reason);
+            return;
+        }
+        match scene_frame(
+            script,
+            (&step, began, now),
+            (&mut keys, &mut mouse),
+            (&mut aim, &mut commands),
+            scene,
+        ) {
+            Ok(true) => script.current = None,
+            Ok(false) => {}
+            Err(reason) => script.stop(&mut keys, &mut mouse, &reason),
+        }
+        return;
     }
     // One-frame presses and clicks are released on the frame after they were pressed.
     if matches!(
@@ -1958,6 +1999,22 @@ pub(super) fn drive(
                     && window.is_some_and(|window| window.cursor_position().is_some())
                 {
                     script.progress.phase = Phase::WaitingForPointer;
+                    return;
+                }
+                if let Some(thing) = scene_thing(*target, online.world()) {
+                    // A thing in the scene, clicked where it shows
+                    // (checklist 6.587); the next frames go through
+                    // `scene_frame`.
+                    match thing {
+                        Ok(thing) => {
+                            if let Some(scene) = scene.as_deref_mut() {
+                                *scene = crate::target::ScenePointer::default();
+                            }
+                            script.scene = Some(SceneClick::new(thing));
+                            script.current = Some((step.clone(), now));
+                        }
+                        Err(reason) => script.stop(&mut keys, &mut mouse, reason),
+                    }
                     return;
                 }
                 let entity = match aim_click(
@@ -3180,6 +3237,7 @@ fn reach(
 /// action can have more than one button, such as the spellbook entry in
 /// the EQ menu and the spellbook button beside the gems. Query iteration
 /// order must not send the pointer to a copy under the menu's dismiss shield.
+#[allow(clippy::too_many_lines)] // One arm per kind of target.
 fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entity> {
     let mut found = None;
     for (
@@ -3254,6 +3312,9 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
             ClickTarget::Store => store,
             ClickTarget::Destroy => destroy == Some(&super::inventory::destruction::Action::Select),
             ClickTarget::Drop => drop,
+            ClickTarget::Spawn { .. } | ClickTarget::Object { .. } | ClickTarget::Door { .. } => {
+                false
+            }
             ClickTarget::BookRow(_)
             | ClickTarget::BookPlace(_)
             | ClickTarget::BookPage(_)
@@ -3474,6 +3535,233 @@ fn point(
         && let Ok((_, mut interaction, ..)) = buttons.get_mut(over)
     {
         interaction.set_if_neq(Interaction::Hovered);
+    }
+}
+
+/// A click on a thing in the scene (checklist 6.587): what it names,
+/// where it has got to, where the script pointer is once it is on its way,
+/// and how many clicks remain (a door takes two).
+#[derive(Clone, Copy, Debug)]
+struct SceneClick {
+    thing: crate::target::Thing,
+    stage: SceneStage,
+    at: Option<Vec2>,
+    clicks: u8,
+}
+
+/// Where a scene click has got to, frame by frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum SceneStage {
+    /// Waiting for the scene's pick to say where the thing shows.
+    Aiming,
+    /// The pointer on its way: from, to (following a moving thing), since.
+    Gliding(Vec2, Vec2, Duration),
+    /// The button went down last frame.
+    Pressed,
+    /// The button came up last frame.
+    Released,
+}
+
+impl SceneClick {
+    fn new(thing: crate::target::Thing) -> Self {
+        Self {
+            thing,
+            stage: SceneStage::Aiming,
+            at: None,
+            clicks: if matches!(thing, crate::target::Thing::Door(_)) {
+                2
+            } else {
+                1
+            },
+        }
+    }
+}
+
+/// One frame of a scene click under way (checklist 6.587), through the
+/// scene's own pick: it aims where the pick names the thing, glides there,
+/// presses as a person does, and lets go; a door takes a second click on
+/// the same point. Ok(true) once done; Err(reason) when the pick names
+/// something else, or nothing takes the press, and nothing was done.
+fn scene_frame(
+    script: &mut Script,
+    (step, began, now): (&Step, Duration, Duration),
+    (keys, mouse): (&mut Keyboard, &mut ButtonInput<MouseButton>),
+    (aim, commands): (&mut pointer::Aim, &mut Commands),
+    scene: &mut crate::target::ScenePointer,
+) -> Result<bool, String> {
+    let Some(mut click) = script.scene else {
+        return Ok(true);
+    };
+    let refused = scene.refused.take();
+    let acted = std::mem::take(&mut scene.acted);
+    let verdict = scene.aim.take();
+    match click.stage {
+        SceneStage::Aiming => match verdict {
+            None if now.saturating_sub(began) > MAX_WAIT => {
+                return Err(click.thing.covered().to_owned());
+            }
+            None => {}
+            Some(Err(reason)) => return Err(reason),
+            Some(Ok(to)) => {
+                let from = aim.at();
+                aim.place(commands, from);
+                click.at = Some(from);
+                click.stage = SceneStage::Gliding(from, to, now);
+            }
+        },
+        SceneStage::Gliding(from, to, since) => {
+            // A thing that moves as the pointer heads for it is followed.
+            let to = match &verdict {
+                Some(Ok(point)) => *point,
+                _ => to,
+            };
+            let elapsed = now.saturating_sub(since);
+            let at = pointer::glide_at(from, to, elapsed);
+            aim.place(commands, at);
+            click.at = Some(at);
+            click.stage = SceneStage::Gliding(from, to, since);
+            if elapsed >= pointer::GLIDE {
+                // Checked again where it lands, before the press.
+                match verdict {
+                    Some(Ok(_)) => {}
+                    Some(Err(reason)) => return Err(reason),
+                    None => return Err(click.thing.covered().to_owned()),
+                }
+                scene_press(script, step, keys, mouse);
+                click.stage = SceneStage::Pressed;
+            }
+        }
+        SceneStage::Pressed => {
+            if let Some(reason) = refused {
+                return Err(reason);
+            }
+            if !acted {
+                // A window, a drag or a held key took the press, as it
+                // would a person's.
+                return Err(click.thing.covered().to_owned());
+            }
+            script.release_button(keys, mouse);
+            click.stage = SceneStage::Released;
+        }
+        SceneStage::Released => {
+            if let Some(reason) = refused {
+                return Err(reason);
+            }
+            click.clicks = click.clicks.saturating_sub(1);
+            if click.clicks == 0 {
+                script.release(keys, mouse);
+                return Ok(true);
+            }
+            // The door's second click, on the same point.
+            scene_press(script, step, keys, mouse);
+            click.stage = SceneStage::Pressed;
+        }
+    }
+    script.scene = Some(click);
+    Ok(false)
+}
+
+/// Presses the step's button for a scene click, with its modifiers held
+/// down from the first press until the click is done.
+fn scene_press(
+    script: &mut Script,
+    step: &Step,
+    keys: &mut Keyboard,
+    mouse: &mut ButtonInput<MouseButton>,
+) {
+    let button = if matches!(
+        step,
+        Step::RightClick(_) | Step::ClickWith { right: true, .. }
+    ) {
+        MouseButton::Right
+    } else {
+        MouseButton::Left
+    };
+    if let Step::ClickWith {
+        keys: modifiers, ..
+    } = step
+        && script.held.is_empty()
+    {
+        for key in modifiers {
+            keys.press(*key);
+        }
+        script.held.clone_from(modifiers);
+    }
+    keys.mark_pointer(button, None);
+    mouse.press(button);
+    script.clicked = Some(button);
+}
+
+/// The thing a scene target names, if the world still holds it as
+/// reported; otherwise why the click is refused before anything moves.
+fn scene_thing(
+    target: ClickTarget,
+    world: &eq_client_core::world::ClientWorld,
+) -> Option<Result<crate::target::Thing, &'static str>> {
+    use crate::target::Thing;
+    let (admission, thing, known) = match target {
+        ClickTarget::Spawn {
+            admission,
+            id,
+            revision,
+        } => (
+            admission,
+            Thing::Spawn(id),
+            world
+                .spawn(id)
+                .is_some_and(|spawn| spawn.revision == revision),
+        ),
+        ClickTarget::Object { admission, drop_id } => (
+            admission,
+            Thing::Object(drop_id),
+            world.objects().entries().contains_key(&drop_id),
+        ),
+        ClickTarget::Door { admission, id } => (
+            admission,
+            Thing::Door(id),
+            world.doors().entries().contains_key(&id),
+        ),
+        _ => return None,
+    };
+    Some(
+        if !world.in_world() || world.session_id() != Some(admission) {
+            Err("that scene target was reported in another admission")
+        } else if known {
+            Ok(thing)
+        } else {
+            Err(match thing {
+                Thing::Spawn(_) => "that spawn is gone or has changed",
+                Thing::Object(_) => "that object is not in this zone's list",
+                Thing::Door(_) => "that door is not in this zone's list",
+            })
+        },
+    )
+}
+
+/// Lends the scene the script's pointer for the frame while a scene click
+/// is under way; any other frame, including the first after a run stops or
+/// fails, the scene reads the real pointer and nothing of the click is left.
+pub(super) fn lease_scene(
+    script: Option<Res<Script>>,
+    scene: Option<ResMut<crate::target::ScenePointer>>,
+) {
+    let Some(mut scene) = scene else {
+        return;
+    };
+    let request = script
+        .and_then(|script| script.scene)
+        .map(|click| crate::target::SceneRequest {
+            thing: click.thing,
+            at: click.at,
+        });
+    if request.is_some() {
+        scene.request = request;
+    } else if scene.request.is_some()
+        || scene.aim.is_some()
+        || scene.refused.is_some()
+        || scene.acted
+    {
+        *scene = crate::target::ScenePointer::default();
     }
 }
 
@@ -6839,6 +7127,327 @@ mod tests {
                 "{stop_at}"
             );
         }
+    }
+
+    /// What a stand-in scene saw of a script's scene click each frame:
+    /// where its pointer was, and whether the left button went down or up.
+    #[derive(Default, Resource)]
+    struct SceneSeen(Vec<(Vec2, bool, bool)>);
+
+    /// Plays the scene's side of a scene click: aims at (100, 100) and
+    /// takes each press there (checklist 6.587).
+    #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are wrappers.
+    fn stand_in_scene(
+        mut scene: ResMut<crate::target::ScenePointer>,
+        mut mouse: ResMut<ButtonInput<MouseButton>>,
+        mut seen: ResMut<SceneSeen>,
+    ) {
+        let (down, up) = (
+            mouse.just_pressed(MouseButton::Left),
+            mouse.just_released(MouseButton::Left),
+        );
+        // A frame's presses are new only that frame, as Bevy's input has it.
+        mouse.clear();
+        let Some(request) = scene.request.take() else {
+            return;
+        };
+        if let Some(at) = request.at {
+            seen.0.push((at, down, up));
+            scene.acted |= down;
+        }
+        scene.aim = Some(Ok(Vec2::new(100.0, 100.0)));
+    }
+
+    /// A pointing app with a spawn 42 (revision as admitted) and door 0 in
+    /// an admitted world, and the stand-in scene; the admission is returned.
+    fn scene_app(steps: impl FnOnce(u64, u64) -> Vec<Step>) -> App {
+        use crate::online::testing as session;
+        let mut online = crate::online::OnlineState::new(true);
+        session::admit(&mut online, 7, session::player(7));
+        session::spawns(&mut online, vec![session::pet(42, 7)]);
+        let admission = online.world().session_id().unwrap();
+        let revision = online.world().spawn(42).unwrap().revision;
+        let mut app = pointing(steps(admission, revision));
+        app.insert_resource(online)
+            .init_resource::<crate::target::ScenePointer>()
+            .init_resource::<SceneSeen>()
+            .add_systems(Update, (lease_scene, stand_in_scene).chain().after(drive));
+        app
+    }
+
+    fn stop_reason(app: &App) -> Option<String> {
+        app.world()
+            .get_resource::<RunStatus>()
+            .filter(|status| status.phase() == Phase::Failed)
+            .and_then(|status| status.events().back())
+            .map(|event| event.message.clone())
+    }
+
+    #[test]
+    fn a_spawn_click_glides_to_where_the_scene_names_it_presses_and_lets_go() {
+        let mut app = scene_app(|admission, revision| {
+            vec![
+                Step::Click(ClickTarget::Spawn {
+                    admission,
+                    id: 42,
+                    revision,
+                }),
+                Step::Wait(Duration::from_secs(1)),
+            ]
+        });
+        for ms in (0..=400).step_by(16) {
+            frame_at(&mut app, ms);
+        }
+        let seen = &app.world().resource::<SceneSeen>().0;
+        // One press and one release, both where the scene aimed.
+        let presses: Vec<_> = seen.iter().filter(|(_, down, _)| *down).collect();
+        assert_eq!(presses.len(), 1, "{seen:?}");
+        assert_eq!(presses[0].0, Vec2::new(100.0, 100.0));
+        assert_eq!(seen.iter().filter(|(_, _, up)| *up).count(), 1, "{seen:?}");
+        assert_eq!(script_pointer(&app), Some(Vec2::new(100.0, 100.0)));
+        assert!(matches!(
+            app.world().resource::<Script>().current,
+            Some((Step::Wait(_), _))
+        ));
+        // Done: the scene reads the real pointer again.
+        let scene = app.world().resource::<crate::target::ScenePointer>();
+        assert!(scene.request.is_none() && scene.aim.is_none());
+    }
+
+    #[test]
+    fn a_door_click_presses_twice_on_one_point() {
+        let mut app = scene_app(|admission, _| {
+            vec![
+                Step::Click(ClickTarget::Door { admission, id: 0 }),
+                Step::Wait(Duration::from_secs(1)),
+            ]
+        });
+        crate::online::testing::doors(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            &eq_client_core::doors::decode(0x4c24, &{
+                let mut bytes = [0u8; 80];
+                bytes[..4].copy_from_slice(b"TEST");
+                bytes
+            })
+            .unwrap()
+            .unwrap(),
+            std::time::Instant::now(),
+        );
+        for ms in (0..=400).step_by(16) {
+            frame_at(&mut app, ms);
+        }
+        let seen = &app.world().resource::<SceneSeen>().0;
+        let presses: Vec<_> = seen.iter().filter(|(_, down, _)| *down).collect();
+        assert_eq!(presses.len(), 2, "{seen:?}");
+        assert_eq!(presses[0].0, presses[1].0);
+        assert_eq!(seen.iter().filter(|(_, _, up)| *up).count(), 2, "{seen:?}");
+        assert!(stop_reason(&app).is_none());
+    }
+
+    #[test]
+    fn a_stale_scene_target_stops_before_the_pointer_moves() {
+        for (target, reason) in [
+            (
+                |admission, revision| ClickTarget::Spawn {
+                    admission: admission + 1,
+                    id: 42,
+                    revision,
+                },
+                "that scene target was reported in another admission",
+            ),
+            (
+                |admission, revision| ClickTarget::Spawn {
+                    admission,
+                    id: 42,
+                    revision: revision + 1,
+                },
+                "that spawn is gone or has changed",
+            ),
+            (
+                |admission, _| ClickTarget::Object {
+                    admission,
+                    drop_id: 9,
+                },
+                "that object is not in this zone's list",
+            ),
+            (
+                |admission, _| ClickTarget::Door { admission, id: 3 },
+                "that door is not in this zone's list",
+            ),
+        ] as [(fn(u64, u64) -> ClickTarget, &str); 4]
+        {
+            let mut app =
+                scene_app(|admission, revision| vec![Step::Click(target(admission, revision))]);
+            app.init_resource::<RunStatus>()
+                .add_systems(Update, observe.after(drive));
+            for ms in [0, 16, 32, 48] {
+                frame_at(&mut app, ms);
+            }
+            assert_eq!(stop_reason(&app).as_deref(), Some(reason));
+            assert_eq!(app.world().resource::<SceneSeen>().0, []);
+            assert!(
+                !app.world()
+                    .resource::<ButtonInput<MouseButton>>()
+                    .pressed(MouseButton::Left)
+            );
+        }
+    }
+
+    #[test]
+    fn a_refused_press_stops_the_run_and_a_stop_hands_the_scene_back() {
+        let mut app = scene_app(|admission, revision| {
+            vec![Step::Click(ClickTarget::Spawn {
+                admission,
+                id: 42,
+                revision,
+            })]
+        });
+        app.init_resource::<RunStatus>()
+            .add_systems(Update, observe.after(drive));
+        let mut ms = 0;
+        while app
+            .world()
+            .resource::<SceneSeen>()
+            .0
+            .iter()
+            .all(|(_, down, _)| !down)
+        {
+            assert!(ms < 1000);
+            frame_at(&mut app, ms);
+            ms += 16;
+        }
+        // The scene's pick named something else on the press.
+        {
+            let mut scene = app
+                .world_mut()
+                .resource_mut::<crate::target::ScenePointer>();
+            scene.acted = false;
+            scene.refused = Some("that spawn is covered or off screen from here".into());
+        }
+        frame_at(&mut app, ms);
+        assert_eq!(
+            stop_reason(&app).as_deref(),
+            Some("that spawn is covered or off screen from here")
+        );
+        frame_at(&mut app, ms + 16);
+        let scene = app.world().resource::<crate::target::ScenePointer>();
+        assert!(scene.request.is_none() && scene.refused.is_none() && !scene.acted);
+        assert!(
+            !app.world()
+                .resource::<ButtonInput<MouseButton>>()
+                .pressed(MouseButton::Left)
+        );
+    }
+
+    #[test]
+    fn a_spawn_replaced_mid_glide_stops_the_click_and_nothing_is_pressed() {
+        let mut app = scene_app(|admission, revision| {
+            vec![Step::Click(ClickTarget::Spawn {
+                admission,
+                id: 42,
+                revision,
+            })]
+        });
+        app.init_resource::<RunStatus>()
+            .add_systems(Update, observe.after(drive));
+        for ms in [0, 16, 32, 48, 64] {
+            frame_at(&mut app, ms);
+        }
+        assert!(app.world().resource::<Script>().scene.is_some());
+        // The spawn leaves and its id comes back on another.
+        {
+            let mut online = app.world_mut().resource_mut::<crate::online::OnlineState>();
+            let before = online.world().spawn(42).unwrap().revision;
+            crate::online::testing::spawns(&mut online, vec![crate::online::testing::pet(42, 7)]);
+            assert_ne!(online.world().spawn(42).unwrap().revision, before);
+        }
+        for ms in (80..=400).step_by(16) {
+            frame_at(&mut app, ms);
+        }
+        assert_eq!(
+            stop_reason(&app).as_deref(),
+            Some("that spawn is gone or has changed")
+        );
+        let seen = &app.world().resource::<SceneSeen>().0;
+        assert!(seen.iter().all(|(_, down, _)| !down), "{seen:?}");
+    }
+
+    #[test]
+    fn a_run_stopped_mid_glide_hands_the_scene_its_real_pointer() {
+        let mut app = scene_app(|admission, revision| {
+            vec![Step::ClickWith {
+                keys: vec![KeyCode::ShiftLeft],
+                target: ClickTarget::Spawn {
+                    admission,
+                    id: 42,
+                    revision,
+                },
+                right: true,
+            }]
+        });
+        app.init_resource::<RunControl>();
+        for ms in [0, 16, 32, 48, 64] {
+            frame_at(&mut app, ms);
+        }
+        assert!(app.world().resource::<Script>().scene.is_some());
+        app.world_mut()
+            .resource_mut::<RunControl>()
+            .request(Request::Stop);
+        frame_at(&mut app, 80);
+        frame_at(&mut app, 96);
+        assert!(!app.world().contains_resource::<Script>());
+        let scene = app.world().resource::<crate::target::ScenePointer>();
+        assert!(scene.request.is_none() && scene.aim.is_none());
+    }
+
+    #[test]
+    fn a_run_stopped_with_the_button_down_lets_go_of_it_and_its_keys() {
+        let mut app = scene_app(|admission, revision| {
+            vec![Step::ClickWith {
+                keys: vec![KeyCode::ShiftLeft],
+                target: ClickTarget::Spawn {
+                    admission,
+                    id: 42,
+                    revision,
+                },
+                right: true,
+            }]
+        });
+        app.init_resource::<RunControl>();
+        let mut ms = 0;
+        while !app
+            .world()
+            .resource::<ButtonInput<MouseButton>>()
+            .pressed(MouseButton::Right)
+        {
+            assert!(ms < 1000);
+            frame_at(&mut app, ms);
+            ms += 16;
+        }
+        // Pressed: the button and Shift are down.
+        assert!(
+            app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .pressed(KeyCode::ShiftLeft)
+        );
+        app.world_mut()
+            .resource_mut::<RunControl>()
+            .request(Request::Stop);
+        frame_at(&mut app, ms);
+        frame_at(&mut app, ms + 16);
+        assert!(!app.world().contains_resource::<Script>());
+        assert!(
+            !app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .pressed(KeyCode::ShiftLeft)
+        );
+        assert!(
+            !app.world()
+                .resource::<ButtonInput<MouseButton>>()
+                .pressed(MouseButton::Right)
+        );
+        let scene = app.world().resource::<crate::target::ScenePointer>();
+        assert!(scene.request.is_none() && scene.aim.is_none() && !scene.acted);
     }
 
     #[test]
