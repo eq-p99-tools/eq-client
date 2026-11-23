@@ -16,6 +16,8 @@ use std::{collections::BTreeMap, time::Instant};
 /// The zone's contents, as the server described them.
 #[derive(Default)]
 pub(super) struct Zone {
+    /// Whether the player's `/surname` waits for its answer.
+    pub(super) surname_asked: bool,
     pub(super) spawns: BTreeMap<u16, Spawn>,
     pub(super) boat_control: crate::boats::ControlState,
     pub(super) boat_notice: Option<crate::boats::ControlBoat>,

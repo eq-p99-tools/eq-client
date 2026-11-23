@@ -386,6 +386,28 @@ reported by the current admission.
 
 The P99 paths follow Titanium source and await attended checks.
 
+## Surnames
+
+Type `/surname Name` to ask the server for a last name. It is offered on
+stock EQEmu servers only, for now. A surname lasts: EQEmu lets a character
+change it once every seven days, and TAKP and Quarm never. So only a line
+you type yourself asks for one. A social, a hotbutton, a reply or a script
+step that tries is refused.
+
+- The name goes exactly as typed: one word, never cut, its case left for the
+  server, which sets it itself. Only what the request cannot carry is
+  refused here: no word, a space, a mark outside plain text, or 32
+  characters and more.
+- The server judges the rest and says so in its own lines: the seven-day
+  wait, the level it needs, a name too long, a name its filter refuses.
+- A surname taken shows on the name tags as the zone announces it. A
+  refusal the server answers without a line of its own shows the installed
+  client's line for a rejected surname.
+- One request waits for its answer at a time.
+
+Whether the original client checks anything first or asks to confirm is not
+read yet. This client sends a typed `/surname` at once.
+
 ## Social hotbuttons
 
 Type `/social set Greet | /pause 10,/say Hello! | /stand` to save a social

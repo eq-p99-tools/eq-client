@@ -2585,6 +2585,13 @@ mod tests {
     }
 
     #[test]
+    fn a_script_never_asks_for_a_surname() {
+        // A surname stays for good, or for days: only a typed line asks.
+        assert!(parse_slash(&["surname", "Exemplum"]).is_err());
+        assert!(parse_slash(&["surname"]).is_err());
+    }
+
+    #[test]
     fn guild_slash_steps_use_only_existing_typed_handlers() {
         let base = Path::new("private");
         for line in [

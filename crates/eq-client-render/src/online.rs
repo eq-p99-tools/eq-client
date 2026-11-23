@@ -349,6 +349,11 @@ impl OnlineState {
         self.world.dismiss_consent(id);
     }
 
+    /// The player's `/surname` went to the server.
+    pub(super) fn asked_surname(&mut self) {
+        self.world.asked_surname();
+    }
+
     /// The player closed the book or note they were reading.
     pub(super) fn close_reading(&mut self) {
         self.world.close_reading();

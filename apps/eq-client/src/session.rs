@@ -197,7 +197,11 @@ impl SessionWorker {
                         enqueue(&sender, &worker_cancel, WorldUpdate::SpellTable(fact))?;
                     }
                     let update = match event {
-                        ClientEvent::World(WorldEvent::SpellTable(_)) => None,
+                        // Spell tables went to the bridge above. Each message
+                        // the session dropped or could not read is also told
+                        // as a diagnostic line, which the log keeps; the gap
+                        // thread's client PR (6.500) takes the record itself.
+                        ClientEvent::World(WorldEvent::SpellTable(_)) | ClientEvent::Gap(_) => None,
                         ClientEvent::World(event) => {
                             observe_world(&event, settings.as_deref());
                             Some(WorldUpdate::Game(event))
@@ -212,6 +216,7 @@ impl SessionWorker {
                             tracing::info!("{message}");
                             None
                         }
+
                         // A reconnect is a fresh login; this viewer asks for
                         // none, but says so if one comes.
                         ClientEvent::Reconnecting {

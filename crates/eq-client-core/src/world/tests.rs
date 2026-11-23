@@ -6667,3 +6667,69 @@ fn the_players_posture_changes_are_counted_but_not_a_first_standing() {
     assert_eq!(posture(&mut world, PostureState::Sitting), 1);
     assert_eq!(posture(&mut world, PostureState::Standing), 2);
 }
+
+/// An admission whose session offers `/surname`.
+fn surnaming(session_id: u64) -> WorldEvent {
+    let WorldEvent::Entered {
+        choices,
+        zone,
+        player,
+        far_clip,
+        spell_landing_flag,
+        zone_id,
+        ..
+    } = entered(session_id)
+    else {
+        unreachable!("an admission")
+    };
+    WorldEvent::Entered {
+        capabilities: vec![crate::Capability::Surnaming],
+        choices,
+        session_id,
+        zone,
+        player,
+        far_clip,
+        spell_landing_flag,
+        zone_id,
+    }
+}
+
+#[test]
+fn a_surname_answer_is_heard_only_where_offered_and_asked() {
+    let answer = |accepted| WorldEvent::SurnameAnswer {
+        accepted,
+        last_name: "Exemplum".into(),
+    };
+    let refused = |changes: &Changes| {
+        changes
+            .notices
+            .iter()
+            .any(|notice| matches!(notice, Notice::SurnameRefused))
+    };
+    // Where the session does not offer it, an answer changes nothing,
+    // asked or not.
+    let mut world = admitted();
+    world.asked_surname();
+    let changes = game(&mut world, answer(false));
+    assert!(changes.ignored && !refused(&changes));
+
+    let mut world = ClientWorld::default();
+    game(&mut world, surnaming(1));
+    connection(&mut world, true, false);
+    // Unasked, it is ignored.
+    let changes = game(&mut world, answer(false));
+    assert!(changes.ignored && !refused(&changes));
+    // Asked, a refusal says so, once.
+    world.asked_surname();
+    assert!(refused(&game(&mut world, answer(false))));
+    assert!(game(&mut world, answer(false)).ignored);
+    // A surname taken says nothing: the zone's last name shows it.
+    world.asked_surname();
+    let changes = game(&mut world, answer(true));
+    assert!(!changes.ignored && changes.notices.is_empty());
+    // A new zone forgets the question.
+    world.asked_surname();
+    game(&mut world, surnaming(2));
+    connection(&mut world, true, false);
+    assert!(game(&mut world, answer(false)).ignored);
+}

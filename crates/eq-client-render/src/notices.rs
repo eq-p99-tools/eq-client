@@ -69,6 +69,9 @@ pub(super) enum Place {
 }
 
 /// Sense Heading in the official client's own words, with the point's name.
+/// The installed string `EQEmu` sends for a surname its filter refuses.
+const SURNAME_REJECTED: u32 = 1374;
+
 fn heading(point: u8, messages: &Messages) -> Said {
     let point = messages.format(12427 + u32::from(point), &[]);
     messages.said(12435, &[point])
@@ -389,6 +392,16 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         | Notice::SocialRefused { reason, string_id } => {
             chat(official(*string_id, &[], reason, messages))
         }
+        // A surname the server's filter refused with its answer's 0 and no
+        // line: the installed line `EQEmu` sends for the same refusal
+        // (`Client::Handle_OP_Surname`, string 1374). Inferred, pending
+        // program read R49-10c.
+        Notice::SurnameRefused => chat(official(
+            Some(SURNAME_REJECTED),
+            &[],
+            "The server refused that surname.",
+            messages,
+        )),
         // The official client always says where `/autosplit` left it (R8).
         Notice::AutoSplit(on) => chat(official(
             Some(if *on { 0x338d } else { 0x338e }),
@@ -434,6 +447,9 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
             chat(match kind {
                 ConsentKind::Resurrection => "The resurrection offer expired.".into(),
                 ConsentKind::Translocate => "The translocate offer expired.".into(),
+                // A duel's question has no deadline, and this client holds
+                // none until eq-client #557.
+                ConsentKind::Duel => return Vec::new(),
             })
         }
         // eqstr 1406, where the installation has it.

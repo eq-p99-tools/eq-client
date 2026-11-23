@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- `/surname Name` asks the server for a last name (gap 3.6, checklist
+  6.507), where the session offers it (stock EQEmu only, for now). Only a
+  typed line sends it: a social, a reply or a script step is refused. It goes
+  as typed, never cut, and `/surname` alone says how it is used. The
+  server's answer is heard only where it is offered and the player asked: a
+  refusal with no line of the server's shows the installed string 1374
+  (inferred, pending read R49-10c), and a surname taken shows through the
+  zone's last name. Repins eq-network to c3d619d (#337); the news other
+  parity items read (poison #556, filters #560, duel #557) is ignored until
+  those land, and a gap record (`ClientEvent::Gap`, 6.500) is left to the
+  diagnostic line the session writes beside it.
 - Speak in a chosen language (parity item 9, checklist 6.495). `/language`
   lists the languages the character knows and `/language N` chooses one,
   kept per character in the options (`language = N`). Every typed line goes

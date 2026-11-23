@@ -1744,6 +1744,11 @@ fn submit_draft(
             return Ok(());
         }
         let line = state.draft.text().trim().to_owned();
+        // A surname stays for good, or for days, so only a typed line asks
+        // for one.
+        if let Some(words) = surname_words(&line) {
+            return surname(&words, online, outbox);
+        }
         let active = state
             .groups
             .active(state.groups.owner())
@@ -1768,6 +1773,40 @@ fn submit_draft(
     }
 }
 
+/// The words after a typed `/surname`, by any form of its name the command
+/// table takes; None for any other line.
+fn surname_words(line: &str) -> Option<String> {
+    let command = crate::commands::spelled(line)?;
+    command_words(&command, "surname").map(str::to_owned)
+}
+
+/// Asks the server for the surname the player typed, as typed: the server
+/// judges it and answers. What the program checks first, and whether it
+/// asks to confirm, is not read yet (program read R49-10a); this client
+/// sends a typed `/surname` at once.
+fn surname(
+    words: &str,
+    online: &mut super::online::OnlineState,
+    outbox: &crate::outbox::Outbox,
+) -> Result<(), Unsent> {
+    let surname = words.trim();
+    if surname.is_empty() {
+        return Err(Unsent::Mistake(
+            "Use /surname and the last name you want.".into(),
+        ));
+    }
+    let session_id = outbox.stamp(online.world())?.session_id;
+    outbox.send(
+        online.world(),
+        ClientCommand::Surname {
+            session_id,
+            surname: surname.to_owned(),
+        },
+    )?;
+    online.asked_surname();
+    Ok(())
+}
+
 /// Apply an ordinary typed line without changing the chat editor or focus.
 fn submit_line(
     line: &str,
@@ -1781,6 +1820,13 @@ fn submit_line(
     let Some(command) = crate::commands::spelled(line) else {
         return Ok(());
     };
+    // Only the player's own typed line asks for a surname: never a social,
+    // a reply or a script.
+    if command_words(&command, "surname").is_some() {
+        return Err(Unsent::Mistake(
+            "Type /surname yourself to choose a surname.".into(),
+        ));
+    }
     if let Some(contacts) = super::contacts::Command::typed(&command) {
         return contacts_command(contacts, active, state, online, outbox, qol);
     }
@@ -3286,6 +3332,68 @@ mod tests {
             let actual = received.try_recv().unwrap();
             assert_eq!(actual, expected);
         }
+    }
+
+    #[test]
+    fn only_a_typed_surname_is_sent_as_typed_where_the_server_offers_it() {
+        use super::super::online::{OnlineState, testing};
+        use eq_client_core::Capability;
+
+        let mut online = OnlineState::new(true);
+        let (queue, received) = std::sync::mpsc::sync_channel(2);
+        let outbox = crate::outbox::Outbox::new(Some(queue));
+        let qol = Settings::default();
+        let admit = |online: &mut OnlineState, session_id, capabilities| {
+            testing::news(
+                online,
+                [eq_client_core::WorldEvent::Entered {
+                    capabilities,
+                    choices: Vec::new(),
+                    session_id,
+                    zone: "qeytoqrg".into(),
+                    player: Box::new(testing::player(7)),
+                    far_clip: None,
+                    spell_landing_flag: None,
+                    zone_id: 0,
+                }],
+            );
+            testing::connect(online, true);
+        };
+        let mut typing = crate::keys::Typing::default();
+        let mut typed = |online: &mut OnlineState, line: &str| {
+            let mut state = ChatState::default();
+            state.draft.replace(line);
+            submit_draft(&mut state, &mut typing, online, &outbox, &qol);
+            state
+        };
+        // A server that does not offer it is sent nothing.
+        admit(&mut online, 4, Vec::new());
+        typed(&mut online, "/surname exemplum");
+        assert!(received.try_recv().is_err());
+
+        admit(&mut online, 5, vec![Capability::Surnaming]);
+        // No word is refused in this client's words.
+        let state = typed(&mut online, "/surname");
+        assert!(received.try_recv().is_err());
+        assert_eq!(state.draft.text(), "/surname");
+        // Typed, it goes as typed: never cut, its case the server's to set.
+        let long = "exemplumexemplumexemplum";
+        typed(&mut online, &format!("/surname {long}"));
+        assert_eq!(
+            received.try_recv().unwrap(),
+            ClientCommand::Surname {
+                session_id: 5,
+                surname: long.into(),
+            }
+        );
+        // A social's line, a reply or a script's game command never asks.
+        let mut state = ChatState::default();
+        assert!(
+            submit_social_line("/surname exemplum", &mut state, &mut online, &outbox, &qol)
+                .is_err()
+        );
+        assert!(submit_game_command("/surname exemplum", &mut online, &outbox, &qol).is_err());
+        assert!(received.try_recv().is_err());
     }
 
     #[test]

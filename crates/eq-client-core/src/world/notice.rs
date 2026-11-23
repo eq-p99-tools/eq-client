@@ -303,6 +303,9 @@ pub enum Notice {
         /// The official client's string for it, in `eqstr_us.txt`.
         string_id: Option<u32>,
     },
+    /// The server refused the player's `/surname` with its answer's 0 and
+    /// no line of its own (TAKP's and Quarm's name filter).
+    SurnameRefused,
     /// A listing change was not sent, and why, worded as
     /// [`Notice::ConsumeRefused`].
     ListingRefused {

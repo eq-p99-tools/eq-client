@@ -600,7 +600,16 @@ impl ClientWorld {
             ConsentKind::Translocate => {
                 let _ = self.translocate.take_if(|current| current.id == id);
             }
+            // The duel's question is taken by eq-client #557; this client
+            // never holds one.
+            ConsentKind::Duel => {}
         }
+    }
+
+    /// The player's `/surname` went to the server: its answer is heard
+    /// once, until the zone changes.
+    pub fn asked_surname(&mut self) {
+        self.zone.surname_asked = true;
     }
 
     /// The player closed the book or note they were reading.
@@ -991,6 +1000,15 @@ impl ClientWorld {
             | WorldEvent::Duel(_)
             | WorldEvent::NewTitles
             | WorldEvent::Gm(_)
+            // News other parity items read, each in its own client PR: the
+            // poison's answer (#556), the kept server filters (#560) and the
+            // duel's question (#557). Until they land, nothing here uses it.
+            | WorldEvent::PoisonAnswered(_)
+            | WorldEvent::ApplyPoisonRefused { .. }
+            | WorldEvent::ServerFiltersKept { .. }
+            | WorldEvent::ServerFiltersRefused { .. }
+            | WorldEvent::DuelOffer(_)
+            | WorldEvent::DuelRefused { .. }
             // The machine's weekly account left for the world; the session
             // host keeps the date it went (the installed client's own
             // `LastSysInfoDate` stamp). Nothing about the world changed.
@@ -1165,6 +1183,17 @@ impl ClientWorld {
                 }
             }
             WorldEvent::LastName { name, last_name } => self.last_name(name, last_name),
+            // The server's answer to the player's own `/surname`: heard only
+            // where the session offers it and the player asked. A surname
+            // taken shows through the zone's last name, not the answer.
+            WorldEvent::SurnameAnswer { accepted, .. } => {
+                let asked = std::mem::take(&mut self.zone.surname_asked);
+                if !asked || !self.can(crate::Capability::Surnaming) {
+                    news.ignored = true;
+                } else if !accepted {
+                    news.notices.push(Notice::SurnameRefused);
+                }
+            }
             WorldEvent::Posture { spawn_id, posture } => {
                 let player = self.is_player(*spawn_id);
                 // A first standing, as the session reports a player at zone
