@@ -1348,6 +1348,27 @@ fn parse_gm(words: &[&str]) -> Result<Step, String> {
     gm_command(words).map(Step::Gm)
 }
 
+/// The `gm` forms that set up or clean up a test fixture: spawning, depop,
+/// guilds, stuns, languages and disciplines. They run only on a local test
+/// session; every other allowed `gm` line runs on any server, as a typed `#`
+/// line would (Adam, 11-23).
+const GM_FIXTURES: &[&str] = &[
+    "spawn",
+    "depop",
+    "guild",
+    "stun",
+    "setlanguage",
+    "traindisc",
+];
+
+/// Whether a `gm` step's text is a fixture form ([`GM_FIXTURES`]).
+pub(crate) fn gm_fixture(command: &str) -> bool {
+    command
+        .split_ascii_whitespace()
+        .next()
+        .is_some_and(|word| GM_FIXTURES.contains(&word))
+}
+
 /// Validate the text for both parsed and programmatically constructed steps.
 pub(super) fn gm_command(words: &[&str]) -> Result<String, String> {
     let [command, arguments @ ..] = words else {

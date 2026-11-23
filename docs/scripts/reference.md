@@ -292,9 +292,11 @@ or occluded. The counters are independent of damage and inventory.
   invitation acceptance, roster change or MOTD update; check received evidence.
   `slash("stopsong")` queues the Bard's stop request on Titanium EQEmu.
   The immediate disconnect aliases typed in chat are not script slash commands.
-  `slash("emote")` and `slash("random")` reach everyone nearby, so like `chat` they
-  run only in a network-constrained local test session.
-- `gm("command [arguments]")`: an allowed GM command on a network-constrained local test session only.
+  `slash("emote")` and `slash("random")` reach everyone nearby, and run on any
+  server, as the player's own would.
+- `gm("command [arguments]")`: an allowed GM command, sent as a typed `#` line on any
+  server. Its fixture forms (`spawn`, `depop`, `guild`, `stun`, `setlanguage` and
+  `traindisc`) run only on a network-constrained local test session.
   Local Titanium EQEmu also supports `gm("guild create CHARACTER_ID_OR_NAME GUILD_NAME")`,
   `gm("guild delete GUILD_ID")` and `gm("guild set CHARACTER_ID_OR_NAME GUILD_ID")`.
   These are narrowly bounded fixture setup/cleanup forms: character names use
@@ -337,7 +339,8 @@ or occluded. The counters are independent of damage and inventory.
   refused when the script is read. What these print names characters and
   items, so their output stays in private run notes and never goes into the
   repository, a pull request or a published page.
-- `chat("channel message")`: chat on a network-constrained local test session only.
+- `chat("channel message")`: chat on any server, under the session's chat pace,
+  with a character in the world.
 - `quit()`: close the client.
 
 The typed parser and normal client capability checks decide which commands and controls are available. A valid action can still fail at runtime when its target, session or expected result is unavailable.
@@ -354,7 +357,7 @@ The typed parser and normal client capability checks decide which commands and c
 
 - `social("set Name | /command | /pause 10,/command")`, `social("bind 1 Name")`,
   `social("play Name")` and `social("cancel")` use the same social controls as
-  chat on a local session. `social("list")`, `social("show Name")` and
+  chat, on any server. `social("list")`, `social("show Name")` and
   `social("delete Name")` also use the ordinary editor. Use the named step
   for scripts. Synthetic chat submission and hotbar activation refuse socials.
   A step queues the control request. Keep the script running with a wait if
