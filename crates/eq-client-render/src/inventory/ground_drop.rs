@@ -129,6 +129,15 @@ pub(crate) fn input(
     }
     if visible && open && clicks.iter().next().is_some() {
         match online.world().prepare_cursor_drop() {
+            // `/fastdrop`: the item goes without the question, through the
+            // same checks and the same one-at-a-time hold as a Yes (6.536).
+            Ok(request) if state.fast_drop => {
+                state.actions.auto_store = false;
+                state.actions.split = None;
+                if let Err(error) = state.submit_ground_drop(&online, &outbox, request) {
+                    state.refuse(crate::outbox::window_line(&error));
+                }
+            }
             Ok(request) if asked.ask(question(&request)) => {
                 state.actions.auto_store = false;
                 state.actions.split = None;
@@ -355,5 +364,43 @@ mod tests {
             ));
             assert!(rx.try_recv().is_err());
         }
+    }
+    /// With `/fastdrop` on, a click sends the drop once with no question,
+    /// and the same checks still refuse a cursor whose coins are unknown
+    /// (6.536).
+    #[test]
+    fn fast_drop_sends_once_without_asking_through_the_same_checks() {
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 7, testing::player(9));
+        testing::inventory(&mut online, InventoryUpdate::Snapshot(vec![cursor(17)]));
+        let (tx, rx) = mpsc::sync_channel(4);
+        let mut app = crate::testing::app();
+        app.insert_resource(online)
+            .insert_resource(Outbox::new(Some(tx)))
+            .insert_resource(InventoryState {
+                fast_drop: true,
+                ..InventoryState::default()
+            })
+            .init_resource::<Asked>()
+            .add_systems(Update, input);
+        app.world_mut()
+            .resource_mut::<crate::windows::Shown>()
+            .open(crate::windows::WindowId::Inventory);
+        let drop = app
+            .world_mut()
+            .spawn((Button, Interaction::None, Node::default(), DropButton))
+            .id();
+        // The coins on hand are unknown: refused, asked nothing, sent nothing.
+        crate::clicks::testing::click(&mut app, drop);
+        assert!(app.world().resource::<Asked>().question().is_none());
+        assert!(rx.try_recv().is_err());
+        testing::empty_carried_coins(&mut app.world_mut().resource_mut::<OnlineState>());
+        crate::clicks::testing::click(&mut app, drop);
+        assert!(app.world().resource::<Asked>().question().is_none());
+        assert!(matches!(rx.try_recv(), Ok(ClientCommand::DropItem(_))));
+        // One at a time: a second click waits for the first's result.
+        crate::clicks::testing::click(&mut app, drop);
+        app.update();
+        assert!(rx.try_recv().is_err());
     }
 }

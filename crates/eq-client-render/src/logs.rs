@@ -74,7 +74,8 @@ pub(crate) fn write(
     // A line in this client's own words is never the official client's,
     // so the log leaves it out (`logs::words`).
     for (_, line) in lines.iter().filter(|(id, _)| *id > seen) {
-        if let Some(words) = logs::words(line, &player.name) {
+        let placed = |heard| crate::languages::tongue_place(messages.as_deref(), heard);
+        if let Some(words) = logs::words(line, &player.name, &placed) {
             text.push_str(&logs::line(now, &read(words, messages.as_deref())));
         }
     }
@@ -133,7 +134,8 @@ pub(crate) fn shown(
     MARK.clone_into(&mut marked.message.text);
     marked.message.item_links.clear();
     let mut message = line.message.clone();
-    let Some(words) = logs::words(&marked, player) else {
+    let placed = |heard| crate::languages::tongue_place(messages, heard);
+    let Some(words) = logs::words(&marked, player, &placed) else {
         return message;
     };
     let words = read(words, messages);
@@ -192,6 +194,7 @@ mod tests {
         let line = |sender: &str| ChatLine {
             channel: ChannelName::Raid,
             message_type: None,
+            tongue: None,
             sender: Some(sender.into()),
             target: None,
             message: Message {
@@ -237,6 +240,7 @@ mod tests {
         let line = |channel, sender: Option<&str>, source| ChatLine {
             channel,
             message_type: None,
+            tongue: None,
             sender: sender.map(str::to_owned),
             target: None,
             message: Message {

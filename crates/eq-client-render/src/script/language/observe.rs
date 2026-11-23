@@ -801,6 +801,7 @@ mod tests {
         ChatLine {
             channel: ChannelName::Tell,
             message_type: None,
+            tongue: None,
             sender: Some(sender.into()),
             target: None,
             message: Message {

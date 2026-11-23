@@ -49,9 +49,34 @@ pub(super) struct CombatState {
     /// turns auto attack off without a line (read R19b 3; the 0x117 line of
     /// its second call is not modelled, recording checklist 6.455).
     off_quiet: bool,
+    /// The assist answers seen ([`eq_client_core::world::ClientWorld::assist_answer`]).
+    seen_assists: u32,
+    /// The spawn an assist answer named while Attack On Assist was on, and
+    /// when: auto attack starts once the target is that spawn.
+    assist_attack: Option<(u16, std::time::Instant)>,
 }
 
+/// How long an assist answer waits for its target to take before Attack
+/// On Assist lets it go: the program starts the attack in the same step it
+/// sets the target (0x45f40a, read R49-8 d), and the target system here
+/// runs within a frame or two.
+const ASSIST_ATTACK_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+
 impl CombatState {
+    /// Arms Attack On Assist for a new assist answer that names a target,
+    /// when the option is `on`: the answer that sets the target starts auto
+    /// attack. The program's attack block \[0x92384c\] is unread; the attack
+    /// press's own refusals stand in for it (checklist 6.490).
+    fn follow_assists(&mut self, world: &eq_client_core::world::ClientWorld, on: bool) {
+        let (answers, assisted) = world.assist_answer();
+        if self.seen_assists != answers {
+            self.seen_assists = answers;
+            self.assist_attack = assisted
+                .filter(|_| on)
+                .map(|id| (id, std::time::Instant::now()));
+        }
+    }
+
     /// A new zone session starts with auto attack off, as the session does,
     /// so the two agree; whether the program turns it off at a zone change
     /// is unread (recording checklist 6.445).
@@ -137,10 +162,36 @@ fn capitalized(text: &str) -> String {
     })
 }
 
+/// Whether the assist answer's target, armed under Attack On Assist, has
+/// just taken, so the attack starts now: not on the player, not already
+/// attacking. The arm ends when it takes or after [`ASSIST_ATTACK_WAIT`].
+fn assisted_attack(
+    combat: &mut CombatState,
+    world: &eq_client_core::world::ClientWorld,
+    own_id: u16,
+) -> bool {
+    let Some((id, since)) = combat.assist_attack else {
+        return false;
+    };
+    if since.elapsed() > ASSIST_ATTACK_WAIT {
+        combat.assist_attack = None;
+        return false;
+    }
+    if world.target().selected != Some(id) {
+        return false;
+    }
+    combat.assist_attack = None;
+    !combat.auto_attack && id != own_id
+}
+
 /// Handles the configured consider, hail and auto-attack keys, as well as
 /// the skin's melee attack button and a hotbutton bound to it, for the
 /// current target.
-#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+#[allow(
+    clippy::needless_pass_by_value,
+    clippy::too_many_arguments,
+    clippy::too_many_lines
+)]
 pub(super) fn input(
     keys: super::keys::Keys,
     online: Res<super::online::OnlineState>,
@@ -149,15 +200,22 @@ pub(super) fn input(
     mut combat: ResMut<CombatState>,
     mut chat: ResMut<super::chat::ChatState>,
     settings: Res<crate::ViewerSettings>,
-    (attack_button, bar_clicks, bindings): (
+    (attack_button, bar_clicks, bindings, options): (
         crate::clicks::Clicks<super::skinned::AttackButton>,
         crate::clicks::Clicks<super::hud::hotbar::Slot>,
         Res<super::hud::hotbar::Bindings>,
+        Option<Res<crate::options::OptionsState>>,
     ),
 ) {
     use super::keys::Act;
     let world = online.world();
     combat.follow_session(world.session_id());
+    // AttackOnAssist, on a client that runs R46's forms (read R49-8 d).
+    let on = options
+        .as_ref()
+        .is_some_and(|options| options.options.attack_on_assist)
+        && settings.0.installed_client.runs_r46_forms();
+    combat.follow_assists(world, on);
     let Some(player) = world.player() else {
         return;
     };
@@ -209,6 +267,15 @@ pub(super) fn input(
             }
         }
     }
+    if assisted_attack(&mut combat, world, player.spawn_id)
+        && live
+        && posture.is_none()
+        && outbox.post(world, attack(true)).is_ok()
+    {
+        combat.auto_attack = true;
+        combat.idle = IdleSwings::default();
+        chat.history.push(toggle_line(toggle, true, &messages));
+    }
     if !live || !keys.focused() {
         return;
     }
@@ -232,10 +299,12 @@ pub(super) fn input(
             || "Hail".to_owned(),
             |(_, spawn)| format!("Hail, {}", display_name(&spawn.name)),
         );
+        // A hail is a say, in the active window's tongue (read R49-4 (b)).
+        let tongue = outbox.tongue(world);
         let _ = outbox.post(world, |stamp| ClientCommand::SendChatInAdmission {
             session_id: stamp.session_id,
             message: OutboundChat::Say(text),
-            tongue: eq_client_core::Tongue::COMMON,
+            tongue,
         });
     }
     let bar_attack = super::hud::hotbar::requested(&keys, &bindings, &bar_clicks)
@@ -612,6 +681,7 @@ mod tests {
             &mut online,
             match client {
                 eq_client_assets::ui::InstalledClient::EqMac => eq_client_core::GameDialect::EqMac,
+                eq_client_assets::ui::InstalledClient::Rof2 => eq_client_core::GameDialect::Rof2,
                 eq_client_assets::ui::InstalledClient::Titanium => {
                     eq_client_core::GameDialect::Titanium
                 }
@@ -783,6 +853,48 @@ mod tests {
         assert_eq!(sent(&rx), None);
         assert!(!app.world().resource::<CombatState>().auto_attack);
         assert_eq!(newest(&app).0, "Self.");
+    }
+
+    /// The server's assist answer names the creature, and the target takes
+    /// it, as the target system does, with Attack On Assist `on`.
+    fn assist_answered(app: &mut App, on: bool) {
+        let mut options = crate::options::OptionsState::default();
+        options.options.attack_on_assist = on;
+        app.insert_resource(options);
+        let mut online = app.world_mut().resource_mut::<crate::online::OnlineState>();
+        online.select_target(None);
+        crate::online::testing::news(
+            &mut online,
+            [eq_client_core::WorldEvent::Assisted(
+                eq_client_core::socials::Assisted { target: Some(30) },
+            )],
+        );
+        online.select_target(Some(30));
+        idle(app, 0.0);
+    }
+
+    #[test]
+    fn attack_on_assist_starts_the_attack_when_the_answer_sets_the_target() {
+        let (mut app, rx) = attacking(eq_client_assets::ui::InstalledClient::Titanium);
+        assist_answered(&mut app, true);
+        assert_eq!(sent(&rx), Some(true));
+        assert!(app.world().resource::<CombatState>().auto_attack);
+        assert_eq!(newest(&app).0, "On.");
+        // One answer starts it once.
+        idle(&mut app, 0.1);
+        assert_eq!(sent(&rx), None);
+    }
+
+    #[test]
+    fn without_attack_on_assist_the_answer_only_targets() {
+        let (mut app, rx) = attacking(eq_client_assets::ui::InstalledClient::Titanium);
+        assist_answered(&mut app, false);
+        assert_eq!(sent(&rx), None);
+        assert!(!app.world().resource::<CombatState>().auto_attack);
+        // The Mac-era client keeps today's answer with the option on.
+        let (mut app, rx) = attacking(eq_client_assets::ui::InstalledClient::EqMac);
+        assist_answered(&mut app, true);
+        assert_eq!(sent(&rx), None);
     }
 
     #[test]

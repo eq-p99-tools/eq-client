@@ -14,15 +14,19 @@
 //! each a skill number or -1 for empty. Those keys carry only a number the
 //! program itself would write: a skill's, or one of its specials (read
 //! R17b), 105 for Harm Touch and 107 for Lay on Hands, named from the spells
-//! they cast (88 and 87), since the program has only the numbers. A
-//! discipline, which has none (6.450), is saved under `[ClientAbilities]`
-//! with its button's own key at -1.
-use super::{AbilityButton, Page, knight, knows_discipline};
+//! they cast (88 and 87), since the program has only the numbers.
+//!
+//! Disciplines have their own window, the Combat Abilities window, so this
+//! client's order and the picker no longer offer them. A button an earlier
+//! version gave one keeps it: it is saved under `[ClientAbilities]` by its
+//! spell, with its button's own key at -1.
+use super::{AbilityButton, Page, knight};
 use bevy::prelude::*;
 use eq_client_core::{
     Capability, abilities::Ability, disciplines::Discipline, hotbar::Binding,
     knights::KnightAbility, world::ClientWorld,
 };
+use std::borrow::Cow;
 
 /// How many buttons the Abilities page has.
 pub(crate) const ABILITY_BUTTONS: usize = 6;
@@ -65,8 +69,9 @@ pub(crate) enum Slot {
     /// A skill or one of the program's specials, by its number, kept as
     /// saved even where this client cannot use it (6.449).
     Skill(u32),
-    /// A discipline, which the program keeps in a window of its own (6.450).
-    Discipline(Discipline),
+    /// A discipline by its spell, which an earlier version of this client
+    /// offered here (6.450) and the program keeps in a window of its own.
+    Discipline(u32),
 }
 
 impl Slot {
@@ -91,7 +96,7 @@ impl Slot {
     /// What `[ClientAbilities]` saves for it, if anything.
     fn own(self) -> Option<String> {
         match self {
-            Self::Discipline(discipline) => Some(format!("discipline:{}", discipline.key())),
+            Self::Discipline(spell) => Some(format!("discipline:{spell}")),
             _ => None,
         }
     }
@@ -100,7 +105,12 @@ impl Slot {
     fn read_own(value: &str) -> Option<Self> {
         let (kind, key) = value.trim().split_once(':')?;
         match kind {
-            "discipline" => Discipline::named(key).map(Self::Discipline),
+            // By its spell, or by the name an earlier version saved.
+            "discipline" => key
+                .parse()
+                .ok()
+                .or_else(|| Discipline::named(key).map(Discipline::spell))
+                .map(Self::Discipline),
             _ => None,
         }
     }
@@ -279,9 +289,9 @@ pub(crate) fn assigned(
             .then_some(Binding::KnightAbility(ability)),
             None => Ability::from_skill(skill).map(Binding::Ability),
         },
-        Slot::Discipline(discipline) => (world.can(Capability::UsingDisciplines)
-            && knows_discipline(world, discipline))
-        .then_some(Binding::Discipline(discipline)),
+        Slot::Discipline(spell) => (world.can(Capability::UsingDisciplines)
+            && crate::disciplines::knows(world, spell))
+        .then_some(Binding::Discipline(spell)),
     }
 }
 
@@ -296,9 +306,9 @@ pub(crate) fn empty(world: &ClientWorld, choices: &Choices, button: AbilityButto
     }
 }
 
-/// This client's own order: knight abilities, disciplines and the
-/// at-target abilities on the Combat page, the rest of those then the
-/// others on the Abilities page.
+/// This client's own order: knight abilities and the at-target abilities
+/// on the Combat page, the rest of those then the others on the Abilities
+/// page.
 fn ordered(world: &ClientWorld, button: AbilityButton) -> Option<Binding> {
     let (targeted, other): (Vec<Ability>, Vec<Ability>) = world
         .abilities()
@@ -310,13 +320,6 @@ fn ordered(world: &ClientWorld, button: AbilityButton) -> Option<Binding> {
         .filter(|_| world.can(Capability::KnightAbilities))
         .map(Binding::KnightAbility)
         .into_iter()
-        .chain(
-            Discipline::SUPPORTED
-                .into_iter()
-                .filter(|_| world.can(Capability::UsingDisciplines))
-                .filter(|&discipline| knows_discipline(world, discipline))
-                .map(Binding::Discipline),
-        )
         .chain(targeted.into_iter().map(Binding::Ability));
     match button.page {
         Page::Combat => targeted.take(COMBAT_BUTTONS).nth(button.index),
@@ -341,7 +344,7 @@ pub(crate) struct Offer {
 /// combat skills only, each that the player has; then on both a knight's
 /// class ability as the program's special number (R17b), offered by the
 /// player's class and level, this client's reading of the profile byte the
-/// program tests (6.450); then the disciplines the player knows (6.450).
+/// program tests (6.450).
 /// A skill this client has no use for is left out, as are the specials
 /// 111, 114 and 115, whose profile bytes or uses the client does not have
 /// (6.449, 6.450).
@@ -374,16 +377,7 @@ pub(crate) fn offered(world: &ClientWorld, page: Page) -> Vec<Offer> {
             name: ability.name(),
             value: None,
         });
-    let disciplines = Discipline::SUPPORTED
-        .into_iter()
-        .filter(|_| world.can(Capability::UsingDisciplines))
-        .filter(|&discipline| knows_discipline(world, discipline))
-        .map(|discipline| Offer {
-            slot: Slot::Discipline(discipline),
-            name: discipline.name(),
-            value: None,
-        });
-    skills_offered.chain(knights).chain(disciplines).collect()
+    skills_offered.chain(knights).collect()
 }
 
 /// The caption of a button that holds a choice the client cannot use:
@@ -395,20 +389,21 @@ pub(crate) const UNUSABLE: &str = "Not available";
 pub(crate) fn caption(
     world: &ClientWorld,
     choices: &Choices,
+    names: &crate::spellbook::SpellNames,
     button: AbilityButton,
-) -> &'static str {
+) -> Cow<'static, str> {
     match assigned(world, choices, button) {
-        Some(Binding::Ability(ability)) => ability.name(),
-        Some(Binding::KnightAbility(ability)) => ability.name(),
-        Some(Binding::Discipline(discipline)) => discipline.name(),
-        _ if empty(world, choices, button) => "",
-        _ => UNUSABLE,
+        Some(Binding::Ability(ability)) => ability.name().into(),
+        Some(Binding::KnightAbility(ability)) => ability.name().into(),
+        Some(Binding::Discipline(spell)) => crate::disciplines::name(names, spell).into(),
+        _ if empty(world, choices, button) => "".into(),
+        _ => UNUSABLE.into(),
     }
 }
 
 /// A button as the script report names it: its page, its place from 1,
 /// what it holds and its caption.
-pub(crate) type ReportedButton = (&'static str, usize, Slot, &'static str);
+pub(crate) type ReportedButton = (&'static str, usize, Slot, Cow<'static, str>);
 
 /// What the script report says of the Actions window's chosen buttons:
 /// each button's page, place from 1, what it holds and its caption; and
@@ -417,6 +412,7 @@ pub(crate) fn report(
     world: &ClientWorld,
     choices: &Choices,
     picker: &super::picker::Picker,
+    names: &crate::spellbook::SpellNames,
 ) -> (Vec<ReportedButton>, Vec<&'static str>) {
     let buttons = [Page::Combat, Page::Abilities]
         .into_iter()
@@ -433,7 +429,12 @@ pub(crate) fn report(
                 Slot::Follows => Slot::of(ordered(world, button)),
                 slot => slot,
             };
-            (name, index + 1, slot, caption(world, choices, button))
+            (
+                name,
+                index + 1,
+                slot,
+                caption(world, choices, names, button),
+            )
         })
         .collect();
     let rows = picker
