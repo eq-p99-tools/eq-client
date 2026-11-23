@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- On Titanium, a right-click on a player inspects them, as the program's use
+  routine ends (reads R49-16 and R49-16e, checklist 6.644).
+  - The player is first considered, as before. Then, with Inspect Others
+    on and nothing on the cursor, a player under 20 away (3D) is inspected
+    through eq-network's new `InspectSpawn`. A player 20 or more away gets
+    the program's line 0x305a naming them, in this client's words where the
+    installation lacks the line.
+  - Right-clicking yourself inspects you with no consider. Nothing is
+    targeted.
+  - The Mac-era and RoF2 programs are unread, so they only consider, as
+    before.
+  - Not modelled yet: the program's busy gate before any right-click use
+    (mounted, dead, camping, a pending trade or merchant, certain windows
+    open; read R49-16e), the trader branches, and the body types the
+    consider skips.
 - `/toggleinspect` and the Inspect Others option as the Titanium program
   keeps them (read R49-16, checklist 6.574). `/toggleinspect on` and `off`
   set it; any other word or none says the usage lines 0x339a and 0x339b;

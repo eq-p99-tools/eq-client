@@ -206,7 +206,7 @@ none gives the original's two usage lines. Each ends with the original's
 line saying where it stands. Nothing is sent, on any server.
 
 It decides only whether your own right-click on a player inspects them
-(checklist 6.644, built next). It does not stop others inspecting you: the
+(checklist 6.644, on Titanium; see [Controls](controls.md)). It does not stop others inspecting you: the
 original answers their inspections whatever it says, and so does this
 client.
 

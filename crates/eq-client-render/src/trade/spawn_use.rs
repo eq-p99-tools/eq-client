@@ -1,5 +1,6 @@
 //! Scene right-clicks reuse the trade/loot paths and otherwise consider the
-//! clicked entity. Neither a click nor consideration changes the target.
+//! clicked entity, then, on Titanium, inspect a player (6.644). None of it
+//! changes the target.
 use super::{BANKER_CLASS, MERCHANT_CLASS, TradeState, merchant_reach};
 use crate::{
     online::OnlineState,
@@ -15,15 +16,26 @@ pub(super) enum Use {
     Trade(u16),
     /// A boat the program lets the player take or let go (read R35).
     Boat(u16),
+    /// A player too far to inspect: the program's line 0x305a names them
+    /// (read R49-16).
+    TooFarToInspect(u16),
 }
 
 impl Use {
     pub(super) const fn id(self) -> u16 {
         match self {
-            Self::Loot(id) | Self::Trade(id) | Self::Boat(id) => id,
+            Self::Loot(id) | Self::Trade(id) | Self::Boat(id) | Self::TooFarToInspect(id) => id,
         }
     }
 }
+
+/// The program's inspect reach: a player 20 or more away (3D) is too far
+/// (Titanium 0x498a66 against [0x644368], read R49-16).
+const INSPECT_REACH: f32 = 20.0;
+
+/// The program's line for a player too far to inspect, %1 their name
+/// (read R49-16; the fallback's words are this client's).
+pub(super) const TOO_FAR_TO_INSPECT: u32 = 0x305a;
 
 /// The program's boat race (read R35 (b): race 141, an NPC; race 502 is not
 /// tested there).
@@ -138,9 +150,10 @@ impl TradeState {
                     },
                 )
                 .map_err(crate::outbox::Refusal::text),
-            // `eligible` never names a boat: the script's boat interaction
-            // goes to the piloting request before this (`script.rs`).
-            (Use::Trade(_) | Use::Boat(_), _) => {
+            // `eligible` never names a boat or an inspection: the script's
+            // boat interaction goes to the piloting request before this
+            // (`script.rs`).
+            (Use::Trade(_) | Use::Boat(_) | Use::TooFarToInspect(_), _) => {
                 Err("Target a merchant, banker, guildmaster or corpse")
             }
         }
@@ -158,6 +171,7 @@ impl TradeState {
         world: &ClientWorld,
         client: InstalledClient,
         outbox: &Outbox,
+        inspect_others: bool,
     ) -> Option<Use> {
         let (session, id) = self.right_clicked.take()?;
         if world.session_id() != Some(session) || !world.in_world() {
@@ -171,21 +185,59 @@ impl TradeState {
         if boat(world, id) {
             return Some(Use::Boat(id));
         }
-        let spawn = &world.spawn(id)?.state;
-        if spawn.invisible {
+        let player = world.player()?;
+        // The player's own spawn skips the consider and goes straight to
+        // the inspect (read R49-16e).
+        let own = id == player.spawn_id;
+        let spawn = if own {
+            None
+        } else {
+            let spawn = &world.spawn(id)?.state;
+            if spawn.invisible {
+                return None;
+            }
+            // Consider has no interaction-radius requirement. The normal
+            // outbox/session path owns capability, admission and spawn
+            // checks.
+            if matches!(spawn.kind, SpawnKind::Npc | SpawnKind::Player) {
+                let _ = outbox.post(world, |stamp| ClientCommand::Consider {
+                    session_id: stamp.session_id,
+                    own_id: player.spawn_id,
+                    target_id: id,
+                    created: stamp.created,
+                });
+            }
+            Some(spawn)
+        };
+        // The program's tail: with Inspect Others on and nothing on the
+        // cursor, a player, or the player themself, is inspected within 20
+        // and named by line 0x305a beyond (reads R49-16, R49-16e).
+        let cursor_empty = !world
+            .inventory()
+            .items()
+            .contains_key(&eq_client_core::inventory::InventorySlot::CURSOR);
+        if !(client.right_click_inspects()
+            && inspect_others
+            && cursor_empty
+            && spawn.is_none_or(|spawn| spawn.kind == SpawnKind::Player))
+        {
             return None;
         }
-        let player = world.player()?;
-        // Consider has no interaction-radius requirement. The normal
-        // outbox/session path owns capability, admission and spawn checks.
-        if matches!(spawn.kind, SpawnKind::Npc | SpawnKind::Player) {
-            let _ = outbox.post(world, |stamp| ClientCommand::Consider {
-                session_id: stamp.session_id,
-                own_id: player.spawn_id,
-                target_id: id,
-                created: stamp.created,
-            });
+        let near = spawn.is_none_or(|spawn| {
+            let (here, there) = (&player.position, &spawn.position);
+            let distance_squared = (here.x - there.x).powi(2)
+                + (here.y - there.y).powi(2)
+                + (here.z - there.z).powi(2);
+            distance_squared < INSPECT_REACH.powi(2)
+        });
+        if !near {
+            return Some(Use::TooFarToInspect(id));
         }
+        let _ = outbox.post(world, |stamp| ClientCommand::InspectSpawn {
+            session_id: stamp.session_id,
+            spawn_id: id,
+            created: stamp.created,
+        });
         None
     }
 }
@@ -263,6 +315,122 @@ mod tests {
                 .selected,
             Some(9)
         );
+    }
+
+    /// A Titanium app with another player, spawn 8, `distance` away.
+    fn titanium_player(distance: f32) -> (App, Receiver<ClientCommand>) {
+        let mut player = actor(Some(1), distance);
+        player.kind = SpawnKind::Player;
+        player.name = "Friend000".into();
+        let (mut app, rx) = app(player, None);
+        app.world_mut()
+            .resource_mut::<crate::ViewerSettings>()
+            .0
+            .installed_client = InstalledClient::Titanium;
+        (app, rx)
+    }
+
+    fn sent(rx: &Receiver<ClientCommand>) -> Vec<ClientCommand> {
+        rx.try_iter().collect()
+    }
+
+    #[test]
+    fn right_click_on_a_player_considers_then_inspects_within_20_on_titanium() {
+        // Within 20: the consider, then the inspect, and no target.
+        let (mut near, rx) = titanium_player(19.9);
+        queue(&mut near);
+        near.update();
+        assert!(matches!(
+            sent(&rx).as_slice(),
+            [
+                ClientCommand::Consider { target_id: 8, .. },
+                ClientCommand::InspectSpawn {
+                    session_id: 1,
+                    spawn_id: 8,
+                    ..
+                },
+            ]
+        ));
+        unchanged_target(&near);
+        // At 20: the consider, then line 0x305a naming them.
+        let (mut far, rx) = titanium_player(20.0);
+        queue(&mut far);
+        far.update();
+        assert!(matches!(
+            sent(&rx).as_slice(),
+            [ClientCommand::Consider { target_id: 8, .. }]
+        ));
+        let chat = far.world().resource::<crate::chat::ChatState>();
+        let said = format!(
+            "{:?}",
+            chat.history.lines(eq_client_core::chat::ChatTab::All)
+        );
+        assert!(
+            said.contains("Friend is too far away to inspect."),
+            "{said}"
+        );
+        // An NPC is considered and never inspected.
+        let (mut npc, rx) = app(actor(Some(1), 5.0), None);
+        npc.world_mut()
+            .resource_mut::<crate::ViewerSettings>()
+            .0
+            .installed_client = InstalledClient::Titanium;
+        queue(&mut npc);
+        npc.update();
+        assert!(matches!(
+            sent(&rx).as_slice(),
+            [ClientCommand::Consider { target_id: 8, .. }]
+        ));
+    }
+
+    #[test]
+    fn right_click_on_the_player_themself_inspects_without_a_consider() {
+        let (mut app, rx) = titanium_player(50.0);
+        app.world_mut()
+            .resource_scope(|world, mut trade: Mut<TradeState>| {
+                trade.right_click(world.resource::<OnlineState>().world(), 7);
+            });
+        app.update();
+        assert!(matches!(
+            sent(&rx).as_slice(),
+            [ClientCommand::InspectSpawn { spawn_id: 7, .. }]
+        ));
+    }
+
+    #[test]
+    fn inspect_others_off_a_held_item_or_an_unread_program_only_considers() {
+        let considered_only = |mut app: App, rx: &Receiver<ClientCommand>| {
+            queue(&mut app);
+            app.update();
+            assert!(matches!(
+                sent(rx).as_slice(),
+                [ClientCommand::Consider { target_id: 8, .. }]
+            ));
+        };
+        // Inspect Others off.
+        let (mut off, rx) = titanium_player(5.0);
+        let mut options = crate::options::OptionsState::default();
+        options
+            .options
+            .set(eq_client_core::options::Toggle::InspectOthers, false);
+        off.insert_resource(options);
+        considered_only(off, &rx);
+        // An item on the cursor.
+        let (mut held, rx) = titanium_player(5.0);
+        let mut item = crate::preview::items().remove(0);
+        item.slot = eq_client_core::inventory::InventorySlot::CURSOR;
+        testing::inventory(
+            &mut held.world_mut().resource_mut::<OnlineState>(),
+            eq_client_core::inventory::InventoryUpdate::Snapshot(vec![item]),
+        );
+        considered_only(held, &rx);
+        // The Mac-era program, unread: as before.
+        let (mut mac, rx) = titanium_player(5.0);
+        mac.world_mut()
+            .resource_mut::<crate::ViewerSettings>()
+            .0
+            .installed_client = InstalledClient::EqMac;
+        considered_only(mac, &rx);
     }
 
     #[test]
