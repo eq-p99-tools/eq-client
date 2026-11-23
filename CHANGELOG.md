@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Refuse a move of the player's own body into less headroom than the
+  Titanium program allows (reads R1d and R49-9, 0x48bb83): the gap from the
+  floor to the ceiling at the move's end must pass 2 × the stand height
+  standing, the stand height + 1 ducking or 3 × it mounted, each by 0.5,
+  or the move stays at its start. The stand height is the program's: 3.125
+  × the size × 0.2, and 1/1.3 of that in a zone whose header sets the
+  classic model scale flag (read R49-9f), so a human needs more than 8.0 in
+  an ordinary zone and more than about 6.27 in such a zone. The compare is
+  strict, as the program's is.
+  The test's engine gate always holds (engine read 1), and the test has no
+  water test, so a swimmer is held under a low ceiling too and stays a
+  swimmer. Fly, a lift's carry and the Mac-era client move as before.
+  Inferred parts are under checklist 6.496; the program's AllowAutoStand
+  stand-up is row 6.496c, not built here.
 - Buffs landing on the player take the slot the Titanium program's whole slot finder gives them (checklist 6.612, read R49-22e, repin to eq-network #417). That includes step 4's replace in place, worked out from each effect's base, formula and max as 0x40f339 does, and step 6's eviction. The facts come from the installed spell data: effects, the Bard level and the band, with each held buff's stored level from its record.
   - A buff the program removes for the landing is dropped as a prediction. If the server's word still holds it afterwards (a record for it, or the next zone-in's table), its word stands, and the disagreement is logged with the rule and both spells (6.612 T1).
   - A value the client can't work out still leaves the landing unslotted. That covers a random formula, one that reads hit points, or one that needs a level we don't know. The old guess for a possible step-4 replace is gone.
@@ -409,6 +423,7 @@ Mac-era servers loot as before, as that client's loot click is unread, and
   Characters in water now swim when moving and tread water when still,
   sinking or on the bottom, instead of walking and standing (read R43;
   checklist 6.485). Needs eq-network's per-axis swim bound.
+
 - A jump never stands a seated player or ends a feign held standing (checklist 6.600, Adam 11-23: "jumping does not stand, just as jumping from sitting does not stand").
   - **Seated jump:** a jump press while sitting or kneeling to loot does nothing and stands no one, as the original client's jump waits on the can-move flag (read R19 c). The Mac-era client is inferred the same. With Allow Auto-Stand on, forward still stands a sitter.
   - **Feign held standing:** with Move While Feigned on, a jump from standing still keeps its crouch's wait but sends no duck or stand, so the feign holds. The session's new `FeignHeld` report says when one is held. Without the option, a feigned player lies, and a lying jump stays blocked.

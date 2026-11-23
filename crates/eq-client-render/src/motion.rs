@@ -1377,6 +1377,62 @@ type InputExtras<'w, 's> = (
     Option<Res<'w, crate::doors::LiftReach>>,
 );
 
+/// Whether the generation's headroom test refuses the player's own move
+/// from `feet` to `landing`: the room over the floor at the landing doesn't
+/// pass what the posture (ducking, mounted) needs and the margin, with S the
+/// test's `stand_height` ([`headroom_stand_height`]). A move that didn't
+/// change the position isn't tested.
+fn lacks_headroom(
+    client: InstalledClient,
+    world: &eq_client_core::movement::CollisionWorld,
+    (body, stand_height): (&PlayerBody, f32),
+    (feet, landing): (Vec3, Vec3),
+    (ducking, mounted): (bool, bool),
+) -> bool {
+    landing.distance_squared(feet) > 1e-10
+        && client.headroom().is_some_and(|rule| {
+            let room = rule.room(stand_height, ducking, mounted);
+            !world.headroom(landing + Vec3::Y * body.feet_offset, room)
+        })
+}
+
+/// The headroom test's S: the model's stand height, 3.125 for every player
+/// model, times the scale the program draws the model at, which is 1/1.3
+/// smaller while the zone header's classic model scale flag is set (read
+/// R49-9f a, 0x47a0e9). Without the player or the zone's header it's the
+/// body's own offset, as before.
+fn headroom_stand_height(client: InstalledClient, world: &ClientWorld, body: &PlayerBody) -> f32 {
+    let Some((player, flag)) = world.player().zip(world.classic_model_scale_flag()) else {
+        return body.feet_offset;
+    };
+    let scale = client.model_scale().drawn_scale(
+        player.race,
+        player.gender,
+        player.size,
+        eq_client_assets::scale::ZoneScale {
+            classic_reduced: flag != 0,
+        },
+    );
+    eq_client_core::drawn_feet_offset(scale)
+}
+
+/// Whether a buff the player holds is known to summon a mount (effect 113).
+/// It stands in for the program's mount state in the headroom test: race
+/// 0xd8 or 0x1d8 with a mount at actor +0x160 (0x4899d3, read R49-9 c),
+/// which this client doesn't hold. A buff whose effects the spell data
+/// can't name doesn't count (checklist 6.496).
+fn on_mount(world: &ClientWorld, spells: Option<&crate::spellbook::SpellNames>) -> bool {
+    use eq_client_core::world::SpellCatalog;
+    const SUMMON_MOUNT: u32 = 113;
+    spells.is_some_and(|spells| {
+        world.buffs().spells().any(|spell| {
+            spells
+                .effect_ids(spell)
+                .is_some_and(|effects| effects.contains(&SUMMON_MOUNT))
+        })
+    })
+}
+
 /// Produces at most one in-flight proposal; renderer stalls never accumulate distance.
 #[allow(
     clippy::needless_pass_by_value,
@@ -2470,6 +2526,37 @@ pub(super) fn input(
             }
             None => (world.step(feet, delta, body.height), mode, false),
         }
+    };
+    // The program undoes a move of the player's own body whose end has less
+    // room over the floor than its posture needs (0x48bb83 in 0x48acef, read
+    // R1d). Its gate, the engine's vtable +0x4c, returns a byte its
+    // constructor sets and eqgame never clears, so the test always runs
+    // (engine read 1). It has no water test, so a swimming body is tested
+    // too (read R49-9 b). A frame with no move of its own, as a lift's
+    // carry, is left alone, and so is Fly. A refused move keeps the frame's
+    // start: the feet, the airborne state and no jump; a swimmer stays a
+    // swimmer. The program's auto-stand (AllowAutoStand, R49-9 e) is its
+    // own row, 6.496c, not built here.
+    let refused = !flying
+        && !placement_blocked
+        && lacks_headroom(
+            client,
+            world,
+            (body, headroom_stand_height(client, online.world(), body)),
+            (feet, landing),
+            (
+                posture == Some(eq_client_core::PostureState::Ducking),
+                on_mount(online.world(), spells.as_deref()),
+            ),
+        );
+    let (landing, jumped) = if refused {
+        controls.airborne.clone_from(&previous_airborne);
+        if !swimming {
+            mode = MovementMode::Forward;
+        }
+        (feet, false)
+    } else {
+        (landing, jumped)
     };
     // The server charges the jump's endurance; the arc travels in position
     // updates.
@@ -4705,6 +4792,111 @@ pub(super) mod tests {
             let onto = run_into(post.clone(), &HUMAN, true, speed);
             assert!(onto.z > 4.5, "post at {speed}: {onto}");
         }
+    }
+
+    #[test]
+    fn the_headroom_tests_s_shrinks_with_the_zones_classic_model_scale() {
+        use crate::online::testing;
+        use eq_client_core::movement::CollisionWorld;
+        // Read R49-9f a: S = 3.125 × size × 0.2, × 1/1.3 under the zone
+        // header's flag; a human (size 6) stands 3.75, or 2.885 there.
+        let world_with = |flag: Option<u8>| {
+            let mut online = crate::online::OnlineState::new(true);
+            testing::admit(&mut online, 11, testing::player(7));
+            if let Some(flag) = flag {
+                let mut header = [0; 700];
+                header[592] = flag;
+                let description = eq_client_core::zones::titanium_description(&header).unwrap();
+                testing::news(
+                    &mut online,
+                    [eq_client_core::WorldEvent::ZoneDescription(description)],
+                );
+            }
+            online
+        };
+        let titanium = InstalledClient::Titanium;
+        let s = |flag| super::headroom_stand_height(titanium, world_with(flag).world(), &HUMAN);
+        assert!((s(Some(0)) - 3.75).abs() < 1e-4, "{}", s(Some(0)));
+        assert!((s(Some(1)) - 3.75 / 1.3).abs() < 1e-4, "{}", s(Some(1)));
+        // Without the header, the body's own offset stands in.
+        assert!((s(None) - HUMAN.feet_offset).abs() < 1e-6);
+        // A doorway of exactly 8.00 and a passage of 7.48 refuse a human at
+        // 3.75 (the compare is strict, R49-9f e) and pass one at 2.885.
+        for room in [8.0, 7.48] {
+            let mut triangles = flat_surface(0.0).to_vec();
+            triangles.extend(solid_box(
+                Vec3::new(-20.0, room, 4.0),
+                Vec3::new(20.0, room + 1.0, 20.0),
+            ));
+            let world = CollisionWorld::new(triangles).unwrap();
+            let into = (Vec3::new(0.0, 0.0, 3.0), Vec3::new(0.0, 0.0, 5.0));
+            let refused = |stand| {
+                super::lacks_headroom(titanium, &world, (&HUMAN, stand), into, (false, false))
+            };
+            assert!(refused(s(Some(0))), "{room}");
+            assert!(!refused(s(Some(1))), "{room}");
+        }
+    }
+
+    #[test]
+    fn a_titanium_move_without_the_postures_headroom_is_refused() {
+        use eq_client_core::movement::CollisionWorld;
+        // A floor at 0 and a ceiling over z > 4; a human's S is 3.75, so
+        // standing needs 7.5, ducking 4.75 and mounted 11.25 (R1d), each
+        // passed by 0.5 (R49-9 e): 8.0, 5.25 and 11.75.
+        let under = |ceiling: f32| {
+            let mut triangles = flat_surface(0.0).to_vec();
+            triangles.extend(solid_box(
+                Vec3::new(-20.0, ceiling, 4.0),
+                Vec3::new(20.0, ceiling + 1.0, 20.0),
+            ));
+            CollisionWorld::new(triangles).unwrap()
+        };
+        let outside = Vec3::new(0.0, 0.0, 3.0);
+        let inside = Vec3::new(0.0, 0.0, 5.0);
+        let refused = |client, world: &CollisionWorld, body, mv, posture| {
+            super::lacks_headroom(client, world, (body, body.feet_offset), mv, posture)
+        };
+        let titanium = InstalledClient::Titanium;
+        let into = (outside, inside);
+        assert!(refused(titanium, &under(7.9), &HUMAN, into, (false, false)));
+        assert!(!refused(
+            titanium,
+            &under(8.1),
+            &HUMAN,
+            into,
+            (false, false)
+        ));
+        assert!(!refused(titanium, &under(5.4), &HUMAN, into, (true, false)));
+        assert!(refused(titanium, &under(5.1), &HUMAN, into, (true, false)));
+        assert!(refused(titanium, &under(11.0), &HUMAN, into, (false, true)));
+        // Moving out from under a low ceiling to room enough is allowed.
+        let out = (inside, outside);
+        assert!(!refused(titanium, &under(7.4), &HUMAN, out, (false, false)));
+        // S follows the body: an ogre (S 5.625) needs 11.75 standing.
+        let ogre = super::PlayerBody {
+            feet_offset: 5.625,
+            height: 9.0,
+            size: 9.0,
+        };
+        assert!(refused(titanium, &under(11.0), &ogre, into, (false, false)));
+        assert!(!refused(titanium, &under(11.0), &ogre, into, (true, false)));
+        // The Mac-era program's twin is unread: it moves as before.
+        assert!(!refused(
+            InstalledClient::EqMac,
+            &under(7.4),
+            &HUMAN,
+            into,
+            (false, false)
+        ));
+        // A frame with no move of its own (a lift's carry) isn't tested.
+        assert!(!refused(
+            titanium,
+            &under(7.4),
+            &HUMAN,
+            (inside, inside),
+            (false, false)
+        ));
     }
 
     #[test]
@@ -7306,6 +7498,116 @@ pub(super) mod tests {
         let falling = next_move(&mut app, 12);
         assert_eq!(falling.mode, MovementMode::Fall);
         assert!(falling.position.z < walking.position.z);
+    }
+
+    #[test]
+    fn a_walk_into_too_little_headroom_keeps_the_frames_start() {
+        use eq_client_core::movement::CollisionWorld;
+        // A body whose S is 3.75 needs room past 8.0 standing; a ceiling 7
+        // over the floor clears its capsule (6.85) but not the program's
+        // test (R1d, R49-9 e).
+        let walk = |ceiling: f32| {
+            let (mut app, receiver) = app();
+            let mut triangles = flat_surface(0.0).to_vec();
+            triangles.extend(flat_surface(ceiling));
+            {
+                let world = app.world_mut();
+                let mut body = world.query::<&mut PlayerBody>().single_mut(world).unwrap();
+                body.feet_offset = 3.75;
+            }
+            online::testing::place(
+                &mut app.world_mut().resource_mut::<online::OnlineState>(),
+                world_position([0.0, 3.75, 0.0], 0.0),
+            );
+            app.insert_resource(Collision(Some(CollisionWorld::new(triangles).unwrap())));
+            app.world_mut().resource_mut::<Controls>().airborne =
+                Some(AirborneController::default());
+            app.update();
+            let mut moved = Vec::new();
+            while let Ok(command) = past_climb(&receiver) {
+                if let ClientCommand::Move(proposal) = command {
+                    moved.push(proposal.position);
+                }
+            }
+            let airborne = app.world().resource::<Controls>().airborne.clone();
+            (moved, airborne)
+        };
+        let (moved, airborne) = walk(7.0);
+        // No move away from the start; the airborne state is the frame's
+        // start: still on the ground, no speed up or down.
+        assert!(
+            moved
+                .iter()
+                .all(|at| at.x.abs() < 0.001 && at.y.abs() < 0.001),
+            "{moved:?}"
+        );
+        let mut airborne = airborne.unwrap();
+        assert!(airborne.velocity().abs() < f32::EPSILON);
+        assert!(airborne.take_landing().is_none());
+        // With room enough the same walk goes.
+        let (moved, _) = walk(8.1);
+        assert!(moved.iter().any(|at| at.x < -0.01), "{moved:?}");
+    }
+
+    #[test]
+    fn a_swim_under_a_low_ceiling_is_refused_and_stays_a_swim() {
+        use eq_client_core::movement::CollisionWorld;
+        // The test has no water test (R49-9 b): under water, a standing
+        // S = 3.75 needs room past 8.0 over the floor as on land.
+        let swim = |ceiling: f32| {
+            let (mut app, receiver) = app();
+            let mut triangles = flat_surface(-12.0).to_vec();
+            triangles.extend(flat_surface(ceiling));
+            {
+                let world = app.world_mut();
+                let mut body = world.query::<&mut PlayerBody>().single_mut(world).unwrap();
+                body.feet_offset = 3.75;
+            }
+            online::testing::place(
+                &mut app.world_mut().resource_mut::<online::OnlineState>(),
+                world_position([0.0, -9.0, 0.0], 0.0),
+            );
+            app.insert_resource(Collision(Some(
+                CollisionWorld::new(triangles).unwrap().with_liquids(Pool {
+                    top: 0.0,
+                    liquid: Liquid::Water,
+                }),
+            )));
+            app.world_mut().resource_mut::<Controls>().airborne =
+                Some(AirborneController::default());
+            let mut moves = Vec::new();
+            for _ in 0..6 {
+                {
+                    let mut controls = app.world_mut().resource_mut::<Controls>();
+                    controls.last_accepted = Instant::now()
+                        .checked_sub(Duration::from_millis(250))
+                        .unwrap();
+                    controls.last_sent = None;
+                }
+                app.update();
+                while let Ok(command) = past_climb(&receiver) {
+                    if let ClientCommand::Move(proposal) = command {
+                        accept(&mut app, &proposal);
+                        moves.push(proposal);
+                    }
+                }
+            }
+            moves
+        };
+        // A ceiling 6 over the floor: no move away from the start, and
+        // every move sent stays a swim.
+        let moves = swim(-6.0);
+        assert!(
+            moves.iter().all(|m| m.mode == MovementMode::Swim),
+            "{moves:?}"
+        );
+        assert!(
+            moves.iter().all(|m| m.position.x.abs() < 0.001),
+            "{moves:?}"
+        );
+        // Room past 8.0: the same swim goes.
+        let moves = swim(-3.5);
+        assert!(moves.iter().any(|m| m.position.x < -0.01), "{moves:?}");
     }
 
     #[test]

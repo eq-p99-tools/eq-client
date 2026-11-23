@@ -602,6 +602,19 @@ impl InstalledClient {
         }
     }
 
+    /// The clearance the program wants between the floor and the ceiling at
+    /// the end of the player's own move, as multiples of the stand height:
+    /// Titanium's test 0x48bb83 (read R1d) wants 2 × S standing, S + 1
+    /// ducking and 3 × S mounted, and undoes a move with less. The Mac-era
+    /// program's twin is unread, so it moves as before.
+    pub const fn headroom(self) -> Option<crate::falls::Headroom> {
+        match self {
+            Self::Titanium => Some(crate::falls::Headroom::TITANIUM),
+            // Not read for the Mac-era program or RoF2.
+            Self::EqMac | Self::Rof2 => None,
+        }
+    }
+
     /// How long after a take-off the program refuses the next jump: both
     /// programs take a jump request only when more than 1,500 ms have
     /// passed since the last take-off (Titanium key routine 0x4a1d74
