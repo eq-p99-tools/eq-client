@@ -7,13 +7,20 @@
 //! The emitters follow the Titanium program's loader (read R49-7 a, first
 //! pass; recording checklist 6.503): each record is one emitter or a day
 //! and a night one, with its own sound, delay and volume. A music record's
-//! track is its id negated (engine follow-up to R49-7, section 2, at
-//! 0x44b502); how the program chooses among regions, fades and switches
-//! music is not read (the follow-up reads only the 20000 clamp and the
-//! 1500 it passes to the music start); every
+//! sound number, 0 or more, is the sequence of `<zone>.xmi` it plays:
+//! 0x44c1bc loads the file through 0x44b33b, and the type-1 branch
+//! 0x44bc19 to 0x4c6a99 plays the record's value as its sequence (read on
+//! the music sign). A negative number -N names entry N of the
+//! `mp3index.txt` list (0x44a8df, 0x44b502), which this client does not
+//! play yet. Music follows the program's chooser (read on zone music
+//! tracks, 0x4c6956): the smallest region the player stands in wins, night
+//! is the hour below 5 or above 18 (0x439041), a switch fades the old track
+//! over 1500 ms and leaving every region over the record's own time, at
+//! most 20000 ms, and `EnvSounds` off silences music regions too. Every
 //! inferred rule is a named constant or function here, marked \[I\]. The instruments are the
-//! player's sound font, not the program's own (a stated departure: an
-//! installation ships none).
+//! sound font the player names (a stated departure: how the program plays
+//! its music is unread, and the synthesizer here refuses the `.sf2` files
+//! an installation may ship as they stand).
 //!
 //! Emitters and music keep their own voices ([`EMITTER_VOICES`]) apart from
 //! the cues [`super::sounds`] plays, so a cue never waits for an emitter
@@ -44,11 +51,15 @@ const BLOCK: usize = 512;
 /// The largest sound font read; a larger one is refused (this client's own
 /// bound).
 const MAX_SOUNDFONT: u64 = 512 * 1024 * 1024;
-/// A music switch's fade-out when its record gives none, in ms [I, pending
-/// R49-7 b].
-const DEFAULT_FADE_MS: i32 = 1000;
-/// Below this share of daylight the night ids play [I, pending R49-7 a].
-const NIGHT_BELOW: f32 = 0.5;
+/// A music node's fade-out when another node takes over, in ms: its +0x28,
+/// always 1500 for a zone region (read on zone music tracks, 0x4c6a99).
+const SWITCH_FADE_MS: i32 = 1500;
+/// The longest a region's own fade-out when nothing replaces it, in ms:
+/// record +0x44 / +0x48 clamped to 20000 (read on zone music tracks).
+const LEAVE_FADE_CAP_MS: i32 = 20_000;
+/// What a zone region's priority adds to its radius (0x642ae0); the lowest
+/// priority among the regions the listener is in wins (0x4c6956).
+const REGION_PRIORITY_BASE: f32 = 10_000.0;
 /// The longest an emitter's one-shot keeps its voice, in seconds, as cues
 /// are bounded; this client's own bound.
 const ONE_SHOT_SECONDS: f32 = 30.0;
@@ -223,7 +234,7 @@ pub(super) struct ZoneAudio {
     loaded: Option<Loaded>,
     /// Counts zones, so a voice from an earlier one is let go.
     generation: u64,
-    /// The music region and sequence playing.
+    /// The music node chosen: its record and the side (0 day, 1 night).
     music: Option<(usize, usize)>,
     /// When each repeating emitter may play next, in seconds since start.
     next: HashMap<usize, f32>,
@@ -264,10 +275,25 @@ pub(super) struct ZoneMusic {
     fading: Option<(f32, f32)>,
 }
 
-/// Whether the zone clock says night: daylight below [`NIGHT_BELOW`]; a
-/// time not yet given is day [I, pending R49-7 a].
-fn is_night(daylight: Option<f32>) -> bool {
-    daylight.is_some_and(|light| light < NIGHT_BELOW)
+/// Whether the zone clock says night, as 0x439041 sets the time state: the
+/// hour below 5 or above 18 (read on zone music tracks). The program keeps
+/// the wire's hour, 1 to 24, and [`eq_client_core::clock::GameTime`] the
+/// wire's less one, so this compares `hour + 1` [I: that the byte read is
+/// the wire's hour, as the clock module's notes say both official clients
+/// store it]. A time not yet given is day [I].
+fn is_night(time: Option<eq_client_core::clock::GameTime>) -> bool {
+    time.is_some_and(|time| {
+        let hour = time.hour + 1;
+        !(5..=18).contains(&hour)
+    })
+}
+
+/// The player's place in the `.eff` files' frame, whose x and y are the
+/// server's y and x [I: from the local look on 099c208, where a record's
+/// height matched the ground only with its x and y swapped, in qeytoqrg's
+/// two night regions; the program's own transform is unread].
+const fn file_frame(position: eq_client_core::WorldPosition) -> [f32; 3] {
+    [position.y, position.x, position.z]
 }
 
 fn distance(emitter: &Emitter, at: [f32; 3]) -> f32 {
@@ -275,33 +301,63 @@ fn distance(emitter: &Emitter, at: [f32; 3]) -> f32 {
     ((x - at[0]).powi(2) + (y - at[1]).powi(2) + (z - at[2]).powi(2)).sqrt()
 }
 
-/// The music region the player stands in, nearest centre first, and the
-/// sequence it plays: the track is the day or night id negated (engine
-/// follow-up to R49-7, section 2, 0x44b502), and the sequence index that
-/// track - 1 [I: the step from a track to the file's sequence is unread];
-/// None where no region holds the player or its track names no sequence.
-/// Which region wins where they overlap is this client's choice [I].
+/// The music node chosen where the player stands, as the chooser 0x4c6956
+/// picks among the active regions (read on zone music tracks): each type-1
+/// side the hour enables is a sphere, active while the player is inside it
+/// (0x4c6de9), and the lowest priority, round(radius + 10000), wins, so the
+/// smallest sphere does; a tie goes to the earlier record [I]. Returns the
+/// record and side, and the `<zone>.xmi` sequence it plays: its sound
+/// number when 0 or more and within the file. A negative number names the
+/// `mp3index.txt` list, which this client does not play, so that node wins
+/// and plays nothing. The program keeps a node that is still active even
+/// when a later one is smaller only until the next choice; this client
+/// chooses afresh each frame, which picks the same node [I].
 fn choose_music(
     emitters: &[Emitter],
     at: [f32; 3],
     night: bool,
     sequences: usize,
-) -> Option<(usize, usize)> {
+) -> Option<((usize, usize), Option<usize>)> {
     emitters
         .iter()
         .enumerate()
-        .filter(|(_, emitter)| emitter.kind.is_music() && emitter.usable())
-        .map(|(index, emitter)| (index, emitter, distance(emitter, at)))
-        .filter(|(_, emitter, distance)| *distance < emitter.radius)
-        .min_by(|a, b| a.2.total_cmp(&b.2))
-        .and_then(|(index, emitter, _)| {
-            let track = emitter.id(night).checked_neg()?;
-            usize::try_from(track)
-                .ok()
-                .and_then(|id| id.checked_sub(1))
-                .filter(|sequence| *sequence < sequences)
-                .map(|sequence| (index, sequence))
+        .filter(|(_, emitter)| emitter.usable())
+        .flat_map(|(index, emitter)| {
+            emitter
+                .split()
+                .into_iter()
+                .filter(move |(phase, side)| {
+                    phase.plays(night) && emitter.kind_of(*side).is_music()
+                })
+                .map(move |(_, side)| (index, side, emitter))
         })
+        .filter(|(_, _, emitter)| distance(emitter, at) < emitter.radius)
+        .min_by(|a, b| {
+            let priority = |emitter: &Emitter| (emitter.radius + REGION_PRIORITY_BASE).round();
+            priority(a.2).total_cmp(&priority(b.2))
+        })
+        .map(|(index, side, emitter)| {
+            let sequence = usize::try_from(emitter.ids[side])
+                .ok()
+                .filter(|sequence| *sequence < sequences);
+            ((index, side), sequence)
+        })
+}
+
+/// How long the chosen music fades out, in seconds, when the choice moves
+/// off it (read on zone music tracks, 0x4c6431): over 1500 ms when another
+/// node takes over or music is turned off, or over its own record +0x44 /
+/// +0x48, at most 20000 ms, when the player leaves every region.
+fn fade_out(old: Option<(&Emitter, usize)>, replaced: bool, music_on: bool) -> f32 {
+    let ms = match old {
+        Some((emitter, side)) if music_on && !replaced => {
+            emitter.fade_out_ms[side & 1].clamp(0, LEAVE_FADE_CAP_MS)
+        }
+        _ => SWITCH_FADE_MS,
+    };
+    #[expect(clippy::cast_precision_loss, reason = "fades are short")]
+    let seconds = ms as f32 / 1000.0;
+    seconds
 }
 
 /// Whether an emitter of this type plays a sound, rather than music or a
@@ -473,20 +529,13 @@ pub(super) fn update(
     let Some(player) = world.player() else {
         return;
     };
-    let at = [player.position.x, player.position.y, player.position.z];
-    let clock = settings.0.installed_client.clock();
-    let daylight = super::daylight::sky_minute(
-        clock,
-        eq_client_core::zones::number(world.zone()),
-        world.game_time(std::time::Instant::now()),
-    )
-    .map(|minute| super::daylight::day_night(clock).daylight(minute));
-    let night = is_night(daylight);
+    let at = file_frame(player.position);
+    let night = is_night(world.game_time(std::time::Instant::now()));
     for (index, emitter) in loaded.emitters.iter().enumerate() {
         let unplayed = match emitter.kind {
             EmitterKind::Unknown(kind) => Some(format!("kind {kind}")),
-            kind if kind.is_music() && emitter.ids.iter().any(|id| *id >= 0) => {
-                Some(format!("music id {:?}", emitter.ids))
+            kind if kind.is_music() && emitter.ids.iter().any(|id| *id < 0) => {
+                Some(format!("music id {:?} (the mp3 list)", emitter.ids))
             }
             _ => None,
         };
@@ -583,10 +632,13 @@ pub(super) fn update(
     }
 
     // Music.
-    let music_volume = if silent {
-        0.0
-    } else {
+    // `EnvSounds` off disables every .eff emitter, music regions included
+    // (read on zone music tracks: 0x44b050 sets +0x1000).
+    let music_on = !silent && options.options.music_volume() > 0.0;
+    let music_volume = if music_on && options.options.environment_sounds {
         options.options.music_volume()
+    } else {
+        0.0
     };
     let font = match &mut audio.font {
         Font::Unasked => {
@@ -614,28 +666,24 @@ pub(super) fn update(
         Font::Ready(font) => Some(Arc::clone(font)),
         Font::Absent => None,
     };
-    let chosen = (music_volume > 0.0)
+    let choice = (music_volume > 0.0)
         .then(|| choose_music(&loaded.emitters, at, night, loaded.sequences.len()))
         .flatten();
-    let fade_ms = audio
-        .music
-        .and_then(|(index, _)| loaded.emitters.get(index))
-        .map_or(DEFAULT_FADE_MS, |emitter| {
-            if emitter.fade_out_ms > 0 {
-                emitter.fade_out_ms
-            } else {
-                DEFAULT_FADE_MS
-            }
-        });
+    let chosen = choice.map(|(node, _)| node);
+    let fade_seconds = fade_out(
+        audio
+            .music
+            .and_then(|(index, side)| Some((loaded.emitters.get(index)?, side))),
+        chosen.is_some(),
+        music_on,
+    );
     let switched = chosen != audio.music;
     for (entity, mut track, sink) in &mut tracks {
         if track.generation != generation {
             continue;
         }
         if switched && track.fading.is_none() {
-            #[expect(clippy::cast_precision_loss, reason = "fades are short")]
-            let length = fade_ms as f32 / 1000.0;
-            track.fading = Some((now, length));
+            track.fading = Some((now, fade_seconds));
         }
         let gain = track
             .fading
@@ -648,7 +696,11 @@ pub(super) fn update(
     }
     if switched {
         audio.music = chosen;
-        if let (Some((_, sequence)), Some(font), Some(mut assets)) = (chosen, font, music_assets) {
+        // The new node starts at once; its +0x4c / +0x50 is taken as a
+        // fade-in by the read [I] and not applied here.
+        if let (Some((_, Some(sequence))), Some(font), Some(mut assets)) =
+            (choice, font, music_assets)
+        {
             let handle = assets.add(MidiMusic {
                 font,
                 midi: Arc::clone(&loaded.sequences[sequence]),
@@ -694,27 +746,71 @@ mod tests {
     }
 
     #[test]
-    fn the_nearest_music_region_holding_the_player_plays_its_hours_sequence() {
+    fn the_smallest_music_region_holding_the_player_plays_its_hours_sequence() {
         let regions = [
-            emitter([0.0; 3], 1000.0, [-1, -2], 1, 0),
-            emitter([100.0, 0.0, 0.0], 50.0, [-3, -3], 1, 0),
-            emitter([0.0; 3], 10.0, [-1, -1], 2, 0),
+            emitter([0.0; 3], 1000.0, [0, 1], 1, 0),
+            emitter([100.0, 0.0, 0.0], 50.0, [2, 2], 1, 0),
+            emitter([0.0; 3], 10.0, [0, 0], 2, 0),
         ];
-        assert_eq!(choose_music(&regions, [0.0; 3], false, 3), Some((0, 0)));
-        assert_eq!(choose_music(&regions, [0.0; 3], true, 3), Some((0, 1)));
+        // Day and night differ, so the record is a day node and a night one.
         assert_eq!(
-            choose_music(&regions, [90.0, 0.0, 0.0], false, 3),
-            Some((1, 2))
+            choose_music(&regions, [0.0; 3], false, 3),
+            Some(((0, 0), Some(0)))
         );
-        // A sequence the file lacks, or an id of 0 or more, plays nothing.
-        assert_eq!(choose_music(&regions, [90.0, 0.0, 0.0], false, 2), None);
-        let none = [emitter([0.0; 3], 100.0, [0, 1], 1, 0)];
-        assert_eq!(choose_music(&none, [0.0; 3], false, 3), None);
-        assert_eq!(choose_music(&none, [0.0; 3], true, 3), None);
-        let lowest = [emitter([0.0; 3], 100.0, [i32::MIN, -1], 1, 0)];
-        assert_eq!(choose_music(&lowest, [0.0; 3], false, 3), None);
-        assert_eq!(choose_music(&lowest, [0.0; 3], true, 3), Some((0, 0)));
+        assert_eq!(
+            choose_music(&regions, [0.0; 3], true, 3),
+            Some(((0, 1), Some(1)))
+        );
+        // Inside both, the smaller sphere wins even with its centre farther.
+        assert_eq!(
+            choose_music(&regions, [60.0, 0.0, 0.0], false, 3),
+            Some(((1, 0), Some(2)))
+        );
+        // A sequence the file lacks plays nothing, but its node still wins.
+        assert_eq!(
+            choose_music(&regions, [90.0, 0.0, 0.0], false, 2),
+            Some(((1, 0), None))
+        );
+        // A negative number names the mp3 list: chosen, nothing played.
+        let listed = [emitter([0.0; 3], 100.0, [-1, i32::MIN], 1, 0)];
+        assert_eq!(
+            choose_music(&listed, [0.0; 3], false, 3),
+            Some(((0, 0), None))
+        );
         assert_eq!(choose_music(&regions, [5000.0, 0.0, 0.0], false, 3), None);
+    }
+
+    #[test]
+    fn the_files_frame_swaps_the_servers_x_and_y() {
+        let server = eq_client_core::WorldPosition {
+            x: 200.7,
+            y: 5063.8,
+            z: -3.8,
+            heading: 0.0,
+        };
+        assert_eq!(file_frame(server), [5063.8, 200.7, -3.8]);
+        // A region the file places at (5063.8, 200.7) holds that player.
+        let region = [emitter([5063.8, 200.7, -3.8], 50.0, [1, 1], 1, 0)];
+        assert_eq!(
+            choose_music(&region, file_frame(server), false, 3),
+            Some(((0, 0), Some(1)))
+        );
+    }
+
+    #[test]
+    fn music_fades_over_1500_ms_on_a_switch_and_its_own_time_on_leaving() {
+        let mut record = [0; eq_client_assets::zone_sounds::RECORD];
+        record[0x38] = 1;
+        record[0x39] = 1;
+        record[0x44..0x48].copy_from_slice(&2500_i32.to_le_bytes());
+        record[0x48..0x4c].copy_from_slice(&90_000_i32.to_le_bytes());
+        let region = Emitter::read(&record);
+        assert!((fade_out(Some((&region, 0)), true, true) - 1.5).abs() < 1e-6);
+        assert!((fade_out(Some((&region, 0)), false, true) - 2.5).abs() < 1e-6);
+        // Clamped to 20000 ms; music turned off fades over 1500 ms.
+        assert!((fade_out(Some((&region, 1)), false, true) - 20.0).abs() < 1e-6);
+        assert!((fade_out(Some((&region, 1)), false, false) - 1.5).abs() < 1e-6);
+        assert!((fade_out(None, false, true) - 1.5).abs() < 1e-6);
     }
 
     #[test]
@@ -789,9 +885,19 @@ mod tests {
 
     #[test]
     fn nights_waits_and_fades_follow_their_rules() {
+        let at = |hour| eq_client_core::clock::GameTime {
+            hour,
+            minute: 0,
+            day: 1,
+            month: 1,
+            year: 3100,
+        };
         assert!(!is_night(None));
-        assert!(!is_night(Some(0.8)));
-        assert!(is_night(Some(0.2)));
+        // Wire hours 5 to 18 are day: GameTime's 4 to 17.
+        assert!(is_night(Some(at(3))));
+        assert!(!is_night(Some(at(4))));
+        assert!(!is_night(Some(at(17))));
+        assert!(is_night(Some(at(18))));
         // The program's 500 ms comes first, then a share of the random
         // delay (here 1000 ms).
         let repeat = emitter([0.0; 3], 10.0, [1, 1], 2, 0);
