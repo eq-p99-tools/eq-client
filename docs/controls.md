@@ -78,8 +78,8 @@ window and its 4-pixel slop are inferred (recording checklist 6.385).
 The Use key casts the program's ray through the centre of the 3D view (read
 R49-19): it targets the first character there, and uses an NPC as a right
 click does; with no character there, it clicks a door on that ray at the
-point it meets it; otherwise it does nothing. An item on the ground or a
-world container counts when the ray hits it (inferred). The quality-of-life
+point it meets it; otherwise it does nothing. It never reaches an item on
+the ground or a world container, which open by their own click. The quality-of-life
 setting Use Picks Nearest, off by default, keeps the older rule instead: the
 nearest door or object within reach, wherever you face. EQMac keeps the
 nearest rule until its key is read.

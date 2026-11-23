@@ -3,11 +3,11 @@
 ## Unreleased
 
 - **The Use key now uses what is at the centre of the view, not the nearest door** (read R49-19, checklist 6.609). On Titanium (and RoF2, inferred) it casts the program's ray from the camera through the centre of the 3D view, the same pick a mouse click makes:
-  - The first character the ray hits becomes the target. An NPC also gets what a right click on it does (a merchant, banker or guildmaster opens, a boat asks to pilot, else it is considered). Another player is only targeted.
-  - With no character, a door on the same ray gets one click at the point the ray met it, and the session judges its reach from there, as for a mouse click.
+  - The first character the ray hits becomes the target. An NPC, or one the target setter refuses while no target stands, also gets what a right click on it does (a merchant, banker or guildmaster opens, a boat asks to pilot, else it is considered; no hail). A player or corpse that becomes the target is only targeted, as the program's key handler reads (0x462519).
+  - With no character, a door on the same ray gets one click at the point the ray met it, and the session judges its reach from there, as for a mouse click. Nothing else is reached: an item on the ground or a world container opens only by its own click (read).
   - With neither, nothing happens and nothing is said.
   - **This changes scripts.** Use no longer finds the nearest door or item without facing it. A script's `press("U")` is the real key, so it goes the same way. Turn on the new quality-of-life setting **Use Picks Nearest** (off by default) to keep the old rule: the nearest door, item on the ground or world container within the same reach.
-  - Inferred and labelled: an item on the ground or a world container counts only when the ray hits it, since whether the program's pick reaches them is unread; which actors the program's pick skips is unread, so it skips what a mouse click skips; and a corpse is only targeted.
+  - Inferred and labelled: the program's pick skips its own actor, its mount and actors with a "not pickable" bit; this skips what a mouse click skips.
   - EQMac keeps the nearest rule until its key is read. The status line's "use the door" hint shows only where Use takes the nearest thing.
 - Buffs landing on the player take the slot the Titanium program's whole slot finder gives them (checklist 6.612, read R49-22e, repin to eq-network #417). That includes step 4's replace in place, worked out from each effect's base, formula and max as 0x40f339 does, and step 6's eviction. The facts come from the installed spell data: effects, the Bard level and the band, with each held buff's stored level from its record.
   - A buff the program removes for the landing is dropped as a prediction. If the server's word still holds it afterwards (a record for it, or the next zone-in's table), its word stands, and the disagreement is logged with the rule and both spells (6.612 T1).

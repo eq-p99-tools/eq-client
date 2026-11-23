@@ -218,7 +218,7 @@ pub(super) fn input(
     } else if keys.pressed(Act::Use)
         && super::interact::by_ray(&online, &super::interact::qol(options.as_deref()))
     {
-        if let Some(chosen) = use_key(&scene, &mut online, &outbox, &mut chat, &mut trade) {
+        if let Some(chosen) = use_key(&scene, &mut online, &outbox, &mut trade) {
             proposal = Some(Some(chosen));
         }
     } else if let Some(cursor) = cursor
@@ -303,21 +303,24 @@ pub(super) fn input(
 }
 
 /// The Use key, as key command 0x10 casts it (read R49-19, checklist
-/// 6.609): the scene's own click pick through the centre of the 3D view.
-/// The first spawn hit is the target, and an NPC also gets what a right
-/// click on it does; with no spawn, a door on the same ray gets a click at
-/// the hit point, whose reach the session judges; with neither, nothing
-/// happens and nothing is said. Gives the spawn to target, if any.
+/// 6.609, and its follow-ups): the scene's own click pick through the
+/// centre of the 3D view (0x494ac5).
+/// - **A spawn** is targeted (0x4a6f0e). Then, if it is an NPC, or no
+///   target stands afterwards, it gets what a right click does (0x4a7356).
+///   A player or corpse that became the target is only targeted.
+/// - **No spawn:** a door on the same ray gets a click at the hit point,
+///   whose reach the session judges (0x49812e). Nothing else is reached:
+///   not an item on the ground nor a world container, which open by their
+///   own clicks.
+/// - **Neither:** nothing happens and nothing is said.
 ///
-/// Inferred and labelled: which actors the program's pick drops (its
-/// virtual +0x1c) is unread, so this skips what a mouse click skips; and
-/// whether the pick reaches an item on the ground or a world container is
-/// unread, so one counts only when the ray hits it, as a click's does.
+/// Gives the spawn to target, if any. The program's pick skips its own
+/// actor, its mount and "not pickable" actors ([I] the last two); this
+/// skips what a mouse click skips.
 fn use_key(
     scene: &Scene,
     online: &mut OnlineState,
     outbox: &Outbox,
-    chat: &mut super::chat::ChatState,
     trade: &mut super::trade::TradeState,
 ) -> Option<u16> {
     let centre = scene.centre()?;
@@ -327,27 +330,23 @@ fn use_key(
         // nothing at all, as for a click (R44).
         Choice::Spawn(id, _) if !interacts(online, id) => None,
         Choice::Spawn(id, _) => {
-            // 0x4a7356 runs for an NPC; a player is only targeted. [I] A
-            // corpse is targeted only, as its kind is not an NPC's.
-            if online
-                .world()
-                .spawn(id)
-                .is_some_and(|spawn| spawn.state.kind == SpawnKind::Npc)
-            {
-                trade.right_click(online.world(), id);
-            }
             // One the target setter refuses by body type keeps the current
             // target (R44).
-            (!refused_by_body(online, id)).then_some(id)
-        }
-        Choice::Item(drop_id) => {
-            if let Some(line) = super::ground::use_object(drop_id, online, outbox) {
-                chat.history.push(super::chat::system_line(line));
+            let refused = refused_by_body(online, id);
+            let npc = online
+                .world()
+                .spawn(id)
+                .is_some_and(|spawn| spawn.state.kind == SpawnKind::Npc);
+            // 0x4a7356 runs for an NPC, or where no target stands after
+            // the targeting.
+            if npc || (refused && online.world().target().selected.is_none()) {
+                trade.right_click(online.world(), id);
             }
-            None
+            (!refused).then_some(id)
         }
-        // 0x49812e: the same ray, mapped to a door, with its hit point.
-        Choice::Door(_) | Choice::Nothing => {
+        // 0x49812e: the same ray, mapped to a door only, with its hit
+        // point. An item on the ground is never reached by this key.
+        Choice::Door(_) | Choice::Item(_) | Choice::Nothing => {
             let picked = scene.pick(online, centre, true)?;
             if let (Choice::Door(door), Some((id, point))) = (picked.choice, picked.door_point)
                 && door.id == id
@@ -2066,19 +2065,38 @@ mod tests {
     }
 
     #[test]
-    fn the_use_key_only_targets_a_player_at_the_views_centre() {
-        const OTHER: u16 = 43;
+    fn the_use_key_only_targets_a_player_or_corpse_at_the_views_centre() {
+        // 0x462519 uses the spawn only when it is an NPC or no target
+        // stands afterwards; these become the target.
+        for (id, kind) in [
+            (43, SpawnKind::Player),
+            (44, SpawnKind::NpcCorpse),
+            (45, SpawnKind::PlayerCorpse),
+        ] {
+            let (mut app, commands, ..) = target_app();
+            scene_camera(&mut app);
+            body_at_origin(&mut app, id, kind);
+            press_use(&mut app);
+            assert!(matches!(
+                commands.try_recv().unwrap(),
+                ClientCommand::SelectTarget {
+                    spawn_id: Some(target),
+                    ..
+                } if target == id
+            ));
+            assert_eq!(right_clicked(&app), None, "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn the_use_key_never_reaches_an_item_on_the_ground_at_the_views_centre() {
         let (mut app, commands, ..) = target_app();
         scene_camera(&mut app);
-        body_at_origin(&mut app, OTHER, SpawnKind::Player);
+        app.world_mut()
+            .spawn((super::super::ground::testing_item(7), Transform::default()));
         press_use(&mut app);
-        assert!(matches!(
-            commands.try_recv().unwrap(),
-            ClientCommand::SelectTarget {
-                spawn_id: Some(OTHER),
-                ..
-            }
-        ));
+        // No pickup, and nothing else: only a door is reached (0x49812e).
+        assert!(commands.try_recv().is_err());
         assert_eq!(right_clicked(&app), None);
     }
 
