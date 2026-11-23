@@ -60,8 +60,14 @@ pub(crate) enum Question {
 }
 
 impl Question {
-    /// What the dialog says, in the client's own words.
-    fn text(self, names: &crate::spellbook::SpellNames, online: &OnlineState) -> String {
+    /// What the dialog says: the program's words where the installation
+    /// has them and a read names them, else the client's own.
+    pub(crate) fn text(
+        self,
+        names: &crate::spellbook::SpellNames,
+        online: &OnlineState,
+        messages: Option<&crate::hud::messages::Messages>,
+    ) -> String {
         match self {
             Self::DeleteCharacter { .. } => online.deletion.prompt().filter(|request| crate::character_delete::question(request) == self).map_or_else(String::new, |request| format!("Delete character {}? This may permanently remove the character. Choose Yes to confirm this exact name, or No to cancel.", request.name())),
             Self::DestroyItem { session_id, revision, item_id } => {
@@ -77,8 +83,11 @@ impl Question {
                 if world.session_id() == Some(session_id)
                     && world.coins_in(eq_client_core::money::CoinPlace::Cursor) == Some(coins)
                 {
-                    format!("Destroy {}? This cannot be undone.",
-                        crate::inventory::destruction::coins_text(coins))
+                    // The program asks with its own string (read R49-11 b).
+                    let ours = crate::inventory::destruction::coins_question(coins);
+                    messages.map_or_else(|| ours.clone(), |messages| {
+                        messages.official(crate::inventory::destruction::COINS_QUESTION, &[], &ours)
+                    })
                 } else {
                     String::new()
                 }
@@ -254,7 +263,7 @@ pub(crate) fn show(
                 .map(|invitations| invitations.question())
                 .unwrap_or_default(),
             question => question
-                .map(|question| question.text(&names, &online))
+                .map(|question| question.text(&names, &online, messages.as_deref()))
                 .unwrap_or_default(),
         },
     };

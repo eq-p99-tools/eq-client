@@ -2,16 +2,23 @@
 //! same controls and answer the ordinary confirmation dialog.
 //!
 //! With coins on the cursor and no item, the same control destroys the coins
-//! (checklist 6.512): one confirmation, then one command per kind, the most
-//! valuable kind first. How the Titanium program starts a coin destroy, and
-//! whether it asks first, is unread (R49-11); the confirmation is ours, a
-//! safeguard kept as item destroy keeps its own.
+//! (checklist 6.512), as the Titanium program's Destroy button does
+//! (`eqgame.exe` 0x517dc3 and 0x4be5fe, read R49-11):
+//! - It asks first, with the installation's string 0x80d, for 10 s; no
+//!   answer in that time is a No. The program skips the question when its
+//!   ini `Destroy` key is set; that key's option is row 6.512b, not built.
+//! - On Yes it destroys the first kind on the cursor, in the order platinum,
+//!   gold, silver, copper, whole: one command, as the program sends one move.
+//! - Departure, labelled (6.512c): the program then clears every kind on its
+//!   cursor, kinds it never told the server about included. This client
+//!   keeps those shown, as the server still holds them.
 use super::InventoryState;
 use crate::{
     confirm::{Asked, Question},
     online::OnlineState,
     outbox::Outbox,
 };
+use anyhow::Context;
 use bevy::prelude::*;
 use eq_client_core::{
     Capability, ClientCommand, Coins,
@@ -19,6 +26,7 @@ use eq_client_core::{
     money::{Coin, CoinDestroy, CoinPlace},
     world::ClientWorld,
 };
+use std::time::{Duration, Instant};
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Action {
@@ -40,6 +48,24 @@ pub(super) struct Destruction {
 struct CursorCoins {
     session_id: u64,
     coins: Coins,
+    /// When the question was asked, for its timeout ([`QUESTION_WAIT`]).
+    asked_at: Instant,
+}
+
+/// How long the program's destroy question waits for an answer: a timed
+/// dialog of 10 s (`eqgame.exe` 0x548460, read R49-11 b).
+const QUESTION_WAIT: Duration = Duration::from_secs(10);
+
+/// The kind the program destroys from these coins, whole: the first one
+/// there, the most valuable first (`eqgame.exe` 0x4be5fe, read R49-11 d).
+fn destroyed_kind(coins: Coins) -> Option<CoinDestroy> {
+    Coin::ALL
+        .into_iter()
+        .map(|coin| CoinDestroy {
+            coin,
+            amount: coins.of(coin),
+        })
+        .find(|destroy| destroy.amount > 0)
 }
 
 impl CursorCoins {
@@ -74,6 +100,7 @@ fn cursor_coins(world: &ClientWorld) -> Option<CursorCoins> {
     (!item && !coins.is_empty()).then_some(CursorCoins {
         session_id: world.session_id()?,
         coins,
+        asked_at: Instant::now(),
     })
 }
 
@@ -99,6 +126,31 @@ const fn coin_name(coin: Coin) -> &'static str {
         Coin::Copper => "copper",
     }
 }
+
+/// This client's words for the coin destroy question, where the installation
+/// lacks the program's own (0x80d): what the destroy takes, and what stays.
+pub(crate) fn coins_question(coins: Coins) -> String {
+    let Some(destroy) = destroyed_kind(coins) else {
+        return String::new();
+    };
+    let mut taken = Coins::default();
+    *taken.of_mut(destroy.coin) = destroy.amount;
+    let mut kept = coins;
+    *kept.of_mut(destroy.coin) = 0;
+    if kept.is_empty() {
+        format!("Destroy {}? This cannot be undone.", coins_text(taken))
+    } else {
+        format!(
+            "Destroy {}? This cannot be undone. {} stays on the cursor.",
+            coins_text(taken),
+            coins_text(kept)
+        )
+    }
+}
+
+/// The program's question before a coin destroy, with no arguments
+/// (`eqgame.exe` 0x517dc3, read R49-11 b).
+pub(crate) const COINS_QUESTION: u32 = 0x80d;
 
 /// What a server that doesn't take destroying coins answers the control.
 const COINS_UNOFFERED: &str = "This server does not take destroying coins.";
@@ -175,17 +227,16 @@ impl InventoryState {
         );
         self.actions.auto_store = false;
         self.actions.split = None;
-        self.actions.message = format!(
-            "Destroy {}? This cannot be undone.",
-            coins_text(coins.coins)
-        );
+        self.actions.message = coins_question(coins.coins);
         self.destruction.coins = Some(coins);
         Ok(())
     }
 
-    /// Destroys the coins the player agreed to, one command per kind, the
-    /// most valuable first. The session takes each from the cursor and says
-    /// where the coins are; a refusal is said by the outbox or the session.
+    /// Destroys the first kind of the coins the player agreed to, whole, in
+    /// one command, as the program sends one move (read R49-11 c, d). The
+    /// session takes it from the cursor; any other kinds stay there, shown
+    /// as the server holds them (6.512c). A refusal is said by the outbox or
+    /// the session.
     fn confirm_coins(
         &mut self,
         coins: CursorCoins,
@@ -200,39 +251,17 @@ impl InventoryState {
             coins.current(online.world()),
             "The coins on the cursor changed; select them again"
         );
-        // The session holds no destroy back (eq-network
-        // `two_kinds_destroyed_back_to_back_are_both_sent_with_nothing_held`),
-        // so every kind goes in this frame. Should one be refused here, the
-        // kinds already sent are gone: the line says which coins stay.
-        let mut sent = Coins::default();
-        for coin in Coin::ALL {
-            let amount = coins.coins.of(coin);
-            if amount == 0 {
-                continue;
-            }
-            if let Err(refusal) = outbox.post(online.world(), |stamp| ClientCommand::DestroyCoins {
+        let destroy = destroyed_kind(coins.coins).context("No coins on the cursor")?;
+        outbox
+            .post(online.world(), |stamp| ClientCommand::DestroyCoins {
                 session_id: stamp.session_id,
-                destroy: CoinDestroy { coin, amount },
+                destroy,
                 created: stamp.created,
-            }) {
-                let mut kept = coins.coins;
-                for coin in Coin::ALL {
-                    *kept.of_mut(coin) -= sent.of(coin);
-                }
-                anyhow::bail!(if sent.is_empty() {
-                    format!("{}; nothing was destroyed", refusal.text())
-                } else {
-                    format!(
-                        "{}; destroy sent for {}, but {} stays on the cursor",
-                        refusal.text(),
-                        coins_text(sent),
-                        coins_text(kept)
-                    )
-                });
-            }
-            *sent.of_mut(coin) = amount;
-        }
-        self.actions.message = format!("Destroy sent for {}", coins_text(coins.coins));
+            })
+            .map_err(|refusal| anyhow::anyhow!("{}; nothing was destroyed", refusal.text()))?;
+        let mut sent = Coins::default();
+        *sent.of_mut(destroy.coin) = destroy.amount;
+        self.actions.message = format!("Destroy sent for {}", coins_text(sent));
         Ok(())
     }
 
@@ -264,7 +293,7 @@ impl InventoryState {
         outbox: &Outbox,
         asked: &mut Asked,
     ) -> anyhow::Result<()> {
-        use anyhow::{Context, ensure};
+        use anyhow::ensure;
         if action == Action::Cancel {
             self.cancel_destruction(asked);
             self.actions.message.clear();
@@ -370,10 +399,13 @@ pub(crate) fn input(
     {
         action = Some(if yes { Action::Confirm } else { Action::Cancel });
     }
-    if let Some(coins) = state.destruction.coins
-        && let Some(yes) = asked.answer(coins.question())
-    {
-        action = Some(if yes { Action::Confirm } else { Action::Cancel });
+    if let Some(coins) = state.destruction.coins {
+        if let Some(yes) = asked.answer(coins.question()) {
+            action = Some(if yes { Action::Confirm } else { Action::Cancel });
+        } else if action.is_none() && coins.asked_at.elapsed() >= QUESTION_WAIT {
+            // The program's dialog closes unanswered after 10 s, as a No.
+            action = Some(Action::Cancel);
+        }
     }
     if !invalid && let Some(action) = action {
         if let Err(error) = state.destroy_action(action, &online, &outbox, &mut asked) {
@@ -519,7 +551,7 @@ mod tests {
         );
         assert_eq!(
             app.world().resource::<InventoryState>().actions.message,
-            "Destroy 3 platinum and 2 gold? This cannot be undone."
+            "Destroy 3 platinum? This cannot be undone. 2 gold stays on the cursor."
         );
         // No keeps the coins and sends nothing.
         crate::clicks::testing::click(&mut app, no);
@@ -532,11 +564,13 @@ mod tests {
         );
         assert!(app.world().resource::<Asked>().question().is_none());
         assert_eq!(destroyed(&rx), []);
-        // Yes sends one destroy per kind, the most valuable first, once.
+        // Yes sends one destroy, of the first kind, the most valuable first,
+        // once, as the program sends one move (read R49-11 d). The gold
+        // stays on the cursor as the server holds it (6.512c).
         crate::clicks::testing::click(&mut app, select);
         crate::clicks::testing::click(&mut app, yes);
         app.update();
-        assert_eq!(destroyed(&rx), [(Coin::Platinum, 3), (Coin::Gold, 2)]);
+        assert_eq!(destroyed(&rx), [(Coin::Platinum, 3)]);
         app.update();
         assert_eq!(destroyed(&rx), []);
         assert!(
@@ -548,10 +582,10 @@ mod tests {
     }
 
     #[test]
-    fn a_kind_refused_after_another_was_sent_says_which_coins_stay() {
-        // A queue with room for one command: platinum goes, gold is refused.
+    fn a_refused_destroy_says_nothing_was_destroyed() {
+        // A queue with no room: the one destroy is refused.
         let online = with_cursor_coins(platinum_and_gold(), true);
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let (tx, rx) = std::sync::mpsc::sync_channel(0);
         let outbox = Outbox::new(Some(tx));
         let (mut state, mut asked) = (InventoryState::default(), Asked::default());
         state
@@ -562,10 +596,97 @@ mod tests {
             .unwrap_err();
         assert_eq!(
             refusal.to_string(),
-            "Too many requests at once; try again; destroy sent for 3 platinum, but 2 gold stays on the cursor"
+            "Too many requests at once; try again; nothing was destroyed"
         );
-        assert_eq!(destroyed(&rx), [(Coin::Platinum, 3)]);
+        assert_eq!(destroyed(&rx), []);
         assert!(!state.destruction.selecting());
+    }
+
+    #[test]
+    fn an_unanswered_question_closes_after_ten_seconds_as_a_no() {
+        // The program's dialog is timed, 10 s (read R49-11 b). A script that
+        // answers nothing gets the same No.
+        let (tx, rx) = std::sync::mpsc::sync_channel(8);
+        let mut app = crate::testing::app();
+        app.insert_resource(with_cursor_coins(platinum_and_gold(), true))
+            .insert_resource(Outbox::new(Some(tx)))
+            .init_resource::<InventoryState>()
+            .init_resource::<Asked>()
+            .add_systems(Update, input);
+        app.world_mut()
+            .resource_mut::<crate::windows::Shown>()
+            .open(crate::windows::WindowId::Inventory);
+        let select = app
+            .world_mut()
+            .spawn((Button, Interaction::None, Node::default(), Action::Select))
+            .id();
+        crate::clicks::testing::click(&mut app, select);
+        let asked_at = |app: &mut App, ago: Duration| {
+            let mut state = app.world_mut().resource_mut::<InventoryState>();
+            let coins = state.destruction.coins.as_mut().unwrap();
+            coins.asked_at = Instant::now().checked_sub(ago).unwrap();
+        };
+        asked_at(&mut app, Duration::from_millis(9_900));
+        app.update();
+        assert!(app.world().resource::<Asked>().question().is_some());
+        asked_at(&mut app, QUESTION_WAIT);
+        app.update();
+        assert!(app.world().resource::<Asked>().question().is_none());
+        assert!(
+            !app.world()
+                .resource::<InventoryState>()
+                .destruction
+                .selecting()
+        );
+        assert_eq!(destroyed(&rx), []);
+    }
+
+    #[test]
+    fn the_dialog_asks_with_the_installations_string_else_our_words() {
+        let online = with_cursor_coins(platinum_and_gold(), true);
+        let names = crate::spellbook::SpellNames::default();
+        let question = Question::DestroyCoins {
+            session_id: 7,
+            coins: platinum_and_gold(),
+        };
+        // A synthetic stand-in for string 0x80d.
+        let messages =
+            crate::hud::messages::Messages::parse("EQST0002\n0 1\n2061 Synthetic coin question?\n");
+        assert_eq!(
+            question.text(&names, &online, Some(&messages)),
+            "Synthetic coin question?"
+        );
+        let ours = "Destroy 3 platinum? This cannot be undone. 2 gold stays on the cursor.";
+        assert_eq!(question.text(&names, &online, None), ours);
+        let lacking = crate::hud::messages::Messages::parse("EQST0002\n0 0\n");
+        assert_eq!(question.text(&names, &online, Some(&lacking)), ours);
+    }
+
+    #[test]
+    fn the_first_kind_on_the_cursor_is_the_one_destroyed_whole() {
+        // This client's own coin controls hold one kind on the cursor at a
+        // time (`coins::click` puts the cursor's coins down first), so two
+        // kinds come only from what the server says the cursor holds.
+        let coins = |platinum, gold, silver, copper| eq_client_core::Coins {
+            platinum,
+            gold,
+            silver,
+            copper,
+        };
+        let first = |coins| destroyed_kind(coins).map(|kind| (kind.coin, kind.amount));
+        assert_eq!(first(coins(0, 0, 0, 5)), Some((Coin::Copper, 5)));
+        assert_eq!(first(coins(0, 0, 3, 5)), Some((Coin::Silver, 3)));
+        assert_eq!(first(coins(0, 2, 3, 5)), Some((Coin::Gold, 2)));
+        assert_eq!(first(coins(1, 2, 3, 5)), Some((Coin::Platinum, 1)));
+        assert_eq!(first(coins(0, 0, 0, 0)), None);
+        assert_eq!(
+            coins_question(coins(0, 0, 0, 5)),
+            "Destroy 5 copper? This cannot be undone."
+        );
+        assert_eq!(
+            coins_question(coins(0, 2, 3, 0)),
+            "Destroy 2 gold? This cannot be undone. 3 silver stays on the cursor."
+        );
     }
 
     #[test]
