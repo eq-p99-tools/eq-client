@@ -570,20 +570,21 @@ mod tests {
             );
             assert!(reached(&format!("/{name} 1")), "{name}");
         }
-        // The table's shortest words for them reach them too.
+        // Shorter words the table gives them reach them too, as the
+        // program's parser does.
         for line in [
-            "/clearc",
-            "/showsp",
-            "/combatm",
+            "/clear",
+            "/shows",
+            "/combat",
             "/particle",
-            "/mousesp",
+            "/mouse",
             "/chatf",
-            "/userc",
+            "/user",
         ] {
             assert!(reached(line), "{line}");
         }
-        // A shorter word the table gives an earlier name never does.
-        for line in ["/c", "/clear", "/show", "/combat", "/mouse", "/user"] {
+        // A word the table gives an earlier name never does.
+        for line in ["/c", "/co", "/cha", "/chat", "/show"] {
             assert!(!reached(line), "{line}");
         }
     }
