@@ -274,8 +274,8 @@ pub(super) fn update(
     ) {
         report(LiquidHazard::Drowning, amount);
     }
-    if let Some(amount) = state.heat.advance(now, &online, qol, &spells, movement) {
-        report(LiquidHazard::Lava, amount);
+    if let Some((hazard, amount)) = state.heat.advance(now, &online, qol, &spells, movement) {
+        report(hazard, amount);
     }
     match (state.air().is_some(), shown.is_open(WindowId::Breath)) {
         (true, false) => shown.open(WindowId::Breath),
@@ -741,6 +741,7 @@ mod tests {
         player.titanium_environment = Some(TitaniumEnvironment {
             zone_id: 27,
             base_fire_resistance: 25,
+            base_cold_resistance: 25,
             has_alternate_advancement: false,
         });
         testing::enter_with(

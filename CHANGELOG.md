@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Velious water's cold as the Titanium program reports it (reads R49-3 b, R49-3c, R49-3d and R49-26; checklist 6.491d). This repins eq-network to #418's cold report.
+  - Each zone region keeps the program's kind for its tag (`RegionKind`: 5 water, 6 slime, 7 lava, 8 Velious water, 9 and 10 the other waters), with `ZoneRegions::kind_at`. The breathing medium is now derived from it, as before for every tag.
+  - With the body's origin in Velious water, the once-a-second feet check lava's heat uses reports cold, type 246, by the cold total: 50 − cold / 3, floor 10. A check reports one feet hazard at most, and only where the session offers `ColdWater`.
+  - The cold total follows the program's: the profile base (byte 12872; a Barbarian's 35, an Iksar's 10 lower), effects 47 and 111, the Ranger and Beastlord term, and worn items' cold (field 16). The resist cap of 500 can't change a cold amount and isn't applied.
+  - Rune absorbs aren't taken off the amount for any hazard yet: a labelled departure, and the server applies its own.
 - A Bard's song holds nothing back, as the Titanium program's doesn't (read R49-21; gap 3.5, checklist 6.442, 6.542). This repins eq-network to 33057d9 (#413, and #407's server filters), on P99 and Titanium EQEmu. The session now tells the client which song a Bard is singing (`WorldEvent::Singing`), and the client's own gates follow it:
   - **A gem press while singing** goes to the session, whatever the gem's timer or the mana, and the session stops the song and casts nothing, as the program's gem click does. A forget goes too.
   - **An item use while singing** isn't refused by the client; the session lets it go alongside the song.
