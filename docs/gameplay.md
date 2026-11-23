@@ -291,6 +291,21 @@ remain disabled. Coin moves use a local ledger because ordinary transfers have
 no acceptance reply; compare authoritative balances after re-admission when
 uncertain, rather than resending a transfer.
 
+### Apply Poison
+
+Right-click a poison (item type 42) in a top-level slot, the cursor included, to apply it, as the Titanium program does it (recording checklist 6.493):
+
+- Without the Apply Poison skill, you are told so and nothing else happens.
+- Standing, you sit down. If you still aren't sitting (ducking, lying or feigning), you are told to sit.
+- Your poison starts going on, with the program's line. After 10 s seated, the request goes to the server.
+- Standing up, or any other posture change before then, stops it with the program's line, and nothing is sent. Zoning drops it without a line.
+- A click while one is going on or waiting for the server's answer is ignored, as the program ignores it.
+- The server decides whether it takes (class, weapon, level) and removes the poison either way. Its answer prints the program's line for success or failure.
+
+The lines come from your installation's `eqstr_us.txt`: the start, the refusals and the stop in the program's colour 0x111, and the answer in colour 0x10e. A poison inside a bag isn't applied by a right-click, because the program only uses top-level slots this way. Alt+right-click and hotkeys keep their ordinary item use.
+
+The program's wait is effect 234's total in ms, from your buffs (a type-4 record's taken away) and the AAs your class may use at your level, when that isn't 0; worn items don't count (read R49-1f, 6.493b). This client sums the same and tells the session, which then waits that long. Where it can't know the total (a buff whose spell your installation lacks, a formula or bard modifier it doesn't evaluate, an AA not yet described, or a spell that landed without a slot), the wait stays 10 s. A total below 0 never ends the wait, as in the program. The EQMac servers (Quarm, TAKP) take the same flow; that is inferred, because their program isn't read.
+
 ## Spells, buffs and the hotbar
 
 The spellbook supports scribing from a cursor scroll, memorizing into eight gems,
@@ -449,30 +464,46 @@ original client's handling is read (recording checklist 6.528).
 
 ## Petitions, bug reports and feedback
 
-`/petition words`, `/bugreport words` (also `/bug`) and `/feedback words`
-send a report to the server's staff. A typed line sends it, whoever types
-it: the keyboard, a social's line or a script's `slash()` step, each with
-the same checks and pace. A button's game command answers that the client
-does not take the command that way yet.
+`/petition words`, `/guidehelp words`, `/bugreport words` (also `/bug`) and
+`/feedback words` send a report to the server's staff. A typed line sends
+it, whoever types it: the keyboard, a social's line or a script's `slash()`
+step, each with the same checks and pace. A button's game command answers
+that the client does not take the command that way yet.
 
+On Titanium servers these follow the official client (read R49-23,
+recording checklist 6.511), in the installation's own lines:
+- `/petition` sends its words and echoes them in the official line. With no
+  words it prints the official line for that and sends nothing.
+  `/guidehelp` is the same, with its own two lines.
+- Where the world turns the petition window on, the official client shows
+  its petition window instead and ignores the words. Which window that is
+  is unread, so this client sends the words as above: a departure.
+- The official `/bugreport` and `/feedback` open a window and ignore the
+  words. This client has no such windows yet, so the **Typed Reports**
+  setting (on by default until the windows are built) sends the words
+  instead. A bug report then prints the official sent line, or its empty-box
+  line with no words; feedback prints nothing, as the official window does.
+  With the setting off, the words are ignored and a line says there is no
+  window yet.
+
+Elsewhere, or on any server:
 - A bug report's first word may name its category with a colon, such as
   `/bug pathing: the guard walks into the wall`. A word that names no
   category, or one without its colon, leaves the whole line as the text,
-  under Other. The report carries the player's place and heading, and the
-  selected entity where there is one.
-- A line with nothing to say sends nothing and answers
-  `Use /petition with what to say.`
+  under Other. Bug reports and feedback carry the player's place and
+  heading, and a bug report the selected entity where there is one.
+- On Mac-era servers, whose official client is unread, a line with nothing
+  to say sends nothing and answers `Use /petition with what to say.`, and
+  this client says `Your petition was sent.` or `Your bug report was sent.`
+  in its own words.
 - One report of a kind is sent at a time: another of the same kind within
   ten seconds is refused with a line asking to wait. Text too long for the
   server's field is refused, never cut.
-- Stock EQEmu says nothing when it takes a petition or a bug report, so
-  this client says `Your petition was sent.` or `Your bug report was sent.`
-  in its own words. The official client's windows and lines for these are
-  unread (recording checklist 6.511).
 
-Only stock EQEmu sessions offer petitions and bug reports. Feedback, and
-every report on Project 1999, Quarm and TAKP, waits for its own live check;
-there the command answers as it does today.
+Stock EQEmu sessions offer all three; it drops feedback, as it drops the
+official client's. Quarm and TAKP offer petitions and bug reports. Project
+1999 offers none of them until its own attended check; there the command
+answers as it does today.
 
 ## Social hotbuttons
 
@@ -639,9 +670,10 @@ checks; selecting alone does not attack or cast.
 
 Titanium See Invisible can reveal an ordinary invisible player or NPC when
 the worker knows the effect and the spawn's appearance. Unclassified
-invisibility values remain hidden. Installed lights illuminate supported
-Titanium interiors, and known race and buff effects can change low-light
-vision. **See the World Clearly** and **Show Invisible Entities** are local
+invisibility values remain hidden. Titanium zones without a sky are lit as the
+original lights them: by each vertex's baked light, the zone's ambient, and up
+to three nearby placed or carried lights (see [Zone lighting](zone-lighting.md)).
+Known race and buff effects can change low-light vision. **See the World Clearly** and **Show Invisible Entities** are local
 presentation settings.
 
 On Titanium EQEmu and Project 1999, received server popups show the supplied
