@@ -113,6 +113,37 @@ const SHOW_INVENTORY_SCOPES: [&str; 13] = [
     "trade", "trib", "world",
 ];
 
+/// A script's AA request (checklist 6.569). The session alone decides
+/// whether it goes; the client checks nothing about the rank or the points.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AaRequest {
+    /// `train_aa(RANK_ID)`: buy the rank with this definition id; on `EQMac`
+    /// the Mac AA id. Spends points, which nothing gives back.
+    Train(u32),
+    /// `activate_aa(RANK_ID)`: use an owned rank's ability, with no target.
+    Activate(u32),
+    /// `aa_split(PERCENT)`: the share of experience that goes to AAs, 0
+    /// (off) to 100.
+    Split(u8),
+}
+
+/// A script's task request (checklist 6.560), in this client's own words:
+/// the same requests the task windows' buttons make. The session alone
+/// decides whether each goes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TaskRequest {
+    /// `accept_task(TASK_ID)`: take this task from the current offer.
+    Accept(u32),
+    /// `decline_tasks()`: decline the current offer.
+    Decline,
+    /// `cancel_task("quest", SLOT)` or `cancel_task("task")`: cancel the
+    /// journal entry in this slot, with no question asked.
+    Cancel(eq_client_core::tasks::TaskSlot),
+    /// `task_history(INDEX)`: ask for the steps of the finished task at
+    /// this index in the finished list.
+    History(u32),
+}
+
 /// One scripted action.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Step {
@@ -152,6 +183,11 @@ pub enum Step {
     WaitDead(Duration),
     /// Runs a game slash command such as `/camp`; chat text is refused.
     Slash(String),
+    /// Asks the session for one AA request, in this client's own script words
+    /// (checklist 6.569): no official slash form is read yet (R49-40b).
+    AlternateAdvancement(AaRequest),
+    /// Answers a task offer or asks the journal, as its windows do.
+    Task(TaskRequest),
     /// Edit or run a social via the ordinary chat controls in a local session.
     Social(String),
     /// Sends an allowed `#` command, such as `summon`, to a local `EQEmu` server;
@@ -625,6 +661,13 @@ pub(crate) const COMMANDS: &[&str] = &[
     "wait_dead",
     "slash",
     "boat",
+    "train_aa",
+    "activate_aa",
+    "aa_split",
+    "accept_task",
+    "decline_tasks",
+    "cancel_task",
+    "task_history",
     "social",
     "gm",
     "chat",
@@ -685,6 +728,13 @@ pub(super) fn parse_words(command: &str, rest: &[&str]) -> Result<Step, String> 
             .ok_or_else(|| format!("expected a number from {low} to {high}"))
     };
     let chord = |keys: &str| keys_from(keys).ok_or_else(|| String::from("unknown key"));
+    // An AA definition id; 0 names none.
+    let rank_id = |id: &str| {
+        id.parse::<u32>()
+            .ok()
+            .filter(|id| *id != 0)
+            .ok_or("expected an AA rank id from 1")
+    };
     // A world container that combines: a station, not a bag that only holds things.
     let station = |kind: &str| {
         kind.parse::<u8>()
@@ -718,6 +768,46 @@ pub(super) fn parse_words(command: &str, rest: &[&str]) -> Result<Step, String> 
         ("wait_dead", [duration]) => Step::WaitDead(millis(duration, MAX_WAIT)?),
         ("slash", words) => parse_slash(words)?,
         ("boat", [intent @ ("acquire" | "release")]) => Step::Slash(format!("/boat {intent}")),
+        ("train_aa", [id]) => Step::AlternateAdvancement(AaRequest::Train(rank_id(id)?)),
+        ("activate_aa", [id]) => Step::AlternateAdvancement(AaRequest::Activate(rank_id(id)?)),
+        ("accept_task", [id]) => Step::Task(TaskRequest::Accept(
+            id.parse::<u32>()
+                .ok()
+                .filter(|id| *id != 0)
+                .ok_or("expected a task id from 1")?,
+        )),
+        ("decline_tasks", []) => Step::Task(TaskRequest::Decline),
+        ("cancel_task", ["task"]) => {
+            Step::Task(TaskRequest::Cancel(eq_client_core::tasks::TaskSlot {
+                kind: eq_client_core::tasks::TaskKind::Task,
+                slot: 0,
+            }))
+        }
+        ("cancel_task", ["quest", slot]) => {
+            let kind = eq_client_core::tasks::TaskKind::Quest;
+            Step::Task(TaskRequest::Cancel(eq_client_core::tasks::TaskSlot {
+                kind,
+                slot: slot
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|slot| *slot < kind.slots())
+                    .ok_or("cancel_task takes a quest slot from 0 to 18")?,
+            }))
+        }
+        ("task_history", [index]) => Step::Task(TaskRequest::History(
+            index
+                .parse::<u32>()
+                .ok()
+                .filter(|index| *index < 50)
+                .ok_or("task_history takes an index from 0 to 49")?,
+        )),
+        ("aa_split", [percent]) => Step::AlternateAdvancement(AaRequest::Split(
+            percent
+                .parse::<u8>()
+                .ok()
+                .filter(|percent| *percent <= 100)
+                .ok_or("aa_split takes a percent from 0 (off) to 100")?,
+        )),
         ("social", operation) if !operation.is_empty() => {
             Step::Social(format!("/social {}", operation.join(" ")))
         }
@@ -1712,6 +1802,80 @@ mod tests {
             .map(|(list, _)| list.split(r"\|").collect::<Vec<_>>())
             .unwrap();
         assert_eq!(list, super::COMMANDS);
+    }
+
+    #[test]
+    fn aa_steps_are_our_own_words_with_bounded_arguments() {
+        use super::AaRequest;
+        let base = Path::new("private");
+        assert_eq!(
+            parse(
+                "train_aa(42)\nactivate_aa(4294967295)\naa_split(0)\naa_split(100)\n",
+                base
+            )
+            .unwrap(),
+            [
+                Step::AlternateAdvancement(AaRequest::Train(42)),
+                Step::AlternateAdvancement(AaRequest::Activate(u32::MAX)),
+                Step::AlternateAdvancement(AaRequest::Split(0)),
+                Step::AlternateAdvancement(AaRequest::Split(100)),
+            ]
+        );
+        for bad in [
+            "train_aa()",
+            "train_aa(0)",
+            "train_aa(-1)",
+            "train_aa(42, 1)",
+            "activate_aa(42, 7)",
+            "activate_aa(\"Fleet\")",
+            "aa_split(101)",
+            "aa_split()",
+        ] {
+            let source = format!("report(\"before\")\n{bad}\nreport(\"after\")\n");
+            let error = super::super::Program::parse(&source, base).unwrap_err();
+            assert_eq!(error.line, Some(2), "{bad}");
+        }
+    }
+
+    #[test]
+    fn task_steps_are_our_own_words_with_bounded_arguments() {
+        use super::TaskRequest;
+        use eq_client_core::tasks::{TaskKind, TaskSlot};
+        let base = Path::new("private");
+        assert_eq!(
+            parse(
+                "accept_task(1000)\ndecline_tasks()\ncancel_task(\"quest\", 18)\ncancel_task(\"task\")\ntask_history(49)\n",
+                base
+            )
+            .unwrap(),
+            [
+                Step::Task(TaskRequest::Accept(1000)),
+                Step::Task(TaskRequest::Decline),
+                Step::Task(TaskRequest::Cancel(TaskSlot {
+                    kind: TaskKind::Quest,
+                    slot: 18
+                })),
+                Step::Task(TaskRequest::Cancel(TaskSlot {
+                    kind: TaskKind::Task,
+                    slot: 0
+                })),
+                Step::Task(TaskRequest::History(49)),
+            ]
+        );
+        for bad in [
+            "accept_task()",
+            "accept_task(0)",
+            "decline_tasks(1)",
+            "cancel_task(\"quest\", 19)",
+            "cancel_task(\"quest\")",
+            "cancel_task(\"task\", 0)",
+            "cancel_task(3)",
+            "task_history(50)",
+        ] {
+            let source = format!("report(\"before\")\n{bad}\nreport(\"after\")\n");
+            let error = super::super::Program::parse(&source, base).unwrap_err();
+            assert_eq!(error.line, Some(2), "{bad}");
+        }
     }
 
     #[test]

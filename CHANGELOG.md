@@ -34,12 +34,22 @@
   is our own until the skin's `TaskSelectWnd` controls are listed. It shows
   each offered task's title, duration, description and shown steps.
   Accept and Decline go through the outbox with the current admission
-  where `Capability::Tasks` is offered, and only from the window's buttons.
-  Elsewhere the offer is read only. Step words built from a step's type,
+  where `Capability::Tasks` is offered. Elsewhere the offer is read only.
+  Scripts can make the same requests, since a script may do whatever the
+  player can (Adam, 11-23). `accept_task(TASK_ID)` and `decline_tasks()`
+  answer the current offer and close it, `cancel_task("quest", SLOT)` or
+  `cancel_task("task")` cancels a journal entry without asking, and
+  `task_history(INDEX)` asks for a finished task's steps. Each step posts
+  one request for the current admission, and the session decides. Step words built from a step's type,
   target and goal, and the duration's words, are ours (inferred, R49-38).
   The step-done, completed and failed lines wait for that read, since
   EQEmu sends its own. Task words appear in the window only, never in the
   logs.
+- Scripts can ask for AA requests (checklist 6.569). The new steps are `train_aa(RANK_ID)`, `activate_aa(RANK_ID)` and `aa_split(PERCENT)`, in this client's own words: the official `/alternateadv` subwords are unread (R49-40b), so they wait.
+  - Each step posts one `TrainAlternateAdvancement`, `ActivateAlternateAdvancement` (no target) or `SetAlternateAdvancementSplit` command for the current admission, then moves on. It never waits for the server and never retries.
+  - The client checks nothing about the rank or the points: the session decides, and its refusal is said in chat.
+  - Every server type still refuses them as not offered until the AA live rows pass. Adam said scripts may train.
+
 - Keep every received AA fact for display (checklist 6.565). The client's
   `alternate_advancement::State` now holds, besides Titanium's selections
   and definitions, the profile's points, the latest AA experience update,

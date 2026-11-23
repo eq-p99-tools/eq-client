@@ -2167,13 +2167,19 @@ pub(super) fn drive(
             // The step waits for the world's answer to this request.
             script.created_before = online.world().creation().map(|last| last.count);
         }
-        Step::Slash(_) | Step::Gm(_) | Step::Chat(_) if !online.in_world() => {
+        Step::Slash(_)
+        | Step::Gm(_)
+        | Step::Chat(_)
+        | Step::AlternateAdvancement(_)
+        | Step::Task(_)
+            if !online.in_world() =>
+        {
             // The worker discards commands while zoning, dead or disconnected.
             script.stop(
                 &mut keys,
                 &mut mouse,
                 concat!(
-                    "slash, gm and chat steps need a character in the world; ",
+                    "slash, gm, chat, AA and task steps need a character in the world; ",
                     "wait_online or wait_zone first"
                 ),
             );
@@ -2350,6 +2356,24 @@ pub(super) fn drive(
                 );
             } else if let Err(reason) = chat.compose_owned_link(*slot, &online) {
                 script.stop(&mut keys, &mut mouse, &reason);
+            }
+            return;
+        }
+        Step::Task(request) => {
+            // One request and done, as a window's button makes it.
+            if let Err(error) =
+                task_request(*request, script.chat_admission(), &observed.1, &mut online)
+            {
+                script.stop(&mut keys, &mut mouse, &error);
+            }
+            return;
+        }
+        Step::AlternateAdvancement(request) => {
+            // One command and done: the session decides, and its refusal is
+            // said in chat; the step never waits on the server or retries.
+            if let Err(error) = aa_request(*request, script.chat_admission(), &observed.1, &online)
+            {
+                script.stop(&mut keys, &mut mouse, &error);
             }
             return;
         }
@@ -2834,6 +2858,108 @@ fn answered(
 /// reported focus counts.
 fn may_run(unattended: bool, reported_focus: Option<bool>, window_focused: bool) -> bool {
     unattended || (reported_focus == Some(true) && window_focused)
+}
+
+/// Posts a script's task request for this admission, or says why it can't.
+/// An answer closes the offer it answers, as the offer window's does.
+fn task_request(
+    request: parse::TaskRequest,
+    admission: Option<u64>,
+    outbox: &crate::outbox::Outbox,
+    online: &mut crate::online::OnlineState,
+) -> Result<(), String> {
+    use eq_client_core::ClientCommand;
+    let world = online.world();
+    if admission.is_some_and(|admission| world.session_id() != Some(admission)) {
+        return Err("the task step's admission has ended".into());
+    }
+    let outbox = outbox.for_script(admission);
+    let refused = |refusal: crate::outbox::Refusal| refusal.text().to_owned();
+    match request {
+        parse::TaskRequest::Accept(task_id) => {
+            let offer = world.task_offer().ok_or("no task is offered")?;
+            if !offer
+                .offers
+                .tasks
+                .iter()
+                .any(|task| task.task_id == task_id)
+            {
+                return Err(format!("task {task_id} isn't offered"));
+            }
+            let serial = offer.serial;
+            outbox
+                .post(world, |stamp| ClientCommand::AcceptTask {
+                    session_id: stamp.session_id,
+                    task_id,
+                    created: stamp.created,
+                })
+                .map_err(refused)?;
+            online.close_task_offer(serial);
+        }
+        parse::TaskRequest::Decline => {
+            let serial = world.task_offer().ok_or("no task is offered")?.serial;
+            outbox
+                .post(world, |stamp| ClientCommand::DeclineTasks {
+                    session_id: stamp.session_id,
+                })
+                .map_err(refused)?;
+            online.close_task_offer(serial);
+        }
+        parse::TaskRequest::Cancel(at) => outbox
+            .post(world, |stamp| ClientCommand::CancelTask {
+                session_id: stamp.session_id,
+                at,
+                created: stamp.created,
+            })
+            .map_err(refused)?,
+        parse::TaskRequest::History(index) => outbox
+            .post(world, |stamp| ClientCommand::AskTaskHistory {
+                session_id: stamp.session_id,
+                index,
+                created: stamp.created,
+            })
+            .map_err(refused)?,
+    }
+    Ok(())
+}
+
+/// Posts a script's AA request for this admission, or says why it can't.
+fn aa_request(
+    request: parse::AaRequest,
+    admission: Option<u64>,
+    outbox: &crate::outbox::Outbox,
+    online: &crate::online::OnlineState,
+) -> Result<(), String> {
+    use eq_client_core::ClientCommand;
+    let world = online.world();
+    if admission.is_some_and(|admission| world.session_id() != Some(admission)) {
+        return Err("the AA step's admission has ended".into());
+    }
+    outbox
+        .for_script(admission)
+        .post(world, |stamp| {
+            let session_id = stamp.session_id;
+            match request {
+                parse::AaRequest::Train(rank_id) => ClientCommand::TrainAlternateAdvancement {
+                    session_id,
+                    rank_id,
+                },
+                parse::AaRequest::Activate(rank_id) => {
+                    ClientCommand::ActivateAlternateAdvancement {
+                        session_id,
+                        rank_id,
+                        target: None,
+                    }
+                }
+                parse::AaRequest::Split(percentage) => {
+                    ClientCommand::SetAlternateAdvancementSplit {
+                        session_id,
+                        percentage,
+                    }
+                }
+            }
+        })
+        .map_err(|refusal| refusal.text().to_owned())
 }
 
 /// The request for a validated local GM command. Fixture cleanup carries
@@ -4029,6 +4155,123 @@ mod tests {
     mod world_input;
     use super::*;
     use eq_client_assets::ui::InstalledClient;
+
+    #[test]
+    fn a_task_step_posts_one_request_and_an_answer_closes_the_offer() {
+        use eq_client_core::{
+            ClientCommand, WorldEvent,
+            tasks::{OfferedTask, TaskKind, TaskOffers, TaskSlot},
+        };
+        use parse::TaskRequest;
+        let mut online = crate::online::OnlineState::new(true);
+        let (tx, rx) = std::sync::mpsc::sync_channel(8);
+        let outbox = crate::outbox::Outbox::new(Some(tx));
+        assert!(task_request(TaskRequest::Decline, None, &outbox, &mut online).is_err());
+        crate::online::testing::admit(&mut online, 3, crate::online::testing::player(7));
+        // No offer: an answer is refused and nothing leaves.
+        assert!(task_request(TaskRequest::Accept(1000), None, &outbox, &mut online).is_err());
+        let offer = || WorldEvent::TasksOffered {
+            session_id: 3,
+            offers: TaskOffers {
+                kind: TaskKind::Quest,
+                giver: 77,
+                tasks: vec![OfferedTask {
+                    task_id: 1000,
+                    duration_seconds: 0,
+                    duration_code: 0,
+                    title: "Synthetic".into(),
+                    description: String::new(),
+                    steps: vec![],
+                }],
+            },
+        };
+        crate::online::testing::news(&mut online, [offer()]);
+        assert!(task_request(TaskRequest::Accept(999), None, &outbox, &mut online).is_err());
+        assert!(rx.try_recv().is_err());
+        task_request(TaskRequest::Accept(1000), None, &outbox, &mut online).unwrap();
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            ClientCommand::AcceptTask {
+                session_id: 3,
+                task_id: 1000,
+                ..
+            }
+        ));
+        assert!(online.world().task_offer().is_none());
+        crate::online::testing::news(&mut online, [offer()]);
+        task_request(TaskRequest::Decline, None, &outbox, &mut online).unwrap();
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            ClientCommand::DeclineTasks { session_id: 3 }
+        ));
+        assert!(online.world().task_offer().is_none());
+        let quest = TaskSlot {
+            kind: TaskKind::Quest,
+            slot: 3,
+        };
+        task_request(TaskRequest::Cancel(quest), None, &outbox, &mut online).unwrap();
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            ClientCommand::CancelTask { session_id: 3, at, .. } if at == quest
+        ));
+        task_request(TaskRequest::History(2), None, &outbox, &mut online).unwrap();
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            ClientCommand::AskTaskHistory {
+                session_id: 3,
+                index: 2,
+                ..
+            }
+        ));
+        // Another admission's step sends nothing.
+        assert!(task_request(TaskRequest::History(2), Some(2), &outbox, &mut online).is_err());
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn an_aa_step_posts_one_command_for_this_admission() {
+        use eq_client_core::ClientCommand;
+        use parse::AaRequest;
+        let mut online = crate::online::OnlineState::new(true);
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let outbox = crate::outbox::Outbox::new(Some(tx));
+        // Before admission nothing leaves.
+        assert!(aa_request(AaRequest::Train(42), None, &outbox, &online).is_err());
+        assert!(rx.try_recv().is_err());
+        crate::online::testing::admit(&mut online, 3, crate::online::testing::player(7));
+        for (request, expected) in [
+            (
+                AaRequest::Train(42),
+                ClientCommand::TrainAlternateAdvancement {
+                    session_id: 3,
+                    rank_id: 42,
+                },
+            ),
+            (
+                AaRequest::Activate(42),
+                ClientCommand::ActivateAlternateAdvancement {
+                    session_id: 3,
+                    rank_id: 42,
+                    target: None,
+                },
+            ),
+            (
+                AaRequest::Split(0),
+                ClientCommand::SetAlternateAdvancementSplit {
+                    session_id: 3,
+                    percentage: 0,
+                },
+            ),
+        ] {
+            assert_eq!(aa_request(request, Some(3), &outbox, &online), Ok(()));
+            assert_eq!(rx.try_recv().unwrap(), expected);
+            // One command: the step neither repeats nor waits.
+            assert!(rx.try_recv().is_err());
+        }
+        // A step written for an admission that has ended sends nothing.
+        assert!(aa_request(AaRequest::Train(42), Some(2), &outbox, &online).is_err());
+        assert!(rx.try_recv().is_err());
+    }
 
     #[test]
     fn station_steps_require_the_station_offer_even_when_carried_combines_are_offered() {

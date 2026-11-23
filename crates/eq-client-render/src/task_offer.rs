@@ -3,8 +3,8 @@
 //! chosen one's duration, description and shown steps, and Accept and
 //! Decline (checklist 6.560).
 //!
-//! Only the player's click on this window answers an offer: no script,
-//! social or hotbutton reaches Accept or Decline. Where the admission
+//! A script answers it with the same requests (`accept_task`,
+//! `decline_tasks`), since a script may do whatever the player can. Where the admission
 //! doesn't offer [`Capability::Tasks`] the offer is shown read only, with a
 //! line saying it can't be answered here. An answer, the next offer and the
 //! zone's end each close it. The task's words are shown here only, never
