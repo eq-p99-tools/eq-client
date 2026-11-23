@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Reach a Titanium door from the point clicked on it (checklist 6.530,
+  read R16b and R16e). A mouse click on a door, or a script's click step,
+  sends where the ray met the door as drawn (`ClickDoor.point`, eq-network
+  #358), and the session admits it within the player's size and 20 in 3-D,
+  as the program does, so a lift resting above can be called from its deck
+  by the part clicked. A click out of reach is no longer dropped without a
+  word: the session refuses it and the chat shows the program's line 1462.
+  The Use key and a script walk's door opening send no point and keep the
+  stricter reach to the door's origin; the Use key's view-centre ray (read
+  R49-19) is its own change. `EQMac` doors are unchanged. The strafe pace
+  (6.540) that this change once carried is already on main.
+
 - Destroy the coins on the cursor (gap 3.8, checklist 6.512), as the
   Titanium program's Destroy button does (read R49-11). With coins on the
   cursor and no item, **Destroy cursor item** asks first, with the

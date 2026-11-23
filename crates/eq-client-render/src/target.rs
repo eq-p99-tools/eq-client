@@ -216,7 +216,11 @@ pub(super) fn input(
         proposal = Some(cycle(&ids, current, act == Act::TargetPrevious));
     } else if let Some(cursor) = cursor
         && (door_release || mouse.any_just_pressed([MouseButton::Left, MouseButton::Right]))
-        && let Some(Picked { choice, spawns }) = scene.pick(&online, cursor, door_cursor.is_some())
+        && let Some(Picked {
+            choice,
+            spawns,
+            door_point,
+        }) = scene.pick(&online, cursor, door_cursor.is_some())
     {
         let client = scene.client();
         // A script's click acts only on what it named: anything else the
@@ -233,8 +237,11 @@ pub(super) fn input(
             Choice::Door(door) => Some(door),
             _ => None,
         };
-        if door_release && let Some(id) = door_clicks.release(picked_door, cursor, now) {
-            super::doors::click(id, &online, &outbox);
+        if door_release
+            && let Some(id) = door_clicks.release(picked_door, cursor, now)
+            && let Some((_, point)) = door_point.filter(|(picked, _)| *picked == id)
+        {
+            super::doors::click(id, point, &online, &outbox);
         }
         if mouse.just_pressed(MouseButton::Left) {
             door_clicks.press(picked_door, cursor, now);
@@ -344,6 +351,10 @@ pub(super) struct Scene<'w, 's> {
 struct Picked {
     choice: Choice,
     spawns: Vec<Candidate>,
+    /// Where the ray met the nearest door it reached as drawn, in the
+    /// renderer's frame: the point a door click is measured from (read
+    /// R16b, R16e; 6.530).
+    door_point: Option<(u8, Vec3)>,
 }
 
 impl Scene<'_, '_> {
@@ -403,14 +414,16 @@ impl Scene<'_, '_> {
             self.doors
                 .iter()
                 .filter_map(|(entity, door, transform, visibility)| {
-                    let distance = super::doors::hit(ray, door, transform, *visibility, models)
-                        .filter(|d| !blocked(*d, Some(door.id)))?;
+                    let (distance, point) =
+                        super::doors::hit_point(ray, door, transform, *visibility, models)
+                            .filter(|(d, _)| !blocked(*d, Some(door.id)))?;
                     Some((
                         Door {
                             entity,
                             id: door.id,
                         },
                         distance,
+                        point,
                     ))
                 })
                 .min_by(|a, b| a.1.total_cmp(&b.1).then(a.0.id.cmp(&b.0.id)))
@@ -418,8 +431,14 @@ impl Scene<'_, '_> {
             None
         };
         Some(Picked {
-            choice: choose(rule, &spawns, item, door),
+            choice: choose(
+                rule,
+                &spawns,
+                item,
+                door.map(|(door, distance, _)| (door, distance)),
+            ),
             spawns,
+            door_point: door.map(|(door, _, point)| (door.id, point)),
         })
     }
 
@@ -1521,14 +1540,18 @@ mod tests {
         frame(&mut app, center, true);
         assert!(commands.try_recv().is_err());
         frame(&mut app, center, false);
-        assert!(matches!(
-            commands.try_recv().unwrap(),
-            ClientCommand::ClickDoor {
-                session_id: 1,
-                door_id: 0,
-                ..
-            }
-        ));
+        // The click names where the pointer's ray met the door as drawn, in
+        // the server's frame: the middle of the screen falls on its origin.
+        let ClientCommand::ClickDoor {
+            session_id: 1,
+            door_id: 0,
+            point: Some(point),
+            ..
+        } = commands.try_recv().unwrap()
+        else {
+            panic!("a door click with its point");
+        };
+        assert!(point.x.hypot(point.y).hypot(point.z) < 1e-3, "{point:?}");
         click(&mut app);
         assert!(commands.try_recv().is_err());
         assert_eq!(
@@ -1696,6 +1719,46 @@ mod tests {
         // A door the pick doesn't name there is refused on the press.
         scripted_frame(&mut app, Thing::Door(1), Some(center), true);
         assert!(app.world().resource::<ScenePointer>().refused.is_some());
+    }
+
+    #[test]
+    fn a_door_clicked_out_of_reach_goes_to_the_session_to_judge() {
+        let (mut app, commands, ..) = target_app();
+        let mut bytes = [0u8; 80];
+        bytes[..4].copy_from_slice(b"TEST");
+        bytes[52] = 100;
+        {
+            let mut online = app.world_mut().resource_mut::<OnlineState>();
+            crate::online::testing::doors(
+                &mut online,
+                &eq_client_core::doors::decode(0x4c24, &bytes)
+                    .unwrap()
+                    .unwrap(),
+                std::time::Instant::now(),
+            );
+            // Far past any reach: the session says 1462, so the click goes
+            // to it rather than being dropped here without a word.
+            crate::online::testing::place_axis(&mut online, |position| position.x = 100.0);
+        }
+        let online = app.world().resource::<OnlineState>();
+        let outbox = app.world().resource::<Outbox>();
+        let drawn = Vec3::new(0.5, 1.0, -0.25);
+        super::super::doors::click(0, drawn, online, outbox);
+        let ClientCommand::ClickDoor {
+            door_id: 0,
+            point: Some(point),
+            ..
+        } = commands.try_recv().unwrap()
+        else {
+            panic!("a door click with its point");
+        };
+        assert_eq!(point, eq_client_core::world_position(drawn.to_array(), 0.0));
+        // The Use key's and a script's use name no point.
+        super::super::doors::open(0, online, outbox);
+        assert!(matches!(
+            commands.try_recv().unwrap(),
+            ClientCommand::ClickDoor { point: None, .. }
+        ));
     }
 
     #[test]

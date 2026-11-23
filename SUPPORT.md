@@ -116,11 +116,15 @@ lift's floor under the deck until their first step, when the ordinary floor
 sweep stands them on the deck; the lift does not carry them down from there,
 and a rider at its origin rides into the zone's own column. What the program
 does at the top and how its rider goes down are unread (checklist 6.440).
-Zone-in states 2 and 3, the rider radius, a changed door field, door reach
-measured to the door's origin rather than the clicked point on it (a
-shortfall of the read rule), and walking out of a door that moved into the
-player stay labelled (checklist 6.423-6.426, 6.428, 6.436, 6.439); Quarm and
-TAKP keep their own doors as before.
+A Titanium door clicked with the mouse is reached from the point clicked on
+it as drawn, within the player's size and 20 in 3-D, as the program measures
+(read R16b, R16e; checklist 6.530); out of reach, the session says the
+program's line 1462. A script's click step takes the same pick and names
+its point too. The Use key and a script walk's own door opening still reach
+a door at its origin, within 20, which is stricter; the Use key's ray
+through the view's centre (read R49-19) is its own change. Zone-in states 2 and 3, the rider radius, a changed door field and
+walking out of a door that moved into the player stay labelled (checklist
+6.423-6.426, 6.428, 6.439); Quarm and TAKP keep their own doors as before.
 
 Titanium carrier support stands on an available installed actor's authored
 solid geometry and carries the rider with its shared received-report pose.

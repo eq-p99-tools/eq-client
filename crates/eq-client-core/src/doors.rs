@@ -163,9 +163,10 @@ impl DoorTable {
         };
         let door = self.doors.entries().get(&id)?;
         // A door is reached at its origin where it stands now, within 20, as
-        // the session checks: short of the program, which measures from the
-        // clicked point on the door as drawn, within the player's size and
-        // 20 (read R16b, R16e; recording checklist 6.436).
+        // the session checks a click with no point: the Use key's, a script
+        // walk's. A mouse click or a script's click step names the point it hit and the session
+        // measures from it, within the player's size and 20, as the program
+        // does (read R16b, R16e; checklist 6.530); this is stricter.
         let at = WorldPosition {
             z: door.position.z + self.lifts.offset(id, now).unwrap_or(0.0),
             ..door.position
