@@ -6,7 +6,7 @@
 //! `cargo run -p eq-client-assets --example inspect_floor -- <EQ dir> <zone> <x> <y> [radius]`
 //!
 //! `x` and `y` are server axes (`#goto x y z`; `/loc` prints y first).
-use eq_client_axes::{to_world, wld_to_world};
+use eq_client_axes::{from_world, to_world, wld_to_world};
 use glam::Vec3;
 use libeq::pfs::PfsReader;
 use libeq::wld::parser::{DmSpriteDef2, MaterialDef, MaterialPalette, WldDoc};
@@ -110,7 +110,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("{step:.1}\t{at_y:.1}\t{shown}\t{}", hits.len());
         step += 1.0;
     }
+
+    regions_along(&asset, at_x, at_y, radius);
     Ok(())
+}
+
+/// Heights down a column the regions probe samples.
+const HEIGHTS: [f32; 9] = [
+    5.0, -5.0, -10.0, -20.0, -50.0, -100.0, -200.0, -300.0, -385.0,
+];
+
+/// What the zone's regions say fills each point of the line, at a few
+/// heights down the column: water, lava, another medium or air, and whether
+/// a zone line sits there.
+fn regions_along(asset: &eq_client_assets::ZoneAsset, at_x: f32, at_y: f32, radius: f32) {
+    println!("## regions along the line (medium at z {HEIGHTS:?})");
+    println!("x\ty\tmedia\tzone_line");
+    let mut step = at_x - radius;
+    while step <= at_x + radius {
+        let media: Vec<String> = HEIGHTS
+            .iter()
+            .map(|&z| {
+                let at = from_world(Vec3::new(step, at_y, z)).to_array();
+                asset
+                    .regions
+                    .medium_at(at)
+                    .map_or_else(|| "none".to_owned(), |medium| format!("{medium:?}"))
+            })
+            .collect();
+        let line = HEIGHTS.iter().any(|&z| {
+            asset
+                .regions
+                .zone_line_at(from_world(Vec3::new(step, at_y, z)).to_array())
+                .is_some()
+        });
+        println!("{step:.1}\t{at_y:.1}\t{}\t{line}", media.join(","));
+        step += 1.0;
+    }
 }
 
 /// The z of a triangle at (`at_x`, `at_y`), when the vertical through it
