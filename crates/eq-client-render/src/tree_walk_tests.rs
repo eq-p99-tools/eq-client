@@ -70,4 +70,13 @@ fn a_walker_passes_through_a_no_hit_tree_and_is_never_stood_on_its_branch() {
         highest > 2.0 || past < 0.0,
         "the referenced tree was walked through ({highest}, {past})"
     );
+
+    // A door built from either model keeps every face the per-face rule
+    // keeps: how the engine sets a door's mode is unread (read R49-49d).
+    let door = |name: &str| {
+        let model = zone.models.iter().find(|model| model.name == name).unwrap();
+        crate::doors::collision(model.collision.clone(), model.no_hit_collision.clone())
+    };
+    assert!(!door("NOHIT_ACTORDEF").is_empty());
+    assert_eq!(door("NOHIT_ACTORDEF"), door("SOLID_ACTORDEF"));
 }

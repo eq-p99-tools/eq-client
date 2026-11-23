@@ -115,12 +115,20 @@ pub struct ZoneModel {
     pub primitives: Vec<ZonePrimitive>,
     /// Authored draw flags, in the order of `primitives`.
     pub materials: Vec<ObjectMaterial>,
-    /// Solid triangles a walker meets, including invisible collision
-    /// surfaces. A face flagged passable is left out unless the engine makes
-    /// its mesh solid throughout (the five model names of EQGraphicsDX9.dll
-    /// 0x10193510), and an object mesh in the engine's no-hit case (read
-    /// R49-49c: trees, plants and grass) gives none.
+    /// Solid triangles a walker meets where the zone places this model,
+    /// including invisible collision surfaces. A face flagged passable is
+    /// left out unless the engine makes its mesh solid throughout (the five
+    /// model names of EQGraphicsDX9.dll 0x10193510), and a mesh in the
+    /// engine's no-hit case (read R49-49c: trees, plants and grass) is in
+    /// [`Self::no_hit_collision`] instead.
     pub collision: Vec<[[f32; 3]; 3]>,
+    /// The solid triangles, by the same face rule, of this model's meshes in
+    /// the no-hit case, which a walker passes through where the zone places
+    /// the model (read R49-49d: a WLD placement always takes the model
+    /// test). A door built from the model keeps them: how the engine sets a
+    /// door's mode (eqgame.exe 0x1006c2b0) is unread, so doors stay as they
+    /// were.
+    pub no_hit_collision: Vec<[[f32; 3]; 3]>,
     /// How many vertices the model's one mesh has, which a placement's
     /// colour track must match; None for a model built on a skeleton.
     pub vertex_count: Option<usize>,
@@ -732,6 +740,10 @@ fn load_object_models(
         // Object models carry no light of their own: their placements do.
         let staged = stage_mesh(&mesh, &[]);
         let vertex_count = mesh.positions().len();
+        let no_hit_mesh = mesh
+            .name()
+            .and_then(|name| fragments.get(name).copied())
+            .is_some_and(no_hit);
         let Some(realized) = realize_object(
             &doc,
             staged,
@@ -748,10 +760,16 @@ fn load_object_models(
             name: name.to_owned(),
             primitives: realized.primitives,
             materials: realized.materials,
-            collision: object_collision(
-                &mesh,
-                mesh.name().and_then(|name| fragments.get(name).copied()),
-            ),
+            collision: if no_hit_mesh {
+                Vec::new()
+            } else {
+                object_collision(&mesh)
+            },
+            no_hit_collision: if no_hit_mesh {
+                object_collision(&mesh)
+            } else {
+                Vec::new()
+            },
             vertex_count: Some(vertex_count),
         });
     }
@@ -787,6 +805,7 @@ fn load_object_models(
             primitives: realized.primitives,
             materials: realized.materials,
             collision: posed.collision,
+            no_hit_collision: posed.no_hit_collision,
             vertex_count: None,
         });
     }
@@ -868,6 +887,8 @@ fn realize_object(
 struct PosedHierarchy {
     staged: Vec<StagedPrimitive>,
     collision: Vec<[[f32; 3]; 3]>,
+    /// The solid triangles of its meshes in the [`no_hit`] case.
+    no_hit_collision: Vec<[[f32; 3]; 3]>,
     /// Skins left out because their vertices aren't each on one bone of
     /// the skeleton.
     skins_skipped: usize,
@@ -908,6 +929,8 @@ struct PosedMesh {
     solids: Vec<[f32; 3]>,
     /// The vertices of its solid faces.
     indices: Vec<u32>,
+    /// Whether the mesh is in the engine's [`no_hit`] case.
+    no_hit: bool,
 }
 
 /// Stands an actor built on a skeleton in its rest pose: each bone's mesh
@@ -984,7 +1007,8 @@ fn pose_hierarchy(
         posed.push(PosedMesh {
             staged,
             solids,
-            indices: object_solid_faces(mesh, Some(raw)),
+            indices: object_solid_faces(mesh),
+            no_hit: no_hit(raw),
         });
     };
     for (index, dag) in definition.dags.iter().enumerate() {
@@ -1018,15 +1042,22 @@ fn pose_hierarchy(
         pose(mesh, raw, &|vertex| joints[owners[vertex]]);
     }
     let mut collision = Vec::new();
+    let mut no_hit_collision = Vec::new();
     let mut by_material: Vec<StagedPrimitive> = Vec::new();
     let skins_skipped = skipped;
     for PosedMesh {
         staged,
         solids,
         indices,
+        no_hit,
     } in posed
     {
-        collision.extend(solid_triangles(&solids, &indices));
+        let triangles = solid_triangles(&solids, &indices);
+        if no_hit {
+            no_hit_collision.extend(triangles);
+        } else {
+            collision.extend(triangles);
+        }
         for primitive in staged {
             match by_material
                 .iter_mut()
@@ -1040,6 +1071,7 @@ fn pose_hierarchy(
     PosedHierarchy {
         staged: by_material,
         collision,
+        no_hit_collision,
         skins_skipped,
     }
 }
@@ -1212,45 +1244,23 @@ fn mesh_fragments(
 }
 
 /// A placed object's or door's solid triangles, by [`object_solid_faces`].
-fn object_collision(
-    mesh: &libeq::wld::Mesh<'_>,
-    raw: Option<&libeq::wld::parser::DmSpriteDef2>,
-) -> Vec<[[f32; 3]; 3]> {
+fn object_collision(mesh: &libeq::wld::Mesh<'_>) -> Vec<[[f32; 3]; 3]> {
     let center = mesh.center();
     let positions: Vec<[f32; 3]> = mesh
         .positions()
         .into_iter()
         .map(|p| [p[0] + center.0, p[1] + center.1, p[2] + center.2])
         .collect();
-    solid_triangles(&positions, &object_solid_faces(mesh, raw))
+    solid_triangles(&positions, &object_solid_faces(mesh))
 }
 
 /// The vertices of the faces a placed actor (a door or an object) collides
-/// with when walking: the one place the engine's rule lives.
-///
-/// - **No hit** (read R49-49c): the engine's moving-sphere sweep
-///   (EQGraphicsDX9.dll 0x10192400) returns no hit at once for a mesh whose
-///   switch +0x5c is set (0x10192406), and the switch is set for an S3D
-///   mesh whose 0x36 flags lack 0x10000 and whose reference at +0x14 is
-///   empty (0x101885e0, 0x10193d70; read F4g). That is every tree, plant
-///   and grass mesh of the object archives, trunks included, so a walker
-///   passes through them; it has no faces here. That the sweep is the
-///   walking test is inferred. The engine's ray tests see every face of
-///   such a mesh; this client's camera shares the walking world and passes
-///   through them too, a labelled departure.
-/// - **Named** (read F4b): every face of a mesh [`SOLID_THROUGHOUT`] names
-///   is solid (0x10193510 marks it).
-/// - **Otherwise** a face flagged passable (WLD 0x10) is skipped.
-///
-/// Zone terrain keeps [`mesh_collision`]'s skip, and boats and EQG models
-/// are unchanged (the EQG loader sets no switch).
-fn object_solid_faces(
-    mesh: &libeq::wld::Mesh<'_>,
-    raw: Option<&libeq::wld::parser::DmSpriteDef2>,
-) -> Vec<u32> {
-    if raw.is_some_and(no_hit) {
-        Vec::new()
-    } else if mesh.name().is_some_and(solid_by_name) {
+/// with: every face of a mesh [`SOLID_THROUGHOUT`] names (read F4b;
+/// 0x10193510 marks it), otherwise every face but those flagged passable
+/// (WLD 0x10). Whether the faces count where the zone places the mesh is
+/// [`no_hit`]'s question.
+fn object_solid_faces(mesh: &libeq::wld::Mesh<'_>) -> Vec<u32> {
+    if mesh.name().is_some_and(solid_by_name) {
         mesh.indices()
     } else {
         mesh.collision_indices()
@@ -1259,6 +1269,17 @@ fn object_solid_faces(
 
 /// Read R49-49c's no-hit case: an S3D mesh whose 0x36 flags lack 0x10000
 /// and whose reference at +0x14 is empty (read F4g).
+///
+/// The engine's moving-sphere sweep (EQGraphicsDX9.dll 0x10192400) returns
+/// no hit at once for a mesh whose switch +0x5c is set (0x10192406), which
+/// this case sets (0x101885e0, 0x10193d70). That is every tree, plant and
+/// grass mesh of the object archives, trunks included, so a walker passes
+/// through them where the zone places them. That the sweep is the walking
+/// test is inferred; read R49-49d finds a WLD placement always takes the
+/// model test. The engine's ray tests see every face of such a mesh; this
+/// client's camera shares the walking world and passes through them too, a
+/// labelled departure. Zone terrain, boats and EQG models are unchanged
+/// (the EQG loader sets no switch).
 fn no_hit(raw: &libeq::wld::parser::DmSpriteDef2) -> bool {
     raw.flags & 0x1_0000 == 0
         && matches!(
@@ -1971,14 +1992,10 @@ mod tests {
     #[test]
     fn a_walker_meets_an_object_face_as_the_engines_sweep_does() {
         let zone = load_hierarchical_zone("passable-face");
-        let solid = |name: &str| {
-            zone.models
-                .iter()
-                .find(|model| model.name == name)
-                .unwrap()
-                .collision
-                .clone()
-        };
+        let model = |name: &str| zone.models.iter().find(|model| model.name == name).unwrap();
+        let solid = |name: &str| model(name).collision.clone();
+        // Kept for a door built from the model, whose mode is unread.
+        let skipped = |name: &str| model(name).no_hit_collision.clone();
         let face = vec![rendered([
             [0.0, 0.0, 0.0],
             [1.0, 0.0, 0.0],
@@ -1991,14 +2008,21 @@ mod tests {
         assert_eq!(solid("WALL_ACTORDEF"), face);
         // Made solid throughout by 0x10193510 by its name.
         assert_eq!(solid("HHCELL_ACTORDEF"), face);
+        for referenced in ["PASS_ACTORDEF", "WALL_ACTORDEF", "HHCELL_ACTORDEF"] {
+            assert_eq!(skipped(referenced), none, "{referenced}");
+        }
         // No 0x10000 and no +0x14 reference: the sweep skips the whole mesh
-        // (read R49-49c), leaves and trunks alike.
+        // where the zone places it (reads R49-49c, R49-49d), leaves and
+        // trunks alike; a door keeps the faces the per-face rule keeps.
         assert_eq!(solid("BARE_ACTORDEF"), none);
+        assert_eq!(skipped("BARE_ACTORDEF"), none);
         assert_eq!(solid("TRUNK_ACTORDEF"), none);
+        assert_eq!(skipped("TRUNK_ACTORDEF"), face);
         // Even under a name the engine makes solid: the sweep's exit comes
         // first. No installed named mesh is no-hit (the bars and ladders
         // are referenced), so this pins the order only.
         assert_eq!(solid("LADDER9_ACTORDEF"), none);
+        assert_eq!(skipped("LADDER9_ACTORDEF"), face);
     }
 
     #[test]
