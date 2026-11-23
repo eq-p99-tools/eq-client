@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- A Bard's song holds nothing back, as the Titanium program's doesn't (read R49-21; gap 3.5, checklist 6.442, 6.542). This repins eq-network to 33057d9 (#413, and #407's server filters), on P99 and Titanium EQEmu. The session now tells the client which song a Bard is singing (`WorldEvent::Singing`), and the client's own gates follow it:
+  - **A gem press while singing** goes to the session, whatever the gem's timer or the mana, and the session stops the song and casts nothing, as the program's gem click does. A forget goes too.
+  - **An item use while singing** isn't refused by the client; the session lets it go alongside the song.
+  - **Memorizing while singing** isn't held back by the song ([I], read R49-48 a).
+  - Any other cast holds as before, including an item cast started alongside the song.
+  - The gem timers the program resets when a song stops are not reset yet (a labelled follow-up).
+- The four new server filter kinds from eq-network #407 get this client's words on the filters page: Item speech, Strikethrough, Stuns and Swarm pet deaths. The rest of #407's client side comes with #624.
+
+- Answer `/played` as the Titanium program does (read R49-8 a, checklist
+  6.490b): the account's entitled time in years (line 0xe24), when the
+  character was made (0x32a8) and its played days, hours and minutes
+  (0x32af), from the profile's fields (eq-network #410), adding a minute
+  each minute after the profile as the program does. The creation time's
+  wording follows the program's `%#c` in the C locale (inferred). The
+  Mac-era and RoF2 clients' `/played` is unread, so it's refused there
+  for now.
 - A Bard's item use now carries the song test from the installed spell data (gap 3.5, checklist 6.542, read R49-21b): the item's spell counts as the class's when the player's class level for it is neither 0 nor 255. The session uses it to choose, for an item's song it keeps, between sending the stop and ending it here. Without installed spell data, or without that spell's class levels, the session keeps its memorized test as before. Labelled: the program also needs the spell's byte +0x1c4 to be clear. That byte isn't mapped to a spells file field yet (read R49-48c), so a class spell with it set counts as a song here and not in the program.
 - Keep the server filters as the Titanium program keeps them (read R49-2,
   checklist 6.494a to c), on eq-network #407.
