@@ -40,6 +40,19 @@ pub trait SpellCatalog {
         None
     }
 
+    /// A spell's twelve effects with the base, formula and max the slot
+    /// finder's step 4 works their values out from (read R49-22e, 0x40f339),
+    /// where the spell data has them.
+    fn placement_effects(&self, _spell: u32) -> Option<[crate::buffs::placement::Effect; 12]> {
+        None
+    }
+
+    /// Whether a spell has a Bard level (its Bard class level is not 255,
+    /// 0x44e755(8)), where the spell data has the class levels.
+    fn bard_level(&self, _spell: u32) -> Option<bool> {
+        None
+    }
+
     /// A spell's target type (Titanium field 98), where the spell data has
     /// it.
     fn target_type(&self, _spell: u32) -> Option<u32> {
