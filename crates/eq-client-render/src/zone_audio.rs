@@ -16,7 +16,7 @@
 //! tracks, 0x4c6956): the smallest region the player stands in wins, night
 //! is the hour below 5 or above 18 (0x439041), a switch fades the old track
 //! over 1500 ms and leaving every region over the record's own time, at
-//! most 20000 ms, and EnvSounds off silences music regions too. Every
+//! most 20000 ms, and `EnvSounds` off silences music regions too. Every
 //! inferred rule is a named constant or function here, marked \[I\]. The instruments are the
 //! sound font the player names (a stated departure: how the program plays
 //! its music is unread, and the synthesizer here refuses the `.sf2` files
@@ -657,7 +657,7 @@ pub(super) fn update(
     }
 
     // Music.
-    // EnvSounds off disables every .eff emitter, music regions included
+    // `EnvSounds` off disables every .eff emitter, music regions included
     // (read on zone music tracks: 0x44b050 sets +0x1000).
     let music_on = !silent && options.options.music_volume() > 0.0;
     let music_volume = if music_on && options.options.environment_sounds {
