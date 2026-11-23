@@ -106,6 +106,12 @@ pub struct ZoneModel {
     pub materials: Vec<ObjectMaterial>,
     /// Solid triangles, including invisible collision surfaces.
     pub collision: Vec<[[f32; 3]; 3]>,
+    /// The faces left out of `collision` for the passable flag, in the same
+    /// frame. A placed object walks through them; a door collides with them
+    /// too, since the official client stops players at doors whose faces are
+    /// all flagged passable (the Neriak Commons bars; inferred until the
+    /// engine's per-face test is read).
+    pub passable: Vec<[[f32; 3]; 3]>,
 }
 
 /// Authored sidedness of a placed-object draw call, independent of its alpha mode.
@@ -670,6 +676,7 @@ fn load_object_models(
             primitives: realized.primitives,
             materials: realized.materials,
             collision: mesh_collision(&mesh),
+            passable: mesh_passable(&mesh),
         });
     }
     // Objects built on a skeleton (trees, torches), stood in their rest
@@ -704,6 +711,7 @@ fn load_object_models(
             primitives: realized.primitives,
             materials: realized.materials,
             collision: posed.collision,
+            passable: posed.passable,
         });
     }
 
@@ -767,6 +775,8 @@ fn realize_object(
 struct PosedHierarchy {
     staged: Vec<StagedPrimitive>,
     collision: Vec<[[f32; 3]; 3]>,
+    /// Its faces flagged passable, posed the same way.
+    passable: Vec<[[f32; 3]; 3]>,
     /// Skins left out because their vertices aren't each on one bone of
     /// the skeleton.
     skins_skipped: usize,
@@ -807,6 +817,8 @@ struct PosedMesh {
     solids: Vec<[f32; 3]>,
     /// The vertices of its solid faces.
     indices: Vec<u32>,
+    /// The vertices of its faces flagged passable.
+    passable: Vec<u32>,
 }
 
 /// Stands an actor built on a skeleton in its rest pose: each bone's mesh
@@ -882,6 +894,7 @@ fn pose_hierarchy(
             staged,
             solids,
             indices: mesh.collision_indices(),
+            passable: passable_indices(mesh),
         });
     };
     for (index, dag) in definition.dags.iter().enumerate() {
@@ -915,15 +928,18 @@ fn pose_hierarchy(
         pose(mesh, &|vertex| joints[owners[vertex]]);
     }
     let mut collision = Vec::new();
+    let mut passable = Vec::new();
     let mut by_material: Vec<StagedPrimitive> = Vec::new();
     let skins_skipped = skipped;
     for PosedMesh {
         staged,
         solids,
         indices,
+        passable: passable_faces,
     } in posed
     {
         collision.extend(solid_triangles(&solids, &indices));
+        passable.extend(solid_triangles(&solids, &passable_faces));
         for primitive in staged {
             match by_material
                 .iter_mut()
@@ -937,6 +953,7 @@ fn pose_hierarchy(
     PosedHierarchy {
         staged: by_material,
         collision,
+        passable,
         skins_skipped,
     }
 }
@@ -1080,6 +1097,42 @@ fn mesh_collision(mesh: &libeq::wld::Mesh<'_>) -> Vec<[[f32; 3]; 3]> {
         .map(|p| [p[0] + center.0, p[1] + center.1, p[2] + center.2])
         .collect();
     solid_triangles(&positions, &mesh.collision_indices())
+}
+
+/// A mesh's faces flagged passable, as [`mesh_collision`] gives its solid ones.
+fn mesh_passable(mesh: &libeq::wld::Mesh<'_>) -> Vec<[[f32; 3]; 3]> {
+    let center = mesh.center();
+    let positions: Vec<[f32; 3]> = mesh
+        .positions()
+        .into_iter()
+        .map(|p| [p[0] + center.0, p[1] + center.1, p[2] + center.2])
+        .collect();
+    solid_triangles(&positions, &passable_indices(mesh))
+}
+
+/// The vertices of a mesh's faces flagged passable: its faces less its solid
+/// ones. libeq gives the solid faces in the order of all of them, so walking
+/// both lists together splits every face into one or the other.
+fn passable_indices(mesh: &libeq::wld::Mesh<'_>) -> Vec<u32> {
+    split_passable(&mesh.indices(), &mesh.collision_indices())
+}
+
+fn split_passable(all: &[u32], solid: &[u32]) -> Vec<u32> {
+    let mut solid = solid.as_chunks::<3>().0.iter().peekable();
+    all.as_chunks::<3>()
+        .0
+        .iter()
+        .filter(|face| {
+            if solid.peek() == Some(face) {
+                solid.next();
+                false
+            } else {
+                true
+            }
+        })
+        .flatten()
+        .copied()
+        .collect()
 }
 
 /// Solid triangles over libeq positions, in the renderer's frame with the
@@ -1335,8 +1388,8 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn write_hierarchical_zone(install: &Path) {
         use crate::test_world::{
-            Coordinates, OLD_FORMAT, WorldFile, material, material_with_flags, mesh, palette,
-            palette_of, skinned_triangle, triangle, write_archive,
+            Coordinates, OLD_FORMAT, WorldFile, flagged_triangle, material, material_with_flags,
+            mesh, palette, palette_of, skinned_triangle, triangle, write_archive,
         };
         let words = |words: &[u32]| -> Vec<u8> {
             words.iter().flat_map(|word| word.to_le_bytes()).collect()
@@ -1400,6 +1453,14 @@ mod tests {
             );
         };
         actor(&mut objects, "OBJ_ACTORDEF", tri_sprite);
+        // Bars: the same triangle, its one face flagged passable (0x10).
+        let bars = objects.name("BARS_DMSPRITEDEF");
+        let bars = objects.fragment(
+            0x36,
+            flagged_triangle(bars, object_palette, &coordinates, 1, &[], 0x10),
+        );
+        let bars_sprite = objects.fragment(0x2d, words(&[0, bars.cast_unsigned(), 0]));
+        actor(&mut objects, "BARS_ACTORDEF", bars_sprite);
         // Base tracks of one frame: the root at rest, the arm 10 along the
         // file's x and 5 up its z (2560 / 256, 1280 / 256).
         let mut tracks = Vec::new();
@@ -1581,11 +1642,40 @@ mod tests {
             eq_client_axes::wld_triangle([0, 1, 2])
         );
         assert_eq!(model.collision, vec![rendered(corners)]);
+        assert_eq!(model.passable, Vec::<[[f32; 3]; 3]>::new());
         let placed = zone
             .objects
             .iter()
             .find(|object| zone.models[object.model].name == "OBJ_ACTORDEF");
         assert!(placed.is_some());
+    }
+
+    #[test]
+    fn a_face_flagged_passable_is_kept_apart_from_the_solids() {
+        let zone = load_hierarchical_zone("passable-face");
+        let bars = zone
+            .models
+            .iter()
+            .find(|model| model.name == "BARS_ACTORDEF")
+            .unwrap();
+        let corners = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]];
+        // Drawn as ever, walked through as a placed object, and kept, in
+        // the same frame, for a door to collide with.
+        assert_eq!(bars.primitives.len(), 1);
+        assert_eq!(bars.collision, Vec::<[[f32; 3]; 3]>::new());
+        assert_eq!(bars.passable, vec![rendered(corners)]);
+    }
+
+    #[test]
+    fn faces_split_into_solid_and_passable_in_order_even_when_repeated() {
+        let all = [0, 1, 2, 3, 4, 5, 0, 1, 2, 6, 7, 8];
+        // The second and third faces are passable; the first repeats later.
+        assert_eq!(
+            super::split_passable(&all, &[0, 1, 2, 6, 7, 8]),
+            vec![3, 4, 5, 0, 1, 2]
+        );
+        assert_eq!(super::split_passable(&all, &all), Vec::<u32>::new());
+        assert_eq!(super::split_passable(&all, &[]), all.to_vec());
     }
 
     #[test]

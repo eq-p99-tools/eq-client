@@ -22,6 +22,7 @@ fn asset() -> ActorAsset {
             }],
             materials: vec![ObjectMaterial { double_sided: true }],
             collision: vec![[points[0], points[1], points[2]]],
+            passable: Vec::new(),
         },
         textures: Vec::new(),
     }

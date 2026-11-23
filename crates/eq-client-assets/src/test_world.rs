@@ -133,6 +133,19 @@ pub(crate) fn skinned_triangle(
     grouped_faces: u16,
     skin: &[(u16, u16)],
 ) -> Vec<u8> {
+    flagged_triangle(name, palette, coordinates, grouped_faces, skin, 0)
+}
+
+/// [`skinned_triangle`] with its one face's flags, such as 0x10 for a face
+/// the player passes through.
+pub(crate) fn flagged_triangle(
+    name: i32,
+    palette: i32,
+    coordinates: &Coordinates,
+    grouped_faces: u16,
+    skin: &[(u16, u16)],
+    face_flags: u16,
+) -> Vec<u8> {
     let mut body = words(&[name.cast_unsigned(), 0x0001_8003, palette.cast_unsigned()]);
     // Animation, two unknown references, center, three unknowns, radius,
     // minimum and maximum.
@@ -163,7 +176,7 @@ pub(crate) fn skinned_triangle(
     body.extend([0_u8, 0, 127].repeat(3));
     // The face (flags, then its vertices), the skin runs, its face group
     // and vertex group.
-    for word in [0_u16, 0, 1, 2] {
+    for word in [face_flags, 0, 1, 2] {
         body.extend(word.to_le_bytes());
     }
     for (count, bone) in skin {
