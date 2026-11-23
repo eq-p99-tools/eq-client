@@ -696,7 +696,7 @@ mod tests {
         options
             .chat_filters
             .set(FilterCategory::Shouts, FilterMode::Hide);
-        app.insert_resource(OptionsState::new(options))
+        app.insert_resource(OptionsState::new(&options))
             .insert_resource(crate::outbox::Outbox::new(Some(sender)))
             .add_systems(Update, tell_session);
         let mut online = OnlineState::new(true);
@@ -752,7 +752,7 @@ mod tests {
     fn a_filters_page_click_steps_its_kind_and_its_label_says_the_mode() {
         use eq_client_core::filters::{FilterCategory, FilterMode};
         let mut app = crate::testing::app();
-        app.insert_resource(OptionsState::new(Options::default()))
+        app.insert_resource(OptionsState::new(&Options::default()))
             .add_systems(Update, (step_filters, show_filters).chain());
         let mut online = OnlineState::new(true);
         testing::admit(&mut online, 1, testing::player(7));
@@ -792,7 +792,7 @@ mod tests {
     fn the_filters_note_says_when_a_change_reaches_this_server() {
         use eq_client_core::Capability;
         let mut app = crate::testing::app();
-        app.insert_resource(OptionsState::new(Options::default()))
+        app.insert_resource(OptionsState::new(&Options::default()))
             .insert_resource(OnlineState::new(true))
             .add_systems(Update, show_filters);
         let note = app.world_mut().spawn((FilterNote, Text::default())).id();
@@ -852,7 +852,7 @@ mod tests {
             saved.text(),
         )
         .unwrap();
-        let state = OptionsState::new(Options::default());
+        let state = OptionsState::new(&Options::default());
         let profile = CharacterProfile {
             world: "ExampleWorld".into(),
             character: "Example".into(),
