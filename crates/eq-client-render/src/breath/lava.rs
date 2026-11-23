@@ -86,6 +86,7 @@ mod tests {
         player.titanium_environment = Some(TitaniumEnvironment {
             zone_id: 27,
             base_fire_resistance: 25,
+            base_cold_resistance: 25,
             has_alternate_advancement: false,
         });
         testing::admit(&mut online, 5, player);

@@ -2581,6 +2581,9 @@ pub(super) fn input(
             support: boat_sample
                 .map(Support::Spawn)
                 .or(support.map(Support::Door)),
+            // Our own vertical speed is the 6.617 client half's; none sends
+            // 0, as before.
+            vertical_speed: None,
         })
     });
     if let Err(reason) = sent {
