@@ -31,6 +31,13 @@ pub struct VerticalPhysics {
     /// sweep under a falling, alighting or placed body keeps `climb`. None
     /// walks by `climb`.
     pub edge_climb: Option<f32>,
+    /// How far above the feet an edge's top may be without stopping a move
+    /// in the air, which then lands on it, in world units; 0 stops at every
+    /// face, as before. The Titanium program sweeps a jump or fall with the
+    /// walk's raised sphere and has no lower test, so an edge under its
+    /// floor sweep's reach is passed over and stood on (read R42; the
+    /// sphere's bottom at or over the origin is inferred, checklist 6.484).
+    pub airborne_clear: f32,
     /// Whether the walk's input still moves the body in the air. Neither
     /// program's does: off the ground a step adds no input and keeps the air
     /// factor's share of the take-off speed (Titanium 0x4c0462-0x4c04ba,
@@ -62,6 +69,7 @@ pub const PROVISIONAL_PHYSICS: VerticalPhysics = VerticalPhysics {
     ground_tolerance: super::MAX_GROUNDED_STEP,
     climb: super::MAX_GROUNDED_STEP,
     edge_climb: None,
+    airborne_clear: 0.0,
     steers_in_air: true,
 };
 
@@ -266,6 +274,7 @@ impl AirborneController {
             || !physics
                 .edge_climb
                 .is_none_or(|edge| edge.is_finite() && edge >= 0.0)
+            || !(physics.airborne_clear.is_finite() && physics.airborne_clear >= 0.0)
         {
             return feet;
         }
@@ -326,7 +335,9 @@ impl AirborneController {
                 climb,
             }
         } else {
-            Support::Airborne
+            Support::Airborne {
+                clear: physics.airborne_clear,
+            }
         };
         if liquids == LiquidGuard::Lava && world.in_swimmable_water(feet, input.height) {
             return feet;
@@ -335,11 +346,20 @@ impl AirborneController {
         if liquids == LiquidGuard::Lava && world.in_swimmable_water(position, input.height) {
             return position;
         }
-        if self.velocity <= 0.0
+        // A move in the air that passed over an edge stands on its top, as
+        // the program's floor refresh finds it and its put-back stops the
+        // body, rising or not (R42): the landing takes the speed it came at.
+        let lifted = !on_ground && position.y > feet.y + 0.001;
+        if (self.velocity <= 0.0 || lifted)
             && let Some(floor) = world.support(position)
         {
-            self.finish_landing(floor, -self.velocity);
+            self.finish_landing(floor, (-self.velocity).max(0.0));
             return Vec3::new(position.x, floor, position.z);
+        }
+        // A lift whose walk went on past the top keeps no upward speed, so
+        // an edge never boosts a jump (inferred, 6.484).
+        if lifted {
+            self.velocity = self.velocity.min(0.0);
         }
         self.peak = Some(self.peak.unwrap_or(feet.y).max(position.y));
         if !stepped {
@@ -500,6 +520,7 @@ mod tests {
         ground_tolerance: crate::movement::MAX_GROUNDED_STEP,
         climb: crate::movement::MAX_GROUNDED_STEP,
         edge_climb: None,
+        airborne_clear: 0.0,
         steers_in_air: true,
     };
     fn tick(
@@ -578,6 +599,7 @@ mod tests {
             ground_tolerance: crate::movement::MAX_GROUNDED_STEP,
             climb: crate::movement::MAX_GROUNDED_STEP,
             edge_climb: None,
+            airborne_clear: 0.0,
             steers_in_air: true,
         };
         let mut state = AirborneController::default();
@@ -625,6 +647,7 @@ mod tests {
         ground_tolerance: 0.501,
         climb: 3.15,
         edge_climb: None,
+        airborne_clear: 0.0,
         steers_in_air: false,
     };
 
@@ -891,6 +914,7 @@ mod tests {
             ground_tolerance: crate::movement::MAX_GROUNDED_STEP,
             climb: crate::movement::MAX_GROUNDED_STEP,
             edge_climb: None,
+            airborne_clear: 0.0,
             steers_in_air: true,
         };
         let input = MotionStep {

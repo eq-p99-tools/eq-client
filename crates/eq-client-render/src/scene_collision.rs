@@ -378,9 +378,14 @@ impl TerrainSurface {
 
     /// Where the character select preview stands a spot's character, in
     /// the renderer's frame: on the first drawn floor at or below the
-    /// spot's height and a little above it. None with no floor there.
+    /// spot's height and a little above it, or at the spot's own height for
+    /// a spot [`afloat`](eq_client_core::select_spots::Spot::afloat). None
+    /// with no floor there.
     pub(super) fn spot_feet(&self, spot: &eq_client_core::select_spots::Spot) -> Option<Vec3> {
         let point = Vec3::from_array(eq_client_core::render_position(spot.position()));
+        if spot.afloat {
+            return Some(point);
+        }
         let floor = self.height_below(
             point.x,
             point.z,

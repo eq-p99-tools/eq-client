@@ -1434,14 +1434,19 @@ pub(crate) mod testing {
 
     /// The test model, prepared in the world's stores.
     pub(crate) fn prepared(world: &mut World) -> PreparedCharacter {
+        prepared_from(world, CharacterAsset::testing())
+    }
+
+    /// A model, prepared in the world's stores.
+    pub(crate) fn prepared_from(world: &mut World, asset: CharacterAsset) -> PreparedCharacter {
         world
             .run_system_once(
-                |mut images: ResMut<Assets<Image>>,
-                 mut meshes: ResMut<Assets<Mesh>>,
-                 mut materials: ResMut<Assets<StandardMaterial>>,
-                 mut bindposes: ResMut<Assets<SkinnedMeshInverseBindposes>>| {
+                move |mut images: ResMut<Assets<Image>>,
+                      mut meshes: ResMut<Assets<Mesh>>,
+                      mut materials: ResMut<Assets<StandardMaterial>>,
+                      mut bindposes: ResMut<Assets<SkinnedMeshInverseBindposes>>| {
                     prepare(
-                        CharacterAsset::testing(),
+                        asset.clone(),
                         (&mut images, &mut meshes, &mut materials, &mut bindposes),
                     )
                 },
@@ -1955,6 +1960,7 @@ mod tests {
         let start = std::time::Instant::now();
         carriers.observe(
             &WorldEvent::Spawns(vec![SpawnState {
+                body_type: None,
                 spawn_id: id,
                 race: 72,
                 kind: SpawnKind::Npc,
@@ -1999,6 +2005,7 @@ mod tests {
     #[test]
     fn another_spawn_moves_by_its_report_not_by_where_it_is_drawn() {
         let report = |velocity: [f32; 3], forward: f32| eq_client_core::SpawnState {
+            body_type: None,
             spawn_id: 9,
             race: 1,
             kind: eq_client_core::SpawnKind::Player,

@@ -187,6 +187,7 @@ fn scripted_interaction_refuses_training_pending_container_and_combine() {
                         trainer: 75,
                         caps: vec![0; 100],
                         language_caps: Vec::new(),
+                        price_scale: None,
                     },
                 ))],
             );
@@ -328,36 +329,21 @@ fn scripted_item_inspection_refuses_unknown_and_stale_links() {
 }
 
 #[test]
-fn named_social_script_control_requires_a_local_session() {
+fn a_named_social_script_control_runs_on_any_session() {
     for local in [false, true] {
         let (mut app, rx) = app();
         let program = Program::parse("social(\"play Test\")", Path::new(".")).unwrap();
         app.insert_resource(Script::from_program(program).local_session(local));
         frame_at(&mut app, 0);
         frame_at(&mut app, 10);
-        if local {
-            assert!(matches!(
-                &app.world().resource::<ChatState>().socials.request,
-                Some(crate::socials::Queued { request: crate::socials::Request::Play(name), owner: Some(_) }) if name == "Test"
-            ));
-            assert_eq!(
-                app.world().resource::<RunStatus>().phase(),
-                Phase::Completed
-            );
-        } else {
-            refused(
-                &app,
-                1,
-                "social script steps need a local character in the world",
-            );
-            assert!(
-                app.world()
-                    .resource::<ChatState>()
-                    .socials
-                    .request
-                    .is_none()
-            );
-        }
+        assert!(matches!(
+            &app.world().resource::<ChatState>().socials.request,
+            Some(crate::socials::Queued { request: crate::socials::Request::Play(name), owner: Some(_) }) if name == "Test"
+        ));
+        assert_eq!(
+            app.world().resource::<RunStatus>().phase(),
+            Phase::Completed
+        );
         assert!(rx.try_recv().is_err());
     }
 }
@@ -431,7 +417,8 @@ fn single_step_applies_social_edits_without_interrupting_a_manual_social() {
         ClientCommand::SendChat(eq_client_core::OutboundChat::Say("First".into()))
     );
 
-    control_at(&mut app, Request::Step, 20);
+    // The manual social's next line waits one runner step (100 ms).
+    control_at(&mut app, Request::Step, 120);
     assert_eq!(
         app.world().resource::<ChatState>().newest(),
         "Saved social Stepped."
@@ -440,24 +427,24 @@ fn single_step_applies_social_edits_without_interrupting_a_manual_social() {
         rx.try_recv().unwrap(),
         ClientCommand::SendChat(eq_client_core::OutboundChat::Say("Later".into()))
     );
-    frame_at(&mut app, 30);
+    frame_at(&mut app, 130);
     assert_eq!(
         app.world().resource::<Script>().status().phase(),
         Phase::Paused
     );
 
-    control_at(&mut app, Request::Step, 40);
+    control_at(&mut app, Request::Step, 140);
     let Some(Action::Social(id)) = app.world().resource::<Bindings>().0[0] else {
         panic!("the single-stepped bind did not run");
     };
     assert_eq!(app.world().resource::<State>().name(id), Some("Stepped"));
-    frame_at(&mut app, 50);
+    frame_at(&mut app, 150);
     assert_eq!(
         app.world().resource::<Script>().status().phase(),
         Phase::Paused
     );
 
-    control_at(&mut app, Request::Step, 60);
+    control_at(&mut app, Request::Step, 160);
     assert_eq!(app.world().resource::<State>().name(id), None);
     assert!(rx.try_recv().is_err());
 }
@@ -540,11 +527,11 @@ fn native_takeover_cancels_a_background_scripts_social() {
 }
 
 #[test]
-fn an_unsafe_social_definition_never_queues_a_target_change_or_followup() {
+fn a_refused_social_definition_never_queues_its_lines() {
     let (mut app, rx) = socials_app();
     let _ = select_service(&mut app, SpawnKind::Npc, 41, 10.0);
     let result = crate::chat::client_request(
-        "/social set Unsafe | /target Missing | /ranged",
+        "/social set Unsafe | /exit | /ranged",
         &mut app.world_mut().resource_mut::<ChatState>(),
     )
     .unwrap();
@@ -578,7 +565,8 @@ fn a_stopped_script_does_not_cancel_a_manually_owned_social() {
     app.world_mut()
         .resource_mut::<RunControl>()
         .request(Request::Stop);
-    frame_at(&mut app, 20);
+    // The next line waits one runner step (100 ms).
+    frame_at(&mut app, 120);
     assert_eq!(
         rx.try_recv().unwrap(),
         ClientCommand::SendChat(eq_client_core::OutboundChat::Say("Later".into()))
@@ -669,6 +657,7 @@ fn scripted_owned_link_uses_the_current_received_item_without_sending() {
         stack_count: None,
         charges: 0,
         bag_slots: 0,
+        augments: Default::default(),
     };
     {
         let mut online = app.world_mut().resource_mut::<OnlineState>();
@@ -820,6 +809,211 @@ fn guild_slash_steps_dispatch_typed_guild_commands_without_sending_chat() {
     }
 }
 
+/// Runs one `slash` step to its end, returning what it sent.
+fn slash_step(line: &str, prepare: impl FnOnce(&mut App)) -> (App, Vec<ClientCommand>) {
+    let (mut app, rx) = app();
+    prepare(&mut app);
+    start(&mut app, &format!("slash(\"{line}\")"));
+    // A run started for this admission, as the control inbox starts one.
+    let zone = app
+        .world()
+        .resource::<OnlineState>()
+        .world()
+        .zone()
+        .to_owned();
+    app.world_mut()
+        .resource_mut::<Script>()
+        .progress
+        .expected_world = Some(crate::script::ExpectedWorld {
+        admission_id: ADMISSION,
+        zone,
+    });
+    frame_at(&mut app, 0);
+    frame_at(&mut app, 10);
+    let sent = rx.try_iter().collect();
+    (app, sent)
+}
+
+#[test]
+fn a_slash_step_runs_its_line_as_typing_would() {
+    use eq_client_core::OutboundChat;
+    let said = |message| ClientCommand::SendChatInAdmission {
+        session_id: ADMISSION,
+        message,
+        tongue: eq_client_core::Tongue::COMMON,
+    };
+    // Chat words go as typed ones do, stamped with the script's admission.
+    let (app, sent) = slash_step("say Hail", |_| ());
+    assert_eq!(sent, [said(OutboundChat::Say("Hail".into()))]);
+    assert_eq!(
+        app.world().resource::<RunStatus>().phase(),
+        Phase::Completed
+    );
+    let (_, sent) = slash_step("tell Friend Hello there", |_| ());
+    assert_eq!(
+        sent,
+        [said(OutboundChat::Tell {
+            recipient: "Friend".into(),
+            message: "Hello there".into(),
+        })]
+    );
+    // /reply answers the latest teller, as typed.
+    let (_, sent) = slash_step("reply thanks", |app| {
+        app.world_mut()
+            .resource_mut::<ChatState>()
+            .contacts
+            .lists
+            .replies
+            .heard("Teller");
+    });
+    assert_eq!(
+        sent,
+        [said(OutboundChat::Tell {
+            recipient: "Teller".into(),
+            message: "thanks".into(),
+        })]
+    );
+    // The friends list is the typed command's to change.
+    let (app, sent) = slash_step("friend Example", |_| ());
+    assert_eq!(sent, []);
+    assert_eq!(
+        app.world().resource::<ChatState>().contacts.asked,
+        Some(crate::contacts::Asked::Friends(Some("Example".into())))
+    );
+    // An abbreviation resolves before any handler reads it: /raid used to
+    // reach the game commands raw and fail, but typed it toggles the window.
+    let (app, sent) = slash_step("raid", |_| ());
+    assert_eq!(sent, []);
+    assert_eq!(
+        app.world().resource::<RunStatus>().phase(),
+        Phase::Completed
+    );
+    assert_eq!(
+        app.world().resource::<ChatState>().toggled,
+        Some(crate::windows::WindowId::Raid)
+    );
+    // A word that resolves to nothing is passed over without a line, as
+    // typing passes it over.
+    let (app, sent) = slash_step("zzzz", |_| ());
+    assert_eq!(sent, []);
+    assert_eq!(
+        app.world().resource::<RunStatus>().phase(),
+        Phase::Completed
+    );
+    // A social still goes to the named step, however it is spelled.
+    for line in ["social play Test", "SOCIAL play Test"] {
+        let (app, sent) = slash_step(line, |_| ());
+        assert_eq!(sent, []);
+        refused(&app, 1, "Use a named social step in a script.");
+    }
+}
+
+#[test]
+fn a_slash_report_takes_the_typed_route_and_its_pace() {
+    // A script may do what a player types: its report runs the typed line,
+    // stamped with its admission, and nothing more is sent than typing the
+    // same line sends.
+    for line in [
+        "petition I am stuck",
+        "bug doors: it will not open",
+        "feedback a note",
+    ] {
+        let (app, sent) = slash_step(line, |_| ());
+        assert_eq!(
+            app.world().resource::<RunStatus>().phase(),
+            Phase::Completed,
+            "{line}"
+        );
+        let (sender, typed_rx) = std::sync::mpsc::sync_channel(4);
+        let mut typed = ChatState::default();
+        let mut online = OnlineState::new(true);
+        session::admit(&mut online, ADMISSION, session::player(7));
+        crate::chat::submit_typed_line(
+            &format!("/{line}"),
+            &mut typed,
+            &mut online,
+            &Outbox::new(Some(sender)),
+            &eq_client_core::qol::Settings::default(),
+        )
+        .unwrap();
+        let typed: Vec<ClientCommand> = typed_rx.try_iter().collect();
+        assert_eq!(sent.len(), 1, "{line}: {sent:?}");
+        assert_eq!(typed.len(), 1, "{line}: {typed:?}");
+        assert_eq!(
+            std::mem::discriminant(&sent[0]),
+            std::mem::discriminant(&typed[0]),
+            "{line}"
+        );
+        assert!(
+            matches!(
+                sent[0],
+                ClientCommand::SendPetition {
+                    session_id: ADMISSION,
+                    ..
+                } | ClientCommand::ReportBug {
+                    session_id: ADMISSION,
+                    ..
+                } | ClientCommand::SendFeedback {
+                    session_id: ADMISSION,
+                    ..
+                }
+            ),
+            "{line}: {sent:?}"
+        );
+    }
+    // Two reports in a row go as a script's steps go, one a frame, each
+    // counted against the run's actions like any other line it sends.
+    let (mut app, rx) = app();
+    start(&mut app, "slash(\"petition one\")\nslash(\"petition two\")");
+    let zone = app
+        .world()
+        .resource::<OnlineState>()
+        .world()
+        .zone()
+        .to_owned();
+    app.world_mut()
+        .resource_mut::<Script>()
+        .progress
+        .expected_world = Some(crate::script::ExpectedWorld {
+        admission_id: ADMISSION,
+        zone,
+    });
+    frame_at(&mut app, 0);
+    assert_eq!(rx.try_iter().count(), 1);
+    frame_at(&mut app, 10);
+    assert_eq!(rx.try_iter().count(), 1);
+}
+
+#[test]
+fn a_slash_departure_takes_the_typed_route_and_never_leaves_sooner() {
+    for (line, departure) in [
+        ("quit", crate::login::Departure::Login),
+        ("exit", crate::login::Departure::Desktop),
+        ("q", crate::login::Departure::Login),
+    ] {
+        let (app, sent) = slash_step(line, |_| ());
+        // Nothing goes to the server from the step itself: the same
+        // departure a typed line asks for is left for the frame's
+        // `login::depart`, and the socials stop as they do when typed.
+        assert_eq!(sent, [], "{line}");
+        let chat = app.world().resource::<ChatState>();
+        assert_eq!(chat.departure, Some(departure), "{line}");
+        let mut typed = ChatState::default();
+        let mut online = OnlineState::new(true);
+        session::admit(&mut online, ADMISSION, session::player(7));
+        crate::chat::submit_typed_line(
+            &format!("/{line}"),
+            &mut typed,
+            &mut online,
+            &Outbox::new(None),
+            &eq_client_core::qol::Settings::default(),
+        )
+        .unwrap();
+        assert_eq!(typed.departure, chat.departure, "{line}");
+        assert_eq!(typed.socials.stop, chat.socials.stop, "{line}");
+    }
+}
+
 #[test]
 fn a_language_script_target_matches_only_the_offered_language_bank() {
     use eq_client_core::training::TrainingSubject;
@@ -847,4 +1041,122 @@ fn a_language_script_target_matches_only_the_offered_language_bank() {
         (None, false, None, None, None),
         None
     ));
+}
+
+#[test]
+fn the_titanium_social_forms_reach_the_chat_as_their_typed_lines_do() {
+    // A script's step leaves the request the typed line leaves, for the
+    // command's own handler to answer or refuse (checklist 6.505).
+    for (source, line) in [
+        ("slash(\"doability 11\")", "/doability 11"),
+        ("slash(\"memspellset nothing\")", "/memspellset nothing"),
+        ("slash(\"lootnodrop always\")", "/lootnodrop always"),
+        ("slash(\"hidecorpses looted\")", "/hidecorpses looted"),
+        ("slash(\"autoinventory\")", "/autoinventory"),
+        ("slash(\"stopcast\")", "/stopcast"),
+    ] {
+        let mut typed = ChatState::default();
+        assert_eq!(
+            crate::chat::client_request_in_scope(line, &mut typed, None),
+            Some(Ok(())),
+            "{line}"
+        );
+        let (mut app, rx) = app();
+        start(&mut app, source);
+        frame_at(&mut app, 0);
+        let chat = app.world().resource::<ChatState>();
+        assert_eq!(
+            (
+                &chat.doability,
+                &chat.spell_set_asked,
+                &chat.loot_no_drop,
+                &chat.hide_corpses,
+                chat.autoinventory.is_some(),
+                chat.slash,
+            ),
+            (
+                &typed.doability,
+                &typed.spell_set_asked,
+                &typed.loot_no_drop,
+                &typed.hide_corpses,
+                typed.autoinventory.is_some(),
+                typed.slash,
+            ),
+            "{source}"
+        );
+        assert!(
+            app.world()
+                .get_resource::<RunStatus>()
+                .is_none_or(|status| status.phase() != Phase::Failed),
+            "{source}"
+        );
+        assert!(rx.try_recv().is_err(), "{source}");
+    }
+}
+
+#[test]
+fn a_chat_pace_refusal_after_a_scripts_chat_fails_the_run() {
+    let reason = "You are sending chat too fast. Wait 4 seconds.";
+    let (mut app, rx) = app();
+    let program = Program::parse("chat(\"say hello\")\nwait(5000)", Path::new(".")).unwrap();
+    // A refusal from before the run's chat is no answer to it.
+    app.world_mut().resource_mut::<ChatState>().paced =
+        Some((std::time::Instant::now(), "an earlier line".into()));
+    app.insert_resource(Script::from_program(program).local_session(true));
+    frame_at(&mut app, 0);
+    frame_at(&mut app, 10);
+    assert_eq!(
+        rx.try_recv().unwrap(),
+        ClientCommand::SendChat(eq_client_core::OutboundChat::Say("hello".into()))
+    );
+    frame_at(&mut app, 20);
+    assert_eq!(
+        app.world().resource::<Script>().status().phase(),
+        Phase::Running
+    );
+    // The session's pace held it: the step failed with the session's words.
+    app.world_mut().resource_mut::<ChatState>().paced =
+        Some((std::time::Instant::now(), reason.into()));
+    frame_at(&mut app, 30);
+    refused(&app, 1, reason);
+    assert!(app.world().resource::<ChatState>().paced.is_none());
+}
+
+#[test]
+fn a_chat_pace_refusal_after_a_gm_step_fails_it_but_not_after_an_emote() {
+    let reason = "You are sending chat too fast. Wait 2 seconds.";
+    for (source, chats) in [
+        ("gm(\"stun 8000\")\nwait(5000)", true),
+        ("slash(\"emote waves\")\nwait(5000)", false),
+    ] {
+        let (mut app, rx) = app();
+        let program = Program::parse(source, Path::new(".")).unwrap();
+        app.insert_resource(Script::from_program(program).local_session(true));
+        frame_at(&mut app, 0);
+        frame_at(&mut app, 10);
+        let sent = rx.try_recv();
+        assert_eq!(
+            sent.as_ref().is_ok_and(|command| matches!(
+                command,
+                ClientCommand::SendChat(_) | ClientCommand::SendChatInAdmission { .. }
+            )),
+            chats,
+            "{source}: {sent:?}"
+        );
+        frame_at(&mut app, 20);
+        app.world_mut().resource_mut::<ChatState>().paced =
+            Some((std::time::Instant::now(), reason.into()));
+        frame_at(&mut app, 30);
+        if chats {
+            refused(&app, 1, reason);
+        } else {
+            // An emote is no chat send: the pace never holds it, so the
+            // refusal is another line's.
+            assert_eq!(
+                app.world().resource::<Script>().status().phase(),
+                Phase::Running,
+                "{source}"
+            );
+        }
+    }
 }

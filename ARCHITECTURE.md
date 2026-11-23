@@ -211,6 +211,62 @@ Use `Instant` for elapsed-time decisions and wall time for logs. Today the UI
 reducer timestamps an update when it consumes it, which is not when the network
 received it, so do not treat existing duration fields as network timings.
 
+## Client generations
+
+Two enums say which official client a run follows. `GameDialect` (from
+eq-network, re-exported by `eq-client-core`) is the generation whose packets
+and program rules the session follows. `InstalledClient`
+(`eq-client-assets/src/ui.rs`) is the same generation seen from the
+installation: its files, and the program rules the renderer applies. One
+mapping joins them: `logins::installed_client` takes a server type's
+generation from the wire it speaks.
+
+Both enums are exhaustive, so adding a generation (RoF2 is a placeholder; see
+below) breaks every `match` on them, and each break is a decision the new
+generation needs.
+Decisions are exhaustive `match`es or named accessors whose bodies are;
+`crates/eq-client-assets/tests/exhaustive_checks.rs` refuses a comparison on
+one variant (`==`, `!=`, `matches!`, `if let`) in production code, for
+`InstalledClient`, `GameDialect` and `ServerProtocol`. Program-rule values come
+from reads of that generation's program, or are absent or labelled inferred
+until one exists.
+
+For a new generation, in order:
+
+1. eq-network's steps first
+   ([adding a generation](https://github.com/eq-p99-tools/eq-network/blob/main/docs/adding-a-generation.md)),
+   then repin here.
+2. The `InstalledClient` variant, listed in `InstalledClient::ALL`, with its
+   marker files in `markers()`. Markers come from a listing of a real
+   installation, and must not match another generation's folder (Titanium's
+   `.eqg` marker will need narrowing for RoF2). The login screen's
+   installation warnings name every generation from that list; their wording
+   ("both") needs rewording for a third, and a test in `logins.rs` pins it.
+3. Follow the compiler through every `match`.
+4. Archives: every archive is found through
+   `eq-client-assets/src/archives.rs`. A newer format (EQG) gets its reader
+   and is chosen there, by the files the installation holds.
+
+### RoF2 status: placeholder
+
+`InstalledClient::Rof2` and eq-network's `GameDialect::Rof2` and
+`ServerProtocol::EqEmuRof2` exist so each decision above has an answer, and
+nothing of RoF2 is built:
+
+- `markers()` gives RoF2 no files, so `detect()` never finds it
+  (`detectable()` is false), and the installation warnings name only the
+  generations that have markers. Their bytes stay as they were, and the
+  `logins.rs` test keeps pinning them until RoF2 gets markers.
+- No preset offers or names `EqEmuRof2` (`seed_name` and `type_name` answer
+  `None`), and eq-network's `FromStr` has no name for it, so neither
+  `EQ_PROTOCOL` nor a presets file can choose it. eq-network refuses a
+  configuration naming it before anything is sent.
+- Each rule without a read of RoF2's program is absent (`None`, or off), or
+  Titanium's on an arm of its own commented `inferred for RoF2 (6.489)`.
+  Recording checklist item 6.489 is the list of those reads: grep the token.
+  Where a function carries `#[expect(clippy::match_same_arms)]` for its RoF2
+  arms, the expectation fails once no arm matches Titanium's any more.
+
 ## Errors and compatibility
 
 Use typed reasons for decisions the caller must make (queue busy, invalid

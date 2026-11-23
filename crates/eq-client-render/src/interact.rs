@@ -79,6 +79,7 @@ mod tests {
                 skills: None,
                 practice_points: None,
                 languages: None,
+                intoxication: None,
                 disciplines: None,
                 gender: 0,
                 level: 1,
@@ -234,6 +235,7 @@ mod tests {
             stack_count: None,
             charges: 0,
             bag_slots: 0,
+            augments: Default::default(),
             details: eq_client_core::ItemDetails {
                 base_held_model: None,
                 equipment: None,

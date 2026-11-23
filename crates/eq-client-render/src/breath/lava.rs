@@ -97,7 +97,8 @@ mod tests {
         qol.set(Fix::TakeEnvironmentalDamage, true);
         let mut heat = Heat::default();
         let start = Instant::now();
-        let at = |seconds| start + Duration::from_secs(seconds);
+        // The program's tick runs strictly more than a second apart.
+        let at = |seconds: u64| start + Duration::from_millis(seconds * 1_001);
         assert_eq!(
             heat.advance(at(0), &online, &qol, &spells, LiquidBasis::Observed),
             None
@@ -149,7 +150,8 @@ mod tests {
         let mut heat = Heat::default();
         let mut qol = Settings::default();
         let start = Instant::now();
-        let at = |seconds| start + Duration::from_secs(seconds);
+        // The program's tick runs strictly more than a second apart.
+        let at = |seconds: u64| start + Duration::from_millis(seconds * 1_001);
         let contact = Some((5, 7, 1));
 
         assert!(!heat.due(at(0), contact, &qol));

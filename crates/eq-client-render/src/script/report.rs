@@ -1,4 +1,5 @@
 //! State a script logs for later review.
+mod alternate_advancement;
 mod buffs;
 mod economy;
 mod guild;
@@ -134,6 +135,13 @@ pub(super) fn state(
         })
     });
     info!(label, state = %economy::state(online.world(), trade), "Script economy report");
+    info!(
+        label,
+        alternate_advancement = %alternate_advancement::state(
+            online.world().alternate_advancement()
+        ),
+        "Script alternate advancement report"
+    );
     let track = online.world().track_window();
     let yours = online.world().player().map(|player| player.level);
     let tracked: Vec<_> = track
@@ -152,7 +160,10 @@ pub(super) fn state(
         })
         .collect();
     if let (Some(choices), Some(picker)) = (observed.15.0.as_deref(), observed.15.1.as_deref()) {
-        let (buttons, rows) = crate::abilities::choices::report(online.world(), choices, picker);
+        let empty = crate::spellbook::SpellNames::default();
+        let names = observed.8.as_deref().unwrap_or(&empty);
+        let (buttons, rows) =
+            crate::abilities::choices::report(online.world(), choices, picker, names);
         info!(
             label,
             kept = choices.kept(),
@@ -273,6 +284,7 @@ pub(super) fn state(
             (question.id, question.offer.spell_id, question.offer.zone_id,
                 question.expires_at.saturating_duration_since(now).as_millis())
         }),
+        duel_consent = ?online.world().duel().map(|question| (question.id, question.challenger)),
         consent_presented = ?observed.10.as_deref().and_then(crate::confirm::Asked::presented),
         consent_closure = ?online.world().last_consent_close(),
         consent_refusal = ?online.world().last_consent_refusal(),
@@ -652,6 +664,16 @@ pub(super) fn surroundings(online: &crate::online::OnlineState, (_, _, _, combat
         .map(|(id, name, kind, _, distance, at)| (*id, name.clone(), kind.clone(), *distance, *at))
         .collect();
     nearby.truncate(12);
+    // What `click("spawn", admission, id, revision)` names, for the nearest
+    // spawns; objects and doors take the admission and their own id
+    // (checklist 6.587).
+    let admission = online.world().session_id().filter(|_| online.in_world());
+    let spawn_clicks: Vec<(u64, u16, u64)> = admission.map_or_else(Vec::new, |admission| {
+        nearby
+            .iter()
+            .filter_map(|entry| Some((admission, entry.0, online.world().spawn(entry.0)?.revision)))
+            .collect()
+    });
     // Doors near the player: id, open type, latest action, distance and position.
     let mut doors: Vec<NearbyDoor> = online
         .world()
@@ -674,7 +696,9 @@ pub(super) fn surroundings(online: &crate::online::OnlineState, (_, _, _, combat
     let (ground, stations) = objects(online, origin);
     let (models, gear) = looks(online, &nearby);
     info!(
+        ?admission,
         ?nearby,
+        ?spawn_clicks,
         ?creatures,
         ?guildmasters,
         ?doors,
@@ -690,9 +714,53 @@ pub(super) fn surroundings(online: &crate::online::OnlineState, (_, _, _, combat
         coins = ?online.world().coins(),
         trade = crate::trade::summary(online.world()),
         auto_attack = combat.auto_attack,
+        map_markers = ?map_markers(online, origin),
         "Script surroundings"
     );
 }
+
+/// How many spawns the map can show a marker for, and what
+/// `click("map_marker", admission, id, revision)` names for the nearest
+/// [`MARKERS_LISTED`] of them (checklist 6.589). The map shows every known
+/// spawn, however far, so this reaches past the nearby list.
+pub(super) fn map_markers(
+    online: &crate::online::OnlineState,
+    origin: Option<Vec3>,
+) -> (usize, Vec<(u64, u16, u64)>) {
+    let world = online.world();
+    let Some(admission) = world.session_id().filter(|_| online.in_world()) else {
+        return (0, Vec::new());
+    };
+    let mut markers: Vec<(f32, u16, u64)> = world
+        .spawns()
+        .iter()
+        // The spawns the map draws: visible, placeable, not the player.
+        .filter(|(id, spawn)| {
+            !spawn.state.invisible
+                && crate::map::placeable(spawn.state.position)
+                && world.player().is_none_or(|player| player.spawn_id != **id)
+        })
+        .map(|(id, spawn)| {
+            let at = Vec3::from_array(eq_client_core::render_position(spawn.state.position));
+            (
+                origin.map_or(0.0, |origin| at.distance(origin)),
+                *id,
+                spawn.revision,
+            )
+        })
+        .collect();
+    markers.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+    let count = markers.len();
+    let listed = markers
+        .into_iter()
+        .take(MARKERS_LISTED)
+        .map(|(_, id, revision)| (admission, id, revision))
+        .collect();
+    (count, listed)
+}
+
+/// How many map markers a report lists, nearest first.
+const MARKERS_LISTED: usize = 64;
 
 /// The doors near the player with how they move and hold the player, for
 /// checking each lift and door against the program's rules on a live run.

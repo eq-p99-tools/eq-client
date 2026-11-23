@@ -294,6 +294,7 @@ mod tests {
         testing::spawns(
             &mut online,
             vec![eq_client_core::SpawnState {
+                body_type: None,
                 class: Some(1),
                 spawn_id: NPC,
                 name: "Guard_Example000".into(),
@@ -413,6 +414,7 @@ mod tests {
         testing::spawns(
             &mut online(&mut app),
             vec![eq_client_core::SpawnState {
+                body_type: None,
                 class: Some(1),
                 spawn_id: 50,
                 name: "Trader".into(),

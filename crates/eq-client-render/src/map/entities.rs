@@ -294,6 +294,10 @@ type Markers<'w, 's> = Query<
 /// Reconcile lightweight UI dots with all known entities. Stationary dots
 /// keep their nodes, and tooltip text is formatted only while inspected.
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+#[expect(
+    clippy::match_same_arms,
+    reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
+)]
 pub(crate) fn update(
     mut commands: Commands,
     online: Res<OnlineState>,
@@ -318,7 +322,12 @@ pub(crate) fn update(
     let world = online.world();
     let arrow =
         arrow.get_or_insert_with(|| images.add(super::arrow_picture([255; 4], [0, 0, 0, 255])));
-    let mac = settings.0.installed_client == eq_client_assets::ui::InstalledClient::EqMac;
+    let mac = match settings.0.installed_client {
+        eq_client_assets::ui::InstalledClient::Titanium => false,
+        // Titanium's, inferred for RoF2 (6.489).
+        eq_client_assets::ui::InstalledClient::Rof2 => false,
+        eq_client_assets::ui::InstalledClient::EqMac => true,
+    };
     let selected = selected(world, &view).map(|entity| entity.shown(world, &motion));
     if selected.is_none() {
         view.selected = None;
@@ -572,7 +581,8 @@ fn known_player(player: &eq_client_core::PlayerState) -> Option<Known<'_>> {
     })
 }
 
-pub(super) fn finite(position: WorldPosition) -> bool {
+/// Whether the map can place a spawn: every coordinate finite.
+pub(crate) fn finite(position: WorldPosition) -> bool {
     [position.x, position.y, position.z]
         .into_iter()
         .all(f32::is_finite)

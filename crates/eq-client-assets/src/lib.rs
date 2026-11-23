@@ -2,9 +2,12 @@
 
 /// Model actors in character archives.
 pub mod actors;
+mod archives;
 pub mod camera;
 pub mod characters;
 pub mod clock;
+pub mod db_strings;
+pub mod eqg;
 pub mod falls;
 pub mod items;
 pub mod keys;
@@ -25,6 +28,8 @@ mod terrain_material_tests;
 #[cfg(test)]
 mod test_world;
 pub mod ui;
+pub mod xmi;
+pub mod zone_sounds;
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -338,7 +343,7 @@ fn zone_world(
     eq_directory: &Path,
     short_name: &str,
 ) -> Result<(PfsReader<File>, String, Vec<u8>), LoadError> {
-    let archive_path = eq_directory.join(format!("{short_name}.s3d"));
+    let archive_path = archives::path(eq_directory, archives::zone(short_name));
     let file = File::open(&archive_path).map_err(|source| LoadError::OpenArchive {
         path: archive_path,
         source,
@@ -619,7 +624,7 @@ fn load_object_models(
     textures_read: Textures,
     (textures, texture_indices): (&mut Vec<ZoneTexture>, &mut HashMap<String, usize>),
 ) -> Result<(Vec<ZoneModel>, Vec<ZoneObject>, ObjectReport), LoadError> {
-    let archive_path = eq_directory.join(format!("{short_name}_obj.s3d"));
+    let archive_path = archives::path(eq_directory, &archives::zone_objects(short_name));
     let file = match File::open(&archive_path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {

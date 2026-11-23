@@ -1,5 +1,7 @@
 //! Calibrated P99 input; no movement is generated without a session grant.
 #[cfg(test)]
+mod belongings_tests;
+#[cfg(test)]
 mod boat_pace_tests;
 mod boats;
 mod follow;
@@ -21,7 +23,7 @@ use eq_client_assets::{
 };
 use eq_client_core::{
     Capability, ClientCommand, DiagonalAlong, DiagonalRates, GroundedDiagonal, HeadingUpdate,
-    MovementMode, MovementRequest, Posture, StrafeSide, Support,
+    MovementMode, MovementRequest, Pace, Posture, StrafeSide, Support,
     hazards::Hazard,
     movement::{
         AirborneController, CollisionWorld, Landing, PROVISIONAL_PHYSICS, VerticalPhysics,
@@ -127,6 +129,10 @@ pub(super) struct Controls {
     /// A jump from standing still crouching first, as both installed
     /// clients do.
     crouch: Option<Crouch>,
+    /// That crouch sends no posture: it began while the player held a Feign
+    /// Death standing (Move While Feigned, 6.454), whose feign the crouch's
+    /// duck and stand would end. It keeps its wait (6.600).
+    quiet_crouch: bool,
     /// The cost of a landing the session's queue had no room to tell; it
     /// goes before the next sample.
     unreported: Option<FallCost>,
@@ -271,6 +277,7 @@ impl Default for Controls {
             last_jump: None,
             endurance_spent: None,
             crouch: None,
+            quiet_crouch: false,
             unreported: None,
             facing: None,
             mouse_turn: 0.0,
@@ -555,14 +562,16 @@ impl Controls {
             let radians = eq_client_core::render_heading(heading);
             intent.preserve_facing = true;
             if let Some(speed) = self.strafe_speed {
-                intent.mode = MovementMode::Strafe;
                 // Titanium strafes on the selected base speed (the R5
-                // audit's S1).
-                intent.speed = if self.walking {
-                    self.strafe_walk_speed.unwrap_or(speed)
+                // audit's S1), and the sample names that pace, so the
+                // session bounds it by the same rate (6.540).
+                let (pace, rate) = if self.walking {
+                    (Pace::Walk, self.strafe_walk_speed.unwrap_or(speed))
                 } else {
-                    speed
+                    (Pace::Run, speed)
                 };
+                intent.mode = MovementMode::Strafe(pace);
+                intent.speed = rate;
                 let facing = Vec3::new(radians.sin(), 0.0, radians.cos());
                 intent.direction = facing.cross(Vec3::Y) * sideways;
             } else {
@@ -943,6 +952,12 @@ impl Controls {
             self.set_speeds(grant);
             self.straddle = None;
         }
+    }
+
+    /// Whether the player moved in the latest pass: the emotes' stand-in
+    /// for the program's own spawn speed (+0x48, recording checklist 6.488).
+    pub(crate) const fn moving(&self) -> bool {
+        self.moving
     }
 
     /// How fast the player's water step moves it across, in units a
@@ -1339,7 +1354,11 @@ fn stroke_pitch(
     // and the mouse only in first person; a chase view's mouse look and
     // camera keys move only the camera (reads R13 d, R33, R39 A).
     let pitch = camera.look_pitch();
-    if pitch == 0.0 || !longitudinal || mode == MovementMode::Strafe || direction == Vec3::ZERO {
+    if pitch == 0.0
+        || !longitudinal
+        || matches!(mode, MovementMode::Strafe(_))
+        || direction == Vec3::ZERO
+    {
         return None;
     }
     let backing = mode == MovementMode::Backward || camera_back && !camera_forward;
@@ -1403,6 +1422,10 @@ fn on_mount(world: &ClientWorld, spells: Option<&crate::spellbook::SpellNames>) 
     clippy::needless_pass_by_value,
     clippy::too_many_arguments,
     clippy::too_many_lines
+)]
+#[expect(
+    clippy::match_same_arms,
+    reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
 )]
 pub(super) fn input(
     keys: crate::keys::Keys,
@@ -1610,8 +1633,12 @@ pub(super) fn input(
     }
     let now = Instant::now();
     controls.settle(now);
-    let water_enabled =
-        client == InstalledClient::Titanium && !flying && online.world().can(Capability::Swimming);
+    let water_enabled = match client {
+        InstalledClient::Titanium => true,
+        // RoF2's water is not read yet.
+        InstalledClient::EqMac | InstalledClient::Rof2 => false,
+    } && !flying
+        && online.world().can(Capability::Swimming);
     if !water_enabled || !focused || controls.stun_active {
         controls.shoreline.reset();
     }
@@ -1635,12 +1662,25 @@ pub(super) fn input(
     // installed client allows. A rooted player's jump is refused where the
     // generation's program refuses it (read R22 c): the press is dropped.
     let rooted_still = controls.speed == Some(0.0) && !online.world().generation().root().jumps;
+    // Nor does a seated player or a looter jump, and nothing stands them for
+    // it: the jump waits on the can-move flag, which only standing and
+    // ducking pass (read R19 c; the Mac-era client inferred, 6.600).
+    let seated = online
+        .world()
+        .generation()
+        .jump_gate()
+        .only_standing_or_ducking
+        && matches!(
+            posture,
+            Some(eq_client_core::PostureState::Sitting | eq_client_core::PostureState::Looting)
+        );
     if focused
         && !flying
         && !swimming
         && !shoreline_active
         && !online.world().is_stunned()
         && !lying
+        && !seated
         && !rooted_still
         && keys.pressed(Act::Jump)
         && controls.airborne.is_some()
@@ -1669,7 +1709,12 @@ pub(super) fn input(
         Crouch::Over => false,
     }) {
         controls.crouch = None;
-        match post_posture(&outbox, online.world(), Posture::Standing) {
+        let stood = if controls.quiet_crouch {
+            Ok(())
+        } else {
+            post_posture(&outbox, online.world(), Posture::Standing)
+        };
+        match stood {
             Ok(()) => {
                 controls.jump = (!detached).then_some(due);
                 controls.crouch = Some(Crouch::Over);
@@ -1775,8 +1820,12 @@ pub(super) fn input(
         controls.held = Some(Held::NoBody);
         return;
     };
-    let placement_blocked = client == InstalledClient::Titanium
-        && !flying
+    let placement_blocked = match client {
+        InstalledClient::Titanium => true,
+        // Titanium's, inferred for RoF2 (6.489).
+        InstalledClient::Rof2 => true,
+        InstalledClient::EqMac => false,
+    } && !flying
         && controls.airborne.is_some()
         && controls.placement.holds(
             online.server_placement(),
@@ -2015,7 +2064,7 @@ pub(super) fn input(
     // R28b),
     // so it isn't halved again here. Elsewhere the session stands them to move,
     // and the step it stands them on is halved as before.
-    if intent.mode == MovementMode::Strafe
+    if matches!(intent.mode, MovementMode::Strafe(_))
         && !online.world().generation().ducking().moves_ducked
         && online
             .world()
@@ -2042,7 +2091,7 @@ pub(super) fn input(
         // walking and ducking shares the grant gave the strafe (R28, R33).
         let input = match mode {
             MovementMode::Backward => swim.backward,
-            MovementMode::Strafe => {
+            MovementMode::Strafe(_) => {
                 swim.strafe * (speed / controls.strafe_speed.unwrap_or(speed).max(f32::EPSILON))
             }
             _ if controls.walking => swim.walk,
@@ -2301,7 +2350,12 @@ pub(super) fn input(
             false
         }
         Some(crouch) if jump && direction == Vec3::ZERO && !airborne => {
-            if let Err(reason) = post_posture(&outbox, online.world(), Posture::Ducking) {
+            // While a feign is held standing the crouch waits as ever but
+            // reports no duck or stand, so the jump keeps the feign (6.600).
+            controls.quiet_crouch = online.world().feign_held();
+            if !controls.quiet_crouch
+                && let Err(reason) = post_posture(&outbox, online.world(), Posture::Ducking)
+            {
                 controls.send_failed(reason);
                 controls.held = Some(Held::Refused);
                 return;
@@ -2837,7 +2891,7 @@ pub(super) fn fall_step(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn fall_step_with_water(
+pub(super) fn fall_step_with_water(
     airborne: &mut AirborneController,
     world: &CollisionWorld,
     physics: VerticalPhysics,
@@ -2927,6 +2981,7 @@ pub(super) fn physics(client: InstalledClient, zone_gravity: Option<f32>) -> Ver
             ground_tolerance: falls.ground_tolerance,
             climb: eq_client_core::movement::MAX_GROUNDED_STEP,
             edge_climb: None,
+            airborne_clear: 0.0,
             steers_in_air: false,
         }
     })
@@ -2964,6 +3019,13 @@ pub(super) fn walking(
     let physics = climbing(physics, client, body);
     client.falls().map_or(physics, |falls| VerticalPhysics {
         edge_climb: Some(falls.walk_climb(body.feet_offset, body.size, raised)),
+        // A raised jump or fall passes over an edge its floor sweep reaches
+        // and lands on it (R42, 6.484); where the walk climbs edges at all.
+        airborne_clear: if raised && falls.edge_climb.is_some() {
+            physics.climb
+        } else {
+            0.0
+        },
         ..physics
     })
 }
@@ -3873,16 +3935,24 @@ pub(super) mod tests {
         let map = KeyMap::for_client(InstalledClient::Titanium);
         let keys = ButtonInput::<KeyCode>::default();
         let strafe = |controls: &Controls| {
-            controls
-                .intent(&keys, &map, &[Act::StrafeLeft], true, (0.0, 0.0), None)
-                .speed
+            let intent = controls.intent(&keys, &map, &[Act::StrafeLeft], true, (0.0, 0.0), None);
+            (intent.speed, intent.mode)
         };
-        assert!((strafe(&controls) - 6.0).abs() < 0.001);
+        // The sample names the pace it takes, so the session bounds it by
+        // the same rate (6.540).
+        let (speed, mode) = strafe(&controls);
+        assert!((speed - 6.0).abs() < 0.001);
+        assert_eq!(mode, MovementMode::Strafe(Pace::Run));
         controls.walking = true;
-        assert!((strafe(&controls) - 4.0).abs() < 0.001);
-        // Without a walking rate, one rate for both.
+        let (speed, mode) = strafe(&controls);
+        assert!((speed - 4.0).abs() < 0.001);
+        assert_eq!(mode, MovementMode::Strafe(Pace::Walk));
+        // Without a walking rate, one rate for both; still a walking strafe,
+        // which the session then bounds by that one rate.
         controls.strafe_walk_speed = None;
-        assert!((strafe(&controls) - 6.0).abs() < 0.001);
+        let (speed, mode) = strafe(&controls);
+        assert!((speed - 6.0).abs() < 0.001);
+        assert_eq!(mode, MovementMode::Strafe(Pace::Walk));
     }
 
     #[test]
@@ -4819,6 +4889,341 @@ pub(super) mod tests {
         assert!(dry_run.z > 4.5, "{dry_run}");
     }
 
+    /// Steps `body` from `start` over `triangles` (render frame) in 50 ms
+    /// steps by `client`'s walking physics, each step's horizontal move and
+    /// jump from `input(step, feet)`; returns where the feet end and the
+    /// landings taken.
+    fn airborne_run(
+        triangles: Vec<[[f32; 3]; 3]>,
+        body: &super::PlayerBody,
+        (client, raised): (InstalledClient, bool),
+        start: Vec3,
+        steps: usize,
+        input: impl Fn(usize, Vec3) -> (Vec3, bool),
+    ) -> (Vec3, Vec<eq_client_core::movement::Landing>) {
+        use eq_client_core::movement::{AirborneController, CollisionWorld};
+        let physics = walking(physics(client, None), client, body, raised);
+        let world = CollisionWorld::new(triangles).unwrap();
+        let mut airborne = AirborneController::default();
+        let mut feet = start;
+        let mut landings = Vec::new();
+        for step in 0..steps {
+            let (horizontal, jump) = input(step, feet);
+            let next = fall_step(
+                &mut airborne,
+                &world,
+                physics,
+                client.falls().map(|_| physics.reach()),
+                feet,
+                horizontal,
+                0.05,
+                body.height,
+                jump,
+            );
+            feet = next;
+            landings.extend(airborne.take_landing());
+        }
+        (feet, landings)
+    }
+
+    /// The plank end at z 0 over a floor at y 0, open water (a deep floor at
+    /// y -30) for `gap`, then a deck at y 4.4 behind a side rising to `side`.
+    fn ship_dock(gap: f32, side: f32) -> Vec<[[f32; 3]; 3]> {
+        let mut triangles = solid_box(Vec3::new(-20.0, -1.0, -40.0), Vec3::new(20.0, 0.0, 0.0));
+        triangles.extend(solid_box(
+            Vec3::new(-20.0, -31.0, -40.0),
+            Vec3::new(20.0, -30.0, 200.0),
+        ));
+        triangles.extend(solid_box(
+            Vec3::new(-20.0, -30.0, gap),
+            Vec3::new(20.0, side, gap + 0.5),
+        ));
+        triangles.extend(solid_box(
+            Vec3::new(-20.0, -30.0, gap + 0.5),
+            Vec3::new(20.0, 4.4, 200.0),
+        ));
+        triangles
+    }
+
+    /// A run at 32 a second along +Z from z -20 that jumps once the feet
+    /// pass `takeoff` (never, for None).
+    fn run_and_jump(takeoff: Option<f32>) -> impl Fn(usize, Vec3) -> (Vec3, bool) {
+        let jumped = std::cell::Cell::new(false);
+        move |_, feet| {
+            let jump = !jumped.get() && takeoff.is_some_and(|at| feet.z >= at);
+            jumped.set(jumped.get() || jump);
+            (Vec3::Z * 32.0 * 0.05, jump)
+        }
+    }
+
+    #[test]
+    fn a_titanium_running_jump_lands_on_a_deck_across_the_water_as_the_program_does() {
+        // Erud's Crossing (11-19 probe): the ship's deck 4.4 over the planks
+        // and 10 to 13 across open water, behind a side 5 high. The program
+        // sweeps a jump with the walk's raised sphere and has no lower
+        // test, so the side doesn't stop it, and the floor refresh stands
+        // it on the deck (R42; 6.484).
+        let start = Vec3::new(0.0, 0.0, -20.0);
+        let (feet, landings) = airborne_run(
+            ship_dock(12.0, 5.0),
+            &HUMAN,
+            (InstalledClient::Titanium, true),
+            start,
+            60,
+            run_and_jump(Some(-1.0)),
+        );
+        assert!(feet.z > 13.0 && (feet.y - 4.4).abs() < 0.01, "{feet}");
+        // It lands once, on the deck, at the speed it came at.
+        let deck = landings.last().unwrap();
+        assert!(deck.fall_distance < 3.0, "{landings:?}");
+    }
+
+    #[test]
+    fn a_jump_still_stops_at_a_taller_side_and_a_walk_off_still_falls() {
+        let start = Vec3::new(0.0, 0.0, -20.0);
+        let titanium = (InstalledClient::Titanium, true);
+        for (name, side, takeoff, raised) in [
+            // A side 9 high reaches past the soles' rise (about 4.95)
+            // plus 3.375.
+            ("a side 9 high", 9.0, Some(-1.0), titanium),
+            // Off the end with no jump, the soles are far under the side's
+            // top less the reach when they meet it.
+            ("a walk off the end", 5.0, None, titanium),
+            // Ducking (or wet feet), the program sweeps at the origin
+            // itself (L = 0): today's sweep stays.
+            (
+                "a ducking jump",
+                5.0,
+                Some(-0.5),
+                (InstalledClient::Titanium, false),
+            ),
+            // The Mac-era client has no raised sweep here.
+            (
+                "a Mac-era jump",
+                5.0,
+                Some(-0.5),
+                (InstalledClient::EqMac, true),
+            ),
+        ] {
+            let (feet, _) = airborne_run(
+                ship_dock(10.0, side),
+                &HUMAN,
+                raised,
+                start,
+                60,
+                run_and_jump(takeoff),
+            );
+            assert!(feet.y < -10.0 && feet.z < 10.0, "{name}: {feet}");
+        }
+    }
+
+    #[test]
+    fn a_jump_mounts_a_ledge_up_to_its_rise_plus_the_floor_sweeps_reach() {
+        // What a standing jump against a ledge reaches: its own rise over
+        // flat ground plus the floor sweep's 3.375 (6.484). Today it
+        // mounted nothing it couldn't walk up.
+        let floor = solid_box(Vec3::new(-20.0, -1.0, -40.0), Vec3::new(20.0, 0.0, 200.0));
+        let press = |step, _| (Vec3::Z * 32.0 * 0.05, step == 0);
+        let mut peak = 0.0_f32;
+        {
+            let physics = walking(
+                physics(InstalledClient::Titanium, None),
+                InstalledClient::Titanium,
+                &HUMAN,
+                true,
+            );
+            let world = eq_client_core::movement::CollisionWorld::new(floor.clone()).unwrap();
+            let mut airborne = eq_client_core::movement::AirborneController::default();
+            let mut feet = Vec3::ZERO;
+            for step in 0..30 {
+                feet = fall_step(
+                    &mut airborne,
+                    &world,
+                    physics,
+                    Some(physics.reach()),
+                    feet,
+                    Vec3::ZERO,
+                    0.05,
+                    HUMAN.height,
+                    step == 0,
+                );
+                peak = peak.max(feet.y);
+            }
+        }
+        let reach = peak + 3.375;
+        for (top, mounts) in [(reach - 0.3, true), (reach + 0.3, false)] {
+            let mut triangles = floor.clone();
+            triangles.extend(solid_box(
+                Vec3::new(-20.0, 0.0, 1.0),
+                Vec3::new(20.0, top, 200.0),
+            ));
+            let (feet, _) = airborne_run(
+                triangles,
+                &HUMAN,
+                (InstalledClient::Titanium, true),
+                Vec3::new(0.0, 0.0, 0.5),
+                40,
+                press,
+            );
+            assert_eq!(
+                (feet.y - top).abs() < 0.01,
+                mounts,
+                "a ledge {top} (rise {peak}): {feet}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fast_fall_steered_onto_a_ledge_takes_the_landing_its_speed_earns() {
+        // No dodge: a run off a platform 12 up, which the air doesn't steer,
+        // meets a ledge's face with the feet just under its top. They stand
+        // on the top with the fall's speed, as a landing onto it would.
+        let mut triangles = solid_box(Vec3::new(-20.0, 11.0, -40.0), Vec3::new(20.0, 12.0, 0.0));
+        triangles.extend(solid_box(
+            Vec3::new(-20.0, -61.0, -40.0),
+            Vec3::new(20.0, -60.0, 200.0),
+        ));
+        triangles.extend(solid_box(
+            Vec3::new(-20.0, -60.0, 14.5),
+            Vec3::new(20.0, 0.0, 200.0),
+        ));
+        let (feet, landings) = airborne_run(
+            triangles,
+            &HUMAN,
+            (InstalledClient::Titanium, true),
+            Vec3::new(0.0, 12.0, -3.0),
+            14,
+            |_, _| (Vec3::Z * 32.0 * 0.05, false),
+        );
+        assert!(feet.y.abs() < 0.01 && feet.z > 14.5, "{feet}");
+        let landing = landings.first().unwrap();
+        assert!(
+            landing.fall_distance > 11.0 && landing.impact_speed > 50.0,
+            "{landings:?}"
+        );
+    }
+
+    #[test]
+    fn a_wall_thinner_than_a_stride_never_boosts_a_jump() {
+        // A standing jump pressed at run speed into a wall at z 1: where the
+        // move ends past the top, nothing lifts the body onto it, and a lift
+        // never keeps upward speed, so the feet never rise past the wall's
+        // top or the plain jump's apex (reviewer F1; 6.484).
+        let floor = solid_box(Vec3::new(-20.0, -1.0, -40.0), Vec3::new(20.0, 0.0, 200.0));
+        let highest = |triangles: Vec<[[f32; 3]; 3]>| {
+            let peak = std::cell::Cell::new(0.0_f32);
+            let (feet, _) = airborne_run(
+                triangles,
+                &HUMAN,
+                (InstalledClient::Titanium, true),
+                Vec3::new(0.0, 0.0, 0.5),
+                40,
+                |step, feet: Vec3| {
+                    peak.set(peak.get().max(feet.y));
+                    (Vec3::Z * 32.0 * 0.05, step == 0)
+                },
+            );
+            peak.get().max(feet.y)
+        };
+        let apex = highest(floor.clone());
+        assert!((apex - 4.95).abs() < 0.1, "{apex}");
+        for top in [3.0, 6.0, 8.0] {
+            for thick in [0.1, 0.3] {
+                let mut triangles = floor.clone();
+                triangles.extend(solid_box(
+                    Vec3::new(-20.0, 0.0, 1.0),
+                    Vec3::new(20.0, top, 1.0 + thick),
+                ));
+                let peak = highest(triangles);
+                assert!(
+                    peak <= apex.max(top) + 0.01,
+                    "a wall {top} high, {thick} thick: {peak} (apex {apex})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_jump_lifted_onto_a_deck_or_ledge_stays_inside_the_session_guard() {
+        use eq_client_core::movement::{AirborneController, CollisionWorld, MAX_GROUNDED_STEP};
+        use eq_network_game::movement::{MovementGuard, MovementMode, MovementRequest};
+
+        // Each 50 ms step goes out as the walk sends it: Jump before the
+        // sample that leaves the ground, Fall while coming down or after
+        // a drop of more than a riser, else Forward. The guard hears the
+        // walk's reach, the jump and the run speed, as a session does.
+        let physics = walking(
+            physics(InstalledClient::Titanium, None),
+            InstalledClient::Titanium,
+            &HUMAN,
+            true,
+        );
+        let floor = solid_box(Vec3::new(-20.0, -1.0, -40.0), Vec3::new(20.0, 0.0, 200.0));
+        let mut ledge = floor;
+        // Just under what a standing jump mounts (about 4.95 + 3.375).
+        ledge.extend(solid_box(
+            Vec3::new(-20.0, 0.0, 1.0),
+            Vec3::new(20.0, 8.0, 200.0),
+        ));
+        for (name, triangles, start, takeoff, top) in [
+            ("the deck", ship_dock(12.0, 5.0), -20.0, -1.0, 4.4),
+            ("a ledge 8 high", ledge, 0.5, 0.5, 8.0),
+        ] {
+            let world = CollisionWorld::new(triangles).unwrap();
+            let begin = Instant::now();
+            let at = |step: usize| begin + Duration::from_millis(50 * step as u64);
+            let origin = |feet: Vec3| {
+                eq_client_core::world_position((feet + Vec3::Y * HUMAN.feet_offset).to_array(), 0.0)
+            };
+            let mut feet = Vec3::new(0.0, 0.0, start);
+            let mut guard = MovementGuard::new(12, origin(feet), at(0));
+            guard.set_speed(Some(32.0), at(0));
+            guard.set_climb(physics.reach());
+            guard.set_jump(physics.jump_speed, physics.gravity);
+            guard.set_fall_speed(physics.terminal_speed);
+            let mut airborne = AirborneController::default();
+            let mut jumped = false;
+            let mut lifted = 0;
+            for step in 1..=40 {
+                let jump = !jumped && feet.z >= takeoff;
+                jumped |= jump;
+                let rising = airborne.velocity() > 0.0;
+                let next = fall_step(
+                    &mut airborne,
+                    &world,
+                    physics,
+                    Some(physics.reach()),
+                    feet,
+                    Vec3::Z * 32.0 * 0.05,
+                    0.05,
+                    HUMAN.height,
+                    jump,
+                );
+                if !rising && airborne.velocity() > 0.0 {
+                    guard.jumped();
+                }
+                let mode = if airborne.velocity() < 0.0 || feet.y - next.y > MAX_GROUNDED_STEP {
+                    MovementMode::Fall
+                } else {
+                    MovementMode::Forward
+                };
+                // The step that stands it on the top, higher than the
+                // arc alone took it, goes out grounded.
+                if (next.y - top).abs() < 0.01 && feet.y < top - 0.01 {
+                    lifted += 1;
+                    assert_eq!(mode, MovementMode::Forward, "{name}: {feet} -> {next}");
+                }
+                let request = MovementRequest::new(mode, 12, origin(next), at(step));
+                assert!(
+                    guard.accept(&request, at(step)).is_ok(),
+                    "{name}: step {step} {mode:?} {feet} -> {next}"
+                );
+                feet = next;
+            }
+            assert!(lifted == 1 && (feet.y - top).abs() < 0.01, "{name}: {feet}");
+        }
+    }
+
     #[test]
     fn the_raised_climb_leaves_doorways_and_stairs_as_they_were() {
         // The width is the capsule's, unchanged (6.482): a gap of 0.9 lets
@@ -5331,6 +5736,91 @@ pub(super) mod tests {
         (stances, jumped)
     }
 
+    /// A seated player's or a looter's jump press does nothing and stands no
+    /// one: the jump waits on the can-move flag (read R19 c; 6.600).
+    #[test]
+    fn a_seated_or_kneeling_player_does_not_jump_or_stand() {
+        use eq_client_core::PostureState;
+        for client in [InstalledClient::Titanium, InstalledClient::EqMac] {
+            for posture in [PostureState::Sitting, PostureState::Looting] {
+                let (mut app, receiver) = standing_jump(client);
+                report_posture(&mut app, posture);
+                app.update();
+                app.update();
+                let sent: Vec<_> = receiver.try_iter().collect();
+                assert!(
+                    !sent.iter().any(|command| matches!(
+                        command,
+                        ClientCommand::SetPosture { .. } | ClientCommand::Jump { .. }
+                    )),
+                    "{client:?} {posture:?}: {sent:?}"
+                );
+                let controls = app.world().resource::<Controls>();
+                assert_eq!((controls.crouch, controls.jump), (None, None));
+            }
+        }
+    }
+
+    /// While a feign is held standing (Move While Feigned), a jump from
+    /// standing still keeps its crouch's wait but sends no duck or stand, so
+    /// the feign holds (6.600). The jump goes no sooner than without it.
+    #[test]
+    fn a_jump_with_a_feign_held_keeps_the_crouch_wait_and_sends_no_posture() {
+        for client in [InstalledClient::Titanium, InstalledClient::EqMac] {
+            let (mut app, receiver) = standing_jump(client);
+            crate::online::testing::news(
+                &mut app.world_mut().resource_mut::<online::OnlineState>(),
+                [eq_client_core::WorldEvent::FeignHeld(true)],
+            );
+            let before = Instant::now();
+            app.update();
+            assert_eq!(stances_and_jump(&receiver), (Vec::new(), false));
+            let Some(Crouch::Until(due)) = app.world().resource::<Controls>().crouch else {
+                panic!("{client:?}: the crouch waits");
+            };
+            let wait = client.standing_jump_crouch().unwrap();
+            assert!(due >= before + wait, "{client:?}: no faster jump");
+            // Held through the crouch, nothing goes.
+            app.update();
+            assert_eq!(stances_and_jump(&receiver), (Vec::new(), false));
+            // Once it is over the jump goes alone.
+            let earlier = Instant::now()
+                .checked_sub(Duration::from_millis(1))
+                .unwrap();
+            app.world_mut().resource_mut::<Controls>().crouch = Some(Crouch::Until(earlier));
+            app.update();
+            assert_eq!(stances_and_jump(&receiver), (Vec::new(), true));
+        }
+    }
+
+    /// Once the session says the feign ended, the crouch reports its duck
+    /// and stand again, as without one.
+    #[test]
+    fn a_jump_after_the_held_feign_ended_crouches_as_ever() {
+        let (mut app, receiver) = standing_jump(InstalledClient::Titanium);
+        crate::online::testing::news(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            [
+                eq_client_core::WorldEvent::FeignHeld(true),
+                eq_client_core::WorldEvent::FeignHeld(false),
+            ],
+        );
+        app.update();
+        assert_eq!(stances_and_jump(&receiver), (vec![Posture::Ducking], false));
+    }
+
+    /// Without Move While Feigned a feign lies the player down, and a lying
+    /// player's jump stays blocked (read R19 c).
+    #[test]
+    fn a_feigned_player_who_lies_does_not_jump() {
+        let (mut app, receiver) = standing_jump(InstalledClient::Titanium);
+        report_posture(&mut app, eq_client_core::PostureState::Lying);
+        app.update();
+        app.update();
+        assert_eq!(stances_and_jump(&receiver), (Vec::new(), false));
+        assert_eq!(app.world().resource::<Controls>().crouch, None);
+    }
+
     #[test]
     fn a_mac_era_jump_from_standing_still_crouches_once_then_goes() {
         let (mut app, receiver) = standing_jump(InstalledClient::EqMac);
@@ -5663,6 +6153,7 @@ pub(super) mod tests {
                 skills: None,
                 practice_points: None,
                 languages: None,
+                intoxication: None,
                 disciplines: None,
                 spell_refresh_ms: None,
                 memorized_spells: [None; 8],
@@ -6182,6 +6673,7 @@ pub(super) mod tests {
                 &mut online,
                 5,
                 SpawnState {
+                    body_type: None,
                     name: "Friend".into(),
                     kind: SpawnKind::Player,
                     race: 1,
@@ -7169,7 +7661,7 @@ pub(super) mod tests {
             );
             controls.strafe_speed = Some(3.0);
             let right = controls.intent(&keys, &map, &[], true, (0.0, heading), None);
-            assert_eq!(right.mode, MovementMode::Strafe);
+            assert_eq!(right.mode, MovementMode::Strafe(Pace::Run));
             assert!(right.preserve_facing);
             assert_eq!(right.speed, 3.0);
             assert!(right.direction.dot(facing).abs() < 0.0001);
@@ -7871,7 +8363,7 @@ pub(super) mod tests {
             let ClientCommand::Move(request) = receiver.try_recv().unwrap() else {
                 panic!("expected a strafe")
             };
-            assert_eq!(request.mode, MovementMode::Strafe);
+            assert_eq!(request.mode, MovementMode::Strafe(Pace::Run));
             let across = request.position.x.hypot(request.position.y);
             assert!(
                 (across - moved).abs() < 0.001,
@@ -7886,7 +8378,7 @@ pub(super) mod tests {
         // halved in the session's grant, so the client takes the grant's
         // running strafe running and its walking strafe walking, as standing.
         use eq_client_core::{GameDialect, PostureState};
-        for (walking, moved) in [(false, 0.4), (true, 0.2)] {
+        for (walking, moved, pace) in [(false, 0.4, Pace::Run), (true, 0.2, Pace::Walk)] {
             let (mut app, receiver) = app();
             online::testing::generation(
                 &mut app.world_mut().resource_mut::<online::OnlineState>(),
@@ -7917,7 +8409,7 @@ pub(super) mod tests {
             let ClientCommand::Move(request) = receiver.try_recv().unwrap() else {
                 panic!("expected a strafe, with no stand before it")
             };
-            assert_eq!(request.mode, MovementMode::Strafe);
+            assert_eq!(request.mode, MovementMode::Strafe(pace));
             let across = request.position.x.hypot(request.position.y);
             assert!(
                 (across - moved).abs() < 0.001,
@@ -8170,7 +8662,7 @@ pub(super) mod tests {
                 };
                 let position = Vec3::from_array(eq_client_core::render_position(request.position));
                 if world_owns_look {
-                    assert_eq!(request.mode, MovementMode::Strafe);
+                    assert_eq!(request.mode, MovementMode::Strafe(Pace::Run));
                     assert!((position - origin - right * side * 0.3).length() < 0.001);
                     assert!(arc(0.0, request.position.heading).abs() < 0.001);
                     accept(&mut app, &request);
@@ -8260,7 +8752,7 @@ pub(super) mod tests {
         keys.reset_all();
         keys.press(KeyCode::KeyE);
         let explicit = intent(&controls, &keys, &[], true, &looking);
-        assert_eq!(explicit.mode, MovementMode::Strafe);
+        assert_eq!(explicit.mode, MovementMode::Strafe(Pace::Run));
         assert!((explicit.speed - 3.0).abs() < f32::EPSILON);
         assert!(explicit.turn.abs() < f32::EPSILON);
     }
@@ -8440,7 +8932,7 @@ pub(super) mod tests {
         keys.press(KeyCode::KeyS);
         let only_side = controls.intent(&keys, &map, &[], true, (0.0, 0.0), None);
         assert!(only_side.diagonal.is_none());
-        assert_eq!(only_side.mode, MovementMode::Strafe);
+        assert_eq!(only_side.mode, MovementMode::Strafe(Pace::Run));
 
         keys.reset_all();
         keys.press(KeyCode::KeyE);
@@ -8865,6 +9357,7 @@ pub(super) mod tests {
         let mut carriers = eq_client_core::movement::Carriers::default();
         let spawned = carriers.observe(
             &WorldEvent::Spawns(vec![SpawnState {
+                body_type: None,
                 spawn_id: 8,
                 race: 72,
                 kind: SpawnKind::Npc,
