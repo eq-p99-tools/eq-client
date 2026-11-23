@@ -132,7 +132,7 @@ impl DoorTable {
                 // types 54-56: nothing is sent or said (0x4906c5, read R37 a).
                 GameDialect::Titanium => id != u8::MAX && !(54..=56).contains(&door.open_type),
                 GameDialect::EqMac => eqmac::ordinary(door),
-                _ => false,
+                GameDialect::Rof2 => false,
             })
     }
 
@@ -153,7 +153,7 @@ impl DoorTable {
                 }
                 eq_network_game::reach::EQMAC.doors
             }
-            _ => return None,
+            GameDialect::Rof2 => return None,
         };
         let door = self.doors.entries().get(&id)?;
         // A door is reached at its origin where it stands now, within 20, as

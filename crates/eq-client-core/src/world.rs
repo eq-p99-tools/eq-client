@@ -595,6 +595,9 @@ impl ClientWorld {
             ConsentKind::Translocate => {
                 let _ = self.translocate.take_if(|current| current.id == id);
             }
+            // A duel's question has no prompt here yet: it waits for its
+            // front end (the duel slice), as `WorldEvent::Duel` does.
+            ConsentKind::Duel => {}
         }
     }
 
@@ -782,6 +785,9 @@ impl ClientWorld {
                 diagonal,
                 falls,
                 jump_factor,
+                // The swim grant waits for the swimming slice; the motion
+                // granted stays as it was.
+                swim: _,
             } => self.grant_motion(
                 *session_id,
                 MotionGrant {
@@ -984,6 +990,52 @@ impl ClientWorld {
             | WorldEvent::Duel(_)
             | WorldEvent::NewTitles
             | WorldEvent::Gm(_)
+            // Pinned past these before their front ends land (repin 6.561);
+            // each waits for the client slice named.
+            // A duel's question and refusal: the duel slice (6.492).
+            | WorldEvent::DuelOffer(_)
+            | WorldEvent::DuelRefused { .. }
+            // Applying a poison: the apply poison slice (6.493).
+            | WorldEvent::ApplyPoisonRefused { .. }
+            | WorldEvent::PoisonAnswered(_)
+            // The Bazaar search: its client slice (6.550).
+            | WorldEvent::Bazaar(_)
+            | WorldEvent::BazaarRefused { .. }
+            // Where the player is bound: /charinfo (6.524).
+            | WorldEvent::BoundIn { .. }
+            // RoF2's buff icons, mana and endurance pools: the RoF2 slices
+            // (6.527, 6.538).
+            | WorldEvent::BuffIcons(_)
+            | WorldEvent::ResourcePercent { .. }
+            | WorldEvent::ResourcePool { .. }
+            // Chat server channels: the chat channels slice (6.509).
+            | WorldEvent::Channel(_)
+            | WorldEvent::ChannelLink(_)
+            | WorldEvent::ChatChannelRefused { .. }
+            // A chat line the pace held: the chat pace slice (6.523).
+            | WorldEvent::ChatRefused { .. }
+            // Petitions, bug reports and feedback: the reports slice (6.511).
+            | WorldEvent::ReportRefused { .. }
+            | WorldEvent::ReportSent { .. }
+            // The server filters the session kept: the filters slice (6.494).
+            | WorldEvent::ServerFiltersKept { .. }
+            | WorldEvent::ServerFiltersRefused { .. }
+            // A last name's answer and the title list: the surname and
+            // titles slices (titles 6.516).
+            | WorldEvent::SurnameAnswer { .. }
+            | WorldEvent::TitleList(_)
+            // The bandolier sets and potion belt: their window's slice (6.559).
+            | WorldEvent::Bandoliers(_)
+            | WorldEvent::PotionBelt(_)
+            // The task journal, offers and history: the tasks slice (6.560).
+            | WorldEvent::TaskDescribed { .. }
+            | WorldEvent::TaskStepUpdated { .. }
+            | WorldEvent::TaskConcluded { .. }
+            | WorldEvent::TaskRemoved { .. }
+            | WorldEvent::CompletedTasks { .. }
+            | WorldEvent::TasksOffered { .. }
+            | WorldEvent::TaskHistory { .. }
+            | WorldEvent::TaskRefused { .. }
             // The machine's weekly account left for the world; the session
             // host keeps the date it went (the installed client's own
             // `LastSysInfoDate` stamp). Nothing about the world changed.
@@ -1567,7 +1619,13 @@ impl ClientWorld {
                 if self.session_id == Some(id.session_id) {
                     self.dismiss_consent(*id);
                     self.last_consent_close = Some((*id, *closure));
-                    if *closure == ConsentClosure::Expired {
+                    // A duel's question has no prompt yet (the duel slice), so
+                    // its end says nothing, as before the repin (6.561).
+                    let prompted = match id.kind {
+                        ConsentKind::Resurrection | ConsentKind::Translocate => true,
+                        ConsentKind::Duel => false,
+                    };
+                    if *closure == ConsentClosure::Expired && prompted {
                         news.notices.push(Notice::ConsentExpired(id.kind));
                     }
                 } else {

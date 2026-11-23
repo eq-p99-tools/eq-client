@@ -235,6 +235,7 @@ pub(super) fn input(
         let _ = outbox.post(world, |stamp| ClientCommand::SendChatInAdmission {
             session_id: stamp.session_id,
             message: OutboundChat::Say(text),
+            tongue: eq_client_core::Tongue::COMMON,
         });
     }
     let bar_attack = super::hud::hotbar::requested(&keys, &bindings, &bar_clicks)

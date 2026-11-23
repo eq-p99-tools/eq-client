@@ -317,7 +317,7 @@ pub const fn seed_name(protocol: ServerProtocol) -> Option<&'static str> {
         ServerProtocol::Quarm => Some("Project Quarm"),
         ServerProtocol::EqEmu => Some("Local EQEmu"),
         ServerProtocol::Takp => Some("Local TAKP"),
-        _ => None,
+        ServerProtocol::EqEmuRof2 => None,
     }
 }
 
@@ -330,7 +330,7 @@ const fn type_name(protocol: ServerProtocol) -> Option<&'static str> {
         ServerProtocol::Quarm => Some("quarm"),
         ServerProtocol::EqEmu => Some("eqemu"),
         ServerProtocol::Takp => Some("takp"),
-        _ => None,
+        ServerProtocol::EqEmuRof2 => None,
     }
 }
 

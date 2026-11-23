@@ -737,6 +737,7 @@ mod tests {
                 &mut online,
                 id,
                 SpawnState {
+                    body_type: None,
                     class: None,
                     spawn_id: id,
                     name: name.into(),
@@ -795,6 +796,7 @@ mod tests {
                 &mut online,
                 id,
                 SpawnState {
+                    body_type: None,
                     class: None,
                     spawn_id: id,
                     name: name.into(),
@@ -849,6 +851,7 @@ mod tests {
                     &mut online,
                     id,
                     SpawnState {
+                        body_type: None,
                         class: None,
                         spawn_id: id,
                         name: "a_bat".into(),
@@ -904,6 +907,7 @@ mod tests {
                     &mut online,
                     id,
                     SpawnState {
+                        body_type: None,
                         class: None,
                         spawn_id: id,
                         name: format!("Synthetic {id}"),

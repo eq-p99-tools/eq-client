@@ -59,6 +59,7 @@ fn spawn(spawn_id: u16) -> SpawnState {
         spawn_id,
         name: "a_rat".into(),
         kind: SpawnKind::Npc,
+        body_type: None,
         race: 1,
         gender: 0,
         position: WorldPosition::default(),
@@ -862,6 +863,7 @@ fn input_acceptance_is_current_and_never_supplies_movement_permission() {
             strafe_units_per_second: None,
             strafe_walk_units_per_second: None,
             swim_backward_units_per_second: None,
+            swim: None,
             falls: true,
             jump_factor: 1.0,
         },
@@ -3736,6 +3738,7 @@ fn the_session_grants_motion_until_any_reset() {
         strafe_units_per_second: None,
         strafe_walk_units_per_second: None,
         swim_backward_units_per_second: None,
+        swim: None,
         falls: true,
         jump_factor: 1.0,
     };

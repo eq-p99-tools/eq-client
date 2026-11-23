@@ -92,6 +92,7 @@ mod tests {
         // Test fixture construction stays in the network's public record
         // shape, without any installed asset or route data.
         SpawnState {
+            body_type: None,
             spawn_id: id,
             race: 72,
             kind: SpawnKind::Npc,
