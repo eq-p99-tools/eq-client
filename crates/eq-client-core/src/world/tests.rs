@@ -26,7 +26,6 @@ use crate::{
 fn player(spawn_id: u16) -> PlayerState {
     PlayerState {
         name: "Example".into(),
-        intoxication: None,
         titanium_environment: None,
         base_attributes: None,
         deity: None,
@@ -41,6 +40,7 @@ fn player(spawn_id: u16) -> PlayerState {
         skills: None,
         practice_points: None,
         languages: None,
+        intoxication: None,
         disciplines: None,
         spell_refresh_ms: None,
         memorized_spells: [None; 8],
@@ -1228,6 +1228,65 @@ fn a_silent_song_stop_releases_only_its_local_cast_hold() {
             std::time::Duration::from_secs(3),
         );
     }
+}
+
+#[test]
+fn the_song_a_bard_sings_holds_nothing_back_but_another_cast_does() {
+    let mut world = admitted();
+    let begin = |spell_id| {
+        WorldEvent::Spell(SpellUpdate::Began {
+            caster_id: 9,
+            spell_id,
+            duration_ms: 3000,
+        })
+    };
+    game(&mut world, begin(42));
+    assert!(world.casting().holds_actions());
+    game(
+        &mut world,
+        WorldEvent::Singing {
+            session_id: 1,
+            spell_id: Some(42),
+        },
+    );
+    assert_eq!(world.casting().singing, Some(42));
+    assert!(!world.casting().holds_actions());
+    // An item cast alongside the song holds as any cast.
+    game(
+        &mut world,
+        WorldEvent::CastPending {
+            session_id: 1,
+            spell_id: Some(77),
+        },
+    );
+    assert!(world.casting().holds_actions());
+    game(
+        &mut world,
+        WorldEvent::CastPending {
+            session_id: 1,
+            spell_id: None,
+        },
+    );
+    game(&mut world, begin(77));
+    assert!(world.casting().holds_actions());
+    // Another admission's word changes nothing; the session's end does.
+    let stale = game(
+        &mut world,
+        WorldEvent::Singing {
+            session_id: 7,
+            spell_id: None,
+        },
+    );
+    assert!(stale.ignored);
+    assert_eq!(world.casting().singing, Some(42));
+    game(
+        &mut world,
+        WorldEvent::Singing {
+            session_id: 1,
+            spell_id: None,
+        },
+    );
+    assert_eq!(world.casting().singing, None);
 }
 
 #[test]

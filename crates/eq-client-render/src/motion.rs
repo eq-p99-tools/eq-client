@@ -1200,6 +1200,7 @@ fn lower_speeds(
                 strafe: a.strafe.min(b.strafe),
                 backward: a.backward.min(b.backward),
                 set: b.set,
+                slower: b.slower,
             }
         }),
         diagonal: DiagonalRates {
@@ -1384,20 +1385,40 @@ type InputExtras<'w, 's> = (
 /// Whether the generation's headroom test refuses the player's own move
 /// from `feet` to `landing`: the room over the floor at the landing doesn't
 /// pass what the posture (ducking, mounted) needs and the margin, with S the
-/// body's current stand height. A move that didn't change the position
-/// isn't tested.
+/// test's `stand_height` ([`headroom_stand_height`]). A move that didn't
+/// change the position isn't tested.
 fn lacks_headroom(
     client: InstalledClient,
     world: &eq_client_core::movement::CollisionWorld,
-    body: &PlayerBody,
+    (body, stand_height): (&PlayerBody, f32),
     (feet, landing): (Vec3, Vec3),
     (ducking, mounted): (bool, bool),
 ) -> bool {
     landing.distance_squared(feet) > 1e-10
         && client.headroom().is_some_and(|rule| {
-            let room = rule.room(body.feet_offset, ducking, mounted);
+            let room = rule.room(stand_height, ducking, mounted);
             !world.headroom(landing + Vec3::Y * body.feet_offset, room)
         })
+}
+
+/// The headroom test's S: the model's stand height, 3.125 for every player
+/// model, times the scale the program draws the model at, which is 1/1.3
+/// smaller while the zone header's classic model scale flag is set (read
+/// R49-9f a, 0x47a0e9). Without the player or the zone's header it's the
+/// body's own offset, as before.
+fn headroom_stand_height(client: InstalledClient, world: &ClientWorld, body: &PlayerBody) -> f32 {
+    let Some((player, flag)) = world.player().zip(world.classic_model_scale_flag()) else {
+        return body.feet_offset;
+    };
+    let scale = client.model_scale().drawn_scale(
+        player.race,
+        player.gender,
+        player.size,
+        eq_client_assets::scale::ZoneScale {
+            classic_reduced: flag != 0,
+        },
+    );
+    eq_client_core::drawn_feet_offset(scale)
 }
 
 /// Whether a buff the player holds is known to summon a mount (effect 113).
@@ -2526,7 +2547,7 @@ pub(super) fn input(
         && lacks_headroom(
             client,
             world,
-            body,
+            (body, headroom_stand_height(client, online.world(), body)),
             (feet, landing),
             (
                 posture == Some(eq_client_core::PostureState::Ducking),
@@ -4780,6 +4801,50 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn the_headroom_tests_s_shrinks_with_the_zones_classic_model_scale() {
+        use crate::online::testing;
+        use eq_client_core::movement::CollisionWorld;
+        // Read R49-9f a: S = 3.125 × size × 0.2, × 1/1.3 under the zone
+        // header's flag; a human (size 6) stands 3.75, or 2.885 there.
+        let world_with = |flag: Option<u8>| {
+            let mut online = crate::online::OnlineState::new(true);
+            testing::admit(&mut online, 11, testing::player(7));
+            if let Some(flag) = flag {
+                let mut header = [0; 700];
+                header[592] = flag;
+                let description = eq_client_core::zones::titanium_description(&header).unwrap();
+                testing::news(
+                    &mut online,
+                    [eq_client_core::WorldEvent::ZoneDescription(description)],
+                );
+            }
+            online
+        };
+        let titanium = InstalledClient::Titanium;
+        let s = |flag| super::headroom_stand_height(titanium, world_with(flag).world(), &HUMAN);
+        assert!((s(Some(0)) - 3.75).abs() < 1e-4, "{}", s(Some(0)));
+        assert!((s(Some(1)) - 3.75 / 1.3).abs() < 1e-4, "{}", s(Some(1)));
+        // Without the header, the body's own offset stands in.
+        assert!((s(None) - HUMAN.feet_offset).abs() < 1e-6);
+        // A doorway of exactly 8.00 and a passage of 7.48 refuse a human at
+        // 3.75 (the compare is strict, R49-9f e) and pass one at 2.885.
+        for room in [8.0, 7.48] {
+            let mut triangles = flat_surface(0.0).to_vec();
+            triangles.extend(solid_box(
+                Vec3::new(-20.0, room, 4.0),
+                Vec3::new(20.0, room + 1.0, 20.0),
+            ));
+            let world = CollisionWorld::new(triangles).unwrap();
+            let into = (Vec3::new(0.0, 0.0, 3.0), Vec3::new(0.0, 0.0, 5.0));
+            let refused = |stand| {
+                super::lacks_headroom(titanium, &world, (&HUMAN, stand), into, (false, false))
+            };
+            assert!(refused(s(Some(0))), "{room}");
+            assert!(!refused(s(Some(1))), "{room}");
+        }
+    }
+
+    #[test]
     fn a_titanium_move_without_the_postures_headroom_is_refused() {
         use eq_client_core::movement::CollisionWorld;
         // A floor at 0 and a ceiling over z > 4; a human's S is 3.75, so
@@ -4796,7 +4861,7 @@ pub(super) mod tests {
         let outside = Vec3::new(0.0, 0.0, 3.0);
         let inside = Vec3::new(0.0, 0.0, 5.0);
         let refused = |client, world: &CollisionWorld, body, mv, posture| {
-            super::lacks_headroom(client, world, body, mv, posture)
+            super::lacks_headroom(client, world, (body, body.feet_offset), mv, posture)
         };
         let titanium = InstalledClient::Titanium;
         let into = (outside, inside);
@@ -7196,6 +7261,7 @@ pub(super) mod tests {
             strafe: 0.7,
             backward: 0.0,
             set: eq_client_core::movement::water::LIQUID_5,
+            slower: eq_client_core::movement::water::LIQUID_6_TO_8,
         };
 
     /// What the program's step gives from rest over `span` for `input`.

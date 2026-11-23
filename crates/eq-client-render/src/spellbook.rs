@@ -160,6 +160,29 @@ impl eq_client_core::world::SpellCatalog for SpellNames {
         Some(self.mechanics(spell)?.effects.map(|slot| slot.id))
     }
 
+    fn placement_effects(
+        &self,
+        spell: u32,
+    ) -> Option<[eq_client_core::buffs::placement::Effect; 12]> {
+        Some(
+            self.mechanics(spell)?
+                .effects
+                .map(|slot| eq_client_core::buffs::placement::Effect {
+                    id: slot.id,
+                    base: slot.base,
+                    formula: slot.formula,
+                    max: slot.maximum,
+                }),
+        )
+    }
+
+    fn bard_level(&self, spell: u32) -> Option<bool> {
+        const BARD: u32 = 8;
+        // The class level the program tests (0x44e755(8)): 255 for none.
+        self.installed_scribe_level(spell, BARD)
+            .map(|level| level != u8::MAX)
+    }
+
     fn target_type(&self, spell: u32) -> Option<u32> {
         self.spell(spell)?.target_type
     }
@@ -629,7 +652,7 @@ pub(super) fn update(
         world,
         selection.selected,
         &names,
-        pending || selection.deletion.queued,
+        memorize_pending(world) || selection.deletion.queued,
         accepts_input,
     );
     if let Some(gem) = requested {
@@ -798,14 +821,26 @@ fn delete_input(
 pub(crate) fn action_pending(world: &ClientWorld) -> bool {
     world.casting().cast.is_some()
         || world.casting().pending.is_some()
-        || matches!(
-            world.book_action(),
-            Some(
-                eq_client_core::BookActionStatus::Preparing
-                    | eq_client_core::BookActionStatus::Submitted
-                    | eq_client_core::BookActionStatus::AwaitingReply
-            )
+        || book_answer_pending(world)
+}
+
+/// A memorization waits as other book actions do, except on the song a
+/// Bard is singing ([I], read R49-48 a): the program's answer leaves the
+/// song alone (R49-21c).
+pub(crate) fn memorize_pending(world: &ClientWorld) -> bool {
+    world.casting().holds_actions() || book_answer_pending(world)
+}
+
+/// A book change the server hasn't settled yet.
+fn book_answer_pending(world: &ClientWorld) -> bool {
+    matches!(
+        world.book_action(),
+        Some(
+            eq_client_core::BookActionStatus::Preparing
+                | eq_client_core::BookActionStatus::Submitted
+                | eq_client_core::BookActionStatus::AwaitingReply
         )
+    )
 }
 
 type BookLabels<'w, 's> = Query<
