@@ -13,7 +13,11 @@ fn definitions() -> Arc<Definitions> {
             fields[1] = format!("Destination {id}");
             fields[8] = format!("Fade {id}");
             fields[14] = "2500".to_owned();
-            fields[15] = if id == 4 { "0".to_owned() } else { (id * 10_000).to_string() };
+            fields[15] = if id == 4 {
+                "0".to_owned()
+            } else {
+                (id * 10_000).to_string()
+            };
             fields[19] = (id * 10).to_string();
             fields[83] = (id % 2).to_string();
             fields[144] = (id * 3).to_string();

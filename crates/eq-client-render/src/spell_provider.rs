@@ -71,9 +71,7 @@ impl eq_client_core::vision::SightCatalog for SightProvider {
     /// of 0.
     fn recast(&self, spell_id: u32) -> Option<std::time::Duration> {
         let provider = self.0.lock().ok()?;
-        let spell = provider
-            .get(spell_id)
-            .or_else(|| provider.text(spell_id))?;
+        let spell = provider.get(spell_id).or_else(|| provider.text(spell_id))?;
         let recast_ms = spell.timing?.recast_ms;
         (recast_ms > 0).then(|| std::time::Duration::from_millis(u64::from(recast_ms)))
     }
