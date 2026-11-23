@@ -173,6 +173,10 @@ pub struct Casting {
     pub cast: Option<(u16, Instant, Duration)>,
     /// A cast request the session has not had answered yet.
     pub pending: Option<u32>,
+    /// The song a Bard is singing, as the session tells it under the
+    /// Titanium program's rules (`WorldEvent::Singing`, read R49-21).
+    /// While its own cast is the one under way, nothing else waits on it.
+    pub singing: Option<u32>,
     /// The request associated with the active cast. TAKP can begin a Luclin
     /// port as spell 2935 and end it naming the requested port.
     requested: Option<u32>,
@@ -190,6 +194,18 @@ pub struct Casting {
 }
 
 impl Casting {
+    /// Whether a cast is under way that holds other actions back: one
+    /// awaiting the server's answer, or one in progress that isn't the
+    /// song a Bard is singing. The program holds nothing because of a song
+    /// (read R49-21d); an item cast alongside one holds as any cast.
+    #[must_use]
+    pub fn holds_actions(&self) -> bool {
+        self.pending.is_some()
+            || self
+                .cast
+                .is_some_and(|(spell, ..)| self.singing != Some(u32::from(spell)))
+    }
+
     /// Time left on knight recovery. A missing profile field
     /// stays unknown. Zero means the last reported wait has elapsed.
     #[must_use]
