@@ -1415,6 +1415,18 @@ pub(super) fn drive(
             script.stop(&mut keys, &mut mouse, "the scene is not drawn");
             return;
         };
+        // The thing must still be the one reported, every frame up to the
+        // last release: an id reused mid-click is refused, not clicked.
+        let named = match &step {
+            Step::Click(target) | Step::RightClick(target) | Step::ClickWith { target, .. } => {
+                scene_thing(*target, online.world())
+            }
+            _ => None,
+        };
+        if let Some(Err(reason)) = named {
+            script.stop(&mut keys, &mut mouse, reason);
+            return;
+        }
         match scene_frame(
             script,
             (&step, began, now),
@@ -7212,6 +7224,39 @@ mod tests {
     }
 
     #[test]
+    fn a_spawn_replaced_mid_glide_stops_the_click_and_nothing_is_pressed() {
+        let mut app = scene_app(|admission, revision| {
+            vec![Step::Click(ClickTarget::Spawn {
+                admission,
+                id: 42,
+                revision,
+            })]
+        });
+        app.init_resource::<RunStatus>()
+            .add_systems(Update, observe.after(drive));
+        for ms in [0, 16, 32, 48, 64] {
+            frame_at(&mut app, ms);
+        }
+        assert!(app.world().resource::<Script>().scene.is_some());
+        // The spawn leaves and its id comes back on another.
+        {
+            let mut online = app.world_mut().resource_mut::<crate::online::OnlineState>();
+            let before = online.world().spawn(42).unwrap().revision;
+            crate::online::testing::spawns(&mut online, vec![crate::online::testing::pet(42, 7)]);
+            assert_ne!(online.world().spawn(42).unwrap().revision, before);
+        }
+        for ms in (80..=400).step_by(16) {
+            frame_at(&mut app, ms);
+        }
+        assert_eq!(
+            stop_reason(&app).as_deref(),
+            Some("that spawn is gone or has changed")
+        );
+        let seen = &app.world().resource::<SceneSeen>().0;
+        assert!(seen.iter().all(|(_, down, _)| !down), "{seen:?}");
+    }
+
+    #[test]
     fn a_run_stopped_mid_glide_hands_the_scene_its_real_pointer() {
         let mut app = scene_app(|admission, revision| {
             vec![Step::ClickWith {
@@ -7237,11 +7282,56 @@ mod tests {
         assert!(!app.world().contains_resource::<Script>());
         let scene = app.world().resource::<crate::target::ScenePointer>();
         assert!(scene.request.is_none() && scene.aim.is_none());
+    }
+
+    #[test]
+    fn a_run_stopped_with_the_button_down_lets_go_of_it_and_its_keys() {
+        let mut app = scene_app(|admission, revision| {
+            vec![Step::ClickWith {
+                keys: vec![KeyCode::ShiftLeft],
+                target: ClickTarget::Spawn {
+                    admission,
+                    id: 42,
+                    revision,
+                },
+                right: true,
+            }]
+        });
+        app.init_resource::<RunControl>();
+        let mut ms = 0;
+        while !app
+            .world()
+            .resource::<ButtonInput<MouseButton>>()
+            .pressed(MouseButton::Right)
+        {
+            assert!(ms < 1000);
+            frame_at(&mut app, ms);
+            ms += 16;
+        }
+        // Pressed: the button and Shift are down.
+        assert!(
+            app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .pressed(KeyCode::ShiftLeft)
+        );
+        app.world_mut()
+            .resource_mut::<RunControl>()
+            .request(Request::Stop);
+        frame_at(&mut app, ms);
+        frame_at(&mut app, ms + 16);
+        assert!(!app.world().contains_resource::<Script>());
         assert!(
             !app.world()
                 .resource::<ButtonInput<KeyCode>>()
                 .pressed(KeyCode::ShiftLeft)
         );
+        assert!(
+            !app.world()
+                .resource::<ButtonInput<MouseButton>>()
+                .pressed(MouseButton::Right)
+        );
+        let scene = app.world().resource::<crate::target::ScenePointer>();
+        assert!(scene.request.is_none() && scene.aim.is_none() && !scene.acted);
     }
 
     #[test]

@@ -901,11 +901,16 @@ pub(super) fn parse_words(command: &str, rest: &[&str]) -> Result<Step, String> 
             slot: InventorySlot(slot.parse().map_err(|_| "expected an inventory slot")?),
         },
         ("click", target) => Step::Click(parse_click(target)?),
-        ("right_click", target) => Step::RightClick(parse_click(target)?),
-        (command @ ("click_with" | "right_click_with"), [keys, target @ ..]) => Step::ClickWith {
+        ("right_click", target) => Step::RightClick(right_clicked(parse_click(target)?)?),
+        ("click_with", [keys, target @ ..]) => Step::ClickWith {
             keys: modifiers(keys)?,
             target: parse_click(target)?,
-            right: command == "right_click_with",
+            right: false,
+        },
+        ("right_click_with", [keys, target @ ..]) => Step::ClickWith {
+            keys: modifiers(keys)?,
+            target: right_clicked(parse_click(target)?)?,
+            right: true,
         },
         ("hover", target) => Step::Hover(window_control(parse_click(target)?)?),
         ("hold_click", [duration, target @ ..]) => Step::HoldClick(
@@ -1018,6 +1023,19 @@ fn number<T: std::str::FromStr>(text: &str, what: &str) -> Result<T, String> {
 
 /// `click <target>` or `right_click <target>`: a slot, spellbook, trade or
 /// bag tint button.
+/// A target a right click takes: a door or a ground object is only left
+/// clicked, as the scene acts on nothing else for them (checklist 6.587).
+fn right_clicked(target: ClickTarget) -> Result<ClickTarget, String> {
+    if matches!(
+        target,
+        ClickTarget::Object { .. } | ClickTarget::Door { .. }
+    ) {
+        Err("an object or door takes click; a right click acts only on a spawn".into())
+    } else {
+        Ok(target)
+    }
+}
+
 /// A target that `hover` and `hold_click` take: a window's control, never
 /// a thing in the scene, which a person only clicks (checklist 6.587).
 fn window_control(target: ClickTarget) -> Result<ClickTarget, String> {
@@ -2331,6 +2349,9 @@ mod tests {
         assert!(parse("hold_click(800, \"door\", 5, 12)\n", base).is_err());
         assert!(parse("click(\"spawn\", 5, 42)\n", base).is_err());
         assert!(parse("click(\"door\", 5, 300)\n", base).is_err());
+        // The scene acts on a right click only for a spawn.
+        assert!(parse("right_click(\"door\", 5, 12)\n", base).is_err());
+        assert!(parse("right_click_with(\"alt\", \"object\", 5, 900)\n", base).is_err());
     }
 
     #[test]
