@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+- Mouse look in the chase view tilts as far as straight up or straight down again, at any zoom (checklist 6.606, Adam 11-23). The chase camera had kept the Titanium program's height model, from eye level to 30 units above the eyes, which at the ordinary zoom tilts only about 15 degrees and never looks up.
+  - **Free Chase Tilt**, a new quality-of-life setting, on by default: a drag turns the chase camera around the eyes up to 89 degrees above or below level, and the wheel moves it along its sightline. Looking up, the camera swings below the eyes, never under the feet, and floors and walls still pull it in. An almost overhead view still zooms before it snaps into first person, and the far plane follows the camera out.
+  - Turned off, the chase camera keeps the program's height model as before. In the Titanium program (read of 11-23, checklists 6.348 and 6.422), mouse look Y in that camera only zooms or moves its height, only the orbit cameras tilt, from about 45 degrees up to 84 down, and no third-person camera follows the character's look pitch. Straight up or down in every view is Adam's choice. First person looks straight up or down either way.
+  - A script's `camera` step takes a pitch from -89 to 89 degrees, so a script can look up as a player can.
+
+- `/loadskin <name>` switches the UI skin in game (checklist 6.605), as the official client's command does. The windows redraw from the new skin at once, and the choice stays the character's for later runs. A name matches the installation's `uifiles` folder whatever its letter case. A skin that isn't installed changes nothing and says so, and an unreadable line gives the usage. The official client's trailing `0` or `1` is accepted, and this client keeps window placements either way. The choice is saved in this client's settings folder, not in the installation's files. A skin loaded in game wins over `--ui-skin` until the player camps or plays another character or world, when `--ui-skin` applies again. What the official client says in reply isn't read, so the replies are this client's own words. Why: the Velious skin's inventory shows the bags alone, with no paperdoll, statistics or hit point and mana numbers, and its equipment sits in Hot Button window 1. `/loadskin default` brings the full inventory back without restarting.
+
+- Destroy the coins on the cursor (gap 3.8, checklist 6.512), as the
+  Titanium program's Destroy button does (read R49-11). With coins on the
+  cursor and no item, **Destroy cursor item** asks first, with the
+  installation's own question (string 0x80d), or our words where the
+  installation lacks it. With no answer in 10 s the question closes as a No.
+  On Yes it sends one `DestroyCoins` (eq-network #342) for the first kind on
+  the cursor, the most valuable first, whole, as the program sends one move.
+  - **Departure, labelled (6.512c):** the program then clears every kind on
+    its cursor, including kinds it never told the server about. This client
+    keeps those shown, as the server still holds them. Its own coin controls
+    hold one kind on the cursor at a time, so two kinds come only from what
+    the server says the cursor holds.
+  - The program skips the question when its ini `Destroy` key is set. That
+    option is row 6.512b, not built here.
+  - Where the session doesn't offer `Capability::DestroyingCoins` (all but
+    stock EQEmu for now) it says "This server does not take destroying
+    coins." and asks nothing. An item on the cursor is destroyed as before;
+    its question in the program's own string (0x7fb) and timeout is row
+    6.512d.
+  - Any change to the cursor's coins cancels the question. Scripts click the
+    same control and dialog, so they destroy coins as they destroy items,
+    and a script that answers nothing gets the timeout's No.
 - Drowning and lava now hurt on every Titanium server, public EQEmu and
   P99 included, as the Titanium program reports them on any server
   (eq-network's liquid change; read R25). **Characters on public servers

@@ -115,7 +115,7 @@ Key names are case-insensitive. Combine them with `+`, such as `alt+1`. Supporte
 
 ## Camera and movement
 
-- `camera(heading, pitch[, distance])`: position the camera; pitch is -89 to 0 degrees. Use `camera("player", offset, pitch[, distance])` for an offset from the player's heading.
+- `camera(heading, pitch[, distance])`: position the camera; pitch is -89 (straight down) to 89 (straight up) degrees, which the chase view holds within its own range: with the Free Chase Tilt setting off it stays between eye level and 30 units above the eyes, so it never looks up. Use `camera("player", offset, pitch[, distance])` for an offset from the player's heading.
 - `face()`: turn the camera toward the target.
 - `face(heading)`: turn the character to an absolute heading at the ordinary turn rate, waiting up to 5 seconds for server confirmation.
 - `move(command, milliseconds)`: hold `forward`, `back`, `camera_forward`,
