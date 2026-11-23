@@ -8,6 +8,10 @@
 use super::chat::{ChatState, Said};
 use bevy::prelude::*;
 
+/// A `/motd` typed, waiting for [`answers`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Asked;
+
 /// Whether a typed line, spelled out, is `/motd`.
 pub(crate) fn typed(input: &str) -> bool {
     input
@@ -20,7 +24,7 @@ pub(crate) fn typed(input: &str) -> bool {
 /// client's line when none came on this connection.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(super) fn answers(mut chat: ResMut<ChatState>, online: Res<super::online::OnlineState>) {
-    if !std::mem::take(&mut chat.motd_asked) {
+    if chat.motd_asked.take().is_none() {
         return;
     }
     if !chat.say_motd_again(&online) {
