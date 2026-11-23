@@ -70,6 +70,16 @@ pub enum Fix {
     /// off, the camera keeps to the program's limit. Its height above the
     /// player stays the program's either way. Adam's choice (11-01).
     LongChaseCamera,
+    /// Lets mouse look tilt the chase camera around the player's eyes as
+    /// far as straight up or straight down, at any zoom; turned off, the
+    /// camera keeps the Titanium program's height model, from eye level to
+    /// 30 units above the eyes, which never looks up and, zoomed out, barely
+    /// looks down (program read N2 of 11-01). In the program mouse look Y
+    /// only zooms that camera, or moves its height; only its orbit cameras
+    /// (modes 5 and 6) tilt, from about 45 degrees up to 84 down, and first
+    /// person looks straight up or down (read of 11-23, checklists 6.348,
+    /// 6.422). Adam's choice (11-23): straight up or down in every view.
+    FreeChaseTilt,
     /// Offers the free camera: a user-assigned key detaches the camera from
     /// the character to fly it anywhere, through walls and terrain, until the
     /// key returns it; the character never moves and nothing is sent. The
@@ -171,7 +181,7 @@ pub enum Fix {
 impl Fix {
     /// Every fix: the settings in the order the quality-of-life page lists
     /// them, then the fixes that are always on.
-    pub const ALL: [Self; 34] = [
+    pub const ALL: [Self; 35] = [
         Self::SkipModifiedFood,
         Self::HiddenWindows,
         Self::AskBeforeDeletingSpells,
@@ -179,6 +189,7 @@ impl Fix {
         Self::FlashOnTells,
         Self::CorpsesAlongGround,
         Self::LongChaseCamera,
+        Self::FreeChaseTilt,
         Self::FreeCamera,
         Self::ClearView,
         Self::WalkWhileWinded,
@@ -224,6 +235,7 @@ impl Fix {
             Self::GillsForDays => "gills_for_days",
             Self::CorpsesAlongGround => "corpses_along_ground",
             Self::LongChaseCamera => "long_chase_camera",
+            Self::FreeChaseTilt => "free_chase_tilt",
             Self::FreeCamera => "free_camera",
             Self::ClearView => "clear_view",
             Self::WalkWhileWinded => "walk_while_winded",
@@ -271,6 +283,7 @@ impl Fix {
             Self::GillsForDays => "Gills for Days",
             Self::CorpsesAlongGround => "Corpses Lie Along the Ground",
             Self::LongChaseCamera => "Long Chase Camera",
+            Self::FreeChaseTilt => "Free Chase Tilt",
             Self::FreeCamera => "Free Camera",
             Self::ClearView => "See the World Clearly",
             Self::WalkWhileWinded => "Walk While Winded",
@@ -331,6 +344,9 @@ impl Fix {
             }
             Self::LongChaseCamera => {
                 "Let the mouse wheel zoom the chase camera out far past the 200 units the Titanium client allows. Turn it off to keep the Titanium client's limit."
+            }
+            Self::FreeChaseTilt => {
+                "Let mouse look tilt the chase camera around your character as far as straight up or straight down, at any zoom. Turn it off to keep the Titanium client's chase camera, which stays between your eye level and 30 units above it."
             }
             Self::FreeCamera => {
                 "Let the Toggle Free Camera key detach the camera from your character and fly it anywhere until the key returns it. Your character never moves. Turn it off to keep the camera on your character."
@@ -428,6 +444,7 @@ impl Fix {
             | Self::FlashOnTells
             | Self::CorpsesAlongGround
             | Self::LongChaseCamera
+            | Self::FreeChaseTilt
             | Self::FreeCamera
             | Self::ClearView
             | Self::ReadWhileStanding
@@ -479,6 +496,7 @@ impl Fix {
             | Self::ShowTimesInChat
             | Self::CorpsesAlongGround
             | Self::LongChaseCamera
+            | Self::FreeChaseTilt
             | Self::FreeCamera
             | Self::ClearView
             | Self::ShowInvisible
@@ -499,8 +517,8 @@ impl Fix {
     /// chat lines read as the official client's do until the player asks
     /// for their times; the world's damage is taken until the player turns
     /// it off, as Adam chose; corpses lie along the ground until the player
-    /// turns it off, as Adam chose; the chase camera goes far until the
-    /// player turns it off, as Adam asked; windows open apart, as Adam asked; and what
+    /// turns it off, as Adam chose; the chase camera goes far, and tilts as far as
+    /// straight up or down, until the player turns it off, as Adam asked; windows open apart, as Adam asked; and what
     /// only adds what the player could work out, or stops a plain mistake,
     /// is always on.
     #[must_use]
@@ -512,6 +530,7 @@ impl Fix {
             | Self::TakeEnvironmentalDamage
             | Self::CorpsesAlongGround
             | Self::LongChaseCamera
+            | Self::FreeChaseTilt
             | Self::FreeCamera
             // The original client stands a sitter when hit (read R19 b).
             | Self::StandWhenHit
@@ -674,6 +693,7 @@ mod tests {
                 Fix::FlashOnTells,
                 Fix::CorpsesAlongGround,
                 Fix::LongChaseCamera,
+                Fix::FreeChaseTilt,
                 Fix::FreeCamera,
                 Fix::ClearView,
                 Fix::WalkWhileWinded,

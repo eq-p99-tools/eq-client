@@ -221,7 +221,9 @@ pub enum Step {
         heading: f32,
         /// Adds the player's current heading, for views relative to the model.
         relative: bool,
-        /// Downward pitch in degrees, from level (0) to straight down.
+        /// Pitch in degrees, upward positive, from straight down (-89) to
+        /// straight up (89); the view holds it within its own range, so with
+        /// the program's chase tilt it never looks up.
         pitch: f32,
         /// Distance from the player, or the one it has.
         radius: Option<f32>,
@@ -674,7 +676,7 @@ fn parse_camera(arguments: &[&str]) -> Result<Step, String> {
     Ok(Step::Camera {
         heading: number(heading, 0.0, 512.0)?,
         relative,
-        pitch: number(pitch, -89.0, 0.0)?,
+        pitch: number(pitch, -89.0, 89.0)?,
         radius: radius
             .first()
             .map(|radius| number(radius, 1.0, 20_000.0))
@@ -2581,6 +2583,7 @@ mod tests {
                  camera(\"player\", 0, -89)\n\
                  camera(128, -20)\n\
                  camera(\"player\", 256, -15, 300)\n\
+                 camera(32, 89)\n\
                  press(\"numlock\")\n\
                  hold(\"numpad8\", 500)\n\
                  press(\"pageup\")\n\
@@ -2616,6 +2619,12 @@ mod tests {
                     pitch: -15.0,
                     radius: Some(300.0),
                 },
+                Step::Camera {
+                    heading: 32.0,
+                    relative: false,
+                    pitch: 89.0,
+                    radius: None,
+                },
                 Step::Press(vec![KeyCode::NumLock]),
                 Step::Hold(vec![KeyCode::Numpad8], Duration::from_millis(500)),
                 Step::Press(vec![KeyCode::PageUp]),
@@ -2631,7 +2640,8 @@ mod tests {
             "camera(64, -20, 0)",
             "camera(64, -20, 30000)",
             "camera(64, -20, 100, 5)",
-            "camera(64, 5)",
+            "camera(64, 95)",
+            "camera(64, -95)",
             "camera(\"player\")",
             "camera(\"player\", 64)",
             "press(\"numpad10\")",

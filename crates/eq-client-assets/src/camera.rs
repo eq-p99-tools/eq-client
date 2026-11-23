@@ -15,6 +15,10 @@
 //! choice of [`ChaseLeash`]: this client's own long range by default, a
 //! quality-of-life setting, or the program's limit.
 //!
+//! How the player's mouse look tilts it is their choice of [`ChaseTilt`]:
+//! as far as straight up or down by default, a quality-of-life setting, or
+//! the program's height model.
+//!
 //! How far it draws is its [`FarPlane`]: the Titanium program draws the
 //! zone, and every spawn in it, out to its camera's far plane and to no
 //! other distance (program read N7 of 11-01).
@@ -36,7 +40,29 @@ pub struct CameraLimits {
     pub chase_height_reach: f32,
     /// How far the camera draws.
     pub far_plane: FarPlane,
+    /// How mouse look tilts the chase camera: the program's height model as
+    /// read, or this client's free tilt, which [`Self::with_tilt`] chooses.
+    pub chase_tilt: ChaseTilt,
 }
+
+/// How mouse look tilts the chase camera.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChaseTilt {
+    /// This client's own: the camera turns around the player's eyes at its
+    /// distance along the sightline, as far as [`FREE_CHASE_PITCH_DEGREES`]
+    /// above or below level, at any zoom. The player's quality-of-life
+    /// choice, on unless they turn it off.
+    Free,
+    /// The program's: the camera's height above the eyes within
+    /// [`CameraLimits::chase_height`] at its distance behind the player, so
+    /// it never looks up (program read N2 of 11-01).
+    Program,
+}
+
+/// How far either side of level the chase camera tilts on a
+/// [`ChaseTilt::Free`]: short of straight up or down, so the view keeps its
+/// heading.
+pub const FREE_CHASE_PITCH_DEGREES: f32 = 89.0;
 
 /// How far behind the player the chase camera may go.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,6 +94,16 @@ impl CameraLimits {
             most * distance / self.chase_height_reach
         } else {
             most
+        }
+    }
+
+    /// The limits with the chase camera tilting by `tilt`. Everything else
+    /// stays as it was.
+    #[must_use]
+    pub const fn with_tilt(self, tilt: ChaseTilt) -> Self {
+        Self {
+            chase_tilt: tilt,
+            ..self
         }
     }
 
@@ -141,6 +177,7 @@ pub const TITANIUM: CameraLimits = CameraLimits {
     chase_distance: (2.0, 200.0),
     chase_height_reach: 200.0,
     far_plane: FarPlane::ZoneRange,
+    chase_tilt: ChaseTilt::Program,
 };
 
 /// The Mac-era client's limits: not yet read, so Titanium's (recording
@@ -153,7 +190,7 @@ pub const EQMAC: CameraLimits = CameraLimits {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChaseLeash, EQMAC, FarPlane, LONG_CHASE_DISTANCE, TITANIUM};
+    use super::{ChaseLeash, ChaseTilt, EQMAC, FarPlane, LONG_CHASE_DISTANCE, TITANIUM};
 
     #[test]
     fn the_leash_chooses_only_the_chase_distance() {
@@ -164,8 +201,25 @@ mod tests {
             assert_eq!(long.chase_height, program.chase_height);
             assert_eq!(long.look_pitch_degrees, program.look_pitch_degrees);
             assert_eq!(long.far_plane, program.far_plane);
+            assert_eq!(long.chase_tilt, program.chase_tilt);
         }
         assert_eq!(TITANIUM.chase_distance, (2.0, 200.0));
+    }
+
+    #[test]
+    fn the_programs_tilt_is_its_height_model_and_the_free_tilt_changes_only_that() {
+        for program in [TITANIUM, EQMAC] {
+            assert_eq!(program.chase_tilt, ChaseTilt::Program);
+            assert_eq!(program.with_tilt(ChaseTilt::Program), program);
+            let free = program.with_tilt(ChaseTilt::Free);
+            assert_eq!(free.chase_tilt, ChaseTilt::Free);
+            assert_eq!(free.with_tilt(ChaseTilt::Program), program);
+            let long = program.on_leash(ChaseLeash::Long);
+            assert_eq!(
+                long.with_tilt(ChaseTilt::Free).chase_distance,
+                LONG_CHASE_DISTANCE
+            );
+        }
     }
 
     #[test]
