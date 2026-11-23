@@ -20,6 +20,7 @@ pub mod machine;
 pub mod maps;
 pub mod movement;
 pub mod names;
+pub mod no_drop;
 pub mod options;
 pub mod outfit;
 pub mod pet;

@@ -428,6 +428,24 @@ saved per exact world and character in this client's settings files. Older
 hotbar files supply their ordinary bindings. Recreate and rebind socials
 from legacy files to establish the exact profile that owns them.
 
+Lines run a tenth of a second apart, as the original's social runner steps
+them. A social or the chat also takes these Titanium commands:
+
+- `/yell` calls for help from the players near you.
+- `/stopcast` ends your own cast, or a Bard's song. It's refused while you
+  ride a mount or have a buff whose effects the spell data can't name.
+- `/doability 1` to `/doability 10` press the Actions window's ability
+  buttons: 1 to 6 on the Abilities page, 7 to 10 on the Combat page.
+- `/memspellset 3` or `/memspellset Heal` memorizes a saved spell set, by its
+  number in name order or the start of its name. It opens the Spellbook.
+- `/hotbutton Name 4 /say Hello` makes a social named Name, or rewrites the
+  first line of the one with that name, and puts it on the cursor to drop on
+  the hotbar. The number is the button's colour and can be left out.
+
+Where the installed client has no string for a line, the line is in this
+client's words, such as "You yell for help." or "Use /doability 1 through
+10.".
+
 The pause order follows the [EverQuest social hotbutton guide](https://www.everquest.com/news/imported-eq-enus-51004).
 
 ## Item links in chat
@@ -476,6 +494,13 @@ character settings when available. Note import reads profiles up to 256 KiB.
 
 Considering, hailing, auto-attack and class abilities use the target and session
 rules. Loot lists received corpse contents; Loot all takes items sequentially.
+On Titanium servers a click on a NO DROP item asks before looting it, as the
+original does, unless the corpse is your own. `/lootnodrop always` always asks
+(the default when the installed `eqclient.ini` keeps no `LootNoDrop`),
+`/lootnodrop sometimes` asks only about items your class or race can't use,
+and `/lootnodrop never` never asks. The installed client's own words for
+these choices work too. A question left unanswered for 20 seconds loots
+nothing. Loot all leaves an item that would ask for its own click.
 Merchants support selection and buy/sell requests. Giving to NPCs and trading
 with players have separate interaction state; a trade is not complete merely
 because its window opened. Ground pickups and doors use reach checks. World

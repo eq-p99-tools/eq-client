@@ -17,6 +17,7 @@ mod auto_loot;
 mod loot_requests;
 mod merchant;
 mod merchant_quantity;
+pub(crate) mod no_drop;
 pub(crate) use merchant_quantity::Selection as MerchantSelection;
 pub(crate) mod spawn_use;
 use loot_requests::PendingLoot;
@@ -49,6 +50,8 @@ pub(super) struct TradeState {
     /// How the installed client prices its merchant window, where its
     /// program's rules are read.
     prices: Option<eq_client_assets::merchants::MerchantPrices>,
+    /// A NO DROP loot the dialog asks about, or is about to.
+    no_drop: no_drop::Confirm,
 }
 
 struct LootWindow {
@@ -432,6 +435,13 @@ pub(super) fn input(
     if trade.prices != prices {
         trade.prices = prices;
     }
+    let loot_no_drop = if settings.0.installed_client.asks_before_no_drop_loot() {
+        options
+            .as_ref()
+            .map_or_else(Default::default, |options| options.options.loot_no_drop)
+    } else {
+        eq_client_core::no_drop::LootNoDrop::Take
+    };
     trade.follow(online.world());
     inventory.refresh_merchant(&trade, online.world());
     if trade.chosen().is_some() && trade.merchant_choice.is_none() {
@@ -655,6 +665,12 @@ pub(super) fn input(
         };
         match action {
             Action::Take(place) => {
+                if let Some(question) =
+                    no_drop::question(online.world(), session_id, place, loot_no_drop)
+                {
+                    trade.no_drop.want(question);
+                    continue;
+                }
                 if let Some(window) = trade
                     .loot
                     .as_mut()
@@ -818,15 +834,24 @@ pub(super) fn input(
         .filter(|loot| loot.listed)
         .map(|loot| {
             let automatic = trade.automatic.active == Some((session_id, loot.corpse_id));
+            // Taking all asks nothing: a NO DROP item the click would ask
+            // about stays for its own click (checklist 6.487).
+            let asks = |item| no_drop::asks(online.world(), loot.corpse_id, item, loot_no_drop);
             let place = loot
                 .items
                 .iter()
-                .find(|(_, item)| !automatic || !no_drop(item))
+                .find(|(_, item)| (!automatic || !no_drop(item)) && !asks(item))
                 .map(|(place, _)| *place);
-            (loot.corpse_id, place)
+            let held = loot.items.values().any(asks);
+            (loot.corpse_id, place, held)
         });
     match next {
-        Some((corpse_id, Some(place))) => {
+        Some((_, None, true)) => {
+            if let Some(window) = trade.loot.as_mut() {
+                window.loot_all = false;
+            }
+        }
+        Some((corpse_id, Some(place), _)) => {
             if send(
                 online.world(),
                 ClientCommand::LootItem {
@@ -850,7 +875,7 @@ pub(super) fn input(
                 ));
             }
         }
-        Some((corpse_id, None))
+        Some((corpse_id, None, false))
             if send(
                 online.world(),
                 ClientCommand::EndLoot {

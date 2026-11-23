@@ -208,6 +208,7 @@ pub(super) fn schedule(app: &mut App) {
             (
                 who::zone_list,
                 whereabouts::answers,
+                crate::slash::answers,
                 (contacts::answers, contacts::persist).chain(),
                 abilities::choices::persist,
                 (guild::invitations, guild::commands, sharing::commands),
@@ -216,7 +217,13 @@ pub(super) fn schedule(app: &mut App) {
                 raid::window,
             ),
             (combat::input, combat::idle_swings).chain(),
-            (trade::input, speed::report).chain(),
+            (
+                trade::input,
+                trade::no_drop::confirm,
+                trade::no_drop::command,
+                speed::report,
+            )
+                .chain(),
             (
                 give::buttons,
                 give::inspect_theirs,

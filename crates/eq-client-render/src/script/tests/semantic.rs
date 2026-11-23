@@ -417,7 +417,8 @@ fn single_step_applies_social_edits_without_interrupting_a_manual_social() {
         ClientCommand::SendChat(eq_client_core::OutboundChat::Say("First".into()))
     );
 
-    control_at(&mut app, Request::Step, 20);
+    // The manual social's next line waits one runner step (100 ms).
+    control_at(&mut app, Request::Step, 120);
     assert_eq!(
         app.world().resource::<ChatState>().newest(),
         "Saved social Stepped."
@@ -426,24 +427,24 @@ fn single_step_applies_social_edits_without_interrupting_a_manual_social() {
         rx.try_recv().unwrap(),
         ClientCommand::SendChat(eq_client_core::OutboundChat::Say("Later".into()))
     );
-    frame_at(&mut app, 30);
+    frame_at(&mut app, 130);
     assert_eq!(
         app.world().resource::<Script>().status().phase(),
         Phase::Paused
     );
 
-    control_at(&mut app, Request::Step, 40);
+    control_at(&mut app, Request::Step, 140);
     let Some(Action::Social(id)) = app.world().resource::<Bindings>().0[0] else {
         panic!("the single-stepped bind did not run");
     };
     assert_eq!(app.world().resource::<State>().name(id), Some("Stepped"));
-    frame_at(&mut app, 50);
+    frame_at(&mut app, 150);
     assert_eq!(
         app.world().resource::<Script>().status().phase(),
         Phase::Paused
     );
 
-    control_at(&mut app, Request::Step, 60);
+    control_at(&mut app, Request::Step, 160);
     assert_eq!(app.world().resource::<State>().name(id), None);
     assert!(rx.try_recv().is_err());
 }
@@ -564,7 +565,8 @@ fn a_stopped_script_does_not_cancel_a_manually_owned_social() {
     app.world_mut()
         .resource_mut::<RunControl>()
         .request(Request::Stop);
-    frame_at(&mut app, 20);
+    // The next line waits one runner step (100 ms).
+    frame_at(&mut app, 120);
     assert_eq!(
         rx.try_recv().unwrap(),
         ClientCommand::SendChat(eq_client_core::OutboundChat::Say("Later".into()))

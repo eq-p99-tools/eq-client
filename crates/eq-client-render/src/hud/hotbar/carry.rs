@@ -229,6 +229,12 @@ impl Carry {
     pub(crate) const fn hotkey(&self) -> Option<Action> {
         self.0
     }
+
+    /// Puts a hotkey on the cursor, as `/hotbutton` attaches the social it
+    /// makes (0x4fd91e, read R45b), replacing whatever was there.
+    pub(crate) const fn put(&mut self, hotkey: Action) {
+        self.0 = Some(hotkey);
+    }
 }
 
 /// A picture a hotkey shows on the cursor, by its icon.

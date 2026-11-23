@@ -136,6 +136,14 @@ pub(super) struct ChatState {
     pub zone_who: Option<eq_client_core::who::WhoFilter>,
     /// A `/loc` or `/time`, waiting to be answered.
     pub asked: Option<super::whereabouts::Asked>,
+    /// A `/yell` or `/stopcast` waiting for its line and send.
+    pub(crate) slash: Option<super::slash::Asked>,
+    /// A `/doability`'s words, waiting for the Actions window's buttons.
+    pub(crate) doability: Option<String>,
+    /// A `/memspellset`'s words, waiting for the spell sets.
+    pub(crate) spell_set_asked: Option<String>,
+    /// A `/lootnodrop`'s words, waiting to set or list the choices.
+    pub(crate) loot_no_drop: Option<String>,
     /// A `/log`, waiting to turn the chat log on or off.
     pub log_toggle: bool,
     /// A `/toggleinspect`, waiting to turn letting others inspect the
@@ -2079,6 +2087,22 @@ pub(super) fn client_request_in_scope(
         state.asked = Some(asked);
         return Some(Ok(()));
     }
+    if let Some(asked) = super::slash::Asked::typed(input) {
+        state.slash = Some(asked);
+        return Some(Ok(()));
+    }
+    if let Some(words) = command_words(input, "doability") {
+        state.doability = Some(words.to_owned());
+        return Some(Ok(()));
+    }
+    if let Some(words) = command_words(input, "memspellset") {
+        state.spell_set_asked = Some(words.to_owned());
+        return Some(Ok(()));
+    }
+    if let Some(words) = command_words(input, "lootnodrop") {
+        state.loot_no_drop = Some(words.to_owned());
+        return Some(Ok(()));
+    }
     if let Some(request) = zone_who_request(input) {
         return Some(request.map(|filter| state.zone_who = Some(filter)));
     }
@@ -2110,6 +2134,15 @@ pub(super) fn client_request_in_scope(
         return Some(Ok(()));
     }
     None
+}
+
+/// The words after `/NAME` when the line is that command, in any case.
+fn command_words<'a>(input: &'a str, name: &str) -> Option<&'a str> {
+    let command = input.strip_prefix('/')?;
+    let (typed, words) = command
+        .split_once(char::is_whitespace)
+        .unwrap_or((command, ""));
+    typed.eq_ignore_ascii_case(name).then_some(words)
 }
 
 /// The name in a `/target Name` command; underscores match spaces as in spawn names.
