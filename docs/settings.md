@@ -131,6 +131,9 @@ read R49-7 first pass and its engine follow-up):
   sound that plays day and night. Any other record is a day sound and a night
   sound, each with its own sound, type, delay and volume.
 - A radius below 0 reaches 10,000 units; a radius of 0 is heard nowhere.
+- The files place their sounds with x and y the other way round from the
+  server's coordinates (`/loc`); the client swaps them (an estimate from a
+  local look).
 - A delay above 0 repeats the sound after the delay plus 500 and up to the
   record's random extra. A positive volume is an attenuation in millibels:
   2,000 is a tenth of full volume, and above 10,000 is silent. Otherwise a
@@ -142,13 +145,22 @@ Still this client's estimate until a later read: that loudness falls in a
 line from the centre to the radius, that delays are in milliseconds, that a
 delay of 0 loops, that a bank name without a dot ends in `.wav`, that the
 numbers between the two lists (32 to 161) name the installation's numbered
-sounds, and how music regions choose, fade and switch.
+sounds, and that a new track starts at once rather than fading in.
 
 Music plays through a synthesizer on a SoundFont (`.sf2`) that you name with
-`--soundfont <file>` or `EQ_CLIENT_SOUNDFONT`. The installation ships no
-SoundFont, so this is a stated departure: the instruments are your file's, not
-the original program's. Without one, or with a file that is missing,
-unreadable or larger than 512 MB, music is silent and the log says why once.
+`--soundfont <file>` or `EQ_CLIENT_SOUNDFONT`, a stated departure: the
+instruments are your file's, and how the original program plays its music is
+unread. An installation may ship `.sf2` files of its own, but this client's
+synthesizer refuses them as they stand, so name another, such as a General
+MIDI SoundFont. Without one, or with a file that is missing, unreadable,
+refused or larger than 512 MB, music is silent and the log says why once.
+A music region plays its zone's sequence by number, counted from 0, as the
+original program does. Where regions overlap, the smallest one you stand in
+plays; outside every region no zone music plays. Night (hours before 5 AM
+and after 6 PM) takes a region's night track where it has one. A change of
+track fades the old one over 1.5 seconds, and leaving every region fades it
+over the region's own time, at most 20 seconds. A region that names an
+entry of the installation's mp3 list (a negative number) plays nothing yet.
 
 These options are saved for each character, under Options → General where the
 skin has the controls. A character with no choice of their own starts from the
@@ -160,7 +172,8 @@ installation's `eqclient.ini` `[Defaults]`, where it has the key:
 - **Music Volume** (`music_volume`, 100): the music's own volume, separate
   from Sound Volume.
 - **Environment Sounds** (`environment_sounds`, on): plays the zone's ambient
-  emitters at the Sound Volume. `EnvSounds` in `eqclient.ini` is read as TRUE
+  emitters at the Sound Volume. As in the original client, turning it off
+  also silences the zone's music regions. `EnvSounds` in `eqclient.ini` is read as TRUE
   or FALSE, which is this client's estimate; its reader is unread.
 - **Combat Music** (`combat_music`, on): `CombatMusic` in `eqclient.ini`, and
   `/combatmusic` turns it on or off. This client plays no combat music yet.
