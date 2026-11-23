@@ -273,7 +273,7 @@ pub struct ClientWorld {
     // The admission: from entering a zone until the next admission.
     session_id: Option<u64>,
     liquid_hazards: LiquidHazardInputs,
-    environmental_aa: crate::alternate_advancement::State,
+    alternate_advancement: crate::alternate_advancement::State,
     /// The session's interpreted stun state and latest revision; None is
     /// unknown/unconfigured, not proof of clear control.
     own_stun: Option<(u64, crate::control::StunState)>,
@@ -399,9 +399,10 @@ pub struct ClientWorld {
 }
 
 impl ClientWorld {
-    /// This admission's received environmental AA observations.
-    pub const fn environmental_aa(&self) -> &crate::alternate_advancement::State {
-        &self.environmental_aa
+    /// This admission's received AA facts, for display and the
+    /// environmental effects; nothing in them sends.
+    pub const fn alternate_advancement(&self) -> &crate::alternate_advancement::State {
+        &self.alternate_advancement
     }
 
     /// Applies one update from the session and says what a front end must redo.
@@ -1261,9 +1262,20 @@ impl ClientWorld {
             WorldEvent::Skill { skill_id, value } => self.skill_news(*skill_id, *value, news),
             WorldEvent::Disciplines(list) => self.disciplines_news(list, news),
             WorldEvent::AlternateAdvancement { session_id, updates } => {
-                if self.session_id == Some(*session_id) && !self.ended && self.player.is_some()
-                    && self.generation == crate::GameDialect::Titanium {
-                    for update in updates { self.environmental_aa.apply(update); }
+                // RoF2 sends no AA facts yet; the session reads Titanium's
+                // and EQMac's (checklist 6.565).
+                let read = match self.generation {
+                    crate::GameDialect::Titanium | crate::GameDialect::EqMac => true,
+                    crate::GameDialect::Rof2 => false,
+                };
+                if read
+                    && self.session_id == Some(*session_id)
+                    && !self.ended
+                    && self.player.is_some()
+                {
+                    for update in updates {
+                        self.alternate_advancement.apply(update);
+                    }
                 } else {
                     news.ignored = true;
                 }
@@ -1907,7 +1919,7 @@ impl ClientWorld {
             self.buffs.clear();
         }
         if ended {
-            self.environmental_aa = crate::alternate_advancement::State::default();
+            self.alternate_advancement = crate::alternate_advancement::State::default();
             self.spell_book = None;
             self.servers = None;
             self.characters = None;
@@ -1938,7 +1950,7 @@ impl ClientWorld {
 
     /// Forgets the admission and its zone.
     fn forget_admission(&mut self) {
-        self.environmental_aa = crate::alternate_advancement::State::default();
+        self.alternate_advancement = crate::alternate_advancement::State::default();
         self.liquid_hazards = LiquidHazardInputs::default();
         self.characters = None;
         self.last_consent_refusal = None;
