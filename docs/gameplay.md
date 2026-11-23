@@ -655,9 +655,10 @@ checks; selecting alone does not attack or cast.
 
 Titanium See Invisible can reveal an ordinary invisible player or NPC when
 the worker knows the effect and the spawn's appearance. Unclassified
-invisibility values remain hidden. Installed lights illuminate supported
-Titanium interiors, and known race and buff effects can change low-light
-vision. **See the World Clearly** and **Show Invisible Entities** are local
+invisibility values remain hidden. Titanium zones without a sky are lit as the
+original lights them: by each vertex's baked light, the zone's ambient, and up
+to three nearby placed or carried lights (see [Zone lighting](zone-lighting.md)).
+Known race and buff effects can change low-light vision. **See the World Clearly** and **Show Invisible Entities** are local
 presentation settings.
 
 On Titanium EQEmu and Project 1999, received server popups show the supplied
