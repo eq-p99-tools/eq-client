@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Read zones in the EQG format newer clients install, for RoF2 later:
+  `eq_client_assets::eqg::load_eqg_zone` turns `<zone>.eqg`'s descriptor,
+  terrain and model meshes, placements and diffuse textures into the same
+  `ZoneAsset` the S3D loader gives. It reads through David Henry's MIT
+  `libeq_eqg` crate (djhenry/libeq at `686b74a`, credited in the
+  third-party notices). The coordinate frame, model file names, triangle
+  flags and texture property are inferred from the format (checklist
+  6.498); regions and lights aren't read. Nothing calls it yet:
+  `load_zone` still reads S3D archives alone.
+
 - Walk onto low edges as the Titanium client does: a standing walk now
   climbs anything it runs into up to 1.25 above the body's origin, so a
   human of size 6 steps over Erudin's pier-end rail and onto its posts

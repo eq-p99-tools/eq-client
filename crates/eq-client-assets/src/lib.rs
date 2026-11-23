@@ -5,6 +5,7 @@ pub mod actors;
 pub mod camera;
 pub mod characters;
 pub mod clock;
+pub mod eqg;
 pub mod falls;
 pub mod items;
 pub mod keys;
