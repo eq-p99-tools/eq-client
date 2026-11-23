@@ -84,12 +84,21 @@ impl SpellCatalog for NoSpells {
     }
 }
 
+/// A notice waiting for the spells' timing, in the order it came.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Pending {
+    /// A gem's refresh: spell, reduction, when.
+    Refresh(u32, u32, Instant),
+    /// A Bard's song stop, with the spells in the gems then.
+    SongStop([Option<u32>; 8]),
+}
+
 /// When each memorized spell can be cast again. Timers start only from the
 /// server's word: the profile at admission, or a gem's refresh notice.
 #[derive(Clone, Debug, Default)]
 pub struct Cooldowns {
-    /// Refresh notices waiting for the spell's timing: spell, reduction, when.
-    pending: Vec<(u32, u32, Instant)>,
+    /// Notices waiting for the spells' timing, in the order they came.
+    pending: Vec<Pending>,
     /// When each spell comes back.
     spells: BTreeMap<u32, Instant>,
     /// When any spell comes back.
@@ -116,15 +125,39 @@ impl Cooldowns {
 
     /// Notes a gem's refresh, which the spell's timing turns into a timer.
     pub fn refresh(&mut self, spell: u32, reduction: u32, now: Instant) {
-        self.pending.push((spell, reduction, now));
+        self.pending.push(Pending::Refresh(spell, reduction, now));
     }
 
-    /// Starts the timers for refreshes whose spells the catalog knows, and
-    /// forgets the ones that ran out. Unknown timing stays unknown: no
-    /// default reuse time is invented.
+    /// Notes a Bard's song stop (0x40f06d, read R49-21 c, 6.542): the
+    /// program then resets the timers of the gems whose spells have no
+    /// recast, and the timer before any spell. Applied in order with the
+    /// refreshes, once the spells' timing is known.
+    pub fn song_stopped(&mut self, gems: &[Option<u32>; 8]) {
+        self.pending.push(Pending::SongStop(*gems));
+    }
+
+    /// Starts the timers for refreshes whose spells the catalog knows,
+    /// applies song stops in their place among them, and forgets the timers
+    /// that ran out. Unknown timing stays unknown: no default reuse time is
+    /// invented, and a song stop keeps a spell's timer it can't judge.
     pub fn resolve(&mut self, spells: &dyn SpellCatalog, now: Instant) {
         self.spells.retain(|_, end| *end > now);
-        for (spell, reduction, received) in self.pending.drain(..) {
+        for pending in std::mem::take(&mut self.pending) {
+            let (spell, reduction, received) = match pending {
+                Pending::Refresh(spell, reduction, received) => (spell, reduction, received),
+                Pending::SongStop(gems) => {
+                    self.recovery = None;
+                    for spell in gems.into_iter().flatten() {
+                        if spells
+                            .timing(spell)
+                            .is_some_and(|timing| timing.recast_ms == 0)
+                        {
+                            self.spells.remove(&spell);
+                        }
+                    }
+                    continue;
+                }
+            };
             if let Some(timing) = spells.timing(spell) {
                 self.spells.insert(
                     spell,
@@ -177,6 +210,9 @@ pub struct Casting {
     /// Titanium program's rules (`WorldEvent::Singing`, read R49-21).
     /// While its own cast is the one under way, nothing else waits on it.
     pub singing: Option<u32>,
+    /// A Bard's `/melody` list (read R49-33 c); each admission starts with
+    /// none.
+    pub melody: super::Melody,
     /// The request associated with the active cast. TAKP can begin a Luclin
     /// port as spell 2935 and end it naming the requested port.
     requested: Option<u32>,
@@ -285,6 +321,7 @@ impl Casting {
                 == Some(&Some(spell_id)) =>
             {
                 self.cooldowns.refresh(spell_id, reduction_ms, now);
+                self.melody.refreshed();
                 if casting(spell_id) {
                     self.cast = None;
                     self.requested = None;
@@ -601,6 +638,69 @@ mod tests {
         unknown.refresh(99, 0, start);
         unknown.resolve(&NoSpells, start);
         assert_eq!(unknown.remaining(99, start), Duration::ZERO);
+    }
+
+    /// Song 73 has no recast, spell 42 has one; both have a recovery.
+    struct Songs;
+
+    impl SpellCatalog for Songs {
+        fn timing(&self, spell: u32) -> Option<SpellTiming> {
+            match spell {
+                73 => Some(SpellTiming {
+                    recovery_ms: 1500,
+                    recast_ms: 0,
+                }),
+                42 => Catalog.timing(42),
+                _ => None,
+            }
+        }
+
+        fn instant_effect(&self, _spell: u32) -> bool {
+            false
+        }
+
+        fn feigns(&self, _spell: u32) -> bool {
+            false
+        }
+    }
+
+    #[test]
+    fn a_song_stop_resets_only_the_timers_of_spells_with_no_recast() {
+        let start = Instant::now();
+        let gems = [Some(73), Some(42), Some(99), None, None, None, None, None];
+        let mut timers = Cooldowns::default();
+        // The profile's timers at admission.
+        timers.restore(&gems, Some([4000, 9000, 9000, 0, 0, 0, 0, 0]), start);
+        assert_eq!(timers.remaining(73, start), Duration::from_secs(4));
+        timers.song_stopped(&gems);
+        timers.resolve(&Songs, start);
+        // No recast: ready at once, as the program's stop leaves it.
+        assert_eq!(timers.remaining(73, start), Duration::ZERO);
+        // A recast keeps its end; unknown timing is kept, not guessed.
+        assert_eq!(timers.remaining(42, start), Duration::from_secs(9));
+        assert_eq!(timers.remaining(99, start), Duration::from_secs(9));
+    }
+
+    #[test]
+    fn a_song_stop_applies_in_order_with_the_refreshes_around_it() {
+        let start = Instant::now();
+        let gems = [Some(73), None, None, None, None, None, None, None];
+        // A refresh before the stop, both waiting for the timing: the stop
+        // clears what the refresh started.
+        let mut timers = Cooldowns::default();
+        timers.refresh(73, 0, start);
+        timers.song_stopped(&gems);
+        timers.resolve(&Songs, start);
+        assert_eq!(timers.remaining(73, start), Duration::ZERO);
+        // A refresh after the stop starts its recovery again.
+        timers.song_stopped(&gems);
+        timers.refresh(73, 0, start);
+        timers.resolve(&Songs, start);
+        assert_eq!(timers.remaining(73, start), Duration::from_millis(1500));
+        // A stop with unknown timing still clears the shared recovery.
+        timers.song_stopped(&[None; 8]);
+        timers.resolve(&NoSpells, start);
+        assert_eq!(timers.remaining(73, start), Duration::ZERO);
     }
 
     #[test]

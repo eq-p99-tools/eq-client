@@ -77,9 +77,15 @@ enters.
 
 **What a hidden row does today:** it asks the server not to send those
 lines, so it hides them only where the server honours that row (stock EQEmu
-sends some lines, such as creatures' shouts, without checking). The original
-also hides some kinds itself (stuns, other players' environmental damage,
-spell and damage lines); this client does not yet (6.494 C2). The packet's
+sends some lines, such as creatures' shouts, without checking). On Titanium
+the original also hides some kinds itself, and so does this client for the
+lines it prints: with **Missed me** hidden, another's melee attack on you
+that does not land (a miss, block, parry, riposte, dodge, invulnerable or
+rune) is not shown, whatever the server sends. Which of those outcomes the
+original's test covers is inferred. Its other local tests cover lines this
+client does not print yet (stuns, other players' environmental damage,
+others' fights, others' spells), and apply when they are added. Mac-era
+servers hide nothing locally: that program is unread. The packet's
 first word, an ini-only switch, is sent as 0, the original's default.
 
 Scripts read a row with `filter.<kind>` (`show`, `hide`, `mine` or `group`)
@@ -225,6 +231,8 @@ from 50 to 200) or `/uiscale` alone for 100% when the slider is hard to reach.
 | Show Invisible Entities | `show_invisible` | Off | Draws known invisible spawns with parenthesized names; targeting rules remain unchanged |
 | Answer List Presence Polls | `answer_list_polls` | Off | Answers supported P99 presence polls after a local delay; does not join a list or answer numeric challenges |
 | Duel Answer Card | `duel_answer_card` | On | Asks Yes or No when another player challenges you to a duel; Yes accepts as `/duel` does and No sends nothing. The original client has no card and takes only `/duel`; turn it off to play that way |
+| Use Picks Nearest | `use_picks_nearest` | Off | Lets the Use key use the nearest door, item on the ground or world container within reach, wherever you face, as this client used to. The original client uses only what lies at the centre of the view: the first character there, else a door (read R49-19) |
+| Typed Reports | `typed_reports` | On | A departure: sends `/bugreport` and `/feedback` from the words typed after them. The original client ignores those words and opens its report windows, which this client does not have yet; on until they are built, then off. Off, the words are ignored as the original ignores them |
 
 These choices take effect in the current session. Controls are unavailable where
 their required session feature is absent. Walk While Winded, Move While
