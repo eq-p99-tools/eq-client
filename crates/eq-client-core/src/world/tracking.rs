@@ -155,7 +155,10 @@ impl ClientWorld {
             return Vec::new();
         };
         let skill = super::character::skill_value(player, TRACKING_SKILL).unwrap_or_default();
-        let time_type = self.zone.sky.map_or(1, |sky| sky.time_type);
+        // Before a zone header has told the time type, the smaller range
+        // (a type outside 1, 2 and 5), never the larger: the program's own
+        // default of 1 comes with a header this session would have read.
+        let time_type = self.zone.sky.map_or(0, |sky| sky.time_type);
         let range = eqmac_track_range(skill, time_type);
         let own = player.position;
         let distance = |at: crate::WorldPosition| {

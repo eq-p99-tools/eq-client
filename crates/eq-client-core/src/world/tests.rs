@@ -7746,3 +7746,38 @@ fn a_mac_tracking_press_lists_the_group_then_the_spawns_in_range() {
     );
     assert_eq!(world.track_window().entries, []);
 }
+
+#[test]
+fn a_mac_tracking_press_before_the_zone_type_is_known_takes_the_smaller_range() {
+    let mut world = admitted();
+    world.carry_as(crate::GameDialect::EqMac);
+    let mut skills = vec![0; 100];
+    skills[53] = 50;
+    world.player.as_mut().unwrap().skills = Some(skills);
+    let at = |spawn_id, x: f32| {
+        let mut spawn = spawn(spawn_id);
+        spawn.position.x = x;
+        spawn
+    };
+    // No zone header yet: 50 / 2 + 500 = 525, not 50 × 10 + 500 = 1000.
+    game(
+        &mut world,
+        WorldEvent::Spawns(vec![at(44, 525.0), at(45, 900.0)]),
+    );
+    game(
+        &mut world,
+        WorldEvent::AbilityUsed {
+            session_id: 1,
+            ability: crate::abilities::Ability::Tracking,
+            ready_in: std::time::Duration::from_secs(10),
+            string_id: None,
+        },
+    );
+    let listed: Vec<_> = world
+        .track_window()
+        .entries
+        .iter()
+        .map(|entry| entry.spawn_id)
+        .collect();
+    assert_eq!(listed, [5, 44]);
+}
