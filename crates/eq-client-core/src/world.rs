@@ -252,6 +252,9 @@ pub struct ClientWorld {
     guild_invitations: std::collections::VecDeque<guild::GuildInvitation>,
     /// Whether looted coins are shared with the group, once known.
     auto_split: Option<bool>,
+    /// The primary bind point's zone, as this admission's profile said it
+    /// (checklist 6.524).
+    bound_in: Option<u16>,
     /// The login server's worlds, until the chosen world lists characters.
     servers: Option<ServerList>,
     characters: Option<CharacterList>,
@@ -974,8 +977,8 @@ impl ClientWorld {
             // Installed spell providers consume table facts before admission staging.
             // Apply Poison's answer (eq-client #556), the server filters'
             // outcome (eq-client #560), the surname's answer, the staff
-            // reports' outcome and the chat channels' lines take their arms
-            // in those threads' PRs.
+            // reports' outcome, the chat channels' lines and the title list
+            // take their arms in those threads' PRs.
             WorldEvent::PoisonAnswered(_)
             | WorldEvent::ApplyPoisonRefused { .. }
             | WorldEvent::ServerFiltersKept { .. }
@@ -986,6 +989,7 @@ impl ClientWorld {
             | WorldEvent::Channel(_)
             | WorldEvent::ChannelLink(_)
             | WorldEvent::ChatChannelRefused { .. }
+            | WorldEvent::TitleList(_)
             | WorldEvent::SpellTable(_)
             | WorldEvent::ChatServer(_)
             | WorldEvent::ZoneUnavailable { .. }
@@ -1398,6 +1402,9 @@ impl ClientWorld {
             // change of it, which the official client always answers with a
             // line (R8).
             WorldEvent::AutoSplit(on) => self.auto_split = Some(*on),
+            // The bind point's zone, as each zone-in's profile says it: the
+            // server sends no change when a bind lands (inferred, 6.524).
+            WorldEvent::BoundIn { zone_id } => self.bound_in = Some(*zone_id),
             WorldEvent::AutoSplitSet { session_id, on } => {
                 if self.session_id == Some(*session_id) {
                     self.auto_split = Some(*on);
@@ -2094,6 +2101,7 @@ impl ClientWorld {
         self.group_invitation = None;
         self.forget_guild();
         self.auto_split = None;
+        self.bound_in = None;
         self.joining_group = false;
         self.assisted = None;
         self.raid = None;

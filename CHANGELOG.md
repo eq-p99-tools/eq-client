@@ -145,6 +145,17 @@
   nothing; a server that takes no assist keeps its earlier answers. The
   Mac-era client keeps its earlier answers. Inferred parts are
   under checklist 6.490. Networking pinned to 126b2c7 (eq-network #324).
+- Say where the player is bound with `/charinfo` (checklist 6.524), from
+  the session's new `BoundIn` (eq-network #353): "Your bind point is in
+  <zone>.", in this client's words, as the program's handler (0x46f6ec) is
+  unread (pending R49-6m). The zone's long name is used, else its short
+  name, else its number; before the profile says it, "Your bind point is
+  not known yet." The bind is the zone-in profile's, so one that lands
+  mid-session shows from the next zone-in (inferred). It sends nothing, on
+  any server. A script may run `slash("charinfo")`, as `/loc` and `/time`.
+  Repins eq-network to #353; the title list waits in the ignore arm for its
+  thread's PR.
+
 - Say the server's message of the day again with `/motd` (checklist
   6.520). The message the world sent on this connection is said again as it
   came, to the same tab and colour, and is not kept as a new one; a new

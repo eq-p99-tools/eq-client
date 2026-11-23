@@ -14,6 +14,11 @@
 //! and of a player in no guild in words of its own, for which this client's
 //! own words stand. A string the installation lacks gives no line. The Mac
 //! client's own answer wasn't read, so there it is refused for now.
+//!
+//! `/charinfo` says where the player is bound (checklist 6.524):
+//! its handler (0x46f6ec) is unread, so its line is this client's (pending
+//! R49-6m), and the bind is the profile's, so one that lands mid-session
+//! shows from the next zone-in (inferred).
 use super::chat::{ChatState, Said};
 use super::hud::messages::Messages;
 use bevy::prelude::*;
@@ -30,6 +35,8 @@ pub(crate) enum Asked {
     /// `/guildstatus [name]`: a player's guild and rank in it, the named
     /// player's or else the target's.
     GuildStatus(Option<String>),
+    /// `/charinfo`: where the player is bound.
+    CharInfo,
 }
 
 /// Whether `/guildstatus` is offered: read R49-6k says the official client
@@ -49,6 +56,16 @@ impl Asked {
             Some(Self::Location)
         } else if name.eq_ignore_ascii_case("time") {
             Some(Self::Time)
+        } else if name
+            .split_whitespace()
+            .next()
+            .is_some_and(|name| name.eq_ignore_ascii_case("charinfo"))
+        {
+            // Words after it are ignored: no form with words is known
+            // (pending R49-6m). A script's `slash("charinfo ...")` is
+            // refused at parse instead: the stricter side for scripts, on
+            // purpose, so the two are not to be made to match.
+            Some(Self::CharInfo)
         } else {
             // The program takes the first word after the command as a name.
             let mut words = name.split_whitespace();
@@ -76,6 +93,7 @@ fn answer(
         Asked::GuildStatus(named) => guild_status(world, named.as_deref(), messages)
             .into_iter()
             .collect(),
+        Asked::CharInfo => vec![bound_in(world)],
         Asked::Location => {
             let numbers = whereabouts::location(player.position);
             let fallback = format!("You stand at {}.", numbers.join(", "));
@@ -138,7 +156,27 @@ fn guild_status(world: &ClientWorld, named: Option<&str>, messages: &Messages) -
 /// The message type the program gives every guild status line (0x111).
 const GUILD_STATUS_TYPE: u32 = 0x111;
 
-/// Answers a `/loc`, `/time` or `/guildstatus` the chat noted, in the chat.
+/// Where the player is bound, in this client's words (pending R49-6m):
+/// the zone's long name, its short name where the list has no long one,
+/// and its number where it has neither.
+fn bound_in(world: &ClientWorld) -> Said {
+    let Some(zone) = world.bound_in() else {
+        return Said::own("Your bind point is not known yet.");
+    };
+    let short = eq_client_core::zones::short_name(u32::from(zone));
+    let name = short.map_or_else(
+        || format!("an unknown zone ({zone})"),
+        |short| {
+            eq_client_core::zones::long_name(short)
+                .unwrap_or(short)
+                .to_owned()
+        },
+    );
+    Said::own(format!("Your bind point is in {name}."))
+}
+
+/// Answers a `/loc`, `/time`, `/guildstatus` or `/charinfo` the chat noted,
+/// in the chat.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(super) fn answers(
     mut chat: ResMut<ChatState>,
@@ -268,6 +306,74 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    fn charinfo_says_the_bind_zone_in_this_clients_words() {
+        let messages = Messages::default();
+        let earth = jiff::civil::date(2026, 10, 3).at(12, 0, 0, 0);
+        let mut state = OnlineState::new(true);
+        let said = |state: &OnlineState| {
+            answer(Asked::CharInfo, state.world(), earth, &messages, TITANIUM)
+        };
+        assert_eq!(said(&state), Err("Enter the world first".into()));
+        testing::admit(&mut state, 1, testing::player(7));
+        assert_eq!(
+            said(&state),
+            Ok(vec![Said::own("Your bind point is not known yet.")])
+        );
+        testing::news(&mut state, [WorldEvent::BoundIn { zone_id: 1 }]);
+        let short = eq_client_core::zones::short_name(1).unwrap();
+        let long = eq_client_core::zones::long_name(short).unwrap();
+        assert_eq!(
+            said(&state),
+            Ok(vec![Said::own(format!("Your bind point is in {long}."))])
+        );
+        // A zone the list doesn't know is named by its number.
+        testing::news(&mut state, [WorldEvent::BoundIn { zone_id: 65_000 }]);
+        assert_eq!(
+            said(&state),
+            Ok(vec![Said::own(
+                "Your bind point is in an unknown zone (65000)."
+            )])
+        );
+        // The next admission waits for its own profile.
+        testing::admit(&mut state, 2, testing::player(7));
+        assert_eq!(
+            said(&state),
+            Ok(vec![Said::own("Your bind point is not known yet.")])
+        );
+        assert_eq!(Asked::typed("/charinfo"), Some(Asked::CharInfo));
+        assert_eq!(Asked::typed("/CHARINFO please"), Some(Asked::CharInfo));
+        assert_eq!(Asked::typed("/charinfox"), None);
+        assert_eq!(
+            crate::commands::spelled("/char").as_deref(),
+            Some("/charinfo")
+        );
+    }
+
+    /// The answer is said in the chat, and nothing goes to the server (6.524).
+    #[test]
+    fn charinfo_sends_nothing() {
+        let mut state = OnlineState::new(true);
+        testing::admit(&mut state, 1, testing::player(7));
+        testing::news(&mut state, [WorldEvent::BoundIn { zone_id: 1 }]);
+        let (queue, received) = std::sync::mpsc::sync_channel(4);
+        let mut app = App::new();
+        app.insert_resource(state)
+            .insert_resource(crate::outbox::Outbox::new(Some(queue)))
+            .insert_resource(crate::ViewerSettings(crate::ViewerConfig::default()))
+            .init_resource::<ChatState>()
+            .add_systems(Update, answers);
+        app.world_mut().resource_mut::<ChatState>().asked = Some(Asked::CharInfo);
+        app.update();
+        let chat = app.world().resource::<ChatState>();
+        let lines = chat.history.lines(eq_client_core::chat::ChatTab::System);
+        assert!(
+            lines
+                .iter()
+                .any(|(_, line)| line.message.text.starts_with("Your bind point is in "))
+        );
+        assert!(received.try_recv().is_err());
     }
 
     #[test]
