@@ -14,6 +14,15 @@
 //! and of a player in no guild in words of its own, for which this client's
 //! own words stand. A string the installation lacks gives no line. The Mac
 //! client's own answer wasn't read, so there it is refused for now.
+//!
+//! `/played` too (checklist 6.490b, read R49-8 a): the Titanium program
+//! answers from three profile fields, in line 0xe24 the account's entitled
+//! time in years (its days × 1/365, one decimal), in 0x32a8 when the
+//! character was made, and in 0x32af its played time in days, hours and
+//! minutes. It adds a minute each minute after the profile itself
+//! (0x422526), and so does this client. The creation time is shown as the
+//! program's `%#c` shows it in the C locale (inferred); the Mac client's
+//! `/played` wasn't read, so there it is refused for now.
 use super::chat::{ChatState, Said};
 use super::hud::messages::Messages;
 use bevy::prelude::*;
@@ -30,6 +39,9 @@ pub(crate) enum Asked {
     /// `/guildstatus [name]`: a player's guild and rank in it, the named
     /// player's or else the target's.
     GuildStatus(Option<String>),
+    /// `/played`: the account's entitled time and the character's age and
+    /// played time.
+    Played,
 }
 
 /// Whether `/guildstatus` is offered: read R49-6k says the official client
@@ -49,6 +61,13 @@ impl Asked {
             Some(Self::Location)
         } else if name.eq_ignore_ascii_case("time") {
             Some(Self::Time)
+        } else if name
+            .split_whitespace()
+            .next()
+            .is_some_and(|command| command.eq_ignore_ascii_case("played"))
+        {
+            // The program reads no words after it.
+            Some(Self::Played)
         } else {
             // The program takes the first word after the command as a name.
             let mut words = name.split_whitespace();
@@ -76,6 +95,13 @@ fn answer(
         Asked::GuildStatus(named) => guild_status(world, named.as_deref(), messages)
             .into_iter()
             .collect(),
+        Asked::Played if clock == eq_client_assets::clock::EQMAC => {
+            return Err("/played on the Mac client waits for its program read".to_owned());
+        }
+        Asked::Played => {
+            let (time, at) = world.played().ok_or("Your played time is not known yet")?;
+            played(time, at.elapsed(), &jiff::tz::TimeZone::system(), messages)
+        }
         Asked::Location => {
             let numbers = whereabouts::location(player.position);
             let fallback = format!("You stand at {}.", numbers.join(", "));
@@ -135,10 +161,55 @@ fn guild_status(world: &ClientWorld, named: Option<&str>, messages: &Messages) -
         .map(|line| Said::official(line).typed(GUILD_STATUS_TYPE))
 }
 
+/// The program's three `/played` lines (read R49-8 a), `elapsed` after
+/// the profile that gave `time`, with the creation time in `zone`.
+fn played(
+    time: eq_client_core::played::PlayedTime,
+    elapsed: std::time::Duration,
+    zone: &jiff::tz::TimeZone,
+    messages: &Messages,
+) -> Vec<Said> {
+    // The program's 1/365 ([0x6471c8]), shown "%.1f".
+    let years = format!("{:.1}", f64::from(time.entitled_days) * 0.002_739_726_1);
+    let made = jiff::Timestamp::from_second(i64::from(time.created)).map_or_else(
+        |_| time.created.to_string(),
+        |made| {
+            made.to_zoned(zone.clone())
+                .strftime("%A, %B %-d, %Y, %H:%M:%S")
+                .to_string()
+        },
+    );
+    // One played minute per minute since the profile, as the tick adds.
+    let minutes = u64::from(time.played_minutes) + elapsed.as_secs() / 60;
+    let (days, hours, minutes) = (minutes / 1440, minutes % 1440 / 60, minutes % 60);
+    let spent = [days, hours, minutes].map(|part| part.to_string());
+    vec![
+        messages.said_or(
+            0xe24,
+            std::slice::from_ref(&years),
+            &format!("This account has {years} years of entitled time."),
+        ),
+        messages.said_or(
+            0x32a8,
+            std::slice::from_ref(&made),
+            &format!("This character was made {made}."),
+        ),
+        messages.said_or(
+            0x32af,
+            &spent,
+            &format!(
+                "You have played {} days, {} hours and {} minutes.",
+                spent[0], spent[1], spent[2]
+            ),
+        ),
+    ]
+}
+
 /// The message type the program gives every guild status line (0x111).
 const GUILD_STATUS_TYPE: u32 = 0x111;
 
-/// Answers a `/loc`, `/time` or `/guildstatus` the chat noted, in the chat.
+/// Answers a `/loc`, `/time`, `/guildstatus` or `/played` the chat noted,
+/// in the chat.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(super) fn answers(
     mut chat: ResMut<ChatState>,
@@ -169,6 +240,78 @@ mod tests {
     use crate::online::{OnlineState, testing};
     use eq_client_assets::clock::{EQMAC, TITANIUM};
     use eq_client_core::WorldEvent;
+
+    #[test]
+    fn played_says_the_entitled_years_the_creation_and_the_played_time() {
+        assert_eq!(Asked::typed("/played"), Some(Asked::Played));
+        assert_eq!(Asked::typed("/PLAYED and more"), Some(Asked::Played));
+        assert_eq!(Asked::typed("/playedx"), None);
+        let time = eq_client_core::played::PlayedTime {
+            entitled_days: 730,
+            // 2004-11-09 13:20:00 UTC.
+            created: 1_100_006_400,
+            played_minutes: 1440 + 2 * 60 + 3,
+        };
+        let utc = jiff::tz::TimeZone::UTC;
+        let messages = Messages::parse(
+            "EQST0002
+0 3
+3620 Entitled %1
+12968 Made %1
+12975 Played %1d %2h %3m
+",
+        );
+        let lines = |elapsed: u64, messages: &Messages| -> Vec<String> {
+            played(
+                time,
+                std::time::Duration::from_secs(elapsed),
+                &utc,
+                messages,
+            )
+            .into_iter()
+            .map(|said| said.words.text)
+            .collect()
+        };
+        assert_eq!(
+            lines(59, &messages),
+            [
+                "Entitled 2.0",
+                "Made Tuesday, November 9, 2004, 13:20:00",
+                "Played 1d 2h 3m",
+            ]
+        );
+        // A minute after the profile, the program's tick has added one.
+        assert_eq!(lines(60, &messages)[2], "Played 1d 2h 4m");
+        // This client's words where the installation lacks the strings.
+        assert_eq!(
+            lines(0, &Messages::default())[2],
+            "You have played 1 days, 2 hours and 3 minutes."
+        );
+    }
+
+    #[test]
+    fn played_waits_for_the_profile_and_for_the_mac_read() {
+        let earth = jiff::civil::date(2026, 10, 3).at(12, 0, 0, 0);
+        let mut state = OnlineState::new(true);
+        testing::admit(&mut state, 1, testing::player(7));
+        let empty = Messages::default();
+        assert!(answer(Asked::Played, state.world(), earth, &empty, TITANIUM).is_err());
+        testing::news(
+            &mut state,
+            [WorldEvent::PlayedTime(eq_client_core::played::PlayedTime {
+                entitled_days: 365,
+                created: 0,
+                played_minutes: 61,
+            })],
+        );
+        let lines = answer(Asked::Played, state.world(), earth, &empty, TITANIUM).unwrap();
+        assert_eq!(lines.len(), 3);
+        assert_eq!(
+            lines[0].words.text,
+            "This account has 1.0 years of entitled time."
+        );
+        assert!(answer(Asked::Played, state.world(), earth, &empty, EQMAC).is_err());
+    }
 
     #[test]
     fn guild_status_answers_as_the_program_reads_in_the_installed_strings() {

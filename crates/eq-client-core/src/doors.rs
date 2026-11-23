@@ -660,15 +660,16 @@ mod tests {
             start,
         );
         // A type 59 lift is both; a hinged door and a type 120 platform are
-        // walls nobody stands on; types 60-77 are neither (eqgame.exe
-        // 0x490370 and the wall contact).
+        // walls nobody stands on; types 60-77 are walls but no floor: every
+        // Titanium door is a wall through the filter 0x42cdb1 (eq-network
+        // #406, 6.607), and 0x490370 picks the floors.
         assert_eq!(table.solidity(4), Solidity::BOTH);
         assert!(!table.solidity(5).floor && table.solidity(5).wall);
         assert!(!table.solidity(6).floor && table.solidity(6).wall);
         let mut passage = lift(8, 0);
         passage.open_type = 60;
         table.apply(&DoorUpdate::Spawn(vec![passage]), start);
-        assert!(!table.solidity(8).floor && !table.solidity(8).wall);
+        assert!(!table.solidity(8).floor && table.solidity(8).wall);
         // Type 27 is a floor only in zone 154 (eqgame.exe 0x490370).
         let mut floor = door(7, 0, 0);
         floor.open_type = 27;

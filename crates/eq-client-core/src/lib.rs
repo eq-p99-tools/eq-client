@@ -52,6 +52,7 @@ pub use eq_network_game::creation;
 pub use eq_network_game::deletion;
 pub use eq_network_game::disciplines;
 pub use eq_network_game::movement::RootRules;
+pub use eq_network_game::played;
 pub use eq_network_game::rules;
 pub use eq_network_game::vision;
 pub mod character_creation;

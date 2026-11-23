@@ -253,6 +253,9 @@ pub struct ClientWorld {
     guild_invitations: std::collections::VecDeque<guild::GuildInvitation>,
     /// Whether looted coins are shared with the group, once known.
     auto_split: Option<bool>,
+    /// `/played`'s fields from the latest Titanium profile, and when it
+    /// came (checklist 6.490b).
+    played: Option<(crate::played::PlayedTime, Instant)>,
     /// The login server's worlds, until the chosen world lists characters.
     servers: Option<ServerList>,
     characters: Option<CharacterList>,
@@ -703,6 +706,10 @@ impl ClientWorld {
             WorldEvent::PoisonStarted { .. } | WorldEvent::PoisonInterrupted { .. } => {
                 news.ignored = true;
             }
+            // The duel's own lines (eq-network #403, R49-6) wait on the
+            // client's duel change; they answer nothing asked here.
+            WorldEvent::DuelNews(_) => news.ignored = true,
+            WorldEvent::PlayedTime(played) => self.played = Some((*played, now)),
             WorldEvent::HazardReported {
                 session_id,
                 hazard,
@@ -2001,6 +2008,7 @@ impl ClientWorld {
         self.group_invitation = None;
         self.forget_guild();
         self.auto_split = None;
+        self.played = None;
         self.joining_group = false;
         self.assisted = None;
         self.raid = None;
