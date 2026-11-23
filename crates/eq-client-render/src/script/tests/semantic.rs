@@ -872,7 +872,7 @@ fn a_slash_step_runs_its_line_as_typing_would() {
     );
     // The friends list is the typed command's to change.
     let (app, sent) = slash_step("friend Example", |_| ());
-    assert!(sent.is_empty());
+    assert_eq!(sent, []);
     assert_eq!(
         app.world().resource::<ChatState>().contacts.asked,
         Some(crate::contacts::Asked::Friends(Some("Example".into())))
@@ -880,7 +880,7 @@ fn a_slash_step_runs_its_line_as_typing_would() {
     // An abbreviation resolves before any handler reads it: /raid used to
     // reach the game commands raw and fail, but typed it toggles the window.
     let (app, sent) = slash_step("raid", |_| ());
-    assert!(sent.is_empty());
+    assert_eq!(sent, []);
     assert_eq!(
         app.world().resource::<RunStatus>().phase(),
         Phase::Completed
@@ -892,7 +892,7 @@ fn a_slash_step_runs_its_line_as_typing_would() {
     // A word that resolves to nothing is passed over without a line, as
     // typing passes it over.
     let (app, sent) = slash_step("zzzz", |_| ());
-    assert!(sent.is_empty());
+    assert_eq!(sent, []);
     assert_eq!(
         app.world().resource::<RunStatus>().phase(),
         Phase::Completed
@@ -900,7 +900,7 @@ fn a_slash_step_runs_its_line_as_typing_would() {
     // A social still goes to the named step, however it is spelled.
     for line in ["social play Test", "SOCIAL play Test"] {
         let (app, sent) = slash_step(line, |_| ());
-        assert!(sent.is_empty());
+        assert_eq!(sent, []);
         refused(&app, 1, "Use a named social step in a script.");
     }
 }
@@ -916,7 +916,7 @@ fn a_slash_departure_takes_the_typed_route_and_never_leaves_sooner() {
         // Nothing goes to the server from the step itself: the same
         // departure a typed line asks for is left for the frame's
         // `login::depart`, and the socials stop as they do when typed.
-        assert!(sent.is_empty(), "{line}");
+        assert_eq!(sent, [], "{line}");
         let chat = app.world().resource::<ChatState>();
         assert_eq!(chat.departure, Some(departure), "{line}");
         let mut typed = ChatState::default();
