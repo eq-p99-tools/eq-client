@@ -116,9 +116,6 @@ fn a_same_zone_relocation_requires_the_current_character_and_admission() {
             position: destination,
         })
     };
-    let boundary = game(&mut world, WorldEvent::SameZoneBoundary { session_id: 1 });
-    assert_eq!(boundary.replies, [Reply::SameZoneBoundary]);
-    assert!(boundary.placed.is_none());
     assert!(world.last_same_zone_relocation().is_none());
     assert!(game(&mut world, relocation(2, 9)).ignored);
     assert!(game(&mut world, relocation(1, 7)).ignored);
@@ -4415,6 +4412,8 @@ fn training_opens_raises_skills_with_a_line_and_closes() {
         WorldEvent::TrainingRefused {
             session_id: 1,
             reason: "No practice points".into(),
+            string_id: None,
+            arguments: Vec::new(),
         },
     );
     assert_eq!(

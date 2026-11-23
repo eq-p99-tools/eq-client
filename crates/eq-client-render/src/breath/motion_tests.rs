@@ -540,6 +540,7 @@ fn prepare_liquid_in(app: &mut App, capabilities: Option<Vec<Capability>>, zone_
     player.titanium_environment = Some(TitaniumEnvironment {
         zone_id: 27,
         base_fire_resistance: 25,
+        base_cold_resistance: 25,
         has_alternate_advancement: false,
     });
     if let Some(capabilities) = capabilities {

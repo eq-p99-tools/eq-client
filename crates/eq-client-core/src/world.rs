@@ -917,13 +917,6 @@ impl ClientWorld {
             WorldEvent::ZoneLineRejected { session_id, reason } => {
                 self.zone_line_refused(*session_id, reason, news);
             }
-            WorldEvent::SameZoneBoundary { session_id } => {
-                if self.accepts_reply(*session_id) {
-                    news.replies.push(Reply::SameZoneBoundary);
-                } else {
-                    news.ignored = true;
-                }
-            }
             WorldEvent::SameZoneRelocated(relocation) => {
                 self.same_zone_relocated(*relocation, now, news);
             }
@@ -1879,7 +1872,12 @@ impl ClientWorld {
             }
             // Training at a guildmaster, and the practice points it spends.
             WorldEvent::Training(update) => self.training_news(update, news),
-            WorldEvent::TrainingRefused { session_id, reason } => {
+            // The program's own words (`string_id`, `arguments`) are the
+            // language-training client half's (6.597); this keeps the
+            // library's words, as before.
+            WorldEvent::TrainingRefused {
+                session_id, reason, ..
+            } => {
                 if self.session_id == Some(*session_id) {
                     news.notices.push(Notice::TrainingRefused(reason.clone()));
                 } else {
