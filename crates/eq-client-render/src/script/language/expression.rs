@@ -316,7 +316,7 @@ pub(super) fn parse(
 pub(super) fn limited_condition(
     source: &str,
     lookup: impl Fn(&str) -> Option<(usize, Kind)>,
-) -> Result<(Expr, u64), Fault> {
+) -> Result<(Expr, Option<u64>), Fault> {
     let tokens = lex(source)?;
     let mut parser = Parser {
         remaining: &tokens,
@@ -324,6 +324,7 @@ pub(super) fn limited_condition(
     };
     let condition = parser.binary(1)?;
     let limit = match parser.remaining {
+        [] => return Ok((condition, None)),
         [
             Spanned {
                 token: Token::Comma,
@@ -344,8 +345,8 @@ pub(super) fn limited_condition(
         ] => Some(*limit),
         _ => None,
     };
-    limit.map(|limit| (condition, limit)).ok_or_else(|| Fault {
-        message: "expected 'while <bool expression>, limit=<integer literal>:'".into(),
+    limit.map(|limit| (condition, Some(limit))).ok_or_else(|| Fault {
+        message: "expected 'while <bool expression>:' or 'while <bool expression>, limit=<integer literal>:'".into(),
         span: covering(parser.remaining).or(Some(0..source.len())),
     })
 }
@@ -606,7 +607,10 @@ mod tests {
         }
         assert!(python("1 != 2").is_ok());
         assert!(python("'unterminated").is_err());
-        assert_eq!(limited_condition("True, limit=5", |_| None).unwrap().1, 5);
+        assert_eq!(
+            limited_condition("True, limit=5", |_| None).unwrap().1,
+            Some(5)
+        );
         assert!(limited_condition("True limit 5", |_| None).is_err());
     }
 }
