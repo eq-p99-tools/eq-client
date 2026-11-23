@@ -165,7 +165,15 @@ pub(crate) fn coloured_triangle(
     coordinates: &Coordinates,
     colours: &[u32],
 ) -> Vec<u8> {
-    triangle_of(name, palette, coordinates, 1, &[], colours, (0x0001_8003, 0))
+    triangle_of(
+        name,
+        palette,
+        coordinates,
+        1,
+        &[],
+        colours,
+        (0x0001_8003, 0),
+    )
 }
 
 fn triangle_of(
