@@ -21,13 +21,13 @@
 //!   else the character's `[ChatManager]` `ChannelAutoJoin`, else
 //!   `eqclient.ini`'s `[Defaults]` one, else `NONE`; any list but `NONE`
 //!   is said (colour 0x122) and sent as `/join list` (R49-12 c).
-//! - `/announce` goes as typed, `/announce` and its words: its handler
+//! - `/announce` goes as typed, `/announce` and its words [I]: its handler
 //!   (0x46cb10) is unread, and this is the form the server takes.
 //! - `/chat` takes only the channel words ([`CHANNEL_WORDS`]): the chat
 //!   server's same handler also sends mail and keeps friends and ignore
 //!   lists, which this client does not reach. What the program sends for
 //!   `/chat` is read only in part (R49-12 e: its text through the same
-//!   sender, [I] with a `;` case at the start), so the words go after a `/`,
+//!   sender, with a `;` case at the start), so the words go after a `/` [I],
 //!   the form the server takes: it skips a command's first byte.
 //! - With no chat server link the program drops every command silently
 //!   (R49-12 d). This client says "You are not connected to the chat
@@ -112,7 +112,7 @@ pub(crate) fn typed(input: &str) -> Option<Result<Asked, String>> {
         "leave" => maybe("/leave"),
         "leaveall" => Ok(Asked::Send("/leaveall".to_owned())),
         "list" => maybe("/list"),
-        // Its handler (0x46cb10) is unread: the form the server takes.
+        // [I] Its handler (0x46cb10) is unread: the form the server takes.
         "announce" => maybe("/announce"),
         "chat" if rest.is_empty() => Err("Use /chat followed by the chat server's command".into()),
         "chat" => {
@@ -121,6 +121,8 @@ pub(crate) fn typed(input: &str) -> Option<Result<Asked, String>> {
                 .iter()
                 .any(|channel| channel.eq_ignore_ascii_case(word))
             {
+                // [I] The sent form is partly read (R49-12 e): after a `/`,
+                // which the server skips.
                 Ok(Asked::Send(format!("/{rest}")))
             } else {
                 Err(format!("/chat does not send {word} to the chat server."))

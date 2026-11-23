@@ -568,7 +568,8 @@ link to it when the world offers one, and these commands go to it:
 - `/list` lists the channels you are on, and `/list channel` lists who is on
   a channel.
 - `/announce` (or `/announce on` and `/announce off`) asks to be told when
-  someone joins or leaves a channel.
+  someone joins or leaves a channel. It goes as typed (inferred: the official
+  client's handler for it is unread).
 - `/1` to `/10` followed by text say it on the channel in that slot. The
   first channel joined is `/1`.
 - `/autojoin channel` (with commas and passwords as for `/join`) keeps the
@@ -581,7 +582,8 @@ link to it when the world offers one, and these commands go to it:
   the official client's files. Its lines about the list show each channel's
   name but never a password.
 - `/chat words` sends the chat server's own channel words, after a `/` as
-  the other commands go: `join`,
+  the other commands go (inferred: what the official client sends here is
+  only partly read): `join`,
   `leave`, `leaveall`, `list`, `listall`, `announce`, and the owner and
   moderator words (`setowner`, `oplist`, `invite`, `grant`, `moderate`,
   `voice`, `kick`, `password`, `toggleinvites`), which are passed through
