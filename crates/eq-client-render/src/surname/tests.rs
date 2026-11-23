@@ -23,7 +23,13 @@ const STRINGS: &str = "EQST0002
 /// buttons, its text and the surname command running in the program's
 /// order.
 fn app(level: u8) -> (App, Receiver<ClientCommand>, [Entity; 3]) {
-    let (sender, receiver) = std::sync::mpsc::sync_channel(8);
+    app_queued(level, 8)
+}
+
+/// [`app`] with a queue to the session of `room` commands; a full queue
+/// refuses a send, which the outbox says in chat.
+fn app_queued(level: u8, room: usize) -> (App, Receiver<ClientCommand>, [Entity; 3]) {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(room);
     let mut online = OnlineState::new(false);
     let mut player = testing::player(7);
     player.level = level;
@@ -37,7 +43,14 @@ fn app(level: u8) -> (App, Receiver<ClientCommand>, [Entity; 3]) {
         .insert_resource(Messages::parse(STRINGS))
         .add_systems(
             Update,
-            (confirm::buttons, command, confirm::window, confirm::show).chain(),
+            (
+                confirm::buttons,
+                command,
+                crate::outbox::show,
+                confirm::window,
+                confirm::show,
+            )
+                .chain(),
         );
     let yes = app
         .world_mut()
@@ -197,6 +210,23 @@ fn yes_sends_the_cut_word_the_question_named_once() {
     assert_eq!(lines(&app), [("Asked.".into(), Some(15))]);
     app.update();
     assert!(receiver.try_recv().is_err());
+    assert!(app.world().resource::<Pending>().asking.is_none());
+}
+
+#[test]
+fn a_yes_the_outbox_refuses_says_why_and_not_that_it_was_sent() {
+    let (mut app, receiver, [yes, _, _]) = app_queued(20, 0);
+    ask(&mut app, "/surname Exemplum");
+    app.update();
+    clicks::click(&mut app, yes);
+    assert!(receiver.try_recv().is_err());
+    assert_eq!(
+        lines(&app)
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect::<Vec<_>>(),
+        [crate::outbox::Refusal::Busy.text()]
+    );
     assert!(app.world().resource::<Pending>().asking.is_none());
 }
 
