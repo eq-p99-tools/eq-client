@@ -67,6 +67,7 @@ merchant action.
 - `scroll_up key` or `scroll_down key`: a window's scrollbar.
 - `tab number`: an options tab counted from 1.
 - `option name`: an option toggle by its settings-file name.
+- `filter kind`: a Filters page row's button by its kind's stable name, such as `ooc` or `bard_songs`: a click steps the row to its next choice, as the player's does.
 - `slider name percent` sets a slider by its position from 0 to 100 percent. Names include `clip_plane`, `max_fps`, `mouse_sensitivity`, `ui_scale`, `run_boost`, `sound_volume`, and `quantity`. On the QoL page, `click("slider", "run_boost", 50)` selects 1.20x and `click("slider", "run_boost", 100)` selects 1.40x.
 - `dropdown key_filter`: the options key-binding filter.
 - `choice number`: a dropdown choice counted from 1.
