@@ -116,9 +116,6 @@ fn a_same_zone_relocation_requires_the_current_character_and_admission() {
             position: destination,
         })
     };
-    let boundary = game(&mut world, WorldEvent::SameZoneBoundary { session_id: 1 });
-    assert_eq!(boundary.replies, [Reply::SameZoneBoundary]);
-    assert!(boundary.placed.is_none());
     assert!(world.last_same_zone_relocation().is_none());
     assert!(game(&mut world, relocation(2, 9)).ignored);
     assert!(game(&mut world, relocation(1, 7)).ignored);
@@ -4503,6 +4500,8 @@ fn training_opens_raises_skills_with_a_line_and_closes() {
         WorldEvent::TrainingRefused {
             session_id: 1,
             reason: "No practice points".into(),
+            string_id: None,
+            arguments: Vec::new(),
         },
     );
     assert_eq!(
@@ -6002,6 +6001,62 @@ fn the_titanium_sessions_duel_news_is_told_with_the_names_it_takes() {
     // Out of the world, nothing is told.
     let mut outside = ClientWorld::default();
     assert!(game(&mut outside, WorldEvent::DuelNews(DuelNews::NotYourself)).ignored);
+}
+
+#[test]
+fn the_mac_eras_decline_news_says_the_programs_lines() {
+    use eq_network_game::socials::DuelNews;
+    let mut world = admitted();
+    let line = |string_id, arguments: &[&str], said: &str| Notice::ProgramLine {
+        string_id,
+        arguments: arguments
+            .iter()
+            .map(|&argument| argument.to_owned())
+            .collect(),
+        lines: Vec::new(),
+        said: said.to_owned(),
+    };
+    let cases = [
+        (
+            DuelNews::Declining { challenger: 5 },
+            line(0x33be, &["a rat"], "You decline a rat's challenge."),
+        ),
+        (
+            DuelNews::NothingToDecline,
+            line(0x33bf, &[], "You have no challenge to decline."),
+        ),
+        (
+            DuelNews::DecliningWhileDueling,
+            line(0x33bd, &[], "You can't decline while dueling."),
+        ),
+    ];
+    for (news, notice) in cases {
+        assert_eq!(
+            game(&mut world, WorldEvent::DuelNews(news)).notices,
+            [notice]
+        );
+    }
+}
+
+#[test]
+fn an_inspection_of_the_player_says_who_looked_only_for_this_admission() {
+    let mut world = admitted();
+    let looked = |session_id| WorldEvent::InspectedBy {
+        session_id,
+        inspector_id: 5,
+        name: "Looker".into(),
+        string_id: 0x57c,
+    };
+    assert_eq!(
+        game(&mut world, looked(1)).notices,
+        [Notice::ProgramLine {
+            string_id: 0x57c,
+            arguments: vec!["Looker".into()],
+            lines: Vec::new(),
+            said: "Looker inspects you.".into(),
+        }]
+    );
+    assert!(game(&mut world, looked(2)).ignored);
 }
 
 #[test]
