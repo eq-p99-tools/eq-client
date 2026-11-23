@@ -69,6 +69,7 @@ mod emotes;
 mod entities;
 mod escape;
 mod exit_log;
+mod fastdrop;
 mod frame_limit;
 mod give;
 mod ground;

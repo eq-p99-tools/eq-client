@@ -145,6 +145,18 @@
   nothing; a server that takes no assist keeps its earlier answers. The
   Mac-era client keeps its earlier answers. Inferred parts are
   under checklist 6.490. Networking pinned to 126b2c7 (eq-network #324).
+- Drop an item on the ground without the question with `/fastdrop`
+  (checklist 6.536), where ground drop is offered (local `EQEmu` today).
+  Each `/fastdrop` turns it over and says the state it lands in, in this
+  client's words. With it on, **Drop cursor item** sends at once through the
+  same checks and the same one-at-a-time hold as a Yes; a destroy and every
+  other question still ask. It is off at start, never saved, and off again
+  at a world entry, a camp, a return to login or a lost link (a zone change
+  keeps it). Only the player's typing turns it over: a
+  script's `slash("fastdrop")` is refused at parse, and a social or
+  hotbutton line is refused. The program's handler (0x4685ba) is unread, so
+  all of this is inferred (pending R49-6n). It sends nothing itself.
+
 - Say where the player is bound with `/charinfo` (checklist 6.524), from
   the session's new `BoundIn` (eq-network #353): "Your bind point is in
   <zone>.", in this client's words, as the program's handler (0x46f6ec) is

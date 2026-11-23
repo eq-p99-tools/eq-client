@@ -180,6 +180,8 @@ pub(super) struct ChatState {
     server_motd: Option<(u64, ChatLine)>,
     /// A `/motd`, waiting for [`super::motd::answers`].
     pub(crate) motd_asked: Option<super::motd::Asked>,
+    /// A `/fastdrop`, waiting for [`super::fastdrop::answers`].
+    pub(crate) fastdrop_asked: Option<super::fastdrop::Asked>,
     /// A guild command typed, for [`super::guild::commands`] to run.
     pub(crate) guild_asked: Option<super::guild::Command>,
     /// A sharing command typed, for [`super::sharing::commands`] to run.
@@ -1980,6 +1982,11 @@ pub(super) fn submit_typed_line(
     outbox: &crate::outbox::Outbox,
     qol: &Settings,
 ) -> Result<(), String> {
+    // A social or hotbutton never lifts the drop's question: it could
+    // chain it with a drop (6.536).
+    if crate::commands::spelled(line).is_some_and(|command| super::fastdrop::typed(&command)) {
+        return Err("A social cannot turn /fastdrop on or off; type it.".into());
+    }
     submit_line(line, ChatTab::All, chat, online, outbox, qol).map_err(|error| match error {
         Unsent::Mistake(reason) => reason,
         Unsent::Refused => "The session refused the command.".into(),
@@ -2124,6 +2131,10 @@ pub(super) fn client_request_in_scope(
     if super::motion::FollowAsked::typed(input) {
         state.script_requests.follow = scope;
         state.follow_asked = Some(super::motion::FollowAsked);
+        return Some(Ok(()));
+    }
+    if super::fastdrop::typed(input) {
+        state.fastdrop_asked = Some(super::fastdrop::Asked);
         return Some(Ok(()));
     }
     if super::motd::typed(input) {
