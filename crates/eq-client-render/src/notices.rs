@@ -628,27 +628,121 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         }
         Notice::Roll(roll) => in_chat(roll_lines(roll, messages)),
         Notice::Raid(notice) => in_chat(raid_lines(notice, messages)),
-        Notice::Duel(notice) => chat(Said::own(duel_line(notice))),
-        Notice::YellForHelp(name) => chat(Said::own(format!("{name} yells for help!"))),
+        Notice::Duel(notice) => in_chat(duel_line(notice, messages).into_iter().collect()),
+        Notice::YellForHelp { name, bearing } => chat(yell_line(name, *bearing, messages)),
+        Notice::QuestReward { coins, giver } => {
+            in_chat(quest_reward_lines(*coins, giver, messages))
+        }
+        Notice::LevelLost { lost, level } => chat(level_lost_line(*lost, *level, messages)),
         Notice::OthersStatChanged { lowered } => chat(others_stat_line(*lowered, messages)),
         Notice::Reward(coins) => chat(Said::own(reward_line(*coins))),
     }
 }
 
-/// News of a duel, in this client's words: the official client's strings
-/// and colours for these are not read (checklist 6.492, pending R49-6a).
-fn duel_line(notice: &eq_client_core::world::DuelNotice) -> String {
+/// News of a duel, in the program's line for it where the installation has
+/// it and with the colour the program gives it (read R49-6 a, d, e and h):
+/// colour 15 for the challenge, its start and `/duel`'s own, 0x111 for
+/// `/duel` with no player or at the player, and 0x10d for a duel's end.
+/// The fallbacks, and the TAKP refusals and the session's own, are this
+/// client's words. A turn-down with a reason the program has no line for
+/// says nothing.
+fn duel_line(
+    notice: &eq_client_core::world::DuelNotice,
+    messages: Option<&Messages>,
+) -> Option<Said> {
     use eq_client_core::{socials::DuelRefusal, world::DuelNotice};
-    match notice {
-        DuelNotice::Challenged(name) => format!("{name} challenges you to a duel."),
-        DuelNotice::Begun(name) => format!("Your duel with {name} begins."),
-        DuelNotice::Refused { from, reason } => match reason {
+    let line = |id: u32, arguments: &[&String], fallback: String, colour: u32| {
+        let arguments: Vec<String> = arguments.iter().map(|name| (*name).clone()).collect();
+        official(Some(id), &arguments, &fallback, messages).typed(colour)
+    };
+    Some(match notice {
+        DuelNotice::Challenged(name) => line(
+            0x592,
+            &[name],
+            format!("{name} challenges you to a duel."),
+            15,
+        ),
+        DuelNotice::Begun(name) => {
+            line(0x590, &[name], format!("Your duel with {name} begins."), 15)
+        }
+        DuelNotice::Refused { from, reason } => Said::own(match reason {
             DuelRefusal::Declined => format!("{from} declined your challenge."),
             DuelRefusal::Dueling => format!("{from} is already dueling."),
             DuelRefusal::Considering => format!("{from} is considering another challenge."),
             DuelRefusal::Other(_) => format!("{from} turned your challenge down."),
-        },
-        DuelNotice::AnswerRefused(reason) => format!("No answer was sent: {reason}"),
+        }),
+        DuelNotice::AnswerRefused(reason) => Said::own(format!("No answer was sent: {reason}")),
+        DuelNotice::Challenging(name) => line(
+            0x33c6,
+            &[name],
+            format!("You challenge {name} to a duel."),
+            15,
+        ),
+        DuelNotice::Accepting(name) => line(
+            0x33c4,
+            &[name],
+            format!("You accept {name}'s challenge to a duel."),
+            15,
+        ),
+        DuelNotice::NoPlayerTarget => line(
+            0x33c0,
+            &[],
+            "You must first target another player to duel.".to_owned(),
+            0x111,
+        ),
+        DuelNotice::NotYourself => line(0x33c1, &[], "You cannot duel yourself.".to_owned(), 0x111),
+        DuelNotice::AlreadyDueling { at_opponent: true } => {
+            line(0x33c2, &[], "You are already dueling them.".to_owned(), 15)
+        }
+        DuelNotice::AlreadyDueling { at_opponent: false } => {
+            line(0x33c3, &[], "You are already in a duel.".to_owned(), 15)
+        }
+        DuelNotice::ConsideringAnother => line(
+            0x33c5,
+            &[],
+            "You are considering another challenge.".to_owned(),
+            15,
+        ),
+        DuelNotice::Won { own, over } => line(
+            0x2f44,
+            &[own, over],
+            format!("{own} has defeated {over} in a duel."),
+            0x10d,
+        ),
+        DuelNotice::Ended(name) => line(
+            0x2f45,
+            &[name, name],
+            format!("The duel with {name} is over."),
+            0x10d,
+        ),
+        DuelNotice::TurnedDown { by, reason } => {
+            let (id, fallback) = turned_down(by, (*reason)?);
+            line(id, &[by], fallback, 15)
+        }
+        DuelNotice::Lapsed(name) => line(
+            0x581,
+            &[name],
+            format!("{name} left; your challenge is withdrawn."),
+            15,
+        ),
+        DuelNotice::Forfeited { own, opponent } => line(
+            0x580,
+            &[own, opponent, opponent],
+            format!("{opponent} fled the duel; {own} wins."),
+            0x10d,
+        ),
+    })
+}
+
+/// The line for a challenge the other program turned down, and this
+/// client's words for it: 0x567 ignored, 0x568 dueling, 0x569 considering
+/// another (read R49-6d).
+fn turned_down(by: &str, reason: eq_client_core::socials::DuelAutoDecline) -> (u32, String) {
+    use eq_client_core::socials::DuelAutoDecline;
+    match reason {
+        DuelAutoDecline::Ignored => (0x567, format!("{by} turned your challenge down.")),
+        DuelAutoDecline::Dueling => (0x568, format!("{by} is already dueling.")),
+        DuelAutoDecline::Considering => (0x569, format!("{by} is considering another challenge.")),
     }
 }
 
@@ -663,6 +757,79 @@ fn others_stat_line(lowered: bool, messages: Option<&Messages>) -> Said {
         (0x3274, "A stat was raised.")
     };
     official(Some(id), &[], fallback, messages).typed(15)
+}
+
+/// A yell for help, on Titanium in the program's line for where the yeller
+/// stands, in colour 0x11a (read R49-6d); elsewhere, and where the
+/// installation lacks the line, in this client's words.
+fn yell_line(
+    name: &str,
+    bearing: Option<eq_client_core::world::YellBearing>,
+    messages: Option<&Messages>,
+) -> Said {
+    let fallback = format!("{name} yells for help!");
+    match bearing {
+        Some(bearing) => official(
+            Some(bearing.string_id()),
+            &[name.to_owned()],
+            &fallback,
+            messages,
+        )
+        .typed(0x11a),
+        None => Said::own(fallback),
+    }
+}
+
+/// A quest's coins as the Titanium program says them (read R49-6g): a line
+/// for each coin given, copper first, 0x59e, 0x5a0, 0x5a1 and 0x5a2, each
+/// with the amount and 0x59f naming the giver, in colour 0x111. The
+/// fallbacks are this client's words.
+fn quest_reward_lines(
+    coins: eq_client_core::Coins,
+    giver: &str,
+    messages: Option<&Messages>,
+) -> Vec<Said> {
+    let from = messages
+        .and_then(|messages| messages.formatted(0x59f, &[giver.to_owned()]))
+        .unwrap_or_default();
+    [
+        (coins.copper, 0x59e, "copper"),
+        (coins.silver, 0x5a0, "silver"),
+        (coins.gold, 0x5a1, "gold"),
+        (coins.platinum, 0x5a2, "platinum"),
+    ]
+    .into_iter()
+    .filter(|(count, ..)| *count > 0)
+    .map(|(count, id, coin)| {
+        official(
+            Some(id),
+            &[count.to_string(), from.clone()],
+            &format!("You receive {count} {coin}."),
+            messages,
+        )
+        .typed(0x111)
+    })
+    .collect()
+}
+
+/// Levels lost, as the Titanium program says it (read R49-6c): 0x1ba for
+/// one, with the level now, and 0x1bb for more, with how many and the
+/// level now, in colour 13.
+fn level_lost_line(lost: u8, level: u8, messages: Option<&Messages>) -> Said {
+    let (id, arguments, fallback) = if lost == 1 {
+        (
+            0x1ba,
+            vec![level.to_string()],
+            format!("You lost a level! You are now level {level}."),
+        )
+    } else {
+        (
+            0x1bb,
+            vec![lost.to_string(), level.to_string()],
+            format!("You lost {lost} levels! You are now level {level}."),
+        )
+    };
+    official(Some(id), &arguments, &fallback, messages).typed(13)
 }
 
 /// The coins a quest or task gave, largest first, naming only those it
@@ -1463,6 +1630,140 @@ mod tests {
     }
 
     #[test]
+    fn duel_news_reads_in_the_programs_lines_and_colours() {
+        use eq_client_core::{socials::DuelAutoDecline, world::DuelNotice};
+        let messages = Messages::parse(
+            "EQST0002
+0 9
+1424 Begun %1.
+1426 Challenged %1.
+1383 Ignored %1.
+1408 Fled %1 %2 %3.
+12100 Won %1 %2.
+12101 Ended %1 %2.
+13248 No player.
+13254 Challenging %1.
+13252 Accepting %1.
+",
+        );
+        let said = |notice: DuelNotice| {
+            wording(&Notice::Duel(notice), Some(&messages))
+                .into_iter()
+                .map(|(_, said)| said)
+                .collect::<Vec<_>>()
+        };
+        let friend = || "Friend".to_owned();
+        let cases = [
+            (DuelNotice::Begun(friend()), "Begun Friend.", 15),
+            (DuelNotice::Challenged(friend()), "Challenged Friend.", 15),
+            (DuelNotice::Challenging(friend()), "Challenging Friend.", 15),
+            (DuelNotice::Accepting(friend()), "Accepting Friend.", 15),
+            (DuelNotice::NoPlayerTarget, "No player.", 0x111),
+            (
+                DuelNotice::Won {
+                    own: "Me".into(),
+                    over: friend(),
+                },
+                "Won Me Friend.",
+                0x10d,
+            ),
+            (DuelNotice::Ended(friend()), "Ended Friend Friend.", 0x10d),
+            (
+                DuelNotice::TurnedDown {
+                    by: friend(),
+                    reason: Some(DuelAutoDecline::Ignored),
+                },
+                "Ignored Friend.",
+                15,
+            ),
+            (
+                DuelNotice::Forfeited {
+                    own: "Me".into(),
+                    opponent: friend(),
+                },
+                "Fled Me Friend Friend.",
+                0x10d,
+            ),
+        ];
+        for (notice, line, colour) in cases {
+            assert_eq!(said(notice), [Said::official(line).typed(colour)]);
+        }
+        // A line the installation lacks is this client's, in the same colour.
+        assert_eq!(
+            said(DuelNotice::NotYourself),
+            [Said::own("You cannot duel yourself.").typed(0x111)]
+        );
+        // A turn-down the program has no line for says nothing.
+        assert_eq!(
+            said(DuelNotice::TurnedDown {
+                by: friend(),
+                reason: None
+            }),
+            []
+        );
+    }
+
+    #[test]
+    fn yell_reward_and_level_news_read_in_the_programs_lines() {
+        use eq_client_core::{Coins, world::YellBearing};
+        let messages = Messages::parse(
+            "EQST0002
+0 6
+442 Down to %1.
+443 Lost %1, now %2.
+1438 %1 copper%2.
+1439 , from %1
+1442 %1 platinum%2.
+12908 %1 behind.
+",
+        );
+        let said = |notice: Notice| {
+            wording(&notice, Some(&messages))
+                .into_iter()
+                .map(|(_, said)| said)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            said(Notice::YellForHelp {
+                name: "Friend".into(),
+                bearing: Some(YellBearing::Behind)
+            }),
+            [Said::official("Friend behind.").typed(0x11a)]
+        );
+        // A band the installation lacks is this client's words.
+        assert_eq!(
+            said(Notice::YellForHelp {
+                name: "Friend".into(),
+                bearing: Some(YellBearing::Ahead)
+            }),
+            [Said::own("Friend yells for help!").typed(0x11a)]
+        );
+        assert_eq!(
+            said(Notice::QuestReward {
+                coins: Coins {
+                    platinum: 2,
+                    gold: 0,
+                    silver: 0,
+                    copper: 5,
+                },
+                giver: "Guard".into()
+            }),
+            [
+                Said::official("5 copper, from Guard.").typed(0x111),
+                Said::official("2 platinum, from Guard.").typed(0x111)
+            ]
+        );
+        assert_eq!(
+            said(Notice::LevelLost { lost: 1, level: 9 }),
+            [Said::official("Down to 9.").typed(13)]
+        );
+        assert_eq!(
+            said(Notice::LevelLost { lost: 2, level: 8 }),
+            [Said::official("Lost 2, now 8.").typed(13)]
+        );
+    }
+
+    #[test]
     fn duel_yell_stat_and_coin_news_read_in_this_clients_words() {
         use eq_client_core::{Coins, socials::DuelRefusal, world::DuelNotice};
         let said = |notice: Notice| {
@@ -1473,11 +1774,11 @@ mod tests {
         };
         assert_eq!(
             said(Notice::Duel(DuelNotice::Challenged("Friend".into()))),
-            [Said::own("Friend challenges you to a duel.")]
+            [Said::own("Friend challenges you to a duel.").typed(15)]
         );
         assert_eq!(
             said(Notice::Duel(DuelNotice::Begun("Friend".into()))),
-            [Said::own("Your duel with Friend begins.")]
+            [Said::own("Your duel with Friend begins.").typed(15)]
         );
         assert_eq!(
             said(Notice::Duel(DuelNotice::Refused {
@@ -1487,7 +1788,10 @@ mod tests {
             [Said::own("Friend is already dueling.")]
         );
         assert_eq!(
-            said(Notice::YellForHelp("Friend".into())),
+            said(Notice::YellForHelp {
+                name: "Friend".into(),
+                bearing: None
+            }),
             [Said::own("Friend yells for help!")]
         );
         assert_eq!(

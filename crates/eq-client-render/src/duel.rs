@@ -1,7 +1,11 @@
 //! Another player's challenge to a duel, asked in the skin's confirmation
-//! dialog and answered only by its Yes or No: no script, setting or key
-//! answers one. The network session owns the question; it has no local
-//! deadline (checklist 6.492, pending R49-6a).
+//! dialog where the Duel Answer Card is on
+//! ([`eq_client_core::qol::Fix::DuelAnswerCard`], on by default). The
+//! Titanium program has no card (read R49-6a): it says the challenge in
+//! the chat and takes `/duel`. The card is a departure the session owns:
+//! Yes sends what `/duel` at the challenger sends, and No closes the
+//! question and sends nothing. A script answers it as the player does. The
+//! question has no local deadline, as the program's has none.
 use crate::{hud::messages::Messages, online::OnlineState, outbox::Outbox};
 use eq_client_core::{ClientCommand, confirmations::ConsentId, world::ClientWorld};
 

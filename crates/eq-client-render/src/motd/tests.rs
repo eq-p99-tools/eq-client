@@ -27,6 +27,9 @@ fn app() -> (
     std::sync::mpsc::Receiver<eq_client_core::ClientCommand>,
 ) {
     let mut online = OnlineState::new(true);
+    // The Mac-era program's `/motd` is unread: the message said again as it
+    // came. Titanium's is the program's line (below).
+    testing::generation(&mut online, eq_client_core::GameDialect::EqMac);
     testing::connect(&mut online, true);
     let (queue, received) = std::sync::mpsc::sync_channel(4);
     let mut app = App::new();
@@ -138,5 +141,24 @@ fn a_new_connection_never_says_the_old_servers_message() {
             "The second server's message."
         ]
     );
+    assert!(received.try_recv().is_err());
+}
+
+#[test]
+fn on_titanium_motd_says_the_kept_message_in_the_programs_line_even_empty() {
+    let (mut app, received) = app();
+    testing::generation(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        eq_client_core::GameDialect::Titanium,
+    );
+    app.insert_resource(crate::hud::messages::Messages::parse(
+        "EQST0002\n0 1\n12965 MOTD: %1\n",
+    ));
+    // None came: the line still says, with nothing in it.
+    ask(&mut app);
+    assert_eq!(system_texts(&app), ["MOTD: "]);
+    hear(&mut app, motd_line("Welcome."));
+    ask(&mut app);
+    assert_eq!(system_texts(&app), ["MOTD: ", "MOTD: Welcome."]);
     assert!(received.try_recv().is_err());
 }

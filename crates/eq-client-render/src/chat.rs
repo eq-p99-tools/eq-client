@@ -349,6 +349,15 @@ impl ChatState {
         self.deliver(line, online);
     }
 
+    /// The server's message of the day as it came on this connection, if
+    /// one came.
+    pub(super) fn kept_motd(&self, online: &OnlineState) -> Option<String> {
+        self.server_motd
+            .as_ref()
+            .filter(|(connection, _)| *connection == online.connection_revision)
+            .map(|(_, line)| line.message.text.clone())
+    }
+
     /// Says the server's message of the day again, as it came on this
     /// connection, the way it was said then; false when none came. The
     /// line said again is not kept as a new one.

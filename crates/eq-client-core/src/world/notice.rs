@@ -22,16 +22,15 @@ pub enum ListingNotice {
     Looking(bool),
 }
 
-/// News of a duel the player is part of. The server sends no line with
-/// any of it on `EQEmu` (its own refusal text excepted), so this client
-/// words it itself; the official client's strings and colours for these
-/// are not read (checklist 6.492, pending R49-6a).
+/// News of a duel the player is part of. On Titanium each is one of the
+/// program's lines (read R49-6 a, d, e and h), told by the session as
+/// [`crate::socials::DuelNews`]; elsewhere the server sends no line with it
+/// (its own refusal text excepted), so this client words it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DuelNotice {
-    /// Another player challenged the player, with no question to answer:
-    /// the server type does not answer duels yet.
+    /// Another player challenged the player (0x592, %1 their name).
     Challenged(String),
-    /// The player's duel with this player began.
+    /// The player's duel with this player began (0x590, %1 their name).
     Begun(String),
     /// The player this names turned the player's duel down, and why
     /// (TAKP's clients' own answer).
@@ -43,6 +42,108 @@ pub enum DuelNotice {
     },
     /// An answer to a challenge was not sent, and why.
     AnswerRefused(String),
+    /// `/duel` challenged this player (0x33c6).
+    Challenging(String),
+    /// `/duel` accepted this player's challenge, and the duel began
+    /// (0x33c4).
+    Accepting(String),
+    /// `/duel` with no target, or one that is not a player (0x33c0).
+    NoPlayerTarget,
+    /// `/duel` at the player themselves (0x33c1).
+    NotYourself,
+    /// `/duel` during a duel: at the opponent (0x33c2), or at someone else
+    /// (0x33c3).
+    AlreadyDueling {
+        /// Whether the target is the opponent.
+        at_opponent: bool,
+    },
+    /// `/duel` at one player while another's challenge waits (0x33c5).
+    ConsideringAnother,
+    /// The player won the duel (0x2f44, %1 the player's name, %2 the
+    /// opponent's).
+    Won {
+        /// The player's name.
+        own: String,
+        /// The opponent's.
+        over: String,
+    },
+    /// The duel partner died otherwise (0x2f45, %1 and %2 their name).
+    Ended(String),
+    /// The one the player challenged turned it down on their program's
+    /// own: 0x567 they ignore the player, 0x568 they are dueling, 0x569
+    /// another challenge waits; no line for a reason the program has none
+    /// for.
+    TurnedDown {
+        /// Who.
+        by: String,
+        /// Why.
+        reason: Option<crate::socials::DuelAutoDecline>,
+    },
+    /// The one the player challenged left before accepting (0x581).
+    Lapsed(String),
+    /// The opponent left during the duel, which the player wins (0x580, %1
+    /// the player's name, %2 and %3 theirs).
+    Forfeited {
+        /// The player's name.
+        own: String,
+        /// The opponent's.
+        opponent: String,
+    },
+}
+
+/// Where a yeller stands from the player, by the line the Titanium program
+/// picks (read R49-6d): the angle between the player's heading and the
+/// bearing to them, folded to half a turn. The sides of each band have two
+/// lines, and which is which is unread, so the first stands for both
+/// (labelled).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum YellBearing {
+    /// Up to 32 of the 512 heading units: 0x326b.
+    Ahead,
+    /// Over 32 up to 96: 0x326d (or 0x3270).
+    AheadAside,
+    /// Over 96 up to 160: 0x326e (or 0x3271).
+    Aside,
+    /// Over 160 up to 224: 0x326f (or 0x3272).
+    BehindAside,
+    /// Over 224: 0x326c.
+    Behind,
+}
+
+impl YellBearing {
+    /// The band a yeller at `yeller` is in for a player at `own`, facing
+    /// its heading. A step along heading `h` moves `(sin h, cos h)` in X
+    /// and Y.
+    #[must_use]
+    pub fn between(own: crate::WorldPosition, yeller: crate::WorldPosition) -> Self {
+        let turn = 512.0_f32;
+        let bearing = (yeller.x - own.x).atan2(yeller.y - own.y) / std::f32::consts::TAU * turn;
+        let difference = (bearing - own.heading).rem_euclid(turn);
+        let folded = if difference > turn / 2.0 {
+            turn - difference
+        } else {
+            difference
+        };
+        match folded {
+            angle if angle <= 32.0 => Self::Ahead,
+            angle if angle <= 96.0 => Self::AheadAside,
+            angle if angle <= 160.0 => Self::Aside,
+            angle if angle <= 224.0 => Self::BehindAside,
+            _ => Self::Behind,
+        }
+    }
+
+    /// The program's line for the band.
+    #[must_use]
+    pub const fn string_id(self) -> u32 {
+        match self {
+            Self::Ahead => 0x326b,
+            Self::AheadAside => 0x326d,
+            Self::Aside => 0x326e,
+            Self::BehindAside => 0x326f,
+            Self::Behind => 0x326c,
+        }
+    }
 }
 
 /// Who took part in a death the player saw, or in news of their group or
@@ -388,9 +489,30 @@ pub enum Notice {
     Duel(DuelNotice),
     /// A player near the player yelled for help, by name. The server sends
     /// no line with it (`Client::Handle_OP_YellForHelp` passes the record
-    /// on); this client's words stand until the official client's are read
-    /// (checklist 6.492, pending R49-6d).
-    YellForHelp(String),
+    /// on). On Titanium the program's line names where the yeller stands
+    /// (read R49-6d); elsewhere this client's words stand.
+    YellForHelp {
+        /// The yeller's shown name.
+        name: String,
+        /// Where they stand from the player, on Titanium.
+        bearing: Option<YellBearing>,
+    },
+    /// A quest gave the player these coins, never all zero, on Titanium:
+    /// the program says each with the giver's shown name (read R49-6g).
+    QuestReward {
+        /// The coins.
+        coins: Coins,
+        /// The giver's shown name, empty for none or one not in view.
+        giver: String,
+    },
+    /// The player lost levels, as the Titanium program says it (read
+    /// R49-6c): 0x1ba for one, 0x1bb for more, colour 13.
+    LevelLost {
+        /// How many levels.
+        lost: u8,
+        /// The level now.
+        level: u8,
+    },
     /// A stat increase named another spawn, which the Titanium program tells
     /// with a line that names no one, as it does (read R49-6f, 0x455fff:
     /// 0x3273 when the amount is below zero, else 0x3274, colour 15). One

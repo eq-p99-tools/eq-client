@@ -305,7 +305,7 @@ fn the_duel_word_notes_any_words_after_it() {
 }
 
 #[test]
-fn a_duel_challenges_only_another_player_targeted_and_never_by_name() {
+fn a_titanium_duel_sends_the_target_as_it_stands_whatever_follows() {
     let duel = |online: &OnlineState, named| {
         answer(
             Asked::Duel { named },
@@ -314,8 +314,43 @@ fn a_duel_challenges_only_another_player_targeted_and_never_by_name() {
             &Messages::default(),
         )
     };
+    // The program reads no words and tests nothing itself (read R49-6h):
+    // the session words each outcome.
+    for (target, sent) in [
+        (Some(12), 12),
+        (Some(7), 7),
+        (Some(20), 20),
+        (Some(21), 21),
+        (None, 0),
+    ] {
+        let online = targeting(target);
+        for named in [false, true] {
+            assert_eq!(
+                duel(&online, named),
+                Ok((None, Some(Sent::Duel { target: sent }))),
+                "{target:?} {named}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_duel_elsewhere_challenges_only_another_player_targeted_and_never_by_name() {
+    let duel = |online: &OnlineState, named| {
+        answer(
+            Asked::Duel { named },
+            online.world(),
+            None,
+            &Messages::default(),
+        )
+    };
+    let mac = |target| {
+        let mut online = targeting(target);
+        testing::generation(&mut online, eq_client_core::GameDialect::EqMac);
+        online
+    };
     // Another player targeted: sent, with no line of ours.
-    let online = targeting(Some(12));
+    let online = mac(Some(12));
     assert_eq!(
         duel(&online, false),
         Ok((None, Some(Sent::Duel { target: 12 })))
@@ -327,7 +362,7 @@ fn a_duel_challenges_only_another_player_targeted_and_never_by_name() {
     );
     // No target, the player, an NPC, a corpse, or a spawn not in the zone.
     for target in [None, Some(7), Some(20), Some(21), Some(99)] {
-        let online = targeting(target);
+        let online = mac(target);
         assert_eq!(
             duel(&online, false).unwrap_err().words.text,
             "You must first target another player to challenge to a duel.",
@@ -371,7 +406,34 @@ fn lfg_takes_alone_on_or_off_and_refuses_any_other_word() {
         Asked::typed("/lfg on now"),
         Some(Asked::Lfg(LfgWords::Other))
     );
-    let online = admitted(vec![Capability::LookingForGroup]);
+    // On Titanium, on and off say the program's line as they send, and
+    // anything else is its usage line (read R49-6i).
+    let titanium = admitted(vec![Capability::LookingForGroup]);
+    let messages = Messages::parse("EQST0002\n0 3\n13134 On.\n13135 Off.\n13136 Usage.\n");
+    let said = |words| answer(Asked::Lfg(words), titanium.world(), None, &messages);
+    assert_eq!(
+        said(LfgWords::On),
+        Ok((
+            Some(Said::official("On.").typed(0x111)),
+            Some(Sent::Looking(Some(true)))
+        ))
+    );
+    assert_eq!(
+        said(LfgWords::Off),
+        Ok((
+            Some(Said::official("Off.").typed(0x111)),
+            Some(Sent::Looking(Some(false)))
+        ))
+    );
+    for words in [LfgWords::None, LfgWords::Other] {
+        assert_eq!(
+            said(words),
+            Ok((Some(Said::official("Usage.").typed(0x111)), None))
+        );
+    }
+    // Elsewhere this client's forms stand.
+    let mut online = admitted(vec![Capability::LookingForGroup]);
+    testing::generation(&mut online, eq_client_core::GameDialect::EqMac);
     let lfg = |words| {
         answer(
             Asked::Lfg(words),

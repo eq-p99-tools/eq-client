@@ -126,6 +126,13 @@ pub enum Fix {
     /// this client gates no crossing and the world sets no level of its
     /// own, so the setting changes nothing until such a gate lands.
     ZoneAnywhere,
+    /// Asks Yes or No in the confirmation window when another player
+    /// challenges the player to a duel. Yes sends what `/duel` at the
+    /// challenger sends; No closes the card and sends nothing. The
+    /// Titanium program has no card: it says the challenge in the chat and
+    /// takes only `/duel` (read R49-6a). Adam's choice (11-23), on by
+    /// default; off, the client behaves as the program does.
+    DuelAnswerCard,
     /// Makes the local map and known entity positions available on every
     /// server, independently of the original client's map support.
     MapEverywhere,
@@ -164,7 +171,7 @@ pub enum Fix {
 impl Fix {
     /// Every fix: the settings in the order the quality-of-life page lists
     /// them, then the fixes that are always on.
-    pub const ALL: [Self; 33] = [
+    pub const ALL: [Self; 34] = [
         Self::SkipModifiedFood,
         Self::HiddenWindows,
         Self::AskBeforeDeletingSpells,
@@ -189,6 +196,7 @@ impl Fix {
         Self::JesusMode,
         Self::ExitAtOnce,
         Self::ZoneAnywhere,
+        Self::DuelAnswerCard,
         Self::MapEverywhere,
         Self::FrameCap,
         Self::GreyedControls,
@@ -231,6 +239,7 @@ impl Fix {
             Self::JesusMode => "jesus_mode",
             Self::ExitAtOnce => "exit_at_once",
             Self::ZoneAnywhere => "zone_anywhere",
+            Self::DuelAnswerCard => "duel_answer_card",
             Self::FrameCap => "frame_cap",
             Self::GreyedControls => "greyed_controls",
             Self::CampCountdown => "camp_countdown",
@@ -277,6 +286,7 @@ impl Fix {
             Self::JesusMode => "Jesus Mode",
             Self::ExitAtOnce => "Exit at Once",
             Self::ZoneAnywhere => "Zone Anywhere",
+            Self::DuelAnswerCard => "Duel Answer Card",
             Self::FrameCap => "Cap Frames at 60",
             Self::GreyedControls => "Grey Out What Is Unavailable",
             Self::CampCountdown => "Count Down Camping",
@@ -364,6 +374,9 @@ impl Fix {
             Self::ZoneAnywhere => {
                 "Cross any zone line whatever level the zone asks for. Nothing is blocked today, so this changes nothing yet."
             }
+            Self::DuelAnswerCard => {
+                "Ask Yes or No when another player challenges you to a duel: Yes accepts as /duel does, and No closes the card and sends nothing. The original client has no card and takes only /duel; turn this off to play it that way."
+            }
             Self::AnswerListPolls => {
                 "Answer supported P99 list presence polls after a local delay. This does not join a list or answer numeric challenges."
             }
@@ -426,7 +439,10 @@ impl Fix {
             | Self::QuietRepeats
             | Self::BuffTimeLeft
             | Self::WeaponRatio
-            | Self::WindowsApart => Kind::Shows,
+            | Self::WindowsApart
+            // Yes sends what `/duel` at the challenger sends, at the
+            // player's own press.
+            | Self::DuelAnswerCard => Kind::Shows,
         }
     }
 
@@ -456,6 +472,7 @@ impl Fix {
             Self::AutoLoot => Some(Capability::Looting),
             Self::AnswerListPolls => Some(Capability::AnsweringListPolls),
             Self::ExitAtOnce => Some(Capability::Camping),
+            Self::DuelAnswerCard => Some(Capability::Dueling),
             Self::ReadWhileStanding => Some(Capability::Spellbook),
             Self::HiddenWindows
             | Self::MapEverywhere
@@ -497,7 +514,9 @@ impl Fix {
             | Self::LongChaseCamera
             | Self::FreeCamera
             // The original client stands a sitter when hit (read R19 b).
-            | Self::StandWhenHit => Availability::Setting { default: true },
+            | Self::StandWhenHit
+            // Adam's choice (11-23): the card, on by default.
+            | Self::DuelAnswerCard => Availability::Setting { default: true },
             // A comfort the player has to ask for starts as the official
             // client behaves: off.
             Self::HiddenWindows
@@ -672,6 +691,7 @@ mod tests {
                 Fix::JesusMode,
                 Fix::ExitAtOnce,
                 Fix::ZoneAnywhere,
+                Fix::DuelAnswerCard,
             ]
         );
         // A fix that is always on stays on whatever is asked.
@@ -711,6 +731,10 @@ mod tests {
         );
         assert!(settings.on(Fix::TakeEnvironmentalDamage));
         assert!(settings.on(Fix::StandWhenHit));
+        // The duel card is Adam's choice, on until the player turns it off.
+        assert!(settings.on(Fix::DuelAnswerCard));
+        assert_eq!(Fix::DuelAnswerCard.needs(), Some(Capability::Dueling));
+        assert!(!Fix::DuelAnswerCard.is_unsafe());
     }
 
     #[test]
