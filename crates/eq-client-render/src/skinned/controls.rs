@@ -111,6 +111,11 @@ pub(crate) struct SkinSlider {
     width: f32,
     /// The thumb's width.
     thumb: f32,
+    /// What a press chooses for a setting that rescales the layout
+    /// ([`Level::rescales_layout`]), shown by the thumb and value label and
+    /// set only once the press ends. A slider taken away mid-drag, with its
+    /// window closed, takes its choice with it, and the setting stays.
+    held: Option<u16>,
 }
 
 impl SkinSlider {
@@ -120,6 +125,7 @@ impl SkinSlider {
             sets: Sets::Level(level),
             width: 150.0,
             thumb: 15.0,
+            held: None,
         }
     }
 
@@ -188,6 +194,7 @@ pub(super) fn slider(
                 sets,
                 width: area.width,
                 thumb: thumb_width,
+                held: None,
             },
             RelativeCursorPosition::default(),
         ));
@@ -199,6 +206,14 @@ pub(super) fn slider(
         if sets == Sets::Level(Level::RunSpeed) {
             node.insert(crate::tooltip::Tooltip(
                 "Scale forward running from 1.00x to 1.40x. Use 1.00x for ordinary speed."
+                    .to_owned(),
+            ));
+        }
+        if sets == Sets::Level(Level::UiScale) {
+            node.insert(crate::tooltip::Tooltip(
+                "Draw this client's windows from 50 % to 200 % of the desktop's size. \
+                 The new size takes effect when you let go. Right-click for 100 %, \
+                 or type /uiscale 100."
                     .to_owned(),
             ));
         }
@@ -248,31 +263,68 @@ pub(super) fn slider(
 }
 
 /// Sets a slider's setting from where the pointer presses or drags it.
+///
+/// A setting that rescales the layout ([`Level::rescales_layout`]) is held
+/// on the slider while the press lasts and set once as it ends, by the
+/// mouse's release or a script's one-frame press. Set each frame, the new
+/// scale would move the window and the slider under a pointer that holds
+/// still, the pointer would then read near one end, and the scale would
+/// swing between its ends frame after frame. A right-click on such a
+/// slider returns the setting to its default.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn slide(
-    sliders: Query<(&Interaction, &SkinSlider, &RelativeCursorPosition)>,
+    mut sliders: Query<(&Interaction, &mut SkinSlider, &RelativeCursorPosition)>,
     online: Res<crate::online::OnlineState>,
+    mouse: Option<Res<ButtonInput<MouseButton>>>,
     mut state: ResMut<OptionsState>,
     mut inventory: ResMut<InventoryState>,
 ) {
-    for (interaction, slider, cursor) in &sliders {
-        let (Interaction::Pressed, Some(at)) = (interaction, cursor.normalized) else {
-            continue;
-        };
-        let along = slider.fraction(at.x);
-        match slider.sets {
+    let right = mouse.is_some_and(|mouse| mouse.just_pressed(MouseButton::Right));
+    for (interaction, mut slider, cursor) in &mut sliders {
+        let pressed = (*interaction == Interaction::Pressed)
+            .then_some(cursor.normalized)
+            .flatten()
+            .map(|at| slider.fraction(at.x));
+        let level = match slider.sets {
             Sets::Level(level)
                 if level.needs().is_none_or(|capability| {
                     crate::outbox::offered(online.world(), capability)
                 }) =>
             {
-                let value = level.at(along);
-                if state.options.level(level) != value {
-                    state.options.set_level(level, value);
-                }
+                level
             }
-            Sets::Level(_) => {}
-            Sets::Quantity => inventory.slide_amount(along),
+            Sets::Level(_) => continue,
+            Sets::Quantity => {
+                if let Some(along) = pressed {
+                    inventory.slide_amount(along);
+                }
+                continue;
+            }
+        };
+        let value = if level.rescales_layout() {
+            if *interaction == Interaction::Pressed {
+                if let Some(along) = pressed {
+                    let value = level.at(along);
+                    if slider.held != Some(value) {
+                        slider.held = Some(value);
+                    }
+                }
+                continue;
+            }
+            if slider.held.is_some() {
+                slider.held.take()
+            } else if right && *interaction == Interaction::Hovered {
+                Some(eq_client_core::options::Options::default().level(level))
+            } else {
+                None
+            }
+        } else {
+            pressed.map(|along| level.at(along))
+        };
+        if let Some(value) = value
+            && state.options.level(level) != value
+        {
+            state.options.set_level(level, value);
         }
     }
 }
@@ -283,12 +335,21 @@ pub(crate) fn slide(
 pub(crate) fn show_sliders(
     state: Res<OptionsState>,
     inventory: Res<InventoryState>,
+    sliders: Query<&SkinSlider>,
     mut thumbs: Query<(&SliderThumb, &mut Node)>,
     mut labels: Query<(&LevelValue, &mut Text)>,
 ) {
+    // What a press holds shows in place of the setting, which waits for
+    // the press to end.
+    let shown = |level: Level| {
+        sliders
+            .iter()
+            .find_map(|slider| slider.held.filter(|_| slider.sets == Sets::Level(level)))
+            .unwrap_or_else(|| state.options.level(level))
+    };
     for (thumb, mut node) in &mut thumbs {
         let along = match thumb.sets {
-            Sets::Level(level) => level.fraction(state.options.level(level)),
+            Sets::Level(level) => level.fraction(shown(level)),
             Sets::Quantity => inventory.amount_along().unwrap_or(0.0),
         };
         let left = px(along * thumb.travel);
@@ -297,7 +358,7 @@ pub(crate) fn show_sliders(
         }
     }
     for (LevelValue(level), mut text) in &mut labels {
-        let words = level.words(state.options.level(*level));
+        let words = level.words(shown(*level));
         if text.0 != words {
             text.0 = words;
         }
@@ -1130,6 +1191,135 @@ mod tests {
         }
     }
 
+    /// The interface scale each frame the options changed, after the first.
+    #[derive(Resource, Default)]
+    struct Changes(Vec<u16>);
+
+    #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+    fn count_changes(state: Res<OptionsState>, mut changes: ResMut<Changes>) {
+        if state.is_changed() && !state.is_added() {
+            changes.0.push(state.options.level(Level::UiScale));
+        }
+    }
+
+    /// An app with the interface scale slider and its value label, the
+    /// slider pressed.
+    fn scale_slider() -> (App, Entity, Entity) {
+        let mut app = App::new();
+        app.init_resource::<OptionsState>()
+            .init_resource::<InventoryState>()
+            .init_resource::<Changes>()
+            .init_resource::<ButtonInput<MouseButton>>()
+            .insert_resource(crate::online::OnlineState::new(false))
+            .add_systems(Update, (slide, show_sliders, count_changes).chain());
+        let input = app
+            .world_mut()
+            .spawn((
+                Interaction::Pressed,
+                SkinSlider::test_level(Level::UiScale),
+                RelativeCursorPosition::default(),
+            ))
+            .id();
+        let label = app
+            .world_mut()
+            .spawn((LevelValue(Level::UiScale), Text::default()))
+            .id();
+        (app, input, label)
+    }
+
+    fn point(app: &mut App, slider: Entity, value: u16) {
+        let across = SkinSlider::test_level(Level::UiScale).across(Level::UiScale.fraction(value));
+        app.world_mut()
+            .get_mut::<RelativeCursorPosition>(slider)
+            .unwrap()
+            .normalized = Some(Vec2::new(across, 0.0));
+    }
+
+    fn scale(app: &App) -> u16 {
+        app.world()
+            .resource::<OptionsState>()
+            .options
+            .level(Level::UiScale)
+    }
+
+    #[test]
+    fn the_interface_scale_holds_a_drag_and_sets_it_once_as_the_press_ends() {
+        let (mut app, slider, label) = scale_slider();
+        // A scale set mid-drag would move the slider under the pointer, so
+        // the pointer reads near one end and then the other frame after
+        // frame. Held, none of it reaches the setting or the layout.
+        for value in [200, 50, 200, 50, 125] {
+            point(&mut app, slider, value);
+            app.update();
+            assert_eq!(scale(&app), 100);
+            assert_eq!(
+                app.world().get::<Text>(label).unwrap().0,
+                format!("{value} %")
+            );
+        }
+        assert_eq!(app.world().resource::<Changes>().0, Vec::<u16>::new());
+        *app.world_mut().get_mut::<Interaction>(slider).unwrap() = Interaction::None;
+        app.update();
+        app.update();
+        assert_eq!(scale(&app), 125);
+        assert_eq!(app.world().get::<Text>(label).unwrap().0, "125 %");
+        assert_eq!(app.world().resource::<Changes>().0, [125]);
+    }
+
+    #[test]
+    fn a_one_frame_press_on_the_interface_scale_sets_it_once() {
+        let (mut app, slider, _) = scale_slider();
+        point(&mut app, slider, 150);
+        app.update();
+        *app.world_mut().get_mut::<Interaction>(slider).unwrap() = Interaction::None;
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!(scale(&app), 150);
+        assert_eq!(app.world().resource::<Changes>().0, [150]);
+    }
+
+    #[test]
+    fn closing_the_window_mid_drag_keeps_the_interface_scale() {
+        let (mut app, slider, label) = scale_slider();
+        point(&mut app, slider, 200);
+        app.update();
+        app.world_mut().despawn(slider);
+        app.update();
+        assert_eq!(scale(&app), 100);
+        assert_eq!(app.world().get::<Text>(label).unwrap().0, "100 %");
+        assert_eq!(app.world().resource::<Changes>().0, Vec::<u16>::new());
+    }
+
+    #[test]
+    fn a_right_click_returns_the_interface_scale_to_its_default() {
+        let (mut app, slider, _) = scale_slider();
+        app.world_mut()
+            .resource_mut::<OptionsState>()
+            .options
+            .set_level(Level::UiScale, 50);
+        *app.world_mut().get_mut::<Interaction>(slider).unwrap() = Interaction::Hovered;
+        app.update();
+        assert_eq!(scale(&app), 50);
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Right);
+        app.update();
+        assert_eq!(scale(&app), 100);
+        // Away from the slider a right-click leaves the scale alone.
+        app.world_mut()
+            .resource_mut::<OptionsState>()
+            .options
+            .set_level(Level::UiScale, 50);
+        *app.world_mut().get_mut::<Interaction>(slider).unwrap() = Interaction::None;
+        let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
+        mouse.release(MouseButton::Right);
+        mouse.clear();
+        mouse.press(MouseButton::Right);
+        app.update();
+        assert_eq!(scale(&app), 50);
+    }
+
     #[test]
     fn camera_key_rows_offer_editable_bindings_and_show_the_captured_key() {
         use crate::keys::{Act, bindings};
@@ -1190,6 +1380,7 @@ mod tests {
             sets: Sets::Level(Level::MaxFps),
             width: 100.0,
             thumb: 10.0,
+            held: None,
         };
         for fraction in [0.0, 0.25, 1.0] {
             assert!((slider.fraction(slider.across(fraction)) - fraction).abs() < 1e-6);
@@ -1202,6 +1393,7 @@ mod tests {
             sets: Sets::Level(Level::ClipPlane),
             width: 100.0,
             thumb: 10.0,
+            held: None,
         };
         // The pointer at the left edge holds the thumb against it.
         assert!(slider.fraction(-0.5) < 0.0);

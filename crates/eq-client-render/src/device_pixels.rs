@@ -11,7 +11,8 @@
 //! ([`Level::UiScale`]), which the official screens never take.
 //! Places and scroll positions are kept in logical pixels (a unit at the
 //! interface's scale), so a window keeps its place and a list its scroll
-//! across the change.
+//! across the change. `/uiscale` sets the player's scale by typing, for when
+//! the slider is hard to reach, and `/uiscale` alone returns it to 100 %.
 use crate::{loading::Loading, login::FrontEnd, online::OnlineState};
 use bevy::{prelude::*, window::PrimaryWindow};
 use eq_client_core::options::Level;
@@ -22,9 +23,55 @@ use eq_client_core::options::Level;
 pub(crate) fn install(app: &mut App) {
     app.add_systems(
         Update,
-        fit.in_set(crate::Stage::Present)
+        (request, fit)
+            .chain()
+            .in_set(crate::Stage::Present)
             .after(crate::loading::Shown),
     );
+}
+
+/// How `/uiscale` is typed, said when it is typed otherwise.
+const USAGE: &str =
+    "Use /uiscale with a size from 50 to 200 in steps of 5, or /uiscale alone for 100";
+
+/// The interface scale a typed `/uiscale` asks for: the percent after it,
+/// one the slider stops at, or 100 with none. None for any other line.
+pub(crate) fn typed(input: &str) -> Option<Result<u16, String>> {
+    let mut words = input.split_whitespace();
+    if !words.next()?.eq_ignore_ascii_case("/uiscale") {
+        return None;
+    }
+    let level = Level::UiScale;
+    Some(match (words.next(), words.next()) {
+        (None, _) => Ok(eq_client_core::options::Options::default().level(level)),
+        (Some(word), None) => word
+            .strip_suffix('%')
+            .unwrap_or(word)
+            .parse::<u16>()
+            .ok()
+            .filter(|percent| level.at(level.fraction(*percent)) == *percent)
+            .ok_or_else(|| USAGE.to_owned()),
+        _ => Err(USAGE.to_owned()),
+    })
+}
+
+/// Sets the interface scale a typed `/uiscale` asked for, and says so.
+fn request(
+    chat: Option<ResMut<crate::chat::ChatState>>,
+    options: Option<ResMut<crate::options::OptionsState>>,
+) {
+    let (Some(mut chat), Some(mut options)) = (chat, options) else {
+        return;
+    };
+    let Some(percent) = chat.ui_scale.take() else {
+        return;
+    };
+    if options.options.level(Level::UiScale) != percent {
+        options.options.set_level(Level::UiScale, percent);
+    }
+    let words = format!("Interface scale set to {}.", Level::UiScale.words(percent));
+    chat.history
+        .push(crate::chat::system_line(crate::chat::Said::own(words)));
 }
 
 /// The interface's scale for a window at `window_factor` (its scale factor):
@@ -194,6 +241,71 @@ mod tests {
         assert_eq!(app.world().resource::<UiScale>().0, 1.5);
         set(&mut app, 100);
         assert_eq!(app.world().resource::<UiScale>().0, 1.0);
+    }
+
+    #[test]
+    fn uiscale_is_typed_with_a_slider_stop_or_alone_for_100() {
+        assert_eq!(typed("/uiscale"), Some(Ok(100)));
+        assert_eq!(typed("/UIScale 150"), Some(Ok(150)));
+        assert_eq!(typed("/uiscale 75%"), Some(Ok(75)));
+        assert_eq!(typed("/uiscale 50"), Some(Ok(50)));
+        assert_eq!(typed("/uiscale 200"), Some(Ok(200)));
+        for bad in [
+            "/uiscale 49",
+            "/uiscale 201",
+            "/uiscale 101",
+            "/uiscale big",
+            "/uiscale 100 100",
+        ] {
+            assert_eq!(typed(bad), Some(Err(USAGE.to_owned())), "{bad}");
+        }
+        assert_eq!(typed("/uiscales"), None);
+        assert_eq!(typed("hello"), None);
+    }
+
+    #[test]
+    fn a_typed_uiscale_sets_the_interface_scale_and_says_so() {
+        let mut app = App::new();
+        app.init_resource::<crate::chat::ChatState>()
+            .init_resource::<crate::options::OptionsState>()
+            .add_systems(Update, request);
+        app.world_mut()
+            .resource_mut::<crate::options::OptionsState>()
+            .options
+            .set_level(Level::UiScale, 50);
+        let ask = |app: &mut App, line: &str| {
+            let mut chat = app.world_mut().resource_mut::<crate::chat::ChatState>();
+            let asked = crate::chat::client_request(line, &mut chat);
+            app.update();
+            asked
+        };
+        let scale = |app: &App| {
+            app.world()
+                .resource::<crate::options::OptionsState>()
+                .options
+                .level(Level::UiScale)
+        };
+        assert_eq!(ask(&mut app, "/uiscale"), Some(Ok(())));
+        assert_eq!(scale(&app), 100);
+        assert_eq!(ask(&mut app, "/uiscale 125"), Some(Ok(())));
+        assert_eq!(scale(&app), 125);
+        assert_eq!(ask(&mut app, "/uiscale 7"), Some(Err(USAGE.to_owned())));
+        assert_eq!(scale(&app), 125);
+        let said: Vec<String> = app
+            .world()
+            .resource::<crate::chat::ChatState>()
+            .history
+            .lines(eq_client_core::chat::ChatTab::All)
+            .into_iter()
+            .map(|(_, line)| line.message.text.clone())
+            .collect();
+        assert_eq!(
+            said,
+            [
+                "Interface scale set to 100 %.",
+                "Interface scale set to 125 %."
+            ]
+        );
     }
 
     /// How many frames found the interface's scale changed.

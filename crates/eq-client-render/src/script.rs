@@ -7041,6 +7041,72 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_scripts_click_on_the_interface_scale_sets_it_once() {
+        use crate::{
+            options::OptionsState,
+            skinned::{SkinSlider, slide},
+        };
+        use bevy::ui::RelativeCursorPosition;
+        use eq_client_core::options::Level;
+
+        /// The interface scale each frame the options changed.
+        #[derive(Resource, Default)]
+        struct Changes(Vec<u16>);
+        #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+        fn count(state: Res<OptionsState>, mut changes: ResMut<Changes>) {
+            if state.is_changed() && !state.is_added() {
+                changes.0.push(state.options.level(Level::UiScale));
+            }
+        }
+
+        let program = Program::parse(
+            "click(\"slider\", \"ui_scale\", 67)\nreport(\"after click\")\n",
+            Path::new("."),
+        )
+        .unwrap();
+        let mut app = pointing(Vec::new());
+        let window = app
+            .world_mut()
+            .query_filtered::<Entity, With<PrimaryWindow>>()
+            .single(app.world())
+            .unwrap();
+        set_focus(&mut app, window, true);
+        let mut online = crate::online::OnlineState::new(true);
+        crate::online::testing::news(
+            &mut online,
+            [eq_client_core::WorldEvent::Entered {
+                capabilities: Vec::new(),
+                choices: Vec::new(),
+                session_id: 9,
+                zone: "qeytoqrg".into(),
+                player: Box::new(crate::online::testing::player(7)),
+                far_clip: None,
+                spell_landing_flag: None,
+                zone_id: 0,
+            }],
+        );
+        crate::online::testing::connect(&mut online, true);
+        app.insert_resource(online)
+            .insert_resource(Script::from_program(program))
+            .init_resource::<Changes>()
+            .add_systems(Update, (slide, count).chain().after(drive));
+        app.world_mut().spawn((
+            Button,
+            SkinSlider::test_level(Level::UiScale),
+            RelativeCursorPosition::default(),
+            laid_out(Vec2::new(240.0, 360.0), 80.0, 1),
+        ));
+        for ms in (0..=2_000).step_by(10) {
+            frame_at(&mut app, ms);
+        }
+        assert_eq!(
+            app.world().resource::<RunStatus>().phase(),
+            Phase::Completed
+        );
+        assert_eq!(app.world().resource::<Changes>().0, [150]);
+    }
+
     fn script_pointer(app: &App) -> Option<Vec2> {
         app.world().get_resource::<ScriptPointer>().map(|at| at.0)
     }
