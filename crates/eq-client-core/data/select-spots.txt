@@ -54,15 +54,16 @@
 # lakerathe neriakb qvic) were looked at live, in our client on a local
 # server, with the person who reviews them walking the character. All nine
 # moved to a position picked by hand during that look; kedge is now
-# reviewed. Only qrg stays unreviewed.
+# reviewed. Only qrg stays unreviewed. --check flags seven of them (the
+# mesh splits those floors off); each is kept with what the look showed.
 #
 # zone          y         x         z       heading  distance  pitch  state
 acrylia        -576.54    -41.42    -18.50    256.0      25.0   10.0  reviewed
-airplane        356.57    354.20    -77.32     19.8      25.0   10.0  reviewed
+airplane        356.57    354.20    -77.32     19.8      25.0   10.0  reviewed  # kept: island walked to live 2026-11-23; the mesh joins the islands by none of its drops
 akanon         1256.12   -545.42    -40.97    352.0      25.0   10.0  reviewed
 akheva           48.00      5.67      0.00    256.0      25.0   10.0  reviewed
 arena           -20.78    502.20     19.06    384.0      25.0   10.0  reviewed
-barindu        -863.97   -268.00    -92.50    317.1      25.0   10.0  reviewed
+barindu        -863.97   -268.00    -92.50    317.1      25.0   10.0  reviewed  # kept: floor walked to live 2026-11-23; the mesh splits this floor off the main island
 befallen       -479.01    -73.78    -69.97    320.0      25.0   10.0  reviewed
 beholder        197.96     16.28      9.65      0.0      25.0   10.0  reviewed
 blackburrow     -41.72   -110.85      0.00    384.0      25.0   10.0  reviewed
@@ -86,7 +87,7 @@ eastwastes    -4315.08   1560.72    171.14    128.0      25.0   10.0  reviewed
 ecommons         -8.32   1619.59    -55.34    352.0      25.0   10.0  reviewed
 emeraldjungle  1424.42    446.70   -344.47      0.0      25.0   10.0  reviewed
 erudnext       -943.39   -214.15     47.97     64.0      25.0   10.0  reviewed
-erudnint        767.82    695.50      3.75    269.6      25.0   10.0  reviewed
+erudnint        767.82    695.50      3.75    269.6      25.0   10.0  reviewed  # kept: palace floor, walked to live 2026-11-23; the mesh splits this floor off the main island
 erudsxing     -1367.16   1233.03    122.24    288.0      25.0   10.0  reviewed  # kept: dry rock island reached by swimming up its sloping shore; the mesh cuts it off at the water
 everfrost       845.89  -3352.50     -8.24    384.0      25.0   10.0  reviewed
 fearplane      -335.72   -219.75     22.26    288.0      25.0   10.0  reviewed
@@ -118,7 +119,7 @@ gukg            790.26   -453.24    -30.00    192.0      25.0   10.0  reviewed
 gukh           -130.72   -518.91     70.00    288.0      24.4   10.0  reviewed
 guktop          629.80    127.58    -69.97     64.0      25.0   10.0  reviewed
 gunthak        -733.33   -644.78     16.00    256.0      25.0   10.0  reviewed
-halas           -55.36     11.24      4.75      0.8      25.0   10.0  reviewed
+halas           -55.36     11.24      4.75      0.8      25.0   10.0  reviewed  # kept: town ground, walked to live 2026-11-23; the mesh splits this floor off the main island
 hateplane       191.42     98.97     47.50    448.0      25.0   10.0  reviewed
 highkeep         43.16   -124.30    -43.97    160.0      25.0   10.0  reviewed
 highpass         -9.62     -0.62      0.00    224.0      25.0   10.0  reviewed
@@ -140,7 +141,7 @@ kithicor        517.54   1468.48    187.06    224.0      25.0   10.0  reviewed
 kodtaz          180.23   1089.02   -432.00     32.0      25.0   10.0  reviewed  # kept: open plain beside the paved road to the temples, on a large mesh island; where the mesh splits is not visible
 kurn             -5.10     -4.81     41.97    384.0      25.0   10.0  reviewed
 lakeofillomen   1788.29   -123.33    155.10     96.0      25.0   10.0  reviewed
-lakerathe      3680.90   1243.85    -36.09     41.0      25.0   10.0  reviewed
+lakerathe      3680.90   1243.85    -36.09     41.0      25.0   10.0  reviewed  # kept: grass bank at the dock, walked to live 2026-11-23; the mesh splits the shore at the water
 lavastorm      -264.77   -309.14    122.26    352.0      25.0   10.0  reviewed
 lfaydark       1401.75   -322.51     20.37    448.0      25.0   10.0  reviewed  # kept: open forest floor, walkable on all sides; the mesh has no floor under this one spot
 load              1.50   -311.37      5.00      0.0      25.0   10.0  reviewed
@@ -197,7 +198,7 @@ qeynos2        1081.84     41.08      0.00    192.0      25.0   10.0  reviewed
 qeytoqrg       1671.17   -247.02    111.89    288.0      25.0   10.0  reviewed
 qinimi         -247.54   -896.13     -8.75    256.0      25.0   10.0  reviewed
 qrg           -1508.61    975.82     -0.00     64.0      25.0   10.0  unreviewed
-qvic            886.21  -2051.76   -672.25     33.2      25.0   10.0  reviewed
+qvic            886.21  -2051.76   -672.25     33.2      25.0   10.0  reviewed  # kept: floor walked to live 2026-11-23; the mesh splits this floor off the main island
 qvicb             1.00     35.00    -31.00    192.0      25.0   10.0  reviewed
 rathemtn       3315.31   1524.79    125.01     64.0      25.0   10.0  reviewed  # kept: open rocky slope, walkable on every side, on a large mesh island; where the mesh splits is not visible
 rivervale       -27.31   -115.96      0.00    256.0      25.0   10.0  reviewed  # kept: town green, walkable on every side, with a door into the hillside nearby; where the mesh splits is not visible
@@ -216,7 +217,7 @@ runnyeye        -14.24    -22.07    -46.97    416.0      25.0   10.0  reviewed
 sebilis       -2098.79   -528.18   -143.94    320.0      25.0   10.0  reviewed
 shadowhaven     -38.33   -293.67    -24.00    256.0      25.0   10.0  reviewed
 sharvahl      -1834.00    345.00   -216.00    256.0      25.0   10.0  reviewed
-sirens          -64.22    -27.15      3.75    509.9      25.0   10.0  reviewed
+sirens          -64.22    -27.15      3.75    509.9      25.0   10.0  reviewed  # kept: floor walked to live 2026-11-23; the mesh splits this floor off the main island
 skyfire        1205.14    609.96   -163.31      0.0      25.0   10.0  reviewed
 skyshrine      2662.68   1995.44   -164.94    256.0      25.0   10.0  reviewed
 sleeper       -2403.81   -999.56   -996.00    288.0      25.0   10.0  reviewed  # kept: tomb walkway reached through the stone archway at its end; the mesh likely splits at that archway
