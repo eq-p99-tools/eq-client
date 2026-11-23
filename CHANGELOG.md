@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Luclin player models follow the Titanium program's own rule** (read R49-44 a, checklist 6.554):
+  - **The server's expansion mask gates them.** They're offered only when bit 0x4 or 0x8 (Luclin or Planes of Power) is set. With no mask seen, nothing is offered. The Mac arm (Quarm, TAKP) gates on the same bits, which is inferred until the Mac client is read.
+  - **The keys are read now, not recalled.** `[Defaults] UseLuclin<Race>Male` / `Female` counts as on when its value starts with T, t or 1, and off otherwise. The race words are the program's: Human, Barbarian, Erudite, WoodElf, HighElf, DarkElf, HalfElf, Dwarf, Troll, Ogre, Halfling, Gnome, Iksar and VahShir.
+  - **A key that isn't set is on where the server offers the models.** So on a server that offers them, players draw with Luclin models unless a key says otherwise. The program also writes `TRUE` back to its ini; this client never writes the official ini.
+  - **`[Defaults] AllLuclinPcModelsOff`** turns every race classic but Vah Shir.
+  - **Fallbacks:** when a race's own key is off, Human also takes Erudite's, and Wood Elf takes Dark Elf's, then Half Elf's, then High Elf's.
+  - **Vah Shir** follows its own key alone, past the gate and the all-off key.
+  - **Froglok stays classic,** since the program's loader doesn't walk it.
+  - **The options file** keeps the keys set on as `luclin_models = ...`, the keys set off as `classic_models = ...`, and `all_luclin_models_off`. A code in both lines is off. A file's keys lie over eqclient.ini's, key by key.
+  - **Offline,** `--demo-luclin-models` sends the preview a synthetic mask that offers them. It can't be combined with `--online`.
 - Seven local-settings slash commands work as the Titanium program's do (checklist 6.525, read R49-22c). They change only this client: nothing goes to a server, on any server type, and scripts can run each with `slash()`.
   - `/clearchat` clears the active chat window's view, silently. The history keeps its lines, so scripts, the log and other windows still have them.
   - `/showspelleffects` and `/combatmusic`: "off" turns the option off and any other word turns it on; with no word they give their usage. Each ends by saying where the option stands. `/combatmusic` now takes the read's words instead of toggling, and says the installation's lines. This client plays no combat music yet, so it changes nothing audible.

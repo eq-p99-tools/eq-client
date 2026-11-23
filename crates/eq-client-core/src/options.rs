@@ -21,8 +21,12 @@ const SHOW_NAMES: &str = "show_names";
 
 /// The name a file keeps [`Options::loot_no_drop`] under.
 const LOOT_NO_DROP: &str = "loot_no_drop";
-/// The name a file keeps [`Options::luclin_models`] under.
+/// The name a file keeps the Luclin model keys set on under.
 const LUCLIN_MODELS: &str = "luclin_models";
+/// The name a file keeps the Luclin model keys set off under.
+const CLASSIC_MODELS: &str = "classic_models";
+/// The name a file keeps [`LuclinModels::all_off`] under.
+const ALL_LUCLIN_MODELS_OFF: &str = "all_luclin_models_off";
 
 /// The name a file keeps [`Options::attack_on_assist`] under.
 const ATTACK_ON_ASSIST: &str = "attack_on_assist";
@@ -449,9 +453,11 @@ pub struct Options {
     pub user_colors: [Option<[u8; 3]>; USER_COLOR_KINDS],
     /// See [`Level::MusicVolume`].
     pub music_volume: u16,
-    /// Which player races and genders draw with the Luclin models, as the
-    /// official client's Options window chooses them (inferred, R49-44a);
-    /// none by default.
+    /// The Luclin model keys per race and gender, and the all-off key, as
+    /// the official client keeps them in `eqclient.ini` (read R49-44 a):
+    /// every key unset by default, so the server's offer decides
+    /// ([`crate::player_models::generation`]). A file's keys lie over the
+    /// ini's seed key by key.
     pub luclin_models: LuclinModels,
     /// The server filters, per character ([`crate::chat_filters`]).
     pub chat_filters: crate::chat_filters::ChatFilters,
@@ -674,6 +680,8 @@ impl Options {
     #[must_use]
     pub fn read(text: &str, defaults: Self) -> Self {
         let mut options = defaults;
+        // The file's Luclin model keys, laid over the seed once read.
+        let mut file_models: Option<LuclinModels> = None;
         for line in text.lines() {
             let Some((key, value)) = line.split_once('=') else {
                 continue;
@@ -681,8 +689,15 @@ impl Options {
             if options.read_chat_setting(key.trim(), value.trim()) {
                 continue;
             }
-            if key.trim() == LUCLIN_MODELS {
-                options.luclin_models = LuclinModels::parse(value);
+            if key.trim() == LUCLIN_MODELS || key.trim() == CLASSIC_MODELS {
+                let keys = file_models.get_or_insert(LuclinModels::NONE);
+                keys.read(value, key.trim() == LUCLIN_MODELS);
+                continue;
+            }
+            if key.trim() == ALL_LUCLIN_MODELS_OFF {
+                if let Ok(off) = value.trim().parse() {
+                    options.luclin_models.all_off = off;
+                }
                 continue;
             }
             if key.trim() == SHOW_NAMES {
@@ -723,6 +738,9 @@ impl Options {
             if let Some(toggle) = Toggle::all().find(|toggle| toggle.key() == key.trim()) {
                 options.set(toggle, on);
             }
+        }
+        if let Some(keys) = file_models {
+            options.luclin_models = keys.over(options.luclin_models);
         }
         options
     }
@@ -797,8 +815,15 @@ impl Options {
                 let _ = writeln!(text, "{USER_COLOR}{kind} = {red} {green} {blue}");
             }
         }
-        for part in [LUCLIN_MODELS, " = ", &self.luclin_models.words(), "\n"] {
+        for part in [LUCLIN_MODELS, " = ", &self.luclin_models.words(true), "\n"] {
             text.push_str(part);
+        }
+        let classic = self.luclin_models.words(false);
+        if !classic.is_empty() {
+            let _ = writeln!(text, "{CLASSIC_MODELS} = {classic}");
+        }
+        if self.luclin_models.all_off {
+            let _ = writeln!(text, "{ALL_LUCLIN_MODELS_OFF} = true");
         }
         text.push_str(&self.chat_filters.text());
         text
@@ -817,7 +842,9 @@ mod tests {
         options.set(Toggle::Qol(Fix::JesusMode), true);
         options.show_names = ShowNames::Last;
         options.loot_no_drop = LootNoDrop::AskUnusable;
-        options.luclin_models.set(6, 1, true);
+        options.luclin_models.set(6, 1, Some(true));
+        options.luclin_models.set(1, 0, Some(false));
+        options.luclin_models.all_off = true;
         options.chat_filters.set(
             eq_network_game::filters::FilterCategory::Auctions,
             eq_network_game::filters::FilterMode::Hide,
@@ -825,6 +852,8 @@ mod tests {
         options.attack_on_assist = true;
         let text = options.text();
         assert!(text.contains("luclin_models = DAF\n"));
+        assert!(text.contains("classic_models = HUM\n"));
+        assert!(text.contains("all_luclin_models_off = true\n"));
         assert!(text.starts_with(HEADER));
         assert!(text.contains("invert_y = true\n"));
         assert!(text.contains("skip_modified_food = false\n"));

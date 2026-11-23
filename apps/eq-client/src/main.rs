@@ -131,6 +131,11 @@ struct Arguments {
     /// Preview a synthetic rain, snow and clearing sequence offline.
     #[arg(long, conflicts_with = "online")]
     demo_weather: bool,
+    /// Offer Luclin player models offline, as a server whose expansion mask
+    /// has Luclin or Planes of Power would. Needs a preview that admits a
+    /// player, such as --demo-entities.
+    #[arg(long, conflicts_with = "online")]
+    demo_luclin_models: bool,
 
     /// Select the nearest rendered player once, without moving or attacking.
     #[arg(long)]
@@ -627,6 +632,7 @@ fn offline_source(arguments: &Arguments) -> Source {
         character_select: arguments.demo_character_select,
         trade: arguments.demo_trade,
         weather: arguments.demo_weather,
+        luclin_models: arguments.demo_luclin_models,
         ..Preview::default()
     })
 }
@@ -980,6 +986,22 @@ mod tests {
         let args = Arguments::try_parse_from(["eq-client", "--demo-weather"]).unwrap();
         assert_eq!(mode(&args, None), Ok(Mode::Offline));
         assert!(Arguments::try_parse_from(["eq-client", "--demo-weather", "--online"]).is_err());
+    }
+
+    #[test]
+    fn the_luclin_models_switch_is_offline_only() {
+        let args =
+            Arguments::try_parse_from(["eq-client", "--demo-entities", "--demo-luclin-models"])
+                .unwrap();
+        assert_eq!(mode(&args, None), Ok(Mode::Offline));
+        let Source::Offline(preview) = offline_source(&args) else {
+            panic!("offline");
+        };
+        assert!(preview.luclin_models);
+        // No session ever opens the gate this way.
+        assert!(
+            Arguments::try_parse_from(["eq-client", "--demo-luclin-models", "--online"]).is_err()
+        );
     }
 
     #[test]

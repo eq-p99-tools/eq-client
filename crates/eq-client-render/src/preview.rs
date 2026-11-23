@@ -42,6 +42,11 @@ pub struct Preview {
     pub trade: bool,
     /// Synthetic light rain, heavy rain, snow and clear weather in sequence.
     pub weather: bool,
+    /// A synthetic expansion mask that offers Luclin models, so the offline
+    /// viewer can show them: with no server, nothing else opens that gate
+    /// ([`eq_client_core::player_models::offered`]). Never part of a
+    /// session.
+    pub luclin_models: bool,
 }
 
 /// An offline selection audit. A rendered image never marks its spot reviewed.
@@ -243,6 +248,13 @@ fn admit(
         return;
     };
     let origin = world_position(standing.translation.to_array(), 0.0);
+    if switches.0.luclin_models {
+        // Synthetic: Luclin and Planes of Power, the bits that offer the
+        // models, told first so the player's own model is chosen with them.
+        news.game(WorldEvent::Expansions(eq_client_core::rules::Expansions(
+            0x4 | 0x8,
+        )));
+    }
     news.game(WorldEvent::Entered {
         // The preview lets the player do everything, jumping included, so
         // it never lags what eq-network adds.

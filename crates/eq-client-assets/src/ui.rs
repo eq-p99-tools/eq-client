@@ -1330,21 +1330,22 @@ pub struct OfficialOptions {
     /// 0x4af32c), unclamped here. The section it sits in is unread, so
     /// `[Defaults]` is tried before `[Options]` (checklist 6.487).
     pub loot_no_drop: Option<i64>,
-    /// Whether each player race and gender draws with its Luclin model, in
-    /// the order of [`LUCLIN_MODEL_KEYS`].
+    /// Each player race and gender's Luclin model key, in the order of
+    /// [`LUCLIN_MODEL_KEYS`]: on when its value starts with T, t or 1, off
+    /// otherwise, and none where the file lacks it (0x43ab98).
     pub luclin_models: [Option<bool>; LUCLIN_MODEL_KEYS.len()],
+    /// `[Defaults] AllLuclinPcModelsOff` (0x4cd3c7, default false).
+    pub all_luclin_models_off: Option<bool>,
     /// Whether an assist's answer starts auto attack: `AttackOnAssist` in
     /// `[Defaults]` (Titanium setup 0x4a3341, read R49-8 d).
     pub attack_on_assist: Option<bool>,
 }
 
-/// The `[Defaults]` keys this client takes the official client's Luclin
-/// model choice from, with the race and gender (0 male, 1 female) each
-/// chooses for. Inferred, unread (R49-44a): the names are recalled as
-/// `UseLuclin<Race><Gender>`, not read from the program, so no key is
-/// trusted to exist; where none is set every model stays classic. The table
-/// is the one place to rename them once the read lands.
-pub const LUCLIN_MODEL_KEYS: [(&str, u32, u32); 30] = [
+/// The `[Defaults]` keys the official client takes its Luclin model choice
+/// from, with the race and gender (0 male, 1 female) each sets: read R49-44
+/// a, `UseLuclin<Race>Male` / `Female` with <Race> from 0x437915, for the
+/// races its loader walks (0x43df32: 1-12, 128 and 130).
+pub const LUCLIN_MODEL_KEYS: [(&str, u32, u32); 28] = [
     ("UseLuclinHumanMale", 1, 0),
     ("UseLuclinHumanFemale", 1, 1),
     ("UseLuclinBarbarianMale", 2, 0),
@@ -1373,8 +1374,6 @@ pub const LUCLIN_MODEL_KEYS: [(&str, u32, u32); 30] = [
     ("UseLuclinIksarFemale", 128, 1),
     ("UseLuclinVahShirMale", 130, 0),
     ("UseLuclinVahShirFemale", 130, 1),
-    ("UseLuclinFroglokMale", 330, 0),
-    ("UseLuclinFroglokFemale", 330, 1),
 ];
 
 fn options_from_ini(text: &str) -> OfficialOptions {
@@ -1408,7 +1407,10 @@ fn options_from_ini(text: &str) -> OfficialOptions {
         loot_no_drop: ini_value(text, "Defaults", "LootNoDrop")
             .or_else(|| ini_value(text, "Options", "LootNoDrop"))
             .and_then(|v| v.trim().parse().ok()),
-        luclin_models: LUCLIN_MODEL_KEYS.map(|(key, _, _)| flag("Defaults", key)),
+        luclin_models: LUCLIN_MODEL_KEYS.map(|(key, _, _)| {
+            ini_value(text, "Defaults", key).map(|value| value.starts_with(['T', 't', '1']))
+        }),
+        all_luclin_models_off: flag("Defaults", "AllLuclinPcModelsOff"),
         attack_on_assist: flag("Defaults", "AttackOnAssist"),
     }
 }
@@ -2329,7 +2331,8 @@ LookSpring=1
                 mouse_sensitivity: Some(4),
                 look_spring: Some(true),
                 loot_no_drop: None,
-                luclin_models: [None; 30],
+                luclin_models: [None; 28],
+                all_luclin_models_off: None,
                 attack_on_assist: None,
             }
         );
@@ -2347,7 +2350,7 @@ LookSpring=1
     #[test]
     fn eqclient_ini_seeds_only_the_luclin_models_it_names() {
         let read = options_from_ini(
-            "[Defaults]\nUseLuclinHumanMale=TRUE\nUseLuclinDarkElfFemale=FALSE\nUseLuclinGnomeMale=maybe\n",
+            "[Defaults]\nUseLuclinHumanMale=TRUE\nUseLuclinDarkElfFemale=FALSE\nUseLuclinGnomeMale=maybe\nUseLuclinVahShirFemale=1x\nUseLuclinIksarMale=true\nUseLuclinTrollMale=0\nUseLuclinOgreMale=\nAllLuclinPcModelsOff=TRUE\n",
         );
         let said = |race, gender| {
             LUCLIN_MODEL_KEYS
@@ -2355,19 +2358,26 @@ LookSpring=1
                 .position(|&(_, r, g)| (r, g) == (race, gender))
                 .and_then(|index| read.luclin_models[index])
         };
+        // On when the value starts with T, t or 1 (0x43ab98); off otherwise.
         assert_eq!(said(1, 0), Some(true));
+        assert_eq!(said(130, 1), Some(true));
+        assert_eq!(said(128, 0), Some(true));
         assert_eq!(said(6, 1), Some(false));
-        // A word that is neither, and every key not there, says nothing.
-        assert_eq!(said(12, 0), None);
+        assert_eq!(said(12, 0), Some(false));
+        assert_eq!(said(9, 0), Some(false));
+        assert_eq!(said(10, 0), Some(false));
+        // A key not there says nothing.
         assert_eq!(said(1, 1), None);
-        assert_eq!(read.luclin_models.iter().flatten().count(), 2);
+        assert_eq!(read.luclin_models.iter().flatten().count(), 7);
+        assert_eq!(read.all_luclin_models_off, Some(true));
         // In another section, the keys are not the choice.
-        assert!(
-            options_from_ini("[Options]\nUseLuclinHumanMale=TRUE\n")
-                .luclin_models
-                .iter()
-                .all(Option::is_none)
-        );
+        let elsewhere = options_from_ini("[Options]\nUseLuclinHumanMale=TRUE\n");
+        assert!(elsewhere.luclin_models.iter().all(Option::is_none));
+        assert_eq!(elsewhere.all_luclin_models_off, None);
+        // The table holds the races the loader walks, both genders, no Froglok.
+        assert_eq!(LUCLIN_MODEL_KEYS.len(), 28);
+        assert!(LUCLIN_MODEL_KEYS.iter().all(|&(_, race, _)| race != 330));
+        assert!(LUCLIN_MODEL_KEYS.contains(&("UseLuclinVahShirFemale", 130, 1)));
     }
 
     #[test]

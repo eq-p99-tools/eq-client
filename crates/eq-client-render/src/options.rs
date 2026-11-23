@@ -458,7 +458,7 @@ mod tests {
         enter(&mut app, 1, "Example");
         app.update();
         let mut human = eq_client_core::player_models::LuclinModels::NONE;
-        human.set(1, 0, true);
+        human.set(1, 0, Some(true));
         let chosen = |app: &App| {
             crate::online::own_luclin_models(
                 app.world().resource::<OnlineState>().world(),

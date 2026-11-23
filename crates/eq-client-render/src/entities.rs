@@ -451,7 +451,9 @@ fn draw(
     };
     // The look changes only which model is drawn: the size, feet and name
     // height below come from the race and size as for a classic model.
-    let generation = player_models::generation((spawn.race, spawn.gender, spawn.kind), chosen);
+    let offered = player_models::offered(state.world().generation(), state.world().expansions());
+    let generation =
+        player_models::generation((spawn.race, spawn.gender, spawn.kind), chosen, offered);
     if let Some(code) = model
         && !nearby_state.models.contains_key(&(code, generation))
     {
@@ -904,6 +906,13 @@ mod tests {
             (human.kind, human.race, human.gender, human.size) = (SpawnKind::Player, 1, 0, 7.0);
             human.pet_owner = None;
             testing::spawns(&mut online, vec![human]);
+            // The server offers the models, so the key decides.
+            testing::news(
+                &mut online,
+                [WorldEvent::Expansions(eq_client_core::rules::Expansions(
+                    0xF,
+                ))],
+            );
             let mut app = App::new();
             character::testing::stores(app.world_mut());
             let classic = character::testing::prepared(app.world_mut());
@@ -922,7 +931,7 @@ mod tests {
                 .models
                 .insert(("HUM", Generation::Luclin), Some(taller));
             let mut chosen = LuclinModels::NONE;
-            chosen.set(1, 0, luclin);
+            chosen.set(1, 0, Some(luclin));
             nearby.luclin = Some(chosen);
             nearby.elapsed = 1.0;
             let config = crate::ViewerConfig {
