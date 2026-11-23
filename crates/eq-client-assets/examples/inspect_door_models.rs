@@ -234,34 +234,73 @@ fn changed(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Each placed object whose model is named for a mesh the rule makes solid
-/// (its name, less `_ACTORDEF`, starts that mesh's name), up to five places
-/// each, in server axes.
+/// Each actor of a zone's object archive with the meshes it draws: its
+/// own mesh, or each bone's mesh and skin of its skeleton.
+fn actor_meshes(directory: &Path, zone: &str) -> Option<BTreeMap<String, BTreeSet<String>>> {
+    use libeq::wld::parser::{ActorDef, DmSprite, HierarchicalSprite, HierarchicalSpriteDef};
+    let file = std::fs::File::open(directory.join(format!("{zone}_obj.s3d"))).ok()?;
+    let mut archive = PfsReader::open(file).ok()?;
+    let bytes = archive.get(&format!("{zone}_obj.wld")).ok()??;
+    let doc = WldDoc::parse(&bytes).ok()?;
+    let at = |reference: u32| i32::try_from(reference).ok().filter(|index| *index > 0);
+    let mesh_name = |reference: u32| -> Option<String> {
+        let sprite: &DmSprite = doc.get(&FragmentRef::new(at(reference)?))?;
+        let mesh: &DmSpriteDef2 = doc.get(&sprite.reference)?;
+        doc.get_string(mesh.name_reference).map(str::to_owned)
+    };
+    let mut actors = BTreeMap::new();
+    for actor in doc.fragment_iter::<ActorDef>() {
+        let Some(name) = doc.get_string(actor.name_reference) else {
+            continue;
+        };
+        let Some(&first) = actor.fragment_references.first() else {
+            continue;
+        };
+        let mut meshes = BTreeSet::new();
+        if let Some(mesh) = mesh_name(first) {
+            meshes.insert(mesh);
+        } else if let Some(index) = at(first)
+            && let Some(sprite) = doc.get::<HierarchicalSprite>(&FragmentRef::new(index))
+            && let Some(definition) = doc.get::<HierarchicalSpriteDef>(&sprite.reference)
+        {
+            for dag in &definition.dags {
+                meshes.extend(mesh_name(dag.mesh_or_sprite_reference));
+            }
+            for &reference in definition.dm_sprites.as_deref().unwrap_or_default() {
+                meshes.extend(mesh_name(reference));
+            }
+        }
+        actors.insert(name.to_owned(), meshes);
+    }
+    Some(actors)
+}
+
+/// Each placed object whose model draws a mesh the rule makes solid, up to
+/// five places each, in server axes.
 fn places(directory: &Path, zone: &str) -> Result<(), Box<dyn std::error::Error>> {
     let facts = mesh_facts(directory, zone).ok_or("no object archive")?;
-    let solid: Vec<&String> = facts
-        .iter()
-        .filter(|(_, fact)| fact.passable > 0 && fact.solid_throughout)
-        .map(|(mesh, _)| mesh)
-        .collect();
+    let actors = actor_meshes(directory, zone).ok_or("no object archive")?;
     let asset = eq_client_assets::load_zone_collision(directory, zone)?;
+    println!("## {zone}");
     println!("model\tmeshes\tsolid\tx\ty\tz\tloc (y, x, z)");
     for (index, model) in asset.models.iter().enumerate() {
-        let stem = model.name.trim_end_matches("_ACTORDEF");
-        let meshes: Vec<&str> = solid
-            .iter()
-            .filter(|mesh| mesh.starts_with(stem))
+        let meshes: Vec<&str> = actors
+            .get(&model.name)
+            .into_iter()
+            .flatten()
+            .filter(|mesh| {
+                facts
+                    .get(*mesh)
+                    .is_some_and(|fact| fact.passable > 0 && fact.solid_throughout)
+            })
             .map(|mesh| mesh.trim_end_matches("_DMSPRITEDEF"))
             .collect();
         if meshes.is_empty() {
             continue;
         }
-        for object in asset
-            .objects
-            .iter()
-            .filter(|object| object.model == index)
-            .take(5)
-        {
+        let placed = asset.objects.iter().filter(|object| object.model == index);
+        println!("# {} placed {}", model.name, placed.clone().count());
+        for object in placed.take(5) {
             let at = eq_client_axes::to_world(glam::Vec3::from_array(object.translation));
             println!(
                 "{}\t{}\t{}\t{:.0}\t{:.0}\t{:.0}\t{:.0}, {:.0}, {:.0}",
@@ -277,5 +316,25 @@ fn places(directory: &Path, zone: &str) -> Result<(), Box<dyn std::error::Error>
             );
         }
     }
+    let drawing: Vec<&String> = actors
+        .iter()
+        .filter(|(_, meshes)| {
+            meshes.iter().any(|mesh| {
+                facts
+                    .get(mesh)
+                    .is_some_and(|fact| fact.passable > 0 && fact.solid_throughout)
+            })
+        })
+        .map(|(actor, _)| actor)
+        .collect();
+    println!(
+        "# actors drawing a changed mesh {}: {}",
+        drawing.len(),
+        drawing
+            .iter()
+            .map(|actor| actor.as_str())
+            .collect::<Vec<_>>()
+            .join(",")
+    );
     Ok(())
 }
