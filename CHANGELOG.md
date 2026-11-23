@@ -9,6 +9,11 @@
   (titles, the bind zone, the chat server's channels) is passed over until
   each one's own client work lands.
 - `/loadskin <name>` switches the UI skin in game (checklist 6.605), as the official client's command does. The windows redraw from the new skin at once, and the choice stays the character's for later runs. A name matches the installation's `uifiles` folder whatever its letter case. A skin that isn't installed changes nothing and says so, and an unreadable line gives the usage. The official client's trailing `0` or `1` is accepted, and this client keeps window placements either way. The choice is saved in this client's settings folder, not in the installation's files. A skin loaded in game wins over `--ui-skin` until the player camps or plays another character or world, when `--ui-skin` applies again. What the official client says in reply isn't read, so the replies are this client's own words. Why: the Velious skin's inventory shows the bags alone, with no paperdoll, statistics or hit point and mana numbers, and its equipment sits in Hot Button window 1. `/loadskin default` brings the full inventory back without restarting.
+- Every other spawn's helm follows its own show-helm flag, as read R49-13 reads the Titanium program (checklist 6.513). This rebuilds #567 on main.
+  - **The flag** comes from the spawn record's byte 139 and appearance kind 43, and the head slot's model is nothing while it is off. Players, NPCs and corpses alike: the program's head code has no distinction. `EQEmu` sends a player's own option, and for an NPC whether its helm texture is set.
+  - **When it shows:** a kind 43 for another spawn only sets the flag, with no redraw, so its helm changes at that spawn's next head wear change (inferred, as the read gives).
+  - **Your own** follows the Show My Helm option at once, as before.
+  - The flag counts only where the session offers Show My Helm (`Capability::ShowingHelm`, stock `EQEmu`). Project 1999's records aren't checked, and `EQMac` and `RoF2` records never say it, so every helm shows there as before.
 
 - Destroy the coins on the cursor (gap 3.8, checklist 6.512), as the
   Titanium program's Destroy button does (read R49-11). With coins on the
