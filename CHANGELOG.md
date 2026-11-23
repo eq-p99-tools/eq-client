@@ -7,6 +7,28 @@
   - **Fix:** a setting that rescales the layout (`Level::rescales_layout`, the interface scale alone) is held on its slider while pressed. The thumb and value label show the held size, and the setting changes once as the press ends, by the mouse's release or a script's one-frame press. Closing the window mid-drag discards the held size. The other sliders still set as they move.
   - **Recovery:** right-click the slider for 100%, or type `/uiscale` (100%) or `/uiscale N` with N a 5% step from 50 to 200. Scripts can use `slash("uiscale 100")` or the slider as before. The options file's `ui_scale` key still works too.
 
+- Destroy the coins on the cursor (gap 3.8, checklist 6.512), as the
+  Titanium program's Destroy button does (read R49-11). With coins on the
+  cursor and no item, **Destroy cursor item** asks first, with the
+  installation's own question (string 0x80d), or our words where the
+  installation lacks it. With no answer in 10 s the question closes as a No.
+  On Yes it sends one `DestroyCoins` (eq-network #342) for the first kind on
+  the cursor, the most valuable first, whole, as the program sends one move.
+  - **Departure, labelled (6.512c):** the program then clears every kind on
+    its cursor, including kinds it never told the server about. This client
+    keeps those shown, as the server still holds them. Its own coin controls
+    hold one kind on the cursor at a time, so two kinds come only from what
+    the server says the cursor holds.
+  - The program skips the question when its ini `Destroy` key is set. That
+    option is row 6.512b, not built here.
+  - Where the session doesn't offer `Capability::DestroyingCoins` (all but
+    stock EQEmu for now) it says "This server does not take destroying
+    coins." and asks nothing. An item on the cursor is destroyed as before;
+    its question in the program's own string (0x7fb) and timeout is row
+    6.512d.
+  - Any change to the cursor's coins cancels the question. Scripts click the
+    same control and dialog, so they destroy coins as they destroy items,
+    and a script that answers nothing gets the timeout's No.
 - Drowning and lava now hurt on every Titanium server, public EQEmu and
   P99 included, as the Titanium program reports them on any server
   (eq-network's liquid change; read R25). **Characters on public servers
