@@ -18,6 +18,7 @@ Use these targets after `click`, `right_click` or `hover`. Each word of a target
 - `book row`: a spellbook list row, counted from zero.
 - `book_place place`: a skin spellbook place, from 0 to 15.
 - `book_page next` or `book_page back`: turn a spellbook page.
+- `book_edit earlier`, `book_edit later`, `book_edit delete`, `book_edit confirm` or `book_edit cancel`: the spellbook's ordering and deletion buttons, for the spell chosen with `book row`. `delete` asks first, and `confirm` or `cancel` answers. A button the session doesn't offer is refused with its reason, as its greyed look tells a person: P99 holds deletion back.
 - `memorize gem`: choose gem 1 to 8 when memorizing.
 - `spell_gem gem`: a gem from 1 to 8. `click` casts its spell and
   `right_click` forgets it.
