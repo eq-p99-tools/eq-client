@@ -109,7 +109,7 @@ pub struct ZoneModel {
     pub materials: Vec<ObjectMaterial>,
     /// Solid triangles, including invisible collision surfaces. A face
     /// flagged passable is left out unless the engine makes its mesh solid
-    /// throughout ([`object_solid_faces`]).
+    /// throughout (the five model names of EQGraphicsDX9.dll 0x10193510).
     pub collision: Vec<[[f32; 3]; 3]>,
 }
 
