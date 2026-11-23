@@ -3,8 +3,10 @@
 //! R45b and R46): `/yell`, `/stopcast` and a plain `/assist`; and `/duel`, a
 //! challenge to the player targeted (checklist 6.492b), which on Titanium
 //! sends the target as it stands and the session words as the program does
-//! (read R49-6h), and elsewhere keeps this client's checks and lines; and
-//! `/lfg`, looking for a group (checklist 6.515), whose forms and lines are
+//! (read R49-6h), and on the Mac era likewise for a plain `/duel` (TAKP
+//! read 11g), elsewhere keeping this client's checks and lines; `/decline`,
+//! the Mac era's refusal of a waiting challenge (TAKP read 11h, 6.622),
+//! whose lines the session gives; and `/lfg`, looking for a group (checklist 6.515), whose forms and lines are
 //! this client's until its handler is read (pending R49-6i). Each line is the
 //! installed client's string where it has one; this client's words stand
 //! in otherwise. On a server that offers none of the sends, each keeps
@@ -55,6 +57,8 @@ pub(crate) enum Asked {
         /// Whether words followed the command.
         named: bool,
     },
+    /// `/decline`: refusing the waiting duel challenge, on the Mac era.
+    Decline,
     /// `/lfg`: looking for a group, as its words ask.
     Lfg(LfgWords),
 }
@@ -88,6 +92,8 @@ pub(crate) enum Sent {
         /// The player challenged.
         target: u16,
     },
+    /// The refusal of the waiting challenge.
+    Decline,
     /// Looking for a group: set, or turned over for None.
     Looking(Option<bool>),
 }
@@ -113,6 +119,9 @@ impl Asked {
             Some(Self::Duel {
                 named: words.next().is_some(),
             })
+        } else if name.eq_ignore_ascii_case("decline") {
+            // Words after it are unread, and ignored.
+            Some(Self::Decline)
         } else if name.eq_ignore_ascii_case("lfg") {
             let first = words.next();
             Some(Self::Lfg(match (first, words.next()) {
@@ -132,6 +141,7 @@ impl Asked {
             Self::StopCast => "stopcast",
             Self::Assist => "assist",
             Self::Duel { .. } => "duel",
+            Self::Decline => "decline",
             Self::Lfg(_) => "lfg",
         }
     }
@@ -142,6 +152,7 @@ impl Asked {
             Self::StopCast => Capability::StoppingCasts,
             Self::Assist => Capability::Assisting,
             Self::Duel { .. } => Capability::Dueling,
+            Self::Decline => Capability::DecliningDuels,
             Self::Lfg(_) => Capability::LookingForGroup,
         }
     }
@@ -169,6 +180,18 @@ fn challenged(world: &ClientWorld) -> Option<u16> {
         .spawn(id)
         .filter(|spawn| spawn.state.kind == eq_client_core::SpawnKind::Player)
         .map(|_| id)
+}
+
+/// Whether a generation's `/duel` is its program's as read: Titanium's
+/// takes the target whatever words follow (read R49-6h, 0x472a67), and the
+/// Mac era's plain form takes it too (TAKP read 11g, 0x4fca55), whose words
+/// are unread. The session words every outcome as the program's line.
+const fn duel_read(dialect: eq_client_core::GameDialect, named: bool) -> bool {
+    match dialect {
+        eq_client_core::GameDialect::Titanium => true,
+        eq_client_core::GameDialect::EqMac => !named,
+        eq_client_core::GameDialect::Rof2 => false,
+    }
 }
 
 /// Whether a generation's `/duel`, `/lfg`, `/motd` and `/charinfo` are the
@@ -206,10 +229,12 @@ fn answer(
             (None, Some(Sent::StopCast))
         }
         Asked::Assist => (None, Some(Sent::Assist)),
-        // The Titanium program reads no words and takes the target, whoever
-        // it is (read R49-6h, 0x472a67): its session words every outcome
-        // as the program's line.
-        Asked::Duel { .. } if reads_r49_6(world.generation()) => (
+        // The session says the program's line for each state (0x33bd,
+        // 0x33be, 0x33bf) and sends the refusal where a challenge waits.
+        Asked::Decline => (None, Some(Sent::Decline)),
+        // The program takes the target, whoever it is ([`duel_read`]): its
+        // session words every outcome as the program's line.
+        Asked::Duel { named } if duel_read(world.generation(), named) => (
             None,
             Some(Sent::Duel {
                 target: world.target().selected.unwrap_or(0),
@@ -343,6 +368,10 @@ pub(super) fn answers(
                     Sent::Duel { target } => ClientCommand::ChallengeDuel {
                         session_id: stamp.session_id,
                         target,
+                        created: stamp.created,
+                    },
+                    Sent::Decline => ClientCommand::DeclineDuel {
+                        session_id: stamp.session_id,
                         created: stamp.created,
                     },
                     Sent::Looking(on) => ClientCommand::LookForGroup {

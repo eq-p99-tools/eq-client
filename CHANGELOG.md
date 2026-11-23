@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- On TAKP and Quarm, `/decline` refuses a waiting duel challenge, as the Mac-era program does (TAKP read 11h, checklist 6.622 client half). The session says the program's line for each state: dueling (0x33bd), declined (0x33be) or nothing to decline (0x33bf). A plain `/duel` there now sends the target as it stands, as the program does (read 11g), and the session gives the program's refusals for no target, the player or a corpse. Words after `/duel` are still refused on the Mac era, since the program's handling of them is unread. Titanium is unchanged, and RoF2 keeps this client's checks.
 - `/toggleinspect` and the Inspect Others option as the Titanium program
   keeps them (read R49-16, checklist 6.574). `/toggleinspect on` and `off`
   set it; any other word or none says the usage lines 0x339a and 0x339b;
