@@ -12,11 +12,11 @@ pub(crate) use self::book::{BOOK_TIMEOUT, BookEditReceipt};
 use self::book::{BookQueue, Expected};
 use crate::theme;
 use bevy::prelude::*;
-use eq_client_core::{Capability, ClientCommand, WorldEvent, world::ClientWorld};
+use eq_client_core::{Capability, ClientCommand, WorldEvent, chat::Tongue, world::ClientWorld};
 use std::{
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
         mpsc::{SyncSender, TrySendError},
     },
     time::Instant,
@@ -112,6 +112,10 @@ pub(crate) struct Outbox {
     /// Present only on a short-lived facade passed by an identified script
     /// dispatch. The shared outbox never stores a script's context.
     chat_admission: Option<u64>,
+    /// The language the active chat window speaks, by the servers' number
+    /// (read R49-4 (b): the builder takes the last window's choice), kept
+    /// by [`crate::languages::speak`].
+    language: Arc<AtomicU8>,
 }
 
 fn interrupts_apply(command: &ClientCommand) -> bool {
@@ -137,6 +141,7 @@ impl Outbox {
             refused: Arc::new(Mutex::new(Vec::new())),
             book: Arc::default(),
             chat_admission: None,
+            language: Arc::default(),
         }
     }
 
@@ -149,6 +154,7 @@ impl Outbox {
             refused: self.refused.clone(),
             book: self.book.clone(),
             chat_admission,
+            language: self.language.clone(),
         }
     }
 
@@ -157,6 +163,33 @@ impl Outbox {
             admission_id: self.chat_admission?,
             zone: world.zone().to_owned(),
         })
+    }
+
+    /// Speaks every line in this language from now on.
+    pub(crate) fn set_language(&self, language: u8) {
+        self.language.store(language, Ordering::Relaxed);
+    }
+
+    /// The tongue a line goes out in (read R49-4 (b)): the active window's
+    /// language where the profile gives skill in it, worded as the program
+    /// words it ([`Tongue::spoken`]), else the common tongue.
+    pub(crate) fn tongue(&self, world: &ClientWorld) -> Tongue {
+        let language = self.language.load(Ordering::Relaxed);
+        world
+            .player()
+            .and_then(|player| {
+                Tongue::spoken(
+                    player,
+                    language,
+                    eq_client_core::chat::Speaker {
+                        game_master: crate::languages::game_master(player),
+                        log_server_word_zero: world
+                            .language_zero_selector()
+                            .is_some_and(|selector| selector.0 != 0),
+                    },
+                )
+            })
+            .unwrap_or(Tongue::COMMON)
     }
 
     pub(crate) fn set_spell_ready(&self, ready: bool) {
@@ -316,15 +349,17 @@ impl Outbox {
         set_step: bool,
         receipt: Option<&BookEditReceipt>,
     ) -> Result<(), Refusal> {
-        let command = match (command, self.chat_admission) {
-            (ClientCommand::SendChat(message), Some(session_id)) => {
-                // The common tongue, as before eq-network carried a chosen
-                // one; the languages work picks the spoken one.
+        // A typed line goes out in the active window's tongue, bound to the
+        // admission it was typed in (a script's, or the one current).
+        let tongue = self.tongue(world);
+        let command = match (command, self.chat_admission.or(world.session_id())) {
+            (ClientCommand::SendChat(message), Some(session_id))
+                if self.chat_admission.is_some() || tongue != Tongue::COMMON =>
+            {
                 ClientCommand::SendChatInAdmission {
                     session_id,
                     message,
-                    // The common tongue until the languages slice chooses.
-                    tongue: eq_client_core::Tongue::COMMON,
+                    tongue,
                 }
             }
             (command, _) => command,

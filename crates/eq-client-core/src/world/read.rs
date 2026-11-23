@@ -358,6 +358,13 @@ impl ClientWorld {
         self.language_zero_selector
     }
 
+    /// Whether the world turns on the program's listener garble (Titanium's
+    /// log-server word at 16, `EQMac`'s `gibberish`); false until it says.
+    #[must_use]
+    pub fn listener_garble(&self) -> bool {
+        self.listener_garble.unwrap_or(false)
+    }
+
     /// The zone header's minimum clip, the nearest its far plane comes;
     /// None until this admission's header comes.
     #[must_use]

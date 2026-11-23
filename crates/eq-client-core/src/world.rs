@@ -308,6 +308,10 @@ pub struct ClientWorld {
     /// Like the world's other rules it survives zone/character admission,
     /// and a new session's restart clears it to unknown.
     language_zero_selector: Option<crate::rules::LanguageZeroSelector>,
+    /// Whether the world turns on the program's listener garble: Titanium's
+    /// log-server word at 16, or `EQMac`'s `gibberish` at the same place
+    /// (reads R49-4 (c), R49-4m). Kept like the other rules.
+    listener_garble: Option<bool>,
     /// The zone header's gravity, once this admission's header came.
     zone_gravity: Option<f32>,
     /// The zone header's top (`max_z`) and lowest height (its underworld),
@@ -979,6 +983,9 @@ impl ClientWorld {
                     self.skills_revision = self.skills_revision.wrapping_add(1);
                 }
                 if let Some(enabled) = rules.name_generator { self.name_generator = Some(enabled); }
+                if let Some(on) = rules.listener_garble.or(rules.gibberish) {
+                    self.listener_garble = Some(on);
+                }
             }
             WorldEvent::NameSuggestion { selection_id, request_id, name } => {
                 self.name_suggestion = Some(NameSuggestion { selection_id: *selection_id, request_id: *request_id, name: name.clone() });
@@ -1045,9 +1052,11 @@ impl ClientWorld {
             | WorldEvent::Gm(_)
             // Pinned past these before their front ends land (repin 6.561);
             // each waits for the client slice named.
-            // A duel's question and refusal: the duel slice (6.492).
+            // A duel's question, refusal and news (read R49-6): the duel
+            // slice (6.492).
             | WorldEvent::DuelOffer(_)
             | WorldEvent::DuelRefused { .. }
+            | WorldEvent::DuelNews(_)
             // Applying a poison: the apply poison slice (6.493).
             | WorldEvent::ApplyPoisonRefused { .. }
             | WorldEvent::PoisonAnswered(_)

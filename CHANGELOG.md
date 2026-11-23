@@ -38,6 +38,22 @@
   page are this client's own until the official options, ini keys and
   `/filter` forms are read (6.494a to c); `/filter` answers that it is not
   taken that way yet.
+- Speak and hear languages as the Titanium program does (checklist 6.495, reads R49-4, R49-4b and R49-4m). This replaces the unmerged design of #558.
+  - **The choice.** Each chat window speaks a language of its own, an index into the languages the character knows, for the session only. It is never saved, and there is no setting for it (Adam, 11-23).
+  - **`/language`.** The installed lines 0x33cc, 0x33cd and 0x33ce, in message type 0x111. The help word lists the languages, nothing says the current one, and a number chooses one. Scripts use `slash("language ...")`.
+  - **The send.** Every channel carries the active window's language. The skill is worded by eq-network's `Tongue::spoken`: your skill less intoxication >> 2, or 100 for a game master. A hail goes out in it too.
+  - **Hearing.** Lines are tagged with 0x583 (the name) or 0x584 (unknown), and language 0 has no tag. Then two garble stages run:
+    - the speaker's stage: this client's own short-word list, then the program's per-letter rule;
+    - the listener's stage, only where the world's log-server switch is on.
+  - **Not garbled:** channels 6 and 14, and any line when a game master is on either side. A game master sender is found by name in the zone (inferred).
+  - **The away reply.** While AFK, a tell that got through the ignore list gets 0x58b back.
+  - **Inferred or left out:**
+    - on the Mac client, `/language`, the send and the speaker stage follow the Titanium read;
+    - an unlabelled program flag at the gate is taken as 0;
+    - the program's bad-word mask is left out (no profanity filter here);
+    - your own lines are never garbled;
+    - the pet speaking as you on channel 8 is not built yet.
+  - **Repin:** eq-network to #405, for `Tongue::spoken`'s `Speaker`, `PlayerState::intoxication` and `WorldRules::listener_garble`.
 - Drowning and lava now hurt on every Titanium server, public EQEmu and
   P99 included, as the Titanium program reports them on any server
   (eq-network's liquid change; read R25). **Characters on public servers

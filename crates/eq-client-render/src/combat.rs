@@ -232,10 +232,12 @@ pub(super) fn input(
             || "Hail".to_owned(),
             |(_, spawn)| format!("Hail, {}", display_name(&spawn.name)),
         );
+        // A hail is a say, in the active window's tongue (read R49-4 (b)).
+        let tongue = outbox.tongue(world);
         let _ = outbox.post(world, |stamp| ClientCommand::SendChatInAdmission {
             session_id: stamp.session_id,
             message: OutboundChat::Say(text),
-            tongue: eq_client_core::Tongue::COMMON,
+            tongue,
         });
     }
     let bar_attack = super::hud::hotbar::requested(&keys, &bindings, &bar_clicks)

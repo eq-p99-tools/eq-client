@@ -215,6 +215,7 @@ pub(crate) fn player(
         skills: None,
         practice_points: None,
         languages: None,
+        intoxication: None,
         disciplines: None,
         spell_refresh_ms: None,
         memorized_spells: gems,
@@ -637,6 +638,7 @@ pub(crate) fn chat_lines() -> Vec<eq_client_core::chat::ChatLine> {
     .map(|(channel, text)| ChatLine {
         channel,
         message_type: None,
+        tongue: None,
         sender: (!matches!(channel, ChannelName::System | ChannelName::Emote))
             .then(|| "Preview".into()),
         target: None,
