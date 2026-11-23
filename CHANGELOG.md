@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- `/target Name` on Titanium follows the program (read R49-33 b, checklist
+  6.635). A spawn whose full server name is exactly the name is picked
+  first, then the nearest whose name starts with it, over every known spawn
+  rather than only the drawn ones. A name that matches none sends the
+  target naming no one, with no line, as the program does (it said "No
+  nearby target named ..."). `/target` with no name says the program's line
+  0x33d3. Spawns this client can't target are still skipped (Adam's call, a
+  labelled departure from the program's look over all spawns). Labelled:
+  the program sends this choice as `OP_TargetCommand`, and this client
+  sends it as the ordinary target choice, which EQEmu handles alike. The
+  Mac-era rule is unchanged.
 - Petitions and reports as the Titanium program takes them (read R49-23,
   checklist 6.511, C1a), on eq-network #414.
   - **`/petition`** sends its words and echoes them in the installed line

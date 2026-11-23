@@ -2503,19 +2503,17 @@ fn command_words<'a>(input: &'a str, name: &str) -> Option<&'a str> {
     typed.eq_ignore_ascii_case(name).then_some(words)
 }
 
-/// The name in a `/target Name` command; underscores match spaces as in spawn names.
+/// The name in a `/target Name` command, empty for none; underscores match
+/// spaces as in spawn names.
 pub(super) fn target_request(input: &str) -> Option<Result<String, String>> {
     let command = input.strip_prefix('/')?;
     let (name, rest) = command.split_once(' ').unwrap_or((command, ""));
     if !name.eq_ignore_ascii_case("target") {
         return None;
     }
-    let rest = rest.trim().replace('_', " ");
-    Some(if rest.is_empty() {
-        Err("Use /target Name".into())
-    } else {
-        Ok(rest)
-    })
+    // An empty name goes on too: the targeting system says the program's
+    // line for it (read R49-33 b).
+    Some(Ok(rest.trim().replace('_', " ")))
 }
 
 /// The name of the player the player targets, themself included; empty
@@ -3406,7 +3404,7 @@ mod tests {
             Some(Ok("a cave rat".into()))
         );
         assert_eq!(target_request("/TARGET Arias"), Some(Ok("Arias".into())));
-        assert!(target_request("/target  ").unwrap().is_err());
+        assert_eq!(target_request("/target  "), Some(Ok(String::new())));
         assert_eq!(target_request("/targetx rat"), None);
         assert_eq!(target_request("target rat"), None);
     }
