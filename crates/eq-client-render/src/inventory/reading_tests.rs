@@ -263,3 +263,35 @@ fn a_poison_on_a_server_without_it_is_refused_in_chat() {
         [Refusal::Unavailable(Capability::ApplyingPoison)]
     );
 }
+
+#[test]
+fn a_poison_in_a_bag_falls_to_the_ordinary_item_use() {
+    let mut online = poisoned(true);
+    let mut bag = crate::preview::items().into_iter().next().unwrap();
+    bag.slot = InventorySlot(24);
+    bag.bag_slots = 4;
+    bag.book = None;
+    let mut vial = bag.clone();
+    vial.slot = InventorySlot(24).child(0).unwrap();
+    vial.bag_slots = 0;
+    vial.rules.item_type = eq_network_game::poisons::POISON_ITEM_TYPE;
+    testing::inventory(
+        &mut online,
+        InventoryUpdate::Snapshot(vec![bag, vial.clone()]),
+    );
+    let (tx, rx) = std::sync::mpsc::sync_channel(2);
+    let sender = Outbox::new(Some(tx));
+    right_click(
+        vial.slot,
+        &online,
+        &sender,
+        &mut Shown::default(),
+        &crate::skinned::Skinned::default(),
+        &mut crate::items::ItemState::default(),
+        &mut InventoryState::default(),
+    );
+    assert!(
+        !matches!(rx.try_recv(), Ok(ClientCommand::ApplyPoison { .. })),
+        "a bag slot is not the program's item use"
+    );
+}

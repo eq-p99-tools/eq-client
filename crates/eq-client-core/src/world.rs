@@ -996,9 +996,6 @@ impl ClientWorld {
             // A duel's question and refusal: the duel slice (6.492).
             | WorldEvent::DuelOffer(_)
             | WorldEvent::DuelRefused { .. }
-            // Applying a poison: the apply poison slice (6.493).
-            | WorldEvent::ApplyPoisonRefused { .. }
-            | WorldEvent::PoisonAnswered(_)
             // The Bazaar search: its client slice (6.550).
             | WorldEvent::Bazaar(_)
             | WorldEvent::BazaarRefused { .. }
@@ -1563,6 +1560,27 @@ impl ClientWorld {
                     news.notices.push(Notice::ApplyPoisonRefused {
                         reason: reason.clone(),
                         string_id: *string_id,
+                    });
+                } else {
+                    news.ignored = true;
+                }
+            }
+            // The wait the session runs before it sends (read R49-1).
+            WorldEvent::PoisonStarted { session_id, string_id, .. }
+            | WorldEvent::PoisonInterrupted {
+                session_id,
+                string_id,
+            } => {
+                if self.session_id == Some(*session_id) {
+                    let started = matches!(event, WorldEvent::PoisonStarted { .. });
+                    news.notices.push(if started {
+                        Notice::PoisonStarted {
+                            string_id: *string_id,
+                        }
+                    } else {
+                        Notice::PoisonInterrupted {
+                            string_id: *string_id,
+                        }
                     });
                 } else {
                     news.ignored = true;

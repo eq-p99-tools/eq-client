@@ -512,10 +512,14 @@ fn right_click(
         // Outbox owns posting refusals and shows them in chat. A successful
         // post opens nothing; the book or note waits for the server's text.
         state.read_slot(slot, online, sender);
-    } else if item.rules.item_type == eq_client_core::poisons::POISON_ITEM_TYPE {
-        // A poison goes on the weapon from where it sits; the server's own
-        // record takes it out. That a right-click starts it, at once, is
-        // inferred pending read R49-1 (recording checklist 6.493).
+    } else if item.rules.item_type == eq_client_core::poisons::POISON_ITEM_TYPE
+        && (0..0x20).contains(&slot.0)
+    {
+        // A poison goes on the weapon from a top-level slot, the cursor
+        // included: the program's item use passes only slots below 0x20
+        // (read R49-1 a), so one in a bag falls to the ordinary use. The
+        // session sits the player and waits; the server's own record takes
+        // the poison out (6.493).
         let _ = sender.post(online.world(), |stamp| {
             eq_client_core::ClientCommand::ApplyPoison {
                 session_id: stamp.session_id,

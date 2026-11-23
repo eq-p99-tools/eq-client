@@ -6713,4 +6713,25 @@ fn a_poison_answer_and_refusal_reach_chat_and_take_nothing_out() {
             string_id: None,
         }]
     );
+    assert_eq!(
+        game(
+            &mut world,
+            WorldEvent::PoisonStarted {
+                session_id: 1,
+                slot: crate::inventory::InventorySlot(23),
+                string_id: 0x305e,
+            }
+        )
+        .notices,
+        [Notice::PoisonStarted { string_id: 0x305e }]
+    );
+    let interrupted = |session_id| WorldEvent::PoisonInterrupted {
+        session_id,
+        string_id: 0x30d1,
+    };
+    assert!(game(&mut world, interrupted(2)).ignored);
+    assert_eq!(
+        game(&mut world, interrupted(1)).notices,
+        [Notice::PoisonInterrupted { string_id: 0x30d1 }]
+    );
 }

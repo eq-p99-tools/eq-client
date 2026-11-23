@@ -240,14 +240,18 @@ uncertain, rather than resending a transfer.
 
 ### Apply Poison
 
-Right-click a carried poison (item type 42) to apply it: the client sends the
-server's Apply Poison request at once with the slot the poison sits in, one
-request at a time. The server decides whether it takes (class, skill, weapon)
-and removes the poison either way. "You apply the poison." and "You failed to
-apply the poison." are this client's own wording. Whether the original client
-starts it this way, and how long it waits before sending, is not yet read, so
-it may be faster than the original (inferred, recording checklist 6.493).
-Alt+right-click and hotkeys keep their ordinary item use.
+Right-click a poison (item type 42) in a top-level slot, the cursor included, to apply it, as the Titanium program does it (recording checklist 6.493):
+
+- Without the Apply Poison skill, you are told so and nothing else happens.
+- Standing, you sit down. If you still aren't sitting (ducking, lying or feigning), you are told to sit.
+- Your poison starts going on, with the program's line. After 10 s seated, the request goes to the server.
+- Standing up, or any other posture change before then, stops it with the program's line, and nothing is sent. Zoning drops it without a line.
+- A click while one is going on or waiting for the server's answer is ignored, as the program ignores it.
+- The server decides whether it takes (class, weapon, level) and removes the poison either way. Its answer prints the program's line for success or failure.
+
+The lines come from your installation's `eqstr_us.txt`: the start, the refusals and the stop in the program's colour 0x111, and the answer in colour 0x10e. A poison inside a bag isn't applied by a right-click, because the program only uses top-level slots this way. Alt+right-click and hotkeys keep their ordinary item use.
+
+The program's wait is effect 234's total (from buffs and AAs) when that isn't 0. This client always waits 10 s for now, which is slower where an effect shortens it and faster where one lengthens it (a follow-up, 6.493b). The EQMac servers (Quarm, TAKP) take the same flow; that is inferred, because their program isn't read.
 
 ## Spells, buffs and the hotbar
 

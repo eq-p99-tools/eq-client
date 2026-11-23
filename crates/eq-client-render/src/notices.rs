@@ -59,6 +59,12 @@ impl Lines {
     }
 }
 
+/// The colour the program prints Apply Poison's own lines in: its
+/// refusals, its start and its cancel (read R49-1 b, R49-1f).
+const POISON_LINE: u32 = 0x111;
+/// The colour of the server's answer to a poison (read R49-1 d).
+const POISON_ANSWER: u32 = 0x10e;
+
 /// Where a notice shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Place {
@@ -377,8 +383,36 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
             string_id,
             arguments,
         } => chat(official(*string_id, arguments, reason, messages)),
+        // The program's refusals, its start and its cancel all print in
+        // colour 0x111 (read R49-1 b, R49-1f); a refusal in the session's
+        // words keeps the system line's.
+        Notice::ApplyPoisonRefused { reason, string_id } => {
+            let line = official(*string_id, &[], reason, messages);
+            chat(if string_id.is_some() {
+                line.typed(POISON_LINE)
+            } else {
+                line
+            })
+        }
+        Notice::PoisonStarted { string_id } => chat(
+            official(
+                Some(*string_id),
+                &[],
+                "You sit down and begin to apply the poison.",
+                messages,
+            )
+            .typed(POISON_LINE),
+        ),
+        Notice::PoisonInterrupted { string_id } => chat(
+            official(
+                Some(*string_id),
+                &[],
+                "You stopped applying the poison.",
+                messages,
+            )
+            .typed(POISON_LINE),
+        ),
         Notice::ConsumeRefused { reason, string_id }
-        | Notice::ApplyPoisonRefused { reason, string_id }
         | Notice::ItemUseRefused { reason, string_id }
         | Notice::CorpseRefused { reason, string_id }
         | Notice::PetRefused { reason, string_id }
@@ -390,17 +424,20 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         | Notice::SocialRefused { reason, string_id } => {
             chat(official(*string_id, &[], reason, messages))
         }
-        // Our words until read R49-1 names the program's lines (6.493).
-        Notice::PoisonAnswered { applied } => chat(official(
-            None,
-            &[],
+        // The program's answer lines, in colour 0x10e (read R49-1 d).
+        Notice::PoisonAnswered { applied } => chat(
             if *applied {
-                "You apply the poison."
+                official(Some(0x3269), &[], "You apply the poison.", messages)
             } else {
-                "You failed to apply the poison."
-            },
-            messages,
-        )),
+                official(
+                    Some(0x326a),
+                    &[],
+                    "You failed to apply the poison.",
+                    messages,
+                )
+            }
+            .typed(POISON_ANSWER),
+        ),
         // The official client always says where `/autosplit` left it (R8).
         Notice::AutoSplit(on) => chat(official(
             Some(if *on { 0x338d } else { 0x338e }),
@@ -1563,6 +1600,68 @@ mod tests {
         assert_eq!(
             wording(&arrived, None),
             [(Place::Chat, Said::own("Arrived in The Qeynos Hills."))]
+        );
+    }
+
+    #[test]
+    fn apply_poison_says_the_programs_lines_in_its_colours() {
+        let messages = Messages::parse(
+            "EQST0002
+0 6
+12381 You must be sitting.
+12382 You begin applying.
+12383 You lack the skill.
+12497 You stop applying.
+12905 You applied it.
+12906 You failed.
+",
+        );
+        let said = |notice: Notice| wording(&notice, Some(&messages));
+        for (notice, text) in [
+            (
+                Notice::PoisonStarted { string_id: 0x305e },
+                "You begin applying.",
+            ),
+            (
+                Notice::PoisonInterrupted { string_id: 0x30d1 },
+                "You stop applying.",
+            ),
+            (
+                Notice::ApplyPoisonRefused {
+                    reason: "no skill".into(),
+                    string_id: Some(0x305f),
+                },
+                "You lack the skill.",
+            ),
+            (
+                Notice::ApplyPoisonRefused {
+                    reason: "not sitting".into(),
+                    string_id: Some(0x305d),
+                },
+                "You must be sitting.",
+            ),
+        ] {
+            assert_eq!(
+                said(notice),
+                [(Place::Chat, Said::official(text).typed(0x111))]
+            );
+        }
+        for (applied, text) in [(true, "You applied it."), (false, "You failed.")] {
+            assert_eq!(
+                said(Notice::PoisonAnswered { applied }),
+                [(Place::Chat, Said::official(text).typed(0x10e))]
+            );
+        }
+        // The session's own words keep the system line's colour.
+        assert_eq!(
+            said(Notice::ApplyPoisonRefused {
+                reason: "Take the poison out of the bag to apply it".into(),
+                string_id: None,
+            }),
+            [(
+                Place::Chat,
+                Said::own("Take the poison out of the bag to apply it")
+            )]
         );
     }
 }
