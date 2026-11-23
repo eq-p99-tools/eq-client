@@ -2239,6 +2239,10 @@ pub(super) fn client_request(input: &str, state: &mut ChatState) -> Option<Resul
 /// An ask a system answers later, kept with the words typed after its
 /// command; true when the line was one.
 fn word_asked(input: &str, state: &mut ChatState) -> bool {
+    if let Some(words) = super::shield::typed(input) {
+        state.shield_words = Some(words);
+        return true;
+    }
     if let Some(words) = command_words(input, "doability") {
         state.doability = Some(words.to_owned());
         return true;
@@ -2318,10 +2322,6 @@ pub(super) fn client_request_in_scope(
     }
     if let Some(asked) = super::slash::Asked::typed(input) {
         state.slash = Some(asked);
-        return Some(Ok(()));
-    }
-    if let Some(words) = super::shield::typed(input) {
-        state.shield_words = Some(words);
         return Some(Ok(()));
     }
     if let Some(words) = command_words(input, "assist").filter(|words| !words.trim().is_empty()) {

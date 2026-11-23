@@ -180,16 +180,16 @@ fn the_answer_system_sends_once_or_says_its_lines() {
 
 #[test]
 fn a_server_that_takes_no_shields_refuses_only_the_send() {
-    let (mut app, received) = app(world_on(Vec::new(), WARRIOR, 30, Some(20)));
-    assert_eq!(shield_with(&mut app, ""), 1);
+    let (mut refused, received) = app(world_on(Vec::new(), WARRIOR, 30, Some(20)));
+    assert_eq!(shield_with(&mut refused, ""), 1);
     assert!(received.try_recv().is_err());
-    let chat = app.world().resource::<ChatState>();
+    let chat = refused.world().resource::<ChatState>();
     let lines = chat.history.lines(eq_client_core::chat::ChatTab::All);
     assert_eq!(lines[0].1.message.text, outbox::UNAVAILABLE);
     // The program's own lines come before any send, on any server.
-    let (mut app, _) = app(world_on(Vec::new(), WARRIOR, 29, Some(20)));
-    assert_eq!(shield_with(&mut app, ""), 1);
-    let chat = app.world().resource::<ChatState>();
+    let (mut low, _) = app(world_on(Vec::new(), WARRIOR, 29, Some(20)));
+    assert_eq!(shield_with(&mut low, ""), 1);
+    let chat = low.world().resource::<ChatState>();
     let lines = chat.history.lines(eq_client_core::chat::ChatTab::All);
     assert_eq!(lines[0].1.message.text, NOT_ABLE.1);
 }
