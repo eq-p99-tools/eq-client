@@ -1004,7 +1004,13 @@ impl ClientWorld {
             | WorldEvent::ServerFiltersKept { .. }
             | WorldEvent::ServerFiltersRefused { .. }
             | WorldEvent::DuelOffer(_)
-            | WorldEvent::DuelRefused { .. }) => {
+            | WorldEvent::DuelRefused { .. }
+            | WorldEvent::SurnameAnswer { .. }
+            | WorldEvent::Channel(_)
+            | WorldEvent::ChannelLink(_)
+            | WorldEvent::ChatChannelRefused { .. }
+            | WorldEvent::ReportSent { .. }
+            | WorldEvent::ReportRefused { .. }) => {
                 // Each still counts in the session's gap file, by kind.
                 news.unshown = crate::gaps::variant_name(unshown);
             }

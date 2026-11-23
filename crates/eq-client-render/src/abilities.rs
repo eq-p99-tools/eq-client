@@ -43,6 +43,46 @@ pub(crate) fn knight(world: &ClientWorld) -> Option<KnightAbility> {
     KnightAbility::for_player(player.class, player.level)
 }
 
+/// The Warrior's class number.
+const WARRIOR: u32 = 1;
+/// The least level that may `/shield` (`EQEmu`'s `Client::Handle_OP_Shielding`).
+const SHIELD_LEVEL: u8 = 30;
+
+/// A Warrior's `/shield` of the targeted spawn, for the typed command, a
+/// social or a script. Before it sends, the client refuses a character
+/// that is not a Warrior or is under level 30, no target or one gone from
+/// the spawn table, and the player themself. `EQEmu` leaves the class and
+/// level silent and its source says the program answers them and oneself,
+/// so these are stricter than the server, never looser; their order and
+/// words are ours, inferred until the program's handler (0x46aa32) is read
+/// (6.517). NPCs, corpses, distance, the recast and the server's rule are
+/// the server's to answer, with its own lines.
+pub(super) fn shield_command(
+    world: &ClientWorld,
+    stamp: crate::outbox::Stamp,
+) -> Result<ClientCommand, String> {
+    let player = world.player().ok_or("You are not in the world yet")?;
+    if player.class != Some(WARRIOR) {
+        return Err("Only a Warrior can shield another player".into());
+    }
+    if player.level < SHIELD_LEVEL {
+        return Err(format!("You must be level {SHIELD_LEVEL} to shield"));
+    }
+    let spawn_id = world
+        .target()
+        .selected
+        .filter(|id| world.spawn(*id).is_some())
+        .ok_or("Target the player you want to shield first")?;
+    if spawn_id == player.spawn_id {
+        return Err("You cannot shield yourself; target another player".into());
+    }
+    Ok(ClientCommand::Shield {
+        session_id: stamp.session_id,
+        spawn_id,
+        created: stamp.created,
+    })
+}
+
 /// Build the same request from a button, hotbar or a named command.
 pub(super) fn knight_command(
     ability: KnightAbility,
@@ -271,6 +311,60 @@ mod tests {
         player.skills = Some(skills);
         testing::admit(&mut online, 1, player);
         online
+    }
+
+    /// The command `/shield` builds for a player of this class and level
+    /// with this target, or the line refusing it.
+    fn shield(class: u32, level: u8, target: Option<u16>) -> Result<ClientCommand, String> {
+        let mut online = OnlineState::new(true);
+        let mut player = testing::player(7);
+        player.class = Some(class);
+        player.level = level;
+        testing::admit(&mut online, 1, player);
+        let other = eq_client_core::SpawnState {
+            kind: eq_client_core::SpawnKind::Player,
+            name: "Other".into(),
+            pet_owner: None,
+            ..testing::pet(9, 0)
+        };
+        testing::news(
+            &mut online,
+            [eq_client_core::WorldEvent::Spawns(vec![other])],
+        );
+        online.select_target(target);
+        shield_command(
+            online.world(),
+            crate::outbox::Stamp {
+                session_id: 1,
+                created: std::time::Instant::now(),
+            },
+        )
+    }
+
+    #[test]
+    fn shield_sends_for_a_warrior_of_thirty_with_another_spawn_targeted() {
+        assert!(matches!(
+            shield(WARRIOR, 30, Some(9)),
+            Ok(ClientCommand::Shield {
+                session_id: 1,
+                spawn_id: 9,
+                ..
+            })
+        ));
+        // Stricter than the server, never looser (6.517, inferred): each
+        // of these sends nothing.
+        for (class, level, target) in [
+            (3, 60, Some(9)),
+            (WARRIOR, 29, Some(9)),
+            (WARRIOR, 30, None),
+            (WARRIOR, 30, Some(44)),
+            (WARRIOR, 30, Some(7)),
+        ] {
+            assert!(
+                shield(class, level, target).is_err(),
+                "{class} {level} {target:?}"
+            );
+        }
     }
 
     #[test]

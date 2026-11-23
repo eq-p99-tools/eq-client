@@ -847,7 +847,14 @@ fn parse_slash(words: &[&str]) -> Result<Step, String> {
         [command]
             if matches!(
                 *command,
-                "camp" | "sit" | "stand" | "ranged" | "stopsong" | "harmtouch" | "layonhands"
+                "camp"
+                    | "sit"
+                    | "stand"
+                    | "ranged"
+                    | "stopsong"
+                    | "harmtouch"
+                    | "layonhands"
+                    | "shield"
             ) =>
         {
             Step::Slash(format!("/{command}"))
@@ -2135,6 +2142,16 @@ mod tests {
             ]
         );
         assert!(parse("slash(\"harmtouch 12\")\n", base).is_err());
+    }
+
+    #[test]
+    fn a_script_may_shield_its_target_and_takes_no_words() {
+        let base = std::path::Path::new(".");
+        assert_eq!(
+            parse("slash(\"shield\")\n", base).unwrap(),
+            [Step::Slash("/shield".into())]
+        );
+        assert!(parse("slash(\"shield Tester\")\n", base).is_err());
     }
 
     #[test]
