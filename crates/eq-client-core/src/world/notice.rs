@@ -202,6 +202,8 @@ pub enum Notice {
     ConsentExpired(crate::confirmations::ConsentKind),
     /// A request to read was not sent, and why.
     ReadRefused(String),
+    /// A task request was not sent, and why, in the session's words.
+    TaskRefused(String),
     /// The world container the player asked to open is in use by someone
     /// else.
     ContainerInUse,

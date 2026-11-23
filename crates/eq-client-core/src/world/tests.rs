@@ -8,6 +8,7 @@ mod loot_requests;
 mod own_stun;
 mod pet_buffs;
 mod qol;
+mod tasks;
 mod wear;
 mod weather;
 

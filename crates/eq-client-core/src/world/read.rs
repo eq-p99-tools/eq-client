@@ -25,6 +25,20 @@ impl ClientWorld {
         })
     }
 
+    /// The tasks an NPC offers in this admission, until the player answers.
+    #[must_use]
+    pub fn task_offer(&self) -> Option<&crate::tasks::TaskOffer> {
+        self.task_offer
+            .as_ref()
+            .filter(|offer| self.in_world() && self.accepts_reply(offer.session_id))
+    }
+
+    /// The admission's task journal.
+    #[must_use]
+    pub const fn task_journal(&self) -> &crate::tasks::TaskJournal {
+        &self.tasks
+    }
+
     /// The latest received player equipment view for this admission.
     #[must_use]
     pub const fn player_inspection(&self) -> Option<&crate::inspection::PlayerInspection> {

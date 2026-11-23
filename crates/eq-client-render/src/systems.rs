@@ -43,6 +43,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<crate::breath::State>()
         .init_resource::<trade::TradeState>()
         .init_resource::<escape::Escape>()
+        .init_resource::<crate::task_offer::Chosen>()
         .init_resource::<windows::pointer::Wheel>()
         .init_resource::<skin::UiSkin>()
         .init_resource::<hud::hotbar::Bindings>()
@@ -298,15 +299,20 @@ pub(super) fn schedule(app: &mut App) {
             .chain()
             .in_set(Stage::Input),
     )
-    .add_systems(Update, crate::dialogs::buttons.in_set(Stage::Input))
+    .add_systems(
+        Update,
+        (crate::dialogs::buttons, crate::task_offer::buttons).in_set(Stage::Input),
+    )
     .add_systems(
         Update,
         (
             items::raise,
             crate::dialogs::present,
+            crate::task_offer::present,
             crate::windows::restack_popups,
             crate::dialogs::inspect_button,
             crate::dialogs::scroll,
+            crate::task_offer::scroll,
         )
             .chain()
             .in_set(Stage::Present),

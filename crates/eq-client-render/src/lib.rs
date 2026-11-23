@@ -119,6 +119,7 @@ mod spell_effects;
 mod spell_icons;
 mod spellbook;
 mod target;
+mod task_offer;
 mod theme;
 mod tooltip;
 mod tracking;

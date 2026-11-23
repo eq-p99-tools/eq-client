@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Show the tasks an NPC offers, and answer them on a local EQEmu server
+  (checklist 6.560). `eq_client_core::tasks` keeps the admission's task
+  journal (entries by slot with their steps, the finished list and its
+  histories) as the session tells it. A new admission starts the journal
+  empty, and another task in a slot drops that slot's steps. The world
+  keeps the current offer until the player answers, the next offer, or
+  the zone's end. A task request the session refused becomes
+  `Notice::TaskRefused`. The Tasks Offered window (`WindowId::TaskOffer`)
+  is our own until the skin's `TaskSelectWnd` controls are listed. It shows
+  each offered task's title, duration, description and shown steps.
+  Accept and Decline go through the outbox with the current admission
+  where `Capability::Tasks` is offered, and only from the window's buttons.
+  Elsewhere the offer is read only. Step words built from a step's type,
+  target and goal, and the duration's words, are ours (inferred, R49-38).
+  The step-done, completed and failed lines wait for that read, since
+  EQEmu sends its own. Task words appear in the window only, never in the
+  logs.
 - CI: the Lint workflow gains a Docs job, `cargo doc --workspace --no-deps --locked` with `RUSTDOCFLAGS=-D warnings`, on every pull request and push to main beside Format (Adam's yes, 11-23). A broken doc link now fails the PR it lands in.
 - A session that ends leaves no ask for the next (gap 3.11, checklist
   6.535). The chat state's pending asks (a `/target`, `/who`, `/loc` or
