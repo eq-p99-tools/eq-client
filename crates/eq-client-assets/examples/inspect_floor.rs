@@ -75,8 +75,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!("# faces near {near}, flagged passable {passable}");
 
-    // The floor our loader gives: the highest solid triangle under each point
-    // of a short line through the given point along x, as the walk ran.
+    // The floors (and ceilings) our loader gives: every solid triangle the
+    // vertical crosses at each point of a short line along x through the
+    // given point, as the walk ran, highest first.
     let asset = eq_client_assets::load_zone_collision(&directory, &zone)?;
     let world: Vec<[Vec3; 3]> = asset
         .collision
@@ -88,18 +89,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         at_x - radius,
         at_x + radius
     );
-    println!("x\ty\tsolid_floor_z\tsolid_hits");
+    println!("x\ty\tsolid_z_levels_high_to_low\tsolid_hits");
     let mut step = at_x - radius;
     while step <= at_x + radius {
         let hits: Vec<f32> = world
             .iter()
             .filter_map(|t| height_at(t, step, at_y))
             .collect();
-        let top = hits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-        let shown = if hits.is_empty() {
+        let mut levels = hits.clone();
+        levels.sort_by(|a, b| b.total_cmp(a));
+        let shown = if levels.is_empty() {
             "none".to_owned()
         } else {
-            format!("{top:.2}")
+            levels
+                .iter()
+                .map(|z| format!("{z:.2}"))
+                .collect::<Vec<_>>()
+                .join(",")
         };
         println!("{step:.1}\t{at_y:.1}\t{shown}\t{}", hits.len());
         step += 1.0;
