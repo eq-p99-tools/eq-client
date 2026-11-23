@@ -1779,12 +1779,6 @@ fn submit_draft(
             return Ok(());
         }
         let line = state.draft.text().trim().to_owned();
-        // A report to the staff goes only from a typed line (6.511).
-        if let Some(asked) =
-            crate::commands::spelled(&line).and_then(|line| super::reports::Asked::typed(&line))
-        {
-            return typed_report(&asked, online, outbox);
-        }
         let active = state
             .groups
             .active(state.groups.owner())
@@ -1836,6 +1830,11 @@ fn submit_line(
     let Some(command) = crate::commands::spelled(line) else {
         return Ok(());
     };
+    // A report to the staff goes from a typed line, whoever types it: the
+    // keyboard, a social or a script's `slash` step (6.511).
+    if let Some(asked) = super::reports::Asked::typed(&command) {
+        return typed_report(&asked, online, outbox);
+    }
     if let Some(contacts) = super::contacts::Command::typed(&command) {
         return contacts_command(contacts, active, state, online, outbox, qol);
     }
@@ -4275,7 +4274,7 @@ mod tests {
     }
 
     #[test]
-    fn only_a_typed_line_sends_a_report_to_the_staff() {
+    fn a_typed_line_sends_a_report_to_the_staff() {
         use eq_client_core::reports::BugCategory;
         let (mut app, receiver) = slash_app(true);
         let last_line = |app: &App| {
@@ -4315,8 +4314,8 @@ mod tests {
             Some("Use /bugreport with what to say.")
         );
 
-        // A social, a hotbutton, a button and a script step take the
-        // ordinary dispatch, which sends no report.
+        // A social's line and a script's `slash` step run the typed line,
+        // so each sends the same report; a button's game command does not.
         let mut chat = ChatState::default();
         let outbox = app
             .world_mut()
@@ -4331,18 +4330,25 @@ mod tests {
             "/bugreport the guard",
             "/feedback a note",
         ] {
-            assert_eq!(
-                submit_typed_line(line, &mut chat, &mut online, &outbox, &Settings::default()),
-                Err(format!(
-                    "This client does not take {} that way yet.",
-                    line.split_whitespace().next().unwrap()
-                )),
-            );
             assert!(
                 submit_game_command(line, &mut online, &outbox, &Settings::default()).is_err(),
                 "{line}"
             );
             assert!(receiver.try_recv().is_err(), "{line}");
+            assert_eq!(
+                submit_typed_line(line, &mut chat, &mut online, &outbox, &Settings::default()),
+                Ok(()),
+                "{line}"
+            );
+            assert!(
+                matches!(
+                    receiver.try_recv(),
+                    Ok(ClientCommand::SendPetition { .. }
+                        | ClientCommand::ReportBug { .. }
+                        | ClientCommand::SendFeedback { .. })
+                ),
+                "{line}"
+            );
         }
     }
 

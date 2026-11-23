@@ -931,14 +931,6 @@ fn parse_slash(words: &[&str]) -> Result<Step, String> {
     if line.chars().any(char::is_control) {
         return Err("a slash line takes no control characters".into());
     }
-    // A person on the staff reads each petition, bug report and note of
-    // feedback, so only a typed line sends one (6.511).
-    if crate::commands::spelled(&line)
-        .and_then(|line| crate::reports::Asked::typed(&line))
-        .is_some()
-    {
-        return Err("only a typed line sends a petition, bug report or feedback".into());
-    }
     Ok(Step::Slash(line))
 }
 
@@ -1797,22 +1789,6 @@ mod tests {
             "boat(\"steer\")",
             "boat(\"acquire\", \"extra\")",
             "boat(\"release\", \"extra\")",
-        ] {
-            let source = format!("report(\"before\")\n{bad}\nreport(\"after\")\n");
-            let error = super::super::Program::parse(&source, base).unwrap_err();
-            assert_eq!(error.line, Some(2), "{bad}");
-        }
-    }
-
-    #[test]
-    fn a_script_never_sends_a_report_to_the_staff() {
-        // A person reads each report, so only a typed line sends one (6.511).
-        let base = Path::new("private");
-        for bad in [
-            "slash(\"petition I am stuck\")",
-            "slash(\"bugreport pathing: the guard\")",
-            "slash(\"bug the guard\")",
-            "slash(\"feedback a note\")",
         ] {
             let source = format!("report(\"before\")\n{bad}\nreport(\"after\")\n");
             let error = super::super::Program::parse(&source, base).unwrap_err();

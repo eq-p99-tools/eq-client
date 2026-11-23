@@ -370,10 +370,10 @@ The P99 paths follow Titanium source and await attended checks.
 ## Petitions, bug reports and feedback
 
 `/petition words`, `/bugreport words` (also `/bug`) and `/feedback words`
-send a report to the server's staff. A person reads each one, so only a
-line the player types sends it. A social, a hotbutton, a button or a script
-step answers that the client does not take the command that way yet, and a
-script's `slash()` refuses the three commands when it is read.
+send a report to the server's staff. A typed line sends it, whoever types
+it: the keyboard, a social's line or a script's `slash()` step, each with
+the same checks and pace. A button's game command answers that the client
+does not take the command that way yet.
 
 - A bug report's first word may name its category with a colon, such as
   `/bug pathing: the guard walks into the wall`. A word that names no

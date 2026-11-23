@@ -906,6 +906,82 @@ fn a_slash_step_runs_its_line_as_typing_would() {
 }
 
 #[test]
+fn a_slash_report_takes_the_typed_route_and_its_pace() {
+    // A script may do what a player types: its report runs the typed line,
+    // stamped with its admission, and nothing more is sent than typing the
+    // same line sends.
+    for line in [
+        "petition I am stuck",
+        "bug doors: it will not open",
+        "feedback a note",
+    ] {
+        let (app, sent) = slash_step(line, |_| ());
+        assert_eq!(
+            app.world().resource::<RunStatus>().phase(),
+            Phase::Completed,
+            "{line}"
+        );
+        let (sender, typed_rx) = std::sync::mpsc::sync_channel(4);
+        let mut typed = ChatState::default();
+        let mut online = OnlineState::new(true);
+        session::admit(&mut online, ADMISSION, session::player(7));
+        crate::chat::submit_typed_line(
+            &format!("/{line}"),
+            &mut typed,
+            &mut online,
+            &Outbox::new(Some(sender)),
+            &eq_client_core::qol::Settings::default(),
+        )
+        .unwrap();
+        let typed: Vec<ClientCommand> = typed_rx.try_iter().collect();
+        assert_eq!(sent.len(), 1, "{line}: {sent:?}");
+        assert_eq!(typed.len(), 1, "{line}: {typed:?}");
+        assert_eq!(
+            std::mem::discriminant(&sent[0]),
+            std::mem::discriminant(&typed[0]),
+            "{line}"
+        );
+        assert!(
+            matches!(
+                sent[0],
+                ClientCommand::SendPetition {
+                    session_id: ADMISSION,
+                    ..
+                } | ClientCommand::ReportBug {
+                    session_id: ADMISSION,
+                    ..
+                } | ClientCommand::SendFeedback {
+                    session_id: ADMISSION,
+                    ..
+                }
+            ),
+            "{line}: {sent:?}"
+        );
+    }
+    // Two reports in a row go as a script's steps go, one a frame, each
+    // counted against the run's actions like any other line it sends.
+    let (mut app, rx) = app();
+    start(&mut app, "slash(\"petition one\")\nslash(\"petition two\")");
+    let zone = app
+        .world()
+        .resource::<OnlineState>()
+        .world()
+        .zone()
+        .to_owned();
+    app.world_mut()
+        .resource_mut::<Script>()
+        .progress
+        .expected_world = Some(crate::script::ExpectedWorld {
+        admission_id: ADMISSION,
+        zone,
+    });
+    frame_at(&mut app, 0);
+    assert_eq!(rx.try_iter().count(), 1);
+    frame_at(&mut app, 10);
+    assert_eq!(rx.try_iter().count(), 1);
+}
+
+#[test]
 fn a_slash_departure_takes_the_typed_route_and_never_leaves_sooner() {
     for (line, departure) in [
         ("quit", crate::login::Departure::Login),
