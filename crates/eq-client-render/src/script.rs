@@ -2190,7 +2190,12 @@ pub(super) fn drive(
             return;
         }
         Step::Slash(command) => {
-            if super::socials::Request::parse(command).is_some() {
+            // A social, however abbreviated, keeps the named step's ownership.
+            let spelled = crate::commands::spelled(command);
+            if spelled
+                .as_deref()
+                .is_some_and(|line| super::socials::Request::parse(line).is_some())
+            {
                 script.stop(
                     &mut keys,
                     &mut mouse,
@@ -2202,18 +2207,13 @@ pub(super) fn drive(
                 .9
                 .as_ref()
                 .map_or_else(Default::default, |options| options.options.qol);
-            let queued = super::chat::client_request_in_scope(
-                command,
-                &mut chat,
-                script.progress.expected_world.clone(),
-            )
-            .unwrap_or_else(|| {
-                super::chat::submit_game_command(command, &mut online, &observed.1, &qol)
-            });
-            if let Err(error) = queued {
+            // The line runs exactly as a typed one, stamped with the script's
+            // admission: the same rules, paces, camp and departures.
+            let outbox = observed.1.for_script(script.chat_admission());
+            if let Err(error) =
+                super::chat::submit_typed_line(command, &mut chat, &mut online, &outbox, &qol)
+            {
                 script.stop(&mut keys, &mut mouse, &error);
-            } else if command.split_ascii_whitespace().next() == Some("/camp") {
-                chat.socials.stop = true;
             }
             return;
         }
