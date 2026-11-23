@@ -24,7 +24,8 @@
   unread. Every line is pending R49-6h. A script's `slash()` cannot send
   it; a social or hotbutton can, as the original's do. Repins eq-network to
   e2e9a02 (#338); its surname and staff report events wait in the ignore
-  arm for those threads' PRs, and its gap log events are traced until
+  arm for those threads' PRs, and the viewer drops its gap log events
+  untraced (a gap's sample can hold other players' chat or names) until
   eq-client #563 takes them.
 
 - Answer another player's challenge to a duel, and tell the news the
