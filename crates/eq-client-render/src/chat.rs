@@ -138,6 +138,11 @@ pub(super) struct ChatState {
     /// When the session's chat pace last held a line, and its words
     /// (6.523): a running script that sent chat before then fails.
     pub(crate) paced: Option<(std::time::Instant, String)>,
+    /// The line to print once the session says the typed report went
+    /// (read R49-23): the program's echo.
+    pub(crate) report_echo: Option<super::reports::ReportLine>,
+    /// Lines a report command prints at once, for [`super::reports::say`].
+    pub(crate) report_lines: Vec<super::reports::ReportLine>,
     /// A `/loc` or `/time`, waiting to be answered.
     pub asked: Option<super::whereabouts::Asked>,
     /// A `/yell` or `/stopcast` waiting for its line and send.
@@ -536,6 +541,7 @@ impl ChatState {
             motd_asked,
             fastdrop_asked,
             assist_words,
+            report_echo,
             // Cleared elsewhere: the link scope, the message of the day and
             // recall by `end_session`, the social inbox at every reset, and
             // the departure by `login::depart`.
@@ -550,6 +556,9 @@ impl ChatState {
             // connection it came on.
             paced: _,
             server_motd: _,
+            // Kept: lines a report command printed, which the next frame
+            // shows.
+            report_lines: _,
             // Kept: the player's own chat setup and what the screen shows.
             history: _,
             received_links: _,
@@ -593,6 +602,8 @@ impl ChatState {
         *motd_asked = None;
         *fastdrop_asked = None;
         *assist_words = None;
+        // An echo waits on the ended session's answer.
+        *report_echo = None;
     }
 
     /// Links can follow a known profile through zoning on the same connection.
@@ -1955,12 +1966,19 @@ fn typed_report(
     asked: &super::reports::Asked,
     online: &super::online::OnlineState,
     outbox: &crate::outbox::Outbox,
+    (state, qol): (&mut ChatState, &Settings),
 ) -> Result<(), Unsent> {
+    use super::reports::Answer;
     let world = online.world();
-    super::reports::offered(asked, world)?;
     let stamp = outbox.stamp(world)?;
-    let command = super::reports::command(asked, world, stamp)?;
-    outbox.send(world, command)?;
+    match super::reports::answer(asked, world, stamp, qol.on(Fix::TypedReports))? {
+        Answer::Send(command, echo) => {
+            outbox.send(world, *command)?;
+            state.report_echo = echo;
+        }
+        Answer::Say(line) => state.report_lines.push(line),
+        Answer::Nothing => {}
+    }
     Ok(())
 }
 
@@ -1980,7 +1998,7 @@ fn submit_line(
     // A report to the staff goes from a typed line, whoever types it: the
     // keyboard, a social or a script's `slash` step (6.511).
     if let Some(asked) = super::reports::Asked::typed(&command) {
-        return typed_report(&asked, online, outbox);
+        return typed_report(&asked, online, outbox, (state, qol));
     }
     match targeted(&command, online.world()) {
         Some(Targeted::Tell(line)) => {
@@ -4798,14 +4816,29 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
-        // A line with nothing to say sends nothing.
-        for line in ["/petition", "/petition   ", "/bugreport pathing:"] {
+        // The program's echo waits for the session to say the report went.
+        assert!(app.world().resource::<ChatState>().report_echo.is_some());
+        // A line with nothing to say sends nothing, and the Titanium
+        // program's line for it is queued, in this client's words where the
+        // installation lacks it. Empty feedback says nothing.
+        for line in ["/petition", "/guidehelp   ", "/bugreport pathing:", "/feedback"] {
             send_typed(&mut app, line);
             assert!(receiver.try_recv().is_err(), "{line}");
         }
+        let queued: Vec<_> = app
+            .world()
+            .resource::<ChatState>()
+            .report_lines
+            .iter()
+            .map(|line| line.said(None).words.text)
+            .collect();
         assert_eq!(
-            last_line(&app).as_deref(),
-            Some("Use /bugreport with what to say.")
+            queued,
+            [
+                "Use /petition with what to say.",
+                "Use /guidehelp with what to say.",
+                "Say what the bug report is about.",
+            ]
         );
 
         // A social's line and a script's `slash` step run the typed line,

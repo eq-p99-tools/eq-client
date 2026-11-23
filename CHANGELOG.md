@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- Petitions and reports as the Titanium program takes them (read R49-23,
+  checklist 6.511, C1a), on eq-network #414.
+  - **`/petition`** sends its words and echoes them in the installed line
+    0x3025; with no words it prints 0x3332 and sends nothing. Our own "Your
+    petition was sent." line stays for Mac-era servers, whose program is
+    unread.
+  - **`/guidehelp`** is the same text form, with lines 0xde8 and 0xde3.
+  - **The petition window:** where the world turns it on, the program
+    toggles a window and ignores the words. Which skin screen that is is
+    unread, so this client takes the text form there: a departure, labelled,
+    with a TODO.
+  - **Typed Reports** (new setting, a departure, on until the report
+    windows are built in C1b, then off): `/bugreport` and `/feedback` send
+    the typed words, as before. The program ignores the words and opens its
+    windows; with the setting off this client ignores them too and says it
+    has no window yet. A bug report prints 0x22ae, or 0x22b0 with no words;
+    feedback prints nothing, as the program's window does.
+  - Feedback now carries the player's place and heading, which Titanium's
+    feedback sends. Stock EQEmu now offers feedback and drops it, as it
+    drops the program's. Project 1999 offers none of the three.
+  - Repins eq-network to main, for `reports::petition_form` and the
+    feedback's place.
+
 - A Bard's song holds nothing back, as the Titanium program's doesn't (read R49-21; gap 3.5, checklist 6.442, 6.542). This repins eq-network to 33057d9 (#413, and #407's server filters), on P99 and Titanium EQEmu. The session now tells the client which song a Bard is singing (`WorldEvent::Singing`), and the client's own gates follow it:
   - **A gem press while singing** goes to the session, whatever the gem's timer or the mana, and the session stops the song and casts nothing, as the program's gem click does. A forget goes too.
   - **An item use while singing** isn't refused by the client; the session lets it go alongside the song.

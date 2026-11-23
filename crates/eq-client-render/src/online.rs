@@ -653,6 +653,19 @@ impl Panels<'_> {
         if let eq_client_core::world::Notice::ChatRefused { reason } = notice {
             chat.paced = Some((std::time::Instant::now(), reason.clone()));
         }
+        // A typed report's echo stands for this client's own line, where the
+        // program has one (read R49-23); a refusal drops it.
+        match notice {
+            eq_client_core::world::Notice::ReportSent(_) => {
+                if let Some(echo) = chat.report_echo.take() {
+                    chat.history
+                        .push(super::chat::system_line(echo.said(messages)));
+                    return;
+                }
+            }
+            eq_client_core::world::Notice::ReportRefused { .. } => chat.report_echo = None,
+            _ => {}
+        }
         for (place, said) in super::notices::wording(notice, messages) {
             match place {
                 Place::Chat => {
