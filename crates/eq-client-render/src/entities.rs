@@ -661,7 +661,7 @@ pub(super) fn interpolate(
             entity.seen = Some(spawn.reported);
             entity.soles = None;
             entity.carried = None;
-            entity.ride = world.zip(entity.feet).and_then(|(world, feet)| {
+            let linked = world.zip(entity.feet).and_then(|(world, feet)| {
                 ride(
                     world,
                     state.world().carriers(),
@@ -669,8 +669,26 @@ pub(super) fn interpolate(
                     feet,
                     spawn.reported,
                 )
-                .map(|(sample, pose)| (sample, pose, pose))
             });
+            // The sweep that links a rider stands it on the deck it found
+            // (0x48c285, read R49-27 (d)), so a report a little above the
+            // deck neither falls nor bobs onto it. Only a report with no
+            // vertical speed and soles within their own reach of the deck
+            // is stood there; one in the air still falls (inferred, 6.611).
+            // A spawn on land keeps falling onto a floor under its report.
+            if let Some((_, _, deck)) = linked
+                && let Some(feet) = entity.feet
+                && spawn.state.velocity[2] == 0.0
+                && render_position(spawn.state.position)[1] - feet - deck <= feet
+            {
+                let at = render_position(spawn.state.position);
+                entity.soles = Some(eq_client_core::DrawnSoles {
+                    height: deck,
+                    spot: Vec2::new(at[0], at[2]),
+                    fall: Some(0.0),
+                });
+            }
+            entity.ride = linked.map(|(sample, pose, _)| (sample, pose, pose));
         }
         // The boat it rides, as the boat is drawn now; a boat gone or
         // replaced drops the link, and the spawn goes on in the world from
@@ -770,8 +788,9 @@ pub(super) fn interpolate(
     }
 }
 
-/// The boat a spawn's latest report puts it on, and the boat's pose at that
-/// report: the program's floor sweep links a spawn to the first carrier
+/// The boat a spawn's latest report puts it on, the boat's pose at that
+/// report and the height of the deck it found, in renderer coordinates: the
+/// program's floor sweep links a spawn to the first carrier
 /// below it, however far down, when it places and floor-snaps the spawn
 /// (0x48a0fc, 0x48c285, 0x479e37, read R49-27 (d)). Taken at every report
 /// here (inferred, 6.611), and only in a zone with a boat in it. The
@@ -785,15 +804,20 @@ fn ride(
 ) -> Option<(
     eq_client_core::movement::CarrierSample,
     eq_client_core::WorldPosition,
+    f32,
 )> {
     use eq_client_core::movement::{CARRIER_REACH, carrier_local};
     carriers.reports().next()?;
     let soles = Vec3::from_array(render_position(spawn.position)) - Vec3::Y * feet;
-    let id = world.ground_spawn(soles, 0.01, crate::motion::sweep_depth(soles))?;
+    let (id, deck) = world.spawn_floor(soles, 0.01, crate::motion::sweep_depth(soles))?;
     let report = carriers.latest(id)?;
     let pose = report.pose(reported);
     let local = carrier_local(pose, spawn.position);
-    (local.x.hypot(local.y).hypot(local.z) <= CARRIER_REACH).then_some((report.sample(), pose))
+    (local.x.hypot(local.y).hypot(local.z) <= CARRIER_REACH).then_some((
+        report.sample(),
+        pose,
+        deck,
+    ))
 }
 
 /// `spawn`'s report in the frame of the boat at `pose`: its place, and its
@@ -1432,5 +1456,120 @@ mod tests {
             (left.x - still.x).abs() < 0.01 && left.x > 30.0,
             "{left:?} then {still:?}"
         );
+    }
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "a boat, its deck and two riders, over two reports"
+    )]
+    fn a_rider_reported_above_the_deck_is_stood_on_it_at_the_report() {
+        use eq_client_core::movement::{Carriers, CollisionMesh, CollisionWorld};
+        use eq_client_core::{GameDialect, WorldEvent, WorldPosition};
+        use std::time::Instant;
+        // Row (a) of 6.611: a rider reported 1.9 over the deck bobbed at
+        // each report. The sweep that links it stands it on the deck
+        // (0x48c285, read R49-27 (d)); one rising on its own does not.
+        let reported = Instant::now();
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        let mut boat = testing::pet(8, 0);
+        boat.race = 72;
+        boat.pet_owner = None;
+        let rider = |id| eq_client_core::SpawnState {
+            pet_owner: None,
+            ..testing::pet(id, 0)
+        };
+        testing::spawns(&mut online, vec![boat.clone(), rider(5), rider(6)]);
+        let mut carriers = Carriers::default();
+        let mut updates = carriers.observe(
+            &WorldEvent::Spawns(vec![boat]),
+            GameDialect::Titanium,
+            reported,
+        );
+        let moored = WorldEvent::Position {
+            spawn_id: 8,
+            position: WorldPosition::default(),
+            velocity: [0.0; 3],
+            forward: 0.0,
+        };
+        updates.extend(carriers.observe(&moored, GameDialect::Titanium, reported));
+        // Feet 3 over a deck 5 up: standing is z 8; these report 9.9.
+        let above = |spawn_id, x: f32, rise: f32| WorldEvent::Position {
+            spawn_id,
+            position: WorldPosition {
+                x,
+                y: 0.0,
+                z: 9.9,
+                heading: 0.0,
+            },
+            velocity: [0.0, 0.0, rise],
+            forward: 0.0,
+        };
+        testing::news_at(
+            &mut online,
+            [
+                moored,
+                WorldEvent::Carriers(updates),
+                above(5, 3.0, 0.0),
+                above(6, -3.0, 2.0),
+            ],
+            reported,
+        );
+        let low = eq_client_core::render_position(WorldPosition {
+            x: -20.0,
+            y: -20.0,
+            z: 5.0,
+            heading: 0.0,
+        });
+        let high = eq_client_core::render_position(WorldPosition {
+            x: 20.0,
+            y: 20.0,
+            z: 5.0,
+            heading: 0.0,
+        });
+        let mut collision = CollisionWorld::new([[
+            [-500.0, -30.0, -500.0],
+            [500.0, -30.0, -500.0],
+            [0.0, -30.0, 500.0],
+        ]])
+        .unwrap();
+        collision.set_spawn_obstacles(vec![(
+            8,
+            std::sync::Arc::new(
+                CollisionMesh::new([
+                    [low, [high[0], 5.0, low[2]], high],
+                    [low, high, [low[0], 5.0, high[2]]],
+                ])
+                .unwrap(),
+            ),
+        )]);
+        let mut app = App::new();
+        app.insert_resource(online)
+            .insert_resource(crate::ViewerSettings(crate::ViewerConfig::default()))
+            .insert_resource(super::super::Collision(Some(collision)))
+            .init_resource::<Time>()
+            .add_systems(Update, interpolate);
+        let entity = |app: &mut App, id| {
+            app.world_mut()
+                .spawn((RemoteEntity::new(id, Some(3.0), 6.0), Transform::default()))
+                .id()
+        };
+        let (on_deck, in_air) = (entity(&mut app, 5), entity(&mut app, 6));
+        let height = |app: &App, entity| {
+            let at = app.world().get::<Transform>(entity).unwrap().translation;
+            eq_client_core::world_position(at.to_array(), 0.0).z
+        };
+        app.update();
+        assert!((height(&app, on_deck) - 8.0).abs() < 0.01);
+        // Carried on by its own rise from the report, not stood on the deck.
+        assert!(height(&app, in_air) > 9.8, "{}", height(&app, in_air));
+        // The rider's next report, as high again: no rise toward it.
+        testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [above(5, 3.0, 0.0)],
+        );
+        app.update();
+        assert!((height(&app, on_deck) - 8.0).abs() < 0.01);
     }
 }
