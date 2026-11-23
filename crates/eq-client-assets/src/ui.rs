@@ -1293,6 +1293,15 @@ pub struct OfficialOptions {
     pub log: Option<bool>,
     /// Whether sounds play: `Sound` in `[Defaults]`.
     pub sound: Option<bool>,
+    /// The music volume: `Music` in `[Defaults]` (read R49-7 c); its scale
+    /// is unread, so only 0 is taken, as silent \[I\].
+    pub music: Option<u32>,
+    /// Whether the zone's ambient sounds play: `EnvSounds` in `[Defaults]`,
+    /// taken as TRUE or FALSE [I: its reader is unread].
+    pub env_sounds: Option<bool>,
+    /// Whether combat music plays: `CombatMusic` in `[Defaults]` (read
+    /// R49-7 c), TRUE when missing.
+    pub combat_music: Option<bool>,
     /// Whether spell-effect particles play: `ShowSpellEffects` in
     /// `[Defaults]`, or a non-zero `SpellParticleDensity` where that is the
     /// key the installation carries.
@@ -1374,6 +1383,9 @@ fn options_from_ini(text: &str) -> OfficialOptions {
     OfficialOptions {
         log: flag("Defaults", "Log"),
         sound: flag("Defaults", "Sound"),
+        music: ini_value(text, "Defaults", "Music").and_then(|v| v.trim().parse().ok()),
+        env_sounds: flag("Defaults", "EnvSounds"),
+        combat_music: flag("Defaults", "CombatMusic"),
         spell_effects: flag("Defaults", "ShowSpellEffects").or_else(|| {
             // Some installations carry the choice as the particles page's
             // density instead; zero density means the same "off".
@@ -2262,6 +2274,20 @@ Log=maybe
     }
 
     #[test]
+    fn eqclient_ini_says_whether_music_ambient_and_combat_music_play() {
+        let read = options_from_ini("[Defaults]\nMusic=0\nEnvSounds=FALSE\nCombatMusic=TRUE\n");
+        assert_eq!(
+            (read.music, read.env_sounds, read.combat_music),
+            (Some(0), Some(false), Some(true))
+        );
+        let missing = options_from_ini("[Defaults]\nSound=TRUE\n");
+        assert_eq!(
+            (missing.music, missing.env_sounds, missing.combat_music),
+            (None, None, None)
+        );
+    }
+
+    #[test]
     fn eqclient_ini_says_whether_sounds_play() {
         let sound = |text| options_from_ini(text).sound;
         assert_eq!(sound("[Defaults]\nSound=TRUE\nSoundVolume=0\n"), Some(true));
@@ -2287,6 +2313,9 @@ LookSpring=1
             OfficialOptions {
                 log: None,
                 sound: None,
+                music: None,
+                env_sounds: None,
+                combat_music: None,
                 spell_effects: None,
                 pc_names: Some(true),
                 npc_names: Some(false),

@@ -483,6 +483,7 @@ pub(super) fn schedule(app: &mut App) {
                 spell_effects::update,
                 sounds::update,
                 zone_audio::update,
+                zone_audio::combat_music_typed,
                 target::marker::update,
                 (names::request, names::update).chain(),
                 (combat_text::update, crate::marquee::present),

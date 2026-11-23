@@ -90,10 +90,25 @@ resets clear pending cues and stop their playback.
 Zone music and ambient sound come from each zone's own files in the
 installation: `<zone>_sounds.eff` places the sound emitters and music regions,
 `<zone>_sndbnk.eff` names their sounds, and `<zone>.xmi` holds the music.
-Emitters near you loop or repeat and grow quieter with distance; the music
-region you stand in plays its day or night sequence and fades out when you
-leave it. How the original program places, chooses and fades these is not yet
-read, so those rules are this client's estimate (item 6.503).
+Emitters follow the original program's reading of these files (item 6.503,
+read R49-7 first pass and its engine follow-up):
+
+- A record whose day and night settings match, or a type-2 record, is one
+  sound that plays day and night. Any other record is a day sound and a night
+  sound, each with its own sound, type, delay and volume.
+- A radius below 0 reaches 10,000 units; a radius of 0 is heard nowhere.
+- A delay above 0 repeats the sound after the delay plus 500 and up to the
+  record's random extra. A positive volume is an attenuation in millibels:
+  2,000 is a tenth of full volume, and above 10,000 is silent. Otherwise a
+  type-0 sound plays at a fifth of full volume and any other at full.
+- The sound bank's `EMIT` list is numbered from 1 and its `LOOP` list from
+  162; carriage returns and spaces are taken out of each name.
+
+Still this client's estimate until a later read: that loudness falls in a
+line from the centre to the radius, that delays are in milliseconds, that a
+delay of 0 loops, that a bank name without a dot ends in `.wav`, that the
+numbers between the two lists (32 to 161) name the installation's numbered
+sounds, and how music regions choose, fade and switch.
 
 Music plays through a synthesizer on a SoundFont (`.sf2`) that you name with
 `--soundfont <file>` or `EQ_CLIENT_SOUNDFONT`. The installation ships no
@@ -101,20 +116,29 @@ SoundFont, so this is a stated departure: the instruments are your file's, not
 the original program's. Without one, or with a file that is missing,
 unreadable or larger than 512 MB, music is silent and the log says why once.
 
-Three options are saved for each character, under Options → General where the
-skin has the controls:
+These options are saved for each character, under Options → General where the
+skin has the controls. A character with no choice of their own starts from the
+installation's `eqclient.ini` `[Defaults]`, where it has the key:
 
-- **Music** (`music`, on): plays the zone's music.
+- **Music** (`music`, on): plays the zone's music. `Music=0` in
+  `eqclient.ini` starts it off; its scale is unread, so other values leave it
+  on.
 - **Music Volume** (`music_volume`, 100): the music's own volume, separate
   from Sound Volume.
 - **Environment Sounds** (`environment_sounds`, on): plays the zone's ambient
-  emitters at the Sound Volume.
+  emitters at the Sound Volume. `EnvSounds` in `eqclient.ini` is read as TRUE
+  or FALSE, which is this client's estimate; its reader is unread.
+- **Combat Music** (`combat_music`, on): `CombatMusic` in `eqclient.ini`, and
+  `/combatmusic` turns it on or off. This client plays no combat music yet.
+
+A `nosound.txt` in the installation folder turns all sound off, as it does
+for the original client; this client takes that to silence music too.
 
 Turning **Sound** off silences the emitters along with every other sound; music
 follows its own Music option. The emitters use at most eight voices of their
 own, nearest first, so they never take a voice from a spell, combat or
 interface sound. A zone change, a camp, a logout or a lost connection stops
-all of them. Combat music is not built yet.
+all of them.
 
 ## Quality of life
 

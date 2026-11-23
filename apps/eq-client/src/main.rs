@@ -817,6 +817,8 @@ fn viewer_config(
         navmesh: !arguments.no_navmesh,
         display,
         music_soundfont: arguments.soundfont,
+        // Read from the installation as the viewer starts.
+        no_sound: false,
     }
 }
 

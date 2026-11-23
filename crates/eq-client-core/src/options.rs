@@ -67,14 +67,21 @@ pub enum Toggle {
     /// Plays sounds; the official client keeps the choice as `Sound` in
     /// `eqclient.ini`, this client per character.
     Sound,
-    /// Plays the zone's music. The official client's own switch, its key
-    /// and default are pending read R49-7 c (recording checklist 6.503);
-    /// this client keeps it per character, on by default.
+    /// Plays the zone's music. The official client keeps its music volume
+    /// as `Music` in `eqclient.ini` (read R49-7 c), a 0 there seeding this
+    /// off [I: the scale is unread]; this client keeps it per character, on
+    /// by default.
     Music,
-    /// Plays the zone's ambient sounds, its emitters. The official
-    /// client's own switch is pending read R49-7 c; this client keeps it per
+    /// Plays the zone's ambient sounds, its emitters. The official client
+    /// keeps `EnvSounds` in `eqclient.ini` (read R49-7 c), taken as a
+    /// TRUE or FALSE [I: its reader is unread]; this client keeps it per
     /// character, on by default.
     EnvironmentSounds,
+    /// Plays combat music, as the official client's `CombatMusic` in
+    /// `eqclient.ini` (TRUE when missing) and its `/combatmusic` (read R49-7
+    /// c). This client keeps it per character; it plays no combat music
+    /// yet (how the program chooses combat music is unread).
+    CombatMusic,
     /// Plays the installation's spell-effect particles, as the official
     /// client's does; the official client keeps the choice as
     /// `ShowSpellEffects` in `eqclient.ini` (and as a zero
@@ -89,7 +96,7 @@ pub enum Toggle {
 impl Toggle {
     /// The official client's own toggles, in the order a file lists them; a
     /// file is read back by name, so the order is only how it is written.
-    pub const OFFICIAL: [Self; 14] = [
+    pub const OFFICIAL: [Self; 15] = [
         Self::PetWindowPopup,
         Self::AutoStand,
         Self::TargetRing,
@@ -106,6 +113,7 @@ impl Toggle {
         // [inferred, item 6.503, pending R49-7 c].
         Self::Music,
         Self::EnvironmentSounds,
+        Self::CombatMusic,
         Self::SpellEffects,
     ];
 
@@ -134,6 +142,7 @@ impl Toggle {
             Self::Sound => "sound",
             Self::Music => "music",
             Self::EnvironmentSounds => "environment_sounds",
+            Self::CombatMusic => "combat_music",
             Self::SpellEffects => "spell_effects",
             Self::Qol(fix) => fix.key(),
         }
@@ -157,6 +166,7 @@ impl Toggle {
             | Self::Sound
             | Self::Music
             | Self::EnvironmentSounds
+            | Self::CombatMusic
             | Self::SpellEffects => None,
             Self::Qol(fix) => fix.needs(),
         }
@@ -378,6 +388,8 @@ pub struct Options {
     pub music: bool,
     /// See [`Toggle::EnvironmentSounds`].
     pub environment_sounds: bool,
+    /// See [`Toggle::CombatMusic`].
+    pub combat_music: bool,
     /// See [`Toggle::SpellEffects`].
     pub spell_effects: bool,
     /// Which quality-of-life fixes are on ([`Toggle::Qol`]).
@@ -436,6 +448,7 @@ impl Default for Options {
             sound: true,
             music: true,
             environment_sounds: true,
+            combat_music: true,
             spell_effects: true,
             qol,
             show_names: ShowNames::Everything,
@@ -470,6 +483,7 @@ impl Options {
             Toggle::Sound => self.sound,
             Toggle::Music => self.music,
             Toggle::EnvironmentSounds => self.environment_sounds,
+            Toggle::CombatMusic => self.combat_music,
             Toggle::SpellEffects => self.spell_effects,
             Toggle::Qol(fix) => self.qol.on(fix),
         }
@@ -491,6 +505,7 @@ impl Options {
             Toggle::Sound => &mut self.sound,
             Toggle::Music => &mut self.music,
             Toggle::EnvironmentSounds => &mut self.environment_sounds,
+            Toggle::CombatMusic => &mut self.combat_music,
             Toggle::SpellEffects => &mut self.spell_effects,
             Toggle::Qol(fix) => {
                 self.qol.set(fix, on);

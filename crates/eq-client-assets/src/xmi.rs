@@ -6,7 +6,7 @@
 //! number in place of a later note-off; there is no running status. XMI
 //! plays at 120 ticks a second, which a Standard MIDI file at 60 ticks a
 //! quarter note and 500,000 microseconds a quarter note keeps; the XMI's
-//! own tempo events are dropped [I]. How the Titanium program plays it is
+//! own tempo events are dropped \[I\]. How the Titanium program plays it is
 //! pending read R49-7 b (recording checklist 6.503).
 
 use thiserror::Error;

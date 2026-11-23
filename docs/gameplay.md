@@ -771,7 +771,10 @@ EQMac, steering and control across zone admissions remain unverified gaps.
 
 Each zone plays its own ambient sounds near you, such as water, wind and
 birds, by day or night, and the music of the region you stand in, which
-fades when you leave it. The rules for where and when are this client's
-estimate until the original program is read (item 6.503). Music needs a
-SoundFont you name; see [Display and audio](settings.md#display-and-audio)
-for it and the Music, Music Volume and Environment Sounds options.
+fades when you leave it. The ambient sounds follow the original program's
+reading of the zone's files (item 6.503, read R49-7 first pass and its
+engine follow-up), including which track a music region names; how regions
+choose among themselves and switch their tracks is this client's estimate. Music needs a SoundFont you name; see
+[Display and audio](settings.md#display-and-audio) for it and the sound
+options. `/combatmusic` turns combat music on or off and keeps the choice,
+but this client plays no combat music yet.
