@@ -113,7 +113,8 @@ pub(crate) fn update(
             .map(|spawn| &spawn.state)
             .filter(|spawn| shown(spawn.kind))
             .filter(|spawn| {
-                world.can_see(spawn) || options.qol.on(eq_client_core::qol::Fix::ShowInvisible)
+                (world.can_see(spawn) && !world.hides_by_body(spawn))
+                    || options.qol.on(eq_client_core::qol::Fix::ShowInvisible)
             })
         {
             let said = words(&spawn.name, spawn.kind, &spawn.name_parts, &spawn.listing);
@@ -294,6 +295,7 @@ mod tests {
     /// A spawn of this kind, named as the server names it, in this guild.
     fn spawn(spawn_id: u16, name: &str, kind: SpawnKind, guild: Option<u32>) -> SpawnState {
         SpawnState {
+            body_type: None,
             name: name.into(),
             kind,
             listing: eq_client_core::listing::Listing { guild, ..default() },
@@ -403,6 +405,57 @@ mod tests {
         assert_eq!(
             shown(&mut app),
             [everyone[0], everyone[1], everyone[2], everyone[4]]
+        );
+    }
+
+    #[test]
+    fn a_body_type_the_program_hides_has_no_name_even_to_see_invisible() {
+        let mut app = app();
+        let mut gnoll = app
+            .world()
+            .resource::<OnlineState>()
+            .world()
+            .spawn(3)
+            .map(|spawn| spawn.state.clone())
+            .unwrap();
+        // Above 64 the program's per-spawn update returns early (R44,
+        // 0x480409); 11 and 60 are refused as targets but still named.
+        for (body_type, named) in [(Some(65), false), (Some(11), true), (None, true)] {
+            gnoll.body_type = body_type;
+            testing::spawn_entry(
+                &mut app.world_mut().resource_mut::<OnlineState>(),
+                3,
+                gnoll.clone(),
+            );
+            app.update();
+            assert_eq!(
+                shown(&mut app).iter().any(|name| name == "a gnoll"),
+                named,
+                "{body_type:?}"
+            );
+        }
+        gnoll.body_type = Some(67);
+        testing::spawn_entry(&mut app.world_mut().resource_mut::<OnlineState>(), 3, gnoll);
+        testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [WorldEvent::ObserverSight {
+                session_id: 1,
+                sees_invisible: true,
+            }],
+        );
+        app.update();
+        assert!(!shown(&mut app).iter().any(|name| name == "a gnoll"));
+        // The QoL fix that shows every spawn shows it too, still refused.
+        app.world_mut()
+            .resource_mut::<crate::options::OptionsState>()
+            .options
+            .qol
+            .set(eq_client_core::qol::Fix::ShowInvisible, true);
+        app.update();
+        assert!(shown(&mut app).iter().any(|name| name == "a gnoll"));
+        assert_eq!(
+            crate::target::unavailable(app.world().resource::<OnlineState>(), 3),
+            Some(crate::target::REFUSED_BY_BODY)
         );
     }
 

@@ -46,6 +46,7 @@ fn item_binding_uses_current_inventory_and_never_activates_replacement_items() {
             skills: None,
             practice_points: None,
             languages: None,
+            intoxication: None,
             disciplines: None,
             spell_refresh_ms: None,
             memorized_spells: [None; 8],

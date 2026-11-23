@@ -2335,11 +2335,19 @@ mod tests {
     }
 
     #[test]
-    fn discipline_slash_names_only_the_supported_set() {
+    fn discipline_slash_takes_any_words_as_the_command_does() {
         let base = std::path::Path::new(".");
         assert_eq!(
             parse("slash(\"discipline defensive\")\n", base).unwrap(),
             [Step::Slash("/discipline defensive".into())]
+        );
+        assert_eq!(
+            parse("slash(\"discipline evasive disc\")\n", base).unwrap(),
+            [Step::Slash("/discipline evasive disc".into())]
+        );
+        assert_eq!(
+            parse("slash(\"discipline\")\n", base).unwrap(),
+            [Step::Slash("/discipline".into())]
         );
     }
 
@@ -2521,6 +2529,18 @@ mod tests {
     }
 
     #[test]
+    fn language_slash_takes_any_words_as_the_typed_command_does() {
+        let base = std::path::Path::new(".");
+        for (script, step) in [
+            ("slash(\"language\")\n", "/language"),
+            ("slash(\"language 2\")\n", "/language 2"),
+            ("slash(\"language help\")\n", "/language help"),
+        ] {
+            assert_eq!(parse(script, base).unwrap(), [Step::Slash(step.into())]);
+        }
+    }
+
+    #[test]
     fn knight_slash_actions_use_the_current_target() {
         let base = std::path::Path::new(".");
         assert_eq!(
@@ -2529,6 +2549,16 @@ mod tests {
                 Step::Slash("/harmtouch".into()),
                 Step::Slash("/layonhands".into())
             ]
+        );
+    }
+
+    #[test]
+    fn a_script_may_shield_its_target() {
+        // Words after it are the typed command's to refuse (6.584).
+        let base = std::path::Path::new(".");
+        assert_eq!(
+            parse("slash(\"shield\")\n", base).unwrap(),
+            [Step::Slash("/shield".into())]
         );
     }
 

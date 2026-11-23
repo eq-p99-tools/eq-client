@@ -39,6 +39,32 @@ Map background opacity, plain/skin style and position lock use
 the [map's controls](controls.md#map); window coordinates remain in the normal
 window-layout file.
 
+## Server filters
+
+Options → Filters lists the kinds of message the server can be asked not to
+send: one button per kind that steps through the modes the server takes for
+it (show, hide, and for some kinds mine only or group only), and a label that
+says the current mode. A kind the generation's packet has no word for has no
+row, so Titanium lists 24 kinds and Mac-era servers 16. The kinds, their
+words and the page are this client's own: which official options set each
+kind, the ini keys the original keeps them under and its `/filter` forms are
+unread (recording checklist 6.494a to c), so `/filter` answers that this
+client does not take it that way yet.
+
+The modes are kept per character in `options-<world>-<character>.txt`, one
+`filter_<kind> = <mode>` line per kind (`show`, `hide`, `mine` or `group`),
+seeded from `options.txt` like the other options. A line naming a mode no
+generation can say is not read, so that kind keeps its default; the defaults
+are the packet the client sent before filters could be set.
+
+Choosing a character at the character list gives the session that
+character's saved modes, so its first zone-in carries them on every server
+type. A change made in play reaches the server at once where the session
+offers it (EQEmu); elsewhere (P99, Quarm, TAKP) it goes with the next
+zone-in. The page's note says which applies to the current server. A
+character entered automatically at connect starts from the defaults until
+its saved modes are sent after it enters.
+
 ## Display and audio
 
 Options provides Max FPS, Far Clip Plane and Mouselook Sensitivity controls.
@@ -74,6 +100,69 @@ file name in the installation root or its `sounds` folder. Cues play once,
 with limits on pending requests, concurrent voices, and playback time. World
 resets clear pending cues and stop their playback.
 
+Zone music and ambient sound come from each zone's own files in the
+installation: `<zone>_sounds.eff` places the sound emitters and music regions,
+`<zone>_sndbnk.eff` names their sounds, and `<zone>.xmi` holds the music.
+Emitters follow the original program's reading of these files (item 6.503,
+read R49-7 first pass and its engine follow-up):
+
+- A record whose day and night settings match, or a type-2 record, is one
+  sound that plays day and night. Any other record is a day sound and a night
+  sound, each with its own sound, type, delay and volume.
+- A radius below 0 reaches 10,000 units; a radius of 0 is heard nowhere.
+- A delay above 0 repeats the sound after the delay plus 500 and up to the
+  record's random extra. A positive volume is an attenuation in millibels:
+  2,000 is a tenth of full volume, and above 10,000 is silent. Otherwise a
+  type-0 sound plays at a fifth of full volume and any other at full.
+- The sound bank's `EMIT` list is numbered from 1 and its `LOOP` list from
+  162; carriage returns and spaces are taken out of each name.
+
+Still this client's estimate until a later read: that loudness falls in a
+line from the centre to the radius, that delays are in milliseconds, that a
+delay of 0 loops, that a bank name without a dot ends in `.wav`, that the
+numbers between the two lists (32 to 161) name the installation's numbered
+sounds, and how music regions choose, fade and switch.
+
+Music plays through a synthesizer on a SoundFont (`.sf2`) that you name with
+`--soundfont <file>` or `EQ_CLIENT_SOUNDFONT`. The installation ships no
+SoundFont, so this is a stated departure: the instruments are your file's, not
+the original program's. Without one, or with a file that is missing,
+unreadable or larger than 512 MB, music is silent and the log says why once.
+
+These options are saved for each character, under Options → General where the
+skin has the controls. A character with no choice of their own starts from the
+installation's `eqclient.ini` `[Defaults]`, where it has the key:
+
+- **Music** (`music`, on): plays the zone's music. `Music=0` in
+  `eqclient.ini` starts it off; its scale is unread, so other values leave it
+  on.
+- **Music Volume** (`music_volume`, 100): the music's own volume, separate
+  from Sound Volume.
+- **Environment Sounds** (`environment_sounds`, on): plays the zone's ambient
+  emitters at the Sound Volume. `EnvSounds` in `eqclient.ini` is read as TRUE
+  or FALSE, which is this client's estimate; its reader is unread.
+- **Combat Music** (`combat_music`, on): `CombatMusic` in `eqclient.ini`, and
+  `/combatmusic` turns it on or off. This client plays no combat music yet.
+
+A `nosound.txt` in the installation folder turns all sound off, as it does
+for the original client; this client takes that to silence music too.
+
+Turning **Sound** off silences the emitters along with every other sound; music
+follows its own Music option. The emitters use at most eight voices of their
+own, nearest first, so they never take a voice from a spell, combat or
+interface sound. A zone change, a camp, a logout or a lost connection stops
+all of them.
+
+## Attack On Assist
+
+Titanium installations keep `attack_on_assist` in the character's options file.
+When it is on, the server's assist answer that sets the target also starts auto
+attack, through the attack key's own refusals and line. `/assist on` and
+`/assist off` set it and say its state, so a social or a script sets it as a
+player does. It starts off: the program's own default is unread (checklist
+6.490), and the installation's `[Defaults]` `AttackOnAssist` seeds it where
+present. The Mac-era client has no such option.
+
 ## Quality of life
 
 Options → QoL stores these choices per character. Availability can depend on the
@@ -101,6 +190,7 @@ from 50 to 200) or `/uiscale` alone for 100% when the slider is hard to reach.
 | Read the Spellbook Standing | `read_while_standing` | Off | Reads the spellbook without automatic sitting |
 | Show Invisible Entities | `show_invisible` | Off | Draws known invisible spawns with parenthesized names; targeting rules remain unchanged |
 | Answer List Presence Polls | `answer_list_polls` | Off | Answers supported P99 presence polls after a local delay; does not join a list or answer numeric challenges |
+| Duel Answer Card | `duel_answer_card` | On | Asks Yes or No when another player challenges you to a duel; Yes accepts as `/duel` does and No sends nothing. The original client has no card and takes only `/duel`; turn it off to play that way |
 
 These choices take effect in the current session. Controls are unavailable where
 their required session feature is absent. Walk While Winded, Move While
@@ -127,6 +217,7 @@ The **Dangerous** section sits below the ordinary settings and includes the
 | Fly | `fly` | Off | Bounded flight through Jump and Duck. Collides with solid geometry and passes through mapped water and lava. Turning it off restores gravity. |
 | Jesus Mode | `jesus_mode` | Off | Stand and move on mapped water or lava reached from above, using ordinary ground speed and collision |
 | Exit at Once | `exit_at_once` | Off | Requests logout without automatic sitting or camp preparation; waits for the server outcome |
+| Zone Anywhere | `zone_anywhere` | Off | Crosses any zone line whatever level the zone asks for. That the official client turns players away below a zone's level is inferred; this client blocks no crossing today, so the setting changes nothing yet |
 | Run a Little Faster | `run_boost` | 1.00x | Slider from 1.00x to 1.40x in 0.01x steps. Scales calibrated forward running and the forward component of diagonals |
 
 The run speed slider saves the multiplier in hundredths, such as
@@ -152,7 +243,9 @@ are hidden, so turning the setting off shows the current weather.
 On Titanium, Air Remaining shows while a resolved head probe is submerged and
 the client knows the inputs to count air. The next one-second breath check
 refills the reserve if the character has surfaced or can breathe underwater.
-With **Gills for Days** enabled, the client skips the air calculation. Turning
+In thegrey, whose air can't be breathed, Air Remaining counts even with the
+head out of water unless the character breathes water. With **Gills for
+Days** enabled, the client skips the air calculation. Turning
 it off starts with a fresh reserve. Because skipping the counter withholds the
 drowning reports every Titanium session takes, the setting needs the session's
 gameplay departures like Fly and Jesus Mode. Titanium `eqgame.exe` checks

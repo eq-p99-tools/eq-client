@@ -2916,3 +2916,187 @@ fn the_erudin_pier_rail_and_its_posts_are_climbed() {
         assert!(south_most < 65.0, "{name}: stopped at y {south_most}");
     }
 }
+
+/// Erud's Crossing: where the ships' last reports leave them at the dock,
+/// (612, -1781) at heading 0 (a local server, 11-18), against the planks. Places
+/// the race-72 actor's collision as the carrier renderer does and prints its
+/// world bounds and the floor along lines from the hull to the planks, with
+/// and without the hull, so the gap between them can be read off.
+/// `EQ_PROBE_SIZE` (default 0) and `EQ_PROBE_GENDER` (default 2) pick the
+/// drawn size and actor.
+#[test]
+#[ignore = "requires EQ_PROBE_INSTALL"]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one placement, its floor map and its jumps"
+)]
+fn the_erud_crossing_ship_at_its_dock_stop() {
+    use eq_client_assets::ui::InstalledClient;
+    use eq_client_core::movement::{CollisionInstance, CollisionMesh};
+    let install = PathBuf::from(std::env::var("EQ_PROBE_INSTALL").unwrap());
+    let size: f32 = std::env::var("EQ_PROBE_SIZE").map_or(0.0, |size| size.parse().unwrap());
+    let gender: u32 = std::env::var("EQ_PROBE_GENDER").map_or(2, |gender| gender.parse().unwrap());
+    let zone = eq_client_assets::load_zone(&install, "erudsxing").unwrap();
+    let dock = build_collision(&zone).unwrap();
+    let tag = eq_client_core::races::carrier_actor(72, gender).unwrap();
+    let actor = eq_client_assets::actors::load_installed_actor(&install, "erudsxing", tag).unwrap();
+    let drawn = crate::entities::Drawn::by(InstalledClient::Titanium, None, (72, gender, size));
+    let pose = eq_client_core::WorldPosition {
+        x: 612.0,
+        y: -1781.0,
+        z: -17.25,
+        heading: 0.0,
+    };
+    let translation = Vec3::from_array(eq_client_core::render_position(pose));
+    let rotation = Quat::from_rotation_y(eq_client_core::static_yaw(pose.heading));
+    let scale = Vec3::splat(drawn.scale);
+    let (mut low, mut high) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+    for point in actor.model.collision.iter().flatten() {
+        let placed = translation + rotation * (Vec3::from_array(*point) * scale);
+        let world = eq_client_core::axes::to_world(placed);
+        low = low.min(world);
+        high = high.max(world);
+    }
+    println!(
+        "actor={tag} scale={} triangles={} world_low={low:?} world_high={high:?}",
+        drawn.scale,
+        actor.model.collision.len()
+    );
+    let mesh = CollisionMesh::new(
+        actor
+            .model
+            .collision
+            .iter()
+            .map(|triangle| triangle.map(|point| (Vec3::from_array(point) * scale).to_array())),
+    )
+    .unwrap();
+    let mut boarded = build_collision(&zone).unwrap();
+    boarded.set_spawn_instances(vec![(
+        96,
+        CollisionInstance::new(std::sync::Arc::new(mesh), translation, rotation).unwrap(),
+    )]);
+    let floor = |world: &eq_client_core::movement::CollisionWorld, x: f32, y: f32| {
+        let feet = Vec3::from_array(eq_client_core::render_position(
+            eq_client_core::WorldPosition {
+                x,
+                y,
+                z: 15.0,
+                heading: 0.0,
+            },
+        ));
+        world.ground(feet, 0.0, 40.0)
+    };
+    for y in [-1800.0_f32, -1790.0, -1781.0, -1771.8, -1765.0] {
+        let mut line = format!("y={y}:");
+        let mut x = 596.0_f32;
+        while x <= 724.0 {
+            let dock_floor = floor(&dock, x, y);
+            let any_floor = floor(&boarded, x, y);
+            let mark = match (dock_floor, any_floor) {
+                (_, None) => "-".to_owned(),
+                (Some(d), Some(a)) if (d - a).abs() < 0.01 => format!("D{a:.1}"),
+                (_, Some(a)) => format!("S{a:.1}"),
+            };
+            line.push(' ');
+            line.push_str(&x.to_string());
+            line.push(':');
+            line.push_str(&mark);
+            x += 4.0;
+        }
+        println!("{line}");
+    }
+    // A human of size 6 running west off the planks at y -1781 and -1771.8,
+    // jumping once its feet pass `takeoff`, by this client's Titanium falls.
+    let human = PlayerBody {
+        feet_offset: 3.75,
+        height: 6.0,
+        size: 6.0,
+    };
+    let physics = motion::walking(
+        motion::physics(InstalledClient::Titanium, None),
+        InstalledClient::Titanium,
+        &human,
+        true,
+    );
+    let west = Vec3::from_array(eq_client_core::render_vector([-1.0, 0.0, 0.0]));
+    // The hull's triangles that reach the band a walker on the planks sweeps
+    // (world z -1 to 8, x past 644): the part, if any, that can stop it.
+    let mut band = 0;
+    let (mut band_low, mut band_high) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+    for triangle in &actor.model.collision {
+        let points = triangle.map(|point| {
+            eq_client_core::axes::to_world(
+                translation + rotation * (Vec3::from_array(point) * scale),
+            )
+        });
+        if points
+            .iter()
+            .any(|p| p.x > 644.0 && p.z > -1.0 && p.z < 8.0)
+        {
+            band += 1;
+            for p in points {
+                band_low = band_low.min(p);
+                band_high = band_high.max(p);
+            }
+        }
+    }
+    println!("hull_band triangles={band} low={band_low:?} high={band_high:?}");
+    for (name, world) in [("dock", &dock), ("boarded", &boarded)] {
+        for y in [-1781.0_f32, -1771.8] {
+            for takeoff in [600.0_f32, 652.0, 654.0, 656.0, 658.0, 660.0] {
+                let mut feet = Vec3::from_array(eq_client_core::render_position(
+                    eq_client_core::WorldPosition {
+                        x: 700.0,
+                        y,
+                        z: 0.0,
+                        heading: 0.0,
+                    },
+                ));
+                let mut airborne = eq_client_core::movement::AirborneController::default();
+                let mut jumped = None;
+                for _ in 0..60 {
+                    let at = eq_client_core::axes::to_world(feet);
+                    let jump = jumped.is_none() && at.x <= takeoff;
+                    if jump {
+                        jumped = Some(at);
+                    }
+                    // With water on, as the online walk steps (a step
+                    // into liquid isn't refused).
+                    feet = motion::fall_step_with_water(
+                        &mut airborne,
+                        world,
+                        physics,
+                        Some(physics.reach()),
+                        feet,
+                        west * 32.0 * 0.05,
+                        0.05,
+                        human.height,
+                        jump,
+                        true,
+                    );
+                }
+                let end = eq_client_core::axes::to_world(feet);
+                println!(
+                    "run_jump world={name} y={y} takeoff={takeoff} jumped_at={jumped:?} end={end:?} aboard={}",
+                    end.z > 3.0
+                );
+            }
+            // What lies west of the plank end at each height over the feet.
+            let from = |z: f32| {
+                Vec3::from_array(eq_client_core::render_position(
+                    eq_client_core::WorldPosition {
+                        x: 660.0,
+                        y,
+                        z,
+                        heading: 0.0,
+                    },
+                ))
+            };
+            let hits: Vec<_> = [0.5_f32, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 8.0]
+                .into_iter()
+                .map(|z| (z, world.ray_distance(from(z), west, 30.0)))
+                .collect();
+            println!("west_rays world={name} y={y}: {hits:?}");
+        }
+    }
+}

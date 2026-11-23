@@ -86,6 +86,56 @@ fn submitted_hand_changes_redress_the_avatar_and_paperdoll_in_the_same_zone() {
     );
 }
 
+#[test]
+fn a_luclin_model_keeps_its_base_look_while_a_classic_one_wears_the_helm() {
+    use crate::online::{OnlineState, testing};
+    use Visibility::{Hidden, Inherited};
+    let mut online = OnlineState::new(true);
+    let mut player = testing::player(7);
+    player.appearance.materials[TextureSlot::Head.index()] = 1;
+    testing::admit(&mut online, 5, player);
+    let mut world = World::new();
+    crate::character::testing::stores(&mut world);
+    // A model with a bare head and a helmed one beside its body.
+    let mut asset = eq_client_assets::characters::CharacterAsset::testing_pieces(&[
+        Piece::Body(0),
+        Piece::Head(0),
+        Piece::Head(1),
+    ]);
+    let classic = crate::character::testing::prepared_from(&mut world, asset.clone());
+    asset.set_luclin(true);
+    let luclin = crate::character::testing::prepared_from(&mut world, asset);
+    let roots =
+        [&classic, &luclin].map(|prepared| crate::character::testing::drawn(&mut world, prepared));
+    world.insert_resource(crate::item_models::ItemLibrary::default());
+    world.insert_resource(crate::ViewerSettings::default());
+    world.insert_resource(crate::options::OptionsState::new(default()));
+    world.init_resource::<Wardrobe>();
+    world.insert_resource(online);
+    world.run_system_once(dress).unwrap();
+    let shown = |world: &World, root| {
+        let character = world
+            .get::<crate::character::AnimatedCharacter>(root)
+            .unwrap();
+        let parts: Vec<_> = character.parts.iter().map(|part| part.entity).collect();
+        (
+            character.dressed.is_some(),
+            parts
+                .into_iter()
+                .map(|part| world.get::<Visibility>(part).copied().unwrap())
+                .collect::<Vec<_>>(),
+        )
+    };
+    assert_eq!(
+        shown(&world, roots[0]),
+        (true, vec![Inherited, Hidden, Inherited])
+    );
+    assert_eq!(
+        shown(&world, roots[1]),
+        (true, vec![Inherited, Inherited, Hidden])
+    );
+}
+
 fn character(world: &mut World) -> Entity {
     crate::character::testing::stores(world);
     let prepared = crate::character::testing::prepared(world);
