@@ -9,8 +9,6 @@ pub(super) struct Request {
     pub gem: u8,
     pub target_id: u16,
     pub forgetting: bool,
-    /// Unmodified installation mana cost; None leaves the decision to the server.
-    pub mana_cost: Option<u32>,
     pub linked_timer: Option<u32>,
 }
 
@@ -38,20 +36,19 @@ pub(crate) fn busy(
 }
 
 /// The gem's spell, if the request can go now; otherwise why not, in the
-/// player's words. Like the official client, a cast refuses locally when the
-/// server-reported mana is short (P99 otherwise answers with a generic
-/// interruption); forgetting never needs mana.
+/// player's words. Mana is the server's to judge: the Titanium program
+/// compares none before it sends the cast (read R49-34 g), and the server's
+/// answer, in its own words, ends the cast.
 pub(super) fn check(
     world: &eq_client_core::world::ClientWorld,
     player: &PlayerState,
     request: &Request,
-    (messages, map): (&super::messages::Messages, &crate::keys::KeyMap),
+    (_, map): (&super::messages::Messages, &crate::keys::KeyMap),
     now: Instant,
 ) -> Result<u32, crate::chat::Said> {
     let Request {
         gem,
         forgetting,
-        mana_cost,
         linked_timer,
         ..
     } = *request;
@@ -62,7 +59,7 @@ pub(super) fn check(
         .flatten()
         .ok_or_else(|| crate::chat::Said::own(super::empty_gem(gem, map)))?;
     // While a Bard sings and no other cast is under way, a gem press stops
-    // the song whatever its timers or the mana, and casts nothing
+    // the song whatever its timers, and casts nothing
     // (0x4ecb56, read R49-21c); a forget goes too ([I], R49-48 a). The
     // session decides both.
     let singing = world.casting().singing.is_some() && !world.casting().holds_actions();
@@ -71,12 +68,6 @@ pub(super) fn check(
     }
     if forgetting || singing {
         return Ok(spell_id);
-    }
-    if mana_cost
-        .zip(world.vitals().mana)
-        .is_some_and(|(cost, mana)| cost > mana)
-    {
-        return Err(messages.said_text(199, "Not enough mana for that spell"));
     }
     let remaining = world.casting().spell_wait(spell_id, linked_timer, now);
     if !remaining.is_zero() {

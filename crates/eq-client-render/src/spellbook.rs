@@ -369,7 +369,10 @@ impl SpellNames {
         self.0.text(id)?.fades.as_deref()
     }
 
-    /// Effective mana cost after the selected policy's complete replay.
+    /// Effective mana cost after the selected policy's complete replay. Only
+    /// tests read it: no cast is held back for mana here, as the program
+    /// holds back none (read R49-34 g).
+    #[cfg(test)]
     pub(super) fn mana(&self, id: u32) -> Option<u32> {
         self.spell(id)?.mana
     }

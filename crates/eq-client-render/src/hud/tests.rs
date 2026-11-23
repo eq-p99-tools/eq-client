@@ -6,8 +6,7 @@ use crate::{
 };
 use bevy::ui::RelativeCursorPosition;
 use eq_client_core::{
-    ClientCommand, PlayerState, SpellUpdate, WorldEvent, WorldPosition, WorldUpdate,
-    world::{ClientWorld, NoSpells},
+    ClientCommand, PlayerState, SpellUpdate, WorldEvent, WorldPosition, world::ClientWorld,
 };
 
 /// A cleric with spell 73 in its first gem, admitted in session 7 as spawn 12.
@@ -1006,7 +1005,6 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
         gem,
         target_id,
         forgetting: false,
-        mana_cost: None,
         linked_timer: None,
     };
     let messages = messages::Messages::default();
@@ -1069,57 +1067,32 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
 }
 
 #[test]
-fn short_server_mana_refuses_casts_locally_but_never_blocks_forgetting() {
+fn a_cast_short_of_mana_goes_to_the_server_as_the_programs_does() {
+    // The program compares no mana before it sends (read R49-34 g); the
+    // server's answer ends the cast (chat tests).
     let player = caster();
-    let messages = messages::Messages::parse(
-        "EQST0002
-0
-199 Synthetic short mana
-",
-    );
-    let mut request = requests::Request {
+    let mut online = admitted();
+    testing::resources(&mut online, 0, 0);
+    let request = requests::Request {
         gem: 0,
         target_id: 12,
         forgetting: false,
-        mana_cost: Some(10),
         linked_timer: None,
     };
-    // The world as the server last reported the player's mana, if it has.
-    let with_mana = |mana: Option<u32>| {
-        let mut world = ClientWorld::default();
-        if let Some(mana) = mana {
-            world.apply(
-                &WorldUpdate::Game(WorldEvent::Mana(mana)),
-                std::time::Instant::now(),
-                &NoSpells,
-            );
-        }
-        world
-    };
-    let check = |world: &ClientWorld, request: &requests::Request| {
-        requests::check(
-            world,
-            &player,
-            request,
-            (&messages, &crate::keys::KeyMap::default()),
-            std::time::Instant::now(),
-        )
-    };
+    assert_eq!(online.world().vitals().mana, Some(0));
     assert_eq!(
-        check(&with_mana(Some(9)), &request),
-        Err(crate::chat::Said::official("Synthetic short mana"))
+        requests::check(
+            online.world(),
+            &player,
+            &request,
+            (
+                &messages::Messages::default(),
+                &crate::keys::KeyMap::default()
+            ),
+            std::time::Instant::now(),
+        ),
+        Ok(73)
     );
-    request.forgetting = true;
-    assert_eq!(check(&with_mana(Some(9)), &request), Ok(73));
-    request.forgetting = false;
-    for (mana, cost) in [(Some(10), Some(10)), (None, Some(10)), (Some(0), None)] {
-        request.mana_cost = cost;
-        assert_eq!(
-            check(&with_mana(mana), &request),
-            Ok(73),
-            "{mana:?} {cost:?}"
-        );
-    }
 }
 
 #[test]

@@ -5487,6 +5487,77 @@ mod tests {
     }
 
     #[test]
+    fn the_servers_answer_to_a_cast_short_of_mana_prints_as_it_comes_and_ends_the_hold() {
+        use eq_client_core::{SpellUpdate, WorldEvent, WorldUpdate};
+        // No cast is held back for mana here (read R49-34 g): the server
+        // judges it. EQEmu answers with its string 199 and an interruption;
+        // another server may answer in its own words after the cast began.
+        let interrupted = WorldUpdate::Game(WorldEvent::Spell(SpellUpdate::Interrupted {
+            caster_id: 7,
+            message_id: 0x1b7,
+            caster_name: None,
+        }));
+        let answered = WorldUpdate::Game(WorldEvent::CastPending {
+            session_id: 1,
+            spell_id: None,
+        });
+        let answers = [
+            (
+                vec![
+                    WorldUpdate::ServerMessage {
+                        string_id: 199,
+                        arguments: Vec::new(),
+                        message_type: Some(13),
+                    },
+                    interrupted.clone(),
+                    answered.clone(),
+                ],
+                "Synthetic short mana.",
+            ),
+            (
+                vec![
+                    answered,
+                    WorldUpdate::Game(WorldEvent::Spell(SpellUpdate::Began {
+                        caster_id: 7,
+                        spell_id: 73,
+                        duration_ms: 3000,
+                    })),
+                    WorldUpdate::Chat(system_line("Synthetic server words.")),
+                    interrupted,
+                ],
+                "Synthetic server words.",
+            ),
+        ];
+        for (answer, words) in answers {
+            let (mut app, tx) = received_chat_app();
+            app.insert_resource(crate::hud::messages::Messages::parse(
+                "EQST0002\n0 1\n199 Synthetic short mana.\n",
+            ));
+            tx.send(WorldUpdate::Game(WorldEvent::Mana(0))).unwrap();
+            tx.send(WorldUpdate::Game(WorldEvent::CastPending {
+                session_id: 1,
+                spell_id: Some(73),
+            }))
+            .unwrap();
+            app.update();
+            let casting = |app: &App| {
+                app.world()
+                    .resource::<crate::online::OnlineState>()
+                    .world()
+                    .casting()
+                    .holds_actions()
+            };
+            assert!(casting(&app));
+            for update in answer {
+                tx.send(update).unwrap();
+            }
+            app.update();
+            assert!(!casting(&app), "{words}");
+            assert!(shown(&mut app).iter().any(|line| line == words), "{words}");
+        }
+    }
+
+    #[test]
     fn consider_chat_uses_titaniums_fixed_palette() {
         for (kind, rgb) in [
             (2, [0, 128, 0]),
