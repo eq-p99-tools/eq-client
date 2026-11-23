@@ -353,6 +353,8 @@ pub struct Options {
     pub ui_scale: u16,
     /// See [`Level::SoundVolume`].
     pub sound_volume: u16,
+    /// The server filters, per character ([`crate::chat_filters`]).
+    pub chat_filters: crate::chat_filters::ChatFilters,
 }
 
 impl Default for Options {
@@ -387,6 +389,7 @@ impl Default for Options {
             mouse_sensitivity: 50,
             ui_scale: 100,
             sound_volume: 100,
+            chat_filters: crate::chat_filters::ChatFilters::default(),
         }
     }
 }
@@ -531,6 +534,9 @@ impl Options {
                 }
                 continue;
             }
+            if options.chat_filters.read(key.trim(), value) {
+                continue;
+            }
             if let Some(level) = Level::ALL
                 .into_iter()
                 .find(|level| level.key() == key.trim())
@@ -572,6 +578,7 @@ impl Options {
                 text.push_str(part);
             }
         }
+        text.push_str(&self.chat_filters.text());
         text
     }
 }
@@ -587,6 +594,10 @@ mod tests {
         options.set(Toggle::Qol(Fix::SkipModifiedFood), false);
         options.set(Toggle::Qol(Fix::JesusMode), true);
         options.show_names = ShowNames::Last;
+        options.chat_filters.set(
+            eq_network_game::filters::FilterCategory::Auctions,
+            eq_network_game::filters::FilterMode::Hide,
+        );
         let text = options.text();
         assert!(text.starts_with(HEADER));
         assert!(text.contains("invert_y = true\n"));
@@ -594,6 +605,7 @@ mod tests {
         assert!(text.contains("jesus_mode = true\n"));
         assert!(text.contains("hidden_windows = false\n"));
         assert!(text.contains("show_names = 2\n"));
+        assert!(text.contains("filter_auctions = hide\n"));
         assert_eq!(Options::read(&text, Options::default()), options);
         // A file from before the QoL page keeps its choices there.
         let before = Options::read(

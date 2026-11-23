@@ -290,6 +290,7 @@ pub(super) fn schedule(app: &mut App) {
                 crate::camera::turn,
                 move_player,
                 options::toggle,
+                options::step_filters,
                 liquid_and_movement(),
                 spellbook::sets::ui::input,
             )
@@ -414,6 +415,7 @@ pub(super) fn schedule(app: &mut App) {
                         skinned::drop_downs,
                         skinned::light_choices,
                         skinned::show_sliders,
+                        options::show_filters,
                         skinned::show_amount,
                         skinned::show_choices,
                         skinned::fill_lists,

@@ -243,24 +243,25 @@ fn default_size_wrapped_qol_shows_the_heading_and_a_line_down_the_speed_control(
             .add_systems(Update, (tabs, controls::scroll_lists));
         let (_, controls) = spawn_tab_box(&mut app, WindowId::Options, tab_box, size);
         // Stand in for measured tab text at a width where eight fit in the
-        // first row and only the new QoL tab wraps.
+        // first row and the generated Filters and QoL tabs wrap.
         for (_, entity) in &controls {
             app.world_mut().get_mut::<Node>(*entity).unwrap().width = px(46);
         }
         app.update();
         app.update();
-        assert_eq!(controls.len(), 9);
+        // The Filters page (6.494b) comes before QoL, which stays last.
+        assert_eq!(controls.len(), 10);
         let first_tab = bounds(app.world(), controls[0].1);
         let particles_tab = bounds(app.world(), controls[7].1);
-        let qol_tab = bounds(app.world(), controls[8].1);
+        let qol_tab = bounds(app.world(), controls[9].1);
         assert!((particles_tab.min.y - first_tab.min.y).abs() < f32::EPSILON);
         assert!(qol_tab.min.y >= first_tab.max.y);
-        crate::clicks::testing::click(&mut app, controls[8].1);
+        crate::clicks::testing::click(&mut app, controls[9].1);
         let page = app
             .world_mut()
             .query::<(Entity, &SkinPage)>()
             .iter(app.world())
-            .find(|(_, page)| page.0.index == 8)
+            .find(|(_, page)| page.0.index == 9)
             .unwrap()
             .0;
         let view = bounds(app.world(), page);
@@ -351,13 +352,14 @@ fn qol_controls_fit_the_width_and_scroll_fully_below_wrapped_tabs() {
             app.update();
             app.update();
             let first_tab = bounds(app.world(), tabs[0].1);
-            let last_tab = bounds(app.world(), tabs[8].1);
+            // QoL stays last, after the Filters page (6.494b).
+            let last_tab = bounds(app.world(), tabs[9].1);
             assert!(last_tab.min.y >= first_tab.max.y);
-            crate::clicks::testing::click(&mut app, tabs[8].1);
+            crate::clicks::testing::click(&mut app, tabs[9].1);
             let mut query = app.world_mut().query::<(Entity, &SkinPage)>();
             let page = query
                 .iter(app.world())
-                .find(|(_, page)| page.0.index == 8)
+                .find(|(_, page)| page.0.index == 9)
                 .unwrap()
                 .0;
             let viewport = bounds(app.world(), page);

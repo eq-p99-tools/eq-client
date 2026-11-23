@@ -84,6 +84,8 @@ pub(super) fn slider_sets(id: Option<&str>, owner: WindowId) -> Option<Sets> {
 /// for the slider, or nothing.
 pub(super) enum ValueLabel {
     Shows(Level),
+    /// The mode of one kind of server filter, on the Filters page.
+    Filter(eq_client_core::filters::FilterCategory),
     Blank,
 }
 
@@ -93,6 +95,9 @@ pub(super) enum ValueLabel {
 pub(super) fn value_label(name: &str, owner: WindowId) -> Option<ValueLabel> {
     if owner != WindowId::Options || !name.ends_with("ValueLabel") {
         return None;
+    }
+    if let Some(category) = super::filters::filter_value(name) {
+        return Some(ValueLabel::Filter(category));
     }
     Some(
         LEVEL_SLIDERS
