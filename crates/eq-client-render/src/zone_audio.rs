@@ -4,9 +4,11 @@
 //! the player stands in plays its sequence through a synthesizer and the
 //! sound font the player names.
 //!
-//! How the Titanium program places, chooses, fades and sets the volume of
-//! them is pending read R49-7 (recording checklist 6.503); every inferred
-//! rule is a named constant or function here. The instruments are the
+//! The emitters follow the Titanium program's loader (read R49-7 a, first
+//! pass; recording checklist 6.503): each record is one emitter or a day
+//! and a night one, with its own sound, delay and volume. How the program
+//! chooses, fades and switches music is pending the second pass; every
+//! inferred rule is a named constant or function here, marked [I]. The instruments are the
 //! player's sound font, not the program's own (a stated departure: an
 //! installation ships none).
 //!
@@ -296,18 +298,24 @@ fn choose_music(
         })
 }
 
-/// The day or night sound of an emitter kind this client plays: a day/night
-/// effect by the hour, a static effect its day id always (reviewer M2) [I].
-fn emitter_sound(kind: EmitterKind, names: &[SoundRef; 2], night: bool) -> Option<&SoundRef> {
-    match kind {
-        EmitterKind::DayNightEffect => Some(&names[usize::from(night)]),
-        EmitterKind::StaticEffect => Some(&names[0]),
-        EmitterKind::Music | EmitterKind::DayNightMusic | EmitterKind::Unknown(_) => None,
-    }
+/// Whether an emitter of this type plays a sound, rather than music or a
+/// type this client does not know.
+const fn plays_sound(kind: EmitterKind) -> bool {
+    matches!(
+        kind,
+        EmitterKind::DayNightEffect | EmitterKind::StaticEffect | EmitterKind::DistanceEffect
+    )
 }
 
-/// The emitters heard from where the player stands, nearest first, at most
-/// [`EMITTER_VOICES`]: each one's index, sound name and loudness.
+/// An emitter's voice key: its record and the side (0 day, 1 night) whose
+/// fields it plays.
+const fn key(index: usize, side: usize) -> usize {
+    index * 2 + side
+}
+
+/// The emitters heard from where the player stands at this hour, nearest
+/// first, at most [`EMITTER_VOICES`]: each one's key ([`key`]), sound name
+/// and loudness, its distance falloff times its own volume.
 fn heard<'a>(
     emitters: &[Emitter],
     names: &'a [[SoundRef; 2]],
@@ -318,13 +326,26 @@ fn heard<'a>(
         .iter()
         .zip(names)
         .enumerate()
-        .filter_map(|(index, (emitter, names))| {
-            let SoundRef::Named(name) = emitter_sound(emitter.kind, names, night)? else {
-                return None;
-            };
-            let distance = distance(emitter, at);
-            let loudness = emitter.loudness(distance);
-            (loudness > 0.0).then_some((index, name.as_str(), loudness, distance))
+        .flat_map(|(index, (emitter, names))| {
+            emitter
+                .split()
+                .into_iter()
+                .filter(move |(phase, side)| {
+                    phase.plays(night) && plays_sound(emitter.kind_of(*side))
+                })
+                .filter_map(move |(_, side)| {
+                    let SoundRef::Named(name) = &names[side] else {
+                        return None;
+                    };
+                    let distance = distance(emitter, at);
+                    let loudness = emitter.loudness(distance) * emitter.volume(side);
+                    (loudness > 0.0).then_some((
+                        key(index, side),
+                        name.as_str(),
+                        loudness,
+                        distance,
+                    ))
+                })
         })
         .collect();
     heard.sort_by(|a, b| a.3.total_cmp(&b.3));
@@ -335,10 +356,10 @@ fn heard<'a>(
         .collect()
 }
 
-/// A repeating emitter's next wait, in seconds: its cooldown and a share of
-/// its random delay, the share from a hash of the emitter and the play
-/// count [I, pending R49-7 a].
-fn wait(emitter: &Emitter, night: bool, salt: u64) -> f32 {
+/// A repeating emitter's next wait, in seconds: its delay and the program's
+/// 500 (read R49-7 a), and a share of its random delay, the share from a
+/// hash of the emitter and the time [I: the share's draw; the ms unit].
+fn wait(emitter: &Emitter, side: usize, salt: u64) -> f32 {
     let mix = salt
         .wrapping_mul(0x9e37_79b9_7f4a_7c15)
         .rotate_left(17)
@@ -347,10 +368,42 @@ fn wait(emitter: &Emitter, night: bool, salt: u64) -> f32 {
     let share = (mix >> 11) as f32 / (1_u64 << 53) as f32;
     #[expect(clippy::cast_precision_loss, reason = "waits are small")]
     let (cooldown, delay) = (
-        emitter.cooldown(night).max(0) as f32,
+        emitter
+            .cooldown(side)
+            .max(0)
+            .saturating_add(eq_client_assets::zone_sounds::REPEAT_FLOOR_MS) as f32,
         emitter.random_delay.max(0) as f32,
     );
     (cooldown + share * delay) / 1000.0
+}
+
+/// Turns combat music on or off for a typed `/combatmusic`, as the official
+/// client's toggle does (read R49-7 c, 0x4689a2), and keeps the choice with
+/// the character's options. The line is this client's own: the program's
+/// is unread, and this client plays no combat music yet.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(super) fn combat_music_typed(
+    mut chat: ResMut<super::chat::ChatState>,
+    mut options: ResMut<super::options::OptionsState>,
+) {
+    if !std::mem::take(&mut chat.combat_music_toggle) {
+        return;
+    }
+    let on = !options.options.combat_music;
+    options.options.combat_music = on;
+    chat.history
+        .push(super::chat::system_line(super::chat::Said::own(
+            combat_music_line(on),
+        )));
+}
+
+/// This client's words for a `/combatmusic`.
+const fn combat_music_line(on: bool) -> &'static str {
+    if on {
+        "Combat music is on. This client does not play combat music yet."
+    } else {
+        "Combat music is off. This client does not play combat music yet."
+    }
 }
 
 /// How loud a fading track plays, from 1 at its start down to 0.
@@ -468,7 +521,14 @@ pub(super) fn update(
     }
 
     // Emitters.
-    let volume = options.options.environment_volume();
+    // An installation's nosound.txt silences emitters and music alike
+    // (read R49-7 c; music too is inferred).
+    let silent = settings.0.no_sound;
+    let volume = if silent {
+        0.0
+    } else {
+        options.options.environment_volume()
+    };
     let wanted = if volume > 0.0 {
         heard(&loaded.emitters, &loaded.names, at, night)
     } else {
@@ -505,8 +565,10 @@ pub(super) fn update(
         if playing.contains(index) || count >= EMITTER_VOICES {
             continue;
         }
-        let emitter = &loaded.emitters[*index];
-        let looping = emitter.cooldown(night) <= 0;
+        let (record, side) = (*index / 2, *index % 2);
+        let emitter = &loaded.emitters[record];
+        // Only a delay above 0 repeats (read R49-7 a); 0 or below loops [I].
+        let looping = emitter.cooldown(side) <= 0;
         if !looping && audio.next.get(index).is_some_and(|next| now < *next) {
             continue;
         }
@@ -516,7 +578,7 @@ pub(super) fn update(
         count += 1;
         if !looping {
             let salt = u64::try_from(*index).unwrap_or(0) ^ u64::from(now.to_bits());
-            audio.next.insert(*index, now + wait(emitter, night, salt));
+            audio.next.insert(*index, now + wait(emitter, side, salt));
         }
         commands.spawn((
             ZoneVoice {
@@ -544,7 +606,11 @@ pub(super) fn update(
     }
 
     // Music.
-    let music_volume = options.options.music_volume();
+    let music_volume = if silent {
+        0.0
+    } else {
+        options.options.music_volume()
+    };
     let font = match &mut audio.font {
         Font::Unasked => {
             if let Some(path) = settings.0.music_soundfont.clone() {
@@ -645,6 +711,7 @@ mod tests {
         record[0x30..0x34].copy_from_slice(&ids[0].to_le_bytes());
         record[0x34..0x38].copy_from_slice(&ids[1].to_le_bytes());
         record[0x38] = kind;
+        record[0x39] = kind;
         record[0x4c..0x50].copy_from_slice(&full.to_le_bytes());
         Emitter::read(&record)
     }
@@ -653,7 +720,7 @@ mod tests {
     fn the_nearest_music_region_holding_the_player_plays_its_hours_sequence() {
         let regions = [
             emitter([0.0; 3], 1000.0, [1, 2], 1, 0),
-            emitter([100.0, 0.0, 0.0], 50.0, [3, 3], 3, 0),
+            emitter([100.0, 0.0, 0.0], 50.0, [3, 3], 1, 0),
             emitter([0.0; 3], 10.0, [1, 1], 2, 0),
         ];
         assert_eq!(choose_music(&regions, [0.0; 3], false, 3), Some((0, 0)));
@@ -718,14 +785,83 @@ mod tests {
     }
 
     #[test]
+    fn a_day_and_a_night_emitter_each_play_their_own_hour_and_volume() {
+        let mut record = [0; eq_client_assets::zone_sounds::RECORD];
+        record[0x1c..0x20].copy_from_slice(&100.0_f32.to_le_bytes());
+        record[0x30..0x34].copy_from_slice(&1_i32.to_le_bytes());
+        record[0x34..0x38].copy_from_slice(&2_i32.to_le_bytes());
+        // By day a type-0 effect at 0.2; by night a type-2 one at 1.0.
+        record[0x38] = 0;
+        record[0x39] = 2;
+        let split = [Emitter::read(&record)];
+        let names = [[
+            SoundRef::Named("day.wav".into()),
+            SoundRef::Named("night.wav".into()),
+        ]];
+        let day = heard(&split, &names, [50.0, 0.0, 0.0], false);
+        assert_eq!(day.len(), 1);
+        assert_eq!((day[0].0, day[0].1), (key(0, 0), "day.wav"));
+        assert!((day[0].2 - 0.1).abs() < 1e-6, "{}", day[0].2);
+        let night = heard(&split, &names, [50.0, 0.0, 0.0], true);
+        assert_eq!((night[0].0, night[0].1), (key(0, 1), "night.wav"));
+        assert!((night[0].2 - 0.5).abs() < 1e-6, "{}", night[0].2);
+    }
+
+    #[test]
+    fn combatmusic_toggles_and_keeps_the_choice_saying_it_is_not_built() {
+        let mut app = App::new();
+        app.init_resource::<super::super::chat::ChatState>()
+            .init_resource::<super::super::options::OptionsState>()
+            .add_systems(Update, combat_music_typed);
+        assert!(
+            app.world()
+                .resource::<super::super::options::OptionsState>()
+                .options
+                .combat_music
+        );
+        for on in [false, true] {
+            app.world_mut()
+                .resource_mut::<super::super::chat::ChatState>()
+                .combat_music_toggle = true;
+            app.update();
+            assert_eq!(
+                app.world()
+                    .resource::<super::super::options::OptionsState>()
+                    .options
+                    .combat_music,
+                on
+            );
+            let chat = app.world().resource::<super::super::chat::ChatState>();
+            assert!(!chat.combat_music_toggle);
+            let lines = chat.history.lines(eq_client_core::chat::ChatTab::All);
+            assert!(
+                lines
+                    .last()
+                    .is_some_and(|(_, line)| line.message.text.contains(combat_music_line(on))),
+                "{lines:?}"
+            );
+        }
+        // Nothing typed, nothing changes.
+        app.update();
+        assert!(
+            app.world()
+                .resource::<super::super::options::OptionsState>()
+                .options
+                .combat_music
+        );
+    }
+
+    #[test]
     fn nights_waits_and_fades_follow_their_rules() {
         assert!(!is_night(None));
         assert!(!is_night(Some(0.8)));
         assert!(is_night(Some(0.2)));
+        // The program's 500 ms comes first, then a share of the random
+        // delay (here 1000 ms).
         let repeat = emitter([0.0; 3], 10.0, [1, 1], 2, 0);
         for salt in 0..50 {
-            let wait = wait(&repeat, false, salt);
-            assert!((0.0..1.0).contains(&wait), "{wait}");
+            let wait = wait(&repeat, 0, salt);
+            assert!((0.5..1.5).contains(&wait), "{wait}");
         }
         assert!((fade(0.0, 2.0) - 1.0).abs() < f32::EPSILON);
         assert!((fade(1.0, 2.0) - 0.5).abs() < f32::EPSILON);

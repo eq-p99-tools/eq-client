@@ -7,20 +7,19 @@
   - **Feign held standing:** with Move While Feigned on, a jump from standing still keeps its crouch's wait but sends no duck or stand, so the feign holds. The session's new `FeignHeld` report says when one is held. Without the option, a feigned player lies, and a lying jump stays blocked.
   - The Move While Feigned text in the settings and the guide now says a jump keeps the feign.
 - Repin eq-network to 86970af, its main with #398 merged (6.599). The repin brings `WorldEvent::FeignHeld`, the seated-jump refusal, and eq-network main through b9a5668. That includes the Quarm and TAKP offers 6.580 to 6.598 and the 6.602 boat-control read. It also brings `TrainingOffer::price_scale`, which is None in every literal here.
-- Play each zone's music and ambient sound from the installation's own
-  files (item 6.503; how the original program does it is pending read
-  R49-7). `eq-client-assets` reads `<zone>_sounds.eff` emitters (84-byte
-  records, layout inferred), the `<zone>_sndbnk.eff` EMIT and LOOP lists, and
-  converts `<zone>.xmi` sequences to standard MIDI, all bounded and tested
-  with inputs built in code. The render crate plays emitters by distance and
-  day or night on at most eight voices of their own, so cues always keep
-  theirs, and plays the music region the player stands in through
-  `rustysynth` 1.3.8 (MIT) on a SoundFont the player names with
-  `--soundfont`; there is no music without one (a stated departure). New
-  per-character options Music, Music Volume (wired to the skin's slider) and
-  Environment Sounds. Unknown record kinds and negative music ids are logged
-  once a zone and not played. Everything stops on a zone change, camp,
-  logout or lost connection. Combat music is not built.
+- Play each zone's music and ambient sound from the installation's own files (item 6.503).
+  - **Emitters** follow the Titanium program's loader (read R49-7 first pass and its engine follow-up). `eq-client-assets` reads `<zone>_sounds.eff`'s 84-byte records:
+    - one emitter for a type-2 record or matching day and night fields, else a day one and a night one, each with its own type, sound, delay and volume;
+    - a radius below 0 reaches 10,000;
+    - a delay above 0 repeats after delay + 500 plus a random share;
+    - volume 0.2 for type 0 and 1.0 otherwise, or a negative millibel attenuation.
+  - **The bank.** `<zone>_sndbnk.eff`'s EMIT list is numbered from 1 and LOOP from 162, with CR and spaces stripped. Inferred and labelled: the linear falloff, a bank name's `.wav`, the ms unit, a delay of 0 looping, and ids 32 to 161.
+  - **Voices.** Emitters play on at most eight voices of their own, so cues always keep theirs.
+  - **Music.** The music region the player stands in plays through `rustysynth` 1.3.8 (MIT) on a SoundFont the player names with `--soundfont`. There is no music without one, a stated departure. How regions choose, fade and switch music is this client's estimate until the second pass.
+  - **Options.** New per-character options: Music, Music Volume (wired to the skin's slider), Environment Sounds and Combat Music. A character without its own choice seeds them from `eqclient.ini`'s `Music` (0 is off), `EnvSounds` and `CombatMusic`.
+  - `/combatmusic` toggles and saves combat music, saying in this client's words that it plays none yet.
+  - A `nosound.txt` in the installation turns all sound off.
+  - Unknown record types and negative music ids are logged once a zone and not played. Everything stops on a zone change, camp, logout or lost connection.
 
 
 - Scripts can click spawns, ground objects and doors in the world by id (checklist 6.587), since a script may do whatever the player can (Adam, 11-23). `click("spawn", admission, id, revision)` targets a spawn (two of one name included), `right_click` loots, trades, boards or considers it without changing the target, `click("object", admission, drop_id)` picks up an item or opens a world container, and `click("door", admission, id)` makes a door's two clicks. Each click goes through the scene's own pick, with the script's pointer as the cursor: it acts only where the pick names that same thing right now, so a thing behind a wall, off screen or under a window is refused and nothing is sent. The report's surroundings line gives the admission and each nearby spawn's click tuple. A run that stops mid-click hands the scene back the real pointer the next frame.

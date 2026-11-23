@@ -409,12 +409,20 @@ pub(super) fn update(
     mut commands: Commands,
     time: Res<Time<bevy::time::Real>>,
     mut sounds: ResMut<Sounds>,
-    options: Res<super::options::OptionsState>,
+    (options, viewer): (
+        Res<super::options::OptionsState>,
+        Res<super::ViewerSettings>,
+    ),
     mut sources: ResMut<Assets<AudioSource>>,
     playing: Query<(Entity, &Playing, Has<AudioSink>, Has<SpatialAudioSink>)>,
     listener: Query<&GlobalTransform, With<SpatialListener>>,
 ) {
-    sounds.volume = options.options.sound_volume();
+    // An installation's nosound.txt silences it all (read R49-7 c).
+    sounds.volume = if viewer.0.no_sound {
+        0.0
+    } else {
+        options.options.sound_volume()
+    };
     let now = time.elapsed_secs();
     let Some(bank) = sounds.bank.clone() else {
         if sounds.open.pending(Some(0)) {

@@ -1,6 +1,6 @@
 #![doc = "Bevy presentation, gameplay input and UI for the native EQ client and offline previews."]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use theme::Size;
 
 mod camera;
@@ -263,6 +263,25 @@ pub struct ViewerConfig {
     /// The program's own instruments are not used (a stated departure,
     /// item 6.503).
     pub music_soundfont: Option<PathBuf>,
+    /// Whether the installation holds a `nosound.txt`, which turns the
+    /// official client's sound off (read R49-7 c). Set at start; this client
+    /// then plays no sound, emitter or music either [I: that it silences
+    /// music too].
+    pub no_sound: bool,
+}
+
+/// Whether an installation's folder holds `nosound.txt`, by any case.
+fn holds_no_sound(directory: Option<&Path>) -> bool {
+    directory.is_some_and(|directory| {
+        std::fs::read_dir(directory).is_ok_and(|entries| {
+            entries.filter_map(Result::ok).any(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.eq_ignore_ascii_case("nosound.txt"))
+            })
+        })
+    })
 }
 
 impl ViewerConfig {
@@ -339,6 +358,14 @@ fn seed_official_options(
         for (toggle, setting) in [
             (Toggle::Log, official.log),
             (Toggle::Sound, official.sound),
+            (Toggle::EnvironmentSounds, official.env_sounds),
+            (Toggle::CombatMusic, official.combat_music),
+            // A music volume of 0 is silent; another value leaves music on,
+            // its scale unread [I].
+            (
+                Toggle::Music,
+                official.music.filter(|volume| *volume == 0).map(|_| false),
+            ),
             (Toggle::SpellEffects, official.spell_effects),
             (Toggle::PcNames, official.pc_names),
             (Toggle::NpcNames, official.npc_names),
@@ -366,9 +393,13 @@ fn seed_official_options(
 pub fn run(
     zone: ZoneAsset,
     character: Option<CharacterAsset>,
-    config: ViewerConfig,
+    mut config: ViewerConfig,
     source: Source,
 ) -> i32 {
+    config.no_sound = holds_no_sound(config.eq_directory.as_deref());
+    if config.no_sound {
+        info!("Sound is off: the installation holds nosound.txt");
+    }
     let screenshot = config.screenshot.clone();
     let steps = config.script.clone();
     let arrow = !config.hide_script_pointer;
