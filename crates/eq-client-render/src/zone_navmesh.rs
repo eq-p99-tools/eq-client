@@ -155,13 +155,19 @@ pub(super) fn walker_sizes() -> [f32; 3] {
 /// standing, with S the stand height a size is drawn at (Titanium
 /// 0x48bb83, reads R1d and R49-9, with its 0.5 margin; checklist 6.504).
 /// Ducking asks less than the capsule already does, and walkers don't
-/// mount, so neither is asked.
+/// mount, so neither is asked. The mesh asks one cell height more than the
+/// test: a span's headroom is counted in whole cells, so a span the voxel
+/// rounding makes look up to a cell taller still never leads a walker to a
+/// refused move (reviewer N1).
 pub(crate) fn settings(client: eq_client_assets::ui::InstalledClient) -> Settings {
     let sized = Settings::sized(walker_sizes());
     match client.headroom() {
-        Some(rule) => sized.with_standing_room(|size| {
-            rule.room(eq_client_core::drawn_feet_offset(size * 0.2), false, false)
-        }),
+        Some(rule) => {
+            let guard = sized.cell_height;
+            sized.with_standing_room(|size| {
+                rule.room(eq_client_core::drawn_feet_offset(size * 0.2), false, false) + guard
+            })
+        }
         None => sized,
     }
 }
@@ -276,7 +282,8 @@ mod tests {
         assert_eq!(titanium.sizes, walker_sizes());
         assert_eq!(eqmac, Settings::sized(walker_sizes()));
         for (index, size) in walker_sizes().into_iter().enumerate() {
-            let room = 2.0 * eq_client_core::drawn_feet_offset(size * 0.2) + 0.5;
+            let room =
+                2.0 * eq_client_core::drawn_feet_offset(size * 0.2) + 0.5 + titanium.cell_height;
             assert!((titanium.clearance(index) - room.max(size + lift)).abs() < 1e-5);
             assert!((eqmac.clearance(index) - (size + lift)).abs() < 1e-5);
         }
