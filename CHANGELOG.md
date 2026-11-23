@@ -8,6 +8,16 @@
   - The Move While Feigned text in the settings and the guide now says a jump keeps the feign.
 - Repin eq-network to 86970af, its main with #398 merged (6.599). The repin brings `WorldEvent::FeignHeld`, the seated-jump refusal, and eq-network main through b9a5668. That includes the Quarm and TAKP offers 6.580 to 6.598 and the 6.602 boat-control read. It also brings `TrainingOffer::price_scale`, which is None in every literal here.
 
+- Scripts can click spawns, ground objects and doors in the world by id (checklist 6.587), since a script may do whatever the player can (Adam, 11-23). `click("spawn", admission, id, revision)` targets a spawn (two of one name included), `right_click` loots, trades, boards or considers it without changing the target, `click("object", admission, drop_id)` picks up an item or opens a world container, and `click("door", admission, id)` makes a door's two clicks. Each click goes through the scene's own pick, with the script's pointer as the cursor: it acts only where the pick names that same thing right now, so a thing behind a wall, off screen or under a window is refused and nothing is sent. The report's surroundings line gives the admission and each nearby spawn's click tuple. A run that stops mid-click hands the scene back the real pointer the next frame.
+
+- Scripts can read the group window, the effects window and the last tell (checklist 6.593, O2).
+  - **Group:** `group.present`, `group.count`, and `group.member1.name` to `group.member5.hp_percent`.
+  - **Effects:** `buffs.count`, and `buff1.spell` to `buff50.spell` in the window's order.
+  - **Tells:** `chat.last_tell` and `chat.last_tell_from`. Like every field, each reads only what a window already shows.
+  - **Kept private:** a run that reads the tells writes neither to a log, a `report()` line, its events (which the control status and Runbook export carry) or a gap record, and a test checks it.
+
+- Escape on the login screen quits the game when nothing is logging in, as the official client's does (checklist 6.601, Adam 11-23; the Mac-era client's the same, inferred). Anything else on the screen takes the press first: an open window or the corner menu closes, and a login under way stops. The Escape that brings character select back to the login screen never also quits; the next one does.
+
 - The player chooses how long a script run may go, on every server (checklist 6.594; Adam, 11-23: "If people want to script indefinitely, let them").
   - **Choices:** the default keeps today's bounds (15 minutes, 5,000 statements, 500 actions, loops of 100). A number of minutes from 1 to 1440 caps the time and lifts those counts, and no limit lifts them all.
   - **Where it's set:** only the workbench's length selector, which starts at the default on each launch, and the new `--script-run-length=default|MINUTES|none`. No statement or file line can set or raise it.

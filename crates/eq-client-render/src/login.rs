@@ -1050,10 +1050,19 @@ mod tests {
         let online = app.world().resource::<OnlineState>();
         assert_eq!(front.screen(online), Screen::Login);
         assert_eq!(front.account, "typed");
+        // The press that went back does nothing more on the login screen.
         assert_eq!(app.world().resource::<Messages<AppExit>>().len(), 0);
-        // On the login screen with nothing logging in, Escape never quits.
+        // There, with nothing logging in, the next Escape quits (6.601) where
+        // the login screen's keys run.
+        assert_eq!(
+            *app.world().resource::<crate::escape::Escape>(),
+            crate::escape::Escape::Back
+        );
         escape(&mut app);
-        assert_eq!(app.world().resource::<Messages<AppExit>>().len(), 0);
+        assert_eq!(
+            *app.world().resource::<crate::escape::Escape>(),
+            crate::escape::Escape::Quit
+        );
     }
 
     #[test]
