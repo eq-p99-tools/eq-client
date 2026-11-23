@@ -33,6 +33,17 @@ Fields read the local client projection on the statement's frame. Values give th
 - `player.mana` and `player.endurance` are the last reported integer values, when available.
 - `target.selected` is a `bool` from the reconciled target state. A pending or unresolved selection is unavailable. `target.name` is the display name of the known selected spawn, when available.
 
+Each field below reads only what one of the client's windows or typed commands already shows the player at that moment.
+
+- `player.hp_percent` is the HP gauge's percent. `player.posture` is `"standing"`, `"sitting"`, `"ducking"`, `"looting"`, `"lying"` or `"frozen"`. `player.casting` is true while the cast bar runs, and `player.stunned` while the player is stunned.
+- `player.loc_x`, `player.loc_y` and `player.loc_z` are the numbers `/loc` gives, to the nearest whole number. `/loc` prints them as y, x, z.
+- `player.exp_percent` is the experience bar's fill, from 0 to 100, rounded down.
+- `player.platinum`, `player.gold`, `player.silver` and `player.copper` are the coins in the purse, as the inventory window shows them.
+- `target.hp_percent` is the target window's percent. `target.kind` is `"npc"`, `"player"` or `"corpse"`. `target.con` is the color a consider gave, as the target's name shows it: `"gray"`, `"green"`, `"light_blue"`, `"blue"`, `"white"`, `"yellow"` or `"red"`. It is unknown until the player considers the target.
+- `pet.present` is whether the player has a pet. `pet.name` and `pet.hp_percent` read the pet window, and are unknown without a pet.
+
+Nothing on screen gives a target's distance, the player's carried weight or heading, or the target's level, so no field reads them.
+
 An observation can be `unknown` before a usable value arrives, or `stale` when the client can identify that its retained context no longer applies, such as a stale target or a retained admission during a transfer. Both stay distinct from `False`, zero and an empty string. `known(value)` is true for a usable value. `stale(value)` is true for a stale value. Ordinary operators preserve an unavailable operand when they read it. A condition that remains unavailable stops the run at that source line.
 
 ## Branches and loops

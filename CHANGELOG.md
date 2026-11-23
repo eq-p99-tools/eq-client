@@ -4,6 +4,11 @@
 
 - Scripts can order and delete spellbook entries (checklist 6.588): `click("book_edit", "earlier" | "later" | "delete" | "confirm" | "cancel")` presses the spellbook's own buttons for the chosen row. A button the session doesn't offer (deletion on P99) is refused with the greyed button's reason, and nothing is sent.
 
+- Scripts can read more of what the player sees (checklist 6.592, O1), since a script may do whatever the player can (Adam, 11-23).
+  - The new fields are `player.hp_percent`, `player.posture`, `player.casting`, `player.stunned`, `player.loc_x`, `player.loc_y` and `player.loc_z` (as `/loc` gives them), `player.exp_percent`, and the purse's `player.platinum`, `player.gold`, `player.silver` and `player.copper`.
+  - The target adds `target.hp_percent`, `target.kind` and `target.con` (after a consider), and the pet adds `pet.present`, `pet.name` and `pet.hp_percent`.
+  - Each field reads only what a window or typed command already shows. A target's distance and level, and the player's weight and heading, have no field, because nothing on screen gives them. Each field keeps the existing unknown and stale rules.
+
 - Scripts can click with Shift, Ctrl or Alt held (checklist 6.586). `click_with(keys, target...)` and `right_click_with(keys, target...)` take `"shift"`, `"ctrl"`, `"alt"` or a chord of them. The keys go down with the button's press and up the frame after its release, through the same input a person's keys use, so every window reads them unchanged. That reaches an item's click effect (Alt + right-click), whole-stack and single-item moves, all-coin moves and link composing, which no script could do before (Adam 11-23: scripts may do whatever a player can). A run stopped mid-click releases the keys.
 
 - A script's `slash(...)` line runs exactly as a typed one (checklist 6.584), since a script may do whatever the player can (Adam, 11-23).
