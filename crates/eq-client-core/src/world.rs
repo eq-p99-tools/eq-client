@@ -1198,9 +1198,8 @@ impl ClientWorld {
                 }
             }
             WorldEvent::LastName { name, last_name } => self.last_name(name, last_name),
-            // The server's answer to the player's own `/surname`: heard only
-            // where the session offers it and the player asked. A surname
-            // taken shows through the zone's last name, not the answer.
+            // The titles the player may choose: kept, latest first, only where
+            // the session offers them, until the zone changes.
             WorldEvent::TitleList(titles) => {
                 if self.in_world() && self.can(crate::Capability::Titling) {
                     self.zone.titles = Some(titles.clone());
@@ -1208,6 +1207,9 @@ impl ClientWorld {
                     news.ignored = true;
                 }
             }
+            // The server's answer to the player's own `/surname`: heard only
+            // where the session offers it and the player asked. A surname
+            // taken shows through the zone's last name, not the answer.
             WorldEvent::SurnameAnswer { accepted, .. } => {
                 let asked = std::mem::take(&mut self.zone.surname_asked);
                 if !asked || !self.can(crate::Capability::Surnaming) {
