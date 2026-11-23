@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- A session that ends leaves no ask for the next (gap 3.11, checklist
+  6.535). The chat state's pending asks (a `/target`, `/who`, `/loc` or
+  `/time`, a guild or split command, a boat take, `/follow`, a Ranger's
+  tracking option, a `/reply` with no tell, and the script scopes for them)
+  were cleared only in part by `/quit` and not at all by a link loss or a
+  camp, so one made just before could act after the next login.
+  `ChatState::forget_admission` clears them all at a link loss, a camp and
+  `/quit`, naming every field so a new one has to be sorted into kept or
+  cleared. A typed ask still survives a zone change within the session, as
+  before, and nothing is said for a cleared one.
 - Read zones in the EQG format newer clients install, for RoF2 later:
   `eq_client_assets::eqg::load_eqg_zone` turns `<zone>.eqg`'s descriptor,
   terrain and model meshes, placements and diffuse textures into the same
