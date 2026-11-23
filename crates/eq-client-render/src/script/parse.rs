@@ -860,6 +860,14 @@ fn parse_slash(words: &[&str]) -> Result<Step, String> {
                 .collect::<Vec<_>>()
                 .join(" "),
         ),
+        // The spoken language: listed, or chosen by its number. Any words
+        // go, so a script meets the typed command's own refusals.
+        ["language", words @ ..] => Step::Slash(
+            std::iter::once("/language")
+                .chain(words.iter().copied())
+                .collect::<Vec<_>>()
+                .join(" "),
+        ),
         ["target", name @ ..] if !name.is_empty() => {
             Step::Slash(format!("/target {}", name.join(" ")))
         }
@@ -2122,6 +2130,18 @@ mod tests {
             parse("slash(\"discipline\")\n", base).unwrap(),
             [Step::Slash("/discipline".into())]
         );
+    }
+
+    #[test]
+    fn language_slash_takes_any_words_as_the_typed_command_does() {
+        let base = std::path::Path::new(".");
+        for (script, step) in [
+            ("slash(\"language\")\n", "/language"),
+            ("slash(\"language 6\")\n", "/language 6"),
+            ("slash(\"language x\")\n", "/language x"),
+        ] {
+            assert_eq!(parse(script, base).unwrap(), [Step::Slash(step.into())]);
+        }
     }
 
     #[test]

@@ -261,6 +261,7 @@ or occluded. The counters are independent of damage and inventory.
   `slash("pet target")` selects your visible pet. Pet orders complete the script
   step when queued. Read subsequent server observations to check their effects.
   `slash("camp desktop")` uses the ordinary camp destination and current QoL exit choice.
+  `slash("language")` lists the languages your character knows, and `slash("language N")` chooses the Nth to speak, as the typed `/language` does; other words get the same line as typed.
   `slash("guildinvite [Name] [o]")`, `slash("guildremove [Name]")`,
   `slash("guildmotd [text]")` and `slash("getguildmotd")` use the existing typed guild
   handlers. Omit a name to use the current target; `o` offers officer rank.

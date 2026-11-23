@@ -13,6 +13,9 @@
   arrives (`eq_client_core::tongues`), never in the common tongue, never the
   player's own. The forms, the wording and the garble rule are inferred,
   pending program read R49-4. `logs::words` takes the tongue-name lookup.
+  Scripts take it too, as `slash("language")` and `slash("language N")`,
+  through the typed command's own path, so a script meets its refusals
+  (scripts may do whatever a player can, Adam 11-23).
 
 - Add RoF2 as a placeholder generation, following eq-network's
   (`GameDialect::Rof2`, `ServerProtocol::EqEmuRof2`). `InstalledClient::Rof2`
