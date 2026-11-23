@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- On TAKP and Quarm, a Tracking press now fills the track window itself, as the Mac-era program does (TAKP read 10c, checklist 6.619 client half): group members in the zone first, at any range, then every other player or NPC within the program's range. The range is skill × 10 + 500 in zone types 1, 2 and 5, and skill / 2 + 500 elsewhere, from the zone header's time type, with the read's above-100 term; before a header has given the type, the smaller range. Corpses, races 0x8f, 0x8d, 0x48, 0x49, 0x72 and 0x8e, invisible spawns and the player are left out, up to 1000 entries. No Mac server sends a list. The distance (a straight line), the visibility test (the invisible flag) and the list order (by spawn ID) are inferred; the actor +0x198 skip is unread. Titanium's press still waits for the server's list.
 - On TAKP and Quarm, `/decline` refuses a waiting duel challenge, as the Mac-era program does (TAKP read 11h, checklist 6.622 client half). The session says the program's line for each state: dueling (0x33bd), declined (0x33be) or nothing to decline (0x33bf). A plain `/duel` there now sends the target as it stands, as the program does (read 11g), and the session gives the program's refusals for no target, the player or a corpse. Words after `/duel` are still refused on the Mac era, since the program's handling of them is unread. Titanium is unchanged, and RoF2 keeps this client's checks.
 - `/toggleinspect` and the Inspect Others option as the Titanium program
   keeps them (read R49-16, checklist 6.574). `/toggleinspect on` and `off`
