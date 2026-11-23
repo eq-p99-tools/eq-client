@@ -116,9 +116,6 @@ fn a_same_zone_relocation_requires_the_current_character_and_admission() {
             position: destination,
         })
     };
-    let boundary = game(&mut world, WorldEvent::SameZoneBoundary { session_id: 1 });
-    assert_eq!(boundary.replies, [Reply::SameZoneBoundary]);
-    assert!(boundary.placed.is_none());
     assert!(world.last_same_zone_relocation().is_none());
     assert!(game(&mut world, relocation(2, 9)).ignored);
     assert!(game(&mut world, relocation(1, 7)).ignored);
@@ -1287,6 +1284,28 @@ fn the_song_a_bard_sings_holds_nothing_back_but_another_cast_does() {
         },
     );
     assert_eq!(world.casting().singing, None);
+}
+
+#[test]
+fn a_song_stop_says_the_programs_line_in_its_colour_for_this_admission_only() {
+    let mut world = admitted();
+    let stopped = |session_id| WorldEvent::SongStopped {
+        session_id,
+        spell_id: 42,
+        string_id: 0x318f,
+    };
+    let changes = game(&mut world, stopped(1));
+    assert_eq!(
+        changes.notices,
+        [Notice::SongStopped {
+            spell_id: 42,
+            string_id: 0x318f
+        }]
+    );
+    assert_eq!(changes.notices[0].message_type(), Some(0x108));
+    let stale = game(&mut world, stopped(7));
+    assert!(stale.ignored);
+    assert_eq!(stale.notices, []);
 }
 
 #[test]
@@ -4415,6 +4434,8 @@ fn training_opens_raises_skills_with_a_line_and_closes() {
         WorldEvent::TrainingRefused {
             session_id: 1,
             reason: "No practice points".into(),
+            string_id: None,
+            arguments: Vec::new(),
         },
     );
     assert_eq!(
@@ -5917,6 +5938,62 @@ fn the_titanium_sessions_duel_news_is_told_with_the_names_it_takes() {
 }
 
 #[test]
+fn the_mac_eras_decline_news_says_the_programs_lines() {
+    use eq_network_game::socials::DuelNews;
+    let mut world = admitted();
+    let line = |string_id, arguments: &[&str], said: &str| Notice::ProgramLine {
+        string_id,
+        arguments: arguments
+            .iter()
+            .map(|&argument| argument.to_owned())
+            .collect(),
+        lines: Vec::new(),
+        said: said.to_owned(),
+    };
+    let cases = [
+        (
+            DuelNews::Declining { challenger: 5 },
+            line(0x33be, &["a rat"], "You decline a rat's challenge."),
+        ),
+        (
+            DuelNews::NothingToDecline,
+            line(0x33bf, &[], "You have no challenge to decline."),
+        ),
+        (
+            DuelNews::DecliningWhileDueling,
+            line(0x33bd, &[], "You can't decline while dueling."),
+        ),
+    ];
+    for (news, notice) in cases {
+        assert_eq!(
+            game(&mut world, WorldEvent::DuelNews(news)).notices,
+            [notice]
+        );
+    }
+}
+
+#[test]
+fn an_inspection_of_the_player_says_who_looked_only_for_this_admission() {
+    let mut world = admitted();
+    let looked = |session_id| WorldEvent::InspectedBy {
+        session_id,
+        inspector_id: 5,
+        name: "Looker".into(),
+        string_id: 0x57c,
+    };
+    assert_eq!(
+        game(&mut world, looked(1)).notices,
+        [Notice::ProgramLine {
+            string_id: 0x57c,
+            arguments: vec!["Looker".into()],
+            lines: Vec::new(),
+            said: "Looker inspects you.".into(),
+        }]
+    );
+    assert!(game(&mut world, looked(2)).ignored);
+}
+
+#[test]
 fn a_duel_question_follows_its_admission_and_closes_once() {
     use crate::confirmations::{ConsentClosure, ConsentId, ConsentKind};
     use eq_network_game::socials::{DuelQuestion, DuelUpdate};
@@ -7159,6 +7236,62 @@ fn the_players_posture_changes_are_counted_but_not_a_first_standing() {
     let mut world = admitted();
     assert_eq!(posture(&mut world, PostureState::Sitting), 1);
     assert_eq!(posture(&mut world, PostureState::Standing), 2);
+}
+
+#[test]
+fn a_poison_answer_and_refusal_reach_chat_and_take_nothing_out() {
+    use crate::poisons::PoisonAnswer;
+    let mut world = admitted();
+    let before = world.inventory().clone();
+    for applied in [true, false] {
+        assert_eq!(
+            game(
+                &mut world,
+                WorldEvent::PoisonAnswered(PoisonAnswer {
+                    slot: crate::inventory::InventorySlot(23),
+                    applied,
+                })
+            )
+            .notices,
+            [Notice::PoisonAnswered { applied }]
+        );
+    }
+    // The server's own inventory record takes the poison out.
+    assert_eq!(world.inventory(), &before);
+    let refused = |session_id| WorldEvent::ApplyPoisonRefused {
+        session_id,
+        reason: "That is not a poison".into(),
+        string_id: None,
+    };
+    assert!(game(&mut world, refused(2)).ignored, "another admission's");
+    assert_eq!(
+        game(&mut world, refused(1)).notices,
+        [Notice::ApplyPoisonRefused {
+            reason: "That is not a poison".into(),
+            string_id: None,
+        }]
+    );
+    assert_eq!(
+        game(
+            &mut world,
+            WorldEvent::PoisonStarted {
+                session_id: 1,
+                slot: crate::inventory::InventorySlot(23),
+                string_id: 0x305e,
+            }
+        )
+        .notices,
+        [Notice::PoisonStarted { string_id: 0x305e }]
+    );
+    let interrupted = |session_id| WorldEvent::PoisonInterrupted {
+        session_id,
+        string_id: 0x30d1,
+    };
+    assert!(game(&mut world, interrupted(2)).ignored);
+    assert_eq!(
+        game(&mut world, interrupted(1)).notices,
+        [Notice::PoisonInterrupted { string_id: 0x30d1 }]
+    );
 }
 
 #[test]

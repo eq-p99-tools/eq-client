@@ -2,6 +2,7 @@
 
 pub(super) mod action_bar;
 pub(crate) mod hotbar;
+pub(crate) mod melody;
 pub(crate) mod messages;
 pub(crate) mod requests;
 #[cfg(test)]
@@ -526,6 +527,45 @@ impl GemRightClick<'_, '_> {
     }
 }
 
+/// Presses a gem through the one request path, as a click or its key
+/// does: the cast or forget goes when the checks pass, else its refusal is
+/// said. The melody's steps press here too.
+pub(super) fn press_gem(
+    (gem, forgetting): (u8, bool),
+    (chat, online, outbox): (
+        &mut super::chat::ChatState,
+        &super::online::OnlineState,
+        &crate::outbox::Outbox,
+    ),
+    (names, messages, settings): (
+        &super::spellbook::SpellNames,
+        &messages::Messages,
+        &crate::ViewerSettings,
+    ),
+    map: &super::keys::KeyMap,
+) {
+    let world = online.world();
+    let Some(player) = world.player() else {
+        return;
+    };
+    let spell = world.gem(usize::from(gem));
+    requests::spell(
+        chat,
+        world,
+        player,
+        outbox,
+        &requests::Request {
+            gem,
+            target_id: world.target().selected.unwrap_or(player.spawn_id),
+            forgetting,
+            mana_cost: spell.and_then(|spell| names.mana(spell)),
+            linked_timer: spell.and_then(|spell| names.linked_timer(spell)),
+        },
+        (messages, map),
+        || super::invisibility::drop_before_cast(world, outbox, names, settings.0.installed_client),
+    );
+}
+
 /// Sends fresh admitted spell/posture requests; server events determine results.
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(super) fn actions(
@@ -558,7 +598,7 @@ pub(super) fn actions(
         right_click.pressed.cancel();
         return;
     }
-    let Some(player) = online.world().player() else {
+    let Some(player_id) = online.world().player().map(|player| player.spawn_id) else {
         right_click.pressed.cancel();
         return;
     };
@@ -590,35 +630,16 @@ pub(super) fn actions(
         _ => None,
     });
     if let Some(gem) = gem {
-        let (names, messages, settings) = &definitions;
-        let mana_cost = online
-            .world()
-            .gem(usize::from(gem))
-            .and_then(|spell| names.mana(spell));
-        requests::spell(
-            &mut chat,
-            online.world(),
-            player,
-            &outbox,
-            &requests::Request {
-                gem,
-                target_id: online.world().target().selected.unwrap_or(player.spawn_id),
-                forgetting: forget.is_some(),
-                mana_cost,
-                linked_timer: online
-                    .world()
-                    .gem(usize::from(gem))
-                    .and_then(|spell| names.linked_timer(spell)),
-            },
-            (messages, &keys.map),
-            || {
-                super::invisibility::drop_before_cast(
-                    online.world(),
-                    &outbox,
-                    names,
-                    settings.0.installed_client,
-                )
-            },
+        // A gem click while singing also clears the melody (0x47e8e0, read
+        // R49-33 c), the user's and a script's alike.
+        if forget.is_none() && online.world().casting().singing.is_some() {
+            online.clear_melody();
+        }
+        press_gem(
+            (gem, forget.is_some()),
+            (&mut chat, &online, &outbox),
+            (&definitions.0, &definitions.1, &definitions.2),
+            &keys.map,
         );
     }
     if let Some(hotbar::Action::Ability(ability)) = bar_action {
@@ -630,7 +651,6 @@ pub(super) fn actions(
     }
     // Sit, Stand, Camp and the group's kinds run what their Actions window
     // buttons run; melee attack toggles in `combat::input`.
-    let player_id = player.spawn_id;
     run_hotbar_command(
         bar_action.and_then(hotbar::command),
         (&keys, &bar_clicks),

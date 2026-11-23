@@ -9,6 +9,7 @@
 | [Detachable chat tabs](chat-tabs.md) | Reordering, detaching and docking chat tabs, and where each character's arrangement is kept |
 | [Gameplay](gameplay.md) | Movement/zoning, inventory, banking, spells, combat and interaction |
 | [Settings](settings.md) | Per-character files, display options and quality-of-life choices |
+| [Zone lighting](zone-lighting.md) | How zones without a sky are lit, as the original's engine lights them |
 | [Assets and offline previews](assets.md) | Installed assets, rendering limits, synthetic demos and screenshots |
 | [Script workbench](scripts/README.md) | In-game editing, examples, language, UI targets and execution controls |
 | [Support and validation](../SUPPORT.md) | Server policy, implementation boundaries and evidence requirements |
