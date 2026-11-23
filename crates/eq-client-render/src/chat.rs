@@ -81,6 +81,18 @@ impl From<&str> for Said {
     }
 }
 
+/// A `/filter` asking for the Filters page ([`ChatState::filter_page`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FilterPage;
+
+/// Whether a typed line is the named command, with any words after it.
+fn typed_command(input: &str, command: &str) -> bool {
+    input
+        .split_whitespace()
+        .next()
+        .is_some_and(|name| name.eq_ignore_ascii_case(command))
+}
+
 /// A locally produced line in the System channel.
 pub(super) fn system_line(said: impl Into<Said>) -> ChatLine {
     let Said {
@@ -109,13 +121,33 @@ struct TabView {
     offset: f32,
     follow: bool,
     seen: u64,
+    /// The newest line `/clearchat` cleared from this tab's view: it shows
+    /// only later lines. The history keeps every line for scripts and the
+    /// log.
+    cleared: u64,
 }
+impl ChatState {
+    /// Clears the tab's view, as `/clearchat` clears the active chat window
+    /// (read R49-22c, 0x46b082); the history keeps its lines.
+    pub(super) fn clear_view(&mut self, tab: ChatTab) {
+        let newest = self.history.lines(tab).last().map_or(0, |(id, _)| *id);
+        self.views.entry(tab).or_default().cleared = newest;
+    }
+
+    /// The newest line `/clearchat` hid from the tab, for tests.
+    #[cfg(test)]
+    pub(super) fn cleared_before(&self, tab: ChatTab) -> u64 {
+        self.views.get(&tab).map_or(0, |view| view.cleared)
+    }
+}
+
 impl Default for TabView {
     fn default() -> Self {
         Self {
             offset: 0.0,
             follow: true,
             seen: 0,
+            cleared: 0,
         }
     }
 }
@@ -165,9 +197,6 @@ pub(super) struct ChatState {
     pub(crate) disciplines: Vec<super::disciplines::Asked>,
     /// A `/log`, waiting to turn the chat log on or off.
     pub log_toggle: bool,
-    /// A `/combatmusic`, waiting to turn combat music on or off (read R49-7
-    /// c, 0x4689a2).
-    pub combat_music_toggle: Option<super::zone_audio::CombatMusicTyped>,
     /// A `/toggleinspect`, waiting to turn letting others inspect the
     /// player on or off; only once the command is offered (checklist 6.574).
     pub inspect_toggled: Option<super::dialogs::InspectToggle>,
@@ -181,6 +210,9 @@ pub(super) struct ChatState {
     /// A window a slash command opens or closes, as `/raidwindow` does the
     /// Raid window, waiting for the toggle.
     pub toggled: Option<super::windows::WindowId>,
+    /// A `/filter`, waiting to show the Options window on its Filters page
+    /// ([`crate::skinned::open_filters`]).
+    pub filter_page: Option<FilterPage>,
     /// An explicit disconnect to handle before other gameplay input.
     pub departure: Option<super::login::Departure>,
     pub(super) socials: super::socials::Inbox,
@@ -212,6 +244,9 @@ pub(super) struct ChatState {
     pub(crate) rangers_only: Option<super::tracking::RangersOnly>,
     /// A `/loadskin` typed, for [`super::skin`] to load and answer.
     pub(crate) load_skin: Option<super::skin::LoadSkin>,
+    /// A local-settings command typed, with the chat tab it was typed in,
+    /// for [`super::local_settings::apply`] to run and answer.
+    pub(crate) local_setting: Option<(super::local_settings::LocalSetting, ChatTab)>,
     draft: draft::Draft,
     /// The lines this character sent, for recalling into the draft. Memory
     /// only: never saved, reported or logged.
@@ -521,6 +556,7 @@ impl ChatState {
             follow_asked,
             rangers_only,
             load_skin,
+            local_setting,
             contacts,
             language_asked,
             away_tells,
@@ -558,12 +594,12 @@ impl ChatState {
             views: _,
             hovered: _,
             log_toggle: _,
-            combat_music_toggle: _,
             inspect_toggled: _,
             show_names: _,
             show_names_usage: _,
             ui_scale: _,
             toggled: _,
+            filter_page: _,
             draft: _,
             refusals: _,
         } = self;
@@ -580,6 +616,7 @@ impl ChatState {
         *follow_asked = None;
         *rangers_only = None;
         *load_skin = None;
+        *local_setting = None;
         contacts.asked = None;
         *language_asked = None;
         away_tells.clear();
@@ -809,6 +846,8 @@ pub(super) struct Content {
     /// Whether the lines start with the time they arrived
     /// ([`Fix::ShowTimesInChat`]).
     times: bool,
+    /// The tab's `/clearchat` mark the lines were drawn after.
+    cleared: u64,
 }
 /// The history entry a chat line shows.
 #[derive(Component)]
@@ -1579,20 +1618,40 @@ pub(super) fn follow_options(
 pub(super) fn look(
     profile: Res<super::profile_files::Profile>,
     settings: Res<super::ViewerSettings>,
+    options: Res<super::options::OptionsState>,
     mut look: ResMut<ChatLook>,
 ) {
-    if !profile.is_changed() {
+    if !profile.is_changed() && !options.is_changed() {
         return;
     }
     let current = profile.names();
     let official = settings.0.official_settings();
-    look.colors = official
+    let mut colors: std::collections::BTreeMap<u16, [u8; 3]> = official
         .as_ref()
         .map(|official| official.text_colors().into_iter().collect())
         .unwrap_or_default();
-    look.font = current
-        .zip(official)
-        .and_then(|((character, world), official)| official.chat_font(character, world));
+    // What `/usercolor` and `/chatfontsize` set wins over the
+    // installation's (6.525).
+    // A kind's number is the installation's `User_<n>`, the chat kind
+    // n + 255; kind 0 has no slot (the program writes kind - 1).
+    for (kind, color) in options.options.user_colors.iter().enumerate() {
+        let slot = u16::try_from(kind)
+            .ok()
+            .filter(|kind| *kind >= 1)
+            .and_then(|kind| kind.checked_add(255));
+        if let (Some(slot), Some(color)) = (slot, color) {
+            colors.insert(slot, *color);
+        }
+    }
+    let font = options.options.chat_font_size.or_else(|| {
+        current
+            .zip(official)
+            .and_then(|((character, world), official)| official.chat_font(character, world))
+    });
+    if look.colors != colors || look.font != font {
+        look.colors = colors;
+        look.font = font;
+    }
 }
 
 /// Keeps the shown lines in step with the active tab's history.
@@ -1743,6 +1802,11 @@ pub(super) fn refresh(
             content.times = times;
             content.tab = None;
         }
+        let cleared = state.views.get(&active).map_or(0, |view| view.cleared);
+        if content.cleared != cleared {
+            content.cleared = cleared;
+            content.tab = None;
+        }
         let children = if content.tab == Some(active) {
             if content.revision == revision {
                 continue;
@@ -1754,7 +1818,8 @@ pub(super) fn refresh(
             None
         };
         content.revision = revision;
-        let lines = state.history.arrivals(active);
+        let mut lines = state.history.arrivals(active);
+        lines.retain(|arrival| arrival.id > cleared);
         // A line reads in its log's words, which tell the player's own
         // speech from others'.
         let player = online
@@ -2275,6 +2340,15 @@ pub(super) fn client_request_in_scope(
     state: &mut ChatState,
     scope: Option<crate::script::ExpectedWorld>,
 ) -> Option<Result<(), String>> {
+    // They change only this client, so a script's are run as typed.
+    if let Some(setting) = super::local_settings::LocalSetting::typed(input) {
+        let tab = state
+            .groups
+            .active(state.groups.owner())
+            .unwrap_or(ChatTab::All);
+        state.local_setting = Some((setting, tab));
+        return Some(Ok(()));
+    }
     if let Some(request) = super::socials::Request::parse(input) {
         return Some(request.and_then(|request| state.queue_social(request, None)));
     }
@@ -2335,17 +2409,14 @@ pub(super) fn client_request_in_scope(
         state.inspect_toggled = Some(super::dialogs::InspectToggle);
         return Some(Ok(()));
     }
-    if input.eq_ignore_ascii_case("/log") {
-        state.log_toggle = true;
+    // `/filter` reads no words and sends nothing: it shows the Options
+    // window on its filter page (eqgame.exe 0x46a245, read R49-2a).
+    if typed_command(input, "/filter") {
+        state.filter_page = Some(FilterPage);
         return Some(Ok(()));
     }
-    // What the official client does with words after it is unread.
-    if input
-        .split_whitespace()
-        .next()
-        .is_some_and(|name| name.eq_ignore_ascii_case("/combatmusic"))
-    {
-        state.combat_music_toggle = Some(super::zone_audio::CombatMusicTyped);
+    if input.eq_ignore_ascii_case("/log") {
+        state.log_toggle = true;
         return Some(Ok(()));
     }
     if let Some(request) = super::skin::LoadSkin::typed(input) {
@@ -2354,11 +2425,7 @@ pub(super) fn client_request_in_scope(
     }
     // The Raid window opens or closes whatever words follow; what the
     // official client does with them is unread (checklist 6.413).
-    if input
-        .split_whitespace()
-        .next()
-        .is_some_and(|name| name.eq_ignore_ascii_case("/raidwindow"))
-    {
+    if typed_command(input, "/raidwindow") {
         state.toggled = Some(super::windows::WindowId::Raid);
         return Some(Ok(()));
     }
@@ -3074,6 +3141,19 @@ mod tests {
     }
 
     #[test]
+    fn a_filter_command_shows_the_filters_page_and_sends_nothing() {
+        // eqgame.exe 0x46a245 reads no words (R49-2a).
+        for line in ["/filter", "/FILTER", "/filter ooc off"] {
+            let mut state = ChatState::default();
+            assert!(
+                matches!(client_request(line, &mut state), Some(Ok(()))),
+                "{line}"
+            );
+            assert_eq!(state.filter_page, Some(FilterPage), "{line}");
+        }
+    }
+
+    #[test]
     fn only_chat_channels_ask_for_a_message_on_a_bare_slash_command() {
         for name in ["say", "auction", "ooc", "guildsay", "gsay", "shout", "rsay"] {
             for rest in ["", "   "] {
@@ -3084,8 +3164,7 @@ mod tests {
             }
             assert!(outbound(ChatTab::All, &format!("/{name} hello")).is_ok());
         }
-        // `/filter`'s forms are unread (6.494a): every form gets this answer.
-        for name in ["help", "played", "unknown", "filter"] {
+        for name in ["help", "played", "unknown"] {
             assert_eq!(
                 outbound(ChatTab::All, &format!("/{name}")).unwrap_err(),
                 format!("This client does not take /{name} that way yet."),
@@ -5253,6 +5332,10 @@ mod tests {
         chat.boat_interacted = Some(8);
         chat.follow_asked = Some(super::super::motion::FollowAsked);
         chat.rangers_only = Some(super::super::tracking::RangersOnly);
+        chat.local_setting = Some((
+            super::super::local_settings::LocalSetting::ClearChat,
+            ChatTab::All,
+        ));
         chat.contacts.asked = Some(super::super::contacts::Asked::NoReply);
     }
 
@@ -5267,6 +5350,7 @@ mod tests {
             && chat.boat_interacted.is_none()
             && chat.follow_asked.is_none()
             && chat.rangers_only.is_none()
+            && chat.local_setting.is_none()
             && chat.contacts.asked.is_none()
     }
 
@@ -5951,6 +6035,7 @@ mod tests {
                 offset: 35.0,
                 follow: false,
                 seen: 0,
+                cleared: 0,
             },
         );
         chat.draft.replace("synthetic auction");
@@ -6044,6 +6129,7 @@ mod tests {
                     follow: false,
                     offset: 35.0,
                     seen: 0,
+                    cleared: 0,
                 },
             );
             for line in crate::preview::chat_lines() {

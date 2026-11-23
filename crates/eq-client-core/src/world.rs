@@ -751,6 +751,9 @@ impl ClientWorld {
             WorldEvent::PoisonStarted { .. } | WorldEvent::PoisonInterrupted { .. } => {
                 news.ignored = true;
             }
+            // The song stop's line (eq-network #421) waits on the Bard
+            // thread's client half, stacked on this repin.
+            WorldEvent::SongStopped { .. } => news.ignored = true,
             WorldEvent::PlayedTime(played) => self.played = Some((*played, now)),
             WorldEvent::HazardReported {
                 session_id,
@@ -1905,6 +1908,13 @@ impl ClientWorld {
             WorldEvent::CastSuperseded { session_id, spell_id } => {
                 news.ignored = !self.release_cast_hold(*session_id, *spell_id);
             }
+            WorldEvent::Singing { session_id, spell_id } => {
+                if self.accepts_reply(*session_id) {
+                    self.casting.singing = *spell_id;
+                } else {
+                    news.ignored = true;
+                }
+            }
             WorldEvent::SongStopUnconfirmed { session_id, spell_id } => {
                 self.song_stop_unconfirmed(*session_id, *spell_id, news);
             }
@@ -1914,7 +1924,7 @@ impl ClientWorld {
                 reason,
                 string_id,
             } => self.cast_refused((*session_id, *spell_id), (reason, *string_id), news),
-            WorldEvent::BuffSnapshot(buffs) => self.buff_snapshot(buffs, now),
+            WorldEvent::BuffSnapshot(buffs) => self.buff_snapshot(buffs, now, news),
             WorldEvent::Buff(update) => {
                 if match self.generation {
                     crate::GameDialect::Titanium => true,

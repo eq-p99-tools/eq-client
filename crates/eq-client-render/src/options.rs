@@ -35,16 +35,16 @@ pub(crate) struct OptionsState {
 
 impl Default for OptionsState {
     fn default() -> Self {
-        Self::new(Options::default())
+        Self::new(&Options::default())
     }
 }
 
 impl OptionsState {
     /// Options that start from these defaults until a character's own load.
-    pub(crate) fn new(defaults: Options) -> Self {
+    pub(crate) fn new(defaults: &Options) -> Self {
         Self {
-            options: defaults,
-            defaults,
+            options: *defaults,
+            defaults: *defaults,
             store: Store::default(),
             told: None,
             helm: None,
@@ -134,9 +134,9 @@ pub(crate) struct FilterNote;
 /// (`ServerFiltersAtOnce` offered) or one that reads it only at zone-in.
 pub(crate) const fn filter_note(at_once: bool) -> &'static str {
     if at_once {
-        "Each kind steps through the modes the server takes for it. This server reads a change at once, so it is sent now."
+        "A change is sent to this server at once."
     } else {
-        "Each kind steps through the modes the server takes for it. This server reads a change only at zone-in, so it applies at the next zone."
+        "A change reaches this server at the next zone."
     }
 }
 
@@ -366,7 +366,7 @@ mod tests {
             .resource_mut::<crate::ViewerSettings>()
             .0
             .settings_directory = Some(directory.to_owned());
-        app.insert_resource(OptionsState::new(Options::default()))
+        app.insert_resource(OptionsState::new(&Options::default()))
             .add_systems(
                 Update,
                 (crate::profile_files::follow, toggle, persist).chain(),
@@ -562,7 +562,7 @@ mod tests {
         let mut options = Options::default();
         options.set(Toggle::Qol(Fix::SkipModifiedFood), false);
         let saved = options.text();
-        app.insert_resource(OptionsState::new(options))
+        app.insert_resource(OptionsState::new(&options))
             .insert_resource(crate::outbox::Outbox::new(Some(tx)))
             .add_systems(Update, tell_session);
         meal_admission(&mut app, 1, false);
@@ -646,7 +646,7 @@ mod tests {
         use eq_client_core::{Capability, ClientCommand};
         let (sender, receiver) = std::sync::mpsc::sync_channel(8);
         let mut app = crate::testing::app();
-        app.insert_resource(OptionsState::new(Options::default()))
+        app.insert_resource(OptionsState::new(&Options::default()))
             .insert_resource(crate::outbox::Outbox::new(Some(sender)))
             .add_systems(Update, (toggle, tell_session).chain());
         let mut online = OnlineState::new(true);
@@ -696,7 +696,7 @@ mod tests {
         options
             .chat_filters
             .set(FilterCategory::Shouts, FilterMode::Hide);
-        app.insert_resource(OptionsState::new(options))
+        app.insert_resource(OptionsState::new(&options))
             .insert_resource(crate::outbox::Outbox::new(Some(sender)))
             .add_systems(Update, tell_session);
         let mut online = OnlineState::new(true);
@@ -752,7 +752,7 @@ mod tests {
     fn a_filters_page_click_steps_its_kind_and_its_label_says_the_mode() {
         use eq_client_core::filters::{FilterCategory, FilterMode};
         let mut app = crate::testing::app();
-        app.insert_resource(OptionsState::new(Options::default()))
+        app.insert_resource(OptionsState::new(&Options::default()))
             .add_systems(Update, (step_filters, show_filters).chain());
         let mut online = OnlineState::new(true);
         testing::admit(&mut online, 1, testing::player(7));
@@ -792,7 +792,7 @@ mod tests {
     fn the_filters_note_says_when_a_change_reaches_this_server() {
         use eq_client_core::Capability;
         let mut app = crate::testing::app();
-        app.insert_resource(OptionsState::new(Options::default()))
+        app.insert_resource(OptionsState::new(&Options::default()))
             .insert_resource(OnlineState::new(true))
             .add_systems(Update, show_filters);
         let note = app.world_mut().spawn((FilterNote, Text::default())).id();
@@ -807,8 +807,8 @@ mod tests {
         app.insert_resource(online);
         app.update();
         assert_eq!(says(&app), filter_note(true));
-        assert!(says(&app).contains("sent now"));
-        // One that does not offer it, as P99, Quarm and TAKP, waits.
+        assert!(says(&app).contains("at once"));
+        // One that does not offer it, as Quarm and TAKP, waits.
         let mut online = OnlineState::new(true);
         testing::news(
             &mut online,
@@ -852,7 +852,7 @@ mod tests {
             saved.text(),
         )
         .unwrap();
-        let state = OptionsState::new(Options::default());
+        let state = OptionsState::new(&Options::default());
         let profile = CharacterProfile {
             world: "ExampleWorld".into(),
             character: "Example".into(),
@@ -873,10 +873,7 @@ mod tests {
             &profile,
             eq_client_core::GameDialect::EqMac,
         );
-        assert_eq!(
-            eqmac.get(FilterCategory::DamageOverTime),
-            FilterMode::MineOnly
-        );
+        assert_eq!(eqmac.get(FilterCategory::DamageOverTime), FilterMode::Show);
         assert_eq!(eqmac.get(FilterCategory::Ooc), FilterMode::Hide);
         // A character with no file of their own reads the defaults.
         let other = CharacterProfile {
@@ -898,7 +895,7 @@ mod tests {
     fn a_setting_for_what_the_session_does_not_offer_stays_as_it_is() {
         use eq_client_core::{Capability, WorldEvent, qol::Fix};
         let mut app = crate::testing::app();
-        app.insert_resource(OptionsState::new(Options::default()))
+        app.insert_resource(OptionsState::new(&Options::default()))
             .add_systems(Update, toggle);
         // A session without meals eats nothing on its own, so the
         // food setting is greyed out there.

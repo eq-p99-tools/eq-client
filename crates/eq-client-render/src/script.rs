@@ -911,6 +911,7 @@ type Buttons<'w, 's> = Query<
             Option<&'static super::skinned::SlashButton>,
             Option<&'static super::options::OptionCheckbox>,
             Has<super::group::JoinButton>,
+            Option<&'static super::options::FilterButton>,
         ),
         (
             Option<&'static super::skinned::SkinSlider>,
@@ -2212,6 +2213,10 @@ pub(super) fn drive(
         clock: client.clock(),
         now: std::time::Instant::now(),
         chat: Some(&chat),
+        filters: observed
+            .9
+            .as_deref()
+            .map(|options| &options.options.chat_filters),
     };
     if let Err(reason) = script.queue_statement(&sight, now) {
         script.stop(&mut keys, &mut mouse, &reason);
@@ -3310,7 +3315,7 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
         tint,
         (give, character, chat_tab),
         (coins, pick, arrow, amount),
-        (selector, tab, ability, attack, slash, checkbox, join),
+        (selector, tab, ability, attack, slash, checkbox, join, filter),
         (
             slider,
             drop_down,
@@ -3338,6 +3343,7 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
             ClickTarget::Slash(command) => slash.is_some_and(|button| button.0 == command),
             ClickTarget::GroupJoin => join,
             ClickTarget::Option(toggle) => checkbox.is_some_and(|checkbox| checkbox.0 == toggle),
+            ClickTarget::Filter(category) => filter.is_some_and(|button| button.0 == category),
             ClickTarget::Slider(name, _) => slider.is_some_and(|slider| slider.sets == sets(name)),
             ClickTarget::KeyFilter => drop_down.is_some_and(|drop_down| {
                 drop_down.choosing() == super::skinned::Choosing::KeyFilter
