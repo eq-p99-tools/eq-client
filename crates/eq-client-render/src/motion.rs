@@ -1,5 +1,7 @@
 //! Calibrated P99 input; no movement is generated without a session grant.
 #[cfg(test)]
+mod belongings_tests;
+#[cfg(test)]
 mod boat_pace_tests;
 mod boats;
 mod follow;
