@@ -545,6 +545,41 @@ mod tests {
     }
 
     /// Runs a typed line and gives the lines it said.
+    #[test]
+    fn the_seven_are_reached_only_as_the_command_table_resolves_them() {
+        // The chat spells a typed word as the installed client's table
+        // resolves it (0x78a0cc) before it asks for a local setting.
+        let reached = |line: &str| {
+            crate::commands::spelled(line)
+                .and_then(|spelled| LocalSetting::typed(&spelled))
+                .is_some()
+        };
+        for name in [
+            "clearchat",
+            "showspelleffects",
+            "combatmusic",
+            "particledensity",
+            "mousespeed",
+            "chatfontsize",
+            "usercolor",
+        ] {
+            assert_eq!(
+                crate::commands::resolve(name),
+                crate::commands::Resolved::Official(name),
+                "{name}"
+            );
+            assert!(reached(&format!("/{name} 1")), "{name}");
+        }
+        // The table's shortest words for them reach them too.
+        for line in ["/clearc", "/showsp", "/combatm", "/particle", "/mousesp", "/chatf", "/userc"] {
+            assert!(reached(line), "{line}");
+        }
+        // A shorter word the table gives an earlier name never does.
+        for line in ["/c", "/clear", "/show", "/combat", "/mouse", "/user"] {
+            assert!(!reached(line), "{line}");
+        }
+    }
+
     fn run(app: &mut App, line: &str) -> Vec<String> {
         let before = app
             .world()

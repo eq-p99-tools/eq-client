@@ -431,10 +431,11 @@ pub struct Options {
     pub ui_scale: u16,
     /// See [`Level::SoundVolume`].
     pub sound_volume: u16,
-    /// The main chat window's font size, 0 to 6, as `/chatfontsize` sets
-    /// it; none keeps the one the official UI file names. The official
-    /// client keeps it with the window's layout (read R49-22c, 0x46b099),
-    /// this client per character.
+    /// The chat's font size, 0 to 6, as `/chatfontsize` sets it; none
+    /// keeps the one the official UI file names. Labelled departure: the
+    /// official client sets only the active chat window's size and keeps it
+    /// with that window's layout (read R49-22c, 0x46b099); this client sets
+    /// one size for the whole chat and keeps it per character.
     pub chat_font_size: Option<u8>,
     /// The pointer speed modifier `/mousespeed` sets, kept as typed; the
     /// official client keeps it as `MousePointerSpeedMod` in `eqclient.ini`
