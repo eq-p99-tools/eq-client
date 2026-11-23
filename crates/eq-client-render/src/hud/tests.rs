@@ -1129,6 +1129,10 @@ fn short_server_mana_refuses_casts_locally_but_never_blocks_forgetting() {
 }
 
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "Walk the program's checks in their order in one scenario"
+)]
 fn a_gem_cast_meets_the_programs_checks_in_its_order() {
     use eq_client_core::{PostureState, control::StunState};
     let mut player = caster();
