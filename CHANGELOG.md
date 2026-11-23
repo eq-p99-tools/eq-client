@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- CI: the Lint workflow gains a Docs job, `cargo doc --workspace --no-deps --locked` with `RUSTDOCFLAGS=-D warnings`, on every pull request and push to main beside Format (Adam's yes, 11-23). A broken doc link now fails the PR it lands in.
 - A session that ends leaves no ask for the next (gap 3.11, checklist
   6.535). The chat state's pending asks (a `/target`, `/who`, `/loc` or
   `/time`, a guild or split command, a boat take, `/follow`, a Ranger's
