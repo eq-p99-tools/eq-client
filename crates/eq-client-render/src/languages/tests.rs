@@ -225,6 +225,29 @@ fn a_tell_heard_while_away_gets_the_away_reply_unless_it_is_one() {
 }
 
 #[test]
+fn a_garbled_away_reply_gets_none_back() {
+    let (mut app, sent) = app();
+    away_now(&mut app);
+    // Another's away reply in a tongue spoken at skill 0: the line shown is
+    // garbled, but the away test reads it as it arrived.
+    let text = "AFK: Sorry, I am AFK right now. Back in a little while, friend.";
+    let mut line = tell("Friend", text);
+    line.tongue = Some(Heard {
+        language: 3,
+        skill: 0,
+        channel: 7,
+        named: false,
+    });
+    hear(&mut app, line);
+    let shown = texts(&app);
+    assert!(
+        shown.iter().all(|shown| shown != text) && !shown.is_empty(),
+        "{shown:?}"
+    );
+    assert!(sent.try_recv().is_err());
+}
+
+#[test]
 fn an_ignored_sender_gets_no_away_reply() {
     let (mut app, sent) = app();
     away_now(&mut app);
