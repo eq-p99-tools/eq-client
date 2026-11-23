@@ -5535,7 +5535,11 @@ mod tests {
         );
     }
 
-    /// What typing `#line` sends.
+    /// What typing `#line` sends, as `gm_request` answers it.
+    #[allow(
+        clippy::unnecessary_wraps,
+        reason = "compared with gm_request's result as it is"
+    )]
     fn typed(line: &str) -> Result<eq_client_core::ClientCommand, String> {
         Ok(eq_client_core::ClientCommand::SendChat(
             eq_client_core::OutboundChat::Say(format!("#{line}")),
