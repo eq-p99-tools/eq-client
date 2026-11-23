@@ -44,6 +44,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<trade::TradeState>()
         .init_resource::<escape::Escape>()
         .init_resource::<crate::task_offer::Chosen>()
+        .init_resource::<crate::task_journal::JournalState>()
         .init_resource::<windows::pointer::Wheel>()
         .init_resource::<skin::UiSkin>()
         .init_resource::<hud::hotbar::Bindings>()
@@ -301,7 +302,12 @@ pub(super) fn schedule(app: &mut App) {
     )
     .add_systems(
         Update,
-        (crate::dialogs::buttons, crate::task_offer::buttons).in_set(Stage::Input),
+        (
+            crate::dialogs::buttons,
+            crate::task_offer::buttons,
+            crate::task_journal::buttons,
+        )
+            .in_set(Stage::Input),
     )
     .add_systems(
         Update,
@@ -309,6 +315,7 @@ pub(super) fn schedule(app: &mut App) {
             items::raise,
             crate::dialogs::present,
             crate::task_offer::present,
+            (crate::task_journal::window, crate::task_journal::fill).chain(),
             crate::windows::restack_popups,
             crate::dialogs::inspect_button,
             crate::dialogs::scroll,

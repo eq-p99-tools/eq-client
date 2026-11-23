@@ -113,7 +113,8 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         | WindowId::Runbook
         | WindowId::ServerDialog
         | WindowId::PlayerInspection
-        | WindowId::TaskOffer => return None,
+        | WindowId::TaskOffer
+        | WindowId::TaskJournal => return None,
     };
     Some((file, id.official()?))
 }

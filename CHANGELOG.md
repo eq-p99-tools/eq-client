@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- Add the Quest Journal (checklist 6.567). `WindowId::TaskJournal` is our
+  own window until the skin's `TaskWnd` controls are listed, and the EQ
+  menu toggles it. It opens when a description of this admission asks
+  (`open_journal`, counted by `TaskJournal::open_asked`), without taking
+  keyboard focus.
+  - The Active page lists the task, then the quests by slot. The chosen
+    entry shows its kind, duration, time left, description, reward text,
+    coin and experience or faction flags, and its steps with done and goal
+    counts. The time left counts from `started_at + duration_seconds` on
+    the local clock, to the minute, clamped at none, and has no line
+    without a start. A hidden step shows only `???`.
+  - The Finished page lists the finished tasks. Choosing one posts
+    `AskTaskHistory` once per entry per admission, and the reply's steps
+    show under it.
+  - Cancel asks Yes or No inside the journal. The shared confirmation
+    dialog isn't used, because a script's click can answer it. Yes rechecks
+    `Capability::Tasks`, the admission, the slot and the task before
+    `CancelTask` goes. A new admission drops the question.
+  - Without `Capability::Tasks` the journal is read only.
+  - All of its words are ours (inferred, R49-38). The reward item link
+    waits for the read, and task words never reach the logs.
 - Show the tasks an NPC offers, and answer them on a local EQEmu server
   (checklist 6.560). `eq_client_core::tasks` keeps the admission's task
   journal (entries by slot with their steps, the finished list and its

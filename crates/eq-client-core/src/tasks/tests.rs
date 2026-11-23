@@ -78,7 +78,13 @@ fn history(session_id: u64, index: u32) -> WorldEvent {
 fn the_journal_follows_the_events_in_order() {
     let mut journal = TaskJournal::default();
     assert!(journal.observe(5, &described(5, QUEST_3, 1000)));
-    assert!(journal.observe(5, &described(5, THE_TASK, 7)));
+    assert_eq!(journal.open_asked(), 0);
+    let mut opening = described(5, THE_TASK, 7);
+    if let WorldEvent::TaskDescribed { description, .. } = &mut opening {
+        description.open_journal = true;
+    }
+    assert!(journal.observe(5, &opening));
+    assert_eq!(journal.open_asked(), 1);
     // The task comes before the quests.
     let order: Vec<_> = journal
         .entries()

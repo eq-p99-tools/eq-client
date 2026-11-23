@@ -16,7 +16,7 @@
 pub use eq_network_game::tasks::{
     CompletedTask, Objective, Outcome, Step, TaskActivity, TaskCompletion, TaskDescription,
     TaskKind, TaskSlot,
-    offers::{OfferedStep, OfferedTask, TaskHistory, TaskOffers},
+    offers::{DoneStep, OfferedStep, OfferedTask, TaskHistory, TaskOffers},
 };
 
 use crate::WorldEvent;
@@ -38,6 +38,7 @@ pub struct TaskJournal {
     entries: Vec<TaskEntry>,
     completed: Option<Vec<CompletedTask>>,
     histories: BTreeMap<u32, TaskHistory>,
+    opened: u64,
 }
 
 const fn slot_order(at: TaskSlot) -> (u8, u32) {
@@ -82,6 +83,13 @@ impl TaskJournal {
         self.histories.get(&index)
     }
 
+    /// Counts the descriptions in this admission that asked for the journal
+    /// to open, as `EQEmu` asks when a task is taken.
+    #[must_use]
+    pub const fn open_asked(&self) -> u64 {
+        self.opened
+    }
+
     /// Takes one task event of `session_id`, the current admission. A new
     /// admission starts the journal empty. Says whether the event was one
     /// the journal holds; an offer, a conclusion and a refusal are not.
@@ -123,6 +131,9 @@ impl TaskJournal {
     }
 
     fn describe(&mut self, description: &TaskDescription) {
+        if description.open_journal {
+            self.opened = self.opened.wrapping_add(1);
+        }
         if let Some(entry) = self
             .entries
             .iter_mut()

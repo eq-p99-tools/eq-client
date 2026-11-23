@@ -456,6 +456,23 @@ won't send is explained in chat. EQEmu says each step's and task's end in
 its own words, so the client adds no line of its own until the original
 client's lines are read.
 
+The **Quest Journal** is in the EQ menu, and it opens by itself when the
+server asks, as EQEmu does when you take a task. It doesn't take the
+keyboard from chat or movement. It is the client's own window until the
+skin's task window is read. The **Active** page lists your task first and
+then your quests. The chosen entry shows its kind, its duration, the time
+left, its description, its reward, and each step with its count. The time
+left counts from the server's start time on this computer's clock, to the
+minute, and the server decides when the task ends. A step not yet open
+shows only `???`. The **Finished** page lists the tasks you have finished.
+Choosing one asks the server for its steps, once in each zone. **Cancel**
+asks again in the journal itself, and only **Yes** sends the cancel. Only
+your own clicks do this: scripts, socials and hotbuttons can't. On servers
+that don't take task requests, the journal is read only. The journal's
+words, the reward lines and the time left are the client's own until the
+original client's are read (inferred). The reward item's link isn't shown
+yet.
+
 Considering, hailing, auto-attack and class abilities use the target and session
 rules. Loot lists received corpse contents; Loot all takes items sequentially.
 Merchants support selection and buy/sell requests. Giving to NPCs and trading
