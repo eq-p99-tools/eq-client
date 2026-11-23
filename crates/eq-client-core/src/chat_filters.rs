@@ -202,7 +202,8 @@ mod tests {
     #[test]
     fn each_generation_lists_and_steps_only_what_its_packet_says() {
         let titanium = ChatFilters::kinds(GameDialect::Titanium);
-        assert_eq!(titanium.len(), 24);
+        // eq-network #407 lists 28 Titanium kinds.
+        assert_eq!(titanium.len(), 28);
         let eqmac = ChatFilters::kinds(GameDialect::EqMac);
         assert_eq!(eqmac.len(), 16);
         assert!(
