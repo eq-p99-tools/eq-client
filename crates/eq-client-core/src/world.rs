@@ -49,7 +49,7 @@ pub use target::Target;
 pub use tracking::{TrackWindow, track_color};
 pub use trade::{Asker, Exchange, Loot, LootContinuation, Merchant};
 pub use vitals::{ReportedHp, Vitals};
-pub use who::ZonePlayer;
+pub use who::{GuildStatus, ZonePlayer};
 
 use crate::{
     BookActionStatus, CharacterChoice, Death, PlayerState, PostureState, SpawnState, SpellBook,
