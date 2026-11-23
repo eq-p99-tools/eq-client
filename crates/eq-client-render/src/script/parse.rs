@@ -334,6 +334,18 @@ pub enum Step {
     /// Right-clicks one UI control the same way, as a bag is opened or an
     /// item inspected.
     RightClick(ClickTarget),
+    /// Clicks one UI control with modifier keys held, as a person holds
+    /// Shift, Ctrl or Alt while clicking (checklist 6.586): the keys go down
+    /// with the button's press and up the frame after its release, so every
+    /// window reads them as it reads a person's.
+    ClickWith {
+        /// The modifiers held: Shift, Ctrl, Alt or a chord of them.
+        keys: Vec<KeyCode>,
+        /// The control clicked.
+        target: ClickTarget,
+        /// Whether it is the right button.
+        right: bool,
+    },
     /// Rests the pointer on one UI control, found as a click finds it, so
     /// its tooltip shows; it stays hovered until the next click or hover.
     Hover(ClickTarget),
@@ -689,6 +701,8 @@ pub(crate) const COMMANDS: &[&str] = &[
     "compose_owned_link",
     "click",
     "right_click",
+    "click_with",
+    "right_click_with",
     "hover",
     "hold_click",
     "report",
@@ -865,6 +879,11 @@ pub(super) fn parse_words(command: &str, rest: &[&str]) -> Result<Step, String> 
         },
         ("click", target) => Step::Click(parse_click(target)?),
         ("right_click", target) => Step::RightClick(parse_click(target)?),
+        (command @ ("click_with" | "right_click_with"), [keys, target @ ..]) => Step::ClickWith {
+            keys: modifiers(keys)?,
+            target: parse_click(target)?,
+            right: command == "right_click_with",
+        },
         ("hover", target) => Step::Hover(parse_click(target)?),
         ("hold_click", [duration, target @ ..]) => {
             Step::HoldClick(parse_click(target)?, millis(duration, MAX_HOLD)?)
@@ -1485,6 +1504,26 @@ fn parse_create(arguments: &[&str]) -> Result<eq_client_core::creation::NewChara
     .map_err(|error| error.to_string())?;
     character.validate().map_err(|error| error.to_string())?;
     Ok(character)
+}
+
+/// The modifier keys a modified click holds: Shift, Ctrl and Alt only, each
+/// at most once.
+fn modifiers(text: &str) -> Result<Vec<KeyCode>, String> {
+    let keys = keys_from(text).ok_or("unknown key")?;
+    let modifier = |key: &KeyCode| {
+        matches!(
+            key,
+            KeyCode::ShiftLeft | KeyCode::ControlLeft | KeyCode::AltLeft
+        )
+    };
+    let mut seen = Vec::new();
+    for key in keys {
+        if !modifier(&key) || seen.contains(&key) {
+            return Err("click_with keys must be shift, ctrl or alt, each once".into());
+        }
+        seen.push(key);
+    }
+    Ok(seen)
 }
 
 fn keys_from(text: &str) -> Option<Vec<KeyCode>> {
@@ -2181,6 +2220,35 @@ mod tests {
             );
         }
         assert!(parse("click(\"book_edit\", \"up\")\n", base).is_err());
+    }
+
+    #[test]
+    fn a_modified_click_takes_shift_ctrl_and_alt_only() {
+        let base = std::path::Path::new(".");
+        assert_eq!(
+            parse("right_click_with(\"alt\", \"slot\", 22)\n", base).unwrap(),
+            [Step::ClickWith {
+                keys: vec![KeyCode::AltLeft],
+                target: ClickTarget::Slot(22),
+                right: true,
+            }]
+        );
+        assert_eq!(
+            parse("click_with(\"ctrl+shift\", \"slot\", 23)\n", base).unwrap(),
+            [Step::ClickWith {
+                keys: vec![KeyCode::ControlLeft, KeyCode::ShiftLeft],
+                target: ClickTarget::Slot(23),
+                right: false,
+            }]
+        );
+        for refused in [
+            "click_with(\"a\", \"slot\", 22)\n",
+            "click_with(\"shift+shift\", \"slot\", 22)\n",
+            "click_with(\"shift\")\n",
+            "click_with(\"nope\", \"slot\", 22)\n",
+        ] {
+            assert!(parse(refused, base).is_err(), "{refused}");
+        }
     }
 
     #[test]
