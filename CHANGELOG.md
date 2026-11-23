@@ -2,10 +2,10 @@
 
 ## Unreleased
 
-- The Interface scale slider on the QoL page no longer swings between its ends while dragged (Adam, 11-23).
+- The Interface scale slider on the QoL page no longer swings between its ends while dragged.
   - **Cause:** each frame of a drag set the scale, which moved the Options window and the slider under a pointer that held still. The pointer then read near one end and then the other, so the scale flipped back and forth and could not be set back to 100%.
   - **Fix:** a setting that rescales the layout (`Level::rescales_layout`, the interface scale alone) is held on its slider while pressed. The thumb and value label show the held size, and the setting changes once as the press ends, by the mouse's release or a script's one-frame press. Closing the window mid-drag discards the held size. The other sliders still set as they move.
-  - **Recovery:** right-click the slider for 100%, or type `/uiscale` (100%) or `/uiscale N` with N a 5% step from 50 to 200. Scripts can use `slash uiscale 100` or the slider as before. The options file's `ui_scale` key still works too.
+  - **Recovery:** right-click the slider for 100%, or type `/uiscale` (100%) or `/uiscale N` with N a 5% step from 50 to 200. Scripts can use `slash("uiscale 100")` or the slider as before. The options file's `ui_scale` key still works too.
 
 - `/guildstatus` is offered, as read R49-6k reads it (checklist 6.575).
   - The Titanium program answers it itself and sends nothing: for the player a typed name finds (`/guildstatus Name`, ignoring case), or else for the target.
