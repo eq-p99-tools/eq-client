@@ -344,12 +344,11 @@ fn an_explicitly_paused_run_still_owns_the_executor_until_stop() {
 #[test]
 fn the_existing_local_command_and_program_limits_are_preserved() {
     let mut app = app();
-    for (id, source) in [(1, "gm(\"level 1\")\n"), (2, "chat(\"say synthetic\")\n")] {
-        let receipt = start(&mut app, id, source);
-        assert_eq!(receipt.code, "invalid_program");
-        assert_eq!(receipt.line, Some(1));
-        assert!(!app.world().contains_resource::<Script>());
-    }
+    // Only a gm fixture form needs a local session; chat runs anywhere.
+    let receipt = start(&mut app, 1, "gm(\"stun 8000\")\n");
+    assert_eq!(receipt.code, "invalid_program");
+    assert_eq!(receipt.line, Some(1));
+    assert!(!app.world().contains_resource::<Script>());
     assert_eq!(
         start(&mut app, 3, &"wait(1)\n".repeat(501)).code,
         "invalid_program"

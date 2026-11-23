@@ -1179,7 +1179,7 @@ pub(super) fn input(
                 if scripted_submit
                     && super::socials::Request::parse(state.draft.text().trim()).is_some()
                 {
-                    state.refuse("Use a named social step in a local script.");
+                    state.refuse("Use a named social step in a script.");
                 } else {
                     let admission = if scripted_submit {
                         script.as_ref().and_then(|script| script.chat_admission())
@@ -2247,23 +2247,6 @@ pub(super) fn zone_who_request(
         Ok(request) => Some(Ok(request.filter)),
         Err(error) => Some(Err(error)),
     }
-}
-
-/// Whether a slash command broadcasts text or a roll to the players around
-/// the character (`/emote` and the words that resolve to it, `/random`): chat-like, so a script may send
-/// it only in a network-enforced local test session.
-pub(super) fn broadcasts_to_others(input: &str) -> bool {
-    let Some(command) = input.trim_start().strip_prefix('/') else {
-        return false;
-    };
-    let name = command
-        .split(char::is_whitespace)
-        .next()
-        .unwrap_or_default();
-    matches!(
-        crate::commands::resolve(name),
-        crate::commands::Resolved::Official("emote" | "random")
-    )
 }
 
 /// Slash commands about the player and those around them: how `/who`

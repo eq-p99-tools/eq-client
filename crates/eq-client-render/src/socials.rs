@@ -379,7 +379,7 @@ pub(super) fn update(
             })
         });
         if synthetic {
-            chat.refuse("Use a named social step in a local script.");
+            chat.refuse("Use a named social step in a script.");
         } else {
             let result = state.require_profile().and_then(|()| {
                 let admission = admission.ok_or("Socials need a character in the world")?;
