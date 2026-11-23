@@ -82,8 +82,8 @@ pub enum Toggle {
     EnvironmentSounds,
     /// Plays combat music, as the official client's `CombatMusic` in
     /// `eqclient.ini` (TRUE when missing) and its `/combatmusic` (read R49-7
-    /// c). This client keeps it per character; it plays no combat music
-    /// yet (how the program chooses combat music is unread).
+    /// c; the command's forms R49-22c, 0x4689a2). This client keeps it per
+    /// character; it plays no combat music yet (row 6.525a).
     CombatMusic,
     /// Plays the installation's spell-effect particles, as the official
     /// client's does; the official client keeps the choice as
