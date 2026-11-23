@@ -38,7 +38,9 @@
     its choice's index; an index outside the row's choices gives its
     default. They stay per character, this client's choice (the original
     keeps one set per install). The `filter_<kind>` lines of the first
-    filters change are no longer read.
+    filters change are no longer read, so **every saved filter choice
+    falls back to its default once** after this update; set them again on
+    the Filters page.
   - **`/filter`** shows the Options window on the Filters page, reading no
     words and sending nothing, as the program does.
   - **At once on Titanium:** a change goes to the server at once on EQEmu
@@ -51,7 +53,7 @@
   - A hidden row hides only where the server honours it; the program's own
     local hiding (stuns, others' environmental lines, spell and damage
     lines) is the next change.
-  - Repins eq-network to a061666 (#407).
+  - Uses main's eq-network pin, which carries #407; no repin of its own.
 - Show the session's chat pace (checklist 6.523, eq-network c951420). Its
   refusal, "You are sending chat too fast. Wait N seconds.", is printed as
   the player's own line, and a script whose chat or social step the pace
