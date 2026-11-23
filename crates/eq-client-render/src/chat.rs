@@ -146,6 +146,8 @@ pub(super) struct ChatState {
     /// A `/shownames` the client could not read, answered with the usage
     /// line.
     pub show_names_usage: bool,
+    /// A `/uiscale`, waiting to set the interface scale.
+    pub ui_scale: Option<u16>,
     /// A window a slash command opens or closes, as `/raidwindow` does the
     /// Raid window, waiting for the toggle.
     pub toggled: Option<super::windows::WindowId>,
@@ -170,6 +172,8 @@ pub(super) struct ChatState {
     /// A Ranger's tracking option typed by another class, for
     /// [`super::tracking::say_rangers_only`] to answer.
     pub(crate) rangers_only: Option<super::tracking::RangersOnly>,
+    /// A `/loadskin` typed, for [`super::skin`] to load and answer.
+    pub(crate) load_skin: Option<super::skin::LoadSkin>,
     draft: draft::Draft,
     /// The lines this character sent, for recalling into the draft. Memory
     /// only: never saved, reported or logged.
@@ -424,6 +428,7 @@ impl ChatState {
             boat_interacted,
             follow_asked,
             rangers_only,
+            load_skin,
             contacts,
             // Cleared elsewhere: the link scope, the message of the day and
             // recall by `end_session`, the social inbox at every reset, and
@@ -444,6 +449,7 @@ impl ChatState {
             inspect_toggled: _,
             show_names: _,
             show_names_usage: _,
+            ui_scale: _,
             toggled: _,
             draft: _,
             refusals: _,
@@ -458,6 +464,7 @@ impl ChatState {
         *boat_interacted = None;
         *follow_asked = None;
         *rangers_only = None;
+        *load_skin = None;
         contacts.asked = None;
     }
 
@@ -2041,7 +2048,8 @@ pub(super) fn run_game_command(
 
 /// A slash command the client answers itself, noted for the system that
 /// answers it: `/target Name`, a plain `/who`, `/loc`, `/time`, `/log`,
-/// `/shownames`, guild requests, `/follow` or `/raidwindow`. None for any other line.
+/// `/shownames`, `/uiscale`, `/loadskin`, guild requests, `/follow` or
+/// `/raidwindow`. None for any other line.
 #[cfg(test)]
 pub(super) fn client_request(input: &str, state: &mut ChatState) -> Option<Result<(), String>> {
     client_request_in_scope(input, state, None)
@@ -2090,6 +2098,10 @@ pub(super) fn client_request_in_scope(
         state.log_toggle = true;
         return Some(Ok(()));
     }
+    if let Some(request) = super::skin::LoadSkin::typed(input) {
+        state.load_skin = Some(request);
+        return Some(Ok(()));
+    }
     // The Raid window opens or closes whatever words follow; what the
     // official client does with them is unread (checklist 6.413).
     if input
@@ -2099,6 +2111,9 @@ pub(super) fn client_request_in_scope(
     {
         state.toggled = Some(super::windows::WindowId::Raid);
         return Some(Ok(()));
+    }
+    if let Some(request) = crate::device_pixels::typed(input) {
+        return Some(request.map(|percent| state.ui_scale = Some(percent)));
     }
     let (command, word) = input.split_once(' ').unwrap_or((input, ""));
     if command.eq_ignore_ascii_case("/shownames") {
