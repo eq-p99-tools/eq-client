@@ -111,11 +111,9 @@ fn recipient(name: &str, kind: SpawnKind) -> Option<&str> {
     match kind {
         // Type 3 keeps the first test: a name, and not an NPC.
         SpawnKind::NpcCorpse => Some(name),
-        SpawnKind::Player
-        | SpawnKind::Npc
-        | SpawnKind::PlayerCorpse
-        | SpawnKind::Unknown(_) => (!name.contains(['#', '_']))
-            .then(|| name.split('\'').next().unwrap_or(name)),
+        SpawnKind::Player | SpawnKind::Npc | SpawnKind::PlayerCorpse | SpawnKind::Unknown(_) => {
+            (!name.contains(['#', '_'])).then(|| name.split('\'').next().unwrap_or(name))
+        }
     }
 }
 
@@ -211,9 +209,10 @@ pub(crate) fn say(mut chat: ResMut<ChatState>, messages: Option<Res<Messages>>) 
     };
     let said = messages
         .as_deref()
-        .map_or_else(|| Said::own(fallback), |messages| {
-            messages.said_or(id, &[], fallback)
-        })
+        .map_or_else(
+            || Said::own(fallback),
+            |messages| messages.said_or(id, &[], fallback),
+        )
         .typed(COLOUR);
     chat.history.push(super::chat::system_line(said));
 }

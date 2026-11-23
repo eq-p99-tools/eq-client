@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- `/ttell` and `/whotarget` as the Titanium program takes them (read R49-18,
+  checklist 6.528). `/ttell` says nothing with no words or no target; a
+  target is taken by the name the server sent, refused (line 0x3322) when
+  it has a `#` or `_` unless it is a creature's corpse, and cut at its
+  apostrophe, so a player's corpse's tell goes to its owner; a tell to
+  yourself or your own corpse gets line 0x3023 and is not sent.
+  `/whotarget` lists any target as a typed `/who` of its name, ignoring any
+  words, and says nothing with no target. Labelled: the program counts a
+  creature that dies in view as a player's corpse and refuses it, where
+  this client sends the tell. Mac-era and RoF2 keep this client's own
+  rules. The code moves to `targeted.rs`.
 - Petitions and reports as the Titanium program takes them (read R49-23,
   checklist 6.511, C1a), on eq-network #414.
   - **`/petition`** sends its words and echoes them in the installed line
