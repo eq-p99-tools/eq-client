@@ -325,6 +325,30 @@ pub enum Notice {
         /// The official client's string for it, in `eqstr_us.txt`.
         string_id: Option<u32>,
     },
+    /// A poison was not put on, and why, worded as
+    /// [`Notice::ConsumeRefused`].
+    ApplyPoisonRefused {
+        /// Why, in the session's words.
+        reason: String,
+        /// The official client's string for it, in `eqstr_us.txt`.
+        string_id: Option<u32>,
+    },
+    /// A poison started going on: the player sat, and the session sends it
+    /// when the program's wait ends (read R49-1).
+    PoisonStarted {
+        /// The program's line for it, in `eqstr_us.txt` (0x305e).
+        string_id: u32,
+    },
+    /// A posture change stopped a poison before it was sent (read R49-1 d).
+    PoisonInterrupted {
+        /// The program's line for it, in `eqstr_us.txt` (0x30d1).
+        string_id: u32,
+    },
+    /// The server's answer to a poison put on: whether it took.
+    PoisonAnswered {
+        /// Whether it took.
+        applied: bool,
+    },
     /// A command to the pet was not sent, and why, worded as
     /// [`Notice::ConsumeRefused`].
     PetRefused {
