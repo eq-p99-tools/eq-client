@@ -140,7 +140,8 @@ impl PointerUi<'_, '_> {
     /// script's own scene click checks, since it owns the input it points
     /// with (checklist 6.587).
     pub fn covers(&self, cursor: Vec2) -> bool {
-        self.drag.as_ref().is_some_and(|drag| drag.active.is_some()) || self.top_at(cursor).is_some()
+        self.drag.as_ref().is_some_and(|drag| drag.active.is_some())
+            || self.top_at(cursor).is_some()
     }
 
     /// Whether the hit surface belongs to this window or is the window itself.

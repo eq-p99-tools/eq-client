@@ -3203,6 +3203,7 @@ fn reach(
 /// action can have more than one button, such as the spellbook entry in
 /// the EQ menu and the spellbook button beside the gems. Query iteration
 /// order must not send the pointer to a copy under the menu's dismiss shield.
+#[allow(clippy::too_many_lines)] // One arm per kind of target.
 fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entity> {
     let mut found = None;
     for (
@@ -3688,17 +3689,19 @@ fn scene_thing(
         ),
         _ => return None,
     };
-    Some(if !world.in_world() || world.session_id() != Some(admission) {
-        Err("that scene target was reported in another admission")
-    } else if known {
-        Ok(thing)
-    } else {
-        Err(match thing {
-            Thing::Spawn(_) => "that spawn is gone or has changed",
-            Thing::Object(_) => "that object is not in this zone's list",
-            Thing::Door(_) => "that door is not in this zone's list",
-        })
-    })
+    Some(
+        if !world.in_world() || world.session_id() != Some(admission) {
+            Err("that scene target was reported in another admission")
+        } else if known {
+            Ok(thing)
+        } else {
+            Err(match thing {
+                Thing::Spawn(_) => "that spawn is gone or has changed",
+                Thing::Object(_) => "that object is not in this zone's list",
+                Thing::Door(_) => "that door is not in this zone's list",
+            })
+        },
+    )
 }
 
 /// Lends the scene the script's pointer for the frame while a scene click
@@ -3711,12 +3714,12 @@ pub(super) fn lease_scene(
     let Some(mut scene) = scene else {
         return;
     };
-    let request = script.and_then(|script| script.scene).map(|click| {
-        crate::target::SceneRequest {
+    let request = script
+        .and_then(|script| script.scene)
+        .map(|click| crate::target::SceneRequest {
             thing: click.thing,
             at: click.at,
-        }
-    });
+        });
     if request.is_some() {
         scene.request = request;
     } else if scene.request.is_some()
@@ -7008,17 +7011,19 @@ mod tests {
     #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are wrappers.
     fn stand_in_scene(
         mut scene: ResMut<crate::target::ScenePointer>,
-        mouse: Res<ButtonInput<MouseButton>>,
+        mut mouse: ResMut<ButtonInput<MouseButton>>,
         mut seen: ResMut<SceneSeen>,
     ) {
+        let (down, up) = (
+            mouse.just_pressed(MouseButton::Left),
+            mouse.just_released(MouseButton::Left),
+        );
+        // A frame's presses are new only that frame, as Bevy's input has it.
+        mouse.clear();
         let Some(request) = scene.request.take() else {
             return;
         };
         if let Some(at) = request.at {
-            let (down, up) = (
-                mouse.just_pressed(MouseButton::Left),
-                mouse.just_released(MouseButton::Left),
-            );
             seen.0.push((at, down, up));
             scene.acted |= down;
         }
@@ -7143,16 +7148,15 @@ mod tests {
             ),
         ] as [(fn(u64, u64) -> ClickTarget, &str); 4]
         {
-            let mut app = scene_app(|admission, revision| {
-                vec![Step::Click(target(admission, revision))]
-            });
+            let mut app =
+                scene_app(|admission, revision| vec![Step::Click(target(admission, revision))]);
             app.init_resource::<RunStatus>()
                 .add_systems(Update, observe.after(drive));
             for ms in [0, 16, 32, 48] {
                 frame_at(&mut app, ms);
             }
             assert_eq!(stop_reason(&app).as_deref(), Some(reason));
-            assert!(app.world().resource::<SceneSeen>().0.is_empty());
+            assert_eq!(app.world().resource::<SceneSeen>().0, []);
             assert!(
                 !app.world()
                     .resource::<ButtonInput<MouseButton>>()
@@ -7186,7 +7190,9 @@ mod tests {
         }
         // The scene's pick named something else on the press.
         {
-            let mut scene = app.world_mut().resource_mut::<crate::target::ScenePointer>();
+            let mut scene = app
+                .world_mut()
+                .resource_mut::<crate::target::ScenePointer>();
             scene.acted = false;
             scene.refused = Some("that spawn is covered or off screen from here".into());
         }

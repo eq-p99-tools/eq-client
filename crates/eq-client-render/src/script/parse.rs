@@ -1128,17 +1128,26 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["book_page", "next"] => ClickTarget::BookPage(true),
         ["book_page", "back"] => ClickTarget::BookPage(false),
         ["book_edit", action] => ClickTarget::BookEdit(book_edit(action)?),
-        ["spawn", admission, id, revision] => ClickTarget::Spawn {
-            admission: admission.parse().map_err(|_| "expected an admission ID")?,
+        ["spawn" | "object" | "door", ..] => world_target(words)?,
+        _ => return Err("unknown or malformed step".into()),
+    })
+}
+
+/// A thing in the world by the ids `report()` gives (checklist 6.587).
+fn world_target(words: &[&str]) -> Result<ClickTarget, String> {
+    let admission = |word: &str| word.parse().map_err(|_| "expected an admission ID");
+    Ok(match words {
+        ["spawn", reported, id, revision] => ClickTarget::Spawn {
+            admission: admission(reported)?,
             id: id.parse().map_err(|_| "expected a spawn ID")?,
             revision: revision.parse().map_err(|_| "expected a spawn revision")?,
         },
-        ["object", admission, drop_id] => ClickTarget::Object {
-            admission: admission.parse().map_err(|_| "expected an admission ID")?,
+        ["object", reported, drop_id] => ClickTarget::Object {
+            admission: admission(reported)?,
             drop_id: drop_id.parse().map_err(|_| "expected a drop ID")?,
         },
-        ["door", admission, id] => ClickTarget::Door {
-            admission: admission.parse().map_err(|_| "expected an admission ID")?,
+        ["door", reported, id] => ClickTarget::Door {
+            admission: admission(reported)?,
             id: id.parse().map_err(|_| "expected a door ID")?,
         },
         _ => return Err("unknown or malformed step".into()),
@@ -2311,7 +2320,10 @@ mod tests {
                     admission: 5,
                     drop_id: 900
                 }),
-                Step::Click(ClickTarget::Door { admission: 5, id: 12 }),
+                Step::Click(ClickTarget::Door {
+                    admission: 5,
+                    id: 12
+                }),
             ]
         );
         // A person only clicks them: no hover or held click.

@@ -176,24 +176,21 @@ pub(super) fn input(
     // A script's scene click points with the script's pointer, never the
     // real one; the gates are the same (checklist 6.587).
     let request = scripted.request;
-    let cursor = windows
-        .single()
-        .ok()
-        .and_then(|window| {
-            let at = match &request {
-                Some(request) => Some(request.at?),
-                None => window.cursor_position(),
-            }?;
-            let physical = at * window.scale_factor();
-            // The script's pointer is its own input, so only a window over
-            // it blocks it, never the script's ownership of the input.
-            let covered = if request.is_some() {
-                ui.covers(physical)
-            } else {
-                ui.contains(physical)
-            };
-            (keys.escape_free() && !presses.taken() && !chat.hovered && !covered).then_some(at)
-        });
+    let cursor = windows.single().ok().and_then(|window| {
+        let at = match &request {
+            Some(request) => Some(request.at?),
+            None => window.cursor_position(),
+        }?;
+        let physical = at * window.scale_factor();
+        // The script's pointer is its own input, so only a window over
+        // it blocks it, never the script's ownership of the input.
+        let covered = if request.is_some() {
+            ui.covers(physical)
+        } else {
+            ui.contains(physical)
+        };
+        (keys.escape_free() && !presses.taken() && !chat.hovered && !covered).then_some(at)
+    });
     let door_cursor = cursor.filter(|_| {
         !mouse.pressed(MouseButton::Right)
             && !mouse.just_pressed(MouseButton::Right)
@@ -438,17 +435,18 @@ impl Scene<'_, '_> {
                 let ray = Ray3d::new(Vec3::ZERO, Dir3::Y);
                 self.picker.pick(root, ray).posed?.middle()
             }
-            Thing::Object(drop_id) => self
-                .ground
-                .iter()
-                .find_map(|(entity, transform)| super::ground::middle(entity, transform, drop_id))?,
+            Thing::Object(drop_id) => self.ground.iter().find_map(|(entity, transform)| {
+                super::ground::middle(entity, transform, drop_id)
+            })?,
             Thing::Door(id) => {
                 let models = self.door_models.as_ref()?;
-                self.doors.iter().find_map(|(_, door, transform, visibility)| {
-                    (door.id == id)
-                        .then(|| super::doors::middle(door, transform, *visibility, models))
-                        .flatten()
-                })?
+                self.doors
+                    .iter()
+                    .find_map(|(_, door, transform, visibility)| {
+                        (door.id == id)
+                            .then(|| super::doors::middle(door, transform, *visibility, models))
+                            .flatten()
+                    })?
             }
         };
         camera.world_to_viewport(camera_transform, middle).ok()
@@ -1562,6 +1560,7 @@ mod tests {
         let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
         mouse.clear();
         if pressed {
+            mouse.reset(MouseButton::Left);
             mouse.press(MouseButton::Left);
         } else {
             mouse.release(MouseButton::Left);
@@ -1616,11 +1615,17 @@ mod tests {
         scripted_frame(&mut app, Thing::Spawn(NPC + 1), None, false);
         assert_eq!(
             app.world_mut().resource_mut::<ScenePointer>().aim.take(),
-            Some(Err("that spawn is covered or off screen from here".to_owned()))
+            Some(Err(
+                "that spawn is covered or off screen from here".to_owned()
+            ))
         );
         scripted_frame(&mut app, Thing::Spawn(NPC + 1), Some(center), true);
         assert_eq!(
-            app.world_mut().resource_mut::<ScenePointer>().refused.take().as_deref(),
+            app.world_mut()
+                .resource_mut::<ScenePointer>()
+                .refused
+                .take()
+                .as_deref(),
             Some("that spawn is covered or off screen from here")
         );
         assert!(!app.world().resource::<ScenePointer>().acted);
