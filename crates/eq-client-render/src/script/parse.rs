@@ -874,8 +874,8 @@ fn parse_slash(words: &[&str]) -> Result<Step, String> {
         // `/who` lists the player.
         [
             command @ ("corpse" | "corpsedrag" | "corpsedrop" | "follow" | "disband" | "loc"
-            | "time" | "motd" | "afk" | "anonymous" | "roleplay" | "raidaccept"
-            | "raiddecline" | "raiddisband" | "raidwindow"),
+            | "time" | "motd" | "charinfo" | "afk" | "anonymous" | "roleplay"
+            | "raidaccept" | "raiddecline" | "raiddisband" | "raidwindow"),
         ] => Step::Slash(format!("/{command}")),
         // The raid's lead, handed on by name or to the target.
         ["makeraidleader", name @ ..] if name.len() <= 1 => Step::Slash(
@@ -2659,6 +2659,12 @@ mod tests {
             [Step::Slash("/motd".into())]
         );
         assert!(parse("slash(\"motd now\")\n", base).is_err());
+        // Where the player is bound, said locally (6.524).
+        assert_eq!(
+            parse("slash(\"charinfo\")\n", base).unwrap(),
+            [Step::Slash("/charinfo".into())]
+        );
+        assert!(parse("slash(\"charinfo now\")\n", base).is_err());
     }
 
     #[test]

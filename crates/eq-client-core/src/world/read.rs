@@ -283,6 +283,15 @@ impl ClientWorld {
         &self.zone_name
     }
 
+    /// The primary bind point's zone number, as this admission's profile
+    /// said it; None before it did, or where it couldn't be read. A bind
+    /// that lands mid-session shows from the next zone-in (inferred,
+    /// checklist 6.524, pending R49-6m).
+    #[must_use]
+    pub const fn bound_in(&self) -> Option<u16> {
+        self.bound_in
+    }
+
     /// The zone's number, as the server gave it at entry; None before the
     /// first entry.
     #[must_use]
