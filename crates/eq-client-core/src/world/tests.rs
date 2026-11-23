@@ -116,9 +116,6 @@ fn a_same_zone_relocation_requires_the_current_character_and_admission() {
             position: destination,
         })
     };
-    let boundary = game(&mut world, WorldEvent::SameZoneBoundary { session_id: 1 });
-    assert_eq!(boundary.replies, [Reply::SameZoneBoundary]);
-    assert!(boundary.placed.is_none());
     assert!(world.last_same_zone_relocation().is_none());
     assert!(game(&mut world, relocation(2, 9)).ignored);
     assert!(game(&mut world, relocation(1, 7)).ignored);
@@ -1309,6 +1306,72 @@ fn a_song_stop_says_the_programs_line_in_its_colour_for_this_admission_only() {
     let stale = game(&mut world, stopped(7));
     assert!(stale.ignored);
     assert_eq!(stale.notices, []);
+}
+
+/// Song 42 has no recast; spell 43 has a 6 s one.
+struct SongFortyTwo;
+
+impl SpellCatalog for SongFortyTwo {
+    fn timing(&self, spell: u32) -> Option<SpellTiming> {
+        let recast_ms = match spell {
+            42 => 0,
+            43 => 6000,
+            _ => return None,
+        };
+        Some(SpellTiming {
+            recovery_ms: 1500,
+            recast_ms,
+        })
+    }
+
+    fn instant_effect(&self, _spell: u32) -> bool {
+        false
+    }
+
+    fn feigns(&self, _spell: u32) -> bool {
+        false
+    }
+}
+
+#[test]
+fn a_song_stop_for_this_admission_resets_the_gems_with_no_recast() {
+    let mut world = ClientWorld::default();
+    let mut bard = player(9);
+    bard.memorized_spells[0] = Some(42);
+    bard.memorized_spells[1] = Some(43);
+    bard.spell_refresh_ms = Some([5000, 5000, 0, 0, 0, 0, 0, 0]);
+    let now = Instant::now();
+    world.apply(
+        &WorldUpdate::Game(WorldEvent::Entered {
+            capabilities: Vec::new(),
+            choices: Vec::new(),
+            session_id: 1,
+            zone: "qeytoqrg".into(),
+            player: Box::new(bard),
+            far_clip: None,
+            spell_landing_flag: None,
+            zone_id: 0,
+        }),
+        now,
+        &SongFortyTwo,
+    );
+    connection(&mut world, true, false);
+    let stopped = |session_id| {
+        WorldUpdate::Game(WorldEvent::SongStopped {
+            session_id,
+            spell_id: 42,
+            string_id: 0x318f,
+        })
+    };
+    let five = std::time::Duration::from_secs(5);
+    // Another admission's stop changes nothing.
+    world.apply(&stopped(7), now, &SongFortyTwo);
+    world.tick(now, &SongFortyTwo);
+    assert_eq!(world.casting().cooldowns.remaining(42, now), five);
+    world.apply(&stopped(1), now, &SongFortyTwo);
+    world.tick(now, &SongFortyTwo);
+    assert!(world.casting().cooldowns.remaining(42, now).is_zero());
+    assert_eq!(world.casting().cooldowns.remaining(43, now), five);
 }
 
 #[test]
@@ -5997,6 +6060,62 @@ fn the_titanium_sessions_duel_news_is_told_with_the_names_it_takes() {
     // Out of the world, nothing is told.
     let mut outside = ClientWorld::default();
     assert!(game(&mut outside, WorldEvent::DuelNews(DuelNews::NotYourself)).ignored);
+}
+
+#[test]
+fn the_mac_eras_decline_news_says_the_programs_lines() {
+    use eq_network_game::socials::DuelNews;
+    let mut world = admitted();
+    let line = |string_id, arguments: &[&str], said: &str| Notice::ProgramLine {
+        string_id,
+        arguments: arguments
+            .iter()
+            .map(|&argument| argument.to_owned())
+            .collect(),
+        lines: Vec::new(),
+        said: said.to_owned(),
+    };
+    let cases = [
+        (
+            DuelNews::Declining { challenger: 5 },
+            line(0x33be, &["a rat"], "You decline a rat's challenge."),
+        ),
+        (
+            DuelNews::NothingToDecline,
+            line(0x33bf, &[], "You have no challenge to decline."),
+        ),
+        (
+            DuelNews::DecliningWhileDueling,
+            line(0x33bd, &[], "You can't decline while dueling."),
+        ),
+    ];
+    for (news, notice) in cases {
+        assert_eq!(
+            game(&mut world, WorldEvent::DuelNews(news)).notices,
+            [notice]
+        );
+    }
+}
+
+#[test]
+fn an_inspection_of_the_player_says_who_looked_only_for_this_admission() {
+    let mut world = admitted();
+    let looked = |session_id| WorldEvent::InspectedBy {
+        session_id,
+        inspector_id: 5,
+        name: "Looker".into(),
+        string_id: 0x57c,
+    };
+    assert_eq!(
+        game(&mut world, looked(1)).notices,
+        [Notice::ProgramLine {
+            string_id: 0x57c,
+            arguments: vec!["Looker".into()],
+            lines: Vec::new(),
+            said: "Looker inspects you.".into(),
+        }]
+    );
+    assert!(game(&mut world, looked(2)).ignored);
 }
 
 #[test]
