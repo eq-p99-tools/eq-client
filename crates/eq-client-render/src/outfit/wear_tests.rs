@@ -43,7 +43,7 @@ fn submitted_hand_changes_redress_the_avatar_and_paperdoll_in_the_same_zone() {
     }
     world.insert_resource(library);
     world.insert_resource(crate::ViewerSettings::default());
-    world.insert_resource(crate::options::OptionsState::new(default()));
+    world.insert_resource(crate::options::OptionsState::new(&default()));
     world.init_resource::<Wardrobe>();
     world.insert_resource(online);
     let held = |world: &World, figure| {
@@ -109,7 +109,7 @@ fn a_luclin_model_keeps_its_base_look_while_a_classic_one_wears_the_helm() {
         [&classic, &luclin].map(|prepared| crate::character::testing::drawn(&mut world, prepared));
     world.insert_resource(crate::item_models::ItemLibrary::default());
     world.insert_resource(crate::ViewerSettings::default());
-    world.insert_resource(crate::options::OptionsState::new(default()));
+    world.insert_resource(crate::options::OptionsState::new(&default()));
     world.init_resource::<Wardrobe>();
     world.insert_resource(online);
     world.run_system_once(dress).unwrap();
