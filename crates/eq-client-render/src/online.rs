@@ -491,6 +491,13 @@ pub(super) struct Panels<'w> {
     socials: Option<ResMut<'w, super::socials::State>>,
 }
 
+/// The installed lines and the playing character's filters, by which the
+/// panels word notices and keep some back.
+type Wording<'a> = (
+    Option<&'a hud::messages::Messages>,
+    Option<eq_client_core::chat_filters::ChatFilters>,
+);
+
 impl Panels<'_> {
     /// Reconcile merchant intent only with admitted worker updates.
     fn merchant_news(&mut self, update: &WorldUpdate, changes: &Changes, world: &ClientWorld) {
@@ -506,10 +513,7 @@ impl Panels<'_> {
         &mut self,
         changes: &Changes,
         state: &mut OnlineState,
-        (messages, filters): (
-            Option<&hud::messages::Messages>,
-            Option<eq_client_core::chat_filters::ChatFilters>,
-        ),
+        wording: Wording<'_>,
         chat: &mut super::chat::ChatState,
     ) {
         // Capture received facts here; action/draw systems apply the current
@@ -528,20 +532,7 @@ impl Panels<'_> {
         if changes.inventory {
             self.inventory.refresh(state.world.inventory().stale());
         }
-        for notice in &changes.notices {
-            // A line the generation's program hides by the player's filters
-            // is not shown (read R49-2 d, recording checklist 6.494).
-            if filters.is_some_and(|filters| {
-                eq_client_core::chat_filters::hidden_locally(
-                    &filters,
-                    state.world().generation(),
-                    notice,
-                )
-            }) {
-                continue;
-            }
-            self.tell(notice, messages, chat);
-        }
+        self.tell_shown(changes, state.world().generation(), wording, chat);
         if state.world.in_world() {
             for cue in &changes.sounds {
                 self.sounds.play_cue(cue);
@@ -655,7 +646,27 @@ impl Panels<'_> {
         }
     }
 
-    /// Shows what a notice says where it belongs.
+    /// Tells each notice but those the generation's program hides by the
+    /// player's filters (read R49-2 d, recording checklist 6.494).
+    fn tell_shown(
+        &mut self,
+        changes: &Changes,
+        generation: eq_client_core::GameDialect,
+        (messages, filters): Wording<'_>,
+        chat: &mut super::chat::ChatState,
+    ) {
+        for notice in changes.notices.iter().filter(|notice| {
+            !filters.is_some_and(|filters| {
+                eq_client_core::chat_filters::hidden_locally(&filters, generation, notice)
+            })
+        }) {
+            self.tell(notice, messages, chat);
+        }
+    }
+
+    /// Shows what a notice says where it belongs. A line the generation's
+    /// program hides by the player's filters never reaches here (read
+    /// R49-2 d, recording checklist 6.494).
     fn tell(
         &mut self,
         notice: &eq_client_core::world::Notice,
