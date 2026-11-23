@@ -681,7 +681,7 @@ pub(super) fn tabbed(
     context: &Context,
 ) {
     let particle_pages = super::particles::pages(&tabs.pages, context.id);
-    let filter_pages = super::filters::pages(&particle_pages, context.id);
+    let filter_pages = super::filters::pages(&particle_pages, context.id, inside.width);
     let pages = super::qol::pages(
         &filter_pages,
         context.id,
@@ -793,6 +793,9 @@ fn tabbed_pages(
                 ..node
             },
         ));
+        if page.name == super::filters::PAGE {
+            viewport.insert(super::filters::FiltersPage);
+        }
         if wrapping {
             viewport.insert((
                 ScrollPosition::default(),

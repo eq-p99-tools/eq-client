@@ -118,6 +118,14 @@ pub(crate) fn command(
         Asked::Feedback(words) => ClientCommand::SendFeedback {
             session_id: stamp.session_id,
             text: words.clone(),
+            // Titanium's feedback carries the place, as a bug report's
+            // does (eq-network #414).
+            place: world.player().map(|player| BugPlace {
+                x: player.position.x,
+                y: player.position.y,
+                z: player.position.z,
+                heading: player.position.heading,
+            }),
             created: stamp.created,
         },
         Asked::Bug(words) => {

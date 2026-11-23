@@ -584,6 +584,15 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
             bevy::log::warn!("The server contradicted a modelled buff slot in this zone visit");
             Vec::new()
         }
+        Notice::BuffPredictionContradicted(disagreement) => {
+            bevy::log::warn!(
+                "Gap: the server still holds spell {} after landing {} ({:?}), which the slot finder removes",
+                disagreement.removed,
+                disagreement.landed,
+                disagreement.rule
+            );
+            Vec::new()
+        }
         Notice::SongStopUnconfirmed { released_cast } => chat(
             if *released_cast {
                 "Song stop unconfirmed. The previous casting hold was released."
