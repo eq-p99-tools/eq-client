@@ -153,17 +153,18 @@ pub(crate) fn tongue_place(messages: Option<&Messages>, heard: Heard) -> String 
 /// What the program weighs as it hears a line from `sender`.
 pub(crate) fn hearing<'a>(world: &'a ClientWorld, sender: &str) -> Option<tongues::Hearing<'a>> {
     let player = world.player()?;
-    let mac = world.generation() == eq_client_core::GameDialect::EqMac;
     Some(tongues::Hearing {
         player: &player.name,
         own: player.languages.as_deref(),
         game_master: game_master(player),
         sender_game_master: world.game_master_in_zone(sender),
         listener_stage: world.listener_garble(),
-        letters: if mac {
-            tongues::Letters::EqMac
-        } else {
-            tongues::Letters::Titanium
+        letters: match world.generation() {
+            eq_client_core::GameDialect::EqMac => tongues::Letters::EqMac,
+            // RoF2's are Titanium's, inferred (6.489).
+            eq_client_core::GameDialect::Titanium | eq_client_core::GameDialect::Rof2 => {
+                tongues::Letters::Titanium
+            }
         },
     })
 }

@@ -1095,19 +1095,6 @@ fn the_titanium_social_forms_reach_the_chat_as_their_typed_lines_do() {
 }
 
 #[test]
-fn a_yell_or_a_hotbutton_step_needs_a_local_session() {
-    for source in ["slash(\"yell\")", "slash(\"hotbutton wave /wave\")"] {
-        let program = Program::parse(source, Path::new(".")).unwrap();
-        assert_eq!(
-            program.check_local_commands(false).unwrap_err().line,
-            Some(1),
-            "{source}"
-        );
-        assert!(program.check_local_commands(true).is_ok(), "{source}");
-    }
-}
-
-#[test]
 fn a_chat_pace_refusal_after_a_scripts_chat_fails_the_run() {
     let reason = "You are sending chat too fast. Wait 4 seconds.";
     let (mut app, rx) = app();

@@ -128,19 +128,6 @@
   brings the duel offer and `/surname` answers and the session's report of
   each server message it could not read (none of them shown or logged yet).
 
-- Keep server filters per character and give them to the session (parity
-  item 6, recording checklist 6.494). Options gains a Filters page with one
-  row per kind the generation's packet has a word for (24 on Titanium, 16 on
-  Mac-era servers): a button steps through the kind's modes and a label says
-  the current one. The modes are kept as `filter_<kind>` lines in the
-  character's options file; a mode no generation can say keeps the default,
-  which is the packet sent before. The character list gives the session the
-  chosen character's saved set, so the first zone-in carries it; a change in
-  play is sent at once where the session offers it (EQEmu) and otherwise
-  goes with the next zone-in, as the page's note says. The kinds, words and
-  page are this client's own until the official options, ini keys and
-  `/filter` forms are read (6.494a to c); `/filter` answers that it is not
-  taken that way yet.
 - Speak and hear languages as the Titanium program does (checklist 6.495, reads R49-4, R49-4b and R49-4m). This replaces the unmerged design of #558.
   - **The choice.** Each chat window speaks a language of its own, an index into the languages the character knows, for the session only. It is never saved, and there is no setting for it (Adam, 11-23).
   - **`/language`.** The installed lines 0x33cc, 0x33cd and 0x33ce, in message type 0x111. The help word lists the languages, nothing says the current one, and a number chooses one. Scripts use `slash("language ...")`.
@@ -165,69 +152,6 @@
   cross a zone line whatever level the zone asks for. That the official
   client turns players away below a zone's level is inferred, not read; this
   client blocks no crossing today, so the setting changes nothing yet.
-- Destroy the coins on the cursor (gap 3.8, checklist 6.512), as the
-  Titanium program's Destroy button does (read R49-11). With coins on the
-  cursor and no item, **Destroy cursor item** asks first, with the
-  installation's own question (string 0x80d), or our words where the
-  installation lacks it. With no answer in 10 s the question closes as a No.
-  On Yes it sends one `DestroyCoins` (eq-network #342) for the first kind on
-  the cursor, the most valuable first, whole, as the program sends one move.
-  - **Departure, labelled (6.512c):** the program then clears every kind on
-    its cursor, including kinds it never told the server about. This client
-    keeps those shown, as the server still holds them. Its own coin controls
-    hold one kind on the cursor at a time, so two kinds come only from what
-    the server says the cursor holds.
-  - The program skips the question when its ini `Destroy` key is set. That
-    option is row 6.512b, not built here.
-  - Where the session doesn't offer `Capability::DestroyingCoins` (all but
-    stock EQEmu for now) it says "This server does not take destroying
-    coins." and asks nothing. An item on the cursor is destroyed as before;
-    its question in the program's own string (0x7fb) and timeout is row
-    6.512d.
-  - Any change to the cursor's coins cancels the question. Scripts click the
-    same control and dialog, so they destroy coins as they destroy items,
-    and a script that answers nothing gets the timeout's No.
-- Drowning and lava now hurt on every Titanium server, public EQEmu and
-  P99 included, as the Titanium program reports them on any server
-  (eq-network's liquid change; read R25). **Characters on public servers
-  can now drown and burn with this client.** Take Environmental Damage,
-  on by default, still withholds every report; a test shows a P99-style
-  session reports neither liquid with it off. `docs/settings.md` says so.
-  Inferred parts are under checklist 6.491.
-  - **The program's lines (reads R49-3 e and R49-3b).** After each of its
-    own reports on a Titanium session, the client prints the program's
-    amount line, then the record's own line for the type, in the
-    program's colours: falls, drowning, lava, zone 200's lava and cold.
-    The death path sends no record, so it prints the amount line alone.
-  - **A record the server sends** for the player (a trap's, or `EQEmu`'s
-    echo of the player's own non-fall record) prints the program's line
-    for its type in place of a melee line. A trap's line is chosen by the
-    record's spell field, as the program does. `EQEmu`'s echo prints the
-    line a second time, as the official client does there, so log
-    parsers read the same lines.
-  - **Departure, labelled (6.491f):** the program takes an echoed
-    record's amount off its local HP a second time. This client keeps HP
-    the server's, so it does not.
-  - **A drowning record from the server empties the air counter** while
-    the head is under, as the program's does.
-  - **The tick** runs strictly more than a second after the last, as the
-    program's `> 1000 ms` (read R49-3 a).
-  - **Lava takes any resist,** a negative one included, as the program's
-    arithmetic does. Zone 200's type-244 heat and cold (type 246) have
-    their formulas in `environment` but nothing samples them: zone 200
-    needs disease resistance, and cold's regions wait on read R49-26.
-  - Other players' environmental lines, which the program builds with
-    their name under chat filter 0x11, are row 6.491g, not built here.
-  - Repin eq-network to c52bc91, its main with #326 merged. It brings
-    `WorldEvent::HazardReported` and `TRAP_DAMAGE_KIND`.
-- `/guildstatus` is offered, as read R49-6k reads it (checklist 6.575).
-  - The Titanium program answers it itself and sends nothing: for the player a typed name finds (`/guildstatus Name`, ignoring case), or else for the target.
-  - Lines 12256, 12257 and 12258 give the rank (member, officer, leader) with the name and the guild. 12259 gives the name alone for any other rank, and 12260 refuses a missing spawn, one that isn't a player, or a game master. All come in message type 0x111.
-  - A player in no guild gets this client's own words, because the program's are its own and not in the strings.
-  - Still inferred: that +0x256 is the GM flag (read R49-4 takes it so), and the name lookup's exact rule. Anonymity isn't tested, so an anonymous player's guild shows as the server sent it. The Mac client's answer wasn't read, so it is refused there for now.
-
-- Scripts can use the map's own controls (checklist 6.589), since a script may do whatever the player can (Adam, 11-23): the search boxes, the watch controls and rows, a spawn's marker, the inspector's Clear and Target, the landmarks and the presentation controls, as `map_search`, `map_watch`, `map_marker`, `map_inspector`, `map_target`, `map_landmarks` and `map_style` targets. Each click runs the map's own handler, so the Target button keeps its capability and range checks. A marker takes the spawn's admission, id and revision, which the report's new `map_markers` field lists for the 64 nearest spawns; a stale one is refused. Watches, landmarks and presentation are saved settings, and these clicks change them as a person's do.
-
 - Say the server's message of the day again with `/motd` (checklist
   6.520). The message the world sent on this connection is said again as it
   came, to the same tab and colour, and is not kept as a new one; a new
@@ -246,8 +170,8 @@
   nothing sent. No level range or comment is sent. The session tells each
   change, and the chat says "You are now looking for a group." or "You
   are no longer looking for a group." (this client's words, pending
-  R49-6i). A script's `slash()` cannot send it; a social or hotbutton
-  can. Repins eq-network to #344's head; its chat channel events wait in
+  R49-6i). A social, a hotbutton or a script's `slash()` can send it, as
+  typing does (6.584). Repins eq-network to #344's head; its chat channel events wait in
   the ignore arm for that thread's PR.
 
 - Challenge the player targeted to a duel with `/duel` (checklist 6.492b),
@@ -257,8 +181,8 @@
   to challenge to a duel."). Words after `/duel` send nothing and say so,
   since the program may challenge by name and the target could be someone
   else. No line is said on sending: whether the program says one is
-  unread. Every line is pending R49-6h. A script's `slash()` cannot send
-  it; a social or hotbutton can, as the original's do. Repins eq-network to
+  unread. Every line is pending R49-6h. A social, a hotbutton or a script's
+  `slash()` can send it, as typing does (6.584). Repins eq-network to
   e2e9a02 (#338); its surname and staff report events wait in the ignore
   arm for those threads' PRs, and the viewer drops its gap log events
   untraced (a gap's sample can hold other players' chat or names) until
@@ -630,66 +554,6 @@ Mac-era servers loot as before, as that client's loot click is unread, and
   Repins eq-network to #353; the title list waits in the ignore arm for its
   thread's PR.
 
-- Say the server's message of the day again with `/motd` (checklist
-  6.520). The message the world sent on this connection is said again as it
-  came, to the same tab and colour, and is not kept as a new one; a new
-  connection, to the same server or another, never says the old one.
-  Without one, this client's line says "There is no message of the day."
-  It sends nothing, on any server. The program's handler (0x46f698) is
-  unread, so that it says the world's message and not the guild's, and
-  that words after it are ignored, is inferred (pending R49-6j). A script
-  may run `slash("motd")`, as it may `/loc` and `/time`.
-
-- Say the player looks for a group with `/lfg` (checklist 6.515), where
-  the session offers it (stock `EQEmu`, eq-network #344). Bare `/lfg`
-  turns the flag over; `/lfg on` and `/lfg off` set it. Those two words
-  are this client's forms, inferred until the program's handler is read
-  (R49-6i), and any other word is refused in this client's words with
-  nothing sent. No level range or comment is sent. The session tells each
-  change, and the chat says "You are now looking for a group." or "You
-  are no longer looking for a group." (this client's words, pending
-  R49-6i). A script's `slash()` cannot send it; a social or hotbutton
-  can. Repins eq-network to #344's head; its chat channel events wait in
-  the ignore arm for that thread's PR.
-
-- Challenge the player targeted to a duel with `/duel` (checklist 6.492b),
-  where the session offers it (stock `EQEmu`, eq-network #338). It sends
-  `ChallengeDuel` only when another player in the zone is targeted, and
-  says this client's line otherwise ("You must first target another player
-  to challenge to a duel."). Words after `/duel` send nothing and say so,
-  since the program may challenge by name and the target could be someone
-  else. No line is said on sending: whether the program says one is
-  unread. Every line is pending R49-6h. A script's `slash()` cannot send
-  it; a social or hotbutton can, as the original's do. Repins eq-network to
-  e2e9a02 (#338); its surname and staff report events wait in the ignore
-  arm for those threads' PRs, and the viewer drops its gap log events
-  untraced (a gap's sample can hold other players' chat or names) until
-  eq-client #563 takes them.
-
-- Answer another player's challenge to a duel, and tell the news the
-  client used to drop (checklist 6.492). Where the session asks (stock
-  `EQEmu`, eq-network #328), the skin's confirmation dialog asks "<name>
-  challenges you to a duel. Do you accept?" after a resurrection and a
-  translocate. Only the player's own click on Yes accepts: a script step
-  that reaches the dialog's Yes, by any name and by click, right-click or
-  held click, is refused in this client's words and stops the script,
-  while a scripted No still declines. No setting or key answers it. The
-  question has no local deadline. A challenger not in the spawn list is
-  "Someone". `InstalledClient::duel_offer()` names the installed client's
-  string where it is read; it is None for every generation until R49-6a.
-  The chat now tells, in this client's words until the program's strings
-  and colours are read (pending R49-6a, 6d, 6f and 6g):
-  - a challenge with no question to answer;
-  - the player's own duel beginning;
-  - a TAKP client turning the player's challenge down;
-  - a nearby player's yell for help;
-  - each stat a quest changed, with no number, since the record does not
-    say whether it is the new value or the rise;
-  - the coins a quest or task gave.
-  The server sends no line of its own for any of these. Becoming a corpse
-  stays unhandled until R49-6e. Repins eq-network to c7ac7ea (#328); its
-  Apply Poison and server filter events are ignored here until eq-client
-  #556 and #560 take them, and outgoing chat names `Tongue::COMMON`.
 - Play each zone's music and ambient sound from the installation's own
   files (item 6.503; how the original program does it is pending read
   R49-7). `eq-client-assets` reads `<zone>_sounds.eff` emitters (84-byte
@@ -782,125 +646,6 @@ Mac-era servers loot as before, as that client's loot click is unread, and
   no command, script step or key reaches it. Repins eq-network to the titles
   change (#346); the chat server's channels (6.509) and the petition and bug
   report answers (6.511) are ignored until their own client PRs land.
-- Add RoF2 as a placeholder generation, following eq-network's
-  (`GameDialect::Rof2`, `ServerProtocol::EqEmuRof2`). `InstalledClient::Rof2`
-  is in `InstalledClient::ALL` but has no marker files, so no folder is ever
-  detected as it, and the installation warnings name only generations with
-  markers, as before. No preset offers or names `EqEmuRof2`, and eq-network
-  refuses a configuration naming it. Each rule without a read of RoF2's
-  program is absent, or Titanium's on its own arm marked
-  `inferred for RoF2 (6.489)`. The skill rules read through a private
-  `Program` (Titanium, `EQMac`). Repins eq-network for the placeholder.
-  Nothing a player can reach changes.
-
-- Make every client-generation decision exhaustive, so adding a third
-  generation (RoF2 is planned) breaks each place that must decide what it
-  does instead of taking another generation's branch. The 31 one-variant
-  checks on `InstalledClient` and `GameDialect` are `match`es naming every
-  variant, and a test refuses new ones. Installation detection checks every
-  generation in `InstalledClient::ALL`, and every installed archive is found
-  through one module (`eq-client-assets/src/archives.rs`), still S3D only.
-  Repins eq-network for its exhaustive `GameDialect` and `ServerProtocol`.
-  No behaviour changes.
-
-- Take the 88 social emotes and disciplines as the Titanium client does
-  (reads R47 to R48c). An emote's first word picks its target: any spawn
-  whose name it begins, the shortest name winning, or the current target
-  with no word or the installed "my target" word. A target past 60 units
-  (flat, origin to origin) is refused, as is a still emote (`/wave`,
-  `/cheer`, `/frown`, `/gesture`) while moving or not standing. The text
-  goes out as OP_Emote, the player's own line prints in the emote colour,
-  and the animation is sent and played while standing still. Two or more
-  words after the target replace the emote's own words. `/discipline` (and
-  `/disc`) with no word lists the known disciplines whose timers run; with a
-  word it uses the first known discipline the word begins. The new Combat
-  Abilities window, opened from the EQ menu, lists the known disciplines with their time left: a click
-  uses one, and a hold or Ctrl and a number puts it on the action bar. The
-  typed command, the window, a hotkey and an Actions window button share one
-  use: a discipline you don't know, can't use at your level or class, or
-  that isn't flagged in the spell file is refused silently; one on its timer
-  prints the time left; a timed self discipline while one is running prints
-  its line; otherwise the cast goes out from slot 10 at the current target,
-  or none, and like a gem cast it waits while a cast is under way or not yet
-  acknowledged. Any discipline the server lists works, not only Evasive and
-  Defensive. The Actions window's picker no longer offers disciplines, which
-  have their own window now; a button that held one keeps it. Inferred parts
-  are under checklist 6.488. This client's words where the installation has
-  no line: "uses /NAME", "You use /NAME" (and "on TARGET"), "Stand still to
-  do that.", "Nobody by that name is near.", "Your target is too far away
-  for that.", "Your class has no disciplines.", "NAME can be used again in
-  Mm Ss." (with hours, "Hh Mm Ss"), "You can't use that discipline right
-  now." The Mac-era client keeps its earlier answers. Networking pinned to
-  2865334 (eq-network #319, #320, #321, #322), which also settles a
-  destroyed item on servers that confirm by silence; an emote goes out as
-  the program built it, spaces kept, and its own line prints once. A social may now run `/target`,
-  `/assist`, `/camp` and `/quit`, as the original's socials do; `/exit` and
-  `/social` stay refused inside one.
-
-- Take the Titanium slash forms socials and hotbuttons use (reads R45,
-  R45b). Social lines run a tenth of a second apart, as the original's
-  runner steps them, and `/pause` takes 1 to 600 tenths, larger or smaller
-  numbers clamped. New commands, in a social or the chat: `/yell` (sends the
-  empty 0x61ef and says "You yell for help."), `/stopcast` (sends the empty
-  0x4839, as `/stopsong` does; refused while mounted, where any buff with
-  the summon-mount effect, or with effects the spell data can't name, stands
-  in for the program's own mount test), `/doability 1` to `10` (the Actions
-  window's buttons, 1 to 6 Abilities and 7 to 10 Combat), `/memspellset`
-  (a saved set by number or name start; it opens the Spellbook) and
-  `/hotbutton NAME [COLOUR] TEXT` (writes the social and puts it on the
-  cursor; the name is cut to 15 characters). The inferred parts are under
-  checklist 6.487. Lines the installation has no string for are in this
-  client's words: "You yell for help.", "You can't stop casting now.",
-  "Use /doability 1 through 10.", "No spell set has that name or number.",
-  "Made hotbutton NAME.", "Every hotbutton is taken." and the four
-  `/hotbutton` help lines. Networking pinned to 57a87f6 (eq-network #318).
-
-- Ask before looting a NO DROP item, as the Titanium client does (read
-  R45b). This is a visible change to everyday looting: a click on a NO DROP
-  item from a corpse that isn't yours now opens the confirmation dialog, and
-  only Yes loots it. A question left 20 seconds loots nothing. `/lootnodrop`
-  picks when it asks, by the words of the installed client's three lines or
-  this client's `always` (always asks), `sometimes` (asks only about an item
-  your class or race can't use) and `never` (never asks); with no word, or
-  a word that names none, it lists the three. The choice is saved with this
-  client's options for the character. It starts from the installed
-  `eqclient.ini`'s `LootNoDrop`, and where there is none from `always`, which
-  the program read doesn't give (inferred, checklist 6.487). Loot all takes
-  what doesn't ask and leaves the rest for their own clicks. Whether the
-  item is NO DROP is read from its flag, and whether the corpse is yours
-  from its name, where the program's own tests are unread (6.487). The
-Mac-era servers loot as before, as that client's loot click is unread, and
-  `/lootnodrop` answers there as it did.
-
-- Refuse untargetable spawns as the Titanium client does (read R44). On
-  EQEmu and P99, a spawn whose body type the original's target setter
-  refuses (11, 60, 65 and 67: EQEmu's zone controller and other utility
-  spawns) is never chosen. A click on one keeps the current target, with no
-  line and nothing sent, and doesn't pick the spawn behind it. Target Next
-  and `/target` pass over it, and a script's `target()` finds nothing, as
-  for a spawn that isn't there (inferred for these paths until their
-  handlers are read; checklist 6.486). There is no interaction with body
-  types 11, 65 and 67. A target the server sets is kept whatever its body
-  type. Body types above 64 are neither drawn nor named, as the original's
-  per-spawn update skips them; See Invisible doesn't reveal them, and only
-  the QoL Show Invisible Entities does (whether the original draws their
-  model is inferred, 6.486). The Mac-era servers target as before.
-  Networking pinned to d0333db (eq-network #317).
-
-- Swim as the Titanium client does (reads R33, R33b, R39, R41). Water now
-  keeps the body's velocity from frame to frame and damps it, gravity still
-  pulls in water so an idle swimmer slowly sinks (about 0.67 units a
-  second), and the Swimming skill adds to swim speed: at run 0.7, level
-  swimming goes from 4.7 units a second to 7 untrained and 17 at skill 100.
-  Looking up or down adds a climb or a dive without slowing forward travel,
-  a held jump pushes up at the original's rate, and rising out of the water
-  falls back in as an ordinary fall. Water is stepped at a fixed 60 times a
-  second (checklist 6.483). In thegrey a head out of water can't breathe,
-  as in the original. Gills for Days still turns the air counter off.
-  Characters in water now swim when moving and tread water when still,
-  sinking or on the bottom, instead of walking and standing (read R43;
-  checklist 6.485). Needs eq-network's per-axis swim bound.
-
 - Walk onto low edges as the Titanium client does: a standing walk now
   climbs anything it runs into up to 1.25 above the body's origin, so a
   human of size 6 steps over Erudin's pier-end rail and onto its posts

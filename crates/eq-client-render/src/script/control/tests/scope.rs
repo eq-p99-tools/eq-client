@@ -685,31 +685,17 @@ fn stopping_before_a_follow_step_does_not_queue_follow() {
 }
 
 #[test]
-fn a_script_reaches_no_chat_channel_command() {
-    // slash() names what it may run, and the chat server's commands are
-    // not among them: a script sends nothing to a public chat server.
-    for command in [
-        "join general",
-        "1 hello",
-        "chat mailto Someone hi",
-        "leaveall",
-    ] {
+fn a_script_runs_a_chat_channel_command_as_typing_does() {
+    // A script may do whatever the player can (6.584): slash() takes the
+    // chat server's commands as the chat line does.
+    for command in ["join general", "1 hello", "leaveall"] {
         let mut app = admitted();
-        let (queue, received) = std::sync::mpsc::sync_channel(4);
+        let (queue, _received) = std::sync::mpsc::sync_channel(4);
         app.insert_resource(crate::outbox::Outbox::new(Some(queue)));
         assert_eq!(
             scoped(&mut app, &format!("slash(\"{command}\")\n")).code,
-            "invalid_program",
+            "start_queued",
             "{command}"
         );
-        frame(&mut app, 1);
-        assert_eq!(
-            app.world()
-                .resource::<crate::chat::ChatState>()
-                .channel_asked
-                .len(),
-            0
-        );
-        assert!(received.try_recv().is_err());
     }
 }

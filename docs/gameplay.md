@@ -529,7 +529,7 @@ link to it when the world offers one, and these commands go to it:
 
 These commands work from the chat line, socials and hotbuttons alike, and
 they are as free as `/say`. There is no send limit for any chat yet. A script's
-`slash()` cannot run them, because its list of commands does not name them.
+`slash()` runs them as typing does (6.584).
 Channel and player names from the chat server print without control
 characters, so a name can't start an item link.
 

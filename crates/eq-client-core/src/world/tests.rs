@@ -6945,8 +6945,8 @@ fn news_the_world_does_not_show_is_named_for_the_gap_file() {
     assert_eq!(game(&mut world, WorldEvent::Ding).unshown, Some("Ding"));
     assert_eq!(game(&mut world, WorldEvent::Spun).unshown, Some("Spun"));
     assert_eq!(
-        game(&mut world, WorldEvent::YellForHelp { spawn_id: 7 }).unshown,
-        Some("YellForHelp")
+        game(&mut world, WorldEvent::HideAndSneakEnded).unshown,
+        Some("HideAndSneakEnded")
     );
 }
 
