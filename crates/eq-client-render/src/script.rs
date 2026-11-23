@@ -577,6 +577,11 @@ impl Script {
         }
         self.acts.clear();
         self.facing = None;
+        self.release_button(keys, mouse);
+    }
+
+    /// Lets go of the mouse button a click pressed, if it still holds it.
+    fn release_button(&mut self, keys: &mut Keyboard, mouse: &mut ButtonInput<MouseButton>) {
         if let Some(button) = self.clicked.take() {
             // A genuine press of the same button belongs to the user now.
             if !keys.native_button(button) {
@@ -1399,7 +1404,11 @@ pub(super) fn drive(
     if matches!(
         script.current,
         Some((
-            Step::Press(_) | Step::Select(_) | Step::Click(_) | Step::RightClick(_),
+            Step::Press(_)
+                | Step::Select(_)
+                | Step::Click(_)
+                | Step::RightClick(_)
+                | Step::ClickWith { .. },
             _
         ))
     ) && (!script.held.is_empty() || script.clicked.is_some())
@@ -1425,6 +1434,14 @@ pub(super) fn drive(
             .current
             .as_ref()
             .is_some_and(|(step, _)| entry_target(step).is_some());
+        if matches!(script.current, Some((Step::ClickWith { .. }, _))) && !menu_entry {
+            // A person lets go of the button before the modifiers: the
+            // control a release clicks reads them still held, and they go
+            // up the frame after, as a one-frame press does.
+            script.release_button(&mut keys, &mut mouse);
+            script.current = Some((Step::Press(script.held.clone()), now));
+            return;
+        }
         script.release(&mut keys, &mut mouse);
         script.current = None;
         if menu_entry {
@@ -1912,7 +1929,7 @@ pub(super) fn drive(
                     arrived(&step, &online, covered)
                 }
             }
-            Step::Click(target) | Step::RightClick(target) => {
+            Step::Click(target) | Step::RightClick(target) | Step::ClickWith { target, .. } => {
                 if elapsed > MAX_WAIT {
                     script.stop(&mut keys, &mut mouse, "the pointer stayed over the window");
                     return;
@@ -1938,11 +1955,24 @@ pub(super) fn drive(
                     }
                 };
                 press(&mut commands, entity, *target, &mut buttons, &mut pointers);
-                let button = if matches!(step, Step::RightClick(_)) {
+                let button = if matches!(
+                    step,
+                    Step::RightClick(_) | Step::ClickWith { right: true, .. }
+                ) {
                     MouseButton::Right
                 } else {
                     MouseButton::Left
                 };
+                if let Step::ClickWith {
+                    keys: modifiers, ..
+                } = &step
+                {
+                    // Down with the button, so the press reads them.
+                    for key in modifiers {
+                        keys.press(*key);
+                    }
+                    script.held.clone_from(modifiers);
+                }
                 keys.mark_pointer(button, Some(entity));
                 mouse.press(button);
                 script.clicked = Some(button);
@@ -2509,7 +2539,7 @@ pub(super) fn drive(
                 MoveCommand::TurnRight => Act::TurnRight,
             }];
         }
-        Step::Click(_) | Step::RightClick(_) | Step::HoldClick(..) => {
+        Step::Click(_) | Step::RightClick(_) | Step::ClickWith { .. } | Step::HoldClick(..) => {
             // The script pointer leaves the control a hover rested on.
             script.pointed = script.hovering.take().or(script.pointed);
             if !script.background_owns_input()
@@ -2766,7 +2796,10 @@ fn opens_menu_first(
 /// The EQ menu entry a click step names, if any.
 fn entry_target(step: &Step) -> Option<ClickTarget> {
     match step {
-        Step::Click(target) | Step::RightClick(target) | Step::HoldClick(target, _)
+        Step::Click(target)
+        | Step::RightClick(target)
+        | Step::ClickWith { target, .. }
+        | Step::HoldClick(target, _)
             if matches!(target, ClickTarget::Toggle(_) | ClickTarget::ActionsWindow) =>
         {
             Some(*target)
@@ -6493,6 +6526,88 @@ mod tests {
         assert!(app.world().get_resource::<Script>().is_none());
         assert_eq!(script_pointer(&app), None);
         assert_eq!(arrow(&mut app).0, Display::None);
+    }
+
+    #[test]
+    fn a_modified_click_holds_its_keys_from_the_press_until_after_the_release() {
+        let mut app = pointing(vec![
+            Step::ClickWith {
+                keys: vec![KeyCode::AltLeft],
+                target: ClickTarget::Give,
+                right: true,
+            },
+            Step::Wait(Duration::from_secs(1)),
+        ]);
+        let (give, _) = give_and_attack(&mut app);
+        let held = |app: &App| {
+            (
+                app.world()
+                    .resource::<ButtonInput<MouseButton>>()
+                    .pressed(MouseButton::Right),
+                app.world()
+                    .resource::<ButtonInput<KeyCode>>()
+                    .pressed(KeyCode::AltLeft),
+            )
+        };
+        for ms in [0, 0, 125] {
+            frame_at(&mut app, ms);
+            assert_eq!(held(&app), (false, false), "{ms}");
+        }
+        // The press: the button and the modifier go down together.
+        frame_at(&mut app, 250);
+        assert_eq!(interaction(&app, give), Interaction::Pressed);
+        assert_eq!(held(&app), (true, true));
+        // The release: the button goes up first, as a person lets go,
+        // so a control that acts on the release still reads Alt.
+        frame_at(&mut app, 266);
+        assert_eq!(held(&app), (false, true));
+        // The modifier goes up the frame after, and the next step runs.
+        frame_at(&mut app, 282);
+        assert_eq!(held(&app), (false, false));
+        frame_at(&mut app, 298);
+        assert!(matches!(
+            app.world().resource::<Script>().current,
+            Some((Step::Wait(_), _))
+        ));
+    }
+
+    #[test]
+    fn a_run_stopped_during_a_modified_click_lets_its_keys_go() {
+        for stop_at in [270, 286] {
+            let (mut app, _) = background(vec![
+                Step::ClickWith {
+                    keys: vec![KeyCode::ShiftLeft, KeyCode::ControlLeft],
+                    target: ClickTarget::Give,
+                    right: false,
+                },
+                Step::Wait(Duration::from_secs(1)),
+            ]);
+            let (give, _) = give_and_attack(&mut app);
+            for ms in [0, 10, 260] {
+                frame_at(&mut app, ms);
+            }
+            assert_eq!(interaction(&app, give), Interaction::Pressed);
+            if stop_at == 286 {
+                // Between the button's release and the modifiers'.
+                frame_at(&mut app, 270);
+            }
+            app.world_mut()
+                .resource_mut::<RunControl>()
+                .request(Request::Stop);
+            frame_at(&mut app, stop_at);
+            assert!(!app.world().contains_resource::<Script>(), "{stop_at}");
+            let keys = app.world().resource::<ButtonInput<KeyCode>>();
+            assert!(
+                !keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ControlLeft]),
+                "{stop_at}"
+            );
+            assert!(
+                !app.world()
+                    .resource::<ButtonInput<MouseButton>>()
+                    .pressed(MouseButton::Left),
+                "{stop_at}"
+            );
+        }
     }
 
     #[test]

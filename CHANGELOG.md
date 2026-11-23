@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Scripts can click with Shift, Ctrl or Alt held (checklist 6.586). `click_with(keys, target...)` and `right_click_with(keys, target...)` take `"shift"`, `"ctrl"`, `"alt"` or a chord of them. The keys go down with the button's press and up the frame after its release, through the same input a person's keys use, so every window reads them unchanged. That reaches an item's click effect (Alt + right-click), whole-stack and single-item moves, all-coin moves and link composing, which no script could do before (Adam 11-23: scripts may do whatever a player can). A run stopped mid-click releases the keys.
+
 - A script's `slash(...)` line runs exactly as a typed one (checklist 6.584), since a script may do whatever the player can (Adam, 11-23).
   - The step takes any line the player could type, up to the chat line's 512 bytes and without control characters, instead of a list of allowed commands.
   - The line goes through the chat line's own path: abbreviations first, then `/reply`, `/rtarget`, `/friend`, `/ignore`, `/who all friends`, sharing, `/follow`, `/quit` and `/exit`, the client's own commands, the game commands and the chat words. The same rules, paces and refusals apply, and the line carries the script's admission.
