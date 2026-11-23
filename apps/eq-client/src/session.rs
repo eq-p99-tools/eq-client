@@ -208,6 +208,11 @@ impl SessionWorker {
                             tracing::info!("{message}");
                             None
                         }
+                        // The gap log's own handling is eq-client #563's.
+                        ClientEvent::Gap(gap) => {
+                            tracing::info!("{gap:?}");
+                            None
+                        }
                         // A reconnect is a fresh login; this viewer asks for
                         // none, but says so if one comes.
                         ClientEvent::Reconnecting {

@@ -2647,6 +2647,8 @@ mod tests {
             ]
         );
         assert!(parse("slash(\"consent\")\n", base).is_err());
+        // A challenge to a duel is no script's to send (checklist 6.492b).
+        assert!(parse("slash(\"duel\")\n", base).is_err());
     }
 
     #[test]
