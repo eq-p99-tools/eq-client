@@ -666,6 +666,14 @@ impl ClientWorld {
         self.player_posture_changes
     }
 
+    /// Whether the player holds a Feign Death standing (Move While Feigned,
+    /// 6.454), as the session last said: a jump then goes without its
+    /// crouch's posture reports, which would end the feign (6.600).
+    #[must_use]
+    pub const fn feign_held(&self) -> bool {
+        self.zone.feign_held
+    }
+
     /// The posture last reported for the player or a spawn.
     #[must_use]
     pub fn posture(&self, id: u16) -> Option<PostureState> {
