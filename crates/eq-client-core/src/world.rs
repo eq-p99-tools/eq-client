@@ -979,7 +979,7 @@ impl ClientWorld {
             // outcome (eq-client #560), the surname's answer, the staff
             // reports' outcome, the chat channels' lines and the title list
             // take their arms in those threads' PRs.
-            WorldEvent::PoisonAnswered(_)
+            unshown @ (WorldEvent::PoisonAnswered(_)
             | WorldEvent::ApplyPoisonRefused { .. }
             | WorldEvent::ServerFiltersKept { .. }
             | WorldEvent::ServerFiltersRefused { .. }
@@ -1068,7 +1068,17 @@ impl ClientWorld {
             // The machine's weekly account left for the world; the session
             // host keeps the date it went (the installed client's own
             // `LastSysInfoDate` stamp). Nothing about the world changed.
-            | WorldEvent::SystemInfoReported { .. } => (),
+            | WorldEvent::SystemInfoReported { .. }
+            // Shown once their front ends land; counted until then.
+            | WorldEvent::PoisonAnswered(_)
+            | WorldEvent::ApplyPoisonRefused { .. }
+            | WorldEvent::ServerFiltersKept { .. }
+            | WorldEvent::ServerFiltersRefused { .. }
+            | WorldEvent::DuelOffer(_)
+            | WorldEvent::DuelRefused { .. }) => {
+                // Each still counts in the session's gap file, by kind.
+                news.unshown = crate::gaps::variant_name(unshown);
+            }
 
             // The zone and what is in it.
             WorldEvent::BoatControl(packet) => {

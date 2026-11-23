@@ -14,6 +14,7 @@ pub mod doors;
 pub mod emotes;
 pub mod entities;
 pub mod environment;
+pub mod gaps;
 pub mod ground;
 pub mod hotbar;
 pub mod logs;

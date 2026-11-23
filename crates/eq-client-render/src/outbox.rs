@@ -318,6 +318,8 @@ impl Outbox {
     ) -> Result<(), Refusal> {
         let command = match (command, self.chat_admission) {
             (ClientCommand::SendChat(message), Some(session_id)) => {
+                // The common tongue, as before eq-network carried a chosen
+                // one; the languages work picks the spoken one.
                 ClientCommand::SendChatInAdmission {
                     session_id,
                     message,
