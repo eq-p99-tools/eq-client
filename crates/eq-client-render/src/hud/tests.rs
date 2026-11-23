@@ -891,6 +891,12 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
         rx.try_recv().unwrap(),
         ClientCommand::ForgetSpell { spell_id: 73, .. }
     ));
+    // The book holds one edit until its answer; this one is refused, so the
+    // gem keeps its spell for the steps below.
+    app.world().resource::<crate::outbox::Outbox>().book_news(
+        &WorldEvent::BookAction(eq_client_core::BookActionStatus::Rejected("Refused".into())),
+        Some(7),
+    );
     // While the session says a Bard sings that song, a press goes to it:
     // the session stops the song (read R49-21c).
     testing::news(
