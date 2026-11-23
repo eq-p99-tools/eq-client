@@ -392,6 +392,14 @@
   pools) are left to those changes; a command dropped before a fresh login
   is logged by its kind.
 
+- Keep the latest title list (gap 3.6 titles half, checklist 6.516). Where
+  the session offers titles (stock EQEmu only, for now), the core keeps the
+  list the server last sent in this zone (`ClientWorld::titles`), forgotten
+  on a zone change; elsewhere a list is ignored. Nothing asks for the list
+  or chooses a title yet: the program's title window is unread (R49-14), so
+  no command, script step or key reaches it. Repins eq-network to the titles
+  change (#346); the chat server's channels (6.509) and the petition and bug
+  report answers (6.511) are ignored until their own client PRs land.
 - Add RoF2 as a placeholder generation, following eq-network's
   (`GameDialect::Rof2`, `ServerProtocol::EqEmuRof2`). `InstalledClient::Rof2`
   is in `InstalledClient::ALL` but has no marker files, so no folder is ever
