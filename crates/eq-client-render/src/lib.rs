@@ -87,6 +87,7 @@ mod languages;
 mod lighting;
 mod list_cells;
 mod loading;
+mod local_settings;
 mod login;
 mod logs;
 mod map;
@@ -519,7 +520,7 @@ pub fn run(
     .insert_resource(online::Updates(std::sync::Mutex::new(updates)))
     .insert_resource(outbox);
     init_presentation(&mut app);
-    app.insert_resource(options::OptionsState::new(option_defaults));
+    app.insert_resource(options::OptionsState::new(&option_defaults));
     app.add_plugins(
         DefaultPlugins
             .set(WindowPlugin {
