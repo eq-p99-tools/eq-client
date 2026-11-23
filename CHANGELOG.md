@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Zones without a sky are lit as the original lights them, so the Erudin palace and other interiors are no longer too dark (Adam, 11-23). See [Zone lighting](docs/zone-lighting.md).
+  - **Baked light:** each terrain vertex's colour from the zone file, and each placed object's colour track, is now drawn. Before, both were dropped at load.
+  - **The engine's single-pass formula:** each vertex sums the ambient by its alpha past the 0.12 offset, its own light at full weight, and up to three point lights. The sum saturates once, then multiplies the texture.
+  - **The ambient** comes from the zone header's time type, as in eqgame.exe 0x441295. Type 4 (the palace) gets 0.5 grey and other types 0.1. Types 1, 2 and 5 follow the day table, read from the installed eqgame.exe. Vision raises the ambient to the floor.
+  - **Point lights:** the zone's placed lights and carried torches light zone geometry per vertex, worked out on the CPU, in place of Bevy's lights. Which lights each mesh takes is inferred until the engine's light lists are read.
+  - **Tone curve:** the scene camera no longer applies one, inside or out, as the original applies none. Colour grading stays.
+  - **Known departure:** the floor's fade while you carry a light isn't modelled.
 - Petitions and reports as the Titanium program takes them (read R49-23,
   checklist 6.511, C1a), on eq-network #414.
   - **`/petition`** sends its words and echoes them in the installed line
