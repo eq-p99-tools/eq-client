@@ -288,9 +288,9 @@ mod tests {
     use super::{Field, Value};
     use crate::online::{OnlineState, testing as session};
     use eq_client_core::{
-        SpawnKind, WorldEvent,
+        Coins, SpawnKind, WorldEvent,
         combat::{ConColor, Consideration},
-        money::Coins,
+        targets::TargetState,
     };
 
     const PLAYER: u16 = 7;
@@ -363,7 +363,19 @@ mod tests {
         session::spawn_entry(&mut online, TARGET, spawn);
         // No target: unknown.
         assert_eq!(read(&online, "target.hp_percent"), Value::Unknown);
-        online.select_target(Some(TARGET));
+        // The server's answer to a selection, as the target window takes it.
+        session::news(
+            &mut online,
+            [WorldEvent::TargetChanged {
+                session_id: 1,
+                request_id: 0,
+                state: TargetState {
+                    revision: 1,
+                    spawn_id: Some(TARGET),
+                    available: true,
+                },
+            }],
+        );
         session::news(
             &mut online,
             [WorldEvent::HealthPercent {
