@@ -6875,80 +6875,25 @@ pub(super) mod tests {
         assert!(highest < 1.0, "origin rose to {highest}: {seen:?}");
     }
 
-    /// The ramp at Temple of Life's north deck (North Qeynos), down into
-    /// the pool, and the deck's face above it: the triangles the installed
-    /// zone's collision has within 6 of where a swimmer froze (local look,
-    /// 11-23), in the renderer's frame, with the pool's floor and water.
-    fn temple_ramp() -> CollisionWorld {
+    /// A ramp shaped like the one at Temple of Life's north deck: two
+    /// overlapping faces climbing out of a pool whose surface is at -2,
+    /// split at a crease, with a wall along their side and a floor at -16.
+    fn pool_ramp() -> CollisionWorld {
+        let (lip, crease, far) = (-6.25, -3.125, 21.75);
         let mut triangles = vec![
-            [
-                [-167.9375, 1.0, 314.125],
-                [-153.9375, 7.96875, 335.875],
-                [-167.9375, 7.96875, 335.875],
-            ],
-            [
-                [-153.9375, 7.96875, 335.875],
-                [-167.9375, 1.0, 314.125],
-                [-167.9375, 0.0, 311.0],
-            ],
-            [
-                [-153.9375, 1.0, 314.125],
-                [-167.9375, 0.0, 311.0],
-                [-153.9375, 0.0, 311.0],
-            ],
-            [
-                [-167.9375, 0.0, 311.0],
-                [-153.9375, 1.0, 314.125],
-                [-153.9375, 7.96875, 335.875],
-            ],
-            [
-                [-167.9375, 1.0, 314.125],
-                [-167.9375, 10.0, 335.875],
-                [-167.9375, 1.0, 307.875],
-            ],
-            [
-                [-167.9375, 10.0, 335.875],
-                [-167.9375, 1.0, 314.125],
-                [-167.9375, 7.96875, 335.875],
-            ],
-            [
-                [-167.9375, 1.0, 314.125],
-                [-167.9375, 0.0, 307.875],
-                [-167.9375, 0.0, 311.0],
-            ],
-            [
-                [-167.9375, 0.0, 307.875],
-                [-167.9375, 1.0, 314.125],
-                [-167.9375, 1.0, 307.875],
-            ],
-            [
-                [-153.9375, -1.0, 307.875],
-                [-167.9375, 0.0, 311.0],
-                [-167.9375, -1.0, 307.875],
-            ],
-            [
-                [-167.9375, 0.0, 311.0],
-                [-153.9375, -1.0, 307.875],
-                [-153.9375, 0.0, 311.0],
-            ],
-            [
-                [-167.9375, 0.0, 311.0],
-                [-167.9375, 0.0, 307.875],
-                [-167.9375, -1.0, 307.875],
-            ],
+            [[0.0, 1.0, 0.0], [14.0, 8.0, far], [0.0, 8.0, far]],
+            [[14.0, 8.0, far], [0.0, 1.0, 0.0], [0.0, 0.0, crease]],
+            [[14.0, 1.0, 0.0], [0.0, 0.0, crease], [14.0, 0.0, crease]],
+            [[0.0, 0.0, crease], [14.0, 1.0, 0.0], [14.0, 8.0, far]],
+            [[0.0, 1.0, 0.0], [0.0, 10.0, far], [0.0, 1.0, lip]],
+            [[0.0, 10.0, far], [0.0, 1.0, 0.0], [0.0, 8.0, far]],
+            [[0.0, 1.0, 0.0], [0.0, 0.0, lip], [0.0, 0.0, crease]],
+            [[0.0, 0.0, lip], [0.0, 1.0, 0.0], [0.0, 1.0, lip]],
+            [[14.0, -1.0, lip], [0.0, 0.0, crease], [0.0, -1.0, lip]],
+            [[0.0, 0.0, crease], [14.0, -1.0, lip], [14.0, 0.0, crease]],
+            [[0.0, 0.0, crease], [0.0, 0.0, lip], [0.0, -1.0, lip]],
         ];
-        triangles.extend([
-            [
-                [-200.0, -16.0, 280.0],
-                [-120.0, -16.0, 280.0],
-                [-120.0, -16.0, 360.0],
-            ],
-            [
-                [-200.0, -16.0, 280.0],
-                [-120.0, -16.0, 360.0],
-                [-200.0, -16.0, 360.0],
-            ],
-        ]);
+        triangles.extend(flat_surface(-16.0));
         CollisionWorld::new(triangles)
             .unwrap()
             .with_liquids(Pool {
@@ -6960,19 +6905,16 @@ pub(super) mod tests {
 
     #[test]
     fn a_body_surfacing_under_a_ramp_drops_back_into_the_water() {
-        // Where the swimmer froze: its origin just out of the water, its
-        // head in the ramp's underside. It must not freeze.
-        for origin in [
-            Vec3::new(-166.45, -1.6, 314.15),
-            Vec3::new(-166.38, -1.5, 314.12),
-        ] {
+        // A swimmer came up under a ramp (Temple of Life, local look,
+        // 11-23): its origin just out of the water, its head in the ramp's
+        // underside. It must drop back in and swim on, not freeze.
+        for origin in [Vec3::new(1.5, -1.6, 0.025), Vec3::new(1.55, -1.5, -0.005)] {
             let feet = origin - Vec3::Y * 3.75;
-            let seen = swim_from(temple_ramp(), feet, 0.0, (Some(WET_SWIMMER), 0.0), 20).unwrap();
+            let seen = swim_from(pool_ramp(), feet, 0.0, (Some(WET_SWIMMER), 0.0), 20).unwrap();
             assert!(
                 seen.iter().any(|(_, at, _)| at.distance(feet) > 0.1),
                 "frozen at {origin}: {seen:?}"
             );
-            // It drops back in and swims on.
             assert!(
                 seen.iter().any(|(mode, _, _)| *mode == MovementMode::Swim),
                 "{seen:?}"
