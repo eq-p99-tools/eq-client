@@ -7,7 +7,8 @@
   `EQEmu`, eq-network #328), the skin's confirmation dialog asks "<name>
   challenges you to a duel. Do you accept?" after a resurrection and a
   translocate. Only the player's own click on Yes accepts: a script step
-  clicking Yes is refused in this client's words and stops the script,
+  that reaches the dialog's Yes, by any name and by click, right-click or
+  held click, is refused in this client's words and stops the script,
   while a scripted No still declines. No setting or key answers it. The
   question has no local deadline. A challenger not in the spawn list is
   "Someone". `InstalledClient::duel_offer()` names the installed client's

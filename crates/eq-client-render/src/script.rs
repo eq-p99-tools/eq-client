@@ -3042,6 +3042,13 @@ fn reach(
     world: &eq_client_core::world::ClientWorld,
 ) -> Result<Entity, String> {
     let entity = find(target, buttons, layout).ok_or("click target is not visible")?;
+    // Accepting a duel is only ever the player's own click, however a step
+    // names the Yes it reached; a script may still say No (checklist 6.492).
+    if accepts_duel(entity, buttons, world) {
+        return Err(
+            "a script cannot accept a challenge to a duel; only your own click on Yes does".into(),
+        );
+    }
     match (target, needs.get(entity)) {
         (ClickTarget::Button(..), Ok(needs)) if !needs.offered(world) => {
             Err(format!("that button is greyed out: {}", needs.reason()))
@@ -3049,19 +3056,21 @@ fn reach(
         (ClickTarget::Slider(..), Ok(needs)) if !needs.offered(world) => {
             Err(format!("that slider is greyed out: {}", needs.reason()))
         }
-        // Accepting a duel is only ever the player's own click; a script
-        // may still say No (checklist 6.492).
-        (ClickTarget::Answer(true), _)
-            if crate::confirm::consent_in(world).map(|id| id.kind)
-                == Some(eq_client_core::confirmations::ConsentKind::Duel) =>
-        {
-            Err(
-                "a script cannot accept a challenge to a duel; only your own click on Yes does"
-                    .into(),
-            )
-        }
         _ => Ok(entity),
     }
+}
+
+/// Whether the control reached is the confirmation dialog's Yes while the
+/// question it answers is a challenge to a duel.
+fn accepts_duel(
+    entity: Entity,
+    buttons: &Buttons,
+    world: &eq_client_core::world::ClientWorld,
+) -> bool {
+    let answer = buttons.get(entity).ok().and_then(|item| item.13.3.0.3);
+    answer.is_some_and(|answer| answer.0)
+        && crate::confirm::consent_in(world).map(|id| id.kind)
+            == Some(eq_client_core::confirmations::ConsentKind::Duel)
 }
 
 /// The frontmost visible matching control in an open window. A semantic
@@ -5279,11 +5288,14 @@ mod tests {
         assert!(receiver.try_recv().is_err());
     }
 
-    #[test]
-    fn a_script_cannot_accept_a_duel() {
+    /// A duel question shown, its Yes laid out as the skin draws it (with
+    /// its skin id), and a script running one step at it: the step is
+    /// refused for the duel, nothing goes out and the question stays open.
+    fn a_script_step_cannot_accept_a_duel(step: Step) {
         use crate::{
             confirm::{AnswerButton, Asked, QuestionText},
             online::{OnlineState, testing},
+            skinned::SkinId,
             windows::{Shown, WindowId},
         };
         use eq_client_core::{
@@ -5292,7 +5304,7 @@ mod tests {
             socials::DuelQuestion,
         };
 
-        let (mut app, _) = background(vec![Step::Click(ClickTarget::Answer(true))]);
+        let (mut app, _) = background(vec![step]);
         let mut online = OnlineState::new(true);
         testing::admit(&mut online, 7, testing::player(9));
         let id = ConsentId {
@@ -5325,15 +5337,16 @@ mod tests {
         let dialog = app.world_mut().spawn(Node::default()).id();
         app.world_mut()
             .spawn((QuestionText, Text::default(), ChildOf(dialog)));
-        let yes = app
-            .world_mut()
-            .spawn((
-                Button,
-                AnswerButton(true),
-                ChildOf(dialog),
-                laid_out(Vec2::new(600.0, 360.0), 40.0, 2),
-            ))
-            .id();
+        app.world_mut().spawn((
+            Button,
+            AnswerButton(true),
+            SkinId {
+                window: WindowId::Confirmation,
+                id: "Yes_Button".into(),
+            },
+            ChildOf(dialog),
+            laid_out(Vec2::new(600.0, 360.0), 40.0, 2),
+        ));
         for ms in (0..=1_000).step_by(10) {
             frame_at(&mut app, ms);
         }
@@ -5366,7 +5379,33 @@ mod tests {
         );
         // The player's own click on Yes accepts: see
         // `confirm::tests::the_players_click_answers_a_duel`.
-        let _ = yes;
+    }
+
+    #[test]
+    fn a_script_cannot_accept_a_duel() {
+        a_script_step_cannot_accept_a_duel(Step::Click(ClickTarget::Answer(true)));
+    }
+
+    /// Named by its skin id, the Yes is the same control.
+    #[test]
+    fn a_script_cannot_accept_a_duel_by_the_buttons_skin_id() {
+        a_script_step_cannot_accept_a_duel(Step::Click(ClickTarget::Button(
+            "confirmation",
+            "Yes_Button",
+        )));
+    }
+
+    /// A right-click and a held click reach a control as a click does.
+    #[test]
+    fn a_script_cannot_accept_a_duel_with_a_right_or_held_click() {
+        a_script_step_cannot_accept_a_duel(Step::RightClick(ClickTarget::Button(
+            "confirmation",
+            "Yes_Button",
+        )));
+        a_script_step_cannot_accept_a_duel(Step::HoldClick(
+            ClickTarget::Answer(true),
+            Duration::from_millis(200),
+        ));
     }
 
     #[test]
