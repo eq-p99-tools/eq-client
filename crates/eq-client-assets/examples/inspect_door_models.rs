@@ -13,6 +13,10 @@
 //! Every object mesh in every installed `<zone>_obj.s3d` whose passable faces
 //! the rule makes solid, placed objects and doors alike:
 //! `cargo run -p eq-client-assets --example inspect_door_models -- <EQ dir> --changed`
+//!
+//! Where a zone places the objects built on those meshes, in server axes,
+//! with the `/loc` the game prints (y, x, z):
+//! `cargo run -p eq-client-assets --example inspect_door_models -- <EQ dir> --places <zone>`
 use libeq::pfs::PfsReader;
 use libeq::wld::parser::{DmSpriteDef2, FragmentRef, StringReference, WldDoc};
 use std::collections::{BTreeMap, BTreeSet};
@@ -22,6 +26,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let directory = PathBuf::from(args.next().ok_or("supply an EQ install directory")?);
     let zone = args.next().ok_or("supply a zone short name or --doors")?;
+    if zone == "--places" {
+        let zone = args.next().ok_or("supply a zone short name")?;
+        places(&directory, &zone)?;
+        return Ok(());
+    }
     if zone == "--changed" {
         changed(&directory)?;
         return Ok(());
@@ -222,5 +231,51 @@ fn changed(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         "# object archives {}, read {read}; meshes made solid throughout {count}",
         zones.len()
     );
+    Ok(())
+}
+
+/// Each placed object whose model is named for a mesh the rule makes solid
+/// (its name, less `_ACTORDEF`, starts that mesh's name), up to five places
+/// each, in server axes.
+fn places(directory: &Path, zone: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let facts = mesh_facts(directory, zone).ok_or("no object archive")?;
+    let solid: Vec<&String> = facts
+        .iter()
+        .filter(|(_, fact)| fact.passable > 0 && fact.solid_throughout)
+        .map(|(mesh, _)| mesh)
+        .collect();
+    let asset = eq_client_assets::load_zone_collision(directory, zone)?;
+    println!("model\tmeshes\tsolid\tx\ty\tz\tloc (y, x, z)");
+    for (index, model) in asset.models.iter().enumerate() {
+        let stem = model.name.trim_end_matches("_ACTORDEF");
+        let meshes: Vec<&str> = solid
+            .iter()
+            .filter(|mesh| mesh.starts_with(stem))
+            .map(|mesh| mesh.trim_end_matches("_DMSPRITEDEF"))
+            .collect();
+        if meshes.is_empty() {
+            continue;
+        }
+        for object in asset
+            .objects
+            .iter()
+            .filter(|object| object.model == index)
+            .take(5)
+        {
+            let at = eq_client_axes::to_world(glam::Vec3::from_array(object.translation));
+            println!(
+                "{}\t{}\t{}\t{:.0}\t{:.0}\t{:.0}\t{:.0}, {:.0}, {:.0}",
+                model.name,
+                meshes.join(","),
+                model.collision.len(),
+                at.x,
+                at.y,
+                at.z,
+                at.y,
+                at.x,
+                at.z
+            );
+        }
+    }
     Ok(())
 }
