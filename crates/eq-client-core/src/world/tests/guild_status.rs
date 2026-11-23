@@ -10,6 +10,12 @@ fn player(spawn_id: u16, name: &str) -> SpawnState {
     }
 }
 
+fn gm(spawn_id: u16, name: &str) -> SpawnState {
+    let mut spawn = player(spawn_id, name);
+    spawn.appearance.titanium_gm = Some(1);
+    spawn
+}
+
 fn listed(world: &mut ClientWorld, spawn_id: u16, change: ListingChange) {
     game(world, WorldEvent::Listing { spawn_id, change });
 }
@@ -28,6 +34,7 @@ fn guild_status_names_the_targets_guild_and_rank_as_eqemu_says_them() {
                 kind: SpawnKind::PlayerCorpse,
                 ..player(11, "Gone")
             },
+            gm(12, "Mod"),
         ]),
     );
     game(
@@ -44,13 +51,18 @@ fn guild_status_names_the_targets_guild_and_rank_as_eqemu_says_them() {
     }
     let status = |world: &mut ClientWorld, target| {
         world.select_target(target);
-        world.guild_status()
+        world.guild_status(None)
     };
     let named = |name: &str| (name.to_owned(), "Seekers".to_owned());
     assert_eq!(status(&mut world, None), Some(GuildStatus::NoPlayer));
     // An NPC and a player's corpse are no players.
     assert_eq!(status(&mut world, Some(5)), Some(GuildStatus::NoPlayer));
     assert_eq!(status(&mut world, Some(11)), Some(GuildStatus::NoPlayer));
+    // A game master is refused, by target or by name.
+    listed(&mut world, 12, ListingChange::Guild(Some(3)));
+    listed(&mut world, 12, ListingChange::GuildRank(GuildRank::Member));
+    assert_eq!(status(&mut world, Some(12)), Some(GuildStatus::NoPlayer));
+    assert_eq!(world.guild_status(Some("Mod")), Some(GuildStatus::NoPlayer));
     let (name, guild) = named("Zed");
     assert_eq!(
         status(&mut world, Some(6)),
@@ -70,19 +82,17 @@ fn guild_status_names_the_targets_guild_and_rank_as_eqemu_says_them() {
         status(&mut world, Some(10)),
         Some(GuildStatus::NoGuild { name: "Cy".into() })
     );
-    // A roleplayer's guild shows; an anonymous player's waits for R49-6k.
-    listed(
-        &mut world,
-        8,
-        ListingChange::Anonymity(Anonymity::Roleplaying),
-    );
-    assert!(matches!(
-        status(&mut world, Some(8)),
-        Some(GuildStatus::Member { .. })
-    ));
-    for anonymity in [Anonymity::Anonymous, Anonymity::AnonymousRoleplaying] {
+    // Anonymity isn't tested: the guild the server sent shows.
+    for anonymity in [
+        Anonymity::Roleplaying,
+        Anonymity::Anonymous,
+        Anonymity::AnonymousRoleplaying,
+    ] {
         listed(&mut world, 8, ListingChange::Anonymity(anonymity));
-        assert_eq!(status(&mut world, Some(8)), None);
+        assert!(matches!(
+            status(&mut world, Some(8)),
+            Some(GuildStatus::Member { .. })
+        ));
     }
     // A guild the world's list doesn't name, or a rank not come yet, says
     // nothing.
@@ -91,13 +101,28 @@ fn guild_status_names_the_targets_guild_and_rank_as_eqemu_says_them() {
     assert_eq!(status(&mut world, Some(10)), None);
     listed(&mut world, 10, ListingChange::Guild(Some(3)));
     assert_eq!(status(&mut world, Some(10)), None);
-    // A rank past Titanium's three is not one EQEmu words.
+    // A rank past the three has a line naming only the player.
     listed(
         &mut world,
         10,
         ListingChange::GuildRank(GuildRank::Other(3)),
     );
-    assert_eq!(status(&mut world, Some(10)), None);
+    assert_eq!(
+        status(&mut world, Some(10)),
+        Some(GuildStatus::Ranked { name: "Cy".into() })
+    );
+    // A typed name finds the player, whatever the target, ignoring case;
+    // a name no spawn has, or an NPC's, is refused.
+    world.select_target(Some(10));
+    let (name, guild) = named("Zed");
+    assert_eq!(
+        world.guild_status(Some("zed")),
+        Some(GuildStatus::Leader { name, guild })
+    );
+    assert_eq!(
+        world.guild_status(Some("Nobody")),
+        Some(GuildStatus::NoPlayer)
+    );
 }
 
 #[test]
@@ -105,7 +130,7 @@ fn guild_status_of_the_player_reads_their_own_listing() {
     let mut world = admitted();
     world.select_target(Some(9));
     assert_eq!(
-        world.guild_status(),
+        world.guild_status(None),
         Some(GuildStatus::NoGuild {
             name: world.player().unwrap().name.clone()
         })

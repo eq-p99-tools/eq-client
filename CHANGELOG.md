@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- `/guildstatus` is offered, as read R49-6k reads it (checklist 6.575).
+  - The Titanium program answers it itself and sends nothing: for the player a typed name finds (`/guildstatus Name`, ignoring case), or else for the target.
+  - Lines 12256, 12257 and 12258 give the rank (member, officer, leader) with the name and the guild. 12259 gives the name alone for any other rank, and 12260 refuses a missing spawn, one that isn't a player, or a game master. All come in message type 0x111.
+  - A player in no guild gets this client's own words, because the program's are its own and not in the strings.
+  - Still inferred: that +0x256 is the GM flag (read R49-4 takes it so), and the name lookup's exact rule. Anonymity isn't tested, so an anonymous player's guild shows as the server sent it. The Mac client's answer wasn't read, so it is refused there for now.
+
 - Scripts can read the group window, the effects window and the last tell (checklist 6.593, O2).
   - **Group:** `group.present`, `group.count`, and `group.member1.name` to `group.member5.hp_percent`.
   - **Effects:** `buffs.count`, and `buff1.spell` to `buff50.spell` in the window's order.
