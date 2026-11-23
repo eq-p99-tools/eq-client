@@ -74,3 +74,12 @@ fn a_social_or_hotbutton_line_cannot_turn_it_over() {
     }
     assert_eq!(chat.fastdrop_asked, None);
 }
+
+#[test]
+fn the_forget_path_turns_it_off_for_the_next_character() {
+    let mut app = app();
+    ask(&mut app);
+    assert!(app.world().resource::<InventoryState>().fast_drop);
+    app.world_mut().resource_mut::<InventoryState>().forget();
+    assert!(!app.world().resource::<InventoryState>().fast_drop);
+}
