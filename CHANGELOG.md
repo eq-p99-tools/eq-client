@@ -291,6 +291,26 @@
   Repins eq-network to d0c75e2 (#341 with #327 to #340). Their poison,
   filters, duel, surname, report and gap events are passed over here until
   their own client changes land. Outgoing chat names `Tongue::COMMON`.
+- Reach a Titanium door from the point clicked on it (checklist 6.530,
+  read R16b and R16e). A mouse click on a door sends where the pointer's
+  ray met the door as drawn (`ClickDoor.point`, eq-network #358), and the
+  session admits it within the player's size and 20 in 3-D, as the
+  program does, so a lift resting above can be called from its deck by the
+  part clicked. A click out of reach is no longer dropped without a word:
+  the session refuses it and the chat shows the program's line 1462. The
+  Use key and scripts send no point and keep the stricter reach to the
+  door's origin; the Use key's own ray is unread (R49-19). `EQMac` doors
+  are unchanged.
+- Name a strafe's pace (checklist 6.540). A strafe sample says whether Walk
+  or Run is selected (`MovementMode::Strafe(Pace)`, eq-network #365), the
+  same choice that already picks its rate, so the session bounds a walking
+  strafe by the walking strafe rate rather than the running one. Nothing a
+  player sees or the server receives changes.
+- eq-network is repinned to 266039c. The events other changes show (titles,
+  a surname's answer, the bind zone, a poison's answer, chat channels, the
+  chat pace refusal, filters, a duel's offer, reports, RoF2 buff icons and
+  pools) are left to those changes; a command dropped before a fresh login
+  is logged by its kind.
 
 - Add RoF2 as a placeholder generation, following eq-network's
   (`GameDialect::Rof2`, `ServerProtocol::EqEmuRof2`). `InstalledClient::Rof2`

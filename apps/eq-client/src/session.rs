@@ -227,6 +227,12 @@ impl SessionWorker {
                             tracing::warn!("Reconnecting in {delay_seconds} s: {error}");
                             Some(WorldUpdate::Connection(Link::LoggingIn))
                         }
+                        // A command from the ended session, dropped unread
+                        // before the fresh login; its kind alone is logged.
+                        ClientEvent::CommandDropped { command, reason } => {
+                            tracing::info!("Dropped {command}: {reason}");
+                            None
+                        }
                     };
                     if let Some(update) = update {
                         enqueue(&sender, &worker_cancel, update)?;
