@@ -42,6 +42,10 @@ pub enum ZoneSoundError {
         /// Why.
         source: io::Error,
     },
+    /// The zone's short name is not plain (letters, digits and underscore),
+    /// so no file name is built from it.
+    #[error("the zone's name is not a plain short name")]
+    ZoneName,
     /// The emitter file is not whole records, or holds too many.
     #[error("{0} bytes is not a whole number of {RECORD}-byte sound records, or too many")]
     Length(usize),
@@ -338,9 +342,15 @@ impl ZoneSounds {
     /// file it lacks leaves its part empty.
     ///
     /// # Errors
-    /// Refuses a file that exists but can't be read, or an emitter file that
-    /// is not whole records.
+    /// Refuses a zone name that is not plain (empty, or anything but ASCII
+    /// letters, digits and underscore) before any path is built, a file
+    /// that exists but can't be read, or an emitter file that is not whole
+    /// records.
     pub fn read(eq_directory: &Path, zone: &str) -> Result<Self, ZoneSoundError> {
+        // The name comes from the server; it names files only when plain.
+        if zone.is_empty() || !zone.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
+            return Err(ZoneSoundError::ZoneName);
+        }
         let zone = zone.to_ascii_lowercase();
         let emitters = optional(&find(eq_directory, &format!("{zone}_sounds.eff")))?
             .map(|bytes| read_emitters(&bytes))
@@ -477,6 +487,26 @@ mod tests {
         assert_eq!(found.emitters.len(), 1);
         assert_eq!(found.bank.section("EMIT"), ["wave.wav"]);
         assert_eq!(found.music.as_deref(), Some(&b"FORM"[..]));
+        fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn a_zone_name_that_is_not_plain_names_no_file() {
+        let directory =
+            std::env::temp_dir().join(format!("zone-sounds-plain-{}", std::process::id()));
+        fs::create_dir_all(directory.join("x")).unwrap();
+        fs::write(directory.join("x").join("a.xmi"), b"FORM").unwrap();
+        for zone in ["../x", "x/a", "x\\a", "", "a.b", "a b", "zone\0"] {
+            assert!(
+                matches!(
+                    ZoneSounds::read(&directory, zone),
+                    Err(ZoneSoundError::ZoneName)
+                ),
+                "{zone:?}"
+            );
+        }
+        assert!(ZoneSounds::read(&directory, "qeynos2").is_ok());
+        assert!(ZoneSounds::read(&directory, "tox_2").is_ok());
         fs::remove_dir_all(&directory).unwrap();
     }
 }
