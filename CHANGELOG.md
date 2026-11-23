@@ -8,6 +8,12 @@
   - A player in no guild gets this client's own words, because the program's are its own and not in the strings.
   - Still inferred: that +0x256 is the GM flag (read R49-4 takes it so), and the name lookup's exact rule. Anonymity isn't tested, so an anonymous player's guild shows as the server sent it. The Mac client's answer wasn't read, so it is refused there for now.
 
+- A jump never stands a seated player or ends a feign held standing (checklist 6.600, Adam 11-23: "jumping does not stand, just as jumping from sitting does not stand").
+  - **Seated jump:** a jump press while sitting or kneeling to loot does nothing and stands no one, as the original client's jump waits on the can-move flag (read R19 c). The Mac-era client is inferred the same. With Allow Auto-Stand on, forward still stands a sitter.
+  - **Feign held standing:** with Move While Feigned on, a jump from standing still keeps its crouch's wait but sends no duck or stand, so the feign holds. The session's new `FeignHeld` report says when one is held. Without the option, a feigned player lies, and a lying jump stays blocked.
+  - The Move While Feigned text in the settings and the guide now says a jump keeps the feign.
+- Repin eq-network to 86970af, its main with #398 merged (6.599). The repin brings `WorldEvent::FeignHeld`, the seated-jump refusal, and eq-network main through b9a5668. That includes the Quarm and TAKP offers 6.580 to 6.598 and the 6.602 boat-control read. It also brings `TrainingOffer::price_scale`, which is None in every literal here.
+
 - Scripts can click spawns, ground objects and doors in the world by id (checklist 6.587), since a script may do whatever the player can (Adam, 11-23). `click("spawn", admission, id, revision)` targets a spawn (two of one name included), `right_click` loots, trades, boards or considers it without changing the target, `click("object", admission, drop_id)` picks up an item or opens a world container, and `click("door", admission, id)` makes a door's two clicks. Each click goes through the scene's own pick, with the script's pointer as the cursor: it acts only where the pick names that same thing right now, so a thing behind a wall, off screen or under a window is refused and nothing is sent. The report's surroundings line gives the admission and each nearby spawn's click tuple. A run that stops mid-click hands the scene back the real pointer the next frame.
 
 - Scripts can read the group window, the effects window and the last tell (checklist 6.593, O2).
