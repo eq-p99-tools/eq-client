@@ -10,7 +10,10 @@
 //! `pointer` module), scrolling a list the control has scrolled out of view as
 //! the wheel does, and lands only on the control under it. A followed
 //! script keeps reading complete lines appended to its file, under the same limits.
-//! `gm`, `chat` and `social` steps require a network-constrained local EQEmu/TAKP session.
+//! `gm` fixture steps (spawn, depop, guild, stun, language, discipline)
+//! require a network-constrained local EQEmu/TAKP session; other `gm` lines and
+//! `chat`, emote, roll and `social` steps run on any server, as the player's
+//! own would.
 pub(crate) mod control;
 mod execution;
 mod input;
@@ -403,7 +406,7 @@ impl Script {
         }
     }
 
-    /// Check the exact local executor and its authority for this frame.
+    /// Check this script's executor and its authority for this frame.
     pub(crate) fn social_dispatch(
         &self,
         owner: &std::sync::Arc<()>,
@@ -411,12 +414,11 @@ impl Script {
     ) -> Option<crate::socials::ScriptDispatch> {
         use crate::socials::ScriptDispatch;
 
-        if !self.local
-            || self
-                .progress
-                .expected_world
-                .as_ref()
-                .is_some_and(|expected| expected.refusal(online).is_some())
+        if self
+            .progress
+            .expected_world
+            .as_ref()
+            .is_some_and(|expected| expected.refusal(online).is_some())
             || !std::sync::Arc::ptr_eq(&self.progress.identity, owner)
             || !matches!(self.progress.phase, Phase::Running | Phase::Following)
         {
@@ -2188,19 +2190,11 @@ pub(super) fn drive(
             return;
         }
         Step::Slash(command) => {
-            if !script.local && super::chat::broadcasts_to_others(command) {
-                script.stop(
-                    &mut keys,
-                    &mut mouse,
-                    "emote and random steps require a network-enforced local test session.",
-                );
-                return;
-            }
             if super::socials::Request::parse(command).is_some() {
                 script.stop(
                     &mut keys,
                     &mut mouse,
-                    "Use a named social step in a local script.",
+                    "Use a named social step in a script.",
                 );
                 return;
             }
@@ -2224,11 +2218,11 @@ pub(super) fn drive(
             return;
         }
         Step::Social(command) => {
-            if !script.local || !online.in_world() {
+            if !online.in_world() {
                 script.stop(
                     &mut keys,
                     &mut mouse,
-                    "social script steps need a local character in the world",
+                    "social script steps need a character in the world",
                 );
                 return;
             }
@@ -2367,9 +2361,7 @@ pub(super) fn drive(
         Step::Gm(_) | Step::Chat(_) => {
             let command = match &step {
                 Step::Gm(command) => gm_request(command, script.local, online.world()),
-                Step::Chat(chat) => {
-                    local_chat(chat, script.local).map(eq_client_core::ClientCommand::SendChat)
-                }
+                Step::Chat(chat) => Ok(eq_client_core::ClientCommand::SendChat(chat.clone())),
                 _ => return,
             };
             let sent = command.and_then(|command| {
@@ -2886,18 +2878,21 @@ fn aa_request(
         .map_err(|refusal| refusal.text().to_owned())
 }
 
-/// The request for a validated local GM command. Fixture cleanup carries
-/// the admission and reconciled NPC selection to the zone's send owner.
+/// The request for a validated GM command. A fixture form needs a local
+/// session; any other line goes as a typed `#` line would, on any server.
+/// Fixture cleanup carries the admission and reconciled NPC selection to the
+/// zone's send owner.
 fn gm_request(
     command: &str,
-    allowed: bool,
+    local: bool,
     world: &eq_client_core::world::ClientWorld,
 ) -> Result<eq_client_core::ClientCommand, String> {
     use eq_client_core::{ClientCommand, OutboundChat, SpawnKind};
 
-    if !allowed {
+    if !local && parse::gm_fixture(command) {
         return Err(
-            "gm steps only run on a local EQEmu or TAKP server (EQ_PROTOCOL=eqemu or takp)".into(),
+            "gm fixture steps only run on a local EQEmu or TAKP server (EQ_PROTOCOL=eqemu or takp)"
+                .into(),
         );
     }
     let words: Vec<_> = command.split_ascii_whitespace().collect();
@@ -2937,21 +2932,6 @@ fn gm_request(
     Ok(ClientCommand::SendChat(OutboundChat::Say(format!(
         "#{command}"
     ))))
-}
-
-/// A `chat` step's line, refused unless the session is on a local `EQEmu` or
-/// TAKP server, as `gm` steps are.
-fn local_chat(
-    chat: &eq_client_core::OutboundChat,
-    allowed: bool,
-) -> Result<eq_client_core::OutboundChat, String> {
-    if !allowed {
-        return Err(
-            "chat steps only run on a local EQEmu or TAKP server (EQ_PROTOCOL=eqemu or takp)"
-                .into(),
-        );
-    }
-    Ok(chat.clone())
 }
 
 /// Whether a button of the skin's character list or a chat tab is the one
@@ -5045,24 +5025,22 @@ mod tests {
     }
 
     #[test]
-    fn chat_steps_speak_only_on_a_local_server() {
-        let line = eq_client_core::OutboundChat::Say("Hail".into());
-        assert!(local_chat(&line, false).is_err());
-        assert_eq!(local_chat(&line, true), Ok(line));
-    }
-
-    #[test]
-    fn gm_commands_only_reach_a_local_eqemu_session() {
+    fn gm_lines_run_anywhere_but_fixtures_only_on_a_local_session() {
         use eq_client_core::{ClientCommand, OutboundChat};
         let world = eq_client_core::world::ClientWorld::default();
-        assert!(gm_request("summon", false, &world).is_err());
+        // A plain line runs anywhere, as a typed `#` line would.
+        assert_eq!(
+            gm_request("summon", false, &world).unwrap(),
+            ClientCommand::SendChat(OutboundChat::Say("#summon".into()))
+        );
+        assert!(gm_request("stun 8000", false, &world).is_err());
         assert_eq!(
             gm_request("givemoney 0 0 5 0", true, &world).unwrap(),
             ClientCommand::SendChat(OutboundChat::Say("#givemoney 0 0 5 0".into()))
         );
         assert!(!Script::new(vec![Step::Gm("summon".into())]).local);
         assert!(Script::new(Vec::new()).local_session(true).local);
-        // Offline, steps run unattended but a gm step is still refused.
+        // Offline, steps run unattended but a gm fixture step is still refused.
         let offline = Script::new(Vec::new()).offline_preview(true);
         assert!(offline.offline && !offline.local);
     }
