@@ -1323,6 +1323,10 @@ pub struct OfficialOptions {
     /// Whether combat music plays: `CombatMusic` in `[Defaults]` (read
     /// R49-7 c), TRUE when missing.
     pub combat_music: Option<bool>,
+    /// Whether the player's right-click inspects other players:
+    /// `InspectOthers` in `[Defaults]` (read R49-16), on when its first
+    /// letter is t, T or 1 and off otherwise, TRUE when missing.
+    pub inspect_others: Option<bool>,
     /// Whether spell-effect particles play: `ShowSpellEffects` in
     /// `[Defaults]`, or a non-zero `SpellParticleDensity` where that is the
     /// key the installation carries.
@@ -1414,6 +1418,8 @@ fn options_from_ini(text: &str) -> OfficialOptions {
         music: ini_value(text, "Defaults", "Music").and_then(|v| v.trim().parse().ok()),
         env_sounds: flag("Defaults", "EnvSounds"),
         combat_music: flag("Defaults", "CombatMusic"),
+        inspect_others: ini_value(text, "Defaults", "InspectOthers")
+            .map(|value| matches!(value.trim().chars().next(), Some('t' | 'T' | '1'))),
         spell_effects: flag("Defaults", "ShowSpellEffects").or_else(|| {
             // Some installations carry the choice as the particles page's
             // density instead; zero density means the same "off".
@@ -2305,6 +2311,21 @@ Log=maybe
     }
 
     #[test]
+    fn eqclient_ini_inspect_others_is_on_by_its_first_letter_and_when_missing() {
+        let read = |value: &str| {
+            options_from_ini(&format!("[Defaults]\nInspectOthers={value}\n")).inspect_others
+        };
+        for on in ["TRUE", "true", "1", "Turnip"] {
+            assert_eq!(read(on), Some(true), "{on}");
+        }
+        for off in ["FALSE", "0", "yes", ""] {
+            assert_eq!(read(off), Some(false), "{off:?}");
+        }
+        // Missing: the client's own default, which is on, stands.
+        assert_eq!(options_from_ini("[Defaults]\n").inspect_others, None);
+    }
+
+    #[test]
     fn eqclient_ini_says_whether_music_ambient_and_combat_music_play() {
         let read = options_from_ini("[Defaults]\nMusic=0\nEnvSounds=FALSE\nCombatMusic=TRUE\n");
         assert_eq!(
@@ -2347,6 +2368,7 @@ LookSpring=1
                 music: None,
                 env_sounds: None,
                 combat_music: None,
+                inspect_others: None,
                 spell_effects: None,
                 pc_names: Some(true),
                 npc_names: Some(false),

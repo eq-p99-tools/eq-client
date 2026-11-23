@@ -162,53 +162,16 @@ pub(super) fn inspect_button(
 type RenderedPopup = Option<((u64, u64), Entity)>;
 type RenderedInspection = Option<(PlayerInspection, Entity)>;
 
-/// Whether `/toggleinspect` is offered: false until read R49-16 gives its
-/// lines, its words and where the official client keeps the option
-/// (checklist 6.574). Only tests take the toggle while it is false.
-pub(crate) const TOGGLE_INSPECT_READ: bool = false;
-
-/// Whether a typed line is `/toggleinspect`, once the command is `offered`.
-pub(crate) fn toggle_inspect_typed(input: &str, offered: bool) -> bool {
-    offered && input.trim().eq_ignore_ascii_case("/toggleinspect")
-}
-
-/// What the session is to be told of the inspect note.
-#[derive(Debug, PartialEq, Eq)]
-enum Tell {
-    /// Answer inspections with this note.
-    Note(String),
-    /// Answer no one.
-    NoNote,
-}
-
-/// A `/toggleinspect`, waiting to turn letting others inspect the player on
-/// or off.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct InspectToggle;
-
-/// The note this admission answers inspections with, whether the player
-/// lets others inspect them, and what the session was last told.
-#[derive(Debug)]
+/// The note this admission answers inspections with, and whether the
+/// session was told it. The program answers others' inspections whatever
+/// its `InspectOthers` option says, which gates only the player's own
+/// right-click inspects (read R49-16 b), so the note is told whenever one is
+/// known.
+#[derive(Debug, Default)]
 pub(super) struct NoteSync {
     admission: Option<u64>,
     note: Option<String>,
-    /// The `InspectOthers` option, held for the session only: it is on by
-    /// default, as answering whenever a note is known was before, and
-    /// nothing saves it until R49-16 says where the official client keeps
-    /// it.
-    answering: bool,
-    told: Option<bool>,
-}
-
-impl Default for NoteSync {
-    fn default() -> Self {
-        Self {
-            admission: None,
-            note: None,
-            answering: true,
-            told: None,
-        }
-    }
+    told: bool,
 }
 
 impl NoteSync {
@@ -217,53 +180,30 @@ impl NoteSync {
         if self.admission != Some(admission) {
             self.admission = Some(admission);
             self.note = note();
-            self.told = None;
+            self.told = false;
         }
     }
 
-    /// Turns letting others inspect the player on or off.
-    fn toggle(&mut self) {
-        self.answering = !self.answering;
+    /// The note to tell the session now, if one is known and not yet told.
+    fn due(&self) -> Option<String> {
+        (!self.told).then(|| self.note.clone()).flatten()
     }
 
-    /// What to tell the session now, if anything: the note while the
-    /// player lets others inspect them, and no note, which answers no one,
-    /// while not. Without a known note there is nothing to tell.
-    fn due(&self) -> Option<Tell> {
-        let note = self.note.as_ref()?;
-        (self.told != Some(self.answering)).then(|| {
-            if self.answering {
-                Tell::Note(note.clone())
-            } else {
-                Tell::NoNote
-            }
-        })
-    }
-
-    fn told(&mut self) {
-        self.told = Some(self.answering);
+    const fn told(&mut self) {
+        self.told = true;
     }
 }
 
 /// Reads the exact installed character's note. Missing or unreadable text
 /// leaves automatic replies disabled, since `EQEmu` persists the reply text.
-/// While the player doesn't let others inspect them, the session is told no
-/// note, so it answers no one (read R49-16b settles whether the official
-/// client answers empty instead).
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn sync_note(
     online: Res<OnlineState>,
     outbox: Res<Outbox>,
     profile: Res<crate::profile_files::Profile>,
     settings: Option<Res<crate::ViewerSettings>>,
-    mut chat: ResMut<crate::chat::ChatState>,
     mut sync: Local<NoteSync>,
 ) {
-    // Read before taking, so the chat isn't marked changed every frame.
-    if chat.inspect_toggled.is_some() {
-        chat.inspect_toggled = None;
-        sync.toggle();
-    }
     let world = online.world();
     let (Some(admission), Some((character, server))) = (world.session_id(), profile.names()) else {
         return;
@@ -279,14 +219,11 @@ pub(super) fn sync_note(
             .and_then(|settings| settings.0.official_settings())
             .and_then(|official| official.inspect_text(character, server))
     });
-    if let Some(tell) = sync.due()
+    if let Some(note) = sync.due()
         && outbox
             .try_post(world, |stamp| ClientCommand::SetInspectNote {
                 session_id: stamp.session_id,
-                note: match tell {
-                    Tell::Note(note) => Some(note),
-                    Tell::NoNote => None,
-                },
+                note: Some(note),
             })
             .is_ok()
     {
@@ -576,44 +513,20 @@ fn entity_text(entity: &str) -> Option<char> {
 mod tests {
 
     #[test]
-    fn letting_others_inspect_is_on_by_default_and_off_tells_the_session_no_note() {
+    fn the_note_is_told_once_each_admission_whatever_inspect_others_says() {
         let mut sync = NoteSync::default();
-        // Without a known note there is nothing to tell, on or off.
+        // Without a known note there is nothing to tell.
         sync.load(1, || None);
         assert_eq!(sync.due(), None);
-        sync.toggle();
-        assert_eq!(sync.due(), None);
-        sync.toggle();
-        // A new admission reads the note again; on by default, it is told once.
+        // A new admission reads the note again, and it is told once.
         sync.load(2, || Some("Hello".into()));
-        assert_eq!(sync.due(), Some(Tell::Note("Hello".into())));
+        assert_eq!(sync.due(), Some("Hello".into()));
         sync.told();
         assert_eq!(sync.due(), None);
-        // Off: the session is told no note, which answers no one; on again,
-        // the note.
-        sync.toggle();
-        assert_eq!(sync.due(), Some(Tell::NoNote));
-        sync.told();
+        sync.load(2, || Some("Other".into()));
         assert_eq!(sync.due(), None);
-        sync.toggle();
-        assert_eq!(sync.due(), Some(Tell::Note("Hello".into())));
-        sync.told();
-        // The option holds across admissions; the next is told it afresh.
-        sync.toggle();
         sync.load(3, || Some("Hello".into()));
-        assert_eq!(sync.due(), Some(Tell::NoNote));
-    }
-
-    #[test]
-    fn toggleinspect_is_not_offered_until_its_read() {
-        const { assert!(!TOGGLE_INSPECT_READ) };
-        assert!(!toggle_inspect_typed("/toggleinspect", TOGGLE_INSPECT_READ));
-        assert!(toggle_inspect_typed(" /ToggleInspect ", true));
-        assert!(!toggle_inspect_typed("/toggleinspect on", true));
-        // The chat leaves the word to the usual answer while it is not offered.
-        let mut chat = crate::chat::ChatState::default();
-        assert!(crate::chat::client_request_in_scope("/toggleinspect", &mut chat, None).is_none());
-        assert_eq!(chat.inspect_toggled, None);
+        assert_eq!(sync.due(), Some("Hello".into()));
     }
 
     use super::*;

@@ -377,6 +377,7 @@ pub(super) fn schedule(app: &mut App) {
                         tracking::window,
                         tracking::say_rangers_only,
                         pet::say_pet_target,
+                        crate::targeted::say,
                     ),
                     (translocate::decline_unasked, confirm::window).chain(),
                     reading::window,

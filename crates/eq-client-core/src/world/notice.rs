@@ -365,7 +365,32 @@ pub enum Notice {
         value: u32,
     },
     /// A training request was not sent, and why.
-    TrainingRefused(String),
+    TrainingRefused {
+        /// This library's words for it.
+        reason: String,
+        /// The program's own line, where the session names one.
+        string_id: Option<u32>,
+        /// What that line names, in order. For the `EQMac` program's
+        /// mastered-language line (0x327e), the language's number.
+        arguments: Vec<String>,
+        /// Whether the world names the common tongue by its alternate name,
+        /// for a line that names a language; None until the world says.
+        common_alternate: Option<bool>,
+    },
+    /// A language practice the `EQMac` program resolves at once (read
+    /// 6.597): its line 0x2f22 for the language's first point, else 0x2f23,
+    /// naming the guildmaster and the language.
+    LanguagePracticed {
+        /// The guildmaster's name.
+        trainer: String,
+        /// The language's number.
+        language: u8,
+        /// Whether this was the language's first point.
+        first: bool,
+        /// Whether the world names the common tongue by its alternate name;
+        /// None until the world says.
+        common_alternate: Option<bool>,
+    },
     /// A training request or projection from the current admission.
     TrainingPractice(crate::training::PracticeUpdate),
     /// An answer to a resurrection was not sent, and why.
