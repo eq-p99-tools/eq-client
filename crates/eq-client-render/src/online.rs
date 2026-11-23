@@ -537,8 +537,7 @@ impl Panels<'_> {
         if changes.inventory {
             self.inventory.refresh(state.world.inventory().stale());
         }
-        let generation = state.world().generation();
-        let shown = |notice: &&_| super::notices::shown(notice, filters, generation);
+        let shown = |notice: &&_| super::notices::shown(notice, filters, state.world.generation());
         for notice in changes.notices.iter().filter(shown) {
             self.tell(notice, messages, chat);
         }
@@ -925,7 +924,13 @@ pub(super) fn receive(
                 );
             }
             let filters = own_filters(state.world(), options.as_deref());
-            panels.show(&changes, &mut state, messages.as_deref(), &filters, &mut chat);
+            panels.show(
+                &changes,
+                &mut state,
+                messages.as_deref(),
+                &filters,
+                &mut chat,
+            );
             if let Some(moved) = &changes.moved {
                 panels.moved(
                     state.world.session_id(),
