@@ -985,6 +985,14 @@ mod tests {
             .init_resource::<super::super::chat::ChatState>()
             .insert_resource(crate::outbox::Outbox::new(Some(sender)))
             .add_systems(Update, super::super::interact::input);
+        // The nearest rule answers the key only where the player keeps it;
+        // the centre ray's own tests are in the scene's pick.
+        let mut options = crate::options::OptionsState::default();
+        options
+            .options
+            .qol
+            .set(eq_client_core::qol::Fix::UsePicksNearest, true);
+        app.insert_resource(options);
         let window = app
             .world_mut()
             .spawn((
