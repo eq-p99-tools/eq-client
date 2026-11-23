@@ -2356,6 +2356,23 @@ fn word_asked(input: &str, state: &mut ChatState) -> bool {
     false
 }
 
+/// A typed command that only shows or toggles one of this client's own
+/// windows or its log, sending nothing; false for any other line.
+fn window_asked(input: &str, state: &mut ChatState) -> bool {
+    if super::dialogs::toggle_inspect_typed(input, super::dialogs::TOGGLE_INSPECT_READ) {
+        state.inspect_toggled = Some(super::dialogs::InspectToggle);
+    } else if typed_command(input, "/filter") {
+        // `/filter` reads no words and sends nothing: it shows the Options
+        // window on its filter page (eqgame.exe 0x46a245, read R49-2a).
+        state.filter_page = Some(FilterPage);
+    } else if input.eq_ignore_ascii_case("/log") {
+        state.log_toggle = true;
+    } else {
+        return false;
+    }
+    true
+}
+
 pub(super) fn client_request_in_scope(
     input: &str,
     state: &mut ChatState,
@@ -2431,18 +2448,7 @@ pub(super) fn client_request_in_scope(
     if let Some(request) = zone_who_request(input) {
         return Some(request.map(|filter| state.zone_who = Some(filter)));
     }
-    if super::dialogs::toggle_inspect_typed(input, super::dialogs::TOGGLE_INSPECT_READ) {
-        state.inspect_toggled = Some(super::dialogs::InspectToggle);
-        return Some(Ok(()));
-    }
-    // `/filter` reads no words and sends nothing: it shows the Options
-    // window on its filter page (eqgame.exe 0x46a245, read R49-2a).
-    if typed_command(input, "/filter") {
-        state.filter_page = Some(FilterPage);
-        return Some(Ok(()));
-    }
-    if input.eq_ignore_ascii_case("/log") {
-        state.log_toggle = true;
+    if window_asked(input, state) {
         return Some(Ok(()));
     }
     if let Some(request) = super::skin::LoadSkin::typed(input) {
