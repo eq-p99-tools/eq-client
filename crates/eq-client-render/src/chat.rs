@@ -428,6 +428,7 @@ impl ChatState {
             follow_asked,
             rangers_only,
             contacts,
+            paced,
             // Cleared elsewhere: the link scope, the message of the day and
             // recall by `end_session`, the social inbox at every reset, and
             // the departure by `login::depart`.
@@ -452,6 +453,8 @@ impl ChatState {
             refusals: _,
         } = self;
         *script_requests = ScriptRequests::default();
+        // A held line was the ended session's.
+        *paced = None;
         *requested_target = None;
         *zone_who = None;
         *asked = None;
