@@ -478,6 +478,21 @@ fn check_installation(eq_directory: &Path, client: InstalledClient, mode: Mode) 
     }
 }
 
+/// Prints `--gap-report` over `paths`, or exits with its error.
+fn gap_report(paths: &[PathBuf], arguments: &Arguments) {
+    let settings = arguments
+        .settings_dir
+        .clone()
+        .or_else(default_settings_directory);
+    match gaps::report(paths, settings.as_deref(), arguments.samples) {
+        Ok(report) => print!("{report}"),
+        Err(error) => {
+            eprintln!("error: {error}");
+            std::process::exit(2);
+        }
+    }
+}
+
 fn main() {
     // A panic reaches the log, and with it the log file, as well as the
     // standard error stream.
@@ -488,20 +503,8 @@ fn main() {
     }));
     let (mut arguments, typed_installation) = parse_arguments();
     if let Some(paths) = &arguments.gap_report {
-        let settings = arguments
-            .settings_dir
-            .clone()
-            .or_else(default_settings_directory);
-        match gaps::report(paths, settings.as_deref(), arguments.samples) {
-            Ok(report) => {
-                print!("{report}");
-                return;
-            }
-            Err(error) => {
-                eprintln!("error: {error}");
-                std::process::exit(2);
-            }
-        }
+        gap_report(paths, &arguments);
+        return;
     }
     if arguments.check_script {
         std::process::exit(script_check_exit(

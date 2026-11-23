@@ -36,6 +36,11 @@ pub const WRITE_EVERY: Duration = Duration::from_secs(10);
 pub const CLIENT_STAGE: &str = "client";
 /// The kind of the client's own unshown news.
 pub const UNSHOWN: &str = "unshown";
+/// The most entries one session's file keeps; what arrives past them is
+/// counted in one [`OVERFLOW`] entry.
+pub const MAX_ENTRIES: usize = 4096;
+/// The kind of the entry that counts what arrives past [`MAX_ENTRIES`].
+pub const OVERFLOW: &str = "overflow";
 
 /// A gap as the network library tells of it, read from its JSON.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -102,6 +107,8 @@ pub enum Kind {
     },
     /// News the client heard but does not show yet.
     Unshown,
+    /// Arrivals past the session's [`MAX_ENTRIES`], counted together.
+    Overflow,
     /// A kind a newer network library tells of.
     #[serde(other)]
     Other,
@@ -121,6 +128,7 @@ impl Kind {
             Self::UnknownKind { kind } => format!("unknown_kind:{kind}"),
             Self::Unreadable { part, .. } => format!("unreadable:{part}"),
             Self::Unshown => UNSHOWN.to_owned(),
+            Self::Overflow => OVERFLOW.to_owned(),
             Self::Other => "other".to_owned(),
         }
     }
@@ -137,6 +145,7 @@ impl Kind {
             | Self::UnknownKind { .. }
             | Self::Unreadable { .. }
             | Self::Unshown
+            | Self::Overflow
             | Self::Other => true,
         }
     }
@@ -149,6 +158,7 @@ impl Kind {
             Self::PartlyRead { parts } => parts.join("; "),
             Self::Unreadable { error, .. } => error.clone(),
             Self::UnknownKind { kind } => format!("kind {kind}"),
+            Self::Overflow => format!("past the {MAX_ENTRIES} entries a session keeps"),
             Self::Unlisted | Self::ReadElsewhere | Self::Unshown | Self::Other => String::new(),
         }
     }
@@ -191,32 +201,46 @@ pub struct Entry {
     pub samples: Vec<String>,
 }
 
-/// What tells one entry from another in a session.
-type Key = (
-    String,
-    String,
-    String,
-    String,
-    Option<u16>,
-    Option<String>,
-    String,
-);
+/// What tells one gap from another: in a session ([`Entry::key`]), and
+/// across sessions in a report, which leaves the zone out.
+#[derive(Clone, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
+struct Key {
+    server: String,
+    dialect: String,
+    stage: String,
+    zone: String,
+    opcode: Option<u16>,
+    /// The news's kind, for the client's own entries; a message is told by
+    /// its opcode alone in a session.
+    name: Option<String>,
+    kind: String,
+}
 
 impl Entry {
     fn key(&self) -> Key {
-        (
-            self.server.clone(),
-            self.dialect.clone(),
-            self.stage.clone(),
-            self.zone.clone(),
-            self.opcode,
-            if self.opcode.is_none() {
+        Key {
+            server: self.server.clone(),
+            dialect: self.dialect.clone(),
+            stage: self.stage.clone(),
+            zone: self.zone.clone(),
+            opcode: self.opcode,
+            name: if self.opcode.is_none() {
                 self.name.clone()
             } else {
                 None
             },
-            self.kind.clone(),
-        )
+            kind: self.kind.clone(),
+        }
+    }
+
+    /// Its key in a report: without the zone, which the report lists, and
+    /// with the table's name, which it shows.
+    fn report_key(&self) -> Key {
+        Key {
+            zone: String::new(),
+            name: self.name.clone(),
+            ..self.key()
+        }
     }
 }
 
@@ -303,11 +327,34 @@ impl GapLog {
         });
     }
 
+    /// Adds `entry` to its gap's, or as a new gap while fewer than
+    /// [`MAX_ENTRIES`] are kept; past them, it is counted in the one
+    /// [`OVERFLOW`] entry, so a flood of new kinds cannot grow the file
+    /// without bound.
     fn add(&mut self, entry: Entry) {
-        match self.entries.get_mut(&entry.key()) {
-            Some(kept) => merge(kept, entry),
-            None => {
-                self.entries.insert(entry.key(), entry);
+        let key = entry.key();
+        if let Some(kept) = self.entries.get_mut(&key) {
+            merge(kept, entry);
+        } else if self.entries.len() < MAX_ENTRIES {
+            self.entries.insert(key, entry);
+        } else {
+            let overflow = Entry {
+                stage: CLIENT_STAGE.to_owned(),
+                zone: String::new(),
+                opcode: None,
+                name: None,
+                kind: OVERFLOW.to_owned(),
+                detail: Kind::Overflow,
+                is_gap: true,
+                samples: Vec::new(),
+                ..entry
+            };
+            let key = overflow.key();
+            match self.entries.get_mut(&key) {
+                Some(kept) => merge(kept, overflow),
+                None => {
+                    self.entries.insert(key, overflow);
+                }
             }
         }
     }
@@ -501,10 +548,16 @@ struct Recorder {
 
 /// The running session's recorder: the session's thread tells it the
 /// network's gaps, the world's the news it leaves unshown.
+///
+/// It is process-wide, for one session per process, as the client runs
+/// one: [`begin`] replaces a recorder already running, whose counts are
+/// then lost unless [`end`] wrote them first.
 static RECORDER: Mutex<Option<Recorder>> = Mutex::new(None);
 
 /// Starts a session's gap file in `directory`, keeping only the newest
-/// files there. Nothing is written until a gap is counted.
+/// files there. Nothing is written until a gap is counted. The recorder is
+/// process-wide: this replaces one already running, unwritten counts and
+/// all.
 ///
 /// # Errors
 /// Returns an error when the directory cannot be made or read.
@@ -615,7 +668,10 @@ pub fn files_in(directory: &Path) -> io::Result<Vec<PathBuf>> {
         .filter(|path| {
             path.file_name()
                 .and_then(|name| name.to_str())
-                .is_some_and(|name| name.starts_with("gaps-") && name.ends_with(".json"))
+                .is_some_and(|name| name.starts_with("gaps-"))
+                && path
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("json"))
         })
         .collect();
     files.sort();
@@ -646,29 +702,56 @@ struct Gathered {
     samples: Vec<String>,
 }
 
+/// A report's row key: whether it is a gap, then the gap.
+type Row = (bool, Key);
+
 /// A Markdown report of the gaps in `files`: the gaps to close ranked by
 /// how often they came, then what was counted as skipped. Samples are left
 /// out unless `samples` asks for them, since one may hold what another
 /// player said.
 #[must_use]
 pub fn report(files: &[GapFile], samples: bool) -> String {
-    let mut gathered: BTreeMap<(bool, String, String, String, String, String, String), Gathered> =
-        BTreeMap::new();
+    let rows = gather(files);
+    let mut out = String::new();
+    let _ = writeln!(out, "# Server message gaps\n");
+    let _ = writeln!(out, "{} session file(s).\n", files.len());
+    let _ = writeln!(out, "## Gaps to close\n");
+    let _ = writeln!(
+        out,
+        "Kind `{UNSHOWN}` is news the client read but does not show. Some is \
+         left unshown on purpose (a server tick, a spell table), so read \
+         those rows before counting them as work.\n"
+    );
+    table(&mut out, &rows, true);
+    let _ = writeln!(out, "## Counted, nothing to read\n");
+    table(&mut out, &rows, false);
+    if samples {
+        let _ = writeln!(out, "## Samples\n");
+        for ((_, key), row) in &rows {
+            for sample in &row.samples {
+                let _ = writeln!(
+                    out,
+                    "- {} {} {} {} {}: `{sample}`",
+                    key.server,
+                    key.stage,
+                    opcode(key.opcode),
+                    cell(key.name.as_deref().unwrap_or_default()),
+                    key.kind,
+                );
+            }
+        }
+    }
+    out
+}
+
+/// The gaps in `files` added up across sessions: gaps to close first,
+/// each part most counted first.
+fn gather(files: &[GapFile]) -> Vec<(Row, Gathered)> {
+    let mut gathered: BTreeMap<Row, Gathered> = BTreeMap::new();
     for file in files {
         let mut seen = BTreeSet::new();
         for entry in &file.entries {
-            let opcode = entry
-                .opcode
-                .map_or_else(String::new, |opcode| format!("0x{opcode:04x}"));
-            let key = (
-                entry.is_gap,
-                entry.server.clone(),
-                entry.dialect.clone(),
-                entry.stage.clone(),
-                opcode,
-                entry.name.clone().unwrap_or_default(),
-                entry.kind.clone(),
-            );
+            let key = (entry.is_gap, entry.report_key());
             let row = gathered.entry(key.clone()).or_default();
             row.count += entry.count;
             if !entry.zone.is_empty() {
@@ -706,63 +789,56 @@ pub fn report(files: &[GapFile], samples: bool) -> String {
             .then(b.count.cmp(&a.count))
             .then(a_key.cmp(b_key))
     });
-    let mut out = String::new();
-    let _ = writeln!(out, "# Server message gaps\n");
-    let _ = writeln!(out, "{} session file(s).\n", files.len());
-    for (heading, gaps) in [("Gaps to close", true), ("Counted, nothing to read", false)] {
-        let _ = writeln!(out, "## {heading}\n");
-        let mut any = false;
-        for ((is_gap, server, dialect, stage, opcode, name, kind), row) in &rows {
-            if *is_gap != gaps {
-                continue;
-            }
-            if !any {
-                let _ = writeln!(
-                    out,
-                    "| Count | Sessions | Server | Generation | Stage | Opcode | Name | Kind | Detail | Bytes | Zones | First seen | Last seen |"
-                );
-                let _ = writeln!(
-                    out,
-                    "|---:|---:|---|---|---|---|---|---|---|---|---|---|---|"
-                );
-                any = true;
-            }
-            let zones: Vec<_> = row.zones.iter().map(String::as_str).collect();
-            let bytes = match row.min_length {
-                Some(min) if min == row.max_length => min.to_string(),
-                Some(min) => format!("{min}-{}", row.max_length),
-                None => String::new(),
-            };
+    rows
+}
+
+/// Writes the table of the rows that are gaps, or of those that are not.
+fn table(out: &mut String, rows: &[(Row, Gathered)], gaps: bool) {
+    let mut any = false;
+    for ((_, key), row) in rows.iter().filter(|((is_gap, _), _)| *is_gap == gaps) {
+        if !any {
             let _ = writeln!(
                 out,
-                "| {} | {} | {server} | {dialect} | {stage} | {opcode} | {} | {kind} | {} | {bytes} | {} | {} | {} |",
-                row.count,
-                row.sessions,
-                cell(name),
-                cell(&row.detail),
-                cell(&zones.join(", ")),
-                row.first_seen,
-                row.last_seen,
+                "| Count | Sessions | Server | Generation | Stage | Opcode | Name | Kind | Detail | Bytes | Zones | First seen | Last seen |"
             );
+            let _ = writeln!(
+                out,
+                "|---:|---:|---|---|---|---|---|---|---|---|---|---|---|"
+            );
+            any = true;
         }
-        if !any {
-            let _ = writeln!(out, "None.");
-        }
-        let _ = writeln!(out);
+        let zones: Vec<_> = row.zones.iter().map(String::as_str).collect();
+        let bytes = match row.min_length {
+            Some(min) if min == row.max_length => min.to_string(),
+            Some(min) => format!("{min}-{}", row.max_length),
+            None => String::new(),
+        };
+        let _ = writeln!(
+            out,
+            "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {bytes} | {} | {} | {} |",
+            row.count,
+            row.sessions,
+            key.server,
+            key.dialect,
+            key.stage,
+            opcode(key.opcode),
+            cell(key.name.as_deref().unwrap_or_default()),
+            key.kind,
+            cell(&row.detail),
+            cell(&zones.join(", ")),
+            row.first_seen,
+            row.last_seen,
+        );
     }
-    if samples {
-        let _ = writeln!(out, "## Samples\n");
-        for ((_, server, _, stage, opcode, name, kind), row) in &rows {
-            for sample in &row.samples {
-                let _ = writeln!(
-                    out,
-                    "- {server} {stage} {opcode} {} {kind}: `{sample}`",
-                    cell(name)
-                );
-            }
-        }
+    if !any {
+        let _ = writeln!(out, "None.");
     }
-    out
+    let _ = writeln!(out);
+}
+
+/// An opcode as the report prints it; empty for the client's own news.
+fn opcode(opcode: Option<u16>) -> String {
+    opcode.map_or_else(String::new, |opcode| format!("0x{opcode:04x}"))
 }
 
 /// Text safe inside a Markdown table cell.

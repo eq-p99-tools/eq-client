@@ -154,7 +154,7 @@ mod tests {
         assert!(plain.contains("| 3 | 1 | eq_emu | titanium | zone | 0x497c | OP_Action |"));
         assert!(!plain.contains("00ff"));
         assert!(
-            report(&[directory.clone()], None, true)
+            report(std::slice::from_ref(&directory), None, true)
                 .unwrap()
                 .contains("`00ff`")
         );

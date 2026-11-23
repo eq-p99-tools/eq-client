@@ -68,8 +68,8 @@ fn repeats_add_up_and_keep_at_most_three_samples() {
 #[test]
 fn a_sample_is_cut_to_256_bytes() {
     let mut log = GapLog::new(at(0));
-    let long = "ab".repeat(1000);
-    log.network(gap(1, Kind::Unlisted, 1, Some(&long)), at(0));
+    let body = "ab".repeat(1000);
+    log.network(gap(1, Kind::Unlisted, 1, Some(&body)), at(0));
     assert_eq!(log.file().entries[0].samples[0].len(), MAX_SAMPLE_CHARS);
 }
 
@@ -217,4 +217,32 @@ fn a_partly_read_message_names_its_parts() {
         parts: vec!["tribute".into(), "alternate advancement".into()],
     };
     assert_eq!(kind.detail(), "tribute; alternate advancement");
+}
+
+#[test]
+fn past_the_entry_cap_arrivals_count_in_one_overflow_entry() {
+    let mut log = GapLog::new(at(0));
+    let opcodes = u16::try_from(MAX_ENTRIES + 10).unwrap();
+    for opcode in 0..opcodes {
+        log.network(gap(opcode, Kind::Unlisted, 2, Some("aa")), at(1));
+    }
+    log.network(gap(0, Kind::Unlisted, 1, None), at(2));
+    let file = log.file();
+    assert_eq!(file.entries.len(), MAX_ENTRIES + 1);
+    let overflow = file
+        .entries
+        .iter()
+        .find(|entry| entry.kind == OVERFLOW)
+        .unwrap();
+    assert_eq!((overflow.count, overflow.opcode), (20, None));
+    assert_eq!(overflow.stage, CLIENT_STAGE);
+    assert_eq!(overflow.server, "eq_emu");
+    assert!(overflow.samples.is_empty() && overflow.is_gap);
+    let first = file
+        .entries
+        .iter()
+        .find(|entry| entry.opcode == Some(0))
+        .unwrap();
+    assert_eq!(first.count, 3);
+    assert!(report(&[file], false).contains("| overflow | past the 4096 entries"));
 }
