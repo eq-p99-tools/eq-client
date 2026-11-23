@@ -55,7 +55,8 @@ pub(super) struct CombatState {
     /// only the tick writes), so a zone change that turned the flag off
     /// sends the off on the first tick in play (read R49-32). Nothing else
     /// writes it, so it outlasts a camp and a new login in the same run.
-    sent_on: bool,
+    /// None until a toggle has left.
+    last_sent: Option<bool>,
     /// The assist answers seen ([`eq_client_core::world::ClientWorld::assist_answer`]).
     seen_assists: u32,
     /// The spawn an assist answer named while Attack On Assist was on, and
@@ -89,13 +90,13 @@ impl CombatState {
     /// (0x4a7cd3 and 0x4a861d call 0x4a2f7a(0)), and its tick then sends
     /// the off, quietly, once the player is in play in the new zone, if the
     /// last value sent was on (read R49-32). `tick_sends` says the installed
-    /// client's tick does that. The Mac-era and RoF2 programs' ticks are
+    /// client's tick does that. The Mac-era and `RoF2` programs' ticks are
     /// unread, so they send nothing, as before (checklist 6.625).
     fn follow_session(&mut self, session_id: Option<u64>, tick_sends: bool) {
         if self.session_id != session_id {
             self.session_id = session_id;
             self.auto_attack = false;
-            self.off_unsent = tick_sends && self.sent_on;
+            self.off_unsent = tick_sends && self.last_sent == Some(true);
             self.off_quiet = self.off_unsent;
             self.idle = IdleSwings::default();
         }
@@ -222,7 +223,11 @@ pub(super) fn input(
     let world = online.world();
     combat.follow_session(
         world.session_id(),
-        matches!(world.generation(), eq_client_core::GameDialect::Titanium),
+        match world.generation() {
+            eq_client_core::GameDialect::Titanium => true,
+            // Their programs' ticks are unread (checklist 6.625).
+            eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => false,
+        },
     );
     // AttackOnAssist, on a client that runs R46's forms (read R49-8 d).
     let on = options
@@ -271,7 +276,7 @@ pub(super) fn input(
         match outbox.try_post(world, attack(false)) {
             Ok(()) => {
                 combat.off_unsent = false;
-                combat.sent_on = false;
+                combat.last_sent = Some(false);
                 if !std::mem::take(&mut combat.off_quiet) {
                     chat.history.push(toggle_line(toggle, false, &messages));
                 }
@@ -289,7 +294,7 @@ pub(super) fn input(
         && outbox.post(world, attack(true)).is_ok()
     {
         combat.auto_attack = true;
-        combat.sent_on = true;
+        combat.last_sent = Some(true);
         combat.idle = IdleSwings::default();
         chat.history.push(toggle_line(toggle, true, &messages));
     }
@@ -348,7 +353,7 @@ pub(super) fn input(
             return;
         }
         combat.auto_attack = enable;
-        combat.sent_on = enable;
+        combat.last_sent = Some(enable);
         combat.idle = IdleSwings::default();
         chat.history.push(toggle_line(toggle, enable, &messages));
     }
