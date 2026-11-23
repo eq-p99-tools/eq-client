@@ -4,6 +4,18 @@ use eq_client_core::world::ClientWorld;
 
 use super::{Kind, Value};
 
+/// The spell gems a player has, on every client the project supports.
+const GEMS: u8 = 8;
+
+/// What the player's windows draw on: the world, the installation's spell
+/// names and linked timers, the installed client's clock and the moment.
+pub(in crate::script) struct Sight<'a> {
+    pub world: &'a ClientWorld,
+    pub spells: Option<&'a crate::spellbook::SpellNames>,
+    pub clock: eq_client_assets::clock::ClientClock,
+    pub now: std::time::Instant,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Field {
     Ready,
@@ -34,6 +46,21 @@ pub(super) enum Field {
     PetPresent,
     PetName,
     PetHpPercent,
+    // A spell gem as the gem bar shows it, counted from 0 (6.592, O1b).
+    GemSpell(u8),
+    GemReady(u8),
+    // The time in Norrath as `/time` tells it.
+    Time(TimePart),
+}
+
+/// One part of the time `/time` tells.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TimePart {
+    Hour,
+    Minute,
+    Day,
+    Month,
+    Year,
 }
 
 /// A coin in the purse, as the inventory window shows it.
@@ -75,6 +102,29 @@ impl Field {
             "pet.present" => Some(Self::PetPresent),
             "pet.name" => Some(Self::PetName),
             "pet.hp_percent" => Some(Self::PetHpPercent),
+            "time.hour" => Some(Self::Time(TimePart::Hour)),
+            "time.minute" => Some(Self::Time(TimePart::Minute)),
+            "time.day" => Some(Self::Time(TimePart::Day)),
+            "time.month" => Some(Self::Time(TimePart::Month)),
+            "time.year" => Some(Self::Time(TimePart::Year)),
+            _ => Self::gem(name),
+        }
+    }
+
+    /// `gem1.spell` to `gem8.ready`, numbered as the gem bar's keys are.
+    fn gem(name: &str) -> Option<Self> {
+        let (gem, part) = name.strip_prefix("gem")?.split_once('.')?;
+        if gem.len() != 1 {
+            return None;
+        }
+        let gem = gem
+            .parse::<u8>()
+            .ok()
+            .filter(|gem| (1..=GEMS).contains(gem))?
+            - 1;
+        match part {
+            "spell" => Some(Self::GemSpell(gem)),
+            "ready" => Some(Self::GemReady(gem)),
             _ => None,
         }
     }
@@ -85,13 +135,15 @@ impl Field {
             | Self::TargetSelected
             | Self::Casting
             | Self::Stunned
-            | Self::PetPresent => Kind::Bool,
+            | Self::PetPresent
+            | Self::GemReady(_) => Kind::Bool,
             Self::Zone
             | Self::TargetName
             | Self::Posture
             | Self::TargetCon
             | Self::TargetKind
-            | Self::PetName => Kind::Text,
+            | Self::PetName
+            | Self::GemSpell(_) => Kind::Text,
             Self::Level
             | Self::ReportedHp
             | Self::ReportedHpMax
@@ -104,11 +156,13 @@ impl Field {
             | Self::ExpPercent
             | Self::Coin(_)
             | Self::TargetHpPercent
-            | Self::PetHpPercent => Kind::Int,
+            | Self::PetHpPercent
+            | Self::Time(_) => Kind::Int,
         }
     }
 
-    pub(super) fn read(self, world: &ClientWorld) -> Value {
+    pub(super) fn read(self, sight: &Sight) -> Value {
+        let world = sight.world;
         if self != Self::Ready && !world.in_world() {
             return if world.session_id().is_some() {
                 Value::Stale
@@ -142,9 +196,57 @@ impl Field {
             | Self::LocZ
             | Self::ExpPercent
             | Self::Coin(_) => self.player(world),
+            Self::GemSpell(_) | Self::GemReady(_) => self.gem_of(sight),
+            Self::Time(part) => time(part, sight),
         }
     }
 
+    /// A gem as the gem bar shows it: its spell's name, unknown when empty,
+    /// and whether it is lit, which is the gem bar's own rule: nothing being
+    /// cast or awaiting the server, and the spell's reuse and any linked
+    /// timer run out. An empty gem is never ready.
+    fn gem_of(self, sight: &Sight) -> Value {
+        let (Self::GemSpell(gem) | Self::GemReady(gem)) = self else {
+            return Value::Unknown;
+        };
+        let spell = sight.world.gems().get(usize::from(gem)).copied().flatten();
+        if matches!(self, Self::GemSpell(_)) {
+            return match (spell, sight.spells) {
+                (Some(spell), Some(names)) => Value::Text(names.label(spell).into()),
+                _ => Value::Unknown,
+            };
+        }
+        let casting = sight.world.casting();
+        Value::Bool(spell.is_some_and(|spell| {
+            let linked = sight.spells.and_then(|names| names.linked_timer(spell));
+            casting.cast.is_none()
+                && casting.pending.is_none()
+                && casting.spell_wait(spell, linked, sight.now).is_zero()
+        }))
+    }
+}
+
+/// The time in Norrath as `/time` tells it: the hour as the installed
+/// client names it, from 0 for 12 AM to 23 for 11 PM, then the minute, day,
+/// month and year. Unknown before the server gives the time, and in a zone
+/// where the client says the time can't be told.
+fn time(part: TimePart, sight: &Sight) -> Value {
+    let timeless = eq_client_core::zones::number(sight.world.zone())
+        .and_then(|zone| sight.clock.timeless(zone))
+        .is_some();
+    let Some(time) = sight.world.game_time(sight.now).filter(|_| !timeless) else {
+        return Value::Unknown;
+    };
+    Value::Int(match part {
+        TimePart::Hour => i64::from(sight.clock.shown_hour(time.hour)),
+        TimePart::Minute => i64::from(time.minute),
+        TimePart::Day => i64::from(time.day),
+        TimePart::Month => i64::from(time.month),
+        TimePart::Year => i64::from(time.year),
+    })
+}
+
+impl Field {
     /// The player's own fields, as the HUD and windows show them.
     fn player(self, world: &ClientWorld) -> Value {
         use eq_client_core::money::CoinPlace;
@@ -285,8 +387,9 @@ const fn kind_word(kind: eq_client_core::SpawnKind) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Field, Value};
+    use super::{Field, Sight, Value};
     use crate::online::{OnlineState, testing as session};
+    use eq_client_assets::clock::{ClientClock, EQMAC, TITANIUM};
     use eq_client_core::{
         Coins, SpawnKind, WorldEvent,
         combat::{ConColor, Consideration},
@@ -297,9 +400,23 @@ mod tests {
     const TARGET: u16 = 42;
 
     fn read(online: &OnlineState, name: &str) -> Value {
+        read_with(online, name, None, TITANIUM)
+    }
+
+    fn read_with(
+        online: &OnlineState,
+        name: &str,
+        spells: Option<&crate::spellbook::SpellNames>,
+        clock: ClientClock,
+    ) -> Value {
         Field::parse(name)
             .unwrap_or_else(|| panic!("{name} is a field"))
-            .read(online.world())
+            .read(&Sight {
+                world: online.world(),
+                spells,
+                clock,
+                now: std::time::Instant::now(),
+            })
     }
 
     fn text(word: &str) -> Value {
@@ -444,8 +561,78 @@ mod tests {
             "player.copper",
             "target.con",
             "pet.present",
+            "gem1.spell",
+            "gem1.ready",
+            "time.hour",
         ] {
             assert_eq!(read(&online, name), Value::Stale, "{name}");
         }
+    }
+
+    #[test]
+    fn gem_fields_read_the_gem_bar() {
+        let mut online = OnlineState::new(true);
+        let mut player = session::player(PLAYER);
+        player.memorized_spells[0] = Some(202);
+        session::admit(&mut online, 1, player);
+        let names = crate::spellbook::SpellNames::default();
+        assert_eq!(
+            read_with(&online, "gem1.spell", Some(&names), TITANIUM),
+            text("Spell 202")
+        );
+        // Without the installation's spell names the gem's name is unknown.
+        assert_eq!(read(&online, "gem1.spell"), Value::Unknown);
+        assert_eq!(read(&online, "gem1.ready"), Value::Bool(true));
+        // An empty gem has no spell and is never lit.
+        assert_eq!(read(&online, "gem8.spell"), Value::Unknown);
+        assert_eq!(read(&online, "gem8.ready"), Value::Bool(false));
+        for name in [
+            "gem0.spell",
+            "gem9.ready",
+            "gem10.spell",
+            "gem1.name",
+            "gem.ready",
+        ] {
+            assert_eq!(Field::parse(name), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn time_fields_read_what_time_tells() {
+        let mut online = OnlineState::new(true);
+        session::admit(&mut online, 1, session::player(PLAYER));
+        assert_eq!(read(&online, "time.hour"), Value::Unknown);
+        session::news(
+            &mut online,
+            [WorldEvent::TimeOfDay(eq_client_core::clock::GameTime {
+                hour: 12,
+                minute: 30,
+                day: 3,
+                month: 2,
+                year: 3200,
+            })],
+        );
+        // The Mac client names the calendar's hour 12 as 1 PM, Titanium as 12.
+        assert_eq!(read(&online, "time.hour"), Value::Int(12));
+        assert_eq!(read_with(&online, "time.hour", None, EQMAC), Value::Int(13));
+        assert_eq!(read(&online, "time.day"), Value::Int(3));
+        assert_eq!(read(&online, "time.month"), Value::Int(2));
+        assert_eq!(read(&online, "time.year"), Value::Int(3200));
+        // Where `/time` says the time can't be told, a script can't read it.
+        session::news(
+            &mut online,
+            [WorldEvent::Entered {
+                capabilities: eq_client_core::Capability::ALL.to_vec(),
+                choices: Vec::new(),
+                session_id: 1,
+                zone: "potimea".into(),
+                player: Box::new(session::player(PLAYER)),
+                far_clip: None,
+                spell_landing_flag: None,
+                zone_id: 0,
+            }],
+        );
+        assert_eq!(read(&online, "time.hour"), Value::Unknown);
+        assert_eq!(read(&online, "time.minute"), Value::Unknown);
     }
 }

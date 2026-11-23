@@ -2,12 +2,10 @@
 
 use std::time::Duration;
 
-use eq_client_core::world::ClientWorld;
-
 use super::{
     Code, Value,
     compile::{MAX_ITERATIONS, Op, Variable},
-    observe::Field,
+    observe::{Field, Sight},
 };
 use crate::script::{Instruction, QueuedStep, RunStatus, parse::MAX_STEPS};
 
@@ -153,11 +151,11 @@ impl Run {
 
     pub(in crate::script) fn tick(
         &mut self,
-        world: &ClientWorld,
+        sight: &Sight,
         progress: &mut RunStatus,
         now: Duration,
     ) -> Result<Tick, String> {
-        self.execute(&|field| field.read(world), progress, now)
+        self.execute(&|field| field.read(sight), progress, now)
     }
 
     /// A run error inside a function names the function and its call.

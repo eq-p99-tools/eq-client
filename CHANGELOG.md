@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Scripts can read the gem bar and the time (checklist 6.592, O1b). `gem1.spell` to `gem8.spell` name each gem's spell, and `gem1.ready` to `gem8.ready` say whether the gem is lit by the gem bar's own rule. `time.hour`, `time.minute`, `time.day`, `time.month` and `time.year` read what `/time` tells, with the installed client's hour, and are unknown where `/time` says the time can't be told.
+
 - Scripts can read more of what the player sees (checklist 6.592, O1), since a script may do whatever the player can (Adam, 11-23).
   - The new fields are `player.hp_percent`, `player.posture`, `player.casting`, `player.stunned`, `player.loc_x`, `player.loc_y` and `player.loc_z` (as `/loc` gives them), `player.exp_percent`, and the purse's `player.platinum`, `player.gold`, `player.silver` and `player.copper`.
   - The target adds `target.hp_percent`, `target.kind` and `target.con` (after a consider), and the pet adds `pet.present`, `pet.name` and `pet.hp_percent`.
