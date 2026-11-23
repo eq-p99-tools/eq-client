@@ -2370,6 +2370,13 @@ fn plain_label(
             (text, crate::options::FilterValue(category)),
             geometry,
         ),
+        Some(controls::ValueLabel::FilterNote) => aligned_in(
+            window,
+            node,
+            label.align,
+            (text, crate::options::FilterNote),
+            geometry,
+        ),
         Some(controls::ValueLabel::Blank) => aligned_in(
             window,
             node,
