@@ -838,4 +838,128 @@ mod tests {
         );
         assert_eq!(observer(online.world(), Some(&names)), Vision::Infra);
     }
+
+    /// Times the zone colouring while a carried light moves through a real
+    /// zone (opt-in; needs the player's own installation). The player walks
+    /// from `EQ_PROBE_FEET` to `EQ_PROBE_GOAL` (renderer X,Y,Z) by
+    /// `EQ_PROBE_STEP` units a frame (default 0.5), once for each light type
+    /// in `EQ_PROBE_LIGHTS` (default "255,2,4,6"; 255 carries none), with
+    /// the zone drawn as a type-4 no-sky zone. Each frame runs the lighting
+    /// system alone, so the time is the CPU work of choosing lights and
+    /// rewriting colours, not the upload of the rewritten meshes.
+    #[test]
+    #[ignore = "requires EQ_PROBE_INSTALL, EQ_PROBE_ZONE, EQ_PROBE_FEET and EQ_PROBE_GOAL"]
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_precision_loss,
+        clippy::cast_sign_loss,
+        clippy::too_many_lines
+    )] // A timing probe over a short walk.
+    fn time_a_carried_light_through_a_zone() {
+        let point = |name: &str| {
+            let values: Vec<f32> = std::env::var(name)
+                .unwrap()
+                .split(',')
+                .map(|number| number.trim().parse().unwrap())
+                .collect();
+            Vec3::new(values[0], values[1], values[2])
+        };
+        let install = std::path::PathBuf::from(std::env::var("EQ_PROBE_INSTALL").unwrap());
+        let name = std::env::var("EQ_PROBE_ZONE").unwrap();
+        let (feet, goal) = (point("EQ_PROBE_FEET"), point("EQ_PROBE_GOAL"));
+        let step: f32 = std::env::var("EQ_PROBE_STEP").map_or(0.5, |step| step.parse().unwrap());
+        let kinds: Vec<u8> = std::env::var("EQ_PROBE_LIGHTS")
+            .unwrap_or_else(|_| "255,2,4,6".into())
+            .split(',')
+            .map(|kind| kind.trim().parse().unwrap())
+            .collect();
+        let frames = ((goal - feet).length() / step).ceil().max(1.0) as usize;
+        for kind in kinds {
+            let zone = eq_client_assets::load_zone(&install, &name).unwrap();
+            let mut online = OnlineState::new(true);
+            let mut own = session::player(7);
+            own.appearance.light = kind;
+            session::admit(&mut online, 5, own);
+            session::news(
+                &mut online,
+                [WorldEvent::Sky(ZoneSky {
+                    sky: 0,
+                    time_type: 4,
+                    fog: [Fog {
+                        color: [0; 3],
+                        near: 0.0,
+                        far: 0.0,
+                    }; 4],
+                })],
+            );
+            let mut app = App::new();
+            let mut queue = bevy::ecs::world::CommandQueue::default();
+            let mut images = Assets::<Image>::default();
+            let mut meshes = Assets::<Mesh>::default();
+            let mut materials = Assets::<StandardMaterial>::default();
+            crate::spawn_static_zone(
+                &mut Commands::new(&mut queue, app.world()),
+                zone,
+                false,
+                &mut images,
+                &mut meshes,
+                &mut materials,
+            );
+            queue.apply(app.world_mut());
+            let zone_name = online.world().zone().to_owned();
+            let (lit_meshes, vertices) = {
+                let mut scene = app.world_mut().resource_mut::<SceneLights>();
+                scene.zone = zone_name;
+                (
+                    scene.meshes.len(),
+                    scene
+                        .meshes
+                        .iter()
+                        .map(|lit| lit.light.len())
+                        .sum::<usize>(),
+                )
+            };
+            app.insert_resource(online)
+                .insert_resource(meshes)
+                .insert_resource(ViewerSettings(crate::ViewerConfig::default()))
+                .init_resource::<OptionsState>()
+                .init_resource::<NearbyEntities>()
+                .add_systems(Update, update);
+            let player = app
+                .world_mut()
+                .spawn((
+                    Player,
+                    Transform::from_translation(feet),
+                    PlayerBody {
+                        feet_offset: 0.0,
+                        height: 6.0,
+                        size: 6.0,
+                    },
+                ))
+                .id();
+            // The first frame colours every mesh once.
+            let start = std::time::Instant::now();
+            app.update();
+            let first = start.elapsed();
+            let mut times = Vec::with_capacity(frames);
+            for frame in 1..=frames {
+                let at = feet.lerp(goal, frame as f32 / frames as f32);
+                app.world_mut()
+                    .get_mut::<Transform>(player)
+                    .unwrap()
+                    .translation = at;
+                let start = std::time::Instant::now();
+                app.update();
+                times.push(start.elapsed().as_secs_f64() * 1000.0);
+            }
+            times.sort_by(f64::total_cmp);
+            let mean = times.iter().sum::<f64>() / times.len() as f64;
+            let p95 = times[(times.len() * 95 / 100).min(times.len() - 1)];
+            println!(
+                "light={kind} meshes={lit_meshes} vertices={vertices} frames={frames} first_ms={:.2} mean_ms={mean:.3} p95_ms={p95:.3} max_ms={:.3}",
+                first.as_secs_f64() * 1000.0,
+                times.last().unwrap(),
+            );
+        }
+    }
 }
