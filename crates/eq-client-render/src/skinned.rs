@@ -4,6 +4,7 @@
 //! frame and pieces, and what each gauge and label shows follows the
 //! official client's numbering. A skin without the window, or a viewer
 //! without an installation, keeps the client's own chrome.
+mod filters;
 #[cfg(test)]
 mod hotbar_drag_tests;
 mod particles;
@@ -1177,6 +1178,9 @@ fn behave(
             Interaction::default(),
             super::tooltip::Tooltip::default(),
         )),
+        Does::Filter(category) => {
+            drawn.insert((Button, super::options::FilterButton(category), skin()))
+        }
         Does::Option(toggle) => {
             drawn.insert((Button, super::options::OptionCheckbox(toggle), skin()));
             // Greyed where the session does not offer what it is for.
@@ -1458,6 +1462,7 @@ fn caption(
         | Does::RaidAction(_)
         | Does::Unoffered(_)
         | Does::Option(_)
+        | Does::Filter(_)
         | Does::Trains
         | Does::Tracks
         | Does::StopsTracking
@@ -2357,6 +2362,13 @@ fn plain_label(
             node,
             label.align,
             (text, controls::LevelValue(level)),
+            geometry,
+        ),
+        Some(controls::ValueLabel::Filter(category)) => aligned_in(
+            window,
+            node,
+            label.align,
+            (text, crate::options::FilterValue(category)),
             geometry,
         ),
         Some(controls::ValueLabel::Blank) => aligned_in(

@@ -2744,7 +2744,8 @@ mod tests {
             }
             assert!(outbound(ChatTab::All, &format!("/{name} hello")).is_ok());
         }
-        for name in ["help", "played", "unknown"] {
+        // `/filter`'s forms are unread (6.494a): every form gets this answer.
+        for name in ["help", "played", "unknown", "filter"] {
             assert_eq!(
                 outbound(ChatTab::All, &format!("/{name}")).unwrap_err(),
                 format!("This client does not take /{name} that way yet."),

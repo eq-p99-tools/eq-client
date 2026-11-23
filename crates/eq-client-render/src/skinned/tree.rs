@@ -681,8 +681,9 @@ pub(super) fn tabbed(
     context: &Context,
 ) {
     let particle_pages = super::particles::pages(&tabs.pages, context.id);
+    let filter_pages = super::filters::pages(&particle_pages, context.id);
     let pages = super::qol::pages(
-        &particle_pages,
+        &filter_pages,
         context.id,
         Vec2::new(inside.width, inside.height),
         tabs.page_frame.as_ref(),
@@ -814,7 +815,8 @@ fn tabbed_page_contents(
     area: Area,
     context: &Context,
 ) {
-    let generated = super::qol::content_height(page);
+    let generated =
+        super::qol::content_height(page).or_else(|| super::filters::content_height(page));
     let area = if let Some(content) = generated {
         let insets = tabs
             .page_frame

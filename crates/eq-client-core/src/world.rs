@@ -1125,6 +1125,15 @@ impl ClientWorld {
                     news.ignored = true;
                 }
             }
+            // The Options page shows the character's filters; the session
+            // keeping them, or refusing a set this client fitted to the
+            // generation first, is not news for the player. Apply Poison
+            // (eq-network #329) has no client side yet; its answers are not
+            // shown until that work lands.
+            WorldEvent::ServerFiltersKept { .. }
+            | WorldEvent::ServerFiltersRefused { .. }
+            | WorldEvent::PoisonAnswered(_)
+            | WorldEvent::ApplyPoisonRefused { .. } => {}
             WorldEvent::ListingRefused {
                 session_id,
                 reason,
