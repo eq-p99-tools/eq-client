@@ -83,7 +83,7 @@ impl OrbitCamera {
         let zoom = (-scroll * 0.12).exp();
         // The chase camera's distance behind the player, which the wheel
         // moves and the snap into first person measures.
-        let distance = self.behind_distance();
+        let distance = self.chase_reach(limits);
         let snap_distance = limits.chase_distance.0 * SNAP_DISTANCE_SCALE;
         let (tilt, zoom) = if let View::FirstPerson = self.view {
             if scroll >= 0.0 {

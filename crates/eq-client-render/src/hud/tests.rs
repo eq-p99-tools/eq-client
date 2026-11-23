@@ -30,6 +30,7 @@ fn caster() -> PlayerState {
         skills: None,
         practice_points: None,
         languages: None,
+        intoxication: None,
         disciplines: None,
         spell_refresh_ms: None,
         memorized_spells: gems,
@@ -879,6 +880,27 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
     forget(&mut app);
     assert!(rx.try_recv().is_err());
     assert!(feedback(&app).contains("Already casting"));
+    // While the session says a Bard sings that song, a press goes to it:
+    // the session stops the song (read R49-21c).
+    testing::news(
+        &mut online(&mut app),
+        [WorldEvent::Singing {
+            session_id: 7,
+            spell_id: Some(73),
+        }],
+    );
+    press(&mut app);
+    assert!(matches!(
+        rx.try_recv().unwrap(),
+        ClientCommand::CastSpell { spell_id: 73, .. }
+    ));
+    testing::news(
+        &mut online(&mut app),
+        [WorldEvent::Singing {
+            session_id: 7,
+            spell_id: None,
+        }],
+    );
     testing::news(
         &mut online(&mut app),
         [WorldEvent::SongStopUnconfirmed {

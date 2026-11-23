@@ -53,18 +53,19 @@ enum Support {
     /// past what the capsule meets (6.344 remainder: the capsule against the
     /// raised sphere, the engine's slide or stop, TAKP's twin of 0x48acef,
     /// the model's own step value).
-    Optional {
-        drop: f32,
-        climb: f32,
-    },
-    Airborne,
+    Optional { drop: f32, climb: f32 },
+    /// In the air: no ground is kept, and a face whose top is no more than
+    /// `clear` above the feet doesn't stop the move, which steps onto that
+    /// top instead (the program's raised sweep, read R42; 6.484).
+    Airborne { clear: f32 },
 }
 
 struct LavaContact;
 
 pub use eq_network_game::movement::{
-    Carried, EQMAC_FALL_SPEED, MAX_FALL_SPEED, MAX_GROUNDED_STEP, PROGRAM_STEP_SECONDS, ZBetween,
-    between_reports, carry, climb_reach, program_steps, swim_speed,
+    Carried, EQMAC_FALL_SPEED, MAX_FALL_SPEED, MAX_GROUNDED_STEP, PROGRAM_STEP_SECONDS,
+    SwimCalibration, ZBetween, between_reports, carry, climb_reach, program_steps, swim_speed,
+    water,
 };
 use glam::Vec3;
 use parry3d::{
@@ -729,7 +730,7 @@ impl CollisionWorld {
         }
         // Feet in deep water or lava now may go anywhere, so they can leave.
         let guarded = !self.inside_guarded_liquid(feet, height, liquids);
-        if matches!(support, Support::Airborne) {
+        if matches!(support, Support::Airborne { .. }) {
             // In the air, a move whose fall would end in deep water or lava is not made.
             return self
                 .guarded_stride(feet, displacement, height, support, liquids, guarded)
@@ -848,13 +849,13 @@ impl CollisionWorld {
                         None => position.y,
                     }
                 }
-                Support::Airborne => position.y,
+                Support::Airborne { .. } => position.y,
             };
             let target = Vec3::new(position.x + remaining.x, ground, position.z + remaining.z);
             // Going down, move across at the current height and then down, so the
             // capsule never cuts the edge it steps off and the feet never stop at
             // a height between the two floors.
-            let descending = !matches!(support, Support::Airborne) && target.y < position.y;
+            let descending = !matches!(support, Support::Airborne { .. }) && target.y < position.y;
             let delta = if descending {
                 Vec3::new(remaining.x, 0.0, remaining.z)
             } else {
@@ -880,7 +881,27 @@ impl CollisionWorld {
                     return Ok(target);
                 }
                 Ok(Some(hit)) => {
-                    if !matches!(support, Support::Airborne)
+                    // In the air, an edge whose top is within the clearance
+                    // is passed over and stood on where the move ends on it,
+                    // as the program's floor refresh under the end point
+                    // finds it. A top the move passes beyond (a thin rail)
+                    // lifts nothing: the face stops the body as before.
+                    if let Support::Airborne { clear } = support
+                        && clear > 0.0
+                        && let Some(top) = self
+                            .support_height(Vec3::new(target.x, position.y, target.z), clear, 0.0)
+                            .filter(|top| *top > position.y + 0.001)
+                    {
+                        let onto = Vec3::new(target.x, top, target.z);
+                        if self.can_step_up(position, onto, height) {
+                            let lifted = Vec3::new(position.x, top, position.z);
+                            if let Some(water) = entry(position, lifted)? {
+                                return Ok(water);
+                            }
+                            return Ok(entry(lifted, onto)?.unwrap_or(onto));
+                        }
+                    }
+                    if !matches!(support, Support::Airborne { .. })
                         && target.y > position.y
                         && self.can_step_up(position, target, height)
                     {

@@ -88,6 +88,31 @@ impl CreationAppearance {
     }
 }
 
+/// Where a race's Luclin model is kept: its own global archive's stem, the
+/// archives that lend movements, and the model it borrows them from, if any.
+#[must_use]
+pub fn luclin_source(model: &str, race: u32) -> (String, [&'static str; 4], Option<&'static str>) {
+    let stem = match race {
+        330 => "globalpcfroglok_chr".into(),
+        _ => format!("global{}_chr", model.to_ascii_lowercase()),
+    };
+    let donors = [
+        "globalelm_chr",
+        "globalelf_chr",
+        "globalhum_chr",
+        "globalhuf_chr",
+    ];
+    let borrows = match model.to_ascii_uppercase().as_str() {
+        "ERM" => Some("HUM"),
+        "ERF" => Some("HUF"),
+        "HIM" | "DAM" | "HAM" => Some("ELM"),
+        "HIF" | "DAF" | "HAF" => Some("ELF"),
+        "FRF" => Some("FRM"),
+        _ => None,
+    };
+    (stem, donors, borrows)
+}
+
 /// Loads a complete creation preview from an installed client. No game assets
 /// or palettes are built into this crate.
 ///
@@ -98,55 +123,71 @@ pub fn load_creation_character(
     model: &str,
     look: CreationAppearance,
 ) -> Result<CharacterAsset, LoadError> {
-    let mut asset = if look.classic {
-        crate::characters::load_global_character(directory, model, &DonorArchives::default())?
-    } else {
-        let stem = match look.race {
-            330 => "globalpcfroglok_chr".into(),
-            _ => format!("global{}_chr", model.to_ascii_lowercase()),
-        };
-        let donors = [
-            "globalelm_chr.s3d",
-            "globalelf_chr.s3d",
-            "globalhum_chr.s3d",
-            "globalhuf_chr.s3d",
-        ]
-        .map(|name| directory.join(name));
-        super::load_with_source(
-            &directory.join(format!("{stem}.s3d")),
-            model,
-            &donors,
-            &DonorArchives::default(),
-            match model {
-                "ERM" => Some("HUM"),
-                "ERF" => Some("HUF"),
-                "HIM" | "DAM" | "HAM" => Some("ELM"),
-                "HIF" | "DAF" | "HAF" => Some("ELF"),
-                "FRF" => Some("FRM"),
-                _ => None,
-            },
-        )?
+    if look.classic {
+        let mut asset =
+            crate::characters::load_global_character(directory, model, &DonorArchives::default())?;
+        asset.dress_materials(|name| look.material(model, name))?;
+        return Ok(asset);
+    }
+    load_luclin(directory, model, look, &DonorArchives::default())
+}
+
+/// Loads a player race's Luclin model for the world, in its base look: the
+/// first face, hair and beard, and the first eye colours. The movements it
+/// borrows are read through `donors`. A spawn's own face, hair and eyes,
+/// and its worn gear, are not applied (checklist 6.554).
+///
+/// # Errors
+/// Reports a missing or malformed Luclin archive, texture or palette; the
+/// caller draws the classic model instead.
+pub fn load_luclin_character(
+    directory: &Path,
+    model: &str,
+    (race, gender): (u32, u32),
+    donors: &DonorArchives,
+) -> Result<CharacterAsset, LoadError> {
+    let look = CreationAppearance {
+        race,
+        gender,
+        ..CreationAppearance::default()
     };
+    load_luclin(directory, model, look, donors)
+}
+
+fn load_luclin(
+    directory: &Path,
+    model: &str,
+    look: CreationAppearance,
+    parsed: &DonorArchives,
+) -> Result<CharacterAsset, LoadError> {
+    let (stem, donors, borrows) = luclin_source(model, look.race);
+    let donors = donors.map(|stem| crate::archives::path(directory, stem));
+    let mut asset = super::load_with_source(
+        &crate::archives::path(directory, &stem),
+        model,
+        &donors,
+        parsed,
+        borrows,
+    )?;
     asset.dress_materials(|name| look.material(model, name))?;
-    if !look.classic {
-        apply_layers(&mut asset, directory, look)?;
-        apply_eyes(&mut asset, directory, look)?;
-        apply_attachments(&mut asset, directory, look)?;
-        // Luclin WLD UVs address DDS rows bottom-up. Decode/composite first,
-        // then orient the finished textures for the renderer's top-down images.
-        for texture in &mut asset.textures {
-            if texture.name.to_ascii_lowercase().ends_with(".dds") {
-                let mut image = image::RgbaImage::from_raw(
-                    texture.width,
-                    texture.height,
-                    std::mem::take(&mut texture.rgba8),
-                )
-                .ok_or_else(|| invalid("appearance texture dimensions"))?;
-                image::imageops::flip_vertical_in_place(&mut image);
-                texture.rgba8 = image.into_raw();
-            }
+    apply_layers(&mut asset, directory, look)?;
+    apply_eyes(&mut asset, directory, look)?;
+    apply_attachments(&mut asset, directory, look)?;
+    // Luclin WLD UVs address DDS rows bottom-up. Decode/composite first,
+    // then orient the finished textures for the renderer's top-down images.
+    for texture in &mut asset.textures {
+        if texture.name.to_ascii_lowercase().ends_with(".dds") {
+            let mut image = image::RgbaImage::from_raw(
+                texture.width,
+                texture.height,
+                std::mem::take(&mut texture.rgba8),
+            )
+            .ok_or_else(|| invalid("appearance texture dimensions"))?;
+            image::imageops::flip_vertical_in_place(&mut image);
+            texture.rgba8 = image.into_raw();
         }
     }
+    asset.set_luclin(true);
     Ok(asset)
 }
 
@@ -255,7 +296,7 @@ fn apply_eyes(
     } else {
         "lgequip"
     };
-    let path = directory.join(format!("{stem}.s3d"));
+    let path = crate::archives::path(directory, stem);
     let (mut archive, bytes) = super::open_world(&path)?;
     let (_, world) = crate::parse_wld(&bytes, stem)?;
     let replacements: Vec<_> = world
@@ -375,8 +416,10 @@ fn apply_attachments(
         }
         let id = base + look.gender * 30 + [1000, 2000][slot] + u32::from(style);
         let item_name = format!("IT{id}");
-        let mut item = super::load_character(&directory.join("lgequip.s3d"), &item_name)
-            .or_else(|_| super::load_character(&directory.join("lgequip2.s3d"), &item_name))?;
+        let [first, second] =
+            crate::archives::EQUIPMENT.map(|stem| crate::archives::path(directory, stem));
+        let mut item = super::load_character(&first, &item_name)
+            .or_else(|_| super::load_character(&second, &item_name))?;
         if look.race != 130 {
             let colors = if let Some(colors) = palette {
                 colors
@@ -489,6 +532,28 @@ fn palette_from_pe(bytes: &[u8]) -> Option<[[u8; 3]; 24]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_luclin_model_is_kept_in_its_races_archive_and_borrows_as_creation_does() {
+        assert_eq!(luclin_source("HUM", 1).0, "globalhum_chr");
+        assert_eq!(luclin_source("FRM", 330).0, "globalpcfroglok_chr");
+        assert_eq!(luclin_source("FRF", 330).2, Some("FRM"));
+        assert_eq!(luclin_source("erm", 3).2, Some("HUM"));
+        for model in ["HIM", "DAM", "HAM"] {
+            assert_eq!(luclin_source(model, 5).2, Some("ELM"));
+        }
+        assert_eq!(luclin_source("DAF", 6).2, Some("ELF"));
+        assert_eq!(luclin_source("HUM", 1).2, None);
+        assert_eq!(luclin_source("IKM", 128).1[2], "globalhum_chr");
+    }
+
+    #[test]
+    fn a_missing_luclin_archive_is_an_error_to_draw_the_classic_model_by() {
+        let empty = std::env::temp_dir().join(format!("luclin-none-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&empty);
+        assert!(load_luclin_character(&empty, "HUM", (1, 0), &DonorArchives::default()).is_err());
+        let _ = std::fs::remove_dir(&empty);
+    }
 
     #[test]
     fn face_details_change_only_the_corresponding_installed_materials() {

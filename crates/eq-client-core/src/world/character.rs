@@ -20,14 +20,32 @@ fn skill_value(player: &crate::PlayerState, skill_id: u32) -> Option<u32> {
     }
 }
 
+/// The sound the Titanium program plays for a level gained (read R49-6c).
+const LEVEL_GAIN_SOUND: u16 = 0x8b;
+
 impl ClientWorld {
     /// The player's level and experience; what items give can depend on
     /// the level.
     pub(super) fn level_news(&mut self, current: u8, experience: u32, changes: &mut Changes) {
+        let program = super::prints_r49_6_lines(self.generation);
         match self.player.as_mut() {
             Some(player) if self.connected => {
                 if player.level != current {
                     self.skills_revision = self.skills_revision.wrapping_add(1);
+                }
+                // The Titanium program says a loss, and plays sound 0x8b for
+                // a gain with no line, measuring from the level it holds
+                // (read R49-6c). That 0x8b is the numbers file's is
+                // inferred. Its music cue at level 10 is a gap (R49-7).
+                if program && current < player.level {
+                    changes.notices.push(super::Notice::LevelLost {
+                        lost: player.level - current,
+                        level: current,
+                    });
+                } else if program && current > player.level {
+                    changes
+                        .sounds
+                        .push(crate::effects::Cue::Number(LEVEL_GAIN_SOUND));
                 }
                 player.level = current;
                 self.vitals.experience = Some(experience);

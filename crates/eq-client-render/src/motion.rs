@@ -23,7 +23,7 @@ use eq_client_assets::{
 };
 use eq_client_core::{
     Capability, ClientCommand, DiagonalAlong, DiagonalRates, GroundedDiagonal, HeadingUpdate,
-    MovementMode, MovementRequest, Posture, StrafeSide, Support,
+    MovementMode, MovementRequest, Pace, Posture, StrafeSide, Support,
     hazards::Hazard,
     movement::{
         AirborneController, CollisionWorld, Landing, PROVISIONAL_PHYSICS, VerticalPhysics,
@@ -63,6 +63,9 @@ pub(super) struct Controls {
     /// Backing up in water, before the water's share applies; the session's
     /// grant (`MotionGrant::swim_backward_units_per_second`).
     pub swim_backward_speed: Option<f32>,
+    /// Swimming as the program moves it, where the session's grant reads
+    /// it (`MotionGrant::swim`): the inputs and the zone's water set.
+    pub swim: Option<eq_client_core::movement::SwimCalibration>,
     diagonal_rates: DiagonalRates,
     /// The share of the jump speed a jump starts with, as the session
     /// grants it: the health and weight factor.
@@ -162,6 +165,9 @@ pub(super) struct Controls {
     stun_active: bool,
     /// When the last jump in water began its up stroke (read R39 B).
     water_jump: Option<Instant>,
+    /// The wet body's velocity between samples (0x4bfe0f; reads R33 and
+    /// R41). A correction, placement or admission starts it at rest.
+    wet: eq_client_core::movement::water::WetVelocity,
     /// Explicit departures; the session checks the same choices independently.
     movement_options: eq_client_core::movement::MovementOptions,
     /// The group member the player follows on foot (`/follow`).
@@ -237,6 +243,7 @@ impl Default for Controls {
             strafe_speed: None,
             strafe_walk_speed: None,
             swim_backward_speed: None,
+            swim: None,
             diagonal_rates: DiagonalRates::default(),
             jump_factor: 1.0,
             straddle: None,
@@ -281,6 +288,7 @@ impl Default for Controls {
             stunned: false,
             stun_active: false,
             water_jump: None,
+            wet: eq_client_core::movement::water::WetVelocity::default(),
             movement_options: eq_client_core::movement::MovementOptions::default(),
             following: None,
         }
@@ -549,17 +557,16 @@ impl Controls {
             let radians = eq_client_core::render_heading(heading);
             intent.preserve_facing = true;
             if let Some(speed) = self.strafe_speed {
-                // A strafe keeps the running pace through the repin (6.561): the
-                // session bounds it as before; the strafe pace slice names
-                // a walking one.
-                intent.mode = MovementMode::Strafe(eq_client_core::Pace::Run);
                 // Titanium strafes on the selected base speed (the R5
-                // audit's S1).
-                intent.speed = if self.walking {
-                    self.strafe_walk_speed.unwrap_or(speed)
+                // audit's S1), and the sample names that pace, so the
+                // session bounds it by the same rate (6.540).
+                let (pace, rate) = if self.walking {
+                    (Pace::Walk, self.strafe_walk_speed.unwrap_or(speed))
                 } else {
-                    speed
+                    (Pace::Run, speed)
                 };
+                intent.mode = MovementMode::Strafe(pace);
+                intent.speed = rate;
                 let facing = Vec3::new(radians.sin(), 0.0, radians.cos());
                 intent.direction = facing.cross(Vec3::Y) * sideways;
             } else {
@@ -879,6 +886,7 @@ impl Controls {
             strafe_units_per_second: self.strafe_speed,
             strafe_walk_units_per_second: self.strafe_walk_speed,
             swim_backward_units_per_second: self.swim_backward_speed,
+            swim: self.swim,
             diagonal: self.diagonal_rates,
             falls: self.airborne.is_some(),
             jump_factor: self.jump_factor,
@@ -941,6 +949,22 @@ impl Controls {
         }
     }
 
+    /// Whether the player moved in the latest pass: the emotes' stand-in
+    /// for the program's own spawn speed (+0x48, recording checklist 6.488).
+    pub(crate) const fn moving(&self) -> bool {
+        self.moving
+    }
+
+    /// How fast the player's water step moves it across, in units a
+    /// second, where the water step runs (a grant with swim inputs); none
+    /// otherwise.
+    pub(crate) fn wet_speed(&self) -> Option<f32> {
+        self.swim.map(|_| {
+            let ([x, z], _) = self.wet.units_per_second();
+            x.hypot(z)
+        })
+    }
+
     /// The speeds of a grant, and nothing else.
     fn set_speeds(&mut self, grant: eq_client_core::world::MotionGrant) {
         self.speed = grant.units_per_second;
@@ -949,6 +973,7 @@ impl Controls {
         self.strafe_speed = grant.strafe_units_per_second;
         self.strafe_walk_speed = grant.strafe_walk_units_per_second;
         self.swim_backward_speed = grant.swim_backward_units_per_second;
+        self.swim = grant.swim;
         self.diagonal_rates = grant.diagonal;
         self.jump_factor = if grant.jump_factor.is_finite() {
             grant.jump_factor.clamp(0.0, 1.0)
@@ -1161,6 +1186,17 @@ fn lower_speeds(
                 .swim_backward_units_per_second
                 .or(grant.units_per_second),
         ),
+        // The lower inputs, in the later grant's water: a zone's set
+        // changes only with the zone, which starts afresh.
+        swim: earlier.swim.zip(grant.swim).map(|(a, b)| {
+            eq_client_core::movement::SwimCalibration {
+                forward: a.forward.min(b.forward),
+                walk: a.walk.min(b.walk),
+                strafe: a.strafe.min(b.strafe),
+                backward: a.backward.min(b.backward),
+                set: b.set,
+            }
+        }),
         diagonal: DiagonalRates {
             run: lower(earlier.diagonal.run, grant.diagonal.run),
             walk: lower(earlier.diagonal.walk, grant.diagonal.walk),
@@ -1275,10 +1311,31 @@ const WATER_JUMP: Duration = Duration::from_millis(500);
 fn swim_stroke(
     direction: Vec3,
     mode: MovementMode,
+    keys: (&KeyMap, &ButtonInput<KeyCode>, &[Act]),
+    view: (&OrbitCamera, Option<&MouseLook>),
+    autorun: bool,
+) -> (Vec3, bool) {
+    match stroke_pitch(direction, mode, keys, view, autorun) {
+        Some((pitch, forward_up)) => (
+            (direction * pitch.cos() + Vec3::Y * pitch.sin()).normalize_or_zero(),
+            forward_up,
+        ),
+        None => (direction, false),
+    }
+}
+
+/// The look pitch a swim stroke along `direction` takes, signed for a
+/// backing stroke, and whether it is a forward stroke looking up; None for
+/// no vertical input: a strafe, no longitudinal input, or a level look.
+/// The program's vertical input is the forward speed (signed, so backing
+/// reverses it) times sin(pitch) (0x4bfe0f, read R39 C).
+fn stroke_pitch(
+    direction: Vec3,
+    mode: MovementMode,
     (map, keys, scripted): (&KeyMap, &ButtonInput<KeyCode>, &[Act]),
     (camera, look): (&OrbitCamera, Option<&MouseLook>),
     autorun: bool,
-) -> (Vec3, bool) {
+) -> Option<(f32, bool)> {
     let keys = sample_keys(keys, map);
     let held = map.holding(&keys, scripted);
     let camera_forward = held.held(Act::CameraForward);
@@ -1297,14 +1354,11 @@ fn swim_stroke(
         || matches!(mode, MovementMode::Strafe(_))
         || direction == Vec3::ZERO
     {
-        return (direction, false);
+        return None;
     }
     let backing = mode == MovementMode::Backward || camera_back && !camera_forward;
     let pitch = if backing { -pitch } else { pitch };
-    (
-        (direction * pitch.cos() + Vec3::Y * pitch.sin()).normalize_or_zero(),
-        !backing && pitch > 0.0,
-    )
+    Some((pitch, !backing && pitch > 0.0))
 }
 
 /// The mouse's look and aim, and the spell names a root is read by.
@@ -1327,6 +1381,10 @@ type InputExtras<'w, 's> = (
     clippy::needless_pass_by_value,
     clippy::too_many_arguments,
     clippy::too_many_lines
+)]
+#[expect(
+    clippy::match_same_arms,
+    reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
 )]
 pub(super) fn input(
     keys: crate::keys::Keys,
@@ -1534,8 +1592,12 @@ pub(super) fn input(
     }
     let now = Instant::now();
     controls.settle(now);
-    let water_enabled =
-        client == InstalledClient::Titanium && !flying && online.world().can(Capability::Swimming);
+    let water_enabled = match client {
+        InstalledClient::Titanium => true,
+        // RoF2's water is not read yet.
+        InstalledClient::EqMac | InstalledClient::Rof2 => false,
+    } && !flying
+        && online.world().can(Capability::Swimming);
     if !water_enabled || !focused || controls.stun_active {
         controls.shoreline.reset();
     }
@@ -1717,8 +1779,12 @@ pub(super) fn input(
         controls.held = Some(Held::NoBody);
         return;
     };
-    let placement_blocked = client == InstalledClient::Titanium
-        && !flying
+    let placement_blocked = match client {
+        InstalledClient::Titanium => true,
+        // Titanium's, inferred for RoF2 (6.489).
+        InstalledClient::Rof2 => true,
+        InstalledClient::EqMac => false,
+    } && !flying
         && controls.airborne.is_some()
         && controls.placement.holds(
             online.server_placement(),
@@ -1975,7 +2041,68 @@ pub(super) fn input(
         preserve_facing,
         diagonal,
     } = intent;
-    if swimming {
+    // The program's wet step for this sample, where the grant reads the
+    // generation's water: the travel it gives, before collision.
+    let mut wet_travel = None;
+    if swimming && let Some(swim) = controls.swim {
+        let caps = swim.caps();
+        // The water leaves a strafe as on land, so its input keeps the
+        // walking and ducking shares the grant gave the strafe (R28, R33).
+        let input = match mode {
+            MovementMode::Backward => swim.backward,
+            MovementMode::Strafe(_) => {
+                swim.strafe * (speed / controls.strafe_speed.unwrap_or(speed).max(f32::EPSILON))
+            }
+            _ if controls.walking => swim.walk,
+            _ => swim.forward,
+        };
+        let mut horizontal = Vec3::ZERO;
+        let mut vertical = 0.0;
+        let mut jump = false;
+        if controls.stun_active || !(focused || follow_step.is_some()) {
+            turn = 0.0;
+            controls.water_jump = None;
+        } else {
+            horizontal = Vec3::new(direction.x, 0.0, direction.z).normalize_or_zero() * input;
+            if focused {
+                if let Some((pitch, _)) = stroke_pitch(
+                    direction,
+                    mode,
+                    (map, &sampled, scripted),
+                    (camera, look.as_deref()),
+                    controls.autorun,
+                ) {
+                    vertical = input * pitch.sin();
+                }
+                // A jump in water pushes up for half a second (read R39 B),
+                // before the frame's step (read R41 b).
+                let jumping = map.holding(&sampled, scripted).held(Act::Jump);
+                jump = controls.water_jump(jumping, now);
+            }
+        }
+        controls.wet.clamp(caps);
+        let (across, up) = controls.wet.advance(
+            swim.set,
+            eq_client_core::movement::water::WetInput {
+                horizontal: [horizontal.x, horizontal.z],
+                vertical,
+                jump,
+            },
+            span,
+        );
+        let mut travel = Vec3::new(across[0], up, across[1]);
+        if let Some(step) = follow_step {
+            // Stop within one frame of reach, as on land.
+            let reach = step.beyond + caps.horizontal / 60.0;
+            let flat = Vec3::new(travel.x, 0.0, travel.z);
+            if flat.length() > reach {
+                travel = flat.normalize_or_zero() * reach + Vec3::Y * travel.y;
+            }
+        }
+        direction = Vec3::new(travel.x, 0.0, travel.z).normalize_or_zero();
+        speed = caps.horizontal;
+        wet_travel = Some(travel);
+    } else if swimming {
         // Titanium backs up in water only by the buffs' modifier (0x4a2bd8;
         // read R13 b), so not at all without one; the grant carries it. A
         // ducking player backs up on the land rule there (R23), which their
@@ -2011,7 +2138,7 @@ pub(super) fn input(
     } else {
         controls.water_jump = None;
     }
-    if let Some(step) = follow_step {
+    if let Some(step) = follow_step.filter(|_| wet_travel.is_none()) {
         // Stop within one frame of reach at the selected movement rate.
         // Water selects its ordinary swim rate above, so it shares this
         // limit rather than replacing an already limited land speed.
@@ -2062,11 +2189,20 @@ pub(super) fn input(
             airborne.velocity() != 0.0 || ride.sinking || unsupported(world, feet)
         });
     // So does a heading sent that still turns toward the facing.
+    // A wet body drifts and sinks with no input (0x4bfe0f, gravity in
+    // water: reads R33 and R41 e), until it rests on the bottom.
+    let drifting = wet_travel.is_some_and(|travel| {
+        travel.length_squared() > 1e-10
+            && (Vec2::new(travel.x, travel.z).length_squared() > 1e-8
+                || travel.y > 0.0
+                || world.support(feet).is_none())
+    });
     if direction == Vec3::ZERO
         && turn == 0.0
         && controls.released_turn == 0.0
         && !controls.moving
         && !airborne
+        && !drifting
         && !shoreline_active
         && controls.jump.is_none()
         && controls.facing.is_none()
@@ -2156,7 +2292,7 @@ pub(super) fn input(
         });
         return;
     }
-    let mut delta = direction * speed * span;
+    let mut delta = wet_travel.unwrap_or(direction * speed * span);
     let jump = controls.jump.take().is_some();
     let crouched = controls.crouch == Some(Crouch::Over);
     if crouched {
@@ -2287,6 +2423,14 @@ pub(super) fn input(
         (feet, MovementMode::Forward, false)
     } else if let Some(plan) = &shore {
         (plan.feet, MovementMode::Shoreline(plan.trace), false)
+    } else if swimming && wet_travel.is_some() {
+        let moved = world.wet_step(feet, delta, body.height);
+        // A body that couldn't sink keeps its velocity but a fast fall
+        // (0x48acef; read R41 c).
+        if delta.y < 0.0 {
+            controls.wet.floor_blocked(feet.y - moved.y);
+        }
+        (moved, MovementMode::Swim, false)
     } else if swimming {
         (
             world.swim_step(feet, delta, body.height),
@@ -2453,6 +2597,28 @@ pub(super) fn input(
         && let Some(airborne) = controls.airborne.as_mut()
     {
         airborne.reset();
+    }
+    if entering {
+        // The program keeps the velocity a body enters water with and damps
+        // it; here it starts from this sample's, held to the water's caps
+        // at the next (the slower side, recording checklist 6.483).
+        let moved = (position - origin) / span.max(f32::EPSILON);
+        controls.wet = eq_client_core::movement::water::WetVelocity::from_units_per_second(
+            [moved.x, moved.z],
+            moved.y,
+        );
+    } else if swimming
+        && wet_travel.is_some()
+        && !placement_blocked
+        && !world.in_swimmable_water(landing, body.height)
+    {
+        // The origin left the water: the program's next step is ordinary
+        // falling, carrying the wet velocity on with no input (read R33).
+        let ([x, z], y) = controls.wet.units_per_second();
+        if let Some(airborne) = controls.airborne.as_mut() {
+            airborne.carry_from_water(y, Vec3::new(x, 0.0, z), landing.y);
+        }
+        controls.wet = eq_client_core::movement::water::WetVelocity::default();
     }
     controls.recent.record(now, delta, position - origin);
     // The host's movement session budgets each sample from the previous
@@ -2652,7 +2818,7 @@ pub(super) fn fall_step(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn fall_step_with_water(
+pub(super) fn fall_step_with_water(
     airborne: &mut AirborneController,
     world: &CollisionWorld,
     physics: VerticalPhysics,
@@ -2742,6 +2908,7 @@ pub(super) fn physics(client: InstalledClient, zone_gravity: Option<f32>) -> Ver
             ground_tolerance: falls.ground_tolerance,
             climb: eq_client_core::movement::MAX_GROUNDED_STEP,
             edge_climb: None,
+            airborne_clear: 0.0,
             steers_in_air: false,
         }
     })
@@ -2779,6 +2946,13 @@ pub(super) fn walking(
     let physics = climbing(physics, client, body);
     client.falls().map_or(physics, |falls| VerticalPhysics {
         edge_climb: Some(falls.walk_climb(body.feet_offset, body.size, raised)),
+        // A raised jump or fall passes over an edge its floor sweep reaches
+        // and lands on it (R42, 6.484); where the walk climbs edges at all.
+        airborne_clear: if raised && falls.edge_climb.is_some() {
+            physics.climb
+        } else {
+            0.0
+        },
         ..physics
     })
 }
@@ -3688,16 +3862,24 @@ pub(super) mod tests {
         let map = KeyMap::for_client(InstalledClient::Titanium);
         let keys = ButtonInput::<KeyCode>::default();
         let strafe = |controls: &Controls| {
-            controls
-                .intent(&keys, &map, &[Act::StrafeLeft], true, (0.0, 0.0), None)
-                .speed
+            let intent = controls.intent(&keys, &map, &[Act::StrafeLeft], true, (0.0, 0.0), None);
+            (intent.speed, intent.mode)
         };
-        assert!((strafe(&controls) - 6.0).abs() < 0.001);
+        // The sample names the pace it takes, so the session bounds it by
+        // the same rate (6.540).
+        let (speed, mode) = strafe(&controls);
+        assert!((speed - 6.0).abs() < 0.001);
+        assert_eq!(mode, MovementMode::Strafe(Pace::Run));
         controls.walking = true;
-        assert!((strafe(&controls) - 4.0).abs() < 0.001);
-        // Without a walking rate, one rate for both.
+        let (speed, mode) = strafe(&controls);
+        assert!((speed - 4.0).abs() < 0.001);
+        assert_eq!(mode, MovementMode::Strafe(Pace::Walk));
+        // Without a walking rate, one rate for both; still a walking strafe,
+        // which the session then bounds by that one rate.
         controls.strafe_walk_speed = None;
-        assert!((strafe(&controls) - 6.0).abs() < 0.001);
+        let (speed, mode) = strafe(&controls);
+        assert!((speed - 6.0).abs() < 0.001);
+        assert_eq!(mode, MovementMode::Strafe(Pace::Walk));
     }
 
     #[test]
@@ -4571,6 +4753,341 @@ pub(super) mod tests {
         assert!(wading.z < 4.0 && wading.y.abs() < 0.001, "{wading}");
         let dry_run = run_into(block, &HUMAN, raised_walk(&dry, feet, None), 32.0);
         assert!(dry_run.z > 4.5, "{dry_run}");
+    }
+
+    /// Steps `body` from `start` over `triangles` (render frame) in 50 ms
+    /// steps by `client`'s walking physics, each step's horizontal move and
+    /// jump from `input(step, feet)`; returns where the feet end and the
+    /// landings taken.
+    fn airborne_run(
+        triangles: Vec<[[f32; 3]; 3]>,
+        body: &super::PlayerBody,
+        (client, raised): (InstalledClient, bool),
+        start: Vec3,
+        steps: usize,
+        input: impl Fn(usize, Vec3) -> (Vec3, bool),
+    ) -> (Vec3, Vec<eq_client_core::movement::Landing>) {
+        use eq_client_core::movement::{AirborneController, CollisionWorld};
+        let physics = walking(physics(client, None), client, body, raised);
+        let world = CollisionWorld::new(triangles).unwrap();
+        let mut airborne = AirborneController::default();
+        let mut feet = start;
+        let mut landings = Vec::new();
+        for step in 0..steps {
+            let (horizontal, jump) = input(step, feet);
+            let next = fall_step(
+                &mut airborne,
+                &world,
+                physics,
+                client.falls().map(|_| physics.reach()),
+                feet,
+                horizontal,
+                0.05,
+                body.height,
+                jump,
+            );
+            feet = next;
+            landings.extend(airborne.take_landing());
+        }
+        (feet, landings)
+    }
+
+    /// The plank end at z 0 over a floor at y 0, open water (a deep floor at
+    /// y -30) for `gap`, then a deck at y 4.4 behind a side rising to `side`.
+    fn ship_dock(gap: f32, side: f32) -> Vec<[[f32; 3]; 3]> {
+        let mut triangles = solid_box(Vec3::new(-20.0, -1.0, -40.0), Vec3::new(20.0, 0.0, 0.0));
+        triangles.extend(solid_box(
+            Vec3::new(-20.0, -31.0, -40.0),
+            Vec3::new(20.0, -30.0, 200.0),
+        ));
+        triangles.extend(solid_box(
+            Vec3::new(-20.0, -30.0, gap),
+            Vec3::new(20.0, side, gap + 0.5),
+        ));
+        triangles.extend(solid_box(
+            Vec3::new(-20.0, -30.0, gap + 0.5),
+            Vec3::new(20.0, 4.4, 200.0),
+        ));
+        triangles
+    }
+
+    /// A run at 32 a second along +Z from z -20 that jumps once the feet
+    /// pass `takeoff` (never, for None).
+    fn run_and_jump(takeoff: Option<f32>) -> impl Fn(usize, Vec3) -> (Vec3, bool) {
+        let jumped = std::cell::Cell::new(false);
+        move |_, feet| {
+            let jump = !jumped.get() && takeoff.is_some_and(|at| feet.z >= at);
+            jumped.set(jumped.get() || jump);
+            (Vec3::Z * 32.0 * 0.05, jump)
+        }
+    }
+
+    #[test]
+    fn a_titanium_running_jump_lands_on_a_deck_across_the_water_as_the_program_does() {
+        // Erud's Crossing (11-19 probe): the ship's deck 4.4 over the planks
+        // and 10 to 13 across open water, behind a side 5 high. The program
+        // sweeps a jump with the walk's raised sphere and has no lower
+        // test, so the side doesn't stop it, and the floor refresh stands
+        // it on the deck (R42; 6.484).
+        let start = Vec3::new(0.0, 0.0, -20.0);
+        let (feet, landings) = airborne_run(
+            ship_dock(12.0, 5.0),
+            &HUMAN,
+            (InstalledClient::Titanium, true),
+            start,
+            60,
+            run_and_jump(Some(-1.0)),
+        );
+        assert!(feet.z > 13.0 && (feet.y - 4.4).abs() < 0.01, "{feet}");
+        // It lands once, on the deck, at the speed it came at.
+        let deck = landings.last().unwrap();
+        assert!(deck.fall_distance < 3.0, "{landings:?}");
+    }
+
+    #[test]
+    fn a_jump_still_stops_at_a_taller_side_and_a_walk_off_still_falls() {
+        let start = Vec3::new(0.0, 0.0, -20.0);
+        let titanium = (InstalledClient::Titanium, true);
+        for (name, side, takeoff, raised) in [
+            // A side 9 high reaches past the soles' rise (about 4.95)
+            // plus 3.375.
+            ("a side 9 high", 9.0, Some(-1.0), titanium),
+            // Off the end with no jump, the soles are far under the side's
+            // top less the reach when they meet it.
+            ("a walk off the end", 5.0, None, titanium),
+            // Ducking (or wet feet), the program sweeps at the origin
+            // itself (L = 0): today's sweep stays.
+            (
+                "a ducking jump",
+                5.0,
+                Some(-0.5),
+                (InstalledClient::Titanium, false),
+            ),
+            // The Mac-era client has no raised sweep here.
+            (
+                "a Mac-era jump",
+                5.0,
+                Some(-0.5),
+                (InstalledClient::EqMac, true),
+            ),
+        ] {
+            let (feet, _) = airborne_run(
+                ship_dock(10.0, side),
+                &HUMAN,
+                raised,
+                start,
+                60,
+                run_and_jump(takeoff),
+            );
+            assert!(feet.y < -10.0 && feet.z < 10.0, "{name}: {feet}");
+        }
+    }
+
+    #[test]
+    fn a_jump_mounts_a_ledge_up_to_its_rise_plus_the_floor_sweeps_reach() {
+        // What a standing jump against a ledge reaches: its own rise over
+        // flat ground plus the floor sweep's 3.375 (6.484). Today it
+        // mounted nothing it couldn't walk up.
+        let floor = solid_box(Vec3::new(-20.0, -1.0, -40.0), Vec3::new(20.0, 0.0, 200.0));
+        let press = |step, _| (Vec3::Z * 32.0 * 0.05, step == 0);
+        let mut peak = 0.0_f32;
+        {
+            let physics = walking(
+                physics(InstalledClient::Titanium, None),
+                InstalledClient::Titanium,
+                &HUMAN,
+                true,
+            );
+            let world = eq_client_core::movement::CollisionWorld::new(floor.clone()).unwrap();
+            let mut airborne = eq_client_core::movement::AirborneController::default();
+            let mut feet = Vec3::ZERO;
+            for step in 0..30 {
+                feet = fall_step(
+                    &mut airborne,
+                    &world,
+                    physics,
+                    Some(physics.reach()),
+                    feet,
+                    Vec3::ZERO,
+                    0.05,
+                    HUMAN.height,
+                    step == 0,
+                );
+                peak = peak.max(feet.y);
+            }
+        }
+        let reach = peak + 3.375;
+        for (top, mounts) in [(reach - 0.3, true), (reach + 0.3, false)] {
+            let mut triangles = floor.clone();
+            triangles.extend(solid_box(
+                Vec3::new(-20.0, 0.0, 1.0),
+                Vec3::new(20.0, top, 200.0),
+            ));
+            let (feet, _) = airborne_run(
+                triangles,
+                &HUMAN,
+                (InstalledClient::Titanium, true),
+                Vec3::new(0.0, 0.0, 0.5),
+                40,
+                press,
+            );
+            assert_eq!(
+                (feet.y - top).abs() < 0.01,
+                mounts,
+                "a ledge {top} (rise {peak}): {feet}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fast_fall_steered_onto_a_ledge_takes_the_landing_its_speed_earns() {
+        // No dodge: a run off a platform 12 up, which the air doesn't steer,
+        // meets a ledge's face with the feet just under its top. They stand
+        // on the top with the fall's speed, as a landing onto it would.
+        let mut triangles = solid_box(Vec3::new(-20.0, 11.0, -40.0), Vec3::new(20.0, 12.0, 0.0));
+        triangles.extend(solid_box(
+            Vec3::new(-20.0, -61.0, -40.0),
+            Vec3::new(20.0, -60.0, 200.0),
+        ));
+        triangles.extend(solid_box(
+            Vec3::new(-20.0, -60.0, 14.5),
+            Vec3::new(20.0, 0.0, 200.0),
+        ));
+        let (feet, landings) = airborne_run(
+            triangles,
+            &HUMAN,
+            (InstalledClient::Titanium, true),
+            Vec3::new(0.0, 12.0, -3.0),
+            14,
+            |_, _| (Vec3::Z * 32.0 * 0.05, false),
+        );
+        assert!(feet.y.abs() < 0.01 && feet.z > 14.5, "{feet}");
+        let landing = landings.first().unwrap();
+        assert!(
+            landing.fall_distance > 11.0 && landing.impact_speed > 50.0,
+            "{landings:?}"
+        );
+    }
+
+    #[test]
+    fn a_wall_thinner_than_a_stride_never_boosts_a_jump() {
+        // A standing jump pressed at run speed into a wall at z 1: where the
+        // move ends past the top, nothing lifts the body onto it, and a lift
+        // never keeps upward speed, so the feet never rise past the wall's
+        // top or the plain jump's apex (reviewer F1; 6.484).
+        let floor = solid_box(Vec3::new(-20.0, -1.0, -40.0), Vec3::new(20.0, 0.0, 200.0));
+        let highest = |triangles: Vec<[[f32; 3]; 3]>| {
+            let peak = std::cell::Cell::new(0.0_f32);
+            let (feet, _) = airborne_run(
+                triangles,
+                &HUMAN,
+                (InstalledClient::Titanium, true),
+                Vec3::new(0.0, 0.0, 0.5),
+                40,
+                |step, feet: Vec3| {
+                    peak.set(peak.get().max(feet.y));
+                    (Vec3::Z * 32.0 * 0.05, step == 0)
+                },
+            );
+            peak.get().max(feet.y)
+        };
+        let apex = highest(floor.clone());
+        assert!((apex - 4.95).abs() < 0.1, "{apex}");
+        for top in [3.0, 6.0, 8.0] {
+            for thick in [0.1, 0.3] {
+                let mut triangles = floor.clone();
+                triangles.extend(solid_box(
+                    Vec3::new(-20.0, 0.0, 1.0),
+                    Vec3::new(20.0, top, 1.0 + thick),
+                ));
+                let peak = highest(triangles);
+                assert!(
+                    peak <= apex.max(top) + 0.01,
+                    "a wall {top} high, {thick} thick: {peak} (apex {apex})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_jump_lifted_onto_a_deck_or_ledge_stays_inside_the_session_guard() {
+        use eq_client_core::movement::{AirborneController, CollisionWorld, MAX_GROUNDED_STEP};
+        use eq_network_game::movement::{MovementGuard, MovementMode, MovementRequest};
+
+        // Each 50 ms step goes out as the walk sends it: Jump before the
+        // sample that leaves the ground, Fall while coming down or after
+        // a drop of more than a riser, else Forward. The guard hears the
+        // walk's reach, the jump and the run speed, as a session does.
+        let physics = walking(
+            physics(InstalledClient::Titanium, None),
+            InstalledClient::Titanium,
+            &HUMAN,
+            true,
+        );
+        let floor = solid_box(Vec3::new(-20.0, -1.0, -40.0), Vec3::new(20.0, 0.0, 200.0));
+        let mut ledge = floor;
+        // Just under what a standing jump mounts (about 4.95 + 3.375).
+        ledge.extend(solid_box(
+            Vec3::new(-20.0, 0.0, 1.0),
+            Vec3::new(20.0, 8.0, 200.0),
+        ));
+        for (name, triangles, start, takeoff, top) in [
+            ("the deck", ship_dock(12.0, 5.0), -20.0, -1.0, 4.4),
+            ("a ledge 8 high", ledge, 0.5, 0.5, 8.0),
+        ] {
+            let world = CollisionWorld::new(triangles).unwrap();
+            let begin = Instant::now();
+            let at = |step: usize| begin + Duration::from_millis(50 * step as u64);
+            let origin = |feet: Vec3| {
+                eq_client_core::world_position((feet + Vec3::Y * HUMAN.feet_offset).to_array(), 0.0)
+            };
+            let mut feet = Vec3::new(0.0, 0.0, start);
+            let mut guard = MovementGuard::new(12, origin(feet), at(0));
+            guard.set_speed(Some(32.0), at(0));
+            guard.set_climb(physics.reach());
+            guard.set_jump(physics.jump_speed, physics.gravity);
+            guard.set_fall_speed(physics.terminal_speed);
+            let mut airborne = AirborneController::default();
+            let mut jumped = false;
+            let mut lifted = 0;
+            for step in 1..=40 {
+                let jump = !jumped && feet.z >= takeoff;
+                jumped |= jump;
+                let rising = airborne.velocity() > 0.0;
+                let next = fall_step(
+                    &mut airborne,
+                    &world,
+                    physics,
+                    Some(physics.reach()),
+                    feet,
+                    Vec3::Z * 32.0 * 0.05,
+                    0.05,
+                    HUMAN.height,
+                    jump,
+                );
+                if !rising && airborne.velocity() > 0.0 {
+                    guard.jumped();
+                }
+                let mode = if airborne.velocity() < 0.0 || feet.y - next.y > MAX_GROUNDED_STEP {
+                    MovementMode::Fall
+                } else {
+                    MovementMode::Forward
+                };
+                // The step that stands it on the top, higher than the
+                // arc alone took it, goes out grounded.
+                if (next.y - top).abs() < 0.01 && feet.y < top - 0.01 {
+                    lifted += 1;
+                    assert_eq!(mode, MovementMode::Forward, "{name}: {feet} -> {next}");
+                }
+                let request = MovementRequest::new(mode, 12, origin(next), at(step));
+                assert!(
+                    guard.accept(&request, at(step)).is_ok(),
+                    "{name}: step {step} {mode:?} {feet} -> {next}"
+                );
+                feet = next;
+            }
+            assert!(lifted == 1 && (feet.y - top).abs() < 0.01, "{name}: {feet}");
+        }
     }
 
     #[test]
@@ -5502,6 +6019,7 @@ pub(super) mod tests {
                 skills: None,
                 practice_points: None,
                 languages: None,
+                intoxication: None,
                 disciplines: None,
                 spell_refresh_ms: None,
                 memorized_spells: [None; 8],
@@ -5920,6 +6438,7 @@ pub(super) mod tests {
             let last_accepted = controls.last_accepted;
             controls.grant(
                 eq_client_core::world::MotionGrant {
+                    swim: None,
                     units_per_second: None,
                     backward_units_per_second: None,
                     walk_units_per_second: None,
@@ -5982,6 +6501,9 @@ pub(super) mod tests {
             let (from, to, top) = (f64::from(from.y), f64::from(to.y), f64::from(self.top));
             (to > top).then_some(((from - top) / (from - to))..1.0)
         }
+        fn water_surface_exit(&self, from: Vec3, to: Vec3) -> bool {
+            self.liquid == Liquid::Water && from.y <= self.top && to.y > self.top
+        }
         fn liquid_surface(&self, top: Vec3, bottom: f32) -> Option<(f32, Liquid)> {
             (top.y > self.top && bottom < self.top).then_some((self.top, self.liquid))
         }
@@ -5990,7 +6512,7 @@ pub(super) mod tests {
         }
     }
 
-    fn liquid_pool(liquid: Liquid) -> CollisionWorld {
+    pub(crate) fn liquid_pool(liquid: Liquid) -> CollisionWorld {
         CollisionWorld::new(flat_surface(-12.0))
             .unwrap()
             .with_liquids(Pool { top: 0.0, liquid })
@@ -6017,6 +6539,7 @@ pub(super) mod tests {
                 &mut online,
                 5,
                 SpawnState {
+                    body_type: None,
                     name: "Friend".into(),
                     kind: SpawnKind::Player,
                     race: 1,
@@ -6532,6 +7055,147 @@ pub(super) mod tests {
         }
     }
 
+    const WET_SWIMMER: eq_client_core::movement::SwimCalibration =
+        eq_client_core::movement::SwimCalibration {
+            forward: 1.7,
+            walk: 1.46,
+            strafe: 0.7,
+            backward: 0.0,
+            set: eq_client_core::movement::water::LIQUID_5,
+        };
+
+    /// What the program's step gives from rest over `span` for `input`.
+    fn wet_expected(
+        input: eq_client_core::movement::water::WetInput,
+        span: f32,
+    ) -> ([f32; 2], f32) {
+        let mut velocity = eq_client_core::movement::water::WetVelocity::default();
+        velocity.advance(WET_SWIMMER.set, input, span)
+    }
+
+    #[test]
+    fn the_wet_step_keeps_full_forward_travel_and_adds_the_pitchs_climb() {
+        for pitch in [
+            0.0_f32,
+            std::f32::consts::FRAC_PI_4,
+            std::f32::consts::FRAC_PI_2,
+            -std::f32::consts::FRAC_PI_4,
+        ] {
+            let (mut app, receiver) = app();
+            app.world_mut().resource_mut::<Controls>().swim = Some(WET_SWIMMER);
+            look_up(&mut app, pitch);
+            app.insert_resource(Collision(Some(liquid_pool(Liquid::Water))));
+            let placed = world_position([0.0, -4.0, 0.0], 0.0);
+            online::testing::place(
+                &mut app.world_mut().resource_mut::<online::OnlineState>(),
+                placed,
+            );
+            app.update();
+            let ClientCommand::Move(swim) = receiver.try_recv().unwrap() else {
+                panic!("expected a swim proposal");
+            };
+            assert_eq!(swim.mode, MovementMode::Swim);
+            let moved = Vec3::from_array(eq_client_core::render_position(swim.position))
+                - Vec3::from_array(eq_client_core::render_position(placed));
+            let span = app.world().resource::<Controls>().sent_span;
+            let ([x, z], y) = wet_expected(
+                eq_client_core::movement::water::WetInput {
+                    horizontal: [0.0, WET_SWIMMER.forward],
+                    vertical: WET_SWIMMER.forward * pitch.sin(),
+                    jump: false,
+                },
+                span,
+            );
+            let flat = Vec2::new(moved.x, moved.z).length();
+            assert!(
+                (flat - x.hypot(z)).abs() < 1e-3,
+                "{pitch}: {flat} vs {}",
+                x.hypot(z)
+            );
+            assert!((moved.y - y).abs() < 1e-3, "{pitch}: {} vs {y}", moved.y);
+            assert_eq!(moved.y > 0.0, pitch > 0.0, "{pitch}");
+        }
+    }
+
+    #[test]
+    fn an_idle_swimmer_sinks_with_no_input() {
+        let (mut app, receiver) = app();
+        app.world_mut().resource_mut::<Controls>().swim = Some(WET_SWIMMER);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        app.insert_resource(Collision(Some(liquid_pool(Liquid::Water))));
+        let placed = world_position([0.0, -4.0, 0.0], 0.0);
+        online::testing::place(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            placed,
+        );
+        app.update();
+        let ClientCommand::Move(sink) = receiver.try_recv().expect("an idle swimmer's sample")
+        else {
+            panic!("expected a swim proposal");
+        };
+        assert_eq!(sink.mode, MovementMode::Swim);
+        let moved = Vec3::from_array(eq_client_core::render_position(sink.position))
+            - Vec3::from_array(eq_client_core::render_position(placed));
+        let span = app.world().resource::<Controls>().sent_span;
+        let (_, y) = wet_expected(eq_client_core::movement::water::WetInput::default(), span);
+        assert!(y < 0.0 && (moved.y - y).abs() < 1e-4, "{} vs {y}", moved.y);
+        assert!(Vec2::new(moved.x, moved.z).length() < 1e-5);
+    }
+
+    #[test]
+    fn a_swimmer_rising_out_of_the_water_hands_its_velocity_to_a_fall() {
+        // The origin sits under the surface and rises fast, looking
+        // straight up. The sample stops just past the surface, where the
+        // program's next frame finds the origin dry, and the next step is
+        // an ordinary fall that carries the wet velocity (read R33).
+        let (mut app, receiver) = app();
+        app.world_mut().resource_mut::<Controls>().swim = Some(WET_SWIMMER);
+        look_up(&mut app, std::f32::consts::FRAC_PI_2);
+        app.insert_resource(Collision(Some(liquid_pool(Liquid::Water))));
+        let placed = world_position([0.0, -2.0, 0.0], 0.0);
+        online::testing::place(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            placed,
+        );
+        {
+            let mut controls = app.world_mut().resource_mut::<Controls>();
+            controls.airborne = Some(AirborneController::default());
+            controls.wet = eq_client_core::movement::water::WetVelocity::from_units_per_second(
+                [0.0, 0.0],
+                30.0,
+            );
+            controls.last_accepted = Instant::now()
+                .checked_sub(Duration::from_millis(100))
+                .unwrap();
+        }
+        app.update();
+        let command = past_climb(&receiver).unwrap();
+        let ClientCommand::Move(rise) = command else {
+            panic!("expected the rising stroke, got {command:?}");
+        };
+        assert_eq!(rise.mode, MovementMode::Swim);
+        // The sample's position is the origin; the water's top is at 0.
+        assert!(
+            rise.position.z > 0.0 && rise.position.z < 0.1,
+            "{}",
+            rise.position.z
+        );
+        let controls = app.world().resource::<Controls>();
+        let carried = controls
+            .airborne
+            .as_ref()
+            .map(AirborneController::velocity)
+            .unwrap();
+        assert!(carried > 30.0, "{carried}");
+        assert_eq!(
+            controls.wet.units_per_second(),
+            ([0.0, 0.0], 0.0),
+            "the wet velocity moved to the fall"
+        );
+    }
+
     #[test]
     fn a_chase_views_camera_pitch_and_mouse_look_leave_a_stroke_level() {
         // The chase camera looks down on the player and the mouse look is
@@ -6749,7 +7413,7 @@ pub(super) mod tests {
             );
             controls.strafe_speed = Some(3.0);
             let right = controls.intent(&keys, &map, &[], true, (0.0, heading), None);
-            assert!(matches!(right.mode, MovementMode::Strafe(_)));
+            assert_eq!(right.mode, MovementMode::Strafe(Pace::Run));
             assert!(right.preserve_facing);
             assert_eq!(right.speed, 3.0);
             assert!(right.direction.dot(facing).abs() < 0.0001);
@@ -6826,6 +7490,7 @@ pub(super) mod tests {
         assert!(controls.walk_speed.is_none());
         controls.grant(
             eq_client_core::world::MotionGrant {
+                swim: None,
                 diagonal: eq_client_core::DiagonalRates::default(),
                 units_per_second: Some(6.0),
                 backward_units_per_second: None,
@@ -7016,6 +7681,7 @@ pub(super) mod tests {
         controls.speed = Some(30.0);
         controls.grant(
             eq_client_core::world::MotionGrant {
+                swim: None,
                 units_per_second: Some(0.0),
                 backward_units_per_second: None,
                 walk_units_per_second: None,
@@ -7105,6 +7771,7 @@ pub(super) mod tests {
         // player runs again by themselves when it ends; run 2026-11-11 row
         // 3 stayed put. The Mac-era program is unread and drops it.
         let grant = |speed| eq_client_core::world::MotionGrant {
+            swim: None,
             diagonal: eq_client_core::DiagonalRates::default(),
             units_per_second: Some(speed),
             backward_units_per_second: None,
@@ -7448,7 +8115,7 @@ pub(super) mod tests {
             let ClientCommand::Move(request) = receiver.try_recv().unwrap() else {
                 panic!("expected a strafe")
             };
-            assert!(matches!(request.mode, MovementMode::Strafe(_)));
+            assert_eq!(request.mode, MovementMode::Strafe(Pace::Run));
             let across = request.position.x.hypot(request.position.y);
             assert!(
                 (across - moved).abs() < 0.001,
@@ -7463,7 +8130,7 @@ pub(super) mod tests {
         // halved in the session's grant, so the client takes the grant's
         // running strafe running and its walking strafe walking, as standing.
         use eq_client_core::{GameDialect, PostureState};
-        for (walking, moved) in [(false, 0.4), (true, 0.2)] {
+        for (walking, moved, pace) in [(false, 0.4, Pace::Run), (true, 0.2, Pace::Walk)] {
             let (mut app, receiver) = app();
             online::testing::generation(
                 &mut app.world_mut().resource_mut::<online::OnlineState>(),
@@ -7494,7 +8161,7 @@ pub(super) mod tests {
             let ClientCommand::Move(request) = receiver.try_recv().unwrap() else {
                 panic!("expected a strafe, with no stand before it")
             };
-            assert!(matches!(request.mode, MovementMode::Strafe(_)));
+            assert_eq!(request.mode, MovementMode::Strafe(pace));
             let across = request.position.x.hypot(request.position.y);
             assert!(
                 (across - moved).abs() < 0.001,
@@ -7747,7 +8414,7 @@ pub(super) mod tests {
                 };
                 let position = Vec3::from_array(eq_client_core::render_position(request.position));
                 if world_owns_look {
-                    assert!(matches!(request.mode, MovementMode::Strafe(_)));
+                    assert_eq!(request.mode, MovementMode::Strafe(Pace::Run));
                     assert!((position - origin - right * side * 0.3).length() < 0.001);
                     assert!(arc(0.0, request.position.heading).abs() < 0.001);
                     accept(&mut app, &request);
@@ -7837,7 +8504,7 @@ pub(super) mod tests {
         keys.reset_all();
         keys.press(KeyCode::KeyE);
         let explicit = intent(&controls, &keys, &[], true, &looking);
-        assert!(matches!(explicit.mode, MovementMode::Strafe(_)));
+        assert_eq!(explicit.mode, MovementMode::Strafe(Pace::Run));
         assert!((explicit.speed - 3.0).abs() < f32::EPSILON);
         assert!(explicit.turn.abs() < f32::EPSILON);
     }
@@ -8017,7 +8684,7 @@ pub(super) mod tests {
         keys.press(KeyCode::KeyS);
         let only_side = controls.intent(&keys, &map, &[], true, (0.0, 0.0), None);
         assert!(only_side.diagonal.is_none());
-        assert!(matches!(only_side.mode, MovementMode::Strafe(_)));
+        assert_eq!(only_side.mode, MovementMode::Strafe(Pace::Run));
 
         keys.reset_all();
         keys.press(KeyCode::KeyE);
@@ -9049,6 +9716,7 @@ pub(super) mod tests {
         controls.jump = Some(Instant::now());
         controls.grant(
             eq_client_core::world::MotionGrant {
+                swim: None,
                 diagonal: eq_client_core::DiagonalRates::default(),
                 units_per_second: None,
                 backward_units_per_second: None,
@@ -9087,6 +9755,7 @@ pub(super) mod tests {
             ..Default::default()
         };
         let grant = |speed| eq_client_core::world::MotionGrant {
+            swim: None,
             diagonal: eq_client_core::DiagonalRates::default(),
             units_per_second: speed,
             backward_units_per_second: None,
@@ -9139,6 +9808,7 @@ pub(super) mod tests {
             ..Default::default()
         };
         let grant = |speed, walk| eq_client_core::world::MotionGrant {
+            swim: None,
             diagonal: eq_client_core::DiagonalRates::default(),
             units_per_second: speed,
             backward_units_per_second: None,
@@ -9195,6 +9865,7 @@ pub(super) mod tests {
 
     fn speeds_grant(speed: f32, backward: Option<f32>) -> eq_client_core::world::MotionGrant {
         eq_client_core::world::MotionGrant {
+            swim: None,
             diagonal: eq_client_core::DiagonalRates::default(),
             units_per_second: Some(speed),
             backward_units_per_second: backward,
@@ -9816,6 +10487,7 @@ pub(super) mod tests {
             let mut controls = app.world_mut().resource_mut::<Controls>();
             controls.grant(
                 eq_client_core::world::MotionGrant {
+                    swim: None,
                     units_per_second: None,
                     backward_units_per_second: None,
                     walk_units_per_second: None,
@@ -9983,6 +10655,7 @@ pub(super) mod tests {
             };
             controls.grant(
                 eq_client_core::world::MotionGrant {
+                    swim: None,
                     units_per_second: Some(4.0),
                     backward_units_per_second: None,
                     walk_units_per_second: None,
