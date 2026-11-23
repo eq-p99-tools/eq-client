@@ -7105,7 +7105,8 @@ fn the_players_posture_changes_are_counted_but_not_a_first_standing() {
 #[test]
 fn news_the_world_does_not_show_is_named_for_the_gap_file() {
     let mut world = admitted();
-    assert_eq!(game(&mut world, WorldEvent::Ding).unshown, Some("Ding"));
+    // A ding has its own line since read R49-6 (#622).
+    assert_eq!(game(&mut world, WorldEvent::Ding).unshown, None);
     assert_eq!(game(&mut world, WorldEvent::Spun).unshown, Some("Spun"));
     assert_eq!(
         game(&mut world, WorldEvent::HideAndSneakEnded).unshown,
