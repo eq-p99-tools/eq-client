@@ -256,6 +256,9 @@ pub struct ClientWorld {
     guild_invitations: std::collections::VecDeque<guild::GuildInvitation>,
     /// Whether looted coins are shared with the group, once known.
     auto_split: Option<bool>,
+    /// `/played`'s fields from the latest Titanium profile, and when it
+    /// came (checklist 6.490b).
+    played: Option<(crate::played::PlayedTime, Instant)>,
     /// The primary bind point's zone, as this admission's profile said it
     /// (checklist 6.524).
     bound_in: Option<u16>,
@@ -743,6 +746,7 @@ impl ClientWorld {
                     self.liquid_hazards.revision = Some(*revision);
                 }
             }
+            WorldEvent::PlayedTime(played) => self.played = Some((*played, now)),
             WorldEvent::HazardReported {
                 session_id,
                 hazard,
@@ -1031,9 +1035,6 @@ impl ClientWorld {
             | WorldEvent::Berserk(_)
             | WorldEvent::Spun
             | WorldEvent::HideAndSneakEnded
-            // `/played`'s profile fields (eq-network #410, 6.490b): the
-            // /played client slice.
-            | WorldEvent::PlayedTime(_)
             | WorldEvent::Target(_)
             | WorldEvent::TargetOfTarget(_)
             | WorldEvent::SacrificeOffer(_)
@@ -2374,6 +2375,7 @@ impl ClientWorld {
         self.group_invitation = None;
         self.forget_guild();
         self.auto_split = None;
+        self.played = None;
         self.bound_in = None;
         self.joining_group = false;
         self.assisted = None;
