@@ -291,6 +291,21 @@ remain disabled. Coin moves use a local ledger because ordinary transfers have
 no acceptance reply; compare authoritative balances after re-admission when
 uncertain, rather than resending a transfer.
 
+### Apply Poison
+
+Right-click a poison (item type 42) in a top-level slot, the cursor included, to apply it, as the Titanium program does it (recording checklist 6.493):
+
+- Without the Apply Poison skill, you are told so and nothing else happens.
+- Standing, you sit down. If you still aren't sitting (ducking, lying or feigning), you are told to sit.
+- Your poison starts going on, with the program's line. After 10 s seated, the request goes to the server.
+- Standing up, or any other posture change before then, stops it with the program's line, and nothing is sent. Zoning drops it without a line.
+- A click while one is going on or waiting for the server's answer is ignored, as the program ignores it.
+- The server decides whether it takes (class, weapon, level) and removes the poison either way. Its answer prints the program's line for success or failure.
+
+The lines come from your installation's `eqstr_us.txt`: the start, the refusals and the stop in the program's colour 0x111, and the answer in colour 0x10e. A poison inside a bag isn't applied by a right-click, because the program only uses top-level slots this way. Alt+right-click and hotkeys keep their ordinary item use.
+
+The program's wait is effect 234's total in ms, from your buffs (a type-4 record's taken away) and the AAs your class may use at your level, when that isn't 0; worn items don't count (read R49-1f, 6.493b). This client sums the same and tells the session, which then waits that long. Where it can't know the total (a buff whose spell your installation lacks, a formula or bard modifier it doesn't evaluate, an AA not yet described, or a spell that landed without a slot), the wait stays 10 s. A total below 0 never ends the wait, as in the program. The EQMac servers (Quarm, TAKP) take the same flow; that is inferred, because their program isn't read.
+
 ## Spells, buffs and the hotbar
 
 The spellbook supports scribing from a cursor scroll, memorizing into eight gems,
@@ -316,7 +331,9 @@ blocks the request. If the server gives no matching cast update within one
 second, the client releases the tracked cast and reports that the stop is
 unconfirmed. When no cast is held, the client reports unconfirmed song state
 as soon as it submits the request. Song buffs and gem timers follow the
-server's updates.
+server's updates. On P99 and Titanium EQEmu, when a song stops, the gems
+whose songs have no recast time are ready again at once, and so is the short
+wait before any spell, as in the official client.
 
 On P99 and Titanium EQEmu, a Bard can type `/melody` followed by gem numbers,
 such as `/melody 1 3 2`, to play those songs in turn, as the official client
@@ -655,9 +672,10 @@ checks; selecting alone does not attack or cast.
 
 Titanium See Invisible can reveal an ordinary invisible player or NPC when
 the worker knows the effect and the spawn's appearance. Unclassified
-invisibility values remain hidden. Installed lights illuminate supported
-Titanium interiors, and known race and buff effects can change low-light
-vision. **See the World Clearly** and **Show Invisible Entities** are local
+invisibility values remain hidden. Titanium zones without a sky are lit as the
+original lights them: by each vertex's baked light, the zone's ambient, and up
+to three nearby placed or carried lights (see [Zone lighting](zone-lighting.md)).
+Known race and buff effects can change low-light vision. **See the World Clearly** and **Show Invisible Entities** are local
 presentation settings.
 
 On Titanium EQEmu and Project 1999, received server popups show the supplied
