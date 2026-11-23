@@ -15,6 +15,7 @@ use std::{sync::mpsc, time::Instant};
 
 fn grant(speed: f32) -> WorldEvent {
     WorldEvent::MotionState {
+        swim: None,
         session_id: 11,
         units_per_second: Some(speed),
         backward_units_per_second: None,

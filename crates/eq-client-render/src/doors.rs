@@ -357,6 +357,9 @@ pub(super) fn open(
         eq_client_core::ClientCommand::ClickDoor {
             session_id: stamp.session_id,
             door_id,
+            // No clicked point until the door click point slice: the reach
+            // runs to the door's origin, as before.
+            point: None,
             created: stamp.created,
         }
     });

@@ -120,6 +120,7 @@ mod tests {
             &mut online,
             2,
             eq_client_core::SpawnState {
+                body_type: None,
                 class: None,
                 spawn_id: 2,
                 name: "Synthetic target".into(),
