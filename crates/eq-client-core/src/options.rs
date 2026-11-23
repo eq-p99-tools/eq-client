@@ -60,6 +60,14 @@ pub enum Toggle {
     /// Plays sounds; the official client keeps the choice as `Sound` in
     /// `eqclient.ini`, this client per character.
     Sound,
+    /// Plays the zone's music. The official client's own switch, its key
+    /// and default are pending read R49-7 c (recording checklist 6.503);
+    /// this client keeps it per character, on by default.
+    Music,
+    /// Plays the zone's ambient sounds, its emitters. The official
+    /// client's own switch is pending read R49-7 c; this client keeps it per
+    /// character, on by default.
+    EnvironmentSounds,
     /// Plays the installation's spell-effect particles, as the official
     /// client's does; the official client keeps the choice as
     /// `ShowSpellEffects` in `eqclient.ini` (and as a zero
@@ -74,7 +82,7 @@ pub enum Toggle {
 impl Toggle {
     /// The official client's own toggles, in the order a file lists them; a
     /// file is read back by name, so the order is only how it is written.
-    pub const OFFICIAL: [Self; 12] = [
+    pub const OFFICIAL: [Self; 14] = [
         Self::PetWindowPopup,
         Self::AutoStand,
         Self::TargetRing,
@@ -86,6 +94,8 @@ impl Toggle {
         Self::LookSpring,
         Self::Log,
         Self::Sound,
+        Self::Music,
+        Self::EnvironmentSounds,
         Self::SpellEffects,
     ];
 
@@ -112,6 +122,8 @@ impl Toggle {
             Self::LookSpring => "look_spring",
             Self::Log => "log",
             Self::Sound => "sound",
+            Self::Music => "music",
+            Self::EnvironmentSounds => "environment_sounds",
             Self::SpellEffects => "spell_effects",
             Self::Qol(fix) => fix.key(),
         }
@@ -133,6 +145,8 @@ impl Toggle {
             | Self::LookSpring
             | Self::Log
             | Self::Sound
+            | Self::Music
+            | Self::EnvironmentSounds
             | Self::SpellEffects => None,
             Self::Qol(fix) => fix.needs(),
         }
@@ -163,6 +177,11 @@ pub enum Level {
     /// scale not yet known, so this client's own starts at 100 (inferred, item
     /// 6.259).
     SoundVolume,
+    /// How loud the zone's music plays, as a percentage of the synthesizer's
+    /// own loudness (the General page's music volume slider). The official
+    /// client's key, scale and default are pending read R49-7 c (recording
+    /// checklist 6.503); this client's own starts at 100.
+    MusicVolume,
 }
 
 /// The fewest frames a second the Max FPS slider offers.
@@ -182,13 +201,14 @@ const MAX_RUN_SPEED: u16 = RunSpeedMultiplier::MAX.percent();
 
 impl Level {
     /// Every level, in the order a file lists them.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::ClipPlane,
         Self::MaxFps,
         Self::MouseSensitivity,
         Self::UiScale,
         Self::RunSpeed,
         Self::SoundVolume,
+        Self::MusicVolume,
     ];
 
     /// The name a file keeps it under.
@@ -201,6 +221,7 @@ impl Level {
             Self::UiScale => "ui_scale",
             Self::RunSpeed => "run_boost",
             Self::SoundVolume => "sound_volume",
+            Self::MusicVolume => "music_volume",
         }
     }
 
@@ -216,7 +237,9 @@ impl Level {
     /// The values its slider stops at, from its left.
     fn stops(self) -> Vec<u16> {
         match self {
-            Self::ClipPlane | Self::MouseSensitivity | Self::SoundVolume => (0..=100).collect(),
+            Self::ClipPlane | Self::MouseSensitivity | Self::SoundVolume | Self::MusicVolume => {
+                (0..=100).collect()
+            }
             Self::MaxFps => (MIN_FPS..=MAX_FPS)
                 .step_by(FPS_STEP)
                 .chain(std::iter::once(0))
@@ -233,7 +256,7 @@ impl Level {
     #[must_use]
     pub fn fraction(self, value: u16) -> f32 {
         match self {
-            Self::ClipPlane | Self::MouseSensitivity | Self::SoundVolume => {
+            Self::ClipPlane | Self::MouseSensitivity | Self::SoundVolume | Self::MusicVolume => {
                 f32::from(value.min(100)) / 100.0
             }
             Self::MaxFps if value == 0 => 1.0,
@@ -277,7 +300,11 @@ impl Level {
     #[must_use]
     pub fn words(self, value: u16) -> String {
         match self {
-            Self::ClipPlane | Self::MouseSensitivity | Self::UiScale | Self::SoundVolume => {
+            Self::ClipPlane
+            | Self::MouseSensitivity
+            | Self::UiScale
+            | Self::SoundVolume
+            | Self::MusicVolume => {
                 format!("{value} %")
             }
             Self::MaxFps if value == 0 => "Display".to_owned(),
@@ -289,7 +316,9 @@ impl Level {
     /// Whether a file's value is one the option takes.
     fn takes(self, value: u16) -> bool {
         match self {
-            Self::ClipPlane | Self::MouseSensitivity | Self::SoundVolume => value <= 100,
+            Self::ClipPlane | Self::MouseSensitivity | Self::SoundVolume | Self::MusicVolume => {
+                value <= 100
+            }
             Self::MaxFps => value == 0 || (1..=1000).contains(&value),
             Self::UiScale => (MIN_UI_SCALE..=MAX_UI_SCALE).contains(&value),
             Self::RunSpeed => RunSpeedMultiplier::from_percent(value).is_some(),
@@ -335,6 +364,10 @@ pub struct Options {
     pub log: bool,
     /// See [`Toggle::Sound`].
     pub sound: bool,
+    /// See [`Toggle::Music`].
+    pub music: bool,
+    /// See [`Toggle::EnvironmentSounds`].
+    pub environment_sounds: bool,
     /// See [`Toggle::SpellEffects`].
     pub spell_effects: bool,
     /// Which quality-of-life fixes are on ([`Toggle::Qol`]).
@@ -353,6 +386,8 @@ pub struct Options {
     pub ui_scale: u16,
     /// See [`Level::SoundVolume`].
     pub sound_volume: u16,
+    /// See [`Level::MusicVolume`].
+    pub music_volume: u16,
 }
 
 impl Default for Options {
@@ -379,6 +414,8 @@ impl Default for Options {
             look_spring: false,
             log: true,
             sound: true,
+            music: true,
+            environment_sounds: true,
             spell_effects: true,
             qol,
             show_names: ShowNames::Everything,
@@ -387,6 +424,7 @@ impl Default for Options {
             mouse_sensitivity: 50,
             ui_scale: 100,
             sound_volume: 100,
+            music_volume: 100,
         }
     }
 }
@@ -407,6 +445,8 @@ impl Options {
             Toggle::LookSpring => self.look_spring,
             Toggle::Log => self.log,
             Toggle::Sound => self.sound,
+            Toggle::Music => self.music,
+            Toggle::EnvironmentSounds => self.environment_sounds,
             Toggle::SpellEffects => self.spell_effects,
             Toggle::Qol(fix) => self.qol.on(fix),
         }
@@ -426,6 +466,8 @@ impl Options {
             Toggle::LookSpring => &mut self.look_spring,
             Toggle::Log => &mut self.log,
             Toggle::Sound => &mut self.sound,
+            Toggle::Music => &mut self.music,
+            Toggle::EnvironmentSounds => &mut self.environment_sounds,
             Toggle::SpellEffects => &mut self.spell_effects,
             Toggle::Qol(fix) => {
                 self.qol.set(fix, on);
@@ -445,6 +487,7 @@ impl Options {
             Level::UiScale => self.ui_scale,
             Level::RunSpeed => self.qol.run_speed_multiplier.percent(),
             Level::SoundVolume => self.sound_volume,
+            Level::MusicVolume => self.music_volume,
         }
     }
 
@@ -462,6 +505,7 @@ impl Options {
                 return;
             }
             Level::SoundVolume => &mut self.sound_volume,
+            Level::MusicVolume => &mut self.music_volume,
         };
         *option = value;
     }
@@ -479,6 +523,28 @@ impl Options {
     pub fn sound_volume(&self) -> f32 {
         if self.sound {
             f32::from(self.sound_volume.min(100)) / 100.0
+        } else {
+            0.0
+        }
+    }
+
+    /// How loud the zone's ambient sounds play: the sound volume, nothing
+    /// when sounds or environment sounds are off.
+    #[must_use]
+    pub fn environment_volume(&self) -> f32 {
+        if self.environment_sounds {
+            self.sound_volume()
+        } else {
+            0.0
+        }
+    }
+
+    /// How loud the zone's music plays, from 0 for silent to 1 for the
+    /// synthesizer's own loudness: nothing when music is off.
+    #[must_use]
+    pub fn music_volume(&self) -> f32 {
+        if self.music {
+            f32::from(self.music_volume.min(100)) / 100.0
         } else {
             0.0
         }

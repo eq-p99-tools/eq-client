@@ -7,7 +7,7 @@
 //! plays at 120 ticks a second, which a Standard MIDI file at 60 ticks a
 //! quarter note and 500,000 microseconds a quarter note keeps; the XMI's
 //! own tempo events are dropped [I]. How the Titanium program plays it is
-//! pending read R49-7 b (recording checklist 6.502).
+//! pending read R49-7 b (recording checklist 6.503).
 
 use thiserror::Error;
 
@@ -23,7 +23,18 @@ pub enum XmiError {
     /// An event's status byte is not one MIDI has.
     #[error("unknown music event {0:#04x}")]
     Event(u8),
+    /// The file holds more than this client converts.
+    #[error("the music file is larger than this client plays")]
+    TooLarge,
 }
+
+/// The most sequences converted from one file (this client's own bound).
+pub const MAX_SEQUENCES: usize = 256;
+/// The most events in one sequence (this client's own bound).
+pub const MAX_EVENTS: usize = 262_144;
+/// The largest Standard MIDI file one sequence may become (this client's
+/// own bound).
+pub const MAX_MIDI: usize = 4 * 1024 * 1024;
 
 /// The Standard MIDI file's ticks a quarter note.
 const DIVISION: u16 = 60;
@@ -121,7 +132,12 @@ fn collect<'a>(bytes: &'a [u8], events: &mut Vec<&'a [u8]>, depth: u8) -> Result
                 let inner = body.get(4..).ok_or(XmiError::Truncated)?;
                 collect(inner, events, depth + 1)?;
             }
-            b"EVNT" => events.push(body),
+            b"EVNT" => {
+                if events.len() >= MAX_SEQUENCES {
+                    return Err(XmiError::TooLarge);
+                }
+                events.push(body);
+            }
             _ => {}
         }
     }
@@ -160,6 +176,9 @@ fn events(body: &[u8]) -> Result<Vec<Timed>, XmiError> {
         }
         let status = reader.byte()?;
         let order = timed.len();
+        if order >= MAX_EVENTS {
+            return Err(XmiError::TooLarge);
+        }
         match status & 0xf0 {
             0x90 => {
                 let note = reader.byte()?;
@@ -250,6 +269,9 @@ pub fn to_midi(bytes: &[u8]) -> Result<Vec<Vec<u8>>, XmiError> {
                 last = time;
             }
             track.extend_from_slice(&[0x00, 0xff, 0x2f, 0x00]);
+            if track.len() > MAX_MIDI {
+                return Err(XmiError::TooLarge);
+            }
             let mut file = Vec::with_capacity(track.len() + 22);
             file.extend_from_slice(b"MThd");
             file.extend_from_slice(&6_u32.to_be_bytes());
@@ -365,6 +387,10 @@ pub(crate) mod tests {
         }
         assert_eq!(to_midi(&xmi(&[&[0xf4]])), Err(XmiError::Event(0xf4)));
         assert_eq!(to_midi(&xmi(&[&[0x90, 0x3c]])), Err(XmiError::Truncated));
+        let many: Vec<&[u8]> = vec![&[0xff, 0x2f, 0x00]; MAX_SEQUENCES + 1];
+        assert_eq!(to_midi(&xmi(&many)), Err(XmiError::TooLarge));
+        let long = [0xc0, 0x05].repeat(MAX_EVENTS + 1);
+        assert_eq!(to_midi(&xmi(&[&long])), Err(XmiError::TooLarge));
     }
 
     #[test]
