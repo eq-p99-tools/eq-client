@@ -116,6 +116,13 @@
   also `Endurance` and `Stamina`) are inferred from the Group window's until
   the default skin is looked at; a skin naming them otherwise keeps its own
   text. The estimate itself is unchanged.
+- `/ttell message` and `/whotarget` (checklist 6.528, inferred). `/ttell`
+  becomes the `/tell` to the targeted player and goes as a typed one, item
+  links included; `/whotarget` lists the target's name in the zone's
+  `/who`. A tell goes only to another player whose name is letters alone;
+  any other target gets this client's own line and nothing is sent.
+  `/ttell` counts as chat for scripts, which cannot send it.
+
 - Read zones in the EQG format newer clients install, for RoF2 later:
   `eq_client_assets::eqg::load_eqg_zone` turns `<zone>.eqg`'s descriptor,
   terrain and model meshes, placements and diffuse textures into the same

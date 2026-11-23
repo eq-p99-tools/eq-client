@@ -408,6 +408,15 @@ reported by the current admission.
 
 The P99 paths follow Titanium source and await attended checks.
 
+`/ttell message` sends a tell to the player you target, exactly as
+`/tell Name message` would, and `/whotarget` lists the target's name in the
+zone's `/who`. A tell goes only to another player whose name is letters
+alone. An NPC, a pet, a corpse or yourself gets this client's own refusal
+line and nothing is sent; `/whotarget` takes any target, since it sends
+nothing. Socials may run both; a script tells only with its own tell step.
+The forms, the refusal lines and the target kinds are inferred until the
+original client's handling is read (recording checklist 6.528).
+
 ## Social hotbuttons
 
 Type `/social set Greet | /pause 10,/say Hello! | /stand` to save a social
