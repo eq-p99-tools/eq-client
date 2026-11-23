@@ -1239,6 +1239,16 @@ impl ClientWorld {
                     news.ignored = true;
                 }
             }
+            // The session's chat pace held a line (6.523).
+            WorldEvent::ChatRefused { session_id, reason } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices.push(Notice::ChatRefused {
+                        reason: reason.clone(),
+                    });
+                } else {
+                    news.ignored = true;
+                }
+            }
             WorldEvent::ReportRefused {
                 session_id,
                 reason,

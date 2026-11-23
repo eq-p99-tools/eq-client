@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Show the session's chat pace (checklist 6.523, eq-network c951420). Its
+  refusal, "You are sending chat too fast. Wait N seconds.", is printed as
+  the player's own line, and a script whose chat or social step the pace
+  holds fails at that step's line with those words. The repin's other news
+  (titles, the bind zone, the chat server's channels) is passed over until
+  each one's own client work lands.
+
 - Send petitions, bug reports and feedback from a typed line (gap list 3.6,
   recording checklist 6.511). `/petition`, `/bugreport` (also `/bug`) and
   `/feedback` with their words send `SendPetition`, `ReportBug` and

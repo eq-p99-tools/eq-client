@@ -7083,3 +7083,21 @@ fn the_latest_title_list_is_kept_where_offered_until_the_zone_changes() {
     connection(&mut world, true, false);
     assert!(world.titles().is_none());
 }
+
+#[test]
+fn the_chat_pace_holding_a_line_is_said_to_this_admission_only() {
+    let mut world = admitted();
+    let refused = |session_id| WorldEvent::ChatRefused {
+        session_id,
+        reason: "You are sending chat too fast. Wait 3 seconds.".into(),
+    };
+    assert_eq!(
+        game(&mut world, refused(1)).notices,
+        [Notice::ChatRefused {
+            reason: "You are sending chat too fast. Wait 3 seconds.".into()
+        }]
+    );
+    let stale = game(&mut world, refused(9));
+    assert!(stale.ignored);
+    assert_eq!(stale.notices, []);
+}

@@ -94,6 +94,9 @@ pub struct Script {
     mode: RunMode,
     /// This frame successfully queued a social using the single-step control.
     stepped_social: bool,
+    /// When this run last sent chat (a chat or social step), and that
+    /// step's line: a chat pace refusal after it fails the run there (6.523).
+    chatted: Option<(std::time::Instant, Option<usize>)>,
     held: Vec<KeyCode>,
     /// The movement commands a moving step holds itself, as the key map
     /// resolves a held key to them, so the step moves under any key table.
@@ -255,6 +258,7 @@ impl Script {
             progress: RunStatus::queued(steps.len(), std::sync::Arc::from("")),
             mode: RunMode::Continuous,
             stepped_social: false,
+            chatted: None,
             steps: steps
                 .into_iter()
                 .map(|step| QueuedStep { step, line: None })
@@ -1304,6 +1308,21 @@ pub(super) fn drive(
         script.retire(&mut commands);
         return;
     }
+    // The session's chat pace held a line sent since this run last chatted:
+    // that step failed, as a refused send does (6.523). The pace is the
+    // character's, so the line may be one typed meanwhile; the run's next
+    // chat would meet the same wait.
+    if let Some((_, reason)) = chat
+        .paced
+        .take_if(|(at, _)| script.chatted.is_some_and(|(chatted, _)| *at >= chatted))
+    {
+        script
+            .progress
+            .at_line(script.chatted.and_then(|(_, line)| line));
+        script.stop(&mut keys, &mut mouse, &reason);
+        script.retire(&mut commands);
+        return;
+    }
     if matches!(script.mode, RunMode::Paused(_)) {
         script.owns_input = false;
         script.last_frame = Some(now);
@@ -2346,7 +2365,10 @@ pub(super) fn drive(
                     chat.queue_social(request, Some(script.progress.identity.clone()))
                 });
             match request {
-                Ok(()) => script.stepped_social = single_step,
+                Ok(()) => {
+                    script.stepped_social = single_step;
+                    script.chatted = Some((std::time::Instant::now(), script.progress.line()));
+                }
                 Err(error) => script.stop(&mut keys, &mut mouse, &error),
             }
             return;
@@ -2478,6 +2500,9 @@ pub(super) fn drive(
                 Step::Chat(chat) => Ok(eq_client_core::ClientCommand::SendChat(chat.clone())),
                 _ => return,
             };
+            // Whatever goes as chat meets the session's pace, a `#` command
+            // among it, so a refusal after it fails this step (6.523).
+            let chats = command.as_ref().is_ok_and(is_chat);
             let sent = command.and_then(|command| {
                 observed
                     .1
@@ -2485,8 +2510,12 @@ pub(super) fn drive(
                     .send(online.world(), command)
                     .map_err(|refusal| refusal.text().to_owned())
             });
-            if let Err(error) = sent {
-                script.stop(&mut keys, &mut mouse, &error);
+            match sent {
+                Err(error) => script.stop(&mut keys, &mut mouse, &error),
+                Ok(()) if chats => {
+                    script.chatted = Some((std::time::Instant::now(), script.progress.line()));
+                }
+                Ok(()) => (),
             }
             return;
         }
@@ -2993,6 +3022,17 @@ fn aa_request(
             }
         })
         .map_err(|refusal| refusal.text().to_owned())
+}
+
+/// Whether a command goes as chat, which the session paces (6.523). A slash
+/// step's game commands never do: an emote or a roll is its own request,
+/// outside the pace, and a script has no `/ttell`.
+const fn is_chat(command: &eq_client_core::ClientCommand) -> bool {
+    matches!(
+        command,
+        eq_client_core::ClientCommand::SendChat(_)
+            | eq_client_core::ClientCommand::SendChatInAdmission { .. }
+    )
 }
 
 /// The request for a validated GM command. A fixture form needs a local
