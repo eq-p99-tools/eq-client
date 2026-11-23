@@ -5987,7 +5987,7 @@ fn an_inspection_of_the_player_says_who_looked_only_for_this_admission() {
             string_id: 0x57c,
             arguments: vec!["Looker".into()],
             lines: Vec::new(),
-            said: "Looker is looking at your equipment.".into(),
+            said: "Looker inspects you.".into(),
         }]
     );
     assert!(game(&mut world, looked(2)).ignored);

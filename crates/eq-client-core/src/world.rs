@@ -975,7 +975,7 @@ impl ClientWorld {
                     let name = crate::entities::display_name(name);
                     news.notices.push(Notice::ProgramLine {
                         string_id: *string_id,
-                        said: format!("{name} is looking at your equipment."),
+                        said: format!("{name} inspects you."),
                         arguments: vec![name],
                         lines: Vec::new(),
                     });
