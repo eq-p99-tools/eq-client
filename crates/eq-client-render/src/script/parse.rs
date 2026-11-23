@@ -221,7 +221,9 @@ pub enum Step {
         heading: f32,
         /// Adds the player's current heading, for views relative to the model.
         relative: bool,
-        /// Downward pitch in degrees, from level (0) to straight down.
+        /// Pitch in degrees, upward positive, from straight down (-89) to
+        /// straight up (89); the view holds it within its own range, so with
+        /// the program's chase tilt it never looks up.
         pitch: f32,
         /// Distance from the player, or the one it has.
         radius: Option<f32>,
@@ -674,7 +676,7 @@ fn parse_camera(arguments: &[&str]) -> Result<Step, String> {
     Ok(Step::Camera {
         heading: number(heading, 0.0, 512.0)?,
         relative,
-        pitch: number(pitch, -89.0, 0.0)?,
+        pitch: number(pitch, -89.0, 89.0)?,
         radius: radius
             .first()
             .map(|radius| number(radius, 1.0, 20_000.0))
@@ -2333,11 +2335,19 @@ mod tests {
     }
 
     #[test]
-    fn discipline_slash_names_only_the_supported_set() {
+    fn discipline_slash_takes_any_words_as_the_command_does() {
         let base = std::path::Path::new(".");
         assert_eq!(
             parse("slash(\"discipline defensive\")\n", base).unwrap(),
             [Step::Slash("/discipline defensive".into())]
+        );
+        assert_eq!(
+            parse("slash(\"discipline evasive disc\")\n", base).unwrap(),
+            [Step::Slash("/discipline evasive disc".into())]
+        );
+        assert_eq!(
+            parse("slash(\"discipline\")\n", base).unwrap(),
+            [Step::Slash("/discipline".into())]
         );
     }
 
@@ -2519,6 +2529,18 @@ mod tests {
     }
 
     #[test]
+    fn language_slash_takes_any_words_as_the_typed_command_does() {
+        let base = std::path::Path::new(".");
+        for (script, step) in [
+            ("slash(\"language\")\n", "/language"),
+            ("slash(\"language 2\")\n", "/language 2"),
+            ("slash(\"language help\")\n", "/language help"),
+        ] {
+            assert_eq!(parse(script, base).unwrap(), [Step::Slash(step.into())]);
+        }
+    }
+
+    #[test]
     fn knight_slash_actions_use_the_current_target() {
         let base = std::path::Path::new(".");
         assert_eq!(
@@ -2527,6 +2549,16 @@ mod tests {
                 Step::Slash("/harmtouch".into()),
                 Step::Slash("/layonhands".into())
             ]
+        );
+    }
+
+    #[test]
+    fn a_script_may_shield_its_target() {
+        // Words after it are the typed command's to refuse (6.584).
+        let base = std::path::Path::new(".");
+        assert_eq!(
+            parse("slash(\"shield\")\n", base).unwrap(),
+            [Step::Slash("/shield".into())]
         );
     }
 
@@ -2551,6 +2583,7 @@ mod tests {
                  camera(\"player\", 0, -89)\n\
                  camera(128, -20)\n\
                  camera(\"player\", 256, -15, 300)\n\
+                 camera(32, 89)\n\
                  press(\"numlock\")\n\
                  hold(\"numpad8\", 500)\n\
                  press(\"pageup\")\n\
@@ -2586,6 +2619,12 @@ mod tests {
                     pitch: -15.0,
                     radius: Some(300.0),
                 },
+                Step::Camera {
+                    heading: 32.0,
+                    relative: false,
+                    pitch: 89.0,
+                    radius: None,
+                },
                 Step::Press(vec![KeyCode::NumLock]),
                 Step::Hold(vec![KeyCode::Numpad8], Duration::from_millis(500)),
                 Step::Press(vec![KeyCode::PageUp]),
@@ -2601,7 +2640,8 @@ mod tests {
             "camera(64, -20, 0)",
             "camera(64, -20, 30000)",
             "camera(64, -20, 100, 5)",
-            "camera(64, 5)",
+            "camera(64, 95)",
+            "camera(64, -95)",
             "camera(\"player\")",
             "camera(\"player\", 64)",
             "press(\"numpad10\")",

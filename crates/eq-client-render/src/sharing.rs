@@ -18,11 +18,11 @@ use bevy::prelude::*;
 use eq_client_core::{ClientCommand, Coins};
 
 /// The installed client's words that turn `/autosplit` off and on.
-mod words {
+pub(crate) mod words {
     /// Off, compared over three letters.
-    pub(super) const OFF: (u32, &str, usize) = (0x3292, "off", 3);
+    pub(crate) const OFF: (u32, &str, usize) = (0x3292, "off", 3);
     /// On, compared over two letters.
-    pub(super) const ON: (u32, &str, usize) = (0x3293, "on", 2);
+    pub(crate) const ON: (u32, &str, usize) = (0x3293, "on", 2);
 }
 
 /// A sharing command typed in the chat.
@@ -82,7 +82,11 @@ impl Command {
 
 /// Whether the word typed is the installed client's word, over its first
 /// letters.
-fn names(typed: &str, (id, fallback, length): (u32, &str, usize), messages: &Messages) -> bool {
+pub(crate) fn names(
+    typed: &str,
+    (id, fallback, length): (u32, &str, usize),
+    messages: &Messages,
+) -> bool {
     let word = messages
         .formatted(id, &[])
         .unwrap_or_else(|| fallback.to_owned());

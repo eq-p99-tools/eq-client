@@ -33,6 +33,10 @@ const fn coin_words(coin: Coin) -> &'static str {
 impl ClientWorld {
     /// The abilities the player has, strikes and taunt first.
     #[must_use]
+    #[expect(
+        clippy::match_same_arms,
+        reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
+    )]
     pub fn abilities(&self) -> Vec<Ability> {
         let Some(player) = self.player.as_ref() else {
             return Vec::new();
@@ -44,7 +48,9 @@ impl ClientWorld {
                 crate::GameDialect::EqMac => {
                     crate::abilities::eqmac::known(*ability, skills, player.race, player.class)
                 }
-                _ => ability.known(skills, player.race),
+                crate::GameDialect::Titanium => ability.known(skills, player.race),
+                // Titanium's, inferred for RoF2 (6.489).
+                crate::GameDialect::Rof2 => ability.known(skills, player.race),
             })
             .collect()
     }
@@ -67,11 +73,17 @@ impl ClientWorld {
 
     /// The server released the named skill's recovery group. Unknown skills
     /// cannot release unrelated abilities. A reset does not imply success.
+    #[expect(
+        clippy::match_same_arms,
+        reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
+    )]
     pub(super) fn skill_ready(&mut self, skill: u32) {
         if let Some(recovery) = Ability::from_skill(skill)
-            .filter(|ability| {
-                self.generation != crate::GameDialect::EqMac
-                    || crate::abilities::eqmac::SUPPORTED.contains(ability)
+            .filter(|ability| match self.generation {
+                crate::GameDialect::Titanium => true,
+                // Titanium's, inferred for RoF2 (6.489).
+                crate::GameDialect::Rof2 => true,
+                crate::GameDialect::EqMac => crate::abilities::eqmac::SUPPORTED.contains(ability),
             })
             .and_then(Ability::recovery)
         {

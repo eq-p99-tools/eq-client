@@ -11,7 +11,7 @@
 //!
 //! A word that starts no name is not the official client's. Only such a
 //! word reaches this client's own commands (`/social`, `/pause` inside a
-//! social, `/ranged`, `/harmtouch`, `/layonhands`); any other is passed over
+//! social, `/ranged`, `/harmtouch`, `/layonhands`, `/uiscale`); any other is passed over
 //! without a line, as the official client's own answer to an unknown word
 //! has not been read (recording checklist 6.413).
 
@@ -374,6 +374,7 @@ const OURS: &[&str] = &[
     "ranged",
     "harmtouch",
     "layonhands",
+    "uiscale",
 ];
 
 /// What a typed command word resolves to.
@@ -475,6 +476,7 @@ mod tests {
         assert_eq!(resolve("Ranged"), Resolved::Ours("ranged"));
         assert_eq!(resolve("harmtouch"), Resolved::Ours("harmtouch"));
         assert_eq!(resolve("layonhands"), Resolved::Ours("layonhands"));
+        assert_eq!(resolve("UiScale"), Resolved::Ours("uiscale"));
         // An official name comes first.
         assert_eq!(resolve("ran"), Resolved::Official("random"));
         assert_eq!(resolve("h"), Resolved::Official("hail"));

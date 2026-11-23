@@ -1,6 +1,6 @@
 #![doc = "Bevy presentation, gameplay input and UI for the native EQ client and offline previews."]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use theme::Size;
 
 mod camera;
@@ -48,22 +48,29 @@ mod character_create;
 mod character_delete;
 mod character_select;
 mod chat;
+mod chat_channels;
 mod clicks;
 mod coins;
 mod combat;
+mod combat_abilities;
 mod combat_text;
 mod commands;
 mod confirm;
 mod contacts;
+mod corpses;
 mod creation_preview;
 mod daylight;
 mod device_pixels;
 mod dialogs;
+mod disciplines;
 mod display_report;
 mod doors;
+mod duel;
+mod emotes;
 mod entities;
 mod escape;
 mod exit_log;
+mod fastdrop;
 mod frame_limit;
 mod give;
 mod ground;
@@ -76,6 +83,7 @@ mod invisibility;
 mod item_models;
 mod items;
 mod keys;
+mod languages;
 mod lighting;
 mod list_cells;
 mod loading;
@@ -83,6 +91,7 @@ mod login;
 mod logs;
 mod map;
 mod marquee;
+mod motd;
 mod motion;
 mod names;
 mod navigation;
@@ -102,6 +111,7 @@ mod profile_files;
 mod projectiles;
 mod raid;
 mod reading;
+mod reports;
 mod resources;
 mod resurrection;
 pub mod script;
@@ -112,6 +122,7 @@ mod sheets;
 mod skills;
 mod skin;
 mod skinned;
+mod slash;
 mod socials;
 mod sounds;
 mod speed;
@@ -133,6 +144,7 @@ mod who;
 mod window_size;
 mod windows;
 mod zone;
+mod zone_audio;
 mod zone_navmesh;
 
 use bevy::asset::RenderAssetUsages;
@@ -259,6 +271,43 @@ pub struct ViewerConfig {
     /// Where the window keeps what it knows of the display and adapter,
     /// for the sessions' machine report.
     pub display: eq_client_core::machine::DisplaySnapshot,
+    /// The sound font the zones' music plays on; None leaves music silent.
+    /// The program's own instruments are not used (a stated departure,
+    /// item 6.503).
+    pub music_soundfont: Option<PathBuf>,
+    /// Whether the installation holds a `nosound.txt`, which turns the
+    /// official client's sound off (read R49-7 c). Set at start; this client
+    /// then plays no sound, emitter or music either [I: that it silences
+    /// music too].
+    pub no_sound: bool,
+}
+
+/// Whether an installation's folder holds `nosound.txt`, by any case.
+fn holds_no_sound(directory: Option<&Path>) -> bool {
+    directory.is_some_and(|directory| {
+        std::fs::read_dir(directory).is_ok_and(|entries| {
+            entries.filter_map(Result::ok).any(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.eq_ignore_ascii_case("nosound.txt"))
+            })
+        })
+    })
+}
+
+#[cfg(test)]
+mod no_sound_tests {
+    #[test]
+    fn a_nosound_file_by_any_case_turns_sound_off() {
+        let directory = std::env::temp_dir().join(format!("no-sound-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        assert!(!super::holds_no_sound(Some(&directory)));
+        assert!(!super::holds_no_sound(None));
+        std::fs::write(directory.join("NoSound.TXT"), "").unwrap();
+        assert!(super::holds_no_sound(Some(&directory)));
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
 }
 
 impl ViewerConfig {
@@ -335,6 +384,14 @@ fn seed_official_options(
         for (toggle, setting) in [
             (Toggle::Log, official.log),
             (Toggle::Sound, official.sound),
+            (Toggle::EnvironmentSounds, official.env_sounds),
+            (Toggle::CombatMusic, official.combat_music),
+            // A music volume of 0 is silent; another value leaves music on,
+            // its scale unread [I].
+            (
+                Toggle::Music,
+                official.music.filter(|volume| *volume == 0).map(|_| false),
+            ),
             (Toggle::SpellEffects, official.spell_effects),
             (Toggle::PcNames, official.pc_names),
             (Toggle::NpcNames, official.npc_names),
@@ -344,11 +401,28 @@ fn seed_official_options(
                 option_defaults.set(toggle, on);
             }
         }
+        // Only a race and gender the file names is seeded; the keys are
+        // inferred (R49-44a), so a file that names none leaves every model
+        // classic.
+        for (&(_, race, gender), said) in eq_client_assets::ui::LUCLIN_MODEL_KEYS
+            .iter()
+            .zip(official.luclin_models)
+        {
+            if let Some(on) = said {
+                option_defaults.luclin_models.set(race, gender, on);
+            }
+        }
         if let Some(level) = official
             .show_names_level
             .and_then(eq_client_core::names::ShowNames::from_level)
         {
             option_defaults.show_names = level;
+        }
+        if let Some(level) = official.loot_no_drop {
+            option_defaults.loot_no_drop = eq_client_core::no_drop::LootNoDrop::from_level(level);
+        }
+        if let Some(on) = official.attack_on_assist {
+            option_defaults.attack_on_assist = on;
         }
         seed_levels(option_defaults, &official);
     }
@@ -362,9 +436,13 @@ fn seed_official_options(
 pub fn run(
     zone: ZoneAsset,
     character: Option<CharacterAsset>,
-    config: ViewerConfig,
+    mut config: ViewerConfig,
     source: Source,
 ) -> i32 {
+    config.no_sound = holds_no_sound(config.eq_directory.as_deref());
+    if config.no_sound {
+        info!("Sound is off: the installation holds nosound.txt");
+    }
     let screenshot = config.screenshot.clone();
     let steps = config.script.clone();
     let arrow = !config.hide_script_pointer;
@@ -456,6 +534,11 @@ pub fn run(
                 ..default()
             }),
     );
+    // The zones' music plays through a synthesizer on the player's SoundFont.
+    {
+        use bevy::audio::AddAudioSource as _;
+        app.add_audio_source::<zone_audio::MidiMusic>();
+    }
     if let Some(build) = app.world().resource::<ViewerSettings>().0.build_identity {
         info!(build, "Client build identity");
     }
@@ -679,6 +762,8 @@ fn install_script(
 }
 
 /// Configures the live or offline window, hiding one-shot screenshot previews.
+/// The window carries the program's name, so the title bar says what the
+/// player is running.
 fn primary_window(
     online: bool,
     visible: bool,
@@ -688,9 +773,9 @@ fn primary_window(
 ) -> Window {
     Window {
         title: if online {
-            "eq-client"
+            "Marginal Advantage"
         } else {
-            "eq-client offline viewer"
+            "Marginal Advantage offline viewer"
         }
         .to_owned(),
         visible,
@@ -1092,6 +1177,7 @@ fn move_player(
         ground_tolerance: eq_client_core::movement::MAX_GROUNDED_STEP,
         climb: eq_client_core::movement::MAX_GROUNDED_STEP,
         edge_climb: None,
+        airborne_clear: 0.0,
         steers_in_air: true,
     };
     player.translation = airborne.step(
@@ -1880,10 +1966,23 @@ mod tests {
         app.update();
         let state = app.world().get::<OrbitCamera>(camera).unwrap();
         assert!(state.pitch > previous.1);
-        // With wheel zoom disabled, pitching keeps the distance behind the
-        // player fixed and moves only the camera's height.
+        // With wheel zoom disabled, pitching keeps the camera's distance
+        // along its sightline (Free Chase Tilt, on by default).
+        assert!((state.radius - previous.2).abs() < 1e-3);
+        let previous = (state.pitch, state.radius);
+        // With Free Chase Tilt off, it keeps the distance behind the player
+        // and moves only the camera's height, as the program's does.
+        app.world_mut()
+            .resource_mut::<options::OptionsState>()
+            .options
+            .qol
+            .set(eq_client_core::qol::Fix::FreeChaseTilt, false);
+        send_input(&mut app);
+        app.update();
+        let state = app.world().get::<OrbitCamera>(camera).unwrap();
+        assert!(state.pitch > previous.0);
         let behind = |pitch: f32, radius: f32| radius * pitch.cos();
-        assert!((behind(state.pitch, state.radius) - behind(previous.1, previous.2)).abs() < 1e-3);
+        assert!((behind(state.pitch, state.radius) - behind(previous.0, previous.1)).abs() < 1e-3);
     }
 
     #[test]

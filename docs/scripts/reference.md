@@ -115,7 +115,7 @@ Key names are case-insensitive. Combine them with `+`, such as `alt+1`. Supporte
 
 ## Camera and movement
 
-- `camera(heading, pitch[, distance])`: position the camera; pitch is -89 to 0 degrees. Use `camera("player", offset, pitch[, distance])` for an offset from the player's heading.
+- `camera(heading, pitch[, distance])`: position the camera; pitch is -89 (straight down) to 89 (straight up) degrees, which the chase view holds within its own range: with the Free Chase Tilt setting off it stays between eye level and 30 units above the eyes, so it never looks up. Use `camera("player", offset, pitch[, distance])` for an offset from the player's heading.
 - `face()`: turn the camera toward the target.
 - `face(heading)`: turn the character to an absolute heading at the ordinary turn rate, waiting up to 5 seconds for server confirmation.
 - `move(command, milliseconds)`: hold `forward`, `back`, `camera_forward`,
@@ -278,7 +278,8 @@ or occluded. The counters are independent of damage and inventory.
   stamped with the script's admission. Chat words (`say`, `tell`, `ooc`, `shout`, `gsay`,
   `auction`), `reply`, `friend`, `ignore`, `quit` and `exit` work as typed. The line is at
   most 512 bytes counting the slash, as the chat line is, and takes no control characters.
-  A social goes through the named `social` step instead.
+  A social goes through the named `social` step instead. `petition`, `bugreport` (`bug`)
+  and `feedback` send their report as typed: a person on the staff reads each one.
   `slash("follow")` queues the ordinary local follow request for the targeted group
   member. Its deferred request keeps the script's expected admission and zone;
   a changed world withdraws it before movement handles it. Completion of the
@@ -293,6 +294,7 @@ or occluded. The counters are independent of damage and inventory.
   `slash("pet target")` selects your visible pet. Pet orders complete the script
   step when queued. Read subsequent server observations to check their effects.
   `slash("camp desktop")` uses the ordinary camp destination and current QoL exit choice.
+  `slash("language")` says the language the active chat window speaks, `slash("language help")` lists the languages your character knows, and `slash("language N")` chooses the Nth of them for that window, as the typed `/language` does; other words get the same line as typed.
   `slash("guildinvite [Name] [o]")`, `slash("guildremove [Name]")`,
   `slash("guildmotd [text]")` and `slash("getguildmotd")` use the typed guild
   handlers. Omit a name to use the current target; `o` offers officer rank.
@@ -354,6 +356,9 @@ or occluded. The counters are independent of damage and inventory.
   repository, a pull request or a published page.
 - `chat("channel message")`: chat on any server, under the session's chat pace,
   with a character in the world.
+  The session paces all chat (10 lines in any 5 seconds, 12 far-reaching ones
+  in any minute): a line it holds fails the run at that `chat` or `social`
+  step's line, with the session's wait.
 - `quit()`: close the client.
 
 The typed parser and normal client capability checks decide which commands and controls are available. A valid action can still fail at runtime when its target, session or expected result is unavailable.

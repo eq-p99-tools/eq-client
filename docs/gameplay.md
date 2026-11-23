@@ -34,6 +34,19 @@ under a floor. The tallest edge the official client climbs is
 unmeasured, so a taller one stops here even where it might not there. The
 body's width is unchanged (recording checklist 6.482).
 
+A standing Titanium jump or fall passes over an edge whose top the floor
+sweep reaches, 3.375 above the feet for a human of size 6, and lands on
+it with no vertical speed left, where the move ends on that top. A
+rail thinner than a stride still stops the jump, and an edge never adds
+height to it. A running jump from the Erud's Crossing
+planks clears the docked ship's side and lands on its deck, and a
+standing jump mounts a ledge up to its own rise plus that reach, about
+8.3 for a human. The program sweeps the air with the same raised body as
+the walk and has no test below it (read R42). Using the floor sweep's
+reach rather than the origin is the stricter reading (recording
+checklist 6.484). Ducking, wet feet and the Mac-era generation keep the
+old behaviour, where an edge at the body stops it.
+
 A local movement proposal completes when the worker returns a result for
 its admission and request stamp. That result describes the worker's
 working position. A pending proposal can defer a due air or lava check
@@ -82,20 +95,38 @@ rules and zone gravity where available, with an explicit provisional fallback
 when those data cannot be read. Project 1999 and Titanium EQEmu sessions
 offer bounded swimming in classic water marked by the installed zone.
 Wet movement starts when the character's body origin enters that region.
-Wade or fall into water, move in any
-horizontal direction, and swim up or down by your character's look pitch with
-forward or backward input. Look Up and Look Down (Page Up and Page Down by
-default) tilt that pitch in every camera view, and first-person mouse look moves
-it too; in the chase views the mouse moves only the camera, as in the original
-client. The chase view does not show the pitch, so after Look Up a later stroke
-still rises: Center View levels it in first person, and each zone entry or
-mouse-wheel change between first person and the chase view levels it too.
-Jump strokes up for half a second, and holding it keeps rising. A stroke never
-covers more than a level stroke would, whatever the pitch. A level stroke can cross into known air
-above the same continuous water while the feet stay wet; ordinary gravity then
-returns the body origin to the water. Unknown regions and dry gaps still hold
-the stroke. A supported bank returns the swimmer to ordinary movement. At the
-surface, look up and swim forward toward a nearby bank to use Titanium's shoreline boost.
+On Titanium, water moves the body as the original client's own water step
+does: velocity carries from frame to frame, the water damps it, and gravity
+still pulls, so **an idle swimmer slowly sinks**, about two thirds of a unit
+a second, until they rest on the bottom. Once the head goes under, Air
+Remaining counts down and a character who can't breathe water drowns;
+**Gills for Days** is the switch for those who don't want to. Characters
+in water swim when they move across it and tread water otherwise, sinking,
+still or resting on the bottom, as the original does; a swim or tread
+carries on while wading out with the body above the water. Wade or fall
+into water, move in any horizontal direction, and swim up or down by your
+character's look pitch with forward or backward input: the pitch adds a
+climb or a dive without taking anything from forward speed. Look Up and
+Look Down (Page Up and Page Down by default) tilt that pitch in every
+camera view, and first-person mouse look moves it too; in the chase views
+the mouse moves only the camera, as in the original client. The chase view
+does not show the pitch, so after Look Up a later stroke still rises:
+Center View levels it in first person, and each zone entry or mouse-wheel
+change between first person and the chase view levels it too. A strafe or
+standing still gives no climb. Jump pushes up for half a second, and
+holding it keeps pushing.
+
+Swim speed is the land speed plus the Swimming skill: at a run speed of
+0.7, level swimming goes 7 units a second untrained and 17 at skill 100, and
+looking straight up also climbs at about twice that rate. Sneaking or
+ducked swimming keeps the land speed. The client steps water 60 times a
+second, where the original steps once a frame, so the sinking rate matches
+the original at 60 frames a second (recording checklist 6.483). A swimmer
+entering water starts within the water's speeds. Rising out of the water
+carries the climb on as an ordinary fall back in. Unknown regions and dry
+gaps still hold the stroke. A supported bank returns the swimmer to
+ordinary movement. At the surface, look up and swim forward toward a nearby
+bank to use Titanium's shoreline boost.
 The client checks that the capsule can reach a supported landing. Automated
 ground routes and EQMac-era sessions retain the deep-water guard. Ordinary
 movement guards against entering lava.
@@ -121,9 +152,10 @@ rules apply. A placement inside lava uses ordinary movement and recovery.
 Turning the setting off restores ordinary movement on the next sample.
 Scripted ground route finding uses solid terrain.
 
-The swim rate is a conservative bound based on the session's current
-movement grant. Exact native speed, wet gravity, skill scaling and live P99 wet movement
-remain to be verified. The Titanium air meter samples the character's
+The session bounds each axis of a Titanium swim by the water's steady
+rates; EQMac-era sessions keep a conservative single bound. Live P99 wet
+movement and a side-by-side check against the original client's sinking
+and swim speeds remain to be done. The Titanium air meter samples the character's
 model-dependent head reference separately. Drowning and lava reports are
 available on local-only EQEmu. See [settings](settings.md).
 
@@ -225,6 +257,15 @@ can continue after the worker accepts a conservative carried-weight report.
 Falls use the retained weight bound when available. If a landing needs
 weight and the bound becomes unknown, the client shows that in chat.
 Choose **No**, press Escape or close Inventory to cancel before submitting.
+Typing `/fastdrop` turns the question off, so **Drop cursor item** drops at
+once through the same checks and the same one-at-a-time hold; typing it
+again brings the question back, and each says which way it now is. It is off
+at start, is not saved, and turns off at a world entry, a camp, a return to
+login or a lost link; a zone change keeps it. Only the item
+drop's question is skipped: destroying still asks. A social, a hotbutton or
+a script's `slash` turns it over as typing does (6.584). The program's handler (0x4685ba) is
+unread, so this behaviour and its lines are inferred (checklist 6.536,
+pending R49-6n).
 
 Where the inventory policy supports it, **Destroy cursor item** asks before
 destroying the whole cursor item or stack. **No**, Escape, closing inventory,
@@ -361,7 +402,11 @@ The Project 1999 and EQEmu sessions offer `/assist`, `/random`, `/emote`,
 reported by the current admission.
 
 - Use `/assist` with a selected entity or `/assist Player` with an exact
-  player name. Wait for the returned selection before using an action that
+  player name. Under a Titanium installation `/assist Name` takes any spawn
+  whose name starts with the word, the shortest such name first, without
+  changing your target; no match says nothing, and your own name says the
+  installed line and sends nothing. `/assist on` and `/assist off` set
+  [Attack On Assist](settings.md#attack-on-assist). Wait for the returned selection before using an action that
   depends on it. On P99 an unresolved request holds the next assist until
   its reply or zone entry. A reply that arrives after the five-second local
   selection window can release the hold.
@@ -404,7 +449,43 @@ question with the confirmation window's buttons, as a player does.
 The Mac-era client's `/surname` isn't read yet. Its servers' handlers say
 the client refuses under 20 and cuts to 19, as Titanium does, so the same
 flow runs there (inferred). Project 1999 doesn't offer it from this client
-yet. A surname with a space in it is refused before it is sent.
+yet. A quoted surname's spaces go as typed.
+
+`/ttell message` sends a tell to the player you target, exactly as
+`/tell Name message` would, and `/whotarget` lists the target's name in the
+zone's `/who`. A tell goes only to another player whose name is letters
+alone. An NPC, a pet, a corpse or yourself gets this client's own refusal
+line and nothing is sent; `/whotarget` takes any target, since it sends
+nothing. Socials may run both; a script tells only with its own tell step.
+The forms, the refusal lines and the target kinds are inferred until the
+original client's handling is read (recording checklist 6.528).
+
+## Petitions, bug reports and feedback
+
+`/petition words`, `/bugreport words` (also `/bug`) and `/feedback words`
+send a report to the server's staff. A typed line sends it, whoever types
+it: the keyboard, a social's line or a script's `slash()` step, each with
+the same checks and pace. A button's game command answers that the client
+does not take the command that way yet.
+
+- A bug report's first word may name its category with a colon, such as
+  `/bug pathing: the guard walks into the wall`. A word that names no
+  category, or one without its colon, leaves the whole line as the text,
+  under Other. The report carries the player's place and heading, and the
+  selected entity where there is one.
+- A line with nothing to say sends nothing and answers
+  `Use /petition with what to say.`
+- One report of a kind is sent at a time: another of the same kind within
+  ten seconds is refused with a line asking to wait. Text too long for the
+  server's field is refused, never cut.
+- Stock EQEmu says nothing when it takes a petition or a bug report, so
+  this client says `Your petition was sent.` or `Your bug report was sent.`
+  in its own words. The official client's windows and lines for these are
+  unread (recording checklist 6.511).
+
+Only stock EQEmu sessions offer petitions and bug reports. Feedback, and
+every report on Project 1999, Quarm and TAKP, waits for its own live check;
+there the command answers as it does today.
 
 ## Social hotbuttons
 
@@ -435,7 +516,111 @@ saved per exact world and character in this client's settings files. Older
 hotbar files supply their ordinary bindings. Recreate and rebind socials
 from legacy files to establish the exact profile that owns them.
 
+Lines run a tenth of a second apart, as the original's social runner steps
+them. A social or the chat also takes these Titanium commands:
+
+- `/yell` calls for help from the players near you.
+- `/stopcast` ends your own cast, or a Bard's song. It's refused while you
+  ride a mount or have a buff whose effects the spell data can't name.
+- `/doability 1` to `/doability 10` press the Actions window's ability
+  buttons: 1 to 6 on the Abilities page, 7 to 10 on the Combat page.
+- `/memspellset 3` or `/memspellset Heal` memorizes a saved spell set, by its
+  number in name order or the start of its name. It opens the Spellbook.
+- `/hotbutton Name 4 /say Hello` makes a social named Name, or rewrites the
+  first line of the one with that name, and puts it on the cursor to drop on
+  the hotbar. The number is the button's colour and can be left out.
+
+Where the installed client has no string for a line, the line is in this
+client's words, such as "You yell for help." or "Use /doability 1 through
+10.".
+
 The pause order follows the [EverQuest social hotbutton guide](https://www.everquest.com/news/imported-eq-enus-51004).
+
+## Chat server channels
+
+On a stock EQEmu server that runs its chat server (`ucs`), the session opens a
+link to it when the world offers one, and these commands go to it:
+
+- `/join channel` joins a channel. Several can be given with commas, and a
+  channel can take a password as `channel:password`.
+- `/leave channel` and `/leaveall` leave one channel or all of them.
+- `/list` lists the channels you are on, and `/list channel` lists who is on
+  a channel.
+- `/announce` (or `/announce on` and `/announce off`) asks to be told when
+  someone joins or leaves a channel.
+- `/1` to `/10` followed by text say it on the channel in that slot. The
+  first channel joined is `/1`.
+- `/chat words` sends the chat server's own channel words as typed: `join`,
+  `leave`, `leaveall`, `list`, `listall`, `announce`, and the owner and
+  moderator words (`setowner`, `oplist`, `invite`, `grant`, `moderate`,
+  `voice`, `kick`, `password`, `toggleinvites`), which are passed through
+  unchecked for the server to judge. Any other word is refused and nothing is
+  sent. That includes the chat server's mail, friends and ignore words and
+  `set`, which saves the channels joined at login.
+
+These commands work from the chat line, socials and hotbuttons alike, and
+they are as free as `/say`. There is no send limit for any chat yet. A script's
+`slash()` runs them as typing does (6.584).
+Channel and player names from the chat server print without control
+characters, so a name can't start an item link.
+
+A line on a channel reads `Name tells channel:2, 'text'`. The slot comes from
+the last list of joined channels the server sent. Before any list names the
+channel, the line shows the channel's name alone. A member who joins or leaves
+reads `Name has entered channel trade.` or `Name has left channel trade.`, and
+the chat server's own lines print as it sends them. The client remembers the
+joined list across zones, and forgets it when the link ends or you camp.
+
+When the server offers no chat server, or the link has not come up, a command
+says "You are not connected to the chat server." and nothing is sent. When
+the link ends, the chat says "The chat server link has ended." There is no
+reconnect: a new link only comes from the world's next offer. `/autojoin`,
+the list the official client joins at login, is not kept yet.
+
+These lines show in the System tab and are not a chat filter of their own. Every
+wording, colour and slot form above is this client's and is inferred; the
+official client's are pending read R49-12 (recording checklist 6.509).
+Project 1999, Quarm and TAKP open no link: on P99, chat channels are withheld
+until there has been an attended session there.
+
+## Spoken languages
+
+Each chat window speaks a language of its own, chosen with `/language` in that
+window. The choice lasts for the session and is never saved, as in the
+original. A new session starts every window on the first language your
+character knows, the common tongue.
+
+- `/language` says the language the window speaks and its number.
+- `/language help` (the installed word) lists the languages your character
+  knows, numbered from 1 in the original's order.
+- `/language N` chooses the Nth of that list. Any other number, or a word, is
+  refused with the installed line.
+
+Every line you send goes out in the active window's language, on every
+channel: say, shout, group, tell, out of character and the rest. The servers
+turn out-of-character and some other chat back to the common tongue
+themselves. The skill sent with a line is your skill in the language less a
+quarter of your intoxication, as the original sends it. A game master sends
+100. Your intoxication is read from your profile when you zone, so a drink
+after zoning isn't counted until the next zone (a known shortfall).
+
+A line heard in another language names it in the place the installed speech
+line keeps for a tongue: the installed tag with the language's name when you
+know it past 24, or the installed "unknown" tag. Language 0 has no tag. A
+heard line is garbled once, as it arrives, as the original garbles it (reads
+R49-4 and R49-4b):
+
+- **By the speaker's skill.** Short words may be dropped or said plainer,
+  then letters may change. The word list is this client's own, written fresh.
+- **By your own skill**, but only where the server turns it on. EQEmu leaves
+  it off; TAKP and Quarm turn it on.
+
+Lines from a game master, lines to a game master, broadcast lines and item
+links are never changed. Neither are your own lines (inferred).
+
+While you are AFK, a tell gets the installed away reply back, in your window's
+language, unless the tell is itself an away reply. A sender on your ignore
+list gets none.
 
 ## Item links in chat
 
@@ -483,6 +668,13 @@ character settings when available. Note import reads profiles up to 256 KiB.
 
 Considering, hailing, auto-attack and class abilities use the target and session
 rules. Loot lists received corpse contents; Loot all takes items sequentially.
+On Titanium servers a click on a NO DROP item asks before looting it, as the
+original does, unless the corpse is your own. `/lootnodrop always` always asks
+(the default when the installed `eqclient.ini` keeps no `LootNoDrop`),
+`/lootnodrop sometimes` asks only about items your class or race can't use,
+and `/lootnodrop never` never asks. The installed client's own words for
+these choices work too. A question left unanswered for 20 seconds loots
+nothing. Loot all leaves an item that would ask for its own click.
 Merchants support selection and buy/sell requests. Giving to NPCs and trading
 with players have separate interaction state; a trade is not complete merely
 because its window opened. Ground pickups and doors use reach checks. World
@@ -605,3 +797,15 @@ same-ID acquisition needs a release echo before retrying; completed ordered
 releases permit ordinary reacquisition. A late acquire cannot undo release
 intent or timeout. Walking off requests release. P99,
 EQMac, steering and control across zone admissions remain unverified gaps.
+
+## Zone music and ambient sound
+
+Each zone plays its own ambient sounds near you, such as water, wind and
+birds, by day or night, and the music of the region you stand in, which
+fades when you leave it. The ambient sounds follow the original program's
+reading of the zone's files (item 6.503, read R49-7 first pass and its
+engine follow-up), including which track a music region names; how regions
+choose among themselves and switch their tracks is this client's estimate. Music needs a SoundFont you name; see
+[Display and audio](settings.md#display-and-audio) for it and the sound
+options. `/combatmusic` turns combat music on or off and keeps the choice,
+but this client plays no combat music yet.

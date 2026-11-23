@@ -323,6 +323,7 @@ mod tests {
     /// origin.
     fn friend(spawn_id: u16, y: f32) -> SpawnState {
         SpawnState {
+            body_type: None,
             name: "Friend".into(),
             kind: SpawnKind::Player,
             race: 1,
@@ -421,6 +422,7 @@ mod tests {
             &mut online,
             5,
             SpawnState {
+                body_type: None,
                 velocity: [0.0, 40.0, 0.0],
                 forward: 40.0,
                 ..friend(5, 25.0)
@@ -471,6 +473,7 @@ mod tests {
             &mut online,
             5,
             SpawnState {
+                body_type: None,
                 kind: SpawnKind::PlayerCorpse,
                 ..friend(5, 50.0)
             },

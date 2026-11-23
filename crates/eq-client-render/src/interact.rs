@@ -79,6 +79,7 @@ mod tests {
                 skills: None,
                 practice_points: None,
                 languages: None,
+                intoxication: None,
                 disciplines: None,
                 gender: 0,
                 level: 1,
