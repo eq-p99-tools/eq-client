@@ -1869,6 +1869,20 @@ fn submit_draft(
     }
 }
 
+/// Sends a typed petition, bug report or feedback, or says why not.
+fn typed_report(
+    asked: &super::reports::Asked,
+    online: &super::online::OnlineState,
+    outbox: &crate::outbox::Outbox,
+) -> Result<(), Unsent> {
+    let world = online.world();
+    super::reports::offered(asked, world)?;
+    let stamp = outbox.stamp(world)?;
+    let command = super::reports::command(asked, world, stamp)?;
+    outbox.send(world, command)?;
+    Ok(())
+}
+
 /// Apply an ordinary typed line without changing the chat editor or focus.
 fn submit_line(
     line: &str,
@@ -1882,6 +1896,11 @@ fn submit_line(
     let Some(command) = crate::commands::spelled(line) else {
         return Ok(());
     };
+    // A report to the staff goes from a typed line, whoever types it: the
+    // keyboard, a social or a script's `slash` step (6.511).
+    if let Some(asked) = super::reports::Asked::typed(&command) {
+        return typed_report(&asked, online, outbox);
+    }
     match targeted(&command, online.world()) {
         Some(Targeted::Tell(line)) => {
             return submit_line(&line?, active, state, online, outbox, qol);
@@ -4635,6 +4654,133 @@ mod tests {
         let chat = app.world().resource::<ChatState>();
         assert_eq!(chat.draft.text(), "");
         assert_eq!(chat.toggled, Some(super::super::windows::WindowId::Raid));
+    }
+
+    #[test]
+    fn a_typed_line_sends_a_report_to_the_staff() {
+        use eq_client_core::reports::BugCategory;
+        let (mut app, receiver) = slash_app(true);
+        let last_line = |app: &App| {
+            app.world()
+                .resource::<ChatState>()
+                .history
+                .lines(ChatTab::All)
+                .last()
+                .map(|(_, line)| line.message.text.clone())
+        };
+        send_typed(&mut app, "/petition  I am stuck in the wall. ");
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(ClientCommand::SendPetition { session_id: 1, text, .. })
+                if text == "I am stuck in the wall."
+        ));
+        // `/bug` is `/bugreport`, as the official parser resolves it.
+        send_typed(&mut app, "/bug doors: it will not open");
+        match receiver.try_recv() {
+            Ok(ClientCommand::ReportBug {
+                session_id, report, ..
+            }) => {
+                assert_eq!(session_id, 1);
+                assert_eq!(report.category, BugCategory::DoorsAndPortals);
+                assert_eq!(report.text, "it will not open");
+                assert!(report.place.is_some());
+            }
+            other => panic!("{other:?}"),
+        }
+        // A line with nothing to say sends nothing.
+        for line in ["/petition", "/petition   ", "/bugreport pathing:"] {
+            send_typed(&mut app, line);
+            assert!(receiver.try_recv().is_err(), "{line}");
+        }
+        assert_eq!(
+            last_line(&app).as_deref(),
+            Some("Use /bugreport with what to say.")
+        );
+
+        // A social's line and a script's `slash` step run the typed line,
+        // so each sends the same report; a button's game command does not.
+        let mut chat = ChatState::default();
+        let outbox = app
+            .world_mut()
+            .remove_resource::<crate::outbox::Outbox>()
+            .unwrap();
+        let mut online = app
+            .world_mut()
+            .remove_resource::<super::super::online::OnlineState>()
+            .unwrap();
+        for line in [
+            "/petition I am stuck",
+            "/bugreport the guard",
+            "/feedback a note",
+        ] {
+            assert!(
+                submit_game_command(line, &mut online, &outbox, &Settings::default()).is_err(),
+                "{line}"
+            );
+            assert!(receiver.try_recv().is_err(), "{line}");
+            assert_eq!(
+                submit_typed_line(line, &mut chat, &mut online, &outbox, &Settings::default()),
+                Ok(()),
+                "{line}"
+            );
+            assert!(
+                matches!(
+                    receiver.try_recv(),
+                    Ok(ClientCommand::SendPetition { .. }
+                        | ClientCommand::ReportBug { .. }
+                        | ClientCommand::SendFeedback { .. })
+                ),
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_typed_report_the_session_does_not_offer_answers_as_today() {
+        let (mut app, receiver) = slash_app(false);
+        {
+            let mut online = app
+                .world_mut()
+                .resource_mut::<super::super::online::OnlineState>();
+            crate::online::testing::news(
+                &mut online,
+                [eq_client_core::WorldEvent::Entered {
+                    capabilities: eq_client_core::Capability::ALL
+                        .iter()
+                        .copied()
+                        .filter(|capability| {
+                            !matches!(
+                                capability,
+                                eq_client_core::Capability::Petitioning
+                                    | eq_client_core::Capability::ReportingBugs
+                                    | eq_client_core::Capability::SendingFeedback
+                            )
+                        })
+                        .collect(),
+                    choices: Vec::new(),
+                    session_id: 1,
+                    zone: "qeytoqrg".into(),
+                    player: Box::new(crate::online::testing::player(1)),
+                    far_clip: None,
+                    spell_landing_flag: None,
+                    zone_id: 0,
+                }],
+            );
+            crate::online::testing::connect(&mut online, true);
+        }
+        for name in ["petition", "bugreport", "feedback"] {
+            send_typed(&mut app, &format!("/{name} a synthetic line"));
+            assert!(receiver.try_recv().is_err(), "{name}");
+            assert_eq!(
+                app.world()
+                    .resource::<ChatState>()
+                    .history
+                    .lines(ChatTab::All)
+                    .last()
+                    .map(|(_, line)| line.message.text.as_str()),
+                Some(format!("This client does not take /{name} that way yet.").as_str())
+            );
+        }
     }
 
     fn press_slash(app: &mut App) {

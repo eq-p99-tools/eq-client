@@ -1044,9 +1044,6 @@ impl ClientWorld {
             | WorldEvent::ChatChannelRefused { .. }
             // A chat line the pace held: the chat pace slice (6.523).
             | WorldEvent::ChatRefused { .. }
-            // Petitions, bug reports and feedback: the reports slice (6.511).
-            | WorldEvent::ReportRefused { .. }
-            | WorldEvent::ReportSent { .. }
             // A last name's answer and the title list: the surname and
             // titles slices (titles 6.516).
             | WorldEvent::SurnameAnswer { .. }
@@ -1223,6 +1220,30 @@ impl ClientWorld {
             // keeping them, or refusing a set this client fitted to the
             // generation first, is not news for the player.
             WorldEvent::ServerFiltersKept { .. } | WorldEvent::ServerFiltersRefused { .. } => {}
+            // A report to the staff went or was refused (6.511).
+            WorldEvent::ReportSent {
+                session_id,
+                report,
+            } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices.push(Notice::ReportSent(*report));
+                } else {
+                    news.ignored = true;
+                }
+            }
+            WorldEvent::ReportRefused {
+                session_id,
+                reason,
+                ..
+            } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices.push(Notice::ReportRefused {
+                        reason: reason.clone(),
+                    });
+                } else {
+                    news.ignored = true;
+                }
+            }
             WorldEvent::ListingRefused {
                 session_id,
                 reason,

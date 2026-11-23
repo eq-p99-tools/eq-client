@@ -417,6 +417,33 @@ nothing. Socials may run both; a script tells only with its own tell step.
 The forms, the refusal lines and the target kinds are inferred until the
 original client's handling is read (recording checklist 6.528).
 
+## Petitions, bug reports and feedback
+
+`/petition words`, `/bugreport words` (also `/bug`) and `/feedback words`
+send a report to the server's staff. A typed line sends it, whoever types
+it: the keyboard, a social's line or a script's `slash()` step, each with
+the same checks and pace. A button's game command answers that the client
+does not take the command that way yet.
+
+- A bug report's first word may name its category with a colon, such as
+  `/bug pathing: the guard walks into the wall`. A word that names no
+  category, or one without its colon, leaves the whole line as the text,
+  under Other. The report carries the player's place and heading, and the
+  selected entity where there is one.
+- A line with nothing to say sends nothing and answers
+  `Use /petition with what to say.`
+- One report of a kind is sent at a time: another of the same kind within
+  ten seconds is refused with a line asking to wait. Text too long for the
+  server's field is refused, never cut.
+- Stock EQEmu says nothing when it takes a petition or a bug report, so
+  this client says `Your petition was sent.` or `Your bug report was sent.`
+  in its own words. The official client's windows and lines for these are
+  unread (recording checklist 6.511).
+
+Only stock EQEmu sessions offer petitions and bug reports. Feedback, and
+every report on Project 1999, Quarm and TAKP, waits for its own live check;
+there the command answers as it does today.
+
 ## Social hotbuttons
 
 Type `/social set Greet | /pause 10,/say Hello! | /stand` to save a social

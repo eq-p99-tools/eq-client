@@ -83,6 +83,7 @@ pub use eq_network_game::pets;
 pub use eq_network_game::popups::Marquee;
 pub use eq_network_game::raid;
 pub use eq_network_game::reach;
+pub use eq_network_game::reports;
 pub use eq_network_game::resurrection;
 pub use eq_network_game::servers;
 pub use eq_network_game::socials;
