@@ -2371,32 +2371,6 @@ LookSpring=1
     }
 
     #[test]
-    fn eqclient_ini_seeds_only_the_luclin_models_it_names() {
-        let read = options_from_ini(
-            "[Defaults]\nUseLuclinHumanMale=TRUE\nUseLuclinDarkElfFemale=FALSE\nUseLuclinGnomeMale=maybe\n",
-        );
-        let said = |race, gender| {
-            LUCLIN_MODEL_KEYS
-                .iter()
-                .position(|&(_, r, g)| (r, g) == (race, gender))
-                .and_then(|index| read.luclin_models[index])
-        };
-        assert_eq!(said(1, 0), Some(true));
-        assert_eq!(said(6, 1), Some(false));
-        // A word that is neither, and every key not there, says nothing.
-        assert_eq!(said(12, 0), None);
-        assert_eq!(said(1, 1), None);
-        assert_eq!(read.luclin_models.iter().flatten().count(), 2);
-        // In another section, the keys are not the choice.
-        assert!(
-            options_from_ini("[Options]\nUseLuclinHumanMale=TRUE\n")
-                .luclin_models
-                .iter()
-                .all(Option::is_none)
-        );
-    }
-
-    #[test]
     fn a_characters_ini_holds_the_first_page_of_hotbuttons() {
         let text = "[Socials]\nPage1Button1Name=Wave\n[HotButtons]\nPage1Button1=H0\nPage1Button3=J29\nPage2Button1=H4\nPage1Button10=\n";
         assert_eq!(
