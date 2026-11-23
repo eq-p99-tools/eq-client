@@ -88,6 +88,15 @@
     local hiding (stuns, others' environmental lines, spell and damage
     lines) is the next change.
   - Uses main's eq-network pin, which carries #407; no repin of its own.
+- Hide locally what the Titanium program hides by its filters, for the lines
+  this client prints (read R49-2 d, checklist 6.494, C2). With **Missed me**
+  hidden, another's melee attack on the player that does not land is not
+  shown (the damage display's test at 0x4a6631; which outcomes it covers is
+  inferred). The program's other local tests gate lines this client does not
+  print yet (stuns, others' environmental damage, others' fights, others'
+  spells, the bad-word mask): each is a named TODO at
+  `chat_filters::hidden_locally`. Mac-era and RoF2 programs are unread and
+  hide nothing locally.
 - Show the session's chat pace (checklist 6.523, eq-network c951420). Its
   refusal, "You are sending chat too fast. Wait N seconds.", is printed as
   the player's own line, and a script whose chat or social step the pace
