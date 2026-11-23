@@ -2665,6 +2665,8 @@ mod tests {
             [Step::Slash("/charinfo".into())]
         );
         assert!(parse("slash(\"charinfo now\")\n", base).is_err());
+        // Nor the drop's question lifted (6.536).
+        assert!(parse("slash(\"fastdrop\")\n", base).is_err());
     }
 
     #[test]

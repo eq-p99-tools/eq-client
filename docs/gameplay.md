@@ -232,6 +232,14 @@ can continue after the worker accepts a conservative carried-weight report.
 Falls use the retained weight bound when available. If a landing needs
 weight and the bound becomes unknown, the client shows that in chat.
 Choose **No**, press Escape or close Inventory to cancel before submitting.
+Typing `/fastdrop` turns the question off, so **Drop cursor item** drops at
+once through the same checks and the same one-at-a-time hold; typing it
+again brings the question back, and each says which way it now is. It is off
+at start, is not saved, and turns off at a camp or a lost link. Only the item
+drop's question is skipped: destroying still asks. Only typing turns it
+over; a script or a social line cannot. The program's handler (0x4685ba) is
+unread, so this behaviour and its lines are inferred (checklist 6.536,
+pending R49-6n).
 
 Where the inventory policy supports it, **Destroy cursor item** asks before
 destroying the whole cursor item or stack. **No**, Escape, closing inventory,

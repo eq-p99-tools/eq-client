@@ -709,6 +709,7 @@ impl Panels<'_> {
         match reason {
             Reset::Lost { ended, .. } => {
                 self.inventory.cancel_actions();
+                self.inventory.fast_drop = false;
                 self.motion.reset(None);
                 if ended {
                     state.selection = None;
@@ -739,6 +740,7 @@ impl Panels<'_> {
             Reset::Camped => {
                 // Leave the zone; the world server sends a fresh character list.
                 self.inventory.forget();
+                self.inventory.fast_drop = false;
                 self.motion.reset(None);
                 self.lines.status.set("Camped - choose a character");
             }
