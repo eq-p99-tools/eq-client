@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Drowning and lava now hurt on every Titanium server, public EQEmu and
+  P99 included, as the Titanium program reports them on any server
+  (eq-network's liquid change; read R25). **Characters on public servers
+  can now drown and burn with this client.** Take Environmental Damage,
+  on by default, still withholds every report; a test shows a P99-style
+  session reports neither liquid with it off. `docs/settings.md` says so.
+  The amounts and timing stay this client's calculation until read R49-3;
+  inferred parts are under checklist 6.491.
+
 - Walk onto low edges as the Titanium client does: a standing walk now
   climbs anything it runs into up to 1.25 above the body's origin, so a
   human of size 6 steps over Erudin's pier-end rail and onto its posts

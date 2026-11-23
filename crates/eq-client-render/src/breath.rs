@@ -94,7 +94,7 @@ impl AirState {
         let scope = world.session_id().zip(world.player()).filter(|_| {
             !world.ended() && !world.is_dead() && world.generation() == GameDialect::Titanium
         });
-        // Skipping the counter withholds the drowning reports a local EQEmu
+        // Skipping the counter withholds the drowning reports every Titanium
         // session takes, so the departure gate applies as it does elsewhere.
         let gills = qol.on(Fix::GillsForDays) && world.can(Capability::GameplayDepartures);
         let Some((admission, player)) = scope.filter(|_| !gills) else {
@@ -629,6 +629,83 @@ mod tests {
         assert_eq!(state.observe(at(11), admission, 2, wet, Some(80)), Some(10));
         assert_eq!(state.observe(at(13), (2, 7), 3, wet, Some(80)), None);
         assert_eq!(state.breath.air().unwrap().remaining, 1);
+    }
+
+    /// A Project 1999 session lists falls, drowning and lava heat among
+    /// its capabilities, as every Titanium session does. With Take
+    /// Environmental Damage off, neither the air counter nor the heat check
+    /// reports anything; turned on, both report, so the test is not empty.
+    #[test]
+    fn take_environmental_damage_off_withholds_drowning_and_lava_on_a_p99_session() {
+        use crate::online::testing;
+        use eq_client_assets::regions::{Liquid, ZoneRegions};
+        use eq_client_core::{hazards::TitaniumEnvironment, inventory::InventoryUpdate};
+
+        let mut online = OnlineState::new(true);
+        let mut player = testing::player(7);
+        player.position.z = -1.0;
+        player.titanium_environment = Some(TitaniumEnvironment {
+            zone_id: 27,
+            base_fire_resistance: 25,
+            has_alternate_advancement: false,
+        });
+        testing::enter_with(
+            &mut online,
+            5,
+            player,
+            None,
+            vec![
+                Capability::Moving,
+                Capability::Falling,
+                Capability::Swimming,
+                Capability::EnvironmentalDamage,
+                Capability::Drowning,
+                Capability::LavaHeat,
+            ],
+        );
+        testing::inventory(&mut online, InventoryUpdate::Snapshot(Vec::new()));
+        testing::buffs(&mut online, std::collections::BTreeMap::new());
+        online.regions = ZoneRegions::test_liquid_surface(0.0, Liquid::Lava);
+        let spells = crate::spellbook::SpellNames::default();
+        let wet = |_: &PlayerState| {
+            (
+                Some(Medium::Water),
+                Ok((Sample::Submerged(NonZeroU32::MIN), Some(80))),
+            )
+        };
+        let start = Instant::now();
+        let at = |seconds| start + Duration::from_secs(seconds);
+
+        let mut qol = eq_client_core::qol::Settings::default();
+        qol.set(Fix::TakeEnvironmentalDamage, false);
+        let mut air = AirState::default();
+        let mut heat = lava::Heat::default();
+        for seconds in 0..5 {
+            let now = at(seconds);
+            let world = online.world();
+            assert_eq!(
+                air.advance(now, world, &qol, 1, LiquidBasis::Observed, wet),
+                None
+            );
+            assert_eq!(
+                heat.advance(now, &online, &qol, &spells, LiquidBasis::Observed),
+                None
+            );
+        }
+
+        qol.set(Fix::TakeEnvironmentalDamage, true);
+        let mut drowned = false;
+        let mut burned = false;
+        for seconds in 5..10 {
+            let now = at(seconds);
+            drowned |= air
+                .advance(now, online.world(), &qol, 1, LiquidBasis::Observed, wet)
+                .is_some();
+            burned |= heat
+                .advance(now, &online, &qol, &spells, LiquidBasis::Observed)
+                .is_some();
+        }
+        assert!(drowned && burned);
     }
 
     #[test]
