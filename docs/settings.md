@@ -149,10 +149,11 @@ Characters on public servers can drown and burn. Actual body contact with lava
 drives the heat check independently of the air counter.
 **Take Environmental Damage** controls all supported reports, including falls,
 and is on by default. Turning it off departs from the original client's
-reporting. Server health and combat updates remain authoritative. The amounts
-and their timing are this client's calculation until the program's formula is
-read, and Project 1999's handling of the liquid reports is not yet checked
-live.
+reporting. Server health and combat updates remain authoritative. The amounts,
+their timing and the chat lines after each report follow the Titanium
+program (reads R49-3 and R49-3b). Project 1999's handling of the liquid
+reports and their damage records is not yet checked live. With the setting
+off, nothing is reported and no damage line prints.
 
 The two spellbook choices are independent. Enable both to read and memorize
 through the book UI while remaining standing.
