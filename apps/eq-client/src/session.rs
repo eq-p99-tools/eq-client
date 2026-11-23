@@ -193,7 +193,11 @@ impl SessionWorker {
                         enqueue(&sender, &worker_cancel, WorldUpdate::SpellTable(fact))?;
                     }
                     let update = match event {
-                        ClientEvent::World(WorldEvent::SpellTable(_)) => None,
+                        // The spell table went to the bridge above. The gap
+                        // log's own handling is eq-client #563's; nothing is
+                        // traced here: a gap's sample bytes can
+                        // hold other players' chat or names.
+                        ClientEvent::World(WorldEvent::SpellTable(_)) | ClientEvent::Gap(_) => None,
                         ClientEvent::World(event) => {
                             observe_world(&event, settings.as_deref());
                             Some(WorldUpdate::Game(event))
@@ -206,11 +210,6 @@ impl SessionWorker {
                         },
                         ClientEvent::Diagnostic(message) => {
                             tracing::info!("{message}");
-                            None
-                        }
-                        // The gap log's own handling is eq-client #563's.
-                        ClientEvent::Gap(gap) => {
-                            tracing::info!("{gap:?}");
                             None
                         }
                         // A reconnect is a fresh login; this viewer asks for
