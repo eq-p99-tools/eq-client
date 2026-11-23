@@ -263,7 +263,12 @@ or occluded. The counters are independent of damage and inventory.
   link is unavailable or another inspection is pending. The `inspection`
   tuple gives the selected item ID and whether a received definition is
   available, including a definition already cached in the admission.
-- `slash("command [arguments]")`: run one of the supported game slash commands, without a leading slash.
+- `slash("command [arguments]")`: run any line the player could type, without its leading slash,
+  exactly as the chat line runs it: the same abbreviations, handlers, paces and refusals,
+  stamped with the script's admission. Chat words (`say`, `tell`, `ooc`, `shout`, `gsay`,
+  `auction`), `reply`, `friend`, `ignore`, `quit` and `exit` work as typed. The line is at
+  most 512 bytes counting the slash, as the chat line is, and takes no control characters.
+  A social goes through the named `social` step instead.
   `slash("follow")` queues the ordinary local follow request for the targeted group
   member. Its deferred request keeps the script's expected admission and zone;
   a changed world withdraws it before movement handles it. Completion of the
@@ -279,15 +284,14 @@ or occluded. The counters are independent of damage and inventory.
   step when queued. Read subsequent server observations to check their effects.
   `slash("camp desktop")` uses the ordinary camp destination and current QoL exit choice.
   `slash("guildinvite [Name] [o]")`, `slash("guildremove [Name]")`,
-  `slash("guildmotd [text]")` and `slash("getguildmotd")` use the existing typed guild
+  `slash("guildmotd [text]")` and `slash("getguildmotd")` use the typed guild
   handlers. Omit a name to use the current target; `o` offers officer rank.
-  Names contain at most 63 ASCII letters. MOTD text is below 512 UTF-8 bytes
-  and contains no control characters;
-  an empty MOTD requests clearing it. Membership, rank and listed-member checks
+  An empty MOTD requests clearing it. Membership, rank and listed-member checks
   remain with the ordinary handlers and session. Queueing a step proves no
   invitation acceptance, roster change or MOTD update; check received evidence.
   `slash("stopsong")` queues the Bard's stop request on Titanium EQEmu.
-  The immediate disconnect aliases typed in chat are not script slash commands.
+  `slash("quit")` and `slash("exit")` leave as typing them does, by the same route;
+  `quit()` closes the client.
   `slash("emote")` and `slash("random")` reach everyone nearby, and run on any
   server, as the player's own would.
 - `gm("command [arguments]")`: an allowed GM command, sent as a typed `#` line on any
