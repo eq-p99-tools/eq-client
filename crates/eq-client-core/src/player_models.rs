@@ -16,8 +16,13 @@
 //! - **Vah Shir (130)** follows its own key alone, past the gate and the
 //!   all-off key, and is on when unset.
 //!
-//! The read is Titanium's. The Mac arm follows the same rule, inferred until
-//! read R49-44 e.
+//! The read is Titanium's. The Mac client (TAKP) has the same keys, reader
+//! and default (R49-44 e); that its expansion bits gate the same way is
+//! inferred by analogy.
+//!
+//! The program reads the keys once, at start-up (R49-44 b); this client
+//! fixes the choice per zone, so a change shows from the next zone (a
+//! stated departure).
 //!
 //! Inferred, unread (R49-44 a's open half): which spawns the choice covers.
 //! Here it is players and their corpses only; non-players of player races
@@ -54,8 +59,8 @@ pub const fn offered(dialect: GameDialect, expansions: Option<Expansions>) -> bo
         return false;
     };
     match dialect {
-        // Read for Titanium. Inferred until read R49-44 e: the Mac client's
-        // mask, from its own opcode, is taken to gate the same way.
+        // Read for Titanium. The Mac client's keys are the same (R49-44 e);
+        // that its mask gates the same way is inferred.
         GameDialect::Titanium | GameDialect::Rof2 | GameDialect::EqMac => mask & OFFERING_BITS != 0,
     }
 }

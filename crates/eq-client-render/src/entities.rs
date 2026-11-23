@@ -29,8 +29,8 @@ pub(super) struct NearbyEntities {
         super::background::Background<Loaded>,
     )>,
     /// The Luclin models the viewer chose, as they were when this zone's
-    /// first spawn was drawn: a change shows from the next zone (inferred,
-    /// R49-44b).
+    /// first spawn was drawn: a change shows from the next zone. The program
+    /// reads its keys once, at start-up (R49-44 b): a stated departure.
     luclin: Option<LuclinModels>,
     /// The Luclin models found missing this run, each said once.
     luclin_missing: BTreeSet<&'static str>,
@@ -932,6 +932,8 @@ mod tests {
                 .insert(("HUM", Generation::Luclin), Some(taller));
             let mut chosen = LuclinModels::NONE;
             chosen.set(1, 0, Some(luclin));
+            // Human also takes Erudite's key (0x43ac64), unset here is on.
+            chosen.set(3, 0, Some(luclin));
             nearby.luclin = Some(chosen);
             nearby.elapsed = 1.0;
             let config = crate::ViewerConfig {
