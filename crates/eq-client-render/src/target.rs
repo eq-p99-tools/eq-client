@@ -2019,7 +2019,10 @@ mod tests {
         let mut spawn = session::pet(id, 99);
         spawn.kind = kind;
         spawn.pet_owner = None;
-        session::spawns(&mut app.world_mut().resource_mut::<OnlineState>(), vec![spawn]);
+        session::spawns(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            vec![spawn],
+        );
     }
 
     /// One frame with the Use key freshly pressed and the real pointer off
@@ -2109,6 +2112,7 @@ mod tests {
             .world()
             .resource::<super::super::chat::ChatState>()
             .history
+            .lines(eq_client_core::chat::ChatTab::All)
             .len();
         press_use(&mut app);
         assert!(commands.try_recv().is_err());
@@ -2116,6 +2120,7 @@ mod tests {
             app.world()
                 .resource::<super::super::chat::ChatState>()
                 .history
+                .lines(eq_client_core::chat::ChatTab::All)
                 .len(),
             lines
         );
@@ -2149,10 +2154,9 @@ mod tests {
             }
         ));
         // A pick at the window's middle would have found nothing there.
-        let mut state = bevy::ecs::system::SystemState::<(Scene, Res<OnlineState>)>::new(
-            app.world_mut(),
-        );
-        let (scene, online) = state.get(app.world());
+        let mut state =
+            bevy::ecs::system::SystemState::<(Scene, Res<OnlineState>)>::new(app.world_mut());
+        let (scene, online) = state.get(app.world()).unwrap();
         assert_eq!(scene.centre(), Some(Vec2::new(200.0, 150.0)));
         let missed = scene.pick(&online, Vec2::new(400.0, 300.0), false).unwrap();
         assert_eq!(missed.choice, Choice::Nothing);

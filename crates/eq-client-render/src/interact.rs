@@ -1,27 +1,29 @@
-//! The Use key. On Titanium (and RoF2, inferred) it casts the program's ray
+//! The Use key. On Titanium (and `RoF2`, inferred) it casts the program's ray
 //! through the centre of the 3D view (read R49-19, checklist 6.609): the
 //! scene's pick does that ([`crate::target::input`]). Here is the older
-//! nearest rule, which EQMac keeps until its path is read, and which the
+//! nearest rule, which `EQMac` keeps until its path is read, and which the
 //! quality-of-life setting "Use Picks Nearest" keeps for anyone who wants
 //! it: whatever is nearest within reach, a door, an item on the ground, or a
 //! world container such as a forge.
 use bevy::prelude::*;
 
 /// Whether the Use key casts the centre ray rather than taking the nearest
-/// door or object. EQMac keeps the nearest rule until its key is read (U6).
+/// door or object. `EQMac` keeps the nearest rule until its key is read (U6).
 pub(super) fn by_ray(
     state: &super::online::OnlineState,
     qol: &eq_client_core::qol::Settings,
 ) -> bool {
-    state.world().generation() != eq_client_core::GameDialect::EqMac
-        && !qol.on(eq_client_core::qol::Fix::UsePicksNearest)
+    match state.world().generation() {
+        eq_client_core::GameDialect::Titanium | eq_client_core::GameDialect::Rof2 => {
+            !qol.on(eq_client_core::qol::Fix::UsePicksNearest)
+        }
+        eq_client_core::GameDialect::EqMac => false,
+    }
 }
 
 /// The options' quality-of-life choices, or their defaults where no options
 /// are kept (a hand-built app).
-pub(super) fn qol(
-    options: Option<&crate::options::OptionsState>,
-) -> eq_client_core::qol::Settings {
+pub(super) fn qol(options: Option<&crate::options::OptionsState>) -> eq_client_core::qol::Settings {
     options.map_or_else(eq_client_core::qol::Settings::default, |options| {
         options.options.qol
     })
@@ -390,8 +392,10 @@ mod tests {
         assert_eq!(nearest(&state), None);
     }
 
+    /// With Use Picks Nearest on, the key takes the nearest item; with it
+    /// off, as by default, this rule leaves the key to the centre ray.
     #[test]
-    fn pressing_f_near_an_item_queues_a_pickup() {
+    fn pressing_f_near_an_item_queues_a_pickup_only_where_use_picks_nearest() {
         let mut state = state();
         crate::online::testing::objects(&mut state, &item_at(3.0));
         let (sender, receiver) = std::sync::mpsc::sync_channel(4);
@@ -409,6 +413,20 @@ mod tests {
             },
             bevy::window::PrimaryWindow,
         ));
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::KeyU);
+        app.update();
+        assert!(receiver.try_recv().is_err());
+        let mut options = crate::options::OptionsState::default();
+        options
+            .options
+            .qol
+            .set(eq_client_core::qol::Fix::UsePicksNearest, true);
+        app.insert_resource(options);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset(KeyCode::KeyU);
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
             .press(KeyCode::KeyU);

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **The Use key now uses what is at the centre of the view, not the nearest door** (read R49-19, checklist 6.609). On Titanium (and RoF2, inferred) it casts the program's ray from the camera through the centre of the 3D view, the same pick a mouse click makes:
+  - The first character the ray hits becomes the target. An NPC also gets what a right click on it does (a merchant, banker or guildmaster opens, a boat asks to pilot, else it is considered). Another player is only targeted.
+  - With no character, a door on the same ray gets one click at the point the ray met it, and the session judges its reach from there, as for a mouse click.
+  - With neither, nothing happens and nothing is said.
+  - **This changes scripts.** Use no longer finds the nearest door or item without facing it. A script's `press("U")` is the real key, so it goes the same way. Turn on the new quality-of-life setting **Use Picks Nearest** (off by default) to keep the old rule: the nearest door, item on the ground or world container within the same reach.
+  - Inferred and labelled: an item on the ground or a world container counts only when the ray hits it, since whether the program's pick reaches them is unread; which actors the program's pick skips is unread, so it skips what a mouse click skips; and a corpse is only targeted.
+  - EQMac keeps the nearest rule until its key is read. The status line's "use the door" hint shows only where Use takes the nearest thing.
 - Answer `/played` as the Titanium program does (read R49-8 a, checklist
   6.490b): the account's entitled time in years (line 0xe24), when the
   character was made (0x32a8) and its played days, hours and minutes

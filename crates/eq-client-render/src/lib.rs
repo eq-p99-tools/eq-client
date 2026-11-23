@@ -1218,8 +1218,10 @@ fn update_hud(
     online: Res<online::OnlineState>,
     players: Query<&Transform, With<Player>>,
     mut labels: Query<(&mut Text, &mut Visibility), With<HudText>>,
-    free: Query<(), With<camera::FreeCamera>>,
-    options: Option<Res<options::OptionsState>>,
+    (free, options): (
+        Query<(), With<camera::FreeCamera>>,
+        Option<Res<options::OptionsState>>,
+    ),
 ) {
     let (Ok(player), Ok((mut label, mut visibility))) = (players.single(), labels.single_mut())
     else {
