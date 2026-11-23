@@ -224,6 +224,17 @@ mod tests {
     }
 
     #[test]
+    fn a_typed_or_scripted_melody_line_waits_for_this_system() {
+        // A script's `slash("melody 1 2")` runs the line as typed.
+        let mut chat = crate::chat::ChatState::default();
+        assert_eq!(
+            crate::chat::client_request_in_scope("/melody 1 2", &mut chat, None),
+            Some(Ok(()))
+        );
+        assert_eq!(chat.melody_asked.as_deref(), Some("1 2"));
+    }
+
+    #[test]
     fn only_a_bard_where_the_server_type_offers_it_plays_a_melody() {
         // Anyone else: nothing sent and nothing said, as the program.
         let (mut app, rx) = bard_app(2, true);

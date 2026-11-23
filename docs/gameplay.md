@@ -330,7 +330,7 @@ while a song plays it only stops the song. Clicking a gem while singing also
 clears the list. Gems 1 to 8 are taken; the official client also takes 9,
 which this client has no gem for, so a 9 is passed over. Elsewhere, and for
 other classes, `/melody` does nothing. Scripts can run it as typed, for
-example `slash("/melody 1 2")`.
+example `slash("melody 1 2")`.
 
 Spellbook operations wait for matching answers one at a time. After 30
 seconds without a matching reply, the session reports the edit as unconfirmed
