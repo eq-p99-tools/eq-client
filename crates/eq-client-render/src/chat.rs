@@ -4332,7 +4332,7 @@ mod tests {
             "/feedback a note",
         ] {
             assert_eq!(
-                submit_social_line(line, &mut chat, &mut online, &outbox, &Settings::default()),
+                submit_typed_line(line, &mut chat, &mut online, &outbox, &Settings::default()),
                 Err(format!(
                     "This client does not take {} that way yet.",
                     line.split_whitespace().next().unwrap()
