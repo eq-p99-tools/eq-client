@@ -6679,3 +6679,38 @@ fn the_players_posture_changes_are_counted_but_not_a_first_standing() {
     assert_eq!(posture(&mut world, PostureState::Sitting), 1);
     assert_eq!(posture(&mut world, PostureState::Standing), 2);
 }
+
+#[test]
+fn a_poison_answer_and_refusal_reach_chat_and_take_nothing_out() {
+    use crate::poisons::PoisonAnswer;
+    let mut world = admitted();
+    let before = world.inventory().clone();
+    for applied in [true, false] {
+        assert_eq!(
+            game(
+                &mut world,
+                WorldEvent::PoisonAnswered(PoisonAnswer {
+                    slot: crate::inventory::InventorySlot(23),
+                    applied,
+                })
+            )
+            .notices,
+            [Notice::PoisonAnswered { applied }]
+        );
+    }
+    // The server's own inventory record takes the poison out.
+    assert_eq!(world.inventory(), &before);
+    let refused = |session_id| WorldEvent::ApplyPoisonRefused {
+        session_id,
+        reason: "That is not a poison".into(),
+        string_id: None,
+    };
+    assert!(game(&mut world, refused(2)).ignored, "another admission's");
+    assert_eq!(
+        game(&mut world, refused(1)).notices,
+        [Notice::ApplyPoisonRefused {
+            reason: "That is not a poison".into(),
+            string_id: None,
+        }]
+    );
+}

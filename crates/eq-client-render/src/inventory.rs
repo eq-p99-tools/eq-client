@@ -491,8 +491,9 @@ fn use_clicked(
 }
 
 /// Right-clicking a carried item: with the skin's bag windows, a bag opens
-/// as in the official client; a book or note asks for its text, food and
-/// drink are eaten or drunk, and anything else shows what it is.
+/// as in the official client; a book or note asks for its text, a poison
+/// goes on the weapon, food and drink are eaten or drunk, and anything else
+/// shows what it is.
 fn right_click(
     slot: InventorySlot,
     online: &super::online::OnlineState,
@@ -511,6 +512,17 @@ fn right_click(
         // Outbox owns posting refusals and shows them in chat. A successful
         // post opens nothing; the book or note waits for the server's text.
         state.read_slot(slot, online, sender);
+    } else if item.rules.item_type == eq_client_core::poisons::POISON_ITEM_TYPE {
+        // A poison goes on the weapon from where it sits; the server's own
+        // record takes it out. That a right-click starts it, at once, is
+        // inferred pending read R49-1 (recording checklist 6.493).
+        let _ = sender.post(online.world(), |stamp| {
+            eq_client_core::ClientCommand::ApplyPoison {
+                session_id: stamp.session_id,
+                slot,
+                created: stamp.created,
+            }
+        });
     } else if eq_client_core::food::Meal::of_item_type(item.rules.item_type).is_some() {
         let _ = sender.post(online.world(), |stamp| {
             eq_client_core::ClientCommand::Consume {

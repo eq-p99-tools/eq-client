@@ -378,6 +378,7 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
             arguments,
         } => chat(official(*string_id, arguments, reason, messages)),
         Notice::ConsumeRefused { reason, string_id }
+        | Notice::ApplyPoisonRefused { reason, string_id }
         | Notice::ItemUseRefused { reason, string_id }
         | Notice::CorpseRefused { reason, string_id }
         | Notice::PetRefused { reason, string_id }
@@ -389,6 +390,17 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         | Notice::SocialRefused { reason, string_id } => {
             chat(official(*string_id, &[], reason, messages))
         }
+        // Our words until read R49-1 names the program's lines (6.493).
+        Notice::PoisonAnswered { applied } => chat(official(
+            None,
+            &[],
+            if *applied {
+                "You apply the poison."
+            } else {
+                "You failed to apply the poison."
+            },
+            messages,
+        )),
         // The official client always says where `/autosplit` left it (R8).
         Notice::AutoSplit(on) => chat(official(
             Some(if *on { 0x338d } else { 0x338e }),

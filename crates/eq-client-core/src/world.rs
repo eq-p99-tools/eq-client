@@ -1554,6 +1554,30 @@ impl ClientWorld {
                     news.ignored = true;
                 }
             }
+            WorldEvent::ApplyPoisonRefused {
+                session_id,
+                reason,
+                string_id,
+            } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices.push(Notice::ApplyPoisonRefused {
+                        reason: reason.clone(),
+                        string_id: *string_id,
+                    });
+                } else {
+                    news.ignored = true;
+                }
+            }
+            // The server's own inventory record takes the poison out.
+            WorldEvent::PoisonAnswered(answer) => {
+                if self.in_world() {
+                    news.notices.push(Notice::PoisonAnswered {
+                        applied: answer.applied,
+                    });
+                } else {
+                    news.ignored = true;
+                }
+            }
             // A book or note to read, and a request the session would not send.
             WorldEvent::BookText(text) => {
                 if self.in_world() && text.window(self.generation).is_some() {

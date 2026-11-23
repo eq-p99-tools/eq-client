@@ -200,3 +200,66 @@ fn queued_readable_projection_and_stale_inventory_do_not_submit_reads() {
     );
     assert!(online.world().reading().is_none());
 }
+
+fn poisoned(offered: bool) -> OnlineState {
+    let mut online = OnlineState::new(true);
+    testing::news(
+        &mut online,
+        [WorldEvent::Entered {
+            capabilities: if offered {
+                vec![Capability::Inventory, Capability::ApplyingPoison]
+            } else {
+                vec![Capability::Inventory]
+            },
+            choices: Vec::new(),
+            session_id: 7,
+            zone: "qeytoqrg".into(),
+            player: Box::new(testing::player(9)),
+            far_clip: None,
+            spell_landing_flag: None,
+            zone_id: 0,
+        }],
+    );
+    testing::connect(&mut online, true);
+    let mut vial = crate::preview::items().into_iter().next().unwrap();
+    vial.slot = InventorySlot(23);
+    vial.bag_slots = 0;
+    vial.book = None;
+    vial.rules.item_type = eq_network_game::poisons::POISON_ITEM_TYPE;
+    testing::inventory(&mut online, InventoryUpdate::Snapshot(vec![vial]));
+    online
+}
+
+#[test]
+fn a_poison_right_clicked_goes_on_from_its_slot_and_stays_until_the_server_says() {
+    let online = poisoned(true);
+    let before = online.world().inventory().clone();
+    let (tx, rx) = std::sync::mpsc::sync_channel(2);
+    let sender = Outbox::new(Some(tx));
+    let mut shown = Shown::default();
+    click(&online, &sender, &mut shown);
+    assert!(matches!(
+        rx.try_recv().unwrap(),
+        ClientCommand::ApplyPoison {
+            session_id: 7,
+            slot: InventorySlot(23),
+            ..
+        }
+    ));
+    assert!(rx.try_recv().is_err());
+    assert_eq!(sender.take_refused(), []);
+    assert_eq!(online.world().inventory(), &before);
+}
+
+#[test]
+fn a_poison_on_a_server_without_it_is_refused_in_chat() {
+    let online = poisoned(false);
+    let (tx, rx) = std::sync::mpsc::sync_channel(2);
+    let sender = Outbox::new(Some(tx));
+    click(&online, &sender, &mut Shown::default());
+    assert!(rx.try_recv().is_err());
+    assert_eq!(
+        sender.take_refused(),
+        [Refusal::Unavailable(Capability::ApplyingPoison)]
+    );
+}

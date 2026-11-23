@@ -454,6 +454,7 @@ fn controlled_gm_and_chat_queue_the_originating_admission() {
                 tongue: eq_client_core::Tongue::COMMON,
                 session_id: 7,
                 message: OutboundChat::Say(expected.into()),
+                tongue: eq_client_core::Tongue::COMMON,
             }
         );
     }
