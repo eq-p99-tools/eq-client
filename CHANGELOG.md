@@ -4,6 +4,13 @@
 
 - Scripts can click spawns, ground objects and doors in the world by id (checklist 6.587), since a script may do whatever the player can (Adam, 11-23). `click("spawn", admission, id, revision)` targets a spawn (two of one name included), `right_click` loots, trades, boards or considers it without changing the target, `click("object", admission, drop_id)` picks up an item or opens a world container, and `click("door", admission, id)` makes a door's two clicks. Each click goes through the scene's own pick, with the script's pointer as the cursor: it acts only where the pick names that same thing right now, so a thing behind a wall, off screen or under a window is refused and nothing is sent. The report's surroundings line gives the admission and each nearby spawn's click tuple. A run that stops mid-click hands the scene back the real pointer the next frame.
 
+- The player chooses how long a script run may go, on every server (checklist 6.594; Adam, 11-23: "If people want to script indefinitely, let them").
+  - **Choices:** the default keeps today's bounds (15 minutes, 5,000 statements, 500 actions, loops of 100). A number of minutes from 1 to 1440 caps the time and lifts those counts, and no limit lifts them all.
+  - **Where it's set:** only the workbench's length selector, which starts at the default on each launch, and the new `--script-run-length=default|MINUTES|none`. No statement or file line can set or raise it.
+  - **What stays:** every length keeps the same action, chat and server paces, per-step waits, input rules and local-only `gm` fixtures. Stop always ends the run on the next frame and releases held input. The history stays at 64 entries.
+  - **Loops:** `while condition:` may leave out `limit=`. Under the default length its 5,000 statements still bound it. `range()` takes counts past 100 under a longer length.
+  - **Execution tab:** the status line shows the time so far and the length chosen.
+
 - Scripts can read the gem bar and the time (checklist 6.592, O1b). `gem1.spell` to `gem8.spell` name each gem's spell, and `gem1.ready` to `gem8.ready` say whether the gem is lit by the gem bar's own rule. `time.hour`, `time.minute`, `time.day`, `time.month` and `time.year` read what `/time` tells, with the installed client's hour, and are unknown where `/time` says the time can't be told.
 
 - Scripts can order and delete spellbook entries (checklist 6.588): `click("book_edit", "earlier" | "later" | "delete" | "confirm" | "cancel")` presses the spellbook's own buttons for the chosen row. A button the session doesn't offer (deletion on P99) is refused with the greyed button's reason, and nothing is sent.

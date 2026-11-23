@@ -67,6 +67,10 @@ struct Workbench {
     /// Rows the Execution source is scrolled from following the next line,
     /// negative towards the top; the run's next step returns it to 0.
     source_scroll: isize,
+    /// The run length the next Run uses: the launch's
+    /// `--script-run-length`, the default unless given, until the player
+    /// steps it with the selector.
+    run_length: crate::script::RunLength,
 }
 
 impl Workbench {
@@ -142,7 +146,10 @@ impl Workbench {
 /// Installs the workbench on every launch, independent of CLI script options.
 pub(crate) fn install(app: &mut App) {
     let config = &app.world().resource::<crate::ViewerSettings>().0;
-    let mut workbench = Workbench::default();
+    let mut workbench = Workbench {
+        run_length: config.script_run_length,
+        ..Workbench::default()
+    };
     workbench.library.root = config
         .eq_directory
         .as_ref()
@@ -192,6 +199,7 @@ pub(crate) fn install(app: &mut App) {
                 poll,
                 library::draw,
                 view::refresh,
+                view::length_label,
                 view::scroll,
                 library::scroll,
             )
@@ -392,6 +400,21 @@ fn controls(
                 }
             }
             Action::Save => state.save(),
+            Action::Length => {
+                state.run_length = state.run_length.next();
+                state.message = match state.run_length {
+                    crate::script::RunLength::Default => {
+                        "Runs keep the default bounds: 15 minutes, 5,000 statements, 500 actions and loops of 100.".into()
+                    }
+                    crate::script::RunLength::Unlimited => {
+                        "Runs go until they end or you press Stop. Paces, waits and the server's rules still apply.".into()
+                    }
+                    length @ crate::script::RunLength::Minutes(_) => format!(
+                        "Runs may go {} with no count of statements, actions or loops. Paces and waits still apply.",
+                        length.span()
+                    ),
+                };
+            }
             Action::Run | Action::RunToCursor => match state.document.program() {
                 Ok(program) if program.statement_count() == 0 => {
                     state.message = "Add a statement before running.".into();
@@ -423,6 +446,7 @@ fn controls(
                     };
                     state.run_target = None;
                     let script = Script::for_viewer(program, &settings.0, online.enabled)
+                        .run_length(state.run_length)
                         .with_breakpoints(dots, run_to);
                     commands.insert_resource(script.status().clone());
                     commands.insert_resource(RunControl::default());
@@ -503,7 +527,13 @@ mod tests {
             &Children,
         )>();
         let mut seen = Vec::new();
+        let mut lengths = 0;
         for (action, tooltip, color, children) in buttons.iter(app.world()) {
+            // The run length selector is text: it names the length.
+            if matches!(action, view::Action::Length) {
+                lengths += 1;
+                continue;
+            }
             let usable = matches!(action, view::Action::Run | view::Action::RunToCursor);
             assert_eq!(
                 color.0,
@@ -529,6 +559,7 @@ mod tests {
             seen.push(tooltip.0.clone());
         }
         seen.sort();
+        assert_eq!(lengths, 2, "a run length selector beside each set");
         // One set over the editor's script and one over the run's source.
         assert_eq!(
             seen,

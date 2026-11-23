@@ -60,7 +60,7 @@ else:
     report("mana_empty_or_unavailable")
 ```
 
-`for i in range(count):` evaluates its integer count once and runs up to 100 iterations. Zero skips the block. The loop variable counts from 0, can only be read, and exists only inside its loop; write `for _ in range(count):` when the body doesn't need it. `while condition, limit=N:` checks a boolean at the start of each iteration, with a required literal cap `N` from 1 to 100. The Execution tab records when a while loop reaches its cap. Add a `wait` when polling for an incoming change. `break` leaves the innermost loop and `continue` starts its next iteration.
+`for i in range(count):` evaluates its integer count once and runs that many iterations: up to 100 under the default run length, any count under a longer one. Zero skips the block. The loop variable counts from 0, can only be read, and exists only inside its loop; write `for _ in range(count):` when the body doesn't need it. `while condition:` checks a boolean at the start of each iteration. `while condition, limit=N:` also stops after `N` iterations, a literal from 1 to 100, and the Execution tab records when it reaches that cap. A while loop without a cap runs until its condition is false, a `break`, or the run's length ends it: under the default length its 5,000 statements do. Add a `wait` when polling for an incoming change. `break` leaves the innermost loop and `continue` starts its next iteration.
 
 ```eqscript
 attempts: int = 0
