@@ -43,7 +43,7 @@ pub use items::ItemCache;
 pub use landings::Landing;
 pub use link::Link;
 pub use motions::{CastDone, Motion};
-pub use notice::{ListingNotice, Notice, Party};
+pub use notice::{ChannelLine, ListingNotice, Notice, Party};
 pub use raid::{Raid, RaidNotice, RaidRank};
 pub use target::Target;
 pub use tracking::{TrackWindow, track_color};
@@ -333,6 +333,10 @@ pub struct ClientWorld {
     popup: Option<crate::popups::PopupOffer>,
     popup_serial: u64,
     player_inspection: Option<crate::inspection::PlayerInspection>,
+    /// The chat server channels the character is on, in slot order, as the
+    /// chat server's last list named them; kept across zones until the link
+    /// ends or the character leaves the world.
+    chat_channels: Vec<String>,
     /// The book or note open to read.
     reading: Option<crate::books::BookText>,
     /// The tradeskill container whose combine waits for the server.
@@ -600,12 +604,21 @@ impl ClientWorld {
             ConsentKind::Translocate => {
                 let _ = self.translocate.take_if(|current| current.id == id);
             }
+            // A duel's prompt is its own change's (eq-client duel PR); none
+            // is kept here yet.
+            ConsentKind::Duel => {}
         }
     }
 
     /// The player closed the book or note they were reading.
     pub fn close_reading(&mut self) {
         self.reading = None;
+    }
+
+    /// The chat server channels the character is on, in slot order: the
+    /// first is `/1`.
+    pub fn chat_channels(&self) -> &[String] {
+        &self.chat_channels
     }
 
     /// Puts away the received equipment report.
@@ -964,7 +977,20 @@ impl ClientWorld {
             // to a player, or the petitions in the queue, for a front end that
             // shows them. The server's regeneration tick waits for its own.
             // Installed spell providers consume table facts before admission staging.
-            WorldEvent::SpellTable(_)
+            // A surname's answer, a poison's, the server's filters, a
+            // duel's offer and a report to the staff are shown by their own
+            // changes (the eq-client PRs for checklist 6.507, 6.493, 6.494,
+            // 6.492 and the reports), which land apart from this one.
+            WorldEvent::ReportSent { .. }
+            | WorldEvent::ReportRefused { .. }
+            | WorldEvent::SurnameAnswer { .. }
+            | WorldEvent::PoisonAnswered { .. }
+            | WorldEvent::ApplyPoisonRefused { .. }
+            | WorldEvent::ServerFiltersKept { .. }
+            | WorldEvent::ServerFiltersRefused { .. }
+            | WorldEvent::DuelOffer { .. }
+            | WorldEvent::DuelRefused { .. }
+            | WorldEvent::SpellTable(_)
             | WorldEvent::ChatServer(_)
             | WorldEvent::ZoneUnavailable { .. }
             | WorldEvent::ServerTick(_)
@@ -1399,6 +1425,24 @@ impl ClientWorld {
             // emote or assist the session would not send.
             WorldEvent::Roll(roll) => news.notices.push(Notice::Roll(roll.clone())),
             WorldEvent::Assisted(answer) => self.assisted = answer.target,
+            // The chat server's channels (recording checklist 6.509).
+            WorldEvent::Channel(event) => self.channel_event(event, news),
+            WorldEvent::ChannelLink(link) => match link {
+                eq_network_game::chat_server::ChannelLink::Up => {}
+                eq_network_game::chat_server::ChannelLink::Lost { .. } => {
+                    self.chat_channels.clear();
+                    news.notices.push(Notice::Channel(ChannelLine::Lost));
+                }
+            },
+            WorldEvent::ChatChannelRefused { session_id, reason } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices.push(Notice::ChannelRefused {
+                        reason: reason.clone(),
+                    });
+                } else {
+                    news.ignored = true;
+                }
+            }
             WorldEvent::SocialRefused {
                 session_id,
                 reason,
@@ -1755,6 +1799,51 @@ impl ClientWorld {
             })
     }
 
+    /// Keeps the chat server's list of joined channels, and tells the rest
+    /// as lines. The server's text is untrusted: its item links are read as
+    /// any chat's, and it prints through the ordinary chat path.
+    fn channel_event(
+        &mut self,
+        event: &eq_network_game::chat_server::ChannelEvent,
+        news: &mut Changes,
+    ) {
+        use eq_network_game::chat_server::ChannelEvent;
+        let line = match event {
+            ChannelEvent::Joined { channels } => {
+                self.chat_channels.clone_from(channels);
+                return;
+            }
+            ChannelEvent::Message {
+                channel,
+                sender,
+                text,
+            } => ChannelLine::Message {
+                slot: self
+                    .chat_channels
+                    .iter()
+                    .position(|joined| joined.eq_ignore_ascii_case(channel))
+                    .map(|index| index + 1),
+                channel: channel.clone(),
+                sender: sender.clone(),
+                text: eq_network_game::chat::message(text.as_bytes(), false).into(),
+            },
+            ChannelEvent::Notice { text } => {
+                ChannelLine::Notice(eq_network_game::chat::message(text.as_bytes(), false).into())
+            }
+            ChannelEvent::MemberJoined { channel, name } => ChannelLine::Member {
+                channel: channel.clone(),
+                name: name.clone(),
+                joined: true,
+            },
+            ChannelEvent::MemberLeft { channel, name } => ChannelLine::Member {
+                channel: channel.clone(),
+                name: name.clone(),
+                joined: false,
+            },
+        };
+        news.notices.push(Notice::Channel(line));
+    }
+
     /// Forgets what the reason makes stale, and says so.
     fn reset(&mut self, reason: Reset) -> Changes {
         self.zone.boat_control = crate::boats::ControlState::Unknown;
@@ -1837,6 +1926,8 @@ impl ClientWorld {
                 self.choices.clear();
                 self.player = None;
                 self.connected = false;
+                // A camp ends the chat server link.
+                self.chat_channels.clear();
             }
             Reset::Lost {
                 ended,
@@ -1869,6 +1960,7 @@ impl ClientWorld {
             self.characters = None;
             self.pending_transfer = None;
             self.inventory = Inventory::default();
+            self.chat_channels.clear();
             self.forget_zone();
         }
     }

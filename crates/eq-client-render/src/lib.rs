@@ -48,6 +48,7 @@ mod character_create;
 mod character_delete;
 mod character_select;
 mod chat;
+mod chat_channels;
 mod clicks;
 mod coins;
 mod combat;

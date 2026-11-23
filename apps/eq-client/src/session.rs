@@ -193,7 +193,9 @@ impl SessionWorker {
                         enqueue(&sender, &worker_cancel, WorldUpdate::SpellTable(fact))?;
                     }
                     let update = match event {
-                        ClientEvent::World(WorldEvent::SpellTable(_)) => None,
+                        // What the session dropped or could not read is the
+                        // gap log's client change's to record (6.500).
+                        ClientEvent::World(WorldEvent::SpellTable(_)) | ClientEvent::Gap(_) => None,
                         ClientEvent::World(event) => {
                             observe_world(&event, settings.as_deref());
                             Some(WorldUpdate::Game(event))

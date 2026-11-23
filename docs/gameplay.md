@@ -435,6 +435,46 @@ client's words, such as "You yell for help." or "Use /doability 1 through
 
 The pause order follows the [EverQuest social hotbutton guide](https://www.everquest.com/news/imported-eq-enus-51004).
 
+## Chat server channels
+
+On a stock EQEmu server that runs its chat server (`ucs`), the session opens a
+link to it when the world offers one, and these commands go to it:
+
+- `/join channel` joins a channel. Several can be given with commas, and a
+  channel can take a password as `channel:password`.
+- `/leave channel` and `/leaveall` leave one channel or all of them.
+- `/list` lists the channels you are on, and `/list channel` lists who is on
+  a channel.
+- `/announce` (or `/announce on` and `/announce off`) asks to be told when
+  someone joins or leaves a channel.
+- `/1` to `/10` followed by text say it on the channel in that slot. The
+  first channel joined is `/1`.
+- `/chat words` sends the chat server's own command words as typed. The
+  owner and moderator words (passwords, invitations, kicks, moderation) are
+  passed through unchecked, and the server judges them.
+
+These commands work from the chat line, socials and hotbuttons alike, and
+they are as free as `/say`. There is no send limit for any chat yet.
+
+A line on a channel reads `Name tells channel:2, 'text'`. The slot comes from
+the last list of joined channels the server sent. Before any list names the
+channel, the line shows the channel's name alone. A member who joins or leaves
+reads `Name has entered channel trade.` or `Name has left channel trade.`, and
+the chat server's own lines print as it sends them. The client remembers the
+joined list across zones, and forgets it when the link ends or you camp.
+
+When the server offers no chat server, or the link has not come up, a command
+says "You are not connected to the chat server." and nothing is sent. When
+the link ends, the chat says "The chat server link has ended." There is no
+reconnect: a new link only comes from the world's next offer. `/autojoin`,
+the list the official client joins at login, is not kept yet.
+
+These lines show in the System tab and are not a chat filter of their own. Every
+wording, colour and slot form above is this client's and is inferred; the
+official client's are pending read R49-12 (recording checklist 6.509).
+Project 1999, Quarm and TAKP open no link: on P99, chat channels are withheld
+until there has been an attended session there.
+
 ## Item links in chat
 
 On Titanium, Ctrl+right-click a displayed inventory item to insert a link into

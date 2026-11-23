@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Join chat server channels on stock EQEmu (checklist 6.509). `/join`,
+  `/leave`, `/leaveall`, `/list`, `/announce`, `/1` to `/10` and `/chat`
+  send the chat server's own words as `ClientCommand::ChatChannel` where
+  the session offers `Capability::ChatChannels`. Elsewhere they say "You are
+  not connected to the chat server." They work typed, in socials and on
+  hotbuttons. Channel messages print through the ordinary chat path with
+  their item links, as `Name tells channel:N, 'text'`. The slot comes from
+  the server's last joined list, kept across zones, and before a list names
+  the channel the line shows the channel's name alone. Member joins and
+  leaves, the server's own lines, a lost link and refusals print too.
+  Every wording and form is this client's, inferred until read R49-12.
+  `/autojoin` is not built.
+  Repins eq-network to d0c75e2 (#341 with #327 to #340). Their poison,
+  filters, duel, surname, report and gap events are passed over here until
+  their own client changes land. Outgoing chat names `Tongue::COMMON`.
+
 - Add RoF2 as a placeholder generation, following eq-network's
   (`GameDialect::Rof2`, `ServerProtocol::EqEmuRof2`). `InstalledClient::Rof2`
   is in `InstalledClient::ALL` but has no marker files, so no folder is ever

@@ -6,6 +6,7 @@ use super::{
     hud::messages::Messages,
     trade::coin_text,
 };
+use eq_client_core::chat::Source;
 use eq_client_core::{
     CampStatus,
     bind_wound::{BindWoundUpdate, strings},
@@ -296,6 +297,52 @@ fn bind_wound(update: &BindWoundUpdate, messages: Option<&Messages>) -> Option<S
     })
 }
 
+/// How a line of the chat server's channels reads. Every form is this
+/// client's, inferred until read R49-12 b: a message names its sender, then
+/// the channel and its slot in the last list of joined channels, or the
+/// channel alone before a list names it. The server's words keep their item
+/// links and print as any server chat does.
+fn channel_line(line: &eq_client_core::world::ChannelLine) -> Said {
+    use eq_client_core::chat::RichText;
+    use eq_client_core::world::ChannelLine;
+    match line {
+        ChannelLine::Message {
+            channel,
+            slot,
+            sender,
+            text,
+        } => {
+            let head = match slot {
+                Some(slot) => format!("{sender} tells {channel}:{slot}, '"),
+                None => format!("{sender} tells {channel}, '"),
+            };
+            let mut words = RichText::from(format!("{head}{}'", text.text));
+            words.insert_links(text, head.len());
+            Said {
+                words,
+                source: Source::Server,
+                message_type: None,
+            }
+        }
+        ChannelLine::Notice(text) => Said {
+            words: text.clone(),
+            source: Source::Server,
+            message_type: None,
+        },
+        ChannelLine::Member {
+            channel,
+            name,
+            joined: true,
+        } => Said::own(format!("{name} has entered channel {channel}.")),
+        ChannelLine::Member {
+            channel,
+            name,
+            joined: false,
+        } => Said::own(format!("{name} has left channel {channel}.")),
+        ChannelLine::Lost => Said::own("The chat server link has ended."),
+    }
+}
+
 /// Lines said in the chat.
 fn in_chat(lines: Vec<Said>) -> Vec<(Place, Said)> {
     lines.into_iter().map(|line| (Place::Chat, line)).collect()
@@ -429,11 +476,15 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
                 }
             })
         }
+        Notice::Channel(line) => chat(channel_line(line)),
+        Notice::ChannelRefused { reason } => chat(Said::own(format!("{reason}."))),
         Notice::ConsentExpired(kind) => {
             use eq_client_core::confirmations::ConsentKind;
             chat(match kind {
                 ConsentKind::Resurrection => "The resurrection offer expired.".into(),
                 ConsentKind::Translocate => "The translocate offer expired.".into(),
+                // The duel's own change words its prompt's end.
+                ConsentKind::Duel => "The duel offer expired.".into(),
             })
         }
         // eqstr 1406, where the installation has it.
