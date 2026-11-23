@@ -18,6 +18,7 @@ use eq_client_core::{
 use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 
 mod draft;
+pub(crate) use draft::MAX_TEXT;
 mod drag;
 mod groups;
 #[cfg(test)]
@@ -1918,8 +1919,10 @@ fn contacts_command(
     Ok(())
 }
 
-/// Run one checked social line through ordinary local and game dispatch.
-pub(super) fn submit_social_line(
+/// Run one line exactly as the chat line runs a typed one: a social's line
+/// or a script's `slash` step, so each meets the same rules (paces, queries,
+/// camp and departures) as the keyboard.
+pub(super) fn submit_typed_line(
     line: &str,
     chat: &mut ChatState,
     online: &mut super::online::OnlineState,
@@ -2955,8 +2958,7 @@ mod tests {
             "/split 0 0 0 1",
             "/follow",
         ] {
-            submit_social_line(line, &mut chat, &mut online, &scoped, &Settings::default())
-                .unwrap();
+            submit_typed_line(line, &mut chat, &mut online, &scoped, &Settings::default()).unwrap();
         }
         assert!(
             chat.requested_target.is_some()
@@ -2966,7 +2968,7 @@ mod tests {
         );
         // Replacing just the guild intent through the original native outbox
         // leaves that one ordinary, even while the scoped facade still exists.
-        submit_social_line(
+        submit_typed_line(
             "/guildmotd native",
             &mut chat,
             &mut online,
