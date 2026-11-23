@@ -38,6 +38,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<buffs::BuffPress>()
         .init_resource::<hud::action_bar::ActionRequests>()
         .init_resource::<combat::CombatState>()
+        .init_resource::<crate::corpses::HiddenCorpses>()
         .init_resource::<combat_text::CombatText>()
         .init_resource::<weather::Field>()
         .init_resource::<crate::breath::State>()
@@ -209,6 +210,8 @@ pub(super) fn schedule(app: &mut App) {
                 who::zone_list,
                 whereabouts::answers,
                 crate::slash::answers,
+                crate::corpses::run,
+                inventory::auto::run,
                 (contacts::answers, contacts::persist).chain(),
                 abilities::choices::persist,
                 (guild::invitations, guild::commands, sharing::commands),

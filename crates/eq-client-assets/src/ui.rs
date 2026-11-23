@@ -742,6 +742,18 @@ impl InstalledClient {
         }
     }
 
+    /// Whether `/autoinventory`, `/hidecorpses` and plain `/assist`'s
+    /// lines run as Titanium's handlers do (read R46: 0x47477f and
+    /// 0x4bcf0b, 0x469b01, 0x46abc4). The Mac-era handlers are unread, so
+    /// that client keeps this client's earlier answers.
+    #[must_use]
+    pub const fn runs_r46_forms(self) -> bool {
+        match self {
+            Self::Titanium => true,
+            Self::EqMac => false,
+        }
+    }
+
     /// Whether the social emote commands (`/smile`, `/bow` and the rest)
     /// run as Titanium's worker runs them (0x49e0c1, reads R47 to R47c).
     /// The Mac-era client's are unread, so they keep this client's earlier

@@ -1,4 +1,5 @@
 //! Compact inventory drawer with validated slot moves and local item inspection.
+pub(crate) mod auto;
 pub(super) mod colors;
 pub(super) mod cursor;
 pub(crate) mod destruction;

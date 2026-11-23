@@ -187,3 +187,72 @@ fn the_answer_system_sends_once_and_says_the_line() {
         "You yell for help."
     );
 }
+
+#[test]
+fn a_plain_assist_takes_the_target_and_says_two_lines_without_one() {
+    assert_eq!(Asked::typed("/assist"), Some(Asked::Assist));
+    assert_eq!(Asked::typed("/ASSIST "), Some(Asked::Assist));
+    // An option, a main-assist word or a name is the chat's own form.
+    assert_eq!(Asked::typed("/assist Friend"), None);
+    let mut app = App::new();
+    let (queue, received) = std::sync::mpsc::sync_channel(4);
+    app.insert_resource(admitted(vec![Capability::Assisting]))
+        .insert_resource(Outbox::new(Some(queue)))
+        .init_resource::<ChatState>()
+        .add_systems(Update, answers);
+    app.world_mut().resource_mut::<ChatState>().slash = Some(Asked::Assist);
+    app.update();
+    assert!(received.try_recv().is_err());
+    let lines: Vec<String> = app
+        .world()
+        .resource::<ChatState>()
+        .history
+        .lines(eq_client_core::chat::ChatTab::All)
+        .into_iter()
+        .map(|(_, line)| line.message.text.clone())
+        .collect();
+    assert_eq!(lines, [UNASSISTED[0].1, UNASSISTED[1].1]);
+    app.world_mut()
+        .resource_mut::<OnlineState>()
+        .select_target(Some(9));
+    app.world_mut().resource_mut::<ChatState>().slash = Some(Asked::Assist);
+    app.update();
+    assert!(matches!(
+        received.try_recv().unwrap(),
+        ClientCommand::Assist {
+            session_id: 5,
+            spawn_id: 9
+        }
+    ));
+}
+
+#[test]
+fn the_mac_era_client_keeps_its_earlier_no_target_answer() {
+    let lines = unassisted(
+        eq_client_assets::ui::InstalledClient::EqMac,
+        &Messages::default(),
+    );
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0].words.text, NO_TARGET);
+}
+
+#[test]
+fn a_server_without_assisting_keeps_the_answers_from_before_r46() {
+    let mut app = App::new();
+    let (queue, received) = std::sync::mpsc::sync_channel(4);
+    app.insert_resource(admitted(Vec::new()))
+        .insert_resource(Outbox::new(Some(queue)))
+        .init_resource::<ChatState>()
+        .add_systems(Update, answers);
+    let ask = |app: &mut App| {
+        app.world_mut().resource_mut::<ChatState>().slash = Some(Asked::Assist);
+        app.update();
+        assert!(received.try_recv().is_err());
+        app.world().resource::<ChatState>().newest()
+    };
+    assert_eq!(ask(&mut app), NO_TARGET);
+    app.world_mut()
+        .resource_mut::<OnlineState>()
+        .select_target(Some(9));
+    assert_eq!(ask(&mut app), crate::outbox::UNAVAILABLE);
+}
