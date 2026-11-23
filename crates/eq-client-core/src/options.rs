@@ -94,6 +94,9 @@ impl Toggle {
         Self::LookSpring,
         Self::Log,
         Self::Sound,
+        // Music and Environment Sounds are listed as the official client's
+        // own, but their official names, form and defaults are unread
+        // [inferred, item 6.503, pending R49-7 c].
         Self::Music,
         Self::EnvironmentSounds,
         Self::SpellEffects,

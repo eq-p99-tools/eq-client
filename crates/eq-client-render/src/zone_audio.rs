@@ -44,6 +44,9 @@ const MAX_SOUNDFONT: u64 = 512 * 1024 * 1024;
 const DEFAULT_FADE_MS: i32 = 1000;
 /// Below this share of daylight the night ids play [I, pending R49-7 a].
 const NIGHT_BELOW: f32 = 0.5;
+/// The longest an emitter's one-shot keeps its voice, in seconds, as cues
+/// are bounded; this client's own bound.
+const ONE_SHOT_SECONDS: f32 = 30.0;
 
 /// One of the zone's music sequences, played on the player's sound font.
 #[derive(Asset, TypePath, Clone)]
@@ -230,6 +233,9 @@ pub(super) struct ZoneVoice {
     emitter: usize,
     name: String,
     looping: bool,
+    /// When a one-shot gives its voice back at the latest, in seconds since
+    /// the app started.
+    until: f32,
 }
 
 #[cfg(test)]
@@ -241,6 +247,7 @@ impl ZoneVoice {
             emitter,
             name: format!("emitter{emitter}.wav"),
             looping: true,
+            until: f32::INFINITY,
         }
     }
 }
@@ -476,16 +483,19 @@ pub(super) fn update(
             .iter()
             .find(|(index, name, _)| *index == voice.emitter && *name == voice.name)
         {
-            Some((_, _, loudness)) => {
+            Some((_, _, loudness)) if now <= voice.until => {
                 playing.insert(voice.emitter);
                 if let Some(mut sink) = sink {
                     sink.set_volume(Volume::Linear(loudness * volume));
                 }
             }
-            // A looping voice stops when it is no longer heard; a one-shot
-            // plays out.
-            None if voice.looping => commands.entity(entity).try_despawn(),
-            None => {
+            // A looping voice stops when it is no longer heard, and every
+            // voice at once when the emitters are turned off; a one-shot
+            // otherwise plays out, within its bound.
+            _ if voice.looping || volume <= 0.0 || now > voice.until => {
+                commands.entity(entity).try_despawn();
+            }
+            _ => {
                 playing.insert(voice.emitter);
             }
         }
@@ -514,6 +524,11 @@ pub(super) fn update(
                 emitter: *index,
                 name: (*name).to_owned(),
                 looping,
+                until: if looping {
+                    f32::INFINITY
+                } else {
+                    now + ONE_SHOT_SECONDS
+                },
             },
             AudioPlayer::new(source),
             PlaybackSettings {
