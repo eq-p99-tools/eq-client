@@ -4838,14 +4838,6 @@ mod tests {
     fn a_typed_line_sends_a_report_to_the_staff() {
         use eq_client_core::reports::BugCategory;
         let (mut app, receiver) = slash_app(true);
-        let last_line = |app: &App| {
-            app.world()
-                .resource::<ChatState>()
-                .history
-                .lines(ChatTab::All)
-                .last()
-                .map(|(_, line)| line.message.text.clone())
-        };
         send_typed(&mut app, "/petition  I am stuck in the wall. ");
         assert!(matches!(
             receiver.try_recv(),
@@ -4870,7 +4862,12 @@ mod tests {
         // A line with nothing to say sends nothing, and the Titanium
         // program's line for it is queued, in this client's words where the
         // installation lacks it. Empty feedback says nothing.
-        for line in ["/petition", "/guidehelp   ", "/bugreport pathing:", "/feedback"] {
+        for line in [
+            "/petition",
+            "/guidehelp   ",
+            "/bugreport pathing:",
+            "/feedback",
+        ] {
             send_typed(&mut app, line);
             assert!(receiver.try_recv().is_err(), "{line}");
         }

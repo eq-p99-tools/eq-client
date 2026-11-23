@@ -371,4 +371,61 @@ mod tests {
             (BugCategory::Other, "pathing the guard")
         );
     }
+
+    /// A Titanium world with the player admitted, and a stamp for it.
+    fn admitted() -> (crate::online::OnlineState, crate::outbox::Stamp) {
+        let (sender, _receiver) = std::sync::mpsc::sync_channel(4);
+        let mut online = crate::online::OnlineState::new(true);
+        crate::online::testing::admit(&mut online, 1, crate::online::testing::player(1));
+        let outbox = crate::outbox::Outbox::new(Some(sender));
+        let stamp = outbox.stamp(online.world()).unwrap();
+        (online, stamp)
+    }
+
+    #[test]
+    fn with_typed_reports_off_a_bug_report_and_feedback_send_nothing() {
+        let (online, stamp) = admitted();
+        let world = online.world();
+        assert_eq!(world.generation(), GameDialect::Titanium);
+        for asked in [
+            Asked::Bug("the guard walks into the wall".into()),
+            Asked::Feedback("a note".into()),
+        ] {
+            let refused = answer(&asked, world, stamp, false).unwrap_err();
+            assert!(refused.contains("Typed Reports"), "{refused}");
+            assert!(matches!(
+                answer(&asked, world, stamp, true),
+                Ok(Answer::Send(..))
+            ));
+        }
+        // A petition is the program's own text form either way.
+        assert!(matches!(
+            answer(&Asked::Petition("I am stuck".into()), world, stamp, false),
+            Ok(Answer::Send(..))
+        ));
+    }
+
+    #[test]
+    fn a_sent_report_carries_the_programs_echo_by_its_id() {
+        let (online, stamp) = admitted();
+        let world = online.world();
+        let echo = |asked: Asked| match answer(&asked, world, stamp, true) {
+            Ok(Answer::Send(_, echo)) => echo,
+            other => panic!("{other:?}"),
+        };
+        let petition = echo(Asked::Petition("I am stuck".into())).unwrap();
+        assert_eq!(
+            (petition.id, petition.colour, petition.arguments.as_slice()),
+            (PETITION_SENT, 0, ["I am stuck".to_owned()].as_slice())
+        );
+        let guide = echo(Asked::GuideHelp("where is the bank".into())).unwrap();
+        assert_eq!((guide.id, guide.colour), (GUIDE_SENT, 0));
+        let bug = echo(Asked::Bug("pathing: the guard".into())).unwrap();
+        assert_eq!((bug.id, bug.colour), (BUG_SENT, PROGRAM_COLOUR));
+        assert!(bug.arguments.is_empty());
+        // The program's feedback window prints nothing once it sends.
+        assert_eq!(echo(Asked::Feedback("a note".into())), None);
+        // Without an installation's lines, this client's words stand in.
+        assert_eq!(bug.said(None).words.text, "Your bug report was sent.");
+    }
 }

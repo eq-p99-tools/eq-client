@@ -653,18 +653,8 @@ impl Panels<'_> {
         if let eq_client_core::world::Notice::ChatRefused { reason } = notice {
             chat.paced = Some((std::time::Instant::now(), reason.clone()));
         }
-        // A typed report's echo stands for this client's own line, where the
-        // program has one (read R49-23); a refusal drops it.
-        match notice {
-            eq_client_core::world::Notice::ReportSent(_) => {
-                if let Some(echo) = chat.report_echo.take() {
-                    chat.history
-                        .push(super::chat::system_line(echo.said(messages)));
-                    return;
-                }
-            }
-            eq_client_core::world::Notice::ReportRefused { .. } => chat.report_echo = None,
-            _ => {}
+        if echoed(notice, messages, chat) {
+            return;
         }
         for (place, said) in super::notices::wording(notice, messages) {
             match place {
@@ -1251,6 +1241,30 @@ fn trace(update: &WorldUpdate, changes: &eq_client_core::world::Changes, world: 
 }
 
 /// Puts the world in the state a test needs by sending what the session would.
+/// Prints a typed report's echo in place of this client's own line, where
+/// the program has one (read R49-23), and says whether it did; a refusal
+/// drops the echo.
+fn echoed(
+    notice: &eq_client_core::world::Notice,
+    messages: Option<&hud::messages::Messages>,
+    chat: &mut super::chat::ChatState,
+) -> bool {
+    match notice {
+        eq_client_core::world::Notice::ReportSent(_) => {
+            chat.report_echo.take().is_some_and(|echo| {
+                chat.history
+                    .push(super::chat::system_line(echo.said(messages)));
+                true
+            })
+        }
+        eq_client_core::world::Notice::ReportRefused { .. } => {
+            chat.report_echo = None;
+            false
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod testing {
     use super::OnlineState;
@@ -1582,6 +1596,42 @@ pub(crate) mod testing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reports_echo_stands_for_the_sent_line_and_a_refusal_drops_it() {
+        use eq_client_core::reports::ReportKind;
+        use eq_client_core::world::Notice;
+        let (sender, _receiver) = std::sync::mpsc::sync_channel(4);
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(1));
+        let outbox = crate::outbox::Outbox::new(Some(sender));
+        let stamp = outbox.stamp(online.world()).unwrap();
+        let asked = crate::reports::Asked::Petition("I am stuck".into());
+        let Ok(crate::reports::Answer::Send(_, echo)) =
+            crate::reports::answer(&asked, online.world(), stamp, true)
+        else {
+            panic!("a petition sends");
+        };
+        let mut chat = super::super::chat::ChatState::default();
+        chat.report_echo.clone_from(&echo);
+        let sent = Notice::ReportSent(ReportKind::Petition);
+        assert!(echoed(&sent, None, &mut chat));
+        assert_eq!(
+            chat.history
+                .lines(eq_client_core::chat::ChatTab::All)
+                .last()
+                .map(|(_, line)| line.message.text.clone()),
+            Some("Your petition was sent.".to_owned())
+        );
+        // Spent: the next notice says this client's own line.
+        assert!(!echoed(&sent, None, &mut chat));
+        chat.report_echo = echo;
+        let refused = Notice::ReportRefused {
+            reason: "Not now.".into(),
+        };
+        assert!(!echoed(&refused, None, &mut chat));
+        assert!(chat.report_echo.is_none());
+    }
     use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
     use eq_client_core::PlayerState;
 
