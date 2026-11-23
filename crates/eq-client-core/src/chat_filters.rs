@@ -329,6 +329,25 @@ mod tests {
     }
 
     #[test]
+    fn every_mac_era_mode_is_one_of_the_rows_choices_so_it_saves_as_itself() {
+        // The file keeps a mode as its place among the Titanium choices, so
+        // a Mac-era page's mode must be one of them (reviewer M1).
+        for category in FilterCategory::ALL {
+            for mode in category.modes(GameDialect::EqMac) {
+                assert!(choices(category).contains(&mode), "{category:?} {mode:?}");
+                let mut filters = ChatFilters::default();
+                filters.set(category, mode);
+                let mut read = ChatFilters::default();
+                for line in filters.text().lines() {
+                    let (key, value) = line.split_once('=').unwrap();
+                    read.read(key.trim(), value);
+                }
+                assert_eq!(read.get(category), mode, "{category:?}");
+            }
+        }
+    }
+
+    #[test]
     fn a_mode_a_generation_cannot_say_goes_to_its_default_for_the_session() {
         let mut filters = ChatFilters::default();
         filters.set(FilterCategory::DamageOverTime, FilterMode::Hide);
