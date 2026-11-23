@@ -1,7 +1,8 @@
-//! The seven local-settings commands, as read R49-22c reads the Titanium
-//! program (6.525): `/clearchat`, `/showspelleffects`, `/combatmusic`,
-//! `/particledensity`, `/mousespeed`, `/chatfontsize` and `/usercolor`. They
-//! change only this client; nothing goes to a server, on any server type.
+//! The local-settings commands, as reads R49-22c and R49-16 read the
+//! Titanium program: `/clearchat`, `/showspelleffects`, `/combatmusic`,
+//! `/particledensity`, `/mousespeed`, `/chatfontsize` and `/usercolor`
+//! (6.525), and `/toggleinspect` (6.574). They change only this client;
+//! nothing goes to a server, on any server type.
 //!
 //! Where the program says a line from its string table, the installation's
 //! words are said, with this client's own where it lacks them. Where the
@@ -13,14 +14,33 @@
 use bevy::prelude::*;
 use eq_client_core::options::{Toggle, USER_COLOR_KINDS};
 
-/// `/showspelleffects` with no word: its two usage lines.
-const SPELL_EFFECTS_USAGE: [u32; 2] = [0x3370, 0x3371];
-/// Its state lines, on and off.
-const SPELL_EFFECTS_STATE: [u32; 2] = [0x3372, 0x3373];
-/// `/combatmusic` with no word.
-const COMBAT_MUSIC_USAGE: u32 = 0x1d63;
-/// Its state lines, on and off.
-const COMBAT_MUSIC_STATE: [u32; 2] = [0x1d64, 0x1d65];
+/// The lines of an on/off command, each a line id with our fallback:
+/// its usage lines when no word was given, and its state lines, on then
+/// off.
+struct ToggleLines {
+    usage: &'static [(u32, &'static str)],
+    state: [(u32, &'static str); 2],
+}
+
+/// `/showspelleffects`.
+const SPELL_EFFECTS: ToggleLines = ToggleLines {
+    usage: &[
+        (0x3370, "Usage: /showspelleffects <on|off>"),
+        (0x3371, "Turns spell effects on or off."),
+    ],
+    state: [
+        (0x3372, "Spell effects are on."),
+        (0x3373, "Spell effects are off."),
+    ],
+};
+/// `/combatmusic`.
+const COMBAT_MUSIC: ToggleLines = ToggleLines {
+    usage: &[(0x1d63, "Usage: /combatmusic <on|off>")],
+    state: [
+        (0x1d64, "Combat music is on."),
+        (0x1d65, "Combat music is off."),
+    ],
+};
 /// `/mousespeed` with no number: its two usage lines.
 const MOUSE_SPEED_USAGE: [u32; 2] = [0x336d, 0x336e];
 /// Its line naming the value.
@@ -29,6 +49,22 @@ const MOUSE_SPEED_NOW: u32 = 0x336f;
 const CHAT_FONT_USAGE: u32 = 0x33d6;
 /// The largest chat font size.
 const LARGEST_CHAT_FONT: u8 = 6;
+/// `/toggleinspect` (read R49-16).
+const INSPECT: ToggleLines = ToggleLines {
+    usage: &[
+        (0x339a, "Usage: /toggleinspect <on|off>"),
+        (
+            0x339b,
+            "Turns inspecting other players by right-clicking them on or off.",
+        ),
+    ],
+    state: [
+        (0x339c, "Right-clicking a player inspects them."),
+        (0x339d, "Right-clicking a player does not inspect them."),
+    ],
+};
+/// The chat colour of `/toggleinspect`'s lines (0x498436).
+const INSPECT_COLOUR: u32 = 0x111;
 /// The colour kinds the help pages list, 10 a page (1 to 69).
 const LISTED_KINDS: u16 = 69;
 
@@ -51,6 +87,9 @@ pub(crate) enum LocalSetting {
     ChatFontSize(Option<u8>),
     /// `/usercolor`.
     UserColor(UserColor),
+    /// `/toggleinspect`, with "on" (true), "off" (false), or none for any
+    /// other word or no word (0x469f00, read R49-16).
+    InspectOthers(Option<bool>),
 }
 
 /// What a `/usercolor` asks.
@@ -105,6 +144,15 @@ impl LocalSetting {
                     .and_then(|word| word.parse::<u8>().ok())
                     .filter(|size| *size <= LARGEST_CHAT_FONT),
             ),
+            "toggleinspect" => Self::InspectOthers(first.and_then(|word| {
+                if word.eq_ignore_ascii_case("on") {
+                    Some(true)
+                } else if word.eq_ignore_ascii_case("off") {
+                    Some(false)
+                } else {
+                    None
+                }
+            })),
             "usercolor" => {
                 let rest: Vec<&str> = std::iter::once(first).flatten().chain(words).collect();
                 Self::UserColor(user_color(&rest))
@@ -268,6 +316,27 @@ const USER_COLOR_USAGE: [&str; 5] = [
     "/usercolor help, or page1 to page7, lists the kinds.",
 ];
 
+/// Runs an on/off command: it sets `toggle` when a word was given, else
+/// says the usage lines; either way it ends with where the toggle stands.
+fn toggle_lines(
+    options: &mut eq_client_core::options::Options,
+    toggle: Toggle,
+    word: Option<bool>,
+    lines: &ToggleLines,
+    said: &dyn Fn(u32, &str) -> crate::chat::Said,
+) -> Vec<crate::chat::Said> {
+    let mut said_lines = Vec::new();
+    if let Some(on) = word {
+        options.set(toggle, on);
+    } else {
+        said_lines.extend(lines.usage.iter().map(|&(id, fallback)| said(id, fallback)));
+    }
+    let [on, off] = lines.state;
+    let (id, fallback) = if options.get(toggle) { on } else { off };
+    said_lines.push(said(id, fallback));
+    said_lines
+}
+
 /// Runs a typed local-settings command and says its lines.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn apply(
@@ -290,43 +359,20 @@ pub(crate) fn apply(
     let mut lines = Vec::new();
     match setting {
         LocalSetting::ClearChat => chat.clear_view(tab),
-        LocalSetting::SpellEffects(word) => {
-            if let Some(on) = word {
-                options.options.set(Toggle::SpellEffects, on);
-            } else {
-                lines.push(said(
-                    SPELL_EFFECTS_USAGE[0],
-                    &[],
-                    "Usage: /showspelleffects <on|off>",
-                ));
-                lines.push(said(
-                    SPELL_EFFECTS_USAGE[1],
-                    &[],
-                    "Turns spell effects on or off.",
-                ));
-            }
-            lines.push(if options.options.get(Toggle::SpellEffects) {
-                said(SPELL_EFFECTS_STATE[0], &[], "Spell effects are on.")
-            } else {
-                said(SPELL_EFFECTS_STATE[1], &[], "Spell effects are off.")
-            });
-        }
-        LocalSetting::CombatMusic(word) => {
-            if let Some(on) = word {
-                options.options.set(Toggle::CombatMusic, on);
-            } else {
-                lines.push(said(
-                    COMBAT_MUSIC_USAGE,
-                    &[],
-                    "Usage: /combatmusic <on|off>",
-                ));
-            }
-            lines.push(if options.options.get(Toggle::CombatMusic) {
-                said(COMBAT_MUSIC_STATE[0], &[], "Combat music is on.")
-            } else {
-                said(COMBAT_MUSIC_STATE[1], &[], "Combat music is off.")
-            });
-        }
+        LocalSetting::SpellEffects(word) => lines.extend(toggle_lines(
+            &mut options.options,
+            Toggle::SpellEffects,
+            word,
+            &SPELL_EFFECTS,
+            &|id, fallback| said(id, &[], fallback),
+        )),
+        LocalSetting::CombatMusic(word) => lines.extend(toggle_lines(
+            &mut options.options,
+            Toggle::CombatMusic,
+            word,
+            &COMBAT_MUSIC,
+            &|id, fallback| said(id, &[], fallback),
+        )),
         LocalSetting::ParticleDensity(None) => lines.push(own(
             "Usage: /particledensity <0-3, or off, low, medium or high>".into(),
         )),
@@ -369,6 +415,13 @@ pub(crate) fn apply(
         LocalSetting::UserColor(asked) => {
             user_color_lines(asked, &mut options, look.as_deref(), &mut lines);
         }
+        LocalSetting::InspectOthers(word) => lines.extend(toggle_lines(
+            &mut options.options,
+            Toggle::InspectOthers,
+            word,
+            &INSPECT,
+            &|id, fallback| said(id, &[], fallback).typed(INSPECT_COLOUR),
+        )),
     }
     for line in lines {
         chat.history.push(crate::chat::system_line(line));
@@ -642,6 +695,46 @@ mod tests {
             run(&mut app, "/combatmusic"),
             ["Usage: /combatmusic <on|off>", "Combat music is off."]
         );
+    }
+
+    #[test]
+    fn toggleinspect_takes_on_and_off_and_says_where_it_stands() {
+        assert_eq!(typed("/toggleinspect"), LocalSetting::InspectOthers(None));
+        assert_eq!(
+            typed("/ToggleInspect OFF"),
+            LocalSetting::InspectOthers(Some(false))
+        );
+        assert_eq!(
+            typed("/toggleinspect on now"),
+            LocalSetting::InspectOthers(Some(true))
+        );
+        // Unlike `/showspelleffects`, any other word changes nothing.
+        assert_eq!(
+            typed("/toggleinspect yes"),
+            LocalSetting::InspectOthers(None)
+        );
+        let mut app = app();
+        // On until set otherwise, as the program's missing key is TRUE.
+        assert!(options(&app).get(Toggle::InspectOthers));
+        assert_eq!(
+            run(&mut app, "/toggleinspect off"),
+            ["Right-clicking a player does not inspect them."]
+        );
+        assert!(!options(&app).get(Toggle::InspectOthers));
+        assert_eq!(
+            run(&mut app, "/toggleinspect maybe"),
+            [
+                "Usage: /toggleinspect <on|off>",
+                "Turns inspecting other players by right-clicking them on or off.",
+                "Right-clicking a player does not inspect them.",
+            ]
+        );
+        assert!(!options(&app).get(Toggle::InspectOthers));
+        assert_eq!(
+            run(&mut app, "/toggleinspect on"),
+            ["Right-clicking a player inspects them."]
+        );
+        assert!(options(&app).get(Toggle::InspectOthers));
     }
 
     #[test]
