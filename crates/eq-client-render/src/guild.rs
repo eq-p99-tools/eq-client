@@ -35,7 +35,10 @@ use std::time::{Duration, Instant};
 
 pub(crate) mod roster;
 
-/// How long the official client's invitation dialog waits (R11, [I]).
+/// How long the official client's invitation dialog waits: 10000 ms from
+/// 0x548460 (read R49-33 d). Its result 0x499e28 answers 5 for anything but
+/// Yes, so the wait running out declines (inferred that the timeout
+/// reaches it; checklist 6.633).
 const DIALOG_WAIT: Duration = Duration::from_secs(10);
 
 /// The official client's lines for its guild, by `eqstr_us.txt` number.
@@ -107,11 +110,9 @@ enum Handling {
     Ask(Said),
     /// Answer at once, saying this first where there is a line.
     Answer(InviteAnswer, Option<Said>),
-    /// Neither ask nor answer: a case the read does not cover.
-    Unread,
 }
 
-/// How the official client handles an invitation (R11, 0x455134).
+/// How the official client handles an invitation (R11, R49-33 d; 0x455134).
 fn handling(
     invitation: &GuildInvitation,
     world: &ClientWorld,
@@ -128,22 +129,18 @@ fn handling(
     if guild == Some(invitation.guild_id) {
         return match offered.cmp(&held) {
             std::cmp::Ordering::Equal => Handling::Answer(InviteAnswer::AlreadyHeld, None),
-            std::cmp::Ordering::Less => {
-                // Only a member's rank is answered so; another lower offer is
-                // not read, and goes unanswered until it is.
-                if offered == 0 {
-                    Handling::Answer(
-                        InviteAnswer::Accept,
-                        Some(messages.said_or(
-                            lines::DEMOTED,
-                            std::slice::from_ref(&inviter),
-                            &format!("{inviter} makes you a member of your guild."),
-                        )),
+            // A lower rank is taken at once, with no dialog: the answer is
+            // the rank offered. Only a member's rank has a line (R49-33 d).
+            std::cmp::Ordering::Less => Handling::Answer(
+                InviteAnswer::Accept,
+                (offered == 0).then(|| {
+                    messages.said_or(
+                        lines::DEMOTED,
+                        std::slice::from_ref(&inviter),
+                        &format!("{inviter} makes you a member of your guild."),
                     )
-                } else {
-                    Handling::Unread
-                }
-            }
+                }),
+            ),
             std::cmp::Ordering::Greater => {
                 let id = lines::PROMOTED[usize::from(offered >= 2)];
                 Handling::Ask(messages.said_or(
@@ -202,9 +199,11 @@ pub(crate) fn invitations(
             send(&online, &outbox, &invitation.inviter, answer);
             pending.asking = None;
         } else if since.elapsed() >= DIALOG_WAIT {
+            // The wait running out answers as No does ([`DIALOG_WAIT`]).
             if dialog.question() == Some(Question::GuildInvite) {
                 dialog.withdraw();
             }
+            send(&online, &outbox, &invitation.inviter, InviteAnswer::Decline);
             pending.asking = None;
         }
     }
@@ -227,7 +226,6 @@ pub(crate) fn invitations(
                 }
                 send(&online, &outbox, &invitation.inviter, answer);
             }
-            Handling::Unread => (),
         }
     }
 }
@@ -522,6 +520,76 @@ mod tests {
         ));
         assert_eq!(rank_number(GuildRank::Leader), 2);
         assert_eq!(InviteAnswer::AlreadyHeld.wire(GuildRank::Officer), 11);
+    }
+
+    #[test]
+    fn a_lower_rank_in_your_own_guild_is_taken_at_once_and_only_a_members_says_so() {
+        // Read R49-33 d: the answer is the rank offered, with no dialog.
+        use crate::online::testing;
+        let messages = Messages::default();
+        let mut online = OnlineState::new(true);
+        let mut player = testing::player(7);
+        player.listing.guild = Some(3);
+        player.listing.guild_rank = Some(GuildRank::Leader);
+        testing::admit(&mut online, 1, player);
+        let offer = |rank| GuildInvitation {
+            inviter: "Inviter".into(),
+            guild_id: 3,
+            rank,
+        };
+        assert_eq!(
+            handling(&offer(GuildRank::Officer), online.world(), false, &messages),
+            Handling::Answer(InviteAnswer::Accept, None)
+        );
+        assert_eq!(InviteAnswer::Accept.wire(GuildRank::Officer), 1);
+        assert!(matches!(
+            handling(&offer(GuildRank::Member), online.world(), false, &messages),
+            Handling::Answer(InviteAnswer::Accept, Some(_))
+        ));
+        assert_eq!(
+            handling(&offer(GuildRank::Leader), online.world(), false, &messages),
+            Handling::Answer(InviteAnswer::AlreadyHeld, None)
+        );
+    }
+
+    #[test]
+    fn an_invitation_left_unanswered_declines_when_the_dialog_gives_up() {
+        use crate::online::testing;
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let mut app = App::new();
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        app.insert_resource(online)
+            .insert_resource(Outbox::new(Some(tx)))
+            .init_resource::<Dialog>()
+            .init_resource::<ChatState>()
+            .insert_resource(Invitations {
+                asking: Some((
+                    GuildInvitation {
+                        inviter: "Inviter".into(),
+                        guild_id: 3,
+                        rank: GuildRank::Member,
+                    },
+                    Instant::now().checked_sub(DIALOG_WAIT).unwrap(),
+                    Said::own("asked"),
+                )),
+            })
+            .add_systems(Update, invitations);
+        app.update();
+        let sent: Vec<_> = rx.try_iter().collect();
+        assert!(
+            matches!(
+                sent.as_slice(),
+                [ClientCommand::AnswerGuildInvite {
+                    answer: InviteAnswer::Decline,
+                    ..
+                }]
+            ),
+            "{sent:?}"
+        );
+        assert!(app.world().resource::<Invitations>().asking.is_none());
+        app.update();
+        assert!(rx.try_recv().is_err(), "once only");
     }
 
     #[test]
