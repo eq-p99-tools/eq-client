@@ -85,14 +85,12 @@ impl From<&str> for Said {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FilterPage;
 
-/// Whether a typed line is `/filter`, with any words. It reads no words and
-/// sends nothing: it shows the Options window on its filter page
-/// (eqgame.exe 0x46a245, read R49-2a).
-fn typed_filter(input: &str) -> bool {
+/// Whether a typed line is the named command, with any words after it.
+fn typed_command(input: &str, command: &str) -> bool {
     input
         .split_whitespace()
         .next()
-        .is_some_and(|name| name.eq_ignore_ascii_case("/filter"))
+        .is_some_and(|name| name.eq_ignore_ascii_case(command))
 }
 
 /// A locally produced line in the System channel.
@@ -2351,7 +2349,9 @@ pub(super) fn client_request_in_scope(
         state.inspect_toggled = Some(super::dialogs::InspectToggle);
         return Some(Ok(()));
     }
-    if typed_filter(input) {
+    // `/filter` reads no words and sends nothing: it shows the Options
+    // window on its filter page (eqgame.exe 0x46a245, read R49-2a).
+    if typed_command(input, "/filter") {
         state.filter_page = Some(FilterPage);
         return Some(Ok(()));
     }
@@ -2360,11 +2360,7 @@ pub(super) fn client_request_in_scope(
         return Some(Ok(()));
     }
     // What the official client does with words after it is unread.
-    if input
-        .split_whitespace()
-        .next()
-        .is_some_and(|name| name.eq_ignore_ascii_case("/combatmusic"))
-    {
+    if typed_command(input, "/combatmusic") {
         state.combat_music_toggle = Some(super::zone_audio::CombatMusicTyped);
         return Some(Ok(()));
     }
@@ -2374,11 +2370,7 @@ pub(super) fn client_request_in_scope(
     }
     // The Raid window opens or closes whatever words follow; what the
     // official client does with them is unread (checklist 6.413).
-    if input
-        .split_whitespace()
-        .next()
-        .is_some_and(|name| name.eq_ignore_ascii_case("/raidwindow"))
-    {
+    if typed_command(input, "/raidwindow") {
         state.toggled = Some(super::windows::WindowId::Raid);
         return Some(Ok(()));
     }
