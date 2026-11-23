@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- Keep every received AA fact for display (checklist 6.565). The client's
+  `alternate_advancement::State` now holds, besides Titanium's selections
+  and definitions, the profile's points, the latest AA experience update,
+  the unspent points from whichever came last, and each reuse timer, and on
+  `EQMac` the `OP_RespondAA` ranks, the profile's AA array and points, the
+  experience update and the reuse timers, all as sent. The world applies
+  them on `EQMac` as on Titanium; RoF2 sends none yet. `owned` and
+  `trainable` read ownership from the table's shape, as eq-network's train
+  gate does, but are for display only: the session alone decides what is
+  sent, and nothing here sends. `ClientWorld::environmental_aa` is renamed
+  `alternate_advancement`.
+- An AA request the session would not send is now news:
+  `Notice::AlternateAdvancementRefused` carries the session's words, shown
+  in chat, and its kind of reason for the AA window to come. A refusal for
+  an earlier admission is ignored. The client sends no AA request yet.
+- Read AA names and descriptions from the installed Titanium client's
+  `dbstr_us.txt`: `eq_client_assets::db_strings::DbStrings` reads the file
+  with a 32 MiB bound and finds a text by its type and id, so a rank's
+  `title_sid` and `desc_sid` name it. The `id^type^text` layout and the
+  types (1 for AA titles, 4 for descriptions) are inferred from `EQEmu`'s
+  string tables until the client is read (checklist 6.565); a missing
+  string is none. The Mac-era client installs no such file. Nothing loads
+  it yet: the AA window comes later.
 - CI: the Lint workflow gains a Docs job, `cargo doc --workspace --no-deps --locked` with `RUSTDOCFLAGS=-D warnings`, on every pull request and push to main beside Format (Adam's yes, 11-23). A broken doc link now fails the PR it lands in.
 - Draw players with the Luclin models where the viewer chose them
   (checklist 6.554, Luclin slice L1). The choice is one per-character

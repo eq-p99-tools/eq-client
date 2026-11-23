@@ -448,6 +448,18 @@ impl InstalledClient {
         matches!(self, Self::Titanium)
     }
 
+    /// The file in the installation that holds this client's database
+    /// strings, which AA definitions name by number
+    /// ([`crate::db_strings::DbStrings`]); None for the Mac-era client,
+    /// whose AA names live elsewhere (read R49-41b).
+    #[must_use]
+    pub const fn db_string_file(self) -> Option<&'static str> {
+        match self {
+            Self::Titanium => Some("dbstr_us.txt"),
+            Self::EqMac => None,
+        }
+    }
+
     /// The file in the installation that holds this client's string table,
     /// the words servers refer to by number. The Mac-era client's is
     /// `eqstr_en.txt`, as the TAKP folder carries (inferred from the
