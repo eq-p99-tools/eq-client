@@ -68,10 +68,10 @@ pub(super) enum Place {
     Status,
 }
 
-/// Sense Heading in the official client's own words, with the point's name.
 /// The installed string `EQEmu` sends for a surname its filter refuses.
 const SURNAME_REJECTED: u32 = 1374;
 
+/// Sense Heading in the official client's own words, with the point's name.
 fn heading(point: u8, messages: &Messages) -> Said {
     let point = messages.format(12427 + u32::from(point), &[]);
     messages.said(12435, &[point])
