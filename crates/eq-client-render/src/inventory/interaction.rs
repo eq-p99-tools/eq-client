@@ -66,6 +66,11 @@ pub(crate) enum SplitAction {
     Confirm,
     Cancel,
 }
+
+/// The most of one coin kind `/autoinventory` puts in the purse: a move
+/// that would pass it says nothing and sends nothing (0x475ce4, read R49-8 c).
+const PURSE_LIMIT: u64 = 1_000_000_000;
+
 impl InventoryState {
     pub(crate) fn select_merchant(
         &mut self,
@@ -161,7 +166,7 @@ impl InventoryState {
     pub(super) fn use_slot(
         &mut self,
         slot: InventorySlot,
-        online: &OnlineState,
+        (online, spells): (&OnlineState, &crate::spellbook::SpellNames),
         sender: &Outbox,
         target: Option<u16>,
         casting: bool,
@@ -211,9 +216,16 @@ impl InventoryState {
                 revision: inventory.revision(),
                 slot,
                 target_id,
-                // The memorized test, as before, until the Bard song slice
-                // passes the installed word.
-                installed_class_spell: None,
+                // Read R49-21b's song test from the installed spell data,
+                // for the item's own spell (6.542).
+                installed_class_spell: inventory
+                    .items()
+                    .get(&slot)
+                    .and_then(|item| item.activation.effect.as_ref())
+                    .zip(player.class)
+                    .and_then(|(effect, class)| {
+                        spells.installed_class_spell(effect.spell_id, class)
+                    }),
                 created: now,
             };
             let available = target_id == player.spawn_id
@@ -556,6 +568,57 @@ impl InventoryState {
         self.revision = self.revision.wrapping_add(1);
     }
 
+    /// Puts the cursor item away as `/autoinventory` does (read R46
+    /// section 1): one move, to the first place the program's order finds.
+    /// Coins on the cursor go to the purse, whole, unless that would put
+    /// more than a billion of the kind there, which is silent (0x475ce4,
+    /// read R49-8 c). Nothing on the cursor is nothing to do. `Ok(false)` is
+    /// no place the item fits; an error is any other reason the move can't
+    /// go.
+    pub(super) fn auto_inventory(
+        &mut self,
+        online: &mut OnlineState,
+        sender: &Outbox,
+    ) -> anyhow::Result<bool> {
+        let inventory = online.world().inventory();
+        if !inventory.items().contains_key(&InventorySlot::CURSOR) {
+            if let Some((coin, amount)) = crate::coins::on_cursor(online.world()) {
+                let carried = online
+                    .world()
+                    .coins_in(CoinPlace::Purse)
+                    .map_or(0, |purse| purse.of(coin));
+                if u64::from(carried) + u64::from(amount) <= PURSE_LIMIT {
+                    crate::coins::send(
+                        CoinTransfer {
+                            from: CoinPlace::Cursor,
+                            to: CoinPlace::Purse,
+                            coin,
+                            into: coin,
+                            amount,
+                        },
+                        online,
+                        sender,
+                    );
+                    self.revision = self.revision.wrapping_add(1);
+                }
+            }
+            return Ok(true);
+        }
+        anyhow::ensure!(
+            inventory.received() && !inventory.stale(),
+            "Wait for a current inventory snapshot"
+        );
+        let actor = self.actor(online)?;
+        let Ok((destination, _)) = inventory.auto_inventory_destination(actor) else {
+            return Ok(false);
+        };
+        // The click takes as much of a stack as the one it lands on holds,
+        // the quantity the rule planned.
+        self.try_click(destination, None, online, sender)?;
+        self.revision = self.revision.wrapping_add(1);
+        Ok(true)
+    }
+
     /// Hands the item on the cursor to the open give window, by the
     /// installed generation's `rule`: under
     /// [`eq_client_assets::ui::GiveAtOpen::StackFirst`] onto a stack of the
@@ -881,6 +944,49 @@ mod tests {
     }
 
     #[test]
+    fn an_item_use_carries_the_song_test_for_its_spell_and_the_players_class() {
+        use eq_client_core::inventory::{ClickEffect, ClickKind, ItemActivation};
+        let mut fields = [""; 120];
+        fields[0] = "73";
+        // The test player is a Warrior: field 104.
+        for (level, class_spell) in [("1", Some(true)), ("255", Some(false)), ("", None)] {
+            let mut bench = Bench::demo(9);
+            let mut item = bench.data().items().values().next().unwrap().clone();
+            item.slot = InventorySlot(13);
+            item.activation = ItemActivation {
+                effect: Some(ClickEffect {
+                    spell_id: 73,
+                    kind: ClickKind::Click,
+                    required_level: 1,
+                    effect_level: 1,
+                    cast_time_ms: 3000,
+                    recast_delay_seconds: 0,
+                    recast_type: 0,
+                }),
+                ..ItemActivation::default()
+            };
+            bench.tell(InventoryUpdate::Snapshot(vec![item]));
+            let Bench { state, online } = &mut bench;
+            let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+            let sender = crate::outbox::Outbox::new(Some(sender));
+            fields[104] = level;
+            let spells = crate::spellbook::SpellNames::parse(&fields.join("^"));
+            state.use_slot(
+                InventorySlot(13),
+                (online, &spells),
+                &sender,
+                None,
+                false,
+                Vec::new,
+            );
+            let ClientCommand::UseItem(request) = receiver.try_recv().unwrap() else {
+                panic!("expected item use")
+            };
+            assert_eq!(request.installed_class_spell, class_spell, "{level:?}");
+        }
+    }
+
+    #[test]
     fn item_use_queues_current_instance_without_consuming_it_and_rejects_duplicate_or_busy_actions()
     {
         use eq_client_core::inventory::{ClickEffect, ClickKind, ItemActivation};
@@ -906,18 +1012,22 @@ mod tests {
         let own_id = online.world().player().unwrap().spawn_id;
         let (sender, receiver) = std::sync::mpsc::sync_channel(2);
         let sender = crate::outbox::Outbox::new(Some(sender));
-        state.use_slot(InventorySlot(13), online, &sender, None, true, Vec::new);
+        let spells = crate::spellbook::SpellNames::default();
+        let used = |state: &mut InventoryState, online: &OnlineState, target, casting| {
+            state.use_slot(
+                InventorySlot(13),
+                (online, &spells),
+                &sender,
+                target,
+                casting,
+                Vec::new,
+            );
+        };
+        used(state, online, None, true);
         assert!(receiver.try_recv().is_err());
-        state.use_slot(
-            InventorySlot(13),
-            online,
-            &sender,
-            Some(65500),
-            false,
-            Vec::new,
-        );
+        used(state, online, Some(65500), false);
         assert!(receiver.try_recv().is_err());
-        state.use_slot(InventorySlot(13), online, &sender, None, false, Vec::new);
+        used(state, online, None, false);
         let ClientCommand::UseItem(request) = receiver.try_recv().unwrap() else {
             panic!("expected item use")
         };
@@ -926,16 +1036,16 @@ mod tests {
         assert_eq!(request.revision, before.revision());
         assert_eq!(request.target_id, own_id);
         assert_eq!(online.world().inventory(), &before);
-        state.use_slot(InventorySlot(13), online, &sender, None, false, Vec::new);
+        used(state, online, None, false);
         assert!(receiver.try_recv().is_err());
         // Elapsing the rate limit cannot replace a request awaiting worker feedback.
         state.actions.last_use = Instant::now().checked_sub(std::time::Duration::from_secs(2));
-        state.use_slot(InventorySlot(13), online, &sender, None, false, Vec::new);
+        used(state, online, None, false);
         assert!(receiver.try_recv().is_err());
         assert_eq!(state.actions.pending_use, Some((9, request.request_id)));
         state.item_use_result(8, request.request_id, None, true);
         state.item_use_result(9, request.request_id + 1, None, true);
-        state.use_slot(InventorySlot(13), online, &sender, None, false, Vec::new);
+        used(state, online, None, false);
         assert!(receiver.try_recv().is_err());
         state.item_use_result(
             9,
@@ -943,7 +1053,7 @@ mod tests {
             Some("Synthetic rejection".into()),
             true,
         );
-        state.use_slot(InventorySlot(13), online, &sender, None, false, Vec::new);
+        used(state, online, None, false);
         let ClientCommand::UseItem(next) = receiver.try_recv().unwrap() else {
             panic!("expected a fresh manual item-use request")
         };
@@ -951,7 +1061,7 @@ mod tests {
         state.cancel_actions();
         state.use_slot(
             InventorySlot(13),
-            online,
+            (online, &spells),
             &crate::outbox::Outbox::new(None),
             None,
             false,
@@ -959,7 +1069,7 @@ mod tests {
         );
         assert!(state.actions.last_use.is_none());
         testing::connect(online, false);
-        state.use_slot(InventorySlot(13), online, &sender, None, false, Vec::new);
+        used(state, online, None, false);
         assert!(receiver.try_recv().is_err());
         assert_eq!(online.world().inventory(), &before);
     }
@@ -1510,6 +1620,141 @@ mod tests {
         assert!(!state.bank_open);
     }
 
+    use eq_client_core::{ItemDetails, inventory::InventoryItem};
+
+    /// The demo's items with `cursor` on the cursor, for a real session.
+    fn with_cursor(cursor: InventoryItem, keep: impl Fn(&InventoryItem) -> bool) -> Bench {
+        let mut bench = Bench::demo(7);
+        let mut items: Vec<_> = crate::preview::items()
+            .into_iter()
+            .filter(|item| item.slot != InventorySlot::CURSOR && keep(item))
+            .collect();
+        items.push(InventoryItem {
+            slot: InventorySlot::CURSOR,
+            ..cursor
+        });
+        bench.tell(InventoryUpdate::Snapshot(items));
+        bench.state.demo = false;
+        bench
+    }
+
+    fn preview(id: u32) -> InventoryItem {
+        crate::preview::items()
+            .into_iter()
+            .find(|item| item.details.id == id)
+            .unwrap()
+    }
+
+    fn auto_move(bench: &mut Bench) -> (anyhow::Result<bool>, Vec<(InventorySlot, InventorySlot)>) {
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let sender = Outbox::new(Some(tx));
+        let Bench { state, online } = bench;
+        let result = state.auto_inventory(online, &sender);
+        let moves = rx
+            .try_iter()
+            .filter_map(|command| match command {
+                ClientCommand::MoveInventory(request) => Some((request.from, request.to)),
+                _ => None,
+            })
+            .collect();
+        (result, moves)
+    }
+
+    /// `/autoinventory` with this much platinum in the purse and on the
+    /// cursor, and no item there: the coin moves it sent.
+    fn coins_put_away(purse: u32, cursor: u32) -> Vec<eq_client_core::money::CoinTransfer> {
+        let mut bench = Bench::demo(7);
+        bench.state.demo = false;
+        let platinum = |platinum| eq_client_core::Coins {
+            platinum,
+            ..eq_client_core::Coins::default()
+        };
+        testing::news(
+            &mut bench.online,
+            [
+                eq_client_core::WorldEvent::Coins(platinum(purse)),
+                eq_client_core::WorldEvent::CoinsElsewhere {
+                    cursor: platinum(cursor),
+                    bank: eq_client_core::Coins::default(),
+                    given: eq_client_core::Coins::default(),
+                    offered: eq_client_core::Coins::default(),
+                },
+            ],
+        );
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let sender = Outbox::new(Some(tx));
+        let Bench { state, online } = &mut bench;
+        assert!(state.auto_inventory(online, &sender).unwrap());
+        rx.try_iter()
+            .filter_map(|command| match command {
+                ClientCommand::MoveCoins { transfer, .. } => Some(transfer),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn autoinventory_puts_the_cursors_coins_in_the_purse_unless_past_a_billion() {
+        use eq_client_core::money::{Coin, CoinPlace, CoinTransfer};
+        assert_eq!(
+            coins_put_away(999_999_990, 10),
+            [CoinTransfer {
+                from: CoinPlace::Cursor,
+                to: CoinPlace::Purse,
+                coin: Coin::Platinum,
+                into: Coin::Platinum,
+                amount: 10,
+            }]
+        );
+        // One past the billion is silent, and nothing goes.
+        assert_eq!(coins_put_away(999_999_991, 10), []);
+        // No coins and no item: nothing to do.
+        assert_eq!(coins_put_away(5, 0), []);
+    }
+
+    #[test]
+    fn autoinventory_wears_what_fits_then_takes_the_first_general_slot() {
+        // The sword's own worn slot is empty: it goes there.
+        let mut bench = with_cursor(preview(1), |item| item.details.id != 1);
+        let (result, moves) = auto_move(&mut bench);
+        assert!(result.unwrap());
+        assert_eq!(moves, [(InventorySlot::CURSOR, InventorySlot(13))]);
+        // The lantern can't be worn: the first empty general slot, past the
+        // two bags.
+        let mut bench = with_cursor(preview(5), |_| true);
+        let (result, moves) = auto_move(&mut bench);
+        assert!(result.unwrap());
+        assert_eq!(moves, [(InventorySlot::CURSOR, InventorySlot(24))]);
+    }
+
+    #[test]
+    fn autoinventory_with_no_room_sends_nothing_and_an_empty_cursor_is_nothing_to_do() {
+        let mut bench = with_cursor(preview(5), |item| !item.slot.is_carried());
+        let mut fillers: Vec<_> = (22..=29)
+            .map(|slot| InventoryItem {
+                slot: InventorySlot(slot),
+                details: ItemDetails {
+                    id: 100 + u32::try_from(slot).unwrap(),
+                    ..preview(5).details
+                },
+                ..preview(5)
+            })
+            .collect();
+        fillers.push(InventoryItem {
+            slot: InventorySlot::CURSOR,
+            ..preview(5)
+        });
+        bench.tell(InventoryUpdate::Snapshot(fillers));
+        let (result, moves) = auto_move(&mut bench);
+        assert!(!result.unwrap());
+        assert_eq!(moves, []);
+        let mut empty = Bench::demo(7);
+        empty.state.demo = false;
+        let (result, moves) = auto_move(&mut empty);
+        assert!(result.unwrap());
+        assert_eq!(moves, []);
+    }
+
     fn test_player() -> eq_client_core::PlayerState {
         eq_client_core::PlayerState {
             name: "Example".into(),
@@ -1527,6 +1772,7 @@ mod tests {
             skills: None,
             practice_points: None,
             languages: None,
+            intoxication: None,
             disciplines: None,
             spell_refresh_ms: None,
             memorized_spells: [None; 8],

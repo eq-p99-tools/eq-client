@@ -125,7 +125,7 @@ fn the_program_keys_carry_only_skill_numbers_and_the_rest_goes_in_the_clients_ow
     choices.choose(
         online.world(),
         button(Page::Abilities, 5),
-        Slot::Discipline(Discipline::Evasive),
+        Slot::Discipline(4503),
     );
     choices.choose(online.world(), button(Page::Abilities, 4), Slot::Skill(71));
     let text = choices.text();
@@ -136,7 +136,7 @@ fn the_program_keys_carry_only_skill_numbers_and_the_rest_goes_in_the_clients_ow
     assert!(text.contains(
         "Ability5=71\nAbility6=-1\n[CombatSkills]\nCombatSkill1=107\nCombatSkill2=107\n"
     ));
-    assert!(text.contains("[ClientAbilities]\nAbility6=discipline:evasive\n"));
+    assert!(text.contains("[ClientAbilities]\nAbility6=discipline:4503\n"));
     assert!(!text.contains("knight:"));
     let read = Choices::read(&text);
     assert_eq!(read, choices);
@@ -157,6 +157,46 @@ fn a_file_read_back_keeps_empty_unknown_and_own_buttons() {
     assert_eq!(read.slot(button(Page::Combat, 0)), Slot::Skill(105));
     // A missing key is empty once the file is the player's own.
     assert_eq!(read.slot(button(Page::Combat, 3)), Slot::Empty);
+}
+
+#[test]
+fn a_discipline_an_earlier_version_saved_by_name_reads_back_as_its_spell() {
+    let read = Choices::read(
+        "[Abilities]\nAbility1=-1\nAbility2=-1\n[ClientAbilities]\nAbility1=discipline:evasive\nAbility2=discipline:4585\n",
+    );
+    assert_eq!(
+        read.slot(button(Page::Abilities, 0)),
+        Slot::Discipline(4503)
+    );
+    assert_eq!(
+        read.slot(button(Page::Abilities, 1)),
+        Slot::Discipline(4585)
+    );
+    // Disciplines live in the Combat Abilities window now: a warrior who
+    // knows one finds none in this client's order or the picker.
+    let mut online = character(WARRIOR, 60, &[]);
+    testing::news(
+        &mut online,
+        [eq_client_core::WorldEvent::Disciplines(vec![4503])],
+    );
+    for page in [Page::Combat, Page::Abilities] {
+        assert!(
+            offered(online.world(), page)
+                .iter()
+                .all(|offer| !matches!(offer.slot, Slot::Discipline(_)))
+        );
+        for index in 0..COMBAT_BUTTONS {
+            assert!(!matches!(
+                assigned(online.world(), &Choices::default(), button(page, index)),
+                Some(Binding::Discipline(_))
+            ));
+        }
+    }
+    // The kept button still holds it.
+    assert_eq!(
+        assigned(online.world(), &read, button(Page::Abilities, 0)),
+        Some(Binding::Discipline(4503))
+    );
 }
 
 #[test]
@@ -181,10 +221,26 @@ fn a_choice_the_client_cannot_use_is_not_empty_and_says_so() {
     choices.choose(world, place, Slot::Skill(105));
     assert_eq!(assigned(world, &choices, place), None);
     assert!(!empty(world, &choices, place));
-    assert_eq!(caption(world, &choices, place), UNUSABLE);
+    assert_eq!(
+        caption(
+            world,
+            &choices,
+            &crate::spellbook::SpellNames::default(),
+            place
+        ),
+        UNUSABLE
+    );
     choices.choose(world, place, Slot::Empty);
     assert!(empty(world, &choices, place));
-    assert_eq!(caption(world, &choices, place), "");
+    assert_eq!(
+        caption(
+            world,
+            &choices,
+            &crate::spellbook::SpellNames::default(),
+            place
+        ),
+        ""
+    );
     // A skill no longer held keeps its button; the session refuses a press.
     let fresh = character(ROGUE, 1, &[]);
     choices.choose(fresh.world(), place, Slot::Skill(Ability::PickLock.skill()));
@@ -211,7 +267,15 @@ fn a_special_number_survives_a_save_and_another_classs_is_kept_unusable() {
     // and unusable.
     let rogue = character(ROGUE, 21, &ROGUE_SKILLS);
     assert_eq!(assigned(rogue.world(), &choices, place), None);
-    assert_eq!(caption(rogue.world(), &choices, place), UNUSABLE);
+    assert_eq!(
+        caption(
+            rogue.world(),
+            &choices,
+            &crate::spellbook::SpellNames::default(),
+            place
+        ),
+        UNUSABLE
+    );
     for special in [111, 114, 115] {
         let mut kept = choices;
         kept.choose(rogue.world(), place, Slot::Skill(special));

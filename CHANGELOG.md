@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Answer `/played` as the Titanium program does (read R49-8 a, checklist
+  6.490b): the account's entitled time in years (line 0xe24), when the
+  character was made (0x32a8) and its played days, hours and minutes
+  (0x32af), from the profile's fields (eq-network #410), adding a minute
+  each minute after the profile as the program does. The creation time's
+  wording follows the program's `%#c` in the C locale (inferred). The
+  Mac-era and RoF2 clients' `/played` is unread, so it's refused there
+  for now.
+- A Bard's item use now carries the song test from the installed spell data (gap 3.5, checklist 6.542, read R49-21b): the item's spell counts as the class's when the player's class level for it is neither 0 nor 255. The session uses it to choose, for an item's song it keeps, between sending the stop and ending it here. Without installed spell data, or without that spell's class levels, the session keeps its memorized test as before. Labelled: the program also needs the spell's byte +0x1c4 to be clear. That byte isn't mapped to a spells file field yet (read R49-48c), so a class spell with it set counts as a song here and not in the program.
 - Show the session's chat pace (checklist 6.523, eq-network #354). Its
   refusal, "You are sending chat too fast. Wait N seconds.", is printed as
   the player's own line. A script fails at a step's line with those words
@@ -9,7 +18,50 @@
   or a `slash` step whose typed line sent chat (`say`, `ooc` and the rest).
   The pace is this client's own: the Titanium program paces no chat (read
   R49-17), so it is a departure, not parity.
+- Follow program read R49-6 on Titanium (checklist 6.492). Each duel outcome the session tells is the program's line in its colour, and `/duel` sends the target as it stands, with the session wording the result. The **Duel Answer Card** is a quality-of-life setting, on by default: Yes accepts as `/duel` does, No sends nothing, and off there is no card, as in the program. Scripts can answer it. A quest's coins are said one line per coin with the giver's name, then the reward sound plays (also for EQEmu's fixed sound record). A yell for help names where the yeller stands from your heading. A level lost is said, and a level gained plays its sound. Another spawn's stat increase has the program's line. `/lfg on` and `off` say the program's lines, and any other form is its usage line. `/motd` says the kept message in the program's line, and `/charinfo` names the bind zone in it. The Mac-era and RoF2 programs are unread and keep this client's words. Repins eq-network to bf7a4db.
+- The Interface scale slider on the QoL page no longer swings between its ends while dragged.
+  - **Cause:** each frame of a drag set the scale, which moved the Options window and the slider under a pointer that held still. The pointer then read near one end and then the other, so the scale flipped back and forth and could not be set back to 100%.
+  - **Fix:** a setting that rescales the layout (`Level::rescales_layout`, the interface scale alone) is held on its slider while pressed. The thumb and value label show the held size, and the setting changes once as the press ends, by the mouse's release or a script's one-frame press. Closing the window mid-drag discards the held size. The other sliders still set as they move.
+  - **Recovery:** right-click the slider for 100%, or type `/uiscale` (100%) or `/uiscale N` with N a 5% step from 50 to 200. Scripts can use `slash("uiscale 100")` or the slider as before. The options file's `ui_scale` key still works too.
 
+- Mouse look in the chase view tilts as far as straight up or straight down again, at any zoom (checklist 6.606, Adam 11-23). The chase camera had kept the Titanium program's height model, from eye level to 30 units above the eyes, which at the ordinary zoom tilts only about 15 degrees and never looks up.
+  - **Free Chase Tilt**, a new quality-of-life setting, on by default: a drag turns the chase camera around the eyes up to 89 degrees above or below level, and the wheel moves it along its sightline. Looking up, the camera swings below the eyes, never under the feet, and floors and walls still pull it in. An almost overhead view still zooms before it snaps into first person, and the far plane follows the camera out.
+  - Turned off, the chase camera keeps the program's height model as before. In the Titanium program (read of 11-23, checklists 6.348 and 6.422), mouse look Y in that camera only zooms or moves its height, only the orbit cameras tilt, from about 45 degrees up to 84 down, and no third-person camera follows the character's look pitch. Straight up or down in every view is Adam's choice. First person looks straight up or down either way.
+  - A script's `camera` step takes a pitch from -89 to 89 degrees, so a script can look up as a player can.
+
+- `/loadskin <name>` switches the UI skin in game (checklist 6.605), as the official client's command does. The windows redraw from the new skin at once, and the choice stays the character's for later runs. A name matches the installation's `uifiles` folder whatever its letter case. A skin that isn't installed changes nothing and says so, and an unreadable line gives the usage. The official client's trailing `0` or `1` is accepted, and this client keeps window placements either way. The choice is saved in this client's settings folder, not in the installation's files. A skin loaded in game wins over `--ui-skin` until the player camps or plays another character or world, when `--ui-skin` applies again. What the official client says in reply isn't read, so the replies are this client's own words. Why: the Velious skin's inventory shows the bags alone, with no paperdoll, statistics or hit point and mana numbers, and its equipment sits in Hot Button window 1. `/loadskin default` brings the full inventory back without restarting.
+
+- `/loadskin <name>` switches the UI skin in game (checklist 6.605), as the official client's command does. The windows redraw from the new skin at once, and the choice stays the character's for later runs. A name matches the installation's `uifiles` folder whatever its letter case. A skin that isn't installed changes nothing and says so, and an unreadable line gives the usage. The official client's trailing `0` or `1` is accepted, and this client keeps window placements either way. The choice is saved in this client's settings folder, not in the installation's files. A skin loaded in game wins over `--ui-skin` until the player camps or plays another character or world, when `--ui-skin` applies again. What the official client says in reply isn't read, so the replies are this client's own words. Why: the Velious skin's inventory shows the bags alone, with no paperdoll, statistics or hit point and mana numbers, and its equipment sits in Hot Button window 1. `/loadskin default` brings the full inventory back without restarting.
+- Every other spawn's helm follows its own show-helm flag, as read R49-13 reads the Titanium program (checklist 6.513). This rebuilds #567 on main.
+  - **The flag** comes from the spawn record's byte 139 and appearance kind 43, and the head slot's model is nothing while it is off. Players, NPCs and corpses alike: the program's head code has no distinction. `EQEmu` sends a player's own option, and for an NPC whether its helm texture is set.
+  - **When it shows:** a kind 43 for another spawn only sets the flag, with no redraw, so its helm changes at that spawn's next head wear change (inferred, as the read gives).
+  - **Your own** follows the Show My Helm option at once, as before.
+  - The flag counts only where the session offers Show My Helm (`Capability::ShowingHelm`, stock `EQEmu`). Project 1999's records aren't checked, and `EQMac` and `RoF2` records never say it, so every helm shows there as before.
+- Keep the latest title list (checklist 6.516), lifted onto main from #574. Where the session offers titles (stock EQEmu only), the core keeps the list the server last sent in this zone (`ClientWorld::titles`), forgotten on a zone change; elsewhere a list is ignored. Nothing asks for the list or chooses a title yet. Read R49-14 has now read the program's title window, but titles are outside Project 1999 and Quarm, so the window waits under Adam's 11-23 priority rule.
+
+- Scripts can use the map's own controls (checklist 6.589), since a script may do whatever the player can (Adam, 11-23): the search boxes, the watch controls and rows, a spawn's marker, the inspector's Clear and Target, the landmarks and the presentation controls, as `map_search`, `map_watch`, `map_marker`, `map_inspector`, `map_target`, `map_landmarks` and `map_style` targets. Each click runs the map's own handler, so the Target button keeps its capability and range checks. A marker takes the spawn's admission, id and revision, which the report's new `map_markers` field lists for the 64 nearest spawns the map can place (a spawn with no finite position is left out, as the map leaves it out); a stale one is refused. Watches, landmarks and presentation are saved settings, and these clicks change them as a person's do.
+- Destroy the coins on the cursor (gap 3.8, checklist 6.512), as the
+  Titanium program's Destroy button does (read R49-11). With coins on the
+  cursor and no item, **Destroy cursor item** asks first, with the
+  installation's own question (string 0x80d), or our words where the
+  installation lacks it. With no answer in 10 s the question closes as a No.
+  On Yes it sends one `DestroyCoins` (eq-network #342) for the first kind on
+  the cursor, the most valuable first, whole, as the program sends one move.
+  - **Departure, labelled (6.512c):** the program then clears every kind on
+    its cursor, including kinds it never told the server about. This client
+    keeps those shown, as the server still holds them. Its own coin controls
+    hold one kind on the cursor at a time, so two kinds come only from what
+    the server says the cursor holds.
+  - The program skips the question when its ini `Destroy` key is set. That
+    option is row 6.512b, not built here.
+  - Where the session doesn't offer `Capability::DestroyingCoins` (all but
+    stock EQEmu for now) it says "This server does not take destroying
+    coins." and asks nothing. An item on the cursor is destroyed as before;
+    its question in the program's own string (0x7fb) and timeout is row
+    6.512d.
+  - Any change to the cursor's coins cancels the question. Scripts click the
+    same control and dialog, so they destroy coins as they destroy items,
+    and a script that answers nothing gets the timeout's No.
 - Send petitions, bug reports and feedback from a typed line (gap list 3.6,
   recording checklist 6.511). `/petition`, `/bugreport` (also `/bug`) and
   `/feedback` with their words send `SendPetition`, `ReportBug` and
@@ -39,28 +91,6 @@
   page are this client's own until the official options, ini keys and
   `/filter` forms are read (6.494a to c); `/filter` answers that it is not
   taken that way yet.
-- Destroy the coins on the cursor (gap 3.8, checklist 6.512), as the
-  Titanium program's Destroy button does (read R49-11). With coins on the
-  cursor and no item, **Destroy cursor item** asks first, with the
-  installation's own question (string 0x80d), or our words where the
-  installation lacks it. With no answer in 10 s the question closes as a No.
-  On Yes it sends one `DestroyCoins` (eq-network #342) for the first kind on
-  the cursor, the most valuable first, whole, as the program sends one move.
-  - **Departure, labelled (6.512c):** the program then clears every kind on
-    its cursor, including kinds it never told the server about. This client
-    keeps those shown, as the server still holds them. Its own coin controls
-    hold one kind on the cursor at a time, so two kinds come only from what
-    the server says the cursor holds.
-  - The program skips the question when its ini `Destroy` key is set. That
-    option is row 6.512b, not built here.
-  - Where the session doesn't offer `Capability::DestroyingCoins` (all but
-    stock EQEmu for now) it says "This server does not take destroying
-    coins." and asks nothing. An item on the cursor is destroyed as before;
-    its question in the program's own string (0x7fb) and timeout is row
-    6.512d.
-  - Any change to the cursor's coins cancels the question. Scripts click the
-    same control and dialog, so they destroy coins as they destroy items,
-    and a script that answers nothing gets the timeout's No.
 - Drowning and lava now hurt on every Titanium server, public EQEmu and
   P99 included, as the Titanium program reports them on any server
   (eq-network's liquid change; read R25). **Characters on public servers
@@ -102,11 +132,258 @@
 
 - Scripts can use the map's own controls (checklist 6.589), since a script may do whatever the player can (Adam, 11-23): the search boxes, the watch controls and rows, a spawn's marker, the inspector's Clear and Target, the landmarks and the presentation controls, as `map_search`, `map_watch`, `map_marker`, `map_inspector`, `map_target`, `map_landmarks` and `map_style` targets. Each click runs the map's own handler, so the Target button keeps its capability and range checks. A marker takes the spawn's admission, id and revision, which the report's new `map_markers` field lists for the 64 nearest spawns; a stale one is refused. Watches, landmarks and presentation are saved settings, and these clicks change them as a person's do.
 
+- Speak and hear languages as the Titanium program does (checklist 6.495, reads R49-4, R49-4b and R49-4m). This replaces the unmerged design of #558.
+  - **The choice.** Each chat window speaks a language of its own, an index into the languages the character knows, for the session only. It is never saved, and there is no setting for it (Adam, 11-23).
+  - **`/language`.** The installed lines 0x33cc, 0x33cd and 0x33ce, in message type 0x111. The help word lists the languages, nothing says the current one, and a number chooses one. Scripts use `slash("language ...")`.
+  - **The send.** Every channel carries the active window's language. The skill is worded by eq-network's `Tongue::spoken`: your skill less intoxication >> 2, or 100 for a game master. A hail goes out in it too.
+  - **Hearing.** Lines are tagged with 0x583 (the name) or 0x584 (unknown), and language 0 has no tag. Then two garble stages run:
+    - the speaker's stage: this client's own short-word list, then the program's per-letter rule;
+    - the listener's stage, only where the world's log-server switch is on.
+  - **Not garbled:** channels 6 and 14, and any line when a game master is on either side. A game master sender is found by name in the zone (inferred).
+  - **The away reply.** While AFK, a tell that got through the ignore list gets 0x58b back.
+  - **Inferred or left out:**
+    - on the Mac client, `/language`, the send and the speaker stage follow the Titanium read;
+    - an unlabelled program flag at the gate is taken as 0;
+    - the program's bad-word mask is left out (no profanity filter here);
+    - your own lines are never garbled;
+    - the pet speaking as you on channel 8 is not built yet.
+  - **Repin:** eq-network to #405, for `Tongue::spoken`'s `Speaker`, `PlayerState::intoxication` and `WorldRules::listener_garble`.
+- The window's title bar says **Marginal Advantage** (and **Marginal
+  Advantage offline viewer** for the offline viewer) in place of
+  `eq-client` (eq-client #447).
+- **Zone Anywhere** (`zone_anywhere`, off) in the QoL page's Dangerous
+  section, a gameplay departure (eq-client #448). It would let the player
+  cross a zone line whatever level the zone asks for. That the official
+  client turns players away below a zone's level is inferred, not read; this
+  client blocks no crossing today, so the setting changes nothing yet.
+- Say the server's message of the day again with `/motd` (checklist
+  6.520). The message the world sent on this connection is said again as it
+  came, to the same tab and colour, and is not kept as a new one; a new
+  connection, to the same server or another, never says the old one.
+  Without one, this client's line says "There is no message of the day."
+  It sends nothing, on any server. The program's handler (0x46f698) is
+  unread, so that it says the world's message and not the guild's, and
+  that words after it are ignored, is inferred (pending R49-6j). A script
+  may run `slash("motd")`, as it may `/loc` and `/time`.
+
+- Say the player looks for a group with `/lfg` (checklist 6.515), where
+  the session offers it (stock `EQEmu`, eq-network #344). Bare `/lfg`
+  turns the flag over; `/lfg on` and `/lfg off` set it. Those two words
+  are this client's forms, inferred until the program's handler is read
+  (R49-6i), and any other word is refused in this client's words with
+  nothing sent. No level range or comment is sent. The session tells each
+  change, and the chat says "You are now looking for a group." or "You
+  are no longer looking for a group." (this client's words, pending
+  R49-6i). A social, a hotbutton or a script's `slash()` can send it, as
+  typing does (6.584). Repins eq-network to #344's head; its chat channel events wait in
+  the ignore arm for that thread's PR.
+
+- Challenge the player targeted to a duel with `/duel` (checklist 6.492b),
+  where the session offers it (stock `EQEmu`, eq-network #338). It sends
+  `ChallengeDuel` only when another player in the zone is targeted, and
+  says this client's line otherwise ("You must first target another player
+  to challenge to a duel."). Words after `/duel` send nothing and say so,
+  since the program may challenge by name and the target could be someone
+  else. No line is said on sending: whether the program says one is
+  unread. Every line is pending R49-6h. A social, a hotbutton or a script's
+  `slash()` can send it, as typing does (6.584). Repins eq-network to
+  e2e9a02 (#338); its surname and staff report events wait in the ignore
+  arm for those threads' PRs, and the viewer drops its gap log events
+  untraced (a gap's sample can hold other players' chat or names) until
+  eq-client #563 takes them.
+
+- Answer another player's challenge to a duel, and tell the news the
+  client used to drop (checklist 6.492). Where the session asks (stock
+  `EQEmu`, eq-network #328), the skin's confirmation dialog asks "<name>
+  challenges you to a duel. Do you accept?" after a resurrection and a
+  translocate. Only the player's own click on Yes accepts: a script step
+  that reaches the dialog's Yes, by any name and by click, right-click or
+  held click, is refused in this client's words and stops the script,
+  while a scripted No still declines. No setting or key answers it. The
+  question has no local deadline. A challenger not in the spawn list is
+  "Someone". `InstalledClient::duel_offer()` names the installed client's
+  string where it is read; it is None for every generation until R49-6a.
+  The chat now tells, in this client's words until the program's strings
+  and colours are read (pending R49-6a, 6d, 6f and 6g):
+  - a challenge with no question to answer;
+  - the player's own duel beginning;
+  - a TAKP client turning the player's challenge down;
+  - a nearby player's yell for help;
+  - each stat a quest changed, with no number, since the record does not
+    say whether it is the new value or the rise;
+  - the coins a quest or task gave.
+  The server sends no line of its own for any of these. Becoming a corpse
+  stays unhandled until R49-6e. Repins eq-network to c7ac7ea (#328); its
+  Apply Poison and server filter events are ignored here until eq-client
+  #556 and #560 take them, and outgoing chat names `Tongue::COMMON`.
+
+- Add RoF2 as a placeholder generation, following eq-network's
+  (`GameDialect::Rof2`, `ServerProtocol::EqEmuRof2`). `InstalledClient::Rof2`
+  is in `InstalledClient::ALL` but has no marker files, so no folder is ever
+  detected as it, and the installation warnings name only generations with
+  markers, as before. No preset offers or names `EqEmuRof2`, and eq-network
+  refuses a configuration naming it. Each rule without a read of RoF2's
+  program is absent, or Titanium's on its own arm marked
+  `inferred for RoF2 (6.489)`. The skill rules read through a private
+  `Program` (Titanium, `EQMac`). Repins eq-network for the placeholder.
+  Nothing a player can reach changes.
+- Take `/autoinventory`, `/hidecorpses` and a plain `/assist` as the
+  Titanium handlers do (read R46). `/autoinventory` puts the cursor item in
+  the first place the program's order finds, worn slots first, then the
+  general slots and bags, in one move; with no room it prints the installed
+  line and the item stays. `/hidecorpses` hides the corpses present but
+  yours, or but yours and your group's, once; any other word shows them
+  all again, and a new zone forgets what was hidden. The third word, whose
+  flag is unread, is answered as not taken yet. A hidden corpse isn't
+  drawn or picked by the mouse, and a name still finds it. A plain
+  `/assist` with no target prints the installed two lines and sends
+  nothing; a server that takes no assist keeps its earlier answers. The
+  Mac-era client keeps its earlier answers. Inferred parts are
+  under checklist 6.490. Networking pinned to 126b2c7 (eq-network #324).
+  - After read R49-8, on a Titanium installation:
+    - `/assist Name` looks the word up as the program does (0x47981d): any
+      spawn whose name starts with it, the shortest first. It sends the
+      assist for that spawn without changing the target. No match is
+      silent; the player's own name prints line 0x57b and sends nothing.
+      The main-assist words keep this client's answer.
+    - Attack On Assist (`attack_on_assist`, default off, inferred): when on,
+      the assist answer that sets the target starts auto attack through the
+      attack key's own refusals. `/assist on` and `/assist off` set it.
+    - `/autoinventory` with coins on the cursor puts them in the purse, one
+      move of that kind, whole, and is silent past a billion of the kind.
+      The inventory window's put-away button runs the same routine.
+    - `/hidecorpses`' third word sets the looted-corpse mode: when the loot
+      window closes, the corpse just looted is hidden unless it is yours.
+      It doesn't hide corpses as they arrive. The show-all word and a new
+      zone clear it (both inferred).
+
+- Make every client-generation decision exhaustive, so adding a third
+  generation (RoF2 is planned) breaks each place that must decide what it
+  does instead of taking another generation's branch. The 31 one-variant
+  checks on `InstalledClient` and `GameDialect` are `match`es naming every
+  variant, and a test refuses new ones. Installation detection checks every
+  generation in `InstalledClient::ALL`, and every installed archive is found
+  through one module (`eq-client-assets/src/archives.rs`), still S3D only.
+  Repins eq-network for its exhaustive `GameDialect` and `ServerProtocol`.
+  No behaviour changes.
+
+- Take the 88 social emotes and disciplines as the Titanium client does
+  (reads R47 to R48c). An emote's first word picks its target: any spawn
+  whose name it begins, the shortest name winning, or the current target
+  with no word or the installed "my target" word. A target past 60 units
+  (flat, origin to origin) is refused, as is a still emote (`/wave`,
+  `/cheer`, `/frown`, `/gesture`) while moving or not standing. The text
+  goes out as OP_Emote, the player's own line prints in the emote colour,
+  and the animation is sent and played while standing still. Two or more
+  words after the target replace the emote's own words. `/discipline` (and
+  `/disc`) with no word lists the known disciplines whose timers run; with a
+  word it uses the first known discipline the word begins. The new Combat
+  Abilities window, opened from the EQ menu, lists the known disciplines with their time left: a click
+  uses one, and a hold or Ctrl and a number puts it on the action bar. The
+  typed command, the window, a hotkey and an Actions window button share one
+  use: a discipline you don't know, can't use at your level or class, or
+  that isn't flagged in the spell file is refused silently; one on its timer
+  prints the time left; a timed self discipline while one is running prints
+  its line; otherwise the cast goes out from slot 10 at the current target,
+  or none, and like a gem cast it waits while a cast is under way or not yet
+  acknowledged. Any discipline the server lists works, not only Evasive and
+  Defensive. The Actions window's picker no longer offers disciplines, which
+  have their own window now; a button that held one keeps it. Inferred parts
+  are under checklist 6.488. This client's words where the installation has
+  no line: "uses /NAME", "You use /NAME" (and "on TARGET"), "Stand still to
+  do that.", "Nobody by that name is near.", "Your target is too far away
+  for that.", "Your class has no disciplines.", "NAME can be used again in
+  Mm Ss." (with hours, "Hh Mm Ss"), "You can't use that discipline right
+  now." The Mac-era client keeps its earlier answers. Networking pinned to
+  2865334 (eq-network #319, #320, #321, #322), which also settles a
+  destroyed item on servers that confirm by silence; an emote goes out as
+  the program built it, spaces kept, and its own line prints once. A social may now run `/target`,
+  `/assist`, `/camp` and `/quit`, as the original's socials do; `/exit` and
+  `/social` stay refused inside one.
+
+- Take the Titanium slash forms socials and hotbuttons use (reads R45,
+  R45b). Social lines run a tenth of a second apart, as the original's
+  runner steps them, and `/pause` takes 1 to 600 tenths, larger or smaller
+  numbers clamped. New commands, in a social or the chat: `/yell` (sends the
+  empty 0x61ef and says "You yell for help."), `/stopcast` (sends the empty
+  0x4839, as `/stopsong` does; refused while mounted, where any buff with
+  the summon-mount effect, or with effects the spell data can't name, stands
+  in for the program's own mount test), `/doability 1` to `10` (the Actions
+  window's buttons, 1 to 6 Abilities and 7 to 10 Combat), `/memspellset`
+  (a saved set by number or name start; it opens the Spellbook) and
+  `/hotbutton NAME [COLOUR] TEXT` (writes the social and puts it on the
+  cursor; the name is cut to 15 characters). The inferred parts are under
+  checklist 6.487. Lines the installation has no string for are in this
+  client's words: "You yell for help.", "You can't stop casting now.",
+  "Use /doability 1 through 10.", "No spell set has that name or number.",
+  "Made hotbutton NAME.", "Every hotbutton is taken." and the four
+  `/hotbutton` help lines. Networking pinned to 57a87f6 (eq-network #318).
+
+- Ask before looting a NO DROP item, as the Titanium client does (read
+  R45b). This is a visible change to everyday looting: a click on a NO DROP
+  item from a corpse that isn't yours now opens the confirmation dialog, and
+  only Yes loots it. A question left 20 seconds loots nothing. `/lootnodrop`
+  picks when it asks, by the words of the installed client's three lines or
+  this client's `always` (always asks), `sometimes` (asks only about an item
+  your class or race can't use) and `never` (never asks); with no word, or
+  a word that names none, it lists the three. The choice is saved with this
+  client's options for the character. It starts from the installed
+  `eqclient.ini`'s `LootNoDrop`, and where there is none from `always`, which
+  the program read doesn't give (inferred, checklist 6.487). Loot all takes
+  what doesn't ask and leaves the rest for their own clicks. Whether the
+  item is NO DROP is read from its flag, and whether the corpse is yours
+  from its name, where the program's own tests are unread (6.487). The
+Mac-era servers loot as before, as that client's loot click is unread, and
+  `/lootnodrop` answers there as it did.
+
+- Refuse untargetable spawns as the Titanium client does (read R44). On
+  EQEmu and P99, a spawn whose body type the original's target setter
+  refuses (11, 60, 65 and 67: EQEmu's zone controller and other utility
+  spawns) is never chosen. A click on one keeps the current target, with no
+  line and nothing sent, and doesn't pick the spawn behind it. Target Next
+  and `/target` pass over it, and a script's `target()` finds nothing, as
+  for a spawn that isn't there (inferred for these paths until their
+  handlers are read; checklist 6.486). There is no interaction with body
+  types 11, 65 and 67. A target the server sets is kept whatever its body
+  type. Body types above 64 are neither drawn nor named, as the original's
+  per-spawn update skips them; See Invisible doesn't reveal them, and only
+  the QoL Show Invisible Entities does (whether the original draws their
+  model is inferred, 6.486). The Mac-era servers target as before.
+  Networking pinned to d0333db (eq-network #317).
+
+- Swim as the Titanium client does (reads R33, R33b, R39, R41). Water now
+  keeps the body's velocity from frame to frame and damps it, gravity still
+  pulls in water so an idle swimmer slowly sinks (about 0.67 units a
+  second), and the Swimming skill adds to swim speed: at run 0.7, level
+  swimming goes from 4.7 units a second to 7 untrained and 17 at skill 100.
+  Looking up or down adds a climb or a dive without slowing forward travel,
+  a held jump pushes up at the original's rate, and rising out of the water
+  falls back in as an ordinary fall. Water is stepped at a fixed 60 times a
+  second (checklist 6.483). In thegrey a head out of water can't breathe,
+  as in the original. Gills for Days still turns the air counter off.
+  Characters in water now swim when moving and tread water when still,
+  sinking or on the bottom, instead of walking and standing (read R43;
+  checklist 6.485). Needs eq-network's per-axis swim bound.
 - A jump never stands a seated player or ends a feign held standing (checklist 6.600, Adam 11-23: "jumping does not stand, just as jumping from sitting does not stand").
   - **Seated jump:** a jump press while sitting or kneeling to loot does nothing and stands no one, as the original client's jump waits on the can-move flag (read R19 c). The Mac-era client is inferred the same. With Allow Auto-Stand on, forward still stands a sitter.
   - **Feign held standing:** with Move While Feigned on, a jump from standing still keeps its crouch's wait but sends no duck or stand, so the feign holds. The session's new `FeignHeld` report says when one is held. Without the option, a feigned player lies, and a lying jump stays blocked.
   - The Move While Feigned text in the settings and the guide now says a jump keeps the feign.
 - Repin eq-network to 86970af, its main with #398 merged (6.599). The repin brings `WorldEvent::FeignHeld`, the seated-jump refusal, and eq-network main through b9a5668. That includes the Quarm and TAKP offers 6.580 to 6.598 and the 6.602 boat-control read. It also brings `TrainingOffer::price_scale`, which is None in every literal here.
+- Play each zone's music and ambient sound from the installation's own files (item 6.503).
+  - **Emitters** follow the Titanium program's loader (read R49-7 first pass and its engine follow-up). `eq-client-assets` reads `<zone>_sounds.eff`'s 84-byte records:
+    - one emitter for a type-2 record or matching day and night fields, else a day one and a night one, each with its own type, sound, delay and volume;
+    - a radius below 0 reaches 10,000;
+    - a delay above 0 repeats after delay + 500 plus a random share;
+    - a positive volume is a millibel attenuation (2000 is a tenth, above 10000 silent); otherwise 0.2 for type 0 and 1.0 for the rest.
+    - a music record's track is its id negated (engine follow-up, 0x44b502); the step from track to sequence is inferred and labelled.
+  - **The bank.** `<zone>_sndbnk.eff`'s EMIT list is numbered from 1 and LOOP from 162, with CR and spaces stripped. Inferred and labelled: the linear falloff, a bank name's `.wav`, the ms unit, a delay of 0 looping, and ids 32 to 161.
+  - **Voices.** Emitters play on at most eight voices of their own, so cues always keep theirs.
+  - **Music.** The music region the player stands in plays through `rustysynth` 1.3.8 (MIT) on a SoundFont the player names with `--soundfont`. There is no music without one, a stated departure. How regions choose among themselves, fade and switch music is this client's estimate; the follow-up read covers only the fade value's clamp.
+  - **Options.** New per-character options: Music, Music Volume (wired to the skin's slider), Environment Sounds and Combat Music. A character without its own choice seeds them from `eqclient.ini`'s `Music` (0 is off), `EnvSounds` and `CombatMusic`.
+  - `/combatmusic` toggles and saves combat music, saying in this client's words that it plays none yet.
+  - A `nosound.txt` in the installation turns all sound off.
+  - Unknown record types and music ids of 0 or more are logged once a zone and not played. Everything stops on a zone change, camp, logout or lost connection.
+
 
 - Scripts can click spawns, ground objects and doors in the world by id (checklist 6.587), since a script may do whatever the player can (Adam, 11-23). `click("spawn", admission, id, revision)` targets a spawn (two of one name included), `right_click` loots, trades, boards or considers it without changing the target, `click("object", admission, drop_id)` picks up an item or opens a world container, and `click("door", admission, id)` makes a door's two clicks. Each click goes through the scene's own pick, with the script's pointer as the cursor: it acts only where the pick names that same thing right now, so a thing behind a wall, off screen or under a window is refused and nothing is sent. The report's surroundings line gives the admission and each nearby spawn's click tuple. A run that stops mid-click hands the scene back the real pointer the next frame.
 
@@ -188,6 +465,40 @@
   string is none. The Mac-era client installs no such file. Nothing loads
   it yet: the AA window comes later.
 - CI: the Lint workflow gains a Docs job, `cargo doc --workspace --no-deps --locked` with `RUSTDOCFLAGS=-D warnings`, on every pull request and push to main beside Format (Adam's yes, 11-23). A broken doc link now fails the PR it lands in.
+- A second click on the boat you stand on, while its take still waits for
+  the server's echo, asks for it again, as the program's does (read R35
+  (c), (e); checklist 6.533). The click was already a take here, since a
+  waiting take holds nothing; a test now pins that. From eq-network
+  `4946ab9` on, the session sends that take again and keeps the first
+  take's wait instead of refusing it as already active, so the change
+  reaches play when this client's pin passes that commit. A release
+  already ends local control at once, as the program's does: the session
+  drops control before it sends (6.477, which needed only its docs fixed).
+
+- Draw players with the Luclin models where the viewer chose them
+  (checklist 6.554, Luclin slice L1). The choice is one per-character
+  option, `luclin_models` in the options file (a list of model codes such as
+  `HUM,DAF`), none by default. Where the official client's `eqclient.ini`
+  sets `[Defaults] UseLuclin<Race><Gender>`, that seeds it. Those key names
+  are recalled, not read (R49-44a): they live in one table,
+  `eq_client_assets::ui::LUCLIN_MODEL_KEYS`, and a file that names none
+  leaves every model classic. The server sends nothing that chooses, so the
+  choice is the viewer's alone on every server, P99 included, as the
+  official client's `eqclient.ini` is. The choice covers players and
+  their corpses (the corpse inferred); non-players of player races and
+  illusions stay classic until the read. It is fixed per zone, so a change
+  shows from the next one (inferred, R49-44b).
+  - `eq_client_assets::characters::load_luclin_character` reads a race's
+    Luclin model in its base look, through the archive and donor table the
+    creation preview uses (`luclin_source`). A model that can't be read draws
+    the classic one, said once a run.
+  - Departure until L2 and L3: a Luclin player shows the base face, hair and
+    eyes, and no worn armour, tints or helm; held items still show.
+  - The look changes only what is drawn (and the name, which rides on the
+    drawn head): the size, feet, collision height, reach and breath come
+    from the race, size and classic model as before, with tests. The zone's classic scale flag
+    applies as Titanium's race rule reads (R49-44d asks whether the program
+    skips Luclin models).
 - A session that ends leaves no ask for the next (gap 3.11, checklist
   6.535). The chat state's pending asks (a `/target`, `/who`, `/loc` or
   `/time`, a guild or split command, a boat take, `/follow`, a Ranger's
@@ -198,6 +509,23 @@
   `/quit`, naming every field so a new one has to be sorted into kept or
   cleared. A typed ask still survives a zone change within the session, as
   before, and nothing is said for a cleared one.
+- The Player window's "%" signs show only with their numbers (gap 3.9,
+  checklist 6.529). While the mana or endurance estimate has no maximum, the
+  default skin showed its "%" with no number over an empty bar; now the sign
+  hides until the number shows, as the Group window's already does, and the
+  hit point sign follows the same rule. The program always knows its
+  maximum, so what shows until ours is known is our choice (inferred). The
+  sign names (`PW_HPPercLabel`, `PW_ManaPercLabel`, `PW_FatiguePercLabel`,
+  also `Endurance` and `Stamina`) are inferred from the Group window's until
+  the default skin is looked at; a skin naming them otherwise keeps its own
+  text. The estimate itself is unchanged.
+- `/ttell message` and `/whotarget` (checklist 6.528, inferred). `/ttell`
+  becomes the `/tell` to the targeted player and goes as a typed one, item
+  links included; `/whotarget` lists the target's name in the zone's
+  `/who`. A tell goes only to another player whose name is letters alone;
+  any other target gets this client's own line and nothing is sent.
+  `/ttell` counts as chat for scripts, which cannot send it.
+
 - Read zones in the EQG format newer clients install, for RoF2 later:
   `eq_client_assets::eqg::load_eqg_zone` turns `<zone>.eqg`'s descriptor,
   terrain and model meshes, placements and diffuse textures into the same
@@ -208,6 +536,136 @@
   6.498); regions and lights aren't read. Nothing calls it yet:
   `load_zone` still reads S3D archives alone.
 
+- Jump onto what the floor sweep reaches as the Titanium client does: a
+  standing jump or fall that meets an edge whose top is within 3.375 of
+  its feet (for a human of size 6) now lands on it instead of stopping and
+  dropping, so a running jump from the Erud's Crossing planks lands on a
+  docked ship's deck. A standing jump mounts a ledge up to its rise plus
+  that reach, about 8.3 for a human, where before it mounted nothing it
+  couldn't walk up. The landing leaves no vertical speed, as the
+  program's put-back does (read R42; inferred bound, checklist 6.484).
+  Ducking, wet feet and the Mac-era generation are unchanged, and the
+  landing sample stays inside the session's guard.
+- Script `slash()` steps take the Titanium forms socials and hotbuttons use:
+  `/yell`, `/stopcast`, `/autoinventory`, `/played`, `/doability`,
+  `/memspellset`, `/lootnodrop` and `/hidecorpses`, each through the same handler as the
+  typed line, and `/hotbutton` as a social step. `/yell` and `/hotbutton` need a
+  local test session (checklist 6.505).
+
+- Drop an item on the ground without the question with `/fastdrop`
+  (checklist 6.536), where ground drop is offered (local `EQEmu` today).
+  Each `/fastdrop` turns it over and says the state it lands in, in this
+  client's words. With it on, **Drop cursor item** sends at once through the
+  same checks and the same one-at-a-time hold as a Yes; a destroy and every
+  other question still ask. It is off at start, never saved, and off again
+  at a world entry, a camp, a return to login or a lost link (a zone change
+  keeps it). A social, a hotbutton or a script's `slash("fastdrop")` turns it
+  over as typing does (checklist 6.584). The program's handler (0x4685ba) is unread, so
+  all of this is inferred (pending R49-6n). It sends nothing itself.
+
+- Say where the player is bound with `/charinfo` (checklist 6.524), from
+  the session's new `BoundIn` (eq-network #353): "Your bind point is in
+  <zone>.", in this client's words, as the program's handler (0x46f6ec) is
+  unread (pending R49-6m). The zone's long name is used, else its short
+  name, else its number; before the profile says it, "Your bind point is
+  not known yet." The bind is the zone-in profile's, so one that lands
+  mid-session shows from the next zone-in (inferred). It sends nothing, on
+  any server. A script may run `slash("charinfo")`, as `/loc` and `/time`.
+  Repins eq-network to #353; the title list waits in the ignore arm for its
+  thread's PR.
+
+- Play each zone's music and ambient sound from the installation's own
+  files (item 6.503; how the original program does it is pending read
+  R49-7). `eq-client-assets` reads `<zone>_sounds.eff` emitters (84-byte
+  records, layout inferred), the `<zone>_sndbnk.eff` EMIT and LOOP lists, and
+  converts `<zone>.xmi` sequences to standard MIDI, all bounded and tested
+  with inputs built in code. The render crate plays emitters by distance and
+  day or night on at most eight voices of their own, so cues always keep
+  theirs, and plays the music region the player stands in through
+  `rustysynth` 1.3.8 (MIT) on a SoundFont the player names with
+  `--soundfont`; there is no music without one (a stated departure). New
+  per-character options Music, Music Volume (wired to the skin's slider) and
+  Environment Sounds. Unknown record kinds and negative music ids are logged
+  once a zone and not played. Everything stops on a zone change, camp,
+  logout or lost connection. Combat music is not built.
+- `/shield` (and `/sh`, socials and scripts): a Warrior's shield of the
+  targeted player, on stock EQEmu (6.517). Before it sends, the client
+  refuses a character that is not a Warrior or is under level 30, no
+  target or one gone from the spawn table, and the player themself, in its
+  own words, inferred until the program's handler is read. The server
+  answers NPC targets, distance, the recast and its rule with its own
+  lines. eq-network is repinned to f408f2e; the news its new events bring
+  (surname answers, chat channels, reports) is counted in the gap file
+  until each front end lands.
+- Record every server message a session drops or cannot read, and the
+  world news the client hears but does not show yet, so live runs become a
+  list of gaps to close (6.500). Each session writes one
+  `gaps/gaps-<UTC start>.json` in the settings directory, at most every
+  10 s and when the session ends: each gap by server type, generation,
+  stage, zone, opcode and kind, with its count, first and last seen, body
+  lengths and up to three 256-byte samples. Unshown world news is counted
+  by its kind's name alone, never by what it holds. Only the newest 50
+  files are kept. The files stay on this machine and never belong in a
+  repository: a zone sample may hold what other players said or their
+  names. `--gap-report [PATH...]` prints a Markdown report over the saved
+  files, gaps to close first; `--samples` adds the samples, which it leaves
+  out by default. Repins eq-network to the merge of #333 (72b0ccd), which
+  also brings the duel answer, Rogue poison, server filters and a chosen
+  chat language: their events are counted as unshown news here until their
+  own client changes land, and chat keeps to the common tongue as before.
+
+- Another player's helm follows their own Show My Helm (gap 3.10, checklist
+  6.513), as their spawn record and each appearance kind 43 change tell of
+  it, where the session offers `Capability::ShowingHelm` (stock EQEmu).
+  Elsewhere, and for NPCs and corpses, every helm shows as before. Inferred,
+  pending program read R49-13.
+- Join chat server channels on stock EQEmu (checklist 6.509). `/join`,
+  `/leave`, `/leaveall`, `/list`, `/announce`, `/1` to `/10` and `/chat`
+  send the chat server's own words as `ClientCommand::ChatChannel` where
+  the session offers `Capability::ChatChannels`. Elsewhere they say "You are
+  not connected to the chat server." They work typed, in socials and on
+  hotbuttons. Channel messages print through the ordinary chat path with
+  their item links, as `Name tells channel:N, 'text'`. The slot comes from
+  the server's last joined list, kept across zones, and before a list names
+  the channel the line shows the channel's name alone. Member joins and
+  leaves, the server's own lines, a lost link and refusals print too.
+  Every wording and form is this client's, inferred until read R49-12.
+  `/autojoin` is not built. `/chat` passes only the chat server's channel
+  words, never its mail, friends, ignore or saved-channel words. Channel and
+  player names print without control characters or link markers. A
+  script's `slash()` does not reach these commands.
+  Repins eq-network to d0c75e2 (#341 with #327 to #340). Their poison,
+  filters, duel, surname, report and gap events are passed over here until
+  their own client changes land. Outgoing chat names `Tongue::COMMON`.
+- Reach a Titanium door from the point clicked on it (checklist 6.530,
+  read R16b and R16e). A mouse click on a door sends where the pointer's
+  ray met the door as drawn (`ClickDoor.point`, eq-network #358), and the
+  session admits it within the player's size and 20 in 3-D, as the
+  program does, so a lift resting above can be called from its deck by the
+  part clicked. A click out of reach is no longer dropped without a word:
+  the session refuses it and the chat shows the program's line 1462. The
+  Use key and scripts send no point and keep the stricter reach to the
+  door's origin; the Use key's own ray is unread (R49-19). `EQMac` doors
+  are unchanged.
+- Name a strafe's pace (checklist 6.540). A strafe sample says whether Walk
+  or Run is selected (`MovementMode::Strafe(Pace)`, eq-network #365), the
+  same choice that already picks its rate, so the session bounds a walking
+  strafe by the walking strafe rate rather than the running one. Nothing a
+  player sees or the server receives changes.
+- eq-network is repinned to 266039c. The events other changes show (titles,
+  a surname's answer, the bind zone, a poison's answer, chat channels, the
+  chat pace refusal, filters, a duel's offer, reports, RoF2 buff icons and
+  pools) are left to those changes; a command dropped before a fresh login
+  is logged by its kind.
+
+- Keep the latest title list (gap 3.6 titles half, checklist 6.516). Where
+  the session offers titles (stock EQEmu only, for now), the core keeps the
+  list the server last sent in this zone (`ClientWorld::titles`), forgotten
+  on a zone change; elsewhere a list is ignored. Nothing asks for the list
+  or chooses a title yet: the program's title window is unread (R49-14), so
+  no command, script step or key reaches it. Repins eq-network to the titles
+  change (#346); the chat server's channels (6.509) and the petition and bug
+  report answers (6.511) are ignored until their own client PRs land.
 - Walk onto low edges as the Titanium client does: a standing walk now
   climbs anything it runs into up to 1.25 above the body's origin, so a
   human of size 6 steps over Erudin's pier-end rail and onto its posts

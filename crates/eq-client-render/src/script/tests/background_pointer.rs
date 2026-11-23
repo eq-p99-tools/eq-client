@@ -419,3 +419,72 @@ fn passive_background_clicks_keep_coverage_and_attended_pointer_isolation() {
         );
     }
 }
+
+/// A window frame with nothing drawn in it, as the effects window with no
+/// effects up: it blocks the pointer and takes no input itself.
+fn empty_frame_over_give(app: &mut App, give: Entity, other: Entity) -> Entity {
+    let frame = app
+        .world_mut()
+        .spawn((
+            Node::default(),
+            bevy::ui::FocusPolicy::Block,
+            laid_out(Vec2::new(240.0, 360.0), 100.0, 10),
+        ))
+        .id();
+    *app.world_mut().resource_mut::<UiStack>() = UiStack {
+        partition: std::iter::once(0..3).collect(),
+        uinodes: vec![give, other, frame],
+    };
+    frame
+}
+
+/// Presses and releases the real left button at `at`, as a player clicks,
+/// with no script running.
+fn native_click(app: &mut App, window: Entity, at: Vec2, from_ms: u64) {
+    app.world_mut().remove_resource::<Script>();
+    set_focus(app, window, true);
+    app.world_mut()
+        .get_mut::<Window>(window)
+        .unwrap()
+        .set_cursor_position(Some(at));
+    frame_at(app, from_ms);
+    for (offset, state) in [(10, ButtonState::Pressed), (20, ButtonState::Released)] {
+        app.world_mut().write_message(MouseButtonInput {
+            button: MouseButton::Left,
+            state,
+            window,
+        });
+        frame_at(app, from_ms + offset);
+    }
+}
+
+#[test]
+fn an_empty_frame_over_a_control_takes_a_real_click_as_it_takes_a_scripts() {
+    // The 11-19 report (checklist 6.506): a script click meant for a slot
+    // under the empty effects window went to the window. The script pointer
+    // and the real one meet the same frame, so neither reaches the control
+    // under it; whether the official client's empty effects window takes
+    // clicks is a parity question, not a script fault.
+    let (mut app, window, give, _) = fixture(Vec::new());
+    native_click(&mut app, window, Vec2::new(240.0, 360.0), 0);
+    assert_eq!(app.world().resource::<Recorded>().presses, [give]);
+
+    let (mut app, window, give, other) = fixture(Vec::new());
+    empty_frame_over_give(&mut app, give, other);
+    native_click(&mut app, window, Vec2::new(240.0, 360.0), 0);
+    assert_eq!(
+        app.world().resource::<Recorded>().presses,
+        [] as [Entity; 0]
+    );
+
+    let (mut app, _, give, other) = fixture(vec![Step::Click(ClickTarget::Give)]);
+    empty_frame_over_give(&mut app, give, other);
+    for ms in [0, 10, 260, 270] {
+        frame_at(&mut app, ms);
+    }
+    assert_eq!(
+        app.world().resource::<Recorded>().presses,
+        [] as [Entity; 0]
+    );
+    assert_eq!(app.world().resource::<RunStatus>().phase(), Phase::Failed);
+}

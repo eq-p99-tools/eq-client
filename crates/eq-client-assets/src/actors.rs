@@ -33,14 +33,13 @@ pub fn load_installed_actor(
         .filter(|metadata| metadata.len() <= 65_536)
         .and_then(|_| std::fs::read_to_string(manifest).ok())
         .map_or_else(Vec::new, |text| imports(&text, tag));
-    let archives = std::iter::once(format!("{zone}_chr"))
+    let archives = std::iter::once(crate::archives::zone_characters(zone))
         .chain(imported)
-        .chain(std::iter::once("global_chr".to_owned()))
-        .chain((2..=7).map(|index| format!("global{index}_chr")));
+        .chain(crate::archives::global_characters());
     let mut last = None;
     for stem in archives {
         match guarded(&stem, || {
-            read_actor(&directory.join(format!("{stem}.s3d")), &stem, tag)
+            read_actor(&crate::archives::path(directory, &stem), &stem, tag)
         }) {
             Ok(actor) => return Ok(actor),
             Err(error) => last = Some(error),

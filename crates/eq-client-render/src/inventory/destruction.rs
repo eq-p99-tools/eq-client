@@ -839,6 +839,28 @@ mod tests {
         assert!(rx.try_recv().is_err());
     }
 
+    /// `/fastdrop` lifts only the item drop's question: a destroy still
+    /// asks (6.536).
+    #[test]
+    fn a_destroy_still_asks_with_fast_drop_on() {
+        let online = online();
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let outbox = Outbox::new(Some(tx));
+        let mut state = InventoryState {
+            fast_drop: true,
+            ..InventoryState::default()
+        };
+        let mut asked = Asked::default();
+        state
+            .destroy_action(Action::Select, &online, &outbox, &mut asked)
+            .unwrap();
+        assert!(matches!(
+            asked.question(),
+            Some(Question::DestroyItem { session_id: 7, .. })
+        ));
+        assert!(rx.try_recv().is_err());
+    }
+
     #[test]
     fn cancel_and_confirm_use_one_frozen_whole_cursor_and_never_remove_locally() {
         let online = online();
