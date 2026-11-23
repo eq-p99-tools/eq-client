@@ -652,9 +652,7 @@ pub(super) fn depart(
         return;
     };
     chat.departure = None;
-    chat.requested_target = None;
-    chat.zone_who = None;
-    chat.asked = None;
+    chat.forget_admission();
     front.end(None, &mut link);
     online.disconnect(&mut panels, &mut scene, &mut commands);
 
