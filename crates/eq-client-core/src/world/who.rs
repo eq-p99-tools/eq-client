@@ -96,6 +96,7 @@ impl ClientWorld {
         relist(change, &mut player.level, &mut player.listing);
         let notice = match change {
             ListingChange::Away(away) => Some(ListingNotice::Away(away)),
+            ListingChange::Looking(looking) => Some(ListingNotice::Looking(looking)),
             ListingChange::Anonymity(after) => anonymity_notice(before, after),
             _ => None,
         };

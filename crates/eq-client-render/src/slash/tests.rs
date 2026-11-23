@@ -87,7 +87,12 @@ fn a_yell_says_its_line_and_sends_with_no_target_or_posture_test() {
 #[test]
 fn a_server_without_the_send_keeps_todays_answer() {
     let online = admitted(Vec::new());
-    for asked in [Asked::Yell, Asked::StopCast, Asked::Duel { named: false }] {
+    for asked in [
+        Asked::Yell,
+        Asked::StopCast,
+        Asked::Duel { named: false },
+        Asked::Lfg(LfgWords::None),
+    ] {
         let refusal =
             answer(asked, online.world(), Some(&Spells), &Messages::default()).unwrap_err();
         assert_eq!(
@@ -278,6 +283,64 @@ fn the_answer_system_sends_a_challenge_once() {
             session_id: 5,
             target: 12,
             ..
+        })
+    ));
+    app.update();
+    assert!(received.try_recv().is_err());
+}
+
+#[test]
+fn lfg_takes_alone_on_or_off_and_refuses_any_other_word() {
+    assert_eq!(Asked::typed("/lfg"), Some(Asked::Lfg(LfgWords::None)));
+    assert_eq!(Asked::typed("/LFG On"), Some(Asked::Lfg(LfgWords::On)));
+    assert_eq!(Asked::typed("/lfg off"), Some(Asked::Lfg(LfgWords::Off)));
+    assert_eq!(
+        Asked::typed("/lfg 20 30"),
+        Some(Asked::Lfg(LfgWords::Other))
+    );
+    assert_eq!(
+        Asked::typed("/lfg on now"),
+        Some(Asked::Lfg(LfgWords::Other))
+    );
+    let online = admitted(vec![Capability::LookingForGroup]);
+    let lfg = |words| {
+        answer(
+            Asked::Lfg(words),
+            online.world(),
+            None,
+            &Messages::default(),
+        )
+    };
+    assert_eq!(lfg(LfgWords::None), Ok((None, Some(Sent::Looking(None)))));
+    assert_eq!(
+        lfg(LfgWords::On),
+        Ok((None, Some(Sent::Looking(Some(true)))))
+    );
+    assert_eq!(
+        lfg(LfgWords::Off),
+        Ok((None, Some(Sent::Looking(Some(false)))))
+    );
+    assert_eq!(
+        lfg(LfgWords::Other).unwrap_err().words.text,
+        "This client takes /lfg alone, /lfg on or /lfg off."
+    );
+}
+
+#[test]
+fn the_answer_system_sends_lfg_once() {
+    let mut app = App::new();
+    let (queue, received) = std::sync::mpsc::sync_channel(4);
+    app.insert_resource(admitted(vec![Capability::LookingForGroup]))
+        .insert_resource(Outbox::new(Some(queue)))
+        .init_resource::<ChatState>()
+        .add_systems(Update, answers);
+    app.world_mut().resource_mut::<ChatState>().slash = Some(Asked::Lfg(LfgWords::On));
+    app.update();
+    assert!(matches!(
+        received.try_recv(),
+        Ok(ClientCommand::LookForGroup {
+            session_id: 5,
+            on: Some(true)
         })
     ));
     app.update();

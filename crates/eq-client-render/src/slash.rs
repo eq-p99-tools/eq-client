@@ -2,7 +2,9 @@
 //! hotbuttons and that the client answers with a line of its own (reads R45
 //! and R45b): `/yell` and `/stopcast`; and `/duel`, a challenge to the
 //! player targeted (checklist 6.492b), whose handler is not read yet
-//! (pending R49-6h), so its lines are this client's. Each line is the
+//! (pending R49-6h), so its lines are this client's; and `/lfg`, looking
+//! for a group (checklist 6.515), whose forms and lines are this client's
+//! until its handler is read (pending R49-6i). Each line is the
 //! installed client's string where it has one; this client's words stand
 //! in otherwise. On a server that offers none of the sends, each keeps
 //! today's answer.
@@ -33,6 +35,23 @@ pub(crate) enum Asked {
         /// Whether words followed the command.
         named: bool,
     },
+    /// `/lfg`: looking for a group, as its words ask.
+    Lfg(LfgWords),
+}
+
+/// What followed `/lfg`. Only `on` and `off` are taken, as this client's
+/// own forms: the program's are not read (checklist 6.515, pending
+/// R49-6i).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LfgWords {
+    /// Nothing: turn it over.
+    None,
+    /// `on`.
+    On,
+    /// `off`.
+    Off,
+    /// Anything else, which sends nothing.
+    Other,
 }
 
 /// What goes to the session for what the player asked.
@@ -47,6 +66,8 @@ pub(crate) enum Sent {
         /// The player challenged.
         target: u16,
     },
+    /// Looking for a group: set, or turned over for None.
+    Looking(Option<bool>),
 }
 
 impl Asked {
@@ -65,6 +86,14 @@ impl Asked {
             Some(Self::Duel {
                 named: words.next().is_some(),
             })
+        } else if name.eq_ignore_ascii_case("lfg") {
+            let first = words.next();
+            Some(Self::Lfg(match (first, words.next()) {
+                (None, _) => LfgWords::None,
+                (Some(word), None) if word.eq_ignore_ascii_case("on") => LfgWords::On,
+                (Some(word), None) if word.eq_ignore_ascii_case("off") => LfgWords::Off,
+                _ => LfgWords::Other,
+            }))
         } else {
             None
         }
@@ -75,6 +104,7 @@ impl Asked {
             Self::Yell => "yell",
             Self::StopCast => "stopcast",
             Self::Duel { .. } => "duel",
+            Self::Lfg(_) => "lfg",
         }
     }
 
@@ -83,6 +113,7 @@ impl Asked {
             Self::Yell => Capability::Yelling,
             Self::StopCast => Capability::StoppingCasts,
             Self::Duel { .. } => Capability::Dueling,
+            Self::Lfg(_) => Capability::LookingForGroup,
         }
     }
 }
@@ -143,6 +174,18 @@ fn answer(
                 "This client does not take a name after /duel yet; target the player and type /duel.",
             ));
         }
+        // The session tells the change, and says nothing for a state the
+        // player is in already.
+        Asked::Lfg(words) => match words {
+            LfgWords::None => (None, Some(Sent::Looking(None))),
+            LfgWords::On => (None, Some(Sent::Looking(Some(true)))),
+            LfgWords::Off => (None, Some(Sent::Looking(Some(false)))),
+            LfgWords::Other => {
+                return Err(Said::own(
+                    "This client takes /lfg alone, /lfg on or /lfg off.",
+                ));
+            }
+        },
         // No line on sending: whether the program says one is unread, and
         // the session may still refuse (one challenge at a time, paced).
         Asked::Duel { named: false } => match challenged(world) {
@@ -194,6 +237,10 @@ pub(super) fn answers(
                         session_id: stamp.session_id,
                         target,
                         created: stamp.created,
+                    },
+                    Sent::Looking(on) => ClientCommand::LookForGroup {
+                        session_id: stamp.session_id,
+                        on,
                     },
                 });
             }
