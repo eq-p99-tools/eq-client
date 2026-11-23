@@ -222,7 +222,7 @@ impl ClientWorld {
                 && !spells.instant_effect(u32::from(effect.spell_id))
             {
                 let landing = self.landing(effect, spells);
-                self.buffs.observe_effect(effect.clone(), landing, now);
+                self.buffs.observe_effect(effect.clone(), &landing, now);
             }
         } else {
             changes.ignored = true;

@@ -751,6 +751,9 @@ impl ClientWorld {
             WorldEvent::PoisonStarted { .. } | WorldEvent::PoisonInterrupted { .. } => {
                 news.ignored = true;
             }
+            // The song stop's line (eq-network #421) waits on the Bard
+            // thread's client half, stacked on this repin.
+            WorldEvent::SongStopped { .. } => news.ignored = true,
             WorldEvent::PlayedTime(played) => self.played = Some((*played, now)),
             WorldEvent::HazardReported {
                 session_id,

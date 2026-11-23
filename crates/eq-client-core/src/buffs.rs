@@ -478,7 +478,7 @@ impl BuffTracker {
     /// is held without a slot, where the program's table has room is
     /// unknown, so a new landing gets no slot: a wrong slot would go out in
     /// a click-off and could take off another buff.
-    pub fn observe_effect(&mut self, effect: SpellEffect, landing: Landing, now: Instant) {
+    pub fn observe_effect(&mut self, effect: SpellEffect, landing: &Landing, now: Instant) {
         if !effect.took_hold() || matches!(effect.spell_id, 0 | u16::MAX) {
             return;
         }
@@ -573,7 +573,7 @@ impl BuffTracker {
                 // Step 3 refuses a refresh where the stored level is above
                 // the caster's, or for effects 0x43, 0x65 and 0x71, and
                 // keeps the old record (R20 (g)).
-                let model = Model::landed(old, spell, &landing);
+                let model = Model::landed(old, spell, landing);
                 self.placed.insert(placed.slot, spell);
                 self.models.insert(spell, model);
             }
@@ -924,7 +924,7 @@ mod tests {
         assert_eq!(state.slots().unwrap()[&3].spell_id, 43);
         state.apply(update(3, u32::MAX, false), now());
         assert_eq!(state.slots().unwrap()[&3].spell_id, 43);
-        state.observe_effect(effect(43), Landing::default(), now());
+        state.observe_effect(effect(43), &Landing::default(), now());
         assert!(state.slots().unwrap().is_empty());
         assert_eq!(
             state.revision(),
@@ -951,8 +951,8 @@ mod tests {
         state.apply(update(25, 43, false), now());
         assert!(!state.has_short());
         // Effects without a slot take the empty buttons, as they landed.
-        state.observe_effect(effect(51), Landing::default(), now());
-        state.observe_effect(effect(50), Landing::default(), now());
+        state.observe_effect(effect(51), &Landing::default(), now());
+        state.observe_effect(effect(50), &Landing::default(), now());
         assert_eq!(spell(&state, EffectWindow::Long, 0), Some(51));
         assert_eq!(spell(&state, EffectWindow::Long, 1), Some(50));
         assert_eq!(spell(&state, EffectWindow::Long, 2), None);
@@ -1050,7 +1050,7 @@ mod tests {
         state.apply(update(3, 42, false), now());
         // EQEmu follows its identified fade with an empty-slot fade.
         state.apply(update(3, u32::MAX, false), now());
-        state.observe_effect(effect(43), Landing::default(), now());
+        state.observe_effect(effect(43), &Landing::default(), now());
         assert!(state.slots().unwrap().is_empty());
         assert_eq!(state.effects().len(), 1);
         state.apply(update(3, 43, true), now());
@@ -1062,8 +1062,8 @@ mod tests {
     fn unslotted_fades_and_refreshes_do_not_leave_duplicate_icons() {
         let mut state = BuffTracker::empty_snapshot();
         state.apply(update(3, 42, true), now());
-        state.observe_effect(effect(42), Landing::default(), now());
-        state.observe_effect(effect(42), Landing::default(), now());
+        state.observe_effect(effect(42), &Landing::default(), now());
+        state.observe_effect(effect(42), &Landing::default(), now());
         assert!(state.slots().unwrap().is_empty());
         assert_eq!(state.effects().len(), 1);
         state.apply(update(3, 42, false), now());
@@ -1095,14 +1095,14 @@ mod tests {
         let mut begin = effect(42);
         begin.effect_flag = 0;
         // First cast: begin action, then landed action; no slot update followed.
-        state.observe_effect(begin.clone(), Landing::default(), now());
-        state.observe_effect(effect(42), Landing::default(), now());
+        state.observe_effect(begin.clone(), &Landing::default(), now());
+        state.observe_effect(effect(42), &Landing::default(), now());
         // Recast: begin action, identified fade of slot 0, empty-slot fade, landed action.
-        state.observe_effect(begin, Landing::default(), now());
+        state.observe_effect(begin, &Landing::default(), now());
         state.apply(update(0, 42, false), now());
         assert!(state.effects().is_empty());
         state.apply(update(0, u32::MAX, false), now());
-        state.observe_effect(effect(42), Landing::default(), now());
+        state.observe_effect(effect(42), &Landing::default(), now());
         assert!(state.slots().unwrap().is_empty());
         assert_eq!(state.effects().keys().copied().collect::<Vec<_>>(), [42]);
     }
@@ -1143,13 +1143,13 @@ mod tests {
         state.apply(update(4, 43, false), later(31));
         assert_eq!(state.time_left(4, later(31)), None);
         // An effect without a slot keeps when it last landed.
-        state.observe_effect(effect(50), Landing::default(), later(10));
-        state.observe_effect(effect(50), Landing::default(), later(20));
+        state.observe_effect(effect(50), &Landing::default(), later(10));
+        state.observe_effect(effect(50), &Landing::default(), later(20));
         assert_eq!(state.landed(50), Some(later(20)));
         state.apply(update(9, 50, false), later(21));
         assert_eq!(state.landed(50), None);
         // A refresh of a slotted spell drops the slot's count with it.
-        state.observe_effect(effect(42), Landing::default(), later(40));
+        state.observe_effect(effect(42), &Landing::default(), later(40));
         assert_eq!(state.time_left(3, later(40)), None);
         assert_eq!(state.landed(42), Some(later(40)));
     }
@@ -1223,7 +1223,7 @@ mod tests {
         assert_eq!(received.duration_ticks, -1);
         assert_eq!(received.estimated_remaining, None);
         // A landing invalidates the received assignment and its duration.
-        state.observe_effect(effect(42), lands(NORMAL), start);
+        state.observe_effect(effect(42), &lands(NORMAL), start);
         assert_eq!(state.slot_of(42), Some(3));
         assert_eq!(state.received_duration(3, start), None);
         // A by-spell correction can reach a modelled record without proving
@@ -1235,7 +1235,7 @@ mod tests {
     #[test]
     fn new_admission_discards_old_effects_and_preserves_snapshot_holes() {
         let mut state = BuffTracker::empty_snapshot();
-        state.observe_effect(effect(42), Landing::default(), now());
+        state.observe_effect(effect(42), &Landing::default(), now());
         state.clear();
         assert!(state.slots().is_none());
         assert!(state.effects().is_empty());
@@ -1246,7 +1246,7 @@ mod tests {
         );
         let mut non_buff = effect(44);
         non_buff.effect_flag = 0;
-        state.observe_effect(non_buff, Landing::default(), now());
+        state.observe_effect(non_buff, &Landing::default(), now());
         assert!(state.effects().is_empty());
     }
 
@@ -1342,8 +1342,8 @@ mod tests {
     fn modelled_slots_keep_their_place_when_an_earlier_buff_fades() {
         let mut state = BuffTracker::default();
         state.replace_snapshot(BTreeMap::new(), 25, now());
-        state.observe_effect(effect(50), lands(NORMAL), now());
-        state.observe_effect(effect(51), lands(NORMAL), now());
+        state.observe_effect(effect(50), &lands(NORMAL), now());
+        state.observe_effect(effect(51), &lands(NORMAL), now());
         assert_eq!(state.modelled(), &BTreeMap::from([(0, 50), (1, 51)]));
         // The server's fade pair for slot 0.
         assert!(!state.apply(update(0, 50, false), now()));
@@ -1354,7 +1354,7 @@ mod tests {
             Some(Shown::Modelled(1, effect)) if effect.spell_id == 51
         ));
         // The next landing takes the lowest empty slot.
-        state.observe_effect(effect(52), lands(NORMAL), now());
+        state.observe_effect(effect(52), &lands(NORMAL), now());
         assert_eq!(state.slot_of(52), Some(0));
         assert_eq!(state.slot_mismatches(), 0);
     }
@@ -1363,17 +1363,17 @@ mod tests {
     fn placement_treats_received_slots_as_held_and_a_refresh_keeps_its_slot() {
         let mut state = BuffTracker::default();
         state.replace_snapshot(BTreeMap::from([(0, buff(43)), (2, buff(45))]), 25, now());
-        state.observe_effect(effect(44), lands(NORMAL), now());
+        state.observe_effect(effect(44), &lands(NORMAL), now());
         assert_eq!(state.slot_of(44), Some(1));
         // A refresh of the received 43 takes over its slot.
-        state.observe_effect(effect(43), lands(NORMAL), now());
+        state.observe_effect(effect(43), &lands(NORMAL), now());
         assert_eq!(state.slot_of(43), Some(0));
         assert_eq!(
             state.slots().unwrap().keys().copied().collect::<Vec<_>>(),
             [2]
         );
         assert_eq!(spells(&state), [43, 44, 45]);
-        state.observe_effect(effect(46), lands(NORMAL), now());
+        state.observe_effect(effect(46), &lands(NORMAL), now());
         assert_eq!(state.slot_of(46), Some(3));
         // A received record for a modelled spell's own slot takes it over.
         assert!(!state.apply(update(3, 46, true), now()));
@@ -1391,7 +1391,7 @@ mod tests {
             last: false,
         });
         assert!(!state.has_short());
-        state.observe_effect(effect(700), lands(song), now());
+        state.observe_effect(effect(700), &lands(song), now());
         assert_eq!(state.slot_of(700), Some(25));
         // A modelled song opens the short window.
         assert!(state.has_short());
@@ -1399,7 +1399,7 @@ mod tests {
             state.in_window(EffectWindow::Short, 0),
             Some(Shown::Modelled(25, effect)) if effect.spell_id == 700
         ));
-        state.observe_effect(effect(50), lands(None), now());
+        state.observe_effect(effect(50), &lands(None), now());
         assert_eq!(
             state.unplaced_reason(50),
             Some(NoSlot::Unplaceable(placement::Unplaced::SpellFieldsUnknown))
@@ -1416,19 +1416,19 @@ mod tests {
         // fade of B comes first. The program puts B in 0.
         let mut state = BuffTracker::default();
         state.replace_snapshot(BTreeMap::new(), 25, now());
-        state.observe_effect(effect(50), lands(NORMAL), now());
-        state.observe_effect(effect(51), lands(NORMAL), now());
+        state.observe_effect(effect(50), &lands(NORMAL), now());
+        state.observe_effect(effect(51), &lands(NORMAL), now());
         state.apply(update(0, 50, false), now());
         state.apply(update(0, u32::MAX, false), now());
         state.apply(update(1, 51, false), now());
         state.apply(update(1, u32::MAX, false), now());
-        state.observe_effect(effect(51), lands(NORMAL), now());
+        state.observe_effect(effect(51), &lands(NORMAL), now());
         assert_eq!(state.modelled(), &BTreeMap::from([(0, 51)]));
         assert_eq!(state.slot_mismatches(), 0);
         // A held effect-148 spell leaves a landing unplaced.
         state.observe_effect(
             effect(52),
-            Landing {
+            &Landing {
                 blocker: Some(true),
                 ..lands(NORMAL)
             },
@@ -1444,8 +1444,8 @@ mod tests {
     fn a_titanium_fade_ends_its_spell_wherever_it_is_held_and_its_empty_half_does_nothing() {
         let mut state = BuffTracker::default();
         state.replace_snapshot(BTreeMap::from([(4, buff(60))]), 25, now());
-        state.observe_effect(effect(50), lands(NORMAL), now());
-        state.observe_effect(effect(51), lands(NORMAL), now());
+        state.observe_effect(effect(50), &lands(NORMAL), now());
+        state.observe_effect(effect(51), &lands(NORMAL), now());
         // Modelled 50 in 0, but the server held it in 5.
         assert!(state.apply(titanium(Applies::FadeBySpell, 5, 50, None), now()));
         assert_eq!(spells(&state), [51, 60]);
@@ -1457,7 +1457,7 @@ mod tests {
         assert_eq!(spells(&state), [51]);
         assert_eq!(state.slot_mismatches(), 1);
         // An unslotted landing ends on its fade, as ever (A1).
-        state.observe_effect(effect(52), Landing::default(), now());
+        state.observe_effect(effect(52), &Landing::default(), now());
         assert_eq!(state.slot_of(52), None);
         state.apply(titanium(Applies::FadeBySpell, 9, 52, None), now());
         assert_eq!(spells(&state), [51]);
@@ -1471,9 +1471,9 @@ mod tests {
             record_type,
             ..lands(NORMAL)
         };
-        state.observe_effect(effect(50), typed(Some(4)), now());
-        state.observe_effect(effect(51), typed(Some(2)), now());
-        state.observe_effect(effect(52), typed(None), now());
+        state.observe_effect(effect(50), &typed(Some(4)), now());
+        state.observe_effect(effect(51), &typed(Some(2)), now());
+        state.observe_effect(effect(52), &typed(None), now());
         assert_eq!(state.modelled_record(50).unwrap().effect_type, 4);
         // A type-2 fade leaves the type-4 record held, as the program does,
         // and says so.
@@ -1497,7 +1497,7 @@ mod tests {
     fn an_update_by_spell_changes_the_record_in_place_and_never_moves_or_adds() {
         let mut state = BuffTracker::default();
         state.replace_snapshot(BTreeMap::from([(3, buff(60))]), 25, now());
-        state.observe_effect(effect(50), lands(NORMAL), now());
+        state.observe_effect(effect(50), &lands(NORMAL), now());
         // EQEmu's duration correction names its own slot, 7.
         let mut corrected = buff(50);
         corrected.duration_ticks = 99;
@@ -1527,7 +1527,7 @@ mod tests {
     fn a_slot_write_puts_the_record_there_as_it_stands() {
         let mut state = BuffTracker::default();
         state.replace_snapshot(BTreeMap::from([(2, buff(60))]), 25, now());
-        state.observe_effect(effect(50), lands(NORMAL), now());
+        state.observe_effect(effect(50), &lands(NORMAL), now());
         // Over the modelled 50 in 0.
         state.apply(titanium(Applies::BySlot, 0, 61, Some(buff(61))), now());
         assert_eq!(spells(&state), [60, 61]);
@@ -1544,7 +1544,7 @@ mod tests {
         // Over a modelled 50 in 0, the write of 50 itself contradicts
         // nothing.
         assert_eq!(state.slot_mismatches(), 1);
-        state.observe_effect(effect(50), lands(NORMAL), now());
+        state.observe_effect(effect(50), &lands(NORMAL), now());
         assert_eq!(state.slot_of(50), Some(1));
         state.apply(titanium(Applies::BySlot, 1, 50, Some(buff(50))), now());
         assert_eq!(state.slot_mismatches(), 1);
@@ -1555,7 +1555,7 @@ mod tests {
     fn a_slot_write_ends_the_unslotted_copy_of_its_spell() {
         let mut state = BuffTracker::default();
         state.replace_snapshot(BTreeMap::new(), 25, now());
-        state.observe_effect(effect(50), lands(None), now());
+        state.observe_effect(effect(50), &lands(None), now());
         assert_eq!(state.slot_of(50), None);
         state.apply(titanium(Applies::BySlot, 4, 50, Some(buff(50))), now());
         // One icon, in the slot written.
@@ -1571,17 +1571,17 @@ mod tests {
         // 1 or nowhere; 52 could then be in 1 or 2.
         let mut state = BuffTracker::default();
         state.replace_snapshot(BTreeMap::new(), 25, now());
-        state.observe_effect(effect(50), lands(NORMAL), now());
-        state.observe_effect(effect(51), conflicting(), now());
-        state.observe_effect(effect(52), lands(NORMAL), now());
+        state.observe_effect(effect(50), &lands(NORMAL), now());
+        state.observe_effect(effect(51), &conflicting(), now());
+        state.observe_effect(effect(52), &lands(NORMAL), now());
         assert_eq!(state.unplaced_reason(52), Some(NoSlot::OccupancyUnknown));
         assert_eq!(state.slot_of(52), None);
         // A refresh of a spell with a slot keeps it.
-        state.observe_effect(effect(50), lands(NORMAL), now());
+        state.observe_effect(effect(50), &lands(NORMAL), now());
         assert_eq!(state.slot_of(50), Some(0));
         // (ii) A spell held without a slot landing again, as a song pulses:
         // step 3 keeps it where the program has it, which is unknown.
-        state.observe_effect(effect(51), lands(NORMAL), now());
+        state.observe_effect(effect(51), &lands(NORMAL), now());
         assert_eq!(state.slot_of(51), None);
         assert_eq!(state.unplaced_reason(51), Some(NoSlot::OccupancyUnknown));
         assert_eq!(
@@ -1597,12 +1597,12 @@ mod tests {
         // Once nothing is held without a slot, placement resumes.
         state.apply(titanium(Applies::FadeBySpell, 1, 51, None), now());
         state.apply(titanium(Applies::FadeBySpell, 2, 52, None), now());
-        state.observe_effect(effect(53), lands(NORMAL), now());
+        state.observe_effect(effect(53), &lands(NORMAL), now());
         assert_eq!(state.slot_of(53), Some(1));
         // The next zone-in gives every slot, and the uncertainty ends.
-        state.observe_effect(effect(54), conflicting(), now());
+        state.observe_effect(effect(54), &conflicting(), now());
         state.replace_snapshot(BTreeMap::from([(0, buff(50))]), 25, now());
-        state.observe_effect(effect(55), lands(NORMAL), now());
+        state.observe_effect(effect(55), &lands(NORMAL), now());
         assert_eq!(state.slot_of(55), Some(1));
     }
 
@@ -1611,11 +1611,11 @@ mod tests {
         let mut state = BuffTracker::default();
         state.replace_snapshot(BTreeMap::new(), 25, now());
         for spell in 100..115 {
-            state.observe_effect(effect(spell), lands(NORMAL), now());
+            state.observe_effect(effect(spell), &lands(NORMAL), now());
         }
         assert_eq!(state.modelled().len(), 15);
         assert_eq!(state.modelled().keys().max(), Some(&14));
-        state.observe_effect(effect(115), lands(NORMAL), now());
+        state.observe_effect(effect(115), &lands(NORMAL), now());
         assert_eq!(state.slot_of(115), None);
         assert_eq!(
             state.unplaced_reason(115),
@@ -1628,9 +1628,9 @@ mod tests {
         ));
         // A later landing waits until the next zone-in; the fifteen keep
         // their slots on a refresh.
-        state.observe_effect(effect(116), lands(NORMAL), now());
+        state.observe_effect(effect(116), &lands(NORMAL), now());
         assert_eq!(state.unplaced_reason(116), Some(NoSlot::OccupancyUnknown));
-        state.observe_effect(effect(100), lands(NORMAL), now());
+        state.observe_effect(effect(100), &lands(NORMAL), now());
         assert_eq!(state.slot_of(100), Some(0));
         assert_eq!(state.slot_mismatches(), 0);
     }
@@ -1643,11 +1643,11 @@ mod tests {
             finder: crate::GameDialect::EqMac.buff_placement(),
             ..lands(NORMAL)
         };
-        state.observe_effect(effect(278), mac, now());
+        state.observe_effect(effect(278), &mac, now());
         assert_eq!(state.slot_of(278), None);
         assert_eq!(state.unplaced_reason(278), Some(NoSlot::NoFinder));
         // A refresh of a received buff drops its record, as before.
-        state.observe_effect(effect(43), mac, now());
+        state.observe_effect(effect(43), &mac, now());
         assert_eq!(state.slot_of(43), None);
         assert!(state.slots().unwrap().is_empty());
         assert_eq!(state.effects().len(), 2);
@@ -1667,31 +1667,31 @@ mod tests {
         for incoming in [
             Landing {
                 caster_level: None,
-                ..known
+                ..known.clone()
             },
             Landing {
                 keeps_record: None,
-                ..known
+                ..known.clone()
             },
             Landing {
                 blocker: Some(true),
-                ..known
+                ..known.clone()
             },
             Landing {
                 blocker: None,
-                ..known
+                ..known.clone()
             },
         ] {
             let mut state = BuffTracker::default();
             state.replace_snapshot(BTreeMap::from([(0, old.clone())]), 25, now());
-            state.observe_effect(effect(50), incoming, now());
+            state.observe_effect(effect(50), &incoming, now());
             assert!(state.modelled_effect_record(50).is_none());
             // A later apparent refusal cannot resolve an earlier ambiguous choice.
             state.observe_effect(
                 effect(50),
-                Landing {
+                &Landing {
                     keeps_record: Some(true),
-                    ..known
+                    ..known.clone()
                 },
                 now(),
             );
@@ -1701,9 +1701,9 @@ mod tests {
             state.apply(titanium(Applies::BySlot, 0, 50, Some(old.clone())), now());
             state.observe_effect(
                 effect(50),
-                Landing {
+                &Landing {
                     caster_level: Some(20),
-                    ..known
+                    ..known.clone()
                 },
                 now(),
             );
@@ -1714,13 +1714,13 @@ mod tests {
         let mut state = BuffTracker::empty_snapshot();
         state.observe_effect(
             effect(50),
-            Landing {
+            &Landing {
                 caster_level: None,
-                ..known
+                ..known.clone()
             },
             now(),
         );
-        state.observe_effect(effect(50), known, now());
+        state.observe_effect(effect(50), &known, now());
         assert!(state.modelled_effect_record(50).is_none());
     }
 
@@ -1738,15 +1738,15 @@ mod tests {
         for incoming in [
             Landing {
                 caster_level: None,
-                ..known
+                ..known.clone()
             },
             Landing {
                 record_type: None,
-                ..known
+                ..known.clone()
             },
         ] {
             let mut state = BuffTracker::empty_snapshot();
-            state.observe_effect(effect(50), incoming, now());
+            state.observe_effect(effect(50), &incoming, now());
             assert!(state.modelled_effect_record(50).is_none());
             state.apply(
                 titanium(Applies::BySpell, 0, 50, Some(correction.clone())),
@@ -1782,12 +1782,12 @@ mod tests {
         ] {
             let mut state = BuffTracker::default();
             state.replace_snapshot(BTreeMap::from([(0, old.clone())]), 25, now());
-            state.observe_effect(effect(50), incoming, now());
+            state.observe_effect(effect(50), &incoming, now());
             assert_eq!(state.modelled_effect_record(50), Some(&old));
         }
         let mut state = BuffTracker::default();
         state.replace_snapshot(BTreeMap::from([(0, old)]), 25, now());
-        state.observe_effect(effect(50), equal, now());
+        state.observe_effect(effect(50), &equal, now());
         let refreshed = state.modelled_effect_record(50).unwrap();
         assert_eq!((refreshed.caster_level, refreshed.effect_type), (40, 4));
         assert!(state.received_duration(0, now()).is_none());
@@ -1801,19 +1801,19 @@ mod tests {
             caster_level: Some(caster_level),
             ..lands(NORMAL)
         };
-        state.observe_effect(effect(50), level(40), now());
+        state.observe_effect(effect(50), &level(40), now());
         // A lower caster's refresh keeps the stored level.
-        state.observe_effect(effect(50), level(20), now());
+        state.observe_effect(effect(50), &level(20), now());
         assert_eq!(state.modelled_record(50).unwrap().caster_level, 40);
         // A higher one's writes its own.
-        state.observe_effect(effect(50), level(50), now());
+        state.observe_effect(effect(50), &level(50), now());
         assert_eq!(state.modelled_record(50).unwrap().caster_level, 50);
         // Effects 0x43, 0x65 and 0x71 refuse any refresh.
         let kept = Landing {
             keeps_record: Some(true),
             ..level(60)
         };
-        state.observe_effect(effect(50), kept, now());
+        state.observe_effect(effect(50), &kept, now());
         assert_eq!(state.modelled_record(50).unwrap().caster_level, 50);
         assert_eq!(state.slot_of(50), Some(0));
     }
@@ -1822,14 +1822,14 @@ mod tests {
     fn a_landing_whose_step_4_value_is_unknown_is_left_unplaced() {
         let mut state = BuffTracker::default();
         state.replace_snapshot(BTreeMap::new(), 25, now());
-        state.observe_effect(effect(50), lands(NORMAL), now());
-        state.observe_effect(effect(51), conflicting(), now());
+        state.observe_effect(effect(50), &lands(NORMAL), now());
+        state.observe_effect(effect(51), &conflicting(), now());
         assert_eq!(
             state.unplaced_reason(51),
             Some(NoSlot::Unplaceable(placement::Unplaced::ValueUnknown))
         );
         // A refresh keeps its own slot: step 3 comes first.
-        state.observe_effect(effect(50), conflicting(), now());
+        state.observe_effect(effect(50), &conflicting(), now());
         assert_eq!(state.slot_of(50), Some(0));
     }
 
@@ -1837,7 +1837,7 @@ mod tests {
     fn a_stronger_landing_replaces_a_received_buff_as_a_prediction() {
         let mut state = BuffTracker::default();
         state.replace_snapshot(BTreeMap::from([(0, buff(40))]), 25, now());
-        state.observe_effect(effect(41), stronger(10, 5), now());
+        state.observe_effect(effect(41), &stronger(10, 5), now());
         // Step 4 replaces 40 in its own slot (R49-22e).
         assert_eq!(state.slot_of(41), Some(0));
         assert!(!state.slots().unwrap().contains_key(&0));
@@ -1853,7 +1853,7 @@ mod tests {
         // reported with its rule and both spells.
         let mut state = BuffTracker::default();
         state.replace_snapshot(BTreeMap::from([(0, buff(40))]), 25, now());
-        state.observe_effect(effect(41), stronger(10, 5), now());
+        state.observe_effect(effect(41), &stronger(10, 5), now());
         state.apply(titanium(Applies::BySlot, 1, 40, Some(buff(40))), now());
         assert_eq!(
             state.take_disagreements(),
@@ -1866,7 +1866,7 @@ mod tests {
         assert!(state.take_disagreements().is_empty());
         // So does the next zone-in's table still holding it.
         state.replace_snapshot(BTreeMap::from([(0, buff(40))]), 25, now());
-        state.observe_effect(effect(42), stronger(10, 5), now());
+        state.observe_effect(effect(42), &stronger(10, 5), now());
         state.replace_snapshot(BTreeMap::from([(3, buff(40))]), 25, now());
         assert_eq!(state.take_disagreements().len(), 1);
     }
@@ -1875,7 +1875,7 @@ mod tests {
     fn a_weaker_landing_is_refused_and_the_held_buff_kept() {
         let mut state = BuffTracker::default();
         state.replace_snapshot(BTreeMap::from([(0, buff(40))]), 25, now());
-        state.observe_effect(effect(41), stronger(5, 10), now());
+        state.observe_effect(effect(41), &stronger(5, 10), now());
         assert_eq!(state.slot_of(41), None);
         assert_eq!(
             state.unplaced_reason(41),
