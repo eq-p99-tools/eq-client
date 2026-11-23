@@ -536,6 +536,7 @@ impl ChatState {
             motd_asked,
             fastdrop_asked,
             assist_words,
+            paced,
             // Cleared elsewhere: the link scope, the message of the day and
             // recall by `end_session`, the social inbox at every reset, and
             // the departure by `login::depart`.
@@ -548,7 +549,6 @@ impl ChatState {
             // Kept: the chat pace's last hold, which runs out on its own
             // time, and the server's message of the day, kept by the
             // connection it came on.
-            paced: _,
             server_motd: _,
             // Kept: the player's own chat setup and what the screen shows.
             history: _,
@@ -568,6 +568,8 @@ impl ChatState {
             refusals: _,
         } = self;
         *script_requests = ScriptRequests::default();
+        // A held line was the ended session's.
+        *paced = None;
         *requested_target = None;
         *zone_who = None;
         *asked = None;
