@@ -74,7 +74,8 @@ pub(crate) fn write(
     // A line in this client's own words is never the official client's,
     // so the log leaves it out (`logs::words`).
     for (_, line) in lines.iter().filter(|(id, _)| *id > seen) {
-        if let Some(words) = logs::words(line, &player.name) {
+        let named = |language| crate::languages::tongue_name(messages.as_deref(), language);
+        if let Some(words) = logs::words(line, &player.name, &named) {
             text.push_str(&logs::line(now, &read(words, messages.as_deref())));
         }
     }
@@ -133,7 +134,8 @@ pub(crate) fn shown(
     MARK.clone_into(&mut marked.message.text);
     marked.message.item_links.clear();
     let mut message = line.message.clone();
-    let Some(words) = logs::words(&marked, player) else {
+    let named = |language| crate::languages::tongue_name(messages, language);
+    let Some(words) = logs::words(&marked, player, &named) else {
         return message;
     };
     let words = read(words, messages);
@@ -180,6 +182,39 @@ mod tests {
     }
 
     #[test]
+    fn speech_in_another_tongue_shows_its_installed_name() {
+        use eq_client_core::chat::{ChannelName, ChatLine, Message, Source};
+        let messages = crate::hud::messages::Messages::parse(
+            "EQST0002
+0 2
+1410 %1 speaks%2: %3
+3203 Elvish
+",
+        );
+        let line = ChatLine {
+            channel: ChannelName::Say,
+            message_type: None,
+            sender: Some("Examplar".into()),
+            target: None,
+            message: Message {
+                message: None,
+                message_hex: None,
+                text: "Hail".into(),
+                item_links: Vec::new(),
+            },
+            source: Source::Server,
+            tongue: Some(eq_client_core::tongues::Heard {
+                language: 4,
+                skill: 100,
+            }),
+        };
+        assert_eq!(
+            shown(&line, "Tester", Some(&messages)).text,
+            "Examplar speaks, in Elvish: Hail"
+        );
+    }
+
+    #[test]
     fn raid_speech_keeps_the_empty_tongues_place() {
         use eq_client_core::chat::{ChannelName, ChatLine, Message, Source};
         let messages = crate::hud::messages::Messages::parse(
@@ -201,6 +236,7 @@ mod tests {
                 item_links: Vec::new(),
             },
             source: Source::Server,
+            tongue: None,
         };
         // Another's line leaves the tongue's place empty, so two spaces stay
         // before the quote, as the installed string has them.
@@ -246,6 +282,7 @@ mod tests {
                 item_links: vec![dagger.clone()],
             },
             source,
+            tongue: None,
         };
         // The link's words, wherever the line's words put them.
         let linked = |message: &Message| {

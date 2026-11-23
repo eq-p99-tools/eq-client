@@ -99,6 +99,7 @@ pub(super) fn system_line(said: impl Into<Said>) -> ChatLine {
             item_links: words.item_links,
         },
         source,
+        tongue: None,
     }
 }
 
@@ -143,6 +144,8 @@ pub(super) struct ChatState {
     pub(crate) spell_set_asked: Option<String>,
     /// A `/lootnodrop`'s words, waiting to set or list the choices.
     pub(crate) loot_no_drop: Option<String>,
+    /// A `/language`'s words, waiting to list the languages or choose one.
+    pub(crate) language_asked: Option<String>,
     /// Social emotes, by case number, with the words after the command,
     /// waiting in order to be said.
     pub(crate) emotes: Vec<(u8, String)>,
@@ -293,7 +296,14 @@ impl ChatState {
         })
     }
 
-    pub(super) fn receive(&mut self, line: ChatLine, online: &OnlineState) {
+    pub(super) fn receive(&mut self, mut line: ChatLine, online: &OnlineState) {
+        // A heard line in a tongue garbles once, as it arrives, so the chat
+        // and the log show the same words (`tongues::hear`).
+        if line.source == Source::Server
+            && let Some(player) = online.world().player()
+        {
+            eq_client_core::tongues::hear(&mut line, &player.name, player.languages.as_deref());
+        }
         // The guild's message of the day shows only when its text is new
         // and not empty; the copy kept changes either way (R11, 0x40a7fd).
         // The one `/getguildmotd` asked for always shows, and is then the
@@ -2046,6 +2056,10 @@ pub(super) fn client_request_in_scope(
     }
     if let Some(words) = command_words(input, "lootnodrop") {
         state.loot_no_drop = Some(words.to_owned());
+        return Some(Ok(()));
+    }
+    if let Some(words) = command_words(input, "language") {
+        state.language_asked = Some(words.to_owned());
         return Some(Ok(()));
     }
     if let Some(words) = command_words(input, "discipline") {

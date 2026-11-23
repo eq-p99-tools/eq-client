@@ -20,6 +20,8 @@ const SHOW_NAMES: &str = "show_names";
 
 /// The name a file keeps [`Options::loot_no_drop`] under.
 const LOOT_NO_DROP: &str = "loot_no_drop";
+/// The name a file keeps [`Options::language`] under.
+const LANGUAGE: &str = "language";
 
 /// An option the player turns on or off.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -351,6 +353,11 @@ pub struct Options {
     /// sets it; the official client keeps it in `eqclient.ini`, this client
     /// per character.
     pub loot_no_drop: LootNoDrop,
+    /// The language the player speaks in, by the servers' number (0 the
+    /// common tongue), as `/language` chose it; this client keeps it per
+    /// character. Where the official client keeps it is not read yet
+    /// (program read R49-4a).
+    pub language: u8,
     /// See [`Level::ClipPlane`].
     pub clip_plane: u16,
     /// See [`Level::MaxFps`].
@@ -391,6 +398,7 @@ impl Default for Options {
             qol,
             show_names: ShowNames::Everything,
             loot_no_drop: LootNoDrop::Ask,
+            language: crate::tongues::COMMON,
             clip_plane: 100,
             max_fps: if qol.on(Fix::FrameCap) { 60 } else { 0 },
             mouse_sensitivity: 50,
@@ -540,6 +548,14 @@ impl Options {
                 }
                 continue;
             }
+            if key.trim() == LANGUAGE {
+                if let Ok(language) = value.trim().parse::<u8>()
+                    && language <= crate::tongues::LAST_CHOSEN
+                {
+                    options.language = language;
+                }
+                continue;
+            }
             if key.trim() == LOOT_NO_DROP {
                 if let Ok(level) = value.trim().parse() {
                     options.loot_no_drop = LootNoDrop::from_level(level);
@@ -584,6 +600,10 @@ impl Options {
         }
         let loot_no_drop = self.loot_no_drop.level().to_string();
         for part in [LOOT_NO_DROP, " = ", &loot_no_drop, "\n"] {
+            text.push_str(part);
+        }
+        let language = self.language.to_string();
+        for part in [LANGUAGE, " = ", &language, "\n"] {
             text.push_str(part);
         }
         for level in Level::ALL {
@@ -747,6 +767,21 @@ mod tests {
     }
 
     #[test]
+    fn the_chosen_language_is_kept_and_a_number_no_player_chooses_is_not() {
+        let defaults = Options::default();
+        assert_eq!(defaults.language, 0);
+        let chosen = Options {
+            language: 3,
+            ..defaults
+        };
+        assert!(chosen.text().contains("language = 3\n"));
+        assert_eq!(Options::read(&chosen.text(), defaults).language, 3);
+        for unread in ["language = 25\n", "language = 27\n", "language = elvish\n"] {
+            assert_eq!(Options::read(unread, defaults).language, 0);
+        }
+    }
+
+    #[test]
     fn every_option_has_a_name_of_its_own() {
         // Every fix's name counts, a fix that is always on too, so it can
         // become a setting without taking another option's name.
@@ -755,7 +790,7 @@ mod tests {
             .map(|toggle| toggle.key())
             .chain(Fix::ALL.iter().map(|fix| fix.key()))
             .chain(Level::ALL.iter().map(|level| level.key()))
-            .chain([SHOW_NAMES])
+            .chain([SHOW_NAMES, LOOT_NO_DROP, LANGUAGE])
             .collect();
         let count = keys.len();
         keys.sort_unstable();

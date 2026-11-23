@@ -220,6 +220,7 @@ pub(super) fn schedule(app: &mut App) {
                 trade::input,
                 trade::no_drop::confirm,
                 trade::no_drop::command,
+                (crate::languages::command, crate::languages::speak).chain(),
                 crate::emotes::run,
                 crate::disciplines::run,
                 speed::report,

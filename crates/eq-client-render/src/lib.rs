@@ -79,6 +79,7 @@ mod invisibility;
 mod item_models;
 mod items;
 mod keys;
+mod languages;
 mod lighting;
 mod list_cells;
 mod loading;

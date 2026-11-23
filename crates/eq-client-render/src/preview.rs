@@ -661,6 +661,7 @@ pub(crate) fn chat_lines() -> Vec<eq_client_core::chat::ChatLine> {
                 vec![]
             },
         },
+        tongue: None,
     })
     .collect()
 }

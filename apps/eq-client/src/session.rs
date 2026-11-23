@@ -71,6 +71,10 @@ fn chat_update(event: eq_network::chat::ChatEvent) -> Option<WorldUpdate> {
                 message,
                 source: eq_client_core::chat::Source::Server,
                 message_type: event.message_type,
+                tongue: event
+                    .channel
+                    .and(event.language.zip(event.language_skill))
+                    .map(|(language, skill)| eq_client_core::tongues::Heard { language, skill }),
             })
         })
 }

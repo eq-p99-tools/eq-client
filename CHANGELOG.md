@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Speak in a chosen language (parity item 9, checklist 6.495). `/language`
+  lists the languages the character knows and `/language N` chooses one,
+  kept per character in the options (`language = N`). Every typed line goes
+  out in it through the outbox (`Outbox::tongue`), as
+  `SendChatInAdmission { tongue }` from eq-network #327, or the common tongue
+  where the profile no longer gives skill in it. A heard channel line keeps
+  its tongue (`ChatLine::tongue`); the speech strings' tongue place names it,
+  and a line in a tongue the player only partly follows is garbled once as it
+  arrives (`eq_client_core::tongues`), never in the common tongue, never the
+  player's own. The forms, the wording and the garble rule are inferred,
+  pending program read R49-4. `logs::words` takes the tongue-name lookup.
+
 - Add RoF2 as a placeholder generation, following eq-network's
   (`GameDialect::Rof2`, `ServerProtocol::EqEmuRof2`). `InstalledClient::Rof2`
   is in `InstalledClient::ALL` but has no marker files, so no folder is ever

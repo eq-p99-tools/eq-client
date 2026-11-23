@@ -910,6 +910,7 @@ mod tests {
                 item_links: vec![],
             },
             source: Source::Server,
+            tongue: None,
         };
         let mut chat = app.world_mut().resource_mut::<crate::chat::ChatState>();
         chat.history.push(said(

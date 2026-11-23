@@ -1,6 +1,6 @@
 //! Typed chat presentation and bounded per-tab history.
 mod text;
-pub use eq_network_game::chat::{ChannelName, ItemLink, LinkExpansion, Message, SpeakMode};
+pub use eq_network_game::chat::{ChannelName, ItemLink, LinkExpansion, Message, SpeakMode, Tongue};
 pub use eq_network_game::{
     chat::{outbound_text_len, outbound_text_limit},
     items::chat_link,
@@ -40,6 +40,9 @@ pub struct ChatLine {
     /// Types from 256 up can have player-configured colors. A line with no
     /// type takes its channel's color.
     pub message_type: Option<u32>,
+    /// The tongue a player's channel line came in, as the server sent it;
+    /// None for every other line.
+    pub tongue: Option<crate::tongues::Heard>,
 }
 
 /// Channel groups presented by the chat window.
@@ -315,6 +318,7 @@ mod tests {
                 item_links: vec![],
             },
             source: Source::Server,
+            tongue: None,
         }
     }
     #[test]

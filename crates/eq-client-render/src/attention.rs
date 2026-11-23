@@ -108,6 +108,7 @@ mod tests {
                 item_links: Vec::new(),
             },
             source: Source::Server,
+            tongue: None,
         }
     }
 

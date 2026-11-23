@@ -232,9 +232,11 @@ pub(super) fn input(
             || "Hail".to_owned(),
             |(_, spawn)| format!("Hail, {}", display_name(&spawn.name)),
         );
+        let tongue = outbox.tongue(world);
         let _ = outbox.post(world, |stamp| ClientCommand::SendChatInAdmission {
             session_id: stamp.session_id,
             message: OutboundChat::Say(text),
+            tongue,
         });
     }
     let bar_attack = super::hud::hotbar::requested(&keys, &bindings, &bar_clicks)
