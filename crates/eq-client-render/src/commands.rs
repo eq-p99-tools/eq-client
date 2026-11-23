@@ -436,7 +436,10 @@ pub(crate) fn game_masters(line: &str) -> bool {
 /// reaches the server instead). Titanium's line only: the Mac program's
 /// answer is unread, so a Mac-era or `RoF2` session stays silent as before.
 pub(crate) fn unknown(line: &str, world: &eq_client_core::world::ClientWorld) -> bool {
-    let titanium = matches!(world.generation(), eq_client_core::GameDialect::Titanium);
+    let titanium = match world.generation() {
+        eq_client_core::GameDialect::Titanium => true,
+        eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => false,
+    };
     let gm = world.player().is_some_and(crate::languages::game_master);
     titanium && line.starts_with('/') && !(gm && game_masters(line))
 }
