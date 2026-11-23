@@ -7087,6 +7087,22 @@ mod tests {
     }
 
     #[test]
+    fn the_reported_markers_leave_out_a_spawn_the_map_cannot_place() {
+        use crate::online::testing as session;
+        let mut online = crate::online::OnlineState::new(true);
+        session::admit(&mut online, 7, session::player(7));
+        let mut lost = session::pet(43, 7);
+        lost.position.x = f32::NAN;
+        session::spawns(&mut online, vec![session::pet(42, 7), lost]);
+        let (count, listed) = report::map_markers(&online, None);
+        assert_eq!(count, 1);
+        assert_eq!(
+            listed.iter().map(|(_, id, _)| *id).collect::<Vec<_>>(),
+            [42]
+        );
+    }
+
+    #[test]
     fn a_map_marker_reported_before_its_spawn_changed_is_refused() {
         use crate::map::{MapControl, MarkerAction};
         use crate::online::testing as session;

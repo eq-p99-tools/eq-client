@@ -581,7 +581,8 @@ fn known_player(player: &eq_client_core::PlayerState) -> Option<Known<'_>> {
     })
 }
 
-pub(super) fn finite(position: WorldPosition) -> bool {
+/// Whether the map can place a spawn: every coordinate finite.
+pub(crate) fn finite(position: WorldPosition) -> bool {
     [position.x, position.y, position.z]
         .into_iter()
         .all(f32::is_finite)

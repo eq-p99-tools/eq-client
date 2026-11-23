@@ -723,7 +723,7 @@ pub(super) fn surroundings(online: &crate::online::OnlineState, (_, _, _, combat
 /// `click("map_marker", admission, id, revision)` names for the nearest
 /// [`MARKERS_LISTED`] of them (checklist 6.589). The map shows every known
 /// spawn, however far, so this reaches past the nearby list.
-fn map_markers(
+pub(super) fn map_markers(
     online: &crate::online::OnlineState,
     origin: Option<Vec3>,
 ) -> (usize, Vec<(u64, u16, u64)>) {
@@ -734,8 +734,11 @@ fn map_markers(
     let mut markers: Vec<(f32, u16, u64)> = world
         .spawns()
         .iter()
+        // The spawns the map draws: visible, placeable, not the player.
         .filter(|(id, spawn)| {
-            !spawn.state.invisible && world.player().is_none_or(|player| player.spawn_id != **id)
+            !spawn.state.invisible
+                && crate::map::placeable(spawn.state.position)
+                && world.player().is_none_or(|player| player.spawn_id != **id)
         })
         .map(|(id, spawn)| {
             let at = Vec3::from_array(eq_client_core::render_position(spawn.state.position));
