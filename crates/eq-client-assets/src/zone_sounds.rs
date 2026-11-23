@@ -5,7 +5,7 @@
 //!
 //! The record layout, the kinds and the id rules here are inferred from the
 //! files and public format knowledge; what the Titanium program reads from
-//! them is pending read R49-7 a (recording checklist 6.502). Each inferred
+//! them is pending read R49-7 a (recording checklist 6.503). Each inferred
 //! field is named once, below, so the read replaces it in one place.
 
 use std::fs;
@@ -18,6 +18,12 @@ use crate::sounds::SoundNumbers;
 
 /// The length of one `_sounds.eff` record [I].
 pub const RECORD: usize = 84;
+/// The most records an emitter file may hold; a larger one is refused
+/// (this client's own bound).
+pub const MAX_RECORDS: usize = 4096;
+/// The largest bank or music file read; a larger one is refused (this
+/// client's own bound).
+pub const MAX_FILE: u64 = 8 * 1024 * 1024;
 /// Ids up to this name the zone's own EMIT sounds, from 1 [I].
 const LAST_EMIT: i32 = 31;
 /// Ids up to this name the installation's numbered sounds [I].
@@ -36,9 +42,15 @@ pub enum ZoneSoundError {
         /// Why.
         source: io::Error,
     },
-    /// The emitter file is not whole records.
-    #[error("{0} bytes is not a whole number of {RECORD}-byte sound records")]
+    /// The emitter file is not whole records, or holds too many.
+    #[error("{0} bytes is not a whole number of {RECORD}-byte sound records, or too many")]
     Length(usize),
+    /// A file is larger than this client reads.
+    #[error("{path} is larger than {MAX_FILE} bytes")]
+    TooLarge {
+        /// The file.
+        path: PathBuf,
+    },
 }
 
 /// What an emitter record does, by its kind byte (+0x38) [I].
@@ -176,7 +188,7 @@ impl Emitter {
 /// # Errors
 /// Refuses a file that is not whole records.
 pub fn read_emitters(bytes: &[u8]) -> Result<Vec<Emitter>, ZoneSoundError> {
-    if bytes.len() % RECORD != 0 {
+    if bytes.len() % RECORD != 0 || bytes.len() / RECORD > MAX_RECORDS {
         return Err(ZoneSoundError::Length(bytes.len()));
     }
     Ok(bytes
@@ -278,6 +290,21 @@ pub struct ZoneSounds {
 }
 
 fn optional(path: &Path) -> Result<Option<Vec<u8>>, ZoneSoundError> {
+    match fs::metadata(path) {
+        Ok(meta) if meta.len() > MAX_FILE => {
+            return Err(ZoneSoundError::TooLarge {
+                path: path.to_owned(),
+            });
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => {
+            return Err(ZoneSoundError::Io {
+                path: path.to_owned(),
+                source,
+            });
+        }
+    }
     match fs::read(path) {
         Ok(bytes) => Ok(Some(bytes)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
@@ -385,6 +412,10 @@ mod tests {
             Err(ZoneSoundError::Length(85))
         ));
         assert!(read_emitters(&[]).unwrap().is_empty());
+        assert!(matches!(
+            read_emitters(&vec![0; RECORD * (MAX_RECORDS + 1)]),
+            Err(ZoneSoundError::Length(_))
+        ));
     }
 
     #[test]
