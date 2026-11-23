@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- A second click on the boat you stand on, while its take still waits for
+  the server's echo, asks for it again, as the program's does (read R35
+  (c), (e); checklist 6.533). The click was already a take here, since a
+  waiting take holds nothing; a test now pins that. From eq-network
+  `4946ab9` on, the session sends that take again and keeps the first
+  take's wait instead of refusing it as already active, so the change
+  reaches play when this client's pin passes that commit. A release
+  already ends local control at once, as the program's does: the session
+  drops control before it sends (6.477, which needed only its docs fixed).
+
 - A session that ends leaves no ask for the next (gap 3.11, checklist
   6.535). The chat state's pending asks (a `/target`, `/who`, `/loc` or
   `/time`, a guild or split command, a boat take, `/follow`, a Ranger's
@@ -12,6 +22,7 @@
   `/quit`, naming every field so a new one has to be sorted into kept or
   cleared. A typed ask still survives a zone change within the session, as
   before, and nothing is said for a cleared one.
+
 - Read zones in the EQG format newer clients install, for RoF2 later:
   `eq_client_assets::eqg::load_eqg_zone` turns `<zone>.eqg`'s descriptor,
   terrain and model meshes, placements and diffuse textures into the same
