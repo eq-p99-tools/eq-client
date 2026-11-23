@@ -127,7 +127,7 @@ impl InventoryState {
     pub(crate) fn activate_shortcut(
         &mut self,
         slot: InventorySlot,
-        online: &super::online::OnlineState,
+        online: (&super::online::OnlineState, &crate::spellbook::SpellNames),
         sender: &crate::outbox::Outbox,
         target: Option<u16>,
         casting: bool,
@@ -503,11 +503,10 @@ fn use_clicked(
     spells: &crate::spellbook::SpellNames,
     settings: &crate::ViewerSettings,
 ) {
-    let casting = online.world().casting();
-    let casting = casting.cast.is_some() || casting.pending.is_some();
+    let casting = online.world().casting().holds_actions();
     state.use_slot(
         slot,
-        online,
+        (online, spells),
         sender,
         online.world().target().selected,
         casting,
