@@ -85,6 +85,16 @@ impl From<&str> for Said {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FilterPage;
 
+/// Whether a typed line is `/filter`, with any words. It reads no words and
+/// sends nothing: it shows the Options window on its filter page
+/// (eqgame.exe 0x46a245, read R49-2a).
+fn typed_filter(input: &str) -> bool {
+    input
+        .split_whitespace()
+        .next()
+        .is_some_and(|name| name.eq_ignore_ascii_case("/filter"))
+}
+
 /// A locally produced line in the System channel.
 pub(super) fn system_line(said: impl Into<Said>) -> ChatLine {
     let Said {
@@ -2341,13 +2351,7 @@ pub(super) fn client_request_in_scope(
         state.inspect_toggled = Some(super::dialogs::InspectToggle);
         return Some(Ok(()));
     }
-    // `/filter` reads no words and sends nothing: it shows the Options
-    // window on its filter page (eqgame.exe 0x46a245, read R49-2a).
-    if input
-        .split_whitespace()
-        .next()
-        .is_some_and(|name| name.eq_ignore_ascii_case("/filter"))
-    {
+    if typed_filter(input) {
         state.filter_page = Some(FilterPage);
         return Some(Ok(()));
     }

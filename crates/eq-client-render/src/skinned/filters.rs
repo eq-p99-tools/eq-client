@@ -90,9 +90,9 @@ pub(super) fn pages(pages: &[Page], owner: WindowId, page_width: f32) -> Cow<'_,
     if owner != WindowId::Options || pages.iter().any(|page| page.name == PAGE) {
         return Cow::Borrowed(pages);
     }
-    let Some(first) = pages.first() else {
+    if pages.is_empty() {
         return Cow::Borrowed(pages);
-    };
+    }
     let pieces = || pages.iter().flat_map(|page| &page.pieces);
     // A plain button where the skin has one, else its checkbox.
     let template = pieces()
@@ -177,9 +177,15 @@ pub(super) fn pages(pages: &[Page], owner: WindowId, page_width: f32) -> Cow<'_,
         ));
         y += height + 2.0;
     }
+    Cow::Owned(placed(pages, rows))
+}
+
+/// The skin's pages with this client's Filters page of `rows` in the place
+/// of the skin's own, or after them. `pages` is not empty.
+fn placed(pages: &[Page], rows: Vec<(String, Element)>) -> Vec<Page> {
     let mut all = pages.to_vec();
     let at = all.iter().position(skin_filters);
-    let base = at.map_or(first, |at| &all[at]);
+    let base = at.map_or(&pages[0], |at| &all[at]);
     let page = Page {
         name: PAGE.into(),
         title: base
@@ -195,7 +201,7 @@ pub(super) fn pages(pages: &[Page], owner: WindowId, page_width: f32) -> Cow<'_,
         Some(at) => all[at] = page,
         None => all.push(page),
     }
-    Cow::Owned(all)
+    all
 }
 
 /// The generated page's full height, for its scrolling viewport.
@@ -266,7 +272,8 @@ mod tests {
         let mut after = first.clone();
         after.name = "OptionsLaterPage".into();
         after.title = Some("Later".into());
-        let made = pages(&[first.clone(), skin, after], WindowId::Options, 300.0);
+        let skin_pages = [first.clone(), skin, after];
+        let made = pages(&skin_pages, WindowId::Options, 300.0);
         let names: Vec<_> = made.iter().map(|page| page.name.as_str()).collect();
         assert_eq!(names, [first.name.as_str(), PAGE, "OptionsLaterPage"]);
         assert_eq!(made[1].title.as_deref(), Some("Filters"));
