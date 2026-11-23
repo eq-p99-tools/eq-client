@@ -295,6 +295,14 @@ pub enum Notice {
         /// What the string names, in its order: a member's name.
         arguments: Vec<String>,
     },
+    /// A petition, bug report or feedback went to the server (6.511).
+    ReportSent(eq_network_game::reports::ReportKind),
+    /// A petition, bug report or feedback was not sent, and why, in the
+    /// session's words, which never repeat the report.
+    ReportRefused {
+        /// Why, in the session's words.
+        reason: String,
+    },
     /// A roll, emote or assist was not sent, and why, worded as
     /// [`Notice::ConsumeRefused`].
     SocialRefused {

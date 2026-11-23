@@ -434,8 +434,24 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
             chat(match kind {
                 ConsentKind::Resurrection => "The resurrection offer expired.".into(),
                 ConsentKind::Translocate => "The translocate offer expired.".into(),
+                // No duel prompt is kept yet (the duel challenge's client
+                // side is another work's), so none expires to tell of.
+                ConsentKind::Duel => return Vec::new(),
             })
         }
+        // Stock EQEmu says nothing to the player when it takes a petition
+        // or a bug report, so these lines, this client's own, stand in for
+        // the official client's, which are unread (6.511b). Feedback's
+        // servers answer it themselves, so it gets none.
+        Notice::ReportSent(report) => {
+            use eq_client_core::reports::ReportKind;
+            match report {
+                ReportKind::Petition => chat(Said::own("Your petition was sent.")),
+                ReportKind::Bug => chat(Said::own("Your bug report was sent.")),
+                ReportKind::Feedback => Vec::new(),
+            }
+        }
+        Notice::ReportRefused { reason } => chat(Said::own(reason.clone())),
         // eqstr 1406, where the installation has it.
         Notice::ContainerInUse => chat(official(Some(1406), &[], "That is in use.", messages)),
         Notice::SkillUp { skill, value } => chat(skill_up(*skill, *value, messages)),
@@ -888,6 +904,31 @@ mod tests {
         assert_eq!(
             wording(&bearing("12675"), Some(&messages)),
             [(Place::Chat, "Tracking: a bat ahead to one side".into())]
+        );
+    }
+
+    #[test]
+    fn a_report_says_this_clients_line_only_where_the_server_says_none() {
+        use eq_client_core::reports::ReportKind;
+        let line = |notice| wording(&notice, None);
+        assert_eq!(
+            line(Notice::ReportSent(ReportKind::Petition)),
+            [(Place::Chat, Said::own("Your petition was sent."))]
+        );
+        assert_eq!(
+            line(Notice::ReportSent(ReportKind::Bug)),
+            [(Place::Chat, Said::own("Your bug report was sent."))]
+        );
+        // Feedback's servers answer it themselves.
+        assert_eq!(line(Notice::ReportSent(ReportKind::Feedback)), []);
+        assert_eq!(
+            line(Notice::ReportRefused {
+                reason: "Wait a little before sending another petition.".into()
+            }),
+            [(
+                Place::Chat,
+                Said::own("Wait a little before sending another petition.")
+            )]
         );
     }
 

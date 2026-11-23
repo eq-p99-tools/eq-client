@@ -600,6 +600,9 @@ impl ClientWorld {
             ConsentKind::Translocate => {
                 let _ = self.translocate.take_if(|current| current.id == id);
             }
+            // The duel challenge (eq-network's duel answer) has no client
+            // prompt yet, so no duel consent is kept to dismiss.
+            ConsentKind::Duel => {}
         }
     }
 
@@ -1129,11 +1132,41 @@ impl ClientWorld {
             // keeping them, or refusing a set this client fitted to the
             // generation first, is not news for the player. Apply Poison
             // (eq-network #329) has no client side yet; its answers are not
-            // shown until that work lands.
+            // shown until that work lands, and nor are the duel challenge's
+            // (eq-network's duel answer), whose prompt is another work's,
+            // or `/surname`'s answer (eq-network #337), whose client side is
+            // another work's too.
             WorldEvent::ServerFiltersKept { .. }
             | WorldEvent::ServerFiltersRefused { .. }
             | WorldEvent::PoisonAnswered(_)
-            | WorldEvent::ApplyPoisonRefused { .. } => {}
+            | WorldEvent::ApplyPoisonRefused { .. }
+            | WorldEvent::DuelOffer(_)
+            | WorldEvent::DuelRefused { .. }
+            | WorldEvent::SurnameAnswer { .. } => {}
+            // A report to the staff went or was refused (6.511).
+            WorldEvent::ReportSent {
+                session_id,
+                report,
+            } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices.push(Notice::ReportSent(*report));
+                } else {
+                    news.ignored = true;
+                }
+            }
+            WorldEvent::ReportRefused {
+                session_id,
+                reason,
+                ..
+            } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices.push(Notice::ReportRefused {
+                        reason: reason.clone(),
+                    });
+                } else {
+                    news.ignored = true;
+                }
+            }
             WorldEvent::ListingRefused {
                 session_id,
                 reason,
