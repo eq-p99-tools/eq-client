@@ -489,7 +489,7 @@ impl ChatState {
         let generation = world.generation();
         match generation {
             eq_client_core::GameDialect::Titanium => {}
-            eq_client_core::GameDialect::EqMac => {
+            eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => {
                 return Err("Inventory item links are unavailable on this server".into());
             }
         }

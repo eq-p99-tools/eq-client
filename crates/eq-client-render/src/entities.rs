@@ -169,6 +169,7 @@ pub(crate) const fn dialect(
     match client {
         eq_client_assets::ui::InstalledClient::Titanium => eq_client_core::GameDialect::Titanium,
         eq_client_assets::ui::InstalledClient::EqMac => eq_client_core::GameDialect::EqMac,
+        eq_client_assets::ui::InstalledClient::Rof2 => eq_client_core::GameDialect::Rof2,
     }
 }
 

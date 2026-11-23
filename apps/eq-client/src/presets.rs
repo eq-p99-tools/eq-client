@@ -310,31 +310,27 @@ fn seed_endpoint(protocol: ServerProtocol) -> (Option<&'static str>, u16) {
 
 /// The name a first run gives a server type's preset; none for a server type
 /// this client offers no preset of.
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "a server type still being built answers None, so no preset offers it"
-)]
 pub const fn seed_name(protocol: ServerProtocol) -> Option<&'static str> {
     match protocol {
         ServerProtocol::Project1999 => Some("Project 1999"),
         ServerProtocol::Quarm => Some("Project Quarm"),
         ServerProtocol::EqEmu => Some("Local EQEmu"),
         ServerProtocol::Takp => Some("Local TAKP"),
+        // A placeholder that cannot log in: no preset offers it.
+        ServerProtocol::EqEmuRof2 => None,
     }
 }
 
 /// A server type's name in the file, which `EQ_PROTOCOL` also takes; none
 /// for a server type this client cannot name.
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "a server type still being built answers None, so no preset names it"
-)]
 const fn type_name(protocol: ServerProtocol) -> Option<&'static str> {
     match protocol {
         ServerProtocol::Project1999 => Some("p99"),
         ServerProtocol::Quarm => Some("quarm"),
         ServerProtocol::EqEmu => Some("eqemu"),
         ServerProtocol::Takp => Some("takp"),
+        // A placeholder that cannot log in: no preset names it.
+        ServerProtocol::EqEmuRof2 => None,
     }
 }
 
@@ -460,6 +456,43 @@ mod tests {
             presets.list[presets.find("Local EQEmu").unwrap()].host,
             None
         );
+    }
+
+    #[test]
+    fn no_preset_offers_or_names_the_rof2_placeholder() {
+        let rof2 = ServerProtocol::EqEmuRof2;
+        assert_eq!(seed_name(rof2), None);
+        assert_eq!(type_name(rof2), None);
+        // Neither a first run nor an environment naming it seeds one.
+        let environment = Endpoint {
+            protocol: Some(rof2),
+            host: Some("127.0.0.1".into()),
+            port: Some(5999),
+        };
+        let presets = Presets::seeded(&environment);
+        assert!(presets.list.iter().all(|preset| preset.protocol != rof2));
+        assert_eq!(presets.last, None);
+        // `EQ_PROTOCOL` reads through the same parse, which knows no name for it.
+        for name in ["eqemu-rof2", "eqemu_rof2", "eq_emu_rof2", "rof2"] {
+            assert!(name.parse::<ServerProtocol>().is_err(), "{name}");
+        }
+        // A file naming it, by any spelling, is skipped like any unknown type.
+        let presets = Presets::read(
+            "[A]\ntype = eqemu-rof2\n\
+             [B]\ntype = eq_emu_rof2\n\
+             [C]\ntype = rof2\n\
+             [Home]\ntype = eqemu\n",
+        );
+        let names: Vec<_> = presets
+            .list
+            .iter()
+            .map(|preset| preset.name.as_str())
+            .collect();
+        assert_eq!(names, ["Home"]);
+        // And one held in memory is never written.
+        let mut held = Presets::read("[Home]\ntype = eqemu\n");
+        held.list.push(Preset::new("Placeholder", rof2));
+        assert!(!held.text().contains("Placeholder"));
     }
 
     #[test]

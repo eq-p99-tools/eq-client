@@ -2856,7 +2856,8 @@ fn gm_request(
     let full_spawn = words.first() == Some(&"spawn") && words.len() > 5;
     let titanium = match world.generation() {
         eq_client_core::GameDialect::Titanium => true,
-        eq_client_core::GameDialect::EqMac => false,
+        // No RoF2 server takes fixtures yet.
+        eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => false,
     };
     if (depop || full_spawn) && !titanium {
         return Err("Full fixture spawn and depop require local EQEmu".into());

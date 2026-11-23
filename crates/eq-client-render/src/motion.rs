@@ -1369,6 +1369,10 @@ type InputExtras<'w, 's> = (
     clippy::too_many_arguments,
     clippy::too_many_lines
 )]
+#[expect(
+    clippy::match_same_arms,
+    reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
+)]
 pub(super) fn input(
     keys: crate::keys::Keys,
     navigation: Res<super::navigation::NavigationKeys>,
@@ -1577,7 +1581,8 @@ pub(super) fn input(
     controls.settle(now);
     let water_enabled = match client {
         InstalledClient::Titanium => true,
-        InstalledClient::EqMac => false,
+        // RoF2's water is not read yet.
+        InstalledClient::EqMac | InstalledClient::Rof2 => false,
     } && !flying
         && online.world().can(Capability::Swimming);
     if !water_enabled || !focused || controls.stun_active {
@@ -1745,6 +1750,8 @@ pub(super) fn input(
     };
     let placement_blocked = match client {
         InstalledClient::Titanium => true,
+        // Titanium's, inferred for RoF2 (6.489).
+        InstalledClient::Rof2 => true,
         InstalledClient::EqMac => false,
     } && !flying
         && controls.airborne.is_some()

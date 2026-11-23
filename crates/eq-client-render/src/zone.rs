@@ -112,7 +112,9 @@ impl Entry {
         });
         let native_head = if match client {
             eq_client_assets::ui::InstalledClient::Titanium => true,
-            eq_client_assets::ui::InstalledClient::EqMac => false,
+            // RoF2's water is not read yet.
+            eq_client_assets::ui::InstalledClient::EqMac
+            | eq_client_assets::ui::InstalledClient::Rof2 => false,
         } && character.is_some()
         {
             super::breath::head::Basis::load(directory, player, model)

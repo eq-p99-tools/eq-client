@@ -225,6 +225,10 @@ pub(super) fn swings(door: &Door) -> bool {
 /// one horizontal axis chosen by the heading, at 0.35 a 50 ms step
 /// (0x4366e8; [`eq_client_core::doors::Slide`]). Like the hinge, the renderer
 /// caps each frame's step at 100 ms.
+#[expect(
+    clippy::match_same_arms,
+    reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
+)]
 fn slide_pose(
     door: &Door,
     generation: GameDialect,
@@ -233,6 +237,8 @@ fn slide_pose(
 ) -> (f32, Vec3) {
     let slides = match generation {
         GameDialect::Titanium => true,
+        // Titanium's, inferred for RoF2 (6.489).
+        GameDialect::Rof2 => true,
         GameDialect::EqMac => false,
     };
     let Some(slide) = slides

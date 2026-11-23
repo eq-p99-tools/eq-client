@@ -319,6 +319,11 @@ pub enum InstalledClient {
     Titanium,
     /// The Mac-era client Project Quarm and TAKP servers expect.
     EqMac,
+    /// The `RoF2` client, a placeholder. It has no marker files yet, so no
+    /// folder is ever detected as it, and no server type a player can choose
+    /// expects it; each of its rules without a read is absent or Titanium's,
+    /// inferred (recording checklist 6.489).
+    Rof2,
 }
 
 /// What an installation's own files say about which official client it
@@ -349,7 +354,7 @@ pub struct GemDraw {
 impl InstalledClient {
     /// Every generation this client knows, in the order detection checks
     /// them.
-    pub const ALL: [Self; 2] = [Self::Titanium, Self::EqMac];
+    pub const ALL: [Self; 3] = [Self::Titanium, Self::EqMac, Self::Rof2];
 
     /// Whether this generation gives a player class a spellbook and gems.
     /// The class checks are Titanium 0x417daf and Mac-era 0x4b8ea1; neither
@@ -361,6 +366,8 @@ impl InstalledClient {
     pub const fn spellbook_class(self, class: u32) -> bool {
         match self {
             Self::Titanium | Self::EqMac => matches!(class, 2..=6 | 8 | 10..=15),
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.spellbook_class(class),
         }
     }
 
@@ -381,7 +388,18 @@ impl InstalledClient {
         match self {
             Self::Titanium => (&["spells_us.txt"], Some("eqg")),
             Self::EqMac => (&["eqmac.exe", "eqgame.dll"], None),
+            // Needs a listing of a real installation; until then nothing
+            // marks it.
+            Self::Rof2 => (&[], None),
         }
+    }
+
+    /// Whether any file marks this generation's installation, so detection
+    /// can find it.
+    #[must_use]
+    pub const fn detectable(self) -> bool {
+        let (files, extension) = self.markers();
+        !files.is_empty() || extension.is_some()
     }
 
     /// Which official client the installation in `eq_directory` holds, from
@@ -429,6 +447,8 @@ impl InstalledClient {
     pub const fn gem_draw(self) -> Option<GemDraw> {
         match self {
             Self::Titanium | Self::EqMac => Some(GemDraw { hover: 0x0020_2020 }),
+            // Not read for RoF2.
+            Self::Rof2 => None,
         }
     }
 
@@ -438,6 +458,8 @@ impl InstalledClient {
         match self {
             Self::Titanium => crate::spells::Layout::TITANIUM,
             Self::EqMac => crate::spells::Layout::EQMAC,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.spell_file(),
         }
     }
 
@@ -448,6 +470,8 @@ impl InstalledClient {
         match self {
             Self::Titanium => true,
             Self::EqMac => false,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.short_effects(),
         }
     }
 
@@ -458,6 +482,8 @@ impl InstalledClient {
         match self {
             Self::Titanium => true,
             Self::EqMac => false,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.casting_window(),
         }
     }
 
@@ -472,6 +498,8 @@ impl InstalledClient {
         match self {
             Self::Titanium => "eqstr_us.txt",
             Self::EqMac => "eqstr_en.txt",
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.string_file(),
         }
     }
 
@@ -484,6 +512,8 @@ impl InstalledClient {
     pub const fn font_file(self) -> Option<&'static str> {
         match self {
             Self::Titanium | Self::EqMac => Some("arial.ttf"),
+            // Not read for RoF2.
+            Self::Rof2 => None,
         }
     }
 
@@ -497,7 +527,8 @@ impl InstalledClient {
                 picture: &["Resources", "loadscreen.jpg"],
                 status: 12387,
             }),
-            Self::EqMac => None,
+            // Not read for RoF2.
+            Self::EqMac | Self::Rof2 => None,
         }
     }
 
@@ -513,7 +544,8 @@ impl InstalledClient {
             Self::Titanium => Some(crate::spells::effects::SpellEffects::read_titanium(
                 eq_directory,
             )),
-            Self::EqMac => None,
+            // Not read for RoF2.
+            Self::EqMac | Self::Rof2 => None,
         }
     }
 
@@ -527,7 +559,8 @@ impl InstalledClient {
                 folders: &["sounds"],
                 numbers: "SoundAssets.txt",
             }),
-            Self::EqMac => None,
+            // Not read for RoF2.
+            Self::EqMac | Self::Rof2 => None,
         }
     }
 
@@ -538,6 +571,8 @@ impl InstalledClient {
         match self {
             Self::Titanium => crate::clock::TITANIUM,
             Self::EqMac => crate::clock::EQMAC,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.clock(),
         }
     }
 
@@ -548,6 +583,8 @@ impl InstalledClient {
         match self {
             Self::Titanium => Some(crate::falls::TITANIUM),
             Self::EqMac => Some(crate::falls::EQMAC),
+            // Not read for RoF2.
+            Self::Rof2 => None,
         }
     }
 
@@ -562,6 +599,8 @@ impl InstalledClient {
     pub const fn jump_spacing(self) -> Option<std::time::Duration> {
         match self {
             Self::Titanium | Self::EqMac => Some(std::time::Duration::from_millis(1500)),
+            // Not read for RoF2.
+            Self::Rof2 => None,
         }
     }
 
@@ -574,6 +613,8 @@ impl InstalledClient {
     pub const fn standing_jump_crouch(self) -> Option<std::time::Duration> {
         match self {
             Self::Titanium | Self::EqMac => Some(std::time::Duration::from_millis(500)),
+            // Not read for RoF2.
+            Self::Rof2 => None,
         }
     }
 
@@ -583,6 +624,8 @@ impl InstalledClient {
         match self {
             Self::Titanium => GiveAtOpen::FirstFree,
             Self::EqMac => GiveAtOpen::StackFirst,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.give_at_open(),
         }
     }
 
@@ -592,6 +635,8 @@ impl InstalledClient {
         match self {
             Self::Titanium => TargetByName::Nearest,
             Self::EqMac => TargetByName::Shortest,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.target_by_name(),
         }
     }
 
@@ -602,6 +647,8 @@ impl InstalledClient {
     pub const fn spawn_pick(self) -> SpawnPick {
         match self {
             Self::Titanium | Self::EqMac => SpawnPick::TrianglesThenPosedBox,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.spawn_pick(),
         }
     }
 
@@ -615,6 +662,8 @@ impl InstalledClient {
     pub const fn click_miss(self) -> ClickMiss {
         match self {
             Self::Titanium | Self::EqMac => ClickMiss::KeepTarget,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.click_miss(),
         }
     }
 
@@ -628,7 +677,8 @@ impl InstalledClient {
     #[must_use]
     pub const fn invisibility_drop(self) -> Option<&'static [u32]> {
         match self {
-            Self::Titanium => None,
+            // Not read for RoF2.
+            Self::Titanium | Self::Rof2 => None,
             Self::EqMac => Some(&[94, 12, 28, 29]),
         }
     }
@@ -640,6 +690,8 @@ impl InstalledClient {
         match self {
             Self::Titanium => crate::scale::TITANIUM,
             Self::EqMac => crate::scale::EQMAC,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.model_scale(),
         }
     }
 
@@ -652,6 +704,8 @@ impl InstalledClient {
         match self {
             Self::Titanium => Some(crate::keys::TITANIUM),
             Self::EqMac => Some(crate::keys::EQMAC),
+            // Not read for RoF2.
+            Self::Rof2 => None,
         }
     }
 
@@ -664,6 +718,8 @@ impl InstalledClient {
         match self {
             Self::Titanium => crate::names::TITANIUM,
             Self::EqMac => crate::names::EQMAC,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.name_colours(),
         }
     }
 
@@ -675,6 +731,8 @@ impl InstalledClient {
         match self {
             Self::Titanium => crate::camera::TITANIUM,
             Self::EqMac => crate::camera::EQMAC,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.camera_limits(),
         }
     }
 
@@ -705,6 +763,8 @@ impl InstalledClient {
                 ..shared
             },
             Self::EqMac => shared,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.attack_toggle(),
         }
     }
 
@@ -714,7 +774,8 @@ impl InstalledClient {
     #[must_use]
     pub const fn merchant_prices(self) -> Option<crate::merchants::MerchantPrices> {
         match self {
-            Self::Titanium => None,
+            // Not read for either.
+            Self::Titanium | Self::Rof2 => None,
             Self::EqMac => Some(crate::merchants::EQMAC),
         }
     }
@@ -727,6 +788,8 @@ impl InstalledClient {
         match self {
             Self::Titanium => true,
             Self::EqMac => false,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.asks_before_no_drop_loot(),
         }
     }
 
@@ -739,6 +802,8 @@ impl InstalledClient {
         match self {
             Self::Titanium => true,
             Self::EqMac => false,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.runs_social_emotes(),
         }
     }
 
@@ -751,6 +816,8 @@ impl InstalledClient {
         match self {
             Self::Titanium => true,
             Self::EqMac => false,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.runs_disciplines(),
         }
     }
 
@@ -764,6 +831,8 @@ impl InstalledClient {
         let (named, to_bind, declined, declines_when_busy) = match self {
             Self::Titanium => (9063, 9062, None, false),
             Self::EqMac => (10017, 10016, Some(10018), true),
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => return Self::Titanium.translocate_offer(),
         };
         TranslocateQuestion {
             named,
@@ -778,7 +847,8 @@ impl InstalledClient {
     pub fn settings(self, eq_directory: &Path) -> Box<dyn OfficialSettings + '_> {
         match self {
             Self::Titanium => Box::new(Titanium(eq_directory)),
-            Self::EqMac => Box::new(Unchecked),
+            // Not read for RoF2.
+            Self::EqMac | Self::Rof2 => Box::new(Unchecked),
         }
     }
 }
@@ -1873,6 +1943,28 @@ mod tests {
     }
 
     #[test]
+    fn no_folder_is_ever_detected_as_rof2() {
+        assert!(InstalledClient::Titanium.detectable());
+        assert!(InstalledClient::EqMac.detectable());
+        assert!(!InstalledClient::Rof2.detectable());
+        let root = std::env::temp_dir().join(format!("install-rof2-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        // Files an RoF2 installation is likely to carry, none of them a marker.
+        for file in [
+            "eqgame.exe",
+            "spells_en.txt",
+            "eqstr_en.txt",
+            "eqhost.txt",
+            "dbstr_us.txt",
+        ] {
+            std::fs::write(root.join(file), b"").unwrap();
+        }
+        let detected = InstalledClient::detect(&root);
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(detected, Detected::Unclassified);
+    }
+
+    #[test]
     fn every_generation_has_its_place_in_detection_order() {
         // A new generation fails to compile here until it has its own place,
         // and then fails until `ALL` holds it there, so detection checks its
@@ -1880,11 +1972,16 @@ mod tests {
         let place = |client: InstalledClient| match client {
             InstalledClient::Titanium => 0,
             InstalledClient::EqMac => 1,
+            InstalledClient::Rof2 => 2,
         };
         for (index, client) in InstalledClient::ALL.into_iter().enumerate() {
             assert_eq!(place(client), index, "{client:?}");
         }
-        for client in [InstalledClient::Titanium, InstalledClient::EqMac] {
+        for client in [
+            InstalledClient::Titanium,
+            InstalledClient::EqMac,
+            InstalledClient::Rof2,
+        ] {
             assert_eq!(InstalledClient::ALL.get(place(client)), Some(&client));
         }
     }

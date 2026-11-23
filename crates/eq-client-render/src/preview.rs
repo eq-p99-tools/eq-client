@@ -296,6 +296,10 @@ fn weather(
 /// Offers two synthetic characters to choose from, each with a synthetic
 /// look, so the select screen shows them in their zones.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+#[expect(
+    clippy::match_same_arms,
+    reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
+)]
 fn characters(news: Res<News>, settings: Res<super::ViewerSettings>, switches: Res<Switches>) {
     // Chain on the body (material 2) or plate (3), and a held model number.
     let look = |race, gender, class, material, held| {
@@ -324,6 +328,10 @@ fn characters(news: Res<News>, settings: Res<super::ViewerSettings>, switches: R
                 }
                 eq_client_assets::ui::InstalledClient::EqMac => {
                     eq_client_core::creation::Rules::EqMac
+                }
+                // Titanium's, inferred for RoF2 (6.489).
+                eq_client_assets::ui::InstalledClient::Rof2 => {
+                    eq_client_core::creation::Rules::Titanium
                 }
             },
             |draft| draft.rules,

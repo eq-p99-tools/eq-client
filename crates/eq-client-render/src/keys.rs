@@ -447,7 +447,9 @@ impl KeyMap {
         let mut map = Self::for_client(settings.installed_client);
         let imports = match settings.installed_client {
             eq_client_assets::ui::InstalledClient::Titanium => true,
-            eq_client_assets::ui::InstalledClient::EqMac => false,
+            // RoF2's key files are not read yet.
+            eq_client_assets::ui::InstalledClient::EqMac
+            | eq_client_assets::ui::InstalledClient::Rof2 => false,
         };
         if imports && let Some(directory) = settings.eq_directory.as_deref() {
             map.import_titanium_movement(directory);

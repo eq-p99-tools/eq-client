@@ -33,6 +33,7 @@ pub fn installed_client(protocol: eq_network::client::ServerProtocol) -> Install
     match eq_client_core::GameDialect::from(protocol) {
         eq_client_core::GameDialect::Titanium => InstalledClient::Titanium,
         eq_client_core::GameDialect::EqMac => InstalledClient::EqMac,
+        eq_client_core::GameDialect::Rof2 => InstalledClient::Rof2,
     }
 }
 
@@ -94,10 +95,16 @@ fn holder<'a>(presets: &'a Presets, launch: usize, directory: &Path) -> Option<&
         .or_else(|| presets.list.iter().find(names))
 }
 
-/// Every generation's installation name, in detection order, joined by
-/// `between`.
+/// The installation name of every generation detection can find, in
+/// detection order, joined by `between`. A generation no file marks yet
+/// (`RoF2`) is left out, since no folder is ever found to hold it.
 fn client_names(between: &str) -> String {
-    InstalledClient::ALL.map(client_name).join(between)
+    InstalledClient::ALL
+        .into_iter()
+        .filter(|client| client.detectable())
+        .map(client_name)
+        .collect::<Vec<_>>()
+        .join(between)
 }
 
 /// What the login screen calls a client's installation.
@@ -105,6 +112,7 @@ const fn client_name(client: InstalledClient) -> &'static str {
     match client {
         InstalledClient::Titanium => "Titanium",
         InstalledClient::EqMac => "TAKP client",
+        InstalledClient::Rof2 => "RoF2 client",
     }
 }
 
@@ -457,6 +465,20 @@ mod tests {
             preset.host.get_or_insert_with(|| "127.0.0.1".into());
         }
         presets
+    }
+
+    #[test]
+    fn each_server_type_installs_its_wire_generations_client() {
+        for (protocol, client) in [
+            (ServerProtocol::Project1999, InstalledClient::Titanium),
+            (ServerProtocol::EqEmu, InstalledClient::Titanium),
+            (ServerProtocol::Quarm, InstalledClient::EqMac),
+            (ServerProtocol::Takp, InstalledClient::EqMac),
+            (ServerProtocol::EqEmuRof2, InstalledClient::Rof2),
+        ] {
+            assert_eq!(installed_client(protocol), client, "{protocol:?}");
+        }
+        assert_eq!(client_name(InstalledClient::Rof2), "RoF2 client");
     }
 
     #[test]

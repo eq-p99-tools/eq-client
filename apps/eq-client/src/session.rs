@@ -169,7 +169,8 @@ impl SessionWorker {
                 // A Titanium login sends what the installation's files hold.
                 let titanium = match eq_client_core::GameDialect::from(protocol) {
                     eq_client_core::GameDialect::Titanium => true,
-                    eq_client_core::GameDialect::EqMac => false,
+                    // RoF2 cannot log in yet.
+                    eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => false,
                 };
                 let sight = titanium.then(|| {
                     Arc::new(eq_client_render::SightProvider::from_definitions(
@@ -418,7 +419,8 @@ fn client(login: Login, options: &SessionOptions) -> Result<Client> {
     // (`sends_system_info`).
     let titanium = match eq_client_core::GameDialect::from(login.protocol) {
         eq_client_core::GameDialect::Titanium => true,
-        eq_client_core::GameDialect::EqMac => false,
+        // RoF2 cannot log in yet.
+        eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => false,
     };
     if titanium {
         config.sysinfo = Some(Arc::new(machine::HostMachine::new(

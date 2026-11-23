@@ -1142,6 +1142,10 @@ impl ScribeRefusal {
 /// Shares admission, cursor and book validation between presentation and
 /// submission; the stamp is the one the outbox gives a command made now. The
 /// scroll goes into the book's first empty place, or into the place given.
+#[expect(
+    clippy::match_same_arms,
+    reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
+)]
 fn prepare_scribe(
     online: Option<&super::online::OnlineState>,
     book: Option<&eq_client_core::SpellBook>,
@@ -1155,6 +1159,8 @@ fn prepare_scribe(
     let world = online.world();
     match world.generation() {
         eq_client_core::GameDialect::Titanium => titanium_press(world, book, place, names)?,
+        // Titanium's, inferred for RoF2 (6.489).
+        eq_client_core::GameDialect::Rof2 => titanium_press(world, book, place, names)?,
         eq_client_core::GameDialect::EqMac => {}
     }
     if world.inventory_moves_pending() {

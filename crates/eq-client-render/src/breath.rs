@@ -96,7 +96,8 @@ impl AirState {
                 && !world.is_dead()
                 && match world.generation() {
                     GameDialect::Titanium => true,
-                    GameDialect::EqMac => false,
+                    // RoF2's water is not read yet.
+                    GameDialect::EqMac | GameDialect::Rof2 => false,
                 }
         });
         // Skipping the counter withholds the drowning reports a local EQEmu
