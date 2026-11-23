@@ -2383,6 +2383,9 @@ pub(super) fn drive(
                 }
                 _ => return,
             };
+            // Whatever goes as chat meets the session's pace, a `#` command
+            // among it, so a refusal after it fails this step (6.523).
+            let chats = command.as_ref().is_ok_and(is_chat);
             let sent = command.and_then(|command| {
                 observed
                     .1
@@ -2392,7 +2395,7 @@ pub(super) fn drive(
             });
             match sent {
                 Err(error) => script.stop(&mut keys, &mut mouse, &error),
-                Ok(()) if matches!(step, Step::Chat(_)) => {
+                Ok(()) if chats => {
                     script.chatted = Some((std::time::Instant::now(), script.progress.line()));
                 }
                 Ok(()) => (),
@@ -2864,6 +2867,17 @@ fn may_run(unattended: bool, reported_focus: Option<bool>, window_focused: bool)
 
 /// The request for a validated local GM command. Fixture cleanup carries
 /// the admission and reconciled NPC selection to the zone's send owner.
+/// Whether a command goes as chat, which the session paces (6.523). A slash
+/// step's game commands never do: an emote or a roll is its own request,
+/// outside the pace, and a script has no `/ttell`.
+const fn is_chat(command: &eq_client_core::ClientCommand) -> bool {
+    matches!(
+        command,
+        eq_client_core::ClientCommand::SendChat(_)
+            | eq_client_core::ClientCommand::SendChatInAdmission { .. }
+    )
+}
+
 fn gm_request(
     command: &str,
     allowed: bool,
