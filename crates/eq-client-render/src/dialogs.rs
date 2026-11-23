@@ -208,7 +208,9 @@ pub(super) fn sync_note(
     let (Some(admission), Some((character, server))) = (world.session_id(), profile.names()) else {
         return;
     };
-    if !world.in_world() || !world.can(Capability::PlayerInspection) {
+    // The note goes wherever the session answers inspections: Titanium
+    // offers both, and the Mac era answers but doesn't ask (6.621).
+    if !world.in_world() || !world.can(Capability::InspectAnswer) {
         return;
     }
     sync.load(admission, || {
