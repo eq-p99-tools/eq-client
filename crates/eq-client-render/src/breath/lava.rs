@@ -89,22 +89,34 @@ impl Heat {
             LiquidHazard::Cold => Need::Cold,
             LiquidHazard::Drowning | LiquidHazard::ZoneHeat => return None,
         };
-        let inputs = modifiers::read(world, spells, player, need).ok();
-        if inputs.as_ref().is_some_and(|inputs| inputs.invulnerable) {
+        let inputs = modifiers::read(world, spells, player, need);
+        if inputs.as_ref().is_ok_and(|inputs| inputs.invulnerable) {
             return None;
         }
-        let resistance = inputs.and_then(|inputs| match hazard {
-            LiquidHazard::Lava => inputs.fire_resistance,
-            LiquidHazard::Cold => inputs.cold_resistance,
-            LiquidHazard::Drowning | LiquidHazard::ZoneHeat => None,
-        });
-        let Some(resistance) = resistance else {
-            // The labelled departure above: held back, and counted.
-            eq_client_core::gaps::unshown(match hazard {
-                LiquidHazard::Cold => "hazard held back: cold total unknown",
-                _ => "hazard held back: fire total unknown",
-            });
-            return None;
+        // What the total waits on, for the gap log: an input that isn't
+        // read, or a contributor with no decoded resist.
+        let resistance = match &inputs {
+            Ok(inputs) => match hazard {
+                LiquidHazard::Lava => inputs.fire_resistance.ok_or("unresolved contributor"),
+                LiquidHazard::Cold => inputs.cold_resistance.ok_or("unresolved contributor"),
+                LiquidHazard::Drowning | LiquidHazard::ZoneHeat => return None,
+            },
+            Err(why) => Err(why.name()),
+        };
+        let resistance = match resistance {
+            Ok(resistance) => resistance,
+            Err(why) => {
+                // The labelled departure above: held back, and counted by
+                // what it waits on.
+                eq_client_core::gaps::unshown(&format!(
+                    "hazard held back: {} total unknown ({why})",
+                    match hazard {
+                        LiquidHazard::Cold => "cold",
+                        _ => "fire",
+                    }
+                ));
+                return None;
+            }
         };
         let amount = match hazard {
             LiquidHazard::Lava => lava_damage(profile.zone_id, resistance),
