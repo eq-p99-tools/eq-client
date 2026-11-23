@@ -1,6 +1,7 @@
 //! The sessions the graphical client runs, each on its own thread: what one
 //! logs in with, and the thread's ownership.
 mod machine;
+mod relay;
 
 use anyhow::Result;
 use eq_client_assets::spells::Definitions;
@@ -170,7 +171,7 @@ impl SessionWorker {
         let ended = reason.clone();
         let closed = Arc::new(AtomicBool::new(false));
         let closing = closed.clone();
-        let (sender, receiver) = mpsc::sync_channel(1024);
+        let (sender, receiver) = relay::start();
         let (commands, command_queue) = mpsc::sync_channel(32);
         let worker = thread::spawn(move || {
             let mut spell_bridge = SpellBridge::new(spell_provider);
@@ -198,7 +199,7 @@ impl SessionWorker {
                         if let Some(sight) = &sight {
                             sight.receive(&fact);
                         }
-                        enqueue(&sender, &worker_cancel, WorldUpdate::SpellTable(fact))?;
+                        sender.send(&worker_cancel, WorldUpdate::SpellTable(fact))?;
                     }
                     let update = match event {
                         // A spell table is taken above.
@@ -241,7 +242,7 @@ impl SessionWorker {
                         }
                     };
                     if let Some(update) = update {
-                        enqueue(&sender, &worker_cancel, update)?;
+                        sender.send(&worker_cancel, update)?;
                     }
                     Ok(())
                 })
@@ -341,23 +342,6 @@ impl SpellBridge {
             _ => return Ok(None),
         };
         Ok(Some(self.binding.envelope(fact)))
-    }
-}
-
-/// Losing a provider fact to overload is a session error, just as for the
-/// other ordered game updates. A closed renderer cancels the producer.
-fn enqueue(
-    sender: &mpsc::SyncSender<WorldUpdate>,
-    cancel: &CancellationToken,
-    update: WorldUpdate,
-) -> Result<()> {
-    match sender.try_send(update) {
-        Ok(()) => Ok(()),
-        Err(mpsc::TrySendError::Disconnected(_)) => {
-            cancel.cancel();
-            Ok(())
-        }
-        Err(mpsc::TrySendError::Full(_)) => anyhow::bail!("viewer event queue full"),
     }
 }
 
@@ -549,15 +533,14 @@ impl Drop for SessionWorker {
     }
 }
 
-/// Sends the terminal status when there is room, then closes the event stream.
-/// A full queue drains in order before the receiver observes disconnection and
-/// ends the session. Joining the worker must never depend on that drain.
+/// Sends the terminal status, then closes the event stream. The relay
+/// holds it behind anything the window has yet to take, so it is never lost
+/// to a busy window, and joining the worker never waits on the window.
 /// `closed` is set first, so a viewer that finds the stream closed knows the
 /// worker ended it, and reads why from the worker's reason.
-fn end_updates(sender: mpsc::SyncSender<WorldUpdate>, closed: &AtomicBool) {
+fn end_updates(sender: relay::Relay, closed: &AtomicBool) {
     closed.store(true, Ordering::Release);
-    let _ = sender.try_send(WorldUpdate::Connection(Link::Ended));
-    drop(sender);
+    sender.close(WorldUpdate::Connection(Link::Ended));
 }
 
 #[cfg(test)]
@@ -643,25 +626,43 @@ mod tests {
     }
 
     #[test]
-    fn an_overloaded_spell_event_bridge_fails_instead_of_dropping_ordered_facts() {
+    fn a_busy_window_keeps_every_spell_fact_in_order() {
         use eq_client_core::spell_tables::{Binding, Fact, Policy};
         let binding = Binding::new(Policy::Project1999);
-        let (sender, receiver) = mpsc::sync_channel(1);
+        let (sender, receiver) = relay::start_with(1, 1_000);
         let cancel = CancellationToken::default();
-        enqueue(&sender, &cancel, WorldUpdate::Connection(Link::LoggingIn)).unwrap();
+        sender
+            .send(&cancel, WorldUpdate::Connection(Link::LoggingIn))
+            .unwrap();
         let fact = binding.envelope(Fact::RunStarted {
             run_id: 7,
             attempt: 1,
         });
-        assert!(enqueue(&sender, &cancel, WorldUpdate::SpellTable(fact.clone())).is_err());
+        // The window's queue is full; the fact waits behind it.
+        sender
+            .send(&cancel, WorldUpdate::SpellTable(fact.clone()))
+            .unwrap();
+        assert!(!cancel.is_cancelled());
+        let wait = Duration::from_secs(5);
         assert!(matches!(
-            receiver.try_recv(),
+            receiver.recv_timeout(wait),
             Ok(WorldUpdate::Connection(Link::LoggingIn))
         ));
-        assert!(receiver.try_recv().is_err());
+        assert!(matches!(
+            receiver.recv_timeout(wait),
+            Ok(WorldUpdate::SpellTable(got))
+                if matches!(got.fact(), Fact::RunStarted { run_id: 7, attempt: 1 })
+        ));
         drop(receiver);
-        enqueue(&sender, &cancel, WorldUpdate::SpellTable(fact)).unwrap();
-        assert!(cancel.is_cancelled());
+        // A window that let go of its queue stops the session.
+        let deadline = std::time::Instant::now() + wait;
+        while !cancel.is_cancelled() {
+            sender
+                .send(&cancel, WorldUpdate::SpellTable(fact.clone()))
+                .unwrap();
+            assert!(std::time::Instant::now() < deadline);
+            thread::yield_now();
+        }
     }
 
     #[test]
@@ -705,9 +706,12 @@ mod tests {
 
     #[test]
     fn full_event_queue_does_not_block_worker_shutdown() {
-        let (sender, receiver) = mpsc::sync_channel(1);
+        let (sender, receiver) = relay::start_with(1, 1_000);
         sender
-            .send(WorldUpdate::Connection(Link::LoggingIn))
+            .send(
+                &CancellationToken::default(),
+                WorldUpdate::Connection(Link::LoggingIn),
+            )
             .unwrap();
         let (finished, completion) = mpsc::channel();
         let closed = Arc::new(AtomicBool::new(false));
@@ -729,21 +733,27 @@ mod tests {
             reason: Arc::new(Mutex::new(Some("The zone server stopped answering".into()))),
             closed,
         };
-        // The viewer finds the stream closed with no end said: the worker
-        // closed it, and its own words say why.
+        // The viewer finds the stream closed: the worker closed it, and its
+        // own words say why.
         assert!(eq_client_render::Worker::closed(&owner));
         assert_eq!(
             eq_client_render::Worker::reason(&owner).as_deref(),
             Some("The zone server stopped answering")
         );
         drop(owner);
+        // The end waited behind what the window had yet to take.
+        let wait = Duration::from_secs(5);
         assert!(matches!(
-            receiver.try_recv(),
+            receiver.recv_timeout(wait),
             Ok(WorldUpdate::Connection(Link::LoggingIn))
         ));
         assert!(matches!(
-            receiver.try_recv(),
-            Err(mpsc::TryRecvError::Disconnected)
+            receiver.recv_timeout(wait),
+            Ok(WorldUpdate::Connection(Link::Ended))
+        ));
+        assert!(matches!(
+            receiver.recv_timeout(wait),
+            Err(mpsc::RecvTimeoutError::Disconnected)
         ));
     }
 
@@ -765,23 +775,24 @@ mod tests {
 
     #[test]
     fn terminal_status_is_delivered_when_the_queue_has_room() {
-        let (sender, receiver) = mpsc::sync_channel(1);
+        let (sender, receiver) = relay::start();
         let closed = AtomicBool::new(false);
         end_updates(sender, &closed);
         assert!(closed.load(Ordering::Acquire));
+        let wait = Duration::from_secs(5);
         assert!(matches!(
-            receiver.try_recv(),
+            receiver.recv_timeout(wait),
             Ok(WorldUpdate::Connection(Link::Ended))
         ));
         assert!(matches!(
-            receiver.try_recv(),
-            Err(mpsc::TryRecvError::Disconnected)
+            receiver.recv_timeout(wait),
+            Err(mpsc::RecvTimeoutError::Disconnected)
         ));
     }
 
     #[test]
     fn terminal_status_does_not_require_a_receiver() {
-        let (sender, receiver) = mpsc::sync_channel(1);
+        let (sender, receiver) = relay::start();
         drop(receiver);
         end_updates(sender, &AtomicBool::new(false));
     }

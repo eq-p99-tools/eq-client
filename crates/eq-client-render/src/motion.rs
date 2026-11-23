@@ -1195,6 +1195,7 @@ fn lower_speeds(
                 strafe: a.strafe.min(b.strafe),
                 backward: a.backward.min(b.backward),
                 set: b.set,
+                slower: b.slower,
             }
         }),
         diagonal: DiagonalRates {
@@ -7163,6 +7164,7 @@ pub(super) mod tests {
             strafe: 0.7,
             backward: 0.0,
             set: eq_client_core::movement::water::LIQUID_5,
+            slower: eq_client_core::movement::water::LIQUID_6_TO_8,
         };
 
     /// What the program's step gives from rest over `span` for `input`.
