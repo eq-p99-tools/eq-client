@@ -195,6 +195,7 @@ mod tests {
                 indices: vec![0, 1, 2],
                 texture: None,
                 material_mode: MaterialMode::Opaque,
+                light: Vec::new(),
             }],
             textures: Vec::new(),
             flat: false,

@@ -1,6 +1,7 @@
 //! Day and night: where a zone has a sky, the scene's brightness, the sun,
 //! the sky's color and the fog follow the time in Norrath. Supported
-//! Titanium interiors use placed lights and observer vision. The outdoor
+//! Titanium zones without a sky are coloured per vertex by `lighting`
+//! (`docs/zone-lighting.md`). The outdoor
 //! scene's unlit materials use camera exposure to darken at night. Fog
 //! follows the zone header's distances and color. The hour the sky follows, when dawn and dusk come and
 //! which zones keep one hour are the installed client's
@@ -176,7 +177,11 @@ pub(super) fn launch_ambient() -> GlobalAmbientLight {
 }
 
 /// Lights the scene for the zone and the time of day.
-#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+#[allow(
+    clippy::needless_pass_by_value,
+    clippy::too_many_arguments,
+    clippy::too_many_lines
+)]
 pub(super) fn update(
     mut commands: Commands,
     online: Res<super::online::OnlineState>,
@@ -238,7 +243,21 @@ pub(super) fn update(
         let darkness = lit_minute
             .filter(|_| sky.sky != 0)
             .map_or(0.0, |minute| 1.0 - day_night.daylight(minute));
-        super::lighting::adjust(&mut lit, vision, interior, darkness);
+        super::lighting::adjust(
+            &mut lit,
+            vision,
+            interior.then(|| {
+                super::lighting::interior_ambient(
+                    sky.time_type,
+                    lit_minute,
+                    vision,
+                    scene_lights
+                        .as_deref()
+                        .and_then(super::lighting::SceneLights::day),
+                )
+            }),
+            darkness,
+        );
     }
     lit.fog = closed_in(
         lit.fog,

@@ -309,6 +309,12 @@ impl Scene<'_, '_> {
                 zone.short_name, zone.objects_unplaced, zone.object_skins_skipped
             );
         }
+        if zone.object_lights_skipped > 0 {
+            info!(
+                "Zone {}: {} object placement colour tracks left out: not one colour per vertex of a one-mesh model",
+                zone.short_name, zone.object_lights_skipped
+            );
+        }
         if let (Some(triangles), Some(mesh)) = (navmesh, self.navmesh.as_mut()) {
             let directory = self
                 .settings

@@ -1439,9 +1439,11 @@ mod tests {
                 texture_coordinates: Vec::new(),
                 texture: None,
                 material_mode: eq_client_assets::MaterialMode::Opaque,
+                light: Vec::new(),
             }],
             materials: vec![eq_client_assets::ObjectMaterial { double_sided: true }],
             collision: Vec::new(),
+            vertex_count: None,
         };
         let mut models = super::super::doors::Models::default();
         models.0.insert(

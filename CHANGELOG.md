@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Zones without a sky are lit as the original lights them, so the Erudin palace and other interiors are no longer too dark (Adam, 11-23). See [Zone lighting](docs/zone-lighting.md).
+  - **Baked light:** each terrain vertex's colour from the zone file, and each placed object's colour track, is now drawn. Before, both were dropped at load.
+  - **The engine's single-pass formula:** each vertex sums the ambient by its alpha past the 0.12 offset, its own light at full weight, and up to three point lights. The sum saturates once, then multiplies the texture.
+  - **The ambient** comes from the zone header's time type, as in eqgame.exe 0x441295. Type 4 (the palace) gets 0.5 grey and other types 0.1. Types 1, 2 and 5 follow the day table, read from the installed eqgame.exe. Vision raises the ambient to the floor.
+  - **Point lights:** the zone's placed lights and carried torches light zone geometry per vertex, worked out on the CPU, in place of Bevy's lights. Which lights each mesh takes is inferred until the engine's light lists are read.
+  - **Tone curve:** the scene camera no longer applies one, inside or out, as the original applies none. Colour grading stays.
+  - **Known departure:** the floor's fade while you carry a light isn't modelled.
+
+
 - A jump never stands a seated player or ends a feign held standing (checklist 6.600, Adam 11-23: "jumping does not stand, just as jumping from sitting does not stand").
   - **Seated jump:** a jump press while sitting or kneeling to loot does nothing and stands no one, as the original client's jump waits on the can-move flag (read R19 c). The Mac-era client is inferred the same. With Allow Auto-Stand on, forward still stands a sitter.
   - **Feign held standing:** with Move While Feigned on, a jump from standing still keeps its crouch's wait but sends no duck or stand, so the feign holds. The session's new `FeignHeld` report says when one is held. Without the option, a feigned player lies, and a lying jump stays blocked.
