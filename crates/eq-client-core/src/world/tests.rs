@@ -6679,3 +6679,97 @@ fn the_players_posture_changes_are_counted_but_not_a_first_standing() {
     assert_eq!(posture(&mut world, PostureState::Sitting), 1);
     assert_eq!(posture(&mut world, PostureState::Standing), 2);
 }
+
+#[test]
+fn an_environmental_record_for_the_player_prints_the_programs_line_not_a_melee_one() {
+    use crate::combat::DamageOutcome;
+    let record = |kind, source_id, spell_id| crate::combat::Damage {
+        target_id: 9,
+        source_id,
+        kind,
+        spell_id,
+        outcome: DamageOutcome::Hit(13),
+        push: None,
+    };
+    let mut world = admitted();
+    let line = |record| Notice::EnvironmentalDamage {
+        reported: None,
+        record: Some(record),
+    };
+    // EQEmu's echo of the player's own record, and a trap's, come from 0.
+    assert_eq!(
+        game(&mut world, WorldEvent::Damage(record(250, 0, None))).notices,
+        [line((0x2f63, 0x149))]
+    );
+    assert_eq!(
+        game(&mut world, WorldEvent::Damage(record(253, 0, Some(0x87)))).notices,
+        [line((0x2f5c, 0x10a))]
+    );
+    // Each drowning record counts, for the breath sampler to empty air.
+    assert_eq!(world.drowning_records(), 0);
+    assert_eq!(
+        game(&mut world, WorldEvent::Damage(record(251, 0, None))).notices,
+        [line((0x2f60, 0x10a))]
+    );
+    assert_eq!(world.drowning_records(), 1);
+    // A record the player is the source of, and a melee kind, keep the
+    // combat line.
+    for damage in [record(250, 9, None), record(1, 5, None)] {
+        assert!(matches!(
+            game(&mut world, WorldEvent::Damage(damage)).notices[..],
+            [Notice::Damage { .. }]
+        ));
+    }
+    // The Mac-era program's lines are unread: its records stay as they were.
+    world.carry_as(crate::GameDialect::EqMac);
+    assert!(matches!(
+        game(&mut world, WorldEvent::Damage(record(251, 0, None))).notices[..],
+        [Notice::Damage { .. }]
+    ));
+    assert_eq!(world.drowning_records(), 1);
+}
+
+#[test]
+fn the_players_own_report_prints_its_amount_then_its_record_line() {
+    use crate::hazards::Hazard;
+    let reported = |session_id, hazard, record| WorldEvent::HazardReported {
+        session_id,
+        hazard,
+        amount: 13,
+        record,
+    };
+    let mut world = admitted();
+    for (hazard, line) in [
+        (Hazard::Drowning, (0x2f60, 0x10a)),
+        (Hazard::Lava, (0x2f63, 0x149)),
+        (Hazard::Falling, (0x2f56, 0x10a)),
+        (Hazard::ZoneHeat, (0x165a, 0x149)),
+        (Hazard::Freezing, (0x2f6d, 0x149)),
+    ] {
+        assert_eq!(
+            game(&mut world, reported(1, hazard, true)).notices,
+            [Notice::EnvironmentalDamage {
+                reported: Some(13),
+                record: Some(line),
+            }],
+            "{hazard:?}"
+        );
+    }
+    // The death path sends no record, so only the amount line prints.
+    assert_eq!(
+        game(&mut world, reported(1, Hazard::Lava, false)).notices,
+        [Notice::EnvironmentalDamage {
+            reported: Some(13),
+            record: None,
+        }]
+    );
+    // An earlier admission's report says nothing.
+    let stale = game(&mut world, reported(2, Hazard::Lava, true));
+    assert!(stale.ignored && stale.notices.is_empty());
+    // The Mac-era program's lines for its own reports are unread here.
+    world.carry_as(crate::GameDialect::EqMac);
+    assert_eq!(
+        game(&mut world, reported(1, Hazard::Falling, true)).notices,
+        []
+    );
+}
