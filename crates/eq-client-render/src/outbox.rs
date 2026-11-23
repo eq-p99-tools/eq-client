@@ -321,6 +321,7 @@ impl Outbox {
                 ClientCommand::SendChatInAdmission {
                     session_id,
                     message,
+                    tongue: eq_client_core::Tongue::COMMON,
                 }
             }
             (command, _) => command,

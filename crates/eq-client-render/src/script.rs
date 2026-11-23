@@ -3049,6 +3049,17 @@ fn reach(
         (ClickTarget::Slider(..), Ok(needs)) if !needs.offered(world) => {
             Err(format!("that slider is greyed out: {}", needs.reason()))
         }
+        // Accepting a duel is only ever the player's own click; a script
+        // may still say No (checklist 6.492).
+        (ClickTarget::Answer(true), _)
+            if crate::confirm::consent_in(world).map(|id| id.kind)
+                == Some(eq_client_core::confirmations::ConsentKind::Duel) =>
+        {
+            Err(
+                "a script cannot accept a challenge to a duel; only your own click on Yes does"
+                    .into(),
+            )
+        }
         _ => Ok(entity),
     }
 }
@@ -5266,6 +5277,96 @@ mod tests {
             (7, 9, item)
         );
         assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_script_cannot_accept_a_duel() {
+        use crate::{
+            confirm::{AnswerButton, Asked, QuestionText},
+            online::{OnlineState, testing},
+            windows::{Shown, WindowId},
+        };
+        use eq_client_core::{
+            WorldEvent,
+            confirmations::{ConsentId, ConsentKind},
+            socials::DuelQuestion,
+        };
+
+        let (mut app, _) = background(vec![Step::Click(ClickTarget::Answer(true))]);
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 7, testing::player(9));
+        let id = ConsentId {
+            session_id: 7,
+            kind: ConsentKind::Duel,
+            sequence: 1,
+        };
+        testing::news(
+            &mut online,
+            [WorldEvent::DuelOffer(DuelQuestion { id, challenger: 5 })],
+        );
+        let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+        app.insert_resource(online)
+            .insert_resource(crate::outbox::Outbox::new(Some(sender)))
+            .init_resource::<Asked>()
+            .init_resource::<crate::chat::ChatState>()
+            .init_resource::<crate::spellbook::SpellNames>()
+            .add_systems(
+                Update,
+                (
+                    crate::confirm::buttons,
+                    crate::confirm::window,
+                    crate::confirm::show,
+                )
+                    .chain(),
+            );
+        app.world_mut()
+            .resource_mut::<Shown>()
+            .open(WindowId::Confirmation);
+        let dialog = app.world_mut().spawn(Node::default()).id();
+        app.world_mut()
+            .spawn((QuestionText, Text::default(), ChildOf(dialog)));
+        let yes = app
+            .world_mut()
+            .spawn((
+                Button,
+                AnswerButton(true),
+                ChildOf(dialog),
+                laid_out(Vec2::new(600.0, 360.0), 40.0, 2),
+            ))
+            .id();
+        for ms in (0..=1_000).step_by(10) {
+            frame_at(&mut app, ms);
+        }
+        // The script stopped at the Yes and nothing went out.
+        assert!(
+            app.world()
+                .get_resource::<Script>()
+                .is_none_or(|script| script.current.is_none() && script.steps.is_empty())
+        );
+        assert!(receiver.try_recv().is_err());
+        // It stopped for the duel, not because the Yes was out of reach.
+        let status = app.world().resource::<RunStatus>();
+        assert!(
+            status.events().iter().any(|event| event
+                .message
+                .contains("cannot accept a challenge to a duel")),
+            "{:?}",
+            status
+                .events()
+                .iter()
+                .map(|e| &e.message)
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            app.world()
+                .resource::<OnlineState>()
+                .world()
+                .duel()
+                .is_some()
+        );
+        // The player's own click on Yes accepts: see
+        // `confirm::tests::the_players_click_answers_a_duel`.
+        let _ = yes;
     }
 
     #[test]

@@ -155,12 +155,17 @@ impl Asked {
 
 /// The server question that takes precedence in the confirmation window.
 fn current_consent(online: &OnlineState) -> Option<ConsentId> {
-    online
-        .world()
+    consent_in(online.world())
+}
+
+/// The server question that takes precedence in the confirmation window of
+/// this world: a resurrection, then a translocate, then a duel.
+pub(crate) fn consent_in(world: &eq_client_core::world::ClientWorld) -> Option<ConsentId> {
+    world
         .resurrection()
         .map(|question| question.id)
-        .or_else(|| online.world().translocate().map(|question| question.id))
-        .or_else(|| online.world().duel().map(|question| question.id))
+        .or_else(|| world.translocate().map(|question| question.id))
+        .or_else(|| world.duel().map(|question| question.id))
 }
 
 /// Keeps the confirmation dialog open while a question waits for an answer.
@@ -281,6 +286,54 @@ pub(crate) fn show(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_players_click_answers_a_duel() {
+        use crate::{clicks::testing as clicks, online::testing};
+        use eq_client_core::{ClientCommand, WorldEvent, socials::DuelQuestion};
+
+        let mut app = crate::testing::app();
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        app.insert_resource(Outbox::new(Some(tx)))
+            .init_resource::<Asked>()
+            .init_resource::<crate::chat::ChatState>()
+            .add_systems(Update, (buttons, window, show).chain());
+        let yes = app
+            .world_mut()
+            .spawn((Interaction::None, AnswerButton(true)))
+            .id();
+        let text = app.world_mut().spawn((QuestionText, Text::default())).id();
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        let id = ConsentId {
+            session_id: 1,
+            kind: ConsentKind::Duel,
+            sequence: 1,
+        };
+        testing::news(
+            &mut online,
+            [WorldEvent::DuelOffer(DuelQuestion { id, challenger: 44 })],
+        );
+        app.insert_resource(online);
+        app.update();
+        assert_eq!(
+            app.world().get::<Text>(text).unwrap().0,
+            "Someone challenges you to a duel. Do you accept?"
+        );
+        assert!(rx.try_recv().is_err());
+        clicks::click(&mut app, yes);
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ClientCommand::AnswerDuel { session_id: 1, offer_id, accept: true }) if offer_id == id
+        ));
+        assert!(
+            app.world()
+                .resource::<OnlineState>()
+                .world()
+                .duel()
+                .is_none()
+        );
+    }
 
     #[test]
     fn a_press_started_on_one_offer_cannot_answer_its_replacement() {

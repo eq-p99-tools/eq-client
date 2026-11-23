@@ -968,7 +968,13 @@ impl ClientWorld {
             // to a player, or the petitions in the queue, for a front end that
             // shows them. The server's regeneration tick waits for its own.
             // Installed spell providers consume table facts before admission staging.
-            WorldEvent::SpellTable(_)
+            // Apply Poison's answer (eq-client #556) and the server filters'
+            // outcome (eq-client #560) take their arms in those PRs.
+            WorldEvent::PoisonAnswered(_)
+            | WorldEvent::ApplyPoisonRefused { .. }
+            | WorldEvent::ServerFiltersKept { .. }
+            | WorldEvent::ServerFiltersRefused { .. }
+            | WorldEvent::SpellTable(_)
             | WorldEvent::ChatServer(_)
             | WorldEvent::ZoneUnavailable { .. }
             | WorldEvent::ServerTick(_)
@@ -1790,7 +1796,7 @@ impl ClientWorld {
         }
         let name = |world: &Self, id: u16| match world.party(u32::from(id)) {
             Party::Named(name) => name,
-            Party::Player | Party::Unseen => "someone".to_owned(),
+            Party::Player | Party::Unseen => "Someone".to_owned(),
         };
         let own = |world: &Self, id: u16| world.is_player(id);
         let notice = match update {

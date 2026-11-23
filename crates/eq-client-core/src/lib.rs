@@ -43,6 +43,7 @@ pub use eq_network_game::boats;
 pub use eq_network_game::books;
 pub use eq_network_game::characters::{CharacterChoice, CharacterLook};
 pub use eq_network_game::chat::OutboundChat;
+pub use eq_network_game::chat::Tongue;
 pub use eq_network_game::clock;
 pub use eq_network_game::combat;
 pub use eq_network_game::command::GameCommand as ClientCommand;

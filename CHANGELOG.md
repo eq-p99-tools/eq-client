@@ -6,8 +6,10 @@
   client used to drop (checklist 6.492). Where the session asks (stock
   `EQEmu`, eq-network #328), the skin's confirmation dialog asks "<name>
   challenges you to a duel. Do you accept?" after a resurrection and a
-  translocate. Only its Yes or No answers: no script, setting or key does.
-  The question has no local deadline. A challenger not in the spawn list is
+  translocate. Only the player's own click on Yes accepts: a script step
+  clicking Yes is refused in this client's words and stops the script,
+  while a scripted No still declines. No setting or key answers it. The
+  question has no local deadline. A challenger not in the spawn list is
   "Someone". `InstalledClient::duel_offer()` names the installed client's
   string where it is read; it is None for every generation until R49-6a.
   The chat now tells, in this client's words until the program's strings
@@ -20,7 +22,9 @@
     say whether it is the new value or the rise;
   - the coins a quest or task gave.
   The server sends no line of its own for any of these. Becoming a corpse
-  stays unhandled until R49-6e.
+  stays unhandled until R49-6e. Repins eq-network to c7ac7ea (#328); its
+  Apply Poison and server filter events are ignored here until eq-client
+  #556 and #560 take them, and outgoing chat names `Tongue::COMMON`.
 
 - Add RoF2 as a placeholder generation, following eq-network's
   (`GameDialect::Rof2`, `ServerProtocol::EqEmuRof2`). `InstalledClient::Rof2`

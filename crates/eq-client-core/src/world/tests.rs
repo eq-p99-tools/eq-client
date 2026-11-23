@@ -5739,7 +5739,7 @@ fn duel_news_tells_the_player_of_their_own_duels() {
             }
         ),
         [Notice::Duel(DuelNotice::Refused {
-            from: "someone".into(),
+            from: "Someone".into(),
             reason: DuelRefusal::Considering
         })]
     );
