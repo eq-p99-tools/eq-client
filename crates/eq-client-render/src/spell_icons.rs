@@ -40,6 +40,10 @@ impl GemArtwork {
     /// Resolve one image and its display rectangle in the slot's skin. Titanium's
     /// paired grids use the same spell index. Mac-era definitions supply a gem
     /// index separately from the renderer's choice of atlas.
+    #[expect(
+        clippy::match_same_arms,
+        reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
+    )]
     fn image(
         &self,
         art: &mut super::sheets::Art,
@@ -50,6 +54,8 @@ impl GemArtwork {
     ) -> Option<(ImageNode, Area)> {
         let icon = match client {
             InstalledClient::Titanium => names.icon(spell),
+            // Titanium's, inferred for RoF2 (6.489).
+            InstalledClient::Rof2 => names.icon(spell),
             InstalledClient::EqMac => names.gem_icon(spell),
         };
         let cell = self

@@ -3,8 +3,10 @@
 //! frontmost open window that Escape closes, and only with nothing else open
 //! does Escape drop the target. Before the world, at the login screens and
 //! character select, the last layer goes back one screen instead (Adam
-//! 11-01, from the live client). Each of those reads this decision instead
-//! of the key, so one press never does two things.
+//! 11-01, from the live client), and on the login screen itself, with
+//! nothing logging in, it quits the game (Adam 11-23, 6.601). Each of those
+//! reads this decision instead of the key, so one press never does two
+//! things.
 use super::windows::{Stack, WindowId};
 use bevy::prelude::*;
 
@@ -24,11 +26,18 @@ pub(crate) enum Escape {
     Target,
     /// Goes back one screen before the world: from character select or the
     /// login server's list of worlds to the login screen, or from a login
-    /// under way to the login screen as it was. It never leaves the game:
-    /// on the login screen with nothing logging in, Escape only leaves the
-    /// box being typed in. That the Mac-era client goes back the same way is
-    /// inferred (recording checklist 6.326).
+    /// under way to the login screen as it was. It never leaves the game.
+    /// That the Mac-era client goes back the same way is inferred (recording
+    /// checklist 6.326).
     Back,
+    /// Leaves the game from the login screen with nothing logging in, as the
+    /// official client's Escape does there (Adam 11-23, recording checklist
+    /// 6.601; the Mac-era client's the same, inferred). Only once nothing
+    /// else on the screen takes the press: an open window closes first and a
+    /// login under way stops first. Its own decision, never `Back`, so the
+    /// press that brought character select back to the login screen can't
+    /// also quit.
+    Quit,
 }
 
 /// The windows' frames, by window.
@@ -74,9 +83,10 @@ pub(super) fn route(
         Screen::Login | Screen::Servers if !front.has_login() || !keys.window_focused() => {
             Escape::Unused
         }
-        // A login under way stops; with none, Escape leaves the box.
+        // A login under way stops; with none, an open window closes, and
+        // with none of those Escape quits.
         Screen::Login if front.running() => Escape::Back,
-        Screen::Login => Escape::Unused,
+        Screen::Login => frontmost(&stack, &frames).map_or(Escape::Quit, Escape::Close),
         Screen::Servers => Escape::Back,
         _ if !keys.escape_free() => Escape::Unused,
         _ if inventory.action_under_way() => Escape::Inventory,

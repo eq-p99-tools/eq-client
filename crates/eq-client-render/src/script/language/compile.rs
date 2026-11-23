@@ -103,7 +103,9 @@ pub(super) enum Op {
     },
     While {
         condition: Expr,
-        limit: u16,
+        /// The written cap; none runs until the condition is false, a
+        /// `break`, or the run's own length.
+        limit: Option<u16>,
         exit: usize,
     },
     /// Leave the loop whose header is here.
@@ -1083,16 +1085,19 @@ impl Builder {
         Ok(expr)
     }
 
-    /// A while condition and its cap; a fault's span is in `source`.
-    fn limited(&self, source: &str) -> Result<(Expr, u16), Fault> {
+    /// A while condition and its cap, if written; a fault's span is in `source`.
+    fn limited(&self, source: &str) -> Result<(Expr, Option<u16>), Fault> {
         let (condition, limit) = expression::limited_condition(source, |name| self.lookup(name))?;
         expect_kind(&condition, Kind::Bool)
             .map_err(|message| Fault::at(message, 0..source.len()))?;
+        let Some(limit) = limit else {
+            return Ok((condition, None));
+        };
         let limit = u16::try_from(limit)
             .ok()
             .filter(|limit| (1..=MAX_ITERATIONS).contains(&i64::from(*limit)))
             .ok_or_else(|| format!("while limit must be from 1 to {MAX_ITERATIONS}"))?;
-        Ok((condition, limit))
+        Ok((condition, Some(limit)))
     }
 
     fn push(&mut self, line: usize, op: Op) {

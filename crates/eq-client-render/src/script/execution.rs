@@ -66,7 +66,7 @@ pub struct RunEvent {
 pub(crate) struct FlowStatus {
     pub(super) statements: usize,
     pub(super) branch: Option<(usize, bool)>,
-    pub(super) loops: Vec<(usize, u16, u16)>,
+    pub(super) loops: Vec<(usize, u64, Option<u64>)>,
     pub(super) variables: Vec<String>,
     /// Each call in progress, outermost first: its function and the line
     /// it has reached.
@@ -82,7 +82,7 @@ impl FlowStatus {
         self.branch
     }
 
-    pub(crate) fn loops(&self) -> &[(usize, u16, u16)] {
+    pub(crate) fn loops(&self) -> &[(usize, u64, Option<u64>)] {
         &self.loops
     }
 
@@ -110,6 +110,8 @@ pub struct RunStatus {
     pub(super) total: usize,
     pub(super) flow: Option<FlowStatus>,
     pub(super) elapsed: Duration,
+    /// The run length the player chose for this run.
+    pub(super) length: super::RunLength,
     pub(super) events: VecDeque<RunEvent>,
     pub(super) revision: u64,
     /// An immediate action also stays active until the next frame settles it.
@@ -188,6 +190,12 @@ impl RunStatus {
         self.elapsed
     }
 
+    /// The run length the player chose for this run.
+    #[must_use]
+    pub const fn length(&self) -> super::RunLength {
+        self.length
+    }
+
     /// Recent execution events, oldest first.
     #[must_use]
     pub fn events(&self) -> &VecDeque<RunEvent> {
@@ -218,6 +226,12 @@ impl RunStatus {
             self.completed_steps += 1;
             self.event(format!("Finished step {}", self.completed_steps));
         }
+    }
+
+    /// Names the line an outcome belongs to when it is an earlier step's,
+    /// as a refusal that comes after the run moved on.
+    pub(super) fn at_line(&mut self, line: Option<usize>) {
+        self.line = line;
     }
 
     pub(super) fn finish(&mut self, phase: Phase, message: impl Into<String>) {

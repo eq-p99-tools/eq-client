@@ -4,7 +4,7 @@
 use super::{Changes, ClientWorld, ListingNotice, Notice};
 use crate::{
     SpawnKind,
-    listing::{Anonymity, Listing, ListingChange},
+    listing::{Anonymity, GuildRank, Listing, ListingChange},
     names::{NameParts, TitleChange},
     who::WhoFilter,
 };
@@ -51,6 +51,48 @@ impl ZonePlayer {
     }
 }
 
+/// What `/guildstatus` says of the target or a named player (checklist
+/// 6.575). Read R49-6k: the program answers locally and sends nothing, from
+/// the spawn a typed name finds or else the target, in strings 12256 to
+/// 12260 by rank.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GuildStatus {
+    /// No such spawn, one that isn't a player, or a game master.
+    NoPlayer,
+    /// The player holds a rank past the three the program words: its line
+    /// names only the player.
+    Ranked {
+        /// The player's name.
+        name: String,
+    },
+    /// The player is in no guild.
+    NoGuild {
+        /// The player's name.
+        name: String,
+    },
+    /// The player leads the guild.
+    Leader {
+        /// The player's name.
+        name: String,
+        /// The guild's name.
+        guild: String,
+    },
+    /// The player is one of the guild's officers.
+    Officer {
+        /// The player's name.
+        name: String,
+        /// The guild's name.
+        guild: String,
+    },
+    /// The player is one of the guild's members.
+    Member {
+        /// The player's name.
+        name: String,
+        /// The guild's name.
+        guild: String,
+    },
+}
+
 /// Applies a change in how `/who` lists a player.
 pub(super) fn relist(change: ListingChange, level: &mut u8, listing: &mut Listing) {
     match change {
@@ -88,6 +130,7 @@ impl ClientWorld {
             news.ignored = true;
             return;
         }
+        let program = super::prints_r49_6_lines(self.generation);
         let Some(player) = self.player.as_mut() else {
             return;
         };
@@ -96,6 +139,10 @@ impl ClientWorld {
         relist(change, &mut player.level, &mut player.listing);
         let notice = match change {
             ListingChange::Away(away) => Some(ListingNotice::Away(away)),
+            // The Titanium program says its line as `/lfg` goes (read
+            // R49-6i), so the change itself says nothing there.
+            ListingChange::Looking(_) if program => None,
+            ListingChange::Looking(looking) => Some(ListingNotice::Looking(looking)),
             ListingChange::Anonymity(after) => anonymity_notice(before, after),
             _ => None,
         };
@@ -172,6 +219,81 @@ impl ClientWorld {
                     && spawn.listing.game_master
                     && spawn.name.eq_ignore_ascii_case(name)
             })
+    }
+
+    /// What `/guildstatus` says (read R49-6k): of the player a typed name
+    /// finds, or else of the target. None while the guild's name or the
+    /// rank hasn't come.
+    ///
+    /// The program also refuses a spawn whose byte at +0x256 is set. Read
+    /// R49-4 takes that byte as the GM flag (a spawn with it sends every
+    /// tongue at skill 100), so a spawn the server marks a game master is
+    /// refused here (inferred). Anonymity isn't tested: what the server sends
+    /// of an anonymous player's guild is shown. The name lookup matches the
+    /// player's name or shown name, ignoring case (inferred: 0x47c88e's
+    /// rule wasn't read).
+    #[must_use]
+    pub fn guild_status(&self, named: Option<&str>) -> Option<GuildStatus> {
+        let matches = |shown: &str, wanted: &str| {
+            shown.eq_ignore_ascii_case(wanted)
+                || crate::entities::display_name(shown).eq_ignore_ascii_case(wanted)
+        };
+        let found = match named {
+            Some(wanted) => self
+                .player
+                .as_ref()
+                .filter(|player| matches(&player.name, wanted))
+                .map(|player| player.spawn_id)
+                .or_else(|| {
+                    self.zone
+                        .spawns
+                        .iter()
+                        .find(|(_, spawn)| matches(&spawn.state.name, wanted))
+                        .map(|(id, _)| *id)
+                }),
+            None => self.target.selected.filter(|_| !self.target_stale()),
+        };
+        let game_master = |id: &u16| {
+            let flag = if self.is_player(*id) {
+                self.player
+                    .as_ref()
+                    .and_then(|player| player.appearance.titanium_gm)
+            } else {
+                self.zone
+                    .spawns
+                    .get(id)
+                    .and_then(|spawn| spawn.state.appearance.titanium_gm)
+            };
+            flag.is_some_and(|flag| flag != 0)
+        };
+        let listed = found.filter(|id| !game_master(id)).and_then(|id| {
+            if self.is_player(id) {
+                self.player
+                    .as_ref()
+                    .map(|player| (player.name.as_str(), player.listing))
+            } else {
+                self.zone
+                    .spawns
+                    .get(&id)
+                    .map(|spawn| &spawn.state)
+                    .filter(|spawn| spawn.kind == SpawnKind::Player)
+                    .map(|spawn| (spawn.name.as_str(), spawn.listing))
+            }
+        });
+        let Some((name, listing)) = listed else {
+            return Some(GuildStatus::NoPlayer);
+        };
+        let name = name.to_owned();
+        let Some(number) = listing.guild else {
+            return Some(GuildStatus::NoGuild { name });
+        };
+        let guild = self.guild_name(number)?.to_owned();
+        Some(match listing.guild_rank? {
+            GuildRank::Leader => GuildStatus::Leader { name, guild },
+            GuildRank::Officer => GuildStatus::Officer { name, guild },
+            GuildRank::Member => GuildStatus::Member { name, guild },
+            GuildRank::Other(_) => GuildStatus::Ranked { name },
+        })
     }
 
     /// The players the zone's own `/who` lists, by name: the player and every

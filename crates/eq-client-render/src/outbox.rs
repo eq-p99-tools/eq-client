@@ -12,11 +12,11 @@ pub(crate) use self::book::{BOOK_TIMEOUT, BookEditReceipt};
 use self::book::{BookQueue, Expected};
 use crate::theme;
 use bevy::prelude::*;
-use eq_client_core::{Capability, ClientCommand, WorldEvent, world::ClientWorld};
+use eq_client_core::{Capability, ClientCommand, WorldEvent, chat::Tongue, world::ClientWorld};
 use std::{
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
         mpsc::{SyncSender, TrySendError},
     },
     time::Instant,
@@ -112,6 +112,10 @@ pub(crate) struct Outbox {
     /// Present only on a short-lived facade passed by an identified script
     /// dispatch. The shared outbox never stores a script's context.
     chat_admission: Option<u64>,
+    /// The language the active chat window speaks, by the servers' number
+    /// (read R49-4 (b): the builder takes the last window's choice), kept
+    /// by [`crate::languages::speak`].
+    language: Arc<AtomicU8>,
 }
 
 fn interrupts_apply(command: &ClientCommand) -> bool {
@@ -137,6 +141,7 @@ impl Outbox {
             refused: Arc::new(Mutex::new(Vec::new())),
             book: Arc::default(),
             chat_admission: None,
+            language: Arc::default(),
         }
     }
 
@@ -149,6 +154,7 @@ impl Outbox {
             refused: self.refused.clone(),
             book: self.book.clone(),
             chat_admission,
+            language: self.language.clone(),
         }
     }
 
@@ -157,6 +163,33 @@ impl Outbox {
             admission_id: self.chat_admission?,
             zone: world.zone().to_owned(),
         })
+    }
+
+    /// Speaks every line in this language from now on.
+    pub(crate) fn set_language(&self, language: u8) {
+        self.language.store(language, Ordering::Relaxed);
+    }
+
+    /// The tongue a line goes out in (read R49-4 (b)): the active window's
+    /// language where the profile gives skill in it, worded as the program
+    /// words it ([`Tongue::spoken`]), else the common tongue.
+    pub(crate) fn tongue(&self, world: &ClientWorld) -> Tongue {
+        let language = self.language.load(Ordering::Relaxed);
+        world
+            .player()
+            .and_then(|player| {
+                Tongue::spoken(
+                    player,
+                    language,
+                    eq_client_core::chat::Speaker {
+                        game_master: crate::languages::game_master(player),
+                        log_server_word_zero: world
+                            .language_zero_selector()
+                            .is_some_and(|selector| selector.0 != 0),
+                    },
+                )
+            })
+            .unwrap_or(Tongue::COMMON)
     }
 
     pub(crate) fn set_spell_ready(&self, ready: bool) {
@@ -316,11 +349,17 @@ impl Outbox {
         set_step: bool,
         receipt: Option<&BookEditReceipt>,
     ) -> Result<(), Refusal> {
-        let command = match (command, self.chat_admission) {
-            (ClientCommand::SendChat(message), Some(session_id)) => {
+        // A typed line goes out in the active window's tongue, bound to the
+        // admission it was typed in (a script's, or the one current).
+        let tongue = self.tongue(world);
+        let command = match (command, self.chat_admission.or(world.session_id())) {
+            (ClientCommand::SendChat(message), Some(session_id))
+                if self.chat_admission.is_some() || tongue != Tongue::COMMON =>
+            {
                 ClientCommand::SendChatInAdmission {
                     session_id,
                     message,
+                    tongue,
                 }
             }
             (command, _) => command,
@@ -473,8 +512,8 @@ pub(crate) enum Needs {
     Ability(eq_client_core::abilities::Ability),
     /// The admitted player has this knight class action.
     KnightAbility(eq_client_core::knights::KnightAbility),
-    /// The admitted player knows this supported discipline.
-    Discipline(eq_client_core::disciplines::Discipline),
+    /// The admitted player knows this discipline, by its spell.
+    Discipline(u32),
     /// Nothing of the session, as an empty action bar slot needs: never
     /// veiled.
     Nothing,
@@ -509,14 +548,17 @@ impl Needs {
                 offered(world, Capability::KnightAbilities)
                     && super::abilities::knight(world) == Some(ability)
             }
-            Self::Discipline(discipline) => {
+            Self::Discipline(spell) => {
                 offered(world, Capability::UsingDisciplines)
-                    && super::abilities::knows_discipline(world, discipline)
+                    && super::disciplines::knows(world, spell)
             }
-            Self::TitaniumBreath => {
-                world.generation() == eq_client_core::GameDialect::Titanium
-                    && offered(world, Capability::GameplayDepartures)
-            }
+            Self::TitaniumBreath => match world.generation() {
+                eq_client_core::GameDialect::Titanium => {
+                    offered(world, Capability::GameplayDepartures)
+                }
+                // Titanium's departure alone.
+                eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => false,
+            },
             Self::Nothing => true,
             Self::Missing => false,
         }

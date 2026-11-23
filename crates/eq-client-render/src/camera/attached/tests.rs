@@ -303,10 +303,120 @@ fn ordinary_look_reaches_both_vertical_directions_after_snapping_in() {
     }
 }
 
+/// Turns the Free Chase Tilt setting on or off for a test app.
+fn free_tilt(app: &mut App, on: bool) {
+    app.world_mut()
+        .resource_mut::<options::OptionsState>()
+        .options
+        .qol
+        .set(eq_client_core::qol::Fix::FreeChaseTilt, on);
+}
+
+#[test]
+fn chase_mouse_look_reaches_straight_down_and_straight_up_at_an_ordinary_zoom() {
+    // Regression: the program's height model had re-locked the chase view's
+    // mouse look to a few degrees at an ordinary zoom. The setting is on by
+    // default, so a player who never opened the page can look anywhere.
+    for (invert_y, pixels) in [(false, -180.0), (true, 180.0)] {
+        let (mut app, camera, player, _) = app();
+        assert!(
+            app.world()
+                .resource::<options::OptionsState>()
+                .options
+                .qol
+                .on(eq_client_core::qol::Fix::FreeChaseTilt)
+        );
+        app.world_mut()
+            .resource_mut::<options::OptionsState>()
+            .options
+            .invert_y = invert_y;
+        // The chase view's opening frame, 120 along the sightline: the
+        // program's 30 above the eyes tilts only about 15 degrees from here.
+        {
+            let mut orbit = app.world_mut().get_mut::<OrbitCamera>(camera).unwrap();
+            orbit.radius = 120.0;
+            orbit.pitch = camera::CHASE_PITCH;
+        }
+        start_look(&mut app);
+        let eye = 3.0 + 6.0 * camera::HEAD_LINE;
+
+        // Looking up: the camera swings below the eyes, no lower than the
+        // feet, and looks almost straight up past the head.
+        for _ in 0..40 {
+            drag(&mut app, Vec2::new(0.0, pixels));
+        }
+        let view = app.world().get::<OrbitCamera>(camera).unwrap();
+        let pose = app.world().get::<Transform>(camera).unwrap();
+        assert!(matches!(view.view, View::Chase));
+        assert!(
+            (view.pitch - 89.0_f32.to_radians()).abs() < 1e-5,
+            "{}",
+            view.pitch
+        );
+        assert!(pose.forward().y > 0.999, "{}", pose.forward());
+        assert!(pose.translation.y < eye, "{}", pose.translation);
+        assert!(pose.translation.y > 0.0, "{}", pose.translation);
+        assert!(pose.rotation.is_finite() && pose.right().is_finite());
+        assert_eq!(
+            app.world().get::<Visibility>(player),
+            Some(&Visibility::Inherited)
+        );
+
+        // Looking down: almost straight down from 120 above the eyes, the
+        // zoom unchanged.
+        for _ in 0..80 {
+            drag(&mut app, Vec2::new(0.0, -pixels));
+        }
+        let view = app.world().get::<OrbitCamera>(camera).unwrap();
+        let pose = app.world().get::<Transform>(camera).unwrap();
+        assert!(matches!(view.view, View::Chase));
+        assert!(
+            (view.pitch + 89.0_f32.to_radians()).abs() < 1e-5,
+            "{}",
+            view.pitch
+        );
+        assert!((view.radius - 120.0).abs() < 1e-3, "{}", view.radius);
+        assert!(pose.forward().y < -0.999, "{}", pose.forward());
+        assert!(pose.translation.y > eye + 119.0, "{}", pose.translation);
+        assert!(pose.rotation.is_finite() && pose.right().is_finite());
+    }
+}
+
+#[test]
+fn a_steep_free_chase_view_zooms_along_its_sightline_before_snapping_in() {
+    let (mut app, camera, _, window) = app();
+    {
+        let mut orbit = app.world_mut().get_mut::<OrbitCamera>(camera).unwrap();
+        orbit.radius = 120.0;
+        orbit.pitch = -89.0_f32.to_radians();
+    }
+    // Almost overhead the camera is only about 2 behind the player along
+    // the ground; one inward notch still only zooms.
+    wheel(&mut app, window, 1.0);
+    let view = app.world().get::<OrbitCamera>(camera).unwrap();
+    assert!(matches!(view.view, View::Chase));
+    assert!(
+        view.radius < 120.0 && view.radius > 100.0,
+        "{}",
+        view.radius
+    );
+    assert!((view.pitch + 89.0_f32.to_radians()).abs() < 1e-5);
+    // Close in along the sightline, the wheel still enters first person.
+    for _ in 0..60 {
+        wheel(&mut app, window, 1.0);
+    }
+    assert!(matches!(
+        app.world().get::<OrbitCamera>(camera).unwrap().view,
+        View::FirstPerson
+    ));
+}
+
 #[test]
 fn chase_looks_down_from_at_most_30_above_and_never_up_with_normal_and_inverted_mouse_input() {
     for (invert_y, pixels) in [(false, -180.0), (true, 180.0)] {
         let (mut app, camera, player, _) = app();
+        // The program's height model, Free Chase Tilt turned off.
+        free_tilt(&mut app, false);
         app.world_mut()
             .resource_mut::<options::OptionsState>()
             .options

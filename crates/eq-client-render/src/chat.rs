@@ -18,6 +18,7 @@ use eq_client_core::{
 use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 
 mod draft;
+pub(crate) use draft::MAX_TEXT;
 mod drag;
 mod groups;
 #[cfg(test)]
@@ -99,6 +100,7 @@ pub(super) fn system_line(said: impl Into<Said>) -> ChatLine {
             item_links: words.item_links,
         },
         source,
+        tongue: None,
     }
 }
 
@@ -133,15 +135,49 @@ pub(super) struct ChatState {
     pub requested_target: Option<String>,
     /// A plain `/who`, waiting to list the zone's players.
     pub zone_who: Option<eq_client_core::who::WhoFilter>,
+    /// When the session's chat pace last held a line, and its words
+    /// (6.523): a running script that sent chat before then fails.
+    pub(crate) paced: Option<(std::time::Instant, String)>,
     /// A `/loc` or `/time`, waiting to be answered.
     pub asked: Option<super::whereabouts::Asked>,
+    /// A `/yell` or `/stopcast` waiting for its line and send.
+    pub(crate) slash: Option<super::slash::Asked>,
+    /// A `/hidecorpses`'s words, waiting for its answer.
+    pub(crate) hide_corpses: Option<String>,
+    /// An `/assist` with words after it, waiting for its answer.
+    pub(crate) assist_words: Option<String>,
+    /// An `/autoinventory` waiting to put the cursor item away.
+    pub(crate) autoinventory: Option<crate::inventory::auto::Asked>,
+    /// Chat server channel commands, as the chat server's words, waiting
+    /// to be sent (checklist 6.509).
+    pub(crate) channel_asked: Vec<String>,
+    /// A `/doability`'s words, waiting for the Actions window's buttons.
+    pub(crate) doability: Option<String>,
+    /// A `/memspellset`'s words, waiting for the spell sets.
+    pub(crate) spell_set_asked: Option<String>,
+    /// A `/lootnodrop`'s words, waiting to set or list the choices.
+    pub(crate) loot_no_drop: Option<String>,
+    /// Social emotes, by case number, with the words after the command,
+    /// waiting in order to be said.
+    pub(crate) emotes: Vec<(u8, String)>,
+    /// Disciplines asked for, by `/discipline` or by a button or hotkey,
+    /// waiting in order to be used.
+    pub(crate) disciplines: Vec<super::disciplines::Asked>,
     /// A `/log`, waiting to turn the chat log on or off.
     pub log_toggle: bool,
+    /// A `/combatmusic`, waiting to turn combat music on or off (read R49-7
+    /// c, 0x4689a2).
+    pub combat_music_toggle: Option<super::zone_audio::CombatMusicTyped>,
+    /// A `/toggleinspect`, waiting to turn letting others inspect the
+    /// player on or off; only once the command is offered (checklist 6.574).
+    pub inspect_toggled: Option<super::dialogs::InspectToggle>,
     /// A `/shownames`, waiting to set how much of players' names shows.
     pub show_names: Option<eq_client_core::names::ShowNames>,
     /// A `/shownames` the client could not read, answered with the usage
     /// line.
     pub show_names_usage: bool,
+    /// A `/uiscale`, waiting to set the interface scale.
+    pub ui_scale: Option<u16>,
     /// A window a slash command opens or closes, as `/raidwindow` does the
     /// Raid window, waiting for the toggle.
     pub toggled: Option<super::windows::WindowId>,
@@ -152,6 +188,14 @@ pub(super) struct ChatState {
     pub(crate) contacts: super::contacts::Book,
     /// The guild's message of the day as last received, shown or not.
     guild_motd: Option<String>,
+    /// The server's message of the day as it came on this connection
+    /// (`OP_MOTD`), for `/motd` to say again (checklist 6.520); a new
+    /// connection, to this server or another, never says the old one.
+    server_motd: Option<(u64, ChatLine)>,
+    /// A `/motd`, waiting for [`super::motd::answers`].
+    pub(crate) motd_asked: Option<super::motd::Asked>,
+    /// A `/fastdrop`, waiting for [`super::fastdrop::answers`].
+    pub(crate) fastdrop_asked: Option<super::fastdrop::Asked>,
     /// A guild command typed, for [`super::guild::commands`] to run.
     pub(crate) guild_asked: Option<super::guild::Command>,
     /// A sharing command typed, for [`super::sharing::commands`] to run.
@@ -166,11 +210,19 @@ pub(super) struct ChatState {
     /// A Ranger's tracking option typed by another class, for
     /// [`super::tracking::say_rangers_only`] to answer.
     pub(crate) rangers_only: Option<super::tracking::RangersOnly>,
+    /// A `/loadskin` typed, for [`super::skin`] to load and answer.
+    pub(crate) load_skin: Option<super::skin::LoadSkin>,
     draft: draft::Draft,
     /// The lines this character sent, for recalling into the draft. Memory
     /// only: never saved, reported or logged.
     recall: recall::Recall,
     refusals: Refusals,
+    /// Each chat window's spoken language, for the session (read R49-4).
+    pub(crate) languages: super::languages::Spoken,
+    /// A `/language`'s words, waiting to be answered.
+    pub(crate) language_asked: Option<String>,
+    /// Tells heard while away, waiting for the away reply.
+    pub(crate) away_tells: Vec<super::languages::AwayTell>,
 }
 
 /// Only deferred gameplay intents need a script world stamp. Each ordinary
@@ -293,7 +345,40 @@ impl ChatState {
             }
         } else if line.channel == ChannelName::GuildMotdReply {
             self.guild_motd = Some(line.message.text.clone());
+        } else if line.channel == ChannelName::Motd && line.source == Source::Server {
+            self.server_motd = Some((online.connection_revision, line.clone()));
         }
+        self.deliver(line, online);
+    }
+
+    /// The server's message of the day as it came on this connection, if
+    /// one came.
+    pub(super) fn kept_motd(&self, online: &OnlineState) -> Option<String> {
+        self.server_motd
+            .as_ref()
+            .filter(|(connection, _)| *connection == online.connection_revision)
+            .map(|(_, line)| line.message.text.clone())
+    }
+
+    /// Says the server's message of the day again, as it came on this
+    /// connection, the way it was said then; false when none came. The
+    /// line said again is not kept as a new one.
+    pub(super) fn say_motd_again(&mut self, online: &OnlineState) -> bool {
+        let Some((_, line)) = self
+            .server_motd
+            .as_ref()
+            .filter(|(connection, _)| *connection == online.connection_revision)
+        else {
+            return false;
+        };
+        let line = line.clone();
+        self.deliver(line, online);
+        true
+    }
+
+    /// Puts a received line in the chat: the ignore list's say, the reply
+    /// list, and its item links.
+    fn deliver(&mut self, mut line: ChatLine, online: &OnlineState) {
         if line.source == Source::Server
             && let Some(sender) = line.sender.as_deref().filter(|sender| !sender.is_empty())
         {
@@ -316,6 +401,14 @@ impl ChatState {
             // shows otherwise (recording checklist 6.412).
             if line.channel == ChannelName::Tell {
                 self.contacts.lists.replies.heard(sender);
+            }
+            // A line in a tongue, once the filters let it through, is
+            // tagged and garbled as it arrives, so the chat and the log show
+            // the same words; a tell heard while away owes the away reply
+            // (read R49-4 (b), (c)). An ignored sender gets none.
+            if line.tongue.is_some() || line.channel == ChannelName::Tell {
+                let sender = sender.to_owned();
+                self.hear_tongue(&mut line, world, &sender);
             }
         }
         let linked = line.source == Source::Server
@@ -394,9 +487,112 @@ impl ChatState {
     /// Ends character-scoped chat state when camping or losing the session.
     /// Zoning keeps the last MOTD so the same guild notice stays quiet.
     pub(super) fn end_session(&mut self) {
+        self.forget_admission();
         self.clear_link_scope();
         self.guild_motd = None;
         self.recall.clear();
+        // The windows' languages last the session (read R49-4 (a)).
+        self.languages.clear();
+    }
+
+    /// The chat window lines are typed in, whose language they speak.
+    pub(crate) const fn active_window(&self) -> super::windows::WindowId {
+        self.groups.owner()
+    }
+
+    /// Forgets every ask made in a session and read by a system later, so
+    /// none acts after the session ends, in the next login or on another
+    /// character (6.535). A typed ask still survives a zone change within the
+    /// session, as before. Every field is named, so a new one does not
+    /// compile until it is sorted into kept or cleared. Nothing is said for
+    /// a cleared ask: what ended the session is said already, and a script
+    /// waiting on one ends with the session.
+    pub(super) fn forget_admission(&mut self) {
+        let Self {
+            // Cleared: asks made in the session.
+            script_requests,
+            requested_target,
+            zone_who,
+            asked,
+            guild_asked,
+            sharing_asked,
+            boat_asked,
+            boat_interacted,
+            follow_asked,
+            rangers_only,
+            load_skin,
+            contacts,
+            language_asked,
+            away_tells,
+            slash,
+            hide_corpses,
+            autoinventory,
+            channel_asked,
+            doability,
+            spell_set_asked,
+            loot_no_drop,
+            emotes,
+            disciplines,
+            motd_asked,
+            fastdrop_asked,
+            assist_words,
+            // Cleared elsewhere: the link scope, the message of the day and
+            // recall by `end_session`, the social inbox at every reset, and
+            // the departure by `login::depart`.
+            link_scope: _,
+            guild_motd: _,
+            recall: _,
+            languages: _,
+            socials: _,
+            departure: _,
+            // Kept: the chat pace's last hold, which runs out on its own
+            // time, and the server's message of the day, kept by the
+            // connection it came on.
+            paced: _,
+            server_motd: _,
+            // Kept: the player's own chat setup and what the screen shows.
+            history: _,
+            received_links: _,
+            script_link_messages: _,
+            groups: _,
+            views: _,
+            hovered: _,
+            log_toggle: _,
+            combat_music_toggle: _,
+            inspect_toggled: _,
+            show_names: _,
+            show_names_usage: _,
+            ui_scale: _,
+            toggled: _,
+            draft: _,
+            refusals: _,
+        } = self;
+        *script_requests = ScriptRequests::default();
+        *requested_target = None;
+        *zone_who = None;
+        *asked = None;
+        *guild_asked = None;
+        *sharing_asked = None;
+        *boat_asked = None;
+        *boat_interacted = None;
+        *follow_asked = None;
+        *rangers_only = None;
+        *load_skin = None;
+        contacts.asked = None;
+        *language_asked = None;
+        away_tells.clear();
+        *slash = None;
+        *hide_corpses = None;
+        *autoinventory = None;
+        channel_asked.clear();
+        *doability = None;
+        *spell_set_asked = None;
+        *loot_no_drop = None;
+        emotes.clear();
+        disciplines.clear();
+        *motd_asked = None;
+        *fastdrop_asked = None;
+        *assist_words = None;
     }
 
     /// Links can follow a known profile through zoning on the same connection.
@@ -473,8 +669,11 @@ impl ChatState {
         let world = online.world();
         active_link_admission(world)?;
         let generation = world.generation();
-        if generation != eq_client_core::GameDialect::Titanium {
-            return Err("Inventory item links are unavailable on this server".into());
+        match generation {
+            eq_client_core::GameDialect::Titanium => {}
+            eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => {
+                return Err("Inventory item links are unavailable on this server".into());
+            }
         }
         let item = world
             .inventory()
@@ -1118,7 +1317,7 @@ pub(super) fn input(
                 if scripted_submit
                     && super::socials::Request::parse(state.draft.text().trim()).is_some()
                 {
-                    state.refuse("Use a named social step in a local script.");
+                    state.refuse("Use a named social step in a script.");
                 } else {
                     let admission = if scripted_submit {
                         script.as_ref().and_then(|script| script.chat_admission())
@@ -1704,9 +1903,19 @@ fn submit_draft(
                 .groups
                 .active(state.groups.owner())
                 .unwrap_or_default();
-            let Some(wire) = crate::commands::spelled(wire.trim()) else {
+            let Some(mut wire) = crate::commands::spelled(wire.trim()) else {
                 return Ok(());
             };
+            match targeted(&wire, world) {
+                Some(Targeted::Tell(line)) => wire = line?.into(),
+                // A link has no part in `/whotarget`'s listing; it lists
+                // as typed without one.
+                Some(Targeted::Who(filter)) => {
+                    state.zone_who = Some(filter?);
+                    return Ok(());
+                }
+                None => (),
+            }
             let message = linked_outbound(
                 active,
                 &wire,
@@ -1741,6 +1950,20 @@ fn submit_draft(
     }
 }
 
+/// Sends a typed petition, bug report or feedback, or says why not.
+fn typed_report(
+    asked: &super::reports::Asked,
+    online: &super::online::OnlineState,
+    outbox: &crate::outbox::Outbox,
+) -> Result<(), Unsent> {
+    let world = online.world();
+    super::reports::offered(asked, world)?;
+    let stamp = outbox.stamp(world)?;
+    let command = super::reports::command(asked, world, stamp)?;
+    outbox.send(world, command)?;
+    Ok(())
+}
+
 /// Apply an ordinary typed line without changing the chat editor or focus.
 fn submit_line(
     line: &str,
@@ -1754,6 +1977,21 @@ fn submit_line(
     let Some(command) = crate::commands::spelled(line) else {
         return Ok(());
     };
+    // A report to the staff goes from a typed line, whoever types it: the
+    // keyboard, a social or a script's `slash` step (6.511).
+    if let Some(asked) = super::reports::Asked::typed(&command) {
+        return typed_report(&asked, online, outbox);
+    }
+    match targeted(&command, online.world()) {
+        Some(Targeted::Tell(line)) => {
+            return submit_line(&line?, active, state, online, outbox, qol);
+        }
+        Some(Targeted::Who(filter)) => {
+            state.zone_who = Some(filter?);
+            return Ok(());
+        }
+        None => (),
+    }
     if let Some(contacts) = super::contacts::Command::typed(&command) {
         return contacts_command(contacts, active, state, online, outbox, qol);
     }
@@ -1857,8 +2095,10 @@ fn contacts_command(
     Ok(())
 }
 
-/// Run one checked social line through ordinary local and game dispatch.
-pub(super) fn submit_social_line(
+/// Run one line exactly as the chat line runs a typed one: a social's line
+/// or a script's `slash` step, so each meets the same rules (paces, queries,
+/// camp and departures) as the keyboard.
+pub(super) fn submit_typed_line(
     line: &str,
     chat: &mut ChatState,
     online: &mut super::online::OnlineState,
@@ -1968,6 +2208,14 @@ pub(super) fn run_game_command(
         chat.rangers_only = Some(super::tracking::RangersOnly);
         return;
     }
+    // A chat channel command on a button goes as typed (checklist 6.509).
+    if let Some(asked) = super::chat_channels::typed(command) {
+        match asked {
+            Ok(words) => chat.channel_asked.push(words),
+            Err(reason) => chat.refuse(reason),
+        }
+        return;
+    }
     match submit_game_command(command, online, outbox, qol) {
         Ok(()) if camp_destination(command).is_some() => chat.socials.stop = true,
         Ok(()) => (),
@@ -1977,10 +2225,47 @@ pub(super) fn run_game_command(
 
 /// A slash command the client answers itself, noted for the system that
 /// answers it: `/target Name`, a plain `/who`, `/loc`, `/time`, `/log`,
-/// `/shownames`, guild requests, `/follow` or `/raidwindow`. None for any other line.
+/// `/shownames`, `/uiscale`, `/loadskin`, guild requests, `/follow` or
+/// `/raidwindow`. None for any other line.
 #[cfg(test)]
 pub(super) fn client_request(input: &str, state: &mut ChatState) -> Option<Result<(), String>> {
     client_request_in_scope(input, state, None)
+}
+
+/// An ask a system answers later, kept with the words typed after its
+/// command; true when the line was one.
+fn word_asked(input: &str, state: &mut ChatState) -> bool {
+    if let Some(words) = command_words(input, "doability") {
+        state.doability = Some(words.to_owned());
+        return true;
+    }
+    if let Some(words) = command_words(input, "hidecorpses") {
+        state.hide_corpses = Some(words.to_owned());
+        return true;
+    }
+    if command_words(input, "autoinventory").is_some() {
+        state.autoinventory = Some(crate::inventory::auto::Asked);
+        return true;
+    }
+    if let Some(words) = command_words(input, "memspellset") {
+        state.spell_set_asked = Some(words.to_owned());
+        return true;
+    }
+    if let Some(words) = command_words(input, "lootnodrop") {
+        state.loot_no_drop = Some(words.to_owned());
+        return true;
+    }
+    if let Some(words) = command_words(input, "discipline") {
+        state
+            .disciplines
+            .push(super::disciplines::Asked::Typed(words.to_owned()));
+        return true;
+    }
+    if let Some((emote, words)) = emote_words(input) {
+        state.emotes.push((emote.case, words.to_owned()));
+        return true;
+    }
+    false
 }
 
 pub(super) fn client_request_in_scope(
@@ -2006,20 +2291,63 @@ pub(super) fn client_request_in_scope(
         state.guild_asked = Some(guild);
         return Some(Ok(()));
     }
+    if let Some(words) = super::languages::typed(input) {
+        state.language_asked = Some(words);
+        return Some(Ok(()));
+    }
     if super::motion::FollowAsked::typed(input) {
         state.script_requests.follow = scope;
         state.follow_asked = Some(super::motion::FollowAsked);
+        return Some(Ok(()));
+    }
+    if super::fastdrop::typed(input) {
+        state.fastdrop_asked = Some(super::fastdrop::Asked);
+        return Some(Ok(()));
+    }
+    if super::motd::typed(input) {
+        state.motd_asked = Some(super::motd::Asked);
         return Some(Ok(()));
     }
     if let Some(asked) = super::whereabouts::Asked::typed(input) {
         state.asked = Some(asked);
         return Some(Ok(()));
     }
+    if let Some(asked) = super::slash::Asked::typed(input) {
+        state.slash = Some(asked);
+        return Some(Ok(()));
+    }
+    if let Some(words) = command_words(input, "assist").filter(|words| !words.trim().is_empty()) {
+        state.assist_words = Some(words.trim().to_owned());
+        return Some(Ok(()));
+    }
+    if let Some(asked) = super::chat_channels::typed(input) {
+        return Some(asked.map(|words| state.channel_asked.push(words)));
+    }
+    if word_asked(input, state) {
+        return Some(Ok(()));
+    }
     if let Some(request) = zone_who_request(input) {
         return Some(request.map(|filter| state.zone_who = Some(filter)));
     }
+    if super::dialogs::toggle_inspect_typed(input, super::dialogs::TOGGLE_INSPECT_READ) {
+        state.inspect_toggled = Some(super::dialogs::InspectToggle);
+        return Some(Ok(()));
+    }
     if input.eq_ignore_ascii_case("/log") {
         state.log_toggle = true;
+        return Some(Ok(()));
+    }
+    // What the official client does with words after it is unread.
+    if input
+        .split_whitespace()
+        .next()
+        .is_some_and(|name| name.eq_ignore_ascii_case("/combatmusic"))
+    {
+        state.combat_music_toggle = Some(super::zone_audio::CombatMusicTyped);
+        return Some(Ok(()));
+    }
+    if let Some(request) = super::skin::LoadSkin::typed(input) {
+        state.load_skin = Some(request);
         return Some(Ok(()));
     }
     // The Raid window opens or closes whatever words follow; what the
@@ -2032,6 +2360,9 @@ pub(super) fn client_request_in_scope(
         state.toggled = Some(super::windows::WindowId::Raid);
         return Some(Ok(()));
     }
+    if let Some(request) = crate::device_pixels::typed(input) {
+        return Some(request.map(|percent| state.ui_scale = Some(percent)));
+    }
     let (command, word) = input.split_once(' ').unwrap_or((input, ""));
     if command.eq_ignore_ascii_case("/shownames") {
         use eq_client_core::names::ShowNames;
@@ -2042,6 +2373,28 @@ pub(super) fn client_request_in_scope(
         return Some(Ok(()));
     }
     None
+}
+
+/// The social emote a line runs, by its command's name as the command
+/// table spells it, and the words after it.
+fn emote_words(input: &str) -> Option<(&'static eq_client_core::emotes::Emote, &str)> {
+    let command = input.strip_prefix('/')?;
+    let (typed, words) = command
+        .split_once(char::is_whitespace)
+        .unwrap_or((command, ""));
+    Some((
+        eq_client_core::emotes::named(&typed.to_ascii_lowercase())?,
+        words,
+    ))
+}
+
+/// The words after `/NAME` when the line is that command, in any case.
+fn command_words<'a>(input: &'a str, name: &str) -> Option<&'a str> {
+    let command = input.strip_prefix('/')?;
+    let (typed, words) = command
+        .split_once(char::is_whitespace)
+        .unwrap_or((command, ""));
+    typed.eq_ignore_ascii_case(name).then_some(words)
 }
 
 /// The name in a `/target Name` command; underscores match spaces as in spawn names.
@@ -2126,13 +2479,13 @@ fn random_range(words: &str) -> Result<(u32, u32), String> {
 
 /// Whose target `/assist` takes: the player named, among those in the zone,
 /// or else the player's target.
-fn assisted(words: &str, online: &super::online::OnlineState) -> Result<u16, String> {
+pub(super) fn assisted(words: &str, online: &super::online::OnlineState) -> Result<u16, String> {
     let world = online.world();
     let Some(name) = words.split_whitespace().next() else {
         return world
             .target()
             .selected
-            .ok_or_else(|| "Target someone to assist first.".to_owned());
+            .ok_or_else(|| super::slash::NO_TARGET.to_owned());
     };
     if let Some(player) = world
         .player()
@@ -2165,6 +2518,68 @@ fn targeted_corpse(online: &super::online::OnlineState) -> Result<u16, String> {
         .ok_or_else(|| "You must first target a corpse.".to_owned())
 }
 
+/// What `/ttell` or `/whotarget` stands for.
+#[derive(Debug, PartialEq)]
+enum Targeted {
+    /// `/ttell message`: the `/tell` to the target it stands for.
+    Tell(Result<String, String>),
+    /// `/whotarget`: the zone's `/who` of the target's name.
+    Who(Result<eq_client_core::who::WhoFilter, String>),
+}
+
+/// `/ttell` and `/whotarget` as what they stand for (recording checklist
+/// 6.528): a `/tell` to the target, which then goes as a typed one would,
+/// and the zone's `/who` of the target's name. None for any other line.
+/// Inferred until read (R49-18): the words after `/whotarget` are passed
+/// over, and the refusal lines are this client's own. A tell goes only to
+/// another player whose name is letters alone, so nothing but a name a
+/// typed `/tell` would take reaches the line; an NPC, a pet, a corpse or
+/// the player themself is refused, as what the program sends them is
+/// unread. `/whotarget` sends nothing, so it takes any target.
+fn targeted(command: &str, world: &eq_client_core::world::ClientWorld) -> Option<Targeted> {
+    let rest = command.strip_prefix('/')?;
+    let (name, words) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+    let target = world.target().selected.and_then(|id| world.spawn(id));
+    if name.eq_ignore_ascii_case("ttell") {
+        let own = world.player().map(|player| player.spawn_id);
+        let recipient = target
+            .filter(|spawn| {
+                spawn.state.kind == eq_client_core::SpawnKind::Player
+                    && Some(spawn.state.spawn_id) != own
+                    && !spawn.state.name.is_empty()
+                    && spawn
+                        .state
+                        .name
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphabetic())
+            })
+            .map(|spawn| spawn.state.name.as_str());
+        Some(Targeted::Tell(
+            recipient
+                .map(|recipient| format!("/tell {recipient} {}", words.trim()))
+                .ok_or_else(|| "Target another player to send them a tell.".to_owned()),
+        ))
+    } else if name.eq_ignore_ascii_case("whotarget") {
+        // The player themself is no spawn of the zone's.
+        let own = world
+            .player()
+            .filter(|player| world.target().selected == Some(player.spawn_id))
+            .map(|player| player.name.clone());
+        Some(Targeted::Who(
+            target
+                .map(|spawn| spawn.state.name.clone())
+                .or(own)
+                .map(|text| eq_client_core::who::WhoFilter {
+                    text,
+                    ..Default::default()
+                })
+                .ok_or_else(|| "Target someone to list with /who first.".to_owned()),
+        ))
+    } else {
+        None
+    }
+}
+
 /// The words of a plain `/who`, which lists the zone's players; None for
 /// anything else, `/who all` among it.
 pub(super) fn zone_who_request(
@@ -2182,23 +2597,6 @@ pub(super) fn zone_who_request(
         Ok(request) => Some(Ok(request.filter)),
         Err(error) => Some(Err(error)),
     }
-}
-
-/// Whether a slash command broadcasts text or a roll to the players around
-/// the character (`/emote` and the words that resolve to it, `/random`): chat-like, so a script may send
-/// it only in a network-enforced local test session.
-pub(super) fn broadcasts_to_others(input: &str) -> bool {
-    let Some(command) = input.trim_start().strip_prefix('/') else {
-        return false;
-    };
-    let name = command
-        .split(char::is_whitespace)
-        .next()
-        .unwrap_or_default();
-    matches!(
-        crate::commands::resolve(name),
-        crate::commands::Resolved::Official("emote" | "random")
-    )
 }
 
 /// Slash commands about the player and those around them: how `/who`
@@ -2475,13 +2873,12 @@ fn class_command(
     stamp: &dyn Fn() -> Result<crate::outbox::Stamp, String>,
 ) -> Option<Result<ClientCommand, String>> {
     Some(match name {
-        "discipline" => {
-            if let Some(discipline) = eq_client_core::disciplines::Discipline::named(words.trim()) {
-                stamp().and_then(|stamp| {
-                    super::abilities::discipline_command(discipline, world, stamp)
-                })
+        // A Warrior's `/shield` of the target, which takes no words.
+        "shield" => {
+            if words.is_empty() {
+                stamp().and_then(|stamp| super::abilities::shield_command(world, stamp))
             } else {
-                Err("Use /discipline evasive or /discipline defensive".into())
+                Err("Use /shield without arguments".into())
             }
         }
         "harmtouch" | "layonhands" => {
@@ -2685,7 +3082,8 @@ mod tests {
             }
             assert!(outbound(ChatTab::All, &format!("/{name} hello")).is_ok());
         }
-        for name in ["help", "played", "unknown"] {
+        // `/filter`'s forms are unread (6.494a): every form gets this answer.
+        for name in ["help", "played", "unknown", "filter"] {
             assert_eq!(
                 outbound(ChatTab::All, &format!("/{name}")).unwrap_err(),
                 format!("This client does not take /{name} that way yet."),
@@ -2907,8 +3305,7 @@ mod tests {
             "/split 0 0 0 1",
             "/follow",
         ] {
-            submit_social_line(line, &mut chat, &mut online, &scoped, &Settings::default())
-                .unwrap();
+            submit_typed_line(line, &mut chat, &mut online, &scoped, &Settings::default()).unwrap();
         }
         assert!(
             chat.requested_target.is_some()
@@ -2918,7 +3315,7 @@ mod tests {
         );
         // Replacing just the guild intent through the original native outbox
         // leaves that one ordinary, even while the scoped facade still exists.
-        submit_social_line(
+        submit_typed_line(
             "/guildmotd native",
             &mut chat,
             &mut online,
@@ -3140,6 +3537,172 @@ mod tests {
         assert!(!online.world().track_window().open);
     }
 
+    /// An admitted player (spawn 7) and, around them, a player named
+    /// `name` (spawn 8), an NPC (9), a player corpse (10) and the player's
+    /// pet (11).
+    fn with_others(name: &str) -> super::super::online::OnlineState {
+        use super::super::online::{OnlineState, testing};
+        use eq_client_core::{Capability, SpawnKind, SpawnState, WorldEvent};
+        let mut online = OnlineState::new(true);
+        testing::news(
+            &mut online,
+            [WorldEvent::Entered {
+                capabilities: vec![Capability::Talking],
+                choices: Vec::new(),
+                session_id: 5,
+                zone: "qeytoqrg".into(),
+                player: Box::new(testing::player(7)),
+                far_clip: None,
+                spell_landing_flag: None,
+                zone_id: 0,
+            }],
+        );
+        testing::connect(&mut online, true);
+        let spawn = |spawn_id, name: &str, kind| SpawnState {
+            name: name.into(),
+            kind,
+            pet_owner: None,
+            ..testing::pet(spawn_id, 7)
+        };
+        testing::news(
+            &mut online,
+            [WorldEvent::Spawns(vec![
+                spawn(8, name, SpawnKind::Player),
+                spawn(9, "a_guard00", SpawnKind::Npc),
+                spawn(10, "Someone", SpawnKind::PlayerCorpse),
+                testing::pet(11, 7),
+            ])],
+        );
+        online
+    }
+
+    #[test]
+    fn ttell_and_whotarget_stand_for_a_tell_and_a_who_of_the_target() {
+        let mut online = with_others("Friend");
+        let spelled = |line| crate::commands::spelled(line).unwrap().into_owned();
+        let tell = |line: &str| Targeted::Tell(Ok(line.to_owned()));
+        let who = |text: &str| {
+            Targeted::Who(Ok(eq_client_core::who::WhoFilter {
+                text: text.into(),
+                ..Default::default()
+            }))
+        };
+        let refused = Targeted::Tell(Err("Target another player to send them a tell.".into()));
+        let unseen = Targeted::Who(Err("Target someone to list with /who first.".into()));
+        // No target.
+        assert_eq!(targeted(&spelled("/tt hi"), online.world()), Some(refused));
+        assert_eq!(targeted(&spelled("/whot"), online.world()), Some(unseen));
+        assert_eq!(targeted("/tell Friend hi", online.world()), None);
+        assert_eq!(targeted("hello", online.world()), None);
+        // Another player: the name exactly as `/tell Name` takes it.
+        online.select_target(Some(8));
+        assert_eq!(
+            targeted(&spelled("/tt hi"), online.world()),
+            Some(tell("/tell Friend hi"))
+        );
+        assert_eq!(
+            targeted(&spelled("/TTELL   hi  there "), online.world()),
+            Some(tell("/tell Friend hi  there"))
+        );
+        // No message gives the tell's own usage line.
+        assert_eq!(
+            targeted(&spelled("/ttell"), online.world()),
+            Some(tell("/tell Friend "))
+        );
+        assert_eq!(
+            outbound(ChatTab::All, "/tell Friend "),
+            Err("Use /tell Name message".into())
+        );
+        for line in ["/whotarget", "/whot", "/whotarget all wiz"] {
+            assert_eq!(
+                targeted(&spelled(line), online.world()),
+                Some(who("Friend"))
+            );
+        }
+        // An NPC, a corpse, a pet or the player themself gets no tell; /who takes
+        // any target, as it sends nothing.
+        for (target, name) in [
+            (9, "a_guard00"),
+            (10, "Someone"),
+            (11, "Gabober000"),
+            (7, "Example"),
+        ] {
+            online.select_target(Some(target));
+            assert_eq!(
+                targeted("/ttell hi", online.world()),
+                Some(Targeted::Tell(Err(
+                    "Target another player to send them a tell.".into()
+                ))),
+                "{target}"
+            );
+            assert_eq!(targeted("/whotarget", online.world()), Some(who(name)));
+        }
+    }
+
+    #[test]
+    fn a_target_name_that_is_not_letters_alone_never_reaches_a_tell() {
+        for name in ["", "Two Words", "Tab\tName", "Bell\x07", "Link\x12", "Ab1"] {
+            let mut online = with_others(name);
+            online.select_target(Some(8));
+            assert!(
+                matches!(
+                    targeted("/ttell hi", online.world()),
+                    Some(Targeted::Tell(Err(_)))
+                ),
+                "{name:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_social_line_sends_ttell_as_the_tell_a_typed_one_is() {
+        let mut online = with_others("Friend");
+        let (queue, received) = std::sync::mpsc::sync_channel(4);
+        let outbox = crate::outbox::Outbox::new(Some(queue));
+        let qol = Settings::default();
+        let mut chat = ChatState::default();
+        assert_eq!(
+            submit_typed_line("/tt hi", &mut chat, &mut online, &outbox, &qol),
+            Err("Target another player to send them a tell.".into())
+        );
+        assert!(received.try_recv().is_err());
+        online.select_target(Some(8));
+        submit_typed_line("/tt hi there", &mut chat, &mut online, &outbox, &qol).unwrap();
+        let typed = |received: &std::sync::mpsc::Receiver<ClientCommand>| {
+            received.try_recv().map(|command| match command {
+                ClientCommand::SendChatInAdmission { message, .. } => {
+                    ClientCommand::SendChat(message)
+                }
+                other => other,
+            })
+        };
+        let sent = typed(&received).unwrap();
+        submit_typed_line(
+            "/tell Friend hi there",
+            &mut chat,
+            &mut online,
+            &outbox,
+            &qol,
+        )
+        .unwrap();
+        assert_eq!(sent, typed(&received).unwrap());
+        assert_eq!(
+            sent,
+            ClientCommand::SendChat(OutboundChat::Tell {
+                recipient: "Friend".into(),
+                message: "hi there".into(),
+            })
+        );
+        assert!(received.try_recv().is_err());
+        // /whotarget lists the zone locally and sends nothing.
+        submit_typed_line("/whotarget", &mut chat, &mut online, &outbox, &qol).unwrap();
+        assert_eq!(
+            chat.zone_who.as_ref().map(|filter| filter.text.as_str()),
+            Some("Friend")
+        );
+        assert!(received.try_recv().is_err());
+    }
+
     #[test]
     fn ordinary_social_slash_commands_use_the_admissions_capabilities() {
         use super::super::online::{OnlineState, testing};
@@ -3350,6 +3913,7 @@ mod tests {
                 skills: None,
                 practice_points: None,
                 languages: None,
+                intoxication: None,
                 disciplines: None,
                 spell_refresh_ms: None,
                 memorized_spells: [None; 8],
@@ -4203,6 +4767,133 @@ mod tests {
         assert_eq!(chat.toggled, Some(super::super::windows::WindowId::Raid));
     }
 
+    #[test]
+    fn a_typed_line_sends_a_report_to_the_staff() {
+        use eq_client_core::reports::BugCategory;
+        let (mut app, receiver) = slash_app(true);
+        let last_line = |app: &App| {
+            app.world()
+                .resource::<ChatState>()
+                .history
+                .lines(ChatTab::All)
+                .last()
+                .map(|(_, line)| line.message.text.clone())
+        };
+        send_typed(&mut app, "/petition  I am stuck in the wall. ");
+        assert!(matches!(
+            receiver.try_recv(),
+            Ok(ClientCommand::SendPetition { session_id: 1, text, .. })
+                if text == "I am stuck in the wall."
+        ));
+        // `/bug` is `/bugreport`, as the official parser resolves it.
+        send_typed(&mut app, "/bug doors: it will not open");
+        match receiver.try_recv() {
+            Ok(ClientCommand::ReportBug {
+                session_id, report, ..
+            }) => {
+                assert_eq!(session_id, 1);
+                assert_eq!(report.category, BugCategory::DoorsAndPortals);
+                assert_eq!(report.text, "it will not open");
+                assert!(report.place.is_some());
+            }
+            other => panic!("{other:?}"),
+        }
+        // A line with nothing to say sends nothing.
+        for line in ["/petition", "/petition   ", "/bugreport pathing:"] {
+            send_typed(&mut app, line);
+            assert!(receiver.try_recv().is_err(), "{line}");
+        }
+        assert_eq!(
+            last_line(&app).as_deref(),
+            Some("Use /bugreport with what to say.")
+        );
+
+        // A social's line and a script's `slash` step run the typed line,
+        // so each sends the same report; a button's game command does not.
+        let mut chat = ChatState::default();
+        let outbox = app
+            .world_mut()
+            .remove_resource::<crate::outbox::Outbox>()
+            .unwrap();
+        let mut online = app
+            .world_mut()
+            .remove_resource::<super::super::online::OnlineState>()
+            .unwrap();
+        for line in [
+            "/petition I am stuck",
+            "/bugreport the guard",
+            "/feedback a note",
+        ] {
+            assert!(
+                submit_game_command(line, &mut online, &outbox, &Settings::default()).is_err(),
+                "{line}"
+            );
+            assert!(receiver.try_recv().is_err(), "{line}");
+            assert_eq!(
+                submit_typed_line(line, &mut chat, &mut online, &outbox, &Settings::default()),
+                Ok(()),
+                "{line}"
+            );
+            assert!(
+                matches!(
+                    receiver.try_recv(),
+                    Ok(ClientCommand::SendPetition { .. }
+                        | ClientCommand::ReportBug { .. }
+                        | ClientCommand::SendFeedback { .. })
+                ),
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_typed_report_the_session_does_not_offer_answers_as_today() {
+        let (mut app, receiver) = slash_app(false);
+        {
+            let mut online = app
+                .world_mut()
+                .resource_mut::<super::super::online::OnlineState>();
+            crate::online::testing::news(
+                &mut online,
+                [eq_client_core::WorldEvent::Entered {
+                    capabilities: eq_client_core::Capability::ALL
+                        .iter()
+                        .copied()
+                        .filter(|capability| {
+                            !matches!(
+                                capability,
+                                eq_client_core::Capability::Petitioning
+                                    | eq_client_core::Capability::ReportingBugs
+                                    | eq_client_core::Capability::SendingFeedback
+                            )
+                        })
+                        .collect(),
+                    choices: Vec::new(),
+                    session_id: 1,
+                    zone: "qeytoqrg".into(),
+                    player: Box::new(crate::online::testing::player(1)),
+                    far_clip: None,
+                    spell_landing_flag: None,
+                    zone_id: 0,
+                }],
+            );
+            crate::online::testing::connect(&mut online, true);
+        }
+        for name in ["petition", "bugreport", "feedback"] {
+            send_typed(&mut app, &format!("/{name} a synthetic line"));
+            assert!(receiver.try_recv().is_err(), "{name}");
+            assert_eq!(
+                app.world()
+                    .resource::<ChatState>()
+                    .history
+                    .lines(ChatTab::All)
+                    .last()
+                    .map(|(_, line)| line.message.text.as_str()),
+                Some(format!("This client does not take /{name} that way yet.").as_str())
+            );
+        }
+    }
+
     fn press_slash(app: &mut App) {
         press_slash_on(app, KeyCode::Slash);
     }
@@ -4544,6 +5235,89 @@ mod tests {
         assert!(!app.world().resource::<crate::keys::Typing>().composing);
     }
 
+    /// Every ask a session can leave pending, as the player or a script
+    /// makes them.
+    fn ask_everything(chat: &mut ChatState) {
+        chat.script_requests.target = Some(crate::script::ExpectedWorld {
+            admission_id: 1,
+            zone: "samplezone".into(),
+        });
+        chat.requested_target = Some("Example".into());
+        chat.zone_who = Some(zone_who_request("/who").unwrap().unwrap());
+        chat.asked = Some(super::super::whereabouts::Asked::Location);
+        chat.guild_asked = Some(super::super::guild::Command::SetMotd("Hello".into()));
+        chat.sharing_asked = Some(super::super::sharing::Command::AutoSplit("on".into()));
+        chat.boat_asked = Some(eq_client_core::boats::Intent::Acquire);
+        chat.boat_interacted = Some(8);
+        chat.follow_asked = Some(super::super::motion::FollowAsked);
+        chat.rangers_only = Some(super::super::tracking::RangersOnly);
+        chat.contacts.asked = Some(super::super::contacts::Asked::NoReply);
+    }
+
+    fn nothing_asked(chat: &ChatState) -> bool {
+        chat.script_requests.target.is_none()
+            && chat.requested_target.is_none()
+            && chat.zone_who.is_none()
+            && chat.asked.is_none()
+            && chat.guild_asked.is_none()
+            && chat.sharing_asked.is_none()
+            && chat.boat_asked.is_none()
+            && chat.boat_interacted.is_none()
+            && chat.follow_asked.is_none()
+            && chat.rangers_only.is_none()
+            && chat.contacts.asked.is_none()
+    }
+
+    #[test]
+    fn a_session_that_ends_or_camps_leaves_no_ask_for_the_next() {
+        use eq_client_core::{WorldEvent, WorldUpdate, world::Link};
+        for end in [
+            WorldUpdate::Connection(Link::Ended),
+            WorldUpdate::Game(WorldEvent::Camp(eq_client_core::CampStatus::Camped)),
+        ] {
+            let (mut app, tx) = received_chat_app();
+            let (queue, sent) = std::sync::mpsc::sync_channel(16);
+            app.insert_resource(crate::outbox::Outbox::new(Some(queue)));
+            ask_everything(&mut app.world_mut().resource_mut::<ChatState>());
+            let said = app.world().resource::<ChatState>().history.revision();
+            tx.send(end.clone()).unwrap();
+            app.update();
+            let chat = app.world().resource::<ChatState>();
+            assert!(nothing_asked(chat), "{end:?}");
+            // Nothing is said for them, and nothing goes out for them in the
+            // next session.
+            assert_eq!(chat.history.revision(), said, "{end:?}");
+            crate::online::testing::admit(
+                &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+                2,
+                crate::online::testing::player(7),
+            );
+            app.update();
+            assert!(nothing_asked(app.world().resource::<ChatState>()));
+            assert!(sent.try_recv().is_err(), "{end:?}");
+        }
+    }
+
+    #[test]
+    fn a_zone_change_keeps_a_typed_ask_and_forgetting_clears_each_one() {
+        // Within the session a typed ask survives a new admission, as before.
+        let (mut app, _tx) = received_chat_app();
+        app.world_mut().resource_mut::<ChatState>().guild_asked =
+            Some(super::super::guild::Command::SetMotd("Hello".into()));
+        crate::online::testing::admit(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            2,
+            crate::online::testing::player(7),
+        );
+        app.update();
+        assert!(app.world().resource::<ChatState>().guild_asked.is_some());
+        // `/quit` to the login screen forgets through the same call.
+        let mut chat = ChatState::default();
+        ask_everything(&mut chat);
+        chat.forget_admission();
+        assert!(nothing_asked(&chat));
+    }
+
     fn received_chat_app() -> (App, std::sync::mpsc::Sender<eq_client_core::WorldUpdate>) {
         use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
         let (tx, rx) = std::sync::mpsc::channel();
@@ -4593,6 +5367,7 @@ mod tests {
         };
         let (mut app, tx) = received_chat_app();
         let guard = eq_client_core::SpawnState {
+            body_type: None,
             name: "a_guard".into(),
             level: 20,
             pet_owner: None,

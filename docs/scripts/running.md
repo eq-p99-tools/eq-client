@@ -67,11 +67,21 @@ Background mode does not enable `gm` or `chat`, change the selected server, or i
 
 - Source: at most 128 KiB of UTF-8 text.
 - Source statements may occupy up to 500 nonblank, noncomment lines, including block delimiters and accepted follow appends.
-- Structured snapshots can execute up to 5,000 statements and 500 actions. Structured actions start at least 100 ms apart when handed to the driver. Scripts without variables or blocks keep their usual cadence.
-- Run: at most 15 minutes, excluding explicit pauses.
+- Structured snapshots can execute up to 5,000 statements and 500 actions under the default run length. Structured actions start at least 100 ms apart when handed to the driver, at every run length. Scripts without variables or blocks keep their usual cadence.
+- Run: at most 15 minutes under the default run length, excluding explicit pauses.
 - Key holds and traces: at most 10 seconds each.
 - Ordinary waits and pointer waits: at most 2 minutes each.
 - World-entry waits: at most 3 minutes.
+
+### Run length
+
+How long a run may go is your choice, on every server. The selector beside the run controls names the length the next Run uses; click it for the next one. It starts at the default on each launch, or at what `--script-run-length` gives: `default`, a number of minutes from 1 to 1440, or `none`. Runs started from `--script` and the control inbox use the flag. No statement or line in a script can set or raise its own length.
+
+- **Default** keeps the bounds above: 15 minutes, 5,000 statements, 500 actions and loops of at most 100.
+- **Minutes** caps the run's time at that many minutes and lifts the counts of statements, actions and loop iterations.
+- **No limit** has neither: the run goes until it ends or you press Stop.
+
+Every length keeps the same paces (100 ms between structured actions, the chat and server paces), the per-step waits and holds above, the input and focus rules, and the local-only `gm` fixtures. A logic-only loop runs one statement a frame, so it never freezes the client, and Stop always ends the run on the next frame and releases held keys and buttons. The Execution tab shows the time so far and the length chosen. What a server's rules say about unattended play is for you to know and follow.
 
 Use `--script` with a complete UTF-8 file to run control flow from an external editor. `--script-follow` can load that initial snapshot. A snapshot without control flow then accepts appended ordinary action lines. A snapshot with control flow takes no appended lines, because they would run ahead of the program's next statement: any append stops follow mode with a line error before it runs, as an appended control-flow or assignment line does. Run a fresh snapshot to add more structured code.
 

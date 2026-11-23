@@ -6,6 +6,7 @@ use super::{
     hud::messages::Messages,
     trade::coin_text,
 };
+use eq_client_core::chat::Source;
 use eq_client_core::{
     CampStatus,
     bind_wound::{BindWoundUpdate, strings},
@@ -296,9 +297,78 @@ fn bind_wound(update: &BindWoundUpdate, messages: Option<&Messages>) -> Option<S
     })
 }
 
+/// How a line of the chat server's channels reads. Every form is this
+/// client's, inferred until read R49-12 b: a message names its sender, then
+/// the channel and its slot in the last list of joined channels, or the
+/// channel alone before a list names it. The server's words keep their item
+/// links and print as any server chat does.
+fn channel_line(line: &eq_client_core::world::ChannelLine) -> Said {
+    use eq_client_core::chat::RichText;
+    use eq_client_core::world::ChannelLine;
+    match line {
+        ChannelLine::Message {
+            channel,
+            slot,
+            sender,
+            text,
+        } => {
+            let head = match slot {
+                Some(slot) => format!("{sender} tells {channel}:{slot}, '"),
+                None => format!("{sender} tells {channel}, '"),
+            };
+            let mut words = RichText::from(format!("{head}{}'", text.text));
+            words.insert_links(text, head.len());
+            Said {
+                words,
+                source: Source::Server,
+                message_type: None,
+            }
+        }
+        ChannelLine::Notice(text) => Said {
+            words: text.clone(),
+            source: Source::Server,
+            message_type: None,
+        },
+        ChannelLine::Member {
+            channel,
+            name,
+            joined: true,
+        } => Said::own(format!("{name} has entered channel {channel}.")),
+        ChannelLine::Member {
+            channel,
+            name,
+            joined: false,
+        } => Said::own(format!("{name} has left channel {channel}.")),
+        ChannelLine::Lost => Said::own("The chat server link has ended."),
+    }
+}
+
 /// Lines said in the chat.
 fn in_chat(lines: Vec<Said>) -> Vec<(Place, Said)> {
     lines.into_iter().map(|line| (Place::Chat, line)).collect()
+}
+
+/// The Titanium program's lines for environmental damage the player took:
+/// after its own report the amount line in its colour (`eqgame.exe`
+/// 0x41c905, read R49-3 e), then the record's line, built with the
+/// you-form text, in the record's colour (0x4a56e3, read R49-3b).
+fn environmental_lines(
+    messages: &Messages,
+    reported: Option<u32>,
+    record: Option<(u32, u32)>,
+) -> Vec<Said> {
+    use eq_client_core::environment::{REPORT_COLOR, REPORT_LINE, YOU_TEXT};
+    let amount = reported.map(|amount| {
+        messages
+            .said(REPORT_LINE, &[amount.to_string()])
+            .typed(REPORT_COLOR)
+    });
+    let record = record.map(|(line, color)| {
+        messages
+            .said(line, &[messages.format(YOU_TEXT, &[])])
+            .typed(color)
+    });
+    amount.into_iter().chain(record).collect()
 }
 
 /// How a notice reads, and where each part shows.
@@ -353,6 +423,9 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
                 )
             })
             .map_or_else(Vec::new, chat),
+        Notice::EnvironmentalDamage { reported, record } => messages
+            .map(|messages| environmental_lines(messages, *reported, *record))
+            .map_or_else(Vec::new, in_chat),
         Notice::Heading(point) => messages
             .map(|messages| heading(*point, messages))
             .map_or_else(Vec::new, chat),
@@ -408,7 +481,8 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         | Notice::ResurrectionRefused(reason)
         | Notice::TranslocateRefused(reason)
         | Notice::PlayerInspectionRefused(reason)
-        | Notice::ReadRefused(reason) => chat(reason.as_str().into()),
+        | Notice::ReadRefused(reason)
+        | Notice::AlternateAdvancementRefused { reason, .. } => chat(reason.as_str().into()),
         Notice::TrainingPractice(update) => {
             use eq_client_core::training::PracticeUpdate;
             chat(match update {
@@ -429,12 +503,31 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
                 }
             })
         }
+        Notice::Channel(line) => chat(channel_line(line)),
+        Notice::ChannelRefused { reason } => chat(Said::own(format!("{reason}."))),
         Notice::ConsentExpired(kind) => {
             use eq_client_core::confirmations::ConsentKind;
             chat(match kind {
                 ConsentKind::Resurrection => "The resurrection offer expired.".into(),
                 ConsentKind::Translocate => "The translocate offer expired.".into(),
+                // A duel's question has no local deadline; worded all the same.
+                ConsentKind::Duel => "The challenge to a duel expired.".into(),
             })
+        }
+        // Stock EQEmu says nothing to the player when it takes a petition
+        // or a bug report, so these lines, this client's own, stand in for
+        // the official client's, which are unread (6.511b). Feedback's
+        // servers answer it themselves, so it gets none.
+        Notice::ReportSent(report) => {
+            use eq_client_core::reports::ReportKind;
+            match report {
+                ReportKind::Petition => chat(Said::own("Your petition was sent.")),
+                ReportKind::Bug => chat(Said::own("Your bug report was sent.")),
+                ReportKind::Feedback => Vec::new(),
+            }
+        }
+        Notice::ReportRefused { reason } | Notice::ChatRefused { reason } => {
+            chat(Said::own(reason.clone()))
         }
         // eqstr 1406, where the installation has it.
         Notice::ContainerInUse => chat(official(Some(1406), &[], "That is in use.", messages)),
@@ -535,7 +628,229 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         }
         Notice::Roll(roll) => in_chat(roll_lines(roll, messages)),
         Notice::Raid(notice) => in_chat(raid_lines(notice, messages)),
+        Notice::Duel(notice) => in_chat(duel_line(notice, messages).into_iter().collect()),
+        Notice::YellForHelp { name, bearing } => chat(yell_line(name, *bearing, messages)),
+        Notice::QuestReward { coins, giver } => {
+            in_chat(quest_reward_lines(*coins, giver, messages))
+        }
+        Notice::LevelLost { lost, level } => chat(level_lost_line(*lost, *level, messages)),
+        Notice::OthersStatChanged { lowered } => chat(others_stat_line(*lowered, messages)),
+        Notice::Reward(coins) => chat(Said::own(reward_line(*coins))),
     }
+}
+
+/// News of a duel, in the program's line for it where the installation has
+/// it and with the colour the program gives it (read R49-6 a, d, e and h):
+/// colour 15 for the challenge, its start and `/duel`'s own, 0x111 for
+/// `/duel` with no player or at the player, and 0x10d for a duel's end.
+/// The fallbacks, and the TAKP refusals and the session's own, are this
+/// client's words. A turn-down with a reason the program has no line for
+/// says nothing.
+fn duel_line(
+    notice: &eq_client_core::world::DuelNotice,
+    messages: Option<&Messages>,
+) -> Option<Said> {
+    use eq_client_core::{socials::DuelRefusal, world::DuelNotice};
+    let line = |id: u32, arguments: &[&String], fallback: String, colour: u32| {
+        let arguments: Vec<String> = arguments.iter().map(|name| (*name).clone()).collect();
+        official(Some(id), &arguments, &fallback, messages).typed(colour)
+    };
+    Some(match notice {
+        DuelNotice::Challenged(name) => line(
+            0x592,
+            &[name],
+            format!("{name} challenges you to a duel."),
+            15,
+        ),
+        DuelNotice::Begun(name) => {
+            line(0x590, &[name], format!("Your duel with {name} begins."), 15)
+        }
+        DuelNotice::Refused { from, reason } => Said::own(match reason {
+            DuelRefusal::Declined => format!("{from} declined your challenge."),
+            DuelRefusal::Dueling => format!("{from} is already dueling."),
+            DuelRefusal::Considering => format!("{from} is considering another challenge."),
+            DuelRefusal::Other(_) => format!("{from} turned your challenge down."),
+        }),
+        DuelNotice::AnswerRefused(reason) => Said::own(format!("No answer was sent: {reason}")),
+        DuelNotice::Challenging(name) => line(
+            0x33c6,
+            &[name],
+            format!("You challenge {name} to a duel."),
+            15,
+        ),
+        DuelNotice::Accepting(name) => line(
+            0x33c4,
+            &[name],
+            format!("You accept {name}'s challenge to a duel."),
+            15,
+        ),
+        DuelNotice::NoPlayerTarget => line(
+            0x33c0,
+            &[],
+            "You must first target another player to duel.".to_owned(),
+            0x111,
+        ),
+        DuelNotice::NotYourself => line(0x33c1, &[], "You cannot duel yourself.".to_owned(), 0x111),
+        DuelNotice::AlreadyDueling { at_opponent: true } => {
+            line(0x33c2, &[], "You are already dueling them.".to_owned(), 15)
+        }
+        DuelNotice::AlreadyDueling { at_opponent: false } => {
+            line(0x33c3, &[], "You are already in a duel.".to_owned(), 15)
+        }
+        DuelNotice::ConsideringAnother => line(
+            0x33c5,
+            &[],
+            "You are considering another challenge.".to_owned(),
+            15,
+        ),
+        DuelNotice::Won { own, over } => line(
+            0x2f44,
+            &[own, over],
+            format!("{own} has defeated {over} in a duel."),
+            0x10d,
+        ),
+        DuelNotice::Ended(name) => line(
+            0x2f45,
+            &[name, name],
+            format!("The duel with {name} is over."),
+            0x10d,
+        ),
+        DuelNotice::TurnedDown { by, reason } => {
+            let (id, fallback) = turned_down(by, (*reason)?);
+            line(id, &[by], fallback, 15)
+        }
+        DuelNotice::Lapsed(name) => line(
+            0x581,
+            &[name],
+            format!("{name} left; your challenge is withdrawn."),
+            15,
+        ),
+        DuelNotice::Forfeited { own, opponent } => line(
+            0x580,
+            &[own, opponent, opponent],
+            format!("{opponent} fled the duel; {own} wins."),
+            0x10d,
+        ),
+    })
+}
+
+/// The line for a challenge the other program turned down, and this
+/// client's words for it: 0x567 ignored, 0x568 dueling, 0x569 considering
+/// another (read R49-6d).
+fn turned_down(by: &str, reason: eq_client_core::socials::DuelAutoDecline) -> (u32, String) {
+    use eq_client_core::socials::DuelAutoDecline;
+    match reason {
+        DuelAutoDecline::Ignored => (0x567, format!("{by} turned your challenge down.")),
+        DuelAutoDecline::Dueling => (0x568, format!("{by} is already dueling.")),
+        DuelAutoDecline::Considering => (0x569, format!("{by} is considering another challenge.")),
+    }
+}
+
+/// Another spawn's stat increase, as the Titanium program tells it: a line
+/// that names no one (read R49-6f, 0x455fff), 0x3273 for an amount below
+/// zero and 0x3274 otherwise, in colour 15. The fallbacks are this
+/// client's words.
+fn others_stat_line(lowered: bool, messages: Option<&Messages>) -> Said {
+    let (id, fallback) = if lowered {
+        (0x3273, "A stat was lowered.")
+    } else {
+        (0x3274, "A stat was raised.")
+    };
+    official(Some(id), &[], fallback, messages).typed(15)
+}
+
+/// A yell for help, on Titanium in the program's line for where the yeller
+/// stands, in colour 0x11a (read R49-6d); elsewhere, and where the
+/// installation lacks the line, in this client's words.
+fn yell_line(
+    name: &str,
+    bearing: Option<eq_client_core::world::YellBearing>,
+    messages: Option<&Messages>,
+) -> Said {
+    let fallback = format!("{name} yells for help!");
+    match bearing {
+        Some(bearing) => official(
+            Some(bearing.string_id()),
+            &[name.to_owned()],
+            &fallback,
+            messages,
+        )
+        .typed(0x11a),
+        None => Said::own(fallback),
+    }
+}
+
+/// A quest's coins as the Titanium program says them (read R49-6g): a line
+/// for each coin given, copper first, 0x59e, 0x5a0, 0x5a1 and 0x5a2, each
+/// with the amount and 0x59f naming the giver, in colour 0x111. The
+/// fallbacks are this client's words.
+fn quest_reward_lines(
+    coins: eq_client_core::Coins,
+    giver: &str,
+    messages: Option<&Messages>,
+) -> Vec<Said> {
+    let from = messages
+        .and_then(|messages| messages.formatted(0x59f, &[giver.to_owned()]))
+        .unwrap_or_default();
+    [
+        (coins.copper, 0x59e, "copper"),
+        (coins.silver, 0x5a0, "silver"),
+        (coins.gold, 0x5a1, "gold"),
+        (coins.platinum, 0x5a2, "platinum"),
+    ]
+    .into_iter()
+    .filter(|(count, ..)| *count > 0)
+    .map(|(count, id, coin)| {
+        official(
+            Some(id),
+            &[count.to_string(), from.clone()],
+            &format!("You receive {count} {coin}."),
+            messages,
+        )
+        .typed(0x111)
+    })
+    .collect()
+}
+
+/// Levels lost, as the Titanium program says it (read R49-6c): 0x1ba for
+/// one, with the level now, and 0x1bb for more, with how many and the
+/// level now, in colour 13.
+fn level_lost_line(lost: u8, level: u8, messages: Option<&Messages>) -> Said {
+    let (id, arguments, fallback) = if lost == 1 {
+        (
+            0x1ba,
+            vec![level.to_string()],
+            format!("You lost a level! You are now level {level}."),
+        )
+    } else {
+        (
+            0x1bb,
+            vec![lost.to_string(), level.to_string()],
+            format!("You lost {lost} levels! You are now level {level}."),
+        )
+    };
+    official(Some(id), &arguments, &fallback, messages).typed(13)
+}
+
+/// The coins a quest or task gave, largest first, naming only those it
+/// gave. This client's words (checklist 6.492, pending R49-6g).
+fn reward_line(coins: eq_client_core::Coins) -> String {
+    let parts: Vec<String> = [
+        (coins.platinum, "platinum"),
+        (coins.gold, "gold"),
+        (coins.silver, "silver"),
+        (coins.copper, "copper"),
+    ]
+    .into_iter()
+    .filter(|(count, _)| *count != 0)
+    .map(|(count, coin)| format!("{count} {coin}"))
+    .collect();
+    let listed = match parts.as_slice() {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    };
+    format!("You receive {listed}.")
 }
 
 /// News of the player's raid, in the installed client's strings for it:
@@ -650,6 +965,8 @@ fn roll_lines(roll: &eq_client_core::socials::Roll, messages: Option<&Messages>)
 /// client's words without them. That the official client says these, and
 /// not the copies of the anonymous lines at 12034 and 12035, is inferred.
 /// The roleplaying lines take message type 273's colour (sitting s9l, read).
+/// Looking for a group is told in this client's words: the program's
+/// strings for `/lfg` are not read (checklist 6.515, pending R49-6i).
 fn listing_line(notice: ListingNotice, messages: Option<&Messages>) -> Said {
     let (id, fallback) = match notice {
         ListingNotice::Away(true) => (13199, "You are away from the keyboard now."),
@@ -658,6 +975,10 @@ fn listing_line(notice: ListingNotice, messages: Option<&Messages>) -> Said {
         ListingNotice::Anonymous(false) => (13237, "You show in /who again."),
         ListingNotice::Roleplaying(true) => (13233, "You are in character now."),
         ListingNotice::Roleplaying(false) => (13234, "You are out of character again."),
+        ListingNotice::Looking(true) => return Said::own("You are now looking for a group."),
+        ListingNotice::Looking(false) => {
+            return Said::own("You are no longer looking for a group.");
+        }
     };
     let line = official(Some(id), &[], fallback, messages);
     match notice {
@@ -866,6 +1187,56 @@ mod tests {
     use eq_client_core::Coins;
 
     #[test]
+    fn environmental_damage_prints_the_programs_lines_in_its_colours() {
+        // Synthetic stand-ins for 0x30c1, 0x2f9b, 0x2f60 and 0x2f63.
+        let messages = Messages::parse(
+            "EQST0002\n0 4\n12481 synthetic hurt for %1.\n12187 SYNTHETIC-YOU\n\
+             12128 %1 synthetic drown.\n12131 %1 synthetic burn.\n",
+        );
+        let lines = |reported, record| {
+            wording(
+                &Notice::EnvironmentalDamage { reported, record },
+                Some(&messages),
+            )
+        };
+        assert_eq!(
+            lines(Some(13), Some((12128, 266))),
+            [
+                (
+                    Place::Chat,
+                    Said::official("synthetic hurt for 13.").typed(283)
+                ),
+                (
+                    Place::Chat,
+                    Said::official("SYNTHETIC-YOU synthetic drown.").typed(266)
+                ),
+            ]
+        );
+        // No record went: the amount line alone.
+        assert_eq!(
+            lines(Some(13), None),
+            [(
+                Place::Chat,
+                Said::official("synthetic hurt for 13.").typed(283)
+            )]
+        );
+        // A record from the server: its line alone, in its colour.
+        assert_eq!(
+            lines(None, Some((12131, 329))),
+            [(
+                Place::Chat,
+                Said::official("SYNTHETIC-YOU synthetic burn.").typed(329)
+            )]
+        );
+        // Without the installation's strings nothing prints.
+        let unworded = Notice::EnvironmentalDamage {
+            reported: Some(13),
+            record: None,
+        };
+        assert_eq!(wording(&unworded, None), []);
+    }
+
+    #[test]
     fn a_bearing_names_its_side_word_by_its_words() {
         let messages = Messages::parse(
             "EQST0002\n0 2\n12677 %1 synthetic ahead, %2 side\n12674 synthetic-right\n",
@@ -888,6 +1259,45 @@ mod tests {
         assert_eq!(
             wording(&bearing("12675"), Some(&messages)),
             [(Place::Chat, "Tracking: a bat ahead to one side".into())]
+        );
+    }
+
+    #[test]
+    fn a_report_says_this_clients_line_only_where_the_server_says_none() {
+        use eq_client_core::reports::ReportKind;
+        let line = |notice| wording(&notice, None);
+        assert_eq!(
+            line(Notice::ReportSent(ReportKind::Petition)),
+            [(Place::Chat, Said::own("Your petition was sent."))]
+        );
+        assert_eq!(
+            line(Notice::ReportSent(ReportKind::Bug)),
+            [(Place::Chat, Said::own("Your bug report was sent."))]
+        );
+        // Feedback's servers answer it themselves.
+        assert_eq!(line(Notice::ReportSent(ReportKind::Feedback)), []);
+        assert_eq!(
+            line(Notice::ReportRefused {
+                reason: "Wait a little before sending another petition.".into()
+            }),
+            [(
+                Place::Chat,
+                Said::own("Wait a little before sending another petition.")
+            )]
+        );
+    }
+
+    #[test]
+    fn a_chat_pace_refusal_is_the_players_own_line() {
+        let reason = "You are sending chat too fast. Wait 1 second.";
+        assert_eq!(
+            wording(
+                &Notice::ChatRefused {
+                    reason: reason.into()
+                },
+                None
+            ),
+            [(Place::Chat, Said::own(reason))]
         );
     }
 
@@ -1220,6 +1630,195 @@ mod tests {
     }
 
     #[test]
+    fn duel_news_reads_in_the_programs_lines_and_colours() {
+        use eq_client_core::{socials::DuelAutoDecline, world::DuelNotice};
+        let messages = Messages::parse(
+            "EQST0002
+0 9
+1424 Begun %1.
+1426 Challenged %1.
+1383 Ignored %1.
+1408 Fled %1 %2 %3.
+12100 Won %1 %2.
+12101 Ended %1 %2.
+13248 No player.
+13254 Challenging %1.
+13252 Accepting %1.
+",
+        );
+        let said = |notice: DuelNotice| {
+            wording(&Notice::Duel(notice), Some(&messages))
+                .into_iter()
+                .map(|(_, said)| said)
+                .collect::<Vec<_>>()
+        };
+        let friend = || "Friend".to_owned();
+        let cases = [
+            (DuelNotice::Begun(friend()), "Begun Friend.", 15),
+            (DuelNotice::Challenged(friend()), "Challenged Friend.", 15),
+            (DuelNotice::Challenging(friend()), "Challenging Friend.", 15),
+            (DuelNotice::Accepting(friend()), "Accepting Friend.", 15),
+            (DuelNotice::NoPlayerTarget, "No player.", 0x111),
+            (
+                DuelNotice::Won {
+                    own: "Me".into(),
+                    over: friend(),
+                },
+                "Won Me Friend.",
+                0x10d,
+            ),
+            (DuelNotice::Ended(friend()), "Ended Friend Friend.", 0x10d),
+            (
+                DuelNotice::TurnedDown {
+                    by: friend(),
+                    reason: Some(DuelAutoDecline::Ignored),
+                },
+                "Ignored Friend.",
+                15,
+            ),
+            (
+                DuelNotice::Forfeited {
+                    own: "Me".into(),
+                    opponent: friend(),
+                },
+                "Fled Me Friend Friend.",
+                0x10d,
+            ),
+        ];
+        for (notice, line, colour) in cases {
+            assert_eq!(said(notice), [Said::official(line).typed(colour)]);
+        }
+        // A line the installation lacks is this client's, in the same colour.
+        assert_eq!(
+            said(DuelNotice::NotYourself),
+            [Said::own("You cannot duel yourself.").typed(0x111)]
+        );
+        // A turn-down the program has no line for says nothing.
+        assert_eq!(
+            said(DuelNotice::TurnedDown {
+                by: friend(),
+                reason: None
+            }),
+            []
+        );
+    }
+
+    #[test]
+    fn yell_reward_and_level_news_read_in_the_programs_lines() {
+        use eq_client_core::{Coins, world::YellBearing};
+        let messages = Messages::parse(
+            "EQST0002
+0 6
+442 Down to %1.
+443 Lost %1, now %2.
+1438 %1 copper%2.
+1439 , from %1
+1442 %1 platinum%2.
+12908 %1 behind.
+",
+        );
+        let said = |notice: Notice| {
+            wording(&notice, Some(&messages))
+                .into_iter()
+                .map(|(_, said)| said)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            said(Notice::YellForHelp {
+                name: "Friend".into(),
+                bearing: Some(YellBearing::Behind)
+            }),
+            [Said::official("Friend behind.").typed(0x11a)]
+        );
+        // A band the installation lacks is this client's words.
+        assert_eq!(
+            said(Notice::YellForHelp {
+                name: "Friend".into(),
+                bearing: Some(YellBearing::Ahead)
+            }),
+            [Said::own("Friend yells for help!").typed(0x11a)]
+        );
+        assert_eq!(
+            said(Notice::QuestReward {
+                coins: Coins {
+                    platinum: 2,
+                    gold: 0,
+                    silver: 0,
+                    copper: 5,
+                },
+                giver: "Guard".into()
+            }),
+            [
+                Said::official("5 copper, from Guard.").typed(0x111),
+                Said::official("2 platinum, from Guard.").typed(0x111)
+            ]
+        );
+        assert_eq!(
+            said(Notice::LevelLost { lost: 1, level: 9 }),
+            [Said::official("Down to 9.").typed(13)]
+        );
+        assert_eq!(
+            said(Notice::LevelLost { lost: 2, level: 8 }),
+            [Said::official("Lost 2, now 8.").typed(13)]
+        );
+    }
+
+    #[test]
+    fn duel_yell_stat_and_coin_news_read_in_this_clients_words() {
+        use eq_client_core::{Coins, socials::DuelRefusal, world::DuelNotice};
+        let said = |notice: Notice| {
+            wording(&notice, None)
+                .into_iter()
+                .map(|(_, said)| said)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            said(Notice::Duel(DuelNotice::Challenged("Friend".into()))),
+            [Said::own("Friend challenges you to a duel.").typed(15)]
+        );
+        assert_eq!(
+            said(Notice::Duel(DuelNotice::Begun("Friend".into()))),
+            [Said::own("Your duel with Friend begins.").typed(15)]
+        );
+        assert_eq!(
+            said(Notice::Duel(DuelNotice::Refused {
+                from: "Friend".into(),
+                reason: DuelRefusal::Dueling
+            })),
+            [Said::own("Friend is already dueling.")]
+        );
+        assert_eq!(
+            said(Notice::YellForHelp {
+                name: "Friend".into(),
+                bearing: None
+            }),
+            [Said::own("Friend yells for help!")]
+        );
+        assert_eq!(
+            said(Notice::OthersStatChanged { lowered: true }),
+            [Said::own("A stat was lowered.").typed(15)]
+        );
+        assert_eq!(
+            said(Notice::OthersStatChanged { lowered: false }),
+            [Said::own("A stat was raised.").typed(15)]
+        );
+        let coins = |platinum, gold, silver, copper| Coins {
+            platinum,
+            gold,
+            silver,
+            copper,
+        };
+        assert_eq!(
+            said(Notice::Reward(coins(0, 0, 0, 7))),
+            [Said::own("You receive 7 copper.")]
+        );
+        assert_eq!(
+            said(Notice::Reward(coins(2, 0, 4, 1))),
+            [Said::own("You receive 2 platinum, 4 silver and 1 copper.")]
+        );
+    }
+
+    #[test]
     fn raid_news_reads_in_the_installed_strings() {
         let messages = Messages::parse(
             "EQST0002
@@ -1301,6 +1900,18 @@ mod tests {
         assert_eq!(
             said(ListingNotice::Away(false)),
             [(Place::Chat, Said::own("You are back at the keyboard."))]
+        );
+        // Looking for a group is always in this client's words (6.515).
+        assert_eq!(
+            said(ListingNotice::Looking(true)),
+            [(Place::Chat, Said::own("You are now looking for a group."))]
+        );
+        assert_eq!(
+            said(ListingNotice::Looking(false)),
+            [(
+                Place::Chat,
+                Said::own("You are no longer looking for a group.")
+            )]
         );
     }
 
