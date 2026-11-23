@@ -8,6 +8,41 @@
   - Scripts use the same practice command and meet the same gate.
   - Source-derived, not live. The first public use is attended.
 
+- A Bard's own gem refresh starts no wait before the next spell, as the Titanium program's (0x458ed8 kind 3, read R49-21 c; checklist 6.642): it sets that wait to the refresh's time, where anyone else's adds the spell's recovery. It applies where the session offers eq-network's new `Capability::BardRefreshTimers`, with the Titanium song rules (P99 and stock `EQEmu`); the Mac-era servers keep the recovery. The spell's own recast still runs.
+- Repinned eq-network from 231d67d to 4f35c9a, picking up #432 (Pick Pockets on a player follows the world's ruleset), #434 (tracking ends silently, 6.636), #433 (a knight's special waits as the program's, 6.626), #435 (the Mac-era arrival aboard a boat, not offered, 6.641), #439 (`Capability::BardRefreshTimers`, 6.642) and #442 (`ClientCommand::InspectSpawn`, inspecting a player by spawn ID for the Titanium right-click, 6.644; not used here yet).
+- On TAKP and Quarm, a Tracking press now fills the track window itself, as the Mac-era program does (TAKP read 10c, checklist 6.619 client half): group members in the zone first, at any range, then every other player or NPC within the program's range. The range is skill × 10 + 500 in zone types 1, 2 and 5, and skill / 2 + 500 elsewhere, from the zone header's time type, with the read's above-100 term; before a header has given the type, the smaller range. Corpses, races 0x8f, 0x8d, 0x48, 0x49, 0x72 and 0x8e, invisible spawns and the player are left out, up to 1000 entries. No Mac server sends a list. The distance (a straight line), the visibility test (the invisible flag) and the list order (by spawn ID) are inferred; the actor +0x198 skip is unread. Titanium's press still waits for the server's list.
+- On TAKP and Quarm, `/decline` refuses a waiting duel challenge, as the Mac-era program does (TAKP read 11h, checklist 6.622 client half). The session says the program's line for each state: dueling (0x33bd), declined (0x33be) or nothing to decline (0x33bf). A plain `/duel` there now sends the target as it stands, as the program does (read 11g), and the session gives the program's refusals for no target, the player or a corpse. Words after `/duel` are still refused on the Mac era, since the program's handling of them is unread. Titanium is unchanged, and RoF2 keeps this client's checks.
+- `/toggleinspect` and the Inspect Others option as the Titanium program
+  keeps them (read R49-16, checklist 6.574). `/toggleinspect on` and `off`
+  set it; any other word or none says the usage lines 0x339a and 0x339b;
+  each ends with 0x339c or 0x339d, in colour 0x111. Nothing is sent. The
+  option is on by default and seeded from `InspectOthers` in `eqclient.ini`
+  (first letter t, T or 1; missing is on), then kept per character, which
+  is this client's choice (the original keeps one per installation).
+  - **Inspections are always answered now.** The option gates only the
+    player's own right-click inspects (6.644, next), not answering others,
+    so the earlier session-only switch that stopped answering is gone.
+  - Scripts can run it with `slash()`, and their reports list
+    `inspect_others` with the other options.
+- `/ttell` and `/whotarget` as the Titanium program takes them (read R49-18,
+  checklist 6.528). `/ttell` says nothing with no words or no target; a
+  target is taken by the name the server sent, refused (line 0x3322) when
+  it has a `#` or `_` unless it is a creature's corpse, and cut at its
+  apostrophe, so a player's corpse's tell goes to its owner; a tell to
+  yourself or your own corpse gets line 0x3023 and is not sent.
+  `/whotarget` lists any target as a typed `/who` of its name, ignoring any
+  words, and says nothing with no target. Labelled: the program counts a
+  creature that dies in view as a player's corpse and refuses it, where
+  this client sends the tell. Mac-era and RoF2 keep this client's own
+  rules. The code moves to `targeted.rs`.
+- `/shield` follows the Titanium program's handler (checklist 6.517, read R49-22d). A Warrior of level 30 or more can name the player to shield, as `/shield Name`: the name is matched as `/assist Name` matches it, the shortest name it begins winning, and the target is left as it is. A name that matches no one says nothing. With no name, the target is shielded. The lines for another class or a lower level, for no target, and for naming or targeting yourself are the installation's own (strings 0xfc1, 0xfbf and 0xfc2, 0xcce and 0xfbe), with this client's words where the installation lacks them. As in the program, the client checks no distance, kind or recast; the server answers those. The Mac-era client's handler is unread there, so it keeps the earlier checks and words. The program's general "can act" test and its silence while a trade or certain windows are open are not modelled yet (row 6.517a), as for `/assist`.
+- **The Use key now uses what is at the centre of the view, not the nearest door** (read R49-19, checklist 6.609). On Titanium (and RoF2, inferred) it casts the program's ray from the camera through the centre of the 3D view, the same pick a mouse click makes:
+  - The first character the ray hits becomes the target. An NPC, or one the target setter refuses while no target stands, also gets what a right click on it does (a merchant, banker or guildmaster opens, a boat asks to pilot, else it is considered; no hail). A player or corpse that becomes the target is only targeted, as the program's key handler reads (0x462519).
+  - With no character, a door on the same ray gets one click at the point the ray met it, and the session judges its reach from there, as for a mouse click. Nothing else is reached: an item on the ground or a world container opens only by its own click (read).
+  - With neither, nothing happens and nothing is said.
+  - **This changes scripts.** Use no longer finds the nearest door or item without facing it. A script's `press("U")` is the real key, so it goes the same way. Turn on the new quality-of-life setting **Use Picks Nearest** (off by default) to keep the old rule: the nearest door, item on the ground or world container within the same reach.
+  - Inferred and labelled: the program's pick skips its own actor, its mount and actors with a "not pickable" bit; this skips what a mouse click skips.
+  - EQMac keeps the nearest rule until its key is read. The status line's "use the door" hint shows only where Use takes the nearest thing.
 - A Bard's song stop resets the gem timers as the Titanium program's stop does (0x40f06d, read R49-21 c; checklist 6.542). On each `WorldEvent::SongStopped`, which the session sends only under the Titanium song rules (P99, Titanium EQEmu), the timers of the gems whose spells have no recast end, and so does the shared recovery before any spell. A spell whose timing the installed data lacks keeps its timer. The stop is applied in order with the gem refreshes around it, so a refresh after it starts its timers again. Before, a press just after `/stopsong` could be refused with "Spell available in N s" where the program casts.
 - A zone line that leads back into the same zone places the player at its landing on stock EQEmu too, as the Titanium program does (0x48aaa6, checklist 6.640, repin to eq-network 231d67d with #430). Before, the client waited for a server move that never came, so in qeynos2 the player fell down the Temple of Life shaft. The installed zone lines already checked P99's crossings, and now check stock EQEmu's. Quarm, TAKP and RoF2 refuse a same-zone line, as before.
   - The repin carries every eq-network change since 614d1c0. An item's cold resistance is scaled with the other bonuses (#418). A training refusal keeps this client's words; the program's line is the language-training client half's (#427). Movement sends no vertical speed of its own, so the session sends 0 as before (#423, the 6.617 client half's).
@@ -123,12 +158,13 @@
   spells, the bad-word mask): each is a named TODO at
   `chat_filters::hidden_locally`. Mac-era and RoF2 programs are unread and
   hide nothing locally.
-- Show the session's chat pace (checklist 6.523, eq-network c951420). Its
+- Show the session's chat pace (checklist 6.523, eq-network #354). Its
   refusal, "You are sending chat too fast. Wait N seconds.", is printed as
-  the player's own line, and a script whose chat or social step the pace
-  holds fails at that step's line with those words. The repin's other news
-  (titles, the bind zone, the chat server's channels) is passed over until
-  each one's own client work lands.
+  the player's own line. A script fails at a step's line with those words
+  when the pace holds chat that step sent: a `chat`, `social` or `gm` step,
+  or a `slash` step whose typed line sent chat (`say`, `ooc` and the rest).
+  The pace is this client's own: the Titanium program paces no chat (read
+  R49-17), so it is a departure, not parity.
 - Follow program read R49-6 on Titanium (checklist 6.492). Each duel outcome the session tells is the program's line in its colour, and `/duel` sends the target as it stands, with the session wording the result. The **Duel Answer Card** is a quality-of-life setting, on by default: Yes accepts as `/duel` does, No sends nothing, and off there is no card, as in the program. Scripts can answer it. A quest's coins are said one line per coin with the giver's name, then the reward sound plays (also for EQEmu's fixed sound record). A yell for help names where the yeller stands from your heading. A level lost is said, and a level gained plays its sound. Another spawn's stat increase has the program's line. `/lfg on` and `off` say the program's lines, and any other form is its usage line. `/motd` says the kept message in the program's line, and `/charinfo` names the bind zone in it. The Mac-era and RoF2 programs are unread and keep this client's words. Repins eq-network to bf7a4db.
 - The Interface scale slider on the QoL page no longer swings between its ends while dragged.
   - **Cause:** each frame of a drag set the scale, which moved the Options window and the slider under a pointer that held still. The pointer then read near one end and then the other, so the scale flipped back and forth and could not be set back to 100%.
@@ -251,7 +287,8 @@
     - the speaker's stage: this client's own short-word list, then the program's per-letter rule;
     - the listener's stage, only where the world's log-server switch is on.
   - **Not garbled:** channels 6 and 14, and any line when a game master is on either side. A game master sender is found by name in the zone (inferred).
-  - **The away reply.** While AFK, a tell that got through the ignore list gets 0x58b back.
+  - **The away reply.** While AFK, a tell that got through the ignore list gets 0x58b back. The test for an away reply (0x589 or 0x58a at the start) reads the tell as it arrived, before any garble, so two away players never answer each other.
+  - **Letters.** A random letter is a backtick or 'a' to 'y' in Titanium's speaker stage (R49-4b's `0x60 + 0x40cbb2(0, 0x19)`, whose draw includes both ends, as the random-bounds read confirms) and in both Mac stages, and 'a' to 'y' in Titanium's listener stage. A roll of 99 or 100 makes a space of any letter but a word's first with no space beside it, its last letter included.
   - **Inferred or left out:**
     - on the Mac client, `/language`, the send and the speaker stage follow the Titanium read;
     - an unlabelled program flag at the gate is taken as 0;

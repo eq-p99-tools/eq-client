@@ -3,7 +3,7 @@ use super::{Changes, ClientWorld, ReportedHp, vitals};
 use eq_network_game::world::LANGUAGE_SKILLS;
 
 /// The current value in an existing skill or language slot.
-fn skill_value(player: &crate::PlayerState, skill_id: u32) -> Option<u32> {
+pub(super) fn skill_value(player: &crate::PlayerState, skill_id: u32) -> Option<u32> {
     if let Some(language) = skill_id.checked_sub(LANGUAGE_SKILLS) {
         player
             .languages

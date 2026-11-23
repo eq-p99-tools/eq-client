@@ -2352,6 +2352,10 @@ pub(super) fn drive(
                 super::chat::submit_typed_line(command, &mut chat, &mut online, &outbox, &qol)
             {
                 script.stop(&mut keys, &mut mouse, &error);
+            } else if outbox.sent_chat() {
+                // A typed chat word (`say`, `ooc` and the rest) meets the
+                // session's pace, so a refusal after it fails this step.
+                script.chatted = Some((std::time::Instant::now(), script.progress.line()));
             }
             return;
         }
@@ -2507,7 +2511,7 @@ pub(super) fn drive(
             };
             // Whatever goes as chat meets the session's pace, a `#` command
             // among it, so a refusal after it fails this step (6.523).
-            let chats = command.as_ref().is_ok_and(is_chat);
+            let chats = command.as_ref().is_ok_and(super::outbox::is_chat);
             let sent = command.and_then(|command| {
                 observed
                     .1
@@ -3027,17 +3031,6 @@ fn aa_request(
             }
         })
         .map_err(|refusal| refusal.text().to_owned())
-}
-
-/// Whether a command goes as chat, which the session paces (6.523). A slash
-/// step's game commands never do: an emote or a roll is its own request,
-/// outside the pace, and a script has no `/ttell`.
-const fn is_chat(command: &eq_client_core::ClientCommand) -> bool {
-    matches!(
-        command,
-        eq_client_core::ClientCommand::SendChat(_)
-            | eq_client_core::ClientCommand::SendChatInAdmission { .. }
-    )
 }
 
 /// The request for a validated GM command. A fixture form needs a local

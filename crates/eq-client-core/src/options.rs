@@ -91,6 +91,12 @@ pub enum Toggle {
     /// `SpellParticleDensity`), this client per character. The Options
     /// window's Particles page is its official home.
     SpellEffects,
+    /// Inspects another player (or the player themself) on a right-click,
+    /// as the official client's `InspectOthers` in `[Defaults]` of
+    /// `eqclient.ini` and its `/toggleinspect` (read R49-16; TRUE when
+    /// missing). It gates only the player's own right-click inspects, not
+    /// answering others'. This client keeps it per character.
+    InspectOthers,
     /// A quality-of-life setting, on the Options window's quality-of-life
     /// page, which only this client has.
     Qol(Fix),
@@ -99,7 +105,7 @@ pub enum Toggle {
 impl Toggle {
     /// The official client's own toggles, in the order a file lists them; a
     /// file is read back by name, so the order is only how it is written.
-    pub const OFFICIAL: [Self; 15] = [
+    pub const OFFICIAL: [Self; 16] = [
         Self::PetWindowPopup,
         Self::AutoStand,
         Self::TargetRing,
@@ -118,6 +124,7 @@ impl Toggle {
         Self::EnvironmentSounds,
         Self::CombatMusic,
         Self::SpellEffects,
+        Self::InspectOthers,
     ];
 
     /// Every toggle, in the order a file lists them: the official client's,
@@ -147,6 +154,7 @@ impl Toggle {
             Self::EnvironmentSounds => "environment_sounds",
             Self::CombatMusic => "combat_music",
             Self::SpellEffects => "spell_effects",
+            Self::InspectOthers => "inspect_others",
             Self::Qol(fix) => fix.key(),
         }
     }
@@ -170,7 +178,8 @@ impl Toggle {
             | Self::Music
             | Self::EnvironmentSounds
             | Self::CombatMusic
-            | Self::SpellEffects => None,
+            | Self::SpellEffects
+            | Self::InspectOthers => None,
             Self::Qol(fix) => fix.needs(),
         }
     }
@@ -404,6 +413,8 @@ pub struct Options {
     pub combat_music: bool,
     /// See [`Toggle::SpellEffects`].
     pub spell_effects: bool,
+    /// See [`Toggle::InspectOthers`].
+    pub inspect_others: bool,
     /// Which quality-of-life fixes are on ([`Toggle::Qol`]).
     pub qol: qol::Settings,
     /// How much of a player's name shows over their head, as `/shownames`
@@ -495,6 +506,7 @@ impl Default for Options {
             environment_sounds: true,
             combat_music: true,
             spell_effects: true,
+            inspect_others: true,
             qol,
             show_names: ShowNames::Everything,
             loot_no_drop: LootNoDrop::Ask,
@@ -534,6 +546,7 @@ impl Options {
             Toggle::EnvironmentSounds => self.environment_sounds,
             Toggle::CombatMusic => self.combat_music,
             Toggle::SpellEffects => self.spell_effects,
+            Toggle::InspectOthers => self.inspect_others,
             Toggle::Qol(fix) => self.qol.on(fix),
         }
     }
@@ -556,6 +569,7 @@ impl Options {
             Toggle::EnvironmentSounds => &mut self.environment_sounds,
             Toggle::CombatMusic => &mut self.combat_music,
             Toggle::SpellEffects => &mut self.spell_effects,
+            Toggle::InspectOthers => &mut self.inspect_others,
             Toggle::Qol(fix) => {
                 self.qol.set(fix, on);
                 return;
