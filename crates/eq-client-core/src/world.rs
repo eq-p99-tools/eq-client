@@ -43,7 +43,7 @@ pub use items::ItemCache;
 pub use landings::Landing;
 pub use link::Link;
 pub use motions::{CastDone, Motion};
-pub use notice::{DuelNotice, ListingNotice, Notice, Party};
+pub use notice::{DuelNotice, ListingNotice, Notice, Party, YellBearing};
 pub use raid::{Raid, RaidNotice, RaidRank};
 pub use target::Target;
 pub use tracking::{TrackWindow, track_color};
@@ -1015,7 +1015,6 @@ impl ClientWorld {
             | WorldEvent::HideAndSneakEnded
             | WorldEvent::Target(_)
             | WorldEvent::TargetOfTarget(_)
-            | WorldEvent::Ding
             | WorldEvent::SacrificeOffer(_)
             | WorldEvent::SacrificeRefused { .. }
             | WorldEvent::BecameCorpse { .. }
@@ -1686,7 +1685,8 @@ impl ClientWorld {
                 // A spawn the player cannot name says nothing.
                 match self.party(u32::from(*spawn_id)) {
                     Party::Named(name) if self.in_world() => {
-                        news.notices.push(Notice::YellForHelp(name));
+                        let bearing = self.yell_bearing(*spawn_id);
+                        news.notices.push(Notice::YellForHelp { name, bearing });
                     }
                     _ => news.ignored = true,
                 }
@@ -1704,12 +1704,37 @@ impl ClientWorld {
                 Ok(id) if self.in_world() && self.is_player(id) => {}
                 _ => news.ignored = true,
             },
+            // The Titanium program says each coin with the giver's name and
+            // always plays sound 0x8d (read R49-6g); elsewhere only the coins
+            // are told. The items and the experience come with the server's
+            // own lines, and the session adds the coins to the purse.
+            WorldEvent::Reward(reward) if self.in_world() && prints_r49_6_lines(self.generation) => {
+                let giver = reward
+                    .giver_id
+                    .map(|id| match self.party(u32::from(id)) {
+                        Party::Named(name) => name,
+                        Party::Player | Party::Unseen => String::new(),
+                    })
+                    .unwrap_or_default();
+                if reward.coins != crate::Coins::default() {
+                    news.notices.push(Notice::QuestReward {
+                        coins: reward.coins,
+                        giver,
+                    });
+                }
+                news.sounds.push(crate::effects::Cue::Number(QUEST_REWARD_SOUND));
+            }
             WorldEvent::Reward(reward) => {
-                // Only the coins: the items and the experience come with
-                // the server's own lines.
                 let coins = reward.coins;
                 if self.in_world() && coins != crate::Coins::default() {
                     news.notices.push(Notice::Reward(coins));
+                }
+            }
+            // `EQEmu`'s fixed sound record is a quest reward of nothing to the
+            // Titanium program, which plays its sound (read R49-6g).
+            WorldEvent::Ding => {
+                if self.in_world() && prints_r49_6_lines(self.generation) {
+                    news.sounds.push(crate::effects::Cue::Number(QUEST_REWARD_SOUND));
                 }
             }
             WorldEvent::ConsentClosed { id, closure } => {
@@ -1978,6 +2003,20 @@ impl ClientWorld {
         news.notices.push(Notice::Duel(notice));
     }
 
+    /// Where a yeller stands from the player, as the Titanium program
+    /// picks its line (read R49-6d, 0x452dc6): the angle between the
+    /// player's heading and the bearing to the yeller, folded to half a
+    /// turn. No range is tested. None off Titanium, or without both
+    /// places.
+    fn yell_bearing(&self, spawn_id: u16) -> Option<YellBearing> {
+        if !prints_r49_6_lines(self.generation) {
+            return None;
+        }
+        let own = self.player.as_ref()?.position;
+        let yeller = self.zone.spawns.get(&spawn_id)?.state.position;
+        Some(YellBearing::between(own, yeller))
+    }
+
     fn party(&self, spawn_id: u32) -> Party {
         if self
             .player
@@ -2180,5 +2219,20 @@ const fn tells_duel_accepted(dialect: crate::GameDialect) -> bool {
     match dialect {
         crate::GameDialect::Titanium => false,
         crate::GameDialect::EqMac | crate::GameDialect::Rof2 => true,
+    }
+}
+
+/// The sound the Titanium program plays at a quest reward, by the sound
+/// object's number (read R49-6g); that it is the numbers file's is
+/// inferred.
+const QUEST_REWARD_SOUND: u16 = 0x8d;
+
+/// Whether a generation's program says the lines read R49-6 found for
+/// rewards, yells and levels: the Titanium program's. The others are unread
+/// and keep this client's.
+pub(crate) const fn prints_r49_6_lines(dialect: crate::GameDialect) -> bool {
+    match dialect {
+        crate::GameDialect::Titanium => true,
+        crate::GameDialect::EqMac | crate::GameDialect::Rof2 => false,
     }
 }

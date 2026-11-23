@@ -422,7 +422,9 @@ fn a_sound_the_server_names_is_sound_news() {
         intensity: 1.0,
     });
     assert_eq!(game(&mut world, shake).sounds, Vec::<Cue>::new());
-    assert_eq!(game(&mut world, WorldEvent::Ding).sounds, Vec::<Cue>::new());
+    // EQEmu's fixed record is a reward of nothing to the Titanium program,
+    // which plays its reward sound (read R49-6g).
+    assert_eq!(game(&mut world, WorldEvent::Ding).sounds, [Cue::Number(0x8d)]);
 }
 
 #[test]
@@ -5922,7 +5924,10 @@ fn a_yell_stats_and_coins_are_told_as_they_come() {
     let mut world = admitted();
     assert_eq!(
         game(&mut world, WorldEvent::YellForHelp { spawn_id: 5 }).notices,
-        [Notice::YellForHelp("a rat".into())]
+        [Notice::YellForHelp {
+            name: "a rat".into(),
+            bearing: Some(crate::world::YellBearing::Ahead)
+        }]
     );
     // Someone the player cannot name says nothing.
     assert_eq!(
@@ -5955,30 +5960,115 @@ fn a_yell_stats_and_coins_are_told_as_they_come() {
         silver: 3,
         copper: 0,
     };
-    assert_eq!(
-        game(
-            &mut world,
-            WorldEvent::Reward(Reward {
-                giver_id: Some(5),
-                coins,
-                experience: 0,
-                items: vec![]
-            })
-        )
-        .notices,
-        [Notice::Reward(coins)]
-    );
-    // A reward of items or experience alone has its own server lines.
-    let nothing = Reward {
-        giver_id: Some(5),
-        coins: Coins::default(),
-        experience: 100,
-        items: vec![1001],
+    let reward = |coins| {
+        WorldEvent::Reward(Reward {
+            giver_id: Some(5),
+            coins,
+            experience: 0,
+            items: vec![],
+        })
     };
+    // On Titanium each coin is said with the giver's name, and the sound
+    // always plays (read R49-6g).
+    let given = game(&mut world, reward(coins));
     assert_eq!(
-        game(&mut world, WorldEvent::Reward(nothing)).notices,
-        Vec::<Notice>::new()
+        given.notices,
+        [Notice::QuestReward {
+            coins,
+            giver: "a rat".into()
+        }]
     );
+    assert_eq!(given.sounds, [crate::effects::Cue::Number(0x8d)]);
+    // A reward of items or experience alone has its own server lines.
+    let nothing = game(&mut world, reward(Coins::default()));
+    assert_eq!(nothing.notices, Vec::<Notice>::new());
+    assert_eq!(nothing.sounds, [crate::effects::Cue::Number(0x8d)]);
+    // So does EQEmu's fixed sound record, a reward of nothing to the program.
+    assert_eq!(
+        game(&mut world, WorldEvent::Ding).sounds,
+        [crate::effects::Cue::Number(0x8d)]
+    );
+    // Elsewhere the coins alone are told, with no sound, and a yell has no
+    // bearing.
+    world.carry_as(crate::GameDialect::EqMac);
+    let mac = game(&mut world, reward(coins));
+    assert_eq!(mac.notices, [Notice::Reward(coins)]);
+    assert_eq!(mac.sounds, []);
+    assert_eq!(game(&mut world, WorldEvent::Ding).sounds, []);
+    assert_eq!(
+        game(&mut world, WorldEvent::YellForHelp { spawn_id: 5 }).notices,
+        [Notice::YellForHelp {
+            name: "a rat".into(),
+            bearing: None
+        }]
+    );
+}
+
+#[test]
+fn a_yellers_band_is_the_angle_from_the_players_heading_folded() {
+    use crate::world::YellBearing;
+    let at = |x, y, heading| WorldPosition {
+        x,
+        y,
+        z: 0.0,
+        heading,
+    };
+    // Facing heading 0, which steps along +Y.
+    let own = at(0.0, 0.0, 0.0);
+    let cases = [
+        (at(0.0, 10.0, 0.0), YellBearing::Ahead),
+        (at(10.0, 10.0, 0.0), YellBearing::AheadAside),
+        (at(-10.0, 10.0, 0.0), YellBearing::AheadAside),
+        (at(10.0, 0.0, 0.0), YellBearing::Aside),
+        (at(-10.0, 0.0, 0.0), YellBearing::Aside),
+        (at(10.0, -10.0, 0.0), YellBearing::BehindAside),
+        (at(0.0, -10.0, 0.0), YellBearing::Behind),
+    ];
+    for (yeller, band) in cases {
+        assert_eq!(YellBearing::between(own, yeller), band, "{yeller:?}");
+    }
+    // Turned to face the yeller, they are ahead, wherever they stand.
+    assert_eq!(
+        YellBearing::between(at(0.0, 0.0, 256.0), at(0.0, -10.0, 0.0)),
+        YellBearing::Ahead
+    );
+    assert_eq!(
+        YellBearing::between(at(0.0, 0.0, 128.0), at(10.0, 0.0, 0.0)),
+        YellBearing::Ahead
+    );
+    assert_eq!(YellBearing::Ahead.string_id(), 0x326b);
+    assert_eq!(YellBearing::Behind.string_id(), 0x326c);
+}
+
+#[test]
+fn a_level_lost_is_said_and_one_gained_plays_its_sound_on_titanium() {
+    let mut world = admitted();
+    let level = |world: &mut ClientWorld, current| {
+        game(
+            world,
+            WorldEvent::Level {
+                current,
+                previous: 0,
+                experience: 0,
+            },
+        )
+    };
+    let gained = level(&mut world, 5);
+    assert_eq!(gained.notices, []);
+    assert_eq!(gained.sounds, [crate::effects::Cue::Number(0x8b)]);
+    assert_eq!(
+        level(&mut world, 4).notices,
+        [Notice::LevelLost { lost: 1, level: 4 }]
+    );
+    assert_eq!(
+        level(&mut world, 1).notices,
+        [Notice::LevelLost { lost: 3, level: 1 }]
+    );
+    let same = level(&mut world, 1);
+    assert_eq!((same.notices, same.sounds), (vec![], vec![]));
+    world.carry_as(crate::GameDialect::EqMac);
+    let mac = level(&mut world, 2);
+    assert_eq!((mac.notices, mac.sounds), (vec![], vec![]));
 }
 
 #[test]

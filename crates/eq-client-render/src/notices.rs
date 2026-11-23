@@ -565,7 +565,11 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         Notice::Roll(roll) => in_chat(roll_lines(roll, messages)),
         Notice::Raid(notice) => in_chat(raid_lines(notice, messages)),
         Notice::Duel(notice) => in_chat(duel_line(notice, messages).into_iter().collect()),
-        Notice::YellForHelp(name) => chat(Said::own(format!("{name} yells for help!"))),
+        Notice::YellForHelp { name, bearing } => chat(yell_line(name, *bearing, messages)),
+        Notice::QuestReward { coins, giver } => {
+            in_chat(quest_reward_lines(*coins, giver, messages))
+        }
+        Notice::LevelLost { lost, level } => chat(level_lost_line(*lost, *level, messages)),
         Notice::OthersStatChanged { lowered } => chat(others_stat_line(*lowered, messages)),
         Notice::Reward(coins) => chat(Said::own(reward_line(*coins))),
     }
@@ -689,6 +693,79 @@ fn others_stat_line(lowered: bool, messages: Option<&Messages>) -> Said {
         (0x3274, "A stat was raised.")
     };
     official(Some(id), &[], fallback, messages).typed(15)
+}
+
+/// A yell for help, on Titanium in the program's line for where the yeller
+/// stands, in colour 0x11a (read R49-6d); elsewhere, and where the
+/// installation lacks the line, in this client's words.
+fn yell_line(
+    name: &str,
+    bearing: Option<eq_client_core::world::YellBearing>,
+    messages: Option<&Messages>,
+) -> Said {
+    let fallback = format!("{name} yells for help!");
+    match bearing {
+        Some(bearing) => official(
+            Some(bearing.string_id()),
+            &[name.to_owned()],
+            &fallback,
+            messages,
+        )
+        .typed(0x11a),
+        None => Said::own(fallback),
+    }
+}
+
+/// A quest's coins as the Titanium program says them (read R49-6g): a line
+/// for each coin given, copper first, 0x59e, 0x5a0, 0x5a1 and 0x5a2, each
+/// with the amount and 0x59f naming the giver, in colour 0x111. The
+/// fallbacks are this client's words.
+fn quest_reward_lines(
+    coins: eq_client_core::Coins,
+    giver: &str,
+    messages: Option<&Messages>,
+) -> Vec<Said> {
+    let from = messages
+        .and_then(|messages| messages.formatted(0x59f, &[giver.to_owned()]))
+        .unwrap_or_default();
+    [
+        (coins.copper, 0x59e, "copper"),
+        (coins.silver, 0x5a0, "silver"),
+        (coins.gold, 0x5a1, "gold"),
+        (coins.platinum, 0x5a2, "platinum"),
+    ]
+    .into_iter()
+    .filter(|(count, ..)| *count > 0)
+    .map(|(count, id, coin)| {
+        official(
+            Some(id),
+            &[count.to_string(), from.clone()],
+            &format!("You receive {count} {coin}."),
+            messages,
+        )
+        .typed(0x111)
+    })
+    .collect()
+}
+
+/// Levels lost, as the Titanium program says it (read R49-6c): 0x1ba for
+/// one, with the level now, and 0x1bb for more, with how many and the
+/// level now, in colour 13.
+fn level_lost_line(lost: u8, level: u8, messages: Option<&Messages>) -> Said {
+    let (id, arguments, fallback) = if lost == 1 {
+        (
+            0x1ba,
+            vec![level.to_string()],
+            format!("You lost a level! You are now level {level}."),
+        )
+    } else {
+        (
+            0x1bb,
+            vec![lost.to_string(), level.to_string()],
+            format!("You lost {lost} levels! You are now level {level}."),
+        )
+    };
+    official(Some(id), &arguments, &fallback, messages).typed(13)
 }
 
 /// The coins a quest or task gave, largest first, naming only those it
@@ -1524,6 +1601,66 @@ mod tests {
     }
 
     #[test]
+    fn yell_reward_and_level_news_read_in_the_programs_lines() {
+        use eq_client_core::{Coins, world::YellBearing};
+        let messages = Messages::parse(
+            "EQST0002
+0 6
+442 Down to %1.
+443 Lost %1, now %2.
+1438 %1 copper%2.
+1439 , from %1
+1442 %1 platinum%2.
+12908 %1 behind.
+",
+        );
+        let said = |notice: Notice| {
+            wording(&notice, Some(&messages))
+                .into_iter()
+                .map(|(_, said)| said)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            said(Notice::YellForHelp {
+                name: "Friend".into(),
+                bearing: Some(YellBearing::Behind)
+            }),
+            [Said::official("Friend behind.").typed(0x11a)]
+        );
+        // A band the installation lacks is this client's words.
+        assert_eq!(
+            said(Notice::YellForHelp {
+                name: "Friend".into(),
+                bearing: Some(YellBearing::Ahead)
+            }),
+            [Said::own("Friend yells for help!").typed(0x11a)]
+        );
+        assert_eq!(
+            said(Notice::QuestReward {
+                coins: Coins {
+                    platinum: 2,
+                    gold: 0,
+                    silver: 0,
+                    copper: 5,
+                },
+                giver: "Guard".into()
+            }),
+            [
+                Said::official("5 copper, from Guard.").typed(0x111),
+                Said::official("2 platinum, from Guard.").typed(0x111)
+            ]
+        );
+        assert_eq!(
+            said(Notice::LevelLost { lost: 1, level: 9 }),
+            [Said::official("Down to 9.").typed(13)]
+        );
+        assert_eq!(
+            said(Notice::LevelLost { lost: 2, level: 8 }),
+            [Said::official("Lost 2, now 8.").typed(13)]
+        );
+    }
+
+    #[test]
     fn duel_yell_stat_and_coin_news_read_in_this_clients_words() {
         use eq_client_core::{Coins, socials::DuelRefusal, world::DuelNotice};
         let said = |notice: Notice| {
@@ -1548,7 +1685,10 @@ mod tests {
             [Said::own("Friend is already dueling.")]
         );
         assert_eq!(
-            said(Notice::YellForHelp("Friend".into())),
+            said(Notice::YellForHelp {
+                name: "Friend".into(),
+                bearing: None
+            }),
             [Said::own("Friend yells for help!")]
         );
         assert_eq!(
