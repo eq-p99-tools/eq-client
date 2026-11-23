@@ -2665,8 +2665,17 @@ mod tests {
             [Step::Slash("/charinfo".into())]
         );
         assert!(parse("slash(\"charinfo now\")\n", base).is_err());
-        // Nor the drop's question lifted (6.536).
+        // Nor the drop's question lifted (6.536): not by slash(), and not by
+        // a chat step, whose words go out as chat and never through the
+        // typed-line path. A chat step needs a channel first.
         assert!(parse("slash(\"fastdrop\")\n", base).is_err());
+        assert!(parse("chat(\"/fastdrop\")\n", base).is_err());
+        assert_eq!(
+            parse("chat(\"say /fastdrop\")\n", base).unwrap(),
+            [Step::Chat(eq_client_core::OutboundChat::Say(
+                "/fastdrop".into()
+            ))]
+        );
     }
 
     #[test]
