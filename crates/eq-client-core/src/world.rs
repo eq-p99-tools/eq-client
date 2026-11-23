@@ -1912,9 +1912,7 @@ impl ClientWorld {
             DuelUpdate::Challenge { .. } | DuelUpdate::AutoDeclined { .. } => return,
             // The Titanium program has no case for an incoming 0x1b09 (read
             // R49-6); its session tells the duel's start.
-            DuelUpdate::Accepted { .. } if self.generation == crate::GameDialect::Titanium => {
-                return;
-            }
+            DuelUpdate::Accepted { .. } if !tells_duel_accepted(self.generation) => return,
             DuelUpdate::Accepted {
                 challenger,
                 accepter,
@@ -2130,3 +2128,13 @@ impl ClientWorld {
 
 #[cfg(test)]
 mod tests;
+
+/// Whether a generation's program tells an incoming duel acceptance. The
+/// Titanium program has no case for 0x1b09 (read R49-6); the others are
+/// unread and keep this client's line.
+const fn tells_duel_accepted(dialect: crate::GameDialect) -> bool {
+    match dialect {
+        crate::GameDialect::Titanium => false,
+        crate::GameDialect::EqMac | crate::GameDialect::Rof2 => true,
+    }
+}

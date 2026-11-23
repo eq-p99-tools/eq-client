@@ -5711,7 +5711,30 @@ fn duel_news_tells_the_player_of_their_own_duels() {
         duel(&mut world, DuelUpdate::Challenge { from: 9 }),
         Vec::<Notice>::new()
     );
-    // A duel begins with the player in it, either side; others say nothing.
+    // The Titanium program has no case for an incoming acceptance (read
+    // R49-6); its session tells the duel's start, and the program's own
+    // refusal, as DuelNews.
+    let titanium = duel(
+        &mut world,
+        DuelUpdate::Accepted {
+            challenger: 9,
+            accepter: 5,
+        },
+    );
+    assert_eq!(titanium, Vec::<Notice>::new());
+    assert_eq!(
+        duel(
+            &mut world,
+            DuelUpdate::AutoDeclined {
+                by: 5,
+                reason: None
+            }
+        ),
+        Vec::<Notice>::new()
+    );
+    // Elsewhere a duel begins with the player in it, either side; others
+    // say nothing.
+    world.carry_as(crate::GameDialect::EqMac);
     for (challenger, accepter) in [(9, 5), (5, 9)] {
         assert_eq!(
             duel(
