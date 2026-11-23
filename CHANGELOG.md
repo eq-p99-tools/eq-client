@@ -9,6 +9,15 @@
   - **Point lights:** the zone's placed lights and carried torches light zone geometry per vertex, worked out on the CPU, in place of Bevy's lights. Which lights each mesh takes is inferred until the engine's light lists are read.
   - **Tone curve:** the scene camera no longer applies one, inside or out, as the original applies none. Colour grading stays.
   - **Known departure:** the floor's fade while you carry a light isn't modelled.
+- `/pet target` and unknown `/pet` words, as read R49-22a reads the Titanium program (checklist 6.610, gap 3.5).
+  - **`/pet target`** stays local and sends no pet order.
+    - It targets the player's pet through the same selection a click on the pet uses.
+    - It then says the program's line (string 0x3330). With no pet it says string 0x3323.
+    - Both lines come from the installation, in this client's own words where the installation lacks them.
+    - Before, no pet gave a refusal in our words. That the word is "target" is inferred (row 22a-iii).
+  - **A `/pet` word that names no order** sends nothing and says nothing, as the program's sender skips it (0x49975b). Before, this client said "Unknown pet command".
+  - **The Pet Info window:** the Options window's Pet Window Popup already decides whether a new pet shows the window (default on). That matches the program's auto setting; its default is row 22a-iv.
+  - The network side, which sends an order with no pet, is eq-network #411. This client has no pet refusal of its own.
 - Buffs landing on the player take the slot the Titanium program's whole slot finder gives them (checklist 6.612, read R49-22e, repin to eq-network #417). That includes step 4's replace in place, worked out from each effect's base, formula and max as 0x40f339 does, and step 6's eviction. The facts come from the installed spell data: effects, the Bard level and the band, with each held buff's stored level from its record.
   - A buff the program removes for the landing is dropped as a prediction. If the server's word still holds it afterwards (a record for it, or the next zone-in's table), its word stands, and the disagreement is logged with the rule and both spells (6.612 T1).
   - A value the client can't work out still leaves the landing unslotted. That covers a random formula, one that reads hit points, or one that needs a level we don't know. The old guess for a possible step-4 replace is gone.
@@ -64,6 +73,15 @@
     local hiding (stuns, others' environmental lines, spell and damage
     lines) is the next change.
   - Uses main's eq-network pin, which carries #407; no repin of its own.
+- Hide locally what the Titanium program hides by its filters, for the lines
+  this client prints (read R49-2 d, checklist 6.494, C2). With **Missed me**
+  hidden, another's melee attack on the player that does not land is not
+  shown (the damage display's test at 0x4a6631; which outcomes it covers is
+  inferred). The program's other local tests gate lines this client does not
+  print yet (stuns, others' environmental damage, others' fights, others'
+  spells, the bad-word mask): each is a named TODO at
+  `chat_filters::hidden_locally`. Mac-era and RoF2 programs are unread and
+  hide nothing locally.
 - Show the session's chat pace (checklist 6.523, eq-network c951420). Its
   refusal, "You are sending chat too fast. Wait N seconds.", is printed as
   the player's own line, and a script whose chat or social step the pace
