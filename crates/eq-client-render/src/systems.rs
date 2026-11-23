@@ -208,6 +208,12 @@ pub(super) fn schedule(app: &mut App) {
             (
                 who::zone_list,
                 whereabouts::answers,
+                (
+                    crate::languages::command,
+                    crate::languages::speak,
+                    crate::languages::away,
+                )
+                    .chain(),
                 (contacts::answers, contacts::persist).chain(),
                 abilities::choices::persist,
                 (guild::invitations, guild::commands, sharing::commands),

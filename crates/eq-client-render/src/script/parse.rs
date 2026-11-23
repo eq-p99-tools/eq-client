@@ -2519,6 +2519,18 @@ mod tests {
     }
 
     #[test]
+    fn language_slash_takes_any_words_as_the_typed_command_does() {
+        let base = std::path::Path::new(".");
+        for (script, step) in [
+            ("slash(\"language\")\n", "/language"),
+            ("slash(\"language 2\")\n", "/language 2"),
+            ("slash(\"language help\")\n", "/language help"),
+        ] {
+            assert_eq!(parse(script, base).unwrap(), [Step::Slash(step.into())]);
+        }
+    }
+
+    #[test]
     fn knight_slash_actions_use_the_current_target() {
         let base = std::path::Path::new(".");
         assert_eq!(

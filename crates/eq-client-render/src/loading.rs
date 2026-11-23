@@ -901,6 +901,7 @@ mod tests {
         let said = |channel, text: &str| ChatLine {
             channel,
             message_type: None,
+            tongue: None,
             sender: None,
             target: None,
             message: Message {

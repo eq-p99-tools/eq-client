@@ -100,6 +100,7 @@ pub(super) fn system_line(said: impl Into<Said>) -> ChatLine {
             item_links: words.item_links,
         },
         source,
+        tongue: None,
     }
 }
 
@@ -175,6 +176,12 @@ pub(super) struct ChatState {
     /// only: never saved, reported or logged.
     recall: recall::Recall,
     refusals: Refusals,
+    /// Each chat window's spoken language, for the session (read R49-4).
+    pub(crate) languages: super::languages::Spoken,
+    /// A `/language`'s words, waiting to be answered.
+    pub(crate) language_asked: Option<String>,
+    /// Tells heard while away, waiting for the away reply.
+    pub(crate) away_tells: Vec<super::languages::AwayTell>,
 }
 
 /// Only deferred gameplay intents need a script world stamp. Each ordinary
@@ -283,7 +290,7 @@ impl ChatState {
         })
     }
 
-    pub(super) fn receive(&mut self, line: ChatLine, online: &OnlineState) {
+    pub(super) fn receive(&mut self, mut line: ChatLine, online: &OnlineState) {
         // The guild's message of the day shows only when its text is new
         // and not empty; the copy kept changes either way (R11, 0x40a7fd).
         // The one `/getguildmotd` asked for always shows, and is then the
@@ -320,6 +327,14 @@ impl ChatState {
             // shows otherwise (recording checklist 6.412).
             if line.channel == ChannelName::Tell {
                 self.contacts.lists.replies.heard(sender);
+            }
+            // A line in a tongue, once the filters let it through, is
+            // tagged and garbled as it arrives, so the chat and the log show
+            // the same words; a tell heard while away owes the away reply
+            // (read R49-4 (b), (c)). An ignored sender gets none.
+            if line.tongue.is_some() || line.channel == ChannelName::Tell {
+                let sender = sender.to_owned();
+                self.hear_tongue(&mut line, world, &sender);
             }
         }
         let linked = line.source == Source::Server
@@ -402,6 +417,13 @@ impl ChatState {
         self.clear_link_scope();
         self.guild_motd = None;
         self.recall.clear();
+        // The windows' languages last the session (read R49-4 (a)).
+        self.languages.clear();
+    }
+
+    /// The chat window lines are typed in, whose language they speak.
+    pub(crate) const fn active_window(&self) -> super::windows::WindowId {
+        self.groups.owner()
     }
 
     /// Forgets every ask made in a session and read by a system later, so
@@ -425,12 +447,15 @@ impl ChatState {
             follow_asked,
             rangers_only,
             contacts,
+            language_asked,
+            away_tells,
             // Cleared elsewhere: the link scope, the message of the day and
             // recall by `end_session`, the social inbox at every reset, and
             // the departure by `login::depart`.
             link_scope: _,
             guild_motd: _,
             recall: _,
+            languages: _,
             socials: _,
             departure: _,
             // Kept: the player's own chat setup and what the screen shows.
@@ -459,6 +484,8 @@ impl ChatState {
         *follow_asked = None;
         *rangers_only = None;
         contacts.asked = None;
+        *language_asked = None;
+        away_tells.clear();
     }
 
     /// Links can follow a known profile through zoning on the same connection.
@@ -2070,6 +2097,10 @@ pub(super) fn client_request_in_scope(
         state.guild_asked = Some(guild);
         return Some(Ok(()));
     }
+    if let Some(words) = super::languages::typed(input) {
+        state.language_asked = Some(words);
+        return Some(Ok(()));
+    }
     if super::motion::FollowAsked::typed(input) {
         state.script_requests.follow = scope;
         state.follow_asked = Some(super::motion::FollowAsked);
@@ -3400,6 +3431,7 @@ mod tests {
                 skills: None,
                 practice_points: None,
                 languages: None,
+                intoxication: None,
                 disciplines: None,
                 spell_refresh_ms: None,
                 memorized_spells: [None; 8],

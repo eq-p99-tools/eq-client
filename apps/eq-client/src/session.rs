@@ -71,6 +71,17 @@ fn chat_update(event: eq_network::chat::ChatEvent) -> Option<WorldUpdate> {
                 message,
                 source: eq_client_core::chat::Source::Server,
                 message_type: event.message_type,
+                // A player's channel message carries its tongue; the tag is
+                // settled as the chat hears it (`tongues::hear`).
+                tongue: event.channel.and_then(|channel| {
+                    let (language, skill) = event.language.zip(event.language_skill)?;
+                    Some(eq_client_core::tongues::Heard {
+                        language,
+                        skill,
+                        channel,
+                        named: false,
+                    })
+                }),
             })
         })
 }

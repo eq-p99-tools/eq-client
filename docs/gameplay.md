@@ -398,6 +398,45 @@ from legacy files to establish the exact profile that owns them.
 
 The pause order follows the [EverQuest social hotbutton guide](https://www.everquest.com/news/imported-eq-enus-51004).
 
+## Spoken languages
+
+Each chat window speaks a language of its own, chosen with `/language` in that
+window. The choice lasts for the session and is never saved, as in the
+original. A new session starts every window on the first language your
+character knows, the common tongue.
+
+- `/language` says the language the window speaks and its number.
+- `/language help` (the installed word) lists the languages your character
+  knows, numbered from 1 in the original's order.
+- `/language N` chooses the Nth of that list. Any other number, or a word, is
+  refused with the installed line.
+
+Every line you send goes out in the active window's language, on every
+channel: say, shout, group, tell, out of character and the rest. The servers
+turn out-of-character and some other chat back to the common tongue
+themselves. The skill sent with a line is your skill in the language less a
+quarter of your intoxication, as the original sends it. A game master sends
+100. Your intoxication is read from your profile when you zone, so a drink
+after zoning isn't counted until the next zone (a known shortfall).
+
+A line heard in another language names it in the place the installed speech
+line keeps for a tongue: the installed tag with the language's name when you
+know it past 24, or the installed "unknown" tag. Language 0 has no tag. A
+heard line is garbled once, as it arrives, as the original garbles it (reads
+R49-4 and R49-4b):
+
+- **By the speaker's skill.** Short words may be dropped or said plainer,
+  then letters may change. The word list is this client's own, written fresh.
+- **By your own skill**, but only where the server turns it on. EQEmu leaves
+  it off; TAKP and Quarm turn it on.
+
+Lines from a game master, lines to a game master, broadcast lines and item
+links are never changed. Neither are your own lines (inferred).
+
+While you are AFK, a tell gets the installed away reply back, in your window's
+language, unless the tell is itself an away reply. A sender on your ignore
+list gets none.
+
 ## Item links in chat
 
 On Titanium, Ctrl+right-click a displayed inventory item to insert a link into
