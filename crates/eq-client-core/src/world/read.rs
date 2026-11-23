@@ -75,7 +75,11 @@ impl ClientWorld {
             .carried_weight_tenths(self.generation(), coins)
             .map_err(|reason| match reason {
                 WeightUnavailable::Prediction => Missing::Prediction,
-                WeightUnavailable::Inventory | WeightUnavailable::Container => Missing::Inventory,
+                // An augment's weight is not summed yet (eq-network 6.570):
+                // unknown, exactly as an unreadable container is.
+                WeightUnavailable::Inventory
+                | WeightUnavailable::Container
+                | WeightUnavailable::Augments => Missing::Inventory,
             })
     }
 
