@@ -160,6 +160,70 @@ impl ChatFilters {
     }
 }
 
+/// Whether the generation's program hides a notice's line itself, by the
+/// player's filters, beside asking the server not to send it.
+///
+/// Titanium's program tests the same 28 values before it prints some lines
+/// (read R49-2 d, through 0x60ca90). Of the lines this client prints, one
+/// kind meets such a test:
+/// - **Missed me** (`Channel09`, tested in the damage display at 0x4a6631):
+///   another's melee attack on the player that does not land (a miss, a
+///   block, a parry, a riposte, a dodge, an invulnerable or a rune) is
+///   hidden while the row is Hide. Which of these outcomes the program's
+///   test covers is inferred.
+///
+/// The other tests the read found gate lines this client does not print
+/// yet. Each one belongs where that line is added:
+// TODO(6.494, C2): Stun (0x417911, 0x41796f, 0x4226ef): the stun lines
+// (R49-6 b), when this client prints them.
+// TODO(6.494, C2): HideDamageShield's index (0x11) in 0x4a56e3: other
+// players' environmental-damage lines, when this client prints them.
+// TODO(6.494, C2): Others' hits (Channel08, 0x4a67d2): the damage display's
+// lines for fights the player is not in, when this client prints them.
+// TODO(6.494, C2): PCSpells, NPCSpells and BardSongs (0x40f303, 0x45e257
+// and the rest): others' spell-effect and casting lines, when this client
+// prints them; which lines each site tests is unread.
+// TODO(6.494, C2): BadWord's chat-text sites (0x454c12 and the rest): the
+// bad-word mask, once the list's source is read.
+// TODO(6.494, C2): the group index's site (0x4602a0), once its use is read.
+///
+/// `EQMac`'s and `RoF2`'s programs are unread, so they hide nothing here.
+#[must_use]
+pub fn hidden_locally(
+    filters: &ChatFilters,
+    dialect: GameDialect,
+    notice: &crate::world::Notice,
+) -> bool {
+    match dialect {
+        GameDialect::Titanium => titanium_hides(filters, notice),
+        GameDialect::EqMac | GameDialect::Rof2 => false,
+    }
+}
+
+/// Titanium's local tests, for the lines this client prints.
+fn titanium_hides(filters: &ChatFilters, notice: &crate::world::Notice) -> bool {
+    use crate::combat::{DamageOutcome, SPELL_DAMAGE_KIND};
+    match notice {
+        crate::world::Notice::Damage { damage, own_id, .. } => {
+            damage.target_id == *own_id
+                && damage.source_id != *own_id
+                && damage.kind != SPELL_DAMAGE_KIND
+                && matches!(
+                    damage.outcome,
+                    DamageOutcome::Miss
+                        | DamageOutcome::Block
+                        | DamageOutcome::Parry
+                        | DamageOutcome::Riposte
+                        | DamageOutcome::Dodge
+                        | DamageOutcome::Invulnerable
+                        | DamageOutcome::Rune
+                )
+                && filters.get(FilterCategory::MissedMe) == FilterMode::Hide
+        }
+        _ => false,
+    }
+}
+
 /// The kinds the original's Options window has a row for, in its order.
 pub fn rows() -> impl Iterator<Item = FilterCategory> {
     FilterCategory::ALL
@@ -224,6 +288,72 @@ pub const fn kind_words(category: FilterCategory) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn titanium_hides_attacks_that_miss_the_player_while_missed_me_is_hidden() {
+        use crate::combat::{Damage, DamageOutcome, SPELL_DAMAGE_KIND};
+        use crate::world::Notice;
+        let notice = |source_id, target_id, kind, outcome| Notice::Damage {
+            damage: Damage {
+                target_id,
+                source_id,
+                kind,
+                spell_id: None,
+                outcome,
+                push: None,
+            },
+            own_id: 5,
+            source: None,
+            target: None,
+        };
+        let mut hidden = ChatFilters::default();
+        hidden.set(FilterCategory::MissedMe, FilterMode::Hide);
+        let shown = ChatFilters::default();
+        for outcome in [
+            DamageOutcome::Miss,
+            DamageOutcome::Block,
+            DamageOutcome::Parry,
+            DamageOutcome::Riposte,
+            DamageOutcome::Dodge,
+            DamageOutcome::Invulnerable,
+            DamageOutcome::Rune,
+        ] {
+            let missed = notice(9, 5, 1, outcome);
+            assert!(
+                hidden_locally(&hidden, GameDialect::Titanium, &missed),
+                "{outcome:?}"
+            );
+            assert!(
+                !hidden_locally(&shown, GameDialect::Titanium, &missed),
+                "{outcome:?}"
+            );
+            // Unread programs hide nothing.
+            assert!(!hidden_locally(&hidden, GameDialect::EqMac, &missed));
+            assert!(!hidden_locally(&hidden, GameDialect::Rof2, &missed));
+            // The player's own misses, and spells, are another row's.
+            assert!(!hidden_locally(
+                &hidden,
+                GameDialect::Titanium,
+                &notice(5, 9, 1, outcome)
+            ));
+            assert!(!hidden_locally(
+                &hidden,
+                GameDialect::Titanium,
+                &notice(9, 5, SPELL_DAMAGE_KIND, outcome)
+            ));
+        }
+        // A hit on the player always shows.
+        assert!(!hidden_locally(
+            &hidden,
+            GameDialect::Titanium,
+            &notice(9, 5, 1, DamageOutcome::Hit(4))
+        ));
+        assert!(!hidden_locally(
+            &hidden,
+            GameDialect::Titanium,
+            &Notice::ItemRefused
+        ));
+    }
 
     #[test]
     fn the_default_is_the_tables() {

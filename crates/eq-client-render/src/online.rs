@@ -506,7 +506,10 @@ impl Panels<'_> {
         &mut self,
         changes: &Changes,
         state: &mut OnlineState,
-        messages: Option<&hud::messages::Messages>,
+        (messages, filters): (
+            Option<&hud::messages::Messages>,
+            Option<eq_client_core::chat_filters::ChatFilters>,
+        ),
         chat: &mut super::chat::ChatState,
     ) {
         // Capture received facts here; action/draw systems apply the current
@@ -526,6 +529,17 @@ impl Panels<'_> {
             self.inventory.refresh(state.world.inventory().stale());
         }
         for notice in &changes.notices {
+            // A line the generation's program hides by the player's filters
+            // is not shown (read R49-2 d, recording checklist 6.494).
+            if filters.is_some_and(|filters| {
+                eq_client_core::chat_filters::hidden_locally(
+                    &filters,
+                    state.world().generation(),
+                    notice,
+                )
+            }) {
+                continue;
+            }
             self.tell(notice, messages, chat);
         }
         if state.world.in_world() {
@@ -893,7 +907,18 @@ pub(super) fn receive(
             }
             state.reset_presentation((reason, old_gems), &mut panels, &mut scene, &mut commands);
         }
-        panels.show(&changes, &mut state, messages.as_deref(), &mut chat);
+        // The playing character's filters, from their options once loaded.
+        let filters = options.as_deref().map(|options| {
+            options
+                .of(super::profile_files::playing(&state.world).as_ref())
+                .chat_filters
+        });
+        panels.show(
+            &changes,
+            &mut state,
+            (messages.as_deref(), filters),
+            &mut chat,
+        );
         if let Some(moved) = &changes.moved {
             panels.moved(
                 state.world.session_id(),
