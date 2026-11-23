@@ -185,8 +185,14 @@ pub(super) fn input(
                 None => window.cursor_position(),
             }?;
             let physical = at * window.scale_factor();
-            (keys.escape_free() && !presses.taken() && !chat.hovered && !ui.contains(physical))
-                .then_some(at)
+            // The script's pointer is its own input, so only a window over
+            // it blocks it, never the script's ownership of the input.
+            let covered = if request.is_some() {
+                ui.covers(physical)
+            } else {
+                ui.contains(physical)
+            };
+            (keys.escape_free() && !presses.taken() && !chat.hovered && !covered).then_some(at)
         });
     let door_cursor = cursor.filter(|_| {
         !mouse.pressed(MouseButton::Right)
@@ -470,7 +476,7 @@ impl Thing {
     }
 
     /// Why a click can't name it from here.
-    const fn covered(self) -> &'static str {
+    pub(crate) const fn covered(self) -> &'static str {
         match self {
             Self::Spawn(_) => "that spawn is covered or off screen from here",
             Self::Object(_) => "that object is covered or off screen from here",
@@ -526,7 +532,7 @@ pub(super) fn aim(
                     && at.y >= 0.0
                     && at.x < size.x
                     && at.y < size.y
-                    && !ui.contains(*at * window.scale_factor())
+                    && !ui.covers(*at * window.scale_factor())
             })
         })
         .filter(|at| {
@@ -1421,12 +1427,8 @@ mod tests {
         );
     }
 
-    #[test]
-    #[allow(clippy::too_many_lines)] // Exercises the scene system and its real picking inputs.
-    fn a_door_uses_two_completed_scene_clicks_and_ignores_drags_and_ui_clicks() {
-        let (mut app, commands, ..) = target_app();
-        let center = Vec2::new(400.0, 300.0);
-        scene_camera(&mut app);
+    /// A door with id 0 in the middle of the view, drawn with its pick mesh.
+    fn door_scene(app: &mut App) {
         app.init_resource::<Time>()
             .init_resource::<super::super::doors::Hinges>()
             .init_resource::<super::super::doors::LiftReach>();
@@ -1465,6 +1467,15 @@ mod tests {
                 .unwrap(),
             std::time::Instant::now(),
         );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // Exercises the scene system and its real picking inputs.
+    fn a_door_uses_two_completed_scene_clicks_and_ignores_drags_and_ui_clicks() {
+        let (mut app, commands, ..) = target_app();
+        let center = Vec2::new(400.0, 300.0);
+        scene_camera(&mut app);
+        door_scene(&mut app);
         app.update();
 
         let frame = |app: &mut App, cursor, pressed| {
@@ -1542,6 +1553,144 @@ mod tests {
         click(&mut app);
         click(&mut app);
         assert!(commands.try_recv().is_err());
+    }
+
+    /// One scene frame with a script's request standing in for the
+    /// pointer (checklist 6.587).
+    fn scripted_frame(app: &mut App, thing: Thing, at: Option<Vec2>, pressed: bool) {
+        app.world_mut().resource_mut::<ScenePointer>().request = Some(SceneRequest { thing, at });
+        let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
+        mouse.clear();
+        if pressed {
+            mouse.press(MouseButton::Left);
+        } else {
+            mouse.release(MouseButton::Left);
+        }
+        app.update();
+    }
+
+    #[test]
+    fn a_script_click_points_with_its_own_pointer_and_acts_only_on_what_it_names() {
+        use crate::online::testing as session;
+
+        const NPC: u16 = 42;
+        let center = Vec2::new(400.0, 300.0);
+        let (mut app, commands, ..) = target_app();
+        scene_camera(&mut app);
+        app.add_systems(Update, aim.after(input));
+        let mut meshes = Assets::<Mesh>::default();
+        let body = app
+            .world_mut()
+            .spawn((
+                Transform::default(),
+                Mesh3d(meshes.add(Cuboid::new(2.0, 2.0, 2.0))),
+            ))
+            .id();
+        app.insert_resource(meshes);
+        app.world_mut()
+            .resource_mut::<NearbyEntities>()
+            .rendered
+            .insert(NPC, body);
+        session::spawns(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            vec![session::pet(NPC, 99)],
+        );
+        // The real pointer rests over nothing, off in a corner.
+        let mut windows = app
+            .world_mut()
+            .query_filtered::<&mut Window, With<PrimaryWindow>>();
+        windows
+            .single_mut(app.world_mut())
+            .unwrap()
+            .set_cursor_position(Some(Vec2::new(5.0, 5.0)));
+
+        // Aiming: the scene's own pick names the spawn at its middle.
+        scripted_frame(&mut app, Thing::Spawn(NPC), None, false);
+        let aimed = app.world_mut().resource_mut::<ScenePointer>().aim.take();
+        assert!(
+            matches!(aimed, Some(Ok(at)) if at.distance(center) < 1.0),
+            "{aimed:?}"
+        );
+        assert!(app.world().resource::<ScenePointer>().request.is_none());
+        // A spawn the pick doesn't name there is refused, and nothing goes.
+        scripted_frame(&mut app, Thing::Spawn(NPC + 1), None, false);
+        assert_eq!(
+            app.world_mut().resource_mut::<ScenePointer>().aim.take(),
+            Some(Err("that spawn is covered or off screen from here".to_owned()))
+        );
+        scripted_frame(&mut app, Thing::Spawn(NPC + 1), Some(center), true);
+        assert_eq!(
+            app.world_mut().resource_mut::<ScenePointer>().refused.take().as_deref(),
+            Some("that spawn is covered or off screen from here")
+        );
+        assert!(!app.world().resource::<ScenePointer>().acted);
+        assert!(commands.try_recv().is_err());
+        // Pressed where it shows, the click targets it as a person's does,
+        // though the real pointer is elsewhere.
+        scripted_frame(&mut app, Thing::Spawn(NPC), Some(center), true);
+        assert!(app.world().resource::<ScenePointer>().acted);
+        assert!(matches!(
+            commands.try_recv().unwrap(),
+            ClientCommand::SelectTarget {
+                spawn_id: Some(NPC),
+                ..
+            }
+        ));
+
+        // Behind a wall the pick names nothing, so the aim refuses.
+        let wall = eq_client_core::movement::CollisionWorld::new([[
+            [-4.0, -4.0, 5.0],
+            [4.0, -4.0, 5.0],
+            [0.0, 4.0, 5.0],
+        ]])
+        .unwrap();
+        app.insert_resource(super::super::Collision(Some(wall)));
+        scripted_frame(&mut app, Thing::Spawn(NPC), None, false);
+        assert!(matches!(
+            app.world_mut().resource_mut::<ScenePointer>().aim.take(),
+            Some(Err(_))
+        ));
+        // Behind the camera it has no point on the view.
+        app.insert_resource(super::super::Collision(None));
+        app.world_mut()
+            .get_mut::<Transform>(body)
+            .unwrap()
+            .translation = Vec3::new(0.0, 0.0, 20.0);
+        scripted_frame(&mut app, Thing::Spawn(NPC), None, false);
+        assert!(matches!(
+            app.world_mut().resource_mut::<ScenePointer>().aim.take(),
+            Some(Err(_))
+        ));
+    }
+
+    #[test]
+    fn a_script_door_click_is_two_real_clicks_on_one_point() {
+        let center = Vec2::new(400.0, 300.0);
+        let (mut app, commands, ..) = target_app();
+        scene_camera(&mut app);
+        door_scene(&mut app);
+        app.add_systems(Update, aim.after(input));
+        app.update();
+        scripted_frame(&mut app, Thing::Door(0), None, false);
+        assert!(matches!(
+            app.world_mut().resource_mut::<ScenePointer>().aim.take(),
+            Some(Ok(_))
+        ));
+        // One completed click opens nothing; the second does, once.
+        scripted_frame(&mut app, Thing::Door(0), Some(center), true);
+        scripted_frame(&mut app, Thing::Door(0), Some(center), false);
+        assert!(commands.try_recv().is_err());
+        scripted_frame(&mut app, Thing::Door(0), Some(center), true);
+        scripted_frame(&mut app, Thing::Door(0), Some(center), false);
+        assert!(matches!(
+            commands.try_recv().unwrap(),
+            ClientCommand::ClickDoor { door_id: 0, .. }
+        ));
+        assert!(commands.try_recv().is_err());
+        assert!(app.world().resource::<ScenePointer>().refused.is_none());
+        // A door the pick doesn't name there is refused on the press.
+        scripted_frame(&mut app, Thing::Door(1), Some(center), true);
+        assert!(app.world().resource::<ScenePointer>().refused.is_some());
     }
 
     #[test]

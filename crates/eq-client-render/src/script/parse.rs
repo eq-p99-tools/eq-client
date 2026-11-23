@@ -500,6 +500,29 @@ pub enum ClickTarget {
     /// One of the spellbook's ordering and deletion buttons, for the row
     /// chosen with `book` (checklist 6.588).
     BookEdit(BookEdit),
+    /// A spawn in the world, clicked where it shows (checklist 6.587).
+    Spawn {
+        /// The admission it was reported in.
+        admission: u64,
+        /// Its spawn id.
+        id: u16,
+        /// Its revision, so a reused id is refused.
+        revision: u64,
+    },
+    /// An object on the ground, clicked where it shows.
+    Object {
+        /// The admission it was reported in.
+        admission: u64,
+        /// Its drop id.
+        drop_id: u32,
+    },
+    /// A door, double-clicked where it shows.
+    Door {
+        /// The admission it was reported in.
+        admission: u64,
+        /// Its door id.
+        id: u8,
+    },
     /// A spell gem of the skin's spell bar, from zero.
     SpellGem(u8),
     /// A hotbutton of the action bar, the client's own or the skin's, from
@@ -884,10 +907,11 @@ pub(super) fn parse_words(command: &str, rest: &[&str]) -> Result<Step, String> 
             target: parse_click(target)?,
             right: command == "right_click_with",
         },
-        ("hover", target) => Step::Hover(parse_click(target)?),
-        ("hold_click", [duration, target @ ..]) => {
-            Step::HoldClick(parse_click(target)?, millis(duration, MAX_HOLD)?)
-        }
+        ("hover", target) => Step::Hover(window_control(parse_click(target)?)?),
+        ("hold_click", [duration, target @ ..]) => Step::HoldClick(
+            window_control(parse_click(target)?)?,
+            millis(duration, MAX_HOLD)?,
+        ),
         ("report", label) => Step::Report(label.join(" ")),
         ("sound", [name]) if sound_name(name) => Step::Sound((*name).to_owned()),
         ("screenshot", [name])
@@ -994,6 +1018,19 @@ fn number<T: std::str::FromStr>(text: &str, what: &str) -> Result<T, String> {
 
 /// `click <target>` or `right_click <target>`: a slot, spellbook, trade or
 /// bag tint button.
+/// A target that `hover` and `hold_click` take: a window's control, never
+/// a thing in the scene, which a person only clicks (checklist 6.587).
+fn window_control(target: ClickTarget) -> Result<ClickTarget, String> {
+    if matches!(
+        target,
+        ClickTarget::Spawn { .. } | ClickTarget::Object { .. } | ClickTarget::Door { .. }
+    ) {
+        Err("a spawn, object or door takes click, right_click or click_with".into())
+    } else {
+        Ok(target)
+    }
+}
+
 fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
     if let Some(training) = training_click(words)? {
         return Ok(ClickTarget::Training(training));
@@ -1091,6 +1128,19 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ["book_page", "next"] => ClickTarget::BookPage(true),
         ["book_page", "back"] => ClickTarget::BookPage(false),
         ["book_edit", action] => ClickTarget::BookEdit(book_edit(action)?),
+        ["spawn", admission, id, revision] => ClickTarget::Spawn {
+            admission: admission.parse().map_err(|_| "expected an admission ID")?,
+            id: id.parse().map_err(|_| "expected a spawn ID")?,
+            revision: revision.parse().map_err(|_| "expected a spawn revision")?,
+        },
+        ["object", admission, drop_id] => ClickTarget::Object {
+            admission: admission.parse().map_err(|_| "expected an admission ID")?,
+            drop_id: drop_id.parse().map_err(|_| "expected a drop ID")?,
+        },
+        ["door", admission, id] => ClickTarget::Door {
+            admission: admission.parse().map_err(|_| "expected an admission ID")?,
+            id: id.parse().map_err(|_| "expected a door ID")?,
+        },
         _ => return Err("unknown or malformed step".into()),
     })
 }
@@ -2220,6 +2270,55 @@ mod tests {
             );
         }
         assert!(parse("click(\"book_edit\", \"up\")\n", base).is_err());
+    }
+
+    #[test]
+    fn world_targets_name_a_spawn_object_or_door_by_its_reported_ids() {
+        let base = std::path::Path::new(".");
+        assert_eq!(
+            parse(
+                concat!(
+                    "click(\"spawn\", 5, 42, 3)\n",
+                    "right_click(\"spawn\", 5, 42, 3)\n",
+                    "click_with(\"shift\", \"spawn\", 5, 42, 3)\n",
+                    "click(\"object\", 5, 900)\n",
+                    "click(\"door\", 5, 12)\n",
+                ),
+                base
+            )
+            .unwrap(),
+            [
+                Step::Click(ClickTarget::Spawn {
+                    admission: 5,
+                    id: 42,
+                    revision: 3
+                }),
+                Step::RightClick(ClickTarget::Spawn {
+                    admission: 5,
+                    id: 42,
+                    revision: 3
+                }),
+                Step::ClickWith {
+                    keys: vec![KeyCode::ShiftLeft],
+                    target: ClickTarget::Spawn {
+                        admission: 5,
+                        id: 42,
+                        revision: 3
+                    },
+                    right: false,
+                },
+                Step::Click(ClickTarget::Object {
+                    admission: 5,
+                    drop_id: 900
+                }),
+                Step::Click(ClickTarget::Door { admission: 5, id: 12 }),
+            ]
+        );
+        // A person only clicks them: no hover or held click.
+        assert!(parse("hover(\"spawn\", 5, 42, 3)\n", base).is_err());
+        assert!(parse("hold_click(800, \"door\", 5, 12)\n", base).is_err());
+        assert!(parse("click(\"spawn\", 5, 42)\n", base).is_err());
+        assert!(parse("click(\"door\", 5, 300)\n", base).is_err());
     }
 
     #[test]

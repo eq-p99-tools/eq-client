@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Scripts can click spawns, ground objects and doors in the world by id (checklist 6.587), since a script may do whatever the player can (Adam, 11-23). `click("spawn", admission, id, revision)` targets a spawn (two of one name included), `right_click` loots, trades, boards or considers it without changing the target, `click("object", admission, drop_id)` picks up an item or opens a world container, and `click("door", admission, id)` makes a door's two clicks. Each click goes through the scene's own pick, with the script's pointer as the cursor: it acts only where the pick names that same thing right now, so a thing behind a wall, off screen or under a window is refused and nothing is sent. The report's surroundings line gives the admission and each nearby spawn's click tuple. A run that stops mid-click hands the scene back the real pointer the next frame.
+
 - Scripts can order and delete spellbook entries (checklist 6.588): `click("book_edit", "earlier" | "later" | "delete" | "confirm" | "cancel")` presses the spellbook's own buttons for the chosen row. A button the session doesn't offer (deletion on P99) is refused with the greyed button's reason, and nothing is sent.
 
 - Scripts can read more of what the player sees (checklist 6.592, O1), since a script may do whatever the player can (Adam, 11-23).
