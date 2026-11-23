@@ -134,9 +134,9 @@ pub(crate) struct FilterNote;
 /// (`ServerFiltersAtOnce` offered) or one that reads it only at zone-in.
 pub(crate) const fn filter_note(at_once: bool) -> &'static str {
     if at_once {
-        "Each kind steps through the modes the server takes for it. This server reads a change at once, so it is sent now."
+        "A change is sent to this server at once."
     } else {
-        "Each kind steps through the modes the server takes for it. This server reads a change only at zone-in, so it applies at the next zone."
+        "A change reaches this server at the next zone."
     }
 }
 
@@ -807,8 +807,8 @@ mod tests {
         app.insert_resource(online);
         app.update();
         assert_eq!(says(&app), filter_note(true));
-        assert!(says(&app).contains("sent now"));
-        // One that does not offer it, as P99, Quarm and TAKP, waits.
+        assert!(says(&app).contains("at once"));
+        // One that does not offer it, as Quarm and TAKP, waits.
         let mut online = OnlineState::new(true);
         testing::news(
             &mut online,

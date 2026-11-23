@@ -11,6 +11,9 @@
   - **A `/pet` word that names no order** sends nothing and says nothing, as the program's sender skips it (0x49975b). Before, this client said "Unknown pet command".
   - **The Pet Info window:** the Options window's Pet Window Popup already decides whether a new pet shows the window (default on). That matches the program's auto setting; its default is row 22a-iv.
   - The network side, which sends an order with no pet, is eq-network #411. This client has no pet refusal of its own.
+- Buffs landing on the player take the slot the Titanium program's whole slot finder gives them (checklist 6.612, read R49-22e, repin to eq-network #417). That includes step 4's replace in place, worked out from each effect's base, formula and max as 0x40f339 does, and step 6's eviction. The facts come from the installed spell data: effects, the Bard level and the band, with each held buff's stored level from its record.
+  - A buff the program removes for the landing is dropped as a prediction. If the server's word still holds it afterwards (a record for it, or the next zone-in's table), its word stands, and the disagreement is logged with the rule and both spells (6.612 T1).
+  - A value the client can't work out still leaves the landing unslotted. That covers a random formula, one that reads hit points, or one that needs a level we don't know. The old guess for a possible step-4 replace is gone.
 - Seven local-settings slash commands work as the Titanium program's do (checklist 6.525, read R49-22c). They change only this client: nothing goes to a server, on any server type, and scripts can run each with `slash()`.
   - `/clearchat` clears the active chat window's view, silently. The history keeps its lines, so scripts, the log and other windows still have them.
   - `/showspelleffects` and `/combatmusic`: "off" turns the option off and any other word turns it on; with no word they give their usage. Each ends by saying where the option stands. `/combatmusic` now takes the read's words instead of toggling, and says the installation's lines. This client plays no combat music yet, so it changes nothing audible.
@@ -35,6 +38,34 @@
   Mac-era and RoF2 clients' `/played` is unread, so it's refused there
   for now.
 - A Bard's item use now carries the song test from the installed spell data (gap 3.5, checklist 6.542, read R49-21b): the item's spell counts as the class's when the player's class level for it is neither 0 nor 255. The session uses it to choose, for an item's song it keeps, between sending the stop and ending it here. Without installed spell data, or without that spell's class levels, the session keeps its memorized test as before. Labelled: the program also needs the spell's byte +0x1c4 to be clear. That byte isn't mapped to a spells file field yet (read R49-48c), so a class spell with it set counts as a song here and not in the program.
+- Keep the server filters as the Titanium program keeps them (read R49-2,
+  checklist 6.494a to c), on eq-network #407.
+  - **Rows and choices:** the Filters page lists the program's 28 rows in
+    its order but swarm pets' deaths, which has no row there either, each
+    stepping through its own choices in the program's order. Bad words start
+    filtered, as there. The page takes the place of the skin's own Filters
+    page, whose controls are not wired, so the window shows one Filters tab.
+  - **Keys:** the options file keeps each row under the original's
+    `eqclient.ini` key (`Channel00`, `BadWord`, `PCSpells` and the rest) as
+    its choice's index; an index outside the row's choices gives its
+    default. They stay per character, this client's choice (the original
+    keeps one set per install). The `filter_<kind>` lines of the first
+    filters change are no longer read, so **every saved filter choice
+    falls back to its default once** after this update; set them again on
+    the Filters page.
+  - **`/filter`** shows the Options window on the Filters page, reading no
+    words and sending nothing, as the program does.
+  - **At once on Titanium:** a change goes to the server at once on EQEmu
+    and P99 alike, as the program sends it again on every change; Mac-era
+    servers take it at the next zone-in. P99's first use is attended.
+  - **Scripts:** `filter.<kind>` reads a row and `click("filter", kind)`
+    steps it.
+  - **Page note:** shorter, and wrapped within the page (6.494d's look
+    found it ran past the window's edge).
+  - A hidden row hides only where the server honours it; the program's own
+    local hiding (stuns, others' environmental lines, spell and damage
+    lines) is the next change.
+  - Uses main's eq-network pin, which carries #407; no repin of its own.
 - Show the session's chat pace (checklist 6.523, eq-network c951420). Its
   refusal, "You are sending chat too fast. Wait N seconds.", is printed as
   the player's own line, and a script whose chat or social step the pace
