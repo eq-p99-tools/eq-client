@@ -177,6 +177,9 @@ pub struct Casting {
     /// Titanium program's rules (`WorldEvent::Singing`, read R49-21).
     /// While its own cast is the one under way, nothing else waits on it.
     pub singing: Option<u32>,
+    /// A Bard's `/melody` list (read R49-33 c); each admission starts with
+    /// none.
+    pub melody: super::Melody,
     /// The request associated with the active cast. TAKP can begin a Luclin
     /// port as spell 2935 and end it naming the requested port.
     requested: Option<u32>,
@@ -285,6 +288,7 @@ impl Casting {
                 == Some(&Some(spell_id)) =>
             {
                 self.cooldowns.refresh(spell_id, reduction_ms, now);
+                self.melody.refreshed();
                 if casting(spell_id) {
                     self.cast = None;
                     self.requested = None;
