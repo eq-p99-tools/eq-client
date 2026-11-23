@@ -2146,12 +2146,14 @@ pub(super) fn input(
     }
     // A ducking or wet body is swept at its origin (L = 0, 0x489a32), so
     // only the floor sweep's climb holds; else the walk climbs edges (6.482).
-    let raised = raised_walk(world, feet, posture);
+    let raised = raised_walk(world, feet, body.height, posture);
+    // The origin is out of the water and the soles still in it.
+    let leaving_water = raised && water_enabled && world.in_liquid(feet);
     let physics = walking(
         physics(client, online.world().zone_gravity()),
         client,
         body,
-        raised,
+        (raised, leaving_water),
     );
     // A hurt or burdened player jumps at the share of the speed the session
     // grants, as the program launches its jumps (0x4193c5).
@@ -2592,6 +2594,14 @@ pub(super) fn input(
     if entering {
         controls.water_entry_rollback = previous_airborne;
     }
+    // The velocity the body enters water with: the fall's own, where it
+    // falls, so a wall that stopped the move doesn't stop it (the program
+    // keeps it and damps it, read R33). This sample's travel elsewhere.
+    let entry_velocity = controls
+        .airborne
+        .as_ref()
+        .filter(|airborne| airborne.velocity() != 0.0 || airborne.drift() != Vec3::ZERO)
+        .map(|airborne| (airborne.drift(), airborne.velocity()));
     if !placement_blocked
         && (entering || swimming || matches!(mode, MovementMode::Shoreline(_)))
         && let Some(airborne) = controls.airborne.as_mut()
@@ -2603,9 +2613,10 @@ pub(super) fn input(
         // it; here it starts from this sample's, held to the water's caps
         // at the next (the slower side, recording checklist 6.483).
         let moved = (position - origin) / span.max(f32::EPSILON);
+        let (across, up) = entry_velocity.unwrap_or((moved, moved.y));
         controls.wet = eq_client_core::movement::water::WetVelocity::from_units_per_second(
-            [moved.x, moved.z],
-            moved.y,
+            [across.x, across.z],
+            up,
         );
     } else if swimming
         && wet_travel.is_some()
@@ -2941,33 +2952,42 @@ pub(super) fn walking(
     physics: VerticalPhysics,
     client: InstalledClient,
     body: &PlayerBody,
-    raised: bool,
+    (raised, leaving_water): (bool, bool),
 ) -> VerticalPhysics {
     let physics = climbing(physics, client, body);
-    client.falls().map_or(physics, |falls| VerticalPhysics {
-        edge_climb: Some(falls.walk_climb(body.feet_offset, body.size, raised)),
-        // A raised jump or fall passes over an edge its floor sweep reaches
-        // and lands on it (R42, 6.484); where the walk climbs edges at all.
-        airborne_clear: if raised && falls.edge_climb.is_some() {
-            physics.climb
-        } else {
-            0.0
-        },
-        ..physics
+    client.falls().map_or(physics, |falls| {
+        let edge_climb = falls.walk_climb(body.feet_offset, body.size, raised);
+        VerticalPhysics {
+            edge_climb: Some(edge_climb),
+            // A raised jump or fall passes over an edge its floor sweep
+            // reaches and lands on it (R42, 6.484); where the walk climbs
+            // edges at all. A body whose origin has just left the water,
+            // the soles still in it, passes over what its walk would climb:
+            // the program's sweep has no lower test, and a swimmer pops out
+            // over a rim that way (inferred, recording checklist 6.483).
+            airborne_clear: match (raised && falls.edge_climb.is_some(), leaving_water) {
+                (true, true) => edge_climb.max(physics.climb),
+                (true, false) => physics.climb,
+                (false, _) => 0.0,
+            },
+            ..physics
+        }
     })
 }
 
 /// Whether the player's walk is swept raised over the origin, so it climbs
-/// edges ([`walking`]): not while ducking, nor with the feet in liquid, where
-/// the program sweeps at the origin itself (L = 0 in 0x489a32; its deep
-/// liquid threshold, +0xad of 5 or more, isn't mapped here, so any liquid
-/// at the feet counts).
+/// edges ([`walking`]): not while ducking, nor in deep liquid, where the
+/// program sweeps at the origin itself (L = 0 in 0x489a32 for +0xad of 5 or
+/// more: the origin's region is water or lava; reads R40 and R49-26). Feet
+/// wading with the origin dry climb, as a swimmer whose origin has just
+/// left the water does.
 pub(super) fn raised_walk(
     world: &eq_client_core::movement::CollisionWorld,
     feet: Vec3,
+    height: f32,
     posture: Option<eq_client_core::PostureState>,
 ) -> bool {
-    posture != Some(eq_client_core::PostureState::Ducking) && !world.in_liquid(feet)
+    posture != Some(eq_client_core::PostureState::Ducking) && !world.origin_in_liquid(feet, height)
 }
 
 /// Asks the session to change the player's stance.
@@ -4660,7 +4680,7 @@ pub(super) mod tests {
             physics(InstalledClient::Titanium, None),
             InstalledClient::Titanium,
             body,
-            raised,
+            (raised, false),
         );
         let mut triangles = vec![
             [[-40.0, 0.0, -40.0], [40.0, 0.0, 40.0], [40.0, 0.0, -40.0]],
@@ -4727,32 +4747,49 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_wading_walk_keeps_the_floor_sweeps_climb_at_a_block_4_high() {
+    fn a_walk_in_deep_water_keeps_the_floor_sweeps_climb_and_wading_climbs() {
         use eq_client_core::movement::CollisionWorld;
-        // With the feet in liquid the program sweeps the walk at the origin
-        // (L = 0 in 0x489a32), so wading keeps the floor sweep's 3.375 and
-        // a block 4 high stops it; on dry ground beside the pool it climbs.
+        // With the origin in liquid (+0xad of 5 or more) the program sweeps
+        // the walk at the origin (L = 0 in 0x489a32), so a block 4 high
+        // stops it; wading with the origin dry climbs it, as on dry ground.
         let dry = CollisionWorld::new(flat_surface(0.0)).unwrap();
-        let wet = CollisionWorld::new(flat_surface(0.0))
-            .unwrap()
-            .with_liquids(Pool {
-                top: 1.5,
-                liquid: Liquid::Water,
-            });
+        let pool = |top| {
+            CollisionWorld::new(flat_surface(0.0))
+                .unwrap()
+                .with_liquids(Pool {
+                    top,
+                    liquid: Liquid::Water,
+                })
+                .with_swim_origin(HUMAN.feet_offset)
+        };
+        let (wading, deep) = (pool(1.5), pool(5.0));
         let feet = Vec3::ZERO;
-        assert!(raised_walk(&dry, feet, None));
-        assert!(raised_walk(&wet, feet + Vec3::Y * 2.0, None));
-        assert!(!raised_walk(&wet, feet, None));
+        let height = HUMAN.height;
+        assert!(raised_walk(&dry, feet, height, None));
+        assert!(raised_walk(&wading, feet, height, None));
+        assert!(!raised_walk(&deep, feet, height, None));
+        assert!(raised_walk(&deep, feet + Vec3::Y * 2.0, height, None));
         assert!(!raised_walk(
             &dry,
             feet,
+            height,
             Some(eq_client_core::PostureState::Ducking)
         ));
         let block = solid_box(Vec3::new(-20.0, 0.0, 4.0), Vec3::new(20.0, 4.0, 6.0));
-        let wading = run_into(block.clone(), &HUMAN, raised_walk(&wet, feet, None), 32.0);
-        assert!(wading.z < 4.0 && wading.y.abs() < 0.001, "{wading}");
-        let dry_run = run_into(block, &HUMAN, raised_walk(&dry, feet, None), 32.0);
-        assert!(dry_run.z > 4.5, "{dry_run}");
+        let swum = run_into(
+            block.clone(),
+            &HUMAN,
+            raised_walk(&deep, feet, height, None),
+            32.0,
+        );
+        assert!(swum.z < 4.0 && swum.y.abs() < 0.001, "{swum}");
+        let waded = run_into(
+            block,
+            &HUMAN,
+            raised_walk(&wading, feet, height, None),
+            32.0,
+        );
+        assert!(waded.z > 4.5, "{waded}");
     }
 
     /// Steps `body` from `start` over `triangles` (render frame) in 50 ms
@@ -4768,7 +4805,7 @@ pub(super) mod tests {
         input: impl Fn(usize, Vec3) -> (Vec3, bool),
     ) -> (Vec3, Vec<eq_client_core::movement::Landing>) {
         use eq_client_core::movement::{AirborneController, CollisionWorld};
-        let physics = walking(physics(client, None), client, body, raised);
+        let physics = walking(physics(client, None), client, body, (raised, false));
         let world = CollisionWorld::new(triangles).unwrap();
         let mut airborne = AirborneController::default();
         let mut feet = start;
@@ -4896,7 +4933,7 @@ pub(super) mod tests {
                 physics(InstalledClient::Titanium, None),
                 InstalledClient::Titanium,
                 &HUMAN,
-                true,
+                (true, false),
             );
             let world = eq_client_core::movement::CollisionWorld::new(floor.clone()).unwrap();
             let mut airborne = eq_client_core::movement::AirborneController::default();
@@ -5022,7 +5059,7 @@ pub(super) mod tests {
             physics(InstalledClient::Titanium, None),
             InstalledClient::Titanium,
             &HUMAN,
-            true,
+            (true, false),
         );
         let floor = solid_box(Vec3::new(-20.0, -1.0, -40.0), Vec3::new(20.0, 0.0, 200.0));
         let mut ledge = floor;
@@ -6509,6 +6546,213 @@ pub(super) mod tests {
         }
         fn within(&self, _: Vec3, _: Vec3) -> Option<Box<dyn Liquids>> {
             None
+        }
+    }
+
+    /// Water below 0 on the near side of a rim at x = 0, as a zone's pool
+    /// region stops at its wall.
+    #[derive(Clone)]
+    struct RimPool;
+
+    impl RimPool {
+        fn wet(point: Vec3) -> bool {
+            point.y < 0.0 && point.x < 0.0
+        }
+    }
+
+    impl Liquids for RimPool {
+        fn liquid_at(&self, point: Vec3) -> Option<Liquid> {
+            Self::wet(point).then_some(Liquid::Water)
+        }
+        fn segment_known(&self, _: Vec3, _: Vec3) -> bool {
+            true
+        }
+        fn passes_through(&self, from: Vec3, to: Vec3, liquid: Liquid) -> bool {
+            liquid == Liquid::Water
+                && (0..=256_u16).any(|i| Self::wet(from.lerp(to, f32::from(i) / 256.0)))
+        }
+        fn first_outside(
+            &self,
+            from: Vec3,
+            to: Vec3,
+            liquid: Liquid,
+        ) -> Option<std::ops::Range<f64>> {
+            if liquid != Liquid::Water {
+                return Some(0.0..1.0);
+            }
+            (0..=1024)
+                .map(|i| f64::from(i) / 1024.0)
+                .find(|&t| !Self::wet(from.as_dvec3().lerp(to.as_dvec3(), t).as_vec3()))
+                .map(|t| t..1.0)
+        }
+        fn water_surface_exit(&self, from: Vec3, to: Vec3) -> bool {
+            Self::wet(from) && !Self::wet(to) && to.y >= 0.0
+        }
+        fn liquid_surface(&self, top: Vec3, bottom: f32) -> Option<(f32, Liquid)> {
+            (top.x < 0.0 && top.y > 0.0 && bottom < 0.0).then_some((0.0, Liquid::Water))
+        }
+        fn within(&self, _: Vec3, _: Vec3) -> Option<Box<dyn Liquids>> {
+            Some(Box::new(self.clone()))
+        }
+    }
+
+    /// A pool whose floor is at -8, with a rim at x = 0 rising to `rim`.
+    fn rim_pool(rim: f32) -> CollisionWorld {
+        let quad = |a, b, c, d| [[a, b, c], [a, c, d]];
+        let mut triangles = Vec::from(quad(
+            [-20.0, -8.0, -10.0],
+            [0.0, -8.0, -10.0],
+            [0.0, -8.0, 10.0],
+            [-20.0, -8.0, 10.0],
+        ));
+        triangles.extend(quad(
+            [0.0, rim, -10.0],
+            [200.0, rim, -10.0],
+            [200.0, rim, 10.0],
+            [0.0, rim, 10.0],
+        ));
+        triangles.extend(quad(
+            [0.0, -8.0, -10.0],
+            [0.0, rim, -10.0],
+            [0.0, rim, 10.0],
+            [0.0, -8.0, 10.0],
+        ));
+        CollisionWorld::new(triangles)
+            .unwrap()
+            .with_liquids(RimPool)
+            .with_swim_origin(3.75)
+    }
+
+    /// Swims at a rim for `samples` accepted samples, forward held and the
+    /// look pitched, and gives each sample's mode and feet.
+    fn swim_at_rim(
+        rim: f32,
+        swim: Option<eq_client_core::movement::SwimCalibration>,
+        pitch: f32,
+        samples: usize,
+    ) -> Vec<(MovementMode, Vec3, Duration)> {
+        let (mut app, receiver) = fixture();
+        app.add_systems(Update, input);
+        app.insert_resource(Collision(Some(rim_pool(rim))));
+        let feet = Vec3::new(-1.0, -3.9, 0.0);
+        let origin = feet + Vec3::Y * 3.75;
+        let placement = world_position(origin.to_array(), 0.0);
+        // The session bounds every sample as a Titanium server's would.
+        let start = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
+        let mut session = eq_network_game::movement::MotionSession::new(11, 7, placement, start)
+            .unwrap()
+            .with_swimming(true)
+            .with_falls(true)
+            .with_jump(Some((44.55, 160.0)));
+        let grant =
+            eq_network_game::movement::titanium_speeds(&eq_network_game::movement::SpeedState {
+                run: 0.7,
+                walk: 0.46,
+                level: 50,
+                hit_points: Some((500, 500)),
+                rate: 0,
+                weight: 0,
+                capacity: 100,
+                sneaking: false,
+                ducking: false,
+                zone_id: 1,
+                swimming_skill: Some(100),
+            })
+            .motion
+            .unwrap();
+        session.calibrate(grant, start).unwrap();
+        {
+            let world = app.world_mut();
+            online::testing::place(&mut world.resource_mut::<online::OnlineState>(), placement);
+            let mut player =
+                world.query_filtered::<(&mut PlayerBody, &mut Transform), With<Player>>();
+            let (mut body, mut transform) = player.single_mut(world).unwrap();
+            body.feet_offset = 3.75;
+            body.height = 7.5;
+            transform.translation = origin;
+            let mut camera = world.query::<&mut OrbitCamera>();
+            let mut camera = camera.single_mut(world).unwrap();
+            camera.yaw = crate::camera::behind(eq_client_core::render_heading(0.0));
+            camera.look = pitch;
+            let mut controls = world.resource_mut::<Controls>();
+            controls.speed = Some(grant.units_per_second);
+            controls.swim = swim;
+            controls.airborne = Some(AirborneController::default());
+            let mut keys = world.resource_mut::<ButtonInput<KeyCode>>();
+            keys.reset_all();
+            keys.press(KeyCode::KeyW);
+        }
+        let mut seen = Vec::new();
+        for _ in 0..samples * 8 {
+            std::thread::sleep(Duration::from_millis(17));
+            app.update();
+            while let Ok(command) = receiver.try_recv() {
+                if let ClientCommand::ClimbReach { per_step, .. } = command {
+                    session.set_climb(per_step);
+                }
+                if let ClientCommand::Move(request) = command {
+                    session
+                        .send_move_sample(&request, Instant::now(), |_| Ok(()))
+                        .unwrap_or_else(|error| {
+                            panic!(
+                                "rim {rim}: {:?} {:?} at {:?}: {error}; before {seen:?}",
+                                request.mode,
+                                request.position,
+                                request.created.duration_since(start)
+                            )
+                        });
+                    accept_now(&mut app, &request);
+                    let at = Vec3::from_array(eq_client_core::render_position(request.position))
+                        - Vec3::Y * 3.75;
+                    seen.push((request.mode, at, request.created.duration_since(start)));
+                }
+            }
+            if seen.len() >= samples {
+                break;
+            }
+        }
+        seen
+    }
+
+    fn accept_now(app: &mut App, request: &MovementRequest) {
+        let created = app.world().resource::<Controls>().pending.unwrap().created;
+        crate::online::testing::news(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            [eq_client_core::WorldEvent::MotionSent {
+                session_id: request.session_id,
+                created,
+                position: request.position,
+                refused: None,
+            }],
+        );
+        let world = app.world_mut();
+        let mut players = world.query_filtered::<&Transform, With<Player>>();
+        let drawn = *players.single(world).unwrap();
+        let mut controls = app.world_mut().resource_mut::<Controls>();
+        assert!(controls.moved(Some(request.session_id), created));
+        controls.display_sample(drawn, request.position);
+        controls.resolve_water_entry(false);
+    }
+
+    #[test]
+    fn a_swimmer_pops_out_of_the_water_over_a_rim_the_walk_would_climb() {
+        // Temple of Life's pool (attended, 11-23): forward with the view
+        // pitched up at a rim a little above the water. Each rise takes the
+        // origin out of the water and the next sample is a fall; a fall
+        // whose soles are still wet passes over what the walk climbs
+        // (origin + 1.25 for this body) and lands on the rim, inside the
+        // session's bound. A rim past that keeps the swimmer in the pool.
+        for (rim, climbs) in [(0.0, true), (1.0, true), (1.25, true), (2.5, false)] {
+            let seen = swim_at_rim(rim, Some(WET_SWIMMER), 0.4, 25);
+            let out = seen
+                .iter()
+                .find(|(_, at, _)| at.x > 0.0)
+                .map(|(mode, at, _)| (*mode, *at));
+            assert_eq!(out.is_some(), climbs, "rim {rim}: {seen:?}");
+            if let Some((mode, at)) = out {
+                assert_eq!(mode, MovementMode::Forward, "rim {rim}");
+                assert!((at.y - rim).abs() < 0.01, "rim {rim}: {at}");
+            }
         }
     }
 
