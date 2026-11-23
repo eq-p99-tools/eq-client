@@ -698,11 +698,6 @@ impl ClientWorld {
                     self.liquid_hazards.revision = Some(*revision);
                 }
             }
-            // Poison news (eq-network #402, 6.493) waits on the client's
-            // poison change (eq-client #556); it answers nothing asked here.
-            WorldEvent::PoisonStarted { .. } | WorldEvent::PoisonInterrupted { .. } => {
-                news.ignored = true;
-            }
             WorldEvent::HazardReported {
                 session_id,
                 hazard,

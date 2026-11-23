@@ -251,7 +251,7 @@ Right-click a poison (item type 42) in a top-level slot, the cursor included, to
 
 The lines come from your installation's `eqstr_us.txt`: the start, the refusals and the stop in the program's colour 0x111, and the answer in colour 0x10e. A poison inside a bag isn't applied by a right-click, because the program only uses top-level slots this way. Alt+right-click and hotkeys keep their ordinary item use.
 
-The program's wait is effect 234's total (from buffs and AAs) when that isn't 0. This client always waits 10 s for now, which is slower where an effect shortens it and faster where one lengthens it (a follow-up, 6.493b). The EQMac servers (Quarm, TAKP) take the same flow; that is inferred, because their program isn't read.
+The program's wait is effect 234's total in ms, from your buffs (a type-4 record's taken away) and the AAs your class may use at your level, when that isn't 0; worn items don't count (read R49-1f, 6.493b). This client sums the same and tells the session, which then waits that long. Where it can't know the total (a buff whose spell your installation lacks, a formula or bard modifier it doesn't evaluate, an AA not yet described, or a spell that landed without a slot), the wait stays 10 s. A total below 0 never ends the wait, as in the program. The EQMac servers (Quarm, TAKP) take the same flow; that is inferred, because their program isn't read.
 
 ## Spells, buffs and the hotbar
 

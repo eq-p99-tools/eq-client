@@ -95,6 +95,7 @@ mod outfit;
 mod paperdoll;
 mod pet;
 mod piloting;
+mod poison_wait;
 mod preview;
 #[cfg(test)]
 mod probes;
