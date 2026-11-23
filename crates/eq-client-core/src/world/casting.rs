@@ -172,13 +172,6 @@ impl Cooldowns {
         }
     }
 
-    /// Drops the recovery every spell waits out: a Bard has none (the
-    /// program's actor +0x110 is set to now for class 8 at the answer,
-    /// read R49-34 m).
-    pub fn without_recovery(&mut self) {
-        self.recovery = None;
-    }
-
     /// How long until a spell can be cast again.
     #[must_use]
     pub fn remaining(&self, spell: u32, now: Instant) -> Duration {
@@ -641,11 +634,6 @@ mod tests {
         timers.refresh(42, u32::MAX, start);
         timers.resolve(&Catalog, start);
         assert_eq!(timers.remaining(42, start), Duration::from_millis(1500));
-        // A Bard has no recovery to wait out (read R49-34 m).
-        let mut bard = timers.clone();
-        bard.without_recovery();
-        assert_eq!(bard.remaining(99, start), Duration::ZERO);
-        assert_eq!(bard.remaining(42, start), Duration::ZERO);
         let mut unknown = Cooldowns::default();
         unknown.refresh(99, 0, start);
         unknown.resolve(&NoSpells, start);
