@@ -2,12 +2,13 @@
 
 ## Unreleased
 
-- Show the session's chat pace (checklist 6.523, eq-network c951420). Its
+- Show the session's chat pace (checklist 6.523, eq-network #354). Its
   refusal, "You are sending chat too fast. Wait N seconds.", is printed as
-  the player's own line, and a script whose chat or social step the pace
-  holds fails at that step's line with those words. The repin's other news
-  (titles, the bind zone, the chat server's channels) is passed over until
-  each one's own client work lands.
+  the player's own line. A script fails at a step's line with those words
+  when the pace holds chat that step sent: a `chat`, `social` or `gm` step,
+  or a `slash` step whose typed line sent chat (`say`, `ooc` and the rest).
+  The pace is this client's own: the Titanium program paces no chat (read
+  R49-17), so it is a departure, not parity.
 
 - Send petitions, bug reports and feedback from a typed line (gap list 3.6,
   recording checklist 6.511). `/petition`, `/bugreport` (also `/bug`) and
