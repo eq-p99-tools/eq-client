@@ -994,7 +994,7 @@ mod tests {
             Arguments::try_parse_from(["eq-client", "--demo-entities", "--demo-luclin-models"])
                 .unwrap();
         assert_eq!(mode(&args, None), Ok(Mode::Offline));
-        let Source::Offline(preview) = offline_source(&args) else {
+        let super::Source::Offline(preview) = super::offline_source(&args) else {
             panic!("offline");
         };
         assert!(preview.luclin_models);

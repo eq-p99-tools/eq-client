@@ -4,7 +4,7 @@
 //! (R49-44 a, 0x43ab98 and 0x43ac64):
 //! - **The server's expansion mask gates it.** Luclin models are offered
 //!   only when bit 0x4 or 0x8 of the mask the server sends is set (0x45386d).
-//!   A third case, [0x923d74], is unread as to meaning and not built.
+//!   A third case, the flag at 0x923d74, is unread as to meaning and not built.
 //! - **`[Defaults] AllLuclinPcModelsOff`** turns every race but Vah Shir
 //!   classic.
 //! - **`[Defaults] UseLuclin<Race>Male` / `Female`** decides per race and
