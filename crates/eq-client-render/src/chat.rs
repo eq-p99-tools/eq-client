@@ -171,7 +171,7 @@ pub(super) struct ChatState {
     /// connection, to this server or another, never says the old one.
     server_motd: Option<(u64, ChatLine)>,
     /// A `/motd`, waiting for [`super::motd::answers`].
-    pub(crate) motd_asked: bool,
+    pub(crate) motd_asked: Option<super::motd::Asked>,
     /// A guild command typed, for [`super::guild::commands`] to run.
     pub(crate) guild_asked: Option<super::guild::Command>,
     /// A sharing command typed, for [`super::sharing::commands`] to run.
@@ -2059,7 +2059,7 @@ pub(super) fn client_request_in_scope(
         return Some(Ok(()));
     }
     if super::motd::typed(input) {
-        state.motd_asked = true;
+        state.motd_asked = Some(super::motd::Asked);
         return Some(Ok(()));
     }
     if let Some(asked) = super::whereabouts::Asked::typed(input) {
