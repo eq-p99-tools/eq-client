@@ -150,7 +150,7 @@ mod tests {
     use std::time::Duration;
 
     fn update(n: usize) -> WorldUpdate {
-        WorldUpdate::Connection(if n % 2 == 0 {
+        WorldUpdate::Connection(if n.is_multiple_of(2) {
             Link::Entering
         } else {
             Link::Connected
