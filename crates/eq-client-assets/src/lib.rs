@@ -15,6 +15,7 @@ pub mod lighting;
 pub mod maps;
 pub mod merchants;
 pub mod names;
+mod pe;
 pub mod regions;
 pub mod scale;
 pub mod sidl;
@@ -72,6 +73,11 @@ pub struct ZonePrimitive {
     pub texture: Option<usize>,
     /// How the material combines with the scene behind it.
     pub material_mode: MaterialMode,
+    /// The light baked into each vertex, as RGBA bytes: the RGB is light the
+    /// vertex has of its own and the alpha how much of the zone ambient it
+    /// takes. One per position, or empty when the mesh has none. See
+    /// `docs/zone-lighting.md`.
+    pub light: Vec<[u8; 4]>,
 }
 
 /// Renderer-independent material behavior used by classic WLD meshes.
@@ -109,6 +115,9 @@ pub struct ZoneModel {
     pub materials: Vec<ObjectMaterial>,
     /// Solid triangles, including invisible collision surfaces.
     pub collision: Vec<[[f32; 3]; 3]>,
+    /// How many vertices the model's one mesh has, which a placement's
+    /// colour track must match; None for a model built on a skeleton.
+    pub vertex_count: Option<usize>,
 }
 
 /// Authored sidedness of a placed-object draw call, independent of its alpha mode.
@@ -129,6 +138,9 @@ pub struct ZoneObject {
     pub rotation: [f32; 4],
     /// Scale along the X, Y, and Z axes.
     pub scale: [f32; 3],
+    /// The placement's own baked vertex light (WLD 0x15 -> 0x33 -> 0x32), one
+    /// per vertex of its model's mesh, as in [`ZonePrimitive::light`].
+    pub light: Option<Vec<[u8; 4]>>,
 }
 
 /// Renderer-independent geometry and textures for a zone.
@@ -144,6 +156,8 @@ pub struct ZoneAsset {
     pub terrain_materials: Vec<TerrainMaterial>,
     /// Installed WLD point lights in the zone's renderer frame.
     pub point_lights: Vec<lighting::PlacedLight>,
+    /// The installed program's day ambient table, when it holds one.
+    pub day_ambient: Option<lighting::DayAmbient>,
     /// Deduplicated diffuse textures used by `primitives`.
     pub textures: Vec<ZoneTexture>,
     /// Reusable static models referenced by placed objects.
@@ -156,6 +170,9 @@ pub struct ZoneAsset {
     /// Skins of placed objects left out because their vertices aren't each
     /// on one bone of the object's skeleton.
     pub object_skins_skipped: usize,
+    /// Placement colour tracks left out because they don't hold one colour
+    /// per vertex of a one-mesh model.
+    pub object_lights_skipped: usize,
     /// Solid terrain triangles independent of material visibility.
     pub collision: Vec<[[f32; 3]; 3]>,
 }
@@ -388,8 +405,10 @@ fn read_zone(
     let mut terrain_materials = Vec::new();
 
     if textures_read == Textures::Realize {
-        for mesh in world.meshes() {
-            for staged in stage_mesh(&mesh) {
+        // Both parses list the meshes in the file's order.
+        let raw = doc.fragment_iter::<libeq::wld::parser::DmSpriteDef2>();
+        for (mesh, raw) in world.meshes().zip(raw) {
+            for staged in stage_mesh(&mesh, &mesh_light(raw)) {
                 terrain_materials.push(terrain_material(
                     &doc,
                     staged.material.as_deref(),
@@ -425,11 +444,15 @@ fn read_zone(
         primitives,
         terrain_materials,
         point_lights,
+        day_ambient: (textures_read == Textures::Realize)
+            .then(|| lighting::day_ambient(eq_directory))
+            .flatten(),
         textures,
         models,
         objects,
         objects_unplaced: report.unplaced,
         object_skins_skipped: report.skins_skipped,
+        object_lights_skipped: report.lights_skipped,
         collision,
     })
 }
@@ -560,6 +583,44 @@ struct ObjectPlacement {
     translation: [f32; 3],
     rotation: [f32; 4],
     scale: [f32; 3],
+    light: Option<Vec<[u8; 4]>>,
+}
+
+/// A WLD vertex colour, a D3DCOLOR (0xAARRGGBB), as RGBA bytes.
+fn vertex_light(color: u32) -> [u8; 4] {
+    let [blue, green, red, alpha] = color.to_le_bytes();
+    [red, green, blue, alpha]
+}
+
+/// A mesh's baked vertex light, or none when it doesn't hold one colour per
+/// vertex.
+fn mesh_light(raw: &libeq::wld::parser::DmSpriteDef2) -> Vec<[u8; 4]> {
+    if raw.vertex_colors.len() == raw.positions.len() {
+        raw.vertex_colors
+            .iter()
+            .copied()
+            .map(vertex_light)
+            .collect()
+    } else {
+        Vec::new()
+    }
+}
+
+/// A placement's colour track, 0x15 -> 0x33 -> 0x32.
+fn placement_light(
+    doc: &libeq::wld::parser::WldDoc,
+    actor: &libeq::wld::parser::Actor,
+) -> Option<Vec<[u8; 4]>> {
+    let track = doc.get(actor.vertex_color_reference.as_ref()?)?;
+    let definition = doc.get(&track.reference)?;
+    Some(
+        definition
+            .vertex_colors
+            .iter()
+            .copied()
+            .map(vertex_light)
+            .collect(),
+    )
 }
 
 /// Parses a WLD file into libeq's document and its model view. Building the view
@@ -586,11 +647,14 @@ fn load_object_placements(
     let Some(bytes) = archive.get("objects.wld")? else {
         return Ok(Vec::new());
     };
-    let (_, world) = parse_wld(&bytes, "objects.wld")?;
+    let (doc, world) = parse_wld(&bytes, "objects.wld")?;
 
+    // Both parses list the placements in the file's order.
+    let actors = doc.fragment_iter::<libeq::wld::parser::Actor>();
     Ok(world
         .objects()
-        .filter_map(|object| {
+        .zip(actors)
+        .filter_map(|(object, actor)| {
             let model_name = object.model_name()?.to_owned();
             let (x, y, z) = object.center();
             let (rotation_x, rotation_y, rotation_z) = object.rotation();
@@ -601,6 +665,7 @@ fn load_object_placements(
                 translation: render([x, y, z]),
                 rotation: placement_rotation([rotation_x, rotation_y, rotation_z]),
                 scale: [uniform_scale; 3],
+                light: placement_light(&doc, actor),
             })
         })
         .collect())
@@ -613,6 +678,8 @@ struct ObjectReport {
     unplaced: usize,
     /// Skins of objects on skeletons left out (see [`PosedHierarchy`]).
     skins_skipped: usize,
+    /// Placement colour tracks that don't fit their model.
+    lights_skipped: usize,
 }
 
 /// The zone's object models and the placements that use them, and what the
@@ -630,7 +697,7 @@ fn load_object_models(
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             let report = ObjectReport {
                 unplaced: placements.len(),
-                skins_skipped: 0,
+                ..ObjectReport::default()
             };
             return Ok((Vec::new(), Vec::new(), report));
         }
@@ -655,7 +722,9 @@ fn load_object_models(
         let (Some(name), Some(mesh)) = (model.name(), model.mesh()) else {
             continue;
         };
-        let staged = stage_mesh(&mesh);
+        // Object models carry no light of their own: their placements do.
+        let staged = stage_mesh(&mesh, &[]);
+        let vertex_count = mesh.positions().len();
         let Some(realized) = realize_object(
             &doc,
             staged,
@@ -673,6 +742,7 @@ fn load_object_models(
             primitives: realized.primitives,
             materials: realized.materials,
             collision: mesh_collision(&mesh),
+            vertex_count: Some(vertex_count),
         });
     }
     // Objects built on a skeleton (trees, torches), stood in their rest
@@ -707,26 +777,44 @@ fn load_object_models(
             primitives: realized.primitives,
             materials: realized.materials,
             collision: posed.collision,
+            vertex_count: None,
         });
     }
 
-    let objects = placements
+    let objects = place_objects(placements, &models, &model_indices, &mut report);
+
+    Ok((models, objects, report))
+}
+
+/// The placements whose model the archive draws, each with its colour
+/// track where the track fits the model.
+fn place_objects(
+    placements: Vec<ObjectPlacement>,
+    models: &[ZoneModel],
+    model_indices: &HashMap<String, usize>,
+    report: &mut ObjectReport,
+) -> Vec<ZoneObject> {
+    placements
         .into_iter()
         .filter_map(|placement| {
             let Some(&model) = model_indices.get(&placement.model_name) else {
                 report.unplaced += 1;
                 return None;
             };
+            let light = placement.light.filter(|light| {
+                let fits = models[model].vertex_count == Some(light.len());
+                report.lights_skipped += usize::from(!fits);
+                fits
+            });
             Some(ZoneObject {
                 model,
                 translation: placement.translation,
                 rotation: placement.rotation,
                 scale: placement.scale,
+                light,
             })
         })
-        .collect();
-
-    Ok((models, objects, report))
+        .collect()
 }
 
 struct RealizedObject {
@@ -853,7 +941,7 @@ fn pose_hierarchy(
     // Each posed mesh's drawn primitives, its vertices and its solid faces.
     let mut posed: Vec<PosedMesh> = Vec::new();
     let mut pose = |mesh: &libeq::wld::Mesh<'_>, joint_of: &dyn Fn(usize) -> Mat4| {
-        let mut staged = stage_mesh(mesh);
+        let mut staged = stage_mesh(mesh, &[]);
         for primitive in &mut staged {
             for (index, (position, normal)) in primitive
                 .positions
@@ -955,12 +1043,20 @@ struct StagedPrimitive {
     texture: Option<String>,
     /// The material's name in upper case, such as `HUMCH0001_MDF`.
     material: Option<String>,
+    /// One per position, or empty.
+    light: Vec<[u8; 4]>,
 }
 
 impl StagedPrimitive {
     /// Adds another primitive of the same material after this one's.
     fn append(&mut self, other: Self) {
         let offset = u32::try_from(self.positions.len()).unwrap_or(u32::MAX);
+        // The merged primitive keeps baked light only when both halves have it.
+        if self.light.len() == self.positions.len() && other.light.len() == other.positions.len() {
+            self.light.extend(other.light);
+        } else {
+            self.light.clear();
+        }
         self.positions.extend(other.positions);
         self.normals.extend(other.normals);
         self.texture_coordinates.extend(other.texture_coordinates);
@@ -994,6 +1090,7 @@ impl StagedPrimitive {
                 .collect(),
             texture,
             material_mode: self.material_mode,
+            light: self.light,
         })
     }
 }
@@ -1022,7 +1119,9 @@ fn placement_rotation(degrees: [f32; 3]) -> [f32; 4] {
 }
 
 /// Reads a mesh's drawable primitives, positioned at the mesh's center.
-fn stage_mesh(mesh: &libeq::wld::Mesh<'_>) -> Vec<StagedPrimitive> {
+/// A mesh's primitives, each over all of the mesh's vertices, with `light`
+/// (one per vertex, or empty) for each.
+fn stage_mesh(mesh: &libeq::wld::Mesh<'_>, light: &[[u8; 4]]) -> Vec<StagedPrimitive> {
     let center = mesh.center();
     let mut primitives = Vec::new();
     for primitive in mesh.primitives() {
@@ -1059,6 +1158,7 @@ fn stage_mesh(mesh: &libeq::wld::Mesh<'_>) -> Vec<StagedPrimitive> {
             material_mode,
             texture,
             material: name,
+            light: light.to_vec(),
         });
     }
     primitives
@@ -1329,6 +1429,139 @@ mod tests {
         );
         assert_eq!(zone.objects.len(), 1);
         assert_eq!(zone.objects[0].model, 0);
+    }
+
+    /// A zone whose terrain carries baked vertex light, and whose object
+    /// placements carry a fitting colour track, a short one, and none.
+    fn write_lit_zone(install: &Path) {
+        use crate::test_world::{
+            Coordinates, OLD_FORMAT, WorldFile, coloured_triangle, material, palette, triangle,
+            write_archive,
+        };
+        let words = |words: &[u32]| -> Vec<u8> {
+            words.iter().flat_map(|word| word.to_le_bytes()).collect()
+        };
+        let coordinates = Coordinates::Old([(0, 0), (256, 0), (0, 256)]);
+
+        let mut zone = WorldFile::new(OLD_FORMAT);
+        let (m, p, t) = (
+            zone.name("M_MDF"),
+            zone.name("P_MP"),
+            zone.name("R1_DMSPRITEDEF"),
+        );
+        let terrain = zone.fragment(0x30, material(m, 0x8000_0001));
+        let terrain_palette = zone.fragment(0x31, palette(p, terrain));
+        // D3DCOLORs, 0xAARRGGBB.
+        zone.fragment(
+            0x36,
+            coloured_triangle(
+                t,
+                terrain_palette,
+                &coordinates,
+                &[0x0011_2233, 0x80FF_0000, 0xFF00_00FF],
+            ),
+        );
+
+        // Two colour tracks, 0x32 definitions behind 0x33 references, then
+        // three placements: name, model, flags (a location, and 0x100 for a
+        // colour track), sphere, the location and its unknown word, the
+        // track, and no user data.
+        let mut placements = WorldFile::new(OLD_FORMAT);
+        let model = placements.name("OBJ_ACTORDEF");
+        let mut track = |colours: &[u32]| {
+            let mut definition = words(&[0, 1, u32::try_from(colours.len()).unwrap(), 1, 200, 0]);
+            definition.extend(words(colours));
+            let definition = placements.fragment(0x32, definition);
+            placements.fragment(0x33, words(&[0, definition.cast_unsigned(), 0]))
+        };
+        let fitting = track(&[0x0102_0304, 0x0506_0708, 0x090A_0B0C]);
+        let short = track(&[0x0102_0304]);
+        for colours in [Some(fitting), Some(short), None] {
+            let flags = 0x02 | if colours.is_some() { 0x100 } else { 0 };
+            let mut placement = words(&[0, model.cast_unsigned(), flags, 0]);
+            for value in [10.0_f32, 20.0, 30.0, 0.0, 0.0, 0.0] {
+                placement.extend(value.to_le_bytes());
+            }
+            placement.extend(words(&[0]));
+            if let Some(track) = colours {
+                placement.extend(words(&[track.cast_unsigned()]));
+            }
+            placement.extend(words(&[0]));
+            placements.fragment(0x15, placement);
+        }
+
+        let mut objects = WorldFile::new(OLD_FORMAT);
+        let (w, p, t) = (
+            objects.name("W_MDF"),
+            objects.name("P_MP"),
+            objects.name("OBJ_DMSPRITEDEF"),
+        );
+        let model = objects.name("OBJ_ACTORDEF");
+        let wood = objects.fragment(0x30, material(w, 0x8000_0001));
+        let object_palette = objects.fragment(0x31, palette(p, wood));
+        let mesh = objects.fragment(0x36, triangle(t, object_palette, &coordinates, 1));
+        let sprite = objects.fragment(0x2d, words(&[0, mesh.cast_unsigned(), 0]));
+        objects.fragment(
+            0x14,
+            words(&[
+                model.cast_unsigned(),
+                0,
+                0,
+                0,
+                1,
+                0,
+                sprite.cast_unsigned(),
+                0,
+            ]),
+        );
+
+        write_archive(
+            install,
+            "litzone.s3d",
+            &[
+                ("litzone.wld", zone.bytes()),
+                ("objects.wld", placements.bytes()),
+            ],
+        );
+        write_archive(
+            install,
+            "litzone_obj.s3d",
+            &[("litzone_obj.wld", objects.bytes())],
+        );
+    }
+
+    #[test]
+    fn baked_vertex_light_loads_for_terrain_and_fitting_placements() {
+        let install = std::env::temp_dir().join(format!("eq-zone-lit-{}", std::process::id()));
+        std::fs::create_dir_all(&install).unwrap();
+        write_lit_zone(&install);
+        let result = load_zone(&install, "litzone");
+        std::fs::remove_dir_all(&install).unwrap();
+        let zone = result.unwrap();
+
+        // Terrain: one RGBA per vertex, from B,G,R,A bytes.
+        assert_eq!(
+            zone.primitives[0].light,
+            vec![
+                [0x11, 0x22, 0x33, 0x00],
+                [0xFF, 0, 0, 0x80],
+                [0, 0, 0xFF, 0xFF]
+            ]
+        );
+        // The model has no light of its own; its one mesh has 3 vertices.
+        assert_eq!(zone.models[0].vertex_count, Some(3));
+        assert_eq!(zone.models[0].primitives[0].light, [] as [[u8; 4]; 0]);
+        // The fitting track is kept, the short one left out and counted.
+        assert_eq!(zone.objects.len(), 3);
+        assert_eq!(
+            zone.objects[0].light,
+            Some(vec![[2, 3, 4, 1], [6, 7, 8, 5], [0x0A, 0x0B, 0x0C, 0x09]])
+        );
+        assert_eq!(zone.objects[1].light, None);
+        assert_eq!(zone.objects[2].light, None);
+        assert_eq!(zone.object_lights_skipped, 1);
+        // No program in this install: no day table.
+        assert_eq!(zone.day_ambient, None);
     }
 
     /// A zone whose object archive holds a plain object, a tree built on a
