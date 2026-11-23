@@ -1707,8 +1707,15 @@ fn submit_draft(
             let Some(mut wire) = crate::commands::spelled(wire.trim()) else {
                 return Ok(());
             };
-            if let Some(Targeted::Tell(line)) = targeted(&wire, world) {
-                wire = line?.into();
+            match targeted(&wire, world) {
+                Some(Targeted::Tell(line)) => wire = line?.into(),
+                // A link has no part in `/whotarget`'s listing; it lists
+                // as typed without one.
+                Some(Targeted::Who(filter)) => {
+                    state.zone_who = Some(filter?);
+                    return Ok(());
+                }
+                None => (),
             }
             let message = linked_outbound(
                 active,
@@ -3217,7 +3224,8 @@ mod tests {
     }
 
     /// An admitted player (spawn 7) and, around them, a player named
-    /// `name` (spawn 8), an NPC (9) and a player corpse (10).
+    /// `name` (spawn 8), an NPC (9), a player corpse (10) and the player's
+    /// pet (11).
     fn with_others(name: &str) -> super::super::online::OnlineState {
         use super::super::online::{OnlineState, testing};
         use eq_client_core::{Capability, SpawnKind, SpawnState, WorldEvent};
@@ -3248,6 +3256,7 @@ mod tests {
                 spawn(8, name, SpawnKind::Player),
                 spawn(9, "a_guard00", SpawnKind::Npc),
                 spawn(10, "Someone", SpawnKind::PlayerCorpse),
+                testing::pet(11, 7),
             ])],
         );
         online
@@ -3296,9 +3305,14 @@ mod tests {
                 Some(who("Friend"))
             );
         }
-        // An NPC, a corpse or the player themself gets no tell; /who takes
+        // An NPC, a corpse, a pet or the player themself gets no tell; /who takes
         // any target, as it sends nothing.
-        for (target, name) in [(9, "a_guard00"), (10, "Someone"), (7, "Example")] {
+        for (target, name) in [
+            (9, "a_guard00"),
+            (10, "Someone"),
+            (11, "Gabober000"),
+            (7, "Example"),
+        ] {
             online.select_target(Some(target));
             assert_eq!(
                 targeted("/ttell hi", online.world()),
