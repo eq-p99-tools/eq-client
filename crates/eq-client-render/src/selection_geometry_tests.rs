@@ -125,6 +125,7 @@ fn spot_at(x: f32, y: f32, z: f32) -> eq_client_core::select_spots::Spot {
         distance: 25.0,
         pitch: 10.0,
         reviewed: false,
+        afloat: false,
     }
 }
 
@@ -156,6 +157,29 @@ fn a_spot_on_a_top_no_walk_reaches_is_flagged_and_one_on_the_floor_passes() {
     // Beside the floor's edge nothing stands the character.
     let (off, _) = check_select_spot(&zone, &spot_at(400.0, 0.0, 0.0), &mesh);
     assert_eq!(off, SpotVerdict::NoFloor);
+    // A spot afloat stays at its own height: high over the floor it is
+    // weighed there, off the mesh, where the same spot not afloat drops
+    // onto the floor; and beside the floor's edge it still has a place.
+    let high = eq_client_core::select_spots::Spot {
+        afloat: true,
+        ..spot_at(80.0, 80.0, 60.0)
+    };
+    let (afloat, _) = check_select_spot(&zone, &high, &mesh);
+    let SpotVerdict::Unreachable { z, island_area } = afloat else {
+        panic!("{afloat:?}");
+    };
+    assert!((z - 60.0).abs() < 0.01, "{z}");
+    assert_eq!(island_area, None);
+    let (dropped, _) = check_select_spot(&zone, &spot_at(80.0, 80.0, 60.0), &mesh);
+    assert_eq!(dropped, SpotVerdict::Reachable);
+    let beside = eq_client_core::select_spots::Spot {
+        afloat: true,
+        ..spot_at(400.0, 0.0, 0.0)
+    };
+    assert!(matches!(
+        check_select_spot(&zone, &beside, &mesh).0,
+        SpotVerdict::Unreachable { .. }
+    ));
     // A kept row excuses an unreachable floor, never a missing one.
     assert!(on_top.flagged(false) && !on_top.flagged(true));
     assert!(off.flagged(false) && off.flagged(true));
