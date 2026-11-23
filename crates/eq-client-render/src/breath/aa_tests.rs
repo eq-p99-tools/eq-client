@@ -91,6 +91,21 @@ fn rank(id: u32, effects: &[(u32, i32)]) -> Update {
             classes: 1 << 2,
             sequence: 900,
             rank: 3,
+            hotkey_sid: 0,
+            hotkey_sid2: 0,
+            title_sid: 0,
+            desc_sid: 0,
+            cost: 0,
+            prereq_skill: 0,
+            prereq_minpoints: 0,
+            kind: 0,
+            spellid: 0,
+            spell_type: 0,
+            spell_refresh: 0,
+            max_level: 0,
+            last_id: 0,
+            next_id: 0,
+            cost2: 0,
             effects: effects
                 .iter()
                 .enumerate()

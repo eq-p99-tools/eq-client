@@ -5,6 +5,7 @@ mod observe;
 mod run;
 
 pub(super) use compile::{Builder, Code};
+pub(super) use observe::Sight;
 pub(super) use run::{Run, Tick};
 
 use std::{fmt, ops::Range, sync::Arc};

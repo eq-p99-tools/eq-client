@@ -4,6 +4,7 @@ mod buff_cancellation;
 mod carriers;
 mod casting;
 mod guild_roster;
+mod guild_status;
 mod loot_requests;
 mod own_stun;
 mod pet_buffs;
@@ -1816,6 +1817,7 @@ fn chest() -> crate::inventory::InventoryItem {
         stack_count: None,
         charges: 0,
         bag_slots: 0,
+        augments: Default::default(),
     }
 }
 
@@ -4303,6 +4305,7 @@ fn training_opens_raises_skills_with_a_line_and_closes() {
             trainer: 42,
             caps,
             language_caps: Vec::new(),
+            price_scale: None,
         })),
     );
     assert_eq!(world.training().map(|offer| offer.trainer), Some(42));
@@ -4365,6 +4368,7 @@ fn language_training_updates_its_bank_and_retains_unknown_points() {
             trainer: 42,
             caps: vec![0; 100],
             language_caps: vec![100; 26],
+            price_scale: None,
         })),
     );
     let revision = world.skills_revision();
@@ -6290,6 +6294,7 @@ fn list_revisions_track_their_own_inputs_and_survive_restart() {
         trainer: 42,
         caps: vec![200; 100],
         language_caps: Vec::new(),
+        price_scale: None,
     }));
     game(&mut world, offer.clone());
     let after_offer = revisions(&world);
@@ -6453,6 +6458,48 @@ fn movement_weight_requires_cursor_receipt_but_never_a_bank_balance() {
         world.movement_weight(),
         Err(crate::SpeedInputUnavailable::Coins)
     );
+}
+
+#[test]
+fn an_augmented_item_makes_the_load_and_worn_stats_unknown_as_a_bad_container_does() {
+    // eq-network 6.570: augments are read but not summed, so the session's
+    // weight is `WeightUnavailable::Augments`, read here exactly as an
+    // unreadable container's (6.572), never as a lighter load.
+    use crate::inventory::InventorySlot;
+    let known = |items: Vec<crate::inventory::InventoryItem>| {
+        let mut world = admitted();
+        game(&mut world, inventory(items));
+        game(&mut world, WorldEvent::Coins(Coins::default()));
+        game(
+            &mut world,
+            WorldEvent::CoinsElsewhere {
+                cursor: Coins::default(),
+                bank: Coins::default(),
+                given: Coins::default(),
+                offered: Coins::default(),
+            },
+        );
+        world
+    };
+    assert!(known(vec![chest()]).movement_weight().is_ok());
+    let mut bad_bag = chest();
+    bad_bag.slot = InventorySlot(22);
+    bad_bag.bag_slots = 4;
+    bad_bag.rules.bag_weight_reduction = 101;
+    let container = known(vec![bad_bag]).movement_weight();
+    assert_eq!(container, Err(crate::SpeedInputUnavailable::Inventory));
+    for slot in [17, 22] {
+        let mut augmented = chest();
+        augmented.slot = InventorySlot(slot);
+        augmented.augments[0] = Some(77);
+        let world = known(vec![augmented]);
+        assert_eq!(world.movement_weight(), container, "{slot}");
+        assert_eq!(
+            world.worker_inventory().equipment_stats_uncertain(),
+            slot == 17,
+            "{slot}"
+        );
+    }
 }
 
 #[test]

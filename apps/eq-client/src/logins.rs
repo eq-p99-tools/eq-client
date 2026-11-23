@@ -37,6 +37,16 @@ pub fn installed_client(protocol: eq_network::client::ServerProtocol) -> Install
     }
 }
 
+/// Whether a server type speaks Titanium's packets (P99 or stock `EQEmu`).
+/// `RoF2` is refused before anything is sent, so it keeps the other branch
+/// until the client knows its installation.
+pub fn speaks_titanium(protocol: eq_network::client::ServerProtocol) -> bool {
+    match eq_client_core::GameDialect::from(protocol) {
+        eq_client_core::GameDialect::Titanium => true,
+        eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => false,
+    }
+}
+
 /// The official client the installation in `directory` holds, for a run at
 /// the login screen: the one its own files mark ([`InstalledClient::detect`]),
 /// else that of the presets naming it, the launch's own first. One neither

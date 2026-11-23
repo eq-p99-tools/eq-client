@@ -1,5 +1,7 @@
 //! Calibrated P99 input; no movement is generated without a session grant.
 #[cfg(test)]
+mod belongings_tests;
+#[cfg(test)]
 mod boat_pace_tests;
 mod boats;
 mod follow;
@@ -123,6 +125,10 @@ pub(super) struct Controls {
     /// A jump from standing still crouching first, as both installed
     /// clients do.
     crouch: Option<Crouch>,
+    /// That crouch sends no posture: it began while the player held a Feign
+    /// Death standing (Move While Feigned, 6.454), whose feign the crouch's
+    /// duck and stand would end. It keeps its wait (6.600).
+    quiet_crouch: bool,
     /// The cost of a landing the session's queue had no room to tell; it
     /// goes before the next sample.
     unreported: Option<FallCost>,
@@ -266,6 +272,7 @@ impl Default for Controls {
             last_jump: None,
             endurance_spent: None,
             crouch: None,
+            quiet_crouch: false,
             unreported: None,
             facing: None,
             mouse_turn: 0.0,
@@ -550,7 +557,10 @@ impl Controls {
             let radians = eq_client_core::render_heading(heading);
             intent.preserve_facing = true;
             if let Some(speed) = self.strafe_speed {
-                intent.mode = MovementMode::Strafe;
+                // A strafe keeps the running pace through the repin (6.561): the
+                // session bounds it as before; the strafe pace slice names
+                // a walking one.
+                intent.mode = MovementMode::Strafe(eq_client_core::Pace::Run);
                 // Titanium strafes on the selected base speed (the R5
                 // audit's S1).
                 intent.speed = if self.walking {
@@ -1340,7 +1350,11 @@ fn stroke_pitch(
     // and the mouse only in first person; a chase view's mouse look and
     // camera keys move only the camera (reads R13 d, R33, R39 A).
     let pitch = camera.look_pitch();
-    if pitch == 0.0 || !longitudinal || mode == MovementMode::Strafe || direction == Vec3::ZERO {
+    if pitch == 0.0
+        || !longitudinal
+        || matches!(mode, MovementMode::Strafe(_))
+        || direction == Vec3::ZERO
+    {
         return None;
     }
     let backing = mode == MovementMode::Backward || camera_back && !camera_forward;
@@ -1608,12 +1622,25 @@ pub(super) fn input(
     // installed client allows. A rooted player's jump is refused where the
     // generation's program refuses it (read R22 c): the press is dropped.
     let rooted_still = controls.speed == Some(0.0) && !online.world().generation().root().jumps;
+    // Nor does a seated player or a looter jump, and nothing stands them for
+    // it: the jump waits on the can-move flag, which only standing and
+    // ducking pass (read R19 c; the Mac-era client inferred, 6.600).
+    let seated = online
+        .world()
+        .generation()
+        .jump_gate()
+        .only_standing_or_ducking
+        && matches!(
+            posture,
+            Some(eq_client_core::PostureState::Sitting | eq_client_core::PostureState::Looting)
+        );
     if focused
         && !flying
         && !swimming
         && !shoreline_active
         && !online.world().is_stunned()
         && !lying
+        && !seated
         && !rooted_still
         && keys.pressed(Act::Jump)
         && controls.airborne.is_some()
@@ -1642,7 +1669,12 @@ pub(super) fn input(
         Crouch::Over => false,
     }) {
         controls.crouch = None;
-        match post_posture(&outbox, online.world(), Posture::Standing) {
+        let stood = if controls.quiet_crouch {
+            Ok(())
+        } else {
+            post_posture(&outbox, online.world(), Posture::Standing)
+        };
+        match stood {
             Ok(()) => {
                 controls.jump = (!detached).then_some(due);
                 controls.crouch = Some(Crouch::Over);
@@ -1992,7 +2024,7 @@ pub(super) fn input(
     // R28b),
     // so it isn't halved again here. Elsewhere the session stands them to move,
     // and the step it stands them on is halved as before.
-    if intent.mode == MovementMode::Strafe
+    if matches!(intent.mode, MovementMode::Strafe(_))
         && !online.world().generation().ducking().moves_ducked
         && online
             .world()
@@ -2019,7 +2051,7 @@ pub(super) fn input(
         // walking and ducking shares the grant gave the strafe (R28, R33).
         let input = match mode {
             MovementMode::Backward => swim.backward,
-            MovementMode::Strafe => {
+            MovementMode::Strafe(_) => {
                 swim.strafe * (speed / controls.strafe_speed.unwrap_or(speed).max(f32::EPSILON))
             }
             _ if controls.walking => swim.walk,
@@ -2278,7 +2310,12 @@ pub(super) fn input(
             false
         }
         Some(crouch) if jump && direction == Vec3::ZERO && !airborne => {
-            if let Err(reason) = post_posture(&outbox, online.world(), Posture::Ducking) {
+            // While a feign is held standing the crouch waits as ever but
+            // reports no duck or stand, so the jump keeps the feign (6.600).
+            controls.quiet_crouch = online.world().feign_held();
+            if !controls.quiet_crouch
+                && let Err(reason) = post_posture(&outbox, online.world(), Posture::Ducking)
+            {
                 controls.send_failed(reason);
                 controls.held = Some(Held::Refused);
                 return;
@@ -5215,6 +5252,91 @@ pub(super) mod tests {
         (stances, jumped)
     }
 
+    /// A seated player's or a looter's jump press does nothing and stands no
+    /// one: the jump waits on the can-move flag (read R19 c; 6.600).
+    #[test]
+    fn a_seated_or_kneeling_player_does_not_jump_or_stand() {
+        use eq_client_core::PostureState;
+        for client in [InstalledClient::Titanium, InstalledClient::EqMac] {
+            for posture in [PostureState::Sitting, PostureState::Looting] {
+                let (mut app, receiver) = standing_jump(client);
+                report_posture(&mut app, posture);
+                app.update();
+                app.update();
+                let sent: Vec<_> = receiver.try_iter().collect();
+                assert!(
+                    !sent.iter().any(|command| matches!(
+                        command,
+                        ClientCommand::SetPosture { .. } | ClientCommand::Jump { .. }
+                    )),
+                    "{client:?} {posture:?}: {sent:?}"
+                );
+                let controls = app.world().resource::<Controls>();
+                assert_eq!((controls.crouch, controls.jump), (None, None));
+            }
+        }
+    }
+
+    /// While a feign is held standing (Move While Feigned), a jump from
+    /// standing still keeps its crouch's wait but sends no duck or stand, so
+    /// the feign holds (6.600). The jump goes no sooner than without it.
+    #[test]
+    fn a_jump_with_a_feign_held_keeps_the_crouch_wait_and_sends_no_posture() {
+        for client in [InstalledClient::Titanium, InstalledClient::EqMac] {
+            let (mut app, receiver) = standing_jump(client);
+            crate::online::testing::news(
+                &mut app.world_mut().resource_mut::<online::OnlineState>(),
+                [eq_client_core::WorldEvent::FeignHeld(true)],
+            );
+            let before = Instant::now();
+            app.update();
+            assert_eq!(stances_and_jump(&receiver), (Vec::new(), false));
+            let Some(Crouch::Until(due)) = app.world().resource::<Controls>().crouch else {
+                panic!("{client:?}: the crouch waits");
+            };
+            let wait = client.standing_jump_crouch().unwrap();
+            assert!(due >= before + wait, "{client:?}: no faster jump");
+            // Held through the crouch, nothing goes.
+            app.update();
+            assert_eq!(stances_and_jump(&receiver), (Vec::new(), false));
+            // Once it is over the jump goes alone.
+            let earlier = Instant::now()
+                .checked_sub(Duration::from_millis(1))
+                .unwrap();
+            app.world_mut().resource_mut::<Controls>().crouch = Some(Crouch::Until(earlier));
+            app.update();
+            assert_eq!(stances_and_jump(&receiver), (Vec::new(), true));
+        }
+    }
+
+    /// Once the session says the feign ended, the crouch reports its duck
+    /// and stand again, as without one.
+    #[test]
+    fn a_jump_after_the_held_feign_ended_crouches_as_ever() {
+        let (mut app, receiver) = standing_jump(InstalledClient::Titanium);
+        crate::online::testing::news(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            [
+                eq_client_core::WorldEvent::FeignHeld(true),
+                eq_client_core::WorldEvent::FeignHeld(false),
+            ],
+        );
+        app.update();
+        assert_eq!(stances_and_jump(&receiver), (vec![Posture::Ducking], false));
+    }
+
+    /// Without Move While Feigned a feign lies the player down, and a lying
+    /// player's jump stays blocked (read R19 c).
+    #[test]
+    fn a_feigned_player_who_lies_does_not_jump() {
+        let (mut app, receiver) = standing_jump(InstalledClient::Titanium);
+        report_posture(&mut app, eq_client_core::PostureState::Lying);
+        app.update();
+        app.update();
+        assert_eq!(stances_and_jump(&receiver), (Vec::new(), false));
+        assert_eq!(app.world().resource::<Controls>().crouch, None);
+    }
+
     #[test]
     fn a_mac_era_jump_from_standing_still_crouches_once_then_goes() {
         let (mut app, receiver) = standing_jump(InstalledClient::EqMac);
@@ -6940,7 +7062,7 @@ pub(super) mod tests {
             );
             controls.strafe_speed = Some(3.0);
             let right = controls.intent(&keys, &map, &[], true, (0.0, heading), None);
-            assert_eq!(right.mode, MovementMode::Strafe);
+            assert!(matches!(right.mode, MovementMode::Strafe(_)));
             assert!(right.preserve_facing);
             assert_eq!(right.speed, 3.0);
             assert!(right.direction.dot(facing).abs() < 0.0001);
@@ -7642,7 +7764,7 @@ pub(super) mod tests {
             let ClientCommand::Move(request) = receiver.try_recv().unwrap() else {
                 panic!("expected a strafe")
             };
-            assert_eq!(request.mode, MovementMode::Strafe);
+            assert!(matches!(request.mode, MovementMode::Strafe(_)));
             let across = request.position.x.hypot(request.position.y);
             assert!(
                 (across - moved).abs() < 0.001,
@@ -7688,7 +7810,7 @@ pub(super) mod tests {
             let ClientCommand::Move(request) = receiver.try_recv().unwrap() else {
                 panic!("expected a strafe, with no stand before it")
             };
-            assert_eq!(request.mode, MovementMode::Strafe);
+            assert!(matches!(request.mode, MovementMode::Strafe(_)));
             let across = request.position.x.hypot(request.position.y);
             assert!(
                 (across - moved).abs() < 0.001,
@@ -7941,7 +8063,7 @@ pub(super) mod tests {
                 };
                 let position = Vec3::from_array(eq_client_core::render_position(request.position));
                 if world_owns_look {
-                    assert_eq!(request.mode, MovementMode::Strafe);
+                    assert!(matches!(request.mode, MovementMode::Strafe(_)));
                     assert!((position - origin - right * side * 0.3).length() < 0.001);
                     assert!(arc(0.0, request.position.heading).abs() < 0.001);
                     accept(&mut app, &request);
@@ -8031,7 +8153,7 @@ pub(super) mod tests {
         keys.reset_all();
         keys.press(KeyCode::KeyE);
         let explicit = intent(&controls, &keys, &[], true, &looking);
-        assert_eq!(explicit.mode, MovementMode::Strafe);
+        assert!(matches!(explicit.mode, MovementMode::Strafe(_)));
         assert!((explicit.speed - 3.0).abs() < f32::EPSILON);
         assert!(explicit.turn.abs() < f32::EPSILON);
     }
@@ -8211,7 +8333,7 @@ pub(super) mod tests {
         keys.press(KeyCode::KeyS);
         let only_side = controls.intent(&keys, &map, &[], true, (0.0, 0.0), None);
         assert!(only_side.diagonal.is_none());
-        assert_eq!(only_side.mode, MovementMode::Strafe);
+        assert!(matches!(only_side.mode, MovementMode::Strafe(_)));
 
         keys.reset_all();
         keys.press(KeyCode::KeyE);

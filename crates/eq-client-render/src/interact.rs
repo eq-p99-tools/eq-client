@@ -234,6 +234,7 @@ mod tests {
             stack_count: None,
             charges: 0,
             bag_slots: 0,
+            augments: Default::default(),
             details: eq_client_core::ItemDetails {
                 base_held_model: None,
                 equipment: None,

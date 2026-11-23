@@ -49,7 +49,7 @@ pub use target::Target;
 pub use tracking::{TrackWindow, track_color};
 pub use trade::{Asker, Exchange, Loot, LootContinuation, Merchant};
 pub use vitals::{ReportedHp, Vitals};
-pub use who::ZonePlayer;
+pub use who::{GuildStatus, ZonePlayer};
 
 use crate::{
     BookActionStatus, CharacterChoice, Death, PlayerState, PostureState, SpawnState, SpellBook,
@@ -279,7 +279,7 @@ pub struct ClientWorld {
     // The admission: from entering a zone until the next admission.
     session_id: Option<u64>,
     liquid_hazards: LiquidHazardInputs,
-    environmental_aa: crate::alternate_advancement::State,
+    alternate_advancement: crate::alternate_advancement::State,
     /// The session's interpreted stun state and latest revision; None is
     /// unknown/unconfigured, not proof of clear control.
     own_stun: Option<(u64, crate::control::StunState)>,
@@ -409,9 +409,10 @@ pub struct ClientWorld {
 }
 
 impl ClientWorld {
-    /// This admission's received environmental AA observations.
-    pub const fn environmental_aa(&self) -> &crate::alternate_advancement::State {
-        &self.environmental_aa
+    /// This admission's received AA facts, for display and the
+    /// environmental effects; nothing in them sends.
+    pub const fn alternate_advancement(&self) -> &crate::alternate_advancement::State {
+        &self.alternate_advancement
     }
 
     /// Applies one update from the session and says what a front end must redo.
@@ -796,6 +797,8 @@ impl ClientWorld {
                 diagonal,
                 falls,
                 jump_factor,
+                // The swim grant waits for the swimming slice; the motion
+                // granted stays as it was.
             } => self.grant_motion(
                 *session_id,
                 MotionGrant {
@@ -1009,6 +1012,36 @@ impl ClientWorld {
             | WorldEvent::InspectAnswer(_)
             | WorldEvent::NewTitles
             | WorldEvent::Gm(_)
+            // Pinned past these before their front ends land (repin 6.561);
+            // each waits for the client slice named.
+            // The Bazaar search: its client slice (6.550).
+            | WorldEvent::Bazaar(_)
+            | WorldEvent::BazaarRefused { .. }
+            // RoF2's buff icons, mana and endurance pools: the RoF2 slices
+            // (6.527, 6.538).
+            | WorldEvent::BuffIcons(_)
+            | WorldEvent::ResourcePercent { .. }
+            | WorldEvent::ResourcePool { .. }
+            // A chat line the pace held: the chat pace slice (6.523).
+            | WorldEvent::ChatRefused { .. }
+            // The bandolier sets and potion belt, unknown sets and the
+            // session's refusals: their windows' slice (6.559, 6.573).
+            | WorldEvent::Bandoliers(_)
+            | WorldEvent::PotionBelt(_)
+            | WorldEvent::BandoliersUnknown
+            | WorldEvent::BandolierRefused { .. }
+            // The task journal, offers and history: the tasks slice (6.560).
+            | WorldEvent::TaskDescribed { .. }
+            | WorldEvent::TaskStepUpdated { .. }
+            | WorldEvent::TaskConcluded { .. }
+            | WorldEvent::TaskRemoved { .. }
+            | WorldEvent::CompletedTasks { .. }
+            | WorldEvent::TasksOffered { .. }
+            | WorldEvent::TaskHistory { .. }
+            | WorldEvent::TaskRefused { .. }
+            // The guild bank as EQEmu tells it: the gap log thread's guild
+            // bank slices (6.563).
+            | WorldEvent::GuildBank(_)
             // The machine's weekly account left for the world; the session
             // host keeps the date it went (the installed client's own
             // `LastSysInfoDate` stamp). Nothing about the world changed.
@@ -1201,6 +1234,7 @@ impl ClientWorld {
                 }
                 self.zone.posture(*spawn_id, *posture, player);
             }
+            WorldEvent::FeignHeld(held) => self.zone.feign_held = *held,
             WorldEvent::HealthPercent { spawn_id, percent } => {
                 self.health_percent(*spawn_id, *percent);
             }
@@ -1234,13 +1268,20 @@ impl ClientWorld {
             WorldEvent::Skill { skill_id, value } => self.skill_news(*skill_id, *value, news),
             WorldEvent::Disciplines(list) => self.disciplines_news(list, news),
             WorldEvent::AlternateAdvancement { session_id, updates } => {
-                if self.session_id == Some(*session_id) && !self.ended && self.player.is_some()
-                    && match self.generation {
-                        crate::GameDialect::Titanium => true,
-                        // Not built for RoF2.
-                        crate::GameDialect::EqMac | crate::GameDialect::Rof2 => false,
-                    } {
-                    for update in updates { self.environmental_aa.apply(update); }
+                // RoF2 sends no AA facts yet; the session reads Titanium's
+                // and EQMac's (checklist 6.565).
+                let read = match self.generation {
+                    crate::GameDialect::Titanium | crate::GameDialect::EqMac => true,
+                    crate::GameDialect::Rof2 => false,
+                };
+                if read
+                    && self.session_id == Some(*session_id)
+                    && !self.ended
+                    && self.player.is_some()
+                {
+                    for update in updates {
+                        self.alternate_advancement.apply(update);
+                    }
                 } else {
                     news.ignored = true;
                 }
@@ -1523,6 +1564,20 @@ impl ClientWorld {
                     news.ignored = true;
                 }
             }
+            WorldEvent::AlternateAdvancementRefused {
+                session_id,
+                reason,
+                refusal,
+            } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices.push(Notice::AlternateAdvancementRefused {
+                        reason: reason.clone(),
+                        refusal: *refusal,
+                    });
+                } else {
+                    news.ignored = true;
+                }
+            }
             WorldEvent::ReadRefused { session_id, reason } => {
                 if self.session_id == Some(*session_id) {
                     news.notices.push(Notice::ReadRefused(reason.clone()));
@@ -1639,7 +1694,13 @@ impl ClientWorld {
                 if self.session_id == Some(id.session_id) {
                     self.dismiss_consent(*id);
                     self.last_consent_close = Some((*id, *closure));
-                    if *closure == ConsentClosure::Expired {
+                    // A duel's question has no prompt yet (the duel slice), so
+                    // its end says nothing, as before the repin (6.561).
+                    let prompted = match id.kind {
+                        ConsentKind::Resurrection | ConsentKind::Translocate => true,
+                        ConsentKind::Duel => false,
+                    };
+                    if *closure == ConsentClosure::Expired && prompted {
                         news.notices.push(Notice::ConsentExpired(id.kind));
                     }
                 } else {
@@ -1971,7 +2032,7 @@ impl ClientWorld {
             self.buffs.clear();
         }
         if ended {
-            self.environmental_aa = crate::alternate_advancement::State::default();
+            self.alternate_advancement = crate::alternate_advancement::State::default();
             self.spell_book = None;
             self.servers = None;
             self.characters = None;
@@ -2002,7 +2063,7 @@ impl ClientWorld {
 
     /// Forgets the admission and its zone.
     fn forget_admission(&mut self) {
-        self.environmental_aa = crate::alternate_advancement::State::default();
+        self.alternate_advancement = crate::alternate_advancement::State::default();
         self.liquid_hazards = LiquidHazardInputs::default();
         self.characters = None;
         self.last_consent_refusal = None;

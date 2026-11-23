@@ -1,5 +1,5 @@
 use super::*;
-use crate::chat::submit_social_line;
+use crate::chat::submit_typed_line;
 use crate::online::{OnlineState, testing};
 
 fn app() -> App {
@@ -61,7 +61,7 @@ fn a_social_or_hotbutton_line_cannot_turn_it_over() {
     let mut chat = ChatState::default();
     for line in ["/fastdrop", "/fa", "/FASTDROP now"] {
         assert!(
-            submit_social_line(
+            submit_typed_line(
                 line,
                 &mut chat,
                 &mut online,

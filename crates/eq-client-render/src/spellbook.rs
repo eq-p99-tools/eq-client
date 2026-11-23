@@ -1438,6 +1438,7 @@ mod tests {
                 stack_count: None,
                 charges: 1,
                 bag_slots: 0,
+                augments: Default::default(),
             }]),
         );
         let before = online.world().inventory().clone();

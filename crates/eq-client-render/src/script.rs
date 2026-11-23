@@ -10,15 +10,20 @@
 //! `pointer` module), scrolling a list the control has scrolled out of view as
 //! the wheel does, and lands only on the control under it. A followed
 //! script keeps reading complete lines appended to its file, under the same limits.
-//! `gm`, `chat` and `social` steps require a network-constrained local EQEmu/TAKP session.
+//! `gm` fixture steps (spawn, depop, guild, stun, language, discipline)
+//! require a network-constrained local EQEmu/TAKP session; other `gm` lines and
+//! `chat`, emote, roll and `social` steps run on any server, as the player's
+//! own would.
 pub(crate) mod control;
 mod execution;
 mod input;
+mod length;
 pub(crate) use input::AuthoredInput;
 pub use input::InputMode;
 pub(super) use input::install as install_input;
 pub(crate) use input::world::WorldInput;
 pub(super) use input::world::apply as world_input;
+pub use length::{MAX_MINUTES, RunLength};
 pub(crate) mod language;
 pub(crate) use parse::{COMMANDS, FREE_TEXT};
 mod parse;
@@ -39,8 +44,8 @@ mod source;
 pub use source::read_source;
 
 pub use parse::{
-    AbilityPage, CharacterClick, ClickTarget, PickButton, RaidClick, SliderClick, Step, TradeClick,
-    TrainingClick, parse,
+    AbilityPage, BookEdit, CharacterClick, ClickTarget, PickButton, RaidClick, SliderClick, Step,
+    TradeClick, TrainingClick, parse,
 };
 pub(crate) use pointer::ScriptPointer;
 
@@ -65,7 +70,6 @@ const FACE_LIMIT: Duration = Duration::from_secs(5);
 /// heading units.
 const FACED: f32 = 0.5;
 const MAX_ONLINE_WAIT: Duration = Duration::from_mins(3);
-const MAX_RUNTIME: Duration = Duration::from_mins(15);
 const FOLLOW_POLL: Duration = Duration::from_millis(250);
 /// Path positions searched per frame, keeping each frame short.
 const SEARCH_BUDGET: usize = 1500;
@@ -103,6 +107,8 @@ pub struct Script {
     /// The control a scripted click pressed, which the pointer is over as
     /// the button is let go.
     pressed: Option<Entity>,
+    /// A click on a thing in the scene under way (checklist 6.587).
+    scene: Option<SceneClick>,
     started: Option<Duration>,
     /// Whether this run has entered a live session that must remain connected.
     session: RunSession,
@@ -122,6 +128,8 @@ pub struct Script {
     /// without anyone watching the window, but `gm` steps stay refused.
     offline: bool,
     input_mode: InputMode,
+    /// How long the player lets this run go.
+    length: RunLength,
     /// True only after this frame's background ownership check succeeds.
     owns_input: bool,
     /// The route a `walk` step is searching for or following.
@@ -259,6 +267,7 @@ impl Script {
             clicked: None,
             world_gesture: None,
             pressed: None,
+            scene: None,
             started: None,
             session: RunSession::BeforeAdmission,
             paused: false,
@@ -268,6 +277,7 @@ impl Script {
             local: false,
             offline: false,
             input_mode: InputMode::Attended,
+            length: RunLength::Default,
             owns_input: false,
             route: None,
             door_wait: None,
@@ -336,6 +346,7 @@ impl Script {
             .local_session(config.local_session)
             .offline_preview(!online)
             .input_mode(config.script_input_mode)
+            .run_length(config.script_run_length)
     }
 
     /// The current run's typed progress, including its immutable source snapshot.
@@ -385,6 +396,18 @@ impl Script {
         self
     }
 
+    /// The player's chosen run length. It lifts only the run's overall
+    /// counts; paces, waits, input rules and Stop stay as they are.
+    #[must_use]
+    pub fn run_length(mut self, length: RunLength) -> Self {
+        self.length = length;
+        self.progress.length = length;
+        if let Some(run) = &mut self.language {
+            run.counted(length.counted());
+        }
+        self
+    }
+
     /// Whether this frame accepts scripted input without native window focus.
     #[must_use]
     pub(crate) const fn unattended(&self) -> bool {
@@ -403,7 +426,7 @@ impl Script {
         }
     }
 
-    /// Check the exact local executor and its authority for this frame.
+    /// Check this script's executor and its authority for this frame.
     pub(crate) fn social_dispatch(
         &self,
         owner: &std::sync::Arc<()>,
@@ -411,12 +434,11 @@ impl Script {
     ) -> Option<crate::socials::ScriptDispatch> {
         use crate::socials::ScriptDispatch;
 
-        if !self.local
-            || self
-                .progress
-                .expected_world
-                .as_ref()
-                .is_some_and(|expected| expected.refusal(online).is_some())
+        if self
+            .progress
+            .expected_world
+            .as_ref()
+            .is_some_and(|expected| expected.refusal(online).is_some())
             || !std::sync::Arc::ptr_eq(&self.progress.identity, owner)
             || !matches!(self.progress.phase, Phase::Running | Phase::Following)
         {
@@ -554,14 +576,10 @@ impl Script {
     }
 
     /// Keep the ordinary action queue authoritative, including menu-entry retries.
-    fn queue_statement(
-        &mut self,
-        world: &eq_client_core::world::ClientWorld,
-        now: Duration,
-    ) -> Result<(), String> {
+    fn queue_statement(&mut self, sight: &language::Sight, now: Duration) -> Result<(), String> {
         if self.steps.is_empty()
             && let Some(run) = &mut self.language
-            && let language::Tick::Action(step) = run.tick(world, &mut self.progress, now)?
+            && let language::Tick::Action(step) = run.tick(sight, &mut self.progress, now)?
         {
             self.steps.push_back(step);
         }
@@ -575,6 +593,14 @@ impl Script {
         }
         self.acts.clear();
         self.facing = None;
+        // The scene reads the real pointer again from the next frame
+        // (`lease_scene`).
+        self.scene = None;
+        self.release_button(keys, mouse);
+    }
+
+    /// Lets go of the mouse button a click pressed, if it still holds it.
+    fn release_button(&mut self, keys: &mut Keyboard, mouse: &mut ButtonInput<MouseButton>) {
         if let Some(button) = self.clicked.take() {
             // A genuine press of the same button belongs to the user now.
             if !keys.native_button(button) {
@@ -852,7 +878,10 @@ type Buttons<'w, 's> = Query<
         (
             Option<&'static super::spellbook::BookEntry>,
             Option<&'static super::spellbook::BookPlace>,
-            Option<&'static super::spellbook::TurnsPages>,
+            (
+                Option<&'static super::spellbook::TurnsPages>,
+                Option<&'static super::book_delete::Action>,
+            ),
             Option<&'static super::hud::SpellGem>,
             Option<&'static super::hud::hotbar::Slot>,
         ),
@@ -1179,12 +1208,13 @@ pub(super) fn drive(
     bodies: Query<&super::PlayerBody, With<super::Player>>,
     collision: Option<Res<super::Collision>>,
     mut cameras: Query<&mut super::OrbitCamera>,
-    (mut buttons, layout, mut pointers, needs, mut aim): (
+    (mut buttons, layout, mut pointers, needs, mut aim, mut scene): (
         Buttons,
         Layout,
         Pointers,
         Query<&crate::outbox::Needs>,
         pointer::Aim,
+        Option<ResMut<crate::target::ScenePointer>>,
     ),
     (windows, settings, mut control, detached_camera): DriverContext,
     mut focus: MessageReader<bevy::window::WindowFocused>,
@@ -1301,7 +1331,11 @@ pub(super) fn drive(
     }
     let started = *script.started.get_or_insert(now);
     script.progress.elapsed = now.saturating_sub(started);
-    if now.saturating_sub(started) > MAX_RUNTIME {
+    if script
+        .length
+        .runtime()
+        .is_some_and(|runtime| now.saturating_sub(started) > runtime)
+    {
         script.cancel_press(&mut buttons, &mut commands);
         script.stop(&mut keys, &mut mouse, "maximum runtime reached");
         script.retire(&mut commands);
@@ -1393,11 +1427,49 @@ pub(super) fn drive(
     {
         interaction.set_if_neq(Interaction::Hovered);
     }
+    // A click on a thing in the scene runs frame by frame through the
+    // scene's own pick, until it is done.
+    if script.scene.is_some()
+        && let Some((step, began)) = script.current.clone()
+    {
+        let Some(scene) = scene.as_deref_mut() else {
+            script.stop(&mut keys, &mut mouse, "the scene is not drawn");
+            return;
+        };
+        // The thing must still be the one reported, every frame up to the
+        // last release: an id reused mid-click is refused, not clicked.
+        let named = match &step {
+            Step::Click(target) | Step::RightClick(target) | Step::ClickWith { target, .. } => {
+                scene_thing(*target, online.world())
+            }
+            _ => None,
+        };
+        if let Some(Err(reason)) = named {
+            script.stop(&mut keys, &mut mouse, reason);
+            return;
+        }
+        match scene_frame(
+            script,
+            (&step, began, now),
+            (&mut keys, &mut mouse),
+            (&mut aim, &mut commands),
+            scene,
+        ) {
+            Ok(true) => script.current = None,
+            Ok(false) => {}
+            Err(reason) => script.stop(&mut keys, &mut mouse, &reason),
+        }
+        return;
+    }
     // One-frame presses and clicks are released on the frame after they were pressed.
     if matches!(
         script.current,
         Some((
-            Step::Press(_) | Step::Select(_) | Step::Click(_) | Step::RightClick(_),
+            Step::Press(_)
+                | Step::Select(_)
+                | Step::Click(_)
+                | Step::RightClick(_)
+                | Step::ClickWith { .. },
             _
         ))
     ) && (!script.held.is_empty() || script.clicked.is_some())
@@ -1423,6 +1495,14 @@ pub(super) fn drive(
             .current
             .as_ref()
             .is_some_and(|(step, _)| entry_target(step).is_some());
+        if matches!(script.current, Some((Step::ClickWith { .. }, _))) && !menu_entry {
+            // A person lets go of the button before the modifiers: the
+            // control a release clicks reads them still held, and they go
+            // up the frame after, as a one-frame press does.
+            script.release_button(&mut keys, &mut mouse);
+            script.current = Some((Step::Press(script.held.clone()), now));
+            return;
+        }
         script.release(&mut keys, &mut mouse);
         script.current = None;
         if menu_entry {
@@ -1910,7 +1990,7 @@ pub(super) fn drive(
                     arrived(&step, &online, covered)
                 }
             }
-            Step::Click(target) | Step::RightClick(target) => {
+            Step::Click(target) | Step::RightClick(target) | Step::ClickWith { target, .. } => {
                 if elapsed > MAX_WAIT {
                     script.stop(&mut keys, &mut mouse, "the pointer stayed over the window");
                     return;
@@ -1919,6 +1999,22 @@ pub(super) fn drive(
                     && window.is_some_and(|window| window.cursor_position().is_some())
                 {
                     script.progress.phase = Phase::WaitingForPointer;
+                    return;
+                }
+                if let Some(thing) = scene_thing(*target, online.world()) {
+                    // A thing in the scene, clicked where it shows
+                    // (checklist 6.587); the next frames go through
+                    // `scene_frame`.
+                    match thing {
+                        Ok(thing) => {
+                            if let Some(scene) = scene.as_deref_mut() {
+                                *scene = crate::target::ScenePointer::default();
+                            }
+                            script.scene = Some(SceneClick::new(thing));
+                            script.current = Some((step.clone(), now));
+                        }
+                        Err(reason) => script.stop(&mut keys, &mut mouse, reason),
+                    }
                     return;
                 }
                 let entity = match aim_click(
@@ -1936,11 +2032,24 @@ pub(super) fn drive(
                     }
                 };
                 press(&mut commands, entity, *target, &mut buttons, &mut pointers);
-                let button = if matches!(step, Step::RightClick(_)) {
+                let button = if matches!(
+                    step,
+                    Step::RightClick(_) | Step::ClickWith { right: true, .. }
+                ) {
                     MouseButton::Right
                 } else {
                     MouseButton::Left
                 };
+                if let Step::ClickWith {
+                    keys: modifiers, ..
+                } = &step
+                {
+                    // Down with the button, so the press reads them.
+                    for key in modifiers {
+                        keys.press(*key);
+                    }
+                    script.held.clone_from(modifiers);
+                }
                 keys.mark_pointer(button, Some(entity));
                 mouse.press(button);
                 script.clicked = Some(button);
@@ -2078,7 +2187,14 @@ pub(super) fn drive(
     if !script.advance(now) || script.breakpoint(now) {
         return;
     }
-    if let Err(reason) = script.queue_statement(online.world(), now) {
+    let sight = language::Sight {
+        world: online.world(),
+        spells: observed.8.as_deref(),
+        clock: client.clock(),
+        now: std::time::Instant::now(),
+        chat: Some(&chat),
+    };
+    if let Err(reason) = script.queue_statement(&sight, now) {
         script.stop(&mut keys, &mut mouse, &reason);
         script.retire(&mut commands);
         return;
@@ -2167,13 +2283,15 @@ pub(super) fn drive(
             // The step waits for the world's answer to this request.
             script.created_before = online.world().creation().map(|last| last.count);
         }
-        Step::Slash(_) | Step::Gm(_) | Step::Chat(_) if !online.in_world() => {
+        Step::Slash(_) | Step::Gm(_) | Step::Chat(_) | Step::AlternateAdvancement(_)
+            if !online.in_world() =>
+        {
             // The worker discards commands while zoning, dead or disconnected.
             script.stop(
                 &mut keys,
                 &mut mouse,
                 concat!(
-                    "slash, gm and chat steps need a character in the world; ",
+                    "slash, gm, chat and AA steps need a character in the world; ",
                     "wait_online or wait_zone first"
                 ),
             );
@@ -2186,19 +2304,16 @@ pub(super) fn drive(
             return;
         }
         Step::Slash(command) => {
-            if !script.local && super::chat::broadcasts_to_others(command) {
+            // A social, however it is spelled, keeps the named step's ownership.
+            let spelled = crate::commands::spelled(command);
+            if spelled
+                .as_deref()
+                .is_some_and(|line| super::socials::Request::parse(line).is_some())
+            {
                 script.stop(
                     &mut keys,
                     &mut mouse,
-                    "emote and random steps require a network-enforced local test session.",
-                );
-                return;
-            }
-            if super::socials::Request::parse(command).is_some() {
-                script.stop(
-                    &mut keys,
-                    &mut mouse,
-                    "Use a named social step in a local script.",
+                    "Use a named social step in a script.",
                 );
                 return;
             }
@@ -2206,27 +2321,22 @@ pub(super) fn drive(
                 .9
                 .as_ref()
                 .map_or_else(Default::default, |options| options.options.qol);
-            let queued = super::chat::client_request_in_scope(
-                command,
-                &mut chat,
-                script.progress.expected_world.clone(),
-            )
-            .unwrap_or_else(|| {
-                super::chat::submit_game_command(command, &mut online, &observed.1, &qol)
-            });
-            if let Err(error) = queued {
+            // The line runs exactly as a typed one, stamped with the script's
+            // admission: the same rules, paces, camp and departures.
+            let outbox = observed.1.for_script(script.chat_admission());
+            if let Err(error) =
+                super::chat::submit_typed_line(command, &mut chat, &mut online, &outbox, &qol)
+            {
                 script.stop(&mut keys, &mut mouse, &error);
-            } else if command.split_ascii_whitespace().next() == Some("/camp") {
-                chat.socials.stop = true;
             }
             return;
         }
         Step::Social(command) => {
-            if !script.local || !online.in_world() {
+            if !online.in_world() {
                 script.stop(
                     &mut keys,
                     &mut mouse,
-                    "social script steps need a local character in the world",
+                    "social script steps need a character in the world",
                 );
                 return;
             }
@@ -2353,12 +2463,19 @@ pub(super) fn drive(
             }
             return;
         }
+        Step::AlternateAdvancement(request) => {
+            // One command and done: the session decides, and its refusal is
+            // said in chat; the step never waits on the server or retries.
+            if let Err(error) = aa_request(*request, script.chat_admission(), &observed.1, &online)
+            {
+                script.stop(&mut keys, &mut mouse, &error);
+            }
+            return;
+        }
         Step::Gm(_) | Step::Chat(_) => {
             let command = match &step {
                 Step::Gm(command) => gm_request(command, script.local, online.world()),
-                Step::Chat(chat) => {
-                    local_chat(chat, script.local).map(eq_client_core::ClientCommand::SendChat)
-                }
+                Step::Chat(chat) => Ok(eq_client_core::ClientCommand::SendChat(chat.clone())),
                 _ => return,
             };
             let sent = command.and_then(|command| {
@@ -2506,7 +2623,7 @@ pub(super) fn drive(
                 MoveCommand::TurnRight => Act::TurnRight,
             }];
         }
-        Step::Click(_) | Step::RightClick(_) | Step::HoldClick(..) => {
+        Step::Click(_) | Step::RightClick(_) | Step::ClickWith { .. } | Step::HoldClick(..) => {
             // The script pointer leaves the control a hover rested on.
             script.pointed = script.hovering.take().or(script.pointed);
             if !script.background_owns_input()
@@ -2763,7 +2880,10 @@ fn opens_menu_first(
 /// The EQ menu entry a click step names, if any.
 fn entry_target(step: &Step) -> Option<ClickTarget> {
     match step {
-        Step::Click(target) | Step::RightClick(target) | Step::HoldClick(target, _)
+        Step::Click(target)
+        | Step::RightClick(target)
+        | Step::ClickWith { target, .. }
+        | Step::HoldClick(target, _)
             if matches!(target, ClickTarget::Toggle(_) | ClickTarget::ActionsWindow) =>
         {
             Some(*target)
@@ -2836,18 +2956,60 @@ fn may_run(unattended: bool, reported_focus: Option<bool>, window_focused: bool)
     unattended || (reported_focus == Some(true) && window_focused)
 }
 
-/// The request for a validated local GM command. Fixture cleanup carries
-/// the admission and reconciled NPC selection to the zone's send owner.
+/// Posts a script's AA request for this admission, or says why it can't.
+fn aa_request(
+    request: parse::AaRequest,
+    admission: Option<u64>,
+    outbox: &crate::outbox::Outbox,
+    online: &crate::online::OnlineState,
+) -> Result<(), String> {
+    use eq_client_core::ClientCommand;
+    let world = online.world();
+    if admission.is_some_and(|admission| world.session_id() != Some(admission)) {
+        return Err("the AA step's admission has ended".into());
+    }
+    outbox
+        .for_script(admission)
+        .post(world, |stamp| {
+            let session_id = stamp.session_id;
+            match request {
+                parse::AaRequest::Train(rank_id) => ClientCommand::TrainAlternateAdvancement {
+                    session_id,
+                    rank_id,
+                },
+                parse::AaRequest::Activate(rank_id) => {
+                    ClientCommand::ActivateAlternateAdvancement {
+                        session_id,
+                        rank_id,
+                        target: None,
+                    }
+                }
+                parse::AaRequest::Split(percentage) => {
+                    ClientCommand::SetAlternateAdvancementSplit {
+                        session_id,
+                        percentage,
+                    }
+                }
+            }
+        })
+        .map_err(|refusal| refusal.text().to_owned())
+}
+
+/// The request for a validated GM command. A fixture form needs a local
+/// session; any other line goes as a typed `#` line would, on any server.
+/// Fixture cleanup carries the admission and reconciled NPC selection to the
+/// zone's send owner.
 fn gm_request(
     command: &str,
-    allowed: bool,
+    local: bool,
     world: &eq_client_core::world::ClientWorld,
 ) -> Result<eq_client_core::ClientCommand, String> {
     use eq_client_core::{ClientCommand, OutboundChat, SpawnKind};
 
-    if !allowed {
+    if !local && parse::gm_fixture(command) {
         return Err(
-            "gm steps only run on a local EQEmu or TAKP server (EQ_PROTOCOL=eqemu or takp)".into(),
+            "gm fixture steps only run on a local EQEmu or TAKP server (EQ_PROTOCOL=eqemu or takp)"
+                .into(),
         );
     }
     let words: Vec<_> = command.split_ascii_whitespace().collect();
@@ -2891,21 +3053,6 @@ fn gm_request(
     Ok(ClientCommand::SendChat(OutboundChat::Say(format!(
         "#{command}"
     ))))
-}
-
-/// A `chat` step's line, refused unless the session is on a local `EQEmu` or
-/// TAKP server, as `gm` steps are.
-fn local_chat(
-    chat: &eq_client_core::OutboundChat,
-    allowed: bool,
-) -> Result<eq_client_core::OutboundChat, String> {
-    if !allowed {
-        return Err(
-            "chat steps only run on a local EQEmu or TAKP server (EQ_PROTOCOL=eqemu or takp)"
-                .into(),
-        );
-    }
-    Ok(chat.clone())
 }
 
 /// Whether a button of the skin's character list or a chat tab is the one
@@ -2994,6 +3141,38 @@ fn tracking_control(
     }
 }
 
+/// Whether a spellbook control is the one a click names: a list row, a
+/// skin place, a page arrow or an ordering button.
+fn book_control(
+    target: ClickTarget,
+    (row, place, turns, edit): (
+        Option<&super::spellbook::BookEntry>,
+        Option<&super::spellbook::BookPlace>,
+        Option<&super::spellbook::TurnsPages>,
+        Option<&super::book_delete::Action>,
+    ),
+) -> bool {
+    match target {
+        ClickTarget::BookRow(number) => row.is_some_and(|row| row.0 == number),
+        ClickTarget::BookPlace(number) => place.is_some_and(|place| place.0 == number),
+        ClickTarget::BookPage(forward) => turns.is_some_and(|turns| turns.0 == forward),
+        ClickTarget::BookEdit(wanted) => edit.is_some_and(|action| *action == book(wanted)),
+        _ => false,
+    }
+}
+
+/// The spellbook button a scripted `book_edit` names.
+const fn book(edit: BookEdit) -> super::book_delete::Action {
+    use super::book_delete::Action;
+    match edit {
+        BookEdit::Earlier => Action::Earlier,
+        BookEdit::Later => Action::Later,
+        BookEdit::Delete => Action::Select,
+        BookEdit::Confirm => Action::Confirm,
+        BookEdit::Cancel => Action::Cancel,
+    }
+}
+
 /// The loot or merchant window's action a scripted click names.
 const fn trading(click: TradeClick) -> super::trade::Action {
     use super::trade::Action;
@@ -3050,7 +3229,12 @@ fn reach(
         );
     }
     match (target, needs.get(entity)) {
-        (ClickTarget::Button(..), Ok(needs)) if !needs.offered(world) => {
+        // A spellbook edit needs the session to offer moving or deleting;
+        // P99 holds deletion back, and the script is told so, as the
+        // greyed button tells a person.
+        (ClickTarget::Button(..) | ClickTarget::BookEdit(_), Ok(needs))
+            if !needs.offered(world) =>
+        {
             Err(format!("that button is greyed out: {}", needs.reason()))
         }
         (ClickTarget::Slider(..), Ok(needs)) if !needs.offered(world) => {
@@ -3077,6 +3261,7 @@ fn accepts_duel(
 /// action can have more than one button, such as the spellbook entry in
 /// the EQ menu and the spellbook button beside the gems. Query iteration
 /// order must not send the pointer to a copy under the menu's dismiss shield.
+#[allow(clippy::too_many_lines)] // One arm per kind of target.
 fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entity> {
     let mut found = None;
     for (
@@ -3086,7 +3271,7 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
         slot,
         scribe,
         (store, destroy, drop),
-        (row, place, turns, spell_gem, hot_button),
+        (row, place, (turns, book_edit), spell_gem, hot_button),
         gem,
         trade,
         tint,
@@ -3151,9 +3336,13 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
             ClickTarget::Store => store,
             ClickTarget::Destroy => destroy == Some(&super::inventory::destruction::Action::Select),
             ClickTarget::Drop => drop,
-            ClickTarget::BookRow(number) => row.is_some_and(|row| row.0 == number),
-            ClickTarget::BookPlace(number) => place.is_some_and(|place| place.0 == number),
-            ClickTarget::BookPage(forward) => turns.is_some_and(|turns| turns.0 == forward),
+            ClickTarget::Spawn { .. } | ClickTarget::Object { .. } | ClickTarget::Door { .. } => {
+                false
+            }
+            ClickTarget::BookRow(_)
+            | ClickTarget::BookPlace(_)
+            | ClickTarget::BookPage(_)
+            | ClickTarget::BookEdit(_) => book_control(target, (row, place, turns, book_edit)),
             ClickTarget::SpellGem(number) => spell_gem.is_some_and(|gem| gem.0 == number),
             ClickTarget::HotButton(number) => hot_button.is_some_and(|slot| slot.0 == number),
             ClickTarget::MemorizeGem(number) => gem.is_some_and(|gem| gem.0 == number),
@@ -3370,6 +3559,233 @@ fn point(
         && let Ok((_, mut interaction, ..)) = buttons.get_mut(over)
     {
         interaction.set_if_neq(Interaction::Hovered);
+    }
+}
+
+/// A click on a thing in the scene (checklist 6.587): what it names,
+/// where it has got to, where the script pointer is once it is on its way,
+/// and how many clicks remain (a door takes two).
+#[derive(Clone, Copy, Debug)]
+struct SceneClick {
+    thing: crate::target::Thing,
+    stage: SceneStage,
+    at: Option<Vec2>,
+    clicks: u8,
+}
+
+/// Where a scene click has got to, frame by frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum SceneStage {
+    /// Waiting for the scene's pick to say where the thing shows.
+    Aiming,
+    /// The pointer on its way: from, to (following a moving thing), since.
+    Gliding(Vec2, Vec2, Duration),
+    /// The button went down last frame.
+    Pressed,
+    /// The button came up last frame.
+    Released,
+}
+
+impl SceneClick {
+    fn new(thing: crate::target::Thing) -> Self {
+        Self {
+            thing,
+            stage: SceneStage::Aiming,
+            at: None,
+            clicks: if matches!(thing, crate::target::Thing::Door(_)) {
+                2
+            } else {
+                1
+            },
+        }
+    }
+}
+
+/// One frame of a scene click under way (checklist 6.587), through the
+/// scene's own pick: it aims where the pick names the thing, glides there,
+/// presses as a person does, and lets go; a door takes a second click on
+/// the same point. Ok(true) once done; Err(reason) when the pick names
+/// something else, or nothing takes the press, and nothing was done.
+fn scene_frame(
+    script: &mut Script,
+    (step, began, now): (&Step, Duration, Duration),
+    (keys, mouse): (&mut Keyboard, &mut ButtonInput<MouseButton>),
+    (aim, commands): (&mut pointer::Aim, &mut Commands),
+    scene: &mut crate::target::ScenePointer,
+) -> Result<bool, String> {
+    let Some(mut click) = script.scene else {
+        return Ok(true);
+    };
+    let refused = scene.refused.take();
+    let acted = std::mem::take(&mut scene.acted);
+    let verdict = scene.aim.take();
+    match click.stage {
+        SceneStage::Aiming => match verdict {
+            None if now.saturating_sub(began) > MAX_WAIT => {
+                return Err(click.thing.covered().to_owned());
+            }
+            None => {}
+            Some(Err(reason)) => return Err(reason),
+            Some(Ok(to)) => {
+                let from = aim.at();
+                aim.place(commands, from);
+                click.at = Some(from);
+                click.stage = SceneStage::Gliding(from, to, now);
+            }
+        },
+        SceneStage::Gliding(from, to, since) => {
+            // A thing that moves as the pointer heads for it is followed.
+            let to = match &verdict {
+                Some(Ok(point)) => *point,
+                _ => to,
+            };
+            let elapsed = now.saturating_sub(since);
+            let at = pointer::glide_at(from, to, elapsed);
+            aim.place(commands, at);
+            click.at = Some(at);
+            click.stage = SceneStage::Gliding(from, to, since);
+            if elapsed >= pointer::GLIDE {
+                // Checked again where it lands, before the press.
+                match verdict {
+                    Some(Ok(_)) => {}
+                    Some(Err(reason)) => return Err(reason),
+                    None => return Err(click.thing.covered().to_owned()),
+                }
+                scene_press(script, step, keys, mouse);
+                click.stage = SceneStage::Pressed;
+            }
+        }
+        SceneStage::Pressed => {
+            if let Some(reason) = refused {
+                return Err(reason);
+            }
+            if !acted {
+                // A window, a drag or a held key took the press, as it
+                // would a person's.
+                return Err(click.thing.covered().to_owned());
+            }
+            script.release_button(keys, mouse);
+            click.stage = SceneStage::Released;
+        }
+        SceneStage::Released => {
+            if let Some(reason) = refused {
+                return Err(reason);
+            }
+            click.clicks = click.clicks.saturating_sub(1);
+            if click.clicks == 0 {
+                script.release(keys, mouse);
+                return Ok(true);
+            }
+            // The door's second click, on the same point.
+            scene_press(script, step, keys, mouse);
+            click.stage = SceneStage::Pressed;
+        }
+    }
+    script.scene = Some(click);
+    Ok(false)
+}
+
+/// Presses the step's button for a scene click, with its modifiers held
+/// down from the first press until the click is done.
+fn scene_press(
+    script: &mut Script,
+    step: &Step,
+    keys: &mut Keyboard,
+    mouse: &mut ButtonInput<MouseButton>,
+) {
+    let button = if matches!(
+        step,
+        Step::RightClick(_) | Step::ClickWith { right: true, .. }
+    ) {
+        MouseButton::Right
+    } else {
+        MouseButton::Left
+    };
+    if let Step::ClickWith {
+        keys: modifiers, ..
+    } = step
+        && script.held.is_empty()
+    {
+        for key in modifiers {
+            keys.press(*key);
+        }
+        script.held.clone_from(modifiers);
+    }
+    keys.mark_pointer(button, None);
+    mouse.press(button);
+    script.clicked = Some(button);
+}
+
+/// The thing a scene target names, if the world still holds it as
+/// reported; otherwise why the click is refused before anything moves.
+fn scene_thing(
+    target: ClickTarget,
+    world: &eq_client_core::world::ClientWorld,
+) -> Option<Result<crate::target::Thing, &'static str>> {
+    use crate::target::Thing;
+    let (admission, thing, known) = match target {
+        ClickTarget::Spawn {
+            admission,
+            id,
+            revision,
+        } => (
+            admission,
+            Thing::Spawn(id),
+            world
+                .spawn(id)
+                .is_some_and(|spawn| spawn.revision == revision),
+        ),
+        ClickTarget::Object { admission, drop_id } => (
+            admission,
+            Thing::Object(drop_id),
+            world.objects().entries().contains_key(&drop_id),
+        ),
+        ClickTarget::Door { admission, id } => (
+            admission,
+            Thing::Door(id),
+            world.doors().entries().contains_key(&id),
+        ),
+        _ => return None,
+    };
+    Some(
+        if !world.in_world() || world.session_id() != Some(admission) {
+            Err("that scene target was reported in another admission")
+        } else if known {
+            Ok(thing)
+        } else {
+            Err(match thing {
+                Thing::Spawn(_) => "that spawn is gone or has changed",
+                Thing::Object(_) => "that object is not in this zone's list",
+                Thing::Door(_) => "that door is not in this zone's list",
+            })
+        },
+    )
+}
+
+/// Lends the scene the script's pointer for the frame while a scene click
+/// is under way; any other frame, including the first after a run stops or
+/// fails, the scene reads the real pointer and nothing of the click is left.
+pub(super) fn lease_scene(
+    script: Option<Res<Script>>,
+    scene: Option<ResMut<crate::target::ScenePointer>>,
+) {
+    let Some(mut scene) = scene else {
+        return;
+    };
+    let request = script
+        .and_then(|script| script.scene)
+        .map(|click| crate::target::SceneRequest {
+            thing: click.thing,
+            at: click.at,
+        });
+    if request.is_some() {
+        scene.request = request;
+    } else if scene.request.is_some()
+        || scene.aim.is_some()
+        || scene.refused.is_some()
+        || scene.acted
+    {
+        *scene = crate::target::ScenePointer::default();
     }
 }
 
@@ -4049,10 +4465,56 @@ fn runs(distance: Option<f32>, range: f32) -> bool {
 #[cfg(test)]
 mod tests {
     mod background_pointer;
+    mod private;
     mod semantic;
     mod world_input;
     use super::*;
     use eq_client_assets::ui::InstalledClient;
+
+    #[test]
+    fn an_aa_step_posts_one_command_for_this_admission() {
+        use eq_client_core::ClientCommand;
+        use parse::AaRequest;
+        let mut online = crate::online::OnlineState::new(true);
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let outbox = crate::outbox::Outbox::new(Some(tx));
+        // Before admission nothing leaves.
+        assert!(aa_request(AaRequest::Train(42), None, &outbox, &online).is_err());
+        assert!(rx.try_recv().is_err());
+        crate::online::testing::admit(&mut online, 3, crate::online::testing::player(7));
+        for (request, expected) in [
+            (
+                AaRequest::Train(42),
+                ClientCommand::TrainAlternateAdvancement {
+                    session_id: 3,
+                    rank_id: 42,
+                },
+            ),
+            (
+                AaRequest::Activate(42),
+                ClientCommand::ActivateAlternateAdvancement {
+                    session_id: 3,
+                    rank_id: 42,
+                    target: None,
+                },
+            ),
+            (
+                AaRequest::Split(0),
+                ClientCommand::SetAlternateAdvancementSplit {
+                    session_id: 3,
+                    percentage: 0,
+                },
+            ),
+        ] {
+            assert_eq!(aa_request(request, Some(3), &outbox, &online), Ok(()));
+            assert_eq!(rx.try_recv().unwrap(), expected);
+            // One command: the step neither repeats nor waits.
+            assert!(rx.try_recv().is_err());
+        }
+        // A step written for an admission that has ended sends nothing.
+        assert!(aa_request(AaRequest::Train(42), Some(2), &outbox, &online).is_err());
+        assert!(rx.try_recv().is_err());
+    }
 
     #[test]
     fn station_steps_require_the_station_offer_even_when_carried_combines_are_offered() {
@@ -4907,6 +5369,78 @@ mod tests {
         assert_eq!(reached[3], Err("click target is not visible".into()));
     }
 
+    #[test]
+    fn a_spellbook_edit_button_is_pressed_by_its_action_unless_it_is_greyed() {
+        use crate::book_delete::Action;
+        use crate::outbox::Needs;
+        #[derive(Resource, Default)]
+        struct Reached(Vec<Result<Action, String>>);
+        let mut app = App::new();
+        app.init_resource::<Reached>();
+        for (action, needs) in [
+            (Action::Earlier, Needs::Nothing),
+            (Action::Later, Needs::Nothing),
+            (Action::Confirm, Needs::Nothing),
+            (Action::Cancel, Needs::Nothing),
+            // Withheld, as P99 withholds deleting spells.
+            (Action::Select, Needs::Missing),
+        ] {
+            app.world_mut().spawn((
+                Node::default(),
+                Button,
+                InheritedVisibility::VISIBLE,
+                action,
+                needs,
+            ));
+        }
+        app.add_systems(
+            Update,
+            |buttons: Buttons,
+             layout: Layout,
+             needs: Query<&Needs>,
+             actions: Query<&Action>,
+             mut reached: ResMut<Reached>| {
+                let world = crate::online::OnlineState::new(true);
+                for edit in [
+                    BookEdit::Earlier,
+                    BookEdit::Later,
+                    BookEdit::Confirm,
+                    BookEdit::Cancel,
+                    BookEdit::Delete,
+                ] {
+                    let found = reach(
+                        ClickTarget::BookEdit(edit),
+                        &buttons,
+                        &layout,
+                        &needs,
+                        world.world(),
+                    );
+                    reached
+                        .0
+                        .push(found.map(|entity| *actions.get(entity).unwrap()));
+                }
+            },
+        );
+        app.update();
+        let reached = &app.world().resource::<Reached>().0;
+        assert_eq!(
+            reached[..4],
+            [
+                Ok(Action::Earlier),
+                Ok(Action::Later),
+                Ok(Action::Confirm),
+                Ok(Action::Cancel)
+            ]
+        );
+        assert_eq!(
+            reached[4],
+            Err(format!(
+                "that button is greyed out: {}",
+                crate::outbox::MISSING
+            ))
+        );
+    }
+
     /// A zone with the player (7) and three gnolls (9 to 11) in it, and a
     /// gnoll's death.
     fn gnolls() -> (
@@ -4974,24 +5508,22 @@ mod tests {
     }
 
     #[test]
-    fn chat_steps_speak_only_on_a_local_server() {
-        let line = eq_client_core::OutboundChat::Say("Hail".into());
-        assert!(local_chat(&line, false).is_err());
-        assert_eq!(local_chat(&line, true), Ok(line));
-    }
-
-    #[test]
-    fn gm_commands_only_reach_a_local_eqemu_session() {
+    fn gm_lines_run_anywhere_but_fixtures_only_on_a_local_session() {
         use eq_client_core::{ClientCommand, OutboundChat};
         let world = eq_client_core::world::ClientWorld::default();
-        assert!(gm_request("summon", false, &world).is_err());
+        // A plain line runs anywhere, as a typed `#` line would.
+        assert_eq!(
+            gm_request("summon", false, &world).unwrap(),
+            ClientCommand::SendChat(OutboundChat::Say("#summon".into()))
+        );
+        assert!(gm_request("stun 8000", false, &world).is_err());
         assert_eq!(
             gm_request("givemoney 0 0 5 0", true, &world).unwrap(),
             ClientCommand::SendChat(OutboundChat::Say("#givemoney 0 0 5 0".into()))
         );
         assert!(!Script::new(vec![Step::Gm("summon".into())]).local);
         assert!(Script::new(Vec::new()).local_session(true).local);
-        // Offline, steps run unattended but a gm step is still refused.
+        // Offline, steps run unattended but a gm fixture step is still refused.
         let offline = Script::new(Vec::new()).offline_preview(true);
         assert!(offline.offline && !offline.local);
     }
@@ -5921,7 +6453,7 @@ mod tests {
                         .request(Request::Stop);
                     270
                 }
-                "runtime" => u64::try_from(MAX_RUNTIME.as_millis()).unwrap() + 1,
+                "runtime" => u64::try_from(length::DEFAULT_RUNTIME.as_millis()).unwrap() + 1,
                 _ => {
                     let mut online = app.world_mut().resource_mut::<crate::online::OnlineState>();
                     online.enabled = true;
@@ -6097,6 +6629,99 @@ mod tests {
         let status = app.world().resource::<RunStatus>();
         assert_eq!(status.phase(), Phase::Failed);
         assert_eq!(status.events().back().unwrap().message, "Session ended");
+    }
+
+    /// A run of `source` offline at the player's chosen length.
+    fn lengthened(source: &str, length: RunLength) -> App {
+        let mut app = pointing(Vec::new());
+        app.init_resource::<RunControl>()
+            .init_resource::<RunStatus>()
+            .add_systems(Update, observe.after(drive));
+        let program = Program::parse(source, Path::new(".")).unwrap();
+        app.insert_resource(
+            Script::from_program(program)
+                .offline_preview(true)
+                .run_length(length),
+        );
+        app
+    }
+
+    #[test]
+    fn the_players_length_sets_the_time_cap() {
+        let minute = 60_000;
+        for (length, stopped_by) in [
+            (RunLength::Default, Some(15)),
+            (RunLength::Minutes(30), Some(30)),
+            (RunLength::Unlimited, None),
+        ] {
+            let mut app = lengthened("while True:\n    pass\n", length);
+            let mut stopped = None;
+            for minutes in [0, 14, 16, 29, 31, 24 * 60, 7 * 24 * 60] {
+                frame_at(&mut app, minutes * minute);
+                if stopped.is_none() && !app.world().contains_resource::<Script>() {
+                    stopped = Some(minutes);
+                }
+            }
+            match stopped_by {
+                Some(cap) => {
+                    // Stopped by the first frame past its cap.
+                    let first_past = [0, 14, 16, 29, 31].into_iter().find(|m| *m > cap);
+                    assert_eq!(stopped, first_past, "{length:?}");
+                    let status = app.world().resource::<RunStatus>();
+                    assert_eq!(
+                        status.events().back().unwrap().message,
+                        "maximum runtime reached",
+                        "{length:?}"
+                    );
+                }
+                None => assert_eq!(stopped, None, "{length:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn stop_ends_an_unlimited_spin_next_frame_and_releases_held_keys() {
+        // A loop with no cap runs one statement a frame, past the default's
+        // 5,000, so the client keeps drawing; Stop still lands.
+        let mut app = lengthened("while True:\n    pass\n", RunLength::Unlimited);
+        for frame in 0..5_200 {
+            frame_at(&mut app, frame * 16);
+        }
+        let statements = app
+            .world()
+            .resource::<Script>()
+            .status()
+            .flow()
+            .unwrap()
+            .statements();
+        assert!(statements > 5_000, "{statements}");
+        app.world_mut()
+            .resource_mut::<RunControl>()
+            .request(Request::Stop);
+        frame_at(&mut app, 5_200 * 16);
+        assert!(!app.world().contains_resource::<Script>());
+        // A held key is let go when Stop lands, at any length.
+        let mut app = lengthened(
+            "hold(\"W\", 10000)\nwhile True:\n    pass\n",
+            RunLength::Unlimited,
+        );
+        frame_at(&mut app, 0);
+        frame_at(&mut app, 100);
+        assert!(
+            app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .pressed(KeyCode::KeyW)
+        );
+        app.world_mut()
+            .resource_mut::<RunControl>()
+            .request(Request::Stop);
+        frame_at(&mut app, 200);
+        assert!(!app.world().contains_resource::<Script>());
+        assert!(
+            !app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .pressed(KeyCode::KeyW)
+        );
     }
 
     #[test]
@@ -6564,6 +7189,409 @@ mod tests {
         assert!(app.world().get_resource::<Script>().is_none());
         assert_eq!(script_pointer(&app), None);
         assert_eq!(arrow(&mut app).0, Display::None);
+    }
+
+    #[test]
+    fn a_modified_click_holds_its_keys_from_the_press_until_after_the_release() {
+        let mut app = pointing(vec![
+            Step::ClickWith {
+                keys: vec![KeyCode::AltLeft],
+                target: ClickTarget::Give,
+                right: true,
+            },
+            Step::Wait(Duration::from_secs(1)),
+        ]);
+        let (give, _) = give_and_attack(&mut app);
+        let held = |app: &App| {
+            (
+                app.world()
+                    .resource::<ButtonInput<MouseButton>>()
+                    .pressed(MouseButton::Right),
+                app.world()
+                    .resource::<ButtonInput<KeyCode>>()
+                    .pressed(KeyCode::AltLeft),
+            )
+        };
+        for ms in [0, 0, 125] {
+            frame_at(&mut app, ms);
+            assert_eq!(held(&app), (false, false), "{ms}");
+        }
+        // The press: the button and the modifier go down together.
+        frame_at(&mut app, 250);
+        assert_eq!(interaction(&app, give), Interaction::Pressed);
+        assert_eq!(held(&app), (true, true));
+        // The release: the button goes up first, as a person lets go,
+        // so a control that acts on the release still reads Alt.
+        frame_at(&mut app, 266);
+        assert_eq!(held(&app), (false, true));
+        // The modifier goes up the frame after, and the next step runs.
+        frame_at(&mut app, 282);
+        assert_eq!(held(&app), (false, false));
+        frame_at(&mut app, 298);
+        assert!(matches!(
+            app.world().resource::<Script>().current,
+            Some((Step::Wait(_), _))
+        ));
+    }
+
+    #[test]
+    fn a_run_stopped_during_a_modified_click_lets_its_keys_go() {
+        for stop_at in [270, 286] {
+            let (mut app, _) = background(vec![
+                Step::ClickWith {
+                    keys: vec![KeyCode::ShiftLeft, KeyCode::ControlLeft],
+                    target: ClickTarget::Give,
+                    right: false,
+                },
+                Step::Wait(Duration::from_secs(1)),
+            ]);
+            let (give, _) = give_and_attack(&mut app);
+            for ms in [0, 10, 260] {
+                frame_at(&mut app, ms);
+            }
+            assert_eq!(interaction(&app, give), Interaction::Pressed);
+            if stop_at == 286 {
+                // Between the button's release and the modifiers'.
+                frame_at(&mut app, 270);
+            }
+            app.world_mut()
+                .resource_mut::<RunControl>()
+                .request(Request::Stop);
+            frame_at(&mut app, stop_at);
+            assert!(!app.world().contains_resource::<Script>(), "{stop_at}");
+            let keys = app.world().resource::<ButtonInput<KeyCode>>();
+            assert!(
+                !keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ControlLeft]),
+                "{stop_at}"
+            );
+            assert!(
+                !app.world()
+                    .resource::<ButtonInput<MouseButton>>()
+                    .pressed(MouseButton::Left),
+                "{stop_at}"
+            );
+        }
+    }
+
+    /// What a stand-in scene saw of a script's scene click each frame:
+    /// where its pointer was, and whether the left button went down or up.
+    #[derive(Default, Resource)]
+    struct SceneSeen(Vec<(Vec2, bool, bool)>);
+
+    /// Plays the scene's side of a scene click: aims at (100, 100) and
+    /// takes each press there (checklist 6.587).
+    #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are wrappers.
+    fn stand_in_scene(
+        mut scene: ResMut<crate::target::ScenePointer>,
+        mut mouse: ResMut<ButtonInput<MouseButton>>,
+        mut seen: ResMut<SceneSeen>,
+    ) {
+        let (down, up) = (
+            mouse.just_pressed(MouseButton::Left),
+            mouse.just_released(MouseButton::Left),
+        );
+        // A frame's presses are new only that frame, as Bevy's input has it.
+        mouse.clear();
+        let Some(request) = scene.request.take() else {
+            return;
+        };
+        if let Some(at) = request.at {
+            seen.0.push((at, down, up));
+            scene.acted |= down;
+        }
+        scene.aim = Some(Ok(Vec2::new(100.0, 100.0)));
+    }
+
+    /// A pointing app with a spawn 42 (revision as admitted) and door 0 in
+    /// an admitted world, and the stand-in scene; the admission is returned.
+    fn scene_app(steps: impl FnOnce(u64, u64) -> Vec<Step>) -> App {
+        use crate::online::testing as session;
+        let mut online = crate::online::OnlineState::new(true);
+        session::admit(&mut online, 7, session::player(7));
+        session::spawns(&mut online, vec![session::pet(42, 7)]);
+        let admission = online.world().session_id().unwrap();
+        let revision = online.world().spawn(42).unwrap().revision;
+        let mut app = pointing(steps(admission, revision));
+        app.insert_resource(online)
+            .init_resource::<crate::target::ScenePointer>()
+            .init_resource::<SceneSeen>()
+            .add_systems(Update, (lease_scene, stand_in_scene).chain().after(drive));
+        app
+    }
+
+    fn stop_reason(app: &App) -> Option<String> {
+        app.world()
+            .get_resource::<RunStatus>()
+            .filter(|status| status.phase() == Phase::Failed)
+            .and_then(|status| status.events().back())
+            .map(|event| event.message.clone())
+    }
+
+    #[test]
+    fn a_spawn_click_glides_to_where_the_scene_names_it_presses_and_lets_go() {
+        let mut app = scene_app(|admission, revision| {
+            vec![
+                Step::Click(ClickTarget::Spawn {
+                    admission,
+                    id: 42,
+                    revision,
+                }),
+                Step::Wait(Duration::from_secs(1)),
+            ]
+        });
+        for ms in (0..=400).step_by(16) {
+            frame_at(&mut app, ms);
+        }
+        let seen = &app.world().resource::<SceneSeen>().0;
+        // One press and one release, both where the scene aimed.
+        let presses: Vec<_> = seen.iter().filter(|(_, down, _)| *down).collect();
+        assert_eq!(presses.len(), 1, "{seen:?}");
+        assert_eq!(presses[0].0, Vec2::new(100.0, 100.0));
+        assert_eq!(seen.iter().filter(|(_, _, up)| *up).count(), 1, "{seen:?}");
+        assert_eq!(script_pointer(&app), Some(Vec2::new(100.0, 100.0)));
+        assert!(matches!(
+            app.world().resource::<Script>().current,
+            Some((Step::Wait(_), _))
+        ));
+        // Done: the scene reads the real pointer again.
+        let scene = app.world().resource::<crate::target::ScenePointer>();
+        assert!(scene.request.is_none() && scene.aim.is_none());
+    }
+
+    #[test]
+    fn a_door_click_presses_twice_on_one_point() {
+        let mut app = scene_app(|admission, _| {
+            vec![
+                Step::Click(ClickTarget::Door { admission, id: 0 }),
+                Step::Wait(Duration::from_secs(1)),
+            ]
+        });
+        crate::online::testing::doors(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            &eq_client_core::doors::decode(0x4c24, &{
+                let mut bytes = [0u8; 80];
+                bytes[..4].copy_from_slice(b"TEST");
+                bytes
+            })
+            .unwrap()
+            .unwrap(),
+            std::time::Instant::now(),
+        );
+        for ms in (0..=400).step_by(16) {
+            frame_at(&mut app, ms);
+        }
+        let seen = &app.world().resource::<SceneSeen>().0;
+        let presses: Vec<_> = seen.iter().filter(|(_, down, _)| *down).collect();
+        assert_eq!(presses.len(), 2, "{seen:?}");
+        assert_eq!(presses[0].0, presses[1].0);
+        assert_eq!(seen.iter().filter(|(_, _, up)| *up).count(), 2, "{seen:?}");
+        assert!(stop_reason(&app).is_none());
+    }
+
+    #[test]
+    fn a_stale_scene_target_stops_before_the_pointer_moves() {
+        for (target, reason) in [
+            (
+                |admission, revision| ClickTarget::Spawn {
+                    admission: admission + 1,
+                    id: 42,
+                    revision,
+                },
+                "that scene target was reported in another admission",
+            ),
+            (
+                |admission, revision| ClickTarget::Spawn {
+                    admission,
+                    id: 42,
+                    revision: revision + 1,
+                },
+                "that spawn is gone or has changed",
+            ),
+            (
+                |admission, _| ClickTarget::Object {
+                    admission,
+                    drop_id: 9,
+                },
+                "that object is not in this zone's list",
+            ),
+            (
+                |admission, _| ClickTarget::Door { admission, id: 3 },
+                "that door is not in this zone's list",
+            ),
+        ] as [(fn(u64, u64) -> ClickTarget, &str); 4]
+        {
+            let mut app =
+                scene_app(|admission, revision| vec![Step::Click(target(admission, revision))]);
+            app.init_resource::<RunStatus>()
+                .add_systems(Update, observe.after(drive));
+            for ms in [0, 16, 32, 48] {
+                frame_at(&mut app, ms);
+            }
+            assert_eq!(stop_reason(&app).as_deref(), Some(reason));
+            assert_eq!(app.world().resource::<SceneSeen>().0, []);
+            assert!(
+                !app.world()
+                    .resource::<ButtonInput<MouseButton>>()
+                    .pressed(MouseButton::Left)
+            );
+        }
+    }
+
+    #[test]
+    fn a_refused_press_stops_the_run_and_a_stop_hands_the_scene_back() {
+        let mut app = scene_app(|admission, revision| {
+            vec![Step::Click(ClickTarget::Spawn {
+                admission,
+                id: 42,
+                revision,
+            })]
+        });
+        app.init_resource::<RunStatus>()
+            .add_systems(Update, observe.after(drive));
+        let mut ms = 0;
+        while app
+            .world()
+            .resource::<SceneSeen>()
+            .0
+            .iter()
+            .all(|(_, down, _)| !down)
+        {
+            assert!(ms < 1000);
+            frame_at(&mut app, ms);
+            ms += 16;
+        }
+        // The scene's pick named something else on the press.
+        {
+            let mut scene = app
+                .world_mut()
+                .resource_mut::<crate::target::ScenePointer>();
+            scene.acted = false;
+            scene.refused = Some("that spawn is covered or off screen from here".into());
+        }
+        frame_at(&mut app, ms);
+        assert_eq!(
+            stop_reason(&app).as_deref(),
+            Some("that spawn is covered or off screen from here")
+        );
+        frame_at(&mut app, ms + 16);
+        let scene = app.world().resource::<crate::target::ScenePointer>();
+        assert!(scene.request.is_none() && scene.refused.is_none() && !scene.acted);
+        assert!(
+            !app.world()
+                .resource::<ButtonInput<MouseButton>>()
+                .pressed(MouseButton::Left)
+        );
+    }
+
+    #[test]
+    fn a_spawn_replaced_mid_glide_stops_the_click_and_nothing_is_pressed() {
+        let mut app = scene_app(|admission, revision| {
+            vec![Step::Click(ClickTarget::Spawn {
+                admission,
+                id: 42,
+                revision,
+            })]
+        });
+        app.init_resource::<RunStatus>()
+            .add_systems(Update, observe.after(drive));
+        for ms in [0, 16, 32, 48, 64] {
+            frame_at(&mut app, ms);
+        }
+        assert!(app.world().resource::<Script>().scene.is_some());
+        // The spawn leaves and its id comes back on another.
+        {
+            let mut online = app.world_mut().resource_mut::<crate::online::OnlineState>();
+            let before = online.world().spawn(42).unwrap().revision;
+            crate::online::testing::spawns(&mut online, vec![crate::online::testing::pet(42, 7)]);
+            assert_ne!(online.world().spawn(42).unwrap().revision, before);
+        }
+        for ms in (80..=400).step_by(16) {
+            frame_at(&mut app, ms);
+        }
+        assert_eq!(
+            stop_reason(&app).as_deref(),
+            Some("that spawn is gone or has changed")
+        );
+        let seen = &app.world().resource::<SceneSeen>().0;
+        assert!(seen.iter().all(|(_, down, _)| !down), "{seen:?}");
+    }
+
+    #[test]
+    fn a_run_stopped_mid_glide_hands_the_scene_its_real_pointer() {
+        let mut app = scene_app(|admission, revision| {
+            vec![Step::ClickWith {
+                keys: vec![KeyCode::ShiftLeft],
+                target: ClickTarget::Spawn {
+                    admission,
+                    id: 42,
+                    revision,
+                },
+                right: true,
+            }]
+        });
+        app.init_resource::<RunControl>();
+        for ms in [0, 16, 32, 48, 64] {
+            frame_at(&mut app, ms);
+        }
+        assert!(app.world().resource::<Script>().scene.is_some());
+        app.world_mut()
+            .resource_mut::<RunControl>()
+            .request(Request::Stop);
+        frame_at(&mut app, 80);
+        frame_at(&mut app, 96);
+        assert!(!app.world().contains_resource::<Script>());
+        let scene = app.world().resource::<crate::target::ScenePointer>();
+        assert!(scene.request.is_none() && scene.aim.is_none());
+    }
+
+    #[test]
+    fn a_run_stopped_with_the_button_down_lets_go_of_it_and_its_keys() {
+        let mut app = scene_app(|admission, revision| {
+            vec![Step::ClickWith {
+                keys: vec![KeyCode::ShiftLeft],
+                target: ClickTarget::Spawn {
+                    admission,
+                    id: 42,
+                    revision,
+                },
+                right: true,
+            }]
+        });
+        app.init_resource::<RunControl>();
+        let mut ms = 0;
+        while !app
+            .world()
+            .resource::<ButtonInput<MouseButton>>()
+            .pressed(MouseButton::Right)
+        {
+            assert!(ms < 1000);
+            frame_at(&mut app, ms);
+            ms += 16;
+        }
+        // Pressed: the button and Shift are down.
+        assert!(
+            app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .pressed(KeyCode::ShiftLeft)
+        );
+        app.world_mut()
+            .resource_mut::<RunControl>()
+            .request(Request::Stop);
+        frame_at(&mut app, ms);
+        frame_at(&mut app, ms + 16);
+        assert!(!app.world().contains_resource::<Script>());
+        assert!(
+            !app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .pressed(KeyCode::ShiftLeft)
+        );
+        assert!(
+            !app.world()
+                .resource::<ButtonInput<MouseButton>>()
+                .pressed(MouseButton::Right)
+        );
+        let scene = app.world().resource::<crate::target::ScenePointer>();
+        assert!(scene.request.is_none() && scene.aim.is_none() && !scene.acted);
     }
 
     #[test]
@@ -7043,7 +8071,7 @@ mod tests {
         }
         let status = app.world().resource::<RunStatus>();
         let flow = status.flow().unwrap();
-        assert_eq!(flow.loops(), [(2, 1, 2)]);
+        assert_eq!(flow.loops(), [(2, 1, Some(2))]);
         assert_eq!(flow.branch(), Some((4, true)));
         assert_eq!(flow.variables(), ["n: int = 1"]);
         assert!(
@@ -7473,7 +8501,10 @@ mod tests {
         frame_at(&mut app, 3);
         let status = app.world().resource::<RunStatus>();
         assert_eq!(status.phase(), Phase::Paused);
-        assert_eq!(status.flow().unwrap().loops(), [(1, 1, 100), (2, 1, 100)]);
+        assert_eq!(
+            status.flow().unwrap().loops(),
+            [(1, 1, Some(100)), (2, 1, Some(100))]
+        );
         assert_eq!(status.flow().unwrap().statements(), 2);
 
         app.world_mut()

@@ -110,6 +110,6 @@ For a script started before entering the world, `wait_online()` can wait for adm
 
 ## Local test servers
 
-Existing local-only test runs may use `gm` and `chat`; ordinary public-server sessions cannot. Launch an EQEmu or TAKP preset with `--online --local-test --script-editor` to use these commands from the workbench without a CLI script. The networking layer then refuses servers outside the local network. P99 and Quarm presets cannot use `--local-test`.
+Only local test runs may use the `gm` fixture forms (spawn, depop, guild, stun, setlanguage, traindisc); other `gm` lines and `chat` run on any server. Launch an EQEmu or TAKP preset with `--online --local-test --script-editor` to use these commands from the workbench without a CLI script. The networking layer then refuses servers outside the local network. P99 and Quarm presets cannot use `--local-test`.
 
 Login scripts read credentials from the existing environment configuration, so account names and passwords do not belong in script files or examples. The existing CLI local test harness remains supported.

@@ -167,12 +167,7 @@ impl SessionWorker {
             options.reconnect = false;
             let result = (|| {
                 // A Titanium login sends what the installation's files hold.
-                let titanium = match eq_client_core::GameDialect::from(protocol) {
-                    eq_client_core::GameDialect::Titanium => true,
-                    // RoF2 cannot log in yet.
-                    eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => false,
-                };
-                let sight = titanium.then(|| {
+                let sight = crate::logins::speaks_titanium(protocol).then(|| {
                     Arc::new(eq_client_render::SightProvider::from_definitions(
                         spell_provider,
                         spell_definitions,
@@ -193,11 +188,15 @@ impl SessionWorker {
                         enqueue(&sender, &worker_cancel, WorldUpdate::SpellTable(fact))?;
                     }
                     let update = match event {
-                        // The spell table went to the bridge above. The gap
-                        // log's own handling is eq-client #563's; nothing is
-                        // traced here: a gap's sample bytes can
-                        // hold other players' chat or names.
-                        ClientEvent::World(WorldEvent::SpellTable(_)) | ClientEvent::Gap(_) => None,
+                        // A spell table is taken above; a gap is filed and
+                        // reported by the gap log slice (6.500), and nothing
+                        // is traced here: a gap's sample bytes can hold other
+                        // players' chat or names. This viewer asks for no
+                        // reconnect, so it queues nothing a fresh login would
+                        // drop.
+                        ClientEvent::World(WorldEvent::SpellTable(_))
+                        | ClientEvent::Gap(_)
+                        | ClientEvent::CommandDropped { .. } => None,
                         ClientEvent::World(event) => {
                             observe_world(&event, settings.as_deref());
                             Some(WorldUpdate::Game(event))
@@ -217,6 +216,7 @@ impl SessionWorker {
                         ClientEvent::Reconnecting {
                             error,
                             delay_seconds,
+                            ..
                         } => {
                             tracing::warn!("Reconnecting in {delay_seconds} s: {error}");
                             Some(WorldUpdate::Connection(Link::LoggingIn))
@@ -421,12 +421,7 @@ fn client(login: Login, options: &SessionOptions) -> Result<Client> {
     // when it is due and dated by the last one this client or the installed
     // client remembers. Which worlds hear it is the server type's to say
     // (`sends_system_info`).
-    let titanium = match eq_client_core::GameDialect::from(login.protocol) {
-        eq_client_core::GameDialect::Titanium => true,
-        // RoF2 cannot log in yet.
-        eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => false,
-    };
-    if titanium {
+    if crate::logins::speaks_titanium(login.protocol) {
         config.sysinfo = Some(Arc::new(machine::HostMachine::new(
             crate::logins::installed_client(login.protocol),
             options.install.clone(),

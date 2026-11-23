@@ -298,29 +298,22 @@ impl Program {
 
     /// Validate authored actions against the session's local-only command gate.
     ///
+    /// Only the `gm` fixture forms are gated. Chat, emotes, rolls, socials and
+    /// other `gm` lines run on any server, since a script may do whatever the
+    /// player can (Adam, 11-23).
+    ///
     /// # Errors
-    /// A restricted action anywhere in the source needs a local test session.
+    /// A `gm` fixture step anywhere in the source needs a local test session.
     pub fn check_local_commands(&self, local: bool) -> Result<(), ParseError> {
         if !local
-            && let Some(instruction) =
-                self.instructions
-                    .iter()
-                    .find(|instruction| match instruction.step() {
-                        Step::Gm(_) | Step::Chat(_) | Step::Social(_) => true,
-                        Step::Slash(command) => crate::chat::broadcasts_to_others(command),
-                        _ => false,
-                    })
+            && let Some(instruction) = self.instructions.iter().find(
+                |instruction| matches!(instruction.step(), Step::Gm(command) if super::parse::gm_fixture(command)),
+            )
         {
             return Err(ParseError {
                 line: Some(instruction.line()),
                 span: None,
-                message: if matches!(instruction.step(), Step::Social(_)) {
-                    "social steps require a network-enforced local test session.".into()
-                } else if matches!(instruction.step(), Step::Slash(_)) {
-                    "emote and random steps require a network-enforced local test session.".into()
-                } else {
-                    "gm and chat require a network-enforced local test session.".into()
-                },
+                message: "gm fixture steps require a network-enforced local test session.".into(),
             });
         }
         Ok(())
@@ -931,9 +924,9 @@ mod tests {
                 "expected ':' at the end of the line",
             ),
             (
-                "while True:\n    pass\n",
+                "while True, 5:\n    pass\n",
                 1,
-                "expected 'while <bool expression>, limit=<integer literal>:'",
+                "expected 'while <bool expression>:' or 'while <bool expression>, limit=<integer literal>:'",
             ),
             (
                 "if !False:\n    pass\n",
@@ -975,7 +968,7 @@ mod tests {
 
     #[test]
     fn restricted_actions_in_skipped_branches_keep_their_gate() {
-        let source = "if False:\n    gm(\"heal\")\nelse:\n    report(\"safe\")\n";
+        let source = "if False:\n    gm(\"stun 8000\")\nelse:\n    report(\"safe\")\n";
         let program = Program::parse(source, Path::new(".")).unwrap();
         assert_eq!(
             program.check_local_commands(false).unwrap_err().line,
@@ -986,35 +979,32 @@ mod tests {
     }
 
     #[test]
-    fn a_gm_show_query_needs_a_local_session() {
+    fn a_gm_show_query_runs_on_any_session() {
         let program =
             Program::parse("report(\"before\")\ngm(\"show buffs\")\n", Path::new(".")).unwrap();
-        assert_eq!(
-            program.check_local_commands(false).unwrap_err().line,
-            Some(2)
-        );
+        assert!(program.check_local_commands(false).is_ok());
         assert!(program.check_local_commands(true).is_ok());
     }
 
     #[test]
-    fn emote_and_random_steps_need_a_local_session_but_listing_steps_do_not() {
-        for (source, line) in [
-            ("slash(\"afk\")\nslash(\"emote waves\")\n", Some(2)),
-            ("slash(\"assist\")\nslash(\"random 1 6\")\n", Some(2)),
+    fn chat_emote_random_social_and_plain_gm_steps_run_on_any_session() {
+        for source in [
+            "slash(\"afk\")\nslash(\"emote waves\")\n",
+            "slash(\"assist\")\nslash(\"random 1 6\")\n",
+            "chat(\"say Hail\")\n",
+            "social(\"play Test\")\n",
         ] {
             let program = Program::parse(source, Path::new(".")).unwrap();
-            assert_eq!(program.check_local_commands(false).unwrap_err().line, line);
-            assert!(program.check_local_commands(true).is_ok());
+            assert!(program.check_local_commands(false).is_ok(), "{source}");
+            assert!(program.check_local_commands(true).is_ok(), "{source}");
         }
-        let program =
-            Program::parse("slash(\"afk\")\nslash(\"assist\")\n", Path::new(".")).unwrap();
-        assert!(program.check_local_commands(false).is_ok());
-        for command in ["/emote waves", "/EM waves", " /random 1 6", "/Random"] {
-            assert!(crate::chat::broadcasts_to_others(command), "{command}");
-        }
-        for command in ["/emoted", "/afk", "/assist", "emote waves", "/randomize"] {
-            assert!(!crate::chat::broadcasts_to_others(command), "{command}");
-        }
+        let program = Program::parse("gm(\"heal\")\ngm(\"stun 8000\")\n", Path::new(".")).unwrap();
+        let refused = program.check_local_commands(false).unwrap_err();
+        assert_eq!(refused.line, Some(2));
+        assert_eq!(
+            refused.message,
+            "gm fixture steps require a network-enforced local test session."
+        );
     }
 
     #[test]

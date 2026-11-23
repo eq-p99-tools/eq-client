@@ -695,6 +695,7 @@ pub(crate) fn items() -> Vec<InventoryItem> {
             stack_count: count,
             charges: 0,
             bag_slots: bag,
+            augments: Default::default(),
             details: ItemDetails {
                 base_held_model: None,
                 equipment: None,

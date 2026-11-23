@@ -211,6 +211,9 @@ impl InventoryState {
                 revision: inventory.revision(),
                 slot,
                 target_id,
+                // The memorized test, as before, until the Bard song slice
+                // passes the installed word.
+                installed_class_spell: None,
                 created: now,
             };
             let available = target_id == player.spawn_id

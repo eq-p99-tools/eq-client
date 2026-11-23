@@ -33,6 +33,22 @@ Fields read the local client projection on the statement's frame. Values give th
 - `player.mana` and `player.endurance` are the last reported integer values, when available.
 - `target.selected` is a `bool` from the reconciled target state. A pending or unresolved selection is unavailable. `target.name` is the display name of the known selected spawn, when available.
 
+Each field below reads only what one of the client's windows or typed commands already shows the player at that moment.
+
+- `player.hp_percent` is the HP gauge's percent. `player.posture` is `"standing"`, `"sitting"`, `"ducking"`, `"looting"`, `"lying"` or `"frozen"`. `player.casting` is true while the cast bar runs, and `player.stunned` while the player is stunned.
+- `player.loc_x`, `player.loc_y` and `player.loc_z` are the numbers `/loc` gives, to the nearest whole number. `/loc` prints them as y, x, z.
+- `player.exp_percent` is the experience bar's fill, from 0 to 100, rounded down.
+- `player.platinum`, `player.gold`, `player.silver` and `player.copper` are the coins in the purse, as the inventory window shows them.
+- `target.hp_percent` is the target window's percent. `target.kind` is `"npc"`, `"player"` or `"corpse"`. `target.con` is the color a consider gave, as the target's name shows it: `"gray"`, `"green"`, `"light_blue"`, `"blue"`, `"white"`, `"yellow"` or `"red"`. It is unknown until the player considers the target.
+- `pet.present` is whether the player has a pet. `pet.name` and `pet.hp_percent` read the pet window, and are unknown without a pet.
+- `gem1.spell` to `gem8.spell` are the names of the spells in the gem bar, unknown for an empty gem. `gem1.ready` to `gem8.ready` are true when the gem is lit: nothing is being cast or awaiting the server, and the spell's reuse and any linked timer have run out. An empty gem is never ready.
+- `time.hour`, `time.minute`, `time.day`, `time.month` and `time.year` are the time in Norrath as `/time` tells it. The hour runs from 0 for 12 AM to 23 for 11 PM, named as the installed client names it. They are unknown before the server gives the time, and in a zone where `/time` says the time can't be told.
+- `group.present` is whether the player is in a group, and `group.count` how many others it holds. `group.member1.name` to `group.member5.name` are the group window's others from the top, and `group.member1.hp_percent` to `group.member5.hp_percent` their health bars, unknown while a member is out of view.
+- `buffs.count` is how many effects the effects window shows, and `buff1.spell` to `buff50.spell` their spells in the order the window draws them. They are unknown before the server lists the player's effects.
+- `chat.last_tell` is the text of the last tell the chat window shows, and `chat.last_tell_from` who sent it. A run that reads them keeps them on the player's own screen: no log, `report()` line, Runbook export or gap record carries them.
+
+Nothing on screen gives a target's distance, the player's carried weight or heading, or the target's level, so no field reads them.
+
 An observation can be `unknown` before a usable value arrives, or `stale` when the client can identify that its retained context no longer applies, such as a stale target or a retained admission during a transfer. Both stay distinct from `False`, zero and an empty string. `known(value)` is true for a usable value. `stale(value)` is true for a stale value. Ordinary operators preserve an unavailable operand when they read it. A condition that remains unavailable stops the run at that source line.
 
 ## Branches and loops
@@ -47,7 +63,7 @@ else:
     report("mana_empty_or_unavailable")
 ```
 
-`for i in range(count):` evaluates its integer count once and runs up to 100 iterations. Zero skips the block. The loop variable counts from 0, can only be read, and exists only inside its loop; write `for _ in range(count):` when the body doesn't need it. `while condition, limit=N:` checks a boolean at the start of each iteration, with a required literal cap `N` from 1 to 100. The Execution tab records when a while loop reaches its cap. Add a `wait` when polling for an incoming change. `break` leaves the innermost loop and `continue` starts its next iteration.
+`for i in range(count):` evaluates its integer count once and runs that many iterations: up to 100 under the default run length, any count under a longer one. Zero skips the block. The loop variable counts from 0, can only be read, and exists only inside its loop; write `for _ in range(count):` when the body doesn't need it. `while condition:` checks a boolean at the start of each iteration. `while condition, limit=N:` also stops after `N` iterations, a literal from 1 to 100, and the Execution tab records when it reaches that cap. A while loop without a cap runs until its condition is false, a `break`, or the run's length ends it: under the default length its 5,000 statements do. Add a `wait` when polling for an incoming change. `break` leaves the innermost loop and `continue` starts its next iteration.
 
 ```eqscript
 attempts: int = 0

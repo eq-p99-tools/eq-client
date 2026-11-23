@@ -75,7 +75,11 @@ impl ClientWorld {
             .carried_weight_tenths(self.generation(), coins)
             .map_err(|reason| match reason {
                 WeightUnavailable::Prediction => Missing::Prediction,
-                WeightUnavailable::Inventory | WeightUnavailable::Container => Missing::Inventory,
+                // An augment's weight is not summed yet (eq-network 6.570):
+                // unknown, exactly as an unreadable container is.
+                WeightUnavailable::Inventory
+                | WeightUnavailable::Container
+                | WeightUnavailable::Augments => Missing::Inventory,
             })
     }
 
@@ -713,6 +717,14 @@ impl ClientWorld {
     #[must_use]
     pub const fn player_posture_changes(&self) -> u32 {
         self.player_posture_changes
+    }
+
+    /// Whether the player holds a Feign Death standing (Move While Feigned,
+    /// 6.454), as the session last said: a jump then goes without its
+    /// crouch's posture reports, which would end the feign (6.600).
+    #[must_use]
+    pub const fn feign_held(&self) -> bool {
+        self.zone.feign_held
     }
 
     /// The posture last reported for the player or a spawn.

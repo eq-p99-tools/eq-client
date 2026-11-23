@@ -111,7 +111,7 @@ fn aa_effects(
     need: Need,
 ) -> Result<Effects, Unavailable> {
     let effects = world
-        .environmental_aa()
+        .alternate_advancement()
         .effects(class, level)
         .ok_or(Unavailable::AlternateAdvancement)?;
     let mut combined = Effects::default();

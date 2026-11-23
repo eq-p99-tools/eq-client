@@ -18,6 +18,7 @@ use eq_client_core::{
 use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 
 mod draft;
+pub(crate) use draft::MAX_TEXT;
 mod drag;
 mod groups;
 #[cfg(test)]
@@ -151,6 +152,9 @@ pub(super) struct ChatState {
     pub(crate) disciplines: Vec<super::disciplines::Asked>,
     /// A `/log`, waiting to turn the chat log on or off.
     pub log_toggle: bool,
+    /// A `/toggleinspect`, waiting to turn letting others inspect the
+    /// player on or off; only once the command is offered (checklist 6.574).
+    pub inspect_toggled: Option<super::dialogs::InspectToggle>,
     /// A `/shownames`, waiting to set how much of players' names shows.
     pub show_names: Option<eq_client_core::names::ShowNames>,
     /// A `/shownames` the client could not read, answered with the usage
@@ -440,9 +444,86 @@ impl ChatState {
     /// Ends character-scoped chat state when camping or losing the session.
     /// Zoning keeps the last MOTD so the same guild notice stays quiet.
     pub(super) fn end_session(&mut self) {
+        self.forget_admission();
         self.clear_link_scope();
         self.guild_motd = None;
         self.recall.clear();
+    }
+
+    /// Forgets every ask made in a session and read by a system later, so
+    /// none acts after the session ends, in the next login or on another
+    /// character (6.535). A typed ask still survives a zone change within the
+    /// session, as before. Every field is named, so a new one does not
+    /// compile until it is sorted into kept or cleared. Nothing is said for
+    /// a cleared ask: what ended the session is said already, and a script
+    /// waiting on one ends with the session.
+    pub(super) fn forget_admission(&mut self) {
+        let Self {
+            // Cleared: asks made in the session.
+            script_requests,
+            requested_target,
+            zone_who,
+            asked,
+            guild_asked,
+            sharing_asked,
+            boat_asked,
+            boat_interacted,
+            follow_asked,
+            rangers_only,
+            contacts,
+            slash,
+            doability,
+            spell_set_asked,
+            loot_no_drop,
+            emotes,
+            disciplines,
+            motd_asked,
+            fastdrop_asked,
+            // Kept: the server's message of the day, keyed by its
+            // connection, so a new one never says the old.
+            server_motd: _,
+            // Cleared elsewhere: the link scope, the message of the day and
+            // recall by `end_session`, the social inbox at every reset, and
+            // the departure by `login::depart`.
+            link_scope: _,
+            guild_motd: _,
+            recall: _,
+            socials: _,
+            departure: _,
+            // Kept: the player's own chat setup and what the screen shows.
+            history: _,
+            received_links: _,
+            script_link_messages: _,
+            groups: _,
+            views: _,
+            hovered: _,
+            log_toggle: _,
+            inspect_toggled: _,
+            show_names: _,
+            show_names_usage: _,
+            toggled: _,
+            draft: _,
+            refusals: _,
+        } = self;
+        *script_requests = ScriptRequests::default();
+        *requested_target = None;
+        *zone_who = None;
+        *asked = None;
+        *guild_asked = None;
+        *sharing_asked = None;
+        *boat_asked = None;
+        *boat_interacted = None;
+        *follow_asked = None;
+        *rangers_only = None;
+        contacts.asked = None;
+        *slash = None;
+        *doability = None;
+        *spell_set_asked = None;
+        *loot_no_drop = None;
+        emotes.clear();
+        disciplines.clear();
+        *motd_asked = None;
+        *fastdrop_asked = None;
     }
 
     /// Links can follow a known profile through zoning on the same connection.
@@ -1167,7 +1248,7 @@ pub(super) fn input(
                 if scripted_submit
                     && super::socials::Request::parse(state.draft.text().trim()).is_some()
                 {
-                    state.refuse("Use a named social step in a local script.");
+                    state.refuse("Use a named social step in a script.");
                 } else {
                     let admission = if scripted_submit {
                         script.as_ref().and_then(|script| script.chat_admission())
@@ -1906,8 +1987,10 @@ fn contacts_command(
     Ok(())
 }
 
-/// Run one checked social line through ordinary local and game dispatch.
-pub(super) fn submit_social_line(
+/// Run one line exactly as the chat line runs a typed one: a social's line
+/// or a script's `slash` step, so each meets the same rules (paces, queries,
+/// camp and departures) as the keyboard.
+pub(super) fn submit_typed_line(
     line: &str,
     chat: &mut ChatState,
     online: &mut super::online::OnlineState,
@@ -2106,6 +2189,10 @@ pub(super) fn client_request_in_scope(
     if let Some(request) = zone_who_request(input) {
         return Some(request.map(|filter| state.zone_who = Some(filter)));
     }
+    if super::dialogs::toggle_inspect_typed(input, super::dialogs::TOGGLE_INSPECT_READ) {
+        state.inspect_toggled = Some(super::dialogs::InspectToggle);
+        return Some(Ok(()));
+    }
     if input.eq_ignore_ascii_case("/log") {
         state.log_toggle = true;
         return Some(Ok(()));
@@ -2291,26 +2378,6 @@ pub(super) fn zone_who_request(
         Ok(request) if request.everywhere => None,
         Ok(request) => Some(Ok(request.filter)),
         Err(error) => Some(Err(error)),
-    }
-}
-
-/// Whether a slash command broadcasts text or a roll to the players around
-/// the character (`/emote` and the words that resolve to it, `/random`,
-/// and the social emotes): chat-like, so a script may send
-/// it only in a network-enforced local test session.
-pub(super) fn broadcasts_to_others(input: &str) -> bool {
-    let Some(command) = input.trim_start().strip_prefix('/') else {
-        return false;
-    };
-    let name = command
-        .split(char::is_whitespace)
-        .next()
-        .unwrap_or_default();
-    match crate::commands::resolve(name) {
-        crate::commands::Resolved::Official(name) => {
-            matches!(name, "emote" | "random") || eq_client_core::emotes::named(name).is_some()
-        }
-        _ => false,
     }
 }
 
@@ -3011,8 +3078,7 @@ mod tests {
             "/split 0 0 0 1",
             "/follow",
         ] {
-            submit_social_line(line, &mut chat, &mut online, &scoped, &Settings::default())
-                .unwrap();
+            submit_typed_line(line, &mut chat, &mut online, &scoped, &Settings::default()).unwrap();
         }
         assert!(
             chat.requested_target.is_some()
@@ -3022,7 +3088,7 @@ mod tests {
         );
         // Replacing just the guild intent through the original native outbox
         // leaves that one ordinary, even while the scoped facade still exists.
-        submit_social_line(
+        submit_typed_line(
             "/guildmotd native",
             &mut chat,
             &mut online,
@@ -4646,6 +4712,89 @@ mod tests {
         );
         app.update();
         assert!(!app.world().resource::<crate::keys::Typing>().composing);
+    }
+
+    /// Every ask a session can leave pending, as the player or a script
+    /// makes them.
+    fn ask_everything(chat: &mut ChatState) {
+        chat.script_requests.target = Some(crate::script::ExpectedWorld {
+            admission_id: 1,
+            zone: "samplezone".into(),
+        });
+        chat.requested_target = Some("Example".into());
+        chat.zone_who = Some(zone_who_request("/who").unwrap().unwrap());
+        chat.asked = Some(super::super::whereabouts::Asked::Location);
+        chat.guild_asked = Some(super::super::guild::Command::SetMotd("Hello".into()));
+        chat.sharing_asked = Some(super::super::sharing::Command::AutoSplit("on".into()));
+        chat.boat_asked = Some(eq_client_core::boats::Intent::Acquire);
+        chat.boat_interacted = Some(8);
+        chat.follow_asked = Some(super::super::motion::FollowAsked);
+        chat.rangers_only = Some(super::super::tracking::RangersOnly);
+        chat.contacts.asked = Some(super::super::contacts::Asked::NoReply);
+    }
+
+    fn nothing_asked(chat: &ChatState) -> bool {
+        chat.script_requests.target.is_none()
+            && chat.requested_target.is_none()
+            && chat.zone_who.is_none()
+            && chat.asked.is_none()
+            && chat.guild_asked.is_none()
+            && chat.sharing_asked.is_none()
+            && chat.boat_asked.is_none()
+            && chat.boat_interacted.is_none()
+            && chat.follow_asked.is_none()
+            && chat.rangers_only.is_none()
+            && chat.contacts.asked.is_none()
+    }
+
+    #[test]
+    fn a_session_that_ends_or_camps_leaves_no_ask_for_the_next() {
+        use eq_client_core::{WorldEvent, WorldUpdate, world::Link};
+        for end in [
+            WorldUpdate::Connection(Link::Ended),
+            WorldUpdate::Game(WorldEvent::Camp(eq_client_core::CampStatus::Camped)),
+        ] {
+            let (mut app, tx) = received_chat_app();
+            let (queue, sent) = std::sync::mpsc::sync_channel(16);
+            app.insert_resource(crate::outbox::Outbox::new(Some(queue)));
+            ask_everything(&mut app.world_mut().resource_mut::<ChatState>());
+            let said = app.world().resource::<ChatState>().history.revision();
+            tx.send(end.clone()).unwrap();
+            app.update();
+            let chat = app.world().resource::<ChatState>();
+            assert!(nothing_asked(chat), "{end:?}");
+            // Nothing is said for them, and nothing goes out for them in the
+            // next session.
+            assert_eq!(chat.history.revision(), said, "{end:?}");
+            crate::online::testing::admit(
+                &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+                2,
+                crate::online::testing::player(7),
+            );
+            app.update();
+            assert!(nothing_asked(app.world().resource::<ChatState>()));
+            assert!(sent.try_recv().is_err(), "{end:?}");
+        }
+    }
+
+    #[test]
+    fn a_zone_change_keeps_a_typed_ask_and_forgetting_clears_each_one() {
+        // Within the session a typed ask survives a new admission, as before.
+        let (mut app, _tx) = received_chat_app();
+        app.world_mut().resource_mut::<ChatState>().guild_asked =
+            Some(super::super::guild::Command::SetMotd("Hello".into()));
+        crate::online::testing::admit(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            2,
+            crate::online::testing::player(7),
+        );
+        app.update();
+        assert!(app.world().resource::<ChatState>().guild_asked.is_some());
+        // `/quit` to the login screen forgets through the same call.
+        let mut chat = ChatState::default();
+        ask_everything(&mut chat);
+        chat.forget_admission();
+        assert!(nothing_asked(&chat));
     }
 
     fn received_chat_app() -> (App, std::sync::mpsc::Sender<eq_client_core::WorldUpdate>) {

@@ -227,6 +227,15 @@ pub enum Notice {
     ConsentExpired(crate::confirmations::ConsentKind),
     /// A request to read was not sent, and why.
     ReadRefused(String),
+    /// An AA request was not sent, and why: the session's words, and its
+    /// kind of reason where it names one (none for a request no feature
+    /// owns, or from an earlier admission).
+    AlternateAdvancementRefused {
+        /// The session's words.
+        reason: String,
+        /// The kind of reason, for a window to show beside its rank.
+        refusal: Option<crate::alternate_advancement::Refusal>,
+    },
     /// The world container the player asked to open is in use by someone
     /// else.
     ContainerInUse,

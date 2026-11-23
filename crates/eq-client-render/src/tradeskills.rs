@@ -152,6 +152,7 @@ mod tests {
             stack_count: None,
             charges: 0,
             bag_slots: 10,
+            augments: Default::default(),
         }
     }
 

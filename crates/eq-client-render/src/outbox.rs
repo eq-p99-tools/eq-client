@@ -321,6 +321,7 @@ impl Outbox {
                 ClientCommand::SendChatInAdmission {
                     session_id,
                     message,
+                    // The common tongue until the languages slice chooses.
                     tongue: eq_client_core::Tongue::COMMON,
                 }
             }
