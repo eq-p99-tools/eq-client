@@ -18,6 +18,11 @@
     - your own lines are never garbled;
     - the pet speaking as you on channel 8 is not built yet.
   - **Repin:** eq-network to #405, for `Tongue::spoken`'s `Speaker`, `PlayerState::intoxication` and `WorldRules::listener_garble`.
+- `/guildstatus` is offered, as read R49-6k reads it (checklist 6.575).
+  - The Titanium program answers it itself and sends nothing: for the player a typed name finds (`/guildstatus Name`, ignoring case), or else for the target.
+  - Lines 12256, 12257 and 12258 give the rank (member, officer, leader) with the name and the guild. 12259 gives the name alone for any other rank, and 12260 refuses a missing spawn, one that isn't a player, or a game master. All come in message type 0x111.
+  - A player in no guild gets this client's own words, because the program's are its own and not in the strings.
+  - Still inferred: that +0x256 is the GM flag (read R49-4 takes it so), and the name lookup's exact rule. Anonymity isn't tested, so an anonymous player's guild shows as the server sent it. The Mac client's answer wasn't read, so it is refused there for now.
 
 - Scripts can use the map's own controls (checklist 6.589), since a script may do whatever the player can (Adam, 11-23): the search boxes, the watch controls and rows, a spawn's marker, the inspector's Clear and Target, the landmarks and the presentation controls, as `map_search`, `map_watch`, `map_marker`, `map_inspector`, `map_target`, `map_landmarks` and `map_style` targets. Each click runs the map's own handler, so the Target button keeps its capability and range checks. A marker takes the spawn's admission, id and revision, which the report's new `map_markers` field lists for the 64 nearest spawns; a stale one is refused. Watches, landmarks and presentation are saved settings, and these clicks change them as a person's do.
 
