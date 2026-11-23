@@ -104,5 +104,11 @@ fn a_meal_or_coins_arriving_keep_autorun_and_a_jump_going() {
             assert_eq!(airborne(controls), under_way, "{revision}");
             assert_eq!(controls.taps.0.len(), 1, "{revision}");
         }
+        // The answer's slower speed is in force.
+        assert_eq!(
+            app.world().resource::<Controls>().speed,
+            Some(27.0),
+            "{revision}"
+        );
     }
 }
