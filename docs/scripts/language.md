@@ -41,6 +41,8 @@ Each field below reads only what one of the client's windows or typed commands a
 - `player.platinum`, `player.gold`, `player.silver` and `player.copper` are the coins in the purse, as the inventory window shows them.
 - `target.hp_percent` is the target window's percent. `target.kind` is `"npc"`, `"player"` or `"corpse"`. `target.con` is the color a consider gave, as the target's name shows it: `"gray"`, `"green"`, `"light_blue"`, `"blue"`, `"white"`, `"yellow"` or `"red"`. It is unknown until the player considers the target.
 - `pet.present` is whether the player has a pet. `pet.name` and `pet.hp_percent` read the pet window, and are unknown without a pet.
+- `gem1.spell` to `gem8.spell` are the names of the spells in the gem bar, unknown for an empty gem. `gem1.ready` to `gem8.ready` are true when the gem is lit: nothing is being cast or awaiting the server, and the spell's reuse and any linked timer have run out. An empty gem is never ready.
+- `time.hour`, `time.minute`, `time.day`, `time.month` and `time.year` are the time in Norrath as `/time` tells it. The hour runs from 0 for 12 AM to 23 for 11 PM, named as the installed client names it. They are unknown before the server gives the time, and in a zone where `/time` says the time can't be told.
 
 Nothing on screen gives a target's distance, the player's carried weight or heading, or the target's level, so no field reads them.
 

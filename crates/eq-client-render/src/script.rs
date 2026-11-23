@@ -559,14 +559,10 @@ impl Script {
     }
 
     /// Keep the ordinary action queue authoritative, including menu-entry retries.
-    fn queue_statement(
-        &mut self,
-        world: &eq_client_core::world::ClientWorld,
-        now: Duration,
-    ) -> Result<(), String> {
+    fn queue_statement(&mut self, sight: &language::Sight, now: Duration) -> Result<(), String> {
         if self.steps.is_empty()
             && let Some(run) = &mut self.language
-            && let language::Tick::Action(step) = run.tick(world, &mut self.progress, now)?
+            && let language::Tick::Action(step) = run.tick(sight, &mut self.progress, now)?
         {
             self.steps.push_back(step);
         }
@@ -2158,7 +2154,13 @@ pub(super) fn drive(
     if !script.advance(now) || script.breakpoint(now) {
         return;
     }
-    if let Err(reason) = script.queue_statement(online.world(), now) {
+    let sight = language::Sight {
+        world: online.world(),
+        spells: observed.8.as_deref(),
+        clock: client.clock(),
+        now: std::time::Instant::now(),
+    };
+    if let Err(reason) = script.queue_statement(&sight, now) {
         script.stop(&mut keys, &mut mouse, &reason);
         script.retire(&mut commands);
         return;
