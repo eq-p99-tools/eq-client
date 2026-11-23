@@ -160,7 +160,10 @@ pub(super) fn state(
         })
         .collect();
     if let (Some(choices), Some(picker)) = (observed.15.0.as_deref(), observed.15.1.as_deref()) {
-        let (buttons, rows) = crate::abilities::choices::report(online.world(), choices, picker);
+        let empty = crate::spellbook::SpellNames::default();
+        let names = observed.8.as_deref().unwrap_or(&empty);
+        let (buttons, rows) =
+            crate::abilities::choices::report(online.world(), choices, picker, names);
         info!(
             label,
             kept = choices.kept(),
@@ -281,6 +284,7 @@ pub(super) fn state(
             (question.id, question.offer.spell_id, question.offer.zone_id,
                 question.expires_at.saturating_duration_since(now).as_millis())
         }),
+        duel_consent = ?online.world().duel().map(|question| (question.id, question.challenger)),
         consent_presented = ?observed.10.as_deref().and_then(crate::confirm::Asked::presented),
         consent_closure = ?online.world().last_consent_close(),
         consent_refusal = ?online.world().last_consent_refusal(),
@@ -719,7 +723,7 @@ pub(super) fn surroundings(online: &crate::online::OnlineState, (_, _, _, combat
 /// `click("map_marker", admission, id, revision)` names for the nearest
 /// [`MARKERS_LISTED`] of them (checklist 6.589). The map shows every known
 /// spawn, however far, so this reaches past the nearby list.
-fn map_markers(
+pub(super) fn map_markers(
     online: &crate::online::OnlineState,
     origin: Option<Vec3>,
 ) -> (usize, Vec<(u64, u16, u64)>) {
@@ -730,8 +734,11 @@ fn map_markers(
     let mut markers: Vec<(f32, u16, u64)> = world
         .spawns()
         .iter()
+        // The spawns the map draws: visible, placeable, not the player.
         .filter(|(id, spawn)| {
-            !spawn.state.invisible && world.player().is_none_or(|player| player.spawn_id != **id)
+            !spawn.state.invisible
+                && crate::map::placeable(spawn.state.position)
+                && world.player().is_none_or(|player| player.spawn_id != **id)
         })
         .map(|(id, spawn)| {
             let at = Vec3::from_array(eq_client_core::render_position(spawn.state.position));

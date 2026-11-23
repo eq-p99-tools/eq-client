@@ -142,6 +142,9 @@ pub(crate) fn show(
                 },
                 None,
             ),
+            Shows::VitalPercent(kind) => {
+                (vital_sign(world, hud.resource_estimate, load, kind), None)
+            }
             Shows::RaidCount | Shows::RaidLevel => (raid_text(*shows, world), None),
             Shows::Partner => (
                 crate::give::partner(world),
@@ -415,6 +418,22 @@ pub(super) fn target_name(world: &eq_client_core::world::ClientWorld) -> String 
                 .map(|player| player.name.clone())
         })
         .unwrap_or_default()
+}
+
+/// The sign after the player's own percent, which shows with the number
+/// before it: none while the estimate has no maximum, a state the program,
+/// which always knows its maximum, never shows (inferred, 6.529).
+pub(super) fn vital_sign(
+    world: &eq_client_core::world::ClientWorld,
+    estimate: Option<(u32, u32)>,
+    load: Option<(u16, Option<u32>)>,
+    kind: u32,
+) -> String {
+    if label_text(world, estimate, load, kind).is_empty() {
+        String::new()
+    } else {
+        "%".to_owned()
+    }
 }
 
 /// A label's text, by the official client's numbering: percentages of the

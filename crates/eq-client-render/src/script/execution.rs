@@ -228,6 +228,12 @@ impl RunStatus {
         }
     }
 
+    /// Names the line an outcome belongs to when it is an earlier step's,
+    /// as a refusal that comes after the run moved on.
+    pub(super) fn at_line(&mut self, line: Option<usize>) {
+        self.line = line;
+    }
+
     pub(super) fn finish(&mut self, phase: Phase, message: impl Into<String>) {
         self.phase = phase;
         self.event(message);

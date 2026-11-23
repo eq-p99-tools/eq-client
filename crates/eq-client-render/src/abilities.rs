@@ -9,12 +9,7 @@
 use crate::{online::OnlineState, outbox::Outbox, theme};
 use bevy::prelude::*;
 use eq_client_core::{
-    ClientCommand,
-    abilities::Ability,
-    disciplines::{Active, Discipline},
-    hotbar::Binding,
-    knights::KnightAbility,
-    world::ClientWorld,
+    ClientCommand, abilities::Ability, hotbar::Binding, knights::KnightAbility, world::ClientWorld,
 };
 
 /// A page of the Actions window that holds ability buttons.
@@ -48,50 +43,44 @@ pub(crate) fn knight(world: &ClientWorld) -> Option<KnightAbility> {
     KnightAbility::for_player(player.class, player.level)
 }
 
-/// Whether the character learned this exact discipline and can use its level.
-pub(crate) fn knows_discipline(world: &ClientWorld, discipline: Discipline) -> bool {
-    world.player().is_some_and(|player| {
-        discipline.learned(player.class, player.level, player.disciplines.as_deref())
-    })
-}
+/// The Warrior's class number.
+const WARRIOR: u32 = 1;
+/// The least level that may `/shield` (`EQEmu`'s `Client::Handle_OP_Shielding`).
+const SHIELD_LEVEL: u8 = 30;
 
-/// The discipline button and ordinary command share the same request path.
-pub(super) fn discipline_command(
-    discipline: Discipline,
+/// A Warrior's `/shield` of the targeted spawn, for the typed command, a
+/// social or a script. Before it sends, the client refuses a character
+/// that is not a Warrior or is under level 30, no target or one gone from
+/// the spawn table, and the player themself. `EQEmu` leaves the class and
+/// level silent and its source says the program answers them and oneself,
+/// so these are stricter than the server, never looser; their order and
+/// words are ours, inferred until the program's handler (0x46aa32) is read
+/// (6.517). NPCs, corpses, distance, the recast and the server's rule are
+/// the server's to answer, with its own lines.
+pub(super) fn shield_command(
     world: &ClientWorld,
     stamp: crate::outbox::Stamp,
 ) -> Result<ClientCommand, String> {
-    if !knows_discipline(world, discipline) {
-        return Err("The discipline is unavailable to your character".into());
+    let player = world.player().ok_or("You are not in the world yet")?;
+    if player.class != Some(WARRIOR) {
+        return Err("Only a Warrior can shield another player".into());
     }
-    let own = world
-        .player()
-        .map(|player| player.spawn_id)
-        .ok_or("Not in the zone yet")?;
-    // Today's request kept through the repin (6.561): the player's own
-    // spawn as the target, and every discipline held while one is active,
-    // as before; the disciplines slice owns R48b's target and timed rule.
-    Ok(ClientCommand::UseDiscipline {
+    if player.level < SHIELD_LEVEL {
+        return Err(format!("You must be level {SHIELD_LEVEL} to shield"));
+    }
+    let spawn_id = world
+        .target()
+        .selected
+        .filter(|id| world.spawn(*id).is_some())
+        .ok_or("Target the player you want to shield first")?;
+    if spawn_id == player.spawn_id {
+        return Err("You cannot shield yourself; target another player".into());
+    }
+    Ok(ClientCommand::Shield {
         session_id: stamp.session_id,
-        spell_id: discipline.spell(),
-        timer: discipline.timer(),
-        target_id: own,
-        timed_self: true,
+        spawn_id,
         created: stamp.created,
     })
-}
-
-/// Whether the discipline buttons wait on received reuse or an active slot.
-pub(crate) fn discipline_waits(
-    world: &ClientWorld,
-    discipline: Discipline,
-    now: std::time::Instant,
-) -> bool {
-    matches!(world.casting().active_discipline(), Active::Titanium(_))
-        || world
-            .casting()
-            .discipline_wait(discipline.timer(), now)
-            .is_some_and(|wait| !wait.is_zero())
 }
 
 /// Build the same request from a button, hotbar or a named command.
@@ -152,9 +141,76 @@ pub(crate) fn needs(
     }
 }
 
+/// `/doability`'s refusal for a number outside 1-10 or none (0x46a7d1).
+const NO_SUCH_ABILITY: u32 = 0x33c8;
+
+/// The button `/doability N` presses (0x46a7d1, read R45): 1-6 the
+/// Abilities page's, 7-10 the Combat page's. That 1-6 are the Abilities
+/// page and 7-10 the Combat page is inferred from the program's adjacent
+/// tables (recording checklist 6.487). The number is read as the program's
+/// `atoi` reads it: leading digits, anything after them ignored.
+pub(crate) fn numbered(words: &str) -> Option<AbilityButton> {
+    let words = words.trim_start();
+    let (sign, digits) = match words.as_bytes().first() {
+        Some(b'-') => (-1, &words[1..]),
+        Some(b'+') => (1, &words[1..]),
+        _ => (1, words),
+    };
+    let end = digits
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(digits.len());
+    let number = sign * digits[..end].parse::<i64>().unwrap_or(0);
+    match number {
+        1..=6 => Some(AbilityButton {
+            page: Page::Abilities,
+            index: usize::try_from(number - 1).ok()?,
+        }),
+        7..=10 => Some(AbilityButton {
+            page: Page::Combat,
+            index: usize::try_from(number - 7).ok()?,
+        }),
+        _ => None,
+    }
+}
+
+/// What pressing an ability button does, by click or by `/doability`: its
+/// ability goes through the session, which says why one did not. Nothing
+/// happens for an empty button or one holding what the client cannot use.
+fn press(
+    button: AbilityButton,
+    online: &OnlineState,
+    outbox: &Outbox,
+    chat: &mut crate::chat::ChatState,
+    choices: &Choices,
+    in_liquid: bool,
+) {
+    match assigned(online.world(), choices, button) {
+        Some(Binding::Ability(ability)) => {
+            use_ability(ability, online, outbox, in_liquid);
+        }
+        Some(Binding::KnightAbility(ability)) => {
+            let Ok(stamp) = outbox.stamp(online.world()) else {
+                return;
+            };
+            match knight_command(ability, online.world(), stamp) {
+                Ok(command) => {
+                    let _ = outbox.send(online.world(), command);
+                }
+                Err(reason) => chat.refuse(reason),
+            }
+        }
+        // The same use as `/discipline` and the Combat Abilities window.
+        Some(Binding::Discipline(spell)) => {
+            chat.disciplines.push(crate::disciplines::Asked::Use(spell));
+        }
+        _ => (),
+    }
+}
+
 /// A clicked ability button uses its ability; an empty one opens the
 /// skills picker for it, and one holding what the client cannot use does
-/// nothing (6.449).
+/// nothing (6.449). `/doability N` presses the same button, except that an
+/// empty one does nothing, as the program returns there with no line.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn input(
     online: Res<OnlineState>,
@@ -162,39 +218,30 @@ pub(crate) fn input(
     mut chat: ResMut<crate::chat::ChatState>,
     buttons: crate::clicks::Clicks<AbilityButton>,
     liquid: crate::motion::Liquid,
-    (choices, mut picker): (Res<Choices>, ResMut<picker::Picker>),
+    (choices, mut picker, messages): (
+        Res<Choices>,
+        ResMut<picker::Picker>,
+        Option<Res<crate::hud::messages::Messages>>,
+    ),
 ) {
+    let in_liquid = || liquid.feet_in(online.world());
     for button in buttons.iter() {
         // An empty button opens the picker for it, as the program's does.
         if choices::empty(online.world(), &choices, *button) {
             picker.ask(*button);
             continue;
         }
-        match assigned(online.world(), &choices, *button) {
-            Some(Binding::Ability(ability)) => {
-                use_ability(ability, &online, &outbox, liquid.feet_in(online.world()));
+        press(*button, &online, &outbox, &mut chat, &choices, in_liquid());
+    }
+    if let Some(words) = chat.doability.take() {
+        match numbered(&words) {
+            Some(button) if choices::empty(online.world(), &choices, button) => {}
+            Some(button) => press(button, &online, &outbox, &mut chat, &choices, in_liquid()),
+            None => {
+                let empty = crate::hud::messages::Messages::default();
+                let messages = messages.as_deref().unwrap_or(&empty);
+                chat.refuse(messages.said_text(NO_SUCH_ABILITY, "Use /doability 1 through 10."));
             }
-            Some(binding @ (Binding::KnightAbility(_) | Binding::Discipline(_))) => {
-                let Ok(stamp) = outbox.stamp(online.world()) else {
-                    continue;
-                };
-                let command = match binding {
-                    Binding::KnightAbility(ability) => {
-                        knight_command(ability, online.world(), stamp)
-                    }
-                    Binding::Discipline(discipline) => {
-                        discipline_command(discipline, online.world(), stamp)
-                    }
-                    _ => unreachable!("the action was matched above"),
-                };
-                match command {
-                    Ok(command) => {
-                        let _ = outbox.send(online.world(), command);
-                    }
-                    Err(reason) => chat.refuse(reason),
-                }
-            }
-            _ => (),
         }
     }
 }
@@ -204,14 +251,15 @@ pub(crate) fn input(
 pub(crate) fn present(
     online: Res<OnlineState>,
     choices: Res<Choices>,
+    names: Res<crate::spellbook::SpellNames>,
     mut labels: Query<(&AbilityLabel, &mut Text, &mut TextColor)>,
 ) {
     let now = std::time::Instant::now();
     for (AbilityLabel(button), mut text, mut color) in &mut labels {
         let binding = assigned(online.world(), &choices, *button);
-        let wanted = choices::caption(online.world(), &choices, *button);
+        let wanted = choices::caption(online.world(), &choices, &names, *button);
         if text.0 != wanted {
-            wanted.clone_into(&mut text.0);
+            text.0 = wanted.into_owned();
         }
         // Dim while its timer runs; one the server does not offer is veiled
         // instead (see `needs`).
@@ -222,8 +270,8 @@ pub(crate) fn present(
                 .casting()
                 .knight_wait(now)
                 .is_some_and(|wait| !wait.is_zero()),
-            Some(Binding::Discipline(discipline)) => {
-                discipline_waits(online.world(), discipline, now)
+            Some(Binding::Discipline(spell)) => {
+                crate::disciplines::waits(online.world(), &names, spell, now)
             }
             _ => false,
         };
@@ -263,6 +311,139 @@ mod tests {
         player.skills = Some(skills);
         testing::admit(&mut online, 1, player);
         online
+    }
+
+    /// The command `/shield` builds for a player of this class and level
+    /// with this target, or the line refusing it.
+    fn shield(class: u32, level: u8, target: Option<u16>) -> Result<ClientCommand, String> {
+        let mut online = OnlineState::new(true);
+        let mut player = testing::player(7);
+        player.class = Some(class);
+        player.level = level;
+        testing::admit(&mut online, 1, player);
+        let other = eq_client_core::SpawnState {
+            kind: eq_client_core::SpawnKind::Player,
+            name: "Other".into(),
+            pet_owner: None,
+            ..testing::pet(9, 0)
+        };
+        testing::news(
+            &mut online,
+            [eq_client_core::WorldEvent::Spawns(vec![other])],
+        );
+        online.select_target(target);
+        shield_command(
+            online.world(),
+            crate::outbox::Stamp {
+                session_id: 1,
+                created: std::time::Instant::now(),
+            },
+        )
+    }
+
+    #[test]
+    fn shield_sends_for_a_warrior_of_thirty_with_another_spawn_targeted() {
+        assert!(matches!(
+            shield(WARRIOR, 30, Some(9)),
+            Ok(ClientCommand::Shield {
+                session_id: 1,
+                spawn_id: 9,
+                ..
+            })
+        ));
+        // Stricter than the server, never looser (6.517, inferred): each
+        // of these sends nothing.
+        for (class, level, target) in [
+            (3, 60, Some(9)),
+            (WARRIOR, 29, Some(9)),
+            (WARRIOR, 30, None),
+            (WARRIOR, 30, Some(44)),
+            (WARRIOR, 30, Some(7)),
+        ] {
+            assert!(
+                shield(class, level, target).is_err(),
+                "{class} {level} {target:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn doability_numbers_one_to_six_the_abilities_page_and_seven_to_ten_combat() {
+        let button = |page, index| Some(AbilityButton { page, index });
+        assert_eq!(numbered("1"), button(Page::Abilities, 0));
+        assert_eq!(numbered(" 6"), button(Page::Abilities, 5));
+        assert_eq!(numbered("7"), button(Page::Combat, 0));
+        assert_eq!(numbered("10"), button(Page::Combat, 3));
+        // Read as atoi reads it.
+        assert_eq!(numbered("3 then more"), button(Page::Abilities, 2));
+        assert_eq!(numbered("+8"), button(Page::Combat, 1));
+        for words in ["", "0", "11", "-1", "kick", "99999999999999999999"] {
+            assert_eq!(numbered(words), None, "{words}");
+        }
+    }
+
+    /// `/doability` runs what a click on the button runs, is silent on an
+    /// empty button, and says the program's line for a number outside 1-10.
+    #[test]
+    fn doability_presses_the_button_and_is_silent_on_an_empty_one() {
+        let mut app = crate::testing::app();
+        let (queue, received) = std::sync::mpsc::sync_channel(4);
+        app.insert_resource(monk())
+            .insert_resource(Outbox::new(Some(queue)))
+            .init_resource::<Choices>()
+            .init_resource::<picker::Picker>()
+            .init_resource::<crate::chat::ChatState>()
+            .add_systems(Update, input);
+        let run = |app: &mut App, words: &str| {
+            app.world_mut()
+                .resource_mut::<crate::chat::ChatState>()
+                .doability = Some(words.into());
+            app.update();
+        };
+        // 7: the Combat page's first button, Kick for a monk.
+        run(&mut app, "7");
+        assert!(matches!(
+            received.try_recv(),
+            Ok(ClientCommand::UseAbility {
+                ability: Ability::Kick,
+                ..
+            })
+        ));
+        assert!(received.try_recv().is_err());
+        // A button chosen empty (the program's -1): no line, no send, no
+        // picker.
+        let empty = AbilityButton {
+            page: Page::Abilities,
+            index: 5,
+        };
+        let mut chosen = Choices::default();
+        chosen.choose(monk().world(), empty, choices::Slot::Empty);
+        app.insert_resource(chosen);
+        let before = app
+            .world()
+            .resource::<crate::chat::ChatState>()
+            .history
+            .lines(eq_client_core::chat::ChatTab::All)
+            .len();
+        run(&mut app, "6");
+        assert!(received.try_recv().is_err());
+        assert_eq!(
+            format!("{:?}", app.world().resource::<picker::Picker>()),
+            format!("{:?}", picker::Picker::default())
+        );
+        let chat = app.world().resource::<crate::chat::ChatState>();
+        assert_eq!(
+            chat.history.lines(eq_client_core::chat::ChatTab::All).len(),
+            before
+        );
+        for words in ["11", ""] {
+            run(&mut app, words);
+            assert!(received.try_recv().is_err());
+            assert_eq!(
+                app.world().resource::<crate::chat::ChatState>().newest(),
+                "Use /doability 1 through 10."
+            );
+        }
     }
 
     #[test]

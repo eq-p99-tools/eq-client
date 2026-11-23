@@ -71,6 +71,17 @@ fn chat_update(event: eq_network::chat::ChatEvent) -> Option<WorldUpdate> {
                 message,
                 source: eq_client_core::chat::Source::Server,
                 message_type: event.message_type,
+                // A player's channel message carries its tongue; the tag is
+                // settled as the chat hears it (`tongues::hear`).
+                tongue: event.channel.and_then(|channel| {
+                    let (language, skill) = event.language.zip(event.language_skill)?;
+                    Some(eq_client_core::tongues::Heard {
+                        language,
+                        skill,
+                        channel,
+                        named: false,
+                    })
+                }),
             })
         })
 }
@@ -180,7 +191,9 @@ impl SessionWorker {
                 } else {
                     client
                 };
+                crate::gaps::begin(settings.as_deref());
                 client.run_with_commands(&worker_cancel, options, &command_queue, |event| {
+                    crate::gaps::write_when_due();
                     if let Some(fact) = spell_bridge.capture(&event)? {
                         if let Some(sight) = &sight {
                             sight.receive(&fact);
@@ -188,13 +201,8 @@ impl SessionWorker {
                         enqueue(&sender, &worker_cancel, WorldUpdate::SpellTable(fact))?;
                     }
                     let update = match event {
-                        // A spell table is taken above; a gap is filed and
-                        // reported by the gap log slice (6.500); this viewer
-                        // asks for no reconnect, so it queues nothing a fresh
-                        // login would drop.
-                        ClientEvent::World(WorldEvent::SpellTable(_))
-                        | ClientEvent::Gap(_)
-                        | ClientEvent::CommandDropped { .. } => None,
+                        // A spell table is taken above.
+                        ClientEvent::World(WorldEvent::SpellTable(_)) => None,
                         ClientEvent::World(event) => {
                             observe_world(&event, settings.as_deref());
                             Some(WorldUpdate::Game(event))
@@ -205,6 +213,12 @@ impl SessionWorker {
                             RecordEvent::Chat(event) => chat_update(event),
                             _ => None,
                         },
+                        // What the session dropped or could not read goes to
+                        // the session's gap file.
+                        ClientEvent::Gap(gap) => {
+                            crate::gaps::record(&*gap);
+                            None
+                        }
                         ClientEvent::Diagnostic(message) => {
                             tracing::info!("{message}");
                             None
@@ -219,6 +233,12 @@ impl SessionWorker {
                             tracing::warn!("Reconnecting in {delay_seconds} s: {error}");
                             Some(WorldUpdate::Connection(Link::LoggingIn))
                         }
+                        // A command from the ended session, dropped unread
+                        // before the fresh login; its kind alone is logged.
+                        ClientEvent::CommandDropped { command, reason } => {
+                            tracing::info!("Dropped {command}: {reason}");
+                            None
+                        }
                     };
                     if let Some(update) = update {
                         enqueue(&sender, &worker_cancel, update)?;
@@ -226,6 +246,7 @@ impl SessionWorker {
                     Ok(())
                 })
             })();
+            crate::gaps::end();
             if let Err(error) = result {
                 tracing::error!("Session ended: {error:#}");
                 // A session asked to stop ends without a reason to show.

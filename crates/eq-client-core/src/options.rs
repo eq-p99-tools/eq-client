@@ -8,6 +8,8 @@ use crate::{
     food::AutoEat,
     movement::RunSpeedMultiplier,
     names::ShowNames,
+    no_drop::LootNoDrop,
+    player_models::LuclinModels,
     qol::{self, Fix},
 };
 
@@ -16,6 +18,14 @@ pub const HEADER: &str = "# eq-client options v1";
 
 /// The name a file keeps [`Options::show_names`] under.
 const SHOW_NAMES: &str = "show_names";
+
+/// The name a file keeps [`Options::loot_no_drop`] under.
+const LOOT_NO_DROP: &str = "loot_no_drop";
+/// The name a file keeps [`Options::luclin_models`] under.
+const LUCLIN_MODELS: &str = "luclin_models";
+
+/// The name a file keeps [`Options::attack_on_assist`] under.
+const ATTACK_ON_ASSIST: &str = "attack_on_assist";
 
 /// An option the player turns on or off.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -247,6 +257,15 @@ impl Level {
         }
     }
 
+    /// Whether setting it lays the interface out again at another size, so
+    /// a window and its slider move under a pointer that holds still: its
+    /// slider keeps what a drag chooses until the press ends rather than
+    /// feeding each frame's choice back into the layout it reads.
+    #[must_use]
+    pub const fn rescales_layout(self) -> bool {
+        matches!(self, Self::UiScale)
+    }
+
     /// The values its slider stops at, from its left.
     fn stops(self) -> Vec<u16> {
         match self {
@@ -391,6 +410,17 @@ pub struct Options {
     /// sets it; the official client keeps it in `eqclient.ini`, this client
     /// per character.
     pub show_names: ShowNames,
+    /// When a loot click on a NO DROP item asks first, as `/lootnodrop`
+    /// sets it; the official client keeps it in `eqclient.ini`, this client
+    /// per character.
+    pub loot_no_drop: LootNoDrop,
+    /// Whether the answer to an assist starts auto attack as it targets, as
+    /// `/assist on` and `/assist off` set it (Titanium 0x45f40a, read
+    /// R49-8 d). The official client keeps it in `eqclient.ini`
+    /// (`[Defaults]` `AttackOnAssist`), this client per character. Its
+    /// default there is unread, so it starts off (inferred, checklist
+    /// 6.490).
+    pub attack_on_assist: bool,
     /// See [`Level::ClipPlane`].
     pub clip_plane: u16,
     /// See [`Level::MaxFps`].
@@ -403,6 +433,12 @@ pub struct Options {
     pub sound_volume: u16,
     /// See [`Level::MusicVolume`].
     pub music_volume: u16,
+    /// Which player races and genders draw with the Luclin models, as the
+    /// official client's Options window chooses them (inferred, R49-44a);
+    /// none by default.
+    pub luclin_models: LuclinModels,
+    /// The server filters, per character ([`crate::chat_filters`]).
+    pub chat_filters: crate::chat_filters::ChatFilters,
 }
 
 impl Default for Options {
@@ -435,12 +471,16 @@ impl Default for Options {
             spell_effects: true,
             qol,
             show_names: ShowNames::Everything,
+            loot_no_drop: LootNoDrop::Ask,
+            attack_on_assist: false,
             clip_plane: 100,
             max_fps: if qol.on(Fix::FrameCap) { 60 } else { 0 },
             mouse_sensitivity: 50,
             ui_scale: 100,
             sound_volume: 100,
             music_volume: 100,
+            luclin_models: LuclinModels::NONE,
+            chat_filters: crate::chat_filters::ChatFilters::default(),
         }
     }
 }
@@ -609,10 +649,29 @@ impl Options {
             let Some((key, value)) = line.split_once('=') else {
                 continue;
             };
+            if key.trim() == LUCLIN_MODELS {
+                options.luclin_models = LuclinModels::parse(value);
+                continue;
+            }
             if key.trim() == SHOW_NAMES {
                 if let Some(level) = ShowNames::parse(value) {
                     options.show_names = level;
                 }
+                continue;
+            }
+            if key.trim() == LOOT_NO_DROP {
+                if let Ok(level) = value.trim().parse() {
+                    options.loot_no_drop = LootNoDrop::from_level(level);
+                }
+                continue;
+            }
+            if key.trim() == ATTACK_ON_ASSIST {
+                if let Ok(on) = value.trim().parse() {
+                    options.attack_on_assist = on;
+                }
+                continue;
+            }
+            if options.chat_filters.read(key.trim(), value) {
                 continue;
             }
             if let Some(level) = Level::ALL
@@ -651,11 +710,23 @@ impl Options {
         for part in [SHOW_NAMES, " = ", self.show_names.word(), "\n"] {
             text.push_str(part);
         }
+        let loot_no_drop = self.loot_no_drop.level().to_string();
+        for part in [LOOT_NO_DROP, " = ", &loot_no_drop, "\n"] {
+            text.push_str(part);
+        }
+        let attack_on_assist = self.attack_on_assist.to_string();
+        for part in [ATTACK_ON_ASSIST, " = ", &attack_on_assist, "\n"] {
+            text.push_str(part);
+        }
         for level in Level::ALL {
             for part in [level.key(), " = ", &self.level(level).to_string(), "\n"] {
                 text.push_str(part);
             }
         }
+        for part in [LUCLIN_MODELS, " = ", &self.luclin_models.words(), "\n"] {
+            text.push_str(part);
+        }
+        text.push_str(&self.chat_filters.text());
         text
     }
 }
@@ -671,13 +742,24 @@ mod tests {
         options.set(Toggle::Qol(Fix::SkipModifiedFood), false);
         options.set(Toggle::Qol(Fix::JesusMode), true);
         options.show_names = ShowNames::Last;
+        options.loot_no_drop = LootNoDrop::AskUnusable;
+        options.luclin_models.set(6, 1, true);
+        options.chat_filters.set(
+            eq_network_game::filters::FilterCategory::Auctions,
+            eq_network_game::filters::FilterMode::Hide,
+        );
+        options.attack_on_assist = true;
         let text = options.text();
+        assert!(text.contains("luclin_models = DAF\n"));
         assert!(text.starts_with(HEADER));
         assert!(text.contains("invert_y = true\n"));
         assert!(text.contains("skip_modified_food = false\n"));
         assert!(text.contains("jesus_mode = true\n"));
         assert!(text.contains("hidden_windows = false\n"));
         assert!(text.contains("show_names = 2\n"));
+        assert!(text.contains("loot_no_drop = 1\n"));
+        assert!(text.contains("filter_auctions = hide\n"));
+        assert!(text.contains("attack_on_assist = true\n"));
         assert_eq!(Options::read(&text, Options::default()), options);
         // A file from before the QoL page keeps its choices there.
         let before = Options::read(
@@ -758,6 +840,13 @@ mod tests {
         // Between stops, the nearest.
         assert_eq!(Level::UiScale.at(Level::UiScale.fraction(100) + 0.01), 100);
         assert_eq!(Level::UiScale.words(125), "125 %");
+        assert!(Level::UiScale.rescales_layout());
+        assert!(
+            Level::ALL
+                .into_iter()
+                .filter(|level| *level != Level::UiScale)
+                .all(|level| !level.rescales_layout())
+        );
         let mut options = Options::default();
         options.set_level(Level::UiScale, 175);
         let text = options.text();

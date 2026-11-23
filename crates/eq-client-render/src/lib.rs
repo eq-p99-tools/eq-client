@@ -48,22 +48,29 @@ mod character_create;
 mod character_delete;
 mod character_select;
 mod chat;
+mod chat_channels;
 mod clicks;
 mod coins;
 mod combat;
+mod combat_abilities;
 mod combat_text;
 mod commands;
 mod confirm;
 mod contacts;
+mod corpses;
 mod creation_preview;
 mod daylight;
 mod device_pixels;
 mod dialogs;
+mod disciplines;
 mod display_report;
 mod doors;
+mod duel;
+mod emotes;
 mod entities;
 mod escape;
 mod exit_log;
+mod fastdrop;
 mod frame_limit;
 mod give;
 mod ground;
@@ -76,6 +83,7 @@ mod invisibility;
 mod item_models;
 mod items;
 mod keys;
+mod languages;
 mod lighting;
 mod list_cells;
 mod loading;
@@ -83,6 +91,7 @@ mod login;
 mod logs;
 mod map;
 mod marquee;
+mod motd;
 mod motion;
 mod names;
 mod navigation;
@@ -102,6 +111,7 @@ mod profile_files;
 mod projectiles;
 mod raid;
 mod reading;
+mod reports;
 mod resources;
 mod resurrection;
 pub mod script;
@@ -112,6 +122,7 @@ mod sheets;
 mod skills;
 mod skin;
 mod skinned;
+mod slash;
 mod socials;
 mod sounds;
 mod speed;
@@ -389,11 +400,28 @@ fn seed_official_options(
                 option_defaults.set(toggle, on);
             }
         }
+        // Only a race and gender the file names is seeded; the keys are
+        // inferred (R49-44a), so a file that names none leaves every model
+        // classic.
+        for (&(_, race, gender), said) in eq_client_assets::ui::LUCLIN_MODEL_KEYS
+            .iter()
+            .zip(official.luclin_models)
+        {
+            if let Some(on) = said {
+                option_defaults.luclin_models.set(race, gender, on);
+            }
+        }
         if let Some(level) = official
             .show_names_level
             .and_then(eq_client_core::names::ShowNames::from_level)
         {
             option_defaults.show_names = level;
+        }
+        if let Some(level) = official.loot_no_drop {
+            option_defaults.loot_no_drop = eq_client_core::no_drop::LootNoDrop::from_level(level);
+        }
+        if let Some(on) = official.attack_on_assist {
+            option_defaults.attack_on_assist = on;
         }
         seed_levels(option_defaults, &official);
     }
@@ -733,6 +761,8 @@ fn install_script(
 }
 
 /// Configures the live or offline window, hiding one-shot screenshot previews.
+/// The window carries the program's name, so the title bar says what the
+/// player is running.
 fn primary_window(
     online: bool,
     visible: bool,
@@ -742,9 +772,9 @@ fn primary_window(
 ) -> Window {
     Window {
         title: if online {
-            "eq-client"
+            "Marginal Advantage"
         } else {
-            "eq-client offline viewer"
+            "Marginal Advantage offline viewer"
         }
         .to_owned(),
         visible,
@@ -1146,6 +1176,7 @@ fn move_player(
         ground_tolerance: eq_client_core::movement::MAX_GROUNDED_STEP,
         climb: eq_client_core::movement::MAX_GROUNDED_STEP,
         edge_climb: None,
+        airborne_clear: 0.0,
         steers_in_air: true,
     };
     player.translation = airborne.step(
@@ -1934,10 +1965,23 @@ mod tests {
         app.update();
         let state = app.world().get::<OrbitCamera>(camera).unwrap();
         assert!(state.pitch > previous.1);
-        // With wheel zoom disabled, pitching keeps the distance behind the
-        // player fixed and moves only the camera's height.
+        // With wheel zoom disabled, pitching keeps the camera's distance
+        // along its sightline (Free Chase Tilt, on by default).
+        assert!((state.radius - previous.2).abs() < 1e-3);
+        let previous = (state.pitch, state.radius);
+        // With Free Chase Tilt off, it keeps the distance behind the player
+        // and moves only the camera's height, as the program's does.
+        app.world_mut()
+            .resource_mut::<options::OptionsState>()
+            .options
+            .qol
+            .set(eq_client_core::qol::Fix::FreeChaseTilt, false);
+        send_input(&mut app);
+        app.update();
+        let state = app.world().get::<OrbitCamera>(camera).unwrap();
+        assert!(state.pitch > previous.0);
         let behind = |pitch: f32, radius: f32| radius * pitch.cos();
-        assert!((behind(state.pitch, state.radius) - behind(previous.1, previous.2)).abs() < 1e-3);
+        assert!((behind(state.pitch, state.radius) - behind(previous.0, previous.1)).abs() < 1e-3);
     }
 
     #[test]
