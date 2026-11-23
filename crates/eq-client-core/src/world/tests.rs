@@ -1308,6 +1308,72 @@ fn a_song_stop_says_the_programs_line_in_its_colour_for_this_admission_only() {
     assert_eq!(stale.notices, []);
 }
 
+/// Song 42 has no recast; spell 43 has a 6 s one.
+struct SongFortyTwo;
+
+impl SpellCatalog for SongFortyTwo {
+    fn timing(&self, spell: u32) -> Option<SpellTiming> {
+        let recast_ms = match spell {
+            42 => 0,
+            43 => 6000,
+            _ => return None,
+        };
+        Some(SpellTiming {
+            recovery_ms: 1500,
+            recast_ms,
+        })
+    }
+
+    fn instant_effect(&self, _spell: u32) -> bool {
+        false
+    }
+
+    fn feigns(&self, _spell: u32) -> bool {
+        false
+    }
+}
+
+#[test]
+fn a_song_stop_for_this_admission_resets_the_gems_with_no_recast() {
+    let mut world = ClientWorld::default();
+    let mut bard = player(9);
+    bard.memorized_spells[0] = Some(42);
+    bard.memorized_spells[1] = Some(43);
+    bard.spell_refresh_ms = Some([5000, 5000, 0, 0, 0, 0, 0, 0]);
+    let now = Instant::now();
+    world.apply(
+        &WorldUpdate::Game(WorldEvent::Entered {
+            capabilities: Vec::new(),
+            choices: Vec::new(),
+            session_id: 1,
+            zone: "qeytoqrg".into(),
+            player: Box::new(bard),
+            far_clip: None,
+            spell_landing_flag: None,
+            zone_id: 0,
+        }),
+        now,
+        &SongFortyTwo,
+    );
+    connection(&mut world, true, false);
+    let stopped = |session_id| {
+        WorldUpdate::Game(WorldEvent::SongStopped {
+            session_id,
+            spell_id: 42,
+            string_id: 0x318f,
+        })
+    };
+    let five = std::time::Duration::from_secs(5);
+    // Another admission's stop changes nothing.
+    world.apply(&stopped(7), now, &SongFortyTwo);
+    world.tick(now, &SongFortyTwo);
+    assert_eq!(world.casting().cooldowns.remaining(42, now), five);
+    world.apply(&stopped(1), now, &SongFortyTwo);
+    world.tick(now, &SongFortyTwo);
+    assert!(world.casting().cooldowns.remaining(42, now).is_zero());
+    assert_eq!(world.casting().cooldowns.remaining(43, now), five);
+}
+
 #[test]
 fn an_idle_song_stop_or_an_old_admission_cannot_release_a_new_cast() {
     let mut world = admitted();
