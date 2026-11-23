@@ -347,11 +347,10 @@ impl ZoneSounds {
     /// that exists but can't be read, or an emitter file that is not whole
     /// records.
     pub fn read(eq_directory: &Path, zone: &str) -> Result<Self, ZoneSoundError> {
-        // The name comes from the server; it names files only when plain.
-        if zone.is_empty() || !zone.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') {
-            return Err(ZoneSoundError::ZoneName);
-        }
+        // The name comes from the server; it names files only when plain,
+        // by the rule the zone's own archives are loaded with.
         let zone = zone.to_ascii_lowercase();
+        let zone = crate::zone_name(&zone).map_err(|_| ZoneSoundError::ZoneName)?;
         let emitters = optional(&find(eq_directory, &format!("{zone}_sounds.eff")))?
             .map(|bytes| read_emitters(&bytes))
             .transpose()?
@@ -496,7 +495,7 @@ mod tests {
             std::env::temp_dir().join(format!("zone-sounds-plain-{}", std::process::id()));
         fs::create_dir_all(directory.join("x")).unwrap();
         fs::write(directory.join("x").join("a.xmi"), b"FORM").unwrap();
-        for zone in ["../x", "x/a", "x\\a", "", "a.b", "a b", "zone\0"] {
+        for zone in ["../x", "a/b", "a\\b", "", "a.b", "a b", "zone\0"] {
             assert!(
                 matches!(
                     ZoneSounds::read(&directory, zone),

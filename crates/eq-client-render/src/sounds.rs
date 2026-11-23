@@ -212,7 +212,10 @@ impl Sounds {
     /// zone's emitter (`super::zone_audio`); None while it is read, when it
     /// cannot be, or when no bank is open. It is read off the frame, only
     /// while no cue waits for a read and a read slot is free, so a cue never
-    /// waits behind it (reviewer M1).
+    /// waits behind it (reviewer M1). Once the cache holds
+    /// `CACHE_ENTRIES` files no new file is read here: an emitter then
+    /// waits until a cue's play evicts the least recently played, which
+    /// keeps the cues' own cache rule the only one.
     pub(super) fn source(&mut self, name: &str) -> Option<Handle<AudioSource>> {
         let key = name.to_ascii_lowercase();
         if let Some(Clip::Ready { source, played, .. }) = self.clips.get_mut(&key) {
