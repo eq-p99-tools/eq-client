@@ -682,9 +682,10 @@ impl Panels<'_> {
         chat: &mut super::chat::ChatState,
     ) {
         for notice in changes.notices.iter().filter(|notice| {
-            !filters.is_some_and(|filters| {
-                eq_client_core::chat_filters::hidden_locally(&filters, generation, notice)
-            })
+            super::notices::ours_shown(notice, generation)
+                && !filters.is_some_and(|filters| {
+                    eq_client_core::chat_filters::hidden_locally(&filters, generation, notice)
+                })
         }) {
             self.tell(notice, messages, chat);
         }
