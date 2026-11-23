@@ -26,7 +26,6 @@ use crate::{
 fn player(spawn_id: u16) -> PlayerState {
     PlayerState {
         name: "Example".into(),
-        intoxication: None,
         titanium_environment: None,
         base_attributes: None,
         deity: None,
@@ -41,6 +40,7 @@ fn player(spawn_id: u16) -> PlayerState {
         skills: None,
         practice_points: None,
         languages: None,
+        intoxication: None,
         disciplines: None,
         spell_refresh_ms: None,
         memorized_spells: [None; 8],
