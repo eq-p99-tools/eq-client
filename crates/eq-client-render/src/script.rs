@@ -2847,8 +2847,6 @@ fn may_run(unattended: bool, reported_focus: Option<bool>, window_focused: bool)
     unattended || (reported_focus == Some(true) && window_focused)
 }
 
-/// The request for a validated local GM command. Fixture cleanup carries
-/// the admission and reconciled NPC selection to the zone's send owner.
 /// Posts a script's AA request for this admission, or says why it can't.
 fn aa_request(
     request: parse::AaRequest,
@@ -2888,6 +2886,8 @@ fn aa_request(
         .map_err(|refusal| refusal.text().to_owned())
 }
 
+/// The request for a validated local GM command. Fixture cleanup carries
+/// the admission and reconciled NPC selection to the zone's send owner.
 fn gm_request(
     command: &str,
     allowed: bool,
