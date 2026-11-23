@@ -746,6 +746,9 @@ impl ClientWorld {
                     self.liquid_hazards.revision = Some(*revision);
                 }
             }
+            // The song stop's line (eq-network #421) waits on the Bard
+            // thread's client half, stacked on this repin.
+            WorldEvent::SongStopped { .. } => news.ignored = true,
             WorldEvent::PlayedTime(played) => self.played = Some((*played, now)),
             WorldEvent::HazardReported {
                 session_id,
@@ -1958,7 +1961,7 @@ impl ClientWorld {
                 reason,
                 string_id,
             } => self.cast_refused((*session_id, *spell_id), (reason, *string_id), news),
-            WorldEvent::BuffSnapshot(buffs) => self.buff_snapshot(buffs, now),
+            WorldEvent::BuffSnapshot(buffs) => self.buff_snapshot(buffs, now, news),
             WorldEvent::Buff(update) => {
                 if match self.generation {
                     crate::GameDialect::Titanium => true,
