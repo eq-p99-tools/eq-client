@@ -1025,9 +1025,12 @@ impl ClientWorld {
             // titles slices (titles 6.516).
             | WorldEvent::SurnameAnswer { .. }
             | WorldEvent::TitleList(_)
-            // The bandolier sets and potion belt: their window's slice (6.559).
+            // The bandolier sets and potion belt, unknown sets and the
+            // session's refusals: their windows' slice (6.559, 6.573).
             | WorldEvent::Bandoliers(_)
             | WorldEvent::PotionBelt(_)
+            | WorldEvent::BandoliersUnknown
+            | WorldEvent::BandolierRefused { .. }
             // The task journal, offers and history: the tasks slice (6.560).
             | WorldEvent::TaskDescribed { .. }
             | WorldEvent::TaskStepUpdated { .. }
@@ -1037,6 +1040,9 @@ impl ClientWorld {
             | WorldEvent::TasksOffered { .. }
             | WorldEvent::TaskHistory { .. }
             | WorldEvent::TaskRefused { .. }
+            // The guild bank as EQEmu tells it: the gap log thread's guild
+            // bank slices (6.563).
+            | WorldEvent::GuildBank(_)
             // The machine's weekly account left for the world; the session
             // host keeps the date it went (the installed client's own
             // `LastSysInfoDate` stamp). Nothing about the world changed.

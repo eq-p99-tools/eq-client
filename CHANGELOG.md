@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Repin eq-network to b631816, keeping today's behaviour (checklist 6.572). The repin brings the bandolier sets, the swap and belt use (all unoffered), and augments read from Titanium item records (6.570).
+  - **Augments:** an augmented item no longer makes the inventory unreadable. `InventoryItem::augments` is filled in every literal.
+  - **Weight:** the session's new `WeightUnavailable::Augments` reads exactly as `Container` does: an unknown load, never a lighter one. A worn augmented item makes equipped stats unconfirmed, so the speed inputs stay unproven.
+  - **Ignored for now:** `WorldEvent::BandoliersUnknown` and `BandolierRefused` go in the ignore arm with the bandolier sets, whose windows are parked (P99 and Quarm features first).
+
 - `/toggleinspect` built, held for read (checklist 6.574).
   - The client keeps an InspectOthers option, on by default, which is today's behaviour: it answers others' inspections whenever the character's note is known.
   - While the option is off, the session is told no note, so it answers no one. eq-network already treats that as no answer.
