@@ -189,6 +189,7 @@ The **Dangerous** section sits below the ordinary settings and includes the
 | Fly | `fly` | Off | Bounded flight through Jump and Duck. Collides with solid geometry and passes through mapped water and lava. Turning it off restores gravity. |
 | Jesus Mode | `jesus_mode` | Off | Stand and move on mapped water or lava reached from above, using ordinary ground speed and collision |
 | Exit at Once | `exit_at_once` | Off | Requests logout without automatic sitting or camp preparation; waits for the server outcome |
+| Zone Anywhere | `zone_anywhere` | Off | Crosses any zone line whatever level the zone asks for. That the official client turns players away below a zone's level is inferred; this client blocks no crossing today, so the setting changes nothing yet |
 | Run a Little Faster | `run_boost` | 1.00x | Slider from 1.00x to 1.40x in 0.01x steps. Scales calibrated forward running and the forward component of diagonals |
 
 The run speed slider saves the multiplier in hundredths, such as

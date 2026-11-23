@@ -157,6 +157,14 @@
     - your own lines are never garbled;
     - the pet speaking as you on channel 8 is not built yet.
   - **Repin:** eq-network to #405, for `Tongue::spoken`'s `Speaker`, `PlayerState::intoxication` and `WorldRules::listener_garble`.
+- The window's title bar says **Marginal Advantage** (and **Marginal
+  Advantage offline viewer** for the offline viewer) in place of
+  `eq-client` (eq-client #447).
+- **Zone Anywhere** (`zone_anywhere`, off) in the QoL page's Dangerous
+  section, a gameplay departure (eq-client #448). It would let the player
+  cross a zone line whatever level the zone asks for. That the official
+  client turns players away below a zone's level is inferred, not read; this
+  client blocks no crossing today, so the setting changes nothing yet.
 - Destroy the coins on the cursor (gap 3.8, checklist 6.512), as the
   Titanium program's Destroy button does (read R49-11). With coins on the
   cursor and no item, **Destroy cursor item** asks first, with the
