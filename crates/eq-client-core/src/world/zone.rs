@@ -346,7 +346,9 @@ impl super::ClientWorld {
     /// also counts toward [`Self::drowning_records`]. Departure, labelled
     /// (recording checklist 6.491f): the program also takes the amount off
     /// its local HP a second time; this client keeps HP the server's, so it
-    /// does not. Other players'
+    /// does not. A record whose source is the player keeps the combat line,
+    /// where the program prints the type line too: inferred unreached, as
+    /// neither server sends the player such a record (6.491f). Other players'
     /// records, and the Mac-era program's, whose lines are unread, keep
     /// the combat line (recording checklist 6.491g).
     fn environmental_record(&mut self, damage: &crate::combat::Damage) -> Option<(u32, u32)> {
