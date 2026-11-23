@@ -242,8 +242,11 @@ pub(super) fn autojoin(
     let ours = options
         .as_ref()
         .and_then(|options| options.options.channel_autojoin);
-    let Some(list) = autojoin_list(ours.as_ref().map(|list| list.as_str()), character, defaults)
-    else {
+    let Some(list) = autojoin_list(
+        ours.as_ref().map(eq_client_core::options::AutoJoin::as_str),
+        character,
+        defaults,
+    ) else {
         return;
     };
     chat.history.push(super::chat::system_line(
@@ -505,13 +508,8 @@ mod tests {
         app.update();
         // Nothing before the link takes the login.
         assert!(received.try_recv().is_err());
-        let up = || {
-            WorldEvent::ChannelLink(eq_network_game::chat_server::ChannelLink::Up)
-        };
-        testing::news(
-            &mut app.world_mut().resource_mut::<OnlineState>(),
-            [up()],
-        );
+        let up = || WorldEvent::ChannelLink(eq_network_game::chat_server::ChannelLink::Up);
+        testing::news(&mut app.world_mut().resource_mut::<OnlineState>(), [up()]);
         app.update();
         app.update();
         match received.try_recv().unwrap() {
@@ -524,10 +522,7 @@ mod tests {
             "Autojoining channels: general"
         );
         // A later link, after a loss, joins again, once.
-        testing::news(
-            &mut app.world_mut().resource_mut::<OnlineState>(),
-            [up()],
-        );
+        testing::news(&mut app.world_mut().resource_mut::<OnlineState>(), [up()]);
         app.update();
         assert!(matches!(
             received.try_recv().unwrap(),

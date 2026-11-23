@@ -2296,9 +2296,7 @@ pub(super) fn run_game_command(
             Ok(words) => chat.channel_asked.push(words),
             // This client's usage words, in the program's colour for its
             // own (R49-12 e).
-            Err(reason) => chat.refuse(
-                Said::own(reason).typed(super::chat_channels::PLAIN_COLOUR),
-            ),
+            Err(reason) => chat.refuse(Said::own(reason).typed(super::chat_channels::PLAIN_COLOUR)),
         }
         return;
     }

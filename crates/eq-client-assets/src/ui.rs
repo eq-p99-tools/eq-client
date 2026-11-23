@@ -1307,7 +1307,7 @@ impl OfficialSettings for Unchecked {}
 /// What the official client's `eqclient.ini` says of the options this
 /// client keeps per character; each None when the file or setting is missing
 /// or says neither on nor off.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OfficialOptions {
     /// Whether the chat is logged from login: `Log` in `[Defaults]`, which
     /// the official `/log` saves.
