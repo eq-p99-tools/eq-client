@@ -2333,6 +2333,41 @@ mod tests {
     }
 
     #[test]
+    fn the_titanium_social_forms_are_slash_steps_and_hotbutton_a_social_one() {
+        let base = std::path::Path::new(".");
+        for (source, line) in [
+            ("yell", "/yell"),
+            ("stopcast", "/stopcast"),
+            ("autoinventory", "/autoinventory"),
+            ("played", "/played"),
+            ("doability 3", "/doability 3"),
+            ("doability", "/doability"),
+            ("memspellset buffs", "/memspellset buffs"),
+            ("lootnodrop never", "/lootnodrop never"),
+            ("hidecorpses allbutgroup", "/hidecorpses allbutgroup"),
+        ] {
+            assert_eq!(
+                parse(&format!("slash(\"{source}\")\n"), base).unwrap(),
+                [Step::Slash(line.into())],
+                "{source}"
+            );
+        }
+        assert_eq!(
+            parse("slash(\"hotbutton wave 3 /wave\")\n", base).unwrap(),
+            [Step::Social("/hotbutton wave 3 /wave".into())]
+        );
+        let long = format!("slash(\"memspellset {}\")\n", "a".repeat(250));
+        for bad in [
+            long.as_str(),
+            "slash(\"memspellset a\u{7}b\")\n",
+            "slash(\"yell now\")\n",
+            "slash(\"doab 3\")\n",
+        ] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
     fn discipline_slash_takes_any_words_as_the_command_does() {
         let base = std::path::Path::new(".");
         assert_eq!(
