@@ -645,18 +645,22 @@ impl CollisionWorld {
     }
 
     /// Whether the gap from the floor under `origin` to the ceiling above it
-    /// is at least `needed`, as the Titanium program's headroom test takes
+    /// is more than `room`, as the Titanium program's headroom test takes
     /// it for the player's own moves (0x48bb83 in 0x48acef; read R1d): the
     /// floor straight down from the origin (0x48a0fc) and the first wall
     /// straight up (0x43a0a0, to z = +32767) among the zone and its solid
     /// doors and objects, never a spawn. No floor, no ceiling, or a
-    /// ceiling at or below the floor is enough. Both are rays here; the
-    /// program sweeps the floor with radius 0.1 × the stand height and the
-    /// ceiling sweep's shape is engine code, unread (checklist 6.496).
+    /// ceiling at or below the floor is enough. Both are rays here, so ours
+    /// is looser at edges, never stricter (checklist 6.496): the program
+    /// sweeps the floor with radius 0.1 × the stand height, and the ceiling
+    /// with a sphere of the model's radius × the zone scale, up from the
+    /// origin (0x43a0a0, read R49-9 d). In zones 0x47, 0x4b and 0x96 the
+    /// program tests even with no floor found, against a floor value that
+    /// is unread; here no floor still passes.
     #[must_use]
-    pub fn headroom(&self, origin: Vec3, needed: f32) -> bool {
+    pub fn headroom(&self, origin: Vec3, room: f32) -> bool {
         const REACH: f32 = 32_767.0;
-        if !origin.is_finite() || !needed.is_finite() {
+        if !origin.is_finite() || !room.is_finite() {
             return true;
         }
         let Some(floor) = self.solid_ground(origin, 0.0, REACH) else {
@@ -673,7 +677,7 @@ impl CollisionWorld {
         else {
             return true;
         };
-        ceiling <= floor || ceiling - floor >= needed
+        ceiling <= floor || ceiling - floor > room
     }
 
     /// Sweeps the character capsule and slides along walls without crossing cliffs or steep slopes.
@@ -1062,7 +1066,7 @@ mod tests {
     }
     #[test]
     fn headroom_measures_the_floor_to_the_first_ceiling_over_the_origin() {
-        // S = 3.75: standing needs 7.5, ducking 4.75, mounted 11.25 (R1d).
+        // The room passed in must be passed, not met (R49-9 e).
         let room = |ceiling: Option<f32>, needed: f32| {
             let mut triangles = floor(0.0);
             if let Some(ceiling) = ceiling {
@@ -1073,6 +1077,7 @@ mod tests {
                 .headroom(Vec3::new(0.0, 3.75, 0.0), needed)
         };
         assert!(!room(Some(7.4), 7.5));
+        assert!(!room(Some(7.5), 7.5));
         assert!(room(Some(7.6), 7.5));
         assert!(!room(Some(4.7), 4.75));
         assert!(room(Some(4.8), 4.75));
