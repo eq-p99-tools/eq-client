@@ -872,10 +872,6 @@ pub(super) fn parse_words(command: &str, rest: &[&str]) -> Result<Step, String> 
     })
 }
 
-/// A slash line's longest text: the chat line's own limit (the draft's
-/// `MAX_TEXT`), counting the leading `/`.
-const SLASH_LINE_MAX: usize = 512;
-
 /// `slash <words>`: any line the player could type after a `/`, run as
 /// typing it would, since a script may do whatever the player can (Adam,
 /// 11-23). The typed-line handlers refuse what they would refuse from the
@@ -888,9 +884,10 @@ fn parse_slash(words: &[&str]) -> Result<Step, String> {
         return Err("slash takes a command without its leading slash".into());
     }
     let line = format!("/{}", words.join(" "));
-    if line.len() > SLASH_LINE_MAX {
+    let longest = crate::chat::MAX_TEXT;
+    if line.len() > longest {
         return Err(format!(
-            "a slash line is at most {SLASH_LINE_MAX} bytes, as the chat line is"
+            "a slash line is at most {longest} bytes, as the chat line is"
         ));
     }
     if line.chars().any(char::is_control) {
@@ -2100,7 +2097,7 @@ mod tests {
         }
         // Only the chat line's own limits apply: its length, counting the
         // slash, and no control characters.
-        let longest = format!("say {}", "a".repeat(SLASH_LINE_MAX - 5));
+        let longest = format!("say {}", "a".repeat(crate::chat::MAX_TEXT - 5));
         assert_eq!(
             parse(&format!("slash(\"{longest}\")"), base).unwrap(),
             [Step::Slash(format!("/{longest}"))]

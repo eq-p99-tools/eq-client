@@ -18,6 +18,7 @@ use eq_client_core::{
 use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 
 mod draft;
+pub(crate) use draft::MAX_TEXT;
 mod drag;
 mod groups;
 #[cfg(test)]

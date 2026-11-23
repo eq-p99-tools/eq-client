@@ -2,7 +2,8 @@
 use eq_client_core::{GameDialect, ItemLink, chat::chat_link};
 use std::ops::Range;
 
-const MAX_TEXT: usize = 512;
+/// The chat line's longest text in bytes, a script's `slash` line included.
+pub(crate) const MAX_TEXT: usize = 512;
 
 #[derive(Clone, Default)]
 pub(super) struct Draft {
