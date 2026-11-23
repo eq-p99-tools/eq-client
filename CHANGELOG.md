@@ -6,8 +6,11 @@
   Titanium program allows (reads R1d and R49-9, 0x48bb83): the gap from the
   floor to the ceiling at the move's end must pass 2 × the stand height
   standing, the stand height + 1 ducking or 3 × it mounted, each by 0.5,
-  or the move stays at its start. A human no longer walks upright under a
-  ceiling 6.85 to 8.0 over the floor, where the official client refuses.
+  or the move stays at its start. The stand height is the program's: 3.125
+  × the size × 0.2, and 1/1.3 of that in a zone whose header sets the
+  classic model scale flag (read R49-9f), so a human needs more than 8.0 in
+  an ordinary zone and more than about 6.27 in such a zone. The compare is
+  strict, as the program's is.
   The test's engine gate always holds (engine read 1), and the test has no
   water test, so a swimmer is held under a low ceiling too and stays a
   swimmer. Fly, a lift's carry and the Mac-era client move as before.
