@@ -13,6 +13,10 @@
   gate does, but are for display only: the session alone decides what is
   sent, and nothing here sends. `ClientWorld::environmental_aa` is renamed
   `alternate_advancement`.
+- An AA request the session would not send is now news:
+  `Notice::AlternateAdvancementRefused` carries the session's words, shown
+  in chat, and its kind of reason for the AA window to come. A refusal for
+  an earlier admission is ignored. The client sends no AA request yet.
 - Read AA names and descriptions from the installed Titanium client's
   `dbstr_us.txt`: `eq_client_assets::db_strings::DbStrings` reads the file
   with a 32 MiB bound and finds a text by its type and id, so a rank's
@@ -21,7 +25,7 @@
   string tables until the client is read (checklist 6.565); a missing
   string is none. The Mac-era client installs no such file. Nothing loads
   it yet: the AA window comes later.
-
+- CI: the Lint workflow gains a Docs job, `cargo doc --workspace --no-deps --locked` with `RUSTDOCFLAGS=-D warnings`, on every pull request and push to main beside Format (Adam's yes, 11-23). A broken doc link now fails the PR it lands in.
 - A session that ends leaves no ask for the next (gap 3.11, checklist
   6.535). The chat state's pending asks (a `/target`, `/who`, `/loc` or
   `/time`, a guild or split command, a boat take, `/follow`, a Ranger's

@@ -288,3 +288,25 @@ fn eqmac_aa_facts_are_kept_and_rof2_sends_none_yet() {
     assert!(game(&mut world, aa(1, points)).ignored);
     assert_eq!(world.alternate_advancement().mac_points(), None);
 }
+
+#[test]
+fn an_aa_refusal_is_this_sessions_news_only() {
+    use crate::alternate_advancement::Refusal;
+    let mut world = admitted();
+    let refused = |session_id| WorldEvent::AlternateAdvancementRefused {
+        session_id,
+        reason: "Not offered.".into(),
+        refusal: Some(Refusal::NotOffered),
+    };
+    let changes = game(&mut world, refused(1));
+    assert_eq!(
+        changes.notices,
+        [Notice::AlternateAdvancementRefused {
+            reason: "Not offered.".into(),
+            refusal: Some(Refusal::NotOffered),
+        }]
+    );
+    let changes = game(&mut world, refused(2));
+    assert!(changes.ignored);
+    assert_eq!(changes.notices.len(), 0);
+}

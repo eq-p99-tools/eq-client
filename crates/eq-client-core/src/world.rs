@@ -1555,6 +1555,20 @@ impl ClientWorld {
                     news.ignored = true;
                 }
             }
+            WorldEvent::AlternateAdvancementRefused {
+                session_id,
+                reason,
+                refusal,
+            } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices.push(Notice::AlternateAdvancementRefused {
+                        reason: reason.clone(),
+                        refusal: *refusal,
+                    });
+                } else {
+                    news.ignored = true;
+                }
+            }
             WorldEvent::ReadRefused { session_id, reason } => {
                 if self.session_id == Some(*session_id) {
                     news.notices.push(Notice::ReadRefused(reason.clone()));

@@ -5,8 +5,8 @@
 //! alone decides what is sent (eq-network's AA gates), and nothing here
 //! sends.
 pub use eq_network_game::alternate_advancement::{
-    Effect, MacPoints, MacProgress, MacRank, MacRanks, MacTimer, Points, Progress, Rank, Selection,
-    Timer, Update,
+    Effect, MacPoints, MacProgress, MacRank, MacRanks, MacTimer, Points, Progress, Rank, Refusal,
+    Selection, Timer, Update,
 };
 use std::collections::BTreeMap;
 
