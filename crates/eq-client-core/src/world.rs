@@ -272,6 +272,9 @@ pub struct ClientWorld {
     creation: Option<Creation>,
     name_suggestion: Option<NameSuggestion>,
     name_generator: Option<bool>,
+    /// Whether the world turns the petition window on (Titanium's
+    /// log-server byte), for [`eq_network_game::reports::petition_form`].
+    petition_window: Option<bool>,
     /// The world's expansion mask, when it reported one.
     expansions: Option<crate::rules::Expansions>,
     /// The last revision given to a spawn, which never repeats.
@@ -748,14 +751,28 @@ impl ClientWorld {
                     self.liquid_hazards.revision = Some(*revision);
                 }
             }
-            // Poison news (eq-network #402, 6.493) waits on the client's
-            // poison change (eq-client #556); it answers nothing asked here.
-            WorldEvent::PoisonStarted { .. } | WorldEvent::PoisonInterrupted { .. } => {
-                news.ignored = true;
+            // A Bard's song stopped, with the program's line for the stop
+            // (0x40f06d, read R49-21).
+            WorldEvent::SongStopped {
+                session_id,
+                spell_id,
+                string_id,
+            } => {
+                if self.accepts_reply(*session_id) {
+                    // The stop also resets the gems' timers (6.542).
+                    if let Some(player) = &self.player {
+                        self.casting
+                            .cooldowns
+                            .song_stopped(&player.memorized_spells);
+                    }
+                    news.notices.push(Notice::SongStopped {
+                        spell_id: *spell_id,
+                        string_id: *string_id,
+                    });
+                } else {
+                    news.ignored = true;
+                }
             }
-            // The song stop's line (eq-network #421) waits on the Bard
-            // thread's client half, stacked on this repin.
-            WorldEvent::SongStopped { .. } => news.ignored = true,
             WorldEvent::PlayedTime(played) => self.played = Some((*played, now)),
             WorldEvent::HazardReported {
                 session_id,
@@ -917,13 +934,6 @@ impl ClientWorld {
             WorldEvent::ZoneLineRejected { session_id, reason } => {
                 self.zone_line_refused(*session_id, reason, news);
             }
-            WorldEvent::SameZoneBoundary { session_id } => {
-                if self.accepts_reply(*session_id) {
-                    news.replies.push(Reply::SameZoneBoundary);
-                } else {
-                    news.ignored = true;
-                }
-            }
             WorldEvent::SameZoneRelocated(relocation) => {
                 self.same_zone_relocated(*relocation, now, news);
             }
@@ -955,6 +965,28 @@ impl ClientWorld {
                     && self.popup.as_ref().is_some_and(|offer| offer.serial == *serial)
                 {
                     self.popup = None;
+                }
+            }
+            // Another player looked at the player, on the Mac era (line
+            // 0x57c, %1 their name; always shown, the program's option for
+            // it being unread: 6.621). The words are ours where the
+            // installation lacks the line.
+            WorldEvent::InspectedBy {
+                session_id,
+                name,
+                string_id,
+                ..
+            } => {
+                if self.accepts_reply(*session_id) {
+                    let name = crate::entities::display_name(name);
+                    news.notices.push(Notice::ProgramLine {
+                        string_id: *string_id,
+                        said: format!("{name} inspects you."),
+                        arguments: vec![name],
+                        lines: Vec::new(),
+                    });
+                } else {
+                    news.ignored = true;
                 }
             }
             WorldEvent::PlayerInspection(view) => {
@@ -1002,6 +1034,9 @@ impl ClientWorld {
                     self.skills_revision = self.skills_revision.wrapping_add(1);
                 }
                 if let Some(enabled) = rules.name_generator { self.name_generator = Some(enabled); }
+                if let Some(on) = rules.petition_window {
+                    self.petition_window = Some(on);
+                }
                 if let Some(on) = rules.listener_garble.or(rules.gibberish) {
                     self.listener_garble = Some(on);
                 }
@@ -1034,11 +1069,8 @@ impl ClientWorld {
             // to a player, or the petitions in the queue, for a front end that
             // shows them. The server's regeneration tick waits for its own.
             // Installed spell providers consume table facts before admission staging.
-            // Apply Poison's answer (eq-client #556) and the surname's
-            // answer take their arms in those threads' rebuilds.
-            unshown @ (WorldEvent::PoisonAnswered(_)
-            | WorldEvent::ApplyPoisonRefused { .. }
-            | WorldEvent::SurnameAnswer { .. }
+            // The surname's answer takes its arm in that thread's rebuild.
+            unshown @ (WorldEvent::SurnameAnswer { .. }
             | WorldEvent::SpellTable(_)
             | WorldEvent::ChatServer(_)
             | WorldEvent::ZoneUnavailable { .. }
@@ -1676,6 +1708,51 @@ impl ClientWorld {
                     news.ignored = true;
                 }
             }
+            WorldEvent::ApplyPoisonRefused {
+                session_id,
+                reason,
+                string_id,
+            } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices.push(Notice::ApplyPoisonRefused {
+                        reason: reason.clone(),
+                        string_id: *string_id,
+                    });
+                } else {
+                    news.ignored = true;
+                }
+            }
+            // The wait the session runs before it sends (read R49-1).
+            WorldEvent::PoisonStarted { session_id, string_id, .. }
+            | WorldEvent::PoisonInterrupted {
+                session_id,
+                string_id,
+            } => {
+                if self.session_id == Some(*session_id) {
+                    let started = matches!(event, WorldEvent::PoisonStarted { .. });
+                    news.notices.push(if started {
+                        Notice::PoisonStarted {
+                            string_id: *string_id,
+                        }
+                    } else {
+                        Notice::PoisonInterrupted {
+                            string_id: *string_id,
+                        }
+                    });
+                } else {
+                    news.ignored = true;
+                }
+            }
+            // The server's own inventory record takes the poison out.
+            WorldEvent::PoisonAnswered(answer) => {
+                if self.in_world() {
+                    news.notices.push(Notice::PoisonAnswered {
+                        applied: answer.applied,
+                    });
+                } else {
+                    news.ignored = true;
+                }
+            }
             // A book or note to read, and a request the session would not send.
             WorldEvent::BookText(text) => {
                 if self.in_world() && text.window(self.generation).is_some() {
@@ -1879,7 +1956,12 @@ impl ClientWorld {
             }
             // Training at a guildmaster, and the practice points it spends.
             WorldEvent::Training(update) => self.training_news(update, news),
-            WorldEvent::TrainingRefused { session_id, reason } => {
+            // The program's own words (`string_id`, `arguments`) are the
+            // language-training client half's (6.597); this keeps the
+            // library's words, as before.
+            WorldEvent::TrainingRefused {
+                session_id, reason, ..
+            } => {
                 if self.session_id == Some(*session_id) {
                     news.notices.push(Notice::TrainingRefused(reason.clone()));
                 } else {
@@ -2112,6 +2194,38 @@ impl ClientWorld {
                 own: own(),
                 opponent: name(opponent),
             },
+            // The Mac era's `/decline` answers (6.622). This client offers
+            // no `/decline` yet, so these come only once it does; the
+            // program's lines, in our words where the installation lacks
+            // them.
+            DuelNews::Declining { challenger } => {
+                let challenger = name(challenger);
+                news.notices.push(Notice::ProgramLine {
+                    string_id: 0x33be,
+                    said: format!("You decline {challenger}'s challenge."),
+                    arguments: vec![challenger],
+                    lines: Vec::new(),
+                });
+                return;
+            }
+            DuelNews::NothingToDecline => {
+                news.notices.push(Notice::ProgramLine {
+                    string_id: 0x33bf,
+                    said: "You have no challenge to decline.".to_owned(),
+                    arguments: Vec::new(),
+                    lines: Vec::new(),
+                });
+                return;
+            }
+            DuelNews::DecliningWhileDueling => {
+                news.notices.push(Notice::ProgramLine {
+                    string_id: 0x33bd,
+                    said: "You can't decline while dueling.".to_owned(),
+                    arguments: Vec::new(),
+                    lines: Vec::new(),
+                });
+                return;
+            }
         };
         news.notices.push(Notice::Duel(notice));
     }
