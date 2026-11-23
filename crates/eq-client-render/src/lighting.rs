@@ -87,7 +87,7 @@ impl SceneLights {
 }
 
 /// Whether the zone draws as the Titanium engine's no-sky scene: the
-/// installed client is Titanium (or RoF2, inferred), the player is in the
+/// installed client is Titanium (or `RoF2`, inferred), the player is in the
 /// zone the scene was built for, and the zone has no sky. The Mac-era
 /// engine is unread, and See the World Clearly draws the plain textures.
 #[expect(
