@@ -2275,7 +2275,9 @@ pub(super) fn broadcasts_to_others(input: &str) -> bool {
         .unwrap_or_default();
     match crate::commands::resolve(name) {
         crate::commands::Resolved::Official(name) => {
-            matches!(name, "emote" | "random") || eq_client_core::emotes::named(name).is_some()
+            // A yell tells the players near (R45).
+            matches!(name, "emote" | "random" | "yell")
+                || eq_client_core::emotes::named(name).is_some()
         }
         _ => false,
     }

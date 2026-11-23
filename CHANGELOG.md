@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Script `slash()` steps take the Titanium forms socials and hotbuttons use:
+  `/yell`, `/stopcast`, `/autoinventory`, `/played`, `/doability`,
+  `/memspellset`, `/lootnodrop` and `/hidecorpses`, each through the same handler as the
+  typed line, and `/hotbutton` as a social step. `/yell` and `/hotbutton` need a
+  local test session (checklist 6.505).
+
 - Take `/autoinventory`, `/hidecorpses` and a plain `/assist` as the
   Titanium handlers do (read R46). `/autoinventory` puts the cursor item in
   the first place the program's order finds, worn slots first, then the

@@ -853,6 +853,18 @@ fn parse_slash(words: &[&str]) -> Result<Step, String> {
             Step::Slash(format!("/{command}"))
         }
         ["camp", "desktop"] => Step::Slash("/camp desktop".into()),
+        // The Titanium forms socials and hotbuttons run (reads R45, R46).
+        [command @ ("yell" | "stopcast" | "autoinventory" | "played")] => {
+            Step::Slash(format!("/{command}"))
+        }
+        // Their own handlers read the words and refuse bad ones with the
+        // line a typed command gets.
+        [
+            command @ ("doability" | "memspellset" | "lootnodrop" | "hidecorpses"),
+            rest @ ..,
+        ] => Step::Slash(bounded_line(command, rest)?),
+        // A hotbutton is a social: a local session's social step.
+        ["hotbutton", rest @ ..] => Step::Social(bounded_line("hotbutton", rest)?),
         // A discipline by the start of its name, or the running timers.
         ["discipline", words @ ..] => Step::Slash(
             std::iter::once("/discipline")
@@ -942,6 +954,21 @@ fn parse_slash(words: &[&str]) -> Result<Step, String> {
         ),
         _ => return Err("unknown or malformed slash command".into()),
     })
+}
+
+/// `/command` and its words as a typed line: under 256 bytes with no
+/// control characters, as the chat entry takes it.
+fn bounded_line(command: &str, words: &[&str]) -> Result<String, String> {
+    let line = std::iter::once(format!("/{command}"))
+        .chain(words.iter().map(|word| (*word).to_owned()))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if line.len() >= 256 || line.chars().any(char::is_control) {
+        return Err(format!(
+            "slash {command} takes words under 256 bytes without control characters"
+        ));
+    }
+    Ok(line)
 }
 
 /// The existing typed guild handlers, with bounded names and MOTD text.
@@ -2105,6 +2132,41 @@ mod tests {
         );
         assert!(parse("wait_relocation()\n", base).is_err());
         assert!(parse("wait_relocation(12, 34, 56)\n", base).is_err());
+    }
+
+    #[test]
+    fn the_titanium_social_forms_are_slash_steps_and_hotbutton_a_social_one() {
+        let base = std::path::Path::new(".");
+        for (source, line) in [
+            ("yell", "/yell"),
+            ("stopcast", "/stopcast"),
+            ("autoinventory", "/autoinventory"),
+            ("played", "/played"),
+            ("doability 3", "/doability 3"),
+            ("doability", "/doability"),
+            ("memspellset buffs", "/memspellset buffs"),
+            ("lootnodrop never", "/lootnodrop never"),
+            ("hidecorpses allbutgroup", "/hidecorpses allbutgroup"),
+        ] {
+            assert_eq!(
+                parse(&format!("slash(\"{source}\")\n"), base).unwrap(),
+                [Step::Slash(line.into())],
+                "{source}"
+            );
+        }
+        assert_eq!(
+            parse("slash(\"hotbutton wave 3 /wave\")\n", base).unwrap(),
+            [Step::Social("/hotbutton wave 3 /wave".into())]
+        );
+        let long = format!("slash(\"memspellset {}\")\n", "a".repeat(250));
+        for bad in [
+            long.as_str(),
+            "slash(\"memspellset a\u{7}b\")\n",
+            "slash(\"yell now\")\n",
+            "slash(\"doab 3\")\n",
+        ] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
     }
 
     #[test]

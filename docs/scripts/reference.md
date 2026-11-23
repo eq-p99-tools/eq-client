@@ -271,8 +271,18 @@ or occluded. The counters are independent of damage and inventory.
   invitation acceptance, roster change or MOTD update; check received evidence.
   `slash("stopsong")` queues the Bard's stop request on Titanium EQEmu.
   The immediate disconnect aliases typed in chat are not script slash commands.
-  `slash("emote")` and `slash("random")` reach everyone nearby, so like `chat` they
+  `slash("emote")`, `slash("random")` and `slash("yell")` reach everyone nearby, so like `chat` they
   run only in a network-constrained local test session.
+  `slash("stopcast")`, `slash("autoinventory")` and `slash("played")` take no words.
+  `slash("doability [words]")`, `slash("memspellset [words]")`,
+  `slash("lootnodrop [words]")` and `slash("hidecorpses [words]")` hand their words to the
+  typed command's own handler, which answers or refuses them as it does a typed line; the
+  whole line is below 256 bytes with no control characters. An option one of them sets,
+  such as `lootnodrop always` or `hidecorpses all`, stays set after the script ends, as it
+  does when typed: `lootnodrop always` removes the No Drop loot confirmation the player
+  would otherwise see. No slash step answers a confirmation or a server's question.
+  `slash("hotbutton name [colour] text")` makes a social hotbutton as typed, and like
+  every social step runs only in a local test session.
 - `gm("command [arguments]")`: an allowed GM command on a network-constrained local test session only.
   Local Titanium EQEmu also supports `gm("guild create CHARACTER_ID_OR_NAME GUILD_NAME")`,
   `gm("guild delete GUILD_ID")` and `gm("guild set CHARACTER_ID_OR_NAME GUILD_ID")`.

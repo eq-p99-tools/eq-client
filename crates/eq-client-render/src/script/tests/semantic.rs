@@ -850,3 +850,67 @@ fn a_language_script_target_matches_only_the_offered_language_bank() {
         None
     ));
 }
+
+#[test]
+fn the_titanium_social_forms_reach_the_chat_as_their_typed_lines_do() {
+    // A script's step leaves the request the typed line leaves, for the
+    // command's own handler to answer or refuse (checklist 6.505).
+    for (source, line) in [
+        ("slash(\"doability 11\")", "/doability 11"),
+        ("slash(\"memspellset nothing\")", "/memspellset nothing"),
+        ("slash(\"lootnodrop always\")", "/lootnodrop always"),
+        ("slash(\"hidecorpses looted\")", "/hidecorpses looted"),
+        ("slash(\"autoinventory\")", "/autoinventory"),
+        ("slash(\"stopcast\")", "/stopcast"),
+    ] {
+        let mut typed = ChatState::default();
+        assert_eq!(
+            crate::chat::client_request_in_scope(line, &mut typed, None),
+            Some(Ok(())),
+            "{line}"
+        );
+        let (mut app, rx) = app();
+        start(&mut app, source);
+        frame_at(&mut app, 0);
+        let chat = app.world().resource::<ChatState>();
+        assert_eq!(
+            (
+                &chat.doability,
+                &chat.spell_set_asked,
+                &chat.loot_no_drop,
+                &chat.hide_corpses,
+                chat.autoinventory.is_some(),
+                chat.slash,
+            ),
+            (
+                &typed.doability,
+                &typed.spell_set_asked,
+                &typed.loot_no_drop,
+                &typed.hide_corpses,
+                typed.autoinventory.is_some(),
+                typed.slash,
+            ),
+            "{source}"
+        );
+        assert!(
+            app.world()
+                .get_resource::<RunStatus>()
+                .is_none_or(|status| status.phase() != Phase::Failed),
+            "{source}"
+        );
+        assert!(rx.try_recv().is_err(), "{source}");
+    }
+}
+
+#[test]
+fn a_yell_or_a_hotbutton_step_needs_a_local_session() {
+    for source in ["slash(\"yell\")", "slash(\"hotbutton wave /wave\")"] {
+        let program = Program::parse(source, Path::new(".")).unwrap();
+        assert_eq!(
+            program.check_local_commands(false).unwrap_err().line,
+            Some(1),
+            "{source}"
+        );
+        assert!(program.check_local_commands(true).is_ok(), "{source}");
+    }
+}

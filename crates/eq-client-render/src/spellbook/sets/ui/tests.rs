@@ -681,3 +681,27 @@ fn memspellset_with_no_match_says_the_programs_line_and_sends_nothing() {
     app.update();
     assert!(matches!(sent.try_recv(), Err(mpsc::TryRecvError::Empty)));
 }
+
+#[test]
+fn a_typed_or_scripted_memspellset_line_with_no_match_gets_the_programs_line() {
+    // The line both a typed `/memspellset` and a script's slash step hand
+    // the chat (checklist 6.505) reaches this handler.
+    let folder = Folder::new();
+    let (mut app, sent) = test_app(&folder, 2);
+    app.world_mut()
+        .resource_mut::<Sets>()
+        .saved
+        .insert("Travel".into(), [None; 8]);
+    let queued = crate::chat::client_request_in_scope(
+        "/memspellset nothing",
+        &mut app.world_mut().resource_mut::<crate::chat::ChatState>(),
+        None,
+    );
+    assert_eq!(queued, Some(Ok(())));
+    app.update();
+    assert_eq!(
+        app.world().resource::<crate::chat::ChatState>().newest(),
+        "No spell set has that name or number."
+    );
+    assert!(matches!(sent.try_recv(), Err(mpsc::TryRecvError::Empty)));
+}
