@@ -18,13 +18,13 @@ pub enum Slot {
     /// The target's name.
     Name,
     /// The player's first pronoun word (0x2fb1 to 0x2fb3 by gender; 0x300f
-    /// in the player's own line). [I] A possessive.
+    /// in the player's own line). Inferred: a possessive.
     OwnP1,
     /// The player's second pronoun word (0x3009, 0x300a or 0x2fb3; 0x300f
-    /// in the player's own line). [I] An object word.
+    /// in the player's own line). Inferred: an object word.
     OwnP2,
     /// The player's third pronoun word (0x300d, 0x300b or 0x300c; 0x3010
-    /// in the player's own line). [I] A reflexive.
+    /// in the player's own line). Inferred: a reflexive.
     OwnP3,
     /// The target's first pronoun word, by the target's gender.
     TargetP1,
