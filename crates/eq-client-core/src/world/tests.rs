@@ -6734,3 +6734,43 @@ fn chat_channel_lines_take_their_slot_from_the_last_joined_list() {
         .ignored
     );
 }
+
+#[test]
+fn chat_channel_names_print_without_control_characters_or_link_markers() {
+    use eq_network_game::chat_server::ChannelEvent;
+    let mut world = admitted();
+    let message = game(
+        &mut world,
+        WorldEvent::Channel(ChannelEvent::Message {
+            channel: "tra\u{12}de".into(),
+            sender: "Ot\u{7}her\u{12}0001".into(),
+            text: "hi".into(),
+        }),
+    );
+    match &message.notices[..] {
+        [
+            Notice::Channel(ChannelLine::Message {
+                channel, sender, ..
+            }),
+        ] => {
+            assert_eq!(channel, "trade");
+            assert_eq!(sender, "Other0001");
+        }
+        other => panic!("{other:?}"),
+    }
+    let joined = game(
+        &mut world,
+        WorldEvent::Channel(ChannelEvent::MemberJoined {
+            channel: "trade\r\n".into(),
+            name: "\u{12}Some\u{1b}one\u{12}".into(),
+        }),
+    );
+    assert_eq!(
+        joined.notices,
+        [Notice::Channel(ChannelLine::Member {
+            channel: "trade".into(),
+            name: "Someone".into(),
+            joined: true,
+        })]
+    );
+}

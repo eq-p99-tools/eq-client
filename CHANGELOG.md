@@ -13,7 +13,10 @@
   the channel the line shows the channel's name alone. Member joins and
   leaves, the server's own lines, a lost link and refusals print too.
   Every wording and form is this client's, inferred until read R49-12.
-  `/autojoin` is not built.
+  `/autojoin` is not built. `/chat` passes only the chat server's channel
+  words, never its mail, friends, ignore or saved-channel words. Channel and
+  player names print without control characters or link markers. A
+  script's `slash()` does not reach these commands.
   Repins eq-network to d0c75e2 (#341 with #327 to #340). Their poison,
   filters, duel, surname, report and gap events are passed over here until
   their own client changes land. Outgoing chat names `Tongue::COMMON`.

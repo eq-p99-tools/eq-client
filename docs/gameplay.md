@@ -449,12 +449,19 @@ link to it when the world offers one, and these commands go to it:
   someone joins or leaves a channel.
 - `/1` to `/10` followed by text say it on the channel in that slot. The
   first channel joined is `/1`.
-- `/chat words` sends the chat server's own command words as typed. The
-  owner and moderator words (passwords, invitations, kicks, moderation) are
-  passed through unchecked, and the server judges them.
+- `/chat words` sends the chat server's own channel words as typed: `join`,
+  `leave`, `leaveall`, `list`, `listall`, `announce`, and the owner and
+  moderator words (`setowner`, `oplist`, `invite`, `grant`, `moderate`,
+  `voice`, `kick`, `password`, `toggleinvites`), which are passed through
+  unchecked for the server to judge. Any other word is refused and nothing is
+  sent. That includes the chat server's mail, friends and ignore words and
+  `set`, which saves the channels joined at login.
 
 These commands work from the chat line, socials and hotbuttons alike, and
-they are as free as `/say`. There is no send limit for any chat yet.
+they are as free as `/say`. There is no send limit for any chat yet. A script's
+`slash()` cannot run them, because its list of commands does not name them.
+Channel and player names from the chat server print without control
+characters, so a name can't start an item link.
 
 A line on a channel reads `Name tells channel:2, 'text'`. The slot comes from
 the last list of joined channels the server sent. Before any list names the

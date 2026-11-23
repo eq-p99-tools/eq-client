@@ -1823,21 +1823,21 @@ impl ClientWorld {
                     .iter()
                     .position(|joined| joined.eq_ignore_ascii_case(channel))
                     .map(|index| index + 1),
-                channel: channel.clone(),
-                sender: sender.clone(),
+                channel: plain(channel),
+                sender: plain(sender),
                 text: eq_network_game::chat::message(text.as_bytes(), false).into(),
             },
             ChannelEvent::Notice { text } => {
                 ChannelLine::Notice(eq_network_game::chat::message(text.as_bytes(), false).into())
             }
             ChannelEvent::MemberJoined { channel, name } => ChannelLine::Member {
-                channel: channel.clone(),
-                name: name.clone(),
+                channel: plain(channel),
+                name: plain(name),
                 joined: true,
             },
             ChannelEvent::MemberLeft { channel, name } => ChannelLine::Member {
-                channel: channel.clone(),
-                name: name.clone(),
+                channel: plain(channel),
+                name: plain(name),
                 joined: false,
             },
         };
@@ -2022,3 +2022,10 @@ impl ClientWorld {
 
 #[cfg(test)]
 mod tests;
+
+/// A name the chat server sent, a channel's or a player's, as plain text:
+/// without control characters, the item link marker among them, so that it
+/// prints as words and can start no link.
+fn plain(name: &str) -> String {
+    name.chars().filter(|c| !c.is_control()).collect()
+}

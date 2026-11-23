@@ -1,11 +1,13 @@
 //! The Titanium program's chat server channel commands (recording checklist
 //! 6.509): `/join`, `/leave`, `/leaveall`, `/list`, `/announce`, `/1` to
 //! `/10` and `/chat`. Each goes to the chat server as the words it takes,
-//! on a server whose session offers chat channels; the server judges them,
-//! the owner's and moderator's words of `/chat` among them, which pass
-//! unchecked. What the program itself checks or says before it sends is
-//! pending read R49-12 e, so every refusal here is this client's own
-//! wording, and `/autojoin`, a list the program keeps, is not built.
+//! on a server whose session offers chat channels; the server judges them.
+//! `/chat` takes only the channel words ([`CHANNEL_WORDS`]): the chat
+//! server's same handler also sends mail and keeps friends and ignore
+//! lists, which this client does not reach. What the program itself checks
+//! or says before it sends is pending read R49-12 e, so every refusal here
+//! is this client's own wording, and `/autojoin`, a list the program keeps,
+//! is not built.
 use super::chat::{ChatState, Said};
 use crate::outbox::{self, Outbox};
 use bevy::prelude::*;
@@ -14,6 +16,32 @@ use eq_client_core::{Capability, ClientCommand};
 /// The most chat server channels a character is on, and so the highest
 /// `/N`.
 const SLOTS: u8 = 10;
+
+/// The chat server's channel words `/chat` passes on, compared whole and
+/// regardless of case as `EQEmu`'s chat server compares them
+/// (`ucs/clientlist.h`): joining, leaving and listing, and the owner's and
+/// moderator's words, passed unchecked. Left out are its mail words
+/// (`mailto`, `getheaders`, `getbody`, `setmessagestatus`, `selectmailbox`,
+/// `setmailforwarding`), its friends and ignore lists (`buddy`,
+/// `ignoreplayer`), `set`, which saves the channels joined at login, and
+/// `afk` and `uptime`.
+pub(crate) const CHANNEL_WORDS: [&str; 15] = [
+    "join",
+    "leave",
+    "leaveall",
+    "list",
+    "listall",
+    "announce",
+    "setowner",
+    "oplist",
+    "invite",
+    "grant",
+    "moderate",
+    "voice",
+    "kick",
+    "password",
+    "toggleinvites",
+];
 
 /// What a typed line, spelled out, asks of the chat server: its words, or
 /// this client's refusal. None for a line that is none of these commands.
@@ -43,7 +71,17 @@ pub(crate) fn typed(input: &str) -> Option<Result<String, String>> {
         "list" => maybe("list"),
         "announce" => maybe("announce"),
         "chat" if rest.is_empty() => Err("Use /chat followed by the chat server's command".into()),
-        "chat" => Ok(rest.to_owned()),
+        "chat" => {
+            let word = rest.split_whitespace().next().unwrap_or_default();
+            if CHANNEL_WORDS
+                .iter()
+                .any(|channel| channel.eq_ignore_ascii_case(word))
+            {
+                Ok(rest.to_owned())
+            } else {
+                Err(format!("/chat does not send {word} to the chat server."))
+            }
+        }
         "autojoin" => Err("This client does not keep /autojoin channels yet.".into()),
         slot => {
             let slot = slot
@@ -137,6 +175,33 @@ mod tests {
         for line in ["/join", "/leave ", "/3", "/chat"] {
             assert!(matches!(typed(line), Some(Err(_))), "{line}");
         }
+        // Only the channel words go: mail, friends, ignore and saved
+        // channels never reach the chat server from here.
+        for line in [
+            "/chat mailto Someone \"subject\" body",
+            "/chat MAILTO Someone",
+            "/chat setmessagestatus 1 2",
+            "/chat getbody 1",
+            "/chat selectmailbox 0",
+            "/chat buddy add Someone",
+            "/chat ignoreplayer Someone",
+            "/chat set general",
+            "/chat 1 hello",
+            "/chat #general hello",
+        ] {
+            let word = line.split_whitespace().nth(1).unwrap();
+            assert_eq!(
+                typed(line),
+                Some(Err(format!(
+                    "/chat does not send {word} to the chat server."
+                ))),
+                "{line}"
+            );
+        }
+        assert_eq!(
+            typed("/chat KICK general Someone"),
+            Some(Ok("KICK general Someone".into()))
+        );
         assert_eq!(
             typed("/autojoin general"),
             Some(Err(
