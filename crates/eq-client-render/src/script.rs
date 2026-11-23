@@ -2135,6 +2135,7 @@ pub(super) fn drive(
         spells: observed.8.as_deref(),
         clock: client.clock(),
         now: std::time::Instant::now(),
+        chat: Some(&chat),
     };
     if let Err(reason) = script.queue_statement(&sight, now) {
         script.stop(&mut keys, &mut mouse, &reason);
@@ -4152,6 +4153,7 @@ fn runs(distance: Option<f32>, range: f32) -> bool {
 #[cfg(test)]
 mod tests {
     mod background_pointer;
+    mod private;
     mod semantic;
     mod world_input;
     use super::*;

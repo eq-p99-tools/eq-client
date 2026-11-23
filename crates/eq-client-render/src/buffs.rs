@@ -342,7 +342,7 @@ pub(super) fn update(
 /// The own list's order: received and modelled buffs together in slot
 /// order, as the program holds them, a modelled one by its spell; then
 /// those without a slot, as they landed.
-fn drawn_order(
+pub(crate) fn drawn_order(
     buffs: &BTreeMap<u32, eq_client_core::Buff>,
     tracker: &eq_client_core::buffs::BuffTracker,
 ) -> (Vec<(u32, Option<u16>)>, Vec<u16>) {

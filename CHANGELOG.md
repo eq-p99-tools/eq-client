@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Scripts can read the group window, the effects window and the last tell (checklist 6.593, O2).
+  - **Group:** `group.present`, `group.count`, and `group.member1.name` to `group.member5.hp_percent`.
+  - **Effects:** `buffs.count`, and `buff1.spell` to `buff50.spell` in the window's order.
+  - **Tells:** `chat.last_tell` and `chat.last_tell_from`. Like every field, each reads only what a window already shows.
+  - **Kept private:** a run that reads the tells writes neither to a log, a `report()` line, its events (which the control status and Runbook export carry) or a gap record, and a test checks it.
+
 - Escape on the login screen quits the game when nothing is logging in, as the official client's does (checklist 6.601, Adam 11-23; the Mac-era client's the same, inferred). Anything else on the screen takes the press first: an open window or the corner menu closes, and a login under way stops. The Escape that brings character select back to the login screen never also quits; the next one does.
 
 - The player chooses how long a script run may go, on every server (checklist 6.594; Adam, 11-23: "If people want to script indefinitely, let them").
