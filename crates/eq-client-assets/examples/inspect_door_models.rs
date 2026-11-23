@@ -19,6 +19,12 @@
 //! Where a zone places the objects built on those meshes, in server axes,
 //! with the `/loc` the game prints (y, x, z):
 //! `cargo run -p eq-client-assets --example inspect_door_models -- <EQ dir> --places <zone>`
+//!
+//! For each object model a zone places: how many placements carry the WLD
+//! 0x15 instance flag 0x80 (libeq's `sprite_volume_only`), beside its meshes'
+//! faces, passable faces and the meshes read F4b's unreferenced case covers
+//! (read F4f: the placer copies that bit into the actor at +0xe4):
+//! `cargo run -p eq-client-assets --example inspect_door_models -- <EQ dir> --instance-flags <zone>`
 use libeq::pfs::PfsReader;
 use libeq::wld::parser::{DmSpriteDef2, FragmentRef, StringReference, WldDoc};
 use std::collections::{BTreeMap, BTreeSet};
@@ -31,6 +37,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if zone == "--places" {
         let zone = args.next().ok_or("supply a zone short name")?;
         places(&directory, &zone)?;
+        return Ok(());
+    }
+    if zone == "--instance-flags" {
+        let zone = args.next().ok_or("supply a zone short name")?;
+        instance_flags(&directory, &zone)?;
         return Ok(());
     }
     if zone == "--changed" {
@@ -343,5 +354,55 @@ fn places(directory: &Path, zone: &str) -> Result<(), Box<dyn std::error::Error>
             .collect::<Vec<_>>()
             .join(",")
     );
+    Ok(())
+}
+
+/// Per placed object model: placements with and without the 0x15 instance
+/// flag 0x80, and its meshes' faces.
+fn instance_flags(directory: &Path, zone: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use libeq::wld::parser::Actor;
+    let facts = mesh_facts(directory, zone).ok_or("no object archive")?;
+    let actors = actor_meshes(directory, zone).ok_or("no object archive")?;
+    let file = std::fs::File::open(directory.join(format!("{zone}.s3d")))?;
+    let mut archive = PfsReader::open(file)?;
+    let bytes = archive
+        .get("objects.wld")?
+        .ok_or("the zone has no objects.wld")?;
+    let doc = WldDoc::parse(&bytes).map_err(|_| "objects.wld could not be parsed")?;
+    // Model name -> (placements, with 0x80, the flag words seen).
+    let mut placed: BTreeMap<String, (usize, usize, BTreeSet<u32>)> = BTreeMap::new();
+    for actor in doc.fragment_iter::<Actor>() {
+        let Some(model) = doc.get_string(actor.actor_def_reference) else {
+            continue;
+        };
+        let flags = u32::from(actor.flags);
+        let entry = placed.entry(model.to_ascii_uppercase()).or_default();
+        entry.0 += 1;
+        entry.1 += usize::from(flags & 0x80 != 0);
+        entry.2.insert(flags);
+    }
+    println!("## {zone}");
+    println!("model\tplaced\tflag_0x80\tflag_words\tmeshes\tfaces\tpassable\tcase_a_meshes");
+    let (mut with, mut without) = (0, 0);
+    for (model, (count, flagged, words)) in &placed {
+        let meshes = actors.get(model).cloned().unwrap_or_default();
+        let (mut face_count, mut passable, mut case_a) = (0, 0, 0);
+        for mesh in &meshes {
+            if let Some(fact) = facts.get(mesh) {
+                face_count += fact.faces;
+                passable += fact.passable;
+                case_a += usize::from(fact.unreferenced && fact.passable > 0);
+            }
+        }
+        with += flagged;
+        without += count - flagged;
+        let words: Vec<String> = words.iter().map(|word| format!("{word:#x}")).collect();
+        println!(
+            "{model}\t{count}\t{flagged}\t{}\t{}\t{face_count}\t{passable}\t{case_a}",
+            words.join(","),
+            meshes.len()
+        );
+    }
+    println!("# placements with 0x80 {with}, without {without}");
     Ok(())
 }
