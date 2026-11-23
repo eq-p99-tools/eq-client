@@ -377,6 +377,21 @@ fn environmental_lines(
     amount.into_iter().chain(record).collect()
 }
 
+/// Whether one of this client's own lines is shown beside the generation's
+/// program. Where the Titanium program says each song stop itself
+/// (`SongStopped`, read R49-21), this client's unconfirmed-stop lines would
+/// only add to it, so they are not shown there; the Mac-era servers send no
+/// program line, so ours stays.
+pub(super) fn ours_shown(notice: &Notice, generation: eq_client_core::GameDialect) -> bool {
+    match notice {
+        Notice::SongStopUnconfirmed { .. } => match generation {
+            eq_client_core::GameDialect::Titanium => false,
+            eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => true,
+        },
+        _ => true,
+    }
+}
+
 /// How a notice reads, and where each part shows.
 #[allow(
     clippy::too_many_lines,
@@ -641,6 +656,11 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
                 disagreement.rule
             );
             Vec::new()
+        }
+        // The program's words, or this client's where the installation
+        // lacks them.
+        Notice::SongStopped { string_id, .. } => {
+            chat(official(Some(*string_id), &[], "Your song ends.", messages))
         }
         Notice::SongStopUnconfirmed { released_cast } => chat(
             if *released_cast {
@@ -1292,6 +1312,35 @@ mod tests {
             record: None,
         };
         assert_eq!(wording(&unworded, None), []);
+    }
+
+    #[test]
+    fn a_song_stop_says_the_programs_line_alone_on_titanium() {
+        let stopped = Notice::SongStopped {
+            spell_id: 42,
+            string_id: 12687,
+        };
+        let messages = Messages::parse("EQST0002\n0 1\n12687 Synthetic song stop.\n");
+        assert_eq!(
+            wording(&stopped, Some(&messages)),
+            [(Place::Chat, Said::official("Synthetic song stop."))]
+        );
+        assert_eq!(
+            wording(&stopped, None),
+            [(Place::Chat, "Your song ends.".into())]
+        );
+        // Where the program says each stop (Titanium), our own
+        // unconfirmed-stop lines aren't shown; on the Mac-era servers, which
+        // send no program line, they are.
+        for released_cast in [false, true] {
+            let unconfirmed = Notice::SongStopUnconfirmed { released_cast };
+            assert!(!ours_shown(
+                &unconfirmed,
+                eq_client_core::GameDialect::Titanium
+            ));
+            assert!(ours_shown(&unconfirmed, eq_client_core::GameDialect::EqMac));
+        }
+        assert!(ours_shown(&stopped, eq_client_core::GameDialect::Titanium));
     }
 
     #[test]

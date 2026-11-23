@@ -133,6 +133,28 @@ pub(crate) fn skinned_triangle(
     grouped_faces: u16,
     skin: &[(u16, u16)],
 ) -> Vec<u8> {
+    triangle_of(name, palette, coordinates, grouped_faces, skin, &[])
+}
+
+/// A one-triangle 0x36 mesh whose vertices carry these colours (none, or
+/// one each).
+pub(crate) fn coloured_triangle(
+    name: i32,
+    palette: i32,
+    coordinates: &Coordinates,
+    colours: &[u32],
+) -> Vec<u8> {
+    triangle_of(name, palette, coordinates, 1, &[], colours)
+}
+
+fn triangle_of(
+    name: i32,
+    palette: i32,
+    coordinates: &Coordinates,
+    grouped_faces: u16,
+    skin: &[(u16, u16)],
+    colours: &[u32],
+) -> Vec<u8> {
     let mut body = words(&[name.cast_unsigned(), 0x0001_8003, palette.cast_unsigned()]);
     // Animation, two unknown references, center, three unknowns, radius,
     // minimum and maximum.
@@ -140,7 +162,8 @@ pub(crate) fn skinned_triangle(
     // Positions, coordinates, normals, colors, faces, skin groups, face
     // groups, vertex groups, mesh operations and scale.
     let skin_count = u16::try_from(skin.len()).unwrap();
-    for count in [3_u16, 3, 3, 0, 1, skin_count, 1, 1, 0, 0] {
+    let colour_count = u16::try_from(colours.len()).unwrap();
+    for count in [3_u16, 3, 3, colour_count, 1, skin_count, 1, 1, 0, 0] {
         body.extend(count.to_le_bytes());
     }
     for axis in [0_i16, 0, 0, 1, 0, 0, 0, 1, 0] {
@@ -161,6 +184,7 @@ pub(crate) fn skinned_triangle(
         }
     }
     body.extend([0_u8, 0, 127].repeat(3));
+    body.extend(words(colours));
     // The face (flags, then its vertices), the skin runs, its face group
     // and vertex group.
     for word in [0_u16, 0, 1, 2] {

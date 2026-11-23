@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+- Zones without a sky are lit as the original lights them, so the Erudin palace and other interiors are no longer too dark (Adam, 11-23). See [Zone lighting](docs/zone-lighting.md).
+  - **Baked light:** each terrain vertex's colour from the zone file, and each placed object's colour track, is now drawn. Before, both were dropped at load.
+  - **The engine's single-pass formula:** each vertex sums the ambient by its alpha past the 0.12 offset, its own light at full weight, and up to three point lights. The sum saturates once, then multiplies the texture.
+  - **The ambient** comes from the zone header's time type, as in eqgame.exe 0x441295. Type 4 (the palace) gets 0.5 grey and other types 0.1. Types 1, 2 and 5 follow the day table, read from the installed eqgame.exe. Vision raises the ambient to the floor.
+  - **Point lights:** the zone's placed lights and carried torches light zone geometry per vertex, worked out on the CPU, in place of Bevy's lights. Which lights each mesh takes is inferred until the engine's light lists are read.
+  - **Tone curve:** the scene camera no longer applies one, inside or out, as the original applies none. Colour grading stays.
+  - **Known departure:** the floor's fade while you carry a light isn't modelled.
+- Petitions and reports as the Titanium program takes them (read R49-23,
+  checklist 6.511, C1a), on eq-network #414.
+  - **`/petition`** sends its words and echoes them in the installed line
+    0x3025; with no words it prints 0x3332 and sends nothing. Our own "Your
+    petition was sent." line stays for Mac-era servers, whose program is
+    unread.
+  - **`/guidehelp`** is the same text form, with lines 0xde8 and 0xde3.
+  - **The petition window:** where the world turns it on, the program
+    toggles a window and ignores the words. Which skin screen that is is
+    unread, so this client takes the text form there: a departure, labelled,
+    with a TODO.
+  - **Typed Reports** (new setting, a departure, on until the report
+    windows are built in C1b, then off): `/bugreport` and `/feedback` send
+    the typed words, as before. The program ignores the words and opens its
+    windows; with the setting off this client ignores them too and says it
+    has no window yet. A bug report prints 0x22ae, or 0x22b0 with no words;
+    feedback prints nothing, as the program's window does.
+  - Feedback now carries the player's place and heading, which Titanium's
+    feedback sends. Stock EQEmu now offers feedback and drops it, as it
+    drops the program's. Project 1999 offers none of the three.
+  - No repin of its own: it uses main's eq-network pin (614d1c0, #635),
+    which carries `reports::petition_form` and the feedback's place.
+- A Bard's song stop says the Titanium program's line (0x40f06d, read R49-21), from eq-network #421's `WorldEvent::SongStopped`. It shows in the program's colour 0x108, in the installation's words (string 0x318f), or this client's where the installation lacks them. A gem click that stops the song now shows that line, not a cast refusal. As read, the program hides the line when the Bard songs filter is "mine only" (filter 9 holding 1), and so does this client, through the local filter gate (`chat_filters::hidden_locally`). Read R49-48 e asks to confirm that compare. On Titanium, where the program's line is the only one, this client's own "Song stop requested" and "Song stop unconfirmed" lines no longer show beside it. The Mac-era servers, which send no program line, keep them.
+- A Bard's `/melody`, as the Titanium program's (0x472156, read R49-33 c; gap 3.5, plan approved with Y1 to Y4). It is offered where the session offers `Capability::Melody`, on P99 (by Adam's word) and Titanium EQEmu. Elsewhere it answers as an unknown game command does.
+  - **`/melody 1 3 2`** clears the list, then, unless a song is sung, plays gems 1, 3 and 2 in turn. It presses the first at once through the same gem press as a click, with the same refusals and lines.
+  - **Each refresh of the player's own gem** sends the song stop, then presses the next gem, cycling. Nothing else moves the melody (no timer, no retry), so with no refresh after a refused press it stalls ([I]; read R49-48 f is filed for the program's index on a refusal).
+  - **`/melody` while a song is sung** sends only the stop. With no numbers it only clears the list.
+  - **Gems 1 to 8** are taken. The program takes 9, which this client has no gem for. How the program splits the numbers isn't in the read, so a run of digits is one number here ([I]).
+  - **Only a Bard's `/melody` does anything.** Anyone else's sends nothing and says nothing, as the program's.
+  - **A gem click while singing** clears the list, the user's and a script's alike (0x47e8e0). A new admission starts with none. Scripts run it as typed: `slash("melody 1 2")`.
 - `/pet target` and unknown `/pet` words, as read R49-22a reads the Titanium program (checklist 6.610, gap 3.5).
   - **`/pet target`** stays local and sends no pet order.
     - It targets the player's pet through the same selection a click on the pet uses.

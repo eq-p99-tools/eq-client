@@ -182,7 +182,8 @@ impl ChatFilters {
 // lines for fights the player is not in, when this client prints them.
 // TODO(6.494, C2): PCSpells, NPCSpells and BardSongs (0x40f303, 0x45e257
 // and the rest): others' spell-effect and casting lines, when this client
-// prints them; which lines each site tests is unread.
+// prints them; which lines each site tests is unread. BardSongs' test in the
+// song stop (0x40f06d) is wired below.
 // TODO(6.494, C2): BadWord's chat-text sites (0x454c12 and the rest): the
 // bad-word mask, once the list's source is read.
 // TODO(6.494, C2): the group index's site (0x4602a0), once its use is read.
@@ -219,6 +220,12 @@ fn titanium_hides(filters: &ChatFilters, notice: &crate::world::Notice) -> bool 
                         | DamageOutcome::Rune
                 )
                 && filters.get(FilterCategory::MissedMe) == FilterMode::Hide
+        }
+        // The song stop's line (0x40f06d): read R49-21 gives the test as
+        // filter 9 holding 1, which read R49-2 names mine only (read R49-48 e
+        // asks to confirm the compare).
+        crate::world::Notice::SongStopped { .. } => {
+            filters.get(FilterCategory::BardSongs) == FilterMode::MineOnly
         }
         _ => false,
     }
@@ -288,6 +295,31 @@ pub const fn kind_words(category: FilterCategory) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn titanium_hides_the_song_stop_line_while_bard_songs_is_mine_only() {
+        // As read R49-21 gives the program's test (R49-48 e asks to confirm).
+        let stopped = crate::world::Notice::SongStopped {
+            spell_id: 42,
+            string_id: 0x318f,
+        };
+        let mut filters = ChatFilters::default();
+        for (mode, hidden) in [
+            (FilterMode::Show, false),
+            (FilterMode::MineOnly, true),
+            (FilterMode::GroupOnly, false),
+            (FilterMode::Hide, false),
+        ] {
+            filters.set(FilterCategory::BardSongs, mode);
+            assert_eq!(
+                hidden_locally(&filters, GameDialect::Titanium, &stopped),
+                hidden,
+                "{mode:?}"
+            );
+            // The unread programs hide nothing here.
+            assert!(!hidden_locally(&filters, GameDialect::EqMac, &stopped));
+        }
+    }
 
     #[test]
     fn titanium_hides_attacks_that_miss_the_player_while_missed_me_is_hidden() {

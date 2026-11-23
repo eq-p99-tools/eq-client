@@ -166,10 +166,16 @@ impl Notice {
     pub const fn message_type(&self) -> Option<u32> {
         match self {
             Self::ServerString { message_type, .. } => *message_type,
+            // The program prints the song stop's line in colour 0x108.
+            Self::SongStopped { .. } => Some(SONG_STOP_COLOUR),
             _ => None,
         }
     }
 }
+
+/// The colour the program prints a song stop's line in (0x40f06d, read
+/// R49-21).
+const SONG_STOP_COLOUR: u32 = 0x108;
 
 /// Something to tell the player.
 #[derive(Clone, Debug, PartialEq)]
@@ -412,6 +418,15 @@ pub enum Notice {
     WhoList(crate::who::WhoList),
     /// Submission or an observed outcome of an explicit buff cancellation.
     BuffCancellation(crate::buffs::cancel::Update),
+    /// A Bard's song stopped under the Titanium program's rules, with the
+    /// line the program prints at the stop (0x40f06d, read R49-21), in its
+    /// colour 0x108. The host hides it where the Bard songs filter does.
+    SongStopped {
+        /// The song's spell.
+        spell_id: u32,
+        /// The program's line, in `eqstr_us.txt`.
+        string_id: u32,
+    },
     /// A manual song stop whose server outcome is unknown.
     SongStopUnconfirmed {
         /// Whether the worker released a local casting hold.
