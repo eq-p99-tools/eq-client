@@ -78,6 +78,12 @@ pub(crate) enum Chosen {
 }
 
 impl TradeState {
+    /// The spawn a scene click or the Use key asked to use, until taken.
+    #[cfg(test)]
+    pub(crate) fn right_clicked(&self) -> Option<u16> {
+        self.right_clicked.map(|(_, id)| id)
+    }
+
     fn open_loot(
         &mut self,
         online: &mut OnlineState,
