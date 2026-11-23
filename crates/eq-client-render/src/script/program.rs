@@ -924,9 +924,9 @@ mod tests {
                 "expected ':' at the end of the line",
             ),
             (
-                "while True:\n    pass\n",
+                "while True, 5:\n    pass\n",
                 1,
-                "expected 'while <bool expression>, limit=<integer literal>:'",
+                "expected 'while <bool expression>:' or 'while <bool expression>, limit=<integer literal>:'",
             ),
             (
                 "if !False:\n    pass\n",
