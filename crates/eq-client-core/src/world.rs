@@ -1039,6 +1039,9 @@ impl ClientWorld {
             | WorldEvent::Berserk(_)
             | WorldEvent::Spun
             | WorldEvent::HideAndSneakEnded
+            // `/played`'s profile fields (eq-network #410, 6.490b): the
+            // /played client slice.
+            | WorldEvent::PlayedTime(_)
             | WorldEvent::Target(_)
             | WorldEvent::TargetOfTarget(_)
             | WorldEvent::SacrificeOffer(_)
