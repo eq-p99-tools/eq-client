@@ -119,7 +119,9 @@ pub(super) fn create_terrain_primitives(
                 })
             });
             TerrainDraw {
-                mesh: meshes.add(create_mesh(primitive, RenderAssetUsages::RENDER_WORLD)),
+                // Kept in the main world too, where the zone light colours
+                // its vertices.
+                mesh: meshes.add(create_mesh(primitive, RenderAssetUsages::default())),
                 material,
                 animation,
             }
@@ -356,6 +358,7 @@ mod terrain_tests {
             indices: vec![0, 1, 2, 2, 1, 0],
             texture: Some(0),
             material_mode: mode,
+            light: Vec::new(),
         }
     }
 

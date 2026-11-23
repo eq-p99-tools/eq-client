@@ -11,7 +11,7 @@ use eq_client_core::{
 };
 
 /// A cleric with spell 73 in its first gem, admitted in session 7 as spawn 12.
-fn caster() -> PlayerState {
+pub(super) fn caster() -> PlayerState {
     let mut gems = [None; 8];
     gems[0] = Some(73);
     PlayerState {
@@ -889,11 +889,14 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
             spell_id: Some(73),
         }],
     );
+    // The press also clears a melody (0x47e8e0, read R49-33 c).
+    assert_eq!(online(&mut app).start_melody(vec![0, 1]), Some(0));
     press(&mut app);
     assert!(matches!(
         rx.try_recv().unwrap(),
         ClientCommand::CastSpell { spell_id: 73, .. }
     ));
+    assert_eq!(world(&app).casting().melody.gems(), &[] as &[u8]);
     testing::news(
         &mut online(&mut app),
         [WorldEvent::Singing {

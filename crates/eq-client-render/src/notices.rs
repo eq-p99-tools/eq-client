@@ -60,6 +60,12 @@ impl Lines {
     }
 }
 
+/// The colour the program prints Apply Poison's own lines in: its
+/// refusals, its start and its cancel (read R49-1 b, R49-1f).
+const POISON_LINE: u32 = 0x111;
+/// The colour of the server's answer to a poison (read R49-1 d).
+const POISON_ANSWER: u32 = 0x10e;
+
 /// Where a notice shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Place {
@@ -371,6 +377,21 @@ fn environmental_lines(
     amount.into_iter().chain(record).collect()
 }
 
+/// Whether one of this client's own lines is shown beside the generation's
+/// program. Where the Titanium program says each song stop itself
+/// (`SongStopped`, read R49-21), this client's unconfirmed-stop lines would
+/// only add to it, so they are not shown there; the Mac-era servers send no
+/// program line, so ours stays.
+pub(super) fn ours_shown(notice: &Notice, generation: eq_client_core::GameDialect) -> bool {
+    match notice {
+        Notice::SongStopUnconfirmed { .. } => match generation {
+            eq_client_core::GameDialect::Titanium => false,
+            eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => true,
+        },
+        _ => true,
+    }
+}
+
 /// How a notice reads, and where each part shows.
 #[allow(
     clippy::too_many_lines,
@@ -450,6 +471,35 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
             string_id,
             arguments,
         } => chat(official(*string_id, arguments, reason, messages)),
+        // The program's refusals, its start and its cancel all print in
+        // colour 0x111 (read R49-1 b, R49-1f); a refusal in the session's
+        // words keeps the system line's.
+        Notice::ApplyPoisonRefused { reason, string_id } => {
+            let line = official(*string_id, &[], reason, messages);
+            chat(if string_id.is_some() {
+                line.typed(POISON_LINE)
+            } else {
+                line
+            })
+        }
+        Notice::PoisonStarted { string_id } => chat(
+            official(
+                Some(*string_id),
+                &[],
+                "You sit down and begin to apply the poison.",
+                messages,
+            )
+            .typed(POISON_LINE),
+        ),
+        Notice::PoisonInterrupted { string_id } => chat(
+            official(
+                Some(*string_id),
+                &[],
+                "You stopped applying the poison.",
+                messages,
+            )
+            .typed(POISON_LINE),
+        ),
         Notice::ConsumeRefused { reason, string_id }
         | Notice::ItemUseRefused { reason, string_id }
         | Notice::CorpseRefused { reason, string_id }
@@ -462,6 +512,20 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         | Notice::SocialRefused { reason, string_id } => {
             chat(official(*string_id, &[], reason, messages))
         }
+        // The program's answer lines, in colour 0x10e (read R49-1 d).
+        Notice::PoisonAnswered { applied } => chat(
+            if *applied {
+                official(Some(0x3269), &[], "You apply the poison.", messages)
+            } else {
+                official(
+                    Some(0x326a),
+                    &[],
+                    "You failed to apply the poison.",
+                    messages,
+                )
+            }
+            .typed(POISON_ANSWER),
+        ),
         // The official client always says where `/autosplit` left it (R8).
         Notice::AutoSplit(on) => chat(official(
             Some(if *on { 0x338d } else { 0x338e }),
@@ -583,6 +647,20 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         Notice::BuffSlotMismatch => {
             bevy::log::warn!("The server contradicted a modelled buff slot in this zone visit");
             Vec::new()
+        }
+        Notice::BuffPredictionContradicted(disagreement) => {
+            bevy::log::warn!(
+                "Gap: the server still holds spell {} after landing {} ({:?}), which the slot finder removes",
+                disagreement.removed,
+                disagreement.landed,
+                disagreement.rule
+            );
+            Vec::new()
+        }
+        // The program's words, or this client's where the installation
+        // lacks them.
+        Notice::SongStopped { string_id, .. } => {
+            chat(official(Some(*string_id), &[], "Your song ends.", messages))
         }
         Notice::SongStopUnconfirmed { released_cast } => chat(
             if *released_cast {
@@ -1234,6 +1312,35 @@ mod tests {
             record: None,
         };
         assert_eq!(wording(&unworded, None), []);
+    }
+
+    #[test]
+    fn a_song_stop_says_the_programs_line_alone_on_titanium() {
+        let stopped = Notice::SongStopped {
+            spell_id: 42,
+            string_id: 12687,
+        };
+        let messages = Messages::parse("EQST0002\n0 1\n12687 Synthetic song stop.\n");
+        assert_eq!(
+            wording(&stopped, Some(&messages)),
+            [(Place::Chat, Said::official("Synthetic song stop."))]
+        );
+        assert_eq!(
+            wording(&stopped, None),
+            [(Place::Chat, "Your song ends.".into())]
+        );
+        // Where the program says each stop (Titanium), our own
+        // unconfirmed-stop lines aren't shown; on the Mac-era servers, which
+        // send no program line, they are.
+        for released_cast in [false, true] {
+            let unconfirmed = Notice::SongStopUnconfirmed { released_cast };
+            assert!(!ours_shown(
+                &unconfirmed,
+                eq_client_core::GameDialect::Titanium
+            ));
+            assert!(ours_shown(&unconfirmed, eq_client_core::GameDialect::EqMac));
+        }
+        assert!(ours_shown(&stopped, eq_client_core::GameDialect::Titanium));
     }
 
     #[test]
@@ -2159,6 +2266,68 @@ mod tests {
         assert_eq!(
             wording(&arrived, None),
             [(Place::Chat, Said::own("Arrived in The Qeynos Hills."))]
+        );
+    }
+
+    #[test]
+    fn apply_poison_says_the_programs_lines_in_its_colours() {
+        let messages = Messages::parse(
+            "EQST0002
+0 6
+12381 You must be sitting.
+12382 You begin applying.
+12383 You lack the skill.
+12497 You stop applying.
+12905 You applied it.
+12906 You failed.
+",
+        );
+        let said = |notice: Notice| wording(&notice, Some(&messages));
+        for (notice, text) in [
+            (
+                Notice::PoisonStarted { string_id: 0x305e },
+                "You begin applying.",
+            ),
+            (
+                Notice::PoisonInterrupted { string_id: 0x30d1 },
+                "You stop applying.",
+            ),
+            (
+                Notice::ApplyPoisonRefused {
+                    reason: "no skill".into(),
+                    string_id: Some(0x305f),
+                },
+                "You lack the skill.",
+            ),
+            (
+                Notice::ApplyPoisonRefused {
+                    reason: "not sitting".into(),
+                    string_id: Some(0x305d),
+                },
+                "You must be sitting.",
+            ),
+        ] {
+            assert_eq!(
+                said(notice),
+                [(Place::Chat, Said::official(text).typed(0x111))]
+            );
+        }
+        for (applied, text) in [(true, "You applied it."), (false, "You failed.")] {
+            assert_eq!(
+                said(Notice::PoisonAnswered { applied }),
+                [(Place::Chat, Said::official(text).typed(0x10e))]
+            );
+        }
+        // The session's own words keep the system line's colour.
+        assert_eq!(
+            said(Notice::ApplyPoisonRefused {
+                reason: "Take the poison out of the bag to apply it".into(),
+                string_id: None,
+            }),
+            [(
+                Place::Chat,
+                Said::own("Take the poison out of the bag to apply it")
+            )]
         );
     }
 }

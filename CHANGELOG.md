@@ -2,6 +2,74 @@
 
 ## Unreleased
 
+- **The Use key now uses what is at the centre of the view, not the nearest door** (read R49-19, checklist 6.609). On Titanium (and RoF2, inferred) it casts the program's ray from the camera through the centre of the 3D view, the same pick a mouse click makes:
+  - The first character the ray hits becomes the target. An NPC, or one the target setter refuses while no target stands, also gets what a right click on it does (a merchant, banker or guildmaster opens, a boat asks to pilot, else it is considered; no hail). A player or corpse that becomes the target is only targeted, as the program's key handler reads (0x462519).
+  - With no character, a door on the same ray gets one click at the point the ray met it, and the session judges its reach from there, as for a mouse click. Nothing else is reached: an item on the ground or a world container opens only by its own click (read).
+  - With neither, nothing happens and nothing is said.
+  - **This changes scripts.** Use no longer finds the nearest door or item without facing it. A script's `press("U")` is the real key, so it goes the same way. Turn on the new quality-of-life setting **Use Picks Nearest** (off by default) to keep the old rule: the nearest door, item on the ground or world container within the same reach.
+  - Inferred and labelled: the program's pick skips its own actor, its mount and actors with a "not pickable" bit; this skips what a mouse click skips.
+  - EQMac keeps the nearest rule until its key is read. The status line's "use the door" hint shows only where Use takes the nearest thing.
+- A Bard's song stop resets the gem timers as the Titanium program's stop does (0x40f06d, read R49-21 c; checklist 6.542). On each `WorldEvent::SongStopped`, which the session sends only under the Titanium song rules (P99, Titanium EQEmu), the timers of the gems whose spells have no recast end, and so does the shared recovery before any spell. A spell whose timing the installed data lacks keeps its timer. The stop is applied in order with the gem refreshes around it, so a refresh after it starts its timers again. Before, a press just after `/stopsong` could be refused with "Spell available in N s" where the program casts.
+- A zone line that leads back into the same zone places the player at its landing on stock EQEmu too, as the Titanium program does (0x48aaa6, checklist 6.640, repin to eq-network 231d67d with #430). Before, the client waited for a server move that never came, so in qeynos2 the player fell down the Temple of Life shaft. The installed zone lines already checked P99's crossings, and now check stock EQEmu's. Quarm, TAKP and RoF2 refuse a same-zone line, as before.
+  - The repin carries every eq-network change since 614d1c0. An item's cold resistance is scaled with the other bonuses (#418). A training refusal keeps this client's words; the program's line is the language-training client half's (#427). Movement sends no vertical speed of its own, so the session sends 0 as before (#423, the 6.617 client half's).
+  - On Quarm and TAKP: another player's inspection says the program's line 0x57c naming them (#426), and the player's inspect note is now sent wherever the session answers inspections. The Mac era's `/decline` answers say the program's lines 0x33bd to 0x33bf (#429), though this client offers no `/decline` yet.
+  - P99's expansion mask now arrives (#437, 0x3). Only character creation's race and class lists read it, and on P99 they are unchanged.
+- Zones without a sky are lit as the original lights them, so the Erudin palace and other interiors are no longer too dark (Adam, 11-23). See [Zone lighting](docs/zone-lighting.md).
+  - **Baked light:** each terrain vertex's colour from the zone file, and each placed object's colour track, is now drawn. Before, both were dropped at load.
+  - **The engine's single-pass formula:** each vertex sums the ambient by its alpha past the 0.12 offset, its own light at full weight, and up to three point lights. The sum saturates once, then multiplies the texture.
+  - **The ambient** comes from the zone header's time type, as in eqgame.exe 0x441295. Type 4 (the palace) gets 0.5 grey and other types 0.1. Types 1, 2 and 5 follow the day table, read from the installed eqgame.exe. Vision raises the ambient to the floor.
+  - **Point lights:** the zone's placed lights and carried torches light zone geometry per vertex, worked out on the CPU, in place of Bevy's lights. Which lights each mesh takes is inferred until the engine's light lists are read.
+  - **Tone curve:** the scene camera no longer applies one, inside or out, as the original applies none. Colour grading stays.
+  - **Known departure:** the floor's fade while you carry a light isn't modelled.
+- Petitions and reports as the Titanium program takes them (read R49-23,
+  checklist 6.511, C1a), on eq-network #414.
+  - **`/petition`** sends its words and echoes them in the installed line
+    0x3025; with no words it prints 0x3332 and sends nothing. Our own "Your
+    petition was sent." line stays for Mac-era servers, whose program is
+    unread.
+  - **`/guidehelp`** is the same text form, with lines 0xde8 and 0xde3.
+  - **The petition window:** where the world turns it on, the program
+    toggles a window and ignores the words. Which skin screen that is is
+    unread, so this client takes the text form there: a departure, labelled,
+    with a TODO.
+  - **Typed Reports** (new setting, a departure, on until the report
+    windows are built in C1b, then off): `/bugreport` and `/feedback` send
+    the typed words, as before. The program ignores the words and opens its
+    windows; with the setting off this client ignores them too and says it
+    has no window yet. A bug report prints 0x22ae, or 0x22b0 with no words;
+    feedback prints nothing, as the program's window does.
+  - Feedback now carries the player's place and heading, which Titanium's
+    feedback sends. Stock EQEmu now offers feedback and drops it, as it
+    drops the program's. Project 1999 offers none of the three.
+  - No repin of its own: it uses main's eq-network pin (614d1c0, #635),
+    which carries `reports::petition_form` and the feedback's place.
+- A Bard's song stop says the Titanium program's line (0x40f06d, read R49-21), from eq-network #421's `WorldEvent::SongStopped`. It shows in the program's colour 0x108, in the installation's words (string 0x318f), or this client's where the installation lacks them. A gem click that stops the song now shows that line, not a cast refusal. As read, the program hides the line when the Bard songs filter is "mine only" (filter 9 holding 1), and so does this client, through the local filter gate (`chat_filters::hidden_locally`). Read R49-48 e asks to confirm that compare. On Titanium, where the program's line is the only one, this client's own "Song stop requested" and "Song stop unconfirmed" lines no longer show beside it. The Mac-era servers, which send no program line, keep them.
+- A Bard's `/melody`, as the Titanium program's (0x472156, read R49-33 c; gap 3.5, plan approved with Y1 to Y4). It is offered where the session offers `Capability::Melody`, on P99 (by Adam's word) and Titanium EQEmu. Elsewhere it answers as an unknown game command does.
+  - **`/melody 1 3 2`** clears the list, then, unless a song is sung, plays gems 1, 3 and 2 in turn. It presses the first at once through the same gem press as a click, with the same refusals and lines.
+  - **Each refresh of the player's own gem** sends the song stop, then presses the next gem, cycling. Nothing else moves the melody (no timer, no retry), so with no refresh after a refused press it stalls ([I]; read R49-48 f is filed for the program's index on a refusal).
+  - **`/melody` while a song is sung** sends only the stop. With no numbers it only clears the list.
+  - **Gems 1 to 8** are taken. The program takes 9, which this client has no gem for. How the program splits the numbers isn't in the read, so a run of digits is one number here ([I]).
+  - **Only a Bard's `/melody` does anything.** Anyone else's sends nothing and says nothing, as the program's.
+  - **A gem click while singing** clears the list, the user's and a script's alike (0x47e8e0). A new admission starts with none. Scripts run it as typed: `slash("melody 1 2")`.
+- `/pet target` and unknown `/pet` words, as read R49-22a reads the Titanium program (checklist 6.610, gap 3.5).
+  - **`/pet target`** stays local and sends no pet order.
+    - It targets the player's pet through the same selection a click on the pet uses.
+    - It then says the program's line (string 0x3330). With no pet it says string 0x3323.
+    - Both lines come from the installation, in this client's own words where the installation lacks them.
+    - Before, no pet gave a refusal in our words. That the word is "target" is inferred (row 22a-iii).
+  - **A `/pet` word that names no order** sends nothing and says nothing, as the program's sender skips it (0x49975b). Before, this client said "Unknown pet command".
+  - **The Pet Info window:** the Options window's Pet Window Popup already decides whether a new pet shows the window (default on). That matches the program's auto setting; its default is row 22a-iv.
+  - The network side, which sends an order with no pet, is eq-network #411. This client has no pet refusal of its own.
+- Buffs landing on the player take the slot the Titanium program's whole slot finder gives them (checklist 6.612, read R49-22e, repin to eq-network #417). That includes step 4's replace in place, worked out from each effect's base, formula and max as 0x40f339 does, and step 6's eviction. The facts come from the installed spell data: effects, the Bard level and the band, with each held buff's stored level from its record.
+  - A buff the program removes for the landing is dropped as a prediction. If the server's word still holds it afterwards (a record for it, or the next zone-in's table), its word stands, and the disagreement is logged with the rule and both spells (6.612 T1).
+  - A value the client can't work out still leaves the landing unslotted. That covers a random formula, one that reads hit points, or one that needs a level we don't know. The old guess for a possible step-4 replace is gone.
+- Seven local-settings slash commands work as the Titanium program's do (checklist 6.525, read R49-22c). They change only this client: nothing goes to a server, on any server type, and scripts can run each with `slash()`.
+  - `/clearchat` clears the active chat window's view, silently. The history keeps its lines, so scripts, the log and other windows still have them.
+  - `/showspelleffects` and `/combatmusic`: "off" turns the option off and any other word turns it on; with no word they give their usage. Each ends by saying where the option stands. `/combatmusic` now takes the read's words instead of toggling, and says the installation's lines. This client plays no combat music yet, so it changes nothing audible.
+  - `/particledensity` takes 0 to 3, or a word starting OFF, LOW, MED or HIG, for the session only. This client draws spell particles fully or not at all, so level 0 hides them and 1 to 3 show them. It is its own flag: `/showspelleffects` still says what it said.
+  - `/mousespeed N` keeps and reports the pointer speed as typed. This client leaves the pointer to the system, so it moves nothing.
+  - `/chatfontsize 0` to `6` sets the chat's font. Labelled departure: the program sets only the active chat window's size, and this client sets one size for the whole chat. `/usercolor <kind> <red> <green> <blue>` sets a text colour (a word that is not a number keeps that channel), `/usercolor <kind> reset` puts it back, and `/usercolor help` or `page1` to `page7` list the kinds.
+  - Lines with string ids come from the installation, with this client's words where it lacks them. The program's English-only lines are in this client's words. Choices are saved in this client's per-character settings, never in `eqclient.ini` or the UI ini.
 - A Bard's song holds nothing back, as the Titanium program's doesn't (read R49-21; gap 3.5, checklist 6.442, 6.542). This repins eq-network to 33057d9 (#413, and #407's server filters), on P99 and Titanium EQEmu. The session now tells the client which song a Bard is singing (`WorldEvent::Singing`), and the client's own gates follow it:
   - **A gem press while singing** goes to the session, whatever the gem's timer or the mana, and the session stops the song and casts nothing, as the program's gem click does. A forget goes too.
   - **An item use while singing** isn't refused by the client; the session lets it go alongside the song.
@@ -19,6 +87,43 @@
   Mac-era and RoF2 clients' `/played` is unread, so it's refused there
   for now.
 - A Bard's item use now carries the song test from the installed spell data (gap 3.5, checklist 6.542, read R49-21b): the item's spell counts as the class's when the player's class level for it is neither 0 nor 255. The session uses it to choose, for an item's song it keeps, between sending the stop and ending it here. Without installed spell data, or without that spell's class levels, the session keeps its memorized test as before. Labelled: the program also needs the spell's byte +0x1c4 to be clear. That byte isn't mapped to a spells file field yet (read R49-48c), so a class spell with it set counts as a song here and not in the program.
+- Keep the server filters as the Titanium program keeps them (read R49-2,
+  checklist 6.494a to c), on eq-network #407.
+  - **Rows and choices:** the Filters page lists the program's 28 rows in
+    its order but swarm pets' deaths, which has no row there either, each
+    stepping through its own choices in the program's order. Bad words start
+    filtered, as there. The page takes the place of the skin's own Filters
+    page, whose controls are not wired, so the window shows one Filters tab.
+  - **Keys:** the options file keeps each row under the original's
+    `eqclient.ini` key (`Channel00`, `BadWord`, `PCSpells` and the rest) as
+    its choice's index; an index outside the row's choices gives its
+    default. They stay per character, this client's choice (the original
+    keeps one set per install). The `filter_<kind>` lines of the first
+    filters change are no longer read, so **every saved filter choice
+    falls back to its default once** after this update; set them again on
+    the Filters page.
+  - **`/filter`** shows the Options window on the Filters page, reading no
+    words and sending nothing, as the program does.
+  - **At once on Titanium:** a change goes to the server at once on EQEmu
+    and P99 alike, as the program sends it again on every change; Mac-era
+    servers take it at the next zone-in. P99's first use is attended.
+  - **Scripts:** `filter.<kind>` reads a row and `click("filter", kind)`
+    steps it.
+  - **Page note:** shorter, and wrapped within the page (6.494d's look
+    found it ran past the window's edge).
+  - A hidden row hides only where the server honours it; the program's own
+    local hiding (stuns, others' environmental lines, spell and damage
+    lines) is the next change.
+  - Uses main's eq-network pin, which carries #407; no repin of its own.
+- Hide locally what the Titanium program hides by its filters, for the lines
+  this client prints (read R49-2 d, checklist 6.494, C2). With **Missed me**
+  hidden, another's melee attack on the player that does not land is not
+  shown (the damage display's test at 0x4a6631; which outcomes it covers is
+  inferred). The program's other local tests gate lines this client does not
+  print yet (stuns, others' environmental damage, others' fights, others'
+  spells, the bad-word mask): each is a named TODO at
+  `chat_filters::hidden_locally`. Mac-era and RoF2 programs are unread and
+  hide nothing locally.
 - Show the session's chat pace (checklist 6.523, eq-network c951420). Its
   refusal, "You are sending chat too fast. Wait N seconds.", is printed as
   the player's own line, and a script whose chat or social step the pace
@@ -380,19 +485,21 @@ Mac-era servers loot as before, as that client's loot click is unread, and
   - **Emitters** follow the Titanium program's loader (read R49-7 first pass and its engine follow-up). `eq-client-assets` reads `<zone>_sounds.eff`'s 84-byte records:
     - one emitter for a type-2 record or matching day and night fields, else a day one and a night one, each with its own type, sound, delay and volume;
     - a radius below 0 reaches 10,000;
+    - positions are in the files' own frame, whose x and y are the server's y and x (inferred from the local look, where qeytoqrg's regions met the ground only swapped);
     - a delay above 0 repeats after delay + 500 plus a random share;
     - a positive volume is a millibel attenuation (2000 is a tenth, above 10000 silent); otherwise 0.2 for type 0 and 1.0 for the rest.
-    - a music record's track is its id negated (engine follow-up, 0x44b502); the step from track to sequence is inferred and labelled.
+    - a music record's sound number of 0 or more is the `<zone>.xmi` sequence it plays, counted from 0 (read on the music sign: 0x44bc19 to 0x4c6a99). A negative number names an `mp3index.txt` entry, which this client does not play yet; it is logged once a zone.
   - **The bank.** `<zone>_sndbnk.eff`'s EMIT list is numbered from 1 and LOOP from 162, with CR and spaces stripped. Inferred and labelled: the linear falloff, a bank name's `.wav`, the ms unit, a delay of 0 looping, and ids 32 to 161.
   - **Voices.** Emitters play on at most eight voices of their own, so cues always keep theirs.
-  - **Music.** The music region the player stands in plays through `rustysynth` 1.3.8 (MIT) on a SoundFont the player names with `--soundfont`. There is no music without one, a stated departure. How regions choose among themselves, fade and switch music is this client's estimate; the follow-up read covers only the fade value's clamp.
+  - **Music.** The music region the player stands in plays through `rustysynth` 1.3.8 (MIT) on a SoundFont the player names with `--soundfont`. There is no music without one, a stated departure. The `.sf2` files an installation may ship are refused by `rustysynth` as they stand, so the player names another. Regions follow the program's chooser (read on zone music tracks): the smallest sphere the player is in wins, night is the hour below 5 or above 18, a switch fades over 1500 ms and leaving every region over the record's +0x44 / +0x48 (at most 20000 ms), and EnvSounds off silences music regions too. A new track's fade-in (+0x4c) is inferred and not applied.
   - **Options.** New per-character options: Music, Music Volume (wired to the skin's slider), Environment Sounds and Combat Music. A character without its own choice seeds them from `eqclient.ini`'s `Music` (0 is off), `EnvSounds` and `CombatMusic`.
   - `/combatmusic` toggles and saves combat music, saying in this client's words that it plays none yet.
   - A `nosound.txt` in the installation turns all sound off.
-  - Unknown record types and music ids of 0 or more are logged once a zone and not played. Everything stops on a zone change, camp, logout or lost connection.
+  - Unknown record types and negative (mp3-list) music ids are logged once a zone and not played. Everything stops on a zone change, camp, logout or lost connection.
 
 
 - Scripts can click spawns, ground objects and doors in the world by id (checklist 6.587), since a script may do whatever the player can (Adam, 11-23). `click("spawn", admission, id, revision)` targets a spawn (two of one name included), `right_click` loots, trades, boards or considers it without changing the target, `click("object", admission, drop_id)` picks up an item or opens a world container, and `click("door", admission, id)` makes a door's two clicks. Each click goes through the scene's own pick, with the script's pointer as the cursor: it acts only where the pick names that same thing right now, so a thing behind a wall, off screen or under a window is refused and nothing is sent. The report's surroundings line gives the admission and each nearby spawn's click tuple. A run that stops mid-click hands the scene back the real pointer the next frame.
+- Apply a poison by right-clicking it (item type 42) in a top-level slot or on the cursor, as the Titanium program does it (6.493, read R49-1). eq-network's session sits the player, waits 10 s seated and sends; this client prints the program's lines: the start (0x305e), the refusals that carry one (0x305f no skill, 0x305d not sitting) and a posture change's cancel (0x30d1), all in colour 0x111, and the server's answer (0x3269 applied, 0x326a failed) in colour 0x10e. A poison in a bag falls to the ordinary item use. The sit is the session's posture event; scripts reach the same right-click path and notices. The wait is effect 234's total (6.493b, read R49-1f): this client sums the effect from buffs (type-4 records negated, as 0x41002f) and usable AAs (0x40feaa), not worn items, and tells the session (`ClientCommand::PoisonWait`, eq-network #404) whenever it changes; where any part is unknown it tells None and the session keeps 10 s. No script, slash line or social can post the total. Repin eq-network to bf7a4db (its main with #402 and #404), bringing `WorldEvent::PoisonStarted` / `PoisonInterrupted`, `ClientCommand::PoisonWait`, `DuelNews`, the player's `intoxication` and `ToggleStance`.
 
 - Scripts can read the group window, the effects window and the last tell (checklist 6.593, O2).
   - **Group:** `group.present`, `group.count`, and `group.member1.name` to `group.member5.hp_percent`.

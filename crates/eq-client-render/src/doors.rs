@@ -640,9 +640,11 @@ mod tests {
                 texture_coordinates: Vec::new(),
                 texture: None,
                 material_mode: eq_client_assets::MaterialMode::Opaque,
+                light: Vec::new(),
             }],
             materials: vec![eq_client_assets::ObjectMaterial { double_sided: true }],
             collision: Vec::new(),
+            vertex_count: None,
         };
         let mut models = Models::default();
         models.0.insert(
@@ -983,6 +985,14 @@ mod tests {
             .init_resource::<super::super::chat::ChatState>()
             .insert_resource(crate::outbox::Outbox::new(Some(sender)))
             .add_systems(Update, super::super::interact::input);
+        // The nearest rule answers the key only where the player keeps it;
+        // the centre ray's own tests are in the scene's pick.
+        let mut options = crate::options::OptionsState::default();
+        options
+            .options
+            .qol
+            .set(eq_client_core::qol::Fix::UsePicksNearest, true);
+        app.insert_resource(options);
         let window = app
             .world_mut()
             .spawn((
