@@ -284,6 +284,20 @@ fn holds_no_sound(directory: Option<&Path>) -> bool {
     })
 }
 
+#[cfg(test)]
+mod no_sound_tests {
+    #[test]
+    fn a_nosound_file_by_any_case_turns_sound_off() {
+        let directory = std::env::temp_dir().join(format!("no-sound-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        assert!(!super::holds_no_sound(Some(&directory)));
+        assert!(!super::holds_no_sound(None));
+        std::fs::write(directory.join("NoSound.TXT"), "").unwrap();
+        assert!(super::holds_no_sound(Some(&directory)));
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
+}
+
 impl ViewerConfig {
     /// The installed official client's own settings, read by the rules of its
     /// generation; None without an installation.

@@ -1147,7 +1147,7 @@ pub struct OfficialOptions {
     /// Whether sounds play: `Sound` in `[Defaults]`.
     pub sound: Option<bool>,
     /// The music volume: `Music` in `[Defaults]` (read R49-7 c); its scale
-    /// is unread, so only 0 is taken, as silent [I].
+    /// is unread, so only 0 is taken, as silent \[I\].
     pub music: Option<u32>,
     /// Whether the zone's ambient sounds play: `EnvSounds` in `[Defaults]`,
     /// taken as TRUE or FALSE [I: its reader is unread].
@@ -2071,6 +2071,9 @@ LookSpring=1
             OfficialOptions {
                 log: None,
                 sound: None,
+                music: None,
+                env_sounds: None,
+                combat_music: None,
                 spell_effects: None,
                 pc_names: Some(true),
                 npc_names: Some(false),

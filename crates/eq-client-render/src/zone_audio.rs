@@ -8,7 +8,7 @@
 //! pass; recording checklist 6.503): each record is one emitter or a day
 //! and a night one, with its own sound, delay and volume. How the program
 //! chooses, fades and switches music is pending the second pass; every
-//! inferred rule is a named constant or function here, marked [I]. The instruments are the
+//! inferred rule is a named constant or function here, marked \[I\]. The instruments are the
 //! player's sound font, not the program's own (a stated departure: an
 //! installation ships none).
 //!
@@ -377,6 +377,10 @@ fn wait(emitter: &Emitter, side: usize, salt: u64) -> f32 {
     (cooldown + share * delay) / 1000.0
 }
 
+/// A typed `/combatmusic`, waiting to be carried out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CombatMusicTyped;
+
 /// Turns combat music on or off for a typed `/combatmusic`, as the official
 /// client's toggle does (read R49-7 c, 0x4689a2), and keeps the choice with
 /// the character's options. The line is this client's own: the program's
@@ -386,7 +390,7 @@ pub(super) fn combat_music_typed(
     mut chat: ResMut<super::chat::ChatState>,
     mut options: ResMut<super::options::OptionsState>,
 ) {
-    if !std::mem::take(&mut chat.combat_music_toggle) {
+    if chat.combat_music_toggle.take().is_none() {
         return;
     }
     let on = !options.options.combat_music;
@@ -822,7 +826,7 @@ mod tests {
         for on in [false, true] {
             app.world_mut()
                 .resource_mut::<super::super::chat::ChatState>()
-                .combat_music_toggle = true;
+                .combat_music_toggle = Some(CombatMusicTyped);
             app.update();
             assert_eq!(
                 app.world()
@@ -832,7 +836,7 @@ mod tests {
                 on
             );
             let chat = app.world().resource::<super::super::chat::ChatState>();
-            assert!(!chat.combat_music_toggle);
+            assert!(chat.combat_music_toggle.is_none());
             let lines = chat.history.lines(eq_client_core::chat::ChatTab::All);
             assert!(
                 lines

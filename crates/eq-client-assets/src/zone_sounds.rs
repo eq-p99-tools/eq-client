@@ -7,7 +7,7 @@
 //! the volume follow the Titanium program's loader 0x44bed1 and 0x44ba79
 //! and its millibel conversion 0x4c4fa1 (read R49-7 a, first pass, and its
 //! engine follow-up; recording checklist 6.503). What the reads leave open
-//! is marked [I] where it is used: the falloff, the bank's default
+//! is marked \[I\] where it is used: the falloff, the bank's default
 //! extension, the delays' unit, a delay of 0 looping, and the ids between
 //! the two banks.
 
@@ -28,7 +28,7 @@ pub const MAX_RECORDS: usize = 4096;
 /// client's own bound).
 pub const MAX_FILE: u64 = 8 * 1024 * 1024;
 /// Ids up to this name the zone's own EMIT sounds, from 1 (read R49-7 a);
-/// where the EMIT bank ends is inferred [I].
+/// where the EMIT bank ends is inferred \[I\].
 const LAST_EMIT: i32 = 31;
 /// Ids up to this name the installation's numbered sounds [I: the read
 /// numbers only the two banks].
@@ -117,12 +117,12 @@ pub struct Emitter {
     /// Its place in the zone's own coordinates, as the file keeps them
     /// (+0x10, +0x14, +0x18). The program stores z negated on the emitter
     /// (+0x2c); whether its player position is negated alike is unread, so
-    /// the file's z is compared with the server's as is [I].
+    /// the file's z is compared with the server's as is \[I\].
     pub position: [f32; 3],
     /// How far it is heard (+0x1c); below 0.0 it is [`UNBOUNDED_RADIUS`].
     pub radius: f32,
     /// The repeat delay, day and night (+0x20, +0x24): above 0 it repeats,
-    /// in ms [I: the unit]; 0 or below loops [I].
+    /// in ms [I: the unit]; 0 or below loops \[I\].
     pub cooldowns: [i32; 2],
     /// The most extra wait added to a repeat, in ms (+0x28).
     pub random_delay: i32,
@@ -262,7 +262,7 @@ impl Emitter {
         self.ids[night as usize]
     }
 
-    /// One side's repeat delay; 0 or below loops [I].
+    /// One side's repeat delay; 0 or below loops \[I\].
     #[must_use]
     pub const fn cooldown(&self, side: usize) -> i32 {
         self.cooldowns[side & 1]
@@ -299,7 +299,7 @@ pub fn read_emitters(bytes: &[u8]) -> Result<Vec<Emitter>, ZoneSoundError> {
 /// (read R49-7 a): a line `EMIT` starts the emitter bank and `LOOP` the
 /// loop bank, and every other line is a sound name, with carriage returns,
 /// line feeds and spaces taken out and [`DEFAULT_EXTENSION`] added to one
-/// without '.'. Headings are matched without regard to case [I].
+/// without '.'. Headings are matched without regard to case \[I\].
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ZoneBank {
     sections: Vec<(String, Vec<String>)>,
@@ -360,7 +360,7 @@ pub enum SoundRef {
 }
 
 /// Resolves a sound id: 0 is none, 1 to 31 the zone's EMIT list, 32 to 161
-/// the installation's numbered sounds [I], 162 up the zone's LOOP list
+/// the installation's numbered sounds \[I\], 162 up the zone's LOOP list
 /// (read R49-7 a numbers EMIT from 1 and LOOP from 162).
 #[must_use]
 pub fn sound_name(id: i32, bank: &ZoneBank, numbers: &SoundNumbers) -> SoundRef {

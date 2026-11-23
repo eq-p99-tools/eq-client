@@ -140,7 +140,7 @@ pub(super) struct ChatState {
     pub log_toggle: bool,
     /// A `/combatmusic`, waiting to turn combat music on or off (read R49-7
     /// c, 0x4689a2).
-    pub combat_music_toggle: bool,
+    pub combat_music_toggle: Option<super::zone_audio::CombatMusicTyped>,
     /// A `/toggleinspect`, waiting to turn letting others inspect the
     /// player on or off; only once the command is offered (checklist 6.574).
     pub inspect_toggled: Option<super::dialogs::InspectToggle>,
@@ -2100,7 +2100,7 @@ pub(super) fn client_request_in_scope(
         .next()
         .is_some_and(|name| name.eq_ignore_ascii_case("/combatmusic"))
     {
-        state.combat_music_toggle = true;
+        state.combat_music_toggle = Some(super::zone_audio::CombatMusicTyped);
         return Some(Ok(()));
     }
     // The Raid window opens or closes whatever words follow; what the

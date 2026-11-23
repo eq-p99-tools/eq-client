@@ -411,14 +411,14 @@ pub(super) fn update(
     mut sounds: ResMut<Sounds>,
     (options, viewer): (
         Res<super::options::OptionsState>,
-        Res<super::ViewerSettings>,
+        Option<Res<super::ViewerSettings>>,
     ),
     mut sources: ResMut<Assets<AudioSource>>,
     playing: Query<(Entity, &Playing, Has<AudioSink>, Has<SpatialAudioSink>)>,
     listener: Query<&GlobalTransform, With<SpatialListener>>,
 ) {
     // An installation's nosound.txt silences it all (read R49-7 c).
-    sounds.volume = if viewer.0.no_sound {
+    sounds.volume = if viewer.is_some_and(|viewer| viewer.0.no_sound) {
         0.0
     } else {
         options.options.sound_volume()
