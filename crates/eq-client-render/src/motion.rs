@@ -21,7 +21,7 @@ use eq_client_assets::{
 };
 use eq_client_core::{
     Capability, ClientCommand, DiagonalAlong, DiagonalRates, GroundedDiagonal, HeadingUpdate,
-    MovementMode, MovementRequest, Posture, StrafeSide, Support,
+    MovementMode, MovementRequest, Pace, Posture, StrafeSide, Support,
     hazards::Hazard,
     movement::{
         AirborneController, CollisionWorld, Landing, PROVISIONAL_PHYSICS, VerticalPhysics,
@@ -550,14 +550,16 @@ impl Controls {
             let radians = eq_client_core::render_heading(heading);
             intent.preserve_facing = true;
             if let Some(speed) = self.strafe_speed {
-                intent.mode = MovementMode::Strafe;
                 // Titanium strafes on the selected base speed (the R5
-                // audit's S1).
-                intent.speed = if self.walking {
-                    self.strafe_walk_speed.unwrap_or(speed)
+                // audit's S1), and the sample names that pace, so the
+                // session bounds it by the same rate (6.540).
+                let (pace, rate) = if self.walking {
+                    (Pace::Walk, self.strafe_walk_speed.unwrap_or(speed))
                 } else {
-                    speed
+                    (Pace::Run, speed)
                 };
+                intent.mode = MovementMode::Strafe(pace);
+                intent.speed = rate;
                 let facing = Vec3::new(radians.sin(), 0.0, radians.cos());
                 intent.direction = facing.cross(Vec3::Y) * sideways;
             } else {
@@ -1340,7 +1342,11 @@ fn stroke_pitch(
     // and the mouse only in first person; a chase view's mouse look and
     // camera keys move only the camera (reads R13 d, R33, R39 A).
     let pitch = camera.look_pitch();
-    if pitch == 0.0 || !longitudinal || mode == MovementMode::Strafe || direction == Vec3::ZERO {
+    if pitch == 0.0
+        || !longitudinal
+        || matches!(mode, MovementMode::Strafe(_))
+        || direction == Vec3::ZERO
+    {
         return None;
     }
     let backing = mode == MovementMode::Backward || camera_back && !camera_forward;
@@ -1992,7 +1998,7 @@ pub(super) fn input(
     // R28b),
     // so it isn't halved again here. Elsewhere the session stands them to move,
     // and the step it stands them on is halved as before.
-    if intent.mode == MovementMode::Strafe
+    if matches!(intent.mode, MovementMode::Strafe(_))
         && !online.world().generation().ducking().moves_ducked
         && online
             .world()
@@ -2019,7 +2025,7 @@ pub(super) fn input(
         // walking and ducking shares the grant gave the strafe (R28, R33).
         let input = match mode {
             MovementMode::Backward => swim.backward,
-            MovementMode::Strafe => {
+            MovementMode::Strafe(_) => {
                 swim.strafe * (speed / controls.strafe_speed.unwrap_or(speed).max(f32::EPSILON))
             }
             _ if controls.walking => swim.walk,
@@ -3818,16 +3824,24 @@ pub(super) mod tests {
         let map = KeyMap::for_client(InstalledClient::Titanium);
         let keys = ButtonInput::<KeyCode>::default();
         let strafe = |controls: &Controls| {
-            controls
-                .intent(&keys, &map, &[Act::StrafeLeft], true, (0.0, 0.0), None)
-                .speed
+            let intent = controls.intent(&keys, &map, &[Act::StrafeLeft], true, (0.0, 0.0), None);
+            (intent.speed, intent.mode)
         };
-        assert!((strafe(&controls) - 6.0).abs() < 0.001);
+        // The sample names the pace it takes, so the session bounds it by
+        // the same rate (6.540).
+        let (speed, mode) = strafe(&controls);
+        assert!((speed - 6.0).abs() < 0.001);
+        assert_eq!(mode, MovementMode::Strafe(Pace::Run));
         controls.walking = true;
-        assert!((strafe(&controls) - 4.0).abs() < 0.001);
-        // Without a walking rate, one rate for both.
+        let (speed, mode) = strafe(&controls);
+        assert!((speed - 4.0).abs() < 0.001);
+        assert_eq!(mode, MovementMode::Strafe(Pace::Walk));
+        // Without a walking rate, one rate for both; still a walking strafe,
+        // which the session then bounds by that one rate.
         controls.strafe_walk_speed = None;
-        assert!((strafe(&controls) - 6.0).abs() < 0.001);
+        let (speed, mode) = strafe(&controls);
+        assert!((speed - 6.0).abs() < 0.001);
+        assert_eq!(mode, MovementMode::Strafe(Pace::Walk));
     }
 
     #[test]
@@ -6940,7 +6954,7 @@ pub(super) mod tests {
             );
             controls.strafe_speed = Some(3.0);
             let right = controls.intent(&keys, &map, &[], true, (0.0, heading), None);
-            assert_eq!(right.mode, MovementMode::Strafe);
+            assert_eq!(right.mode, MovementMode::Strafe(Pace::Run));
             assert!(right.preserve_facing);
             assert_eq!(right.speed, 3.0);
             assert!(right.direction.dot(facing).abs() < 0.0001);
@@ -7642,7 +7656,7 @@ pub(super) mod tests {
             let ClientCommand::Move(request) = receiver.try_recv().unwrap() else {
                 panic!("expected a strafe")
             };
-            assert_eq!(request.mode, MovementMode::Strafe);
+            assert_eq!(request.mode, MovementMode::Strafe(Pace::Run));
             let across = request.position.x.hypot(request.position.y);
             assert!(
                 (across - moved).abs() < 0.001,
@@ -7657,7 +7671,7 @@ pub(super) mod tests {
         // halved in the session's grant, so the client takes the grant's
         // running strafe running and its walking strafe walking, as standing.
         use eq_client_core::{GameDialect, PostureState};
-        for (walking, moved) in [(false, 0.4), (true, 0.2)] {
+        for (walking, moved, pace) in [(false, 0.4, Pace::Run), (true, 0.2, Pace::Walk)] {
             let (mut app, receiver) = app();
             online::testing::generation(
                 &mut app.world_mut().resource_mut::<online::OnlineState>(),
@@ -7688,7 +7702,7 @@ pub(super) mod tests {
             let ClientCommand::Move(request) = receiver.try_recv().unwrap() else {
                 panic!("expected a strafe, with no stand before it")
             };
-            assert_eq!(request.mode, MovementMode::Strafe);
+            assert_eq!(request.mode, MovementMode::Strafe(pace));
             let across = request.position.x.hypot(request.position.y);
             assert!(
                 (across - moved).abs() < 0.001,
@@ -7941,7 +7955,7 @@ pub(super) mod tests {
                 };
                 let position = Vec3::from_array(eq_client_core::render_position(request.position));
                 if world_owns_look {
-                    assert_eq!(request.mode, MovementMode::Strafe);
+                    assert_eq!(request.mode, MovementMode::Strafe(Pace::Run));
                     assert!((position - origin - right * side * 0.3).length() < 0.001);
                     assert!(arc(0.0, request.position.heading).abs() < 0.001);
                     accept(&mut app, &request);
@@ -8031,7 +8045,7 @@ pub(super) mod tests {
         keys.reset_all();
         keys.press(KeyCode::KeyE);
         let explicit = intent(&controls, &keys, &[], true, &looking);
-        assert_eq!(explicit.mode, MovementMode::Strafe);
+        assert_eq!(explicit.mode, MovementMode::Strafe(Pace::Run));
         assert!((explicit.speed - 3.0).abs() < f32::EPSILON);
         assert!(explicit.turn.abs() < f32::EPSILON);
     }
@@ -8211,7 +8225,7 @@ pub(super) mod tests {
         keys.press(KeyCode::KeyS);
         let only_side = controls.intent(&keys, &map, &[], true, (0.0, 0.0), None);
         assert!(only_side.diagonal.is_none());
-        assert_eq!(only_side.mode, MovementMode::Strafe);
+        assert_eq!(only_side.mode, MovementMode::Strafe(Pace::Run));
 
         keys.reset_all();
         keys.press(KeyCode::KeyE);

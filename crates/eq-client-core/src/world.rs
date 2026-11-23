@@ -600,6 +600,9 @@ impl ClientWorld {
             ConsentKind::Translocate => {
                 let _ = self.translocate.take_if(|current| current.id == id);
             }
+            // A duel's prompt is its own change's (eq-client duel PR); none
+            // is kept here yet.
+            ConsentKind::Duel => {}
         }
     }
 
@@ -964,7 +967,32 @@ impl ClientWorld {
             // to a player, or the petitions in the queue, for a front end that
             // shows them. The server's regeneration tick waits for its own.
             // Installed spell providers consume table facts before admission staging.
-            WorldEvent::SpellTable(_)
+            // Each of these is shown by its own change, which lands apart
+            // from this one: titles (6.516), a surname's answer (6.507), the
+            // bind zone (6.524), a poison's answer (6.493), the chat server's
+            // channels (6.509), the 6.523 chat pace refusal (shown by the
+            // limiter's client PR), the server's filters (6.494), a duel's
+            // offer (6.492), a report to the staff (the petitions PR) and
+            // RoF2's buff icons (6.527) and mana and endurance pools (6.538).
+            WorldEvent::TitleList(_)
+            | WorldEvent::BuffIcons(_)
+            | WorldEvent::ResourcePool { .. }
+            | WorldEvent::ResourcePercent { .. }
+            | WorldEvent::SurnameAnswer { .. }
+            | WorldEvent::BoundIn { .. }
+            | WorldEvent::PoisonAnswered(_)
+            | WorldEvent::Channel(_)
+            | WorldEvent::ChannelLink(_)
+            | WorldEvent::ChatRefused { .. }
+            | WorldEvent::ChatChannelRefused { .. }
+            | WorldEvent::ApplyPoisonRefused { .. }
+            | WorldEvent::ServerFiltersKept { .. }
+            | WorldEvent::ServerFiltersRefused { .. }
+            | WorldEvent::DuelOffer(_)
+            | WorldEvent::DuelRefused { .. }
+            | WorldEvent::ReportSent { .. }
+            | WorldEvent::ReportRefused { .. }
+            | WorldEvent::SpellTable(_)
             | WorldEvent::ChatServer(_)
             | WorldEvent::ZoneUnavailable { .. }
             | WorldEvent::ServerTick(_)

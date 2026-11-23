@@ -434,6 +434,8 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
             chat(match kind {
                 ConsentKind::Resurrection => "The resurrection offer expired.".into(),
                 ConsentKind::Translocate => "The translocate offer expired.".into(),
+                // The duel's own change words its prompt's end.
+                ConsentKind::Duel => "The duel offer expired.".into(),
             })
         }
         // eqstr 1406, where the installation has it.

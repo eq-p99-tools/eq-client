@@ -193,7 +193,9 @@ impl SessionWorker {
                         enqueue(&sender, &worker_cancel, WorldUpdate::SpellTable(fact))?;
                     }
                     let update = match event {
-                        ClientEvent::World(WorldEvent::SpellTable(_)) => None,
+                        // What the session dropped or could not read is the
+                        // gap log's client change's to record (6.500).
+                        ClientEvent::World(WorldEvent::SpellTable(_)) | ClientEvent::Gap(_) => None,
                         ClientEvent::World(event) => {
                             observe_world(&event, settings.as_deref());
                             Some(WorldUpdate::Game(event))
@@ -213,9 +215,16 @@ impl SessionWorker {
                         ClientEvent::Reconnecting {
                             error,
                             delay_seconds,
+                            ..
                         } => {
                             tracing::warn!("Reconnecting in {delay_seconds} s: {error}");
                             Some(WorldUpdate::Connection(Link::LoggingIn))
+                        }
+                        // A command from the ended session, dropped unread
+                        // before the fresh login; its kind alone is logged.
+                        ClientEvent::CommandDropped { command, reason } => {
+                            tracing::info!("Dropped {command}: {reason}");
+                            None
                         }
                     };
                     if let Some(update) = update {
