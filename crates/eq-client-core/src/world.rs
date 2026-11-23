@@ -761,6 +761,12 @@ impl ClientWorld {
                 string_id,
             } => {
                 if self.accepts_reply(*session_id) {
+                    // The stop also resets the gems' timers (6.542).
+                    if let Some(player) = &self.player {
+                        self.casting
+                            .cooldowns
+                            .song_stopped(&player.memorized_spells);
+                    }
                     news.notices.push(Notice::SongStopped {
                         spell_id: *spell_id,
                         string_id: *string_id,
