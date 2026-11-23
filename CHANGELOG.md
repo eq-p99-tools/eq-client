@@ -242,6 +242,15 @@
   Environment Sounds. Unknown record kinds and negative music ids are logged
   once a zone and not played. Everything stops on a zone change, camp,
   logout or lost connection. Combat music is not built.
+- `/shield` (and `/sh`, socials and scripts): a Warrior's shield of the
+  targeted player, on stock EQEmu (6.517). Before it sends, the client
+  refuses a character that is not a Warrior or is under level 30, no
+  target or one gone from the spawn table, and the player themself, in its
+  own words, inferred until the program's handler is read. The server
+  answers NPC targets, distance, the recast and its rule with its own
+  lines. eq-network is repinned to f408f2e; the news its new events bring
+  (surname answers, chat channels, reports) is counted in the gap file
+  until each front end lands.
 - Record every server message a session drops or cannot read, and the
   world news the client hears but does not show yet, so live runs become a
   list of gaps to close (6.500). Each session writes one

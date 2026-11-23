@@ -2574,6 +2574,16 @@ mod tests {
     }
 
     #[test]
+    fn a_script_may_shield_its_target_and_takes_no_words() {
+        let base = std::path::Path::new(".");
+        assert_eq!(
+            parse("slash(\"shield\")\n", base).unwrap(),
+            [Step::Slash("/shield".into())]
+        );
+        assert!(parse("slash(\"shield Tester\")\n", base).is_err());
+    }
+
+    #[test]
     fn ranged_slash_uses_the_current_target_and_takes_no_arguments() {
         let base = Path::new("private");
         assert_eq!(

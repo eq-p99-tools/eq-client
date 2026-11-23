@@ -2648,6 +2648,14 @@ fn class_command(
     stamp: &dyn Fn() -> Result<crate::outbox::Stamp, String>,
 ) -> Option<Result<ClientCommand, String>> {
     Some(match name {
+        // A Warrior's `/shield` of the target, which takes no words.
+        "shield" => {
+            if words.is_empty() {
+                stamp().and_then(|stamp| super::abilities::shield_command(world, stamp))
+            } else {
+                Err("Use /shield without arguments".into())
+            }
+        }
         "harmtouch" | "layonhands" => {
             let ability = eq_client_core::knights::KnightAbility::named(name)?;
             if words.is_empty() {
