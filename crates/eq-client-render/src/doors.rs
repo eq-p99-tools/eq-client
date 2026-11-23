@@ -44,6 +44,29 @@ impl PickMesh {
 }
 
 /// Nearest drawn triangle on this door's current model and pose.
+/// The middle of the mesh a click on this door tests, in the world; None
+/// for a hidden door or one whose model isn't loaded.
+pub(super) fn middle(
+    door: &DoorEntity,
+    transform: &Transform,
+    visibility: Visibility,
+    models: &Models,
+) -> Option<Vec3> {
+    if visibility == Visibility::Hidden {
+        return None;
+    }
+    let (low, high) = models
+        .0
+        .get(&door.model)?
+        .pick
+        .iter()
+        .flat_map(|mesh| mesh.positions.iter().map(|at| Vec3::from_array(*at)))
+        .fold(None, |bounds: Option<(Vec3, Vec3)>, at| {
+            Some(bounds.map_or((at, at), |(low, high)| (low.min(at), high.max(at))))
+        })?;
+    Some(transform.transform_point((low + high) / 2.0))
+}
+
 pub(super) fn hit(
     ray: Ray3d,
     door: &DoorEntity,
@@ -85,6 +108,20 @@ pub(super) fn hit(
                 })
         })
         .min_by(f32::total_cmp)
+}
+
+/// Where `ray` first meets this door as drawn, with its distance along the
+/// ray: the point a click on the door is measured from (read R16b, R16e;
+/// checklist 6.530), in the renderer's frame.
+pub(super) fn hit_point(
+    ray: Ray3d,
+    door: &DoorEntity,
+    transform: &Transform,
+    visibility: Visibility,
+    models: &Models,
+) -> Option<(f32, Vec3)> {
+    hit(ray, door, transform, visibility, models)
+        .map(|distance| (distance, ray.origin + *ray.direction * distance))
 }
 
 /// Rebuilds only this small obstacle when its rendered pose changes.
@@ -225,13 +262,23 @@ pub(super) fn swings(door: &Door) -> bool {
 /// one horizontal axis chosen by the heading, at 0.35 a 50 ms step
 /// (0x4366e8; [`eq_client_core::doors::Slide`]). Like the hinge, the renderer
 /// caps each frame's step at 100 ms.
+#[expect(
+    clippy::match_same_arms,
+    reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
+)]
 fn slide_pose(
     door: &Door,
     generation: GameDialect,
     previous: Option<f32>,
     seconds: f32,
 ) -> (f32, Vec3) {
-    let Some(slide) = (generation == GameDialect::Titanium)
+    let slides = match generation {
+        GameDialect::Titanium => true,
+        // Titanium's, inferred for RoF2 (6.489).
+        GameDialect::Rof2 => true,
+        GameDialect::EqMac => false,
+    };
+    let Some(slide) = slides
         .then(|| eq_client_core::doors::Slide::of(door))
         .flatten()
     else {
@@ -329,27 +376,63 @@ fn player_for_use(state: &super::online::OnlineState) -> Option<&eq_client_core:
     state.world().player()
 }
 
-/// Uses the door under the pointer with the same reach and eligibility as Use.
+/// Uses the door under the pointer. `point` is where the pointer's ray hit
+/// the door as drawn, in the renderer's frame.
+///
+/// On Titanium the session measures the reach from that point, within the
+/// player's size and 20, as the program does (read R16b, R16e; checklist
+/// 6.530), and says the program's line 1462 when it is out of reach, so the
+/// click is sent for the session to judge rather than dropped here. `EQMac`'s
+/// read reach takes no point: a door out of it is not clicked, as before.
 pub(super) fn click(
+    door_id: u8,
+    point: Vec3,
+    state: &super::online::OnlineState,
+    outbox: &crate::outbox::Outbox,
+) {
+    let Some(player) = player_for_use(state) else {
+        return;
+    };
+    let doors = state.world().doors();
+    let point = match state.world().generation() {
+        GameDialect::Titanium => doors
+            .supports_use(door_id)
+            .then(|| eq_client_core::world_position(point.to_array(), 0.0)),
+        // Titanium's, inferred for RoF2 (6.489).
+        GameDialect::Rof2 => doors
+            .supports_use(door_id)
+            .then(|| eq_client_core::world_position(point.to_array(), 0.0)),
+        GameDialect::EqMac => {
+            if doors
+                .use_distance(door_id, player.position, std::time::Instant::now())
+                .is_some()
+            {
+                open(door_id, state, outbox);
+            }
+            return;
+        }
+    };
+    if let Some(point) = point {
+        post(door_id, Some(point), state, outbox);
+    }
+}
+
+/// Asks to use a door with no clicked point, as the Use key and scripts do:
+/// the session measures to the door's origin, which is stricter than the
+/// program; the Use key's own ray is unread (R49-19).
+pub(super) fn open(
     door_id: u8,
     state: &super::online::OnlineState,
     outbox: &crate::outbox::Outbox,
 ) {
-    if let Some(player) = player_for_use(state)
-        && state
-            .world()
-            .doors()
-            .use_distance(door_id, player.position, std::time::Instant::now())
-            .is_some()
-    {
-        open(door_id, state, outbox);
-    }
+    post(door_id, None, state, outbox);
 }
 
 /// Asks to use a door; no state is predicted. A click sent says nothing; a
 /// refusal from the session or the outbox is said in the chat.
-pub(super) fn open(
+fn post(
     door_id: u8,
+    point: Option<eq_client_core::WorldPosition>,
     state: &super::online::OnlineState,
     outbox: &crate::outbox::Outbox,
 ) {
@@ -357,9 +440,7 @@ pub(super) fn open(
         eq_client_core::ClientCommand::ClickDoor {
             session_id: stamp.session_id,
             door_id,
-            // No clicked point until the door click point slice: the reach
-            // runs to the door's origin, as before.
-            point: None,
+            point,
             created: stamp.created,
         }
     });
@@ -540,6 +621,65 @@ mod tests {
         assert!(world.step(start, movement, 6.0).distance(start + movement) < 0.001);
         world.set_obstacles(vec![collider(&model, &closed).unwrap()]);
         assert!(world.step(start, movement, 6.0).z < 4.6);
+    }
+
+    #[test]
+    fn a_click_point_lies_on_the_door_as_drawn_mid_swing() {
+        // A square door, 4 wide and 10 tall, in its model's z = 0 plane.
+        let source = eq_client_assets::ZoneModel {
+            name: "TEST".into(),
+            primitives: vec![eq_client_assets::ZonePrimitive {
+                positions: vec![
+                    [0.0, 0.0, 0.0],
+                    [4.0, 0.0, 0.0],
+                    [4.0, 10.0, 0.0],
+                    [0.0, 10.0, 0.0],
+                ],
+                indices: vec![0, 1, 2, 0, 2, 3],
+                normals: Vec::new(),
+                texture_coordinates: Vec::new(),
+                texture: None,
+                material_mode: eq_client_assets::MaterialMode::Opaque,
+            }],
+            materials: vec![eq_client_assets::ObjectMaterial { double_sided: true }],
+            collision: Vec::new(),
+        };
+        let mut models = Models::default();
+        models.0.insert(
+            "TEST".into(),
+            Model {
+                primitives: Vec::new(),
+                collision: Vec::new(),
+                pick: PickMesh::from_model(&source),
+            },
+        );
+        let mut definition = sliding_door();
+        definition.open_type = 0;
+        let entity = DoorEntity {
+            id: definition.id,
+            model: "TEST".into(),
+            swing: 0.0,
+            slide: 0.0,
+            definition: definition.clone(),
+            collider: None,
+        };
+        // A ray from in front of the door, at one unit up and one across.
+        let ray = Ray3d::new(Vec3::new(1.0, 1.0, 20.0), Dir3::NEG_Z);
+        let shut = posed(&definition, 0.0, Vec3::ZERO);
+        let (distance, point) =
+            hit_point(ray, &entity, &shut, Visibility::Inherited, &models).unwrap();
+        assert!((distance - 20.0).abs() < 1e-4);
+        assert!(point.distance(Vec3::new(1.0, 1.0, 0.0)) < 1e-4);
+        // Swung an eighth of a turn, the same ray meets the door further back,
+        // on its drawn face: the point is on the model's plane in the pose
+        // drawn, not where the shut door stood.
+        let swung = posed(&definition, QUARTER_TURN / 2.0, Vec3::ZERO);
+        let (_, point) = hit_point(ray, &entity, &swung, Visibility::Inherited, &models).unwrap();
+        let local = swung.to_matrix().inverse().transform_point3(point);
+        assert!(local.z.abs() < 1e-4, "{local}");
+        assert!(point.z < -0.5, "{point}");
+        // A hidden door is never hit.
+        assert!(hit_point(ray, &entity, &shut, Visibility::Hidden, &models).is_none());
     }
 
     fn sliding_door() -> Door {
@@ -790,6 +930,7 @@ mod tests {
                 skills: None,
                 practice_points: None,
                 languages: None,
+                intoxication: None,
                 disciplines: None,
                 gender: 0,
                 level: 1,

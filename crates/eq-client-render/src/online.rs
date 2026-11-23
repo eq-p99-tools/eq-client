@@ -394,6 +394,12 @@ impl OnlineState {
     }
 
     /// The player closed the give window.
+    /// Plays a motion the client starts itself on a spawn in view, at
+    /// normal speed.
+    pub(super) fn play_motion(&mut self, spawn_id: u16, action: u16) {
+        self.world.play_motion(spawn_id, action, 1.0);
+    }
+
     pub(super) fn close_trade(&mut self) {
         self.world.close_trade();
     }
@@ -643,6 +649,10 @@ impl Panels<'_> {
         chat: &mut super::chat::ChatState,
     ) {
         use super::notices::Place;
+        // A running script whose chat the pace held fails (6.523).
+        if let eq_client_core::world::Notice::ChatRefused { reason } = notice {
+            chat.paced = Some((std::time::Instant::now(), reason.clone()));
+        }
         for (place, said) in super::notices::wording(notice, messages) {
             match place {
                 Place::Chat => {
@@ -703,6 +713,7 @@ impl Panels<'_> {
         match reason {
             Reset::Lost { ended, .. } => {
                 self.inventory.cancel_actions();
+                self.inventory.fast_drop = false;
                 self.motion.reset(None);
                 if ended {
                     state.selection = None;
@@ -981,6 +992,10 @@ fn apply(
     let before = world.player().map(|player| player.position);
     let old_gems = super::spellbook::sets::snapshot(world);
     let changes = world.apply(update, std::time::Instant::now(), spells);
+    // News the world does not show yet still counts in the session's gaps.
+    if let Some(kind) = changes.unshown {
+        eq_client_core::gaps::unshown(kind);
+    }
     if let Some(outbox) = outbox
         && !changes.ignored
     {
@@ -1020,6 +1035,7 @@ fn log_grant(grant: eq_client_core::world::MotionGrant) {
         strafe_units_per_second,
         strafe_walk_units_per_second,
         swim_backward_units_per_second,
+        swim,
         diagonal,
         falls,
         jump_factor,
@@ -1036,6 +1052,7 @@ fn log_grant(grant: eq_client_core::world::MotionGrant) {
             ?strafe_units_per_second,
             ?strafe_walk_units_per_second,
             ?swim_backward_units_per_second,
+            ?swim,
             ?diagonal,
             falls,
             jump_factor,
@@ -1091,8 +1108,12 @@ fn start_entry(
             ),
             luclin_models,
         );
-        let titanium_swimming = drawn_by.0 == eq_client_assets::ui::InstalledClient::Titanium
-            && state.world.can(eq_client_core::Capability::Swimming);
+        let titanium_swimming = match drawn_by.0 {
+            eq_client_assets::ui::InstalledClient::Titanium => true,
+            // RoF2's water is not read yet.
+            eq_client_assets::ui::InstalledClient::EqMac
+            | eq_client_assets::ui::InstalledClient::Rof2 => false,
+        } && state.world.can(eq_client_core::Capability::Swimming);
         state.loading.start(id, move || {
             let loading = std::time::Instant::now();
             let entry =
@@ -1307,6 +1328,7 @@ pub(crate) mod testing {
             skills: None,
             practice_points: None,
             languages: None,
+            intoxication: None,
             disciplines: None,
             spell_refresh_ms: None,
             memorized_spells: [None; 8],
@@ -1399,11 +1421,29 @@ pub(crate) mod testing {
         player: PlayerState,
         far_clip: Option<f32>,
     ) {
+        enter_with(
+            state,
+            session_id,
+            player,
+            far_clip,
+            eq_client_core::Capability::ALL.to_vec(),
+        );
+    }
+
+    /// Admits this player in this session, connected, with the capabilities
+    /// a server type's session lists.
+    pub(crate) fn enter_with(
+        state: &mut OnlineState,
+        session_id: u64,
+        player: PlayerState,
+        far_clip: Option<f32>,
+        capabilities: Vec<eq_client_core::Capability>,
+    ) {
         state.plan_inventory_as(Some(eq_client_core::inventory::MoveRules::EqEmu));
         news(
             state,
             [WorldEvent::Entered {
-                capabilities: eq_client_core::Capability::ALL.to_vec(),
+                capabilities,
                 choices: Vec::new(),
                 session_id,
                 zone: "qeytoqrg".into(),
@@ -1948,6 +1988,7 @@ mod tests {
             skills: None,
             practice_points: None,
             languages: None,
+            intoxication: None,
             disciplines: None,
             spell_refresh_ms: None,
             memorized_spells: [None; 8],
@@ -2490,6 +2531,7 @@ mod tests {
             skills: Some(vec![0; 100]),
             practice_points: None,
             languages: None,
+            intoxication: None,
             disciplines: None,
             spell_refresh_ms: None,
             memorized_spells: [None; 8],

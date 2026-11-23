@@ -6,33 +6,52 @@
 //! client builds its Norrath line from a format of its own, which this
 //! client doesn't copy, so 6706 stands in there. That `/loc` is worded so is
 //! inferred from what 13177 says; this client's words stand in without the
-//! strings.
+//! strings. `/charinfo` says where the player is bound (checklist 6.524):
+//! its handler (0x46f6ec) is unread, so its line is this client's (pending
+//! R49-6m), and the bind is the profile's, so one that lands mid-session
+//! shows from the next zone-in (inferred).
 //!
-//! `/guildstatus` is answered here too, once read R49-6k lets it be offered
-//! (checklist 6.575): `EQEmu`'s guild status lines, from the target the
-//! client knows, since Titanium's patch maps no `OP_GuildStatus`. A string
-//! the installation lacks gives no line.
+//! `/guildstatus` is answered here too (checklist 6.575, read R49-6k): the
+//! Titanium program answers it itself and sends nothing, of the player a
+//! typed name finds or else the target, in strings 12256 to 12260 by rank,
+//! and of a player in no guild in words of its own, for which this client's
+//! own words stand. A string the installation lacks gives no line. The Mac
+//! client's own answer wasn't read, so there it is refused for now.
+//!
+//! `/played` too (checklist 6.490b, read R49-8 a): the Titanium program
+//! answers from three profile fields, in line 0xe24 the account's entitled
+//! time in years (its days × 1/365, one decimal), in 0x32a8 when the
+//! character was made, and in 0x32af its played time in days, hours and
+//! minutes. It adds a minute each minute after the profile itself
+//! (0x422526), and so does this client. The creation time is shown as the
+//! program's `%#c` shows it in the C locale (inferred); the Mac client's
+//! `/played` wasn't read, so there it is refused for now.
 use super::chat::{ChatState, Said};
 use super::hud::messages::Messages;
 use bevy::prelude::*;
-use eq_client_assets::clock::ClientClock;
+use eq_client_assets::ui::InstalledClient;
 use eq_client_core::{whereabouts, world::ClientWorld};
 
 /// Which the player asked.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Asked {
     /// `/loc`: where the player stands.
     Location,
     /// `/time`: the time in Norrath and on Earth.
     Time,
-    /// `/guildstatus`: the target's guild and rank in it.
-    GuildStatus,
+    /// `/charinfo`: where the player is bound.
+    CharInfo,
+    /// `/guildstatus [name]`: a player's guild and rank in it, the named
+    /// player's or else the target's.
+    GuildStatus(Option<String>),
+    /// `/played`: the account's entitled time and the character's age and
+    /// played time.
+    Played,
 }
 
-/// Whether `/guildstatus` is offered: false until read R49-6k says whether
-/// the official client answers it itself, from its target, and in which
-/// strings (checklist 6.575). Only tests answer it while it is false.
-const GUILD_STATUS_READ: bool = false;
+/// Whether `/guildstatus` is offered: read R49-6k says the official client
+/// answers it itself, and in which strings (checklist 6.575).
+const GUILD_STATUS_READ: bool = true;
 
 impl Asked {
     /// What a typed line asks, if it is `/location` or `/time`, spelled out.
@@ -47,11 +66,37 @@ impl Asked {
             Some(Self::Location)
         } else if name.eq_ignore_ascii_case("time") {
             Some(Self::Time)
-        } else if guild_status && name.eq_ignore_ascii_case("guildstatus") {
-            Some(Self::GuildStatus)
+        } else if name
+            .split_whitespace()
+            .next()
+            .is_some_and(|command| command.eq_ignore_ascii_case("played"))
+        {
+            // The program reads no words after it.
+            Some(Self::Played)
+        } else if name
+            .split_whitespace()
+            .next()
+            .is_some_and(|name| name.eq_ignore_ascii_case("charinfo"))
+        {
+            // No words are read (R49-6m, 0x46f6ec).
+            Some(Self::CharInfo)
         } else {
-            None
+            // The program takes the first word after the command as a name.
+            let mut words = name.split_whitespace();
+            let command = words.next()?;
+            (guild_status && command.eq_ignore_ascii_case("guildstatus"))
+                .then(|| Self::GuildStatus(words.next().map(str::to_owned)))
         }
+    }
+}
+
+/// Whether the installed client's own answers to `/played` and
+/// `/guildstatus` have been read from its program, so they can be given as
+/// it gives them; one arm for each generation, so a new one is decided here.
+const fn read_answers(installed: InstalledClient) -> bool {
+    match installed {
+        InstalledClient::Titanium => true,
+        InstalledClient::EqMac | InstalledClient::Rof2 => false,
     }
 }
 
@@ -62,11 +107,25 @@ fn answer(
     world: &ClientWorld,
     earth: jiff::civil::DateTime,
     messages: &Messages,
-    clock: ClientClock,
+    installed: InstalledClient,
 ) -> Result<Vec<Said>, String> {
     let player = world.player().ok_or("Enter the world first")?;
+    let clock = installed.clock();
     Ok(match asked {
-        Asked::GuildStatus => guild_status(world, messages).into_iter().collect(),
+        Asked::CharInfo => vec![bound_in(world, messages)],
+        Asked::GuildStatus(_) if !read_answers(installed) => {
+            return Err("/guildstatus on the Mac client waits for its program read".to_owned());
+        }
+        Asked::GuildStatus(named) => guild_status(world, named.as_deref(), messages)
+            .into_iter()
+            .collect(),
+        Asked::Played if !read_answers(installed) => {
+            return Err("/played on the Mac client waits for its program read".to_owned());
+        }
+        Asked::Played => {
+            let (time, at) = world.played().ok_or("Your played time is not known yet")?;
+            played(time, at.elapsed(), &jiff::tz::TimeZone::system(), messages)
+        }
         Asked::Location => {
             let numbers = whereabouts::location(player.position);
             let fallback = format!("You stand at {}.", numbers.join(", "));
@@ -103,23 +162,112 @@ fn answer(
     })
 }
 
-/// `EQEmu`'s guild status line for the target, in the installed client's
-/// words (`Handle_OP_GuildStatus`: 12256 to 12260, inferred to be the
-/// program's own until read R49-6k); none where the installation lacks the
-/// string or the client can't tell.
-fn guild_status(world: &ClientWorld, messages: &Messages) -> Option<Said> {
+/// Where the player is bound: on Titanium in the program's line 0x32a7,
+/// elsewhere in this client's words. The zone is named by its long name,
+/// its short name where the list has no long one, and its number where it
+/// has neither.
+fn bound_in(world: &ClientWorld, messages: &Messages) -> Said {
+    let Some(zone) = world.bound_in() else {
+        return Said::own("Your bind point is not known yet.");
+    };
+    let short = eq_client_core::zones::short_name(u32::from(zone));
+    let name = short.map_or_else(
+        || format!("an unknown zone ({zone})"),
+        |short| {
+            eq_client_core::zones::long_name(short)
+                .unwrap_or(short)
+                .to_owned()
+        },
+    );
+    let fallback = format!("Your bind point is in {name}.");
+    // The Titanium program's line names the primary bind's zone, colour
+    // 0x111 (read R49-6m, 0x46f6ec). That it also follows a bind effect
+    // landing, without a new profile, is a follow-up.
+    if super::slash::reads_r49_6(world.generation()) {
+        messages
+            .said_or(BOUND_IN, std::slice::from_ref(&name), &fallback)
+            .typed(0x111)
+    } else {
+        Said::own(fallback)
+    }
+}
+
+/// `/charinfo`'s line, with the bind zone's name (read R49-6m).
+const BOUND_IN: u32 = 0x32a7;
+
+/// The program's guild status line (read R49-6k, 0x466970), in the
+/// installed client's words: 12256 to 12258 by rank with the name and the
+/// guild, 12259 with the name alone for any other rank, and 12260 for no
+/// player. None where the installation lacks the string or the client
+/// can't tell yet. A player in no guild gets this client's own words, as
+/// the program's are its own and not in the strings.
+fn guild_status(world: &ClientWorld, named: Option<&str>, messages: &Messages) -> Option<Said> {
     use eq_client_core::world::GuildStatus;
-    let (id, arguments) = match world.guild_status()? {
+    let (id, arguments) = match world.guild_status(named)? {
         GuildStatus::NoPlayer => (12260, Vec::new()),
-        GuildStatus::NoGuild { name } => (12259, vec![name]),
+        GuildStatus::NoGuild { name } => {
+            return Some(Said::own(format!("{name} is not in a guild.")).typed(GUILD_STATUS_TYPE));
+        }
+        GuildStatus::Ranked { name } => (12259, vec![name]),
         GuildStatus::Member { name, guild } => (12256, vec![name, guild]),
         GuildStatus::Officer { name, guild } => (12257, vec![name, guild]),
         GuildStatus::Leader { name, guild } => (12258, vec![name, guild]),
     };
-    messages.formatted(id, &arguments).map(Said::official)
+    messages
+        .formatted(id, &arguments)
+        .map(|line| Said::official(line).typed(GUILD_STATUS_TYPE))
 }
 
-/// Answers a `/loc`, `/time` or `/guildstatus` the chat noted, in the chat.
+/// The program's three `/played` lines (read R49-8 a), `elapsed` after
+/// the profile that gave `time`, with the creation time in `zone`.
+fn played(
+    time: eq_client_core::played::PlayedTime,
+    elapsed: std::time::Duration,
+    zone: &jiff::tz::TimeZone,
+    messages: &Messages,
+) -> Vec<Said> {
+    // The program's 1/365 ([0x6471c8]), shown "%.1f".
+    let years = format!("{:.1}", f64::from(time.entitled_days) * 0.002_739_726_1);
+    let made = jiff::Timestamp::from_second(i64::from(time.created)).map_or_else(
+        |_| time.created.to_string(),
+        |made| {
+            made.to_zoned(zone.clone())
+                .strftime("%A, %B %-d, %Y, %H:%M:%S")
+                .to_string()
+        },
+    );
+    // One played minute per minute since the profile, as the tick adds.
+    let minutes = u64::from(time.played_minutes) + elapsed.as_secs() / 60;
+    let (days, hours, minutes) = (minutes / 1440, minutes % 1440 / 60, minutes % 60);
+    let spent = [days, hours, minutes].map(|part| part.to_string());
+    vec![
+        messages.said_or(
+            0xe24,
+            std::slice::from_ref(&years),
+            &format!("This account has {years} years of entitled time."),
+        ),
+        messages.said_or(
+            0x32a8,
+            std::slice::from_ref(&made),
+            &format!("This character was made {made}."),
+        ),
+        messages.said_or(
+            0x32af,
+            &spent,
+            &format!(
+                "You have played {} days, {} hours and {} minutes.",
+                spent[0], spent[1], spent[2]
+            ),
+        ),
+    ]
+}
+
+/// The message type the program gives every guild status line (0x111).
+const GUILD_STATUS_TYPE: u32 = 0x111;
+
+/// Answers a `/loc`, `/time`, `/charinfo`, `/guildstatus` or `/played` the
+/// chat noted,
+/// in the chat.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(super) fn answers(
     mut chat: ResMut<ChatState>,
@@ -133,8 +281,13 @@ pub(super) fn answers(
     let empty = Messages::default();
     let messages = messages.as_deref().unwrap_or(&empty);
     let now = jiff::Zoned::now().datetime();
-    let clock = settings.0.installed_client.clock();
-    match answer(asked, online.world(), now, messages, clock) {
+    match answer(
+        asked,
+        online.world(),
+        now,
+        messages,
+        settings.0.installed_client,
+    ) {
         Ok(lines) => {
             for line in lines {
                 chat.history.push(super::chat::system_line(line));
@@ -148,38 +301,188 @@ pub(super) fn answers(
 mod tests {
     use super::*;
     use crate::online::{OnlineState, testing};
-    use eq_client_assets::clock::{EQMAC, TITANIUM};
+    use eq_client_assets::ui::InstalledClient::{EqMac as EQMAC, Titanium as TITANIUM};
     use eq_client_core::WorldEvent;
 
     #[test]
-    fn guild_status_waits_for_its_read_then_answers_in_the_installed_strings_only() {
-        use eq_client_core::listing::{GuildRank, ListingChange};
-        // Not offered until R49-6k: the word passes on as before.
-        assert_eq!(Asked::typed("/guildstatus"), None);
-        assert_eq!(
-            Asked::typed_when("/GuildStatus ", true),
-            Some(Asked::GuildStatus)
+    fn played_says_the_entitled_years_the_creation_and_the_played_time() {
+        assert_eq!(Asked::typed("/played"), Some(Asked::Played));
+        assert_eq!(Asked::typed("/PLAYED and more"), Some(Asked::Played));
+        assert_eq!(Asked::typed("/playedx"), None);
+        let time = eq_client_core::played::PlayedTime {
+            entitled_days: 730,
+            // 2004-11-09 13:20:00 UTC.
+            created: 1_100_006_400,
+            played_minutes: 1440 + 2 * 60 + 3,
+        };
+        let utc = jiff::tz::TimeZone::UTC;
+        let messages = Messages::parse(
+            "EQST0002
+0 3
+3620 Entitled %1
+12968 Made %1
+12975 Played %1d %2h %3m
+",
         );
+        let lines = |elapsed: u64, messages: &Messages| -> Vec<String> {
+            played(
+                time,
+                std::time::Duration::from_secs(elapsed),
+                &utc,
+                messages,
+            )
+            .into_iter()
+            .map(|said| said.words.text)
+            .collect()
+        };
+        assert_eq!(
+            lines(59, &messages),
+            [
+                "Entitled 2.0",
+                "Made Tuesday, November 9, 2004, 13:20:00",
+                "Played 1d 2h 3m",
+            ]
+        );
+        // A minute after the profile, the program's tick has added one.
+        assert_eq!(lines(60, &messages)[2], "Played 1d 2h 4m");
+        // This client's words where the installation lacks the strings.
+        assert_eq!(
+            lines(0, &Messages::default())[2],
+            "You have played 1 days, 2 hours and 3 minutes."
+        );
+    }
+
+    #[test]
+    fn played_waits_for_the_profile_and_for_the_mac_read() {
+        let earth = jiff::civil::date(2026, 10, 3).at(12, 0, 0, 0);
+        let mut state = OnlineState::new(true);
+        testing::admit(&mut state, 1, testing::player(7));
+        let empty = Messages::default();
+        assert!(answer(Asked::Played, state.world(), earth, &empty, TITANIUM).is_err());
+        testing::news(
+            &mut state,
+            [WorldEvent::PlayedTime(eq_client_core::played::PlayedTime {
+                entitled_days: 365,
+                created: 0,
+                played_minutes: 61,
+            })],
+        );
+        let lines = answer(Asked::Played, state.world(), earth, &empty, TITANIUM).unwrap();
+        assert_eq!(lines.len(), 3);
+        assert_eq!(
+            lines[0].words.text,
+            "This account has 1.0 years of entitled time."
+        );
+        assert!(answer(Asked::Played, state.world(), earth, &empty, EQMAC).is_err());
+    }
+
+    #[test]
+    fn charinfo_says_the_bind_zone_in_this_clients_words() {
+        let messages = Messages::default();
+        let earth = jiff::civil::date(2026, 10, 3).at(12, 0, 0, 0);
+        let mut state = OnlineState::new(true);
+        let said = |state: &OnlineState| {
+            answer(Asked::CharInfo, state.world(), earth, &messages, TITANIUM)
+        };
+        assert_eq!(said(&state), Err("Enter the world first".into()));
+        testing::admit(&mut state, 1, testing::player(7));
+        assert_eq!(
+            said(&state),
+            Ok(vec![Said::own("Your bind point is not known yet.")])
+        );
+        testing::news(&mut state, [WorldEvent::BoundIn { zone_id: 1 }]);
+        let short = eq_client_core::zones::short_name(1).unwrap();
+        let long = eq_client_core::zones::long_name(short).unwrap();
+        assert_eq!(
+            said(&state),
+            Ok(vec![
+                Said::own(format!("Your bind point is in {long}.")).typed(0x111)
+            ])
+        );
+        // A zone the list doesn't know is named by its number.
+        testing::news(&mut state, [WorldEvent::BoundIn { zone_id: 65_000 }]);
+        assert_eq!(
+            said(&state),
+            Ok(vec![
+                Said::own("Your bind point is in an unknown zone (65000).").typed(0x111)
+            ])
+        );
+        // The next admission waits for its own profile.
+        testing::admit(&mut state, 2, testing::player(7));
+        assert_eq!(
+            said(&state),
+            Ok(vec![Said::own("Your bind point is not known yet.")])
+        );
+        assert_eq!(Asked::typed("/charinfo"), Some(Asked::CharInfo));
+        assert_eq!(Asked::typed("/CHARINFO please"), Some(Asked::CharInfo));
+        assert_eq!(Asked::typed("/charinfox"), None);
+        assert_eq!(
+            crate::commands::spelled("/char").as_deref(),
+            Some("/charinfo")
+        );
+    }
+
+    /// The answer is said in the chat, and nothing goes to the server (6.524).
+    #[test]
+    fn charinfo_sends_nothing() {
+        let mut state = OnlineState::new(true);
+        testing::admit(&mut state, 1, testing::player(7));
+        testing::news(&mut state, [WorldEvent::BoundIn { zone_id: 1 }]);
+        let (queue, received) = std::sync::mpsc::sync_channel(4);
+        let mut app = App::new();
+        app.insert_resource(state)
+            .insert_resource(crate::outbox::Outbox::new(Some(queue)))
+            .insert_resource(crate::ViewerSettings(crate::ViewerConfig::default()))
+            .init_resource::<ChatState>()
+            .add_systems(Update, answers);
+        app.world_mut().resource_mut::<ChatState>().asked = Some(Asked::CharInfo);
+        app.update();
+        let chat = app.world().resource::<ChatState>();
+        let lines = chat.history.lines(eq_client_core::chat::ChatTab::System);
+        assert!(
+            lines
+                .iter()
+                .any(|(_, line)| line.message.text.starts_with("Your bind point is in "))
+        );
+        assert!(received.try_recv().is_err());
+    }
+
+    #[test]
+    fn guild_status_answers_as_the_program_reads_in_the_installed_strings() {
+        use eq_client_core::listing::{GuildRank, ListingChange};
+        // Offered since R49-6k, with the first word after it as a name.
+        assert_eq!(Asked::typed("/guildstatus"), Some(Asked::GuildStatus(None)));
+        assert_eq!(
+            Asked::typed("/GuildStatus  Zed more"),
+            Some(Asked::GuildStatus(Some("Zed".into())))
+        );
+        assert_eq!(Asked::typed("/guildstatusx"), None);
         let messages = Messages::parse(
             "EQST0002
 0 3
 12258 %1 leads %2
-12259 %1 has no guild
+12259 %1 holds a rank
 12260 Target a player
 ",
         );
         let earth = jiff::civil::date(2026, 10, 3).at(12, 0, 0, 0);
         let mut state = OnlineState::new(true);
         testing::admit(&mut state, 1, testing::player(7));
-        let said = |state: &OnlineState, messages: &Messages| {
-            answer(Asked::GuildStatus, state.world(), earth, messages, TITANIUM).unwrap()
+        let said = |state: &OnlineState, messages: &Messages, named: Option<&str>| {
+            let asked = Asked::GuildStatus(named.map(str::to_owned));
+            answer(asked, state.world(), earth, messages, TITANIUM).unwrap()
         };
-        assert_eq!(said(&state, &messages), [Said::official("Target a player")]);
+        let official = |text: String| Said::official(text).typed(GUILD_STATUS_TYPE);
+        assert_eq!(
+            said(&state, &messages, None),
+            [official("Target a player".into())]
+        );
         state.select_target(Some(7));
         let name = state.world().player().unwrap().name.clone();
+        // No guild: the program's words are its own, so ours stand.
         assert_eq!(
-            said(&state, &messages),
-            [Said::official(format!("{name} has no guild"))]
+            said(&state, &messages, None),
+            [Said::own(format!("{name} is not in a guild.")).typed(GUILD_STATUS_TYPE)]
         );
         testing::news(
             &mut state,
@@ -196,8 +499,30 @@ mod tests {
             ],
         );
         assert_eq!(
-            said(&state, &messages),
-            [Said::official(format!("{name} leads Seekers"))]
+            said(&state, &messages, None),
+            [official(format!("{name} leads Seekers"))]
+        );
+        // By name, whatever the target; a name no one has is refused.
+        state.select_target(None);
+        assert_eq!(
+            said(&state, &messages, Some(&name.to_lowercase())),
+            [official(format!("{name} leads Seekers"))]
+        );
+        assert_eq!(
+            said(&state, &messages, Some("Nobody")),
+            [official("Target a player".into())]
+        );
+        state.select_target(Some(7));
+        testing::news(
+            &mut state,
+            [WorldEvent::Listing {
+                spawn_id: 7,
+                change: ListingChange::GuildRank(GuildRank::Other(4)),
+            }],
+        );
+        assert_eq!(
+            said(&state, &messages, None),
+            [official(format!("{name} holds a rank"))]
         );
         // A string the installation lacks gives no line, never words of ours.
         testing::news(
@@ -207,8 +532,19 @@ mod tests {
                 change: ListingChange::GuildRank(GuildRank::Member),
             }],
         );
-        assert_eq!(said(&state, &messages), []);
-        assert_eq!(said(&state, &Messages::default()), []);
+        assert_eq!(said(&state, &messages, None), []);
+        assert_eq!(said(&state, &Messages::default(), None), []);
+        // The Mac client's answer wasn't read.
+        assert!(
+            answer(
+                Asked::GuildStatus(None),
+                state.world(),
+                earth,
+                &messages,
+                EQMAC
+            )
+            .is_err()
+        );
     }
 
     #[test]

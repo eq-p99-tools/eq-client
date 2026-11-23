@@ -161,9 +161,9 @@ fn load_luclin(
     parsed: &DonorArchives,
 ) -> Result<CharacterAsset, LoadError> {
     let (stem, donors, borrows) = luclin_source(model, look.race);
-    let donors = donors.map(|stem| directory.join(format!("{stem}.s3d")));
+    let donors = donors.map(|stem| crate::archives::path(directory, stem));
     let mut asset = super::load_with_source(
-        &directory.join(format!("{stem}.s3d")),
+        &crate::archives::path(directory, &stem),
         model,
         &donors,
         parsed,
@@ -296,7 +296,7 @@ fn apply_eyes(
     } else {
         "lgequip"
     };
-    let path = directory.join(format!("{stem}.s3d"));
+    let path = crate::archives::path(directory, stem);
     let (mut archive, bytes) = super::open_world(&path)?;
     let (_, world) = crate::parse_wld(&bytes, stem)?;
     let replacements: Vec<_> = world
@@ -416,8 +416,10 @@ fn apply_attachments(
         }
         let id = base + look.gender * 30 + [1000, 2000][slot] + u32::from(style);
         let item_name = format!("IT{id}");
-        let mut item = super::load_character(&directory.join("lgequip.s3d"), &item_name)
-            .or_else(|_| super::load_character(&directory.join("lgequip2.s3d"), &item_name))?;
+        let [first, second] =
+            crate::archives::EQUIPMENT.map(|stem| crate::archives::path(directory, stem));
+        let mut item = super::load_character(&first, &item_name)
+            .or_else(|_| super::load_character(&second, &item_name))?;
         if look.race != 130 {
             let colors = if let Some(colors) = palette {
                 colors

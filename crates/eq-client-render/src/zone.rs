@@ -50,7 +50,8 @@ impl PreparedEntry {
     }
 
     /// Stands the character on the floor at a character select spot: the
-    /// first floor at or below the spot's height and a little above it, or
+    /// first floor at or below the spot's height and a little above it (at
+    /// the spot's own height for a spot afloat in open water), or
     /// without a spot (or a floor under it) the highest surface at the
     /// centre of the zone's bounds, as the offline viewer starts.
     pub(super) fn stand(&mut self, spot: Option<&eq_client_core::select_spots::Spot>) {
@@ -115,12 +116,17 @@ impl Entry {
                 }
             }
         });
-        let native_head =
-            if client == eq_client_assets::ui::InstalledClient::Titanium && character.is_some() {
-                super::breath::head::Basis::load(directory, player, model)
-            } else {
-                None
-            };
+        let native_head = if match client {
+            eq_client_assets::ui::InstalledClient::Titanium => true,
+            // RoF2's water is not read yet.
+            eq_client_assets::ui::InstalledClient::EqMac
+            | eq_client_assets::ui::InstalledClient::Rof2 => false,
+        } && character.is_some()
+        {
+            super::breath::head::Basis::load(directory, player, model)
+        } else {
+            None
+        };
         let luclin = match generation {
             eq_client_core::player_models::Generation::Classic => None,
             eq_client_core::player_models::Generation::Luclin => model.and_then(|model| {

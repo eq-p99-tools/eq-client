@@ -77,6 +77,9 @@ struct AirState {
     placement: u64,
     breath: Breath,
     probe: Option<Probe>,
+    /// The world's drowning records count as last seen
+    /// ([`eq_client_core::world::ClientWorld::drowning_records`]).
+    drowning_records: Option<u32>,
 }
 
 impl AirState {
@@ -92,9 +95,15 @@ impl AirState {
         sample: impl FnOnce(&PlayerState) -> Observation,
     ) -> Option<u32> {
         let scope = world.session_id().zip(world.player()).filter(|_| {
-            !world.ended() && !world.is_dead() && world.generation() == GameDialect::Titanium
+            !world.ended()
+                && !world.is_dead()
+                && match world.generation() {
+                    GameDialect::Titanium => true,
+                    // RoF2's water is not read yet.
+                    GameDialect::EqMac | GameDialect::Rof2 => false,
+                }
         });
-        // Skipping the counter withholds the drowning reports a local EQEmu
+        // Skipping the counter withholds the drowning reports every Titanium
         // session takes, so the departure gate applies as it does elsewhere.
         let gills = qol.on(Fix::GillsForDays) && world.can(Capability::GameplayDepartures);
         let Some((admission, player)) = scope.filter(|_| !gills) else {
@@ -130,6 +139,17 @@ impl AirState {
             self.set_scope(scope, placement);
             self.probe = Some((None, Err(Unavailable::MovementPending)));
             return None;
+        }
+        self.set_scope(scope, placement);
+        let records = world.drowning_records();
+        if self
+            .drowning_records
+            .replace(records)
+            .is_some_and(|seen| seen != records)
+        {
+            // A drowning record the server sent empties the counter while
+            // the head is under, as the program's does (read R49-3b).
+            self.breath.empty();
         }
         let (medium, result) = sample(player);
         let (sample, maximum) = result.unwrap_or((Sample::Unknown, None));
@@ -197,9 +217,18 @@ fn observe_head(
         Ok(medium) => medium,
         Err(reason) => return (None, Err(reason)),
     };
+    // In a zone with no breathable air a head out of water doesn't breathe
+    // either: only a water-breathing race or effect 14 does (0x41a753 /
+    // 0x5f6c40, zone flag 0x4000; read R41 d).
+    let airless = online
+        .world()
+        .generation()
+        .water()
+        .zip(online.world().zone_number())
+        .is_some_and(|(water, zone)| water.airless(zone));
     let sample = match medium {
-        Medium::Air => Ok((Sample::CanBreathe, None)),
-        Medium::Water | Medium::Lava | Medium::OtherSubmerging => {
+        Medium::Air if !airless => Ok((Sample::CanBreathe, None)),
+        Medium::Air | Medium::Water | Medium::Lava | Medium::OtherSubmerging => {
             submerged(online.world(), spells, player)
         }
     };
@@ -368,6 +397,69 @@ mod tests {
     use std::{num::NonZeroU32, time::Duration};
 
     #[test]
+    fn a_drowning_record_from_the_server_empties_air_while_the_head_is_under() {
+        use crate::online::testing;
+        use eq_client_core::{
+            WorldEvent,
+            combat::{Damage, DamageOutcome},
+            qol::Settings,
+        };
+
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 5, testing::player(7));
+        let mut qol = Settings::default();
+        qol.set(Fix::TakeEnvironmentalDamage, true);
+        let mut state = AirState::default();
+        let start = Instant::now();
+        let at = |millis| start + Duration::from_millis(millis);
+        let wet = |_: &PlayerState| {
+            (
+                Some(Medium::Water),
+                Ok((Sample::Submerged(NonZeroU32::new(5).unwrap()), Some(80))),
+            )
+        };
+        let record = || {
+            WorldEvent::Damage(Damage {
+                target_id: 7,
+                source_id: 0,
+                kind: 251,
+                spell_id: None,
+                outcome: DamageOutcome::Hit(10),
+                push: None,
+            })
+        };
+        let observed = LiquidBasis::Observed;
+        assert_eq!(
+            state.advance(at(0), online.world(), &qol, 1, observed, wet),
+            None
+        );
+        assert_eq!(state.breath.air().unwrap().remaining, 5);
+        testing::news(&mut online, [record()]);
+        assert_eq!(
+            state.advance(at(500), online.world(), &qol, 1, observed, wet),
+            None
+        );
+        assert_eq!(state.breath.air().unwrap().remaining, 0);
+        // The next tick under is an empty one.
+        assert_eq!(
+            state.advance(at(1_001), online.world(), &qol, 1, observed, wet),
+            Some(10)
+        );
+        // A record seen once empties once: air comes back above water, and
+        // the same count under again leaves the fresh counter alone.
+        let dry = |_: &PlayerState| (Some(Medium::Air), Ok((Sample::CanBreathe, None)));
+        assert_eq!(
+            state.advance(at(2_100), online.world(), &qol, 1, observed, dry),
+            None
+        );
+        assert_eq!(
+            state.advance(at(2_200), online.world(), &qol, 1, observed, wet),
+            None
+        );
+        assert_eq!(state.breath.air().unwrap().remaining, 5);
+    }
+
+    #[test]
     fn pending_move_cannot_sample_the_old_projection_or_refill_spent_air() {
         use crate::online::testing;
         use eq_client_core::qol::Settings;
@@ -378,7 +470,8 @@ mod tests {
         qol.set(Fix::TakeEnvironmentalDamage, true);
         let mut state = AirState::default();
         let start = Instant::now();
-        let at = |seconds| start + Duration::from_secs(seconds);
+        // The program's tick runs strictly more than a second apart.
+        let at = |seconds: u64| start + Duration::from_millis(seconds * 1_001);
         let wet = |_: &PlayerState| {
             (
                 Some(Medium::Water),
@@ -446,14 +539,14 @@ mod tests {
         let now = Instant::now();
         let wet = Sample::Submerged(NonZeroU32::MIN);
         state.observe(now, (5, 7), 1, wet, Some(80));
-        state.observe(now + Duration::from_secs(1), (5, 7), 1, wet, Some(80));
+        state.observe(now + Duration::from_millis(1_001), (5, 7), 1, wet, Some(80));
         assert_eq!(state.breath.air().unwrap().remaining, 0);
 
         let mut qol = Settings::default();
         qol.set(Fix::TakeEnvironmentalDamage, true);
         let spells = SpellNames::default();
         let amount = state.advance(
-            now + Duration::from_secs(2),
+            now + Duration::from_millis(2_002),
             online.world(),
             &qol,
             1,
@@ -502,7 +595,7 @@ mod tests {
         };
         state.advance(start, online.world(), &qol, 1, LiquidBasis::Observed, wet);
         state.advance(
-            start + Duration::from_secs(1),
+            start + Duration::from_millis(1_001),
             online.world(),
             &qol,
             1,
@@ -551,7 +644,7 @@ mod tests {
         for seconds in [0, 1, 2] {
             assert_eq!(
                 state.advance(
-                    start + Duration::from_secs(seconds),
+                    start + Duration::from_millis(seconds * 1_001),
                     online.world(),
                     &qol,
                     1,
@@ -618,7 +711,8 @@ mod tests {
     fn placement_and_admission_changes_do_not_replay_drowning_ticks() {
         let mut state = AirState::default();
         let start = Instant::now();
-        let at = |seconds| start + Duration::from_secs(seconds);
+        // The program's tick runs strictly more than a second apart.
+        let at = |seconds: u64| start + Duration::from_millis(seconds * 1_001);
         let wet = Sample::Submerged(NonZeroU32::MIN);
         let admission = (1, 7);
         assert_eq!(state.observe(at(0), admission, 1, wet, Some(80)), None);
@@ -631,6 +725,84 @@ mod tests {
         assert_eq!(state.breath.air().unwrap().remaining, 1);
     }
 
+    /// A Project 1999 session lists falls, drowning and lava heat among
+    /// its capabilities, as every Titanium session does. With Take
+    /// Environmental Damage off, neither the air counter nor the heat check
+    /// reports anything; turned on, both report, so the test is not empty.
+    #[test]
+    fn take_environmental_damage_off_withholds_drowning_and_lava_on_a_p99_session() {
+        use crate::online::testing;
+        use eq_client_assets::regions::{Liquid, ZoneRegions};
+        use eq_client_core::{hazards::TitaniumEnvironment, inventory::InventoryUpdate};
+
+        let mut online = OnlineState::new(true);
+        let mut player = testing::player(7);
+        player.position.z = -1.0;
+        player.titanium_environment = Some(TitaniumEnvironment {
+            zone_id: 27,
+            base_fire_resistance: 25,
+            has_alternate_advancement: false,
+        });
+        testing::enter_with(
+            &mut online,
+            5,
+            player,
+            None,
+            vec![
+                Capability::Moving,
+                Capability::Falling,
+                Capability::Swimming,
+                Capability::EnvironmentalDamage,
+                Capability::Drowning,
+                Capability::LavaHeat,
+            ],
+        );
+        testing::inventory(&mut online, InventoryUpdate::Snapshot(Vec::new()));
+        testing::buffs(&mut online, std::collections::BTreeMap::new());
+        online.regions = ZoneRegions::test_liquid_surface(0.0, Liquid::Lava);
+        let spells = crate::spellbook::SpellNames::default();
+        let wet = |_: &PlayerState| {
+            (
+                Some(Medium::Water),
+                Ok((Sample::Submerged(NonZeroU32::MIN), Some(80))),
+            )
+        };
+        let start = Instant::now();
+        // The program's tick runs strictly more than a second apart.
+        let at = |seconds: u64| start + Duration::from_millis(seconds * 1_001);
+
+        let mut qol = eq_client_core::qol::Settings::default();
+        qol.set(Fix::TakeEnvironmentalDamage, false);
+        let mut air = AirState::default();
+        let mut heat = lava::Heat::default();
+        for seconds in 0..5 {
+            let now = at(seconds);
+            let world = online.world();
+            assert_eq!(
+                air.advance(now, world, &qol, 1, LiquidBasis::Observed, wet),
+                None
+            );
+            assert_eq!(
+                heat.advance(now, &online, &qol, &spells, LiquidBasis::Observed),
+                None
+            );
+        }
+
+        qol.set(Fix::TakeEnvironmentalDamage, true);
+        let mut drowned = false;
+        let mut burned = false;
+        for seconds in 5..10 {
+            let now = at(seconds);
+            drowned |= air
+                .advance(now, online.world(), &qol, 1, LiquidBasis::Observed, wet)
+                .is_some();
+            burned |= heat
+                .advance(now, &online, &qol, &spells, LiquidBasis::Observed)
+                .is_some();
+        }
+        assert!(drowned && burned);
+    }
+
     #[test]
     fn environmental_prevention_leaves_air_running_but_gills_skip_sampling() {
         use crate::online::testing;
@@ -639,7 +811,8 @@ mod tests {
         let mut qol = eq_client_core::qol::Settings::default();
         let mut state = AirState::default();
         let start = Instant::now();
-        let at = |seconds| start + Duration::from_secs(seconds);
+        // The program's tick runs strictly more than a second apart.
+        let at = |seconds: u64| start + Duration::from_millis(seconds * 1_001);
         let wet = |_: &PlayerState| {
             (
                 Some(Medium::Water),

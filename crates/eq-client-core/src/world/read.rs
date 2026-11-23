@@ -287,6 +287,22 @@ impl ClientWorld {
         &self.zone_name
     }
 
+    /// The primary bind point's zone number, as this admission's profile
+    /// said it; None before it did, or where it couldn't be read. A bind
+    /// that lands mid-session shows from the next zone-in (inferred,
+    /// checklist 6.524, pending R49-6m).
+    #[must_use]
+    pub const fn bound_in(&self) -> Option<u16> {
+        self.bound_in
+    }
+
+    /// The zone's number, as the server gave it at entry; None before the
+    /// first entry.
+    #[must_use]
+    pub const fn zone_number(&self) -> Option<u16> {
+        self.zone_number
+    }
+
     /// The zone's long name, from the zone list, or its short name for a
     /// zone the list lacks. Inferred: the official client names the zone as
     /// the server's zone header does, which the session doesn't read, and
@@ -340,6 +356,13 @@ impl ClientWorld {
     #[must_use]
     pub const fn language_zero_selector(&self) -> Option<crate::rules::LanguageZeroSelector> {
         self.language_zero_selector
+    }
+
+    /// Whether the world turns on the program's listener garble (Titanium's
+    /// log-server word at 16, `EQMac`'s `gibberish`); false until it says.
+    #[must_use]
+    pub fn listener_garble(&self) -> bool {
+        self.listener_garble.unwrap_or(false)
     }
 
     /// The zone header's minimum clip, the nearest its far plane comes;
@@ -450,6 +473,12 @@ impl ClientWorld {
         self.translocate.as_ref()
     }
 
+    /// The challenge to a duel waiting for the player's answer.
+    #[must_use]
+    pub const fn duel(&self) -> Option<&crate::socials::DuelQuestion> {
+        self.duel.as_ref()
+    }
+
     /// The resurrection offered and not yet answered.
     #[must_use]
     pub const fn resurrection(&self) -> Option<&ConsentOffer<ResurrectionOffer>> {
@@ -542,6 +571,37 @@ impl ClientWorld {
     #[must_use]
     pub fn can_see(&self, spawn: &crate::SpawnState) -> bool {
         crate::vision::can_see(spawn, self.zone.sees_invisible && self.in_world())
+    }
+
+    /// Whether this generation's program refuses a spawn as a new target by
+    /// its body type: the target setter puts the previous target back,
+    /// silently and with nothing sent (program read R44). A target the
+    /// server sets is kept whatever its body type.
+    #[must_use]
+    pub fn refuses_target(&self, spawn: &crate::SpawnState) -> bool {
+        self.generation()
+            .targeting()
+            .is_some_and(|rules| rules.refuses(spawn.body_type))
+    }
+
+    /// Whether this generation's program interacts with a spawn of its body
+    /// type at all (program read R44, 0x4a7356).
+    #[must_use]
+    pub fn interacts_with(&self, spawn: &crate::SpawnState) -> bool {
+        self.generation()
+            .targeting()
+            .is_none_or(|rules| rules.interacts(spawn.body_type))
+    }
+
+    /// Whether this generation's program hides a spawn by its body type, so
+    /// it is neither drawn nor named (program read R44, 0x480409; whether
+    /// the model is drawn is inferred, recording checklist 6.486). Apart
+    /// from invisibility: no See Invisible reveals it.
+    #[must_use]
+    pub fn hides_by_body(&self, spawn: &crate::SpawnState) -> bool {
+        self.generation()
+            .targeting()
+            .is_some_and(|rules| rules.hides(spawn.body_type))
     }
 
     /// The player's target.
@@ -664,6 +724,23 @@ impl ClientWorld {
     #[must_use]
     pub const fn player_posture_changes(&self) -> u32 {
         self.player_posture_changes
+    }
+
+    /// How many drowning records aimed at the player the server has sent,
+    /// wrapping. The Titanium program empties the air counter for each
+    /// while the player's head is under (read R49-3b); a reader that looks
+    /// once a frame sees each new one.
+    #[must_use]
+    pub const fn drowning_records(&self) -> u32 {
+        self.drowning_records
+    }
+
+    /// Whether the player holds a Feign Death standing (Move While Feigned,
+    /// 6.454), as the session last said: a jump then goes without its
+    /// crouch's posture reports, which would end the feign (6.600).
+    #[must_use]
+    pub const fn feign_held(&self) -> bool {
+        self.zone.feign_held
     }
 
     /// The posture last reported for the player or a spawn.

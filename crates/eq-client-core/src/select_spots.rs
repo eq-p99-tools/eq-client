@@ -30,7 +30,8 @@ pub const PITCH: f32 = 10.0;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Spot {
     /// Where the character stands, as `/loc` prints it: the server's y, x
-    /// and z. The character stands on the first floor at or below z + 5.
+    /// and z. The character stands on the first floor at or below z + 5,
+    /// unless the spot is [`Spot::afloat`].
     pub loc: [f32; 3],
     /// The way the character faces, in the server's 0-512 units.
     pub heading: f32,
@@ -41,6 +42,11 @@ pub struct Spot {
     /// Whether a render of the spot has been looked at; false while it is
     /// the spot tool's untouched proposal.
     pub reviewed: bool,
+    /// Whether the character stays at the spot's own height, feet at z,
+    /// rather than standing on a floor: a spot picked by hand in open water,
+    /// the row's word `afloat` (Adam, 2026-11-23, Kedge Keep). The character
+    /// stands there for now; swimming there is still to do.
+    pub afloat: bool,
 }
 
 impl Spot {
@@ -62,7 +68,7 @@ impl Spot {
     pub fn line(&self, zone: &str) -> String {
         let [y, x, z] = self.loc;
         format!(
-            "{zone:<12} {y:>9.2} {x:>9.2} {z:>9.2} {:>8.1} {:>9.1} {:>6.1}  {}",
+            "{zone:<12} {y:>9.2} {x:>9.2} {z:>9.2} {:>8.1} {:>9.1} {:>6.1}  {}{}",
             self.heading,
             self.distance,
             self.pitch,
@@ -70,7 +76,8 @@ impl Spot {
                 "reviewed"
             } else {
                 "unreviewed"
-            }
+            },
+            if self.afloat { " afloat" } else { "" }
         )
     }
 }
@@ -101,16 +108,20 @@ impl Spots {
     /// the reachability check flags it.
     ///
     /// # Errors
-    /// Names the first line that isn't a short name, six numbers and a
-    /// state, that lists a zone a second time, or that is kept without a
-    /// reason.
+    /// Names the first line that isn't a short name, six numbers, a state
+    /// and an optional `afloat`, that lists a zone a second time, or that is
+    /// kept without a reason.
     pub fn parse(text: &str) -> Result<Self, String> {
         let mut spots = HashMap::new();
         let mut kept = HashMap::new();
         for (index, line) in text.lines().enumerate() {
             let number = index + 1;
             let (data, comment) = line.split_once('#').unwrap_or((line, ""));
-            let words: Vec<&str> = data.split_whitespace().collect();
+            let mut words: Vec<&str> = data.split_whitespace().collect();
+            let afloat = words.len() > 1 && words.last() == Some(&"afloat");
+            if afloat {
+                words.pop();
+            }
             let [zone, numbers @ .., state] = &words[..] else {
                 continue;
             };
@@ -137,6 +148,7 @@ impl Spots {
                 distance,
                 pitch,
                 reviewed,
+                afloat,
             };
             let zone = zone.to_ascii_lowercase();
             if let Some(reason) = comment.trim().strip_prefix("kept:") {
@@ -270,6 +282,7 @@ pub fn propose(
                 distance: camera_distance(room),
                 pitch: PITCH,
                 reviewed: false,
+                afloat: false,
             }
         })
 }
@@ -483,6 +496,7 @@ mod tests {
             distance: 22.0,
             pitch: 12.0,
             reviewed: false,
+            afloat: false,
         };
         let text = format!("# a comment\n\n{}  # and another\n", spot.line("ecommons"));
         let spots = Spots::parse(&text).unwrap();
@@ -501,6 +515,34 @@ mod tests {
         assert!(Spots::parse("ecommons 1 2 3 4 5 6 maybe").is_err());
         assert!(Spots::parse("ecommons 1 2 three 4 5 6 reviewed").is_err());
         assert!(Spots::parse("ecommons 1 2 3 4 5 reviewed").is_err());
+    }
+
+    #[test]
+    fn an_afloat_row_reads_back_as_written_and_afloat_alone_is_no_state() {
+        let spot = Spot {
+            loc: [1.46, -1.04, 313.94],
+            heading: 148.0,
+            distance: 25.0,
+            pitch: 10.0,
+            reviewed: true,
+            afloat: true,
+        };
+        let line = spot.line("kedge");
+        assert!(line.ends_with("reviewed afloat"), "{line}");
+        let spots = Spots::parse(&format!("{line}  # kept: open water\n")).unwrap();
+        assert_eq!(spots.get("kedge"), Some(&spot));
+        assert_eq!(spots.kept("kedge"), Some("open water"));
+        let floor = Spot {
+            afloat: false,
+            ..spot
+        };
+        assert!(!floor.line("kedge").contains("afloat"));
+        assert_eq!(
+            Spots::parse(&floor.line("kedge")).unwrap().get("kedge"),
+            Some(&floor)
+        );
+        assert!(Spots::parse("kedge 1 2 3 4 25 10 afloat").is_err());
+        assert!(Spots::parse("kedge 1 2 3 4 25 10 afloat reviewed").is_err());
     }
 
     /// A square of floor `half` across each way at height zero, as two
@@ -571,6 +613,7 @@ mod tests {
             distance: 25.0,
             pitch: 10.0,
             reviewed: true,
+            afloat: false,
         };
         let text = format!(
             "{}  # kept: pads join the levels\n{}  # a note\n",

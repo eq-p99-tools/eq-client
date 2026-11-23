@@ -3,7 +3,7 @@ use crate::theme::{self, Size};
 use bevy::prelude::*;
 use eq_client_core::{ClientCommand, SpellBook};
 
-#[derive(Component, Clone, Copy, PartialEq, Eq)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Action {
     Select,
     Confirm,

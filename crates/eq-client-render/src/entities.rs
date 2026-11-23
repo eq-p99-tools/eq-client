@@ -217,6 +217,7 @@ pub(crate) const fn dialect(
     match client {
         eq_client_assets::ui::InstalledClient::Titanium => eq_client_core::GameDialect::Titanium,
         eq_client_assets::ui::InstalledClient::EqMac => eq_client_core::GameDialect::EqMac,
+        eq_client_assets::ui::InstalledClient::Rof2 => eq_client_core::GameDialect::Rof2,
     }
 }
 
@@ -258,6 +259,7 @@ pub(super) fn reconcile(
         Res<crate::options::OptionsState>,
         Option<Res<crate::loading::Loading>>,
     ),
+    hidden: Option<Res<crate::corpses::HiddenCorpses>>,
     time: Res<Time>,
     mut nearby_state: ResMut<NearbyEntities>,
     mut images: ResMut<Assets<Image>>,
@@ -369,7 +371,16 @@ pub(super) fn reconcile(
         .spawns()
         .values()
         .map(|spawn| &spawn.state)
-        .filter(|spawn| reveal || world.can_see(spawn));
+        // A body type the program hides is apart from invisibility: no See
+        // Invisible shows it, only the QoL fix that shows every spawn.
+        .filter(|spawn| reveal || (world.can_see(spawn) && !world.hides_by_body(spawn)))
+        // A corpse `/hidecorpses` hid isn't drawn, so isn't picked by the
+        // mouse; a name still finds it (6.490).
+        .filter(|spawn| {
+            !hidden
+                .as_deref()
+                .is_some_and(|hidden| hidden.hides(spawn.spawn_id))
+        });
     let selected = nearby_with_invisible(
         candidates,
         player.spawn_id,

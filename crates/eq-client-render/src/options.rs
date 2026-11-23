@@ -25,23 +25,31 @@ pub(crate) struct OptionsState {
     told: Option<(u64, AutoEat)>,
     /// The admission and Show My Helm as the session last knew it.
     helm: Option<(u64, bool)>,
+    /// The admission and the server filters the session keeps, as far as
+    /// this client told it; none once a character list is back.
+    filters: Option<(u64, eq_client_core::filters::ServerFilters)>,
+    /// The server filters given at the character list for the character
+    /// entering, which its first admission starts from.
+    chosen: Option<eq_client_core::filters::ServerFilters>,
 }
 
 impl Default for OptionsState {
     fn default() -> Self {
-        Self::new(Options::default())
+        Self::new(&Options::default())
     }
 }
 
 impl OptionsState {
     /// Options that start from these defaults until a character's own load.
-    pub(crate) fn new(defaults: Options) -> Self {
+    pub(crate) fn new(defaults: &Options) -> Self {
         Self {
-            options: defaults,
-            defaults,
+            options: *defaults,
+            defaults: *defaults,
             store: Store::default(),
             told: None,
             helm: None,
+            filters: None,
+            chosen: None,
         }
     }
 
@@ -66,11 +74,132 @@ impl OptionsState {
             .unwrap_or_default();
         Options::read(&text, self.defaults)
     }
+
+    /// Notes the server filters given at the character list for the
+    /// character entering, or none where none were given: the session then
+    /// keeps its configured set.
+    pub(crate) fn choose_filters(
+        &mut self,
+        chosen: Option<eq_client_core::filters::ServerFilters>,
+    ) {
+        self.filters = None;
+        self.chosen = chosen;
+    }
+
+    /// A character's saved server filters for the generation, read from
+    /// their options file, or the shared one where they have none, before
+    /// they play: what the character list gives the session for them.
+    pub(crate) fn saved_filters(
+        &self,
+        directory: Option<&std::path::PathBuf>,
+        profile: &CharacterProfile,
+        dialect: eq_client_core::GameDialect,
+    ) -> eq_client_core::filters::ServerFilters {
+        // Before the options first load, a store of its own reads the files.
+        let mut unopened = Store::default();
+        let store = if self.store.loaded {
+            &self.store
+        } else {
+            unopened.directory = directory.cloned();
+            &unopened
+        };
+        let text = store
+            .read(&file_name(Some(profile)))
+            .or_else(|| store.read(SHARED))
+            .unwrap_or_default();
+        Options::read(&text, self.defaults)
+            .chat_filters
+            .for_session(dialect)
+    }
 }
 
 /// An Options window checkbox: a click turns its option the other way.
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct OptionCheckbox(pub(crate) Toggle);
+
+/// A Filters page button: a click steps its kind to the next mode the
+/// generation's packet takes for it.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FilterButton(pub(crate) eq_client_core::filters::FilterCategory);
+
+/// A Filters page label: it says its kind's mode.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FilterValue(pub(crate) eq_client_core::filters::FilterCategory);
+
+/// The Filters page's note: it says when a change reaches this server.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FilterNote;
+
+/// The Filters page's note, for a session that reads a change at once
+/// (`ServerFiltersAtOnce` offered) or one that reads it only at zone-in.
+pub(crate) const fn filter_note(at_once: bool) -> &'static str {
+    if at_once {
+        "Each kind steps through the modes the server takes for it. This server reads a change at once, so it is sent now."
+    } else {
+        "Each kind steps through the modes the server takes for it. This server reads a change only at zone-in, so it applies at the next zone."
+    }
+}
+
+/// Steps a kind's server filter when its Filters page button is clicked.
+/// The session hears the change from [`tell_session`].
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(crate) fn step_filters(
+    clicks: crate::clicks::Clicks<FilterButton>,
+    online: Res<crate::online::OnlineState>,
+    mut state: ResMut<OptionsState>,
+) {
+    let dialect = online.world().generation();
+    for FilterButton(category) in clicks.iter() {
+        if let Some(next) = state.options.chat_filters.next(*category, dialect) {
+            state.options.chat_filters.set(*category, next);
+        }
+    }
+}
+
+/// Says each kind's mode on the Filters page, and hides the rows of kinds
+/// the playing generation's packet has no word for.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(crate) fn show_filters(
+    online: Res<crate::online::OnlineState>,
+    state: Res<OptionsState>,
+    mut buttons: Query<(&FilterButton, &mut Visibility)>,
+    mut labels: Query<(&FilterValue, &mut Text)>,
+    mut notes: Query<&mut Text, (With<FilterNote>, Without<FilterValue>)>,
+) {
+    let note = filter_note(
+        online
+            .world()
+            .can(eq_client_core::Capability::ServerFiltersAtOnce),
+    );
+    for mut text in &mut notes {
+        if text.0 != note {
+            note.clone_into(&mut text.0);
+        }
+    }
+    let dialect = online.world().generation();
+    let taken =
+        |category: eq_client_core::filters::FilterCategory| !category.modes(dialect).is_empty();
+    for (FilterButton(category), mut visibility) in &mut buttons {
+        let wanted = if taken(*category) {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+        if *visibility != wanted {
+            *visibility = wanted;
+        }
+    }
+    for (FilterValue(category), mut text) in &mut labels {
+        let words = if taken(*category) {
+            eq_client_core::chat_filters::mode_words(state.options.chat_filters.get(*category))
+        } else {
+            ""
+        };
+        if text.0 != words {
+            words.clone_into(&mut text.0);
+        }
+    }
+}
 
 /// Turns an option the other way when its checkbox is clicked.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
@@ -146,6 +275,7 @@ pub(crate) fn tell_session(
         return;
     };
     tell_helm(&online, &outbox, &mut state, session_id);
+    tell_filters(&online, &outbox, &mut state, session_id);
     if !crate::outbox::offered(online.world(), eq_client_core::Capability::Meals) {
         return;
     }
@@ -190,6 +320,41 @@ fn tell_helm(
     }
 }
 
+/// Tells the session the character's server filters when they differ from
+/// the set it keeps: at an admission whose set is not the character's (one
+/// entered without the character list's choice), and on each change. The
+/// session keeps the set across zones and sends it at once only where the
+/// server type reads a change mid-zone; elsewhere the next zone-in carries
+/// it (recording checklist 6.494c and e).
+fn tell_filters(
+    online: &crate::online::OnlineState,
+    outbox: &crate::outbox::Outbox,
+    state: &mut ResMut<OptionsState>,
+    session_id: u64,
+) {
+    let wanted = state
+        .options
+        .chat_filters
+        .for_session(online.world().generation());
+    // A zone crossing keeps the set the session already had.
+    let held = match &state.filters {
+        Some((_, held)) => held.clone(),
+        None => state.chosen.clone().unwrap_or_default(),
+    };
+    let told = held == wanted
+        || outbox.tell(
+            online.world(),
+            eq_client_core::ClientCommand::SetServerFilters {
+                session_id,
+                filters: wanted.clone(),
+            },
+        );
+    let known = if told { wanted } else { held };
+    if state.filters.as_ref() != Some(&(session_id, known.clone())) {
+        state.bypass_change_detection().filters = Some((session_id, known));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,7 +366,7 @@ mod tests {
             .resource_mut::<crate::ViewerSettings>()
             .0
             .settings_directory = Some(directory.to_owned());
-        app.insert_resource(OptionsState::new(Options::default()))
+        app.insert_resource(OptionsState::new(&Options::default()))
             .add_systems(
                 Update,
                 (crate::profile_files::follow, toggle, persist).chain(),
@@ -397,7 +562,7 @@ mod tests {
         let mut options = Options::default();
         options.set(Toggle::Qol(Fix::SkipModifiedFood), false);
         let saved = options.text();
-        app.insert_resource(OptionsState::new(options))
+        app.insert_resource(OptionsState::new(&options))
             .insert_resource(crate::outbox::Outbox::new(Some(tx)))
             .add_systems(Update, tell_session);
         meal_admission(&mut app, 1, false);
@@ -481,7 +646,7 @@ mod tests {
         use eq_client_core::{Capability, ClientCommand};
         let (sender, receiver) = std::sync::mpsc::sync_channel(8);
         let mut app = crate::testing::app();
-        app.insert_resource(OptionsState::new(Options::default()))
+        app.insert_resource(OptionsState::new(&Options::default()))
             .insert_resource(crate::outbox::Outbox::new(Some(sender)))
             .add_systems(Update, (toggle, tell_session).chain());
         let mut online = OnlineState::new(true);
@@ -520,10 +685,217 @@ mod tests {
     }
 
     #[test]
+    fn the_server_filters_are_told_when_they_differ_from_what_the_session_keeps() {
+        use eq_client_core::{
+            ClientCommand,
+            filters::{FilterCategory, FilterMode},
+        };
+        let (sender, receiver) = std::sync::mpsc::sync_channel(8);
+        let mut app = crate::testing::app();
+        let mut options = Options::default();
+        options
+            .chat_filters
+            .set(FilterCategory::Shouts, FilterMode::Hide);
+        app.insert_resource(OptionsState::new(&options))
+            .insert_resource(crate::outbox::Outbox::new(Some(sender)))
+            .add_systems(Update, tell_session);
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        testing::connect(&mut online, true);
+        app.insert_resource(online);
+        let told = |receiver: &std::sync::mpsc::Receiver<ClientCommand>| {
+            receiver
+                .try_iter()
+                .filter_map(|command| match command {
+                    ClientCommand::SetServerFilters {
+                        session_id,
+                        filters,
+                    } => Some((session_id, filters.get(FilterCategory::Shouts))),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        // Entered without the list's choice, the session keeps the default.
+        app.update();
+        assert_eq!(told(&receiver), [(1, FilterMode::Hide)]);
+        app.update();
+        assert_eq!(told(&receiver), []);
+        // A change is told once.
+        app.world_mut()
+            .resource_mut::<OptionsState>()
+            .options
+            .chat_filters
+            .set(FilterCategory::Shouts, FilterMode::Show);
+        app.update();
+        app.update();
+        assert_eq!(told(&receiver), [(1, FilterMode::Show)]);
+        // An entry whose choice the list gave already is not told again.
+        let mut chosen = eq_client_core::filters::ServerFilters::default();
+        chosen.set(FilterCategory::Shouts, FilterMode::Hide);
+        {
+            let mut state = app.world_mut().resource_mut::<OptionsState>();
+            state
+                .options
+                .chat_filters
+                .set(FilterCategory::Shouts, FilterMode::Hide);
+            state.choose_filters(Some(chosen));
+        }
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 2, testing::player(7));
+        testing::connect(&mut online, true);
+        app.insert_resource(online);
+        app.update();
+        assert_eq!(told(&receiver), []);
+    }
+
+    #[test]
+    fn a_filters_page_click_steps_its_kind_and_its_label_says_the_mode() {
+        use eq_client_core::filters::{FilterCategory, FilterMode};
+        let mut app = crate::testing::app();
+        app.insert_resource(OptionsState::new(&Options::default()))
+            .add_systems(Update, (step_filters, show_filters).chain());
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        app.insert_resource(online);
+        let button = app
+            .world_mut()
+            .spawn((
+                Interaction::None,
+                FilterButton(FilterCategory::BardSongs),
+                Visibility::Inherited,
+            ))
+            .id();
+        let label = app
+            .world_mut()
+            .spawn((FilterValue(FilterCategory::BardSongs), Text::default()))
+            .id();
+        app.update();
+        assert_eq!(app.world().get::<Text>(label).unwrap().0, "Show");
+        crate::clicks::testing::click(&mut app, button);
+        assert_eq!(
+            app.world()
+                .resource::<OptionsState>()
+                .options
+                .chat_filters
+                .get(FilterCategory::BardSongs),
+            FilterMode::MineOnly
+        );
+        app.update();
+        assert_eq!(app.world().get::<Text>(label).unwrap().0, "Mine only");
+        assert_eq!(
+            *app.world().get::<Visibility>(button).unwrap(),
+            Visibility::Inherited
+        );
+    }
+
+    #[test]
+    fn the_filters_note_says_when_a_change_reaches_this_server() {
+        use eq_client_core::Capability;
+        let mut app = crate::testing::app();
+        app.insert_resource(OptionsState::new(&Options::default()))
+            .insert_resource(OnlineState::new(true))
+            .add_systems(Update, show_filters);
+        let note = app.world_mut().spawn((FilterNote, Text::default())).id();
+        let says = |app: &App| app.world().get::<Text>(note).unwrap().0.clone();
+        // Before an admission nothing is read until the zone-in.
+        app.update();
+        assert_eq!(says(&app), filter_note(false));
+        assert!(says(&app).contains("next zone"));
+        // A session that offers ServerFiltersAtOnce reads it at once.
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        app.insert_resource(online);
+        app.update();
+        assert_eq!(says(&app), filter_note(true));
+        assert!(says(&app).contains("sent now"));
+        // One that does not offer it, as P99, Quarm and TAKP, waits.
+        let mut online = OnlineState::new(true);
+        testing::news(
+            &mut online,
+            [eq_client_core::WorldEvent::Entered {
+                capabilities: Capability::ALL
+                    .into_iter()
+                    .filter(|capability| *capability != Capability::ServerFiltersAtOnce)
+                    .collect(),
+                choices: Vec::new(),
+                session_id: 2,
+                zone: "qeytoqrg".into(),
+                player: Box::new(testing::player(7)),
+                far_clip: None,
+                spell_landing_flag: None,
+                zone_id: 0,
+            }],
+        );
+        app.insert_resource(online);
+        app.update();
+        assert_eq!(says(&app), filter_note(false));
+    }
+
+    #[test]
+    fn a_characters_saved_filters_read_before_they_play() {
+        use eq_client_core::filters::{FilterCategory, FilterMode};
+        let directory = std::env::temp_dir().join(format!(
+            "eq-client-filters-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let mut saved = Options::default();
+        saved
+            .chat_filters
+            .set(FilterCategory::DamageOverTime, FilterMode::Hide);
+        saved
+            .chat_filters
+            .set(FilterCategory::Ooc, FilterMode::Hide);
+        std::fs::write(
+            directory.join("options-ExampleWorld-Example.txt"),
+            saved.text(),
+        )
+        .unwrap();
+        let state = OptionsState::new(&Options::default());
+        let profile = CharacterProfile {
+            world: "ExampleWorld".into(),
+            character: "Example".into(),
+        };
+        let titanium = state.saved_filters(
+            Some(&directory),
+            &profile,
+            eq_client_core::GameDialect::Titanium,
+        );
+        assert_eq!(
+            titanium.get(FilterCategory::DamageOverTime),
+            FilterMode::Hide
+        );
+        assert_eq!(titanium.get(FilterCategory::Ooc), FilterMode::Hide);
+        // EQMac's packet has no damage-over-time word.
+        let eqmac = state.saved_filters(
+            Some(&directory),
+            &profile,
+            eq_client_core::GameDialect::EqMac,
+        );
+        assert_eq!(eqmac.get(FilterCategory::DamageOverTime), FilterMode::Show);
+        assert_eq!(eqmac.get(FilterCategory::Ooc), FilterMode::Hide);
+        // A character with no file of their own reads the defaults.
+        let other = CharacterProfile {
+            world: "ExampleWorld".into(),
+            character: "Another".into(),
+        };
+        assert_eq!(
+            state.saved_filters(
+                Some(&directory),
+                &other,
+                eq_client_core::GameDialect::Titanium
+            ),
+            eq_client_core::filters::ServerFilters::default()
+        );
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[test]
     fn a_setting_for_what_the_session_does_not_offer_stays_as_it_is() {
         use eq_client_core::{Capability, WorldEvent, qol::Fix};
         let mut app = crate::testing::app();
-        app.insert_resource(OptionsState::new(Options::default()))
+        app.insert_resource(OptionsState::new(&Options::default()))
             .add_systems(Update, toggle);
         // A session without meals eats nothing on its own, so the
         // food setting is greyed out there.
