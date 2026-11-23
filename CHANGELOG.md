@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- Petitions and reports as the Titanium program takes them (read R49-23,
+  checklist 6.511, C1a), on eq-network #414.
+  - **`/petition`** sends its words and echoes them in the installed line
+    0x3025; with no words it prints 0x3332 and sends nothing. Our own "Your
+    petition was sent." line stays for Mac-era servers, whose program is
+    unread.
+  - **`/guidehelp`** is the same text form, with lines 0xde8 and 0xde3.
+  - **The petition window:** where the world turns it on, the program
+    toggles a window and ignores the words. Which skin screen that is is
+    unread, so this client takes the text form there: a departure, labelled,
+    with a TODO.
+  - **Typed Reports** (new setting, a departure, on until the report
+    windows are built in C1b, then off): `/bugreport` and `/feedback` send
+    the typed words, as before. The program ignores the words and opens its
+    windows; with the setting off this client ignores them too and says it
+    has no window yet. A bug report prints 0x22ae, or 0x22b0 with no words;
+    feedback prints nothing, as the program's window does.
+  - Feedback now carries the player's place and heading, which Titanium's
+    feedback sends. Stock EQEmu now offers feedback and drops it, as it
+    drops the program's. Project 1999 offers none of the three.
+  - No repin of its own: it uses main's eq-network pin (614d1c0, #635),
+    which carries `reports::petition_form` and the feedback's place.
 - A Bard's song stop says the Titanium program's line (0x40f06d, read R49-21), from eq-network #421's `WorldEvent::SongStopped`. It shows in the program's colour 0x108, in the installation's words (string 0x318f), or this client's where the installation lacks them. A gem click that stops the song now shows that line, not a cast refusal. As read, the program hides the line when the Bard songs filter is "mine only" (filter 9 holding 1), and so does this client, through the local filter gate (`chat_filters::hidden_locally`). Read R49-48 e asks to confirm that compare. On Titanium, where the program's line is the only one, this client's own "Song stop requested" and "Song stop unconfirmed" lines no longer show beside it. The Mac-era servers, which send no program line, keep them.
 - A Bard's `/melody`, as the Titanium program's (0x472156, read R49-33 c; gap 3.5, plan approved with Y1 to Y4). It is offered where the session offers `Capability::Melody`, on P99 (by Adam's word) and Titanium EQEmu. Elsewhere it answers as an unknown game command does.
   - **`/melody 1 3 2`** clears the list, then, unless a song is sung, plays gems 1, 3 and 2 in turn. It presses the first at once through the same gem press as a click, with the same refusals and lines.

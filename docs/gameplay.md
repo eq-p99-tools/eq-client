@@ -449,30 +449,46 @@ original client's handling is read (recording checklist 6.528).
 
 ## Petitions, bug reports and feedback
 
-`/petition words`, `/bugreport words` (also `/bug`) and `/feedback words`
-send a report to the server's staff. A typed line sends it, whoever types
-it: the keyboard, a social's line or a script's `slash()` step, each with
-the same checks and pace. A button's game command answers that the client
-does not take the command that way yet.
+`/petition words`, `/guidehelp words`, `/bugreport words` (also `/bug`) and
+`/feedback words` send a report to the server's staff. A typed line sends
+it, whoever types it: the keyboard, a social's line or a script's `slash()`
+step, each with the same checks and pace. A button's game command answers
+that the client does not take the command that way yet.
 
+On Titanium servers these follow the official client (read R49-23,
+recording checklist 6.511), in the installation's own lines:
+- `/petition` sends its words and echoes them in the official line. With no
+  words it prints the official line for that and sends nothing.
+  `/guidehelp` is the same, with its own two lines.
+- Where the world turns the petition window on, the official client shows
+  its petition window instead and ignores the words. Which window that is
+  is unread, so this client sends the words as above: a departure.
+- The official `/bugreport` and `/feedback` open a window and ignore the
+  words. This client has no such windows yet, so the **Typed Reports**
+  setting (on by default until the windows are built) sends the words
+  instead. A bug report then prints the official sent line, or its empty-box
+  line with no words; feedback prints nothing, as the official window does.
+  With the setting off, the words are ignored and a line says there is no
+  window yet.
+
+Elsewhere, or on any server:
 - A bug report's first word may name its category with a colon, such as
   `/bug pathing: the guard walks into the wall`. A word that names no
   category, or one without its colon, leaves the whole line as the text,
-  under Other. The report carries the player's place and heading, and the
-  selected entity where there is one.
-- A line with nothing to say sends nothing and answers
-  `Use /petition with what to say.`
+  under Other. Bug reports and feedback carry the player's place and
+  heading, and a bug report the selected entity where there is one.
+- On Mac-era servers, whose official client is unread, a line with nothing
+  to say sends nothing and answers `Use /petition with what to say.`, and
+  this client says `Your petition was sent.` or `Your bug report was sent.`
+  in its own words.
 - One report of a kind is sent at a time: another of the same kind within
   ten seconds is refused with a line asking to wait. Text too long for the
   server's field is refused, never cut.
-- Stock EQEmu says nothing when it takes a petition or a bug report, so
-  this client says `Your petition was sent.` or `Your bug report was sent.`
-  in its own words. The official client's windows and lines for these are
-  unread (recording checklist 6.511).
 
-Only stock EQEmu sessions offer petitions and bug reports. Feedback, and
-every report on Project 1999, Quarm and TAKP, waits for its own live check;
-there the command answers as it does today.
+Stock EQEmu sessions offer all three; it drops feedback, as it drops the
+official client's. Quarm and TAKP offer petitions and bug reports. Project
+1999 offers none of them until its own attended check; there the command
+answers as it does today.
 
 ## Social hotbuttons
 
