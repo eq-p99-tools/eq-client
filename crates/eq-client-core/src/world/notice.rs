@@ -395,6 +395,16 @@ pub enum Notice {
         /// The caster's name, as the server sent it.
         caster: String,
     },
+    /// A line from the chat server's channels (recording checklist 6.509;
+    /// how the official client words and colours each is pending read
+    /// R49-12 b).
+    Channel(ChannelLine),
+    /// A chat channel command was not sent, and why, in this library's
+    /// words.
+    ChannelRefused {
+        /// Why.
+        reason: String,
+    },
     /// A character the player asked for was not created.
     CreationRefused {
         /// The name asked for.
@@ -402,4 +412,34 @@ pub enum Notice {
         /// Which refusal: the name, the creation, or the client's own.
         outcome: crate::creation::CreationOutcome,
     },
+}
+
+/// A line the chat server's channels gave.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ChannelLine {
+    /// Someone's message on a channel.
+    Message {
+        /// The channel's name, as the server sent it.
+        channel: String,
+        /// Its slot, from 1, in the last list of joined channels; None
+        /// before a list names it.
+        slot: Option<usize>,
+        /// Who said it.
+        sender: String,
+        /// What they said, with its item links.
+        text: crate::chat::RichText,
+    },
+    /// The chat server's own line, as it sent it.
+    Notice(crate::chat::RichText),
+    /// Someone joined or left a channel the character is on.
+    Member {
+        /// The channel's name.
+        channel: String,
+        /// Who.
+        name: String,
+        /// Joined (true) or left.
+        joined: bool,
+    },
+    /// The link to the chat server ended.
+    Lost,
 }

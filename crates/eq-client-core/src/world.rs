@@ -43,7 +43,7 @@ pub use items::ItemCache;
 pub use landings::Landing;
 pub use link::Link;
 pub use motions::{CastDone, Motion};
-pub use notice::{DuelNotice, ListingNotice, Notice, Party};
+pub use notice::{ChannelLine, DuelNotice, ListingNotice, Notice, Party};
 pub use raid::{Raid, RaidNotice, RaidRank};
 pub use target::Target;
 pub use tracking::{TrackWindow, track_color};
@@ -338,6 +338,10 @@ pub struct ClientWorld {
     popup: Option<crate::popups::PopupOffer>,
     popup_serial: u64,
     player_inspection: Option<crate::inspection::PlayerInspection>,
+    /// The chat server channels the character is on, in slot order, as the
+    /// chat server's last list named them; kept across zones until the link
+    /// ends or the character leaves the world.
+    chat_channels: Vec<String>,
     /// The book or note open to read.
     reading: Option<crate::books::BookText>,
     /// The tradeskill container whose combine waits for the server.
@@ -615,6 +619,12 @@ impl ClientWorld {
     /// The player closed the book or note they were reading.
     pub fn close_reading(&mut self) {
         self.reading = None;
+    }
+
+    /// The chat server channels the character is on, in slot order: the
+    /// first is `/1`.
+    pub fn chat_channels(&self) -> &[String] {
+        &self.chat_channels
     }
 
     /// Puts away the received equipment report.
@@ -977,7 +987,7 @@ impl ClientWorld {
             // Installed spell providers consume table facts before admission staging.
             // Apply Poison's answer (eq-client #556), the server filters'
             // outcome (eq-client #560), the surname's answer, the staff
-            // reports' outcome, the chat channels' lines and the title list
+            // reports' outcome and the title list
             // take their arms in those threads' PRs.
             unshown @ (WorldEvent::PoisonAnswered(_)
             | WorldEvent::ApplyPoisonRefused { .. }
@@ -986,9 +996,6 @@ impl ClientWorld {
             | WorldEvent::SurnameAnswer { .. }
             | WorldEvent::ReportSent { .. }
             | WorldEvent::ReportRefused { .. }
-            | WorldEvent::Channel(_)
-            | WorldEvent::ChannelLink(_)
-            | WorldEvent::ChatChannelRefused { .. }
             | WorldEvent::TitleList(_)
             | WorldEvent::SpellTable(_)
             | WorldEvent::ChatServer(_)
@@ -1500,6 +1507,24 @@ impl ClientWorld {
             // emote or assist the session would not send.
             WorldEvent::Roll(roll) => news.notices.push(Notice::Roll(roll.clone())),
             WorldEvent::Assisted(answer) => self.assisted = answer.target,
+            // The chat server's channels (recording checklist 6.509).
+            WorldEvent::Channel(event) => self.channel_event(event, news),
+            WorldEvent::ChannelLink(link) => match link {
+                eq_network_game::chat_server::ChannelLink::Up => {}
+                eq_network_game::chat_server::ChannelLink::Lost { .. } => {
+                    self.chat_channels.clear();
+                    news.notices.push(Notice::Channel(ChannelLine::Lost));
+                }
+            },
+            WorldEvent::ChatChannelRefused { session_id, reason } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices.push(Notice::ChannelRefused {
+                        reason: reason.clone(),
+                    });
+                } else {
+                    news.ignored = true;
+                }
+            }
             WorldEvent::SocialRefused {
                 session_id,
                 reason,
@@ -1962,6 +1987,51 @@ impl ClientWorld {
             })
     }
 
+    /// Keeps the chat server's list of joined channels, and tells the rest
+    /// as lines. The server's text is untrusted: its item links are read as
+    /// any chat's, and it prints through the ordinary chat path.
+    fn channel_event(
+        &mut self,
+        event: &eq_network_game::chat_server::ChannelEvent,
+        news: &mut Changes,
+    ) {
+        use eq_network_game::chat_server::ChannelEvent;
+        let line = match event {
+            ChannelEvent::Joined { channels } => {
+                self.chat_channels.clone_from(channels);
+                return;
+            }
+            ChannelEvent::Message {
+                channel,
+                sender,
+                text,
+            } => ChannelLine::Message {
+                slot: self
+                    .chat_channels
+                    .iter()
+                    .position(|joined| joined.eq_ignore_ascii_case(channel))
+                    .map(|index| index + 1),
+                channel: plain(channel),
+                sender: plain(sender),
+                text: eq_network_game::chat::message(text.as_bytes(), false).into(),
+            },
+            ChannelEvent::Notice { text } => {
+                ChannelLine::Notice(eq_network_game::chat::message(text.as_bytes(), false).into())
+            }
+            ChannelEvent::MemberJoined { channel, name } => ChannelLine::Member {
+                channel: plain(channel),
+                name: plain(name),
+                joined: true,
+            },
+            ChannelEvent::MemberLeft { channel, name } => ChannelLine::Member {
+                channel: plain(channel),
+                name: plain(name),
+                joined: false,
+            },
+        };
+        news.notices.push(Notice::Channel(line));
+    }
+
     /// Forgets what the reason makes stale, and says so.
     fn reset(&mut self, reason: Reset) -> Changes {
         self.zone.boat_control = crate::boats::ControlState::Unknown;
@@ -2045,6 +2115,8 @@ impl ClientWorld {
                 self.choices.clear();
                 self.player = None;
                 self.connected = false;
+                // A camp ends the chat server link.
+                self.chat_channels.clear();
             }
             Reset::Lost {
                 ended,
@@ -2077,6 +2149,7 @@ impl ClientWorld {
             self.characters = None;
             self.pending_transfer = None;
             self.inventory = Inventory::default();
+            self.chat_channels.clear();
             self.forget_zone();
         }
     }
@@ -2139,3 +2212,10 @@ impl ClientWorld {
 
 #[cfg(test)]
 mod tests;
+
+/// A name the chat server sent, a channel's or a player's, as plain text:
+/// without control characters, the item link marker among them, so that it
+/// prints as words and can start no link.
+fn plain(name: &str) -> String {
+    name.chars().filter(|c| !c.is_control()).collect()
+}

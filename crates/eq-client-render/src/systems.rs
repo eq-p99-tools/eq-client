@@ -215,6 +215,7 @@ pub(super) fn schedule(app: &mut App) {
                 crate::slash::answers,
                 crate::corpses::run,
                 inventory::auto::run,
+                crate::chat_channels::answers,
                 (contacts::answers, contacts::persist).chain(),
                 abilities::choices::persist,
                 (guild::invitations, guild::commands, sharing::commands),

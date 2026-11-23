@@ -6917,3 +6917,110 @@ fn news_the_world_does_not_show_is_named_for_the_gap_file() {
         Some("YellForHelp")
     );
 }
+
+#[test]
+fn chat_channel_lines_take_their_slot_from_the_last_joined_list() {
+    use eq_network_game::chat_server::{ChannelEvent, ChannelLink, LinkLoss};
+    let mut world = admitted();
+    let message = |channel: &str| {
+        WorldEvent::Channel(ChannelEvent::Message {
+            channel: channel.into(),
+            sender: "Other".into(),
+            text: "hi".into(),
+        })
+    };
+    let slot_of = |changes: &Changes| match &changes.notices[..] {
+        [Notice::Channel(ChannelLine::Message { slot, text, .. })] => {
+            assert_eq!(text.text, "hi");
+            *slot
+        }
+        other => panic!("{other:?}"),
+    };
+    // Before a list names it, the channel has no slot.
+    assert_eq!(slot_of(&game(&mut world, message("trade"))), None);
+    let listed = game(
+        &mut world,
+        WorldEvent::Channel(ChannelEvent::Joined {
+            channels: vec!["general".into(), "Trade".into()],
+        }),
+    );
+    assert_eq!(listed.notices, []);
+    assert_eq!(world.chat_channels(), ["general", "Trade"]);
+    assert_eq!(slot_of(&game(&mut world, message("trade"))), Some(2));
+    // A zone change keeps the list.
+    game(&mut world, entered(2));
+    assert_eq!(slot_of(&game(&mut world, message("general"))), Some(1));
+    // A lost link says so once and forgets the list.
+    let lost = game(
+        &mut world,
+        WorldEvent::ChannelLink(ChannelLink::Lost {
+            reason: LinkLoss::Dropped,
+        }),
+    );
+    assert_eq!(lost.notices, [Notice::Channel(ChannelLine::Lost)]);
+    assert_eq!(world.chat_channels().len(), 0);
+    // A refusal for this admission is told; one for another is not.
+    let refused = game(
+        &mut world,
+        WorldEvent::ChatChannelRefused {
+            session_id: 2,
+            reason: "The chat server link has ended".into(),
+        },
+    );
+    assert_eq!(
+        refused.notices,
+        [Notice::ChannelRefused {
+            reason: "The chat server link has ended".into()
+        }]
+    );
+    assert!(
+        game(
+            &mut world,
+            WorldEvent::ChatChannelRefused {
+                session_id: 1,
+                reason: "old".into(),
+            },
+        )
+        .ignored
+    );
+}
+
+#[test]
+fn chat_channel_names_print_without_control_characters_or_link_markers() {
+    use eq_network_game::chat_server::ChannelEvent;
+    let mut world = admitted();
+    let message = game(
+        &mut world,
+        WorldEvent::Channel(ChannelEvent::Message {
+            channel: "tra\u{12}de".into(),
+            sender: "Ot\u{7}her\u{12}0001".into(),
+            text: "hi".into(),
+        }),
+    );
+    match &message.notices[..] {
+        [
+            Notice::Channel(ChannelLine::Message {
+                channel, sender, ..
+            }),
+        ] => {
+            assert_eq!(channel, "trade");
+            assert_eq!(sender, "Other0001");
+        }
+        other => panic!("{other:?}"),
+    }
+    let joined = game(
+        &mut world,
+        WorldEvent::Channel(ChannelEvent::MemberJoined {
+            channel: "trade\r\n".into(),
+            name: "\u{12}Some\u{1b}one\u{12}".into(),
+        }),
+    );
+    assert_eq!(
+        joined.notices,
+        [Notice::Channel(ChannelLine::Member {
+            channel: "trade".into(),
+            name: "Someone".into(),
+            joined: true,
+        })]
+    );
+}

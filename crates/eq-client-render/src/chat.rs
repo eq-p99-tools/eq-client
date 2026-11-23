@@ -142,6 +142,9 @@ pub(super) struct ChatState {
     pub(crate) hide_corpses: Option<String>,
     /// An `/autoinventory` waiting to put the cursor item away.
     pub(crate) autoinventory: Option<crate::inventory::auto::Asked>,
+    /// Chat server channel commands, as the chat server's words, waiting
+    /// to be sent (checklist 6.509).
+    pub(crate) channel_asked: Vec<String>,
     /// A `/doability`'s words, waiting for the Actions window's buttons.
     pub(crate) doability: Option<String>,
     /// A `/memspellset`'s words, waiting for the spell sets.
@@ -2090,6 +2093,14 @@ pub(super) fn run_game_command(
         chat.rangers_only = Some(super::tracking::RangersOnly);
         return;
     }
+    // A chat channel command on a button goes as typed (checklist 6.509).
+    if let Some(asked) = super::chat_channels::typed(command) {
+        match asked {
+            Ok(words) => chat.channel_asked.push(words),
+            Err(reason) => chat.refuse(reason),
+        }
+        return;
+    }
     match submit_game_command(command, online, outbox, qol) {
         Ok(()) if camp_destination(command).is_some() => chat.socials.stop = true,
         Ok(()) => (),
@@ -2148,6 +2159,9 @@ pub(super) fn client_request_in_scope(
     if let Some(asked) = super::slash::Asked::typed(input) {
         state.slash = Some(asked);
         return Some(Ok(()));
+    }
+    if let Some(asked) = super::chat_channels::typed(input) {
+        return Some(asked.map(|words| state.channel_asked.push(words)));
     }
     if let Some(words) = command_words(input, "doability") {
         state.doability = Some(words.to_owned());
