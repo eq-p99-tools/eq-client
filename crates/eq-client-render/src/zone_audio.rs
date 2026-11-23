@@ -16,7 +16,7 @@
 //! music is not read (the follow-up reads only the 20000 clamp and the
 //! 1500 it passes to the music start); every
 //! inferred rule is a named constant or function here, marked \[I\]. The instruments are the
-//! SoundFont the player names (a stated departure: how the program plays
+//! sound font the player names (a stated departure: how the program plays
 //! its music is unread, and the synthesizer here refuses the `.sf2` files
 //! an installation may ship as they stand).
 //!
