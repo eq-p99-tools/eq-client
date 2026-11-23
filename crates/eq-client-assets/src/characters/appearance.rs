@@ -486,7 +486,7 @@ fn palette_from_pe(bytes: &[u8]) -> Option<[[u8; 3]; 24]> {
     [0x0069_89a0_u32, 0x0060_2850]
         .into_iter()
         .find_map(|address| {
-            let data = crate::program::at(bytes, address, 96)?;
+            let data = crate::pe::data(bytes, address, 96)?;
             if data.as_chunks::<4>().0.iter().any(|color| color[3] != 0)
                 || data.get(48..51)? != [255, 255, 255]
             {

@@ -21,6 +21,7 @@ mod inventory_moves;
 mod items;
 mod landings;
 mod link;
+mod melody;
 mod motions;
 mod notice;
 mod pet_buffs;
@@ -42,6 +43,7 @@ pub use held_models::HeldModelEstimate;
 pub use items::ItemCache;
 pub use landings::Landing;
 pub use link::Link;
+pub use melody::{Melody, melody_gems};
 pub use motions::{CastDone, Motion};
 pub use notice::{ChannelLine, DuelNotice, ListingNotice, Notice, Party, YellBearing};
 pub use raid::{Raid, RaidNotice, RaidRank};
@@ -270,6 +272,9 @@ pub struct ClientWorld {
     creation: Option<Creation>,
     name_suggestion: Option<NameSuggestion>,
     name_generator: Option<bool>,
+    /// Whether the world turns the petition window on (Titanium's
+    /// log-server byte), for [`eq_network_game::reports::petition_form`].
+    petition_window: Option<bool>,
     /// The world's expansion mask, when it reported one.
     expansions: Option<crate::rules::Expansions>,
     /// The last revision given to a spawn, which never repeats.
@@ -746,14 +751,22 @@ impl ClientWorld {
                     self.liquid_hazards.revision = Some(*revision);
                 }
             }
-            // Poison news (eq-network #402, 6.493) waits on the client's
-            // poison change (eq-client #556); it answers nothing asked here.
-            WorldEvent::PoisonStarted { .. } | WorldEvent::PoisonInterrupted { .. } => {
-                news.ignored = true;
+            // A Bard's song stopped, with the program's line for the stop
+            // (0x40f06d, read R49-21).
+            WorldEvent::SongStopped {
+                session_id,
+                spell_id,
+                string_id,
+            } => {
+                if self.accepts_reply(*session_id) {
+                    news.notices.push(Notice::SongStopped {
+                        spell_id: *spell_id,
+                        string_id: *string_id,
+                    });
+                } else {
+                    news.ignored = true;
+                }
             }
-            // The song stop's line (eq-network #421) waits on the Bard
-            // thread's client half, stacked on this repin.
-            WorldEvent::SongStopped { .. } => news.ignored = true,
             WorldEvent::PlayedTime(played) => self.played = Some((*played, now)),
             WorldEvent::HazardReported {
                 session_id,
@@ -1000,6 +1013,9 @@ impl ClientWorld {
                     self.skills_revision = self.skills_revision.wrapping_add(1);
                 }
                 if let Some(enabled) = rules.name_generator { self.name_generator = Some(enabled); }
+                if let Some(on) = rules.petition_window {
+                    self.petition_window = Some(on);
+                }
                 if let Some(on) = rules.listener_garble.or(rules.gibberish) {
                     self.listener_garble = Some(on);
                 }
@@ -1032,11 +1048,8 @@ impl ClientWorld {
             // to a player, or the petitions in the queue, for a front end that
             // shows them. The server's regeneration tick waits for its own.
             // Installed spell providers consume table facts before admission staging.
-            // Apply Poison's answer (eq-client #556) and the surname's
-            // answer take their arms in those threads' rebuilds.
-            unshown @ (WorldEvent::PoisonAnswered(_)
-            | WorldEvent::ApplyPoisonRefused { .. }
-            | WorldEvent::SurnameAnswer { .. }
+            // The surname's answer takes its arm in that thread's rebuild.
+            unshown @ (WorldEvent::SurnameAnswer { .. }
             | WorldEvent::SpellTable(_)
             | WorldEvent::ChatServer(_)
             | WorldEvent::ZoneUnavailable { .. }
@@ -1669,6 +1682,51 @@ impl ClientWorld {
                     news.notices.push(Notice::ConsumeRefused {
                         reason: reason.clone(),
                         string_id: *string_id,
+                    });
+                } else {
+                    news.ignored = true;
+                }
+            }
+            WorldEvent::ApplyPoisonRefused {
+                session_id,
+                reason,
+                string_id,
+            } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices.push(Notice::ApplyPoisonRefused {
+                        reason: reason.clone(),
+                        string_id: *string_id,
+                    });
+                } else {
+                    news.ignored = true;
+                }
+            }
+            // The wait the session runs before it sends (read R49-1).
+            WorldEvent::PoisonStarted { session_id, string_id, .. }
+            | WorldEvent::PoisonInterrupted {
+                session_id,
+                string_id,
+            } => {
+                if self.session_id == Some(*session_id) {
+                    let started = matches!(event, WorldEvent::PoisonStarted { .. });
+                    news.notices.push(if started {
+                        Notice::PoisonStarted {
+                            string_id: *string_id,
+                        }
+                    } else {
+                        Notice::PoisonInterrupted {
+                            string_id: *string_id,
+                        }
+                    });
+                } else {
+                    news.ignored = true;
+                }
+            }
+            // The server's own inventory record takes the poison out.
+            WorldEvent::PoisonAnswered(answer) => {
+                if self.in_world() {
+                    news.notices.push(Notice::PoisonAnswered {
+                        applied: answer.applied,
                     });
                 } else {
                     news.ignored = true;

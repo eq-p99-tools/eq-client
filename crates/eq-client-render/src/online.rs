@@ -328,6 +328,21 @@ impl OnlineState {
         (self.selection.as_mut(), &self.world)
     }
 
+    /// Starts a Bard's melody and gives its first gem (read R49-33 c).
+    pub(super) fn start_melody(&mut self, gems: Vec<u8>) -> Option<u8> {
+        self.world.start_melody(gems)
+    }
+
+    /// Clears the melody list.
+    pub(super) fn clear_melody(&mut self) {
+        self.world.clear_melody();
+    }
+
+    /// The gem the owed melody step presses, taken once.
+    pub(super) fn take_melody_step(&mut self) -> Option<u8> {
+        self.world.take_melody_step()
+    }
+
     /// The target the server's answer to an assist names, taken once.
     pub(super) fn take_assisted(&mut self) -> Option<u16> {
         self.world.take_assisted()
@@ -502,6 +517,13 @@ pub(super) struct Panels<'w> {
     socials: Option<ResMut<'w, super::socials::State>>,
 }
 
+/// The installed lines and the playing character's filters, by which the
+/// panels word notices and keep some back.
+type Wording<'a> = (
+    Option<&'a hud::messages::Messages>,
+    Option<eq_client_core::chat_filters::ChatFilters>,
+);
+
 impl Panels<'_> {
     /// Reconcile merchant intent only with admitted worker updates.
     fn merchant_news(&mut self, update: &WorldUpdate, changes: &Changes, world: &ClientWorld) {
@@ -517,7 +539,7 @@ impl Panels<'_> {
         &mut self,
         changes: &Changes,
         state: &mut OnlineState,
-        messages: Option<&hud::messages::Messages>,
+        wording: Wording<'_>,
         chat: &mut super::chat::ChatState,
     ) {
         // Capture received facts here; action/draw systems apply the current
@@ -536,9 +558,7 @@ impl Panels<'_> {
         if changes.inventory {
             self.inventory.refresh(state.world.inventory().stale());
         }
-        for notice in &changes.notices {
-            self.tell(notice, messages, chat);
-        }
+        self.tell_shown(changes, state.world().generation(), wording, chat);
         if state.world.in_world() {
             for cue in &changes.sounds {
                 self.sounds.play_cue(cue);
@@ -652,7 +672,28 @@ impl Panels<'_> {
         }
     }
 
-    /// Shows what a notice says where it belongs.
+    /// Tells each notice but those the generation's program hides by the
+    /// player's filters (read R49-2 d, recording checklist 6.494).
+    fn tell_shown(
+        &mut self,
+        changes: &Changes,
+        generation: eq_client_core::GameDialect,
+        (messages, filters): Wording<'_>,
+        chat: &mut super::chat::ChatState,
+    ) {
+        for notice in changes.notices.iter().filter(|notice| {
+            super::notices::ours_shown(notice, generation)
+                && !filters.is_some_and(|filters| {
+                    eq_client_core::chat_filters::hidden_locally(&filters, generation, notice)
+                })
+        }) {
+            self.tell(notice, messages, chat);
+        }
+    }
+
+    /// Shows what a notice says where it belongs. A line the generation's
+    /// program hides by the player's filters never reaches here (read
+    /// R49-2 d, recording checklist 6.494).
     fn tell(
         &mut self,
         notice: &eq_client_core::world::Notice,
@@ -663,6 +704,9 @@ impl Panels<'_> {
         // A running script whose chat the pace held fails (6.523).
         if let eq_client_core::world::Notice::ChatRefused { reason } = notice {
             chat.paced = Some((std::time::Instant::now(), reason.clone()));
+        }
+        if echoed(notice, messages, chat) {
+            return;
         }
         for (place, said) in super::notices::wording(notice, messages) {
             match place {
@@ -921,7 +965,18 @@ pub(super) fn receive(
                     &mut commands,
                 );
             }
-            panels.show(&changes, &mut state, messages.as_deref(), &mut chat);
+            // The playing character's filters, from their options once loaded.
+            let filters = options.as_deref().map(|options| {
+                options
+                    .of(super::profile_files::playing(&state.world).as_ref())
+                    .chat_filters
+            });
+            panels.show(
+                &changes,
+                &mut state,
+                (messages.as_deref(), filters),
+                &mut chat,
+            );
             if let Some(moved) = &changes.moved {
                 panels.moved(
                     state.world.session_id(),
@@ -1270,6 +1325,30 @@ fn trace(update: &WorldUpdate, changes: &eq_client_core::world::Changes, world: 
 }
 
 /// Puts the world in the state a test needs by sending what the session would.
+/// Prints a typed report's echo in place of this client's own line, where
+/// the program has one (read R49-23), and says whether it did; a refusal
+/// drops the echo.
+fn echoed(
+    notice: &eq_client_core::world::Notice,
+    messages: Option<&hud::messages::Messages>,
+    chat: &mut super::chat::ChatState,
+) -> bool {
+    match notice {
+        eq_client_core::world::Notice::ReportSent(_) => {
+            chat.report_echo.take().is_some_and(|echo| {
+                chat.history
+                    .push(super::chat::system_line(echo.said(messages)));
+                true
+            })
+        }
+        eq_client_core::world::Notice::ReportRefused { .. } => {
+            chat.report_echo = None;
+            false
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod testing {
     use super::OnlineState;
@@ -1601,6 +1680,42 @@ pub(crate) mod testing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reports_echo_stands_for_the_sent_line_and_a_refusal_drops_it() {
+        use eq_client_core::reports::ReportKind;
+        use eq_client_core::world::Notice;
+        let (sender, _receiver) = std::sync::mpsc::sync_channel(4);
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(1));
+        let outbox = crate::outbox::Outbox::new(Some(sender));
+        let stamp = outbox.stamp(online.world()).unwrap();
+        let asked = crate::reports::Asked::Petition("I am stuck".into());
+        let Ok(crate::reports::Answer::Send(_, echo)) =
+            crate::reports::answer(&asked, online.world(), stamp, true)
+        else {
+            panic!("a petition sends");
+        };
+        let mut chat = super::super::chat::ChatState::default();
+        chat.report_echo.clone_from(&echo);
+        let sent = Notice::ReportSent(ReportKind::Petition);
+        assert!(echoed(&sent, None, &mut chat));
+        assert_eq!(
+            chat.history
+                .lines(eq_client_core::chat::ChatTab::All)
+                .last()
+                .map(|(_, line)| line.message.text.clone()),
+            Some("Your petition was sent.".to_owned())
+        );
+        // Spent: the next notice says this client's own line.
+        assert!(!echoed(&sent, None, &mut chat));
+        chat.report_echo = echo;
+        let refused = Notice::ReportRefused {
+            reason: "Not now.".into(),
+        };
+        assert!(!echoed(&refused, None, &mut chat));
+        assert!(chat.report_echo.is_none());
+    }
     use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
     use eq_client_core::PlayerState;
 

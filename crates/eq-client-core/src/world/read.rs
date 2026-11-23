@@ -208,6 +208,17 @@ impl ClientWorld {
         self.name_suggestion.as_ref()
     }
 
+    /// How the generation's program takes `/petition` in this world: as
+    /// a window or as text (read R49-23).
+    #[must_use]
+    pub fn petition_form(&self) -> eq_network_game::reports::PetitionForm {
+        let rules = eq_network_game::rules::WorldRules {
+            petition_window: self.petition_window,
+            ..eq_network_game::rules::WorldRules::default()
+        };
+        eq_network_game::reports::petition_form(self.generation(), Some(&rules))
+    }
+
     /// Whether the world enables its generation UI (unknown means allowed).
     pub const fn name_generator(&self) -> bool {
         !matches!(self.name_generator, Some(false))
