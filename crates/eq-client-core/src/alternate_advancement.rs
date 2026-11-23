@@ -131,6 +131,28 @@ impl State {
         })
     }
 
+    /// How many Titanium definitions are kept.
+    #[must_use]
+    pub fn definition_count(&self) -> usize {
+        self.definitions.len()
+    }
+
+    /// The latest Titanium selections as sent: the profile's first-rank
+    /// ids, or `OP_RespondAA`'s exact ids. None while none have come.
+    #[must_use]
+    pub fn selections(&self) -> Option<&[Selection]> {
+        self.selections.as_deref()
+    }
+
+    /// The offered ranks the player owns, as far as the facts tell, that
+    /// carry an ability to use, for display; the session judges again
+    /// before anything is sent.
+    pub fn activatable(&self) -> impl Iterator<Item = &Rank> {
+        self.definitions
+            .values()
+            .filter(|rank| rank.spellid != -1 && self.owned(rank) == Some(true))
+    }
+
     /// The profile's points as sent.
     #[must_use]
     pub const fn points(&self) -> Option<&Points> {
