@@ -44,6 +44,29 @@ impl PickMesh {
 }
 
 /// Nearest drawn triangle on this door's current model and pose.
+/// The middle of the mesh a click on this door tests, in the world; None
+/// for a hidden door or one whose model isn't loaded.
+pub(super) fn middle(
+    door: &DoorEntity,
+    transform: &Transform,
+    visibility: Visibility,
+    models: &Models,
+) -> Option<Vec3> {
+    if visibility == Visibility::Hidden {
+        return None;
+    }
+    let (low, high) = models
+        .0
+        .get(&door.model)?
+        .pick
+        .iter()
+        .flat_map(|mesh| mesh.positions.iter().map(|at| Vec3::from_array(*at)))
+        .fold(None, |bounds: Option<(Vec3, Vec3)>, at| {
+            Some(bounds.map_or((at, at), |(low, high)| (low.min(at), high.max(at))))
+        })?;
+    Some(transform.transform_point((low + high) / 2.0))
+}
+
 pub(super) fn hit(
     ray: Ray3d,
     door: &DoorEntity,

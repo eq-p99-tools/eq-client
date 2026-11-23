@@ -63,6 +63,7 @@ Run a script from the workbench while logged in to act on your current character
 
   A run that stops mid-click lets the keys go.
 - `hover(target...)`: rest the synthetic pointer over a control.
+- `click("spawn", admission, id, revision)`, `click("object", admission, drop_id)` and `click("door", admission, id)`, with `right_click` and `click_with` for a spawn: click a thing in the world, by the ids a fresh `report()` gives. The click obeys what is on screen: it acts only where the scene's own pick names that thing right now, so a thing a person couldn't click from here refuses the step and nothing is sent. A door takes a person's two clicks. See [World](targets.md#world).
 - `hold_click(milliseconds, target...)`: hold the left button on a control.
 - `drag(window, x, y)`: move a named window to logical screen pixels.
 - `wheel("world", lines)`: turn the wheel over visible world space, from -64 to
@@ -107,6 +108,8 @@ on local-only Titanium EQEmu. It opens the ordinary drop confirmation.
 `click("answer", "no")` cancels. The cursor stays held until a fresh received
 inventory snapshot. Treat submission and any ground-object appearance as
 separate from inventory confirmation.
+
+The map's controls are targets too (see [Map controls](targets.md#map-controls)). Watches and landmarks are saved per character, and the map's presentation beside the window placements, so a script's clicks on them change saved settings, as a person's do. The script does not put them back.
 
 Key names are case-insensitive. Combine them with `+`, such as `alt+1`. Supported names include letters, digits, `f1` to `f12`, `space`, `escape`, `enter`, `backspace`, `delete`, `tab`, `slash`, `up`, `down`, `left`, `right`, `shift`, `ctrl`, `alt`, `numlock`, `insert`, `home`, `end`, `pageup`, `pagedown`, `numpad0` to `numpad9`, `numpad_add`, `numpad_subtract`, `numpad_multiply`, `numpad_divide`, `numpad_decimal` and `numpad_enter`.
 
