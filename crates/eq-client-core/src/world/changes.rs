@@ -100,8 +100,6 @@ pub enum Reply {
     },
     /// A zone line could not be crossed; the move that asked is over.
     ZoneLineRefused,
-    /// A local boundary stayed in this admission. Normal movement can resume.
-    SameZoneBoundary,
 }
 
 /// What an update changed that a front end must redo.

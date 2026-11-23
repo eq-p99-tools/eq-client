@@ -186,6 +186,10 @@ pub fn eqemu_equipment_by_level(
                     .bonuses
                     .and_then(|bonuses| bonuses.fire_resistance)
                     .map(|_| 0),
+                cold_resistance: item
+                    .bonuses
+                    .and_then(|bonuses| bonuses.cold_resistance)
+                    .map(|_| 0),
                 ..ItemBonuses::default()
             },
             worn: None,
@@ -198,6 +202,7 @@ pub fn eqemu_equipment_by_level(
             strength: scale(raw.strength),
             stamina: scale(raw.stamina),
             fire_resistance: raw.fire_resistance.map(scale),
+            cold_resistance: raw.cold_resistance.map(scale),
             agility: scale(raw.agility),
             dexterity: scale(raw.dexterity),
             charisma: scale(raw.charisma),
