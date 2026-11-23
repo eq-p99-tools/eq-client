@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- The track window draws light blue as the Titanium program does (read
+  R49-30 d, checklist 6.637): a green entry near the green edge is light
+  blue instead, when e = their level less the green threshold, less 1 for
+  each of your level under 55, under 41 and under 31, is above -6 and your
+  level is above 7. Those entries were drawn green. The green threshold's
+  rounding (down) and its strict edge are now read, no longer inferred.
 - Petitions and reports as the Titanium program takes them (read R49-23,
   checklist 6.511, C1a), on eq-network #414.
   - **`/petition`** sends its words and echoes them in the installed line

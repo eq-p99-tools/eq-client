@@ -26,15 +26,14 @@ pub struct TrackWindow {
 }
 
 /// An entry's colour in the track window by the program's own rule (read R14
-/// section 2), from the level difference d, theirs less yours: green below
-/// the green threshold (three quarters of your level up to 60, your level
-/// less 15 above it) when d is under -3, blue for any other d under 0, white
-/// at 0, yellow under 3, and red beyond. The program's light blue near the
-/// green edge for levels above 7 is not read closely enough to draw, so
-/// those entries are blue (recording checklist 6.444). The threshold's
-/// rounding (three quarters taken in whole levels, rounded down) and its
-/// edge (green only strictly below it) are inferred, under the same label.
-/// Consider's colours follow their own rule; the two are not one rule.
+/// section 2, R49-30 d), from the level difference d, theirs less yours:
+/// green below the green threshold T (three quarters of your level, rounded
+/// down, up to 60; your level less 15 above it) when d is under -3, blue for
+/// any other d under 0, white at 0, yellow under 3, and red beyond. A green
+/// entry near the edge is light blue instead: with e = theirs - T, less 1 for
+/// each of your level under 55, under 41 and under 31, light blue when e is
+/// above -6 and your level above 7 (0x566fe6). Consider's colours follow
+/// their own rule; the two are not one rule.
 #[must_use]
 pub fn track_color(yours: u8, theirs: u8) -> ConColor {
     let difference = i16::from(theirs) - i16::from(yours);
@@ -44,7 +43,19 @@ pub fn track_color(yours: u8, theirs: u8) -> ConColor {
         i16::from(yours) - 15
     };
     match difference {
-        _ if i16::from(theirs) < threshold && difference < -3 => ConColor::Green,
+        _ if i16::from(theirs) < threshold && difference < -3 => {
+            let edge = i16::from(theirs)
+                - threshold
+                - [55, 41, 31]
+                    .into_iter()
+                    .map(|level| i16::from(yours < level))
+                    .sum::<i16>();
+            if edge > -6 && yours > 7 {
+                ConColor::LightBlue
+            } else {
+                ConColor::Green
+            }
+        }
         ..0 => ConColor::Blue,
         0 => ConColor::White,
         1..3 => ConColor::Yellow,
@@ -174,18 +185,35 @@ mod tests {
 
     #[test]
     fn the_track_colours_follow_the_programs_level_rule() {
-        // Level 20: the green threshold is 15.
-        assert_eq!(track_color(20, 14), ConColor::Green);
+        // Level 20: the green threshold is 15, and the edge takes 3 off.
+        assert_eq!(track_color(20, 12), ConColor::Green);
+        assert_eq!(track_color(20, 13), ConColor::LightBlue);
+        assert_eq!(track_color(20, 14), ConColor::LightBlue);
         assert_eq!(track_color(20, 15), ConColor::Blue);
         assert_eq!(track_color(20, 19), ConColor::Blue);
         assert_eq!(track_color(20, 20), ConColor::White);
         assert_eq!(track_color(20, 22), ConColor::Yellow);
         assert_eq!(track_color(20, 23), ConColor::Red);
-        // Low levels: d must also be under -3.
+        // A level-30 Ranger: T = 22, light blue from 20.
+        assert_eq!(track_color(30, 19), ConColor::Green);
+        assert_eq!(track_color(30, 20), ConColor::LightBlue);
+        assert_eq!(track_color(30, 21), ConColor::LightBlue);
+        assert_eq!(track_color(30, 22), ConColor::Blue);
+        // Level 40 takes 2 off, level 50 takes 1.
+        assert_eq!(track_color(40, 26), ConColor::Green);
+        assert_eq!(track_color(40, 27), ConColor::LightBlue);
+        assert_eq!(track_color(50, 32), ConColor::Green);
+        assert_eq!(track_color(50, 33), ConColor::LightBlue);
+        // Low levels: d must also be under -3, and light blue needs a level
+        // above 7.
         assert_eq!(track_color(4, 1), ConColor::Blue);
-        assert_eq!(track_color(8, 4), ConColor::Green);
-        // Above 60 the threshold is the level less 15.
-        assert_eq!(track_color(65, 49), ConColor::Green);
+        assert_eq!(track_color(7, 3), ConColor::Green);
+        assert_eq!(track_color(8, 3), ConColor::Green);
+        assert_eq!(track_color(8, 4), ConColor::LightBlue);
+        // Above 60 the threshold is the level less 15, with nothing off.
+        assert_eq!(track_color(65, 44), ConColor::Green);
+        assert_eq!(track_color(65, 45), ConColor::LightBlue);
+        assert_eq!(track_color(65, 49), ConColor::LightBlue);
         assert_eq!(track_color(65, 50), ConColor::Blue);
     }
 }
