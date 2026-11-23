@@ -137,6 +137,10 @@ pub(super) struct ChatState {
     pub asked: Option<super::whereabouts::Asked>,
     /// A `/yell` or `/stopcast` waiting for its line and send.
     pub(crate) slash: Option<super::slash::Asked>,
+    /// A `/hidecorpses`'s words, waiting for its answer.
+    pub(crate) hide_corpses: Option<String>,
+    /// An `/autoinventory` waiting to put the cursor item away.
+    pub(crate) autoinventory: Option<crate::inventory::auto::Asked>,
     /// A `/doability`'s words, waiting for the Actions window's buttons.
     pub(crate) doability: Option<String>,
     /// A `/memspellset`'s words, waiting for the spell sets.
@@ -2038,6 +2042,14 @@ pub(super) fn client_request_in_scope(
     }
     if let Some(words) = command_words(input, "doability") {
         state.doability = Some(words.to_owned());
+        return Some(Ok(()));
+    }
+    if let Some(words) = command_words(input, "hidecorpses") {
+        state.hide_corpses = Some(words.to_owned());
+        return Some(Ok(()));
+    }
+    if command_words(input, "autoinventory").is_some() {
+        state.autoinventory = Some(crate::inventory::auto::Asked);
         return Some(Ok(()));
     }
     if let Some(words) = command_words(input, "memspellset") {

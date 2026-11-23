@@ -56,6 +56,7 @@ mod combat_text;
 mod commands;
 mod confirm;
 mod contacts;
+mod corpses;
 mod creation_preview;
 mod daylight;
 mod device_pixels;

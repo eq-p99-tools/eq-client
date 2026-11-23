@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Take `/autoinventory`, `/hidecorpses` and a plain `/assist` as the
+  Titanium handlers do (read R46). `/autoinventory` puts the cursor item in
+  the first place the program's order finds, worn slots first, then the
+  general slots and bags, in one move; with no room it prints the installed
+  line and the item stays. `/hidecorpses` hides the corpses present but
+  yours, or but yours and your group's, once; a third word hides corpses as
+  they come; any other word shows them all again. A hidden corpse isn't
+  drawn or picked by the mouse, and a name still finds it. A plain
+  `/assist` with no target prints the installed two lines and sends
+  nothing. The Mac-era client keeps its earlier answers. Inferred parts are
+  under checklist 6.490. Networking pinned to 126b2c7 (eq-network #324).
+
 - Make every client-generation decision exhaustive, so adding a third
   generation (RoF2 is planned) breaks each place that must decide what it
   does instead of taking another generation's branch. The 31 one-variant

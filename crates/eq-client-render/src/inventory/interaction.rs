@@ -553,6 +553,34 @@ impl InventoryState {
         self.revision = self.revision.wrapping_add(1);
     }
 
+    /// Puts the cursor item away as `/autoinventory` does (read R46
+    /// section 1): one move, to the first place the program's order finds.
+    /// Nothing on the cursor is nothing to do. `Ok(false)` is no place it
+    /// fits; an error is any other reason the move can't go.
+    pub(super) fn auto_inventory(
+        &mut self,
+        online: &mut OnlineState,
+        sender: &Outbox,
+    ) -> anyhow::Result<bool> {
+        let inventory = online.world().inventory();
+        if !inventory.items().contains_key(&InventorySlot::CURSOR) {
+            return Ok(true);
+        }
+        anyhow::ensure!(
+            inventory.received() && !inventory.stale(),
+            "Wait for a current inventory snapshot"
+        );
+        let actor = self.actor(online)?;
+        let Ok((destination, _)) = inventory.auto_inventory_destination(actor) else {
+            return Ok(false);
+        };
+        // The click takes as much of a stack as the one it lands on holds,
+        // the quantity the rule planned.
+        self.try_click(destination, None, online, sender)?;
+        self.revision = self.revision.wrapping_add(1);
+        Ok(true)
+    }
+
     /// Hands the item on the cursor to the open give window, by the
     /// installed generation's `rule`: under
     /// [`eq_client_assets::ui::GiveAtOpen::StackFirst`] onto a stack of the
@@ -1505,6 +1533,89 @@ mod tests {
         testing::news(online, [eq_client_core::WorldEvent::Despawn(9)]);
         state.refresh_bank_access(online);
         assert!(!state.bank_open);
+    }
+
+    use eq_client_core::{ItemDetails, inventory::InventoryItem};
+
+    /// The demo's items with `cursor` on the cursor, for a real session.
+    fn with_cursor(cursor: InventoryItem, keep: impl Fn(&InventoryItem) -> bool) -> Bench {
+        let mut bench = Bench::demo(7);
+        let mut items: Vec<_> = crate::preview::items()
+            .into_iter()
+            .filter(|item| item.slot != InventorySlot::CURSOR && keep(item))
+            .collect();
+        items.push(InventoryItem {
+            slot: InventorySlot::CURSOR,
+            ..cursor
+        });
+        bench.tell(InventoryUpdate::Snapshot(items));
+        bench.state.demo = false;
+        bench
+    }
+
+    fn preview(id: u32) -> InventoryItem {
+        crate::preview::items()
+            .into_iter()
+            .find(|item| item.details.id == id)
+            .unwrap()
+    }
+
+    fn auto_move(bench: &mut Bench) -> (anyhow::Result<bool>, Vec<(InventorySlot, InventorySlot)>) {
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let sender = Outbox::new(Some(tx));
+        let Bench { state, online } = bench;
+        let result = state.auto_inventory(online, &sender);
+        let moves = rx
+            .try_iter()
+            .filter_map(|command| match command {
+                ClientCommand::MoveInventory(request) => Some((request.from, request.to)),
+                _ => None,
+            })
+            .collect();
+        (result, moves)
+    }
+
+    #[test]
+    fn autoinventory_wears_what_fits_then_takes_the_first_general_slot() {
+        // The sword's own worn slot is empty: it goes there.
+        let mut bench = with_cursor(preview(1), |item| item.details.id != 1);
+        let (result, moves) = auto_move(&mut bench);
+        assert!(result.unwrap());
+        assert_eq!(moves, [(InventorySlot::CURSOR, InventorySlot(13))]);
+        // The lantern can't be worn: the first empty general slot, past the
+        // two bags.
+        let mut bench = with_cursor(preview(5), |_| true);
+        let (result, moves) = auto_move(&mut bench);
+        assert!(result.unwrap());
+        assert_eq!(moves, [(InventorySlot::CURSOR, InventorySlot(24))]);
+    }
+
+    #[test]
+    fn autoinventory_with_no_room_sends_nothing_and_an_empty_cursor_is_nothing_to_do() {
+        let mut bench = with_cursor(preview(5), |item| !item.slot.is_carried());
+        let mut fillers: Vec<_> = (22..=29)
+            .map(|slot| InventoryItem {
+                slot: InventorySlot(slot),
+                details: ItemDetails {
+                    id: 100 + u32::try_from(slot).unwrap(),
+                    ..preview(5).details
+                },
+                ..preview(5)
+            })
+            .collect();
+        fillers.push(InventoryItem {
+            slot: InventorySlot::CURSOR,
+            ..preview(5)
+        });
+        bench.tell(InventoryUpdate::Snapshot(fillers));
+        let (result, moves) = auto_move(&mut bench);
+        assert!(!result.unwrap());
+        assert_eq!(moves, []);
+        let mut empty = Bench::demo(7);
+        empty.state.demo = false;
+        let (result, moves) = auto_move(&mut empty);
+        assert!(result.unwrap());
+        assert_eq!(moves, []);
     }
 
     fn test_player() -> eq_client_core::PlayerState {
