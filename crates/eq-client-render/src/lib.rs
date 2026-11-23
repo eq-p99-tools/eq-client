@@ -133,6 +133,7 @@ mod spell_effects;
 mod spell_icons;
 mod spellbook;
 mod target;
+mod targeted;
 mod theme;
 mod tooltip;
 mod tracking;
@@ -389,6 +390,7 @@ fn seed_official_options(
             (Toggle::Sound, official.sound),
             (Toggle::EnvironmentSounds, official.env_sounds),
             (Toggle::CombatMusic, official.combat_music),
+            (Toggle::InspectOthers, official.inspect_others),
             // A music volume of 0 is silent; another value leaves music on,
             // its scale unread [I].
             (
