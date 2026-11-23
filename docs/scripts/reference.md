@@ -24,6 +24,16 @@ retry; a completed ordered release permits ordinary reacquisition. Walk-off, cam
 floor-link withdrawal is retried until the worker reports changed state; queue
 acceptance alone does not settle it.
 
+## Alternate advancement
+
+These three steps are this client's own words, not the official client's. The official `/alternateadv` subwords haven't been read yet (R49-40b), so no slash form is offered for them.
+
+- `train_aa(rank_id)`: asks to buy the AA rank with this definition id (on the Mac-era client, the Mac AA id from 1 to 226). It spends points, which nothing gives back.
+- `activate_aa(rank_id)`: asks to use an owned rank's ability. It takes no target.
+- `aa_split(percent)`: asks to send this share of experience, from 0 (off) to 100, to AAs.
+
+Each step posts one request for the current admission and moves on. It never waits for the server and never tries again. The client checks nothing about the rank, the points or the level: the session alone decides, and when it refuses, the reason is said in chat. Every server type still refuses these as not offered until the AA live rows pass (checklist 6.569). The steps need a character in the world.
+
 ## Your current session
 
 Run a script from the workbench while logged in to act on your current character. Commands use your existing target and UI state. Login and character-selection commands are unnecessary for this workflow.
