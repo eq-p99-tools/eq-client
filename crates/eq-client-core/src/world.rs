@@ -612,6 +612,14 @@ impl ClientWorld {
         self.zone.surname_asked = true;
     }
 
+    /// The titles and suffixes the player may choose from, as the latest
+    /// list of this admission named them; none until the player asks. No
+    /// window asks yet: the program's title window is unread (R49-14).
+    #[must_use]
+    pub fn titles(&self) -> Option<&[eq_network_game::names::TitleChoice]> {
+        self.zone.titles.as_deref()
+    }
+
     /// The player closed the book or note they were reading.
     pub fn close_reading(&mut self) {
         self.reading = None;
@@ -1009,6 +1017,13 @@ impl ClientWorld {
             | WorldEvent::ServerFiltersRefused { .. }
             | WorldEvent::DuelOffer(_)
             | WorldEvent::DuelRefused { .. }
+            // The chat server's channels (6.509) and petitions and bug
+            // reports (6.511), each taken by its own client PR.
+            | WorldEvent::Channel(_)
+            | WorldEvent::ChannelLink(_)
+            | WorldEvent::ChatChannelRefused { .. }
+            | WorldEvent::ReportSent { .. }
+            | WorldEvent::ReportRefused { .. }
             // The machine's weekly account left for the world; the session
             // host keeps the date it went (the installed client's own
             // `LastSysInfoDate` stamp). Nothing about the world changed.
@@ -1186,6 +1201,13 @@ impl ClientWorld {
             // The server's answer to the player's own `/surname`: heard only
             // where the session offers it and the player asked. A surname
             // taken shows through the zone's last name, not the answer.
+            WorldEvent::TitleList(titles) => {
+                if self.in_world() && self.can(crate::Capability::Titling) {
+                    self.zone.titles = Some(titles.clone());
+                } else {
+                    news.ignored = true;
+                }
+            }
             WorldEvent::SurnameAnswer { accepted, .. } => {
                 let asked = std::mem::take(&mut self.zone.surname_asked);
                 if !asked || !self.can(crate::Capability::Surnaming) {

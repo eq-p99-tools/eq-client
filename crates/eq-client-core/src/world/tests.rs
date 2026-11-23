@@ -6670,6 +6670,11 @@ fn the_players_posture_changes_are_counted_but_not_a_first_standing() {
 
 /// An admission whose session offers `/surname`.
 fn surnaming(session_id: u64) -> WorldEvent {
+    offering(session_id, crate::Capability::Surnaming)
+}
+
+/// An admission whose session offers one capability.
+fn offering(session_id: u64, capability: crate::Capability) -> WorldEvent {
     let WorldEvent::Entered {
         choices,
         zone,
@@ -6683,7 +6688,7 @@ fn surnaming(session_id: u64) -> WorldEvent {
         unreachable!("an admission")
     };
     WorldEvent::Entered {
-        capabilities: vec![crate::Capability::Surnaming],
+        capabilities: vec![capability],
         choices,
         session_id,
         zone,
@@ -6732,4 +6737,37 @@ fn a_surname_answer_is_heard_only_where_offered_and_asked() {
     game(&mut world, surnaming(2));
     connection(&mut world, true, false);
     assert!(game(&mut world, answer(false)).ignored);
+}
+
+#[test]
+fn the_latest_title_list_is_kept_where_offered_until_the_zone_changes() {
+    use eq_network_game::names::TitleChoice;
+    let list = |prefix: &str| {
+        WorldEvent::TitleList(vec![TitleChoice {
+            id: 7,
+            prefix: prefix.into(),
+            suffix: String::new(),
+        }])
+    };
+    // Where the session does not offer titles, a list changes nothing.
+    let mut world = admitted();
+    assert!(game(&mut world, list("Lord")).ignored);
+    assert!(world.titles().is_none());
+
+    let mut world = ClientWorld::default();
+    game(&mut world, offering(1, crate::Capability::Titling));
+    connection(&mut world, true, false);
+    assert!(world.titles().is_none());
+    let changes = game(&mut world, list("Lord"));
+    assert!(!changes.ignored && changes.notices.is_empty());
+    // The latest list replaces the one before.
+    game(&mut world, list("Lady"));
+    assert_eq!(
+        world.titles().map(|titles| titles[0].prefix.as_str()),
+        Some("Lady")
+    );
+    // A new zone forgets it.
+    game(&mut world, offering(2, crate::Capability::Titling));
+    connection(&mut world, true, false);
+    assert!(world.titles().is_none());
 }

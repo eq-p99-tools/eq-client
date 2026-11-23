@@ -18,6 +18,8 @@ use std::{collections::BTreeMap, time::Instant};
 pub(super) struct Zone {
     /// Whether the player's `/surname` waits for its answer.
     pub(super) surname_asked: bool,
+    /// The titles and suffixes the latest list in this admission offered.
+    pub(super) titles: Option<Vec<eq_network_game::names::TitleChoice>>,
     pub(super) spawns: BTreeMap<u16, Spawn>,
     pub(super) boat_control: crate::boats::ControlState,
     pub(super) boat_notice: Option<crate::boats::ControlBoat>,
