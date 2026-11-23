@@ -585,6 +585,7 @@ impl ChatState {
             motd_asked,
             fastdrop_asked,
             assist_words,
+            paced,
             shield_words,
             report_echo,
             // Cleared elsewhere: the link scope, the message of the day and
@@ -596,10 +597,8 @@ impl ChatState {
             languages: _,
             socials: _,
             departure: _,
-            // Kept: the chat pace's last hold, which runs out on its own
-            // time, and the server's message of the day, kept by the
+            // Kept: the server's message of the day, kept by the
             // connection it came on.
-            paced: _,
             server_motd: _,
             // Kept: lines a report command printed, which the next frame
             // shows.
@@ -622,6 +621,8 @@ impl ChatState {
             refusals: _,
         } = self;
         *script_requests = ScriptRequests::default();
+        // A held line was the ended session's.
+        *paced = None;
         *requested_target = None;
         *zone_who = None;
         *asked = None;
