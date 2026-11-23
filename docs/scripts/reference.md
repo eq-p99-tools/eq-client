@@ -55,6 +55,13 @@ Run a script from the workbench while logged in to act on your current character
 - `hold(keys, milliseconds)`: hold a key or chord, then release it.
 - `click(target...)`: left-click a named control.
 - `right_click(target...)`: right-click a named control.
+- `click_with(keys, target...)` and `right_click_with(keys, target...)`: click a named control with modifier keys held, as a person holds them. `keys` is `"shift"`, `"ctrl"`, `"alt"` or a chord of them such as `"ctrl+shift"`. The keys go down with the button and come up the frame after it, so each window reads them as it reads yours. For example:
+  - `right_click_with("alt", "slot", 22)` uses the item's click effect;
+  - `click_with("shift", "slot", 23)` moves the whole stack, and `click_with("ctrl", "slot", 23)` moves one;
+  - `click_with("shift", "coins", "purse", "platinum")` takes all of that coin;
+  - `right_click_with("ctrl", "slot", 22)` puts the item's link in the chat line.
+
+  A run that stops mid-click lets the keys go.
 - `hover(target...)`: rest the synthetic pointer over a control.
 - `hold_click(milliseconds, target...)`: hold the left button on a control.
 - `drag(window, x, y)`: move a named window to logical screen pixels.
