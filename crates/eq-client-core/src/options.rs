@@ -257,6 +257,15 @@ impl Level {
         }
     }
 
+    /// Whether setting it lays the interface out again at another size, so
+    /// a window and its slider move under a pointer that holds still: its
+    /// slider keeps what a drag chooses until the press ends rather than
+    /// feeding each frame's choice back into the layout it reads.
+    #[must_use]
+    pub const fn rescales_layout(self) -> bool {
+        matches!(self, Self::UiScale)
+    }
+
     /// The values its slider stops at, from its left.
     fn stops(self) -> Vec<u16> {
         match self {
@@ -831,6 +840,13 @@ mod tests {
         // Between stops, the nearest.
         assert_eq!(Level::UiScale.at(Level::UiScale.fraction(100) + 0.01), 100);
         assert_eq!(Level::UiScale.words(125), "125 %");
+        assert!(Level::UiScale.rescales_layout());
+        assert!(
+            Level::ALL
+                .into_iter()
+                .filter(|level| *level != Level::UiScale)
+                .all(|level| !level.rescales_layout())
+        );
         let mut options = Options::default();
         options.set_level(Level::UiScale, 175);
         let text = options.text();
