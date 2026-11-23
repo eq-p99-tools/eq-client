@@ -28,6 +28,9 @@ pub(super) struct Zone {
     pub(super) considered: BTreeMap<u16, ConColor>,
     /// The player's own posture, which the zone's spawns do not carry.
     pub(super) player_posture: Option<PostureState>,
+    /// The player holds a Feign Death standing (Move While Feigned, 6.454),
+    /// as the session last said; a new admission starts with none.
+    pub(super) feign_held: bool,
     pub(super) doors: DoorTable,
     pub(super) objects: Objects,
     /// The corpse and the merchant are the zone's.

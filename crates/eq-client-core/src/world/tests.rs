@@ -4270,6 +4270,7 @@ fn training_opens_raises_skills_with_a_line_and_closes() {
             trainer: 42,
             caps,
             language_caps: Vec::new(),
+            price_scale: None,
         })),
     );
     assert_eq!(world.training().map(|offer| offer.trainer), Some(42));
@@ -4332,6 +4333,7 @@ fn language_training_updates_its_bank_and_retains_unknown_points() {
             trainer: 42,
             caps: vec![0; 100],
             language_caps: vec![100; 26],
+            price_scale: None,
         })),
     );
     let revision = world.skills_revision();
@@ -6086,6 +6088,7 @@ fn list_revisions_track_their_own_inputs_and_survive_restart() {
         trainer: 42,
         caps: vec![200; 100],
         language_caps: Vec::new(),
+        price_scale: None,
     }));
     game(&mut world, offer.clone());
     let after_offer = revisions(&world);
