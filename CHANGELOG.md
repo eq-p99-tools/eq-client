@@ -13,8 +13,9 @@
   even mid-cast, and does nothing and says nothing while a request is
   pending, where it was refused with this client's words. Not built yet,
   labelled: the deity and level tests of the usability check (the item
-  fields aren't decoded here), a modified left click picking the gem up
-  (ours keeps its hold), and the popup menu on an empty gem.
+  fields aren't decoded here), an Alt left click picking the gem up (read
+  R49-34 n names the keys, but what 0x4ebe36 puts on the cursor isn't
+  read, so ours keeps its hold), and the popup menu on an empty gem.
 - A gem cast meets the Titanium program's own checks before it goes, in its
   order (reads R49-34 e and h-j, slice G, checklist 6.639; audit table in
   the PR). The gem click comes first (0x4ecb56): while a cast is under way
