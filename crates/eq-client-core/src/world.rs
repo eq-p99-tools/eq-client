@@ -1905,6 +1905,13 @@ impl ClientWorld {
             WorldEvent::CastSuperseded { session_id, spell_id } => {
                 news.ignored = !self.release_cast_hold(*session_id, *spell_id);
             }
+            WorldEvent::Singing { session_id, spell_id } => {
+                if self.accepts_reply(*session_id) {
+                    self.casting.singing = *spell_id;
+                } else {
+                    news.ignored = true;
+                }
+            }
             WorldEvent::SongStopUnconfirmed { session_id, spell_id } => {
                 self.song_stop_unconfirmed(*session_id, *spell_id, news);
             }
