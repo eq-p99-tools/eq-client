@@ -1036,9 +1036,7 @@ impl ClientWorld {
             // The server filters the session kept: the filters slice (6.494).
             | WorldEvent::ServerFiltersKept { .. }
             | WorldEvent::ServerFiltersRefused { .. }
-            // A last name's answer and the title list: the surname and
-            // titles slices (titles 6.516).
-            | WorldEvent::SurnameAnswer { .. }
+            // The title list: the titles slice (6.516).
             | WorldEvent::TitleList(_)
             // The bandolier sets and potion belt, unknown sets and the
             // session's refusals: their windows' slice (6.559, 6.573).
@@ -1232,6 +1230,20 @@ impl ClientWorld {
                 }
             }
             WorldEvent::LastName { name, last_name } => self.last_name(name, last_name),
+            // The name tag follows the zone's own last-name update, not this.
+            WorldEvent::SurnameAnswer {
+                accepted,
+                last_name,
+            } => match &self.player {
+                Some(player) if self.session_id.is_some() => {
+                    news.notices.push(Notice::SurnameAnswer {
+                        accepted: *accepted,
+                        name: player.name.clone(),
+                        last_name: last_name.clone(),
+                    });
+                }
+                _ => news.ignored = true,
+            },
             WorldEvent::Posture { spawn_id, posture } => {
                 let player = self.is_player(*spawn_id);
                 // A first standing, as the session reports a player at zone

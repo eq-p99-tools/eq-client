@@ -167,6 +167,8 @@ pub(super) struct ChatState {
     pub(crate) boat_interacted: Option<u16>,
     /// `/follow` typed or pressed, for [`super::motion::input`] to start.
     pub(crate) follow_asked: Option<super::motion::FollowAsked>,
+    /// The words of a `/surname` typed or run, for [`super::surname::command`].
+    pub(crate) surname_asked: Option<String>,
     /// A Ranger's tracking option typed by another class, for
     /// [`super::tracking::say_rangers_only`] to answer.
     pub(crate) rangers_only: Option<super::tracking::RangersOnly>,
@@ -186,6 +188,7 @@ struct ScriptRequests {
     sharing: Option<crate::script::ExpectedWorld>,
     follow: Option<crate::script::ExpectedWorld>,
     boat: Option<crate::script::ExpectedWorld>,
+    surname: Option<crate::script::ExpectedWorld>,
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -220,6 +223,11 @@ pub(crate) fn guard_script_requests(
     }
     if let Some(reason) = withdraw(&mut chat.script_requests.follow, &online)
         && chat.follow_asked.take().is_some()
+    {
+        refusal = Some(reason);
+    }
+    if let Some(reason) = withdraw(&mut chat.script_requests.surname, &online)
+        && chat.surname_asked.take().is_some()
     {
         refusal = Some(reason);
     }
@@ -423,6 +431,7 @@ impl ChatState {
             boat_asked,
             boat_interacted,
             follow_asked,
+            surname_asked,
             rangers_only,
             contacts,
             // Cleared elsewhere: the link scope, the message of the day and
@@ -457,6 +466,7 @@ impl ChatState {
         *boat_asked = None;
         *boat_interacted = None;
         *follow_asked = None;
+        *surname_asked = None;
         *rangers_only = None;
         contacts.asked = None;
     }
@@ -2068,6 +2078,11 @@ pub(super) fn client_request_in_scope(
     if let Some(guild) = super::guild::Command::typed(input) {
         state.script_requests.guild = scope;
         state.guild_asked = Some(guild);
+        return Some(Ok(()));
+    }
+    if let Some(words) = super::surname::typed(input) {
+        state.script_requests.surname = scope;
+        state.surname_asked = Some(words);
         return Some(Ok(()));
     }
     if super::motion::FollowAsked::typed(input) {

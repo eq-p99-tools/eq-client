@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- `/surname` runs as read R49-10 reads the Titanium program (checklist 6.507). This supersedes the earlier draft #565.
+  - **Checks, in order, each sending nothing:** under level 20 (line 0x328c); a bare `/surname` with no surname set (usage 0x328d); words 32 bytes or more (0x8bf). The read gives `strlen >= 0x20` on the argument, and that this is the whole argument rather than the first word is inferred.
+  - **A bare `/surname` with one set:** the program asks a question whose yes path isn't read (R49-10e), so this client says in its own words that it waits for that read (a gap).
+  - **The question:** the first word, with `'` and `"` quotes taken, cut to 19 bytes at a character boundary and its case kept. Question 0x235a names exactly that word for 10 seconds. Yes sends it and says 0x235b. No, the time running out or the session ending sends nothing.
+  - **The answer** is always shown, as the program shows it: refused 0x55e, taken 0x55f with the player's name and the surname. No gate on our own request, and nothing local changes. The name tag follows the zone's last-name update.
+  - The lines come in colour 15. Scripts run the same handler through `slash("surname Name")` and answer the question with its buttons (Scripts = Users, 11-23).
+  - The Mac-era client's `/surname` isn't read (R49-10d). Quarm's and TAKP's handlers say the client refuses under 20 and cuts to 19, so the same flow runs there (inferred), with the first use attended. Project 1999 stays unoffered.
+  - Known gaps: a quoted surname with a space is refused by the encoder before it is sent, and an answer word other than 0 or 1 is dropped by the decoder although the program shows it as taken.
+
 - Drowning and lava now hurt on every Titanium server, public EQEmu and
   P99 included, as the Titanium program reports them on any server
   (eq-network's liquid change; read R25). **Characters on public servers

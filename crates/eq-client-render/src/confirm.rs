@@ -51,6 +51,9 @@ pub(crate) enum Question {
     /// Whether to join a guild, or take a higher rank in it, as the player
     /// was invited ([`crate::guild::Invitations`] holds the words).
     GuildInvite,
+    /// Whether to send the surname named ([`crate::surname::Pending`] holds
+    /// the word).
+    Surname,
 }
 
 impl Question {
@@ -80,8 +83,8 @@ impl Question {
                     names.label(spell)
                 )
             }
-            // The invitation's own words; see [`show`].
-            Self::GuildInvite => String::new(),
+            // The invitation's and the surname's own words; see [`show`].
+            Self::GuildInvite | Self::Surname => String::new(),
         }
     }
 }
@@ -193,14 +196,20 @@ pub(crate) fn buttons(
     }
 }
 
+/// Those who hold the words of a question of the client's own.
+type Holders<'w> = (
+    Option<Res<'w, crate::guild::Invitations>>,
+    Option<Res<'w, crate::surname::Pending>>,
+);
+
 /// Shows the dialog's question.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn show(
     (online, mut asked, settings): (Res<OnlineState>, ResMut<Asked>, Res<crate::ViewerSettings>),
-    (messages, names, invitations): (
+    (messages, names, (invitations, surname)): (
         Option<Res<crate::hud::messages::Messages>>,
         Res<crate::spellbook::SpellNames>,
-        Option<Res<crate::guild::Invitations>>,
+        Holders,
     ),
     mut texts: Query<&mut Text, With<QuestionText>>,
     controls: Query<Entity, With<AnswerButton>>,
@@ -235,6 +244,9 @@ pub(crate) fn show(
         None => match asked.question {
             Some(Question::GuildInvite) => invitations
                 .map(|invitations| invitations.question())
+                .unwrap_or_default(),
+            Some(Question::Surname) => surname
+                .map(|surname| surname.question(messages.as_deref()))
                 .unwrap_or_default(),
             question => question
                 .map(|question| question.text(&names, &online))

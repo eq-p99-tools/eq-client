@@ -300,6 +300,9 @@ or occluded. The counters are independent of damage and inventory.
   remain with the ordinary handlers and session. Queueing a step proves no
   invitation acceptance, roster change or MOTD update; check received evidence.
   `slash("stopsong")` queues the Bard's stop request on Titanium EQEmu.
+  `slash("surname Name")` runs the typed `/surname`: its checks, then the same
+  timed question, which the script answers with the confirmation window's Yes
+  or No.
   `slash("quit")` and `slash("exit")` leave as typing them does, by the same route;
   `quit()` closes the client.
   `slash("emote")` and `slash("random")` reach everyone nearby, and run on any

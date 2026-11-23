@@ -118,6 +118,7 @@ mod speed;
 mod spell_effects;
 mod spell_icons;
 mod spellbook;
+mod surname;
 mod target;
 mod theme;
 mod tooltip;
