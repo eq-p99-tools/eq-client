@@ -1068,3 +1068,44 @@ fn a_chat_pace_refusal_after_a_scripts_chat_fails_the_run() {
     refused(&app, 1, reason);
     assert!(app.world().resource::<ChatState>().paced.is_none());
 }
+
+#[test]
+fn a_chat_pace_refusal_after_a_gm_or_typed_say_fails_it_but_not_after_an_emote() {
+    let reason = "You are sending chat too fast. Wait 2 seconds.";
+    for (source, chats) in [
+        ("gm(\"stun 8000\")\nwait(5000)", true),
+        // A slash step runs a typed line, so a typed chat word meets the pace.
+        ("slash(\"say hello\")\nwait(5000)", true),
+        ("slash(\"emote waves\")\nwait(5000)", false),
+    ] {
+        let (mut app, rx) = app();
+        let program = Program::parse(source, Path::new(".")).unwrap();
+        app.insert_resource(Script::from_program(program).local_session(true));
+        frame_at(&mut app, 0);
+        frame_at(&mut app, 10);
+        let sent = rx.try_recv();
+        assert_eq!(
+            sent.as_ref().is_ok_and(|command| matches!(
+                command,
+                ClientCommand::SendChat(_) | ClientCommand::SendChatInAdmission { .. }
+            )),
+            chats,
+            "{source}: {sent:?}"
+        );
+        frame_at(&mut app, 20);
+        app.world_mut().resource_mut::<ChatState>().paced =
+            Some((std::time::Instant::now(), reason.into()));
+        frame_at(&mut app, 30);
+        if chats {
+            refused(&app, 1, reason);
+        } else {
+            // An emote is no chat send: the pace never holds it, so the
+            // refusal is another line's.
+            assert_eq!(
+                app.world().resource::<Script>().status().phase(),
+                Phase::Running,
+                "{source}"
+            );
+        }
+    }
+}

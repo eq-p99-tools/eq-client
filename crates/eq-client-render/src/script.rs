@@ -2347,6 +2347,10 @@ pub(super) fn drive(
                 super::chat::submit_typed_line(command, &mut chat, &mut online, &outbox, &qol)
             {
                 script.stop(&mut keys, &mut mouse, &error);
+            } else if outbox.sent_chat() {
+                // A typed chat word (`say`, `ooc` and the rest) meets the
+                // session's pace, so a refusal after it fails this step.
+                script.chatted = Some((std::time::Instant::now(), script.progress.line()));
             }
             return;
         }
@@ -2500,6 +2504,9 @@ pub(super) fn drive(
                 Step::Chat(chat) => Ok(eq_client_core::ClientCommand::SendChat(chat.clone())),
                 _ => return,
             };
+            // Whatever goes as chat meets the session's pace, a `#` command
+            // among it, so a refusal after it fails this step (6.523).
+            let chats = command.as_ref().is_ok_and(super::outbox::is_chat);
             let sent = command.and_then(|command| {
                 observed
                     .1
@@ -2509,7 +2516,7 @@ pub(super) fn drive(
             });
             match sent {
                 Err(error) => script.stop(&mut keys, &mut mouse, &error),
-                Ok(()) if matches!(step, Step::Chat(_)) => {
+                Ok(()) if chats => {
                     script.chatted = Some((std::time::Instant::now(), script.progress.line()));
                 }
                 Ok(()) => (),
