@@ -16,6 +16,7 @@ pub mod maps;
 pub mod merchants;
 pub mod names;
 mod pe;
+pub mod program;
 pub mod regions;
 pub mod scale;
 pub mod sidl;
