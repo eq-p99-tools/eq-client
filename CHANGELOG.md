@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `/guildstatus` answers on the Mac-era client as its program does (checklist 6.623, TAKP program read 6.575m: 0x4f4bb1 and 0x52f36b). It is local only and sends nothing. It uses the same string ids as Titanium's, colour 0x111:
+  - Unlike Titanium, it answers for any spawn but a corpse, so an NPC is answered (usually as not in a guild).
+  - The line for a rank past the three (12259, 0x2fe3) also names the guild.
+  - A typed name or the target picks the spawn, as on Titanium.
+  - A player in no guild still gets this client's words, because the program's are its own; the name is shown as players see it.
+  - The program also refuses a game master (spawn +0x109, inferred to be the spawn record's GM byte). The session doesn't decode that byte for Mac spawns yet, so no Mac spawn is refused for it. That is a labelled follow-up.
+  - `/played` on the Mac client still waits for its read.
 - Buffs landing on the player take the slot the Titanium program's whole slot finder gives them (checklist 6.612, read R49-22e, repin to eq-network #417). That includes step 4's replace in place, worked out from each effect's base, formula and max as 0x40f339 does, and step 6's eviction. The facts come from the installed spell data: effects, the Bard level and the band, with each held buff's stored level from its record.
   - A buff the program removes for the landing is dropped as a prediction. If the server's word still holds it afterwards (a record for it, or the next zone-in's table), its word stands, and the disagreement is logged with the rule and both spells (6.612 T1).
   - A value the client can't work out still leaves the landing unslotted. That covers a random formula, one that reads hit points, or one that needs a level we don't know. The old guess for a possible step-4 replace is gone.

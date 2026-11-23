@@ -59,11 +59,14 @@ impl ZonePlayer {
 pub enum GuildStatus {
     /// No such spawn, one that isn't a player, or a game master.
     NoPlayer,
-    /// The player holds a rank past the three the program words: its line
-    /// names only the player.
+    /// The player holds a rank past the three the program words. The
+    /// Titanium program's line names only the player; the `EQMac`
+    /// program's (0x2fe3) names the guild too.
     Ranked {
         /// The player's name.
         name: String,
+        /// The guild's name.
+        guild: String,
     },
     /// The player is in no guild.
     NoGuild {
@@ -232,6 +235,12 @@ impl ClientWorld {
     /// of an anonymous player's guild is shown. The name lookup matches the
     /// player's name or shown name, ignoring case (inferred: 0x47c88e's
     /// rule wasn't read).
+    ///
+    /// On the Mac-era program (read 6.575m, 0x52f36b) a corpse is refused,
+    /// but an NPC is answered (any spawn the name or target finds). Its GM
+    /// test reads spawn +0x109, inferred to be the spawn record's GM byte;
+    /// the session doesn't decode that byte for Mac spawns yet, so no Mac
+    /// spawn is refused as a game master here (a labelled follow-up).
     #[must_use]
     pub fn guild_status(&self, named: Option<&str>) -> Option<GuildStatus> {
         let matches = |shown: &str, wanted: &str| {
@@ -253,6 +262,7 @@ impl ClientWorld {
                 }),
             None => self.target.selected.filter(|_| !self.target_stale()),
         };
+        let eqmac = self.generation() == crate::GameDialect::EqMac;
         let game_master = |id: &u16| {
             let flag = if self.is_player(*id) {
                 self.player
@@ -276,7 +286,15 @@ impl ClientWorld {
                     .spawns
                     .get(&id)
                     .map(|spawn| &spawn.state)
-                    .filter(|spawn| spawn.kind == SpawnKind::Player)
+                    .filter(|spawn| {
+                        // The `EQMac` program refuses only a corpse (read
+                        // 6.575m, 0x52f36b): an NPC is answered too.
+                        if eqmac {
+                            !matches!(spawn.kind, SpawnKind::PlayerCorpse | SpawnKind::NpcCorpse)
+                        } else {
+                            spawn.kind == SpawnKind::Player
+                        }
+                    })
                     .map(|spawn| (spawn.name.as_str(), spawn.listing))
             }
         });
@@ -292,7 +310,7 @@ impl ClientWorld {
             GuildRank::Leader => GuildStatus::Leader { name, guild },
             GuildRank::Officer => GuildStatus::Officer { name, guild },
             GuildRank::Member => GuildStatus::Member { name, guild },
-            GuildRank::Other(_) => GuildStatus::Ranked { name },
+            GuildRank::Other(_) => GuildStatus::Ranked { name, guild },
         })
     }
 
