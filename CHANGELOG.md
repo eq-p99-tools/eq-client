@@ -3,21 +3,23 @@
 ## Unreleased
 
 - On Titanium, navigation mesh routes keep the headroom test: a size's floor
-  needs twice its stand height to the ceiling, not only its capsule's
-  height, so a route no longer leads a walker under a ceiling its move is
+  needs more than twice its stand height and the test's 0.5 margin to the
+  ceiling, not only its capsule's height, so a route no longer leads a walker under a ceiling its move is
   refused at. A scripted walk that meets a headroom refusal anyway stops
   with a line instead of pushing each frame. Meshes rebuild once
   (checklist 6.504).
 
 - Refuse a move of the player's own body into less headroom than the
-  Titanium program allows (read R1d, 0x48bb83): the gap from the floor to
-  the ceiling at the move's end must be 2 × the stand height standing,
-  the stand height + 1 ducking and 3 × it mounted, or the move stays at
-  its start. A human no longer walks upright under a ceiling 6.85 to 7.5
-  over the floor, where the official client refuses. A swimmer, Fly, a
-  lift's carry and the Mac-era client move as before. Inferred parts are
-  under checklist 6.496; the PR stays draft until the test's engine gate
-  is read or looked at on the official client.
+  Titanium program allows (reads R1d and R49-9, 0x48bb83): the gap from the
+  floor to the ceiling at the move's end must pass 2 × the stand height
+  standing, the stand height + 1 ducking or 3 × it mounted, each by 0.5,
+  or the move stays at its start. A human no longer walks upright under a
+  ceiling 6.85 to 8.0 over the floor, where the official client refuses.
+  The test's engine gate always holds (engine read 1), and the test has no
+  water test, so a swimmer is held under a low ceiling too and stays a
+  swimmer. Fly, a lift's carry and the Mac-era client move as before.
+  Inferred parts are under checklist 6.496; the program's AllowAutoStand
+  stand-up is row 6.496c, not built here.
 
 - Swim as the Titanium client does (reads R33, R33b, R39, R41). Water now
   keeps the body's velocity from frame to frame and damps it, gravity still

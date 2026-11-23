@@ -153,13 +153,14 @@ pub(super) fn walker_sizes() -> [f32; 3] {
 /// What a zone's mesh is built with for `client`: the three walker sizes,
 /// each needing the room the generation's headroom test asks of it
 /// standing, with S the stand height a size is drawn at (Titanium
-/// 0x48bb83, read R1d; checklist 6.504). Ducking asks less than the capsule
-/// already does, and walkers don't mount, so neither is asked.
+/// 0x48bb83, reads R1d and R49-9, with its 0.5 margin; checklist 6.504).
+/// Ducking asks less than the capsule already does, and walkers don't
+/// mount, so neither is asked.
 pub(crate) fn settings(client: eq_client_assets::ui::InstalledClient) -> Settings {
     let sized = Settings::sized(walker_sizes());
     match client.headroom() {
         Some(rule) => sized.with_standing_room(|size| {
-            rule.needed(eq_client_core::drawn_feet_offset(size * 0.2), false, false)
+            rule.room(eq_client_core::drawn_feet_offset(size * 0.2), false, false)
         }),
         None => sized,
     }
@@ -267,7 +268,7 @@ pub(super) fn report(
 #[cfg(test)]
 mod tests {
     #[test]
-    fn a_titanium_mesh_asks_each_size_for_twice_its_stand_height() {
+    fn a_titanium_mesh_asks_each_size_for_twice_its_stand_height_and_the_margin() {
         use eq_client_assets::ui::InstalledClient;
         let titanium = settings(InstalledClient::Titanium);
         let eqmac = settings(InstalledClient::EqMac);
@@ -275,7 +276,7 @@ mod tests {
         assert_eq!(titanium.sizes, walker_sizes());
         assert_eq!(eqmac, Settings::sized(walker_sizes()));
         for (index, size) in walker_sizes().into_iter().enumerate() {
-            let room = 2.0 * eq_client_core::drawn_feet_offset(size * 0.2);
+            let room = 2.0 * eq_client_core::drawn_feet_offset(size * 0.2) + 0.5;
             assert!((titanium.clearance(index) - room.max(size + lift)).abs() < 1e-5);
             assert!((eqmac.clearance(index) - (size + lift)).abs() < 1e-5);
         }
