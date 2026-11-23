@@ -157,6 +157,10 @@ pub const fn kind_words(category: FilterCategory) -> &'static str {
         FilterCategory::FocusEffects => "Focus effects",
         FilterCategory::PetSpells => "Pet spells",
         FilterCategory::HealOverTime => "Heals over time",
+        FilterCategory::ItemSpeech => "Item speech",
+        FilterCategory::Strikethrough => "Strikethrough",
+        FilterCategory::Stuns => "Stuns",
+        FilterCategory::SwarmPetDeath => "Swarm pet deaths",
     }
 }
 
