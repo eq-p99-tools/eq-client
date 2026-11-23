@@ -806,6 +806,135 @@ fn guild_slash_steps_dispatch_typed_guild_commands_without_sending_chat() {
     }
 }
 
+/// Runs one `slash` step to its end, returning what it sent.
+fn slash_step(line: &str, prepare: impl FnOnce(&mut App)) -> (App, Vec<ClientCommand>) {
+    let (mut app, rx) = app();
+    prepare(&mut app);
+    start(&mut app, &format!("slash(\"{line}\")"));
+    // A run started for this admission, as the control inbox starts one.
+    let zone = app
+        .world()
+        .resource::<OnlineState>()
+        .world()
+        .zone()
+        .to_owned();
+    app.world_mut()
+        .resource_mut::<Script>()
+        .progress
+        .expected_world = Some(crate::script::ExpectedWorld {
+        admission_id: ADMISSION,
+        zone,
+    });
+    frame_at(&mut app, 0);
+    frame_at(&mut app, 10);
+    let sent = rx.try_iter().collect();
+    (app, sent)
+}
+
+#[test]
+fn a_slash_step_runs_its_line_as_typing_would() {
+    use eq_client_core::OutboundChat;
+    let said = |message| ClientCommand::SendChatInAdmission {
+        session_id: ADMISSION,
+        message,
+        tongue: eq_client_core::Tongue::COMMON,
+    };
+    // Chat words go as typed ones do, stamped with the script's admission.
+    let (app, sent) = slash_step("say Hail", |_| ());
+    assert_eq!(sent, [said(OutboundChat::Say("Hail".into()))]);
+    assert_eq!(
+        app.world().resource::<RunStatus>().phase(),
+        Phase::Completed
+    );
+    let (_, sent) = slash_step("tell Friend Hello there", |_| ());
+    assert_eq!(
+        sent,
+        [said(OutboundChat::Tell {
+            recipient: "Friend".into(),
+            message: "Hello there".into(),
+        })]
+    );
+    // /reply answers the latest teller, as typed.
+    let (_, sent) = slash_step("reply thanks", |app| {
+        app.world_mut()
+            .resource_mut::<ChatState>()
+            .contacts
+            .lists
+            .replies
+            .heard("Teller");
+    });
+    assert_eq!(
+        sent,
+        [said(OutboundChat::Tell {
+            recipient: "Teller".into(),
+            message: "thanks".into(),
+        })]
+    );
+    // The friends list is the typed command's to change.
+    let (app, sent) = slash_step("friend Example", |_| ());
+    assert_eq!(sent, []);
+    assert_eq!(
+        app.world().resource::<ChatState>().contacts.asked,
+        Some(crate::contacts::Asked::Friends(Some("Example".into())))
+    );
+    // An abbreviation resolves before any handler reads it: /raid used to
+    // reach the game commands raw and fail, but typed it toggles the window.
+    let (app, sent) = slash_step("raid", |_| ());
+    assert_eq!(sent, []);
+    assert_eq!(
+        app.world().resource::<RunStatus>().phase(),
+        Phase::Completed
+    );
+    assert_eq!(
+        app.world().resource::<ChatState>().toggled,
+        Some(crate::windows::WindowId::Raid)
+    );
+    // A word that resolves to nothing is passed over without a line, as
+    // typing passes it over.
+    let (app, sent) = slash_step("zzzz", |_| ());
+    assert_eq!(sent, []);
+    assert_eq!(
+        app.world().resource::<RunStatus>().phase(),
+        Phase::Completed
+    );
+    // A social still goes to the named step, however it is spelled.
+    for line in ["social play Test", "SOCIAL play Test"] {
+        let (app, sent) = slash_step(line, |_| ());
+        assert_eq!(sent, []);
+        refused(&app, 1, "Use a named social step in a script.");
+    }
+}
+
+#[test]
+fn a_slash_departure_takes_the_typed_route_and_never_leaves_sooner() {
+    for (line, departure) in [
+        ("quit", crate::login::Departure::Login),
+        ("exit", crate::login::Departure::Desktop),
+        ("q", crate::login::Departure::Login),
+    ] {
+        let (app, sent) = slash_step(line, |_| ());
+        // Nothing goes to the server from the step itself: the same
+        // departure a typed line asks for is left for the frame's
+        // `login::depart`, and the socials stop as they do when typed.
+        assert_eq!(sent, [], "{line}");
+        let chat = app.world().resource::<ChatState>();
+        assert_eq!(chat.departure, Some(departure), "{line}");
+        let mut typed = ChatState::default();
+        let mut online = OnlineState::new(true);
+        session::admit(&mut online, ADMISSION, session::player(7));
+        crate::chat::submit_typed_line(
+            &format!("/{line}"),
+            &mut typed,
+            &mut online,
+            &Outbox::new(None),
+            &eq_client_core::qol::Settings::default(),
+        )
+        .unwrap();
+        assert_eq!(typed.departure, chat.departure, "{line}");
+        assert_eq!(typed.socials.stop, chat.socials.stop, "{line}");
+    }
+}
+
 #[test]
 fn a_language_script_target_matches_only_the_offered_language_bank() {
     use eq_client_core::training::TrainingSubject;
