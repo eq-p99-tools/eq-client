@@ -7,11 +7,13 @@
 //! Every door model named in a list of `zone<TAB>model` lines (for example the
 //! server's doors table) that has faces flagged passable, in every installed
 //! zone the list names, with its mesh's 0x36 flags and +0x14 reference, and
-//! whether the engine's rule makes it solid throughout (read F4b):
+//! whether the loader makes it solid throughout (read F4b's named case):
 //! `cargo run -p eq-client-assets --example inspect_door_models -- <EQ dir> --doors <list>`
 //!
 //! Every object mesh in every installed `<zone>_obj.s3d` whose passable faces
-//! the rule makes solid, placed objects and doors alike:
+//! either case of read F4b would make solid, placed objects and doors alike,
+//! with whether the loader applies it (`named`; F4b's unreferenced case is
+//! held, see `object_solid_faces`):
 //! `cargo run -p eq-client-assets --example inspect_door_models -- <EQ dir> --changed`
 //!
 //! Where a zone places the objects built on those meshes, in server axes,
@@ -81,8 +83,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// One mesh's facts the solid-throughout rule reads.
 struct MeshFacts {
-    /// Whether the loader keeps every face as solid.
+    /// Whether the loader keeps every face as solid (a named mesh).
     solid_throughout: bool,
+    /// Read F4b's other case: no 0x10000 flag and no +0x14 reference. The
+    /// loader does not apply it.
+    unreferenced: bool,
     flags: u32,
     referenced: bool,
     faces: usize,
@@ -102,7 +107,8 @@ fn mesh_facts(directory: &Path, zone: &str) -> Option<BTreeMap<String, MeshFacts
         };
         let referenced = !matches!(raw.fragment4, FragmentRef::Name(StringReference(0), _));
         facts.entry(name.to_owned()).or_insert_with(|| MeshFacts {
-            solid_throughout: raw.flags & 0x1_0000 == 0 && !referenced || named(name),
+            solid_throughout: named(name),
+            unreferenced: raw.flags & 0x1_0000 == 0 && !referenced,
             flags: raw.flags,
             referenced,
             faces: raw.faces.len(),
@@ -210,25 +216,26 @@ fn changed(directory: &Path) -> Result<(), Box<dyn std::error::Error>> {
         })
         .collect();
     zones.sort();
-    let (mut read, mut count) = (0, 0);
-    println!("zone\tmesh\tflags\treferenced\tfaces\tpassable");
+    let (mut read, mut count, mut applied) = (0, 0, 0);
+    println!("zone\tmesh\tflags\treferenced\tfaces\tpassable\tapplied");
     for zone in &zones {
         let Some(facts) = mesh_facts(directory, zone) else {
             continue;
         };
         read += 1;
         for (mesh, fact) in &facts {
-            if fact.passable > 0 && fact.solid_throughout {
+            if fact.passable > 0 && (fact.solid_throughout || fact.unreferenced) {
                 count += 1;
+                applied += usize::from(fact.solid_throughout);
                 println!(
-                    "{zone}\t{mesh}\t{:#x}\t{}\t{}\t{}",
-                    fact.flags, fact.referenced, fact.faces, fact.passable
+                    "{zone}\t{mesh}\t{:#x}\t{}\t{}\t{}\t{}",
+                    fact.flags, fact.referenced, fact.faces, fact.passable, fact.solid_throughout
                 );
             }
         }
     }
     println!(
-        "# object archives {}, read {read}; meshes made solid throughout {count}",
+        "# object archives {}, read {read}; meshes either case covers {count}, applied (named) {applied}",
         zones.len()
     );
     Ok(())

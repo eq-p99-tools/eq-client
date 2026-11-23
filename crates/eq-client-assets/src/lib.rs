@@ -650,7 +650,6 @@ fn load_object_models(
     let mut models = Vec::new();
     let mut model_indices = HashMap::new();
     let mut report = ObjectReport::default();
-    let fragments = mesh_fragments(&doc);
     for model in world.models() {
         let (Some(name), Some(mesh)) = (model.name(), model.mesh()) else {
             continue;
@@ -672,7 +671,7 @@ fn load_object_models(
             name: name.to_owned(),
             primitives: realized.primitives,
             materials: realized.materials,
-            collision: object_collision(&mesh, &fragments),
+            collision: object_collision(&mesh),
         });
     }
     // Objects built on a skeleton (trees, torches), stood in their rest
@@ -852,9 +851,7 @@ fn pose_hierarchy(
     };
     // Each posed mesh's drawn primitives, its vertices and its solid faces.
     let mut posed: Vec<PosedMesh> = Vec::new();
-    let mut pose = |mesh: &libeq::wld::Mesh<'_>,
-                    raw: &libeq::wld::parser::DmSpriteDef2,
-                    joint_of: &dyn Fn(usize) -> Mat4| {
+    let mut pose = |mesh: &libeq::wld::Mesh<'_>, joint_of: &dyn Fn(usize) -> Mat4| {
         let mut staged = stage_mesh(mesh);
         for primitive in &mut staged {
             for (index, (position, normal)) in primitive
@@ -886,16 +883,16 @@ fn pose_hierarchy(
         posed.push(PosedMesh {
             staged,
             solids,
-            indices: object_solid_faces(mesh, Some(raw)),
+            indices: object_solid_faces(mesh),
         });
     };
     for (index, dag) in definition.dags.iter().enumerate() {
         if dag.mesh_or_sprite_reference == 0 {
             continue;
         }
-        if let Some((mesh, raw)) = mesh_of(dag.mesh_or_sprite_reference) {
+        if let Some((mesh, _)) = mesh_of(dag.mesh_or_sprite_reference) {
             let joint = joints[index];
-            pose(mesh, raw, &|_| joint);
+            pose(mesh, &|_| joint);
         }
     }
     let mut skipped = 0;
@@ -917,7 +914,7 @@ fn pose_hierarchy(
             skipped += 1;
             continue;
         }
-        pose(mesh, raw, &|vertex| joints[owners[vertex]]);
+        pose(mesh, &|vertex| joints[owners[vertex]]);
     }
     let mut collision = Vec::new();
     let mut by_material: Vec<StagedPrimitive> = Vec::new();
@@ -1087,55 +1084,33 @@ fn mesh_collision(mesh: &libeq::wld::Mesh<'_>) -> Vec<[[f32; 3]; 3]> {
     solid_triangles(&positions, &mesh.collision_indices())
 }
 
-/// Each mesh fragment of an object archive by name, the first where two
-/// share one, for the engine's solid-throughout rule.
-fn mesh_fragments(
-    doc: &libeq::wld::parser::WldDoc,
-) -> HashMap<&str, &libeq::wld::parser::DmSpriteDef2> {
-    let mut fragments = HashMap::new();
-    for raw in doc.fragment_iter::<libeq::wld::parser::DmSpriteDef2>() {
-        if let Some(name) = doc.get_string(raw.name_reference) {
-            fragments.entry(name).or_insert(raw);
-        }
-    }
-    fragments
-}
-
 /// A placed object's or door's solid triangles, by [`object_solid_faces`].
-fn object_collision(
-    mesh: &libeq::wld::Mesh<'_>,
-    fragments: &HashMap<&str, &libeq::wld::parser::DmSpriteDef2>,
-) -> Vec<[[f32; 3]; 3]> {
-    let raw = mesh.name().and_then(|name| fragments.get(name).copied());
+fn object_collision(mesh: &libeq::wld::Mesh<'_>) -> Vec<[[f32; 3]; 3]> {
     let center = mesh.center();
     let positions: Vec<[f32; 3]> = mesh
         .positions()
         .into_iter()
         .map(|p| [p[0] + center.0, p[1] + center.1, p[2] + center.2])
         .collect();
-    solid_triangles(&positions, &object_solid_faces(mesh, raw))
+    solid_triangles(&positions, &object_solid_faces(mesh))
 }
 
 /// The vertices of the faces a placed actor (a door or an object) collides
 /// with: the one place the engine's rule lives. The engine skips a face
 /// flagged passable (WLD 0x10) unless it has made the whole mesh solid
-/// (EQGraphicsDX9.dll 0x10193510, read F4b): a mesh whose 0x36 flags lack
-/// 0x10000 and whose reference at +0x14 is empty, or one
-/// [`SOLID_THROUGHOUT`] names. Every face of such a mesh is solid. Zone
-/// terrain keeps [`mesh_collision`]'s skip (its own test is unread), and
-/// boats and EQG models are unchanged.
-fn object_solid_faces(
-    mesh: &libeq::wld::Mesh<'_>,
-    raw: Option<&libeq::wld::parser::DmSpriteDef2>,
-) -> Vec<u32> {
-    let unreferenced = raw.is_some_and(|raw| {
-        raw.flags & 0x1_0000 == 0
-            && matches!(
-                raw.fragment4,
-                libeq::wld::parser::FragmentRef::Name(libeq::wld::parser::StringReference(0), _)
-            )
-    });
-    if unreferenced || mesh.name().is_some_and(solid_by_name) {
+/// (EQGraphicsDX9.dll 0x10193510, read F4b). Every face of a mesh
+/// [`SOLID_THROUGHOUT`] names is solid.
+///
+/// Read F4b gives 0x10193510 a second case: a mesh whose 0x36 flags lack
+/// 0x10000 and whose reference at +0x14 is empty. Read that way it covers
+/// the trees, plants and grass of the object archives (their leaves and
+/// blades are flagged passable), and in the original client a player walks
+/// through those leaves and grass. So that case is not applied until a read
+/// settles why it does not reach them (inferred, read F4d). Zone terrain
+/// keeps [`mesh_collision`]'s skip (its own test is unread), and boats and
+/// EQG models are unchanged.
+fn object_solid_faces(mesh: &libeq::wld::Mesh<'_>) -> Vec<u32> {
+    if mesh.name().is_some_and(solid_by_name) {
         mesh.indices()
     } else {
         mesh.collision_indices()
@@ -1721,12 +1696,14 @@ mod tests {
             [1.0, 0.0, 0.0],
             [0.0, 0.0, 1.0],
         ])];
+        let none = Vec::<[[f32; 3]; 3]>::new();
         // Skipped as passable (0x10192400 and its kin), drawn as ever.
-        assert_eq!(solid("PASS_ACTORDEF"), Vec::<[[f32; 3]; 3]>::new());
-        // Made solid throughout by 0x10193510: by name, and with neither
-        // 0x10000 nor a +0x14 reference.
+        assert_eq!(solid("PASS_ACTORDEF"), none);
+        // Neither 0x10000 nor a +0x14 reference, like a tree's leaves: still
+        // walked through, as in the original (F4b's second case unapplied).
+        assert_eq!(solid("BARE_ACTORDEF"), none);
+        // Made solid throughout by 0x10193510 by its name.
         assert_eq!(solid("HHCELL_ACTORDEF"), face);
-        assert_eq!(solid("BARE_ACTORDEF"), face);
     }
 
     #[test]
