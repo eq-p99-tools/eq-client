@@ -71,6 +71,8 @@ pub(super) struct SceneLights {
     worked: Vec<Worked>,
     /// How the meshes were last coloured; None before the first time.
     applied: Option<Colouring>,
+    /// The carried lights the meshes were last coloured with.
+    carried: Vec<PassLight>,
 }
 
 impl SceneLights {
@@ -82,6 +84,7 @@ impl SceneLights {
             meshes: Vec::new(),
             worked: Vec::new(),
             applied: None,
+            carried: Vec::new(),
         }
     }
 }
@@ -524,6 +527,10 @@ pub(super) fn update(
     }
     let colouring = inputs.map_or(Colouring::White, Colouring::Lit);
     let refresh = scene.applied != Some(colouring);
+    // Nothing a draw takes can have changed: the placed lights stay put.
+    if !refresh && carried == scene.carried {
+        return;
+    }
     for (lit, worked) in scene.meshes.iter().zip(&mut scene.worked) {
         if refresh {
             worked.base = match inputs {
@@ -548,6 +555,7 @@ pub(super) fn update(
         }
     }
     scene.applied = Some(colouring);
+    scene.carried = carried;
 }
 
 #[cfg(test)]
