@@ -9,7 +9,7 @@
 //!
 //! What is read here comes from the files' layout alone, with no read of the
 //! program that draws them, so each choice the format leaves open is inferred
-//! (6.498): the coordinate frame ([`render`], [`placement_rotation`]), which
+//! (6.498): the coordinate frame (`render`, `placement_rotation`), which
 //! file a model name names, what a triangle's material and flags mean, and
 //! which material property names the diffuse texture. Regions and lights are
 //! not read: the zone has none.
