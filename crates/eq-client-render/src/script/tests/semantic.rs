@@ -187,6 +187,7 @@ fn scripted_interaction_refuses_training_pending_container_and_combine() {
                         trainer: 75,
                         caps: vec![0; 100],
                         language_caps: Vec::new(),
+                        price_scale: None,
                     },
                 ))],
             );

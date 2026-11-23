@@ -1257,6 +1257,7 @@ impl ClientWorld {
                 }
                 self.zone.posture(*spawn_id, *posture, player);
             }
+            WorldEvent::FeignHeld(held) => self.zone.feign_held = *held,
             WorldEvent::HealthPercent { spawn_id, percent } => {
                 self.health_percent(*spawn_id, *percent);
             }

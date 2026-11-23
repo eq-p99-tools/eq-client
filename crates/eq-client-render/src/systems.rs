@@ -54,6 +54,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<guild::Invitations>()
         .init_resource::<crate::socials::State>()
         .init_resource::<hud::hotbar::carry::Presses>()
+        .init_resource::<target::ScenePointer>()
         .init_resource::<clicks::LeftButton>()
         .init_resource::<hud::hotbar::carry::Carry>()
         .init_resource::<spellbook::BookView>()
@@ -203,7 +204,7 @@ pub(super) fn schedule(app: &mut App) {
             (coins::input, coins::change),
             inventory::colors::input,
             interact::input,
-            target::input,
+            (target::input, target::aim).chain(),
             (
                 who::zone_list,
                 whereabouts::answers,

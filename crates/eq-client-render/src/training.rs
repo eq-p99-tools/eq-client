@@ -363,6 +363,7 @@ mod tests {
                     trainer: 42,
                     caps: vec![200; 100],
                     language_caps: vec![100; 26],
+                    price_scale: None,
                 },
             ))],
         );
@@ -434,6 +435,7 @@ mod tests {
                     trainer: 42,
                     caps,
                     language_caps,
+                    price_scale: None,
                 },
             ))],
         );
@@ -518,6 +520,7 @@ mod tests {
                     trainer: 42,
                     caps: vec![0; 100],
                     language_caps: Vec::new(),
+                    price_scale: None,
                 },
             ))],
         );
@@ -545,6 +548,7 @@ mod tests {
                     trainer: 42,
                     caps: vec![0; 100],
                     language_caps: Vec::new(),
+                    price_scale: None,
                 },
             ))],
         );
@@ -580,6 +584,7 @@ mod tests {
                     trainer: 42,
                     caps,
                     language_caps: Vec::new(),
+                    price_scale: None,
                 },
             ))],
         );
@@ -662,6 +667,7 @@ mod tests {
                     trainer: 42,
                     caps,
                     language_caps: Vec::new(),
+                    price_scale: None,
                 },
             ))],
         );
