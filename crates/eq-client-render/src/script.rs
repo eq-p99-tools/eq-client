@@ -922,7 +922,7 @@ type Buttons<'w, 's> = Query<
                 ),
                 Option<&'static super::reading::PageButton>,
                 Option<&'static super::tradeskills::CombineButton>,
-                Option<&'static super::map::MapButton>,
+                (Option<&'static super::map::MapButton>, super::map::MapParts),
                 (
                     Option<&'static super::raid::RaidRow>,
                     Option<&'static super::raid::RaidAction>,
@@ -3220,6 +3220,24 @@ fn reach(
     needs: &Query<&crate::outbox::Needs>,
     world: &eq_client_core::world::ClientWorld,
 ) -> Result<Entity, String> {
+    if let ClickTarget::MapControl(crate::map::MapControl::Marker {
+        admission,
+        id,
+        revision,
+    }) = target
+    {
+        // A marker names the spawn the report named, or none: a reused id
+        // is refused, as for a click in the scene (checklist 6.589).
+        if !world.in_world() || world.session_id() != Some(admission) {
+            return Err("that marker was reported in another admission".to_owned());
+        }
+        if world
+            .spawn(id)
+            .is_none_or(|spawn| spawn.revision != revision)
+        {
+            return Err("that spawn is gone or has changed".to_owned());
+        }
+    }
     let entity = find(target, buttons, layout).ok_or("click target is not visible")?;
     // Accepting a duel is only ever the player's own click, however a step
     // names the Yes it reached; a script may still say No (checklist 6.492).
@@ -3316,7 +3334,11 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
             | ClickTarget::Done(_) => dialog_control(target, dialog, trade),
             ClickTarget::Page(forward) => page.is_some_and(|page| page.0 == forward),
             ClickTarget::Combine(slot) => combine.is_some_and(|combine| combine.0.0 == slot),
-            ClickTarget::Map(action) => map.is_some_and(|button| *button == action),
+            ClickTarget::Map(action) => map.0.is_some_and(|button| *button == action),
+            ClickTarget::MapControl(control) => {
+                let (_, (watch, search, marker, target, landmark, style)) = map;
+                control.names((watch, search, marker, target, landmark, style))
+            }
             ClickTarget::Raid(click) => raid_action.is_some_and(|action| *action == raid(click)),
             ClickTarget::RaidRow(grouped, index) => raid_row.is_some_and(|row| {
                 row.index == index && (row.list == super::raid::RaidList::Grouped) == grouped
@@ -6940,6 +6962,149 @@ mod tests {
 
     fn interaction(app: &App, entity: Entity) -> Interaction {
         *app.world().get::<Interaction>(entity).unwrap()
+    }
+
+    #[test]
+    fn a_map_control_click_presses_the_row_it_names() {
+        use crate::map::{Control, MapControl, MarkerAction};
+        use crate::online::testing as session;
+        let online = || {
+            let mut online = crate::online::OnlineState::new(true);
+            session::admit(&mut online, 7, session::player(7));
+            session::spawns(&mut online, vec![session::pet(42, 7)]);
+            online
+        };
+        let (admission, revision) = {
+            let online = online();
+            let world = online.world();
+            (
+                world.session_id().unwrap(),
+                world.spawn(42).unwrap().revision,
+            )
+        };
+        let rows = |app: &mut App| {
+            let other = app
+                .world_mut()
+                .spawn((
+                    Button,
+                    Control::Remove("a gnoll".into()),
+                    laid_out(Vec2::new(240.0, 300.0), 40.0, 1),
+                ))
+                .id();
+            let wanted = app
+                .world_mut()
+                .spawn((
+                    Button,
+                    Control::Remove("a rare guard".into()),
+                    laid_out(Vec2::new(240.0, 360.0), 40.0, 1),
+                ))
+                .id();
+            let marker = app
+                .world_mut()
+                .spawn((
+                    Button,
+                    MarkerAction::Select(42),
+                    laid_out(Vec2::new(500.0, 200.0), 12.0, 1),
+                ))
+                .id();
+            (other, wanted, marker)
+        };
+        for (control, pressed) in [
+            (MapControl::RemoveWatch("a rare guard"), 1),
+            (
+                MapControl::Marker {
+                    admission,
+                    id: 42,
+                    revision,
+                },
+                2,
+            ),
+        ] {
+            let mut app = pointing(vec![
+                Step::Click(ClickTarget::MapControl(control)),
+                Step::Wait(Duration::from_secs(1)),
+            ]);
+            app.insert_resource(online());
+            let (other, wanted, marker) = rows(&mut app);
+            let mut ms = 0;
+            while ![other, wanted, marker]
+                .iter()
+                .any(|entity| interaction(&app, *entity) == Interaction::Pressed)
+            {
+                assert!(ms < 1000, "{control:?}");
+                frame_at(&mut app, ms);
+                ms += 16;
+            }
+            let entities = [other, wanted, marker];
+            for (index, entity) in entities.iter().enumerate() {
+                assert_eq!(
+                    interaction(&app, *entity) == Interaction::Pressed,
+                    index == pressed,
+                    "{control:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_map_marker_reported_before_its_spawn_changed_is_refused() {
+        use crate::map::{MapControl, MarkerAction};
+        use crate::online::testing as session;
+        let online = || {
+            let mut online = crate::online::OnlineState::new(true);
+            session::admit(&mut online, 7, session::player(7));
+            session::spawns(&mut online, vec![session::pet(42, 7)]);
+            online
+        };
+        let (admission, revision) = {
+            let online = online();
+            let world = online.world();
+            (
+                world.session_id().unwrap(),
+                world.spawn(42).unwrap().revision,
+            )
+        };
+        for (marker, reason) in [
+            (
+                MapControl::Marker {
+                    admission,
+                    id: 42,
+                    revision: revision + 1,
+                },
+                "that spawn is gone or has changed",
+            ),
+            (
+                MapControl::Marker {
+                    admission: admission + 1,
+                    id: 42,
+                    revision,
+                },
+                "that marker was reported in another admission",
+            ),
+        ] {
+            let mut app = pointing(vec![Step::Click(ClickTarget::MapControl(marker))]);
+            app.insert_resource(online())
+                .init_resource::<RunStatus>()
+                .add_systems(Update, observe.after(drive));
+            let shown = app
+                .world_mut()
+                .spawn((
+                    Button,
+                    MarkerAction::Select(42),
+                    laid_out(Vec2::new(500.0, 200.0), 12.0, 1),
+                ))
+                .id();
+            for ms in [0, 16, 32, 48] {
+                frame_at(&mut app, ms);
+            }
+            let status = app.world().resource::<RunStatus>();
+            assert_eq!(status.phase(), Phase::Failed);
+            assert_eq!(
+                status.events().back().map(|event| event.message.as_str()),
+                Some(reason)
+            );
+            assert_eq!(interaction(&app, shown), Interaction::None);
+        }
     }
 
     #[test]

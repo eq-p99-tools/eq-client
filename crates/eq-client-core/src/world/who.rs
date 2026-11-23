@@ -51,14 +51,20 @@ impl ZonePlayer {
     }
 }
 
-/// What `/guildstatus` says of the target (checklist 6.575): `EQEmu`'s
-/// `Handle_OP_GuildStatus` lines, answered from what the client knows,
-/// since Titanium's patch maps no `OP_GuildStatus`. That the program
-/// answers locally, from its target, is inferred until read R49-6k.
+/// What `/guildstatus` says of the target or a named player (checklist
+/// 6.575). Read R49-6k: the program answers locally and sends nothing, from
+/// the spawn a typed name finds or else the target, in strings 12256 to
+/// 12260 by rank.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GuildStatus {
-    /// No target, or a target that isn't a player.
+    /// No such spawn, one that isn't a player, or a game master.
     NoPlayer,
+    /// The player holds a rank past the three the program words: its line
+    /// names only the player.
+    Ranked {
+        /// The player's name.
+        name: String,
+    },
     /// The player is in no guild.
     NoGuild {
         /// The player's name.
@@ -211,14 +217,52 @@ impl ClientWorld {
             })
     }
 
-    /// What `/guildstatus` says of the target, or None where the client
-    /// can't tell: an anonymous player (owed to R49-6k), a guild whose name
-    /// the world's list lacks (`EQEmu` says nothing then), or a rank not
-    /// known yet.
+    /// What `/guildstatus` says (read R49-6k): of the player a typed name
+    /// finds, or else of the target. None while the guild's name or the
+    /// rank hasn't come.
+    ///
+    /// The program also refuses a spawn whose byte at +0x256 is set. Read
+    /// R49-4 takes that byte as the GM flag (a spawn with it sends every
+    /// tongue at skill 100), so a spawn the server marks a game master is
+    /// refused here (inferred). Anonymity isn't tested: what the server sends
+    /// of an anonymous player's guild is shown. The name lookup matches the
+    /// player's name or shown name, ignoring case (inferred: 0x47c88e's
+    /// rule wasn't read).
     #[must_use]
-    pub fn guild_status(&self) -> Option<GuildStatus> {
-        let target = self.target.selected.filter(|_| !self.target_stale());
-        let listed = target.and_then(|id| {
+    pub fn guild_status(&self, named: Option<&str>) -> Option<GuildStatus> {
+        let matches = |shown: &str, wanted: &str| {
+            shown.eq_ignore_ascii_case(wanted)
+                || crate::entities::display_name(shown).eq_ignore_ascii_case(wanted)
+        };
+        let found = match named {
+            Some(wanted) => self
+                .player
+                .as_ref()
+                .filter(|player| matches(&player.name, wanted))
+                .map(|player| player.spawn_id)
+                .or_else(|| {
+                    self.zone
+                        .spawns
+                        .iter()
+                        .find(|(_, spawn)| matches(&spawn.state.name, wanted))
+                        .map(|(id, _)| *id)
+                }),
+            None => self.target.selected.filter(|_| !self.target_stale()),
+        };
+        let game_master = |id: &u16| {
+            let flag = if self.is_player(*id) {
+                self.player
+                    .as_ref()
+                    .and_then(|player| player.appearance.titanium_gm)
+            } else {
+                self.zone
+                    .spawns
+                    .get(id)
+                    .and_then(|spawn| spawn.state.appearance.titanium_gm)
+            };
+            flag.is_some_and(|flag| flag != 0)
+        };
+        let listed = found.filter(|id| !game_master(id)).and_then(|id| {
             if self.is_player(id) {
                 self.player
                     .as_ref()
@@ -235,10 +279,6 @@ impl ClientWorld {
         let Some((name, listing)) = listed else {
             return Some(GuildStatus::NoPlayer);
         };
-        match listing.anonymity {
-            Anonymity::Anonymous | Anonymity::AnonymousRoleplaying => return None,
-            Anonymity::Open | Anonymity::Roleplaying => {}
-        }
         let name = name.to_owned();
         let Some(number) = listing.guild else {
             return Some(GuildStatus::NoGuild { name });
@@ -248,7 +288,7 @@ impl ClientWorld {
             GuildRank::Leader => GuildStatus::Leader { name, guild },
             GuildRank::Officer => GuildStatus::Officer { name, guild },
             GuildRank::Member => GuildStatus::Member { name, guild },
-            GuildRank::Other(_) => return None,
+            GuildRank::Other(_) => GuildStatus::Ranked { name },
         })
     }
 
