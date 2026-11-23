@@ -538,6 +538,11 @@ fn a_buy_follows_the_programs_order_and_lines() {
         trade.quantity_limit(online.world(), Chosen::Ware(99)),
         Err(Refused::Silent)
     );
+    // A silent refusal can't read as a buy that went: nothing is sent and
+    // the merchant's action status, which a script's report shows as
+    // `merchant.action_status`, stays empty.
+    assert!(rx.try_recv().is_err());
+    assert_eq!(trade.merchant_status(), None);
     // Something on the cursor: the program's line, before the coins.
     let mut held = crate::preview::items().remove(4);
     held.slot = InventorySlot::CURSOR;
@@ -564,8 +569,13 @@ fn a_buy_follows_the_programs_order_and_lines() {
     let selection = choose(&mut trade, online.world(), Chosen::Ware(3));
     submit(&mut trade, &online, &outbox, selection, 1).unwrap();
     assert!(matches!(rx.try_recv(), Ok(ClientCommand::Buy { .. })));
+    // A buy that went shows as waiting; the silent refusal of a second
+    // press neither sends nor changes that.
+    assert_eq!(trade.merchant_status(), Some("Waiting for merchant"));
     assert_eq!(
         trade.quantity_limit(online.world(), Chosen::Ware(3)),
         Err(Refused::Silent)
     );
+    assert!(rx.try_recv().is_err());
+    assert_eq!(trade.merchant_status(), Some("Waiting for merchant"));
 }
