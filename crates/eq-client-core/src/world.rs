@@ -972,12 +972,16 @@ impl ClientWorld {
             // to a player, or the petitions in the queue, for a front end that
             // shows them. The server's regeneration tick waits for its own.
             // Installed spell providers consume table facts before admission staging.
-            // Apply Poison's answer (eq-client #556) and the server filters'
-            // outcome (eq-client #560) take their arms in those PRs.
+            // Apply Poison's answer (eq-client #556), the server filters'
+            // outcome (eq-client #560), the surname's answer and the staff
+            // reports' outcome take their arms in those threads' PRs.
             WorldEvent::PoisonAnswered(_)
             | WorldEvent::ApplyPoisonRefused { .. }
             | WorldEvent::ServerFiltersKept { .. }
             | WorldEvent::ServerFiltersRefused { .. }
+            | WorldEvent::SurnameAnswer { .. }
+            | WorldEvent::ReportSent { .. }
+            | WorldEvent::ReportRefused { .. }
             | WorldEvent::SpellTable(_)
             | WorldEvent::ChatServer(_)
             | WorldEvent::ZoneUnavailable { .. }

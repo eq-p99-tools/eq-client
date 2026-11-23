@@ -81,13 +81,13 @@ fn a_yell_says_its_line_and_sends_with_no_target_or_posture_test() {
     let online = admitted(vec![Capability::Yelling]);
     let (line, send) = answer(Asked::Yell, online.world(), None, &Messages::default()).unwrap();
     assert_eq!(line.unwrap().words.text, "You yell for help.");
-    assert_eq!(send, Some(Asked::Yell));
+    assert_eq!(send, Some(Sent::Yell));
 }
 
 #[test]
 fn a_server_without_the_send_keeps_todays_answer() {
     let online = admitted(Vec::new());
-    for asked in [Asked::Yell, Asked::StopCast] {
+    for asked in [Asked::Yell, Asked::StopCast, Asked::Duel { named: false }] {
         let refusal =
             answer(asked, online.world(), Some(&Spells), &Messages::default()).unwrap_err();
         assert_eq!(
@@ -108,7 +108,7 @@ fn a_cast_stop_sends_unless_a_mount_is_summoned() {
             &Messages::default(),
         )
     };
-    assert_eq!(stop(), Ok((None, Some(Asked::StopCast))));
+    assert_eq!(stop(), Ok((None, Some(Sent::StopCast))));
     holding(&mut online, 501);
     assert_eq!(
         answer(
@@ -117,7 +117,7 @@ fn a_cast_stop_sends_unless_a_mount_is_summoned() {
             Some(&Spells),
             &Messages::default()
         ),
-        Ok((None, Some(Asked::StopCast)))
+        Ok((None, Some(Sent::StopCast)))
     );
     // A summoned mount: the program's line, nothing sent (6.487).
     holding(&mut online, 500);
@@ -255,4 +255,100 @@ fn a_server_without_assisting_keeps_the_answers_from_before_r46() {
         .resource_mut::<OnlineState>()
         .select_target(Some(9));
     assert_eq!(ask(&mut app), crate::outbox::UNAVAILABLE);
+}
+
+/// An admitted world where the player (7) targets `target`, with another
+/// player (12), an NPC (20) and a player's corpse (21) in the zone.
+fn targeting(target: Option<u16>) -> OnlineState {
+    use eq_client_core::SpawnKind;
+    let mut online = admitted(vec![Capability::Dueling]);
+    let spawns = [
+        (12, SpawnKind::Player),
+        (20, SpawnKind::Npc),
+        (21, SpawnKind::PlayerCorpse),
+    ]
+    .map(|(id, kind)| {
+        let mut spawn = testing::pet(id, 0);
+        spawn.pet_owner = None;
+        spawn.kind = kind;
+        spawn
+    });
+    testing::spawns(&mut online, spawns.to_vec());
+    testing::news(
+        &mut online,
+        [WorldEvent::TargetChanged {
+            session_id: 5,
+            request_id: 0,
+            state: eq_client_core::targets::TargetState {
+                revision: 1,
+                spawn_id: target,
+                available: true,
+            },
+        }],
+    );
+    online
+}
+
+#[test]
+fn the_duel_word_notes_any_words_after_it() {
+    assert_eq!(Asked::typed("/duel"), Some(Asked::Duel { named: false }));
+    assert_eq!(Asked::typed("/DUEL  "), Some(Asked::Duel { named: false }));
+    assert_eq!(
+        Asked::typed("/duel Somebody"),
+        Some(Asked::Duel { named: true })
+    );
+}
+
+#[test]
+fn a_duel_challenges_only_another_player_targeted_and_never_by_name() {
+    let duel = |online: &OnlineState, named| {
+        answer(
+            Asked::Duel { named },
+            online.world(),
+            None,
+            &Messages::default(),
+        )
+    };
+    // Another player targeted: sent, with no line of ours.
+    let online = targeting(Some(12));
+    assert_eq!(
+        duel(&online, false),
+        Ok((None, Some(Sent::Duel { target: 12 })))
+    );
+    // Words after it send nothing, even with a player targeted.
+    assert_eq!(
+        duel(&online, true).unwrap_err().words.text,
+        "This client does not take a name after /duel yet; target the player and type /duel."
+    );
+    // No target, the player, an NPC, a corpse, or a spawn not in the zone.
+    for target in [None, Some(7), Some(20), Some(21), Some(99)] {
+        let online = targeting(target);
+        assert_eq!(
+            duel(&online, false).unwrap_err().words.text,
+            "You must first target another player to challenge to a duel.",
+            "{target:?}"
+        );
+    }
+}
+
+#[test]
+fn the_answer_system_sends_a_challenge_once() {
+    let mut app = App::new();
+    let (queue, received) = std::sync::mpsc::sync_channel(4);
+    app.insert_resource(targeting(Some(12)))
+        .insert_resource(Outbox::new(Some(queue)))
+        .init_resource::<ChatState>()
+        .add_systems(Update, answers);
+    app.world_mut().resource_mut::<ChatState>().slash = Some(Asked::Duel { named: false });
+    app.update();
+    assert!(matches!(
+        received.try_recv(),
+        Ok(ClientCommand::ChallengeDuel {
+            session_id: 5,
+            target: 12,
+            ..
+        })
+    ));
+    app.update();
+    assert!(received.try_recv().is_err());
 }

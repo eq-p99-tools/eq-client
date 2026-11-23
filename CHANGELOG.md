@@ -145,6 +145,20 @@
   nothing; a server that takes no assist keeps its earlier answers. The
   Mac-era client keeps its earlier answers. Inferred parts are
   under checklist 6.490. Networking pinned to 126b2c7 (eq-network #324).
+- Challenge the player targeted to a duel with `/duel` (checklist 6.492b),
+  where the session offers it (stock `EQEmu`, eq-network #338). It sends
+  `ChallengeDuel` only when another player in the zone is targeted, and
+  says this client's line otherwise ("You must first target another player
+  to challenge to a duel."). Words after `/duel` send nothing and say so,
+  since the program may challenge by name and the target could be someone
+  else. No line is said on sending: whether the program says one is
+  unread. Every line is pending R49-6h. A script's `slash()` cannot send
+  it; a social or hotbutton can, as the original's do. Repins eq-network to
+  e2e9a02 (#338); its surname and staff report events wait in the ignore
+  arm for those threads' PRs, and the viewer drops its gap log events
+  untraced (a gap's sample can hold other players' chat or names) until
+  eq-client #563 takes them.
+
 - Answer another player's challenge to a duel, and tell the news the
   client used to drop (checklist 6.492). Where the session asks (stock
   `EQEmu`, eq-network #328), the skin's confirmation dialog asks "<name>

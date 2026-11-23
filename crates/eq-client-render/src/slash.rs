@@ -1,8 +1,11 @@
 //! Slash commands of the Titanium program that players run in socials and
 //! hotbuttons and that the client answers with a line of its own (reads R45,
-//! R45b and R46): `/yell`, `/stopcast` and a plain `/assist`. Each line is the installed client's
-//! string where it has one; this client's words stand in otherwise. On a
-//! server that offers neither send, each keeps today's answer.
+//! R45b and R46): `/yell`, `/stopcast` and a plain `/assist`; and `/duel`, a
+//! challenge to the player targeted (checklist 6.492b), whose handler is not
+//! read yet (pending R49-6h), so its lines are this client's. Each line is
+//! the installed client's string where it has one; this client's words stand
+//! in otherwise. On a server that offers none of the sends, each keeps
+//! today's answer.
 use super::chat::{ChatState, Said};
 use super::hud::messages::Messages;
 use crate::outbox::{self, Outbox};
@@ -36,14 +39,38 @@ pub(crate) enum Asked {
     StopCast,
     /// `/assist` with no word: taking the target's target.
     Assist,
+    /// `/duel`: a challenge to the player targeted; `named` when words
+    /// followed it.
+    Duel {
+        /// Whether words followed the command.
+        named: bool,
+    },
+}
+
+/// What goes to the session for what the player asked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Sent {
+    /// A yell for help.
+    Yell,
+    /// The cast's end.
+    StopCast,
+    /// The target's target.
+    Assist,
+    /// A challenge to this player.
+    Duel {
+        /// The player challenged.
+        target: u16,
+    },
 }
 
 impl Asked {
     /// What a typed line asks, spelled out, if it is one of these. Words
-    /// after either are ignored, as the handlers read none.
+    /// after `/yell` or `/stopcast` are ignored, as the handlers read none;
+    /// words after `/duel` are noted.
     pub(crate) fn typed(input: &str) -> Option<Self> {
         let command = input.strip_prefix('/')?;
-        let name = command.split_whitespace().next().unwrap_or_default();
+        let mut words = command.split_whitespace();
+        let name = words.next().unwrap_or_default();
         if name.eq_ignore_ascii_case("yell") {
             Some(Self::Yell)
         } else if name.eq_ignore_ascii_case("stopcast") {
@@ -53,6 +80,10 @@ impl Asked {
             // A word after it is an option, a main-assist form or a name,
             // which the chat's own `/assist` answers.
             Some(Self::Assist)
+        } else if name.eq_ignore_ascii_case("duel") {
+            Some(Self::Duel {
+                named: words.next().is_some(),
+            })
         } else {
             None
         }
@@ -63,6 +94,7 @@ impl Asked {
             Self::Yell => "yell",
             Self::StopCast => "stopcast",
             Self::Assist => "assist",
+            Self::Duel { .. } => "duel",
         }
     }
 
@@ -71,6 +103,7 @@ impl Asked {
             Self::Yell => Capability::Yelling,
             Self::StopCast => Capability::StoppingCasts,
             Self::Assist => Capability::Assisting,
+            Self::Duel { .. } => Capability::Dueling,
         }
     }
 }
@@ -85,13 +118,27 @@ fn mounted(world: &ClientWorld, spells: Option<&dyn eq_client_core::world::Spell
     })
 }
 
+/// The player targeted, if it is another player in the zone: the rule the
+/// session applies before it sends a challenge, so this line never
+/// contradicts its refusal.
+fn challenged(world: &ClientWorld) -> Option<u16> {
+    let id = world.target().selected?;
+    if world.is_player(id) {
+        return None;
+    }
+    world
+        .spawn(id)
+        .filter(|spawn| spawn.state.kind == eq_client_core::SpawnKind::Player)
+        .map(|_| id)
+}
+
 /// The lines and the command for what the player asked.
 fn answer(
     asked: Asked,
     world: &ClientWorld,
     spells: Option<&dyn eq_client_core::world::SpellCatalog>,
     messages: &Messages,
-) -> Result<(Option<Said>, Option<Asked>), Said> {
+) -> Result<(Option<Said>, Option<Sent>), Said> {
     if !outbox::offered(world, asked.capability()) {
         return Err(Said::own(format!(
             "This client does not take /{} that way yet.",
@@ -101,15 +148,33 @@ fn answer(
     Ok(match asked {
         Asked::Yell => (
             Some(messages.said_text(YELLED, "You yell for help.")),
-            Some(asked),
+            Some(Sent::Yell),
         ),
         Asked::StopCast => {
             if world.player().is_none() || mounted(world, spells) {
                 return Err(messages.said_text(CANNOT_STOP, "You can't stop casting now."));
             }
-            (None, Some(asked))
+            (None, Some(Sent::StopCast))
         }
-        Asked::Assist => (None, Some(asked)),
+        Asked::Assist => (None, Some(Sent::Assist)),
+        // The program may challenge by name; until its handler is read,
+        // words after `/duel` send nothing rather than challenge whoever is
+        // targeted (pending R49-6h).
+        Asked::Duel { named: true } => {
+            return Err(Said::own(
+                "This client does not take a name after /duel yet; target the player and type /duel.",
+            ));
+        }
+        // No line on sending: whether the program says one is unread, and
+        // the session may still refuse (one challenge at a time, paced).
+        Asked::Duel { named: false } => match challenged(world) {
+            Some(target) => (None, Some(Sent::Duel { target })),
+            None => {
+                return Err(Said::own(
+                    "You must first target another player to challenge to a duel.",
+                ));
+            }
+        },
     })
 }
 
@@ -126,7 +191,8 @@ fn unassisted(client: eq_client_assets::ui::InstalledClient, messages: &Messages
     }
 }
 
-/// Answers a `/yell` or `/stopcast` the chat noted: the line, then the send.
+/// Answers a `/yell`, `/stopcast`, plain `/assist` or `/duel` the chat
+/// noted: the line, then the send.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(super) fn answers(
     mut chat: ResMut<ChatState>,
@@ -172,18 +238,23 @@ pub(super) fn answers(
             }
             if let Some(send) = send {
                 let _ = outbox.post(world, |stamp| match send {
-                    Asked::Yell => ClientCommand::YellForHelp {
+                    Sent::Yell => ClientCommand::YellForHelp {
                         session_id: stamp.session_id,
                         created: stamp.created,
                     },
-                    Asked::StopCast => ClientCommand::StopCasting {
+                    Sent::StopCast => ClientCommand::StopCasting {
                         session_id: stamp.session_id,
                         created: stamp.created,
                     },
                     // A self target is the session's refusal (0x57b).
-                    Asked::Assist => ClientCommand::Assist {
+                    Sent::Assist => ClientCommand::Assist {
                         session_id: stamp.session_id,
                         spawn_id: target.unwrap_or_default(),
+                    },
+                    Sent::Duel { target } => ClientCommand::ChallengeDuel {
+                        session_id: stamp.session_id,
+                        target,
+                        created: stamp.created,
                     },
                 });
             }
