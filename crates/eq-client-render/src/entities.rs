@@ -29,8 +29,10 @@ pub(super) struct NearbyEntities {
         super::background::Background<Loaded>,
     )>,
     /// The Luclin models the viewer chose, as they were when this zone's
-    /// first spawn was drawn: a change shows from the next zone. The program
-    /// reads its keys once, at start-up (R49-44 b): a stated departure.
+    /// first spawn was drawn: a change in the client shows from the next
+    /// zone, and the options file is read at each entry into the world. The
+    /// program reads its keys once, at start-up (R49-44 b): a stated
+    /// departure.
     luclin: Option<LuclinModels>,
     /// The Luclin models found missing this run, each said once.
     luclin_missing: BTreeSet<&'static str>,

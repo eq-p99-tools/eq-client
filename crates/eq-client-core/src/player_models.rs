@@ -21,8 +21,10 @@
 //! inferred by analogy.
 //!
 //! The program reads the keys once, at start-up (R49-44 b); this client
-//! fixes the choice per zone, so a change shows from the next zone (a
-//! stated departure).
+//! reads them with the character's options at each entry into the world and
+//! fixes the choice per zone, so a change to the options file shows from the
+//! next entry into the world (a local look, 11-23), and one made in the
+//! client from the next zone (a stated departure).
 //!
 //! Inferred, unread (R49-44 a's open half): which spawns the choice covers.
 //! Here it is players and their corpses only; non-players of player races
