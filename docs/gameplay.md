@@ -448,8 +448,8 @@ client's own window until the skin's task select window is read. Where step
 text or a duration arrives without the task's own words, the client writes
 them itself (inferred, recording checklist 6.560). On a local stock EQEmu
 server, **Accept** takes the chosen task and **Decline** ends the offer.
-Only a click on these buttons answers an offer: scripts, socials and
-hotbuttons can't. Anywhere else the window is read only and says that the
+A script can answer the same way with `accept_task` and `decline_tasks`.
+Anywhere else the window is read only and says that the
 offer can't be answered there. An answer, the next offer and a new zone
 each close the window. Escape leaves it open. A task request the session
 won't send is explained in chat. EQEmu says each step's and task's end in
