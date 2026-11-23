@@ -294,7 +294,7 @@ pub fn to_midi(bytes: &[u8]) -> Result<Vec<Vec<u8>>, XmiError> {
 pub(crate) mod tests {
     use super::*;
 
-    fn chunk(tag: &[u8; 4], body: &[u8]) -> Vec<u8> {
+    fn chunk(tag: [u8; 4], body: &[u8]) -> Vec<u8> {
         let mut out = tag.to_vec();
         out.extend_from_slice(&u32::try_from(body.len()).unwrap().to_be_bytes());
         out.extend_from_slice(body);
@@ -308,15 +308,15 @@ pub(crate) mod tests {
     pub(crate) fn xmi(sequences: &[&[u8]]) -> Vec<u8> {
         let count = u16::try_from(sequences.len()).unwrap();
         let mut dir = b"XDIR".to_vec();
-        dir.extend(chunk(b"INFO", &count.to_le_bytes()));
+        dir.extend(chunk(*b"INFO", &count.to_le_bytes()));
         let mut cat = b"XMID".to_vec();
         for sequence in sequences {
             let mut form = b"XMID".to_vec();
-            form.extend(chunk(b"TIMB", &[0, 0]));
-            form.extend(chunk(b"EVNT", sequence));
-            cat.extend(chunk(b"FORM", &form));
+            form.extend(chunk(*b"TIMB", &[0, 0]));
+            form.extend(chunk(*b"EVNT", sequence));
+            cat.extend(chunk(*b"FORM", &form));
         }
-        [chunk(b"FORM", &dir), chunk(b"CAT ", &cat)].concat()
+        [chunk(*b"FORM", &dir), chunk(*b"CAT ", &cat)].concat()
     }
 
     /// Program 5 on channel 0; a note of 30 ticks at once; 10 ticks on, a
@@ -381,7 +381,7 @@ pub(crate) mod tests {
     fn broken_files_are_refused_and_never_panic() {
         let whole = xmi(&[TUNE]);
         assert_eq!(to_midi(b"RIFF"), Err(XmiError::Truncated));
-        assert_eq!(to_midi(&chunk(b"JUNK", &[1, 2])), Err(XmiError::NotXmi));
+        assert_eq!(to_midi(&chunk(*b"JUNK", &[1, 2])), Err(XmiError::NotXmi));
         for end in 0..whole.len() {
             let _ = to_midi(&whole[..end]);
         }

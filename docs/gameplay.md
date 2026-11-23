@@ -610,3 +610,12 @@ same-ID acquisition needs a release echo before retrying; completed ordered
 releases permit ordinary reacquisition. A late acquire cannot undo release
 intent or timeout. Walking off requests release. P99,
 EQMac, steering and control across zone admissions remain unverified gaps.
+
+## Zone music and ambient sound
+
+Each zone plays its own ambient sounds near you, such as water, wind and
+birds, by day or night, and the music of the region you stand in, which
+fades when you leave it. The rules for where and when are this client's
+estimate until the original program is read (item 6.503). Music needs a
+SoundFont you name; see [Display and audio](settings.md#display-and-audio)
+for it and the Music, Music Volume and Environment Sounds options.
