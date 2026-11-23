@@ -1317,7 +1317,10 @@ fn update_hud(
     online: Res<online::OnlineState>,
     players: Query<&Transform, With<Player>>,
     mut labels: Query<(&mut Text, &mut Visibility), With<HudText>>,
-    free: Query<(), With<camera::FreeCamera>>,
+    (free, options): (
+        Query<(), With<camera::FreeCamera>>,
+        Option<Res<options::OptionsState>>,
+    ),
 ) {
     let (Ok(player), Ok((mut label, mut visibility))) = (players.single(), labels.single_mut())
     else {
@@ -1328,7 +1331,10 @@ fn update_hud(
         lines.push(map.named(keys::Act::FreeCamera, "Free camera - return to character"));
     }
     let nearest = interact::nearest(&online);
-    lines.push(match nearest {
+    // Where the key casts the centre ray, the nearest thing is not what it
+    // uses, so it is not offered (the program shows no such hint).
+    let by_ray = interact::by_ray(&online, &interact::qol(options.as_deref()));
+    lines.push(match nearest.as_ref().filter(|_| !by_ray) {
         Some(interact::Use::Door(..)) => map.help(&[(keys::Act::Use, "use the door")]),
         Some(interact::Use::Object(_)) => {
             map.help(&[(keys::Act::Use, "pick up or open what is here")])
