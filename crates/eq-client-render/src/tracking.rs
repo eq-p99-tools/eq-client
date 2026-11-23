@@ -646,9 +646,10 @@ mod tests {
             ids(&online, sorted(TrackSort::ReverseConsider)),
             [31, 32, 30]
         );
-        // The green bat hides; a player is never filtered by colour.
+        // The bat (green, or light blue near the edge) hides; a player is
+        // never filtered by colour.
         let filtered = Choices {
-            filter: TrackFilter(0x1 | 0x4),
+            filter: TrackFilter(0x1 | 0x4 | 0x20),
             ..Choices::default()
         };
         assert_eq!(ids(&online, filtered), [31, 32]);
