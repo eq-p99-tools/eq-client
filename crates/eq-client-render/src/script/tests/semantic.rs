@@ -654,6 +654,7 @@ fn scripted_owned_link_uses_the_current_received_item_without_sending() {
         stack_count: None,
         charges: 0,
         bag_slots: 0,
+        augments: Default::default(),
     };
     {
         let mut online = app.world_mut().resource_mut::<OnlineState>();

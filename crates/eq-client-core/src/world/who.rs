@@ -4,7 +4,7 @@
 use super::{Changes, ClientWorld, ListingNotice, Notice};
 use crate::{
     SpawnKind,
-    listing::{Anonymity, Listing, ListingChange},
+    listing::{Anonymity, GuildRank, Listing, ListingChange},
     names::{NameParts, TitleChange},
     who::WhoFilter,
 };
@@ -49,6 +49,42 @@ impl ZonePlayer {
                 .is_none_or(|(low, high)| open && (low..=high).contains(&self.level))
             && (!filter.game_masters || self.listing.game_master)
     }
+}
+
+/// What `/guildstatus` says of the target (checklist 6.575): `EQEmu`'s
+/// `Handle_OP_GuildStatus` lines, answered from what the client knows,
+/// since Titanium's patch maps no `OP_GuildStatus`. That the program
+/// answers locally, from its target, is inferred until read R49-6k.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GuildStatus {
+    /// No target, or a target that isn't a player.
+    NoPlayer,
+    /// The player is in no guild.
+    NoGuild {
+        /// The player's name.
+        name: String,
+    },
+    /// The player leads the guild.
+    Leader {
+        /// The player's name.
+        name: String,
+        /// The guild's name.
+        guild: String,
+    },
+    /// The player is one of the guild's officers.
+    Officer {
+        /// The player's name.
+        name: String,
+        /// The guild's name.
+        guild: String,
+    },
+    /// The player is one of the guild's members.
+    Member {
+        /// The player's name.
+        name: String,
+        /// The guild's name.
+        guild: String,
+    },
 }
 
 /// Applies a change in how `/who` lists a player.
@@ -172,6 +208,47 @@ impl ClientWorld {
                     && spawn.listing.game_master
                     && spawn.name.eq_ignore_ascii_case(name)
             })
+    }
+
+    /// What `/guildstatus` says of the target, or None where the client
+    /// can't tell: an anonymous player (owed to R49-6k), a guild whose name
+    /// the world's list lacks (`EQEmu` says nothing then), or a rank not
+    /// known yet.
+    #[must_use]
+    pub fn guild_status(&self) -> Option<GuildStatus> {
+        let target = self.target.selected.filter(|_| !self.target_stale());
+        let listed = target.and_then(|id| {
+            if self.is_player(id) {
+                self.player
+                    .as_ref()
+                    .map(|player| (player.name.as_str(), player.listing))
+            } else {
+                self.zone
+                    .spawns
+                    .get(&id)
+                    .map(|spawn| &spawn.state)
+                    .filter(|spawn| spawn.kind == SpawnKind::Player)
+                    .map(|spawn| (spawn.name.as_str(), spawn.listing))
+            }
+        });
+        let Some((name, listing)) = listed else {
+            return Some(GuildStatus::NoPlayer);
+        };
+        match listing.anonymity {
+            Anonymity::Anonymous | Anonymity::AnonymousRoleplaying => return None,
+            Anonymity::Open | Anonymity::Roleplaying => {}
+        }
+        let name = name.to_owned();
+        let Some(number) = listing.guild else {
+            return Some(GuildStatus::NoGuild { name });
+        };
+        let guild = self.guild_name(number)?.to_owned();
+        Some(match listing.guild_rank? {
+            GuildRank::Leader => GuildStatus::Leader { name, guild },
+            GuildRank::Officer => GuildStatus::Officer { name, guild },
+            GuildRank::Member => GuildStatus::Member { name, guild },
+            GuildRank::Other(_) => return None,
+        })
     }
 
     /// The players the zone's own `/who` lists, by name: the player and every
