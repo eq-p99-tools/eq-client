@@ -233,7 +233,47 @@ fn cancel_asks_in_the_window_and_only_yes_sends_it_for_the_same_entry() {
     click(&mut app, Action::Entry(QUEST_5));
     click(&mut app, Action::Cancel);
     hear(&mut app, [described(6, QUEST_5, 1003, false)]);
+    assert!(button(&mut app, Action::Confirm(true)).is_none());
+    assert!(receiver.try_recv().is_err());
+}
+
+#[test]
+fn a_cancel_question_names_the_entry_yes_cancels_and_is_dropped_when_it_changes() {
+    let (mut app, receiver) = app(true);
+    hear(&mut app, [described(5, QUEST_3, 1000, false)]);
+    // Nothing chosen: the quest shown is the one asked about.
+    click(&mut app, Action::Cancel);
+    assert!(has(&mut app, "Cancel Synthetic task 1000?"));
+    // A task that sorts first arrives; the question still names the quest.
+    hear(&mut app, [described(5, THE_TASK, 7, false)]);
+    assert!(has(&mut app, "Cancel Synthetic task 1000?"));
+    assert!(!has(&mut app, "Cancel Synthetic task 7?"));
     click(&mut app, Action::Confirm(true));
+    assert!(matches!(
+        receiver.try_recv().unwrap(),
+        ClientCommand::CancelTask {
+            session_id: 5,
+            at: QUEST_3,
+            ..
+        }
+    ));
+
+    // Another task in the asked slot drops the question.
+    click(&mut app, Action::Cancel);
+    assert!(button(&mut app, Action::Confirm(true)).is_some());
+    hear(&mut app, [described(5, QUEST_3, 1001, false)]);
+    assert!(button(&mut app, Action::Confirm(true)).is_none());
+    assert!(!has(&mut app, "Cancel Synthetic task 1000?"));
+    // And so does the slot's removal.
+    click(&mut app, Action::Cancel);
+    hear(
+        &mut app,
+        [WorldEvent::TaskRemoved {
+            session_id: 5,
+            at: QUEST_3,
+        }],
+    );
+    assert!(button(&mut app, Action::Confirm(true)).is_none());
     assert!(receiver.try_recv().is_err());
 }
 

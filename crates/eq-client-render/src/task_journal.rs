@@ -166,12 +166,15 @@ pub(super) fn window(
         shown.close(WindowId::TaskJournal);
         state.cancelling = None;
     }
-    // A question about another admission's entry is dropped.
-    if state
-        .cancelling
-        .is_some_and(|asked| world.session_id() != Some(asked.session_id))
-    {
-        state.cancelling = None;
+    // A question is dropped with its admission, and whenever the entry
+    // shown is no longer the one it asks about.
+    if let Some(asked) = state.cancelling {
+        let shown = chosen_entry(world, &state)
+            .map(|entry| (entry.description.at, entry.description.task_id));
+        if world.session_id() != Some(asked.session_id) || shown != Some((asked.at, asked.task_id))
+        {
+            state.cancelling = None;
+        }
     }
     if let Some(session_id) = world.session_id() {
         let asked = (session_id, world.task_journal().open_asked());
@@ -609,6 +612,8 @@ pub(super) fn press(
             else {
                 return Err("No journal entry is shown");
             };
+            // The entry asked about stays shown until the answer.
+            state.entry = Some(entry.description.at);
             state.cancelling = Some(Cancelling {
                 session_id,
                 at: entry.description.at,
