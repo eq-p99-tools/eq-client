@@ -1018,9 +1018,6 @@ impl ClientWorld {
             // Petitions, bug reports and feedback: the reports slice (6.511).
             | WorldEvent::ReportRefused { .. }
             | WorldEvent::ReportSent { .. }
-            // The server filters the session kept: the filters slice (6.494).
-            | WorldEvent::ServerFiltersKept { .. }
-            | WorldEvent::ServerFiltersRefused { .. }
             // A last name's answer and the title list: the surname and
             // titles slices (titles 6.516).
             | WorldEvent::SurnameAnswer { .. }
@@ -1179,13 +1176,8 @@ impl ClientWorld {
             }
             // The Options page shows the character's filters; the session
             // keeping them, or refusing a set this client fitted to the
-            // generation first, is not news for the player. Apply Poison
-            // (eq-network #329) has no client side yet; its answers are not
-            // shown until that work lands.
-            WorldEvent::ServerFiltersKept { .. }
-            | WorldEvent::ServerFiltersRefused { .. }
-            | WorldEvent::PoisonAnswered(_)
-            | WorldEvent::ApplyPoisonRefused { .. } => {}
+            // generation first, is not news for the player.
+            WorldEvent::ServerFiltersKept { .. } | WorldEvent::ServerFiltersRefused { .. } => {}
             WorldEvent::ListingRefused {
                 session_id,
                 reason,
