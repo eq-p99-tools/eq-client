@@ -2,7 +2,6 @@
 
 ## Unreleased
 
-<<<<<<< HEAD
 - Petitions and reports as the Titanium program takes them (read R49-23,
   checklist 6.511, C1a), on eq-network #414.
   - **`/petition`** sends its words and echoes them in the installed line
@@ -23,14 +22,11 @@
   - Feedback now carries the player's place and heading, which Titanium's
     feedback sends. Stock EQEmu now offers feedback and drops it, as it
     drops the program's. Project 1999 offers none of the three.
-  - Repins eq-network to main, for `reports::petition_form` and the
-    feedback's place.
-
-=======
+  - No repin of its own: it uses the eq-network pin of #635 (614d1c0),
+    which carries `reports::petition_form` and the feedback's place.
 - Buffs landing on the player take the slot the Titanium program's whole slot finder gives them (checklist 6.612, read R49-22e, repin to eq-network #417). That includes step 4's replace in place, worked out from each effect's base, formula and max as 0x40f339 does, and step 6's eviction. The facts come from the installed spell data: effects, the Bard level and the band, with each held buff's stored level from its record.
   - A buff the program removes for the landing is dropped as a prediction. If the server's word still holds it afterwards (a record for it, or the next zone-in's table), its word stands, and the disagreement is logged with the rule and both spells (6.612 T1).
   - A value the client can't work out still leaves the landing unslotted. That covers a random formula, one that reads hit points, or one that needs a level we don't know. The old guess for a possible step-4 replace is gone.
->>>>>>> origin/claude/project-thread-phietu-buff-repin
 - Seven local-settings slash commands work as the Titanium program's do (checklist 6.525, read R49-22c). They change only this client: nothing goes to a server, on any server type, and scripts can run each with `slash()`.
   - `/clearchat` clears the active chat window's view, silently. The history keeps its lines, so scripts, the log and other windows still have them.
   - `/showspelleffects` and `/combatmusic`: "off" turns the option off and any other word turns it on; with no word they give their usage. Each ends by saying where the option stands. `/combatmusic` now takes the read's words instead of toggling, and says the installation's lines. This client plays no combat music yet, so it changes nothing audible.
