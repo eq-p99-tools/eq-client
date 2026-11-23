@@ -77,6 +77,6 @@ fn a_walker_passes_through_a_no_hit_tree_and_is_never_stood_on_its_branch() {
         let model = zone.models.iter().find(|model| model.name == name).unwrap();
         crate::doors::collision(model.collision.clone(), model.no_hit_collision.clone())
     };
-    assert!(!door("NOHIT_ACTORDEF").is_empty());
+    assert_ne!(door("NOHIT_ACTORDEF"), Vec::<[[f32; 3]; 3]>::new());
     assert_eq!(door("NOHIT_ACTORDEF"), door("SOLID_ACTORDEF"));
 }

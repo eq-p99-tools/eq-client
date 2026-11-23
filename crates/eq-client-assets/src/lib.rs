@@ -740,10 +740,6 @@ fn load_object_models(
         // Object models carry no light of their own: their placements do.
         let staged = stage_mesh(&mesh, &[]);
         let vertex_count = mesh.positions().len();
-        let no_hit_mesh = mesh
-            .name()
-            .and_then(|name| fragments.get(name).copied())
-            .is_some_and(no_hit);
         let Some(realized) = realize_object(
             &doc,
             staged,
@@ -755,21 +751,15 @@ fn load_object_models(
         else {
             continue;
         };
+        let raw = mesh.name().and_then(|name| fragments.get(name).copied());
+        let (collision, no_hit_collision) = placed_collision(&mesh, raw.is_some_and(no_hit));
         model_indices.insert(name.to_owned(), models.len());
         models.push(ZoneModel {
             name: name.to_owned(),
             primitives: realized.primitives,
             materials: realized.materials,
-            collision: if no_hit_mesh {
-                Vec::new()
-            } else {
-                object_collision(&mesh)
-            },
-            no_hit_collision: if no_hit_mesh {
-                object_collision(&mesh)
-            } else {
-                Vec::new()
-            },
+            collision,
+            no_hit_collision,
             vertex_count: Some(vertex_count),
         });
     }
@@ -933,6 +923,41 @@ struct PosedMesh {
     no_hit: bool,
 }
 
+/// Solid triangles, each as its three points.
+type Triangles = Vec<[[f32; 3]; 3]>;
+
+/// Posed meshes merged into one primitive per material, with their solid
+/// triangles split as (where the zone places them, in the [`no_hit`] case).
+fn merge_posed(posed: Vec<PosedMesh>) -> (Vec<StagedPrimitive>, Triangles, Triangles) {
+    let mut collision = Vec::new();
+    let mut no_hit_collision = Vec::new();
+    let mut by_material: Vec<StagedPrimitive> = Vec::new();
+    for PosedMesh {
+        staged,
+        solids,
+        indices,
+        no_hit,
+    } in posed
+    {
+        let triangles = solid_triangles(&solids, &indices);
+        if no_hit {
+            no_hit_collision.extend(triangles);
+        } else {
+            collision.extend(triangles);
+        }
+        for primitive in staged {
+            match by_material
+                .iter_mut()
+                .find(|merged| merged.material == primitive.material)
+            {
+                Some(merged) => merged.append(primitive),
+                None => by_material.push(primitive),
+            }
+        }
+    }
+    (by_material, collision, no_hit_collision)
+}
+
 /// Stands an actor built on a skeleton in its rest pose: each bone's mesh
 /// moved by its bone, then each skin's vertices by the bone each belongs to.
 /// None when the actor isn't one, its skeleton can't be read, or nothing is
@@ -1041,33 +1066,8 @@ fn pose_hierarchy(
         }
         pose(mesh, raw, &|vertex| joints[owners[vertex]]);
     }
-    let mut collision = Vec::new();
-    let mut no_hit_collision = Vec::new();
-    let mut by_material: Vec<StagedPrimitive> = Vec::new();
+    let (by_material, collision, no_hit_collision) = merge_posed(posed);
     let skins_skipped = skipped;
-    for PosedMesh {
-        staged,
-        solids,
-        indices,
-        no_hit,
-    } in posed
-    {
-        let triangles = solid_triangles(&solids, &indices);
-        if no_hit {
-            no_hit_collision.extend(triangles);
-        } else {
-            collision.extend(triangles);
-        }
-        for primitive in staged {
-            match by_material
-                .iter_mut()
-                .find(|merged| merged.material == primitive.material)
-            {
-                Some(merged) => merged.append(primitive),
-                None => by_material.push(primitive),
-            }
-        }
-    }
     PosedHierarchy {
         staged: by_material,
         collision,
@@ -1241,6 +1241,17 @@ fn mesh_fragments(
         }
     }
     fragments
+}
+
+/// A one-mesh model's solid triangles, as (where the zone places it, kept
+/// for a door only): a mesh in the [`no_hit`] case gives a placement none.
+fn placed_collision(mesh: &libeq::wld::Mesh<'_>, no_hit: bool) -> (Triangles, Triangles) {
+    let faces = object_collision(mesh);
+    if no_hit {
+        (Vec::new(), faces)
+    } else {
+        (faces, Vec::new())
+    }
 }
 
 /// A placed object's or door's solid triangles, by [`object_solid_faces`].
