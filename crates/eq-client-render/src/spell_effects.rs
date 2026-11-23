@@ -151,7 +151,10 @@ pub(super) fn update(
     ),
     mut particles: ResMut<SpellParticles>,
     mut sounds: ResMut<super::sounds::Sounds>,
-    options: Res<super::options::OptionsState>,
+    (options, density): (
+        Res<super::options::OptionsState>,
+        Option<Res<super::local_settings::ParticleDensity>>,
+    ),
     mut bodies: Bodies,
     places: Query<&GlobalTransform>,
     camera: Query<&GlobalTransform, With<super::OrbitCamera>>,
@@ -200,11 +203,14 @@ pub(super) fn update(
         for number in heard {
             sounds.play_number(number, place);
         }
-        if !options.on(eq_client_core::options::Toggle::SpellEffects) {
+        let drawn = options.on(eq_client_core::options::Toggle::SpellEffects)
+            && density.as_deref().is_none_or(|density| density.draws());
+        if !drawn {
             // The player has the official choice for spell effects off (the
             // installation's `ShowSpellEffects`, or its particles page set
-            // to no density): whatever the spell started above is put away
-            // again, drawn sprays and all. The sounds keep playing, and
+            // to no density), or typed `/particledensity 0` this session:
+            // whatever the spell started above is put away again, drawn
+            // sprays and all. The sounds keep playing, and
             // chat and the action bar still say what was cast and what
             // landed.
             running.sprays.retain(|spray| {

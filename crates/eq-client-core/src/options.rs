@@ -82,8 +82,8 @@ pub enum Toggle {
     EnvironmentSounds,
     /// Plays combat music, as the official client's `CombatMusic` in
     /// `eqclient.ini` (TRUE when missing) and its `/combatmusic` (read R49-7
-    /// c). This client keeps it per character; it plays no combat music
-    /// yet (how the program chooses combat music is unread).
+    /// c; the command's forms R49-22c, 0x4689a2). This client keeps it per
+    /// character; it plays no combat music yet (row 6.525a).
     CombatMusic,
     /// Plays the installation's spell-effect particles, as the official
     /// client's does; the official client keeps the choice as
@@ -368,7 +368,7 @@ impl Level {
 }
 
 /// Every option the client keeps.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 #[allow(
     clippy::struct_excessive_bools,
     reason = "each is one of the Options window's checkboxes"
@@ -431,6 +431,22 @@ pub struct Options {
     pub ui_scale: u16,
     /// See [`Level::SoundVolume`].
     pub sound_volume: u16,
+    /// The chat's font size, 0 to 6, as `/chatfontsize` sets it; none
+    /// keeps the one the official UI file names. Labelled departure: the
+    /// official client sets only the active chat window's size and keeps it
+    /// with that window's layout (read R49-22c, 0x46b099); this client sets
+    /// one size for the whole chat and keeps it per character.
+    pub chat_font_size: Option<u8>,
+    /// The pointer speed modifier `/mousespeed` sets, kept as typed; the
+    /// official client keeps it as `MousePointerSpeedMod` in `eqclient.ini`
+    /// (read R49-22c, 0x471974). This client uses the system's pointer, so
+    /// it is kept and reported but moves nothing.
+    pub mouse_pointer_speed: Option<f64>,
+    /// Each colour kind's colour as `/usercolor` set it, by the kind's
+    /// number; none keeps the installation's. The official client keeps
+    /// them as `User_<kind>_Red`, `_Green` and `_Blue` in `[TextColors]` of
+    /// `eqclient.ini` (read R49-22c, 0x46b1b2), this client per character.
+    pub user_colors: [Option<[u8; 3]>; USER_COLOR_KINDS],
     /// See [`Level::MusicVolume`].
     pub music_volume: u16,
     /// Which player races and genders draw with the Luclin models, as the
@@ -440,6 +456,16 @@ pub struct Options {
     /// The server filters, per character ([`crate::chat_filters`]).
     pub chat_filters: crate::chat_filters::ChatFilters,
 }
+
+/// How many colour kinds `/usercolor` takes: 0 to 86, as the program's
+/// range check reads (0x46b87b).
+pub const USER_COLOR_KINDS: usize = 87;
+
+/// The names a file keeps the chat font size and the pointer speed under.
+const CHAT_FONT_SIZE: &str = "chat_font_size";
+const MOUSE_POINTER_SPEED: &str = "mouse_pointer_speed";
+/// The prefix a file keeps each colour kind's colour under.
+const USER_COLOR: &str = "user_color_";
 
 impl Default for Options {
     /// The client's defaults: the pet's window pops up, a sitting player
@@ -478,6 +504,9 @@ impl Default for Options {
             mouse_sensitivity: 50,
             ui_scale: 100,
             sound_volume: 100,
+            chat_font_size: None,
+            mouse_pointer_speed: None,
+            user_colors: [None; USER_COLOR_KINDS],
             music_volume: 100,
             luclin_models: LuclinModels::NONE,
             chat_filters: crate::chat_filters::ChatFilters::default(),
@@ -649,6 +678,9 @@ impl Options {
             let Some((key, value)) = line.split_once('=') else {
                 continue;
             };
+            if options.read_chat_setting(key.trim(), value.trim()) {
+                continue;
+            }
             if key.trim() == LUCLIN_MODELS {
                 options.luclin_models = LuclinModels::parse(value);
                 continue;
@@ -695,9 +727,40 @@ impl Options {
         options
     }
 
+    /// Reads a chat font size, pointer speed or colour line; whether the key
+    /// was one of those.
+    fn read_chat_setting(&mut self, key: &str, value: &str) -> bool {
+        if key == CHAT_FONT_SIZE {
+            if let Some(size) = value.parse().ok().filter(|size| *size <= 6) {
+                self.chat_font_size = Some(size);
+            }
+        } else if key == MOUSE_POINTER_SPEED {
+            if let Some(speed) = value.parse::<f64>().ok().filter(|speed| speed.is_finite()) {
+                self.mouse_pointer_speed = Some(speed);
+            }
+        } else if let Some(kind) = key.strip_prefix(USER_COLOR) {
+            let rgb: Vec<u8> = value
+                .split_whitespace()
+                .filter_map(|part| part.parse().ok())
+                .collect();
+            if let (Some(slot), &[red, green, blue]) = (
+                kind.parse::<usize>()
+                    .ok()
+                    .and_then(|kind| self.user_colors.get_mut(kind)),
+                rgb.as_slice(),
+            ) {
+                *slot = Some([red, green, blue]);
+            }
+        } else {
+            return false;
+        }
+        true
+    }
+
     /// The text a file keeps: the header, then every option.
     #[must_use]
     pub fn text(&self) -> String {
+        use std::fmt::Write as _;
         let mut text = format!("{HEADER}\n");
         for toggle in Toggle::all() {
             text.push_str(toggle.key());
@@ -721,6 +784,17 @@ impl Options {
         for level in Level::ALL {
             for part in [level.key(), " = ", &self.level(level).to_string(), "\n"] {
                 text.push_str(part);
+            }
+        }
+        if let Some(size) = self.chat_font_size {
+            let _ = writeln!(text, "{CHAT_FONT_SIZE} = {size}");
+        }
+        if let Some(speed) = self.mouse_pointer_speed {
+            let _ = writeln!(text, "{MOUSE_POINTER_SPEED} = {speed}");
+        }
+        for (kind, color) in self.user_colors.iter().enumerate() {
+            if let Some([red, green, blue]) = color {
+                let _ = writeln!(text, "{USER_COLOR}{kind} = {red} {green} {blue}");
             }
         }
         for part in [LUCLIN_MODELS, " = ", &self.luclin_models.words(), "\n"] {
@@ -758,7 +832,7 @@ mod tests {
         assert!(text.contains("hidden_windows = false\n"));
         assert!(text.contains("show_names = 2\n"));
         assert!(text.contains("loot_no_drop = 1\n"));
-        assert!(text.contains("filter_auctions = hide\n"));
+        assert!(text.contains("Channel04 = 0\n"));
         assert!(text.contains("attack_on_assist = true\n"));
         assert_eq!(Options::read(&text, Options::default()), options);
         // A file from before the QoL page keeps its choices there.
@@ -782,6 +856,30 @@ mod tests {
         assert_eq!(read.show_names, ShowNames::Everything);
         let off = Options::read("show_names = off\n", defaults);
         assert_eq!(off.show_names, ShowNames::Off);
+    }
+
+    /// The chat font size, the pointer speed and the colours `/chatfontsize`,
+    /// `/mousespeed` and `/usercolor` set keep to the file (6.525).
+    #[test]
+    fn chat_settings_keep_to_their_file() {
+        let mut options = Options::default();
+        options.set(Toggle::CombatMusic, false);
+        options.chat_font_size = Some(4);
+        options.mouse_pointer_speed = Some(1.5);
+        options.user_colors[12] = Some([1, 2, 3]);
+        options.user_colors[86] = Some([255, 0, 9]);
+        let text = options.text();
+        assert!(text.contains("combat_music = false\n"));
+        assert!(text.contains("chat_font_size = 4\n"));
+        assert!(text.contains("mouse_pointer_speed = 1.5\n"));
+        assert!(text.contains("user_color_12 = 1 2 3\n"));
+        assert_eq!(Options::read(&text, Options::default()), options);
+        // What no slot or range takes keeps the default.
+        let read = Options::read(
+            "chat_font_size = 9\nmouse_pointer_speed = inf\nuser_color_87 = 1 2 3\nuser_color_5 = 1 2\n",
+            Options::default(),
+        );
+        assert_eq!(read, Options::default());
     }
 
     #[test]
