@@ -113,20 +113,6 @@ const SHOW_INVENTORY_SCOPES: [&str; 13] = [
     "trade", "trib", "world",
 ];
 
-/// A script's AA request (checklist 6.569). The session alone decides
-/// whether it goes; the client checks nothing about the rank or the points.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AaRequest {
-    /// `train_aa(RANK_ID)`: buy the rank with this definition id; on `EQMac`
-    /// the Mac AA id. Spends points, which nothing gives back.
-    Train(u32),
-    /// `activate_aa(RANK_ID)`: use an owned rank's ability, with no target.
-    Activate(u32),
-    /// `aa_split(PERCENT)`: the share of experience that goes to AAs, 0
-    /// (off) to 100.
-    Split(u8),
-}
-
 /// One scripted action.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Step {
@@ -166,9 +152,6 @@ pub enum Step {
     WaitDead(Duration),
     /// Runs a game slash command such as `/camp`; chat text is refused.
     Slash(String),
-    /// Asks the session for one AA request, in this client's own script words
-    /// (checklist 6.569): no official slash form is read yet (R49-40b).
-    AlternateAdvancement(AaRequest),
     /// Edit or run a social via the ordinary chat controls in a local session.
     Social(String),
     /// Sends an allowed `#` command, such as `summon`, to a local `EQEmu` server;
@@ -642,9 +625,6 @@ pub(crate) const COMMANDS: &[&str] = &[
     "wait_dead",
     "slash",
     "boat",
-    "train_aa",
-    "activate_aa",
-    "aa_split",
     "social",
     "gm",
     "chat",
@@ -705,13 +685,6 @@ pub(super) fn parse_words(command: &str, rest: &[&str]) -> Result<Step, String> 
             .ok_or_else(|| format!("expected a number from {low} to {high}"))
     };
     let chord = |keys: &str| keys_from(keys).ok_or_else(|| String::from("unknown key"));
-    // An AA definition id; 0 names none.
-    let rank_id = |id: &str| {
-        id.parse::<u32>()
-            .ok()
-            .filter(|id| *id != 0)
-            .ok_or("expected an AA rank id from 1")
-    };
     // A world container that combines: a station, not a bag that only holds things.
     let station = |kind: &str| {
         kind.parse::<u8>()
@@ -745,15 +718,6 @@ pub(super) fn parse_words(command: &str, rest: &[&str]) -> Result<Step, String> 
         ("wait_dead", [duration]) => Step::WaitDead(millis(duration, MAX_WAIT)?),
         ("slash", words) => parse_slash(words)?,
         ("boat", [intent @ ("acquire" | "release")]) => Step::Slash(format!("/boat {intent}")),
-        ("train_aa", [id]) => Step::AlternateAdvancement(AaRequest::Train(rank_id(id)?)),
-        ("activate_aa", [id]) => Step::AlternateAdvancement(AaRequest::Activate(rank_id(id)?)),
-        ("aa_split", [percent]) => Step::AlternateAdvancement(AaRequest::Split(
-            percent
-                .parse::<u8>()
-                .ok()
-                .filter(|percent| *percent <= 100)
-                .ok_or("aa_split takes a percent from 0 (off) to 100")?,
-        )),
         ("social", operation) if !operation.is_empty() => {
             Step::Social(format!("/social {}", operation.join(" ")))
         }
@@ -1748,39 +1712,6 @@ mod tests {
             .map(|(list, _)| list.split(r"\|").collect::<Vec<_>>())
             .unwrap();
         assert_eq!(list, super::COMMANDS);
-    }
-
-    #[test]
-    fn aa_steps_are_our_own_words_with_bounded_arguments() {
-        use super::AaRequest;
-        let base = Path::new("private");
-        assert_eq!(
-            parse(
-                "train_aa(42)\nactivate_aa(4294967295)\naa_split(0)\naa_split(100)\n",
-                base
-            )
-            .unwrap(),
-            [
-                Step::AlternateAdvancement(AaRequest::Train(42)),
-                Step::AlternateAdvancement(AaRequest::Activate(u32::MAX)),
-                Step::AlternateAdvancement(AaRequest::Split(0)),
-                Step::AlternateAdvancement(AaRequest::Split(100)),
-            ]
-        );
-        for bad in [
-            "train_aa()",
-            "train_aa(0)",
-            "train_aa(-1)",
-            "train_aa(42, 1)",
-            "activate_aa(42, 7)",
-            "activate_aa(\"Fleet\")",
-            "aa_split(101)",
-            "aa_split()",
-        ] {
-            let source = format!("report(\"before\")\n{bad}\nreport(\"after\")\n");
-            let error = super::super::Program::parse(&source, base).unwrap_err();
-            assert_eq!(error.line, Some(2), "{bad}");
-        }
     }
 
     #[test]

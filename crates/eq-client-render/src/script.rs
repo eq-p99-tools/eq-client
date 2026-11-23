@@ -2167,15 +2167,13 @@ pub(super) fn drive(
             // The step waits for the world's answer to this request.
             script.created_before = online.world().creation().map(|last| last.count);
         }
-        Step::Slash(_) | Step::Gm(_) | Step::Chat(_) | Step::AlternateAdvancement(_)
-            if !online.in_world() =>
-        {
+        Step::Slash(_) | Step::Gm(_) | Step::Chat(_) if !online.in_world() => {
             // The worker discards commands while zoning, dead or disconnected.
             script.stop(
                 &mut keys,
                 &mut mouse,
                 concat!(
-                    "slash, gm, chat and AA steps need a character in the world; ",
+                    "slash, gm and chat steps need a character in the world; ",
                     "wait_online or wait_zone first"
                 ),
             );
@@ -2352,15 +2350,6 @@ pub(super) fn drive(
                 );
             } else if let Err(reason) = chat.compose_owned_link(*slot, &online) {
                 script.stop(&mut keys, &mut mouse, &reason);
-            }
-            return;
-        }
-        Step::AlternateAdvancement(request) => {
-            // One command and done: the session decides, and its refusal is
-            // said in chat; the step never waits on the server or retries.
-            if let Err(error) = aa_request(*request, script.chat_admission(), &observed.1, &online)
-            {
-                script.stop(&mut keys, &mut mouse, &error);
             }
             return;
         }
@@ -2845,45 +2834,6 @@ fn answered(
 /// reported focus counts.
 fn may_run(unattended: bool, reported_focus: Option<bool>, window_focused: bool) -> bool {
     unattended || (reported_focus == Some(true) && window_focused)
-}
-
-/// Posts a script's AA request for this admission, or says why it can't.
-fn aa_request(
-    request: parse::AaRequest,
-    admission: Option<u64>,
-    outbox: &crate::outbox::Outbox,
-    online: &crate::online::OnlineState,
-) -> Result<(), String> {
-    use eq_client_core::ClientCommand;
-    let world = online.world();
-    if admission.is_some_and(|admission| world.session_id() != Some(admission)) {
-        return Err("the AA step's admission has ended".into());
-    }
-    outbox
-        .for_script(admission)
-        .post(world, |stamp| {
-            let session_id = stamp.session_id;
-            match request {
-                parse::AaRequest::Train(rank_id) => ClientCommand::TrainAlternateAdvancement {
-                    session_id,
-                    rank_id,
-                },
-                parse::AaRequest::Activate(rank_id) => {
-                    ClientCommand::ActivateAlternateAdvancement {
-                        session_id,
-                        rank_id,
-                        target: None,
-                    }
-                }
-                parse::AaRequest::Split(percentage) => {
-                    ClientCommand::SetAlternateAdvancementSplit {
-                        session_id,
-                        percentage,
-                    }
-                }
-            }
-        })
-        .map_err(|refusal| refusal.text().to_owned())
 }
 
 /// The request for a validated local GM command. Fixture cleanup carries
@@ -4079,51 +4029,6 @@ mod tests {
     mod world_input;
     use super::*;
     use eq_client_assets::ui::InstalledClient;
-
-    #[test]
-    fn an_aa_step_posts_one_command_for_this_admission() {
-        use eq_client_core::ClientCommand;
-        use parse::AaRequest;
-        let mut online = crate::online::OnlineState::new(true);
-        let (tx, rx) = std::sync::mpsc::sync_channel(4);
-        let outbox = crate::outbox::Outbox::new(Some(tx));
-        // Before admission nothing leaves.
-        assert!(aa_request(AaRequest::Train(42), None, &outbox, &online).is_err());
-        assert!(rx.try_recv().is_err());
-        crate::online::testing::admit(&mut online, 3, crate::online::testing::player(7));
-        for (request, expected) in [
-            (
-                AaRequest::Train(42),
-                ClientCommand::TrainAlternateAdvancement {
-                    session_id: 3,
-                    rank_id: 42,
-                },
-            ),
-            (
-                AaRequest::Activate(42),
-                ClientCommand::ActivateAlternateAdvancement {
-                    session_id: 3,
-                    rank_id: 42,
-                    target: None,
-                },
-            ),
-            (
-                AaRequest::Split(0),
-                ClientCommand::SetAlternateAdvancementSplit {
-                    session_id: 3,
-                    percentage: 0,
-                },
-            ),
-        ] {
-            assert_eq!(aa_request(request, Some(3), &outbox, &online), Ok(()));
-            assert_eq!(rx.try_recv().unwrap(), expected);
-            // One command: the step neither repeats nor waits.
-            assert!(rx.try_recv().is_err());
-        }
-        // A step written for an admission that has ended sends nothing.
-        assert!(aa_request(AaRequest::Train(42), Some(2), &outbox, &online).is_err());
-        assert!(rx.try_recv().is_err());
-    }
 
     #[test]
     fn station_steps_require_the_station_offer_even_when_carried_combines_are_offered() {

@@ -442,6 +442,9 @@ to five seconds (inferred, recording checklist 6.400).
 Automatic inspection replies use the known inspect note from the installed
 character settings when available. Note import reads profiles up to 256 KiB.
 
+`/tasktimers` asks a local stock EQEmu server for your task timers, and the
+server answers in chat in its own words. Other servers aren't asked.
+
 Considering, hailing, auto-attack and class abilities use the target and session
 rules. Loot lists received corpse contents; Loot all takes items sequentially.
 Merchants support selection and buy/sell requests. Giving to NPCs and trading

@@ -2412,6 +2412,22 @@ fn sit_command(world: &eq_client_core::world::ClientWorld) -> eq_client_core::Po
 }
 
 /// Slash commands that are game actions rather than chat; None means ordinary chat.
+/// The task commands this client takes: `/tasktimers`, the player's task
+/// timers, which the server lists in its own words. The request's empty
+/// body is inferred (R49-38); the session paces it and sends it only where
+/// it takes task requests. None for any other line.
+fn task_command(
+    name: &str,
+    stamp: &dyn Fn() -> Result<crate::outbox::Stamp, String>,
+) -> Option<Result<ClientCommand, String>> {
+    (name == "tasktimers").then(|| {
+        stamp().map(|stamp| ClientCommand::ListTaskTimers {
+            session_id: stamp.session_id,
+            created: stamp.created,
+        })
+    })
+}
+
 fn game_commands(
     input: &str,
     online: &super::online::OnlineState,
@@ -2441,7 +2457,9 @@ fn game_commands(
     if let Some(commands) = social_commands(&name, words, online, &stamp) {
         return Some(commands);
     }
-    if let Some(command) = class_command(&name, words, online.world(), &stamp) {
+    if let Some(command) =
+        class_command(&name, words, online.world(), &stamp).or_else(|| task_command(&name, &stamp))
+    {
         return Some(command.map(|command| vec![command]));
     }
     Some(match name.as_str() {
@@ -3685,6 +3703,13 @@ mod tests {
                 .unwrap()
                 .as_slice(),
             [ClientCommand::DropCorpse { spawn_id: None, .. }]
+        ));
+        assert!(matches!(
+            game_commands("/tasktimers", &online, &outbox, &Settings::default())
+                .unwrap()
+                .unwrap()
+                .as_slice(),
+            [ClientCommand::ListTaskTimers { .. }]
         ));
     }
     #[test]

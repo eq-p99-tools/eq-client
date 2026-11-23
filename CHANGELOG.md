@@ -2,11 +2,12 @@
 
 ## Unreleased
 
-- Scripts can ask for AA requests (checklist 6.569). The new steps are `train_aa(RANK_ID)`, `activate_aa(RANK_ID)` and `aa_split(PERCENT)`, in this client's own words: the official `/alternateadv` subwords are unread (R49-40b), so they wait.
-  - Each step posts one `TrainAlternateAdvancement`, `ActivateAlternateAdvancement` (no target) or `SetAlternateAdvancementSplit` command for the current admission, then moves on. It never waits for the server and never retries.
-  - The client checks nothing about the rank or the points: the session decides, and its refusal is said in chat.
-  - Every server type still refuses them as not offered until the AA live rows pass. Adam said scripts may train.
-
+- `/tasktimers` asks the server for the player's task timers (checklist
+  6.571), and the server answers in its own words. The session paces the
+  request and sends it only where `Capability::Tasks` is offered, which
+  today means a local stock EQEmu server. Anywhere else the outbox refuses
+  it with its usual words. The request's empty body is inferred (R49-38).
+  `/taskhelp` is unchanged until its text is read.
 - Keep every received AA fact for display (checklist 6.565). The client's
   `alternate_advancement::State` now holds, besides Titanium's selections
   and definitions, the profile's points, the latest AA experience update,
