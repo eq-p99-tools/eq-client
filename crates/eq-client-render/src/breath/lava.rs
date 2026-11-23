@@ -8,6 +8,12 @@
 //! (R49-3 b). This client doesn't model them for any hazard: it reports
 //! the unabsorbed amount and the server applies its own, a departure owed
 //! (checklist 6.491d).
+//!
+//! When the resist total a hazard needs can't be worked out here (a buff's
+//! resist or an item's isn't known yet), no report goes out, for lava and
+//! cold alike, where the program reports by its own total: a departure,
+//! counted in the gap log each time it holds a report back (checklist
+//! 6.632).
 use super::modifiers::{self, Need};
 use crate::{motion::LiquidBasis, online::OnlineState, spellbook::SpellNames};
 use eq_client_assets::regions::{Medium, RegionKind};
@@ -83,13 +89,26 @@ impl Heat {
             LiquidHazard::Cold => Need::Cold,
             LiquidHazard::Drowning | LiquidHazard::ZoneHeat => return None,
         };
-        let inputs = modifiers::read(world, spells, player, need).ok()?;
-        if inputs.invulnerable {
+        let inputs = modifiers::read(world, spells, player, need).ok();
+        if inputs.as_ref().is_some_and(|inputs| inputs.invulnerable) {
             return None;
         }
+        let resistance = inputs.and_then(|inputs| match hazard {
+            LiquidHazard::Lava => inputs.fire_resistance,
+            LiquidHazard::Cold => inputs.cold_resistance,
+            LiquidHazard::Drowning | LiquidHazard::ZoneHeat => None,
+        });
+        let Some(resistance) = resistance else {
+            // The labelled departure above: held back, and counted.
+            eq_client_core::gaps::unshown(match hazard {
+                LiquidHazard::Cold => "hazard held back: cold total unknown",
+                _ => "hazard held back: fire total unknown",
+            });
+            return None;
+        };
         let amount = match hazard {
-            LiquidHazard::Lava => lava_damage(profile.zone_id, inputs.fire_resistance?),
-            LiquidHazard::Cold => cold_damage(inputs.cold_resistance?),
+            LiquidHazard::Lava => lava_damage(profile.zone_id, resistance),
+            LiquidHazard::Cold => cold_damage(resistance),
             LiquidHazard::Drowning | LiquidHazard::ZoneHeat => None,
         }?;
         Some((hazard, amount))
