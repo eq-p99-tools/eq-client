@@ -1,4 +1,5 @@
 //! Tabbed chat, with mobile palette colors and independent scroll positions.
+use super::targeted::{Targeted, targeted};
 use crate::{
     online::OnlineState,
     profile_files::CharacterProfile,
@@ -206,9 +207,6 @@ pub(super) struct ChatState {
     pub(crate) disciplines: Vec<super::disciplines::Asked>,
     /// A `/log`, waiting to turn the chat log on or off.
     pub log_toggle: bool,
-    /// A `/toggleinspect`, waiting to turn letting others inspect the
-    /// player on or off; only once the command is offered (checklist 6.574).
-    pub inspect_toggled: Option<super::dialogs::InspectToggle>,
     /// A `/shownames`, waiting to set how much of players' names shows.
     pub show_names: Option<eq_client_core::names::ShowNames>,
     /// A `/shownames` the client could not read, answered with the usage
@@ -255,6 +253,8 @@ pub(super) struct ChatState {
     pub(crate) load_skin: Option<super::skin::LoadSkin>,
     /// A `/pet target`'s outcome, for [`super::pet::say_pet_target`] to say.
     pub(crate) pet_targeted: Option<super::pet::PetTargeted>,
+    /// A `/ttell`'s program line, for [`super::targeted::say`] to say.
+    pub(crate) targeted_line: Option<super::targeted::Line>,
     /// A local-settings command typed, with the chat tab it was typed in,
     /// for [`super::local_settings::apply`] to run and answer.
     pub(crate) local_setting: Option<(super::local_settings::LocalSetting, ChatTab)>,
@@ -568,6 +568,7 @@ impl ChatState {
             rangers_only,
             load_skin,
             pet_targeted,
+            targeted_line,
             local_setting,
             contacts,
             language_asked,
@@ -585,6 +586,7 @@ impl ChatState {
             motd_asked,
             fastdrop_asked,
             assist_words,
+            paced,
             shield_words,
             report_echo,
             // Cleared elsewhere: the link scope, the message of the day and
@@ -596,10 +598,8 @@ impl ChatState {
             languages: _,
             socials: _,
             departure: _,
-            // Kept: the chat pace's last hold, which runs out on its own
-            // time, and the server's message of the day, kept by the
+            // Kept: the server's message of the day, kept by the
             // connection it came on.
-            paced: _,
             server_motd: _,
             // Kept: lines a report command printed, which the next frame
             // shows.
@@ -612,7 +612,6 @@ impl ChatState {
             views: _,
             hovered: _,
             log_toggle: _,
-            inspect_toggled: _,
             show_names: _,
             show_names_usage: _,
             ui_scale: _,
@@ -622,6 +621,8 @@ impl ChatState {
             refusals: _,
         } = self;
         *script_requests = ScriptRequests::default();
+        // A held line was the ended session's.
+        *paced = None;
         *requested_target = None;
         *zone_who = None;
         *asked = None;
@@ -633,6 +634,7 @@ impl ChatState {
         *rangers_only = None;
         *load_skin = None;
         *pet_targeted = None;
+        *targeted_line = None;
         *local_setting = None;
         contacts.asked = None;
         *language_asked = None;
@@ -2002,6 +2004,11 @@ fn submit_draft(
                     state.zone_who = Some(filter?);
                     return Ok(());
                 }
+                Some(Targeted::Say(line)) => {
+                    state.targeted_line = Some(line);
+                    return Ok(());
+                }
+                Some(Targeted::Nothing) => return Ok(()),
                 None => (),
             }
             let message = linked_outbound(
@@ -2085,6 +2092,11 @@ fn submit_line(
             state.zone_who = Some(filter?);
             return Ok(());
         }
+        Some(Targeted::Say(line)) => {
+            state.targeted_line = Some(line);
+            return Ok(());
+        }
+        Some(Targeted::Nothing) => return Ok(()),
         None => (),
     }
     if let Some(contacts) = super::contacts::Command::typed(&command) {
@@ -2450,10 +2462,6 @@ pub(super) fn client_request_in_scope(
     if let Some(request) = zone_who_request(input) {
         return Some(request.map(|filter| state.zone_who = Some(filter)));
     }
-    if super::dialogs::toggle_inspect_typed(input, super::dialogs::TOGGLE_INSPECT_READ) {
-        state.inspect_toggled = Some(super::dialogs::InspectToggle);
-        return Some(Ok(()));
-    }
     // `/filter` reads no words and sends nothing: it shows the Options
     // window on its filter page (eqgame.exe 0x46a245, read R49-2a).
     if typed_command(input, "/filter") {
@@ -2630,68 +2638,6 @@ fn targeted_corpse(online: &super::online::OnlineState) -> Result<u16, String> {
                 .is_some_and(|spawn| spawn.state.kind == eq_client_core::SpawnKind::PlayerCorpse)
         })
         .ok_or_else(|| "You must first target a corpse.".to_owned())
-}
-
-/// What `/ttell` or `/whotarget` stands for.
-#[derive(Debug, PartialEq)]
-enum Targeted {
-    /// `/ttell message`: the `/tell` to the target it stands for.
-    Tell(Result<String, String>),
-    /// `/whotarget`: the zone's `/who` of the target's name.
-    Who(Result<eq_client_core::who::WhoFilter, String>),
-}
-
-/// `/ttell` and `/whotarget` as what they stand for (recording checklist
-/// 6.528): a `/tell` to the target, which then goes as a typed one would,
-/// and the zone's `/who` of the target's name. None for any other line.
-/// Inferred until read (R49-18): the words after `/whotarget` are passed
-/// over, and the refusal lines are this client's own. A tell goes only to
-/// another player whose name is letters alone, so nothing but a name a
-/// typed `/tell` would take reaches the line; an NPC, a pet, a corpse or
-/// the player themself is refused, as what the program sends them is
-/// unread. `/whotarget` sends nothing, so it takes any target.
-fn targeted(command: &str, world: &eq_client_core::world::ClientWorld) -> Option<Targeted> {
-    let rest = command.strip_prefix('/')?;
-    let (name, words) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
-    let target = world.target().selected.and_then(|id| world.spawn(id));
-    if name.eq_ignore_ascii_case("ttell") {
-        let own = world.player().map(|player| player.spawn_id);
-        let recipient = target
-            .filter(|spawn| {
-                spawn.state.kind == eq_client_core::SpawnKind::Player
-                    && Some(spawn.state.spawn_id) != own
-                    && !spawn.state.name.is_empty()
-                    && spawn
-                        .state
-                        .name
-                        .bytes()
-                        .all(|byte| byte.is_ascii_alphabetic())
-            })
-            .map(|spawn| spawn.state.name.as_str());
-        Some(Targeted::Tell(
-            recipient
-                .map(|recipient| format!("/tell {recipient} {}", words.trim()))
-                .ok_or_else(|| "Target another player to send them a tell.".to_owned()),
-        ))
-    } else if name.eq_ignore_ascii_case("whotarget") {
-        // The player themself is no spawn of the zone's.
-        let own = world
-            .player()
-            .filter(|player| world.target().selected == Some(player.spawn_id))
-            .map(|player| player.name.clone());
-        Some(Targeted::Who(
-            target
-                .map(|spawn| spawn.state.name.clone())
-                .or(own)
-                .map(|text| eq_client_core::who::WhoFilter {
-                    text,
-                    ..Default::default()
-                })
-                .ok_or_else(|| "Target someone to list with /who first.".to_owned()),
-        ))
-    } else {
-        None
-    }
 }
 
 /// The words of a plain `/who`, which lists the zone's players; None for
@@ -3698,95 +3644,27 @@ mod tests {
     }
 
     #[test]
-    fn ttell_and_whotarget_stand_for_a_tell_and_a_who_of_the_target() {
-        let mut online = with_others("Friend");
-        let spelled = |line| crate::commands::spelled(line).unwrap().into_owned();
-        let tell = |line: &str| Targeted::Tell(Ok(line.to_owned()));
-        let who = |text: &str| {
-            Targeted::Who(Ok(eq_client_core::who::WhoFilter {
-                text: text.into(),
-                ..Default::default()
-            }))
-        };
-        let refused = Targeted::Tell(Err("Target another player to send them a tell.".into()));
-        let unseen = Targeted::Who(Err("Target someone to list with /who first.".into()));
-        // No target.
-        assert_eq!(targeted(&spelled("/tt hi"), online.world()), Some(refused));
-        assert_eq!(targeted(&spelled("/whot"), online.world()), Some(unseen));
-        assert_eq!(targeted("/tell Friend hi", online.world()), None);
-        assert_eq!(targeted("hello", online.world()), None);
-        // Another player: the name exactly as `/tell Name` takes it.
-        online.select_target(Some(8));
-        assert_eq!(
-            targeted(&spelled("/tt hi"), online.world()),
-            Some(tell("/tell Friend hi"))
-        );
-        assert_eq!(
-            targeted(&spelled("/TTELL   hi  there "), online.world()),
-            Some(tell("/tell Friend hi  there"))
-        );
-        // No message gives the tell's own usage line.
-        assert_eq!(
-            targeted(&spelled("/ttell"), online.world()),
-            Some(tell("/tell Friend "))
-        );
-        assert_eq!(
-            outbound(ChatTab::All, "/tell Friend "),
-            Err("Use /tell Name message".into())
-        );
-        for line in ["/whotarget", "/whot", "/whotarget all wiz"] {
-            assert_eq!(
-                targeted(&spelled(line), online.world()),
-                Some(who("Friend"))
-            );
-        }
-        // An NPC, a corpse, a pet or the player themself gets no tell; /who takes
-        // any target, as it sends nothing.
-        for (target, name) in [
-            (9, "a_guard00"),
-            (10, "Someone"),
-            (11, "Gabober000"),
-            (7, "Example"),
-        ] {
-            online.select_target(Some(target));
-            assert_eq!(
-                targeted("/ttell hi", online.world()),
-                Some(Targeted::Tell(Err(
-                    "Target another player to send them a tell.".into()
-                ))),
-                "{target}"
-            );
-            assert_eq!(targeted("/whotarget", online.world()), Some(who(name)));
-        }
-    }
-
-    #[test]
-    fn a_target_name_that_is_not_letters_alone_never_reaches_a_tell() {
-        for name in ["", "Two Words", "Tab\tName", "Bell\x07", "Link\x12", "Ab1"] {
-            let mut online = with_others(name);
-            online.select_target(Some(8));
-            assert!(
-                matches!(
-                    targeted("/ttell hi", online.world()),
-                    Some(Targeted::Tell(Err(_)))
-                ),
-                "{name:?}"
-            );
-        }
-    }
-
-    #[test]
     fn a_social_line_sends_ttell_as_the_tell_a_typed_one_is() {
         let mut online = with_others("Friend");
         let (queue, received) = std::sync::mpsc::sync_channel(4);
         let outbox = crate::outbox::Outbox::new(Some(queue));
         let qol = Settings::default();
         let mut chat = ChatState::default();
+        // With no target, the Titanium program says and sends nothing.
         assert_eq!(
             submit_typed_line("/tt hi", &mut chat, &mut online, &outbox, &qol),
-            Err("Target another player to send them a tell.".into())
+            Ok(())
         );
         assert!(received.try_recv().is_err());
+        assert!(chat.targeted_line.is_none());
+        // An NPC's name has a `_`: the program's refusal line is queued.
+        online.select_target(Some(9));
+        submit_typed_line("/tt hi", &mut chat, &mut online, &outbox, &qol).unwrap();
+        assert!(received.try_recv().is_err());
+        assert_eq!(
+            chat.targeted_line.take(),
+            Some(super::super::targeted::Line::Refused)
+        );
         online.select_target(Some(8));
         submit_typed_line("/tt hi there", &mut chat, &mut online, &outbox, &qol).unwrap();
         let typed = |received: &std::sync::mpsc::Receiver<ClientCommand>| {
@@ -3815,11 +3693,12 @@ mod tests {
             })
         );
         assert!(received.try_recv().is_err());
-        // /whotarget lists the zone locally and sends nothing.
+        // /whotarget lists the zone locally, as a typed `/who Friend` does,
+        // and sends nothing.
         submit_typed_line("/whotarget", &mut chat, &mut online, &outbox, &qol).unwrap();
         assert_eq!(
-            chat.zone_who.as_ref().map(|filter| filter.text.as_str()),
-            Some("Friend")
+            chat.zone_who,
+            zone_who_request("/who Friend").and_then(Result::ok)
         );
         assert!(received.try_recv().is_err());
     }
