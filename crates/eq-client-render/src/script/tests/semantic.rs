@@ -1039,3 +1039,31 @@ fn a_language_script_target_matches_only_the_offered_language_bank() {
         None
     ));
 }
+
+#[test]
+fn a_chat_pace_refusal_after_a_scripts_chat_fails_the_run() {
+    let reason = "You are sending chat too fast. Wait 4 seconds.";
+    let (mut app, rx) = app();
+    let program = Program::parse("chat(\"say hello\")\nwait(5000)", Path::new(".")).unwrap();
+    // A refusal from before the run's chat is no answer to it.
+    app.world_mut().resource_mut::<ChatState>().paced =
+        Some((std::time::Instant::now(), "an earlier line".into()));
+    app.insert_resource(Script::from_program(program).local_session(true));
+    frame_at(&mut app, 0);
+    frame_at(&mut app, 10);
+    assert_eq!(
+        rx.try_recv().unwrap(),
+        ClientCommand::SendChat(eq_client_core::OutboundChat::Say("hello".into()))
+    );
+    frame_at(&mut app, 20);
+    assert_eq!(
+        app.world().resource::<Script>().status().phase(),
+        Phase::Running
+    );
+    // The session's pace held it: the step failed with the session's words.
+    app.world_mut().resource_mut::<ChatState>().paced =
+        Some((std::time::Instant::now(), reason.into()));
+    frame_at(&mut app, 30);
+    refused(&app, 1, reason);
+    assert!(app.world().resource::<ChatState>().paced.is_none());
+}

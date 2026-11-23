@@ -6676,3 +6676,21 @@ fn the_players_posture_changes_are_counted_but_not_a_first_standing() {
     assert_eq!(posture(&mut world, PostureState::Sitting), 1);
     assert_eq!(posture(&mut world, PostureState::Standing), 2);
 }
+
+#[test]
+fn the_chat_pace_holding_a_line_is_said_to_this_admission_only() {
+    let mut world = admitted();
+    let refused = |session_id| WorldEvent::ChatRefused {
+        session_id,
+        reason: "You are sending chat too fast. Wait 3 seconds.".into(),
+    };
+    assert_eq!(
+        game(&mut world, refused(1)).notices,
+        [Notice::ChatRefused {
+            reason: "You are sending chat too fast. Wait 3 seconds.".into()
+        }]
+    );
+    let stale = game(&mut world, refused(9));
+    assert!(stale.ignored);
+    assert_eq!(stale.notices, []);
+}

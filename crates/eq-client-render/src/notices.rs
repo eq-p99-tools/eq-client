@@ -451,7 +451,9 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
                 ReportKind::Feedback => Vec::new(),
             }
         }
-        Notice::ReportRefused { reason } => chat(Said::own(reason.clone())),
+        Notice::ReportRefused { reason } | Notice::ChatRefused { reason } => {
+            chat(Said::own(reason.clone()))
+        }
         // eqstr 1406, where the installation has it.
         Notice::ContainerInUse => chat(official(Some(1406), &[], "That is in use.", messages)),
         Notice::SkillUp { skill, value } => chat(skill_up(*skill, *value, messages)),
@@ -929,6 +931,20 @@ mod tests {
                 Place::Chat,
                 Said::own("Wait a little before sending another petition.")
             )]
+        );
+    }
+
+    #[test]
+    fn a_chat_pace_refusal_is_the_players_own_line() {
+        let reason = "You are sending chat too fast. Wait 1 second.";
+        assert_eq!(
+            wording(
+                &Notice::ChatRefused {
+                    reason: reason.into()
+                },
+                None
+            ),
+            [(Place::Chat, Said::own(reason))]
         );
     }
 
