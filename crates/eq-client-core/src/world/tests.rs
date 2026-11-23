@@ -856,6 +856,7 @@ fn input_acceptance_is_current_and_never_supplies_movement_permission() {
     game(
         &mut world,
         WorldEvent::MotionState {
+            swim: None,
             diagonal: crate::DiagonalRates::default(),
             session_id: 1,
             units_per_second: None,
@@ -3732,6 +3733,7 @@ fn the_session_grants_motion_until_any_reset() {
         walk: None,
     };
     let grant = |session_id| WorldEvent::MotionState {
+        swim: None,
         diagonal,
         session_id,
         units_per_second: Some(20.0),

@@ -95,20 +95,38 @@ rules and zone gravity where available, with an explicit provisional fallback
 when those data cannot be read. Project 1999 and Titanium EQEmu sessions
 offer bounded swimming in classic water marked by the installed zone.
 Wet movement starts when the character's body origin enters that region.
-Wade or fall into water, move in any
-horizontal direction, and swim up or down by your character's look pitch with
-forward or backward input. Look Up and Look Down (Page Up and Page Down by
-default) tilt that pitch in every camera view, and first-person mouse look moves
-it too; in the chase views the mouse moves only the camera, as in the original
-client. The chase view does not show the pitch, so after Look Up a later stroke
-still rises: Center View levels it in first person, and each zone entry or
-mouse-wheel change between first person and the chase view levels it too.
-Jump strokes up for half a second, and holding it keeps rising. A stroke never
-covers more than a level stroke would, whatever the pitch. A level stroke can cross into known air
-above the same continuous water while the feet stay wet; ordinary gravity then
-returns the body origin to the water. Unknown regions and dry gaps still hold
-the stroke. A supported bank returns the swimmer to ordinary movement. At the
-surface, look up and swim forward toward a nearby bank to use Titanium's shoreline boost.
+On Titanium, water moves the body as the original client's own water step
+does: velocity carries from frame to frame, the water damps it, and gravity
+still pulls, so **an idle swimmer slowly sinks**, about two thirds of a unit
+a second, until they rest on the bottom. Once the head goes under, Air
+Remaining counts down and a character who can't breathe water drowns;
+**Gills for Days** is the switch for those who don't want to. Characters
+in water swim when they move across it and tread water otherwise, sinking,
+still or resting on the bottom, as the original does; a swim or tread
+carries on while wading out with the body above the water. Wade or fall
+into water, move in any horizontal direction, and swim up or down by your
+character's look pitch with forward or backward input: the pitch adds a
+climb or a dive without taking anything from forward speed. Look Up and
+Look Down (Page Up and Page Down by default) tilt that pitch in every
+camera view, and first-person mouse look moves it too; in the chase views
+the mouse moves only the camera, as in the original client. The chase view
+does not show the pitch, so after Look Up a later stroke still rises:
+Center View levels it in first person, and each zone entry or mouse-wheel
+change between first person and the chase view levels it too. A strafe or
+standing still gives no climb. Jump pushes up for half a second, and
+holding it keeps pushing.
+
+Swim speed is the land speed plus the Swimming skill: at a run speed of
+0.7, level swimming goes 7 units a second untrained and 17 at skill 100, and
+looking straight up also climbs at about twice that rate. Sneaking or
+ducked swimming keeps the land speed. The client steps water 60 times a
+second, where the original steps once a frame, so the sinking rate matches
+the original at 60 frames a second (recording checklist 6.483). A swimmer
+entering water starts within the water's speeds. Rising out of the water
+carries the climb on as an ordinary fall back in. Unknown regions and dry
+gaps still hold the stroke. A supported bank returns the swimmer to
+ordinary movement. At the surface, look up and swim forward toward a nearby
+bank to use Titanium's shoreline boost.
 The client checks that the capsule can reach a supported landing. Automated
 ground routes and EQMac-era sessions retain the deep-water guard. Ordinary
 movement guards against entering lava.
@@ -134,9 +152,10 @@ rules apply. A placement inside lava uses ordinary movement and recovery.
 Turning the setting off restores ordinary movement on the next sample.
 Scripted ground route finding uses solid terrain.
 
-The swim rate is a conservative bound based on the session's current
-movement grant. Exact native speed, wet gravity, skill scaling and live P99 wet movement
-remain to be verified. The Titanium air meter samples the character's
+The session bounds each axis of a Titanium swim by the water's steady
+rates; EQMac-era sessions keep a conservative single bound. Live P99 wet
+movement and a side-by-side check against the original client's sinking
+and swim speeds remain to be done. The Titanium air meter samples the character's
 model-dependent head reference separately. Drowning and lava reports are
 available on local-only EQEmu. See [settings](settings.md).
 

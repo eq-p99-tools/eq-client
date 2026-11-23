@@ -287,6 +287,13 @@ impl ClientWorld {
         &self.zone_name
     }
 
+    /// The zone's number, as the server gave it at entry; None before the
+    /// first entry.
+    #[must_use]
+    pub const fn zone_number(&self) -> Option<u16> {
+        self.zone_number
+    }
+
     /// The zone's long name, from the zone list, or its short name for a
     /// zone the list lacks. Inferred: the official client names the zone as
     /// the server's zone header does, which the session doesn't read, and

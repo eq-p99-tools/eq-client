@@ -175,6 +175,20 @@ impl AirborneController {
         }
     }
 
+    /// Carries a body leaving water on as a fall: its vertical velocity and
+    /// horizontal drift, in world units a second, as the program's dry step
+    /// takes the wet velocity on with no input (0x4bfe0f; read R33). The
+    /// fall starts at `feet_height`, so a landing counts from its peak.
+    pub fn carry_from_water(&mut self, vertical: f32, drift: Vec3, feet_height: f32) {
+        if vertical.is_finite() && drift.is_finite() && feet_height.is_finite() {
+            self.velocity = vertical;
+            self.drift = Vec3::new(drift.x, 0.0, drift.z);
+            self.clock = 0.0;
+            self.peak = Some(feet_height);
+            self.landing = None;
+        }
+    }
+
     /// Resets momentum after a correction, teleport, or a new admission.
     pub fn reset(&mut self) {
         *self = Self::default();
