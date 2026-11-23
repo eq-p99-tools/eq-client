@@ -275,7 +275,9 @@ or occluded. The counters are independent of damage and inventory.
   stamped with the script's admission. Chat words (`say`, `tell`, `ooc`, `shout`, `gsay`,
   `auction`), `reply`, `friend`, `ignore`, `quit` and `exit` work as typed. The line is at
   most 512 bytes counting the slash, as the chat line is, and takes no control characters.
-  A social goes through the named `social` step instead.
+  A social goes through the named `social` step instead. `petition`, `bugreport` (`bug`)
+  and `feedback` are refused when the script is read: a person on the staff reads each
+  one, so only a typed line sends it.
   `slash("follow")` queues the ordinary local follow request for the targeted group
   member. Its deferred request keeps the script's expected admission and zone;
   a changed world withdraws it before movement handles it. Completion of the

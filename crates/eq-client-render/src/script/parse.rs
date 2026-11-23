@@ -931,6 +931,14 @@ fn parse_slash(words: &[&str]) -> Result<Step, String> {
     if line.chars().any(char::is_control) {
         return Err("a slash line takes no control characters".into());
     }
+    // A person on the staff reads each petition, bug report and note of
+    // feedback, so only a typed line sends one (6.511).
+    if crate::commands::spelled(&line)
+        .and_then(|line| crate::reports::Asked::typed(&line))
+        .is_some()
+    {
+        return Err("only a typed line sends a petition, bug report or feedback".into());
+    }
     Ok(Step::Slash(line))
 }
 
