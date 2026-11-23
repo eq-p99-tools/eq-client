@@ -444,7 +444,8 @@ character, and every line you type goes out in it. The servers themselves turn
 out-of-character chat back to the common tongue. A saved language your
 character no longer knows falls back to the common tongue.
 
-A line heard in another tongue names it (for example "says, in Elvish,").
+A line heard in another tongue names it in the place the installed speech line
+keeps for a tongue, as ", in" and the installed name of the language.
 How much you follow is the lower of your own skill and the skill the line
 carries. Below full skill, letters are swapped at random, more of them the
 lower your skill, the same way each time the line shows. Common-tongue lines,

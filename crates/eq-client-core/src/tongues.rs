@@ -9,7 +9,7 @@
 //! two, and 27 for a tongue the listener barely knows) and TAKP (which sends
 //! the speaker's); each letter is then swapped as `EQEmu`'s own garble for
 //! books swaps it (`Client::GarbleMessage`), with a chance of
-//! (100 - skill) in 116.
+//! (101 - skill) in 116: a draw of 0 to 115 at most 100 - skill.
 use crate::chat::{ChatLine, Message};
 
 /// The common tongue's number.
@@ -51,7 +51,8 @@ const LETTERS: &[u8; 52] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxy
 
 /// Garbles a heard line for a player who follows `followed` of its tongue:
 /// nothing at 100; below, each ASCII letter outside the item links' text is
-/// swapped with a chance of (100 - followed) in 116. The draw is seeded from
+/// swapped with a chance of (101 - followed) in 116 (`EQEmu`'s draw of 0 to
+/// 115, taken when at most 100 - followed). The draw is seeded from
 /// the line, so one line garbles the same way each time; the length stays,
 /// so the links' places hold.
 pub fn garble(message: &mut Message, followed: u8, seed: u64) {
@@ -203,6 +204,28 @@ mod tests {
                 assert_eq!(heard, sent);
             }
         }
+    }
+
+    #[test]
+    fn a_letter_swaps_with_a_chance_of_101_less_the_skill_in_116() {
+        let text = "abcdefghij".repeat(400);
+        let changed = |followed| {
+            let mut message = said(&text, 3, 100).message;
+            garble(&mut message, followed, 0x5eed);
+            message
+                .text
+                .bytes()
+                .zip(text.bytes())
+                .filter(|(heard, sent)| heard != sent)
+                .count()
+        };
+        // A swap may draw the same letter (1 in 52), so the share changed is
+        // the chance times 51/52: about 0.85 at no skill, 0.017 at 99.
+        let none = changed(0);
+        assert!((3_200..=3_600).contains(&none), "{none}");
+        let nearly = changed(99);
+        assert!((20..=120).contains(&nearly), "{nearly}");
+        assert_eq!(changed(100), 0);
     }
 
     #[test]
