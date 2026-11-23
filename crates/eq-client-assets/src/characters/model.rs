@@ -18,7 +18,9 @@ use crate::{LoadError, MaterialMode, ZonePrimitive, ZoneTexture, load_texture, s
 
 #[path = "appearance.rs"]
 mod appearance;
-pub use appearance::{CreationAppearance, load_creation_character};
+pub use appearance::{
+    CreationAppearance, load_creation_character, load_luclin_character, luclin_source,
+};
 
 /// The clip a model plays standing still.
 pub const STANDING_CLIP: &str = "P01";
@@ -39,6 +41,9 @@ pub struct CharacterAsset {
     pub pieces: Vec<Piece>,
     /// The archive the model came from, for the textures of other looks.
     source: PathBuf,
+    /// Whether it is a newer (Luclin) player model, which the classic
+    /// dressing rules don't describe.
+    luclin: bool,
     /// Every material in that archive by name: its texture file and blending.
     catalog: HashMap<String, (Option<String>, MaterialMode)>,
     parents: Vec<Option<usize>>,
@@ -380,6 +385,19 @@ impl CharacterAsset {
         &self.source
     }
 
+    /// Whether it is a newer (Luclin) player model
+    /// ([`super::load_luclin_character`]), which the classic dressing rules
+    /// (worn materials, robe bodies, helm heads) don't describe.
+    #[must_use]
+    pub const fn luclin(&self) -> bool {
+        self.luclin
+    }
+
+    /// Marks the model as a newer (Luclin) player model, or not.
+    pub const fn set_luclin(&mut self, luclin: bool) {
+        self.luclin = luclin;
+    }
+
     /// Whether the model's archive has this material, such as `HUMCH0201_MDF`.
     #[must_use]
     pub fn has_material(&self, material: &str) -> bool {
@@ -609,6 +627,7 @@ impl CharacterAsset {
             materials: vec![None],
             pieces: vec![Piece::Body(0)],
             source: PathBuf::new(),
+            luclin: false,
             catalog: HashMap::from([("TSTHE0301_MDF".into(), (None, MaterialMode::Opaque))]),
             parents: vec![None, Some(0)],
             base_pose: vec![still, raised],
@@ -658,6 +677,19 @@ impl CharacterAsset {
             primitive.positions = pose.positions;
             primitive.normals = pose.normals;
         }
+        asset
+    }
+
+    /// The [`testing`](Self::testing) model with its triangle repeated, once
+    /// for each of `pieces`, so tests can see which pieces show.
+    #[must_use]
+    pub fn testing_pieces(pieces: &[Piece]) -> Self {
+        let mut asset = Self::testing();
+        let (primitive, skin) = (asset.primitives[0].clone(), asset.skins[0].clone());
+        asset.primitives = vec![primitive; pieces.len()];
+        asset.skins = vec![skin; pieces.len()];
+        asset.materials = vec![None; pieces.len()];
+        asset.pieces = pieces.to_vec();
         asset
     }
 }
@@ -845,6 +877,7 @@ pub(super) fn load_with_source(
         materials,
         pieces,
         source: path.to_owned(),
+        luclin: false,
         catalog,
         parents,
         base_pose,
@@ -1123,6 +1156,7 @@ mod tests {
             materials: Vec::new(),
             pieces: Vec::new(),
             source: PathBuf::new(),
+            luclin: false,
             catalog: HashMap::new(),
             parents: vec![None],
             base_pose: vec![base],
@@ -1172,6 +1206,7 @@ mod tests {
             materials: Vec::new(),
             pieces: Vec::new(),
             source: PathBuf::new(),
+            luclin: false,
             catalog: HashMap::new(),
             parents: vec![None, Some(0), Some(0)],
             base_pose: vec![still; 3],
@@ -1210,6 +1245,7 @@ mod tests {
             materials: Vec::new(),
             pieces: Vec::new(),
             source: PathBuf::new(),
+            luclin: false,
             catalog: HashMap::new(),
             parents: vec![None, Some(0), Some(1)],
             base_pose: vec![still; 3],
@@ -1286,6 +1322,7 @@ mod tests {
             materials: Vec::new(),
             pieces: Vec::new(),
             source: PathBuf::new(),
+            luclin: false,
             catalog: HashMap::new(),
             parents: vec![None],
             base_pose: vec![base],
@@ -1315,6 +1352,7 @@ mod tests {
             materials: Vec::new(),
             pieces: vec![Piece::Body(0), Piece::Head(0), Piece::Head(1)],
             source: PathBuf::new(),
+            luclin: false,
             catalog: HashMap::new(),
             parents: vec![None],
             base_pose: Vec::new(),
@@ -1368,6 +1406,7 @@ mod tests {
                 materials: vec![None],
                 pieces: vec![Piece::Body(0)],
                 source: PathBuf::new(),
+                luclin: false,
                 catalog: HashMap::new(),
                 parents: vec![None, Some(0)],
                 base_pose: vec![hip, hip],
@@ -1420,6 +1459,7 @@ mod tests {
             materials: Vec::new(),
             pieces: vec![Piece::Body(0)],
             source: PathBuf::new(),
+            luclin: false,
             catalog: HashMap::new(),
             parents: vec![None],
             base_pose: vec![bone],

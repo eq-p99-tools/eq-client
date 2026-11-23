@@ -158,17 +158,35 @@ impl Selection {
     }
 
     /// Asks once; a refused request leaves the choice available for another
-    /// click, and the outbox says why.
-    fn enter(&mut self, outbox: &Outbox, world: &eq_client_core::world::ClientWorld) {
+    /// click, and the outbox says why. Before the choice it gives the
+    /// session the character's saved server filters (`filters`, by name),
+    /// so their first zone-in carries them; once the choice is sent it
+    /// returns what was given.
+    fn enter(
+        &mut self,
+        outbox: &Outbox,
+        world: &eq_client_core::world::ClientWorld,
+        filters: impl FnOnce(&str) -> Option<eq_client_core::filters::ServerFilters>,
+    ) -> Option<Entered> {
         if self.submitted || self.held {
-            return;
+            return None;
         }
-        let Some(slot) = self.selected else {
-            return;
-        };
-        if !self.entries.iter().any(|entry| entry.slot == slot) {
-            return;
-        }
+        let slot = self.selected?;
+        let name = self
+            .entries
+            .iter()
+            .find(|entry| entry.slot == slot)?
+            .name
+            .clone();
+        let given = filters(&name).filter(|filters| {
+            outbox.tell(
+                world,
+                ClientCommand::ChooseServerFilters {
+                    selection_id: self.id,
+                    filters: filters.clone(),
+                },
+            )
+        });
         let command = ClientCommand::SelectCharacter {
             selection_id: self.id,
             slot,
@@ -177,10 +195,20 @@ impl Selection {
             Ok(()) => {
                 self.submitted = true;
                 self.message = "Entering world...".into();
+                Some(Entered { filters: given })
             }
-            Err(refusal) => self.message = refusal.text().into(),
+            Err(refusal) => {
+                self.message = refusal.text().into();
+                None
+            }
         }
     }
+}
+
+/// A sent character choice: the server filters given before it, if any.
+#[derive(Debug, PartialEq)]
+struct Entered {
+    filters: Option<eq_client_core::filters::ServerFilters>,
 }
 
 #[cfg(test)]
@@ -243,6 +271,10 @@ pub(super) fn update(
         Res<crate::select_preview::Preview>,
         Res<crate::hud::messages::Messages>,
     ),
+    (mut options, settings): (
+        ResMut<crate::options::OptionsState>,
+        Res<crate::ViewerSettings>,
+    ),
 ) {
     let focused = keys.focused();
     let keys = navigation.sample(&keys.input);
@@ -297,7 +329,20 @@ pub(super) fn update(
         }
     }
     let mut ask_delete = false;
+    let mut entered = None;
     let (choosing, world) = online.choosing();
+    // The character's saved filters, for the generation the world speaks.
+    let saved = |name: &str| {
+        let profile = crate::profile_files::CharacterProfile {
+            world: world.world_name()?.to_owned(),
+            character: name.to_owned(),
+        };
+        Some(options.saved_filters(
+            settings.0.settings_directory.as_ref(),
+            &profile,
+            world.generation(),
+        ))
+    };
     if visible
         && focused
         && let Some(selection) = choosing
@@ -318,7 +363,7 @@ pub(super) fn update(
                         editor.open(selection, world);
                     }
                 }
-                Action::Enter => selection.enter(&outbox, world),
+                Action::Enter => entered = selection.enter(&outbox, world, saved).or(entered),
                 Action::Delete => {
                     ask_delete = selection.deletion.is_some() && selection.selected.is_some();
                 }
@@ -352,8 +397,11 @@ pub(super) fn update(
             editor.open(selection, world);
         }
         if !editor.active() && keys.just_pressed(KeyCode::Enter) {
-            selection.enter(&outbox, world);
+            entered = selection.enter(&outbox, world, saved).or(entered);
         }
+    }
+    if let Some(Entered { filters }) = entered {
+        options.choose_filters(filters);
     }
     if ask_delete && !editor.active() {
         match online.prepare_character_deletion() {
@@ -834,6 +882,8 @@ mod tests {
             .init_resource::<crate::loading::Screen>()
             .init_resource::<crate::select_preview::Preview>()
             .init_resource::<crate::hud::messages::Messages>()
+            .init_resource::<crate::options::OptionsState>()
+            .init_resource::<crate::ViewerSettings>()
             .add_message::<AppExit>()
             .add_systems(Update, update);
         app.world_mut().spawn((
@@ -1250,7 +1300,7 @@ mod tests {
         // The list arrives with its first character highlighted.
         assert_eq!(selection.chosen(), Some(3));
         selection.selected = None;
-        selection.enter(&sender, &world);
+        selection.enter(&sender, &world, |_| None);
         assert!(rx.try_recv().is_err());
         selection.selected = Some(3);
         queue
@@ -1259,11 +1309,11 @@ mod tests {
                 slot: 1,
             })
             .unwrap();
-        selection.enter(&sender, &world);
+        selection.enter(&sender, &world, |_| None);
         assert!(!selection.submitted);
         rx.try_recv().unwrap();
-        selection.enter(&sender, &world);
-        selection.enter(&sender, &world);
+        selection.enter(&sender, &world, |_| None);
+        selection.enter(&sender, &world, |_| None);
         assert!(selection.submitted);
         assert_eq!(
             rx.try_recv().unwrap(),
@@ -1273,6 +1323,53 @@ mod tests {
             }
         );
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn entry_gives_the_characters_saved_filters_first() {
+        use eq_client_core::filters::{FilterCategory, FilterMode, ServerFilters};
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let sender = crate::outbox::Outbox::new(Some(tx));
+        let world = eq_client_core::world::ClientWorld::default();
+        let mut selection = Selection::new(
+            7,
+            vec![CharacterChoice {
+                slot: 3,
+                name: "Example".into(),
+                level: Some(1),
+                zone_id: Some(22),
+                look: None,
+            }],
+        );
+        let mut saved = ServerFilters::default();
+        saved.set(FilterCategory::Auctions, FilterMode::Hide);
+        let mut asked = Vec::new();
+        let given = selection.enter(&sender, &world, |name| {
+            asked.push(name.to_owned());
+            Some(saved.clone())
+        });
+        assert_eq!(asked, ["Example"]);
+        assert_eq!(
+            given,
+            Some(Entered {
+                filters: Some(saved.clone())
+            })
+        );
+        assert_eq!(
+            rx.try_iter().collect::<Vec<_>>(),
+            [
+                ClientCommand::ChooseServerFilters {
+                    selection_id: 7,
+                    filters: saved
+                },
+                ClientCommand::SelectCharacter {
+                    selection_id: 7,
+                    slot: 3
+                }
+            ]
+        );
+        // Once entering, nothing more is given.
+        assert_eq!(selection.enter(&sender, &world, |_| None), None);
     }
 
     #[test]
@@ -1317,6 +1414,8 @@ mod tests {
             .init_resource::<crate::windows::Shown>()
             .init_resource::<crate::skinned::Skinned>()
             .init_resource::<crate::login::FrontEnd>()
+            .init_resource::<crate::options::OptionsState>()
+            .init_resource::<crate::ViewerSettings>()
             .init_resource::<crate::loading::Screen>()
             .init_resource::<crate::select_preview::Preview>()
             .init_resource::<crate::hud::messages::Messages>()

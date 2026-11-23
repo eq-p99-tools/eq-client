@@ -147,6 +147,7 @@ impl ClientWorld {
         self.target.accepts_updates = true;
         self.zone.pet_buffs.accepts_staged_entry = true;
         zone.clone_into(&mut self.zone_name);
+        self.zone_number = Some(zone_id);
         self.zone.doors.set_zone(zone_id);
         changes
             .notices

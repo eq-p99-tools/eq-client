@@ -17,7 +17,7 @@ pub(crate) use controls::{
     actions as control_actions, focus as search_focus, scroll as scroll_watches,
 };
 pub(crate) use controls::{input as search_input, update as update_controls};
-pub(crate) use entities::{inspect, update as update_entities};
+pub(crate) use entities::{finite as placeable, inspect, update as update_entities};
 pub(crate) use items::update as update_items;
 pub(crate) use landmarks::{
     Landmarks, actions as landmark_actions, draw as draw_landmarks, follow as follow_landmarks,

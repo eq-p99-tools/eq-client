@@ -10,12 +10,6 @@ use libeq::pfs::PfsReader;
 
 use crate::{LoadError, StagedPrimitive, ZonePrimitive, ZoneTexture, model_key};
 
-/// The classic item archives, searched in this order; each holds a WLD of the
-/// same name. An installation may lack the later ones.
-const ARCHIVES: [&str; 7] = [
-    "gequip", "gequip2", "gequip3", "gequip4", "gequip5", "gequip6", "gequip8",
-];
-
 /// One item model with its own textures, ready to draw.
 #[derive(Clone, Debug)]
 pub struct ItemModel {
@@ -72,8 +66,8 @@ impl ItemModels {
     pub fn open(eq_directory: &Path) -> Result<Self, LoadError> {
         let mut archives = Vec::new();
         let mut models = HashMap::new();
-        for stem in ARCHIVES {
-            let path = eq_directory.join(format!("{stem}.s3d"));
+        for stem in crate::archives::ITEMS {
+            let path = crate::archives::path(eq_directory, stem);
             let file = match File::open(&path) {
                 Ok(file) => file,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => continue,

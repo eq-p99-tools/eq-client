@@ -87,9 +87,13 @@ impl SceneLights {
 }
 
 /// Whether the zone draws as the Titanium engine's no-sky scene: the
-/// installed client is Titanium, the player is in the zone the scene was
-/// built for, and the zone has no sky. The Mac-era engine is unread, and
-/// See the World Clearly draws the plain textures.
+/// installed client is Titanium (or RoF2, inferred), the player is in the
+/// zone the scene was built for, and the zone has no sky. The Mac-era
+/// engine is unread, and See the World Clearly draws the plain textures.
+#[expect(
+    clippy::match_same_arms,
+    reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
+)]
 pub(super) fn interior(
     scene: Option<&SceneLights>,
     world: &ClientWorld,
@@ -97,7 +101,12 @@ pub(super) fn interior(
     clearly: bool,
 ) -> bool {
     !clearly
-        && settings.0.installed_client == InstalledClient::Titanium
+        && match settings.0.installed_client {
+            InstalledClient::Titanium => true,
+            // Titanium's, inferred for RoF2 (6.489).
+            InstalledClient::Rof2 => true,
+            InstalledClient::EqMac => false,
+        }
         && world.connected()
         && world.session_id().is_some()
         && world.pending_transfer().is_none()

@@ -50,7 +50,8 @@ impl PreparedEntry {
     }
 
     /// Stands the character on the floor at a character select spot: the
-    /// first floor at or below the spot's height and a little above it, or
+    /// first floor at or below the spot's height and a little above it (at
+    /// the spot's own height for a spot afloat in open water), or
     /// without a spot (or a floor under it) the highest surface at the
     /// centre of the zone's bounds, as the offline viewer starts.
     pub(super) fn stand(&mut self, spot: Option<&eq_client_core::select_spots::Spot>) {
@@ -85,11 +86,16 @@ impl Entry {
     /// The player's own model is drawn by the installed client's rule, with
     /// the zone header's classic model scale flag, as every other spawn is
     /// ([`super::entities::Drawn`]).
+    /// `generation` is the look the player's model draws with
+    /// ([`eq_client_core::player_models::generation`]); only the drawing
+    /// takes it, as the body's height, feet, size and breath come from the
+    /// classic model however it is drawn ([`own_model`]).
     pub(super) fn admission(
         zone_name: &str,
         player: &eq_client_core::PlayerState,
         (client, flag): (eq_client_assets::ui::InstalledClient, Option<u32>),
         directory: &std::path::Path,
+        generation: eq_client_core::player_models::Generation,
     ) -> Result<Self, String> {
         let zone = eq_client_assets::load_zone(directory, zone_name)
             .map_err(|error| format!("Zone {zone_name} could not be loaded: {error}"))?;
@@ -110,13 +116,35 @@ impl Entry {
                 }
             }
         });
-        let native_head =
-            if client == eq_client_assets::ui::InstalledClient::Titanium && character.is_some() {
-                super::breath::head::Basis::load(directory, player, model)
-            } else {
-                None
-            };
-        let height = character.as_ref().map_or(6.0, CharacterAsset::height);
+        let native_head = if match client {
+            eq_client_assets::ui::InstalledClient::Titanium => true,
+            // RoF2's water is not read yet.
+            eq_client_assets::ui::InstalledClient::EqMac
+            | eq_client_assets::ui::InstalledClient::Rof2 => false,
+        } && character.is_some()
+        {
+            super::breath::head::Basis::load(directory, player, model)
+        } else {
+            None
+        };
+        let luclin = match generation {
+            eq_client_core::player_models::Generation::Classic => None,
+            eq_client_core::player_models::Generation::Luclin => model.and_then(|model| {
+                eq_client_assets::characters::load_luclin_character(
+                    directory,
+                    model,
+                    (player.race, player.gender),
+                    &eq_client_assets::characters::DonorArchives::default(),
+                )
+                .inspect_err(|error| {
+                    if first_miss(model) {
+                        warn!("Luclin model {model} unavailable, drawing the classic one: {error}");
+                    }
+                })
+                .ok()
+            }),
+        };
+        let (character, height) = own_model(character, luclin);
         // Use the model's estimated standing offset to project feet.
         // A fresh server placement can still need a collision step to stand.
         let feet_offset = eq_client_core::z_offset(player.race, player.size);
@@ -197,6 +225,30 @@ impl Entry {
             navmesh,
         }
     }
+}
+
+/// Whether this is the first time this run the player's Luclin model `model`
+/// could not be read, so it is said once however many zones it is missed in.
+/// Other spawns' misses are kept by [`super::entities::NearbyEntities`].
+fn first_miss(model: &'static str) -> bool {
+    static MISSED: std::sync::Mutex<std::collections::BTreeSet<&str>> =
+        std::sync::Mutex::new(std::collections::BTreeSet::new());
+    MISSED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(model)
+}
+
+/// The model the player is drawn with, and the height their body collides
+/// by: the Luclin model where one was read, else the classic one; the height
+/// is always the classic model's, so the look changes nothing the player
+/// moves, swims or reaches by (6.554).
+fn own_model(
+    classic: Option<CharacterAsset>,
+    luclin: Option<CharacterAsset>,
+) -> (Option<CharacterAsset>, f32) {
+    let height = classic.as_ref().map_or(6.0, CharacterAsset::height);
+    (luclin.or(classic), height)
 }
 
 /// Where a server position puts the player's root, facing its heading.
@@ -392,5 +444,40 @@ impl Scene<'_, '_> {
         for (_, mut camera) in &mut self.cameras {
             camera.focus = point;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_missing_luclin_model_of_the_players_is_said_once_a_run() {
+        assert!(first_miss("TSTLUCLINA"));
+        assert!(!first_miss("TSTLUCLINA"));
+        assert!(first_miss("TSTLUCLINB"));
+    }
+
+    #[test]
+    fn the_players_luclin_model_is_drawn_but_the_body_keeps_the_classic_height() {
+        let classic = CharacterAsset::testing();
+        let mut luclin = CharacterAsset::testing();
+        for point in &mut luclin.primitives[0].positions {
+            point[1] *= 3.0;
+        }
+        luclin.set_luclin(true);
+        assert_ne!(luclin.height().to_bits(), classic.height().to_bits());
+        let height = classic.height();
+        let (drawn, collides) = own_model(Some(classic.clone()), Some(luclin));
+        assert!(drawn.unwrap().luclin());
+        assert_eq!(collides.to_bits(), height.to_bits());
+        // Without a Luclin model, the classic one, as before.
+        let (drawn, collides) = own_model(Some(classic), None);
+        assert!(!drawn.unwrap().luclin());
+        assert_eq!(collides.to_bits(), height.to_bits());
+        // Without a classic one, the default height whatever is drawn.
+        let (drawn, collides) = own_model(None, Some(CharacterAsset::testing()));
+        assert!(drawn.is_some());
+        assert_eq!(collides.to_bits(), 6.0_f32.to_bits());
     }
 }
