@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- A knight's Lay on Hands or Harm Touch waits as the Titanium program's does
+  (read R49-29 b, checklist 6.626, slice B). eq-network is repinned to
+  700e61e (#432, #434, #433; none breaking). The session now waits the
+  program's own gem-9 timer: 10 s from a press, then the spell's recast
+  after the server refreshes the gem, saying the program's 0x2efd while it
+  runs. This client hands it the recast from the installed spell file
+  (field 15, the replayed table on P99 once ready). The server's long reuse
+  no longer holds the press: the button's hover shows it as "Server reuse
+  N s" (this client's label, "(estimated)" where the session estimated it)
+  and the button still dims while it runs, but the press goes after the
+  local wait and the server decides. Tracking now ends silently (#434) and
+  Pick Pockets on a player follows the world's ruleset (#432).
 - A Bard's song stop resets the gem timers as the Titanium program's stop does (0x40f06d, read R49-21 c; checklist 6.542). On each `WorldEvent::SongStopped`, which the session sends only under the Titanium song rules (P99, Titanium EQEmu), the timers of the gems whose spells have no recast end, and so does the shared recovery before any spell. A spell whose timing the installed data lacks keeps its timer. The stop is applied in order with the gem refreshes around it, so a refresh after it starts its timers again. Before, a press just after `/stopsong` could be refused with "Spell available in N s" where the program casts.
 - A zone line that leads back into the same zone places the player at its landing on stock EQEmu too, as the Titanium program does (0x48aaa6, checklist 6.640, repin to eq-network 231d67d with #430). Before, the client waited for a server move that never came, so in qeynos2 the player fell down the Temple of Life shaft. The installed zone lines already checked P99's crossings, and now check stock EQEmu's. Quarm, TAKP and RoF2 refuse a same-zone line, as before.
   - The repin carries every eq-network change since 614d1c0. An item's cold resistance is scaled with the other bonuses (#418). A training refusal keeps this client's words; the program's line is the language-training client half's (#427). Movement sends no vertical speed of its own, so the session sends 0 as before (#423, the 6.617 client half's).

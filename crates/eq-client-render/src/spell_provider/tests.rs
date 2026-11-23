@@ -12,6 +12,8 @@ fn definitions() -> Arc<Definitions> {
             fields[0] = id.to_string();
             fields[1] = format!("Destination {id}");
             fields[8] = format!("Fade {id}");
+            fields[14] = "2500".to_owned();
+            fields[15] = if id == 4 { "0".to_owned() } else { (id * 10_000).to_string() };
             fields[19] = (id * 10).to_string();
             fields[83] = (id % 2).to_string();
             fields[144] = (id * 3).to_string();
@@ -406,4 +408,17 @@ fn unknown_run_identity_withdraws_ready_mechanics_without_clearing_snapshots() {
         provider.readiness(),
         &Readiness::Unavailable(Failure::RunIdentity)
     );
+}
+
+#[test]
+fn a_knight_special_waits_the_installed_recast() {
+    use eq_client_core::vision::SightCatalog;
+    let sight = SightProvider::from_definitions(Binding::new(Policy::Installed), definitions());
+    assert_eq!(sight.recast(3), Some(std::time::Duration::from_secs(30)));
+    // A recast of 0 and a spell the file lacks give none.
+    assert_eq!(sight.recast(4), None);
+    assert_eq!(sight.recast(99), None);
+    // Before a P99 replay is ready, the installed file's recast still holds.
+    let waiting = SightProvider::from_definitions(Binding::new(Policy::Project1999), definitions());
+    assert_eq!(waiting.recast(1), Some(std::time::Duration::from_secs(10)));
 }
