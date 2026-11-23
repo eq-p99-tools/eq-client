@@ -306,7 +306,9 @@ pub(super) fn reconcile(
         .spawns()
         .values()
         .map(|spawn| &spawn.state)
-        .filter(|spawn| reveal || world.can_see(spawn));
+        // A body type the program hides is apart from invisibility: no See
+        // Invisible shows it, only the QoL fix that shows every spawn.
+        .filter(|spawn| reveal || (world.can_see(spawn) && !world.hides_by_body(spawn)));
     let selected = nearby_with_invisible(
         candidates,
         player.spawn_id,

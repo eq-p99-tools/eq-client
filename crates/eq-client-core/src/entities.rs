@@ -142,6 +142,7 @@ mod tests {
     #[allow(clippy::float_cmp)] // Exactly representable fixture values.
     fn moving_spawns_are_carried_on_as_the_generations_program_does() {
         let spawn = SpawnState {
+            body_type: None,
             class: None,
             spawn_id: 9,
             name: "Synthetic walker".into(),
@@ -184,6 +185,7 @@ mod tests {
         assert!((held.x - 10.0 - 12.0 * 11.636).abs() < 0.5, "{held:?}");
         // A reported velocity with no input dies away.
         let coasting = SpawnState {
+            body_type: None,
             velocity: [20.0, 0.0, 0.0],
             forward: 0.0,
             ..spawn.clone()
@@ -191,6 +193,7 @@ mod tests {
         let stop = carried(GameDialect::Titanium, &coasting, Duration::from_secs(5));
         assert!(stop.x > 10.0 && stop.x < 11.0, "{stop:?}");
         let standing = SpawnState {
+            body_type: None,
             forward: 0.0,
             ..spawn
         };
@@ -214,6 +217,7 @@ mod tests {
     }
     fn spawn(id: u16, x: f32) -> SpawnState {
         SpawnState {
+            body_type: None,
             class: None,
             spawn_id: id,
             name: String::new(),

@@ -551,6 +551,37 @@ impl ClientWorld {
         crate::vision::can_see(spawn, self.zone.sees_invisible && self.in_world())
     }
 
+    /// Whether this generation's program refuses a spawn as a new target by
+    /// its body type: the target setter puts the previous target back,
+    /// silently and with nothing sent (program read R44). A target the
+    /// server sets is kept whatever its body type.
+    #[must_use]
+    pub fn refuses_target(&self, spawn: &crate::SpawnState) -> bool {
+        self.generation()
+            .targeting()
+            .is_some_and(|rules| rules.refuses(spawn.body_type))
+    }
+
+    /// Whether this generation's program interacts with a spawn of its body
+    /// type at all (program read R44, 0x4a7356).
+    #[must_use]
+    pub fn interacts_with(&self, spawn: &crate::SpawnState) -> bool {
+        self.generation()
+            .targeting()
+            .is_none_or(|rules| rules.interacts(spawn.body_type))
+    }
+
+    /// Whether this generation's program hides a spawn by its body type, so
+    /// it is neither drawn nor named (program read R44, 0x480409; whether
+    /// the model is drawn is inferred, recording checklist 6.486). Apart
+    /// from invisibility: no See Invisible reveals it.
+    #[must_use]
+    pub fn hides_by_body(&self, spawn: &crate::SpawnState) -> bool {
+        self.generation()
+            .targeting()
+            .is_some_and(|rules| rules.hides(spawn.body_type))
+    }
+
     /// The player's target.
     #[must_use]
     pub const fn target(&self) -> &Target {

@@ -126,6 +126,21 @@
   program's put-back does (read R42; inferred bound, checklist 6.484).
   Ducking, wet feet and the Mac-era generation are unchanged, and the
   landing sample stays inside the session's guard.
+- Refuse untargetable spawns as the Titanium client does (read R44). On
+  EQEmu and P99, a spawn whose body type the original's target setter
+  refuses (11, 60, 65 and 67: EQEmu's zone controller and other utility
+  spawns) is never chosen. A click on one keeps the current target, with no
+  line and nothing sent, and doesn't pick the spawn behind it. Target Next
+  and `/target` pass over it, and a script's `target()` finds nothing, as
+  for a spawn that isn't there (inferred for these paths until their
+  handlers are read; checklist 6.486). There is no interaction with body
+  types 11, 65 and 67. A target the server sets is kept whatever its body
+  type. Body types above 64 are neither drawn nor named, as the original's
+  per-spawn update skips them; See Invisible doesn't reveal them, and only
+  the QoL Show Invisible Entities does (whether the original draws their
+  model is inferred, 6.486). The Mac-era servers target as before.
+  Networking pinned to d0333db (eq-network #317).
+
 - Swim as the Titanium client does (reads R33, R33b, R39, R41). Water now
   keeps the body's velocity from frame to frame and damps it, gravity still
   pulls in water so an idle swimmer slowly sinks (about 0.67 units a

@@ -6513,6 +6513,7 @@ pub(super) mod tests {
                 &mut online,
                 5,
                 SpawnState {
+                    body_type: None,
                     name: "Friend".into(),
                     kind: SpawnKind::Player,
                     race: 1,

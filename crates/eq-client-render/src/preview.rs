@@ -472,6 +472,7 @@ fn trade(
         .map(|player| player.position)
         .unwrap_or_default();
     news.game(WorldEvent::Spawns(vec![eq_client_core::SpawnState {
+        body_type: None,
         name: "Preview_Trader000".into(),
         kind: SpawnKind::Player,
         ..synthetic(5, 1, 0.0, trader)
