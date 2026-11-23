@@ -669,7 +669,7 @@ pub(crate) fn memorize(
     if world.gems().contains(&Some(held.spell)) {
         return Some(messages.said_text(12052, "That spell is in a gem already."));
     }
-    if action_pending(world) {
+    if super::memorize_pending(world) {
         return Some(Said::own("Wait for the current spell action"));
     }
     // The outbox says why a memorization it holds back did not go.
