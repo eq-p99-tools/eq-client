@@ -39,6 +39,7 @@ pub fn rewrite_proposals<'a>(
             return Err(format!("{zone}: proposed twice"));
         }
         spot.reviewed = false;
+        spot.afloat = false;
         replacements.push((zone, spot));
     }
     let newline = text.find('\n').map_or("\n", |index| {
@@ -101,6 +102,7 @@ mod tests {
             pitch: 10.0,
             // The document writer must not trust a caller to approve a row.
             reviewed: true,
+            afloat: false,
         }
     }
 
