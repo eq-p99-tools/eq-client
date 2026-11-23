@@ -73,7 +73,8 @@
   - **Rows and choices:** the Filters page lists the program's 28 rows in
     its order but swarm pets' deaths, which has no row there either, each
     stepping through its own choices in the program's order. Bad words start
-    filtered, as there.
+    filtered, as there. The page takes the place of the skin's own Filters
+    page, whose controls are not wired, so the window shows one Filters tab.
   - **Keys:** the options file keeps each row under the original's
     `eqclient.ini` key (`Channel00`, `BadWord`, `PCSpells` and the rest) as
     its choice's index; an index outside the row's choices gives its

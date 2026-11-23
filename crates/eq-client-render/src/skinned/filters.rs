@@ -70,9 +70,22 @@ fn row_button(template: &Button, category: FilterCategory, area: Area) -> Button
     button
 }
 
-/// The skin's pages, and for the Options window a Filters page after them,
-/// where the skin has a checkbox to cut its buttons from. The page's note
-/// wraps within the page's width, `page_width`.
+/// Whether a skin page is the skin's own filters page: one holding an
+/// `OFP_` control, or titled Filters.
+fn skin_filters(page: &Page) -> bool {
+    page.pieces.iter().any(|(id, _)| id.starts_with("OFP_"))
+        || page
+            .title
+            .as_deref()
+            .is_some_and(|title| title.trim().eq_ignore_ascii_case("filters"))
+}
+
+/// The skin's pages, and for the Options window this client's Filters page,
+/// where the skin has a button to cut its rows from. The page takes the
+/// place of the skin's own filters page, whose controls are not wired, so
+/// the window keeps one Filters tab in the skin's place; a skin without one
+/// gets the page after its own. The page's note wraps within the page's
+/// width, `page_width`.
 pub(super) fn pages(pages: &[Page], owner: WindowId, page_width: f32) -> Cow<'_, [Page]> {
     if owner != WindowId::Options || pages.iter().any(|page| page.name == PAGE) {
         return Cow::Borrowed(pages);
@@ -165,13 +178,23 @@ pub(super) fn pages(pages: &[Page], owner: WindowId, page_width: f32) -> Cow<'_,
         y += height + 2.0;
     }
     let mut all = pages.to_vec();
-    all.push(Page {
+    let at = all.iter().position(skin_filters);
+    let base = at.map_or(first, |at| &all[at]);
+    let page = Page {
         name: PAGE.into(),
-        title: Some("Filters".into()),
+        title: base
+            .title
+            .clone()
+            .filter(|_| at.is_some())
+            .or_else(|| Some("Filters".into())),
         pieces: rows,
         tooltip: Some("What the server sends of each kind of message".into()),
-        ..first.clone()
-    });
+        ..base.clone()
+    };
+    match at {
+        Some(at) => all[at] = page,
+        None => all.push(page),
+    }
     Cow::Owned(all)
 }
 
@@ -236,6 +259,23 @@ mod tests {
             1
         );
         assert_eq!(filter_button("EQC_Filter_ooc"), Some(FilterCategory::Ooc));
+        // The skin's own filters page gives way to this one, in its place.
+        let mut skin = first.clone();
+        skin.name = "OptionsFilterPage".into();
+        skin.title = Some("Filters".into());
+        let mut after = first.clone();
+        after.name = "OptionsLaterPage".into();
+        after.title = Some("Later".into());
+        let made = pages(&[first.clone(), skin, after], WindowId::Options, 300.0);
+        let names: Vec<_> = made.iter().map(|page| page.name.as_str()).collect();
+        assert_eq!(names, [first.name.as_str(), PAGE, "OptionsLaterPage"]);
+        assert_eq!(made[1].title.as_deref(), Some("Filters"));
+        assert!(
+            made[1]
+                .pieces
+                .iter()
+                .any(|(id, _)| filter_button(id).is_some())
+        );
         assert_eq!(filter_button("EQC_Filter_oocValueLabel"), None);
         assert_eq!(
             filter_value("EQC_Filter_oocValueLabel"),
