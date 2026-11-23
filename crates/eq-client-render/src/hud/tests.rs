@@ -1008,6 +1008,7 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
         forgetting: false,
         mana_cost: None,
         linked_timer: None,
+        checks: requests::CastChecks::default(),
     };
     let messages = messages::Messages::default();
     requests::spell(
@@ -1083,6 +1084,7 @@ fn short_server_mana_refuses_casts_locally_but_never_blocks_forgetting() {
         forgetting: false,
         mana_cost: Some(10),
         linked_timer: None,
+        checks: requests::CastChecks::default(),
     };
     // The world as the server last reported the player's mana, if it has.
     let with_mana = |mana: Option<u32>| {
@@ -1104,6 +1106,7 @@ fn short_server_mana_refuses_casts_locally_but_never_blocks_forgetting() {
             (&messages, &crate::keys::KeyMap::default()),
             std::time::Instant::now(),
         )
+        .map(|checked| checked.spell_id)
     };
     assert_eq!(
         check(&with_mana(Some(9)), &request),
@@ -1120,6 +1123,110 @@ fn short_server_mana_refuses_casts_locally_but_never_blocks_forgetting() {
             "{mana:?} {cost:?}"
         );
     }
+}
+
+#[test]
+fn a_gem_cast_meets_the_programs_checks_in_its_order() {
+    use eq_client_core::{PostureState, control::StunState};
+    let mut player = caster();
+    player.level = 10;
+    let messages = messages::Messages::default();
+    let mut online = OnlineState::new(true);
+    testing::admit(&mut online, 1, player.clone());
+    let posture = |online: &mut OnlineState, posture| {
+        testing::news(
+            online,
+            [WorldEvent::Posture {
+                spawn_id: 12,
+                posture,
+            }],
+        );
+    };
+    let request = |checks| requests::Request {
+        gem: 0,
+        target_id: 12,
+        forgetting: false,
+        mana_cost: None,
+        linked_timer: None,
+        checks,
+    };
+    let check = |online: &OnlineState, checks| {
+        requests::check(
+            online.world(),
+            &player,
+            &request(checks),
+            (&messages, &crate::keys::KeyMap::default()),
+            std::time::Instant::now(),
+        )
+    };
+    let words = |result: Result<requests::Checked, crate::chat::Said>| {
+        result.map_err(|said| said.words.text)
+    };
+    let plain = requests::CastChecks::default();
+    let standing = requests::Checked {
+        spell_id: 73,
+        stand_first: false,
+    };
+    assert_eq!(words(check(&online, plain)), Ok(standing));
+    // Sitting: stands first with Allow Auto Stand, else the server decides.
+    posture(&mut online, PostureState::Sitting);
+    let auto_stand = requests::CastChecks {
+        auto_stand: true,
+        ..plain
+    };
+    assert_eq!(
+        words(check(&online, auto_stand)),
+        Ok(requests::Checked {
+            stand_first: true,
+            ..standing
+        })
+    );
+    assert_eq!(words(check(&online, plain)), Ok(standing));
+    // The level below the spell's for the class, 255 for none.
+    posture(&mut online, PostureState::Standing);
+    for level in [11, u8::MAX] {
+        let checks = requests::CastChecks {
+            spell_level: Some(level),
+            ..plain
+        };
+        assert_eq!(
+            words(check(&online, checks)),
+            Err("Your level is too low for that spell.".into())
+        );
+    }
+    let at_level = requests::CastChecks {
+        spell_level: Some(10),
+        ..plain
+    };
+    assert_eq!(words(check(&online, at_level)), Ok(standing));
+    // Ducking refuses a spell but not a song.
+    posture(&mut online, PostureState::Ducking);
+    assert_eq!(
+        words(check(&online, plain)),
+        Err("You can't cast while ducking.".into())
+    );
+    let song = requests::CastChecks {
+        song: true,
+        ..plain
+    };
+    assert_eq!(words(check(&online, song)), Ok(standing));
+    // Stunned comes before the level and the ducking.
+    testing::news(
+        &mut online,
+        [WorldEvent::OwnStun {
+            session_id: 1,
+            revision: 1,
+            state: StunState::Stunned,
+        }],
+    );
+    let everything = requests::CastChecks {
+        spell_level: Some(60),
+        ..plain
+    };
+    assert_eq!(
+        words(check(&online, everything)),
+        Err("You are stunned.".into())
+    );
 }
 
 #[test]

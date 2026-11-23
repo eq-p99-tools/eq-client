@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- A gem cast meets the Titanium program's own checks before it goes, in its
+  order (read R49-34 e, slice G, checklist 6.639; audit table in the PR):
+  a sitting player stands first when Allow Auto Stand is on (step 4);
+  stunned says 0xae (5); a cast while one is under way says 0x309a (9),
+  where it said this client's words, and a Bard's song still passes; a
+  level below the spell's for the class says 0x309b (10), from the
+  installed spell data; and a spell that isn't a song, cast while ducking,
+  says 0xd5 (16), all in colour 0x121. A song is one a Bard has a level
+  for [I]. Sitting without Allow Auto Stand is still left to the server,
+  as only spells with the record's +0x1fc byte clear need standing and
+  that byte isn't mapped. The local mana check and the gem refresh wait
+  stay until their reads land.
 - Zones without a sky are lit as the original lights them, so the Erudin palace and other interiors are no longer too dark (Adam, 11-23). See [Zone lighting](docs/zone-lighting.md).
   - **Baked light:** each terrain vertex's colour from the zone file, and each placed object's colour track, is now drawn. Before, both were dropped at load.
   - **The engine's single-pass formula:** each vertex sums the ambient by its alpha past the 0.12 offset, its own light at full weight, and up to three point lights. The sum saturates once, then multiplies the texture.
