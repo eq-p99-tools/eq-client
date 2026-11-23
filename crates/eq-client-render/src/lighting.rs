@@ -33,6 +33,10 @@ impl SceneLights {
 
 /// Selects the no-sky classic presentation when the matching installation
 /// supplied usable point lights. No sky by itself is insufficient.
+#[expect(
+    clippy::match_same_arms,
+    reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
+)]
 pub(super) fn interior(
     scene: Option<&SceneLights>,
     world: &ClientWorld,
@@ -40,7 +44,12 @@ pub(super) fn interior(
     clearly: bool,
 ) -> bool {
     !clearly
-        && settings.0.installed_client == InstalledClient::Titanium
+        && match settings.0.installed_client {
+            InstalledClient::Titanium => true,
+            // Titanium's, inferred for RoF2 (6.489).
+            InstalledClient::Rof2 => true,
+            InstalledClient::EqMac => false,
+        }
         && world.connected()
         && world.session_id().is_some()
         && world.pending_transfer().is_none()

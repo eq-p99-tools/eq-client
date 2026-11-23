@@ -512,8 +512,8 @@ pub(crate) enum Needs {
     Ability(eq_client_core::abilities::Ability),
     /// The admitted player has this knight class action.
     KnightAbility(eq_client_core::knights::KnightAbility),
-    /// The admitted player knows this supported discipline.
-    Discipline(eq_client_core::disciplines::Discipline),
+    /// The admitted player knows this discipline, by its spell.
+    Discipline(u32),
     /// Nothing of the session, as an empty action bar slot needs: never
     /// veiled.
     Nothing,
@@ -548,14 +548,17 @@ impl Needs {
                 offered(world, Capability::KnightAbilities)
                     && super::abilities::knight(world) == Some(ability)
             }
-            Self::Discipline(discipline) => {
+            Self::Discipline(spell) => {
                 offered(world, Capability::UsingDisciplines)
-                    && super::abilities::knows_discipline(world, discipline)
+                    && super::disciplines::knows(world, spell)
             }
-            Self::TitaniumBreath => {
-                world.generation() == eq_client_core::GameDialect::Titanium
-                    && offered(world, Capability::GameplayDepartures)
-            }
+            Self::TitaniumBreath => match world.generation() {
+                eq_client_core::GameDialect::Titanium => {
+                    offered(world, Capability::GameplayDepartures)
+                }
+                // Titanium's departure alone.
+                eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => false,
+            },
             Self::Nothing => true,
             Self::Missing => false,
         }

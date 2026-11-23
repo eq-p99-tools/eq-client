@@ -2,7 +2,21 @@
 mod definition;
 
 pub(crate) use definition::Request;
-use definition::{Catalog, Line};
+use definition::{Catalog, HotButton, HotButtonRefusal, Line};
+
+/// `/hotbutton`'s lines (0x4735cc, read R45): written, all 120 taken, and
+/// the four help lines with no name.
+const HOT_BUTTON_MADE: u32 = 0x33e2;
+const HOT_BUTTON_FULL: u32 = 0x33e3;
+const HOT_BUTTON_HELP: [(u32, &str); 4] = [
+    (0x33de, "Use /hotbutton name [colour] text"),
+    (0x33df, "makes a hotbutton named name that runs text,"),
+    (
+        0x33e0,
+        "in the colour given, a number, if one follows the name,",
+    ),
+    (0x33e1, "and puts it on the cursor."),
+];
 
 use crate::{
     chat::{ChatState, system_line},
@@ -116,7 +130,9 @@ impl State {
     }
 
     /// Runs at most one due line. A pause starts after submission and never
-    /// stands for the result of the command. Refusals end the run.
+    /// stands for the result of the command; an ordinary line waits one
+    /// step (about 100 ms) before the next, as the program's runner does.
+    /// Refusals end the run.
     fn tick(
         &mut self,
         admission: Option<u64>,
@@ -144,7 +160,8 @@ impl State {
         }
         run.next += 1;
         run.due = now + line.pause;
-        if run.next == run.lines.len() && line.pause.is_zero() {
+        // A last line's one step leaves nothing to wait for.
+        if run.next == run.lines.len() && line.pause <= definition::STEP {
             self.cancel("completed");
         }
         None
@@ -270,7 +287,22 @@ impl State {
                 format!("Deleted social {name}.")
             }
             Request::Cancel => unreachable!("cancellation is handled before the profile check"),
+            Request::HotButton(_) => unreachable!("`/hotbutton` is handled by the update"),
         }))
+    }
+
+    /// Writes `/hotbutton`'s social and saves it; its ID, to put on the
+    /// cursor.
+    fn hot_button(&mut self, asked: &HotButton, now: Instant) -> Result<u32, HotButtonRefusal> {
+        self.require_profile().map_err(HotButtonRefusal::Invalid)?;
+        let edited = self.catalog.named(&asked.name);
+        let id = self.catalog.hot_button(asked)?;
+        if edited.is_some() {
+            self.changed(id, now);
+        } else {
+            self.save(now);
+        }
+        Ok(id)
     }
 
     /// Log local scheduling state for script acceptance without logging macro text.
@@ -328,9 +360,52 @@ pub(super) fn prepare(
     state.file.loaded_text(text);
 }
 
+/// `/hotbutton` (0x4735cc, read R45 and R45b): the help with no name;
+/// otherwise the social is written and put on the cursor, as the program
+/// attaches it there, with its line, or the program's line when all 120
+/// are taken. A name or line this client's socials can't hold is refused
+/// in this client's words.
+fn hot_button(
+    state: &mut State,
+    asked: Option<HotButton>,
+    now: Instant,
+    messages: &crate::hud::messages::Messages,
+    chat: &mut ChatState,
+    carry: Option<&mut hotbar::carry::Carry>,
+) {
+    let Some(asked) = asked else {
+        for (id, fallback) in HOT_BUTTON_HELP {
+            chat.history
+                .push(system_line(messages.said_text(id, fallback)));
+        }
+        return;
+    };
+    match state.hot_button(&asked, now) {
+        Ok(id) => {
+            if let Some(carry) = carry {
+                carry.put(Action::Social(id));
+            }
+            let made = format!("Made hotbutton {}.", asked.name);
+            chat.history.push(system_line(messages.said_or(
+                HOT_BUTTON_MADE,
+                std::slice::from_ref(&asked.name),
+                &made,
+            )));
+        }
+        Err(HotButtonRefusal::Full) => {
+            chat.refuse(messages.said_text(HOT_BUTTON_FULL, "Every hotbutton is taken."));
+        }
+        Err(HotButtonRefusal::Invalid(reason)) => chat.refuse(reason),
+    }
+}
+
 /// Consume an explicit editor request or a normal hotbutton activation,
 /// then submit one due command through the same path as typed input.
-#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+#[allow(
+    clippy::needless_pass_by_value,
+    clippy::too_many_arguments,
+    clippy::type_complexity
+)]
 pub(super) fn update(
     mut state: ResMut<State>,
     mut bindings: ResMut<Bindings>,
@@ -341,8 +416,14 @@ pub(super) fn update(
     (outbox, options): (Res<Outbox>, Res<crate::options::OptionsState>),
     script: Option<Res<crate::script::Script>>,
     authored: Option<Res<crate::script::AuthoredInput>>,
+    (time, messages, mut carry): (
+        Res<Time<Real>>,
+        Option<Res<crate::hud::messages::Messages>>,
+        Option<ResMut<hotbar::carry::Carry>>,
+    ),
 ) {
-    let now = Instant::now();
+    // The frame's own instant, so that the runner's steps follow frames.
+    let now = time.last_update().unwrap_or_else(Instant::now);
     state.retire_script(script.as_deref(), &online);
     let admission = online
         .world()
@@ -354,6 +435,24 @@ pub(super) fn update(
         return;
     }
     let mut stepped_play = false;
+    if let Some(Queued {
+        request: Request::HotButton(asked),
+        ..
+    }) = chat.socials.request.as_ref()
+    {
+        let asked = asked.clone();
+        chat.socials.request = None;
+        let empty = crate::hud::messages::Messages::default();
+        let messages = messages.as_deref().unwrap_or(&empty);
+        hot_button(
+            &mut state,
+            asked,
+            now,
+            messages,
+            &mut chat,
+            carry.as_deref_mut(),
+        );
+    }
     if let Some(request) = chat.socials.request.take() {
         let dispatch = request
             .owner
@@ -453,6 +552,31 @@ mod tests {
         assert_eq!(state.last, Some("completed"));
     }
 
+    /// R45b: lines run about 100 ms apart, and `/pause 5, /sit` sits at once
+    /// and runs the next line after the wait.
+    #[test]
+    fn ordinary_lines_run_a_step_apart_and_a_pause_comma_runs_first() {
+        let (mut state, id) = with_social("/social set Test | /stand | /pause 5, /sit | /say next");
+        let now = Instant::now();
+        state.start(id, 1, now, None).unwrap();
+        let mut sent = Vec::new();
+        for ms in [0, 0, 50, 99, 100, 101, 599, 600, 700] {
+            state.tick(Some(1), now + Duration::from_millis(ms), |line| {
+                sent.push((ms, line.to_owned()));
+                Ok(())
+            });
+        }
+        assert_eq!(
+            sent,
+            [
+                (0, "/stand".into()),
+                (100, "/sit".into()),
+                (600, "/say next".into()),
+            ]
+        );
+        assert!(state.run.is_none());
+    }
+
     #[test]
     fn a_bound_social_dispatches_ordinary_posture_and_chat_requests() {
         use eq_client_core::{ClientCommand, OutboundChat, Posture};
@@ -483,10 +607,11 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::sync_channel(4);
         let outbox = Outbox::new(Some(tx));
         state.start(id, 1, now, None).unwrap();
-        for _ in 0..2 {
+        // Lines run one step apart.
+        for step in [now, now + definition::STEP] {
             assert!(
                 state
-                    .tick(Some(1), now, |command| {
+                    .tick(Some(1), step, |command| {
                         crate::chat::submit_typed_line(
                             command,
                             &mut chat,
@@ -512,6 +637,61 @@ mod tests {
             ClientCommand::SendChat(OutboundChat::Say("Synthetic".into()))
         );
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn hotbutton_says_its_help_or_makes_the_social_and_puts_it_on_the_cursor() {
+        let (mut state, _) = with_social("/social set Test | /sit");
+        state.file.profile = Some(profile_files::CharacterProfile {
+            character: "Example".into(),
+            world: "Fixture".into(),
+        });
+        let messages = crate::hud::messages::Messages::default();
+        let mut chat = ChatState::default();
+        let mut carry = hotbar::carry::Carry::default();
+        let now = Instant::now();
+        hot_button(
+            &mut state,
+            None,
+            now,
+            &messages,
+            &mut chat,
+            Some(&mut carry),
+        );
+        assert_eq!(chat.newest(), HOT_BUTTON_HELP[3].1);
+        assert_eq!(carry.hotkey(), None);
+        let Request::HotButton(asked) = Request::parse("/hotbutton Rest 7 /sit").unwrap().unwrap()
+        else {
+            panic!("expected /hotbutton");
+        };
+        hot_button(
+            &mut state,
+            asked,
+            now,
+            &messages,
+            &mut chat,
+            Some(&mut carry),
+        );
+        let id = state.catalog.named("Rest").unwrap();
+        assert_eq!(carry.hotkey(), Some(Action::Social(id)));
+        assert_eq!(chat.newest(), "Made hotbutton Rest.");
+        // Without a profile nothing is written or carried.
+        let mut unprofiled = State::default();
+        let mut carry = hotbar::carry::Carry::default();
+        let Request::HotButton(asked) = Request::parse("/hotbutton Rest /sit").unwrap().unwrap()
+        else {
+            panic!("expected /hotbutton");
+        };
+        hot_button(
+            &mut unprofiled,
+            asked,
+            now,
+            &messages,
+            &mut chat,
+            Some(&mut carry),
+        );
+        assert_eq!(carry.hotkey(), None);
+        assert_eq!(chat.newest(), "Socials need an active character profile");
     }
 
     #[test]

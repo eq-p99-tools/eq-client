@@ -177,6 +177,10 @@ pub(super) fn launch_ambient() -> GlobalAmbientLight {
 
 /// Lights the scene for the zone and the time of day.
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+#[expect(
+    clippy::match_same_arms,
+    reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
+)]
 pub(super) fn update(
     mut commands: Commands,
     online: Res<super::online::OnlineState>,
@@ -233,7 +237,13 @@ pub(super) fn update(
     let day_night = day_night(clock);
     let mut lit = lighting(&sky, lit_minute, &day_night);
     let interior = super::lighting::interior(scene_lights.as_deref(), world, &settings, clearly);
-    if !clearly && settings.0.installed_client == eq_client_assets::ui::InstalledClient::Titanium {
+    let observer_dark = match settings.0.installed_client {
+        eq_client_assets::ui::InstalledClient::Titanium => true,
+        // Titanium's, inferred for RoF2 (6.489).
+        eq_client_assets::ui::InstalledClient::Rof2 => true,
+        eq_client_assets::ui::InstalledClient::EqMac => false,
+    };
+    if !clearly && observer_dark {
         let vision = super::lighting::observer(world, names.as_deref());
         let darkness = lit_minute
             .filter(|_| sky.sky != 0)

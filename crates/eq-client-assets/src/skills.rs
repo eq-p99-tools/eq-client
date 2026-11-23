@@ -59,8 +59,27 @@ pub struct SkillInputs {
 /// Numeric data and list rules belonging to one installed client generation.
 #[derive(Clone, Debug)]
 pub struct SkillRules {
-    client: InstalledClient,
+    client: Program,
     table: SkillTable,
+}
+
+/// The skill programs whose constructor data and list rules are read: one
+/// for each generation that has them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Program {
+    Titanium,
+    EqMac,
+}
+
+impl Program {
+    const fn of(client: InstalledClient) -> Self {
+        match client {
+            InstalledClient::Titanium => Self::Titanium,
+            InstalledClient::EqMac => Self::EqMac,
+            // Titanium's, inferred for RoF2 (6.489).
+            InstalledClient::Rof2 => Self::of(InstalledClient::Titanium),
+        }
+    }
 }
 
 /// The semantic rank text, before resolving words from installed strings.
@@ -90,6 +109,7 @@ impl SkillRules {
     /// Rejects wrong columns, missing or duplicate cells, inconsistent name
     /// IDs, out-of-range indices and values that cannot fit the read fields.
     pub fn parse(client: InstalledClient, text: &str) -> Result<Self, SkillTableError> {
+        let client = Program::of(client);
         Ok(Self {
             client,
             table: SkillTable::parse(client, text)?,
@@ -108,8 +128,8 @@ impl SkillRules {
     #[must_use]
     pub fn class_rule(&self, skill: u32, class: u32) -> Option<ClassRule> {
         let last = match self.client {
-            InstalledClient::Titanium => 16,
-            InstalledClient::EqMac => 15,
+            Program::Titanium => 16,
+            Program::EqMac => 15,
         };
         (1..=last)
             .contains(&class)
@@ -123,7 +143,11 @@ impl SkillRules {
     #[must_use]
     pub fn presence(&self, skill: u32, raw: u32, inputs: SkillInputs) -> Presence {
         if skill >= 100
-            || (self.client == InstalledClient::Titanium && skill == 57 && inputs.race != 12)
+            || (match self.client {
+                Program::Titanium => true,
+                Program::EqMac => false,
+            } && skill == 57
+                && inputs.race != 12)
         {
             return Presence::Hidden;
         }
@@ -131,23 +155,19 @@ impl SkillRules {
             return Presence::Unresolved;
         };
         let value = match self.client {
-            InstalledClient::EqMac => u16::try_from(raw)
+            Program::EqMac => u16::try_from(raw)
                 .ok()
                 .map(|value| i32::from(i16::from_le_bytes(value.to_le_bytes()))),
-            InstalledClient::Titanium => i32::try_from(raw).ok(),
+            Program::Titanium => i32::try_from(raw).ok(),
         };
         let Some(value) = value else {
             return Presence::Unresolved;
         };
         let racial = self.racial_base(skill, inputs.race) != 0;
         let at_level = |level| match self.client {
-            InstalledClient::EqMac if value >= 254 || !class.usable() => racial,
-            InstalledClient::Titanium
-                if !class.usable() || (value == 0 && class.train_level > 1) =>
-            {
-                racial
-            }
-            InstalledClient::EqMac | InstalledClient::Titanium => {
+            Program::EqMac if value >= 254 || !class.usable() => racial,
+            Program::Titanium if !class.usable() || (value == 0 && class.train_level > 1) => racial,
+            Program::EqMac | Program::Titanium => {
                 level >= class.train_level || (value >= 1 && racial)
             }
         };
@@ -168,7 +188,10 @@ impl SkillRules {
                 50
             }
             (128, 50) => 100,
-            (330, 50) if matches!(self.client, InstalledClient::Titanium) => 125,
+            (330, 50) => match self.client {
+                Program::Titanium => 125,
+                Program::EqMac => 0,
+            },
             _ => 0,
         }
     }
@@ -198,35 +221,36 @@ impl SkillRules {
             i32::from(u8::try_from(raw).ok()?)
         } else if id < 100 {
             match self.client {
-                InstalledClient::EqMac if raw == 255 => {
-                    i32::from(self.racial_base(id, inputs.race))
-                }
-                InstalledClient::EqMac => {
+                Program::EqMac if raw == 255 => i32::from(self.racial_base(id, inputs.race)),
+                Program::EqMac => {
                     i32::from(i16::from_le_bytes(u16::try_from(raw).ok()?.to_le_bytes()))
                 }
-                InstalledClient::Titanium => i32::try_from(raw).ok()?,
+                Program::Titanium => i32::try_from(raw).ok()?,
             }
         } else {
             return None;
         };
         let class = inputs.class.and_then(|class| self.class_rule(id, class));
         let rank = match self.client {
-            InstalledClient::EqMac if value == 254 => class.map_or(RankText::Unknown, |class| {
-                RankText::TrainableAt(class.train_level)
-            }),
-            // The fixed decimal level argument at 0x5fe49c is 66.
-            InstalledClient::EqMac if value == 255 => RankText::TrainableAt(66),
-            InstalledClient::Titanium if !language && value == 0 => class
+            Program::EqMac => match value {
+                254 => class.map_or(RankText::Unknown, |class| {
+                    RankText::TrainableAt(class.train_level)
+                }),
+                // The fixed decimal level argument at 0x5fe49c is 66.
+                255 => RankText::TrainableAt(66),
+                _ => self.rank(value, language),
+            },
+            Program::Titanium if !language && value == 0 => class
                 .filter(|class| class.usable() && class.train_level > inputs.level)
                 .map_or_else(
                     || self.rank(value, language),
                     |class| RankText::TrainableAt(class.train_level),
                 ),
-            _ => self.rank(value, language),
+            Program::Titanium => self.rank(value, language),
         };
         let numeric = match self.client {
-            InstalledClient::EqMac => (value < 254).then_some(value),
-            InstalledClient::Titanium => Some(value),
+            Program::EqMac => (value < 254).then_some(value),
+            Program::Titanium => Some(value),
         };
         Some(RowText {
             rank,
@@ -235,8 +259,11 @@ impl SkillRules {
     }
 
     fn rank(&self, value: i32, language: bool) -> RankText {
-        if value < 0 && self.client == InstalledClient::EqMac {
-            return RankText::String(0xc98);
+        if value < 0 {
+            match self.client {
+                Program::Titanium => {}
+                Program::EqMac => return RankText::String(0xc98),
+            }
         }
         u32::try_from(value)
             .ok()
@@ -272,12 +299,12 @@ impl SkillRules {
 pub(crate) fn for_client(client: InstalledClient) -> &'static SkillRules {
     static TITANIUM: OnceLock<SkillRules> = OnceLock::new();
     static EQMAC: OnceLock<SkillRules> = OnceLock::new();
-    let (cache, csv) = match client {
-        InstalledClient::Titanium => (
+    let (cache, csv) = match Program::of(client) {
+        Program::Titanium => (
             &TITANIUM,
             include_str!("../data/skills/skill-tables-titanium-20261103-v2.csv"),
         ),
-        InstalledClient::EqMac => (
+        Program::EqMac => (
             &EQMAC,
             include_str!("../data/skills/skill-tables-eqmac-20261103-v2.csv"),
         ),
@@ -294,7 +321,7 @@ mod tests {
 
     fn synthetic(client: InstalledClient) -> String {
         let field = match client {
-            InstalledClient::Titanium => "class_usable",
+            InstalledClient::Titanium | InstalledClient::Rof2 => "class_usable",
             InstalledClient::EqMac => "class_cap",
         };
         let mut text = format!("skill,class,train_level,{field},name_eqstr\n");
