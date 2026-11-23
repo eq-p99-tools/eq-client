@@ -223,13 +223,13 @@ fn guild_status(world: &ClientWorld, named: Option<&str>, messages: &Messages) -
             let name = eq_client_core::entities::display_name(&name);
             return Some(Said::own(format!("{name} is not in a guild.")).typed(GUILD_STATUS_TYPE));
         }
-        GuildStatus::Ranked { name, guild } => {
-            if world.generation() == eq_client_core::GameDialect::EqMac {
-                (12259, vec![name, guild])
-            } else {
+        GuildStatus::Ranked { name, guild } => match world.generation() {
+            eq_client_core::GameDialect::EqMac => (12259, vec![name, guild]),
+            // RoF2's line is Titanium's, inferred (6.489).
+            eq_client_core::GameDialect::Titanium | eq_client_core::GameDialect::Rof2 => {
                 (12259, vec![name])
             }
-        }
+        },
         GuildStatus::Member { name, guild } => (12256, vec![name, guild]),
         GuildStatus::Officer { name, guild } => (12257, vec![name, guild]),
         GuildStatus::Leader { name, guild } => (12258, vec![name, guild]),

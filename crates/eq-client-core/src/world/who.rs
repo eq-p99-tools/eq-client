@@ -262,7 +262,11 @@ impl ClientWorld {
                 }),
             None => self.target.selected.filter(|_| !self.target_stale()),
         };
-        let eqmac = self.generation() == crate::GameDialect::EqMac;
+        let eqmac = match self.generation() {
+            crate::GameDialect::EqMac => true,
+            // RoF2's refusals are Titanium's, inferred (6.489).
+            crate::GameDialect::Titanium | crate::GameDialect::Rof2 => false,
+        };
         let game_master = |id: &u16| {
             let flag = if self.is_player(*id) {
                 self.player
