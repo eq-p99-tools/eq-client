@@ -6,8 +6,11 @@
 //!
 //! The emitters follow the Titanium program's loader (read R49-7 a, first
 //! pass; recording checklist 6.503): each record is one emitter or a day
-//! and a night one, with its own sound, delay and volume. How the program
-//! chooses, fades and switches music is pending the second pass; every
+//! and a night one, with its own sound, delay and volume. A music record's
+//! track is its id negated (engine follow-up to R49-7, section 2, at
+//! 0x44b502); how the program chooses among regions, fades and switches
+//! music is not read (the follow-up reads only the 20000 clamp and the
+//! 1500 it passes to the music start); every
 //! inferred rule is a named constant or function here, marked \[I\]. The instruments are the
 //! player's sound font, not the program's own (a stated departure: an
 //! installation ships none).
@@ -273,8 +276,11 @@ fn distance(emitter: &Emitter, at: [f32; 3]) -> f32 {
 }
 
 /// The music region the player stands in, nearest centre first, and the
-/// sequence it plays: index id - 1, the day or night id; None where no
-/// region holds the player or its id names no sequence [I, pending R49-7 b].
+/// sequence it plays: the track is the day or night id negated (engine
+/// follow-up to R49-7, section 2, 0x44b502), and the sequence index that
+/// track - 1 [I: the step from a track to the file's sequence is unread];
+/// None where no region holds the player or its track names no sequence.
+/// Which region wins where they overlap is this client's choice [I].
 fn choose_music(
     emitters: &[Emitter],
     at: [f32; 3],
@@ -289,8 +295,8 @@ fn choose_music(
         .filter(|(_, emitter, distance)| *distance < emitter.radius)
         .min_by(|a, b| a.2.total_cmp(&b.2))
         .and_then(|(index, emitter, _)| {
-            let id = emitter.id(night);
-            usize::try_from(id)
+            let track = emitter.id(night).checked_neg()?;
+            usize::try_from(track)
                 .ok()
                 .and_then(|id| id.checked_sub(1))
                 .filter(|sequence| *sequence < sequences)
@@ -512,7 +518,7 @@ pub(super) fn update(
     for (index, emitter) in loaded.emitters.iter().enumerate() {
         let unplayed = match emitter.kind {
             EmitterKind::Unknown(kind) => Some(format!("kind {kind}")),
-            kind if kind.is_music() && emitter.ids.iter().any(|id| *id < 0) => {
+            kind if kind.is_music() && emitter.ids.iter().any(|id| *id >= 0) => {
                 Some(format!("music id {:?}", emitter.ids))
             }
             _ => None,
@@ -723,9 +729,9 @@ mod tests {
     #[test]
     fn the_nearest_music_region_holding_the_player_plays_its_hours_sequence() {
         let regions = [
-            emitter([0.0; 3], 1000.0, [1, 2], 1, 0),
-            emitter([100.0, 0.0, 0.0], 50.0, [3, 3], 1, 0),
-            emitter([0.0; 3], 10.0, [1, 1], 2, 0),
+            emitter([0.0; 3], 1000.0, [-1, -2], 1, 0),
+            emitter([100.0, 0.0, 0.0], 50.0, [-3, -3], 1, 0),
+            emitter([0.0; 3], 10.0, [-1, -1], 2, 0),
         ];
         assert_eq!(choose_music(&regions, [0.0; 3], false, 3), Some((0, 0)));
         assert_eq!(choose_music(&regions, [0.0; 3], true, 3), Some((0, 1)));
@@ -733,11 +739,14 @@ mod tests {
             choose_music(&regions, [90.0, 0.0, 0.0], false, 3),
             Some((1, 2))
         );
-        // A sequence the file lacks, a zero or negative id, plays nothing.
+        // A sequence the file lacks, or an id of 0 or more, plays nothing.
         assert_eq!(choose_music(&regions, [90.0, 0.0, 0.0], false, 2), None);
-        let none = [emitter([0.0; 3], 100.0, [0, -1], 1, 0)];
+        let none = [emitter([0.0; 3], 100.0, [0, 1], 1, 0)];
         assert_eq!(choose_music(&none, [0.0; 3], false, 3), None);
         assert_eq!(choose_music(&none, [0.0; 3], true, 3), None);
+        let lowest = [emitter([0.0; 3], 100.0, [i32::MIN, -1], 1, 0)];
+        assert_eq!(choose_music(&lowest, [0.0; 3], false, 3), None);
+        assert_eq!(choose_music(&lowest, [0.0; 3], true, 3), Some((0, 0)));
         assert_eq!(choose_music(&regions, [5000.0, 0.0, 0.0], false, 3), None);
     }
 

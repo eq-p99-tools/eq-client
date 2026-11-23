@@ -6,7 +6,9 @@
 //! The record layout, the day and night split, the radius, the repeat and
 //! the volume follow the Titanium program's loader 0x44bed1 and 0x44ba79
 //! and its millibel conversion 0x4c4fa1 (read R49-7 a, first pass, and its
-//! engine follow-up; recording checklist 6.503). What the reads leave open
+//! engine follow-up; recording checklist 6.503). The follow-up's section 2
+//! supersedes the first pass on the volume's sign: a positive record value
+//! is the attenuation, taken negated. What the reads leave open
 //! is marked \[I\] where it is used: the falloff, the bank's default
 //! extension, the delays' unit, a delay of 0 looping, and the ids between
 //! the two banks.
@@ -41,7 +43,7 @@ pub const UNBOUNDED_RADIUS: f32 = 10_000.0;
 /// What the program adds to a repeating emitter's delay (read R49-7 a), in
 /// ms [I: the unit].
 pub const REPEAT_FLOOR_MS: i32 = 500;
-/// The volume of a type-0 record whose volume value is not negative (read
+/// The volume of a type-0 record whose volume value is 0 or less (read
 /// R49-7 a); any other type plays at 1.0.
 pub const TYPE_ZERO_VOLUME: f32 = 0.2;
 /// The extension a bank name without '.' takes [I: the read names the
@@ -132,13 +134,14 @@ pub struct Emitter {
     pub kind: EmitterKind,
     /// The day and night type bytes (+0x38, +0x39).
     pub kinds: [u8; 2],
-    /// The day and night volume values (+0x3c, +0x40): negative is an
+    /// The day and night volume values (+0x3c, +0x40): positive is an
     /// attenuation in millibels, otherwise the type's own volume.
     pub volumes: [i32; 2],
     /// The day value at +0x44, which the program keeps as the emitter's
     /// +0x1c and, for music, clamps to 20000 and passes with 1500 to the
     /// music start (engine follow-up to R49-7); the music half takes it as
-    /// a switch's fade-out in ms [I, pending the R49-7 second pass].
+    /// a switch's fade-out in ms [I: the engine follow-up's section 2 reads
+    /// the clamp and the 1500 but not what the music start does with them].
     pub fade_out_ms: i32,
     /// The whole record. The pair at +0x4c is a distance setting the
     /// program combines with the type (engine follow-up to R49-7); how the
@@ -231,17 +234,18 @@ impl Emitter {
         EmitterKind::from_byte(self.kinds[side & 1])
     }
 
-    /// One side's volume (read R49-7 a): a negative value is an attenuation
-    /// in millibels, which 0x4c4fa1 turns into amplitude as 10^(v/2000),
-    /// silent below -10000 (engine follow-up to R49-7); otherwise 1.0, or
+    /// One side's volume (engine follow-up to R49-7, section 2, in
+    /// 0x44ba79): a positive value v is an attenuation in millibels, which
+    /// 0x4c4fa1(-v) turns into amplitude as 10^(-v/2000), so 2000 is a
+    /// tenth and above 10000 is silent; 0 or less is 1.0, or
     /// [`TYPE_ZERO_VOLUME`] for a type-0 emitter.
     #[must_use]
     pub fn volume(&self, side: usize) -> f32 {
         let side = side & 1;
         match self.volumes[side] {
-            value if value < -10_000 => 0.0,
+            value if value > 10_000 => 0.0,
             #[expect(clippy::cast_precision_loss, reason = "attenuations are small")]
-            value if value < 0 => 10_f32.powf(value as f32 / 2000.0),
+            value if value > 0 => 10_f32.powf(-(value as f32) / 2000.0),
             _ if self.kinds[side] == 0 => TYPE_ZERO_VOLUME,
             _ => 1.0,
         }
@@ -590,22 +594,25 @@ mod tests {
     }
 
     #[test]
-    fn volume_is_the_types_own_or_an_attenuation() {
+    fn a_positive_volume_is_an_attenuation_otherwise_the_types_own() {
         let mut quiet = record([0.0; 3], 50.0, [3, 3], 0, 0);
         quiet[0x39] = 2;
-        pair(&mut quiet, 0x3c, 0, -2000);
+        pair(&mut quiet, 0x3c, 0, 2000);
         let emitter = Emitter::read(&quiet);
         assert!((emitter.volume(0) - TYPE_ZERO_VOLUME).abs() < f32::EPSILON);
-        // -2000 millibels is a tenth, and below -10000 is silent.
+        // 2000 millibels is a tenth, and above 10000 is silent.
         assert!((emitter.volume(1) - 0.1).abs() < 1e-6);
         let mut silent = quiet;
-        pair(&mut silent, 0x3c, 0, -10_001);
+        pair(&mut silent, 0x3c, 0, 10_001);
         assert!(Emitter::read(&silent).volume(1).abs() < f32::EPSILON);
-        pair(&mut silent, 0x3c, 0, -10_000);
+        pair(&mut silent, 0x3c, 0, 10_000);
         assert!((Emitter::read(&silent).volume(1) - 1e-5).abs() < 1e-7);
+        // 0 or less is the type's own: 1.0, or 0.2 for type 0.
         let mut loud = quiet;
-        pair(&mut loud, 0x3c, 5, 0);
-        assert!((Emitter::read(&loud).volume(1) - 1.0).abs() < f32::EPSILON);
+        pair(&mut loud, 0x3c, -5, -2000);
+        let loud = Emitter::read(&loud);
+        assert!((loud.volume(0) - TYPE_ZERO_VOLUME).abs() < f32::EPSILON);
+        assert!((loud.volume(1) - 1.0).abs() < f32::EPSILON);
     }
 
     #[test]

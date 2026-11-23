@@ -72,8 +72,9 @@ read R49-7 first pass and its engine follow-up):
   sound, each with its own sound, type, delay and volume.
 - A radius below 0 reaches 10,000 units; a radius of 0 is heard nowhere.
 - A delay above 0 repeats the sound after the delay plus 500 and up to the
-  record's random extra; a negative volume is an attenuation in millibels.
-  A type-0 sound otherwise plays at a fifth of full volume.
+  record's random extra. A positive volume is an attenuation in millibels:
+  2,000 is a tenth of full volume, and above 10,000 is silent. Otherwise a
+  type-0 sound plays at a fifth of full volume and any other at full.
 - The sound bank's `EMIT` list is numbered from 1 and its `LOOP` list from
   162; carriage returns and spaces are taken out of each name.
 

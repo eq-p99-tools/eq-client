@@ -73,7 +73,7 @@ pub enum Toggle {
     /// Plays combat music, as the official client's `CombatMusic` in
     /// `eqclient.ini` (TRUE when missing) and its `/combatmusic` (read R49-7
     /// c). This client keeps it per character; it plays no combat music
-    /// yet (pending the R49-7 second pass).
+    /// yet (how the program chooses combat music is unread).
     CombatMusic,
     /// Plays the installation's spell-effect particles, as the official
     /// client's does; the official client keeps the choice as
