@@ -127,6 +127,22 @@ pub enum AaRequest {
     Split(u8),
 }
 
+/// A spellbook ordering or deletion button: move the chosen spell one slot
+/// earlier or later, ask to delete it, or answer that question.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BookEdit {
+    /// Move earlier.
+    Earlier,
+    /// Move later.
+    Later,
+    /// Delete spell, which asks first.
+    Delete,
+    /// Confirm the deletion.
+    Confirm,
+    /// Cancel the deletion.
+    Cancel,
+}
+
 /// One scripted action.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Step {
@@ -481,6 +497,9 @@ pub enum ClickTarget {
     BookPlace(u8),
     /// The skin's spellbook's arrow: forward (true) or back.
     BookPage(bool),
+    /// One of the spellbook's ordering and deletion buttons, for the row
+    /// chosen with `book` (checklist 6.588).
+    BookEdit(BookEdit),
     /// A spell gem of the skin's spell bar, from zero.
     SpellGem(u8),
     /// A hotbutton of the action bar, the client's own or the skin's, from
@@ -1071,7 +1090,20 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ),
         ["book_page", "next"] => ClickTarget::BookPage(true),
         ["book_page", "back"] => ClickTarget::BookPage(false),
+        ["book_edit", action] => ClickTarget::BookEdit(book_edit(action)?),
         _ => return Err("unknown or malformed step".into()),
+    })
+}
+
+/// A spellbook ordering or deletion button by its word.
+fn book_edit(word: &str) -> Result<BookEdit, String> {
+    Ok(match word {
+        "earlier" => BookEdit::Earlier,
+        "later" => BookEdit::Later,
+        "delete" => BookEdit::Delete,
+        "confirm" => BookEdit::Confirm,
+        "cancel" => BookEdit::Cancel,
+        _ => return Err("book_edit takes earlier, later, delete, confirm or cancel".into()),
     })
 }
 
@@ -2170,6 +2202,24 @@ mod tests {
             parse("slash(\"discipline defensive\")\n", base).unwrap(),
             [Step::Slash("/discipline defensive".into())]
         );
+    }
+
+    #[test]
+    fn book_edit_names_each_spellbook_ordering_button() {
+        let base = std::path::Path::new(".");
+        for (word, edit) in [
+            ("earlier", BookEdit::Earlier),
+            ("later", BookEdit::Later),
+            ("delete", BookEdit::Delete),
+            ("confirm", BookEdit::Confirm),
+            ("cancel", BookEdit::Cancel),
+        ] {
+            assert_eq!(
+                parse(&format!("click(\"book_edit\", \"{word}\")\n"), base).unwrap(),
+                [Step::Click(ClickTarget::BookEdit(edit))]
+            );
+        }
+        assert!(parse("click(\"book_edit\", \"up\")\n", base).is_err());
     }
 
     #[test]
