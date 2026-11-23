@@ -557,7 +557,10 @@ mod tests {
             [[2.0, 0.0, -5.0], [2.0, 0.0, 5.0], [2.0, 10.0, 5.0]],
             [[2.0, 0.0, -5.0], [2.0, 10.0, 5.0], [2.0, 10.0, -5.0]],
         ];
-        assert!(door_collision(Vec::new(), Vec::new()).is_empty());
+        assert_eq!(
+            door_collision(Vec::new(), Vec::new()),
+            Vec::<[[f32; 3]; 3]>::new()
+        );
         let collision = door_collision(Vec::new(), bars.clone());
         assert_eq!(collision, bars);
         let floor = vec![
