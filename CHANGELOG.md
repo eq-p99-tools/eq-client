@@ -2,11 +2,14 @@
 
 ## Unreleased
 
-- Velious water's cold as the Titanium program reports it (reads R49-3 b, R49-3c, R49-3d and R49-26; checklist 6.491d). This repins eq-network to #418's cold report.
+- Velious water's cold as the Titanium program reports it (reads R49-3 b, R49-3c, R49-3d and R49-26; checklist 6.491d). This repins eq-network to main 010536e, which carries #418's cold report and #424's event saves.
   - Each zone region keeps the program's kind for its tag (`RegionKind`: 5 water, 6 slime, 7 lava, 8 Velious water, 9 and 10 the other waters), with `ZoneRegions::kind_at`. The breathing medium is now derived from it, as before for every tag.
   - With the body's origin in Velious water, the once-a-second feet check lava's heat uses reports cold, type 246, by the cold total: 50 − cold / 3, floor 10. A check reports one feet hazard at most, and only where the session offers `ColdWater`.
   - The cold total follows the program's: the profile base (byte 12872; a Barbarian's 35, an Iksar's 10 lower), effects 47 and 111, the Ranger and Beastlord term, and worn items' cold (field 16). The resist cap of 500 can't change a cold amount and isn't applied.
   - Rune absorbs aren't taken off the amount for any hazard yet: a labelled departure, and the server applies its own.
+- Buffs landing on the player take the slot the Titanium program's whole slot finder gives them (checklist 6.612, read R49-22e, repin to eq-network #417). That includes step 4's replace in place, worked out from each effect's base, formula and max as 0x40f339 does, and step 6's eviction. The facts come from the installed spell data: effects, the Bard level and the band, with each held buff's stored level from its record.
+  - A buff the program removes for the landing is dropped as a prediction. If the server's word still holds it afterwards (a record for it, or the next zone-in's table), its word stands, and the disagreement is logged with the rule and both spells (6.612 T1).
+  - A value the client can't work out still leaves the landing unslotted. That covers a random formula, one that reads hit points, or one that needs a level we don't know. The old guess for a possible step-4 replace is gone.
 - Seven local-settings slash commands work as the Titanium program's do (checklist 6.525, read R49-22c). They change only this client: nothing goes to a server, on any server type, and scripts can run each with `slash()`.
   - `/clearchat` clears the active chat window's view, silently. The history keeps its lines, so scripts, the log and other windows still have them.
   - `/showspelleffects` and `/combatmusic`: "off" turns the option off and any other word turns it on; with no word they give their usage. Each ends by saying where the option stands. `/combatmusic` now takes the read's words instead of toggling, and says the installation's lines. This client plays no combat music yet, so it changes nothing audible.
