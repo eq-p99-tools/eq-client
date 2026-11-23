@@ -1434,14 +1434,19 @@ pub(crate) mod testing {
 
     /// The test model, prepared in the world's stores.
     pub(crate) fn prepared(world: &mut World) -> PreparedCharacter {
+        prepared_from(world, CharacterAsset::testing())
+    }
+
+    /// A model, prepared in the world's stores.
+    pub(crate) fn prepared_from(world: &mut World, asset: CharacterAsset) -> PreparedCharacter {
         world
             .run_system_once(
-                |mut images: ResMut<Assets<Image>>,
-                 mut meshes: ResMut<Assets<Mesh>>,
-                 mut materials: ResMut<Assets<StandardMaterial>>,
-                 mut bindposes: ResMut<Assets<SkinnedMeshInverseBindposes>>| {
+                move |mut images: ResMut<Assets<Image>>,
+                      mut meshes: ResMut<Assets<Mesh>>,
+                      mut materials: ResMut<Assets<StandardMaterial>>,
+                      mut bindposes: ResMut<Assets<SkinnedMeshInverseBindposes>>| {
                     prepare(
-                        CharacterAsset::testing(),
+                        asset.clone(),
                         (&mut images, &mut meshes, &mut materials, &mut bindposes),
                     )
                 },

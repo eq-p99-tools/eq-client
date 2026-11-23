@@ -788,6 +788,15 @@ pub(super) fn carry_as(settings: Res<ViewerSettings>, mut state: ResMut<OnlineSt
     }
 }
 
+/// What [`receive`] reads its news by: the viewer's settings, the spell
+/// names, the messages and the options.
+type Definitions<'w> = (
+    Res<'w, ViewerSettings>,
+    Option<ResMut<'w, super::spellbook::SpellNames>>,
+    Option<Res<'w, hud::messages::Messages>>,
+    Option<Res<'w, super::options::OptionsState>>,
+);
+
 /// Applies the session's news to the world and shows what it changed. The
 /// world decides what each update means; this only hands its changes to the
 /// panels, the chat and the scene.
@@ -803,17 +812,13 @@ pub(super) fn receive(
         Option<Res<super::login::FrontEnd>>,
         Option<Res<super::outbox::Outbox>>,
     ),
-    definitions: (
-        Res<ViewerSettings>,
-        Option<ResMut<super::spellbook::SpellNames>>,
-        Option<Res<hud::messages::Messages>>,
-    ),
+    definitions: Definitions<'_>,
     mut state: ResMut<OnlineState>,
     mut panels: Panels,
     mut chat: ResMut<super::chat::ChatState>,
     (mut scene, loading): (super::zone::Scene, Option<Res<super::loading::Loading>>),
 ) {
-    let (settings, mut spell_names, messages) = definitions;
+    let (settings, mut spell_names, messages, options) = definitions;
     let Ok(receiver) = updates.0.lock() else {
         return;
     };
@@ -902,7 +907,13 @@ pub(super) fn receive(
             // The session is this zone's even if its assets fail to load, so
             // nothing of the previous zone stays on screen either.
             scene.leave(&mut commands, &mut state.regions);
-            start_entry(&mut state, &settings.0, directory, &mut chat);
+            let luclin_models = own_luclin_models(state.world(), options.as_deref());
+            start_entry(
+                &mut state,
+                (&settings.0, luclin_models),
+                directory,
+                &mut chat,
+            );
         }
         if let Some(position) = changes.placed {
             let at = |p: eq_client_core::WorldPosition| [p.x, p.y, p.z];
@@ -1046,6 +1057,19 @@ fn log_grant(grant: eq_client_core::world::MotionGrant) {
     }
 }
 
+/// The Luclin models the character just admitted chose: from their own
+/// options, which load only later in the frame ([`super::options::persist`]).
+pub(super) fn own_luclin_models(
+    world: &eq_client_core::world::ClientWorld,
+    options: Option<&super::options::OptionsState>,
+) -> eq_client_core::player_models::LuclinModels {
+    options.map_or_else(Default::default, |options| {
+        options
+            .of(super::profile_files::playing(world).as_ref())
+            .luclin_models
+    })
+}
+
 /// Whether the news is a new admission, which brings its zone.
 const fn admits(update: &WorldUpdate) -> bool {
     matches!(update, WorldUpdate::Game(WorldEvent::Entered { .. }))
@@ -1056,7 +1080,10 @@ const fn admits(update: &WorldUpdate) -> bool {
 /// frame thread, or says why there is nothing to load.
 fn start_entry(
     state: &mut OnlineState,
-    settings: &crate::ViewerConfig,
+    (settings, luclin_models): (
+        &crate::ViewerConfig,
+        eq_client_core::player_models::LuclinModels,
+    ),
     directory: &std::path::Path,
     chat: &mut super::chat::ChatState,
 ) {
@@ -1067,6 +1094,16 @@ fn start_entry(
             settings.installed_client,
             state.world.classic_model_scale_flag(),
         );
+        // The player's own look, by the same choice as other players'
+        // ([`super::entities`]).
+        let generation = eq_client_core::player_models::generation(
+            (
+                player.race,
+                player.gender,
+                eq_client_core::SpawnKind::Player,
+            ),
+            luclin_models,
+        );
         let titanium_swimming = match drawn_by.0 {
             eq_client_assets::ui::InstalledClient::Titanium => true,
             // RoF2's water is not read yet.
@@ -1075,8 +1112,9 @@ fn start_entry(
         } && state.world.can(eq_client_core::Capability::Swimming);
         state.loading.start(id, move || {
             let loading = std::time::Instant::now();
-            let entry = super::zone::Entry::admission(&zone, &player, drawn_by, &directory)
-                .map(|entry| entry.prepare(navmesh, titanium_swimming));
+            let entry =
+                super::zone::Entry::admission(&zone, &player, drawn_by, &directory, generation)
+                    .map(|entry| entry.prepare(navmesh, titanium_swimming));
             if entry.is_ok() {
                 // Read and prepared off the frame thread, behind the
                 // loading screen.

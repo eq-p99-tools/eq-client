@@ -357,6 +357,17 @@ fn seed_official_options(
                 option_defaults.set(toggle, on);
             }
         }
+        // Only a race and gender the file names is seeded; the keys are
+        // inferred (R49-44a), so a file that names none leaves every model
+        // classic.
+        for (&(_, race, gender), said) in eq_client_assets::ui::LUCLIN_MODEL_KEYS
+            .iter()
+            .zip(official.luclin_models)
+        {
+            if let Some(on) = said {
+                option_defaults.luclin_models.set(race, gender, on);
+            }
+        }
         if let Some(level) = official
             .show_names_level
             .and_then(eq_client_core::names::ShowNames::from_level)

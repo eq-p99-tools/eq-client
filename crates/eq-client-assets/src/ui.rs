@@ -1317,7 +1317,49 @@ pub struct OfficialOptions {
     /// 0x4af32c), unclamped here. The section it sits in is unread, so
     /// `[Defaults]` is tried before `[Options]` (checklist 6.487).
     pub loot_no_drop: Option<i64>,
+    /// Whether each player race and gender draws with its Luclin model, in
+    /// the order of [`LUCLIN_MODEL_KEYS`].
+    pub luclin_models: [Option<bool>; LUCLIN_MODEL_KEYS.len()],
 }
+
+/// The `[Defaults]` keys this client takes the official client's Luclin
+/// model choice from, with the race and gender (0 male, 1 female) each
+/// chooses for. Inferred, unread (R49-44a): the names are recalled as
+/// `UseLuclin<Race><Gender>`, not read from the program, so no key is
+/// trusted to exist; where none is set every model stays classic. The table
+/// is the one place to rename them once the read lands.
+pub const LUCLIN_MODEL_KEYS: [(&str, u32, u32); 30] = [
+    ("UseLuclinHumanMale", 1, 0),
+    ("UseLuclinHumanFemale", 1, 1),
+    ("UseLuclinBarbarianMale", 2, 0),
+    ("UseLuclinBarbarianFemale", 2, 1),
+    ("UseLuclinEruditeMale", 3, 0),
+    ("UseLuclinEruditeFemale", 3, 1),
+    ("UseLuclinWoodElfMale", 4, 0),
+    ("UseLuclinWoodElfFemale", 4, 1),
+    ("UseLuclinHighElfMale", 5, 0),
+    ("UseLuclinHighElfFemale", 5, 1),
+    ("UseLuclinDarkElfMale", 6, 0),
+    ("UseLuclinDarkElfFemale", 6, 1),
+    ("UseLuclinHalfElfMale", 7, 0),
+    ("UseLuclinHalfElfFemale", 7, 1),
+    ("UseLuclinDwarfMale", 8, 0),
+    ("UseLuclinDwarfFemale", 8, 1),
+    ("UseLuclinTrollMale", 9, 0),
+    ("UseLuclinTrollFemale", 9, 1),
+    ("UseLuclinOgreMale", 10, 0),
+    ("UseLuclinOgreFemale", 10, 1),
+    ("UseLuclinHalflingMale", 11, 0),
+    ("UseLuclinHalflingFemale", 11, 1),
+    ("UseLuclinGnomeMale", 12, 0),
+    ("UseLuclinGnomeFemale", 12, 1),
+    ("UseLuclinIksarMale", 128, 0),
+    ("UseLuclinIksarFemale", 128, 1),
+    ("UseLuclinVahShirMale", 130, 0),
+    ("UseLuclinVahShirFemale", 130, 1),
+    ("UseLuclinFroglokMale", 330, 0),
+    ("UseLuclinFroglokFemale", 330, 1),
+];
 
 fn options_from_ini(text: &str) -> OfficialOptions {
     let flag = |section, key| match ini_value(text, section, key)?.to_ascii_uppercase().as_str() {
@@ -1347,6 +1389,7 @@ fn options_from_ini(text: &str) -> OfficialOptions {
         loot_no_drop: ini_value(text, "Defaults", "LootNoDrop")
             .or_else(|| ini_value(text, "Options", "LootNoDrop"))
             .and_then(|v| v.trim().parse().ok()),
+        luclin_models: LUCLIN_MODEL_KEYS.map(|(key, _, _)| flag("Defaults", key)),
     }
 }
 
@@ -2249,6 +2292,7 @@ LookSpring=1
                 mouse_sensitivity: Some(4),
                 look_spring: Some(true),
                 loot_no_drop: None,
+                luclin_models: [None; 30],
             }
         );
         assert_eq!(options_from_ini(""), OfficialOptions::default());
@@ -2256,6 +2300,32 @@ LookSpring=1
         assert_eq!(loot("[Defaults]\nLootNoDrop=1\n"), Some(1));
         assert_eq!(loot("[Options]\nLootNoDrop=2\n"), Some(2));
         assert_eq!(loot("[Defaults]\nLootNoDrop=x\n"), None);
+    }
+
+    #[test]
+    fn eqclient_ini_seeds_only_the_luclin_models_it_names() {
+        let read = options_from_ini(
+            "[Defaults]\nUseLuclinHumanMale=TRUE\nUseLuclinDarkElfFemale=FALSE\nUseLuclinGnomeMale=maybe\n",
+        );
+        let said = |race, gender| {
+            LUCLIN_MODEL_KEYS
+                .iter()
+                .position(|&(_, r, g)| (r, g) == (race, gender))
+                .and_then(|index| read.luclin_models[index])
+        };
+        assert_eq!(said(1, 0), Some(true));
+        assert_eq!(said(6, 1), Some(false));
+        // A word that is neither, and every key not there, says nothing.
+        assert_eq!(said(12, 0), None);
+        assert_eq!(said(1, 1), None);
+        assert_eq!(read.luclin_models.iter().flatten().count(), 2);
+        // In another section, the keys are not the choice.
+        assert!(
+            options_from_ini("[Options]\nUseLuclinHumanMale=TRUE\n")
+                .luclin_models
+                .iter()
+                .all(Option::is_none)
+        );
     }
 
     #[test]

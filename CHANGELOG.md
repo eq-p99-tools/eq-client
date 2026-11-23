@@ -106,6 +106,30 @@
   already ends local control at once, as the program's does: the session
   drops control before it sends (6.477, which needed only its docs fixed).
 
+- Draw players with the Luclin models where the viewer chose them
+  (checklist 6.554, Luclin slice L1). The choice is one per-character
+  option, `luclin_models` in the options file (a list of model codes such as
+  `HUM,DAF`), none by default. Where the official client's `eqclient.ini`
+  sets `[Defaults] UseLuclin<Race><Gender>`, that seeds it. Those key names
+  are recalled, not read (R49-44a): they live in one table,
+  `eq_client_assets::ui::LUCLIN_MODEL_KEYS`, and a file that names none
+  leaves every model classic. The server sends nothing that chooses, so the
+  choice is the viewer's alone on every server, P99 included, as the
+  official client's `eqclient.ini` is. The choice covers players and
+  their corpses (the corpse inferred); non-players of player races and
+  illusions stay classic until the read. It is fixed per zone, so a change
+  shows from the next one (inferred, R49-44b).
+  - `eq_client_assets::characters::load_luclin_character` reads a race's
+    Luclin model in its base look, through the archive and donor table the
+    creation preview uses (`luclin_source`). A model that can't be read draws
+    the classic one, said once a run.
+  - Departure until L2 and L3: a Luclin player shows the base face, hair and
+    eyes, and no worn armour, tints or helm; held items still show.
+  - The look changes only what is drawn (and the name, which rides on the
+    drawn head): the size, feet, collision height, reach and breath come
+    from the race, size and classic model as before, with tests. The zone's classic scale flag
+    applies as Titanium's race rule reads (R49-44d asks whether the program
+    skips Luclin models).
 - A session that ends leaves no ask for the next (gap 3.11, checklist
   6.535). The chat state's pending asks (a `/target`, `/who`, `/loc` or
   `/time`, a guild or split command, a boat take, `/follow`, a Ranger's

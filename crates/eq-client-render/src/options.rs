@@ -49,6 +49,23 @@ impl OptionsState {
     pub(crate) const fn on(&self, toggle: Toggle) -> bool {
         self.options.get(toggle)
     }
+
+    /// The options `profile` plays with: those in effect where they are
+    /// already that character's, else what [`persist`] will load for them
+    /// (their own file, else the shared one, over the defaults). An
+    /// admission is read before the options follow it in the frame, so what
+    /// is built for it then asks here.
+    pub(crate) fn of(&self, profile: Option<&CharacterProfile>) -> Options {
+        if self.store.loaded && self.store.profile.as_ref() == profile {
+            return self.options;
+        }
+        let text = self
+            .store
+            .read(&file_name(profile))
+            .or_else(|| self.store.read(SHARED))
+            .unwrap_or_default();
+        Options::read(&text, self.defaults)
+    }
 }
 
 /// An Options window checkbox: a click turns its option the other way.
@@ -255,6 +272,57 @@ mod tests {
         let restored = &restarted.world().resource::<OptionsState>().options;
         assert!(!restored.wheel_zoom);
         assert_eq!(restored.level(Level::RunSpeed), 120);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_character_just_admitted_draws_by_their_own_luclin_choice() {
+        let directory = std::env::temp_dir().join(format!(
+            "eq-client-options-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            directory.join("options-ExampleWorld-Another.txt"),
+            "# eq-client options v1\nluclin_models = HUM\n",
+        )
+        .unwrap();
+        let mut app = app(&directory);
+        enter(&mut app, 1, "Example");
+        app.update();
+        let mut human = eq_client_core::player_models::LuclinModels::NONE;
+        human.set(1, 0, true);
+        let chosen = |app: &App| {
+            crate::online::own_luclin_models(
+                app.world().resource::<OnlineState>().world(),
+                Some(app.world().resource::<OptionsState>()),
+            )
+        };
+        assert_eq!(
+            chosen(&app),
+            eq_client_core::player_models::LuclinModels::NONE
+        );
+        // The next character is admitted before their options load: their
+        // own file's choice counts, not the one still in effect.
+        enter(&mut app, 2, "Another");
+        assert_eq!(
+            app.world().resource::<OptionsState>().options.luclin_models,
+            eq_client_core::player_models::LuclinModels::NONE
+        );
+        assert_eq!(chosen(&app), human);
+        app.update();
+        assert_eq!(chosen(&app), human);
+        // A change not yet written counts for the character playing.
+        app.world_mut()
+            .resource_mut::<OptionsState>()
+            .options
+            .luclin_models = eq_client_core::player_models::LuclinModels::NONE;
+        assert_eq!(
+            chosen(&app),
+            eq_client_core::player_models::LuclinModels::NONE
+        );
         let _ = std::fs::remove_dir_all(&directory);
     }
 
