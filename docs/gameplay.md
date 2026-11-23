@@ -383,8 +383,8 @@ script's `slash()` refuses the three commands when it is read.
 - A line with nothing to say sends nothing and answers
   `Use /petition with what to say.`
 - One report of a kind is sent at a time: another of the same kind within
-  ten seconds is refused with a line asking to wait. Text too long for the server's field is refused, never
-  cut.
+  ten seconds is refused with a line asking to wait. Text too long for the
+  server's field is refused, never cut.
 - Stock EQEmu says nothing when it takes a petition or a bug report, so
   this client says `Your petition was sent.` or `Your bug report was sent.`
   in its own words. The official client's windows and lines for these are
