@@ -324,9 +324,9 @@ impl Stage {
     }
 
     /// A random letter. Titanium's speaker stage draws 0x60 plus
-    /// 0x40cbb2(0, 0x19) (R49-4b), a backtick or 'a' to 'y', taking the draw
-    /// as inclusive as its consonant draw, 'a' plus 0x40cbb2(0, 0x18), must
-    /// be (inferred). Its listener stage draws 'a' to 'y' (R49-4). TAKP's
+    /// 0x40cbb2(0, 0x19) (R49-4b), a backtick or 'a' to 'y': 0x40cbb2(lo, hi)
+    /// gives lo plus a roll modulo hi - lo + 1, both ends included (read
+    /// 11-24, the random bounds). Its listener stage draws 'a' to 'y' (R49-4). TAKP's
     /// listener stage draws a roll modulo 0x1a plus 0x60, a backtick or 'a'
     /// to 'y' (R49-4m); the `EQMac` speaker stage isn't read, so it draws as
     /// Titanium's does (inferred).

@@ -11,7 +11,7 @@
     - the listener's stage, only where the world's log-server switch is on.
   - **Not garbled:** channels 6 and 14, and any line when a game master is on either side. A game master sender is found by name in the zone (inferred).
   - **The away reply.** While AFK, a tell that got through the ignore list gets 0x58b back. The test for an away reply (0x589 or 0x58a at the start) reads the tell as it arrived, before any garble, so two away players never answer each other.
-  - **Letters.** A random letter is a backtick or 'a' to 'y' in Titanium's speaker stage (R49-4b's `0x60 + 0x40cbb2(0, 0x19)`, the draw taken as inclusive, as its consonant draw must be: inferred) and in both Mac stages, and 'a' to 'y' in Titanium's listener stage. A roll of 99 or 100 makes a space of any letter but a word's first with no space beside it, its last letter included.
+  - **Letters.** A random letter is a backtick or 'a' to 'y' in Titanium's speaker stage (R49-4b's `0x60 + 0x40cbb2(0, 0x19)`, whose draw includes both ends, as the random-bounds read confirms) and in both Mac stages, and 'a' to 'y' in Titanium's listener stage. A roll of 99 or 100 makes a space of any letter but a word's first with no space beside it, its last letter included.
   - **Inferred or left out:**
     - on the Mac client, `/language`, the send and the speaker stage follow the Titanium read;
     - an unlabelled program flag at the gate is taken as 0;
