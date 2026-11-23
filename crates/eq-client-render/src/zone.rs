@@ -131,7 +131,9 @@ impl Entry {
                     &eq_client_assets::characters::DonorArchives::default(),
                 )
                 .inspect_err(|error| {
-                    warn!("Luclin model {model} unavailable, drawing the classic one: {error}");
+                    if first_miss(model) {
+                        warn!("Luclin model {model} unavailable, drawing the classic one: {error}");
+                    }
                 })
                 .ok()
             }),
@@ -217,6 +219,18 @@ impl Entry {
             navmesh,
         }
     }
+}
+
+/// Whether this is the first time this run the player's Luclin model `model`
+/// could not be read, so it is said once however many zones it is missed in.
+/// Other spawns' misses are kept by [`super::entities::NearbyEntities`].
+fn first_miss(model: &'static str) -> bool {
+    static MISSED: std::sync::Mutex<std::collections::BTreeSet<&str>> =
+        std::sync::Mutex::new(std::collections::BTreeSet::new());
+    MISSED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(model)
 }
 
 /// The model the player is drawn with, and the height their body collides
@@ -424,6 +438,13 @@ impl Scene<'_, '_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_missing_luclin_model_of_the_players_is_said_once_a_run() {
+        assert!(first_miss("TSTLUCLINA"));
+        assert!(!first_miss("TSTLUCLINA"));
+        assert!(first_miss("TSTLUCLINB"));
+    }
 
     #[test]
     fn the_players_luclin_model_is_drawn_but_the_body_keeps_the_classic_height() {

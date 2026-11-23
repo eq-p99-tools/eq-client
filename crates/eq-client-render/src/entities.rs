@@ -28,10 +28,10 @@ pub(super) struct NearbyEntities {
         (&'static str, Generation),
         super::background::Background<Loaded>,
     )>,
-    /// The Luclin models the viewer chose, and whether the server's policy
-    /// allows them, as they were when this zone's first spawn was drawn: a
-    /// change shows from the next zone (inferred, R49-44b).
-    luclin: Option<(LuclinModels, bool)>,
+    /// The Luclin models the viewer chose, as they were when this zone's
+    /// first spawn was drawn: a change shows from the next zone (inferred,
+    /// R49-44b).
+    luclin: Option<LuclinModels>,
     /// The Luclin models found missing this run, each said once.
     luclin_missing: BTreeSet<&'static str>,
     /// The archives this zone's models borrow movements from, each parsed once.
@@ -358,10 +358,9 @@ pub(super) fn reconcile(
             .map_or(reach, |distance| distance.min(reach))
     };
     let world = state.world();
-    let luclin = *nearby_state.luclin.get_or_insert((
-        options.options.luclin_models,
-        player_models::allowed_by(world.player_model_rules()),
-    ));
+    let luclin = *nearby_state
+        .luclin
+        .get_or_insert(options.options.luclin_models);
     let reveal = options
         .options
         .qol
@@ -428,7 +427,7 @@ fn draw(
     commands: &mut Commands,
     state: &OnlineState,
     (directory, client): (&std::path::Path, eq_client_assets::ui::InstalledClient),
-    (id, (chosen, allowed)): (u16, (LuclinModels, bool)),
+    (id, chosen): (u16, LuclinModels),
     nearby_state: &mut NearbyEntities,
     (meshes, materials): Stores,
 ) -> bool {
@@ -441,8 +440,7 @@ fn draw(
     };
     // The look changes only which model is drawn: the size, feet and name
     // height below come from the race and size as for a classic model.
-    let generation =
-        player_models::generation((spawn.race, spawn.gender, spawn.kind), chosen, allowed);
+    let generation = player_models::generation((spawn.race, spawn.gender, spawn.kind), chosen);
     if let Some(code) = model
         && !nearby_state.models.contains_key(&(code, generation))
     {
@@ -914,7 +912,7 @@ mod tests {
                 .insert(("HUM", Generation::Luclin), Some(taller));
             let mut chosen = LuclinModels::NONE;
             chosen.set(1, 0, luclin);
-            nearby.luclin = Some((chosen, true));
+            nearby.luclin = Some(chosen);
             nearby.elapsed = 1.0;
             let config = crate::ViewerConfig {
                 eq_directory: Some(directory.clone()),

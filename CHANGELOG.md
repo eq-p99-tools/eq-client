@@ -10,10 +10,9 @@
   sets `[Defaults] UseLuclin<Race><Gender>`, that seeds it. Those key names
   are recalled, not read (R49-44a): they live in one table,
   `eq_client_assets::ui::LUCLIN_MODEL_KEYS`, and a file that names none
-  leaves every model classic. A server whose creation rules preview classic
-  models only (`creation::Rules::classic_appearance`, P99's) keeps every
-  model classic, whatever the option says; the world keeps that policy from
-  the last character list for the session. The choice covers players and
+  leaves every model classic. The server sends nothing that chooses, so the
+  choice is the viewer's alone on every server, P99 included, as the
+  official client's `eqclient.ini` is. The choice covers players and
   their corpses (the corpse inferred); non-players of player races and
   illusions stay classic until the read. It is fixed per zone, so a change
   shows from the next one (inferred, R49-44b).

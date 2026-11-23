@@ -781,10 +781,6 @@ pub(super) fn carry_as(settings: Res<ViewerSettings>, mut state: ResMut<OnlineSt
     }
 }
 
-/// Applies the session's news to the world and shows what it changed. The
-/// world decides what each update means; this only hands its changes to the
-/// panels, the chat and the scene.
-#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 /// What [`receive`] reads its news by: the viewer's settings, the spell
 /// names, the messages and the options.
 type Definitions<'w> = (
@@ -794,6 +790,10 @@ type Definitions<'w> = (
     Option<Res<'w, super::options::OptionsState>>,
 );
 
+/// Applies the session's news to the world and shows what it changed. The
+/// world decides what each update means; this only hands its changes to the
+/// panels, the chat and the scene.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 #[allow(
     clippy::too_many_lines,
     reason = "keep ordered world reduction, panel resets and zone loading together"
@@ -900,9 +900,7 @@ pub(super) fn receive(
             // The session is this zone's even if its assets fail to load, so
             // nothing of the previous zone stays on screen either.
             scene.leave(&mut commands, &mut state.regions);
-            let luclin_models = options
-                .as_ref()
-                .map_or_else(Default::default, |options| options.options.luclin_models);
+            let luclin_models = own_luclin_models(state.world(), options.as_deref());
             start_entry(
                 &mut state,
                 (&settings.0, luclin_models),
@@ -1046,6 +1044,19 @@ fn log_grant(grant: eq_client_core::world::MotionGrant) {
     }
 }
 
+/// The Luclin models the character just admitted chose: from their own
+/// options, which load only later in the frame ([`super::options::persist`]).
+pub(super) fn own_luclin_models(
+    world: &eq_client_core::world::ClientWorld,
+    options: Option<&super::options::OptionsState>,
+) -> eq_client_core::player_models::LuclinModels {
+    options.map_or_else(Default::default, |options| {
+        options
+            .of(super::profile_files::playing(world).as_ref())
+            .luclin_models
+    })
+}
+
 /// Whether the news is a new admission, which brings its zone.
 const fn admits(update: &WorldUpdate) -> bool {
     matches!(update, WorldUpdate::Game(WorldEvent::Entered { .. }))
@@ -1079,7 +1090,6 @@ fn start_entry(
                 eq_client_core::SpawnKind::Player,
             ),
             luclin_models,
-            eq_client_core::player_models::allowed_by(state.world.player_model_rules()),
         );
         let titanium_swimming = drawn_by.0 == eq_client_assets::ui::InstalledClient::Titanium
             && state.world.can(eq_client_core::Capability::Swimming);

@@ -29,7 +29,7 @@ prerequisites.
 | Protocol / installation | Titanium | Titanium | EQMac / TAKP | EQMac / TAKP |
 | Login, character selection, world state and chat | Yes | Yes | Yes | Yes |
 | Character appearance preview at selection | Yes | Yes | Yes | Yes |
-| Luclin player models in the world (checklist 6.554) | No: classic by the creation policy | Opt-in, base look | Opt-in, base look | Opt-in, base look |
+| Luclin player models in the world (checklist 6.554) | Viewer's choice, base look | Viewer's choice, base look | Viewer's choice, base look | Viewer's choice, base look |
 | Movement and falling | Yes | Yes | Yes | Yes |
 | Drowning and lava heat reports | No | Local-only Titanium sessions | No | No |
 | Jumping | Yes | Yes | Yes | Yes |

@@ -2,9 +2,9 @@
 //!
 //! The official Titanium client lets the player choose, per player race and
 //! gender, whether those characters draw with the Luclin models or the
-//! classic ones; the server sends nothing that chooses. Where the server's
-//! policy keeps the classic look (P99, whose creation rules preview classic
-//! models only), every spawn draws classic whatever the choice.
+//! classic ones. The server sends nothing that chooses, so the choice is the
+//! viewer's alone, on every server alike (P99 included): this client follows
+//! it as the official one follows its `eqclient.ini`.
 //!
 //! Inferred, unread (R49-44a): which spawns the choice covers. Here it is
 //! players and their corpses only; non-players of player races and illusions
@@ -98,48 +98,33 @@ impl LuclinModels {
 }
 
 /// The model generation a spawn draws with: Luclin for a player, or a
-/// player's corpse, of a race and gender the viewer chose, where the
-/// server's policy `allows` Luclin models; classic otherwise.
+/// player's corpse, of a race and gender the viewer chose; classic
+/// otherwise.
 #[must_use]
-pub fn generation(
-    (race, gender, kind): (u32, u32, SpawnKind),
-    chosen: LuclinModels,
-    allows: bool,
-) -> Generation {
+pub fn generation((race, gender, kind): (u32, u32, SpawnKind), chosen: LuclinModels) -> Generation {
     let player = matches!(kind, SpawnKind::Player | SpawnKind::PlayerCorpse);
-    if allows && player && chosen.chosen(race, gender) {
+    if player && chosen.chosen(race, gender) {
         Generation::Luclin
     } else {
         Generation::Classic
     }
 }
 
-/// Whether the server's creation policy lets the world draw Luclin models:
-/// not where it previews only classic models (P99's
-/// [`crate::creation::Rules::classic_appearance`]), nor before any policy
-/// is known.
-#[must_use]
-pub fn allowed_by(rules: Option<crate::creation::Rules>) -> bool {
-    rules.is_some_and(|rules| !rules.classic_appearance())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::creation::Rules;
 
     #[test]
-    fn only_a_chosen_player_race_and_gender_draws_luclin_where_the_policy_allows() {
+    fn only_a_chosen_player_race_and_gender_draws_luclin() {
         let mut chosen = LuclinModels::NONE;
         chosen.set(1, 0, true);
         chosen.set(330, 1, true);
-        let allows = allowed_by(Some(Rules::Titanium));
         assert_eq!(
-            generation((1, 0, SpawnKind::Player), chosen, allows),
+            generation((1, 0, SpawnKind::Player), chosen),
             Generation::Luclin
         );
         assert_eq!(
-            generation((330, 1, SpawnKind::PlayerCorpse), chosen, allows),
+            generation((330, 1, SpawnKind::PlayerCorpse), chosen),
             Generation::Luclin
         );
         // The other gender, another race, a guard of the race: classic.
@@ -149,16 +134,13 @@ mod tests {
             (1, 0, SpawnKind::Npc),
             (1, 0, SpawnKind::NpcCorpse),
         ] {
-            assert_eq!(generation(spawn, chosen, allows), Generation::Classic);
+            assert_eq!(generation(spawn, chosen), Generation::Classic);
         }
-        // P99's policy, and none known yet, keep every model classic.
-        for rules in [Some(Rules::Classic), None] {
-            assert_eq!(
-                generation((1, 0, SpawnKind::Player), chosen, allowed_by(rules)),
-                Generation::Classic
-            );
-        }
-        assert!(allowed_by(Some(Rules::EqMac)));
+        // Nothing chosen, nothing drawn Luclin.
+        assert_eq!(
+            generation((1, 0, SpawnKind::Player), LuclinModels::NONE),
+            Generation::Classic
+        );
     }
 
     #[test]
