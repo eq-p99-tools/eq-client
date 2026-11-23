@@ -261,6 +261,16 @@ pub fn model(race: u32, gender: u32) -> Option<&'static str> {
         .find(|code| !code.is_empty())
 }
 
+/// What the Titanium program draws a spawn as when its own model isn't
+/// loaded (0x43c84b, read R49-37a): `HUF` for gender 1, else `HUM`, with
+/// the spawn then taken as race 1, Human, unless its race is 216 or 472,
+/// which keep their own.
+#[must_use]
+pub fn stand_in(race: u32, gender: u32) -> (&'static str, u32) {
+    let model = if gender == 1 { "HUF" } else { "HUM" };
+    (model, if matches!(race, 216 | 472) { race } else { 1 })
+}
+
 /// The exact static actor registration for carrier races and genders in
 /// Titanium (`eqgame.exe` 0x48c8af). Missing genders stay unsupported; these
 /// actor tags are not the three-letter skeletal character identifiers.
@@ -281,6 +291,15 @@ pub const fn carrier_actor(race: u32, gender: u32) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_spawn_without_its_model_stands_in_as_a_human_of_its_gender() {
+        assert_eq!(stand_in(9999, 0), ("HUM", 1));
+        assert_eq!(stand_in(9999, 1), ("HUF", 1));
+        assert_eq!(stand_in(39, 2), ("HUM", 1));
+        assert_eq!(stand_in(216, 1), ("HUF", 216));
+        assert_eq!(stand_in(472, 0), ("HUM", 472));
+    }
 
     #[test]
     fn each_gender_draws_its_own_model_or_the_nearest_one_the_race_has() {
